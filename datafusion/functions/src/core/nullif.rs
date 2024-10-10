@@ -17,13 +17,15 @@
 
 use arrow::datatypes::DataType;
 use datafusion_common::{exec_err, Result};
-use datafusion_expr::ColumnarValue;
+use datafusion_expr::{ColumnarValue, Documentation};
 
 use arrow::compute::kernels::cmp::eq;
 use arrow::compute::kernels::nullif::nullif;
 use datafusion_common::ScalarValue;
+use datafusion_expr::scalar_doc_sections::DOC_SECTION_CONDITIONAL;
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use std::any::Any;
+use std::sync::OnceLock;
 
 #[derive(Debug)]
 pub struct NullIfFunc {
@@ -93,6 +95,47 @@ impl ScalarUDFImpl for NullIfFunc {
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
         nullif_func(args)
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_nullif_doc())
+    }
+}
+
+static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+
+fn get_nullif_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_CONDITIONAL)
+            .with_description("Returns _null_ if _expression1_ equals _expression2_; otherwise it returns _expression1_.
+This can be used to perform the inverse operation of [`coalesce`](#coalesce).")
+            .with_syntax_example("nullif(expression1, expression2)")
+            .with_sql_example(r#"```sql
+> select nullif('datafusion', 'data');
++-----------------------------------------+
+| nullif(Utf8("datafusion"),Utf8("data")) |
++-----------------------------------------+
+| datafusion                              |
++-----------------------------------------+
+> select nullif('datafusion', 'datafusion');
++-----------------------------------------------+
+| nullif(Utf8("datafusion"),Utf8("datafusion")) |
++-----------------------------------------------+
+|                                               |
++-----------------------------------------------+
+```
+"#)
+            .with_argument(
+                "expression1",
+                "Expression to compare and return if equal to expression2. Can be a constant, column, or function, and any combination of operators."
+            )
+            .with_argument(
+                "expression2",
+                "Expression to compare to expression1. Can be a constant, column, or function, and any combination of operators."
+            )
+            .build()
+            .unwrap()
+    })
 }
 
 /// Implements NULLIF(expr1, expr2)

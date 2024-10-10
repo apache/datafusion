@@ -20,8 +20,11 @@ use arrow::compute::is_not_null;
 use arrow::compute::kernels::zip::zip;
 use arrow::datatypes::DataType;
 use datafusion_common::{internal_err, Result};
-use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
-use std::sync::Arc;
+use datafusion_expr::scalar_doc_sections::DOC_SECTION_CONDITIONAL;
+use datafusion_expr::{
+    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+};
+use std::sync::{Arc, OnceLock};
 
 #[derive(Debug)]
 pub struct NVLFunc {
@@ -91,6 +94,46 @@ impl ScalarUDFImpl for NVLFunc {
     fn aliases(&self) -> &[String] {
         &self.aliases
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_nvl_doc())
+    }
+}
+
+static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+
+fn get_nvl_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_CONDITIONAL)
+            .with_description("Returns _expression2_ if _expression1_ is NULL otherwise it returns _expression1_.")
+            .with_syntax_example("nvl(expression1, expression2)")
+            .with_sql_example(r#"```sql
+> select nvl(null, 'a');
++---------------------+
+| nvl(NULL,Utf8("a")) |
++---------------------+
+| a                   |
++---------------------+\
+> select nvl('b', 'a');
++--------------------------+
+| nvl(Utf8("b"),Utf8("a")) |
++--------------------------+
+| b                        |
++--------------------------+
+```
+"#)
+            .with_argument(
+                "expression1",
+                "Expression to return if not null. Can be a constant, column, or function, and any combination of operators."
+            )
+            .with_argument(
+                "expression2",
+                "Expression to return if expr1 is null. Can be a constant, column, or function, and any combination of operators."
+            )
+            .build()
+            .unwrap()
+    })
 }
 
 fn nvl_func(args: &[ColumnarValue]) -> Result<ColumnarValue> {

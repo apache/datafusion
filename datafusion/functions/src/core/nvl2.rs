@@ -20,11 +20,12 @@ use arrow::compute::is_not_null;
 use arrow::compute::kernels::zip::zip;
 use arrow::datatypes::DataType;
 use datafusion_common::{exec_err, internal_err, Result};
+use datafusion_expr::scalar_doc_sections::DOC_SECTION_CONDITIONAL;
 use datafusion_expr::{
-    type_coercion::binary::comparison_coercion, ColumnarValue, ScalarUDFImpl, Signature,
-    Volatility,
+    type_coercion::binary::comparison_coercion, ColumnarValue, Documentation,
+    ScalarUDFImpl, Signature, Volatility,
 };
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 #[derive(Debug)]
 pub struct NVL2Func {
@@ -90,6 +91,50 @@ impl ScalarUDFImpl for NVL2Func {
         )?;
         Ok(vec![new_type; arg_types.len()])
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_nvl2_doc())
+    }
+}
+
+static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+
+fn get_nvl2_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_CONDITIONAL)
+            .with_description("Returns _expression2_ if _expression1_ is not NULL; otherwise it returns _expression3_.")
+            .with_syntax_example("nvl2(expression1, expression2, expression3)")
+            .with_sql_example(r#"```sql
+> select nvl2(null, 'a', 'b');
++--------------------------------+
+| nvl2(NULL,Utf8("a"),Utf8("b")) |
++--------------------------------+
+| b                              |
++--------------------------------+
+> select nvl2('data', 'a', 'b');
++----------------------------------------+
+| nvl2(Utf8("data"),Utf8("a"),Utf8("b")) |
++----------------------------------------+
+| a                                      |
++----------------------------------------+
+```
+"#)
+            .with_argument(
+                "expression1",
+                "Expression to test for null. Can be a constant, column, or function, and any combination of operators."
+            )
+            .with_argument(
+                "expression2",
+                "Expression to return if expr1 is not null. Can be a constant, column, or function, and any combination of operators."
+            )
+            .with_argument(
+                "expression3",
+                "Expression to return if expr1 is null. Can be a constant, column, or function, and any combination of operators."
+            )
+            .build()
+            .unwrap()
+    })
 }
 
 fn nvl2_func(args: &[ColumnarValue]) -> Result<ColumnarValue> {

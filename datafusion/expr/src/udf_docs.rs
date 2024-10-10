@@ -155,7 +155,7 @@ impl DocumentationBuilder {
     ///
     /// ```text
     /// <arg_name>:
-    ///   <expression_type> expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators.
+    ///   <expression_type> expression to operate on. Can be a constant, column, or function, and any combination of operators.
     /// ```
     pub fn with_standard_argument(
         self,

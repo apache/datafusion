@@ -47,23 +47,6 @@ impl CoalesceFunc {
     }
 }
 
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_coalesce_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_CONDITIONAL)
-            .with_description("Returns the first of its arguments that is not _null_. Returns _null_ if all arguments are _null_. This function is often used to substitute a default value for _null_ values.")
-            .with_syntax_example("coalesce(expression1[, ..., expression_n])")
-            .with_argument(
-                "expression1, expression_n",
-                "Expression to use if previous expressions are _null_. Can be a constant, column, or function, and any combination of arithmetic operators. Pass as many expression arguments as necessary."
-            )
-            .build()
-            .unwrap()
-    })
-}
-
 impl ScalarUDFImpl for CoalesceFunc {
     fn as_any(&self) -> &dyn Any {
         self
@@ -162,6 +145,32 @@ impl ScalarUDFImpl for CoalesceFunc {
     fn documentation(&self) -> Option<&Documentation> {
         Some(get_coalesce_doc())
     }
+}
+
+static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+
+fn get_coalesce_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_CONDITIONAL)
+            .with_description("Returns the first of its arguments that is not _null_. Returns _null_ if all arguments are _null_. This function is often used to substitute a default value for _null_ values.")
+            .with_syntax_example("coalesce(expression1[, ..., expression_n])")
+            .with_sql_example(r#"```sql
+> select coalesce(null, null, 'datafusion');
++----------------------------------------+
+| coalesce(NULL,NULL,Utf8("datafusion")) |
++----------------------------------------+
+| datafusion                             |
++----------------------------------------+
+```"#,
+            )
+            .with_argument(
+                "expression1, expression_n",
+                "Expression to use if previous expressions are _null_. Can be a constant, column, or function, and any combination of arithmetic operators. Pass as many expression arguments as necessary."
+            )
+            .build()
+            .unwrap()
+    })
 }
 
 #[cfg(test)]

@@ -17,17 +17,19 @@
 
 //! [`ArrowCastFunc`]: Implementation of the `arrow_cast`
 
-use std::any::Any;
-
 use arrow::datatypes::DataType;
 use datafusion_common::{
     arrow_datafusion_err, internal_err, plan_datafusion_err, plan_err, DataFusionError,
     ExprSchema, Result, ScalarValue,
 };
+use std::any::Any;
+use std::sync::OnceLock;
 
+use datafusion_expr::scalar_doc_sections::DOC_SECTION_OTHER;
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
 use datafusion_expr::{
-    ColumnarValue, Expr, ExprSchemable, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, Documentation, Expr, ExprSchemable, ScalarUDFImpl, Signature,
+    Volatility,
 };
 
 /// Implements casting to arbitrary arrow types (rather than SQL types)
@@ -131,6 +133,39 @@ impl ScalarUDFImpl for ArrowCastFunc {
         // return the newly written argument to DataFusion
         Ok(ExprSimplifyResult::Simplified(new_expr))
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_arrow_cast_doc())
+    }
+}
+
+static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+
+fn get_arrow_cast_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_OTHER)
+            .with_description("Casts a value to a specific Arrow data type.")
+            .with_syntax_example("arrow_cast(expression, datatype)")
+            .with_sql_example(
+                r#"```sql
+> select arrow_cast(-5, 'Int8') as a,
+  arrow_cast('foo', 'Dictionary(Int32, Utf8)') as b,
+  arrow_cast('bar', 'LargeUtf8') as c,
+  arrow_cast('2023-01-02T12:53:02', 'Timestamp(Microsecond, Some("+08:00"))') as d
+  ;
++----+-----+-----+---------------------------+
+| a  | b   | c   | d                         |
++----+-----+-----+---------------------------+
+| -5 | foo | bar | 2023-01-02T12:53:02+08:00 |
++----+-----+-----+---------------------------+
+```"#,
+            )
+            .with_argument("expression", "Expression to cast. The expression can be a constant, column, or function, and any combination of operators.")
+            .with_argument("datatype", "[Arrow data type](https://docs.rs/arrow/latest/arrow/datatypes/enum.DataType.html) name to cast to, as a string. The format is the same as that returned by [`arrow_typeof`]")
+            .build()
+            .unwrap()
+    })
 }
 
 /// Returns the requested type from the arguments
