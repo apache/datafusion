@@ -412,7 +412,11 @@ impl MinMaxBytesState {
     fn set_value(&mut self, group_index: usize, new_val: &[u8]) {
         match self.min_max[group_index].as_mut() {
             None => {
-                self.min_max[group_index] = Some(new_val.to_vec());
+                // No existing value, so allocate a new one (allocate 2x the size of the input)
+                // to avoid re-allocating for small strings
+                let mut new_vec = Vec::with_capacity(new_val.len() * 2);
+                new_vec.extend_from_slice(new_val);
+                self.min_max[group_index] = Some(new_vec);
                 self.total_data_bytes += new_val.len();
             }
             Some(existing_val) => {
