@@ -17,7 +17,9 @@
 
 //! [`ParquetOpener`] for opening Parquet files
 
-use crate::datasource::file_format::coerce_file_schema_to_view_type;
+use crate::datasource::file_format::{
+    coerce_file_schema_to_string_type, coerce_file_schema_to_view_type,
+};
 use crate::datasource::physical_plan::parquet::page_filter::PagePruningAccessPlanFilter;
 use crate::datasource::physical_plan::parquet::row_group_filter::RowGroupAccessPlanFilter;
 use crate::datasource::physical_plan::parquet::{
@@ -123,11 +125,11 @@ impl FileOpener for ParquetOpener {
                 ArrowReaderMetadata::load_async(&mut reader, options.clone()).await?;
             let mut schema = Arc::clone(metadata.schema());
 
-            // TODO: need https://github.com/apache/arrow-rs/pull/6539
-            // if let Some(merged) = coerce_file_schema_to_string_type(&table_schema, &schema)
-            // {
-            //     schema = Arc::new(merged);
-            // }
+            if let Some(merged) =
+                coerce_file_schema_to_string_type(&table_schema, &schema)
+            {
+                schema = Arc::new(merged);
+            }
 
             // read with view types
             if let Some(merged) = coerce_file_schema_to_view_type(&table_schema, &schema)

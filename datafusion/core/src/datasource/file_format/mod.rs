@@ -354,7 +354,13 @@ pub(crate) fn coerce_file_schema_to_string_type(
                         field.is_nullable(),
                     ))
                 }
-                (Some(DataType::Utf8View), DataType::BinaryView) => {
+                // If `schema_force_view_types` is enabled, the actual data could be `Binary` or `LargeBinary`
+                // because we will first change the table schema for binary-to-string coercion, then apply the
+                // string-to-view transformation. So we need all binary types to be coerced to `Utf8View` here.
+                (
+                    Some(DataType::Utf8View),
+                    DataType::Binary | DataType::LargeBinary | DataType::BinaryView,
+                ) => {
                     transform = true;
                     Arc::new(Field::new(
                         field.name(),
