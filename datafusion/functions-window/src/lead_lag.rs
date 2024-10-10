@@ -169,7 +169,8 @@ impl WindowUDFImpl for WindowShift {
                 }
             })?;
         let return_type = partition_evaluator_args
-            .input_types_at(0)
+            .input_types()
+            .get(0)
             .unwrap_or(&DataType::Null);
         let default_value = scalar_at(&partition_evaluator_args, 2)
             .and_then(|scalar| get_default_value(return_type, scalar))?;
@@ -228,7 +229,7 @@ fn scalar_at(
     partition_evaluator_args: &PartitionEvaluatorArgs,
     index: usize,
 ) -> Result<Option<ScalarValue>> {
-    let value = if let Some(expr) = partition_evaluator_args.input_expr_at(index) {
+    let value = if let Some(expr) = partition_evaluator_args.input_exprs().get(index) {
         let inner = expr
             .as_any()
             .downcast_ref::<datafusion_physical_expr::expressions::Literal>()
@@ -243,60 +244,7 @@ fn scalar_at(
     };
     Ok(value)
 }
-/*fn try_get_literal<'a>(
-    partition_evaluator_args: &'a PartitionEvaluatorArgs,
-    index: usize,
-) -> Result<&'a ScalarValue> {
-    partition_evaluator_args
-        .input_expr_at(index)
-        .and_then(|expr| expr.as_any().downcast_ref::<datafusion_physical_expr::expressions::Literal>())
-        .ok_or_else(|| DataFusionError::NotImplemented(
-            format!("There is only support for Literal types at field idx: {index} in Window Function")
-        )).map(|lit| lit.value())
-}
 
-fn try_get_signed_integer(value: &ScalarValue) -> Result<i64> {
-    if value.data_type().is_integer() {
-        value.cast_to(&DataType::Int64)?.try_into()
-    } else {
-        Err(DataFusionError::Execution(format!(
-            "Expected an integer value, but got {:?}",
-            value.data_type()
-        )))
-    }
-}
-
-fn try_get_shift_offset(
-    kind: &WindowShiftKind,
-    partition_evaluator_args: &PartitionEvaluatorArgs,
-    index: usize,
-) -> Result<i64> {
-    try_get_literal(partition_evaluator_args, index)
-        .and_then(try_get_signed_integer)
-        .map_or(Ok(None), |n| Ok(Some(n)))
-        .map(|n| kind.shift_offset(n))
-        .map(|offset| {
-            if partition_evaluator_args.is_reversed() {
-                offset.neg()
-            } else {
-                offset
-            }
-        })
-}
-
-fn try_get_default_value(
-    partition_evaluator_args: &PartitionEvaluatorArgs,
-    index: usize,
-) -> Result<ScalarValue> {
-    let return_type = partition_evaluator_args.input_types_at(0).unwrap();
-    match try_get_literal(partition_evaluator_args, index) {
-        Ok(default_value) if !default_value.is_null() => {
-            default_value.cast_to(return_type)
-        }
-        _ => ScalarValue::try_from(return_type),
-    }
-}
-*/
 #[derive(Debug)]
 struct WindowShiftEvaluator {
     shift_offset: i64,
