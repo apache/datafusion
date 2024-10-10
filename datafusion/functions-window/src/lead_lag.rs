@@ -36,19 +36,6 @@ use std::sync::Arc;
 get_or_init_udwf!(Lag, lag, "lag udwf", WindowShift::lag);
 get_or_init_udwf!(Lead, lead, "lead udwf", WindowShift::lead);
 
-// This workaround necessary to avoid multiple definitions of
-// `STATIC_WindowShift` being created during macro expansion for lazily
-// initializing the `WindowUDF` (exactly once).
-//
-// This happens when `WindowShift` is passed as the `$UDWF` parameter
-// twice to create `lag_udwf()` and `lead_udwf()` respectively. Now,
-// it will expand into `STATIC_Lag` and `STATIC_lead` which are unique,
-// avoiding the issue.
-#[allow(dead_code)]
-struct Lag {}
-#[allow(dead_code)]
-struct Lead {}
-
 /// Create an expression to represent the `lag` window function
 ///
 /// returns value evaluated at the row that is offset rows before the current row within the partition;
