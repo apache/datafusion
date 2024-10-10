@@ -26,9 +26,42 @@ use datafusion_expr::scalar_doc_sections::DOC_SECTION_DATETIME;
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
+use datafusion_macros::udf_doc;
 use std::any::Any;
 use std::sync::OnceLock;
 
+#[udf_doc(
+    doc_section(include = "true", label = "Time and Date Functions"),
+    description = r"Converts a value to a date (`YYYY-MM-DD`).
+Supports strings, integer and double types as input.
+Strings are parsed as YYYY-MM-DD (e.g. '2023-07-20') if no [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html)s are provided.
+Integers and doubles are interpreted as days since the unix epoch (`1970-01-01T00:00:00Z`).
+Returns the corresponding date.
+Note: `to_date` returns Date32, which represents its values as the number of days since unix epoch(`1970-01-01`) stored as signed 32 bit value. The largest supported date value is `9999-12-31`.",
+    syntax_example = "to_date('2017-05-31', '%Y-%m-%d')",
+    sql_example = "```sql\n\
+> select to_date('2023-01-31');\n\
++-----------------------------+\n\
+| to_date(Utf8(\"2023-01-31\")) |\n\
++-----------------------------+\n\
+| 2023-01-31                  |\n\
++-----------------------------+\n\
+> select to_date('2023/01/31', '%Y-%m-%d', '%Y/%m/%d');\n\
++---------------------------------------------------------------+\n\
+| to_date(Utf8(\"2023/01/31\"),Utf8(\"%Y-%m-%d\"),Utf8(\"%Y/%m/%d\")) |\n\
++---------------------------------------------------------------+\n\
+| 2023-01-31                                                    |\n\
++---------------------------------------------------------------+\n\
+```\n\n\
+Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/to_date.rs)",
+    standard_argument(name = "expression", expression_type = "String"),
+    argument(
+        name = "format_n",
+        description = r"Optional [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) strings to use to parse the expression. Formats will be tried in the order
+  they appear with the first successful one being returned. If none of the formats successfully parse the expression
+  an error will be returned."
+    )
+)]
 #[derive(Debug)]
 pub struct ToDateFunc {
     signature: Signature,
@@ -470,5 +503,11 @@ mod tests {
                 date_str
             );
         }
+    }
+
+    #[test]
+    fn test_doc() {
+        let dt = ToDateFunc::new();
+        println!("{:?}", dt.documentation_test());
     }
 }
