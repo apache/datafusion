@@ -327,15 +327,12 @@ macro_rules! create_array {
 ///
 /// Example:
 /// ```
+/// use datafusion_common::{create_batch, create_array};
 /// let batch = create_batch!(
 ///     ("a", Int32, vec![1, 2, 3]),
 ///     ("b", Float64, vec![Some(4.0), None, Some(5.0)]),
 ///     ("c", Utf8, vec!["alpha", "beta", "gamma"])
-/// )?;
-///
-/// let ctx = SessionContext::new();
-///
-/// df = ctx.read_batch(batch)?;
+/// );
 /// ```
 #[macro_export]
 macro_rules! create_batch {
