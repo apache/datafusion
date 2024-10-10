@@ -35,7 +35,7 @@ use datafusion::error::Result;
 #[derive(Debug)]
 #[allow(non_camel_case_types)]
 pub struct FFI_TableProvider {
-    pub version: i64,
+    pub version: c_int,
     pub schema: Option<unsafe extern "C" fn(provider: *const FFI_TableProvider) -> FFI_ArrowSchema>,
     pub scan: Option<
         unsafe extern "C" fn(
@@ -177,7 +177,7 @@ impl FFI_TableProvider {
         let private_data = Box::new(ProviderPrivateData { provider });
 
         Self {
-            version: 2,
+            version: 1,
             schema: Some(schema_fn_wrapper),
             scan: Some(scan_fn_wrapper),
             table_type: Some(table_type_fn_wrapper),
@@ -211,7 +211,7 @@ impl FFI_TableProvider {
 /// defined on this struct must only use the stable functions provided in 
 /// FFI_TableProvider to interact with the foreign table provider.
 #[derive(Debug)]
-struct ForeignTableProvider(*const FFI_TableProvider);
+pub struct ForeignTableProvider(pub *const FFI_TableProvider);
 
 unsafe impl Send for ForeignTableProvider {}
 unsafe impl Sync for ForeignTableProvider {}
