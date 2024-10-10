@@ -279,6 +279,86 @@ pub fn get_data_dir(
     }
 }
 
+#[macro_export]
+macro_rules! create_array {
+    (Boolean, $values: expr) => {
+        std::sync::Arc::new(arrow::array::BooleanArray::from($values))
+    };
+    (Int8, $values: expr) => {
+        std::sync::Arc::new(arrow::array::Int8Array::from($values))
+    };
+    (Int16, $values: expr) => {
+        std::sync::Arc::new(arrow::array::Int16Array::from($values))
+    };
+    (Int32, $values: expr) => {
+        std::sync::Arc::new(arrow::array::Int32Array::from($values))
+    };
+    (Int64, $values: expr) => {
+        std::sync::Arc::new(arrow::array::Int64Array::from($values))
+    };
+    (UInt8, $values: expr) => {
+        std::sync::Arc::new(arrow::array::UInt8Array::from($values))
+    };
+    (UInt16, $values: expr) => {
+        std::sync::Arc::new(arrow::array::UInt16Array::from($values))
+    };
+    (UInt32, $values: expr) => {
+        std::sync::Arc::new(arrow::array::UInt32Array::from($values))
+    };
+    (UInt64, $values: expr) => {
+        std::sync::Arc::new(arrow::array::UInt64Array::from($values))
+    };
+    (Float16, $values: expr) => {
+        std::sync::Arc::new(arrow::array::Float16Array::from($values))
+    };
+    (Float32, $values: expr) => {
+        std::sync::Arc::new(arrow::array::Float32Array::from($values))
+    };
+    (Float64, $values: expr) => {
+        std::sync::Arc::new(arrow::array::Float64Array::from($values))
+    };
+    (Utf8, $values: expr) => {
+        std::sync::Arc::new(arrow::array::StringArray::from($values))
+    };
+}
+
+/// Creates a record batch from literal slice of values, suitable for rapid
+/// testing and development.
+///
+/// Example:
+/// ```
+/// let batch = create_batch!(
+///     ("a", Int32, vec![1, 2, 3]),
+///     ("b", Float64, vec![Some(4.0), None, Some(5.0)]),
+///     ("c", Utf8, vec!["alpha", "beta", "gamma"])
+/// )?;
+///
+/// let ctx = SessionContext::new();
+///
+/// df = ctx.read_batch(batch)?;
+/// ```
+#[macro_export]
+macro_rules! create_batch {
+    ($(($name: expr, $type: ident, $values: expr)),*) => {
+        {
+            let schema = std::sync::Arc::new(arrow_schema::Schema::new(vec![
+                $(
+                    arrow_schema::Field::new($name, arrow_schema::DataType::$type, true),
+                )*
+            ]));
+
+            let batch = arrow_array::RecordBatch::try_new(
+                schema,
+                vec![$(
+                    create_array!($type, $values),
+                )*]
+            );
+
+            batch
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -332,5 +412,16 @@ mod tests {
 
         let res = parquet_test_data();
         assert!(PathBuf::from(res).is_dir());
+    }
+
+    #[test]
+    fn test_create_record_batch() {
+        let batch = create_batch!(
+            ("a", Int32, vec![1, 2, 3]),
+            ("b", Float64, vec![Some(4.0), None, Some(5.0)]),
+            ("c", Utf8, vec!["alpha", "beta", "gamma"])
+        );
+
+        assert!(batch.is_ok());
     }
 }
