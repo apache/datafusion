@@ -57,6 +57,7 @@ fn struct_expr(args: &[ColumnarValue]) -> Result<ColumnarValue> {
 #[derive(Debug)]
 pub struct StructFunc {
     signature: Signature,
+    aliases: Vec<String>,
 }
 
 impl Default for StructFunc {
@@ -69,6 +70,7 @@ impl StructFunc {
     pub fn new() -> Self {
         Self {
             signature: Signature::variadic_any(Volatility::Immutable),
+            aliases: vec![String::from("row")]
         }
     }
 }
@@ -79,6 +81,10 @@ impl ScalarUDFImpl for StructFunc {
     }
     fn name(&self) -> &str {
         "struct"
+    }
+
+    fn aliases(&self) -> &[String] {
+        &self.aliases
     }
 
     fn signature(&self) -> &Signature {
