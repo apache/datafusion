@@ -108,13 +108,13 @@ pub fn apply_filter_as_nulls(
     opt_filter: Option<&BooleanArray>,
 ) -> Result<ArrayRef> {
     let nulls = filtered_null_mask(opt_filter, input);
-    replace_nulls(input, nulls)
+    set_nulls_dyn(input, nulls)
 }
 
 /// Replaces the nulls in the input array with the given `NullBuffer`
 ///
-/// Can replace when upstreamed in arrow-rs: https://github.com/apache/arrow-rs/issues/6528
-pub fn replace_nulls(input: &dyn Array, nulls: Option<NullBuffer>) -> Result<ArrayRef> {
+/// Can replace when upstreamed in arrow-rs: <https://github.com/apache/arrow-rs/issues/6528>
+pub fn set_nulls_dyn(input: &dyn Array, nulls: Option<NullBuffer>) -> Result<ArrayRef> {
     if let Some(nulls) = nulls.as_ref() {
         assert_eq!(nulls.len(), input.len());
     }

@@ -29,6 +29,11 @@ use std::sync::Arc;
 ///
 /// This implementation dispatches to the appropriate specialized code in
 /// [`MinMaxBytesState`] based on data type and comparison function
+///
+/// [`StringArray`]: arrow::array::StringArray
+/// [`BinaryArray`]: arrow::array::BinaryArray
+/// [`StringViewArray`]: arrow::array::StringViewArray
+#[derive(Debug)]
 pub(crate) struct MinMaxBytesAccumulator {
     /// Inner data storage.
     inner: MinMaxBytesState,
@@ -107,21 +112,18 @@ impl GroupsAccumulator for MinMaxBytesAccumulator {
             (true, &DataType::Utf8) => self.inner.update_batch(
                 str_to_bytes(array.as_string::<i32>().iter()),
                 group_indices,
-                opt_filter,
                 total_num_groups,
                 string_min,
             ),
             (true, &DataType::LargeUtf8) => self.inner.update_batch(
                 str_to_bytes(array.as_string::<i64>().iter()),
                 group_indices,
-                opt_filter,
                 total_num_groups,
                 string_min,
             ),
             (true, &DataType::Utf8View) => self.inner.update_batch(
                 str_to_bytes(array.as_string_view().iter()),
                 group_indices,
-                opt_filter,
                 total_num_groups,
                 string_min,
             ),
@@ -130,21 +132,18 @@ impl GroupsAccumulator for MinMaxBytesAccumulator {
             (false, &DataType::Utf8) => self.inner.update_batch(
                 str_to_bytes(array.as_string::<i32>().iter()),
                 group_indices,
-                opt_filter,
                 total_num_groups,
                 string_max,
             ),
             (false, &DataType::LargeUtf8) => self.inner.update_batch(
                 str_to_bytes(array.as_string::<i64>().iter()),
                 group_indices,
-                opt_filter,
                 total_num_groups,
                 string_max,
             ),
             (false, &DataType::Utf8View) => self.inner.update_batch(
                 str_to_bytes(array.as_string_view().iter()),
                 group_indices,
-                opt_filter,
                 total_num_groups,
                 string_max,
             ),
@@ -153,21 +152,18 @@ impl GroupsAccumulator for MinMaxBytesAccumulator {
             (true, &DataType::Binary) => self.inner.update_batch(
                 array.as_binary::<i32>().iter(),
                 group_indices,
-                opt_filter,
                 total_num_groups,
                 binary_min,
             ),
             (true, &DataType::LargeBinary) => self.inner.update_batch(
                 array.as_binary::<i64>().iter(),
                 group_indices,
-                opt_filter,
                 total_num_groups,
                 binary_min,
             ),
             (true, &DataType::BinaryView) => self.inner.update_batch(
                 array.as_binary_view().iter(),
                 group_indices,
-                opt_filter,
                 total_num_groups,
                 binary_min,
             ),
@@ -176,21 +172,18 @@ impl GroupsAccumulator for MinMaxBytesAccumulator {
             (false, &DataType::Binary) => self.inner.update_batch(
                 array.as_binary::<i32>().iter(),
                 group_indices,
-                opt_filter,
                 total_num_groups,
                 binary_max,
             ),
             (false, &DataType::LargeBinary) => self.inner.update_batch(
                 array.as_binary::<i64>().iter(),
                 group_indices,
-                opt_filter,
                 total_num_groups,
                 binary_max,
             ),
             (false, &DataType::BinaryView) => self.inner.update_batch(
                 array.as_binary_view().iter(),
                 group_indices,
-                opt_filter,
                 total_num_groups,
                 binary_max,
             ),
@@ -206,7 +199,7 @@ impl GroupsAccumulator for MinMaxBytesAccumulator {
     fn evaluate(&mut self, emit_to: EmitTo) -> Result<ArrayRef> {
         let (data_capacity, min_maxes) = self.inner.emit_to(emit_to);
 
-        // Convert the Vec of bytes to a vec of Strings (no cost)
+        // Convert the Vec of bytes to a vec of Strings (at no cost)
         fn bytes_to_str(
             min_maxes: Vec<Option<Vec<u8>>>,
         ) -> impl Iterator<Item = Option<String>> {
@@ -351,15 +344,33 @@ fn capacity_to_view_block_size(data_capacity: usize) -> u32 {
     }
 }
 
-/// Stores internal Min/Max state for "bytes" types ([`StringArray`], [`BinaryArray`], etc)
+/// Stores internal Min/Max state for "bytes" types.
 ///
 /// This implementation is general and stores the minimum/maximum for each
 /// groups in an individual byte array, which balances allocations and memory
 /// fragmentation (aka garbage).
 ///
-/// Note that for StringViewArray and BinaryViewArray, there are potentially
-/// more efficient implementations by managing a string data buffer directly,
-/// but then garbage collection, memory management, and final array
+/// ```text
+///                      ┌─────────────────────────────────┐
+///   ┌─────┐     ┌─────▶│Option<Vec<u8>> (["A"])          │──────────────▶   "A"
+///   │  0  │─────┘      └─────────────────────────────────┘
+///   ├─────┤            ┌─────────────────────────────────┐
+///   │  1  │───────────▶│Option<Vec<u8>> (["Z"])          │───────────────▶   "Z"
+///   └─────┘            └─────────────────────────────────┘                   ...
+///     ...                 ...
+///   ┌─────┐            ┌────────────────────────────────┐
+///   │ N-2 │            │Option<Vec<u8>> (["A"])         │────────────────▶   "A"
+///   ├─────┤            └────────────────────────────────┘
+///   │ N-1 │─────┐      ┌────────────────────────────────┐
+///   └─────┘     └─────▶│Option<Vec<u8>> (["Q"])         │────────────────▶   "Q"
+///                      └────────────────────────────────┘
+///
+///                        min_max: Vec<Option<Vec<u8>>
+/// ```
+///
+/// Note that for `StringViewArray` and `BinaryViewArray`, there are potentially
+/// more efficient implementations (e.g. by managing a string data buffer
+/// directly), but then garbage collection, memory management, and final array
 /// construction becomes more complex.
 ///
 /// See discussion on <https://github.com/apache/datafusion/issues/6906>
@@ -425,7 +436,6 @@ impl MinMaxBytesState {
         &mut self,
         iter: I,
         group_indices: &[usize],
-        opt_filter: Option<&BooleanArray>,
         total_num_groups: usize,
         mut cmp: F,
     ) -> Result<()>
@@ -435,8 +445,6 @@ impl MinMaxBytesState {
     {
         self.min_max.resize(total_num_groups, None);
         let mut locations = vec![MinMaxLocation::ExistingMinMax; total_num_groups];
-
-        assert!(opt_filter.is_none(), "Filtering not yet implemented");
 
         // Figure out the new min value for each group
         for (new_val, group_index) in iter.into_iter().zip(group_indices.iter()) {
