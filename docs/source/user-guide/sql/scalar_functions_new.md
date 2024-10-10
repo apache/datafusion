@@ -54,6 +54,10 @@ log(numeric_expression)
 ## Conditional Functions
 
 - [coalesce](#coalesce)
+- [ifnull](#ifnull)
+- [nullif](#nullif)
+- [nvl](#nvl)
+- [nvl2](#nvl2)
 
 ### `coalesce`
 
@@ -66,6 +70,117 @@ coalesce(expression1[, ..., expression_n])
 #### Arguments
 
 - **expression1, expression_n**: Expression to use if previous expressions are _null_. Can be a constant, column, or function, and any combination of arithmetic operators. Pass as many expression arguments as necessary.
+
+#### Example
+
+```sql
+> select coalesce(null, null, 'datafusion');
++----------------------------------------+
+| coalesce(NULL,NULL,Utf8("datafusion")) |
++----------------------------------------+
+| datafusion                             |
++----------------------------------------+
+```
+
+### `ifnull`
+
+_Alias of [nvl](#nvl)._
+
+### `nullif`
+
+Returns _null_ if _expression1_ equals _expression2_; otherwise it returns _expression1_.
+This can be used to perform the inverse operation of [`coalesce`](#coalesce).
+
+```
+nullif(expression1, expression2)
+```
+
+#### Arguments
+
+- **expression1**: Expression to compare and return if equal to expression2. Can be a constant, column, or function, and any combination of operators.
+- **expression2**: Expression to compare to expression1. Can be a constant, column, or function, and any combination of operators.
+
+#### Example
+
+```sql
+> select nullif('datafusion', 'data');
++-----------------------------------------+
+| nullif(Utf8("datafusion"),Utf8("data")) |
++-----------------------------------------+
+| datafusion                              |
++-----------------------------------------+
+> select nullif('datafusion', 'datafusion');
++-----------------------------------------------+
+| nullif(Utf8("datafusion"),Utf8("datafusion")) |
++-----------------------------------------------+
+|                                               |
++-----------------------------------------------+
+```
+
+### `nvl`
+
+Returns _expression2_ if _expression1_ is NULL otherwise it returns _expression1_.
+
+```
+nvl(expression1, expression2)
+```
+
+#### Arguments
+
+- **expression1**: Expression to return if not null. Can be a constant, column, or function, and any combination of operators.
+- **expression2**: Expression to return if expr1 is null. Can be a constant, column, or function, and any combination of operators.
+
+#### Example
+
+```sql
+> select nvl(null, 'a');
++---------------------+
+| nvl(NULL,Utf8("a")) |
++---------------------+
+| a                   |
++---------------------+\
+> select nvl('b', 'a');
++--------------------------+
+| nvl(Utf8("b"),Utf8("a")) |
++--------------------------+
+| b                        |
++--------------------------+
+```
+
+#### Aliases
+
+- ifnull
+
+### `nvl2`
+
+Returns _expression2_ if _expression1_ is not NULL; otherwise it returns _expression3_.
+
+```
+nvl2(expression1, expression2, expression3)
+```
+
+#### Arguments
+
+- **expression1**: Expression to test for null. Can be a constant, column, or function, and any combination of operators.
+- **expression2**: Expression to return if expr1 is not null. Can be a constant, column, or function, and any combination of operators.
+- **expression3**: Expression to return if expr1 is null. Can be a constant, column, or function, and any combination of operators.
+
+#### Example
+
+```sql
+> select nvl2(null, 'a', 'b');
++--------------------------------+
+| nvl2(NULL,Utf8("a"),Utf8("b")) |
++--------------------------------+
+| b                              |
++--------------------------------+
+> select nvl2('data', 'a', 'b');
++----------------------------------------+
+| nvl2(Utf8("data"),Utf8("a"),Utf8("b")) |
++----------------------------------------+
+| a                                      |
++----------------------------------------+
+```
 
 ## String Functions
 
@@ -1159,6 +1274,45 @@ to_date('2017-05-31', '%Y-%m-%d')
 
 Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/to_date.rs)
 
+## Struct Functions
+
+- [named_struct](#named_struct)
+
+### `named_struct`
+
+Returns an Arrow struct using the specified name and input expressions pairs.
+
+```
+named_struct(expression1_name, expression1_input[, ..., expression_n_name, expression_n_input])
+```
+
+#### Arguments
+
+- **expression_n_name**: Name of the column field. Must be a constant string.
+- **expression_n_input**: Expression to include in the output struct. Can be a constant, column, or function, and any combination of arithmetic or string operators.
+
+#### Example
+
+For example, this query converts two columns `a` and `b` to a single column with
+a struct type of fields `field_a` and `field_b`:
+
+```sql
+> select * from t;
++---+---+
+| a | b |
++---+---+
+| 1 | 2 |
+| 3 | 4 |
++---+---+
+> select named_struct('field_a', a, 'field_b', b) from t;
++-------------------------------------------------------+
+| named_struct(Utf8("field_a"),t.a,Utf8("field_b"),t.b) |
++-------------------------------------------------------+
+| {field_a: 1, field_b: 2}                              |
+| {field_a: 3, field_b: 4}                              |
++-------------------------------------------------------+
+```
+
 ## Hashing Functions
 
 - [sha224](#sha224)
@@ -1174,3 +1328,123 @@ sha224(expression)
 #### Arguments
 
 - **expression**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
+
+## Other Functions
+
+- [arrow_cast](#arrow_cast)
+- [arrow_typeof](#arrow_typeof)
+- [get_field](#get_field)
+- [version](#version)
+
+### `arrow_cast`
+
+Casts a value to a specific Arrow data type.
+
+```
+arrow_cast(expression, datatype)
+```
+
+#### Arguments
+
+- **expression**: Expression to cast. The expression can be a constant, column, or function, and any combination of operators.
+- **datatype**: [Arrow data type](https://docs.rs/arrow/latest/arrow/datatypes/enum.DataType.html) name to cast to, as a string. The format is the same as that returned by [`arrow_typeof`]
+
+#### Example
+
+```sql
+> select arrow_cast(-5, 'Int8') as a,
+  arrow_cast('foo', 'Dictionary(Int32, Utf8)') as b,
+  arrow_cast('bar', 'LargeUtf8') as c,
+  arrow_cast('2023-01-02T12:53:02', 'Timestamp(Microsecond, Some("+08:00"))') as d
+  ;
++----+-----+-----+---------------------------+
+| a  | b   | c   | d                         |
++----+-----+-----+---------------------------+
+| -5 | foo | bar | 2023-01-02T12:53:02+08:00 |
++----+-----+-----+---------------------------+
+```
+
+### `arrow_typeof`
+
+Returns the name of the underlying [Arrow data type](https://docs.rs/arrow/latest/arrow/datatypes/enum.DataType.html) of the expression:
+
+```
+arrow_typeof(expression)
+```
+
+#### Arguments
+
+- **expression**: Expression to evaluate. The expression can be a constant, column, or function, and any combination of operators.
+
+#### Example
+
+```sql
+> select arrow_typeof('foo'), arrow_typeof(1);
++---------------------------+------------------------+
+| arrow_typeof(Utf8("foo")) | arrow_typeof(Int64(1)) |
++---------------------------+------------------------+
+| Utf8                      | Int64                  |
++---------------------------+------------------------+
+```
+
+### `get_field`
+
+Returns a field within a map or a struct with the given key.
+Note: most users invoke `get_field` indirectly via field access
+syntax such as `my_struct_col['field_name']` which results in a call to
+`get_field(my_struct_col, 'field_name')`.
+
+```
+get_field(expression1, expression2)
+```
+
+#### Arguments
+
+- **expression1**: The map or struct to retrieve a field for.
+- **expression2**: The field name in the map or struct to retrieve data for. Must evaluate to a string.
+
+#### Example
+
+```sql
+> create table t (idx varchar, v varchar) as values ('data','fusion'), ('apache', 'arrow');
+> select struct(idx, v) from t as c;
++-------------------------+
+| struct(c.idx,c.v)       |
++-------------------------+
+| {c0: data, c1: fusion}  |
+| {c0: apache, c1: arrow} |
++-------------------------+
+> select get_field((select struct(idx, v) from t), 'c0');
++-----------------------+
+| struct(t.idx,t.v)[c0] |
++-----------------------+
+| data                  |
+| apache                |
++-----------------------+
+> select get_field((select struct(idx, v) from t), 'c1');
++-----------------------+
+| struct(t.idx,t.v)[c1] |
++-----------------------+
+| fusion                |
+| arrow                 |
++-----------------------+
+```
+
+### `version`
+
+Returns the version of DataFusion.
+
+```
+version()
+```
+
+#### Example
+
+```sql
+> select version();
++--------------------------------------------+
+| version()                                  |
++--------------------------------------------+
+| Apache DataFusion 42.0.0, aarch64 on macos |
++--------------------------------------------+
+```
