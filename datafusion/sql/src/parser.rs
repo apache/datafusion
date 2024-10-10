@@ -761,10 +761,10 @@ impl<'a> DFParser<'a> {
                         // Note that mixing both names and definitions is not allowed
                         let peeked = self.parser.peek_nth_token(2);
                         if peeked == Token::Comma || peeked == Token::RParen {
-                            // list of column names
+                            // List of column names
                             builder.table_partition_cols = Some(self.parse_partitions()?)
                         } else {
-                            // list of column defs
+                            // List of column defs
                             let (cols, cons) = self.parse_columns()?;
                             builder.table_partition_cols = Some(
                                 cols.iter().map(|col| col.name.to_string()).collect(),
@@ -850,7 +850,7 @@ impl<'a> DFParser<'a> {
             options.push((key, value));
             let comma = self.parser.consume_token(&Token::Comma);
             if self.parser.consume_token(&Token::RParen) {
-                // allow a trailing comma, even though it's not in standard
+                // Allow a trailing comma, even though it's not in standard
                 break;
             } else if !comma {
                 return self.expected(

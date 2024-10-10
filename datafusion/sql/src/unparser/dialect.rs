@@ -162,7 +162,7 @@ impl Dialect for DefaultDialect {
     fn identifier_quote_style(&self, identifier: &str) -> Option<char> {
         let identifier_regex = Regex::new(r"^[a-zA-Z_][a-zA-Z0-9_]*$").unwrap();
         let id_upper = identifier.to_uppercase();
-        // special case ignore "ID", see https://github.com/sqlparser-rs/sqlparser-rs/issues/1382
+        // Special case ignore "ID", see https://github.com/sqlparser-rs/sqlparser-rs/issues/1382
         // ID is a keyword in ClickHouse, but we don't want to quote it when unparsing SQL here
         if (id_upper != "ID" && ALL_KEYWORDS.contains(&id_upper.as_str()))
             || !identifier_regex.is_match(identifier)
@@ -377,7 +377,7 @@ impl Default for CustomDialect {
 }
 
 impl CustomDialect {
-    // create a CustomDialect
+    // Create a CustomDialect
     #[deprecated(note = "please use `CustomDialectBuilder` instead")]
     pub fn new(identifier_quote_style: Option<char>) -> Self {
         Self {
@@ -541,7 +541,7 @@ impl CustomDialectBuilder {
         self
     }
 
-    /// Customize the dialect to supports `NULLS FIRST` in `ORDER BY` clauses
+    /// Customize the dialect to support `NULLS FIRST` in `ORDER BY` clauses
     pub fn with_supports_nulls_first_in_sort(
         mut self,
         supports_nulls_first_in_sort: bool,
@@ -620,7 +620,7 @@ impl CustomDialectBuilder {
         self
     }
 
-    /// Customize the dialect to supports column aliases as part of alias table definition
+    /// Customize the dialect to support column aliases as part of alias table definition
     pub fn with_supports_column_alias_in_table_alias(
         mut self,
         supports_column_alias_in_table_alias: bool,
