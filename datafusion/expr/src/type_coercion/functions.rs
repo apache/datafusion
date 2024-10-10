@@ -221,20 +221,37 @@ fn get_valid_types_with_scalar_udf(
     current_types: &[DataType],
     func: &ScalarUDF,
 ) -> Result<Vec<Vec<DataType>>> {
-    let valid_types = match signature {
+    match signature {
         TypeSignature::UserDefined => match func.coerce_types(current_types) {
-            Ok(coerced_types) => vec![coerced_types],
-            Err(e) => return exec_err!("User-defined coercion failed with {:?}", e),
+            Ok(coerced_types) => Ok(vec![coerced_types]),
+            Err(e) => exec_err!("User-defined coercion failed with {:?}", e),
         },
-        TypeSignature::OneOf(signatures) => signatures
-            .iter()
-            .filter_map(|t| get_valid_types_with_scalar_udf(t, current_types, func).ok())
-            .flatten()
-            .collect::<Vec<_>>(),
-        _ => get_valid_types(signature, current_types)?,
-    };
+        TypeSignature::OneOf(signatures) => {
+            let mut res = vec![];
+            let mut errors = vec![];
+            for sig in signatures {
+                match get_valid_types_with_scalar_udf(sig, current_types, func) {
+                    Ok(valid_types) => {
+                        res.extend(valid_types);
+                    }
+                    Err(e) => {
+                        errors.push(e.to_string());
+                    }
+                }
+            }
 
-    Ok(valid_types)
+            // Every signature failed, return the joined error
+            if res.is_empty() {
+                internal_err!(
+                    "Failed to match any signature, errors: {}",
+                    errors.join(",")
+                )
+            } else {
+                Ok(res)
+            }
+        }
+        _ => get_valid_types(signature, current_types),
+    }
 }
 
 fn get_valid_types_with_aggregate_udf(
