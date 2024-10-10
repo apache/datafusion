@@ -2754,7 +2754,6 @@ are not allowed
 - [unnest](#unnest-struct)
 
 For more struct functions see the new documentation [`here`](https://datafusion.apache.org/user-guide/sql/scalar_functions_new.html)
-For more struct functions see the new documentation [`here`](https://datafusion.apache.org/user-guide/sql/scalar_functions_new.html)
 
 ### `unnest (struct)`
 
