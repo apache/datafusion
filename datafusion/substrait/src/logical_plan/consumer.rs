@@ -1040,7 +1040,7 @@ fn apply_projection(table: DataFrame, substrait_schema: DFSchema) -> Result<Logi
 
             Ok(LogicalPlan::TableScan(scan))
         }
-        _ => Ok(t),
+        _ => plan_err!("DataFrame passed to apply_projection must be a TableScan"),
     }
 }
 
