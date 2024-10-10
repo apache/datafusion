@@ -19,7 +19,9 @@ use datafusion::{
 };
 use futures::{executor::block_on, Stream, TryStreamExt};
 
-pub fn record_batch_to_arrow_stream(stream: SendableRecordBatchStream) -> FFI_ArrowArrayStream {
+pub fn record_batch_to_arrow_stream(
+    stream: SendableRecordBatchStream,
+) -> FFI_ArrowArrayStream {
     let private_data = Box::new(RecoredBatchStreamPrivateData {
         stream,
         last_error: None,
@@ -50,7 +52,8 @@ unsafe extern "C" fn release_stream(stream: *mut FFI_ArrowArrayStream) {
     stream.get_next = None;
     stream.get_last_error = None;
 
-    let private_data = Box::from_raw(stream.private_data as *mut RecoredBatchStreamPrivateData);
+    let private_data =
+        Box::from_raw(stream.private_data as *mut RecoredBatchStreamPrivateData);
     drop(private_data);
 
     stream.release = None;
@@ -89,7 +92,9 @@ struct ExportedRecordBatchStream {
 
 impl ExportedRecordBatchStream {
     fn get_private_data(&mut self) -> &mut RecoredBatchStreamPrivateData {
-        unsafe { &mut *((*self.stream).private_data as *mut RecoredBatchStreamPrivateData) }
+        unsafe {
+            &mut *((*self.stream).private_data as *mut RecoredBatchStreamPrivateData)
+        }
     }
 
     pub fn get_schema(&mut self, out: *mut FFI_ArrowSchema) -> i32 {
@@ -106,7 +111,8 @@ impl ExportedRecordBatchStream {
             }
             Err(ref err) => {
                 private_data.last_error = Some(
-                    CString::new(err.to_string()).expect("Error string has a null byte in it."),
+                    CString::new(err.to_string())
+                        .expect("Error string has a null byte in it."),
                 );
                 1
             }
@@ -133,7 +139,8 @@ impl ExportedRecordBatchStream {
             }
             Err(err) => {
                 private_data.last_error = Some(
-                    CString::new(err.to_string()).expect("Error string has a null byte in it."),
+                    CString::new(err.to_string())
+                        .expect("Error string has a null byte in it."),
                 );
                 1
             }
