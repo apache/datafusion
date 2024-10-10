@@ -1385,6 +1385,24 @@ NaN
 statement ok
 DROP TABLE tmp_percentile_cont;
 
+# Test for issue where approx_percentile_cont_with_weight
+
+statement ok
+CREATE TABLE t1(v1 BOOL);
+
+statement ok
+INSERT INTO t1 VALUES (TRUE);
+
+# ISSUE: https://github.com/apache/datafusion/issues/12716
+# This test verifies that approx_percentile_cont_with_weight does not panic when given 'NaN' and returns 'inf'
+query R
+SELECT approx_percentile_cont_with_weight('NaN'::DOUBLE, 0, 0) FROM t1 WHERE t1.v1;
+----
+Infinity
+
+statement ok
+DROP TABLE t1;
+
 # csv_query_cube_avg
 query TIR
 SELECT c1, c2, AVG(c3) FROM aggregate_test_100 GROUP BY CUBE (c1, c2) ORDER BY c1, c2

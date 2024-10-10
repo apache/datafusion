@@ -27,7 +27,11 @@ dev/update_function_docs.sh file for updating surrounding text.
 
 # Aggregate Functions (NEW)
 
-This page is a WIP and will replace the Aggregate Functions page once completed.
+Note: this documentation is in the process of being migrated to be [automatically created from the codebase].
+Please see the [Aggregate Functions (old)](aggregate_functions.md) page for
+the rest of the documentation.
+
+[automatically created from the codebase]: https://github.com/apache/datafusion/issues/12740
 
 Aggregate functions operate on a set of values to compute a single result.
 

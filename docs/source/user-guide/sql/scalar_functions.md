@@ -19,6 +19,14 @@
 
 # Scalar Functions
 
+Scalar functions operate on a single row at a time and return a single value.
+
+Note: this documentation is in the process of being migrated to be [automatically created from the codebase].
+Please see the [Scalar Functions (new)](scalar_functions_new.md) page for
+the rest of the documentation.
+
+[automatically created from the codebase]: https://github.com/apache/datafusion/issues/12740
+
 ## Math Functions
 
 - [abs](#abs)
