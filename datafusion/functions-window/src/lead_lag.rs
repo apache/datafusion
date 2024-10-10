@@ -157,7 +157,7 @@ impl WindowUDFImpl for WindowShift {
             })?;
         let return_type = partition_evaluator_args
             .input_types()
-            .get(0)
+            .first()
             .unwrap_or(&DataType::Null);
         let default_value = scalar_at(&partition_evaluator_args, 2)
             .and_then(|scalar| get_default_value(return_type, scalar))?;
