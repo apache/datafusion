@@ -25,11 +25,7 @@ use std::sync::Arc;
 
 use super::write::demux::start_demuxer_task;
 use super::write::{create_writer, SharedBuffer};
-use super::{
-    coerce_file_schema_to_view_type, transform_binary_to_string,
-    transform_schema_to_view, FileFormat, FileFormatFactory, FilePushdownSupport,
-    FileScanConfig,
-};
+use super::{coerce_file_schema_to_string_type, coerce_file_schema_to_view_type, transform_binary_to_string, transform_schema_to_view, FileFormat, FileFormatFactory, FilePushdownSupport, FileScanConfig};
 use crate::arrow::array::RecordBatch;
 use crate::arrow::datatypes::{Fields, Schema, SchemaRef};
 use crate::datasource::file_format::file_compression_type::FileCompressionType;
@@ -572,6 +568,11 @@ pub fn statistics_from_parquet_meta_calc(
         file_metadata.schema_descr(),
         file_metadata.key_value_metadata(),
     )?;
+    // TODO: need https://github.com/apache/arrow-rs/pull/6539
+    // if let Some(merged) = coerce_file_schema_to_string_type(&table_schema, &file_schema) {
+    //     file_schema = merged;
+    // }
+
     if let Some(merged) = coerce_file_schema_to_view_type(&table_schema, &file_schema) {
         file_schema = merged;
     }

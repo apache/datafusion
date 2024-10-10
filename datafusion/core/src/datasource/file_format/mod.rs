@@ -322,6 +322,50 @@ pub fn transform_binary_to_string(schema: &Schema) -> Schema {
     Schema::new_with_metadata(transformed_fields, schema.metadata.clone())
 }
 
+/// If the table schema uses a string type, coerce the file schema to use a string type.
+pub(crate) fn coerce_file_schema_to_string_type(
+    table_schema: &Schema,
+    file_schema: &Schema,
+) -> Option<Schema> {
+    let mut transform = false;
+    let table_fields: HashMap<_, _> = table_schema
+        .fields
+        .iter()
+        .map(|f| (f.name(), f.data_type()))
+        .collect();
+    let transformed_fields: Vec<Arc<Field>> = file_schema
+        .fields
+        .iter()
+        .map(
+            |field| match (table_fields.get(field.name()), field.data_type()) {
+                (Some(DataType::Utf8), DataType::Binary) => {
+                    transform = true;
+                    Arc::new(Field::new(field.name(), DataType::Utf8, field.is_nullable()))
+                }
+                (Some(DataType::LargeUtf8), DataType::LargeBinary) => {
+                    transform = true;
+                    Arc::new(Field::new(field.name(), DataType::LargeUtf8, field.is_nullable()))
+                }
+                (Some(DataType::Utf8View), DataType::BinaryView) => {
+                    transform = true;
+                    Arc::new(Field::new(field.name(), DataType::Utf8View, field.is_nullable()))
+                }
+                _ => field.clone(),
+            },
+        )
+        .collect();
+
+    if !transform {
+        None
+    }
+    else {
+        Some(Schema::new_with_metadata(
+            transformed_fields,
+            file_schema.metadata.clone(),
+        ))
+    }
+}
+
 #[cfg(test)]
 pub(crate) mod test_util {
     use std::ops::Range;
