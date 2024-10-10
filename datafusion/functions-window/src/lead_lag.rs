@@ -554,10 +554,13 @@ mod tests {
             Arc::new(Int32Array::from(vec![1, -2, 3, -4, 5, -6, 7, 8]));
         let num_rows = values.len();
 
-        let input_exprs: &[Arc<dyn PhysicalExpr>] = &[Arc::new(
-            datafusion_physical_expr::expressions::Column::new("c3", 0),
-        )];
-        let input_types: &[DataType] = &[DataType::Int32];
+        let first = Arc::new(Column::new("c3", 0)) as Arc<dyn PhysicalExpr>;
+        let second =
+            Arc::new(Literal::new(ScalarValue::Int32(Some(1)))) as Arc<dyn PhysicalExpr>;
+        let third =
+            Arc::new(Literal::new(ScalarValue::try_from(&DataType::Int32)?)) as Arc<dyn PhysicalExpr>;
+        let input_exprs = &[first, second, third];
+        let input_types: &[DataType] = &[DataType::Int32, DataType::Int32, DataType::Int32];
 
         let actual = WindowShift::lead()
             .partition_evaluator(PartitionEvaluatorArgs::new(
@@ -593,10 +596,13 @@ mod tests {
             Arc::new(Int32Array::from(vec![1, -2, 3, -4, 5, -6, 7, 8]));
         let num_rows = values.len();
 
-        let input_exprs: &[Arc<dyn PhysicalExpr>] = &[Arc::new(
-            datafusion_physical_expr::expressions::Column::new("c3", 0),
-        )];
-        let input_types: &[DataType] = &[DataType::Int32];
+        let first = Arc::new(Column::new("c3", 0)) as Arc<dyn PhysicalExpr>;
+        let second =
+            Arc::new(Literal::new(ScalarValue::Int32(Some(1)))) as Arc<dyn PhysicalExpr>;
+        let third =
+            Arc::new(Literal::new(ScalarValue::try_from(&DataType::Int32)?)) as Arc<dyn PhysicalExpr>;
+        let input_exprs = &[first, second, third];
+        let input_types: &[DataType] = &[DataType::Int32, DataType::Int32, DataType::Int32];
 
         let actual = WindowShift::lag()
             .partition_evaluator(PartitionEvaluatorArgs::new(
