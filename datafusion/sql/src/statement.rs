@@ -440,6 +440,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                                 if_not_exists,
                                 or_replace,
                                 column_defaults,
+                                temporary,
                             },
                         )))
                     }
@@ -463,6 +464,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                                 if_not_exists,
                                 or_replace,
                                 column_defaults,
+                                temporary,
                             },
                         )))
                     }
@@ -526,6 +528,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     input: Arc::new(plan),
                     or_replace,
                     definition: sql,
+                    temporary,
                 })))
             }
             Statement::ShowCreate { obj_type, obj_name } => match obj_type {
@@ -1255,7 +1258,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 unbounded,
                 options: options_map,
                 constraints,
-                column_defaults,
+                column_defaults
             },
         )))
     }

@@ -240,6 +240,8 @@ pub struct CreateExternalTableNode {
     pub table_partition_cols: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
     #[prost(bool, tag = "6")]
     pub if_not_exists: bool,
+    #[prost(bool, optional, tag = "14")]
+    pub temporary: Option<bool>,
     #[prost(string, tag = "7")]
     pub definition: ::prost::alloc::string::String,
     #[prost(message, repeated, tag = "10")]
@@ -305,6 +307,8 @@ pub struct CreateViewNode {
     pub or_replace: bool,
     #[prost(string, tag = "4")]
     pub definition: ::prost::alloc::string::String,
+    #[prost(bool, optional, tag = "6")]
+    pub temporary: Option<bool>,
 }
 /// a node containing data for defining values list. unlike in SQL where it's two dimensional, here
 /// the list is flattened, and with the field n_cols it can be parsed and partitioned into rows

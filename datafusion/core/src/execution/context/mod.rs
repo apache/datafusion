@@ -761,10 +761,16 @@ impl SessionContext {
             or_replace,
             constraints,
             column_defaults,
+            temporary,
         } = cmd;
 
         let input = Arc::unwrap_or_clone(input);
         let input = self.state().optimize(&input)?;
+
+        if temporary {
+            return not_impl_err!("CREATE TEMPORARY table");
+        }
+
         let table = self.table(name.clone()).await;
         match (if_not_exists, or_replace, table) {
             (true, false, Ok(_)) => self.return_empty_dataframe(),
@@ -813,9 +819,14 @@ impl SessionContext {
             input,
             or_replace,
             definition,
+            temporary,
         } = cmd;
 
         let view = self.table(name.clone()).await;
+
+        if temporary {
+            return not_impl_err!("CREATE TEMPORARY view");
+        }
 
         match (or_replace, view) {
             (true, Ok(_)) => {
