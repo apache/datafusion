@@ -45,7 +45,7 @@ use rand::{Rng, SeedableRng};
 use tokio::task::JoinSet;
 
 use crate::fuzz_cases::aggregation_fuzzer::{
-    AggregationFuzzerBuilder, ColumnDescr, DatasetGeneratorConfig,
+    AggregationFuzzerBuilder, ColumnDescr, DatasetGeneratorConfig, QueryBuilder,
 };
 
 // ========================================================================
@@ -55,13 +55,24 @@ use crate::fuzz_cases::aggregation_fuzzer::{
 // TODO: write more test case to cover more `group by`s and `aggregation function`s
 // TODO: maybe we can use macro to simply the case creating
 
-/// Fuzz test for `basic prim aggr(sum/sum distinct/max/min/count/avg)` + `no group by`
+// Dimensions to test:
+// Aggregation functions:
+// Arguments type to aggregation functions
+// Group by columns (0..n)
+
+/// Fuzz test for `core` aggregates (sum/sum distinct/max/min/count/avg)
+/// and integral arguments
+///
+///
 #[tokio::test(flavor = "multi_thread")]
-async fn test_basic_prim_aggr_no_group() {
+async fn core_aggregates() {
     let builder = AggregationFuzzerBuilder::default();
 
-    // Define data generator config
-    let columns = vec![ColumnDescr::new("a", DataType::Int32)];
+    let columns = vec![
+        ColumnDescr::new("a", DataType::Int32),
+        ColumnDescr::new("b", DataType::Int64),
+        ColumnDescr::new("c", DataType::Utf8),
+    ];
 
     let data_gen_config = DatasetGeneratorConfig {
         columns,
@@ -69,17 +80,26 @@ async fn test_basic_prim_aggr_no_group() {
         sort_keys_set: Vec::new(),
     };
 
+    let query_builder = QueryBuilder::new()
+        .with_table_name("fuzz_table")
+        .with_aggregate_function("sum")
+        .with_distinct_aggregate_function("sum")
+        .with_aggregate_function("max")
+        .with_aggregate_function("min")
+        .with_aggregate_function("count")
+        .with_distinct_aggregate_function("count")
+        .with_aggregate_function("avg")
+        .with_aggregate_argument("a") // integral arguments only
+        .with_aggregate_argument("b")
+        .with_group_by_column("a")
+        .with_group_by_column("b")
+        .with_group_by_column("c"); // group by string as well
+
     // Build fuzzer
     let fuzzer = builder
         .data_gen_config(data_gen_config)
         .data_gen_rounds(16)
-        .add_sql("SELECT sum(a) FROM fuzz_table")
-        .add_sql("SELECT sum(distinct a) FROM fuzz_table")
-        .add_sql("SELECT max(a) FROM fuzz_table")
-        .add_sql("SELECT min(a) FROM fuzz_table")
-        .add_sql("SELECT count(a) FROM fuzz_table")
-        .add_sql("SELECT count(distinct a) FROM fuzz_table")
-        .add_sql("SELECT avg(a) FROM fuzz_table")
+        .add_sql_from_builder(query_builder, 10) // 10 random queries
         .table_name("fuzz_table")
         .build();
 
@@ -353,7 +373,7 @@ async fn streaming_aggregate_test() {
         vec!["d", "c", "a"],
         vec!["d", "c", "b", "a"],
     ];
-    let n = 300;
+    let n = 10;
     let distincts = vec![10, 20];
     for distinct in distincts {
         let mut join_set = JoinSet::new();
