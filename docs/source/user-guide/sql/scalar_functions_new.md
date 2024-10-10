@@ -1366,7 +1366,7 @@ arrow_cast(expression, datatype)
 
 ### `arrow_typeof`
 
-Returns the name of the underlying [Arrow data type](https://docs.rs/arrow/latest/arrow/datatypes/enum.DataType.html) of the expression:
+Returns the name of the underlying [Arrow data type](https://docs.rs/arrow/latest/arrow/datatypes/enum.DataType.html) of the expression.
 
 ```
 arrow_typeof(expression)
