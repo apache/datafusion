@@ -441,17 +441,18 @@ impl MinMaxBytesState {
         I: IntoIterator<Item = Option<&'a [u8]>>,
     {
         self.min_max.resize(total_num_groups, None);
+        // Minimize value copies by calculating the new min/maxes for each group
+        // in this batch (either the existing min/max or the new input value)
+        // and updating the owne values in `self.min_maxes` at most once
         let mut locations = vec![MinMaxLocation::ExistingMinMax; total_num_groups];
 
         // Figure out the new min value for each group
         for (new_val, group_index) in iter.into_iter().zip(group_indices.iter()) {
             let group_index = *group_index;
-            // ignore null inputs
             let Some(new_val) = new_val else {
-                continue;
+                continue; // skip nulls
             };
 
-            // go through contortions to avoid copying strings too many times
             let existing_val = match locations[group_index] {
                 // previous input value was the min/max, so compare it
                 MinMaxLocation::Input(existing_val) => existing_val,
@@ -465,13 +466,13 @@ impl MinMaxBytesState {
                 }
             };
 
-            // Actually compare the new value to the existing value, replacing if necessary
+            // Compare the new value to the existing value, replacing if necessary
             if cmp(new_val, existing_val) {
                 locations[group_index] = MinMaxLocation::Input(new_val);
             }
         }
 
-        // Update self.min_max with the new min values we found in the input
+        // Update self.min_max with any new min/max values we found in the input
         for (group_index, location) in locations.iter().enumerate() {
             match location {
                 MinMaxLocation::ExistingMinMax => {}
