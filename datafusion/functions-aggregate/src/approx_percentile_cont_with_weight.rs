@@ -19,6 +19,8 @@ use std::any::Any;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 
+use arrow::array::AsArray;
+use arrow::datatypes::Float64Type;
 use arrow::{
     array::ArrayRef,
     datatypes::{DataType, Field},
@@ -27,9 +29,8 @@ use arrow::{
 use datafusion_common::ScalarValue;
 use datafusion_common::{not_impl_err, plan_err, Result};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
-use datafusion_expr::type_coercion::aggregates::NUMERICS;
 use datafusion_expr::Volatility::Immutable;
-use datafusion_expr::{Accumulator, AggregateUDFImpl, Signature, TypeSignature};
+use datafusion_expr::{Accumulator, AggregateUDFImpl, Signature};
 use datafusion_functions_aggregate_common::tdigest::{
     Centroid, TDigest, DEFAULT_MAX_SIZE,
 };
@@ -68,20 +69,7 @@ impl ApproxPercentileContWithWeight {
     /// Create a new [`ApproxPercentileContWithWeight`] aggregate function.
     pub fn new() -> Self {
         Self {
-            signature: Signature::one_of(
-                // Accept any numeric value paired with a float64 percentile
-                NUMERICS
-                    .iter()
-                    .map(|t| {
-                        TypeSignature::Exact(vec![
-                            t.clone(),
-                            t.clone(),
-                            DataType::Float64,
-                        ])
-                    })
-                    .collect(),
-                Immutable,
-            ),
+            signature: Signature::user_defined(Immutable),
             approx_percentile_cont: ApproxPercentileCont::new(),
         }
     }
@@ -100,21 +88,8 @@ impl AggregateUDFImpl for ApproxPercentileContWithWeight {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        if !arg_types[0].is_numeric() {
-            return plan_err!(
-                "approx_percentile_cont_with_weight requires numeric input types"
-            );
-        }
-        if !arg_types[1].is_numeric() {
-            return plan_err!(
-                "approx_percentile_cont_with_weight requires numeric weight input types"
-            );
-        }
-        if arg_types[2] != DataType::Float64 {
-            return plan_err!("approx_percentile_cont_with_weight requires float64 percentile input types");
-        }
-        Ok(arg_types[0].clone())
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        Ok(DataType::Float64)
     }
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
@@ -151,6 +126,10 @@ impl AggregateUDFImpl for ApproxPercentileContWithWeight {
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
         self.approx_percentile_cont.state_fields(args)
     }
+
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        Ok(vec![DataType::Float64; arg_types.len()])
+    }
 }
 
 #[derive(Debug)]
@@ -179,13 +158,23 @@ impl Accumulator for ApproxPercentileWithWeightAccumulator {
             weights.len(),
             "invalid number of values in means and weights"
         );
-        let means_f64 = ApproxPercentileAccumulator::convert_to_float(means)?;
-        let weights_f64 = ApproxPercentileAccumulator::convert_to_float(weights)?;
+
+        let means = means
+            .as_primitive::<Float64Type>()
+            .values()
+            .as_ref()
+            .to_vec();
+        let weights = weights
+            .as_primitive::<Float64Type>()
+            .values()
+            .as_ref()
+            .to_vec();
+
         let mut digests: Vec<TDigest> = vec![];
-        for (mean, weight) in means_f64.iter().zip(weights_f64.iter()) {
+        for (mean, weight) in means.into_iter().zip(weights.into_iter()) {
             digests.push(TDigest::new_with_centroid(
                 DEFAULT_MAX_SIZE,
-                Centroid::new(*mean, *weight),
+                Centroid::new(mean, weight),
             ))
         }
         self.approx_percentile_cont_accumulator
