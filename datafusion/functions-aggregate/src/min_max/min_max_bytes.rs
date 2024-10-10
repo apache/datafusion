@@ -497,14 +497,13 @@ impl MinMaxBytesState {
                 )
             }
             EmitTo::First(n) => {
-                let min_maxes = self.min_max.drain(..n).collect();
-                let data_capacity: usize = self
-                    .min_max
+                let first_min_maxes: Vec<_> = self.min_max.drain(..n).collect();
+                let first_data_capacity: usize = first_min_maxes
                     .iter()
                     .map(|opt| opt.as_ref().map(|s| s.len()).unwrap_or(0))
                     .sum();
-                self.total_data_bytes -= data_capacity;
-                (data_capacity, min_maxes)
+                self.total_data_bytes -= first_data_capacity;
+                (first_data_capacity, first_min_maxes)
             }
         }
     }
