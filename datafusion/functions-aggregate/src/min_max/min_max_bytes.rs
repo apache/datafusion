@@ -378,9 +378,6 @@ fn capacity_to_view_block_size(data_capacity: usize) -> u32 {
 struct MinMaxBytesState {
     /// The minimum/maximum value for each group
     min_max: Vec<Option<Vec<u8>>>,
-    // todo use null state
-    // /// Have we seen any non-null values yet?
-    // null_state: NullState,
     /// The data type of the array
     data_type: DataType,
     /// The total bytes of the string data (for pre-allocating the final array,
