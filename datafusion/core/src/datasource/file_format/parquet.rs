@@ -26,7 +26,7 @@ use std::sync::Arc;
 use super::write::demux::start_demuxer_task;
 use super::write::{create_writer, SharedBuffer};
 use super::{
-    coerce_file_schema_to_string_type, coerce_file_schema_to_view_type,
+    coerce_file_schema_to_view_type,
     transform_binary_to_string, transform_schema_to_view, FileFormat, FileFormatFactory,
     FilePushdownSupport, FileScanConfig,
 };

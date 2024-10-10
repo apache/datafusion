@@ -897,7 +897,7 @@ impl TryFrom<&protobuf::ParquetOptions> for ParquetOptions {
             pruning: value.pruning,
             skip_metadata: value.skip_metadata,
             metadata_size_hint: value
-                .metadata_size_hint_opt.clone()
+                .metadata_size_hint_opt
                 .map(|opt| match opt {
                     protobuf::parquet_options::MetadataSizeHintOpt::MetadataSizeHint(v) => Some(v as usize),
                 })
@@ -980,7 +980,7 @@ impl TryFrom<&protobuf::ParquetColumnOptions> for ParquetColumnOptions {
                 })
                 .unwrap_or(None),
             max_statistics_size: value
-                .max_statistics_size_opt.clone()
+                .max_statistics_size_opt
                 .map(|opt| match opt {
                     protobuf::parquet_column_options::MaxStatisticsSizeOpt::MaxStatisticsSize(v) => Some(v as usize),
                 })
@@ -991,18 +991,18 @@ impl TryFrom<&protobuf::ParquetColumnOptions> for ParquetColumnOptions {
                     protobuf::parquet_column_options::EncodingOpt::Encoding(v) => Some(v),
                 })
                 .unwrap_or(None),
-            bloom_filter_enabled: value.bloom_filter_enabled_opt.clone().map(|opt| match opt {
+            bloom_filter_enabled: value.bloom_filter_enabled_opt.map(|opt| match opt {
                 protobuf::parquet_column_options::BloomFilterEnabledOpt::BloomFilterEnabled(v) => Some(v),
             })
                 .unwrap_or(None),
             bloom_filter_fpp: value
-                .bloom_filter_fpp_opt.clone()
+                .bloom_filter_fpp_opt
                 .map(|opt| match opt {
                     protobuf::parquet_column_options::BloomFilterFppOpt::BloomFilterFpp(v) => Some(v),
                 })
                 .unwrap_or(None),
             bloom_filter_ndv: value
-                .bloom_filter_ndv_opt.clone()
+                .bloom_filter_ndv_opt
                 .map(|opt| match opt {
                     protobuf::parquet_column_options::BloomFilterNdvOpt::BloomFilterNdv(v) => Some(v),
                 })
