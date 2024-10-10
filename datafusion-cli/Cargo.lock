@@ -1445,6 +1445,7 @@ dependencies = [
  "datafusion-common",
  "datafusion-expr",
  "datafusion-functions-window-common",
+ "datafusion-physical-expr",
  "datafusion-physical-expr-common",
  "log",
  "paste",

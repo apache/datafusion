@@ -17,123 +17,219 @@
 
 //! Defines physical expression for `lead` and `lag` that can evaluated
 //! at runtime during query execution
-use crate::window::BuiltInWindowFunctionExpr;
-use crate::PhysicalExpr;
-use arrow::array::ArrayRef;
-use arrow::datatypes::{DataType, Field};
-use arrow_array::Array;
+use datafusion_common::arrow::array::ArrayRef;
+use datafusion_common::arrow::datatypes::DataType;
+use datafusion_common::arrow::datatypes::Field;
 use datafusion_common::{arrow_datafusion_err, DataFusionError, Result, ScalarValue};
-use datafusion_expr::PartitionEvaluator;
+use datafusion_expr::{
+    Literal, PartitionEvaluator, ReversedUDWF, Signature, TypeSignature, Volatility,
+    WindowUDFImpl,
+};
+use datafusion_functions_window_common::field::WindowUDFFieldArgs;
+use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
 use std::any::Any;
 use std::cmp::min;
 use std::collections::VecDeque;
 use std::ops::{Neg, Range};
 use std::sync::Arc;
 
+get_or_init_udwf!(Lag, lag, "lag udwf", WindowShift::lag);
+get_or_init_udwf!(Lead, lead, "lead udwf", WindowShift::lead);
+
+/// Create an expression to represent the `lag` window function
+///
+/// returns value evaluated at the row that is offset rows before the current row within the partition;
+/// if there is no such row, instead return default (which must be of the same type as value).
+/// Both offset and default are evaluated with respect to the current row.
+/// If omitted, offset defaults to 1 and default to null
+pub fn lag(
+    arg: datafusion_expr::Expr,
+    shift_offset: Option<i64>,
+    default_value: Option<ScalarValue>,
+) -> datafusion_expr::Expr {
+    let shift_offset_lit = shift_offset
+        .map(|v| v.lit())
+        .unwrap_or(ScalarValue::Null.lit());
+    let default_lit = default_value.unwrap_or(ScalarValue::Null).lit();
+
+    lag_udwf().call(vec![arg, shift_offset_lit, default_lit])
+}
+
+/// Create an expression to represent the `lead` window function
+///
+/// returns value evaluated at the row that is offset rows after the current row within the partition;
+/// if there is no such row, instead return default (which must be of the same type as value).
+/// Both offset and default are evaluated with respect to the current row.
+/// If omitted, offset defaults to 1 and default to null
+pub fn lead(
+    arg: datafusion_expr::Expr,
+    shift_offset: Option<i64>,
+    default_value: Option<ScalarValue>,
+) -> datafusion_expr::Expr {
+    let shift_offset_lit = shift_offset
+        .map(|v| v.lit())
+        .unwrap_or(ScalarValue::Null.lit());
+    let default_lit = default_value.unwrap_or(ScalarValue::Null).lit();
+
+    lead_udwf().call(vec![arg, shift_offset_lit, default_lit])
+}
+
+#[derive(Debug)]
+enum WindowShiftKind {
+    Lag,
+    Lead,
+}
+
+impl WindowShiftKind {
+    fn name(&self) -> &'static str {
+        match self {
+            WindowShiftKind::Lag => "lag",
+            WindowShiftKind::Lead => "lead",
+        }
+    }
+
+    fn shift_offset(&self, value: i64) -> i64 {
+        match self {
+            WindowShiftKind::Lag => value,
+            WindowShiftKind::Lead => value.neg(),
+        }
+    }
+}
+
 /// window shift expression
 #[derive(Debug)]
 pub struct WindowShift {
-    name: String,
-    /// Output data type
-    data_type: DataType,
-    shift_offset: i64,
-    expr: Arc<dyn PhysicalExpr>,
-    default_value: ScalarValue,
-    ignore_nulls: bool,
+    signature: Signature,
+    kind: WindowShiftKind,
 }
 
 impl WindowShift {
-    /// Get shift_offset of window shift expression
-    pub fn get_shift_offset(&self) -> i64 {
-        self.shift_offset
+    fn new(kind: WindowShiftKind) -> Self {
+        Self {
+            signature: Signature::one_of(
+                vec![
+                    TypeSignature::Any(1),
+                    TypeSignature::Any(2),
+                    TypeSignature::Any(3),
+                ],
+                Volatility::Immutable,
+            ),
+            kind,
+        }
     }
 
-    /// Get the default_value for window shift expression.
-    pub fn get_default_value(&self) -> ScalarValue {
-        self.default_value.clone()
+    pub fn lag() -> Self {
+        Self::new(WindowShiftKind::Lag)
     }
-}
 
-/// lead() window function
-pub fn lead(
-    name: String,
-    data_type: DataType,
-    expr: Arc<dyn PhysicalExpr>,
-    shift_offset: Option<i64>,
-    default_value: ScalarValue,
-    ignore_nulls: bool,
-) -> WindowShift {
-    WindowShift {
-        name,
-        data_type,
-        shift_offset: shift_offset.map(|v| v.neg()).unwrap_or(-1),
-        expr,
-        default_value,
-        ignore_nulls,
+    pub fn lead() -> Self {
+        Self::new(WindowShiftKind::Lead)
     }
 }
 
-/// lag() window function
-pub fn lag(
-    name: String,
-    data_type: DataType,
-    expr: Arc<dyn PhysicalExpr>,
-    shift_offset: Option<i64>,
-    default_value: ScalarValue,
-    ignore_nulls: bool,
-) -> WindowShift {
-    WindowShift {
-        name,
-        data_type,
-        shift_offset: shift_offset.unwrap_or(1),
-        expr,
-        default_value,
-        ignore_nulls,
-    }
-}
-
-impl BuiltInWindowFunctionExpr for WindowShift {
-    /// Return a reference to Any that can be used for downcasting
+impl WindowUDFImpl for WindowShift {
     fn as_any(&self) -> &dyn Any {
         self
     }
 
-    fn field(&self) -> Result<Field> {
-        let nullable = true;
-        Ok(Field::new(&self.name, self.data_type.clone(), nullable))
-    }
-
-    fn expressions(&self) -> Vec<Arc<dyn PhysicalExpr>> {
-        vec![Arc::clone(&self.expr)]
-    }
-
     fn name(&self) -> &str {
-        &self.name
+        self.kind.name()
     }
 
-    fn create_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>> {
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn partition_evaluator(
+        &self,
+        partition_evaluator_args: PartitionEvaluatorArgs,
+    ) -> Result<Box<dyn PartitionEvaluator>> {
+        let shift_offset = scalar_at(&partition_evaluator_args, 1)?
+            .map(get_signed_integer)
+            .unwrap_or(Ok(1))
+            .map(|n| self.kind.shift_offset(n))
+            .map(|offset| {
+                if partition_evaluator_args.is_reversed() {
+                    offset.neg()
+                } else {
+                    offset
+                }
+            })?;
+        let return_type = partition_evaluator_args
+            .input_types()
+            .first()
+            .unwrap_or(&DataType::Null);
+        let default_value = scalar_at(&partition_evaluator_args, 2)
+            .and_then(|scalar| get_default_value(return_type, scalar))?;
+
         Ok(Box::new(WindowShiftEvaluator {
-            shift_offset: self.shift_offset,
-            default_value: self.default_value.clone(),
-            ignore_nulls: self.ignore_nulls,
+            shift_offset,
+            default_value,
+            ignore_nulls: partition_evaluator_args.ignore_nulls(),
             non_null_offsets: VecDeque::new(),
         }))
     }
 
-    fn reverse_expr(&self) -> Option<Arc<dyn BuiltInWindowFunctionExpr>> {
-        Some(Arc::new(Self {
-            name: self.name.clone(),
-            data_type: self.data_type.clone(),
-            shift_offset: -self.shift_offset,
-            expr: Arc::clone(&self.expr),
-            default_value: self.default_value.clone(),
-            ignore_nulls: self.ignore_nulls,
-        }))
+    fn field(&self, field_args: WindowUDFFieldArgs) -> Result<Field> {
+        Ok(Field::new(
+            field_args.name(),
+            field_args.get_input_type(0).unwrap(),
+            true,
+        ))
+    }
+
+    fn reverse_expr(&self) -> ReversedUDWF {
+        match self.kind {
+            WindowShiftKind::Lag => ReversedUDWF::Reversed(lag_udwf()),
+            WindowShiftKind::Lead => ReversedUDWF::Reversed(lead_udwf()),
+        }
+    }
+}
+fn get_signed_integer(value: ScalarValue) -> Result<i64> {
+    if value.data_type().is_integer() {
+        value.cast_to(&DataType::Int64)?.try_into()
+    } else {
+        Err(DataFusionError::Execution(
+            "Expected an integer value".to_string(),
+        ))
     }
 }
 
+fn get_default_value(
+    return_type: &DataType,
+    value: Option<ScalarValue>,
+) -> Result<ScalarValue> {
+    match value {
+        Some(default_value) if !default_value.is_null() => {
+            default_value.cast_to(return_type)
+        }
+        // If None or Null datatype
+        _ => ScalarValue::try_from(return_type),
+    }
+}
+
+fn scalar_at(
+    partition_evaluator_args: &PartitionEvaluatorArgs,
+    index: usize,
+) -> Result<Option<ScalarValue>> {
+    let value = if let Some(expr) = partition_evaluator_args.input_exprs().get(index) {
+        let inner = expr
+            .as_any()
+            .downcast_ref::<datafusion_physical_expr::expressions::Literal>()
+            .ok_or_else(|| DataFusionError::NotImplemented(
+                format!("There is only support Literal types for field at idx: {index} in Window Function."),
+            ))?
+            .value()
+            .clone();
+        Some(inner)
+    } else {
+        None
+    };
+    Ok(value)
+}
+
 #[derive(Debug)]
-pub(crate) struct WindowShiftEvaluator {
+struct WindowShiftEvaluator {
     shift_offset: i64,
     default_value: ScalarValue,
     ignore_nulls: bool,
@@ -205,7 +301,7 @@ fn shift_with_default_value(
     offset: i64,
     default_value: &ScalarValue,
 ) -> Result<ArrayRef> {
-    use arrow::compute::concat;
+    use datafusion_common::arrow::compute::concat;
 
     let value_len = array.len() as i64;
     if offset == 0 {
@@ -402,23 +498,10 @@ impl PartitionEvaluator for WindowShiftEvaluator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::expressions::Column;
-    use arrow::{array::*, datatypes::*};
+    use arrow::array::*;
     use datafusion_common::cast::as_int32_array;
-
-    fn test_i32_result(expr: WindowShift, expected: Int32Array) -> Result<()> {
-        let arr: ArrayRef = Arc::new(Int32Array::from(vec![1, -2, 3, -4, 5, -6, 7, 8]));
-        let values = vec![arr];
-        let schema = Schema::new(vec![Field::new("arr", DataType::Int32, false)]);
-        let batch = RecordBatch::try_new(Arc::new(schema), values.clone())?;
-        let values = expr.evaluate_args(&batch)?;
-        let result = expr
-            .create_evaluator()?
-            .evaluate_all(&values, batch.num_rows())?;
-        let result = as_int32_array(&result)?;
-        assert_eq!(expected, *result);
-        Ok(())
-    }
+    use datafusion_physical_expr::expressions::{Column, Literal};
+    use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 
     #[test]
     fn lead_lag_get_range() -> Result<()> {
@@ -466,75 +549,131 @@ mod tests {
     }
 
     #[test]
-    fn lead_lag_window_shift() -> Result<()> {
-        test_i32_result(
-            lead(
-                "lead".to_owned(),
-                DataType::Int32,
-                Arc::new(Column::new("c3", 0)),
-                None,
-                ScalarValue::Null.cast_to(&DataType::Int32)?,
-                false,
-            ),
-            [
-                Some(-2),
-                Some(3),
-                Some(-4),
-                Some(5),
-                Some(-6),
-                Some(7),
-                Some(8),
-                None,
-            ]
-            .iter()
-            .collect::<Int32Array>(),
-        )?;
+    fn test_lead_window_shift() -> Result<()> {
+        let values: ArrayRef =
+            Arc::new(Int32Array::from(vec![1, -2, 3, -4, 5, -6, 7, 8]));
+        let num_rows = values.len();
 
-        test_i32_result(
-            lag(
-                "lead".to_owned(),
-                DataType::Int32,
-                Arc::new(Column::new("c3", 0)),
-                None,
-                ScalarValue::Null.cast_to(&DataType::Int32)?,
-                false,
-            ),
-            [
-                None,
-                Some(1),
-                Some(-2),
-                Some(3),
-                Some(-4),
-                Some(5),
-                Some(-6),
-                Some(7),
-            ]
-            .iter()
-            .collect::<Int32Array>(),
-        )?;
+        let first = Arc::new(Column::new("c3", 0)) as Arc<dyn PhysicalExpr>;
+        let second = Arc::new(Literal::new(ScalarValue::try_from(&DataType::Int32)?))
+            as Arc<dyn PhysicalExpr>;
+        let third = Arc::new(Literal::new(ScalarValue::try_from(&DataType::Int32)?))
+            as Arc<dyn PhysicalExpr>;
+        let input_exprs = &[first, second, third];
+        let input_types: &[DataType] =
+            &[DataType::Int32, DataType::Int32, DataType::Int32];
 
-        test_i32_result(
-            lag(
-                "lead".to_owned(),
-                DataType::Int32,
-                Arc::new(Column::new("c3", 0)),
-                None,
-                ScalarValue::Int32(Some(100)),
+        let actual = WindowShift::lead()
+            .partition_evaluator(PartitionEvaluatorArgs::new(
+                input_exprs,
+                input_types,
                 false,
-            ),
-            [
-                Some(100),
-                Some(1),
-                Some(-2),
-                Some(3),
-                Some(-4),
-                Some(5),
-                Some(-6),
-                Some(7),
-            ]
-            .iter()
-            .collect::<Int32Array>(),
-        )?;
+                false,
+            ))?
+            .evaluate_all(&[values], num_rows)?;
+        let actual = as_int32_array(actual.as_ref())?;
+
+        let expected = [
+            Some(-2),
+            Some(3),
+            Some(-4),
+            Some(5),
+            Some(-6),
+            Some(7),
+            Some(8),
+            None,
+        ]
+        .iter()
+        .collect::<Int32Array>();
+
+        assert_eq!(expected, *actual);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_lag_window_shift() -> Result<()> {
+        let values: ArrayRef =
+            Arc::new(Int32Array::from(vec![1, -2, 3, -4, 5, -6, 7, 8]));
+        let num_rows = values.len();
+
+        let first = Arc::new(Column::new("c3", 0)) as Arc<dyn PhysicalExpr>;
+        let second =
+            Arc::new(Literal::new(ScalarValue::Int32(Some(1)))) as Arc<dyn PhysicalExpr>;
+        let third = Arc::new(Literal::new(ScalarValue::try_from(&DataType::Int32)?))
+            as Arc<dyn PhysicalExpr>;
+        let input_exprs = &[first, second, third];
+        let input_types: &[DataType] =
+            &[DataType::Int32, DataType::Int32, DataType::Int32];
+
+        let actual = WindowShift::lag()
+            .partition_evaluator(PartitionEvaluatorArgs::new(
+                input_exprs,
+                input_types,
+                false,
+                false,
+            ))?
+            .evaluate_all(&[values], num_rows)?;
+        let actual = as_int32_array(actual.as_ref())?;
+
+        let expected = [
+            None,
+            Some(1),
+            Some(-2),
+            Some(3),
+            Some(-4),
+            Some(5),
+            Some(-6),
+            Some(7),
+        ]
+        .iter()
+        .collect::<Int32Array>();
+
+        assert_eq!(expected, *actual);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_lag_with_default() -> Result<()> {
+        let values: ArrayRef =
+            Arc::new(Int32Array::from(vec![1, -2, 3, -4, 5, -6, 7, 8]));
+        let num_rows = values.len();
+
+        let first = Arc::new(Column::new("c3", 0)) as Arc<dyn PhysicalExpr>;
+        let second =
+            Arc::new(Literal::new(ScalarValue::Int32(Some(1)))) as Arc<dyn PhysicalExpr>;
+        let third = Arc::new(Literal::new(ScalarValue::Int32(Some(100))))
+            as Arc<dyn PhysicalExpr>;
+        let input_exprs = &[first, second, third];
+        let input_types: &[DataType] =
+            &[DataType::Int32, DataType::Int32, DataType::Int32];
+
+        let actual = WindowShift::lag()
+            .partition_evaluator(PartitionEvaluatorArgs::new(
+                input_exprs,
+                input_types,
+                false,
+                false,
+            ))?
+            .evaluate_all(&[values], num_rows)?;
+        let actual = as_int32_array(actual.as_ref())?;
+
+        let expected = [
+            Some(100),
+            Some(1),
+            Some(-2),
+            Some(3),
+            Some(-4),
+            Some(5),
+            Some(-6),
+            Some(7),
+        ]
+        .iter()
+        .collect::<Int32Array>();
+
+        assert_eq!(expected, *actual);
+
         Ok(())
     }
 }

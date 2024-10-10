@@ -145,8 +145,6 @@ impl From<protobuf::BuiltInWindowFunction> for BuiltInWindowFunction {
             protobuf::BuiltInWindowFunction::Rank => Self::Rank,
             protobuf::BuiltInWindowFunction::PercentRank => Self::PercentRank,
             protobuf::BuiltInWindowFunction::DenseRank => Self::DenseRank,
-            protobuf::BuiltInWindowFunction::Lag => Self::Lag,
-            protobuf::BuiltInWindowFunction::Lead => Self::Lead,
             protobuf::BuiltInWindowFunction::FirstValue => Self::FirstValue,
             protobuf::BuiltInWindowFunction::CumeDist => Self::CumeDist,
             protobuf::BuiltInWindowFunction::Ntile => Self::Ntile,

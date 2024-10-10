@@ -22,7 +22,7 @@ use std::sync::Arc;
 
 use crate::{
     expressions::{
-        cume_dist, dense_rank, lag, lead, percent_rank, rank, Literal, NthValue, Ntile,
+        cume_dist, dense_rank, percent_rank, rank, Literal, NthValue, Ntile,
         PhysicalSortExpr,
     },
     ExecutionPlan, ExecutionPlanProperties, InputOrderMode, PhysicalExpr,
@@ -209,17 +209,6 @@ fn get_unsigned_integer(value: ScalarValue) -> Result<u64> {
     value.cast_to(&DataType::UInt64)?.try_into()
 }
 
-fn get_casted_value(
-    default_value: Option<ScalarValue>,
-    dtype: &DataType,
-) -> Result<ScalarValue> {
-    match default_value {
-        Some(v) if !v.data_type().is_null() => v.cast_to(dtype),
-        // If None or Null datatype
-        _ => ScalarValue::try_from(dtype),
-    }
-}
-
 fn create_built_in_window_expr(
     fun: &BuiltInWindowFunction,
     args: &[Arc<dyn PhysicalExpr>],
@@ -256,38 +245,6 @@ fn create_built_in_window_expr(
                 }
                 Arc::new(Ntile::new(name, n as u64, out_data_type))
             }
-        }
-        BuiltInWindowFunction::Lag => {
-            let arg = Arc::clone(&args[0]);
-            let shift_offset = get_scalar_value_from_args(args, 1)?
-                .map(get_signed_integer)
-                .map_or(Ok(None), |v| v.map(Some))?;
-            let default_value =
-                get_casted_value(get_scalar_value_from_args(args, 2)?, out_data_type)?;
-            Arc::new(lag(
-                name,
-                out_data_type.clone(),
-                arg,
-                shift_offset,
-                default_value,
-                ignore_nulls,
-            ))
-        }
-        BuiltInWindowFunction::Lead => {
-            let arg = Arc::clone(&args[0]);
-            let shift_offset = get_scalar_value_from_args(args, 1)?
-                .map(get_signed_integer)
-                .map_or(Ok(None), |v| v.map(Some))?;
-            let default_value =
-                get_casted_value(get_scalar_value_from_args(args, 2)?, out_data_type)?;
-            Arc::new(lead(
-                name,
-                out_data_type.clone(),
-                arg,
-                shift_offset,
-                default_value,
-                ignore_nulls,
-            ))
         }
         BuiltInWindowFunction::NthValue => {
             let arg = Arc::clone(&args[0]);
