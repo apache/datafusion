@@ -495,142 +495,141 @@ impl PartitionEvaluator for WindowShiftEvaluator {
     }
 }
 
-// #[cfg(test)]
-// mod tests {
-//     use super::*;
-//     use crate::expressions::Column;
-//     use arrow::{array::*, datatypes::*};
-//     use datafusion_common::cast::as_int32_array;
-//
-//     fn test_i32_result(expr: WindowShift, expected: Int32Array) -> Result<()> {
-//         let arr: ArrayRef = Arc::new(Int32Array::from(vec![1, -2, 3, -4, 5, -6, 7, 8]));
-//         let values = vec![arr];
-//         let schema = Schema::new(vec![Field::new("arr", DataType::Int32, false)]);
-//         let batch = RecordBatch::try_new(Arc::new(schema), values.clone())?;
-//         let values = expr.evaluate_args(&batch)?;
-//         let result = expr
-//             .create_evaluator()?
-//             .evaluate_all(&values, batch.num_rows())?;
-//         let result = as_int32_array(&result)?;
-//         assert_eq!(expected, *result);
-//         Ok(())
-//     }
-//
-//     #[test]
-//     fn lead_lag_get_range() -> Result<()> {
-//         // LAG(2)
-//         let lag_fn = WindowShiftEvaluator {
-//             shift_offset: 2,
-//             default_value: ScalarValue::Null,
-//             ignore_nulls: false,
-//             non_null_offsets: Default::default(),
-//         };
-//         assert_eq!(lag_fn.get_range(6, 10)?, Range { start: 4, end: 7 });
-//         assert_eq!(lag_fn.get_range(0, 10)?, Range { start: 0, end: 1 });
-//
-//         // LAG(2 ignore nulls)
-//         let lag_fn = WindowShiftEvaluator {
-//             shift_offset: 2,
-//             default_value: ScalarValue::Null,
-//             ignore_nulls: true,
-//             // models data received [<Some>, <Some>, <Some>, NULL, <Some>, NULL, <current row>, ...]
-//             non_null_offsets: vec![2, 2].into(), // [1, 1, 2, 2] actually, just last 2 is used
-//         };
-//         assert_eq!(lag_fn.get_range(6, 10)?, Range { start: 2, end: 7 });
-//
-//         // LEAD(2)
-//         let lead_fn = WindowShiftEvaluator {
-//             shift_offset: -2,
-//             default_value: ScalarValue::Null,
-//             ignore_nulls: false,
-//             non_null_offsets: Default::default(),
-//         };
-//         assert_eq!(lead_fn.get_range(6, 10)?, Range { start: 6, end: 8 });
-//         assert_eq!(lead_fn.get_range(9, 10)?, Range { start: 9, end: 10 });
-//
-//         // LEAD(2 ignore nulls)
-//         let lead_fn = WindowShiftEvaluator {
-//             shift_offset: -2,
-//             default_value: ScalarValue::Null,
-//             ignore_nulls: true,
-//             // models data received [..., <current row>, NULL, <Some>, NULL, <Some>, ..]
-//             non_null_offsets: vec![2, 2].into(),
-//         };
-//         assert_eq!(lead_fn.get_range(4, 10)?, Range { start: 4, end: 9 });
-//
-//         Ok(())
-//     }
-//
-//     #[test]
-//     fn lead_lag_window_shift() -> Result<()> {
-//         test_i32_result(
-//             lead(
-//                 "lead".to_owned(),
-//                 DataType::Int32,
-//                 Arc::new(Column::new("c3", 0)),
-//                 None,
-//                 ScalarValue::Null.cast_to(&DataType::Int32)?,
-//                 false,
-//             ),
-//             [
-//                 Some(-2),
-//                 Some(3),
-//                 Some(-4),
-//                 Some(5),
-//                 Some(-6),
-//                 Some(7),
-//                 Some(8),
-//                 None,
-//             ]
-//             .iter()
-//             .collect::<Int32Array>(),
-//         )?;
-//
-//         test_i32_result(
-//             lag(
-//                 "lead".to_owned(),
-//                 DataType::Int32,
-//                 Arc::new(Column::new("c3", 0)),
-//                 None,
-//                 ScalarValue::Null.cast_to(&DataType::Int32)?,
-//                 false,
-//             ),
-//             [
-//                 None,
-//                 Some(1),
-//                 Some(-2),
-//                 Some(3),
-//                 Some(-4),
-//                 Some(5),
-//                 Some(-6),
-//                 Some(7),
-//             ]
-//             .iter()
-//             .collect::<Int32Array>(),
-//         )?;
-//
-//         test_i32_result(
-//             lag(
-//                 "lead".to_owned(),
-//                 DataType::Int32,
-//                 Arc::new(Column::new("c3", 0)),
-//                 None,
-//                 ScalarValue::Int32(Some(100)),
-//                 false,
-//             ),
-//             [
-//                 Some(100),
-//                 Some(1),
-//                 Some(-2),
-//                 Some(3),
-//                 Some(-4),
-//                 Some(5),
-//                 Some(-6),
-//                 Some(7),
-//             ]
-//             .iter()
-//             .collect::<Int32Array>(),
-//         )?;
-//         Ok(())
-//     }
-// }
+#[cfg(test)]
+mod tests {
+    use super::*;
+    // use arrow::{array::*, datatypes::*};
+    // use datafusion_common::cast::as_int32_array;
+
+    //     fn test_i32_result(expr: WindowShift, expected: Int32Array) -> Result<()> {
+    //         let arr: ArrayRef = Arc::new(Int32Array::from(vec![1, -2, 3, -4, 5, -6, 7, 8]));
+    //         let values = vec![arr];
+    //         let schema = Schema::new(vec![Field::new("arr", DataType::Int32, false)]);
+    //         let batch = RecordBatch::try_new(Arc::new(schema), values.clone())?;
+    //         let values = expr.evaluate_args(&batch)?;
+    //         let result = expr
+    //             .create_evaluator()?
+    //             .evaluate_all(&values, batch.num_rows())?;
+    //         let result = as_int32_array(&result)?;
+    //         assert_eq!(expected, *result);
+    //         Ok(())
+    //     }
+
+    #[test]
+    fn lead_lag_get_range() -> Result<()> {
+        // LAG(2)
+        let lag_fn = WindowShiftEvaluator {
+            shift_offset: 2,
+            default_value: ScalarValue::Null,
+            ignore_nulls: false,
+            non_null_offsets: Default::default(),
+        };
+        assert_eq!(lag_fn.get_range(6, 10)?, Range { start: 4, end: 7 });
+        assert_eq!(lag_fn.get_range(0, 10)?, Range { start: 0, end: 1 });
+
+        // LAG(2 ignore nulls)
+        let lag_fn = WindowShiftEvaluator {
+            shift_offset: 2,
+            default_value: ScalarValue::Null,
+            ignore_nulls: true,
+            // models data received [<Some>, <Some>, <Some>, NULL, <Some>, NULL, <current row>, ...]
+            non_null_offsets: vec![2, 2].into(), // [1, 1, 2, 2] actually, just last 2 is used
+        };
+        assert_eq!(lag_fn.get_range(6, 10)?, Range { start: 2, end: 7 });
+
+        // LEAD(2)
+        let lead_fn = WindowShiftEvaluator {
+            shift_offset: -2,
+            default_value: ScalarValue::Null,
+            ignore_nulls: false,
+            non_null_offsets: Default::default(),
+        };
+        assert_eq!(lead_fn.get_range(6, 10)?, Range { start: 6, end: 8 });
+        assert_eq!(lead_fn.get_range(9, 10)?, Range { start: 9, end: 10 });
+
+        // LEAD(2 ignore nulls)
+        let lead_fn = WindowShiftEvaluator {
+            shift_offset: -2,
+            default_value: ScalarValue::Null,
+            ignore_nulls: true,
+            // models data received [..., <current row>, NULL, <Some>, NULL, <Some>, ..]
+            non_null_offsets: vec![2, 2].into(),
+        };
+        assert_eq!(lead_fn.get_range(4, 10)?, Range { start: 4, end: 9 });
+
+        Ok(())
+    }
+
+    //     #[test]
+    //     fn lead_lag_window_shift() -> Result<()> {
+    //         test_i32_result(
+    //             lead(
+    //                 "lead".to_owned(),
+    //                 DataType::Int32,
+    //                 Arc::new(Column::new("c3", 0)),
+    //                 None,
+    //                 ScalarValue::Null.cast_to(&DataType::Int32)?,
+    //                 false,
+    //             ),
+    //             [
+    //                 Some(-2),
+    //                 Some(3),
+    //                 Some(-4),
+    //                 Some(5),
+    //                 Some(-6),
+    //                 Some(7),
+    //                 Some(8),
+    //                 None,
+    //             ]
+    //             .iter()
+    //             .collect::<Int32Array>(),
+    //         )?;
+    //
+    //         test_i32_result(
+    //             lag(
+    //                 "lead".to_owned(),
+    //                 DataType::Int32,
+    //                 Arc::new(Column::new("c3", 0)),
+    //                 None,
+    //                 ScalarValue::Null.cast_to(&DataType::Int32)?,
+    //                 false,
+    //             ),
+    //             [
+    //                 None,
+    //                 Some(1),
+    //                 Some(-2),
+    //                 Some(3),
+    //                 Some(-4),
+    //                 Some(5),
+    //                 Some(-6),
+    //                 Some(7),
+    //             ]
+    //             .iter()
+    //             .collect::<Int32Array>(),
+    //         )?;
+    //
+    //         test_i32_result(
+    //             lag(
+    //                 "lead".to_owned(),
+    //                 DataType::Int32,
+    //                 Arc::new(Column::new("c3", 0)),
+    //                 None,
+    //                 ScalarValue::Int32(Some(100)),
+    //                 false,
+    //             ),
+    //             [
+    //                 Some(100),
+    //                 Some(1),
+    //                 Some(-2),
+    //                 Some(3),
+    //                 Some(-4),
+    //                 Some(5),
+    //                 Some(-6),
+    //                 Some(7),
+    //             ]
+    //             .iter()
+    //             .collect::<Int32Array>(),
+    //         )?;
+    //         Ok(())
+    //     }
+}
