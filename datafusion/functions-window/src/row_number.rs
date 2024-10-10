@@ -149,44 +149,44 @@ impl PartitionEvaluator for NumRowsEvaluator {
     }
 }
 
-// #[cfg(test)]
-// mod tests {
-//     use std::sync::Arc;
-//
-//     use datafusion_common::arrow::array::{Array, BooleanArray};
-//     use datafusion_common::cast::as_uint64_array;
-//
-//     use super::*;
-//
-//     #[test]
-//     fn row_number_all_null() -> Result<()> {
-//         let values: ArrayRef = Arc::new(BooleanArray::from(vec![
-//             None, None, None, None, None, None, None, None,
-//         ]));
-//         let num_rows = values.len();
-//
-//         let actual = RowNumber::default()
-//             .partition_evaluator()?
-//             .evaluate_all(&[values], num_rows)?;
-//         let actual = as_uint64_array(&actual)?;
-//
-//         assert_eq!(vec![1, 2, 3, 4, 5, 6, 7, 8], *actual.values());
-//         Ok(())
-//     }
-//
-//     #[test]
-//     fn row_number_all_values() -> Result<()> {
-//         let values: ArrayRef = Arc::new(BooleanArray::from(vec![
-//             true, false, true, false, false, true, false, true,
-//         ]));
-//         let num_rows = values.len();
-//
-//         let actual = RowNumber::default()
-//             .partition_evaluator()?
-//             .evaluate_all(&[values], num_rows)?;
-//         let actual = as_uint64_array(&actual)?;
-//
-//         assert_eq!(vec![1, 2, 3, 4, 5, 6, 7, 8], *actual.values());
-//         Ok(())
-//     }
-// }
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use datafusion_common::arrow::array::{Array, BooleanArray};
+    use datafusion_common::cast::as_uint64_array;
+
+    use super::*;
+
+    #[test]
+    fn row_number_all_null() -> Result<()> {
+        let values: ArrayRef = Arc::new(BooleanArray::from(vec![
+            None, None, None, None, None, None, None, None,
+        ]));
+        let num_rows = values.len();
+
+        let actual = RowNumber::default()
+            .partition_evaluator(PartitionEvaluatorArgs::default())?
+            .evaluate_all(&[values], num_rows)?;
+        let actual = as_uint64_array(&actual)?;
+
+        assert_eq!(vec![1, 2, 3, 4, 5, 6, 7, 8], *actual.values());
+        Ok(())
+    }
+
+    #[test]
+    fn row_number_all_values() -> Result<()> {
+        let values: ArrayRef = Arc::new(BooleanArray::from(vec![
+            true, false, true, false, false, true, false, true,
+        ]));
+        let num_rows = values.len();
+
+        let actual = RowNumber::default()
+            .partition_evaluator(PartitionEvaluatorArgs::default())?
+            .evaluate_all(&[values], num_rows)?;
+        let actual = as_uint64_array(&actual)?;
+
+        assert_eq!(vec![1, 2, 3, 4, 5, 6, 7, 8], *actual.values());
+        Ok(())
+    }
+}

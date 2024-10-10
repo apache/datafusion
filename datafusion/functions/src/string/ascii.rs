@@ -39,13 +39,8 @@ impl Default for AsciiFunc {
 
 impl AsciiFunc {
     pub fn new() -> Self {
-        use DataType::*;
         Self {
-            signature: Signature::uniform(
-                1,
-                vec![Utf8, LargeUtf8, Utf8View],
-                Volatility::Immutable,
-            ),
+            signature: Signature::string(1, Volatility::Immutable),
         }
     }
 }
