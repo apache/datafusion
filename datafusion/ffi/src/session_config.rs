@@ -1,6 +1,4 @@
-use std::{
-    ffi::{c_void, CString},
-};
+use std::ffi::{c_void, CString};
 
 use datafusion::{catalog::Session, prelude::SessionConfig};
 
@@ -21,7 +19,7 @@ pub struct SessionConfigPrivateData {
     pub last_error: Option<CString>,
 }
 
-struct ExportedSessionConfig {
+pub struct ExportedSessionConfig {
     session: *mut FFI_SessionConfig,
 }
 

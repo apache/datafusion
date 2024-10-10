@@ -9,21 +9,29 @@ pub enum FFI_TableProviderFilterPushDown {
     Exact,
 }
 
-impl From<FFI_TableProviderFilterPushDown> for TableProviderFilterPushDown {
-    fn from(value: FFI_TableProviderFilterPushDown) -> Self {
+impl From<&FFI_TableProviderFilterPushDown> for TableProviderFilterPushDown {
+    fn from(value: &FFI_TableProviderFilterPushDown) -> Self {
         match value {
-            FFI_TableProviderFilterPushDown::Unsupported => TableProviderFilterPushDown::Unsupported,
-            FFI_TableProviderFilterPushDown::Inexact => TableProviderFilterPushDown::Inexact,
+            FFI_TableProviderFilterPushDown::Unsupported => {
+                TableProviderFilterPushDown::Unsupported
+            }
+            FFI_TableProviderFilterPushDown::Inexact => {
+                TableProviderFilterPushDown::Inexact
+            }
             FFI_TableProviderFilterPushDown::Exact => TableProviderFilterPushDown::Exact,
         }
     }
 }
 
-impl From<TableProviderFilterPushDown> for FFI_TableProviderFilterPushDown {
-    fn from(value: TableProviderFilterPushDown) -> Self {
+impl From<&TableProviderFilterPushDown> for FFI_TableProviderFilterPushDown {
+    fn from(value: &TableProviderFilterPushDown) -> Self {
         match value {
-            TableProviderFilterPushDown::Unsupported => FFI_TableProviderFilterPushDown::Unsupported,
-            TableProviderFilterPushDown::Inexact => FFI_TableProviderFilterPushDown::Inexact,
+            TableProviderFilterPushDown::Unsupported => {
+                FFI_TableProviderFilterPushDown::Unsupported
+            }
+            TableProviderFilterPushDown::Inexact => {
+                FFI_TableProviderFilterPushDown::Inexact
+            }
             TableProviderFilterPushDown::Exact => FFI_TableProviderFilterPushDown::Exact,
         }
     }

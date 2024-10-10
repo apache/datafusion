@@ -12,7 +12,9 @@ use datafusion::{
     execution::{SendableRecordBatchStream, TaskContext},
     physical_plan::{DisplayAs, ExecutionMode, ExecutionPlan, PlanProperties},
 };
-use datafusion::{error::Result, physical_expr::EquivalenceProperties, prelude::SessionContext};
+use datafusion::{
+    error::Result, physical_expr::EquivalenceProperties, prelude::SessionContext,
+};
 use datafusion_proto::{
     physical_plan::{
         from_proto::{parse_physical_sort_exprs, parse_protobuf_partitioning},
@@ -23,15 +25,18 @@ use datafusion_proto::{
 };
 use prost::Message;
 
-use super::record_batch_stream::{record_batch_to_arrow_stream, ConsumerRecordBatchStream};
+use super::record_batch_stream::{
+    record_batch_to_arrow_stream, ConsumerRecordBatchStream,
+};
 
 #[repr(C)]
 #[derive(Debug)]
 #[allow(missing_docs)]
 #[allow(non_camel_case_types)]
 pub struct FFI_ExecutionPlan {
-    pub properties:
-        Option<unsafe extern "C" fn(plan: *const FFI_ExecutionPlan) -> FFI_PlanProperties>,
+    pub properties: Option<
+        unsafe extern "C" fn(plan: *const FFI_ExecutionPlan) -> FFI_PlanProperties,
+    >,
     pub children: Option<
         unsafe extern "C" fn(
             plan: *const FFI_ExecutionPlan,
@@ -57,7 +62,9 @@ pub struct ExecutionPlanPrivateData {
     pub context: Arc<TaskContext>,
 }
 
-unsafe extern "C" fn properties_fn_wrapper(plan: *const FFI_ExecutionPlan) -> FFI_PlanProperties {
+unsafe extern "C" fn properties_fn_wrapper(
+    plan: *const FFI_ExecutionPlan,
+) -> FFI_PlanProperties {
     let private_data = (*plan).private_data as *const ExecutionPlanPrivateData;
     let properties = (*private_data).plan.properties();
     properties.clone().into()
@@ -193,9 +200,10 @@ impl ExportedExecutionPlan {
 
         println!("entered ExportedExecutionPlan::new");
         let properties = unsafe {
-            let properties_fn = (*plan).properties.ok_or(DataFusionError::NotImplemented(
-                "properties not implemented on FFI_ExecutionPlan".to_string(),
-            ))?;
+            let properties_fn =
+                (*plan).properties.ok_or(DataFusionError::NotImplemented(
+                    "properties not implemented on FFI_ExecutionPlan".to_string(),
+                ))?;
             println!("About to call properties fn");
             properties_fn(plan).try_into()?
         };
@@ -298,7 +306,8 @@ impl ExecutionPlan for ExportedExecutionPlan {
                 0 => ConsumerRecordBatchStream::try_from(arrow_stream)
                     .map(|v| Pin::new(Box::new(v)) as SendableRecordBatchStream),
                 _ => Err(DataFusionError::Execution(
-                    "Error occurred during FFI call to FFI_ExecutionPlan execute.".to_string(),
+                    "Error occurred during FFI call to FFI_ExecutionPlan execute."
+                        .to_string(),
                 )),
             }
         }
@@ -319,8 +328,9 @@ pub struct FFI_PlanProperties {
         ) -> i32,
     >,
 
-    pub execution_mode:
-        Option<unsafe extern "C" fn(plan: *const FFI_PlanProperties) -> FFI_ExecutionMode>,
+    pub execution_mode: Option<
+        unsafe extern "C" fn(plan: *const FFI_PlanProperties) -> FFI_ExecutionMode,
+    >,
 
     // PhysicalSortExprNodeCollection proto
     pub output_ordering: Option<
@@ -331,7 +341,8 @@ pub struct FFI_PlanProperties {
         ) -> i32,
     >,
 
-    pub schema: Option<unsafe extern "C" fn(plan: *const FFI_PlanProperties) -> FFI_ArrowSchema>,
+    pub schema:
+        Option<unsafe extern "C" fn(plan: *const FFI_PlanProperties) -> FFI_ArrowSchema>,
 
     pub private_data: *mut c_void,
 }
@@ -393,10 +404,11 @@ unsafe extern "C" fn output_ordering_fn_wrapper(
     .to_owned();
 
     let codec = DefaultPhysicalExtensionCodec {};
-    let physical_sort_expr_nodes = match serialize_physical_sort_exprs(output_ordering, &codec) {
-        Ok(p) => p,
-        Err(_) => return 1,
-    };
+    let physical_sort_expr_nodes =
+        match serialize_physical_sort_exprs(output_ordering, &codec) {
+            Ok(p) => p,
+            Err(_) => return 1,
+        };
 
     let ordering_data = PhysicalSortExprNodeCollection {
         physical_sort_expr_nodes,
@@ -411,7 +423,9 @@ unsafe extern "C" fn output_ordering_fn_wrapper(
 }
 
 // pub schema: Option<unsafe extern "C" fn(plan: *const FFI_PlanProperties) -> FFI_ArrowSchema>,
-unsafe extern "C" fn schema_fn_wrapper(properties: *const FFI_PlanProperties) -> FFI_ArrowSchema {
+unsafe extern "C" fn schema_fn_wrapper(
+    properties: *const FFI_PlanProperties,
+) -> FFI_ArrowSchema {
     let private_data = (*properties).private_data as *const PlanProperties;
     let schema = (*private_data).eq_properties.schema();
 
@@ -460,11 +474,13 @@ impl TryFrom<FFI_PlanProperties> for PlanProperties {
             let ffi_schema = schema_fn(&value);
             let schema: Schema = (&ffi_schema).try_into()?;
 
-            let ordering_fn = value
-                .output_ordering
-                .ok_or(DataFusionError::NotImplemented(
-                    "output_ordering() not implemented on FFI_PlanProperties".to_string(),
-                ))?;
+            let ordering_fn =
+                value
+                    .output_ordering
+                    .ok_or(DataFusionError::NotImplemented(
+                        "output_ordering() not implemented on FFI_PlanProperties"
+                            .to_string(),
+                    ))?;
             let mut buff_size = 0;
             let mut buff = null_mut();
             if ordering_fn(&value, &mut buff_size, &mut buff) != 0 {
@@ -483,8 +499,9 @@ impl TryFrom<FFI_PlanProperties> for PlanProperties {
                 false => {
                     let data = slice::from_raw_parts(buff, buff_size);
 
-                    let proto_output_ordering = PhysicalSortExprNodeCollection::decode(data)
-                        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                    let proto_output_ordering =
+                        PhysicalSortExprNodeCollection::decode(data)
+                            .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
                     Some(parse_physical_sort_exprs(
                         &proto_output_ordering.physical_sort_expr_nodes,
@@ -499,7 +516,8 @@ impl TryFrom<FFI_PlanProperties> for PlanProperties {
                 value
                     .output_partitioning
                     .ok_or(DataFusionError::NotImplemented(
-                        "output_partitioning() not implemented on FFI_PlanProperties".to_string(),
+                        "output_partitioning() not implemented on FFI_PlanProperties"
+                            .to_string(),
                     ))?;
             if partitioning_fn(&value, &mut buff_size, &mut buff) != 0 {
                 return Err(DataFusionError::Plan(
@@ -509,8 +527,8 @@ impl TryFrom<FFI_PlanProperties> for PlanProperties {
             }
             let data = slice::from_raw_parts(buff, buff_size);
 
-            let proto_partitioning =
-                Partitioning::decode(data).map_err(|e| DataFusionError::External(Box::new(e)))?;
+            let proto_partitioning = Partitioning::decode(data)
+                .map_err(|e| DataFusionError::External(Box::new(e)))?;
             // TODO: Validate this unwrap is safe.
             let partitioning = parse_protobuf_partitioning(
                 Some(&proto_partitioning),
@@ -520,15 +538,17 @@ impl TryFrom<FFI_PlanProperties> for PlanProperties {
             )?
             .unwrap();
 
-            let execution_mode_fn = value.execution_mode.ok_or(DataFusionError::NotImplemented(
-                "execution_mode() not implemented on FFI_PlanProperties".to_string(),
-            ))?;
+            let execution_mode_fn =
+                value.execution_mode.ok_or(DataFusionError::NotImplemented(
+                    "execution_mode() not implemented on FFI_PlanProperties".to_string(),
+                ))?;
             let execution_mode = execution_mode_fn(&value).into();
 
             let eq_properties = match orderings {
-                Some(ordering) => {
-                    EquivalenceProperties::new_with_orderings(Arc::new(schema), &[ordering])
-                }
+                Some(ordering) => EquivalenceProperties::new_with_orderings(
+                    Arc::new(schema),
+                    &[ordering],
+                ),
                 None => EquivalenceProperties::new(Arc::new(schema)),
             };
 
