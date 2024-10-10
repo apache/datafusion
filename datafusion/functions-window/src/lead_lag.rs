@@ -175,10 +175,6 @@ impl WindowUDFImpl for WindowShift {
         let default_value = scalar_at(&partition_evaluator_args, 2)
             .and_then(|scalar| get_default_value(return_type, scalar))?;
 
-        /*        let shift_offset =
-                    try_get_shift_offset(&self.kind, &partition_evaluator_args, 1)?;
-                let default_value = try_get_default_value(&partition_evaluator_args, 2)?;
-        */
         Ok(Box::new(WindowShiftEvaluator {
             shift_offset,
             default_value,
