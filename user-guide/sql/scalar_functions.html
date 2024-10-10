@@ -29,7 +29,7 @@
     <link rel="preload" as="script" href="../../_static/scripts/pydata-sphinx-theme.js?digest=1999514e3f237ded88cf">
   
     <script src="../../_static/documentation_options.js?v=8a448e45"></script>
-    <script src="../../_static/doctools.js?v=9a2dae69"></script>
+    <script src="../../_static/doctools.js?v=9bcbadda"></script>
     <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
     <script async="true" defer="true" src="https://buttons.github.io/buttons.js"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
@@ -3209,93 +3209,6 @@
   </ul>
  </li>
  <li class="toc-h2 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#hashing-functions">
-   Hashing Functions
-  </a>
-  <ul class="nav section-nav flex-column">
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#digest">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       digest
-      </span>
-     </code>
-    </a>
-    <ul class="nav section-nav flex-column">
-     <li class="toc-h4 nav-item toc-entry">
-      <a class="reference internal nav-link" href="#id192">
-       Arguments
-      </a>
-     </li>
-    </ul>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#md5">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       md5
-      </span>
-     </code>
-    </a>
-    <ul class="nav section-nav flex-column">
-     <li class="toc-h4 nav-item toc-entry">
-      <a class="reference internal nav-link" href="#id193">
-       Arguments
-      </a>
-     </li>
-    </ul>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#sha256">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       sha256
-      </span>
-     </code>
-    </a>
-    <ul class="nav section-nav flex-column">
-     <li class="toc-h4 nav-item toc-entry">
-      <a class="reference internal nav-link" href="#id194">
-       Arguments
-      </a>
-     </li>
-    </ul>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#sha384">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       sha384
-      </span>
-     </code>
-    </a>
-    <ul class="nav section-nav flex-column">
-     <li class="toc-h4 nav-item toc-entry">
-      <a class="reference internal nav-link" href="#id195">
-       Arguments
-      </a>
-     </li>
-    </ul>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#sha512">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       sha512
-      </span>
-     </code>
-    </a>
-    <ul class="nav section-nav flex-column">
-     <li class="toc-h4 nav-item toc-entry">
-      <a class="reference internal nav-link" href="#id196">
-       Arguments
-      </a>
-     </li>
-    </ul>
-   </li>
-  </ul>
- </li>
- <li class="toc-h2 nav-item toc-entry">
   <a class="reference internal nav-link" href="#other-functions">
    Other Functions
   </a>
@@ -3310,12 +3223,12 @@
     </a>
     <ul class="nav section-nav flex-column">
      <li class="toc-h4 nav-item toc-entry">
-      <a class="reference internal nav-link" href="#id197">
+      <a class="reference internal nav-link" href="#id192">
        Arguments
       </a>
      </li>
      <li class="toc-h4 nav-item toc-entry">
-      <a class="reference internal nav-link" href="#id198">
+      <a class="reference internal nav-link" href="#id193">
        Example
       </a>
      </li>
@@ -3331,12 +3244,12 @@
     </a>
     <ul class="nav section-nav flex-column">
      <li class="toc-h4 nav-item toc-entry">
-      <a class="reference internal nav-link" href="#id199">
+      <a class="reference internal nav-link" href="#id194">
        Arguments
       </a>
      </li>
      <li class="toc-h4 nav-item toc-entry">
-      <a class="reference internal nav-link" href="#id200">
+      <a class="reference internal nav-link" href="#id195">
        Example
       </a>
      </li>
@@ -3352,7 +3265,7 @@
     </a>
     <ul class="nav section-nav flex-column">
      <li class="toc-h4 nav-item toc-entry">
-      <a class="reference internal nav-link" href="#id201">
+      <a class="reference internal nav-link" href="#id196">
        Example
       </a>
      </li>
@@ -6608,99 +6521,6 @@ Can be a constant, column, or function, and any combination of map operators.</p
 </section>
 </section>
 </section>
-<section id="hashing-functions">
-<h2>Hashing Functions<a class="headerlink" href="#hashing-functions" title="Link to this heading">¶</a></h2>
-<ul class="simple">
-<li><p><a class="reference internal" href="#digest">digest</a></p></li>
-<li><p><a class="reference internal" href="#md5">md5</a></p></li>
-<li><p><a class="reference internal" href="#sha256">sha256</a></p></li>
-<li><p><a class="reference internal" href="#sha384">sha384</a></p></li>
-<li><p><a class="reference internal" href="#sha512">sha512</a></p></li>
-</ul>
-<section id="digest">
-<h3><code class="docutils literal notranslate"><span class="pre">digest</span></code><a class="headerlink" href="#digest" title="Link to this heading">¶</a></h3>
-<p>Computes the binary hash of an expression using the specified algorithm.</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">digest</span><span class="p">(</span><span class="n">expression</span><span class="p">,</span> <span class="n">algorithm</span><span class="p">)</span>
-</pre></div>
-</div>
-<section id="id192">
-<h4>Arguments<a class="headerlink" href="#id192" title="Link to this heading">¶</a></h4>
-<ul class="simple">
-<li><p><strong>expression</strong>: String expression to operate on.
-Can be a constant, column, or function, and any combination of string operators.</p></li>
-<li><p><strong>algorithm</strong>: String expression specifying algorithm to use.
-Must be one of:</p>
-<ul>
-<li><p>md5</p></li>
-<li><p>sha224</p></li>
-<li><p>sha256</p></li>
-<li><p>sha384</p></li>
-<li><p>sha512</p></li>
-<li><p>blake2s</p></li>
-<li><p>blake2b</p></li>
-<li><p>blake3</p></li>
-</ul>
-</li>
-</ul>
-</section>
-</section>
-<section id="md5">
-<h3><code class="docutils literal notranslate"><span class="pre">md5</span></code><a class="headerlink" href="#md5" title="Link to this heading">¶</a></h3>
-<p>Computes an MD5 128-bit checksum for a string expression.</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">md5</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
-</pre></div>
-</div>
-<section id="id193">
-<h4>Arguments<a class="headerlink" href="#id193" title="Link to this heading">¶</a></h4>
-<ul class="simple">
-<li><p><strong>expression</strong>: String expression to operate on.
-Can be a constant, column, or function, and any combination of string operators.</p></li>
-</ul>
-</section>
-</section>
-<section id="sha256">
-<h3><code class="docutils literal notranslate"><span class="pre">sha256</span></code><a class="headerlink" href="#sha256" title="Link to this heading">¶</a></h3>
-<p>Computes the SHA-256 hash of a binary string.</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">sha256</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
-</pre></div>
-</div>
-<section id="id194">
-<h4>Arguments<a class="headerlink" href="#id194" title="Link to this heading">¶</a></h4>
-<ul class="simple">
-<li><p><strong>expression</strong>: String expression to operate on.
-Can be a constant, column, or function, and any combination of string operators.</p></li>
-</ul>
-</section>
-</section>
-<section id="sha384">
-<h3><code class="docutils literal notranslate"><span class="pre">sha384</span></code><a class="headerlink" href="#sha384" title="Link to this heading">¶</a></h3>
-<p>Computes the SHA-384 hash of a binary string.</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">sha384</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
-</pre></div>
-</div>
-<section id="id195">
-<h4>Arguments<a class="headerlink" href="#id195" title="Link to this heading">¶</a></h4>
-<ul class="simple">
-<li><p><strong>expression</strong>: String expression to operate on.
-Can be a constant, column, or function, and any combination of string operators.</p></li>
-</ul>
-</section>
-</section>
-<section id="sha512">
-<h3><code class="docutils literal notranslate"><span class="pre">sha512</span></code><a class="headerlink" href="#sha512" title="Link to this heading">¶</a></h3>
-<p>Computes the SHA-512 hash of a binary string.</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">sha512</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
-</pre></div>
-</div>
-<section id="id196">
-<h4>Arguments<a class="headerlink" href="#id196" title="Link to this heading">¶</a></h4>
-<ul class="simple">
-<li><p><strong>expression</strong>: String expression to operate on.
-Can be a constant, column, or function, and any combination of string operators.</p></li>
-</ul>
-</section>
-</section>
-</section>
 <section id="other-functions">
 <h2>Other Functions<a class="headerlink" href="#other-functions" title="Link to this heading">¶</a></h2>
 <ul class="simple">
@@ -6714,8 +6534,8 @@ Can be a constant, column, or function, and any combination of string operators.
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">arrow_cast</span><span class="p">(</span><span class="n">expression</span><span class="p">,</span> <span class="n">datatype</span><span class="p">)</span>
 </pre></div>
 </div>
-<section id="id197">
-<h4>Arguments<a class="headerlink" href="#id197" title="Link to this heading">¶</a></h4>
+<section id="id192">
+<h4>Arguments<a class="headerlink" href="#id192" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>expression</strong>: Expression to cast.
 Can be a constant, column, or function, and any combination of arithmetic or
@@ -6724,8 +6544,8 @@ string operators.</p></li>
 to cast to, as a string. The format is the same as that returned by [<code class="docutils literal notranslate"><span class="pre">arrow_typeof</span></code>]</p></li>
 </ul>
 </section>
-<section id="id198">
-<h4>Example<a class="headerlink" href="#id198" title="Link to this heading">¶</a></h4>
+<section id="id193">
+<h4>Example<a class="headerlink" href="#id193" title="Link to this heading">¶</a></h4>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span> <span class="n">select</span> <span class="n">arrow_cast</span><span class="p">(</span><span class="o">-</span><span class="mi">5</span><span class="p">,</span> <span class="s1">&#39;Int8&#39;</span><span class="p">)</span> <span class="k">as</span> <span class="n">a</span><span class="p">,</span>
   <span class="n">arrow_cast</span><span class="p">(</span><span class="s1">&#39;foo&#39;</span><span class="p">,</span> <span class="s1">&#39;Dictionary(Int32, Utf8)&#39;</span><span class="p">)</span> <span class="k">as</span> <span class="n">b</span><span class="p">,</span>
   <span class="n">arrow_cast</span><span class="p">(</span><span class="s1">&#39;bar&#39;</span><span class="p">,</span> <span class="s1">&#39;LargeUtf8&#39;</span><span class="p">)</span> <span class="k">as</span> <span class="n">c</span><span class="p">,</span>
@@ -6747,16 +6567,16 @@ to cast to, as a string. The format is the same as that returned by [<code class
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">arrow_typeof</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
 </pre></div>
 </div>
-<section id="id199">
-<h4>Arguments<a class="headerlink" href="#id199" title="Link to this heading">¶</a></h4>
+<section id="id194">
+<h4>Arguments<a class="headerlink" href="#id194" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>expression</strong>: Expression to evaluate.
 Can be a constant, column, or function, and any combination of arithmetic or
 string operators.</p></li>
 </ul>
 </section>
-<section id="id200">
-<h4>Example<a class="headerlink" href="#id200" title="Link to this heading">¶</a></h4>
+<section id="id195">
+<h4>Example<a class="headerlink" href="#id195" title="Link to this heading">¶</a></h4>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span> <span class="n">select</span> <span class="n">arrow_typeof</span><span class="p">(</span><span class="s1">&#39;foo&#39;</span><span class="p">),</span> <span class="n">arrow_typeof</span><span class="p">(</span><span class="mi">1</span><span class="p">);</span>
 <span class="o">+---------------------------+------------------------+</span>
 <span class="o">|</span> <span class="n">arrow_typeof</span><span class="p">(</span><span class="n">Utf8</span><span class="p">(</span><span class="s2">&quot;foo&quot;</span><span class="p">))</span> <span class="o">|</span> <span class="n">arrow_typeof</span><span class="p">(</span><span class="n">Int64</span><span class="p">(</span><span class="mi">1</span><span class="p">))</span> <span class="o">|</span>
@@ -6774,8 +6594,8 @@ string operators.</p></li>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">version</span><span class="p">()</span>
 </pre></div>
 </div>
-<section id="id201">
-<h4>Example<a class="headerlink" href="#id201" title="Link to this heading">¶</a></h4>
+<section id="id196">
+<h4>Example<a class="headerlink" href="#id196" title="Link to this heading">¶</a></h4>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span> <span class="n">select</span> <span class="n">version</span><span class="p">();</span>
 <span class="o">+--------------------------------------------+</span>
 <span class="o">|</span> <span class="n">version</span><span class="p">()</span>                                  <span class="o">|</span>
@@ -6831,7 +6651,7 @@ string operators.</p></li>
     
     <div class="footer-item">
       <p class="sphinx-version">
-Created using <a href="http://sphinx-doc.org/">Sphinx</a> 8.0.2.<br>
+Created using <a href="http://sphinx-doc.org/">Sphinx</a> 8.1.0.<br>
 </p>
     </div>
     
