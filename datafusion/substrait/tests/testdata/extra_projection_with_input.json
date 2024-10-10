@@ -1,0 +1,113 @@
+{
+  "extensionUris": [
+    {
+      "extensionUriAnchor": 1,
+      "uri": "/functions_arithmetic.yaml"
+    }
+  ],
+  "extensions": [
+    {
+      "extensionFunction": {
+        "extensionUriReference": 1,
+        "functionAnchor": 1,
+        "name": "row_number"
+      }
+    }
+  ],
+  "relations": [
+    {
+      "root": {
+        "input": {
+          "project": {
+            "common": {
+              "direct": {}
+            },
+            "input": {
+              "read": {
+                "common": {
+                  "direct": {}
+                },
+                "baseSchema": {
+                  "names": [
+                    "user_id",
+                    "name",
+                    "paid_for_service"
+                  ],
+                  "struct": {
+                    "types": [
+                      {
+                        "string": {
+                          "nullability": "NULLABILITY_REQUIRED"
+                        }
+                      },
+                      {
+                        "string": {
+                          "nullability": "NULLABILITY_REQUIRED"
+                        }
+                      },
+                      {
+                        "bool": {
+                          "nullability": "NULLABILITY_REQUIRED"
+                        }
+                      }
+                    ],
+                    "nullability": "NULLABILITY_REQUIRED"
+                  }
+                },
+                "namedTable": {
+                  "names": [
+                    "users"
+                  ]
+                }
+              }
+            },
+            "expressions": [
+              {
+                "windowFunction": {
+                  "functionReference": 1,
+                  "sorts": [
+                    {
+                      "expr": {
+                        "selection": {
+                          "directReference": {
+                            "structField": {
+                              "field": 1
+                            }
+                          },
+                          "rootReference": {}
+                        }
+                      },
+                      "direction": "SORT_DIRECTION_ASC_NULLS_FIRST"
+                    }
+                  ],
+                  "upperBound": {
+                    "unbounded": {}
+                  },
+                  "lowerBound": {
+                    "unbounded": {}
+                  },
+                  "outputType": {
+                    "i64": {
+                      "nullability": "NULLABILITY_REQUIRED"
+                    }
+                  },
+                  "invocation": "AGGREGATION_INVOCATION_ALL"
+                }
+              }
+            ]
+          }
+        },
+        "names": [
+          "user_id",
+          "name",
+          "paid_for_service",
+          "row_number"
+        ]
+      }
+    }
+  ],
+  "version": {
+    "minorNumber": 52,
+    "producer": "spark-substrait-gateway"
+  }
+}
