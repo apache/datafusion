@@ -66,3 +66,20 @@ assert_cmd = "2.0"
 ctor = "0.2.0"
 predicates = "3.0"
 rstest = "0.22"
+
+## Temporary arrow-rs patch until 53.2.0 is released
+## to get change in https://github.com/apache/arrow-rs/pull/6539
+## See https://github.com/alamb/arrow-rs/pull/53 for details
+[patch.crates-io]
+arrow = { git = "https://github.com/apache/arrow-rs.git", rev = "3c2e694e89b12d6b70d7b1aed3f4dcff169de2da" }
+arrow-array = { git = "https://github.com/apache/arrow-rs.git", rev = "3c2e694e89b12d6b70d7b1aed3f4dcff169de2da" }
+arrow-buffer = { git = "https://github.com/apache/arrow-rs.git", rev = "3c2e694e89b12d6b70d7b1aed3f4dcff169de2da" }
+arrow-cast = { git = "https://github.com/apache/arrow-rs.git", rev = "3c2e694e89b12d6b70d7b1aed3f4dcff169de2da" }
+arrow-data = { git = "https://github.com/apache/arrow-rs.git", rev = "3c2e694e89b12d6b70d7b1aed3f4dcff169de2da" }
+arrow-ipc = { git = "https://github.com/apache/arrow-rs.git", rev = "3c2e694e89b12d6b70d7b1aed3f4dcff169de2da" }
+arrow-schema = { git = "https://github.com/apache/arrow-rs.git", rev = "3c2e694e89b12d6b70d7b1aed3f4dcff169de2da" }
+arrow-select = { git = "https://github.com/apache/arrow-rs.git", rev = "3c2e694e89b12d6b70d7b1aed3f4dcff169de2da" }
+arrow-string = { git = "https://github.com/apache/arrow-rs.git", rev = "3c2e694e89b12d6b70d7b1aed3f4dcff169de2da" }
+arrow-ord = { git = "https://github.com/apache/arrow-rs.git", rev = "3c2e694e89b12d6b70d7b1aed3f4dcff169de2da" }
+arrow-flight = { git = "https://github.com/apache/arrow-rs.git", rev = "3c2e694e89b12d6b70d7b1aed3f4dcff169de2da" }
+parquet = { git = "https://github.com/apache/arrow-rs.git", rev = "3c2e694e89b12d6b70d7b1aed3f4dcff169de2da" }
