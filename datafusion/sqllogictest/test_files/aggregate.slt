@@ -3818,6 +3818,180 @@ DROP TABLE min_bool;
 # Min_Max End #
 #################
 
+
+
+#################
+# min_max on strings/binary with null values and groups
+#################
+
+statement ok
+CREATE TABLE strings (value TEXT, id int);
+
+statement ok
+INSERT INTO strings VALUES
+ ('c', 1),
+ ('d', 1),
+ ('a', 3),
+ ('c', 1),
+ ('b', 1),
+ (NULL, 1),
+ (NULL, 4),
+ ('d', 1),
+ ('z', 2),
+ ('c', 1),
+ ('a', 2);
+
+############ Utf8 ############
+
+query IT
+SELECT id, MIN(value) FROM strings GROUP BY id ORDER BY id;
+----
+1 b
+2 a
+3 a
+4 NULL
+
+query IT
+SELECT id, MAX(value) FROM strings GROUP BY id ORDER BY id;
+----
+1 d
+2 z
+3 a
+4 NULL
+
+############ LargeUtf8 ############
+
+statement ok
+CREATE VIEW large_strings AS SELECT id, arrow_cast(value, 'LargeUtf8') as value FROM strings;
+
+
+query IT
+SELECT id, MIN(value) FROM large_strings GROUP BY id ORDER BY id;
+----
+1 b
+2 a
+3 a
+4 NULL
+
+query IT
+SELECT id, MAX(value) FROM large_strings GROUP BY id ORDER BY id;
+----
+1 d
+2 z
+3 a
+4 NULL
+
+statement ok
+DROP VIEW large_strings
+
+############ Utf8View ############
+
+statement ok
+CREATE VIEW string_views AS SELECT id, arrow_cast(value, 'Utf8View') as value FROM strings;
+
+
+query IT
+SELECT id, MIN(value) FROM string_views GROUP BY id ORDER BY id;
+----
+1 b
+2 a
+3 a
+4 NULL
+
+query IT
+SELECT id, MAX(value) FROM string_views GROUP BY id ORDER BY id;
+----
+1 d
+2 z
+3 a
+4 NULL
+
+statement ok
+DROP VIEW string_views
+
+############ Binary ############
+
+statement ok
+CREATE VIEW binary AS SELECT id, arrow_cast(value, 'Binary') as value FROM strings;
+
+
+query I?
+SELECT id, MIN(value) FROM binary GROUP BY id ORDER BY id;
+----
+1 62
+2 61
+3 61
+4 NULL
+
+query I?
+SELECT id, MAX(value) FROM binary GROUP BY id ORDER BY id;
+----
+1 64
+2 7a
+3 61
+4 NULL
+
+statement ok
+DROP VIEW binary
+
+############ LargeBinary ############
+
+statement ok
+CREATE VIEW large_binary AS SELECT id, arrow_cast(value, 'LargeBinary') as value FROM strings;
+
+
+query I?
+SELECT id, MIN(value) FROM large_binary GROUP BY id ORDER BY id;
+----
+1 62
+2 61
+3 61
+4 NULL
+
+query I?
+SELECT id, MAX(value) FROM large_binary GROUP BY id ORDER BY id;
+----
+1 64
+2 7a
+3 61
+4 NULL
+
+statement ok
+DROP VIEW large_binary
+
+############ BinaryView ############
+
+statement ok
+CREATE VIEW binary_views AS SELECT id, arrow_cast(value, 'BinaryView') as value FROM strings;
+
+
+query I?
+SELECT id, MIN(value) FROM binary_views GROUP BY id ORDER BY id;
+----
+1 62
+2 61
+3 61
+4 NULL
+
+query I?
+SELECT id, MAX(value) FROM binary_views GROUP BY id ORDER BY id;
+----
+1 64
+2 7a
+3 61
+4 NULL
+
+statement ok
+DROP VIEW binary_views
+
+statement ok
+DROP TABLE strings;
+
+#################
+# End min_max on strings/binary with null values and groups
+#################
+
+
 statement ok
 create table bool_aggregate_functions (
   c1 boolean not null,
