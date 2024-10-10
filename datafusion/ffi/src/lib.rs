@@ -21,6 +21,7 @@ pub mod execution_plan;
 pub mod record_batch_stream;
 pub mod session_config;
 pub mod table_provider;
+pub mod table_source;
 
 #[cfg(doctest)]
 doc_comment::doctest!("../README.md", readme_example_test);
