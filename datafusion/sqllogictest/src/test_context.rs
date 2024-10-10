@@ -22,10 +22,11 @@ use std::path::Path;
 use std::sync::Arc;
 
 use arrow::array::{
-    ArrayRef, BinaryArray, Float64Array, Int32Array, LargeBinaryArray, LargeStringArray,
-    StringArray, TimestampNanosecondArray,
+    Array, ArrayRef, BinaryArray, Float64Array, Int32Array, LargeBinaryArray,
+    LargeStringArray, NullArray, StringArray, TimestampNanosecondArray, UnionArray,
 };
-use arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit};
+use arrow::buffer::ScalarBuffer;
+use arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit, UnionFields};
 use arrow::record_batch::RecordBatch;
 use datafusion::logical_expr::{create_udf, ColumnarValue, Expr, ScalarUDF, Volatility};
 use datafusion::physical_plan::ExecutionPlan;
@@ -110,6 +111,10 @@ impl TestContext {
             "metadata.slt" => {
                 info!("Registering metadata table tables");
                 register_metadata_tables(test_ctx.session_ctx()).await;
+            }
+            "union_function.slt" => {
+                info!("Registering tables with union column");
+                register_union_tables(test_ctx.session_ctx())
             }
             _ => {
                 info!("Using default SessionContext");
@@ -370,4 +375,83 @@ fn create_example_udf() -> ScalarUDF {
         Volatility::Immutable,
         adder,
     )
+}
+
+fn register_union_tables(ctx: &SessionContext) {
+    sparse_union(ctx);
+    dense_union(ctx);
+    empty_sparse_union(ctx);
+    empty_dense_union(ctx);
+}
+
+fn register_union_table(
+    ctx: &SessionContext,
+    union: UnionArray,
+    table_name: &str,
+    expected: impl Array + 'static,
+) {
+    let schema = Schema::new(vec![
+        Field::new("my_union", union.data_type().clone(), false),
+        Field::new("expected", expected.data_type().clone(), true),
+    ]);
+
+    let batch = RecordBatch::try_new(
+        Arc::new(schema.clone()),
+        vec![Arc::new(union), Arc::new(expected)],
+    )
+    .unwrap();
+
+    ctx.register_batch(table_name, batch).unwrap();
+}
+
+fn sparse_union(ctx: &SessionContext) {
+    let union = UnionArray::try_new(
+        //single field
+        UnionFields::new(vec![3], vec![Field::new("int", DataType::Int32, false)]),
+        ScalarBuffer::from(vec![3, 3]), // non empty, every type id must match
+        None,                           //sparse
+        vec![
+            Arc::new(Int32Array::from(vec![1, 2])), // not null
+        ],
+    )
+    .unwrap();
+
+    register_union_table(ctx, union, "sparse_union", Int32Array::from(vec![1, 2]));
+}
+
+fn dense_union(ctx: &SessionContext) {
+    let union = UnionArray::try_new(
+        //single field
+        UnionFields::new(vec![3], vec![Field::new("int", DataType::Int32, false)]),
+        ScalarBuffer::from(vec![3, 3]),
+        Some(vec![0, 1].into()),
+        vec![Arc::new(Int32Array::from(vec![1, 2]))],
+    )
+    .unwrap();
+
+    register_union_table(ctx, union, "dense_union", Int32Array::from(vec![1, 2]));
+}
+
+fn empty_sparse_union(ctx: &SessionContext) {
+    let union = UnionArray::try_new(
+        UnionFields::empty(),
+        ScalarBuffer::from(vec![]),
+        None,
+        vec![],
+    )
+    .unwrap();
+
+    register_union_table(ctx, union, "empty_sparse_union", NullArray::new(0))
+}
+
+fn empty_dense_union(ctx: &SessionContext) {
+    let union = UnionArray::try_new(
+        UnionFields::empty(),
+        ScalarBuffer::from(vec![]),
+        Some(ScalarBuffer::from(vec![])),
+        vec![],
+    )
+    .unwrap();
+
+    register_union_table(ctx, union, "empty_dense_union", NullArray::new(0))
 }

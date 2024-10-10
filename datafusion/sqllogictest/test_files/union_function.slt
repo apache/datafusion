@@ -1,0 +1,97 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+##########
+## UNION DataType Tests
+##########
+
+
+query II?
+select union_extract(my_union, 'int'), expected, my_union from sparse_union;
+----
+1 1 {int=1}
+2 2 {int=2}
+
+
+query II?
+select union_extract(my_union, 'int'), expected, my_union from dense_union;
+----
+1 1 {int=1}
+2 2 {int=2}
+
+
+
+query error DataFusion error: Execution error: field int not found on union
+select union_extract(my_union, 'int'), expected, my_union from empty_sparse_union;
+
+
+query error DataFusion error: Execution error: field int not found on union
+select union_extract(my_union, 'int'), expected, my_union from empty_dense_union;
+
+
+query error
+select union_extract() from empty_dense_union;
+----
+DataFusion error: Error during planning: Error during planning: union_extract does not support zero arguments. No function matches the given name and argument types 'union_extract()'. You might need to add explicit type casts.
+	Candidate functions:
+	union_extract(UserDefined)
+
+
+
+query error
+select union_extract(my_union) from empty_dense_union;
+----
+DataFusion error: Error during planning: Execution error: User-defined coercion failed with Execution("union_extract expects 2 arguments, got 1 instead") No function matches the given name and argument types 'union_extract(Union([], Dense))'. You might need to add explicit type casts.
+	Candidate functions:
+	union_extract(UserDefined)
+
+
+
+query error
+select union_extract('a') from empty_dense_union;
+----
+DataFusion error: Error during planning: Execution error: User-defined coercion failed with Execution("union_extract expects 2 arguments, got 1 instead") No function matches the given name and argument types 'union_extract(Utf8)'. You might need to add explicit type casts.
+	Candidate functions:
+	union_extract(UserDefined)
+
+
+
+
+query error
+select union_extract('a', my_union) from empty_dense_union;
+----
+DataFusion error: Error during planning: Execution error: User-defined coercion failed with Execution("union_extract first argument must be a union, got Utf8 instead") No function matches the given name and argument types 'union_extract(Utf8, Union([], Dense))'. You might need to add explicit type casts.
+	Candidate functions:
+	union_extract(UserDefined)
+
+
+
+query error
+select union_extract(my_union, 1) from empty_dense_union;
+----
+DataFusion error: Error during planning: Execution error: User-defined coercion failed with Execution("union_extract second argument must be a non-null string literal, got Int64 instead") No function matches the given name and argument types 'union_extract(Union([], Dense), Int64)'. You might need to add explicit type casts.
+	Candidate functions:
+	union_extract(UserDefined)
+
+
+
+query error
+select union_extract(my_union, 'a', 'b') from empty_dense_union;
+----
+DataFusion error: Error during planning: Execution error: User-defined coercion failed with Execution("union_extract expects 2 arguments, got 3 instead") No function matches the given name and argument types 'union_extract(Union([], Dense), Utf8, Utf8)'. You might need to add explicit type casts.
+	Candidate functions:
+	union_extract(UserDefined)
