@@ -1,3 +1,20 @@
+// Licensed to the Apache Software Foundation (ASF) under one
+// or more contributor license agreements.  See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership.  The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License.  You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+
 use std::{
     any::Any,
     ffi::{c_char, c_int, c_void, CStr, CString},
@@ -433,7 +450,8 @@ impl TableProvider for ForeignTableProvider {
             let mut num_return = 0;
             let pushdowns = null_mut();
             let err_code = pushdown_fn(self.0, buffer_size as c_int, buffer, &mut num_return, pushdowns);
-            let pushdowns_slice = slice::from_raw_parts(pushdowns, num_return as usize);
+            let num_return = num_return as usize;
+            let pushdowns_slice = Vec::from_raw_parts(pushdowns, num_return, num_return);
 
             match err_code {
                 0 => {

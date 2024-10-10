@@ -1,4 +1,21 @@
-use std::{ffi::c_void, ptr::null_mut, slice, sync::Arc};
+// Licensed to the Apache Software Foundation (ASF) under one
+// or more contributor license agreements.  See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership.  The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License.  You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+
+use std::{ffi::c_void, ptr::null_mut, sync::Arc};
 
 use arrow::ffi::FFI_ArrowSchema;
 use datafusion::{error::DataFusionError, physical_expr::EquivalenceProperties, physical_plan::{ExecutionMode, PlanProperties}, prelude::SessionContext};
@@ -231,10 +248,10 @@ impl TryFrom<FFI_PlanProperties> for PlanProperties {
             let orderings = match buff_size == 0 {
                 true => None,
                 false => {
-                    let data = slice::from_raw_parts(buff, buff_size);
+                    let data = Vec::from_raw_parts(buff, buff_size, buff_size);
 
                     let proto_output_ordering =
-                        PhysicalSortExprNodeCollection::decode(data)
+                        PhysicalSortExprNodeCollection::decode(data.as_ref())
                             .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
                     Some(parse_physical_sort_exprs(
@@ -259,9 +276,9 @@ impl TryFrom<FFI_PlanProperties> for PlanProperties {
                         .to_string(),
                 ));
             }
-            let data = slice::from_raw_parts(buff, buff_size);
+            let data = Vec::from_raw_parts(buff, buff_size, buff_size);
 
-            let proto_partitioning = Partitioning::decode(data)
+            let proto_partitioning = Partitioning::decode(data.as_ref())
                 .map_err(|e| DataFusionError::External(Box::new(e)))?;
             // TODO: Validate this unwrap is safe.
             let partitioning = parse_protobuf_partitioning(
