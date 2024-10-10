@@ -555,12 +555,13 @@ mod tests {
         let num_rows = values.len();
 
         let first = Arc::new(Column::new("c3", 0)) as Arc<dyn PhysicalExpr>;
-        let second =
-            Arc::new(Literal::new(ScalarValue::Int32(Some(1)))) as Arc<dyn PhysicalExpr>;
-        let third =
-            Arc::new(Literal::new(ScalarValue::try_from(&DataType::Int32)?)) as Arc<dyn PhysicalExpr>;
+        let second = Arc::new(Literal::new(ScalarValue::try_from(&DataType::Int32)?))
+            as Arc<dyn PhysicalExpr>;
+        let third = Arc::new(Literal::new(ScalarValue::try_from(&DataType::Int32)?))
+            as Arc<dyn PhysicalExpr>;
         let input_exprs = &[first, second, third];
-        let input_types: &[DataType] = &[DataType::Int32, DataType::Int32, DataType::Int32];
+        let input_types: &[DataType] =
+            &[DataType::Int32, DataType::Int32, DataType::Int32];
 
         let actual = WindowShift::lead()
             .partition_evaluator(PartitionEvaluatorArgs::new(
@@ -599,10 +600,11 @@ mod tests {
         let first = Arc::new(Column::new("c3", 0)) as Arc<dyn PhysicalExpr>;
         let second =
             Arc::new(Literal::new(ScalarValue::Int32(Some(1)))) as Arc<dyn PhysicalExpr>;
-        let third =
-            Arc::new(Literal::new(ScalarValue::try_from(&DataType::Int32)?)) as Arc<dyn PhysicalExpr>;
+        let third = Arc::new(Literal::new(ScalarValue::try_from(&DataType::Int32)?))
+            as Arc<dyn PhysicalExpr>;
         let input_exprs = &[first, second, third];
-        let input_types: &[DataType] = &[DataType::Int32, DataType::Int32, DataType::Int32];
+        let input_types: &[DataType] =
+            &[DataType::Int32, DataType::Int32, DataType::Int32];
 
         let actual = WindowShift::lag()
             .partition_evaluator(PartitionEvaluatorArgs::new(
