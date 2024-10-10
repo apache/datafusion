@@ -633,12 +633,13 @@ mod tests {
         let num_rows = values.len();
 
         let first = Arc::new(Column::new("c3", 0)) as Arc<dyn PhysicalExpr>;
-        let second = Arc::new(Literal::new(ScalarValue::Null)) as Arc<dyn PhysicalExpr>;
+        let second =
+            Arc::new(Literal::new(ScalarValue::Int32(Some(1)))) as Arc<dyn PhysicalExpr>;
         let third = Arc::new(Literal::new(ScalarValue::Int32(Some(100))))
             as Arc<dyn PhysicalExpr>;
         let input_exprs = &[first, second, third];
         let input_types: &[DataType] =
-            &[DataType::Int32, DataType::Null, DataType::Int32];
+            &[DataType::Int32, DataType::Int32, DataType::Int32];
 
         let actual = WindowShift::lag()
             .partition_evaluator(PartitionEvaluatorArgs::new(
@@ -651,7 +652,7 @@ mod tests {
         let actual = as_int32_array(actual.as_ref())?;
 
         let expected = [
-            Some(1),
+            Some(100),
             Some(1),
             Some(-2),
             Some(3),
@@ -667,76 +668,4 @@ mod tests {
 
         Ok(())
     }
-    //     #[test]
-    //     fn lead_lag_window_shift() -> Result<()> {
-    //         test_i32_result(
-    //             lead(
-    //                 "lead".to_owned(),
-    //                 DataType::Int32,
-    //                 Arc::new(Column::new("c3", 0)),
-    //                 None,
-    //                 ScalarValue::Null.cast_to(&DataType::Int32)?,
-    //                 false,
-    //             ),
-    //             [
-    //                 Some(-2),
-    //                 Some(3),
-    //                 Some(-4),
-    //                 Some(5),
-    //                 Some(-6),
-    //                 Some(7),
-    //                 Some(8),
-    //                 None,
-    //             ]
-    //             .iter()
-    //             .collect::<Int32Array>(),
-    //         )?;
-    //
-    //         test_i32_result(
-    //             lag(
-    //                 "lead".to_owned(),
-    //                 DataType::Int32,
-    //                 Arc::new(Column::new("c3", 0)),
-    //                 None,
-    //                 ScalarValue::Null.cast_to(&DataType::Int32)?,
-    //                 false,
-    //             ),
-    //             [
-    //                 None,
-    //                 Some(1),
-    //                 Some(-2),
-    //                 Some(3),
-    //                 Some(-4),
-    //                 Some(5),
-    //                 Some(-6),
-    //                 Some(7),
-    //             ]
-    //             .iter()
-    //             .collect::<Int32Array>(),
-    //         )?;
-    //
-    //         test_i32_result(
-    //             lag(
-    //                 "lead".to_owned(),
-    //                 DataType::Int32,
-    //                 Arc::new(Column::new("c3", 0)),
-    //                 None,
-    //                 ScalarValue::Int32(Some(100)),
-    //                 false,
-    //             ),
-    //             [
-    //                 Some(100),
-    //                 Some(1),
-    //                 Some(-2),
-    //                 Some(3),
-    //                 Some(-4),
-    //                 Some(5),
-    //                 Some(-6),
-    //                 Some(7),
-    //             ]
-    //             .iter()
-    //             .collect::<Int32Array>(),
-    //         )?;
-    //         Ok(())
-    //     }
 }
