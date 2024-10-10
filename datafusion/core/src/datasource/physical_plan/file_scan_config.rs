@@ -231,7 +231,14 @@ impl FileScanConfig {
         for idx in proj_iter {
             if idx < self.file_schema.fields().len() {
                 let field = self.file_schema.field(idx);
-                table_fields.push(field.clone());
+
+                let f = if field.data_type().equals_datatype(&DataType::Binary) {
+                    Field::new(field.name(), DataType::Utf8, field.is_nullable())
+                } else {
+                    field.clone()
+                };
+
+                table_fields.push(f);
                 table_cols_stats.push(self.statistics.column_statistics[idx].clone())
             } else {
                 let partition_idx = idx - self.file_schema.fields().len();

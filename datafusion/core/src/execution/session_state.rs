@@ -539,6 +539,7 @@ impl SessionState {
             let resolved = &self.resolve_table_ref(reference);
             if let Entry::Vacant(v) = provider.tables.entry(resolved.to_string()) {
                 if let Ok(schema) = self.schema_for_ref(resolved.clone()) {
+                    // println!("schema provider: {:?}", schema);
                     if let Some(table) = schema.table(&resolved.table).await? {
                         v.insert(provider_as_source(table));
                     }
