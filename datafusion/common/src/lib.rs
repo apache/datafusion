@@ -43,6 +43,7 @@ pub mod scalar;
 pub mod stats;
 pub mod test_util;
 pub mod tree_node;
+pub mod types;
 pub mod utils;
 
 /// Reexport arrow crate
