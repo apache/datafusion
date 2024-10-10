@@ -20,7 +20,9 @@ use crate::crypto::basic::md5;
 use arrow::datatypes::DataType;
 use datafusion_common::{plan_err, Result};
 use datafusion_expr::scalar_doc_sections::DOC_SECTION_HASHING;
-use datafusion_expr::{ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{
+    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+};
 use std::any::Any;
 use std::sync::OnceLock;
 
@@ -98,9 +100,7 @@ fn get_md5_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
         Documentation::builder()
             .with_doc_section(DOC_SECTION_HASHING)
-            .with_description(
-                "Computes an MD5 128-bit checksum for a string expression.",
-            )
+            .with_description("Computes an MD5 128-bit checksum for a string expression.")
             .with_syntax_example("md5(expression)")
             .with_sql_example(
                 r#"```sql
@@ -112,8 +112,7 @@ fn get_md5_doc() -> &'static Documentation {
 +-------------------------------------+
 ```"#,
             )
-            .with_standard_argument(
-                "expression", "String")
+            .with_standard_argument("expression", "String")
             .build()
             .unwrap()
     })
