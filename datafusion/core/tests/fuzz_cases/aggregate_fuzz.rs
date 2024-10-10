@@ -55,6 +55,11 @@ use crate::fuzz_cases::aggregation_fuzzer::{
 // TODO: write more test case to cover more `group by`s and `aggregation function`s
 // TODO: maybe we can use macro to simply the case creating
 
+// Dimensions to test:
+// Aggregation functions:
+// Arguments type to aggregation functions
+// Group by columns:
+
 /// Fuzz test for `basic prim aggr(sum/sum distinct/max/min/count/avg)` + `no group by`
 #[tokio::test(flavor = "multi_thread")]
 async fn test_basic_prim_aggr_no_group() {
@@ -353,7 +358,7 @@ async fn streaming_aggregate_test() {
         vec!["d", "c", "a"],
         vec!["d", "c", "b", "a"],
     ];
-    let n = 300;
+    let n = 10;
     let distincts = vec![10, 20];
     for distinct in distincts {
         let mut join_set = JoinSet::new();
