@@ -1348,26 +1348,56 @@ fn build_is_null_column_expr(
 /// The maximum number of entries in an `InList` that might be rewritten into
 /// an OR chain
 const MAX_LIST_VALUE_SIZE_REWRITE: usize = 20;
+/// Rewrite a predicate expression to a pruning predicate expression.
+/// See documentation for `PruningPredicate` for more information.
+pub struct PredicateRewriter {
+    unhandled_hook: Arc<dyn UnhandledPredicateHook>,
+}
 
-/// Translate logical filter expression into pruning predicate
-/// expression that will evaluate to FALSE if it can be determined no
-/// rows between the min/max values could pass the predicates.
-///
-/// Any predicates that can not be translated will be passed to `unhandled_hook`.
-///
-/// Returns the pruning predicate as an [`PhysicalExpr`]
-///
-/// Notice: Does not handle [`phys_expr::InListExpr`] greater than 20, which will fall back to calling `unhandled_hook`
-pub fn rewrite_predicate_to_statistics_predicate(
-    expr: &Arc<dyn PhysicalExpr>,
-    schema: &Schema,
-    unhandled_hook: Option<Arc<dyn UnhandledPredicateHook>>,
-) -> Arc<dyn PhysicalExpr> {
-    let unhandled_hook = unhandled_hook.unwrap_or(default_unhandled_hook());
+impl Default for PredicateRewriter {
+    fn default() -> Self {
+        Self {
+            unhandled_hook: default_unhandled_hook(),
+        }
+    }
+}
 
-    let mut required_columns = RequiredColumns::new();
+impl PredicateRewriter {
+    /// Create a new `PredicateRewriter`
+    pub fn new() -> Self {
+        Self::default()
+    }
 
-    build_predicate_expression(expr, schema, &mut required_columns, &unhandled_hook)
+    /// Set the unhandled hook to be used when a predicate can not be rewritten
+    pub fn with_unhandled_hook(
+        self,
+        unhandled_hook: Arc<dyn UnhandledPredicateHook>,
+    ) -> Self {
+        Self { unhandled_hook }
+    }
+
+    /// Translate logical filter expression into pruning predicate
+    /// expression that will evaluate to FALSE if it can be determined no
+    /// rows between the min/max values could pass the predicates.
+    ///
+    /// Any predicates that can not be translated will be passed to `unhandled_hook`.
+    ///
+    /// Returns the pruning predicate as an [`PhysicalExpr`]
+    ///
+    /// Notice: Does not handle [`phys_expr::InListExpr`] greater than 20, which will fall back to calling `unhandled_hook`
+    pub fn rewrite_predicate_to_statistics_predicate(
+        &self,
+        expr: &Arc<dyn PhysicalExpr>,
+        schema: &Schema,
+    ) -> Arc<dyn PhysicalExpr> {
+        let mut required_columns = RequiredColumns::new();
+        build_predicate_expression(
+            expr,
+            schema,
+            &mut required_columns,
+            &self.unhandled_hook,
+        )
+    }
 }
 
 /// Translate logical filter expression into pruning predicate
@@ -3481,25 +3511,24 @@ mod tests {
             Field::new("b", DataType::Int32, true),
         ]);
 
+        let rewriter = PredicateRewriter::new()
+            .with_unhandled_hook(Arc::new(CustomUnhandledHook {}));
+
         let transform_expr = |expr| {
             let expr = logical2physical(&expr, &schema_with_b);
-            rewrite_predicate_to_statistics_predicate(
-                &expr,
-                &schema,
-                Some(Arc::new(CustomUnhandledHook {})),
-            )
+            rewriter.rewrite_predicate_to_statistics_predicate(&expr, &schema)
         };
 
         // transform an arbitrary valid expression that we know is handled
-        let known_expression = col("a").eq(lit(ScalarValue::Int32(Some(12))));
-        let known_expression_transformed = rewrite_predicate_to_statistics_predicate(
-            &logical2physical(&known_expression, &schema),
-            &schema,
-            None,
-        );
+        let known_expression = col("a").eq(lit(12));
+        let known_expression_transformed = PredicateRewriter::new()
+            .rewrite_predicate_to_statistics_predicate(
+                &logical2physical(&known_expression, &schema),
+                &schema,
+            );
 
         // an expression referencing an unknown column (that is not in the schema) gets passed to the hook
-        let input = col("b").eq(lit(ScalarValue::Int32(Some(12))));
+        let input = col("b").eq(lit(12));
         let expected = logical2physical(&lit(42), &schema);
         let transformed = transform_expr(input.clone());
         assert_eq!(transformed.to_string(), expected.to_string());
