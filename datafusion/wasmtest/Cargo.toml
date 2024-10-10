@@ -60,4 +60,5 @@ wasm-bindgen = "0.2.87"
 wasm-bindgen-futures = "0.4.40"
 
 [dev-dependencies]
-wasm-bindgen-test = "0.3"
+tokio = { workspace = true }
+wasm-bindgen-test = "0.3.44"
