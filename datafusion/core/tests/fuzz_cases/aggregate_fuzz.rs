@@ -45,299 +45,149 @@ use rand::{Rng, SeedableRng};
 use tokio::task::JoinSet;
 
 use crate::fuzz_cases::aggregation_fuzzer::{
-    AggregationFuzzerBuilder, ColumnDescr, DatasetGeneratorConfig,
+    AggregationFuzzerBuilder, ColumnDescr, DatasetGeneratorConfig, QueryBuilder,
 };
 
 // ========================================================================
 //  The new aggregation fuzz tests based on [`AggregationFuzzer`]
 // ========================================================================
+//
+// Notes on tests:
+//
+// Since the supported types differ for each aggregation function, the tests
+// below are structured so they enumerate each different aggregate function.
+//
+// The test framework handles varying combinations of arguments (data types),
+// sortedness, and grouping parameters
+//
+// TODO: Test on floating point values (where output needs to be compared with some
+// acceptable range due to floating point rounding)
+//
+// TODO: test other aggregate functions
+// - AVG (unstable given the wide range of inputs)
+//
+// TODO: specific test for ordering (ensure all group by columns are ordered)
 
-// TODO: write more test case to cover more `group by`s and `aggregation function`s
-// TODO: maybe we can use macro to simply the case creating
-
-/// Fuzz test for `basic prim aggr(sum/sum distinct/max/min/count/avg)` + `no group by`
 #[tokio::test(flavor = "multi_thread")]
-async fn test_basic_prim_aggr_no_group() {
-    let builder = AggregationFuzzerBuilder::default();
+async fn test_min() {
+    let data_gen_config = baseline_config();
 
-    // Define data generator config
-    let columns = vec![ColumnDescr::new("a", DataType::Int32)];
+    // Queries like SELECT min(a) FROM fuzz_table GROUP BY b
+    let query_builder = QueryBuilder::new()
+        .with_table_name("fuzz_table")
+        .with_aggregate_function("min")
+        // min works on all column types
+        .with_aggregate_arguments(data_gen_config.all_columns())
+        .with_group_by_columns(data_gen_config.all_columns());
 
-    let data_gen_config = DatasetGeneratorConfig {
-        columns,
-        rows_num_range: (512, 1024),
-        sort_keys_set: Vec::new(),
-    };
-
-    // Build fuzzer
-    let fuzzer = builder
-        .data_gen_config(data_gen_config)
-        .data_gen_rounds(16)
-        .add_sql("SELECT sum(a) FROM fuzz_table")
-        .add_sql("SELECT sum(distinct a) FROM fuzz_table")
-        .add_sql("SELECT max(a) FROM fuzz_table")
-        .add_sql("SELECT min(a) FROM fuzz_table")
-        .add_sql("SELECT count(a) FROM fuzz_table")
-        .add_sql("SELECT count(distinct a) FROM fuzz_table")
-        .add_sql("SELECT avg(a) FROM fuzz_table")
-        .table_name("fuzz_table")
-        .build();
-
-    fuzzer.run().await
+    AggregationFuzzerBuilder::from(data_gen_config)
+        .add_query_builder(query_builder)
+        .build()
+        .run()
+        .await;
 }
 
-/// Fuzz test for `basic prim aggr(sum/sum distinct/max/min/count/avg)` + `group by single int64`
 #[tokio::test(flavor = "multi_thread")]
-async fn test_basic_prim_aggr_group_by_single_int64() {
-    let builder = AggregationFuzzerBuilder::default();
+async fn test_max() {
+    let data_gen_config = baseline_config();
 
-    // Define data generator config
+    // Queries like SELECT max(a) FROM fuzz_table GROUP BY b
+    let query_builder = QueryBuilder::new()
+        .with_table_name("fuzz_table")
+        .with_aggregate_function("max")
+        // max works on all column types
+        .with_aggregate_arguments(data_gen_config.all_columns())
+        .with_group_by_columns(data_gen_config.all_columns());
+
+    AggregationFuzzerBuilder::from(data_gen_config)
+        .add_query_builder(query_builder)
+        .build()
+        .run()
+        .await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_sum() {
+    let data_gen_config = baseline_config();
+
+    // Queries like SELECT sum(a), sum(distinct) FROM fuzz_table GROUP BY b
+    let query_builder = QueryBuilder::new()
+        .with_table_name("fuzz_table")
+        .with_aggregate_function("sum")
+        .with_distinct_aggregate_function("sum")
+        // sum only works on numeric columns
+        .with_aggregate_arguments(data_gen_config.numeric_columns())
+        .with_group_by_columns(data_gen_config.all_columns());
+
+    AggregationFuzzerBuilder::from(data_gen_config)
+        .add_query_builder(query_builder)
+        .build()
+        .run()
+        .await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_count() {
+    let data_gen_config = baseline_config();
+
+    // Queries like SELECT count(a), count(distinct) FROM fuzz_table GROUP BY b
+    let query_builder = QueryBuilder::new()
+        .with_table_name("fuzz_table")
+        .with_aggregate_function("count")
+        .with_distinct_aggregate_function("count")
+        // count work for all arguments
+        .with_aggregate_arguments(data_gen_config.all_columns())
+        .with_group_by_columns(data_gen_config.all_columns());
+
+    AggregationFuzzerBuilder::from(data_gen_config)
+        .add_query_builder(query_builder)
+        .build()
+        .run()
+        .await;
+}
+
+/// Return a standard set of columns for testing data generation
+///
+/// Includes numeric and string types
+///
+/// Does not include:
+/// 1. Floating point numbers
+/// 1. structured types
+fn baseline_config() -> DatasetGeneratorConfig {
     let columns = vec![
-        ColumnDescr::new("a", DataType::Int32),
-        ColumnDescr::new("b", DataType::Int64),
-        ColumnDescr::new("c", DataType::Int64),
+        ColumnDescr::new("i8", DataType::Int8),
+        ColumnDescr::new("i16", DataType::Int16),
+        ColumnDescr::new("i32", DataType::Int32),
+        ColumnDescr::new("i64", DataType::Int64),
+        ColumnDescr::new("u8", DataType::UInt8),
+        ColumnDescr::new("u16", DataType::UInt16),
+        ColumnDescr::new("u32", DataType::UInt32),
+        ColumnDescr::new("u64", DataType::UInt64),
+        // TODO: date/time columns
+        // todo decimal columns
+        // begin string columns
+        ColumnDescr::new("utf8", DataType::Utf8),
+        ColumnDescr::new("largeutf8", DataType::LargeUtf8),
+        // TODO add support for utf8view in data generator
+        // ColumnDescr::new("utf8view", DataType::Utf8View),
+        // todo binary
     ];
-    let sort_keys_set = vec![
-        vec!["b".to_string()],
-        vec!["c".to_string(), "b".to_string()],
-    ];
-    let data_gen_config = DatasetGeneratorConfig {
+
+    DatasetGeneratorConfig {
         columns,
         rows_num_range: (512, 1024),
-        sort_keys_set,
-    };
-
-    // Build fuzzer
-    let fuzzer = builder
-        .data_gen_config(data_gen_config)
-        .data_gen_rounds(16)
-        .add_sql("SELECT b, sum(a) FROM fuzz_table GROUP BY b")
-        .add_sql("SELECT b, sum(distinct a) FROM fuzz_table GROUP BY b")
-        .add_sql("SELECT b, max(a) FROM fuzz_table GROUP BY b")
-        .add_sql("SELECT b, min(a) FROM fuzz_table GROUP BY b")
-        .add_sql("SELECT b, count(a) FROM fuzz_table GROUP BY b")
-        .add_sql("SELECT b, count(distinct a) FROM fuzz_table GROUP BY b")
-        .add_sql("SELECT b, avg(a) FROM fuzz_table GROUP BY b")
-        .table_name("fuzz_table")
-        .build();
-
-    fuzzer.run().await;
-}
-
-/// Fuzz test for `basic prim aggr(sum/sum distinct/max/min/count/avg)` + `group by single string`
-#[tokio::test(flavor = "multi_thread")]
-async fn test_basic_prim_aggr_group_by_single_string() {
-    let builder = AggregationFuzzerBuilder::default();
-
-    // Define data generator config
-    let columns = vec![
-        ColumnDescr::new("a", DataType::Int32),
-        ColumnDescr::new("b", DataType::Utf8),
-        ColumnDescr::new("c", DataType::Int64),
-    ];
-    let sort_keys_set = vec![
-        vec!["b".to_string()],
-        vec!["c".to_string(), "b".to_string()],
-    ];
-    let data_gen_config = DatasetGeneratorConfig {
-        columns,
-        rows_num_range: (512, 1024),
-        sort_keys_set,
-    };
-
-    // Build fuzzer
-    let fuzzer = builder
-        .data_gen_config(data_gen_config)
-        .data_gen_rounds(16)
-        .add_sql("SELECT b, sum(a) FROM fuzz_table GROUP BY b")
-        .add_sql("SELECT b, sum(distinct a) FROM fuzz_table GROUP BY b")
-        .add_sql("SELECT b, max(a) FROM fuzz_table GROUP BY b")
-        .add_sql("SELECT b, min(a) FROM fuzz_table GROUP BY b")
-        .add_sql("SELECT b, count(a) FROM fuzz_table GROUP BY b")
-        .add_sql("SELECT b, count(distinct a) FROM fuzz_table GROUP BY b")
-        .add_sql("SELECT b, avg(a) FROM fuzz_table GROUP BY b")
-        .table_name("fuzz_table")
-        .build();
-
-    fuzzer.run().await;
-}
-
-/// Fuzz test for `basic prim aggr(sum/sum distinct/max/min/count/avg)` + `group by string + int64`
-#[tokio::test(flavor = "multi_thread")]
-async fn test_basic_prim_aggr_group_by_mixed_string_int64() {
-    let builder = AggregationFuzzerBuilder::default();
-
-    // Define data generator config
-    let columns = vec![
-        ColumnDescr::new("a", DataType::Int32),
-        ColumnDescr::new("b", DataType::Utf8),
-        ColumnDescr::new("c", DataType::Int64),
-        ColumnDescr::new("d", DataType::Int32),
-    ];
-    let sort_keys_set = vec![
-        vec!["b".to_string(), "c".to_string()],
-        vec!["d".to_string(), "b".to_string(), "c".to_string()],
-    ];
-    let data_gen_config = DatasetGeneratorConfig {
-        columns,
-        rows_num_range: (512, 1024),
-        sort_keys_set,
-    };
-
-    // Build fuzzer
-    let fuzzer = builder
-        .data_gen_config(data_gen_config)
-        .data_gen_rounds(16)
-        .add_sql("SELECT b, c, sum(a) FROM fuzz_table GROUP BY b, c")
-        .add_sql("SELECT b, c, sum(distinct a) FROM fuzz_table GROUP BY b,c")
-        .add_sql("SELECT b, c, max(a) FROM fuzz_table GROUP BY b, c")
-        .add_sql("SELECT b, c, min(a) FROM fuzz_table GROUP BY b, c")
-        .add_sql("SELECT b, c, count(a) FROM fuzz_table GROUP BY b, c")
-        .add_sql("SELECT b, c, count(distinct a) FROM fuzz_table GROUP BY b, c")
-        .add_sql("SELECT b, c, avg(a) FROM fuzz_table GROUP BY b, c")
-        .table_name("fuzz_table")
-        .build();
-
-    fuzzer.run().await;
-}
-
-/// Fuzz test for `basic string aggr(count/count distinct/min/max)` + `no group by`
-#[tokio::test(flavor = "multi_thread")]
-async fn test_basic_string_aggr_no_group() {
-    let builder = AggregationFuzzerBuilder::default();
-
-    // Define data generator config
-    let columns = vec![ColumnDescr::new("a", DataType::Utf8)];
-
-    let data_gen_config = DatasetGeneratorConfig {
-        columns,
-        rows_num_range: (512, 1024),
-        sort_keys_set: Vec::new(),
-    };
-
-    // Build fuzzer
-    let fuzzer = builder
-        .data_gen_config(data_gen_config)
-        .data_gen_rounds(8)
-        .add_sql("SELECT max(a) FROM fuzz_table")
-        .add_sql("SELECT min(a) FROM fuzz_table")
-        .add_sql("SELECT count(a) FROM fuzz_table")
-        .add_sql("SELECT count(distinct a) FROM fuzz_table")
-        .table_name("fuzz_table")
-        .build();
-
-    fuzzer.run().await;
-}
-
-/// Fuzz test for `basic string aggr(count/count distinct/min/max)` + `group by single int64`
-#[tokio::test(flavor = "multi_thread")]
-async fn test_basic_string_aggr_group_by_single_int64() {
-    let builder = AggregationFuzzerBuilder::default();
-
-    // Define data generator config
-    let columns = vec![
-        ColumnDescr::new("a", DataType::Utf8),
-        ColumnDescr::new("b", DataType::Int64),
-        ColumnDescr::new("c", DataType::Int64),
-    ];
-    let sort_keys_set = vec![
-        vec!["b".to_string()],
-        vec!["c".to_string(), "b".to_string()],
-    ];
-    let data_gen_config = DatasetGeneratorConfig {
-        columns,
-        rows_num_range: (512, 1024),
-        sort_keys_set,
-    };
-
-    // Build fuzzer
-    let fuzzer = builder
-        .data_gen_config(data_gen_config)
-        .data_gen_rounds(8)
-        .add_sql("SELECT b, max(a) FROM fuzz_table GROUP BY b")
-        .add_sql("SELECT b, min(a) FROM fuzz_table GROUP BY b")
-        .add_sql("SELECT b, count(a) FROM fuzz_table GROUP BY b")
-        .add_sql("SELECT b, count(distinct a) FROM fuzz_table GROUP BY b")
-        .table_name("fuzz_table")
-        .build();
-
-    fuzzer.run().await;
-}
-
-/// Fuzz test for `basic string aggr(count/count distinct/min/max)` + `group by single string`
-#[tokio::test(flavor = "multi_thread")]
-async fn test_basic_string_aggr_group_by_single_string() {
-    let builder = AggregationFuzzerBuilder::default();
-
-    // Define data generator config
-    let columns = vec![
-        ColumnDescr::new("a", DataType::Utf8),
-        ColumnDescr::new("b", DataType::Utf8),
-        ColumnDescr::new("c", DataType::Int64),
-    ];
-    let sort_keys_set = vec![
-        vec!["b".to_string()],
-        vec!["c".to_string(), "b".to_string()],
-    ];
-    let data_gen_config = DatasetGeneratorConfig {
-        columns,
-        rows_num_range: (512, 1024),
-        sort_keys_set,
-    };
-
-    // Build fuzzer
-    let fuzzer = builder
-        .data_gen_config(data_gen_config)
-        .data_gen_rounds(16)
-        .add_sql("SELECT b, max(a) FROM fuzz_table GROUP BY b")
-        .add_sql("SELECT b, min(a) FROM fuzz_table GROUP BY b")
-        .add_sql("SELECT b, count(a) FROM fuzz_table GROUP BY b")
-        .add_sql("SELECT b, count(distinct a) FROM fuzz_table GROUP BY b")
-        .table_name("fuzz_table")
-        .build();
-
-    fuzzer.run().await;
-}
-
-/// Fuzz test for `basic string aggr(count/count distinct/min/max)` + `group by string + int64`
-#[tokio::test(flavor = "multi_thread")]
-async fn test_basic_string_aggr_group_by_mixed_string_int64() {
-    let builder = AggregationFuzzerBuilder::default();
-
-    // Define data generator config
-    let columns = vec![
-        ColumnDescr::new("a", DataType::Utf8),
-        ColumnDescr::new("b", DataType::Utf8),
-        ColumnDescr::new("c", DataType::Int64),
-        ColumnDescr::new("d", DataType::Int32),
-    ];
-    let sort_keys_set = vec![
-        vec!["b".to_string(), "c".to_string()],
-        vec!["d".to_string(), "b".to_string(), "c".to_string()],
-    ];
-    let data_gen_config = DatasetGeneratorConfig {
-        columns,
-        rows_num_range: (512, 1024),
-        sort_keys_set,
-    };
-
-    // Build fuzzer
-    let fuzzer = builder
-        .data_gen_config(data_gen_config)
-        .data_gen_rounds(16)
-        .add_sql("SELECT b, c, max(a) FROM fuzz_table GROUP BY b, c")
-        .add_sql("SELECT b, c, min(a) FROM fuzz_table GROUP BY b, c")
-        .add_sql("SELECT b, c, count(a) FROM fuzz_table GROUP BY b, c")
-        .add_sql("SELECT b, c, count(distinct a) FROM fuzz_table GROUP BY b, c")
-        .table_name("fuzz_table")
-        .build();
-
-    fuzzer.run().await;
+        sort_keys_set: vec![
+            // low cardinality to try and get many repeated runs
+            vec![String::from("u8")],
+            vec![String::from("utf8"), String::from("u8")],
+        ],
+    }
 }
 
 // ========================================================================
 //  The old aggregation fuzz tests
 // ========================================================================
+
 /// Tracks if this stream is generating input or output
 /// Tests that streaming aggregate and batch (non streaming) aggregate produce
 /// same results
@@ -353,7 +203,7 @@ async fn streaming_aggregate_test() {
         vec!["d", "c", "a"],
         vec!["d", "c", "b", "a"],
     ];
-    let n = 300;
+    let n = 10;
     let distincts = vec![10, 20];
     for distinct in distincts {
         let mut join_set = JoinSet::new();

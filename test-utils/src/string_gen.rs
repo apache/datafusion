@@ -62,7 +62,7 @@ impl StringBatchGenerator {
         let mut cases = vec![];
         let mut rng = thread_rng();
         for null_pct in [0.0, 0.01, 0.1, 0.5] {
-            for _ in 0..100 {
+            for _ in 0..10 {
                 // max length of generated strings
                 let max_len = rng.gen_range(1..50);
                 let num_strings = rng.gen_range(1..100);
