@@ -370,6 +370,8 @@ impl From<&DataType> for TypeCategory {
 /// align with the behavior of Postgres. Therefore, we've made slight adjustments to the rules
 /// to better match the behavior of both Postgres and DuckDB. For example, we expect adjusted
 /// decimal precision and scale when coercing decimal types.
+///
+/// This function doesn't preserve correct field name and nullability for the nested data type, we only care about data type.
 pub fn type_union_resolution(data_types: &[DataType]) -> Option<DataType> {
     if data_types.is_empty() {
         return None;
@@ -475,6 +477,26 @@ fn type_union_resolution_coercion(
             let new_item_type =
                 type_union_resolution_coercion(lhs.data_type(), rhs.data_type());
             new_item_type.map(|t| DataType::List(Arc::new(Field::new("item", t, true))))
+        }
+        (DataType::Struct(lhs), DataType::Struct(rhs)) => {
+            if lhs.len() != rhs.len() {
+                return None;
+            }
+
+            let types = std::iter::zip(lhs.iter(), rhs.iter())
+                .map(|(lhs, rhs)| {
+                    type_union_resolution_coercion(lhs.data_type(), rhs.data_type())
+                })
+                .collect::<Option<Vec<DataType>>>()?;
+
+            let fields = types
+                .into_iter()
+                .enumerate()
+                .map(|(i, datatype)| {
+                    Arc::new(Field::new(format!("c{i}"), datatype, true))
+                })
+                .collect::<Vec<FieldRef>>();
+            Some(DataType::Struct(fields.into()))
         }
         _ => {
             // numeric coercion is the same as comparison coercion, both find the narrowest type
