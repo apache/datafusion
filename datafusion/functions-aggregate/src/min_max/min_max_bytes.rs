@@ -24,18 +24,20 @@ use datafusion_expr::{EmitTo, GroupsAccumulator};
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::nulls::apply_filter_as_nulls;
 use std::sync::Arc;
 
-/// Implements Min/Max accumulators for "bytes" types ([`StringArray`], [`BinaryArray`], etc)
+/// Implements fast Min/Max [`GroupsAccumulator`] for "bytes" types ([`StringArray`],
+/// [`BinaryArray`], [`StringViewArray`], etc)
 ///
 /// This implementation dispatches to the appropriate specialized code in
 /// [`MinMaxBytesState`] based on data type and comparison function
 pub(crate) struct MinMaxBytesAccumulator {
+    /// Inner data storage.
     inner: MinMaxBytesState,
     /// if true, is `MIN` otherwise is `MAX`
     is_min: bool,
 }
 
 impl MinMaxBytesAccumulator {
-    /// Create a new accumulator fo computing min(string)
+    /// Create a new accumulator for computing `min(val)`
     pub fn new_min(data_type: DataType) -> Self {
         Self {
             inner: MinMaxBytesState::new(data_type),
@@ -43,7 +45,7 @@ impl MinMaxBytesAccumulator {
         }
     }
 
-    /// Create a new accumulator fo computing max(string)
+    /// Create a new accumulator fo computing `max(val)`
     pub fn new_max(data_type: DataType) -> Self {
         Self {
             inner: MinMaxBytesState::new(data_type),
@@ -62,7 +64,6 @@ impl GroupsAccumulator for MinMaxBytesAccumulator {
     ) -> Result<()> {
         let array = &values[0];
         assert_eq!(array.len(), group_indices.len());
-        // Ensure the input matches the output
         assert_eq!(array.data_type(), &self.inner.data_type);
 
         // apply filter if needed
@@ -70,8 +71,8 @@ impl GroupsAccumulator for MinMaxBytesAccumulator {
 
         // dispatch to appropriate kernel / specialized implementation
         fn string_min(a: &[u8], b: &[u8]) -> bool {
-            // safety: only called from update_batch, which ensures a and b come
-            // from a string array, and thus are valid utf8
+            // safety: only called from this function, which ensures a and b come
+            // from an array with valid utf8 data
             unsafe {
                 let a = std::str::from_utf8_unchecked(a);
                 let b = std::str::from_utf8_unchecked(b);
@@ -79,8 +80,8 @@ impl GroupsAccumulator for MinMaxBytesAccumulator {
             }
         }
         fn string_max(a: &[u8], b: &[u8]) -> bool {
-            // safety: only called from update_batch, which ensures a and b come
-            // from a string array, and thus are valid utf8
+            // safety: only called from this function, which ensures a and b come
+            // from an array with valid utf8 data
             unsafe {
                 let a = std::str::from_utf8_unchecked(a);
                 let b = std::str::from_utf8_unchecked(b);
@@ -102,7 +103,7 @@ impl GroupsAccumulator for MinMaxBytesAccumulator {
         }
 
         match (self.is_min, &self.inner.data_type) {
-            // String Min
+            // Utf8/LargeUtf8/Utf8View Min
             (true, &DataType::Utf8) => self.inner.update_batch(
                 str_to_bytes(array.as_string::<i32>().iter()),
                 group_indices,
@@ -125,7 +126,7 @@ impl GroupsAccumulator for MinMaxBytesAccumulator {
                 string_min,
             ),
 
-            // String Max
+            // Utf8/LargeUtf8/Utf8View Max
             (false, &DataType::Utf8) => self.inner.update_batch(
                 str_to_bytes(array.as_string::<i32>().iter()),
                 group_indices,
@@ -148,7 +149,7 @@ impl GroupsAccumulator for MinMaxBytesAccumulator {
                 string_max,
             ),
 
-            // Binary Min
+            // Binary/LargeBinary/BinaryView Min
             (true, &DataType::Binary) => self.inner.update_batch(
                 array.as_binary::<i32>().iter(),
                 group_indices,
@@ -171,7 +172,7 @@ impl GroupsAccumulator for MinMaxBytesAccumulator {
                 binary_min,
             ),
 
-            // Binary Max
+            // Binary/LargeBinary/BinaryView Max
             (false, &DataType::Binary) => self.inner.update_batch(
                 array.as_binary::<i32>().iter(),
                 group_indices,
