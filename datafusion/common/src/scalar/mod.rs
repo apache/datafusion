@@ -3577,9 +3577,8 @@ impl fmt::Display for ScalarValue {
                     columns
                         .iter()
                         .zip(fields.iter())
-                        .enumerate()
-                        .map(|(index, (column, field))| {
-                            if nulls.is_some_and(|b| b.is_null(index)) {
+                        .map(|(column, field)| {
+                            if nulls.is_some_and(|b| b.is_null(0)) {
                                 format!("{}:NULL", field.name())
                             } else if let DataType::Struct(_) = field.data_type() {
                                 let sv = ScalarValue::Struct(Arc::new(
@@ -3874,7 +3873,6 @@ mod tests {
     use arrow::buffer::OffsetBuffer;
     use arrow::compute::{is_null, kernels};
     use arrow::error::ArrowError;
-    use arrow::ipc::Utf8Builder;
     use arrow::util::pretty::pretty_format_columns;
     use arrow_buffer::{Buffer, NullBuffer};
     use arrow_schema::Fields;
@@ -6618,11 +6616,11 @@ mod tests {
         //verify compared to arrow display
         let batch = RecordBatch::try_from_iter(vec![("s", arr as _)]).unwrap();
         let expected = [
-            "+-------------+",
-            "| s           |",
-            "+-------------+",
+            "+--------------+",
+            "| s            |",
+            "+--------------+",
             "| {a: 1, b: 2} |",
-            "+-------------+",
+            "+--------------+",
         ];
         assert_batches_eq!(&expected, &[batch]);
     }
