@@ -374,18 +374,29 @@ You reached the bottom!
 statement ok
 drop view complex_view;
 
+# struct with different keys r1 and r2 is not valid
 statement ok
 create table t(a struct<r1 varchar, c int>, b struct<r2 varchar, c float>) as values (struct('red', 1), struct('blue', 2.3));
+
+query error Expect same keys for struct type but got mismatched pair r1,c and r2,c
+select [a, b] from t;
+
+statement ok
+drop table t;
+
+# struct with the same key
+statement ok
+create table t(a struct<r varchar, c int>, b struct<r varchar, c float>) as values (struct('red', 1), struct('blue', 2.3));
 
 query T
 select arrow_typeof([a, b]) from t;
 ----
-List(Field { name: "item", data_type: Struct([Field { name: "c0", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "c1", data_type: Float32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }]), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} })
+List(Field { name: "item", data_type: Struct([Field { name: "r", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "c", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }]), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} })
 
 query ?
 select [a, b] from t;
 ----
-[{c0: red, c1: 1.0}, {c0: blue, c1: 2.3}]
+[{r: red, c: 1}, {r: blue, c: 2}]
 
 statement ok
 drop table t;

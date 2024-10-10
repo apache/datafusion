@@ -371,7 +371,7 @@ impl From<&DataType> for TypeCategory {
 /// to better match the behavior of both Postgres and DuckDB. For example, we expect adjusted
 /// decimal precision and scale when coercing decimal types.
 ///
-/// This function doesn't preserve correct field name and nullability for the nested data type, we only care about data type.
+/// This function doesn't preserve correct field name and nullability for the struct type, we only care about data type.
 pub fn type_union_resolution(data_types: &[DataType]) -> Option<DataType> {
     if data_types.is_empty() {
         return None;
