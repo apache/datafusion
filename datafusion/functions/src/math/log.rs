@@ -17,7 +17,6 @@
 
 //! Math function: `log()`.
 
-use datafusion_macros::udf_doc;
 use std::any::Any;
 use std::sync::{Arc, OnceLock};
 
@@ -38,7 +37,6 @@ use datafusion_expr::{
 };
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 
-#[udf_doc(description = "log_description", example = "log_example")]
 #[derive(Debug)]
 pub struct LogFunc {
     signature: Signature,
@@ -59,8 +57,10 @@ fn get_log_doc() -> &'static Documentation {
             .with_description("Returns the base-x logarithm of a number. Can either provide a specified base, or if omitted then takes the base-10 of a number.")
             .with_syntax_example(r#"log(base, numeric_expression)
 log(numeric_expression)"#)
-            .with_standard_argument("base", "Base numeric")
-            .with_standard_argument("numeric_expression", "Numeric")
+            .with_argument("base",
+                           "Base numeric expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators.")
+            .with_argument("numeric_expression",
+                           "Numeric expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators.")
             .build()
             .unwrap()
     })
@@ -185,6 +185,10 @@ impl ScalarUDFImpl for LogFunc {
         Ok(ColumnarValue::Array(arr))
     }
 
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_log_doc())
+    }
+
     /// Simplify the `log` function by the relevant rules:
     /// 1. Log(a, 1) ===> 0
     /// 2. Log(a, Power(a, b)) ===> b
@@ -262,7 +266,6 @@ mod tests {
     use datafusion_common::DFSchema;
     use datafusion_expr::execution_props::ExecutionProps;
     use datafusion_expr::simplify::SimplifyContext;
-    use datafusion_pre_macros::DocumentationTest;
 
     #[test]
     fn test_log_f64() {
@@ -469,18 +472,6 @@ mod tests {
         assert_eq!(
             log.output_ordering(&[base_order, num_order]).unwrap(),
             SortProperties::Unordered
-        );
-    }
-
-    #[test]
-    fn test_doc() {
-        let log = LogFunc::new();
-        assert_eq!(
-            log.documentation_test(),
-            Some(DocumentationTest {
-                description: "log_description".to_string(),
-                syntax_example: "log_example".to_string(),
-            })
         );
     }
 }
