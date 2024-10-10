@@ -6,13 +6,12 @@ use datafusion_proto::{physical_plan::{from_proto::{parse_physical_sort_exprs, p
 use prost::Message;
 
 
+// TODO: should we just make ExecutionMode repr(C)?
 #[repr(C)]
 #[allow(non_camel_case_types)]
 pub enum FFI_ExecutionMode {
     Bounded,
-
     Unbounded,
-
     PipelineBreaking,
 }
 
@@ -66,6 +65,8 @@ pub struct FFI_PlanProperties {
     pub schema:
         Option<unsafe extern "C" fn(plan: *const FFI_PlanProperties) -> FFI_ArrowSchema>,
 
+    pub release: Option<unsafe extern "C" fn(arg: *mut Self)>,
+    
     pub private_data: *mut c_void,
 }
 
@@ -74,9 +75,6 @@ unsafe extern "C" fn output_partitioning_fn_wrapper(
     buffer_size: &mut usize,
     buffer_bytes: &mut *mut u8,
 ) -> i32 {
-    // let private_data = (*plan).private_data as *const ExecutionPlanPrivateData;
-    // let properties = (*private_data).plan.properties();
-    // properties.clone().into()
     let private_data = (*properties).private_data as *const PlanProperties;
     let partitioning = (*private_data).output_partitioning();
 
@@ -156,6 +154,25 @@ unsafe extern "C" fn schema_fn_wrapper(
     FFI_ArrowSchema::try_from(schema.as_ref()).unwrap_or(FFI_ArrowSchema::empty())
 }
 
+unsafe extern "C" fn release_fn_wrapper(props: *mut FFI_PlanProperties) {
+    if props.is_null() {
+        return;
+    }
+    let props = &mut *props;
+
+    props.execution_mode = None;
+    props.output_partitioning = None;
+    props.execution_mode = None;
+    props.output_ordering = None;
+    props.schema = None;
+
+    let private_data = Box::from_raw(props.private_data as *mut PlanProperties);
+    drop(private_data);
+
+    props.release = None;
+}
+
+
 impl From<PlanProperties> for FFI_PlanProperties {
     fn from(value: PlanProperties) -> Self {
         let private_data = Box::new(value);
@@ -165,6 +182,7 @@ impl From<PlanProperties> for FFI_PlanProperties {
             execution_mode: Some(execution_mode_fn_wrapper),
             output_ordering: Some(output_ordering_fn_wrapper),
             schema: Some(schema_fn_wrapper),
+            release: Some(release_fn_wrapper),
             private_data: Box::into_raw(private_data) as *mut c_void,
         }
     }
