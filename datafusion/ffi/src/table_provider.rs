@@ -28,11 +28,11 @@ use datafusion_proto::{
 use futures::executor::block_on;
 use prost::Message;
 
-use crate::table_source::{FFI_TableProviderFilterPushDown, FFI_TableType};
+use crate::{session_config::ExportedSessionConfig, table_source::{FFI_TableProviderFilterPushDown, FFI_TableType}};
 
 use super::{
     execution_plan::{ExportedExecutionPlan, FFI_ExecutionPlan},
-    session_config::{FFI_SessionConfig, SessionConfigPrivateData},
+    session_config::FFI_SessionConfig,
 };
 use datafusion::error::Result;
 
@@ -127,10 +127,9 @@ unsafe extern "C" fn scan_fn_wrapper(
     limit: c_int,
     err_code: *mut c_int,
 ) -> *mut FFI_ExecutionPlan {
-    let config =
-        unsafe { (*session_config).private_data as *const SessionConfigPrivateData };
+    let config = ExportedSessionConfig(session_config).session_config().clone();
     let session = SessionStateBuilder::new()
-        .with_config((*config).config.clone())
+        .with_config(config)
         .build();
     let ctx = SessionContext::new_with_state(session);
 
