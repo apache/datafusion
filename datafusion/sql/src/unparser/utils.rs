@@ -175,7 +175,7 @@ fn find_agg_expr<'a>(agg: &'a Aggregate, column: &Column) -> Result<Option<&'a E
                 Ordering::Less => Ok(grouping_expr.into_iter().nth(index)),
                 Ordering::Equal => {
                     internal_err!(
-                        "Tried to unproject column refereing to internal grouping id"
+                        "Tried to unproject column referring to internal grouping id"
                     )
                 }
                 Ordering::Greater => {

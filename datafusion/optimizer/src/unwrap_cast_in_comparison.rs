@@ -146,7 +146,7 @@ impl TreeNodeRewriter for UnwrapCastExprRewriter {
                     };
                     is_supported_type(&left_type)
                         && is_supported_type(&right_type)
-                        && op.is_comparison_operator()
+                        && op.supports_propagation()
                 } =>
             {
                 match (left.as_mut(), right.as_mut()) {

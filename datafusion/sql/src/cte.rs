@@ -98,8 +98,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             }
         };
 
-        // Each recursive CTE consists from two parts in the logical plan:
-        //   1. A static term   (the left hand side on the SQL, where the
+        // Each recursive CTE consists of two parts in the logical plan:
+        //   1. A static term   (the left-hand side on the SQL, where the
         //                       referencing to the same CTE is not allowed)
         //
         //   2. A recursive term (the right hand side, and the recursive
