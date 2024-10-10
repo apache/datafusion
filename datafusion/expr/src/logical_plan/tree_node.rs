@@ -142,6 +142,7 @@ impl TreeNode for LogicalPlan {
                 join_constraint,
                 schema,
                 null_equals_null,
+                filter_pushdown_info,
             }) => map_until_stop_and_collect!(
                 rewrite_arc(left, &mut f),
                 right,
@@ -157,6 +158,7 @@ impl TreeNode for LogicalPlan {
                     join_constraint,
                     schema,
                     null_equals_null,
+                    filter_pushdown_info,
                 })
             }),
             LogicalPlan::CrossJoin(CrossJoin {
@@ -639,6 +641,7 @@ impl LogicalPlan {
                 join_constraint,
                 schema,
                 null_equals_null,
+                filter_pushdown_info,
             }) => map_until_stop_and_collect!(
                 on.into_iter().map_until_stop_and_collect(
                     |on| map_until_stop_and_collect!(f(on.0), on.1, f(on.1))
@@ -658,6 +661,7 @@ impl LogicalPlan {
                     join_constraint,
                     schema,
                     null_equals_null,
+                    filter_pushdown_info,
                 })
             }),
             LogicalPlan::Sort(Sort { expr, input, fetch }) => {

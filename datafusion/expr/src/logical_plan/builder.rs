@@ -878,6 +878,7 @@ impl LogicalPlanBuilder {
             join_constraint: JoinConstraint::On,
             schema: DFSchemaRef::new(join_schema),
             null_equals_null,
+            filter_pushdown_info: None,
         })))
     }
 
@@ -942,6 +943,7 @@ impl LogicalPlanBuilder {
                 join_constraint: JoinConstraint::Using,
                 schema: DFSchemaRef::new(join_schema),
                 null_equals_null: false,
+                filter_pushdown_info: None,
             })))
         }
     }
@@ -1165,6 +1167,7 @@ impl LogicalPlanBuilder {
             join_constraint: JoinConstraint::On,
             schema: DFSchemaRef::new(join_schema),
             null_equals_null: false,
+            filter_pushdown_info: None,
         })))
     }
 
