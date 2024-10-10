@@ -439,7 +439,6 @@ select * from t;
 ----
 {r: red, b: 2} {r: blue, b: 2.3}
 
-# TODO: Should be coerced to float
 query T
 select arrow_typeof(c1) from t;
 ----
