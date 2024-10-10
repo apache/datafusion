@@ -1,4 +1,4 @@
-use std::ffi::{c_void, CString};
+use std::ffi::c_void;
 
 use datafusion::{catalog::Session, prelude::SessionConfig};
 
@@ -14,18 +14,19 @@ pub struct FFI_SessionConfig {
 
 unsafe impl Send for FFI_SessionConfig {}
 
-pub struct SessionConfigPrivateData {
+struct SessionConfigPrivateData {
     pub config: SessionConfig,
-    pub last_error: Option<CString>,
 }
 
-pub struct ExportedSessionConfig {
-    session: *mut FFI_SessionConfig,
-}
+pub struct ExportedSessionConfig(pub *const FFI_SessionConfig);
 
 impl ExportedSessionConfig {
-    fn get_private_data(&mut self) -> &mut SessionConfigPrivateData {
-        unsafe { &mut *((*self.session).private_data as *mut SessionConfigPrivateData) }
+    fn get_private_data(&self) -> &SessionConfigPrivateData {
+        unsafe { &*((*self.0).private_data as *const SessionConfigPrivateData) }
+    }
+
+    pub fn session_config(&self) -> &SessionConfig {
+        &self.get_private_data().config
     }
 }
 
@@ -35,7 +36,6 @@ impl FFI_SessionConfig {
         let config = session.config().clone();
         let private_data = Box::new(SessionConfigPrivateData {
             config,
-            last_error: None,
         });
 
         Self {

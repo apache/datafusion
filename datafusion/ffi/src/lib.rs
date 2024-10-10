@@ -18,6 +18,7 @@
 #![deny(clippy::clone_on_ref_ptr)]
 
 pub mod execution_plan;
+pub mod plan_properties;
 pub mod record_batch_stream;
 pub mod session_config;
 pub mod table_provider;
