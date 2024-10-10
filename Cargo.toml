@@ -26,6 +26,7 @@ members = [
     "datafusion/expr",
     "datafusion/expr-common",
     "datafusion/execution",
+    "datafusion/ffi",
     "datafusion/functions",
     "datafusion/functions-aggregate",
     "datafusion/functions-aggregate-common",
@@ -99,6 +100,7 @@ datafusion-common-runtime = { path = "datafusion/common-runtime", version = "42.
 datafusion-execution = { path = "datafusion/execution", version = "42.1.0" }
 datafusion-expr = { path = "datafusion/expr", version = "42.1.0" }
 datafusion-expr-common = { path = "datafusion/expr-common", version = "42.1.0" }
+datafusion-ffi = { path = "datafusion/ffi", version = "42.1.0" }
 datafusion-functions = { path = "datafusion/functions", version = "42.1.0" }
 datafusion-functions-aggregate = { path = "datafusion/functions-aggregate", version = "42.1.0" }
 datafusion-functions-aggregate-common = { path = "datafusion/functions-aggregate-common", version = "42.1.0" }
