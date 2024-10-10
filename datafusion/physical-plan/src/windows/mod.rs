@@ -252,15 +252,27 @@ fn create_built_in_window_expr(
             }
         }
         BuiltInWindowFunction::Lag => {
-            let arg = Arc::clone(&args[0]);
+            let mut arg = Arc::clone(&args[0]);
             let shift_offset = get_scalar_value_from_args(args, 1)?
                 .map(get_signed_integer)
                 .map_or(Ok(None), |v| v.map(Some))?;
-            let default_value =
-                get_casted_value(get_scalar_value_from_args(args, 2)?, out_data_type)?;
+            // If value is NULL, we use default data type as output data type, no need to cast data type
+            let default_value = match out_data_type {
+                DataType::Null => match get_scalar_value_from_args(args, 2)? {
+                    Some(value) => {
+                        let null_value = ScalarValue::try_from(value.data_type())?;
+                        arg = Arc::new(Literal::new(null_value));
+                        value
+                    }
+                    None => ScalarValue::try_from(DataType::Null)?,
+                },
+                _ => {
+                    get_casted_value(get_scalar_value_from_args(args, 2)?, out_data_type)?
+                }
+            };
             Arc::new(lag(
                 name,
-                out_data_type.clone(),
+                default_value.data_type().clone(),
                 arg,
                 shift_offset,
                 default_value,
@@ -268,15 +280,27 @@ fn create_built_in_window_expr(
             ))
         }
         BuiltInWindowFunction::Lead => {
-            let arg = Arc::clone(&args[0]);
+            let mut arg = Arc::clone(&args[0]);
             let shift_offset = get_scalar_value_from_args(args, 1)?
                 .map(get_signed_integer)
                 .map_or(Ok(None), |v| v.map(Some))?;
-            let default_value =
-                get_casted_value(get_scalar_value_from_args(args, 2)?, out_data_type)?;
+            // If value is NULL, we use default data type as output data type, no need to cast data type
+            let default_value = match out_data_type {
+                DataType::Null => match get_scalar_value_from_args(args, 2)? {
+                    Some(value) => {
+                        let null_value = ScalarValue::try_from(value.data_type())?;
+                        arg = Arc::new(Literal::new(null_value));
+                        value
+                    }
+                    None => ScalarValue::try_from(DataType::Null)?,
+                },
+                _ => {
+                    get_casted_value(get_scalar_value_from_args(args, 2)?, out_data_type)?
+                }
+            };
             Arc::new(lead(
                 name,
-                out_data_type.clone(),
+                default_value.data_type().clone(),
                 arg,
                 shift_offset,
                 default_value,
