@@ -173,6 +173,15 @@ unsafe extern "C" fn release_fn_wrapper(props: *mut FFI_PlanProperties) {
 }
 
 
+impl Drop for FFI_PlanProperties {
+    fn drop(&mut self) {
+        match self.release {
+            None => (),
+            Some(release) => unsafe { release(self) },
+        };
+    }
+}
+
 impl From<PlanProperties> for FFI_PlanProperties {
     fn from(value: PlanProperties) -> Self {
         let private_data = Box::new(value);

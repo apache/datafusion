@@ -33,14 +33,15 @@ pub struct FFI_ExecutionPlan {
             err_code: &mut i32,
         ) -> *mut *const FFI_ExecutionPlan,
     >,
-    pub name: unsafe extern "C" fn(plan: *const FFI_ExecutionPlan) -> *const c_char,
+    pub name: Option<unsafe extern "C" fn(plan: *const FFI_ExecutionPlan) -> *const c_char>,
 
-    pub execute: unsafe extern "C" fn(
+    pub execute: Option<unsafe extern "C" fn(
         plan: *const FFI_ExecutionPlan,
         partition: usize,
         err_code: &mut i32,
-    ) -> FFI_ArrowArrayStream,
+    ) -> FFI_ArrowArrayStream>,
 
+    pub release: Option<unsafe extern "C" fn(arg: *mut Self)>,
     pub private_data: *mut c_void,
 }
 
@@ -107,6 +108,24 @@ unsafe extern "C" fn name_fn_wrapper(plan: *const FFI_ExecutionPlan) -> *const c
         .into_raw()
 }
 
+unsafe extern "C" fn release_fn_wrapper(plan: *mut FFI_ExecutionPlan) {
+    if plan.is_null() {
+        return;
+    }
+    let plan = &mut *plan;
+
+    plan.properties = None;
+    plan.children = None;
+    plan.name = None;
+    plan.execute = None;
+
+    let private_data = Box::from_raw(plan.private_data as *mut ExecutionPlanPrivateData);
+    drop(private_data);
+
+    plan.release = None;
+}
+
+
 // Since the trait ExecutionPlan requires borrowed values, we wrap our FFI.
 // This struct exists on the consumer side (datafusion-python, for example) and not
 // in the provider's side.
@@ -155,19 +174,21 @@ impl FFI_ExecutionPlan {
         Self {
             properties: Some(properties_fn_wrapper),
             children: Some(children_fn_wrapper),
-            name: name_fn_wrapper,
-            execute: execute_fn_wrapper,
+            name: Some(name_fn_wrapper),
+            execute: Some(execute_fn_wrapper),
+            release: Some(release_fn_wrapper),
             private_data: Box::into_raw(private_data) as *mut c_void,
         }
     }
+}
 
-    // pub fn empty() -> Self {
-    //     Self {
-    //         properties: None,
-    //         children: None,
-    //         private_data: std::ptr::null_mut(),
-    //     }
-    // }
+impl Drop for FFI_ExecutionPlan {
+    fn drop(&mut self) {
+        match self.release {
+            None => (),
+            Some(release) => unsafe { release(self) },
+        };
+    }
 }
 
 impl ExportedExecutionPlan {
@@ -178,12 +199,16 @@ impl ExportedExecutionPlan {
     /// The caller must ensure the pointer provided points to a valid implementation
     /// of FFI_ExecutionPlan
     pub unsafe fn new(plan: *const FFI_ExecutionPlan) -> Result<Self> {
-        let name_fn = (*plan).name;
-        let name_cstr = name_fn(plan);
-        let name = CString::from_raw(name_cstr as *mut c_char)
-            .to_str()
-            .unwrap_or("Unable to parse FFI_ExecutionPlan name")
-            .to_string();
+        let name_ptr = (*plan).name.map(|func| func(plan));
+        let name = match name_ptr {
+            Some(name_cstr) => {
+                CString::from_raw(name_cstr as *mut c_char)
+                .to_str()
+                .unwrap_or("Unable to parse FFI_ExecutionPlan name")
+                .to_string()
+            }
+            None => "Plan has no name".to_string()
+        };
 
         let properties = unsafe {
             let properties_fn =
@@ -269,6 +294,11 @@ impl ExecutionPlan for ExportedExecutionPlan {
     ) -> datafusion::error::Result<datafusion::execution::SendableRecordBatchStream> {
         unsafe {
             let execute_fn = (*self.plan).execute;
+            if execute_fn.is_none() {
+                return Err(DataFusionError::Execution("execute is not defined on FFI_ExecutionPlan".to_string()));
+            }
+            let execute_fn = execute_fn.unwrap();
+
             let mut err_code = 0;
             let arrow_stream = execute_fn(self.plan, partition, &mut err_code);
 

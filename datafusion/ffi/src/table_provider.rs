@@ -69,6 +69,7 @@ pub struct FFI_TableProvider {
         ) -> c_int,
     >,
 
+    pub release: Option<unsafe extern "C" fn(arg: *mut Self)>,
     pub private_data: *mut c_void,
 }
 
@@ -172,6 +173,34 @@ unsafe extern "C" fn scan_fn_wrapper(
     }
 }
 
+
+unsafe extern "C" fn release_fn_wrapper(provider: *mut FFI_TableProvider) {
+    if provider.is_null() {
+        return;
+    }
+    let provider = &mut *provider;
+
+    provider.schema = None;
+    provider.scan = None;
+    provider.table_type = None;
+    provider.supports_filters_pushdown = None;
+
+    let private_data = Box::from_raw(provider.private_data as *mut ProviderPrivateData);
+    drop(private_data);
+
+    provider.release = None;
+}
+
+
+impl Drop for FFI_TableProvider {
+    fn drop(&mut self) {
+        match self.release {
+            None => (),
+            Some(release) => unsafe { release(self) },
+        };
+    }
+}
+
 impl ExportedTableProvider {
     fn get_private_data(&self) -> &ProviderPrivateData {
         unsafe { &*((*self.0).private_data as *const ProviderPrivateData) }
@@ -261,6 +290,7 @@ impl FFI_TableProvider {
             scan: Some(scan_fn_wrapper),
             table_type: Some(table_type_fn_wrapper),
             supports_filters_pushdown: Some(supports_filters_pushdown_fn_wrapper),
+            release: Some(release_fn_wrapper),
             private_data: Box::into_raw(private_data) as *mut c_void,
         }
     }
@@ -281,6 +311,7 @@ impl FFI_TableProvider {
             scan: None,
             table_type: None,
             supports_filters_pushdown: None,
+            release: None,
             private_data: std::ptr::null_mut(),
         }
     }
