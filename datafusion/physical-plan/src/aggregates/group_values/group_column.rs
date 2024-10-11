@@ -829,7 +829,7 @@ mod tests {
     #[test]
     fn test_byte_view_append_val() {
         let mut builder =
-            ByteViewGroupValueBuilder::<StringViewType>::new().with_max_block_size(30);
+            ByteViewGroupValueBuilder::<StringViewType>::new().with_max_block_size(60);
         let builder_array = StringViewArray::from(vec![
             Some("this string is quite long"), // in buffer 0
             Some("foo"),
@@ -845,10 +845,10 @@ mod tests {
         }
 
         let output = Box::new(builder).build();
+        // should be 2 output buffers to hold all the data
         assert_eq!(
             output.as_string_view().data_buffers().len(),
             2,
-            "output should have 2 buffers"
         );
         assert_eq!(&output, &builder_array)
     }
@@ -915,4 +915,56 @@ mod tests {
         assert!(!builder.equal_to(5, &input_array, 5));
         assert!(builder.equal_to(6, &input_array, 6));
     }
+
+
+    #[test]
+    fn test_byte_view_take_n() {
+        let mut builder =
+            ByteViewGroupValueBuilder::<StringViewType>::new().with_max_block_size(60);
+        let input_array = StringViewArray::from(vec![
+            Some("this string is quite long"), // in buffer 0
+            Some("foo"),
+            Some("bar"),
+            Some("this string is also quite long"), // buffer 0
+            Some("this string is quite long"),      // buffer 1
+            Some("another string that is is quite long"),      // buffer 2
+            Some("bar"),
+        ]);
+        let input_array: ArrayRef = Arc::new(input_array);
+        for row in 0..input_array.len() {
+            builder.append_val(&input_array, row);
+        }
+
+        // should be 2 completed, one in progress buffer to hold all output
+        assert_eq!(builder.completed.len(), 2);
+        assert!(builder.in_progress.len() > 0);
+
+        let first_4 = builder.take_n(4);
+        assert_eq!(&first_4, &input_array.slice(0, 4));
+
+        // Add some new data after the first n
+        let input_array = StringViewArray::from(vec![
+            Some("short"),
+            Some("Some new data to add that is long"), // in buffer 0
+            Some("short again"),
+        ]);
+        let input_array: ArrayRef = Arc::new(input_array);
+        for row in 0..input_array.len() {
+            builder.append_val(&input_array, row);
+        }
+
+        let result = Box::new(builder).build();
+        let expected: ArrayRef = Arc::new(StringViewArray::from(vec![
+            // last three rows of the original input
+            Some("this string is quite long"),
+            Some("another string that is is quite long"),
+            Some("bar"),
+            // last three rows of the subsequent input
+            Some("short"),
+            Some("Some new data to add that is long"), // in buffer 0
+            Some("short again"),
+        ]));
+        assert_eq!(result, expected);
+    }
+
 }
