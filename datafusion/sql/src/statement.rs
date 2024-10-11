@@ -394,9 +394,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 let column_defaults =
                     self.build_column_defaults(&columns, planner_context)?;
 
-                // println!("query: {:?}", query);
-                // println!("column_defaults: {:?}", column_defaults);
-                // println!("columns: {:?}", columns);
                 let has_columns = !columns.is_empty();
                 let schema = self.build_schema(columns)?.to_dfschema_ref()?;
                 if has_columns {
@@ -409,7 +406,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         let input_schema = plan.schema();
 
                         let plan = if has_columns {
-                            // let schema = self.build_schema(columns)?.to_dfschema_ref()?;
                             if schema.fields().len() != input_schema.fields().len() {
                                 return plan_err!(
                             "Mismatch: {} columns specified, but result has {} columns",
@@ -455,7 +451,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     }
 
                     None => {
-                        // let schema = self.build_schema(columns)?.to_dfschema_ref()?;
                         let plan = EmptyRelation {
                             produce_one_row: false,
                             schema,
