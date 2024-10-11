@@ -449,7 +449,7 @@ select arrow_typeof(c2) from t;
 ----
 Struct([Field { name: "r", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "b", data_type: Float32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }])
 
-query
+statement ok
 drop table t;
 
 ##################################
@@ -504,3 +504,14 @@ NULL
 
 statement ok
 drop table t;
+
+# row() with incorrect order
+statement error DataFusion error: Arrow error: Cast error: Cannot cast string 'blue' to value of Float64 type
+create table t(a struct(r varchar, c int), b struct(r varchar, c float)) as values 
+    (row('red', 1), row(2.3, 'blue')),
+    (row('purple', 1), row('green', 2.3));
+
+# out of order struct literal
+# TODO: This query should not fail
+statement error DataFusion error: Arrow error: Cast error: Cannot cast string 'a' to value of Int64 type
+create table t(a struct(r varchar, c int)) as values ({r: 'a', c: 1}), ({c: 2, r: 'b'});
