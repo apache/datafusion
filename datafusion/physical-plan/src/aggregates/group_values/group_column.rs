@@ -564,23 +564,48 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
 
 impl<B: ByteViewType> GroupColumn for ByteViewGroupValueBuilder<B> {
     fn equal_to(&self, lhs_row: usize, array: &ArrayRef, rhs_row: usize) -> bool {
-        todo!()
+        self.equal_to_inner(lhs_row, array, rhs_row)
     }
 
     fn append_val(&mut self, array: &ArrayRef, row: usize) {
-        todo!()
+        self.append_val_inner(array, row)
     }
 
     fn len(&self) -> usize {
-        todo!()
+        self.views.len()
     }
 
     fn size(&self) -> usize {
-        todo!()
+        self.views.capacity() * std::mem::size_of::<u128>()
+            + self.in_progress.len()
+            + self.completed.iter().map(|b| b.len()).sum::<usize>()
+            + self.nulls.allocated_size()
     }
 
     fn build(self: Box<Self>) -> ArrayRef {
-        todo!()
+        let Self {
+            views,
+            in_progress,
+            mut completed,
+            max_block_size: _,
+            nulls,
+            _phantom,
+        } = *self;
+
+        // complete the in progress view
+        completed.push(in_progress.into());
+
+        // safety
+        // all input values came from arrays of the correct type (so were valid utf8 if string)
+        // all views were created correctly
+        let arr = unsafe {
+            GenericByteViewArray::<B>::new_unchecked(
+                views.into(),
+                completed,
+                nulls.build(),
+            )
+        };
+        Arc::new(arr)
     }
 
     fn take_n(&mut self, n: usize) -> ArrayRef {
