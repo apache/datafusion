@@ -254,10 +254,8 @@ async fn test_basic_string_aggr_group_by_single_int64() {
     let fuzzer = builder
         .data_gen_config(data_gen_config)
         .data_gen_rounds(8)
-        // FIXME: Encounter error in min/max
-        //   ArrowError(InvalidArgumentError("number of columns(1) must match number of fields(2) in schema"))
-        // .add_sql("SELECT b, max(a) FROM fuzz_table GROUP BY b")
-        // .add_sql("SELECT b, min(a) FROM fuzz_table GROUP BY b")
+        .add_sql("SELECT b, max(a) FROM fuzz_table GROUP BY b")
+        .add_sql("SELECT b, min(a) FROM fuzz_table GROUP BY b")
         .add_sql("SELECT b, count(a) FROM fuzz_table GROUP BY b")
         .add_sql("SELECT b, count(distinct a) FROM fuzz_table GROUP BY b")
         .table_name("fuzz_table")
@@ -291,10 +289,8 @@ async fn test_basic_string_aggr_group_by_single_string() {
     let fuzzer = builder
         .data_gen_config(data_gen_config)
         .data_gen_rounds(16)
-        // FIXME: Encounter error in min/max
-        //   ArrowError(InvalidArgumentError("number of columns(1) must match number of fields(2) in schema"))
-        // .add_sql("SELECT b, max(a) FROM fuzz_table GROUP BY b")
-        // .add_sql("SELECT b, min(a) FROM fuzz_table GROUP BY b")
+        .add_sql("SELECT b, max(a) FROM fuzz_table GROUP BY b")
+        .add_sql("SELECT b, min(a) FROM fuzz_table GROUP BY b")
         .add_sql("SELECT b, count(a) FROM fuzz_table GROUP BY b")
         .add_sql("SELECT b, count(distinct a) FROM fuzz_table GROUP BY b")
         .table_name("fuzz_table")
@@ -329,10 +325,8 @@ async fn test_basic_string_aggr_group_by_mixed_string_int64() {
     let fuzzer = builder
         .data_gen_config(data_gen_config)
         .data_gen_rounds(16)
-        // FIXME: Encounter error in min/max
-        //   ArrowError(InvalidArgumentError("number of columns(1) must match number of fields(2) in schema"))
-        // .add_sql("SELECT b, c, max(a) FROM fuzz_table GROUP BY b, c")
-        // .add_sql("SELECT b, c, min(a) FROM fuzz_table GROUP BY b, c")
+        .add_sql("SELECT b, c, max(a) FROM fuzz_table GROUP BY b, c")
+        .add_sql("SELECT b, c, min(a) FROM fuzz_table GROUP BY b, c")
         .add_sql("SELECT b, c, count(a) FROM fuzz_table GROUP BY b, c")
         .add_sql("SELECT b, c, count(distinct a) FROM fuzz_table GROUP BY b, c")
         .table_name("fuzz_table")

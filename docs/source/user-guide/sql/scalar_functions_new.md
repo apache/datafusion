@@ -27,7 +27,11 @@ dev/update_function_docs.sh file for updating surrounding text.
 
 # Scalar Functions (NEW)
 
-This page is a WIP and will replace the Scalar Functions page once completed.
+Note: this documentation is in the process of being migrated to be [automatically created from the codebase].
+Please see the [Scalar Functions (old)](aggregate_functions.md) page for
+the rest of the documentation.
+
+[automatically created from the codebase]: https://github.com/apache/datafusion/issues/12740
 
 ## Math Functions
 
@@ -1157,7 +1161,67 @@ Additional examples can be found [here](https://github.com/apache/datafusion/blo
 
 ## Hashing Functions
 
+- [digest](#digest)
+- [md5](#md5)
 - [sha224](#sha224)
+- [sha256](#sha256)
+- [sha384](#sha384)
+- [sha512](#sha512)
+
+### `digest`
+
+Computes the binary hash of an expression using the specified algorithm.
+
+```
+digest(expression, algorithm)
+```
+
+#### Arguments
+
+- **expression**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
+- **algorithm**: String expression specifying algorithm to use. Must be one of:
+- md5
+- sha224
+- sha256
+- sha384
+- sha512
+- blake2s
+- blake2b
+- blake3
+
+#### Example
+
+```sql
+> select digest('foo', 'sha256');
++------------------------------------------+
+| digest(Utf8("foo"), Utf8("sha256"))      |
++------------------------------------------+
+| <binary_hash_result>                     |
++------------------------------------------+
+```
+
+### `md5`
+
+Computes an MD5 128-bit checksum for a string expression.
+
+```
+md5(expression)
+```
+
+#### Arguments
+
+- **expression**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
+
+#### Example
+
+```sql
+> select md5('foo');
++-------------------------------------+
+| md5(Utf8("foo"))                    |
++-------------------------------------+
+| <md5_checksum_result>               |
++-------------------------------------+
+```
 
 ### `sha224`
 
@@ -1170,3 +1234,83 @@ sha224(expression)
 #### Arguments
 
 - **expression**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
+
+#### Example
+
+```sql
+> select sha224('foo');
++------------------------------------------+
+| sha224(Utf8("foo"))                      |
++------------------------------------------+
+| <sha224_hash_result>                     |
++------------------------------------------+
+```
+
+### `sha256`
+
+Computes the SHA-256 hash of a binary string.
+
+```
+sha256(expression)
+```
+
+#### Arguments
+
+- **expression**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
+
+#### Example
+
+```sql
+> select sha256('foo');
++--------------------------------------+
+| sha256(Utf8("foo"))                  |
++--------------------------------------+
+| <sha256_hash_result>                 |
++--------------------------------------+
+```
+
+### `sha384`
+
+Computes the SHA-384 hash of a binary string.
+
+```
+sha384(expression)
+```
+
+#### Arguments
+
+- **expression**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
+
+#### Example
+
+```sql
+> select sha384('foo');
++-----------------------------------------+
+| sha384(Utf8("foo"))                     |
++-----------------------------------------+
+| <sha384_hash_result>                    |
++-----------------------------------------+
+```
+
+### `sha512`
+
+Computes the SHA-512 hash of a binary string.
+
+```
+sha512(expression)
+```
+
+#### Arguments
+
+- **expression**: String
+
+#### Example
+
+```sql
+> select sha512('foo');
++-------------------------------------------+
+| sha512(Utf8("foo"))                       |
++-------------------------------------------+
+| <sha512_hash_result>                      |
++-------------------------------------------+
+```

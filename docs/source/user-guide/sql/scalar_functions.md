@@ -19,6 +19,14 @@
 
 # Scalar Functions
 
+Scalar functions operate on a single row at a time and return a single value.
+
+Note: this documentation is in the process of being migrated to be [automatically created from the codebase].
+Please see the [Scalar Functions (new)](scalar_functions_new.md) page for
+the rest of the documentation.
+
+[automatically created from the codebase]: https://github.com/apache/datafusion/issues/12740
+
 ## Math Functions
 
 - [abs](#abs)
@@ -3057,90 +3065,6 @@ select map_values(map([100, 5], [42,43]));
 ----
 [42, 43]
 ```
-
-## Hashing Functions
-
-- [digest](#digest)
-- [md5](#md5)
-- [sha256](#sha256)
-- [sha384](#sha384)
-- [sha512](#sha512)
-
-### `digest`
-
-Computes the binary hash of an expression using the specified algorithm.
-
-```
-digest(expression, algorithm)
-```
-
-#### Arguments
-
-- **expression**: String expression to operate on.
-  Can be a constant, column, or function, and any combination of string operators.
-- **algorithm**: String expression specifying algorithm to use.
-  Must be one of:
-
-  - md5
-  - sha224
-  - sha256
-  - sha384
-  - sha512
-  - blake2s
-  - blake2b
-  - blake3
-
-### `md5`
-
-Computes an MD5 128-bit checksum for a string expression.
-
-```
-md5(expression)
-```
-
-#### Arguments
-
-- **expression**: String expression to operate on.
-  Can be a constant, column, or function, and any combination of string operators.
-
-### `sha256`
-
-Computes the SHA-256 hash of a binary string.
-
-```
-sha256(expression)
-```
-
-#### Arguments
-
-- **expression**: String expression to operate on.
-  Can be a constant, column, or function, and any combination of string operators.
-
-### `sha384`
-
-Computes the SHA-384 hash of a binary string.
-
-```
-sha384(expression)
-```
-
-#### Arguments
-
-- **expression**: String expression to operate on.
-  Can be a constant, column, or function, and any combination of string operators.
-
-### `sha512`
-
-Computes the SHA-512 hash of a binary string.
-
-```
-sha512(expression)
-```
-
-#### Arguments
-
-- **expression**: String expression to operate on.
-  Can be a constant, column, or function, and any combination of string operators.
 
 ## Other Functions
 
