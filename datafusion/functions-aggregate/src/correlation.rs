@@ -132,8 +132,8 @@ fn get_corr_doc() -> &'static Documentation {
 | 0.85                           |
 +--------------------------------+
 ```"#)
-            .with_argument("expression1", "First expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators.")
-            .with_argument("expression2", "Second expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators.")
+            .with_standard_argument("expression1", "First")
+            .with_standard_argument("expression2", "Second")
             .build()
             .unwrap()
     })

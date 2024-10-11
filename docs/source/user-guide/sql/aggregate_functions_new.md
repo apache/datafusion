@@ -70,7 +70,7 @@ array_agg(expression [ORDER BY expression])
 
 #### Arguments
 
-- **expression**: Expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators.
+- **expression**: The expression to operate on. Can be a constant, column, or function, and any combination of operators.
 
 #### Example
 
@@ -93,8 +93,7 @@ avg(expression)
 
 #### Arguments
 
-- **expression**: Expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators.
-- **Aliases: **: `mean`
+- **expression**: The expression to operate on. Can be a constant, column, or function, and any combination of operators.
 
 #### Example
 
@@ -157,7 +156,7 @@ bool_and(expression)
 
 #### Arguments
 
-- **expression**: Expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators.
+- **expression**: The expression to operate on. Can be a constant, column, or function, and any combination of operators.
 
 #### Example
 
@@ -180,7 +179,7 @@ bool_and(expression)
 
 #### Arguments
 
-- **expression**: Expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators.
+- **expression**: The expression to operate on. Can be a constant, column, or function, and any combination of operators.
 
 #### Example
 
@@ -203,7 +202,7 @@ count(expression)
 
 #### Arguments
 
-- **expression**: Expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators.
+- **expression**: The expression to operate on. Can be a constant, column, or function, and any combination of operators.
 
 #### Example
 
@@ -233,7 +232,7 @@ first_value(expression [ORDER BY expression])
 
 #### Arguments
 
-- **expression**: Expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators.
+- **expression**: The expression to operate on. Can be a constant, column, or function, and any combination of operators.
 
 #### Example
 
@@ -283,7 +282,7 @@ first_value(expression [ORDER BY expression])
 
 #### Arguments
 
-- **expression**: Expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators.
+- **expression**: The expression to operate on. Can be a constant, column, or function, and any combination of operators.
 
 #### Example
 
@@ -306,7 +305,7 @@ max(expression)
 
 #### Arguments
 
-- **expression**: Expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators.
+- **expression**: The expression to operate on. Can be a constant, column, or function, and any combination of operators.
 
 #### Example
 
@@ -333,7 +332,7 @@ median(expression)
 
 #### Arguments
 
-- **expression**: Expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators.
+- **expression**: The expression to operate on. Can be a constant, column, or function, and any combination of operators.
 
 #### Example
 
@@ -356,7 +355,7 @@ max(expression)
 
 #### Arguments
 
-- **expression**: Expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators.
+- **expression**: The expression to operate on. Can be a constant, column, or function, and any combination of operators.
 
 #### Example
 
@@ -404,7 +403,7 @@ sum(expression)
 
 #### Arguments
 
-- **expression**: Expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators.
+- **expression**: The expression to operate on. Can be a constant, column, or function, and any combination of operators.
 
 #### Example
 
@@ -483,8 +482,8 @@ corr(expression1, expression2)
 
 #### Arguments
 
-- **expression1**: First expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators.
-- **expression2**: Second expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators.
+- **expression1**: First expression to operate on. Can be a constant, column, or function, and any combination of operators.
+- **expression2**: Second expression to operate on. Can be a constant, column, or function, and any combination of operators.
 
 #### Example
 
@@ -511,8 +510,8 @@ covar_samp(expression1, expression2)
 
 #### Arguments
 
-- **expression1**: First expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators.
-- **expression2**: Second expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators.
+- **expression1**: First expression to operate on. Can be a constant, column, or function, and any combination of operators.
+- **expression2**: Second expression to operate on. Can be a constant, column, or function, and any combination of operators.
 
 #### Example
 
@@ -535,8 +534,8 @@ covar_samp(expression1, expression2)
 
 #### Arguments
 
-- **expression1**: First expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators.
-- **expression2**: Second expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators.
+- **expression1**: First expression to operate on. Can be a constant, column, or function, and any combination of operators.
+- **expression2**: Second expression to operate on. Can be a constant, column, or function, and any combination of operators.
 
 #### Example
 
@@ -592,7 +591,7 @@ stddev(expression)
 
 #### Arguments
 
-- **expression**: Expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators.
+- **expression**: The expression to operate on. Can be a constant, column, or function, and any combination of operators.
 
 #### Example
 
@@ -619,7 +618,7 @@ stddev(expression)
 
 #### Arguments
 
-- **expression**: Expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators.
+- **expression**: The expression to operate on. Can be a constant, column, or function, and any combination of operators.
 
 #### Example
 
@@ -653,7 +652,7 @@ approx_distinct(expression)
 
 #### Arguments
 
-- **expression**: Expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators.
+- **expression**: The expression to operate on. Can be a constant, column, or function, and any combination of operators.
 
 #### Example
 
@@ -676,7 +675,7 @@ approx_median(expression)
 
 #### Arguments
 
-- **expression**: Expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators.
+- **expression**: The expression to operate on. Can be a constant, column, or function, and any combination of operators.
 
 #### Example
 
@@ -699,7 +698,7 @@ approx_percentile_cont(expression, percentile, centroids)
 
 #### Arguments
 
-- **expression**: Expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators.
+- **expression**: The expression to operate on. Can be a constant, column, or function, and any combination of operators.
 - **percentile**: Percentile to compute. Must be a float value between 0 and 1 (inclusive).
 - **centroids**: Number of centroids to use in the t-digest algorithm. _Default is 100_. A higher number results in more accurate approximation but requires more memory.
 
@@ -724,7 +723,7 @@ approx_percentile_cont_with_weight(expression, weight, percentile)
 
 #### Arguments
 
-- **expression**: Expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators.
+- **expression**: The expression to operate on. Can be a constant, column, or function, and any combination of operators.
 - **weight**: Expression to use as weight. Can be a constant, column, or function, and any combination of arithmetic operators.
 - **percentile**: Percentile to compute. Must be a float value between 0 and 1 (inclusive).
 

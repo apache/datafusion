@@ -199,7 +199,7 @@ fn get_bool_and_doc() -> &'static Documentation {
 | true                        |
 +----------------------------+
 ```"#)
-            .with_argument("expression", "Expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators.")
+            .with_standard_argument("expression", "The")
             .build()
             .unwrap()
     })
@@ -346,7 +346,7 @@ fn get_bool_or_doc() -> &'static Documentation {
 | true                        |
 +----------------------------+
 ```"#)
-            .with_standard_argument("expression", "Expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators.")
+            .with_standard_argument("expression", "The")
             .build()
             .unwrap()
     })

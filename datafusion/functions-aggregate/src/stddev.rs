@@ -159,7 +159,7 @@ fn get_stddev_doc() -> &'static Documentation {
 +----------------------+
 ```"#, 
             )
-            .with_argument("expression", "Expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators.")
+            .with_standard_argument("expression", "The")
             .build()
             .unwrap()
     })
@@ -282,7 +282,7 @@ fn get_stddev_pop_doc() -> &'static Documentation {
 +--------------------------+
 ```"#, 
             )
-            .with_argument("expression", "Expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators.")
+            .with_standard_argument("expression", "The")
             .build()
             .unwrap()
     })

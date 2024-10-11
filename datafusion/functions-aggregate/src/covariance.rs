@@ -151,8 +151,8 @@ fn get_covar_samp_doc() -> &'static Documentation {
 +-----------------------------------+
 ```"#, 
             )
-            .with_argument("expression1", "First expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators.")
-            .with_argument("expression2", "Second expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators.")
+            .with_standard_argument("expression1", "First")
+            .with_standard_argument("expression2", "Second")
             .build()
             .unwrap()
     })
@@ -248,8 +248,8 @@ fn get_covar_pop_doc() -> &'static Documentation {
 +-----------------------------------+
 ```"#, 
             )
-            .with_argument("expression1", "First expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators.")
-            .with_argument("expression2", "Second expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators.")
+            .with_standard_argument("expression1", "First")
+            .with_standard_argument("expression2", "Second")
             .build()
             .unwrap()
     })
