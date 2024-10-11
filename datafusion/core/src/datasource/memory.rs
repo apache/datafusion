@@ -37,14 +37,17 @@ use crate::physical_planner::create_physical_sort_exprs;
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
+use datafusion_catalog::Session;
 use datafusion_common::{not_impl_err, plan_err, Constraints, DFSchema, SchemaExt};
 use datafusion_execution::TaskContext;
 use datafusion_expr::dml::InsertOp;
+use datafusion_expr::SortExpr;
+use datafusion_physical_expr::equivalence::ProjectionMapping;
+use datafusion_physical_expr::expressions::Column;
+use datafusion_physical_expr::EquivalenceProperties;
 use datafusion_physical_plan::metrics::MetricsSet;
 
 use async_trait::async_trait;
-use datafusion_catalog::Session;
-use datafusion_expr::SortExpr;
 use futures::StreamExt;
 use log::debug;
 use parking_lot::Mutex;
@@ -231,7 +234,7 @@ impl TableProvider for MemTable {
         if !sort_order.is_empty() {
             let df_schema = DFSchema::try_from(self.schema.as_ref().clone())?;
 
-            let file_sort_order = sort_order
+            let mut file_sort_order = sort_order
                 .iter()
                 .map(|sort_exprs| {
                     create_physical_sort_exprs(
@@ -241,6 +244,26 @@ impl TableProvider for MemTable {
                     )
                 })
                 .collect::<Result<Vec<_>>>()?;
+
+            if let Some(projection) = projection {
+                let mut base_eqp = EquivalenceProperties::new_with_orderings(
+                    self.schema(),
+                    &file_sort_order,
+                );
+                let proj_exprs = projection
+                    .iter()
+                    .map(|idx| self.schema.field(*idx).name())
+                    .enumerate()
+                    .map(|(idx, name)| (Arc::new(Column::new(name, idx))))
+                    .collect();
+                let projection_mapping =
+                    ProjectionMapping::try_new(&proj_exprs, &self.schema)?;
+                file_sort_order = base_eqp
+                    .project(&projection_mapping, exec.schema())
+                    .oeq_class
+                    .orderings;
+            }
+
             exec = exec.with_sort_information(file_sort_order);
         }
 
