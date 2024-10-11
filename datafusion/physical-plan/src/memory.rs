@@ -208,6 +208,7 @@ impl MemoryExec {
     /// [`EquivalenceProperties`], we can keep track of these equivalences
     /// and treat `a ASC` and `b DESC` as the same ordering requirement.
     pub fn with_sort_information(mut self, sort_information: Vec<LexOrdering>) -> Self {
+        // All sort expressions must refer to the projected schema
         debug_assert!({
             let fields = self.projected_schema.fields();
             sort_information
