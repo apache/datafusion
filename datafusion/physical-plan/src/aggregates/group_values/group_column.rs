@@ -568,7 +568,7 @@ impl GroupColumn for ByteGroupValueViewBuilder {
             OutputType::BinaryView => {
                 self.equal_to_inner::<BinaryViewType>(lhs_row, array, rhs_row)
             }
-            _ => unreachable!("View types should use `ArrowBytesViewMap`"),
+            _ => unreachable!("String/Binary type should use ByteGroupValueBuilder"),
         }
     }
 
@@ -580,7 +580,7 @@ impl GroupColumn for ByteGroupValueViewBuilder {
             OutputType::BinaryView => {
                 self.append_val_inner::<BinaryViewType>(array, row);
             }
-            _ => unreachable!("View types should use `ArrowBytesViewMap`"),
+            _ => unreachable!("String/Binary type should use ByteGroupValueBuilder"),
         }
     }
 
@@ -638,7 +638,7 @@ impl GroupColumn for ByteGroupValueViewBuilder {
                     null_buffer,
                 ))
             }
-            _ => unreachable!("View types should use `ArrowBytesViewMap`"),
+            _ => unreachable!("String/Binary type should use ByteGroupValueBuilder"),
         }
     }
 
@@ -719,7 +719,7 @@ impl GroupColumn for ByteGroupValueViewBuilder {
                         null_buffer,
                     ))
                 }
-                _ => unreachable!("View types should use `ArrowBytesViewMap`"),
+                _ => unreachable!("String/Binary type should use ByteGroupValueBuilder"),
             }
         } else {
             let views = ScalarBuffer::from(first_n_views);
@@ -738,7 +738,7 @@ impl GroupColumn for ByteGroupValueViewBuilder {
                         null_buffer,
                     ))
                 }
-                _ => unreachable!("View types should use `ArrowBytesViewMap`"),
+                _ => unreachable!("String/Binary type should use ByteGroupValueBuilder"),
             }
         }
     }
