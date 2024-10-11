@@ -478,21 +478,20 @@ fn union_schema(inputs: &[Arc<dyn ExecutionPlan>]) -> SchemaRef {
         .map(|i| {
             inputs
                 .iter()
-                .filter_map(|input| {
-                    if input.schema().fields().len() > i {
-                        let field = input.schema().field(i).clone();
-                        let right_hand_metdata = inputs
-                            .get(1)
-                            .map(|right_input| {
-                                right_input.schema().field(i).metadata().clone()
-                            })
-                            .unwrap_or_default();
-                        let mut metadata = field.metadata().clone();
-                        metadata.extend(right_hand_metdata);
-                        Some(field.with_metadata(metadata))
-                    } else {
-                        None
-                    }
+                .enumerate()
+                .filter_map(|(input_idx, input)| {
+                    let field = input.schema().field(i).clone();
+                    let mut metadata = field.metadata().clone();
+
+                    let other_side_metdata = inputs
+                        .get(input_idx ^ (1 << 0))
+                        .map(|other_input| {
+                            other_input.schema().field(i).metadata().clone()
+                        })
+                        .unwrap_or_default();
+
+                    metadata.extend(other_side_metdata);
+                    Some(field.with_metadata(metadata))
                 })
                 .find_or_first(|f| f.is_nullable())
                 .unwrap()
