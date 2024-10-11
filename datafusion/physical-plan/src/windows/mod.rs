@@ -53,6 +53,7 @@ mod window_agg_exec;
 pub use bounded_window_agg_exec::BoundedWindowAggExec;
 use datafusion_functions_window_common::field::WindowUDFFieldArgs;
 use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
+use datafusion_functions_window_common::utils::get_signed_integer;
 use datafusion_physical_expr::expressions::Column;
 pub use datafusion_physical_expr::window::{
     BuiltInWindowExpr, PlainAggregateWindowExpr, WindowExpr,
@@ -183,18 +184,6 @@ fn get_scalar_value_from_args(
     } else {
         None
     })
-}
-
-fn get_signed_integer(value: ScalarValue) -> Result<i64> {
-    if value.is_null() {
-        return Ok(0);
-    }
-
-    if !value.data_type().is_integer() {
-        return exec_err!("Expected an integer value");
-    }
-
-    value.cast_to(&DataType::Int64)?.try_into()
 }
 
 fn get_unsigned_integer(value: ScalarValue) -> Result<u64> {
