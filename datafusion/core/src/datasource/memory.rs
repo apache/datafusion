@@ -254,11 +254,10 @@ impl TableProvider for MemTable {
                 );
                 let proj_exprs = projection
                     .iter()
-                    .map(|idx| self.schema.field(*idx).name())
-                    .enumerate()
-                    .map(|(idx, name)| {
+                    .map(|idx| {
+                        let name = self.schema.field(*idx).name();
                         (
-                            Arc::new(Column::new(name, idx)) as Arc<dyn PhysicalExpr>,
+                            Arc::new(Column::new(name, *idx)) as Arc<dyn PhysicalExpr>,
                             name.to_string(),
                         )
                     })
