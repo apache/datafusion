@@ -39,7 +39,8 @@ use datafusion_expr::function::AccumulatorArgs;
 use datafusion_expr::function::StateFieldsArgs;
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{
-    Accumulator, AggregateUDFImpl, Documentation, GroupsAccumulator, ReversedUDAF, Signature, Volatility,
+    Accumulator, AggregateUDFImpl, Documentation, GroupsAccumulator, ReversedUDAF,
+    Signature, Volatility,
 };
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::prim_op::PrimitiveGroupsAccumulator;
 use datafusion_functions_aggregate_common::utils::Hashable;
@@ -265,7 +266,6 @@ fn get_sum_doc() -> &'static Documentation {
             .unwrap()
     })
 }
-
 
 /// This accumulator computes SUM incrementally
 struct SumAccumulator<T: ArrowNumericType> {

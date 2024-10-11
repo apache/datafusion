@@ -17,7 +17,7 @@
 
 use std::any::Any;
 use std::fmt::{Debug, Formatter};
-use std::sync::{Arc,OnceLock};
+use std::sync::{Arc, OnceLock};
 
 use arrow::array::{Array, RecordBatch};
 use arrow::compute::{filter, is_not_null};
@@ -39,8 +39,8 @@ use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::type_coercion::aggregates::{INTEGERS, NUMERICS};
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{
-    Accumulator, AggregateUDFImpl, Documentation, ColumnarValue, Expr, Signature, TypeSignature,
-    Volatility,
+    Accumulator, AggregateUDFImpl, ColumnarValue, Documentation, Expr, Signature,
+    TypeSignature, Volatility,
 };
 use datafusion_functions_aggregate_common::tdigest::{
     TDigest, TryIntoF64, DEFAULT_MAX_SIZE,
@@ -300,7 +300,6 @@ fn get_approx_percentile_cont_doc() -> &'static Documentation {
             .unwrap()
     })
 }
-
 
 #[derive(Debug)]
 pub struct ApproxPercentileAccumulator {

@@ -158,7 +158,6 @@ fn get_covar_samp_doc() -> &'static Documentation {
     })
 }
 
-
 pub struct CovariancePopulation {
     signature: Signature,
 }
@@ -255,7 +254,6 @@ fn get_covar_pop_doc() -> &'static Documentation {
             .unwrap()
     })
 }
-
 
 /// An accumulator to compute covariance
 /// The algorithm used is an online implementation and numerically stable. It is derived from the following paper

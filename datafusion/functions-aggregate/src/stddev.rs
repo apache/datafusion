@@ -30,7 +30,8 @@ use datafusion_expr::aggregate_doc_sections::DOC_SECTION_STATISTICAL;
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{
-    Accumulator, AggregateUDFImpl, Documentation, GroupsAccumulator, Signature, Volatility,
+    Accumulator, AggregateUDFImpl, Documentation, GroupsAccumulator, Signature,
+    Volatility,
 };
 use datafusion_functions_aggregate_common::stats::StatsType;
 
@@ -164,7 +165,6 @@ fn get_stddev_doc() -> &'static Documentation {
     })
 }
 
-
 make_udaf_expr_and_func!(
     StddevPop,
     stddev_pop,
@@ -287,7 +287,6 @@ fn get_stddev_pop_doc() -> &'static Documentation {
             .unwrap()
     })
 }
-
 
 /// An accumulator to compute the average
 #[derive(Debug)]

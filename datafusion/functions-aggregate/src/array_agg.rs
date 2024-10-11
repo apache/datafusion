@@ -28,8 +28,8 @@ use datafusion_common::{internal_err, Result};
 use datafusion_expr::aggregate_doc_sections::DOC_SECTION_GENERAL;
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::format_state_name;
-use datafusion_expr::{AggregateUDFImpl, Documentation};
 use datafusion_expr::{Accumulator, Signature, Volatility};
+use datafusion_expr::{AggregateUDFImpl, Documentation};
 use datafusion_functions_aggregate_common::merge_arrays::merge_ordered_arrays;
 use datafusion_functions_aggregate_common::utils::ordering_fields;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
@@ -173,7 +173,6 @@ fn get_array_agg_doc() -> &'static Documentation {
             .unwrap()
     })
 }
-
 
 #[derive(Debug)]
 pub struct ArrayAggAccumulator {

@@ -34,12 +34,14 @@ use datafusion_common::{
 use datafusion_expr::aggregate_doc_sections::DOC_SECTION_APPROXIMATE;
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::format_state_name;
-use datafusion_expr::{Accumulator, AggregateUDFImpl, Documentation, Signature, Volatility};
+use datafusion_expr::{
+    Accumulator, AggregateUDFImpl, Documentation, Signature, Volatility,
+};
 use std::any::Any;
 use std::fmt::{Debug, Formatter};
-use std::sync::OnceLock;
 use std::hash::Hash;
 use std::marker::PhantomData;
+use std::sync::OnceLock;
 make_udaf_expr_and_func!(
     ApproxDistinct,
     approx_distinct,

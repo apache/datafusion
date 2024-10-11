@@ -31,8 +31,8 @@ use datafusion_expr::aggregate_doc_sections::DOC_SECTION_STATISTICAL;
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{
-    lit, Accumulator, AggregateUDFImpl, Documentation, ExprFunctionExt, ReversedUDAF, Signature,
-    SortExpr, Volatility,
+    lit, Accumulator, AggregateUDFImpl, Documentation, ExprFunctionExt, ReversedUDAF,
+    Signature, SortExpr, Volatility,
 };
 use datafusion_functions_aggregate_common::merge_arrays::merge_ordered_arrays;
 use datafusion_functions_aggregate_common::utils::ordering_fields;
@@ -197,7 +197,6 @@ fn get_nth_value_doc() -> &'static Documentation {
             .unwrap()
     })
 }
-
 
 #[derive(Debug)]
 pub struct NthValueAccumulator {

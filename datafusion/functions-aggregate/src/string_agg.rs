@@ -133,7 +133,6 @@ fn get_string_agg_doc() -> &'static Documentation {
     })
 }
 
-
 #[derive(Debug)]
 pub(crate) struct StringAggAccumulator {
     values: Option<String>,

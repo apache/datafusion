@@ -52,7 +52,8 @@ use arrow::datatypes::{
 
 use datafusion_common::ScalarValue;
 use datafusion_expr::{
-    function::AccumulatorArgs, Accumulator, AggregateUDFImpl, Documentation, Signature, Volatility,
+    function::AccumulatorArgs, Accumulator, AggregateUDFImpl, Documentation, Signature,
+    Volatility,
 };
 use datafusion_expr::{GroupsAccumulator, StatisticsArgs};
 use half::f16;
@@ -353,7 +354,6 @@ fn get_max_doc() -> &'static Documentation {
             .unwrap()
     })
 }
-
 
 // Statically-typed version of min/max(array) -> ScalarValue for string types
 macro_rules! typed_min_max_batch_string {
@@ -1179,7 +1179,6 @@ fn get_min_doc() -> &'static Documentation {
             .unwrap()
     })
 }
-
 
 /// An accumulator to compute the minimum value
 #[derive(Debug)]

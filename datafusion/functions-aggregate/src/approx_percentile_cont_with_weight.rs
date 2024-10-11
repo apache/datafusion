@@ -30,7 +30,9 @@ use datafusion_expr::aggregate_doc_sections::DOC_SECTION_APPROXIMATE;
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::type_coercion::aggregates::NUMERICS;
 use datafusion_expr::Volatility::Immutable;
-use datafusion_expr::{Accumulator, AggregateUDFImpl, Documentation, Signature, TypeSignature};
+use datafusion_expr::{
+    Accumulator, AggregateUDFImpl, Documentation, Signature, TypeSignature,
+};
 use datafusion_functions_aggregate_common::tdigest::{
     Centroid, TDigest, DEFAULT_MAX_SIZE,
 };
@@ -184,7 +186,6 @@ fn get_approx_percentile_cont_with_weight_doc() -> &'static Documentation {
             .unwrap()
     })
 }
-
 
 #[derive(Debug)]
 pub struct ApproxPercentileWithWeightAccumulator {

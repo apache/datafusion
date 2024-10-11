@@ -20,8 +20,8 @@ use datafusion_common::stats::Precision;
 use datafusion_functions_aggregate_common::aggregate::count_distinct::BytesViewDistinctCountAccumulator;
 use datafusion_physical_expr::expressions;
 use std::collections::HashSet;
-use std::ops::BitAnd;
 use std::fmt::Debug;
+use std::ops::BitAnd;
 use std::sync::{Arc, OnceLock};
 
 use arrow::{
@@ -362,7 +362,6 @@ fn get_count_doc() -> &'static Documentation {
             .unwrap()
     })
 }
-
 
 #[derive(Debug)]
 struct CountAccumulator {

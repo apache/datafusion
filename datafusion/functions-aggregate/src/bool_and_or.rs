@@ -34,7 +34,8 @@ use datafusion_expr::aggregate_doc_sections::DOC_SECTION_GENERAL;
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::{format_state_name, AggregateOrderSensitivity};
 use datafusion_expr::{
-    Accumulator, AggregateUDFImpl, Documentation, GroupsAccumulator, ReversedUDAF, Signature, Volatility,
+    Accumulator, AggregateUDFImpl, Documentation, GroupsAccumulator, ReversedUDAF,
+    Signature, Volatility,
 };
 
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::bool_op::BooleanGroupsAccumulator;
@@ -204,7 +205,6 @@ fn get_bool_and_doc() -> &'static Documentation {
     })
 }
 
-
 #[derive(Debug, Default)]
 struct BoolAndAccumulator {
     acc: Option<bool>,
@@ -351,7 +351,6 @@ fn get_bool_or_doc() -> &'static Documentation {
             .unwrap()
     })
 }
-
 
 #[derive(Debug, Default)]
 struct BoolOrAccumulator {

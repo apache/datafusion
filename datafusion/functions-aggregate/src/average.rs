@@ -34,7 +34,8 @@ use datafusion_expr::type_coercion::aggregates::{avg_return_type, coerce_avg_typ
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::Volatility::Immutable;
 use datafusion_expr::{
-    Accumulator, AggregateUDFImpl, Documentation, EmitTo, GroupsAccumulator, ReversedUDAF, Signature,
+    Accumulator, AggregateUDFImpl, Documentation, EmitTo, GroupsAccumulator,
+    ReversedUDAF, Signature,
 };
 
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::accumulate::NullState;
@@ -267,7 +268,6 @@ fn get_avg_doc() -> &'static Documentation {
             .unwrap()
     })
 }
-
 
 /// An accumulator to compute the average
 #[derive(Debug, Default)]

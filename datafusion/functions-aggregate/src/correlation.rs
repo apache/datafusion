@@ -108,7 +108,7 @@ impl AggregateUDFImpl for Correlation {
             ),
         ])
     }
-    
+
     fn documentation(&self) -> Option<&Documentation> {
         Some(get_corr_doc())
     }
@@ -138,7 +138,6 @@ fn get_corr_doc() -> &'static Documentation {
             .unwrap()
     })
 }
-
 
 /// An accumulator to compute correlation
 #[derive(Debug)]

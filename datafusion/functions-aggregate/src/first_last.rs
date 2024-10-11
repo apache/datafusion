@@ -32,8 +32,8 @@ use datafusion_expr::aggregate_doc_sections::DOC_SECTION_GENERAL;
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::{format_state_name, AggregateOrderSensitivity};
 use datafusion_expr::{
-    Accumulator, AggregateUDFImpl, ArrayFunctionSignature, Documentation, Expr, ExprFunctionExt,
-    Signature, SortExpr, TypeSignature, Volatility,
+    Accumulator, AggregateUDFImpl, ArrayFunctionSignature, Documentation, Expr,
+    ExprFunctionExt, Signature, SortExpr, TypeSignature, Volatility,
 };
 use datafusion_functions_aggregate_common::utils::get_sort_options;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
@@ -196,7 +196,6 @@ fn get_first_value_doc() -> &'static Documentation {
             .unwrap()
     })
 }
-
 
 #[derive(Debug)]
 pub struct FirstValueAccumulator {

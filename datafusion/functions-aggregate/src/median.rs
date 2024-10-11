@@ -16,7 +16,7 @@
 // under the License.
 
 use std::collections::HashSet;
-use std::fmt::{Formatter, Debug};
+use std::fmt::{Debug, Formatter};
 use std::sync::{Arc, OnceLock};
 
 use arrow::array::{downcast_integer, ArrowNumericType};
@@ -153,7 +153,7 @@ impl AggregateUDFImpl for Median {
     fn aliases(&self) -> &[String] {
         &[]
     }
-    
+
     fn documentation(&self) -> Option<&Documentation> {
         Some(get_median_doc())
     }
@@ -183,7 +183,6 @@ fn get_median_doc() -> &'static Documentation {
             .unwrap()
     })
 }
-
 
 /// The median accumulator accumulates the raw input values
 /// as `ScalarValue`s
