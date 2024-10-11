@@ -15,8 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Defines physical expression for `lead` and `lag` that can evaluated
-//! at runtime during query execution
+//! `lead` and `lag` window function implementations
+
 use crate::utils::{get_casted_value, get_scalar_value_from_args, get_signed_integer};
 use datafusion_common::arrow::array::ArrayRef;
 use datafusion_common::arrow::datatypes::DataType;
