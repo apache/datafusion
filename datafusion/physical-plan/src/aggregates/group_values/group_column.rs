@@ -577,7 +577,43 @@ impl GroupColumn for ByteGroupValueViewBuilder {
     }
 
     fn build(self: Box<Self>) -> ArrayRef {
-        todo!()
+        let Self {
+            output_type,
+            views,
+            in_progress,
+            mut completed,
+            max_block_size,
+            nulls,
+        } = *self;
+
+        // Build nulls
+        let null_buffer = nulls.build();
+
+        // Build values
+        // Flush `in_process` firstly
+        if !in_progress.is_empty() {
+            let buffer = Buffer::from(in_progress);
+            completed.push(buffer);
+        }
+
+        let views = ScalarBuffer::from(views);
+        match output_type {
+            OutputType::Utf8View => {
+                Arc::new(GenericByteViewArray::<StringViewType>::new(
+                    views,
+                    completed,
+                    null_buffer,
+                ))
+            }
+            OutputType::BinaryView => {
+                Arc::new(GenericByteViewArray::<BinaryViewType>::new(
+                    views,
+                    completed,
+                    null_buffer,
+                ))
+            }
+            _ => unreachable!("View types should use `ArrowBytesViewMap`"),
+        }
     }
 
     fn take_n(&mut self, n: usize) -> ArrayRef {
