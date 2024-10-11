@@ -479,7 +479,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     self.sql_to_expr(predicate_expr, plan.schema(), planner_context)?;
 
                 // Check for aggregation functions
-                let aggregate_exprs = find_aggregate_exprs(&[filter_expr.clone()]);
+                let aggregate_exprs =
+                    find_aggregate_exprs(std::slice::from_ref(&filter_expr));
                 if !aggregate_exprs.is_empty() {
                     return plan_err!(
                         "Aggregate functions are not allowed in the WHERE clause. Consider using HAVING instead"
