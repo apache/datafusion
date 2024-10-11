@@ -566,7 +566,10 @@ impl Unparser<'_> {
         }
     }
 
-    pub(crate) fn function_args_to_sql(&self, args: &[Expr]) -> Result<Vec<ast::FunctionArg>> {
+    pub(crate) fn function_args_to_sql(
+        &self,
+        args: &[Expr],
+    ) -> Result<Vec<ast::FunctionArg>> {
         args.iter()
             .map(|e| {
                 if matches!(
@@ -1345,7 +1348,7 @@ impl Unparser<'_> {
             DataType::Boolean => Ok(ast::DataType::Bool),
             DataType::Int8 => Ok(ast::DataType::TinyInt(None)),
             DataType::Int16 => Ok(ast::DataType::SmallInt(None)),
-            DataType::Int32 => Ok(ast::DataType::Integer(None)),
+            DataType::Int32 => Ok(self.dialect.int32_cast_dtype()),
             DataType::Int64 => Ok(self.dialect.int64_cast_dtype()),
             DataType::UInt8 => Ok(ast::DataType::UnsignedTinyInt(None)),
             DataType::UInt16 => Ok(ast::DataType::UnsignedSmallInt(None)),
@@ -2253,6 +2256,34 @@ mod tests {
 
         for (dialect, identifier) in
             [(default_dialect, "BIGINT"), (mysql_dialect, "SIGNED")]
+        {
+            let unparser = Unparser::new(&dialect);
+            let expr = Expr::Cast(Cast {
+                expr: Box::new(col("a")),
+                data_type: DataType::Int64,
+            });
+            let ast = unparser.expr_to_sql(&expr)?;
+
+            let actual = format!("{}", ast);
+            let expected = format!(r#"CAST(a AS {identifier})"#);
+
+            assert_eq!(actual, expected);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn custom_dialect_with_int32_cast_dtype() -> Result<()> {
+        let default_dialect = CustomDialectBuilder::new().build();
+        let mysql_dialect = CustomDialectBuilder::new()
+            .with_int32_cast_dtype(ast::DataType::Custom(
+                ObjectName(vec![Ident::new("SIGNED")]),
+                vec![],
+            ))
+            .build();
+
+        for (dialect, identifier) in
+            [(default_dialect, "INTEGER"), (mysql_dialect, "SIGNED")]
         {
             let unparser = Unparser::new(&dialect);
             let expr = Expr::Cast(Cast {
