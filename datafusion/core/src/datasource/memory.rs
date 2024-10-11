@@ -42,13 +42,9 @@ use datafusion_common::{not_impl_err, plan_err, Constraints, DFSchema, SchemaExt
 use datafusion_execution::TaskContext;
 use datafusion_expr::dml::InsertOp;
 use datafusion_expr::SortExpr;
-use datafusion_physical_expr::equivalence::ProjectionMapping;
-use datafusion_physical_expr::expressions::Column;
-use datafusion_physical_expr::EquivalenceProperties;
 use datafusion_physical_plan::metrics::MetricsSet;
 
 use async_trait::async_trait;
-use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use futures::StreamExt;
 use log::debug;
 use parking_lot::Mutex;

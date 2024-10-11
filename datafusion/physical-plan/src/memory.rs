@@ -33,10 +33,10 @@ use arrow::record_batch::RecordBatch;
 use datafusion_common::{internal_err, project_schema, Result};
 use datafusion_execution::memory_pool::MemoryReservation;
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::{EquivalenceProperties, LexOrdering};
 use datafusion_physical_expr::equivalence::ProjectionMapping;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::utils::collect_columns;
+use datafusion_physical_expr::{EquivalenceProperties, LexOrdering};
 
 use futures::Stream;
 
@@ -238,18 +238,19 @@ impl MemoryExec {
         // If there is a projection on the source, we also need to project orderings
         if let Some(projection) = &self.projection {
             let base_eqp = EquivalenceProperties::new_with_orderings(
-                self.schema(),
+                self.original_schema(),
                 &sort_information,
             );
             let proj_exprs = projection
                 .iter()
                 .map(|idx| {
-                    let name = self.schema.field(*idx).name();
+                    let base_schema = self.original_schema();
+                    let name = base_schema.field(*idx).name();
                     (Arc::new(Column::new(name, *idx)) as _, name.to_string())
                 })
                 .collect::<Vec<_>>();
             let projection_mapping =
-                ProjectionMapping::try_new(&proj_exprs, &self.schema)?;
+                ProjectionMapping::try_new(&proj_exprs, &self.original_schema())?;
             sort_information = base_eqp
                 .project(&projection_mapping, self.schema())
                 .oeq_class
