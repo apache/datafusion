@@ -458,7 +458,7 @@ pub trait PruningStatistics {
 /// [`Snowflake SIGMOD Paper`]: https://dl.acm.org/doi/10.1145/2882903.2903741
 /// [small materialized aggregates]: https://www.vldb.org/conf/1998/p476.pdf
 /// [zone maps]: https://dl.acm.org/doi/10.1007/978-3-642-03730-6_10
-///[data skipping]: https://dl.acm.org/doi/10.1145/2588555.2610515
+/// [data skipping]: https://dl.acm.org/doi/10.1145/2588555.2610515
 #[derive(Debug, Clone)]
 pub struct PruningPredicate {
     /// The input schema against which the predicate will be evaluated
@@ -478,17 +478,28 @@ pub struct PruningPredicate {
     literal_guarantees: Vec<LiteralGuarantee>,
 }
 
-/// Hook to handle predicates that DataFusion can not handle, e.g. certain complex expressions
-/// or predicates that reference columns that are not in the schema.
+/// Rewrites predicates that [`PredicateRewriter`] can not handle, e.g. certain
+/// complex expressions or predicates that reference columns that are not in the
+/// schema.
 pub trait UnhandledPredicateHook {
-    /// Called when a predicate can not be handled by DataFusion's transformation rules
-    /// or is referencing a column that is not in the schema.
+    /// Called when a predicate can not be rewritten in terms of statistics or
+    /// references a column that is not in the schema.
     fn handle(&self, expr: &Arc<dyn PhysicalExpr>) -> Arc<dyn PhysicalExpr>;
 }
 
+/// The default handling for unhandled predicates is to return a constant `true`
+/// (meaning don't prune the container)
 #[derive(Debug, Clone)]
 struct ConstantUnhandledPredicateHook {
     default: Arc<dyn PhysicalExpr>,
+}
+
+impl Default for ConstantUnhandledPredicateHook {
+    fn default() -> Self {
+        Self {
+            default: Arc::new(phys_expr::Literal::new(ScalarValue::from(true))),
+        }
+    }
 }
 
 impl ConstantUnhandledPredicateHook {
@@ -501,12 +512,6 @@ impl UnhandledPredicateHook for ConstantUnhandledPredicateHook {
     fn handle(&self, _expr: &Arc<dyn PhysicalExpr>) -> Arc<dyn PhysicalExpr> {
         self.default.clone()
     }
-}
-
-fn default_unhandled_hook() -> Arc<dyn UnhandledPredicateHook> {
-    Arc::new(ConstantUnhandledPredicateHook::new(Arc::new(
-        phys_expr::Literal::new(ScalarValue::Boolean(Some(true))),
-    )))
 }
 
 impl PruningPredicate {
@@ -533,7 +538,7 @@ impl PruningPredicate {
     /// See the struct level documentation on [`PruningPredicate`] for more
     /// details.
     pub fn try_new(expr: Arc<dyn PhysicalExpr>, schema: SchemaRef) -> Result<Self> {
-        let unhandled_hook = default_unhandled_hook();
+        let unhandled_hook = Arc::new(ConstantUnhandledPredicateHook::default()) as _;
 
         // build predicate expression once
         let mut required_columns = RequiredColumns::new();
@@ -1348,8 +1353,9 @@ fn build_is_null_column_expr(
 /// The maximum number of entries in an `InList` that might be rewritten into
 /// an OR chain
 const MAX_LIST_VALUE_SIZE_REWRITE: usize = 20;
-/// Rewrite a predicate expression to a pruning predicate expression.
-/// See documentation for `PruningPredicate` for more information.
+
+/// Rewrite a predicate expression in terms of statistics (min/max/null_counts)
+/// for use as a [`PruningPredicate`].
 pub struct PredicateRewriter {
     unhandled_hook: Arc<dyn UnhandledPredicateHook>,
 }
@@ -1357,7 +1363,7 @@ pub struct PredicateRewriter {
 impl Default for PredicateRewriter {
     fn default() -> Self {
         Self {
-            unhandled_hook: default_unhandled_hook(),
+            unhandled_hook: Arc::new(ConstantUnhandledPredicateHook::default()),
         }
     }
 }
@@ -4049,7 +4055,7 @@ mod tests {
         required_columns: &mut RequiredColumns,
     ) -> Arc<dyn PhysicalExpr> {
         let expr = logical2physical(expr, schema);
-        let unhandled_hook = default_unhandled_hook();
+        let unhandled_hook = Arc::new(ConstantUnhandledPredicateHook::default()) as _;
         build_predicate_expression(&expr, schema, required_columns, &unhandled_hook)
     }
 }
