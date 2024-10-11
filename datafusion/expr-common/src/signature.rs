@@ -125,6 +125,11 @@ pub enum TypeSignature {
     /// Fixed number of arguments of numeric types.
     /// See <https://docs.rs/arrow/latest/arrow/datatypes/enum.DataType.html#method.is_numeric> to know which type is considered numeric
     Numeric(usize),
+    /// Fixed number of arguments of all the same string types.
+    /// The precedence of type from high to low is Utf8View, LargeUtf8 and Utf8.
+    /// Null is considerd as Utf8 by default
+    /// Dictionary with string value type is also handled.
+    String(usize),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
@@ -190,8 +195,11 @@ impl TypeSignature {
                     .collect::<Vec<String>>()
                     .join(", ")]
             }
+            TypeSignature::String(num) => {
+                vec![format!("String({num})")]
+            }
             TypeSignature::Numeric(num) => {
-                vec![format!("Numeric({})", num)]
+                vec![format!("Numeric({num})")]
             }
             TypeSignature::Exact(types) | TypeSignature::Coercible(types) => {
                 vec![Self::join_types(types, ", ")]
@@ -276,6 +284,14 @@ impl Signature {
     pub fn numeric(arg_count: usize, volatility: Volatility) -> Self {
         Self {
             type_signature: TypeSignature::Numeric(arg_count),
+            volatility,
+        }
+    }
+
+    /// A specified number of numeric arguments
+    pub fn string(arg_count: usize, volatility: Volatility) -> Self {
+        Self {
+            type_signature: TypeSignature::String(arg_count),
             volatility,
         }
     }

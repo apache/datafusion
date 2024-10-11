@@ -47,6 +47,9 @@ use datafusion::functions_aggregate::expr_fn::{
 };
 use datafusion::functions_aggregate::min_max::max_udaf;
 use datafusion::functions_nested::map::map;
+use datafusion::functions_window::dense_rank::dense_rank;
+use datafusion::functions_window::percent_rank::percent_rank;
+use datafusion::functions_window::rank::{rank, rank_udwf};
 use datafusion::functions_window::row_number::row_number;
 use datafusion::prelude::*;
 use datafusion::test_util::{TestTableFactory, TestTableProvider};
@@ -75,6 +78,7 @@ use datafusion_functions_aggregate::expr_fn::{
 };
 use datafusion_functions_aggregate::string_agg::string_agg;
 use datafusion_functions_window_common::field::WindowUDFFieldArgs;
+use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
 use datafusion_proto::bytes::{
     logical_plan_from_bytes, logical_plan_from_bytes_with_extension_codec,
     logical_plan_to_bytes, logical_plan_to_bytes_with_extension_codec,
@@ -937,6 +941,9 @@ async fn roundtrip_expr_api() -> Result<()> {
             vec![lit(10), lit(20), lit(30)],
         ),
         row_number(),
+        rank(),
+        dense_rank(),
+        percent_rank(),
         nth_value(col("b"), 1, vec![]),
         nth_value(
             col("b"),
@@ -2304,9 +2311,7 @@ fn roundtrip_window() {
 
     // 1. without window_frame
     let test_expr1 = Expr::WindowFunction(expr::WindowFunction::new(
-        WindowFunctionDefinition::BuiltInWindowFunction(
-            datafusion_expr::BuiltInWindowFunction::Rank,
-        ),
+        WindowFunctionDefinition::WindowUDF(rank_udwf()),
         vec![],
     ))
     .partition_by(vec![col("col1")])
@@ -2317,9 +2322,7 @@ fn roundtrip_window() {
 
     // 2. with default window_frame
     let test_expr2 = Expr::WindowFunction(expr::WindowFunction::new(
-        WindowFunctionDefinition::BuiltInWindowFunction(
-            datafusion_expr::BuiltInWindowFunction::Rank,
-        ),
+        WindowFunctionDefinition::WindowUDF(rank_udwf()),
         vec![],
     ))
     .partition_by(vec![col("col1")])
@@ -2336,9 +2339,7 @@ fn roundtrip_window() {
     );
 
     let test_expr3 = Expr::WindowFunction(expr::WindowFunction::new(
-        WindowFunctionDefinition::BuiltInWindowFunction(
-            datafusion_expr::BuiltInWindowFunction::Rank,
-        ),
+        WindowFunctionDefinition::WindowUDF(rank_udwf()),
         vec![],
     ))
     .partition_by(vec![col("col1")])
@@ -2459,7 +2460,10 @@ fn roundtrip_window() {
             &self.signature
         }
 
-        fn partition_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>> {
+        fn partition_evaluator(
+            &self,
+            _partition_evaluator_args: PartitionEvaluatorArgs,
+        ) -> Result<Box<dyn PartitionEvaluator>> {
             make_partition_evaluator()
         }
 

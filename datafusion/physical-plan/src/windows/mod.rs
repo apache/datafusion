@@ -21,10 +21,7 @@ use std::borrow::Borrow;
 use std::sync::Arc;
 
 use crate::{
-    expressions::{
-        cume_dist, dense_rank, lag, lead, percent_rank, rank, Literal, NthValue, Ntile,
-        PhysicalSortExpr,
-    },
+    expressions::{cume_dist, lag, lead, Literal, NthValue, Ntile, PhysicalSortExpr},
     ExecutionPlan, ExecutionPlanProperties, InputOrderMode, PhysicalExpr,
 };
 
@@ -52,6 +49,7 @@ mod window_agg_exec;
 
 pub use bounded_window_agg_exec::BoundedWindowAggExec;
 use datafusion_functions_window_common::field::WindowUDFFieldArgs;
+use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
 use datafusion_physical_expr::expressions::Column;
 pub use datafusion_physical_expr::window::{
     BuiltInWindowExpr, PlainAggregateWindowExpr, WindowExpr,
@@ -230,9 +228,6 @@ fn create_built_in_window_expr(
     let out_data_type: &DataType = input_schema.field_with_name(&name)?.data_type();
 
     Ok(match fun {
-        BuiltInWindowFunction::Rank => Arc::new(rank(name, out_data_type)),
-        BuiltInWindowFunction::DenseRank => Arc::new(dense_rank(name, out_data_type)),
-        BuiltInWindowFunction::PercentRank => Arc::new(percent_rank(name, out_data_type)),
         BuiltInWindowFunction::CumeDist => Arc::new(cume_dist(name, out_data_type)),
         BuiltInWindowFunction::Ntile => {
             let n = get_scalar_value_from_args(args, 0)?.ok_or_else(|| {
@@ -385,7 +380,13 @@ impl BuiltInWindowFunctionExpr for WindowUDFExpr {
     }
 
     fn create_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>> {
-        self.fun.partition_evaluator_factory()
+        self.fun
+            .partition_evaluator_factory(PartitionEvaluatorArgs::new(
+                &self.args,
+                &self.input_types,
+                self.is_reversed,
+                self.ignore_nulls,
+            ))
     }
 
     fn name(&self) -> &str {

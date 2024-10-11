@@ -887,6 +887,17 @@ pub async fn from_substrait_rel(
                         not_impl_err!("Union relation requires at least one input")
                     }
                 }
+                set_rel::SetOp::IntersectionPrimary => {
+                    if set.inputs.len() == 2 {
+                        LogicalPlanBuilder::intersect(
+                            from_substrait_rel(ctx, &set.inputs[0], extensions).await?,
+                            from_substrait_rel(ctx, &set.inputs[1], extensions).await?,
+                            false,
+                        )
+                    } else {
+                        not_impl_err!("Primary Intersect relation with more than two inputs isn't supported")
+                    }
+                }
                 _ => not_impl_err!("Unsupported set operator: {set_op:?}"),
             },
             Err(e) => not_impl_err!("Invalid set operation type {}: {e}", set.op),

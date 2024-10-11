@@ -26,8 +26,9 @@ use datafusion_common::{
     utils::{coerced_fixed_size_list_to_list, list_ndims},
     Result,
 };
-use datafusion_expr_common::signature::{
-    ArrayFunctionSignature, FIXED_SIZE_LIST_WILDCARD, TIMEZONE_WILDCARD,
+use datafusion_expr_common::{
+    signature::{ArrayFunctionSignature, FIXED_SIZE_LIST_WILDCARD, TIMEZONE_WILDCARD},
+    type_coercion::binary::string_coercion,
 };
 use std::sync::Arc;
 
@@ -176,6 +177,7 @@ fn is_well_supported_signature(type_signature: &TypeSignature) -> bool {
         type_signature,
         TypeSignature::UserDefined
             | TypeSignature::Numeric(_)
+            | TypeSignature::String(_)
             | TypeSignature::Coercible(_)
             | TypeSignature::Any(_)
     )
@@ -219,20 +221,37 @@ fn get_valid_types_with_scalar_udf(
     current_types: &[DataType],
     func: &ScalarUDF,
 ) -> Result<Vec<Vec<DataType>>> {
-    let valid_types = match signature {
+    match signature {
         TypeSignature::UserDefined => match func.coerce_types(current_types) {
-            Ok(coerced_types) => vec![coerced_types],
-            Err(e) => return exec_err!("User-defined coercion failed with {:?}", e),
+            Ok(coerced_types) => Ok(vec![coerced_types]),
+            Err(e) => exec_err!("User-defined coercion failed with {:?}", e),
         },
-        TypeSignature::OneOf(signatures) => signatures
-            .iter()
-            .filter_map(|t| get_valid_types_with_scalar_udf(t, current_types, func).ok())
-            .flatten()
-            .collect::<Vec<_>>(),
-        _ => get_valid_types(signature, current_types)?,
-    };
+        TypeSignature::OneOf(signatures) => {
+            let mut res = vec![];
+            let mut errors = vec![];
+            for sig in signatures {
+                match get_valid_types_with_scalar_udf(sig, current_types, func) {
+                    Ok(valid_types) => {
+                        res.extend(valid_types);
+                    }
+                    Err(e) => {
+                        errors.push(e.to_string());
+                    }
+                }
+            }
 
-    Ok(valid_types)
+            // Every signature failed, return the joined error
+            if res.is_empty() {
+                internal_err!(
+                    "Failed to match any signature, errors: {}",
+                    errors.join(",")
+                )
+            } else {
+                Ok(res)
+            }
+        }
+        _ => get_valid_types(signature, current_types),
+    }
 }
 
 fn get_valid_types_with_aggregate_udf(
@@ -381,6 +400,67 @@ fn get_valid_types(
             .iter()
             .map(|valid_type| current_types.iter().map(|_| valid_type.clone()).collect())
             .collect(),
+        TypeSignature::String(number) => {
+            if *number < 1 {
+                return plan_err!(
+                    "The signature expected at least one argument but received {}",
+                    current_types.len()
+                );
+            }
+            if *number != current_types.len() {
+                return plan_err!(
+                    "The signature expected {} arguments but received {}",
+                    number,
+                    current_types.len()
+                );
+            }
+
+            fn coercion_rule(
+                lhs_type: &DataType,
+                rhs_type: &DataType,
+            ) -> Result<DataType> {
+                match (lhs_type, rhs_type) {
+                    (DataType::Null, DataType::Null) => Ok(DataType::Utf8),
+                    (DataType::Null, data_type) | (data_type, DataType::Null) => {
+                        coercion_rule(data_type, &DataType::Utf8)
+                    }
+                    (DataType::Dictionary(_, lhs), DataType::Dictionary(_, rhs)) => {
+                        coercion_rule(lhs, rhs)
+                    }
+                    (DataType::Dictionary(_, v), other)
+                    | (other, DataType::Dictionary(_, v)) => coercion_rule(v, other),
+                    _ => {
+                        if let Some(coerced_type) = string_coercion(lhs_type, rhs_type) {
+                            Ok(coerced_type)
+                        } else {
+                            plan_err!(
+                                "{} and {} are not coercible to a common string type",
+                                lhs_type,
+                                rhs_type
+                            )
+                        }
+                    }
+                }
+            }
+
+            // Length checked above, safe to unwrap
+            let mut coerced_type = current_types.first().unwrap().to_owned();
+            for t in current_types.iter().skip(1) {
+                coerced_type = coercion_rule(&coerced_type, t)?;
+            }
+
+            fn base_type_or_default_type(data_type: &DataType) -> DataType {
+                if data_type.is_null() {
+                    DataType::Utf8
+                } else if let DataType::Dictionary(_, v) = data_type {
+                    base_type_or_default_type(v)
+                } else {
+                    data_type.to_owned()
+                }
+            }
+
+            vec![vec![base_type_or_default_type(&coerced_type); *number]]
+        }
         TypeSignature::Numeric(number) => {
             if *number < 1 {
                 return plan_err!(

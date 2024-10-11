@@ -47,27 +47,6 @@ impl Default for RPadFunc {
     }
 }
 
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_rpad_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_STRING)
-            .with_description("Pads the right side of a string with another string to a specified string length.")
-            .with_syntax_example("rpad(str, n[, padding_str])")
-            .with_standard_argument(
-                "str",
-                "String",
-            )
-            .with_argument("n", "String length to pad to.")
-            .with_argument("padding_str",
-                           "String expression to pad with. Can be a constant, column, or function, and any combination of string operators. _Default is a space._")
-            .with_related_udf("lpad")
-            .build()
-            .unwrap()
-    })
-}
-
 impl RPadFunc {
     pub fn new() -> Self {
         use DataType::*;
@@ -141,6 +120,35 @@ impl ScalarUDFImpl for RPadFunc {
     fn documentation(&self) -> Option<&Documentation> {
         Some(get_rpad_doc())
     }
+}
+
+static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+
+fn get_rpad_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_STRING)
+            .with_description("Pads the right side of a string with another string to a specified string length.")
+            .with_syntax_example("rpad(str, n[, padding_str])")
+            .with_sql_example(r#"```sql
+>  select rpad('datafusion', 20, '_-');
++-----------------------------------------------+
+| rpad(Utf8("datafusion"),Int64(20),Utf8("_-")) |
++-----------------------------------------------+
+| datafusion_-_-_-_-_-                          |
++-----------------------------------------------+
+```"#)
+            .with_standard_argument(
+                "str",
+                "String",
+            )
+            .with_argument("n", "String length to pad to.")
+            .with_argument("padding_str",
+                           "String expression to pad with. Can be a constant, column, or function, and any combination of string operators. _Default is a space._")
+            .with_related_udf("lpad")
+            .build()
+            .unwrap()
+    })
 }
 
 pub fn rpad<StringArrayLen: OffsetSizeTrait, FillArrayLen: OffsetSizeTrait>(
