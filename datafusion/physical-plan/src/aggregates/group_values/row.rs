@@ -16,6 +16,7 @@
 // under the License.
 
 use crate::aggregates::group_values::GroupValues;
+use foldhash::fast::RandomState;
 use arrow::compute::cast;
 use arrow::record_batch::RecordBatch;
 use arrow::row::{RowConverter, Rows, SortField};
@@ -25,7 +26,6 @@ use datafusion_common::hash_utils::create_hashes;
 use datafusion_common::Result;
 use datafusion_execution::memory_pool::proxy::{RawTableAllocExt, VecAllocExt};
 use datafusion_expr::EmitTo;
-use foldhash::fast::RandomState;
 use hashbrown::raw::RawTable;
 use std::sync::Arc;
 

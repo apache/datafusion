@@ -18,6 +18,7 @@
 //! [`ArrowBytesMap`] and [`ArrowBytesSet`] for storing maps/sets of values from
 //! StringArray / LargeStringArray / BinaryArray / LargeBinaryArray.
 
+use foldhash::fast::RandomState;
 use arrow::array::cast::AsArray;
 use arrow::array::types::{ByteArrayType, GenericBinaryType, GenericStringType};
 use arrow::array::{
@@ -28,7 +29,6 @@ use arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
 use arrow::datatypes::DataType;
 use datafusion_common::hash_utils::create_hashes;
 use datafusion_common::utils::proxy::{RawTableAllocExt, VecAllocExt};
-use foldhash::fast::RandomState;
 use std::any::type_name;
 use std::fmt::Debug;
 use std::mem;
