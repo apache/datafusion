@@ -227,13 +227,13 @@ pub(super) fn subquery_alias_inner_query_and_columns(
         return (plan, vec![]);
     };
 
-    // check if it's projection inside projection
+    // Check if it's projection inside projection
     let Some(inner_projection) = find_projection(outer_projections.input.as_ref()) else {
         return (plan, vec![]);
     };
 
     let mut columns: Vec<Ident> = vec![];
-    // check if the inner projection and outer projection have a matching pattern like
+    // Check if the inner projection and outer projection have a matching pattern like
     //     Projection: j1.j1_id AS id
     //       Projection: j1.j1_id
     for (i, inner_expr) in inner_projection.expr.iter().enumerate() {
@@ -241,7 +241,7 @@ pub(super) fn subquery_alias_inner_query_and_columns(
             return (plan, vec![]);
         };
 
-        // inner projection schema fields store the projection name which is used in outer
+        // Inner projection schema fields store the projection name which is used in outer
         // projection expr
         let inner_expr_string = match inner_expr {
             Expr::Column(_) => inner_expr.to_string(),

@@ -84,6 +84,13 @@ impl ScalarUDFImpl for SubstrFunc {
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        if arg_types.len() < 2 || arg_types.len() > 3 {
+            return plan_err!(
+                "The {} function requires 2 or 3 arguments, but got {}.",
+                self.name(),
+                arg_types.len()
+            );
+        }
         let first_data_type = match &arg_types[0] {
             DataType::Null => Ok(DataType::Utf8),
             DataType::LargeUtf8 | DataType::Utf8View | DataType::Utf8 => Ok(arg_types[0].clone()),

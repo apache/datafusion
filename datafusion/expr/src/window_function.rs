@@ -19,27 +19,6 @@ use datafusion_common::ScalarValue;
 
 use crate::{expr::WindowFunction, BuiltInWindowFunction, Expr, Literal};
 
-/// Create an expression to represent the `rank` window function
-pub fn rank() -> Expr {
-    Expr::WindowFunction(WindowFunction::new(BuiltInWindowFunction::Rank, vec![]))
-}
-
-/// Create an expression to represent the `dense_rank` window function
-pub fn dense_rank() -> Expr {
-    Expr::WindowFunction(WindowFunction::new(
-        BuiltInWindowFunction::DenseRank,
-        vec![],
-    ))
-}
-
-/// Create an expression to represent the `percent_rank` window function
-pub fn percent_rank() -> Expr {
-    Expr::WindowFunction(WindowFunction::new(
-        BuiltInWindowFunction::PercentRank,
-        vec![],
-    ))
-}
-
 /// Create an expression to represent the `cume_dist` window function
 pub fn cume_dist() -> Expr {
     Expr::WindowFunction(WindowFunction::new(BuiltInWindowFunction::CumeDist, vec![]))

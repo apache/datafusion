@@ -21,10 +21,7 @@ use std::borrow::Borrow;
 use std::sync::Arc;
 
 use crate::{
-    expressions::{
-        cume_dist, dense_rank, lag, lead, percent_rank, rank, Literal, NthValue, Ntile,
-        PhysicalSortExpr,
-    },
+    expressions::{cume_dist, lag, lead, Literal, NthValue, Ntile, PhysicalSortExpr},
     ExecutionPlan, ExecutionPlanProperties, InputOrderMode, PhysicalExpr,
 };
 
@@ -231,9 +228,6 @@ fn create_built_in_window_expr(
     let out_data_type: &DataType = input_schema.field_with_name(&name)?.data_type();
 
     Ok(match fun {
-        BuiltInWindowFunction::Rank => Arc::new(rank(name, out_data_type)),
-        BuiltInWindowFunction::DenseRank => Arc::new(dense_rank(name, out_data_type)),
-        BuiltInWindowFunction::PercentRank => Arc::new(percent_rank(name, out_data_type)),
         BuiltInWindowFunction::CumeDist => Arc::new(cume_dist(name, out_data_type)),
         BuiltInWindowFunction::Ntile => {
             let n = get_scalar_value_from_args(args, 0)?.ok_or_else(|| {

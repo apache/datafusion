@@ -1277,6 +1277,8 @@ Additional examples can be found [here](https://github.com/apache/datafusion/blo
 ## Struct Functions
 
 - [named_struct](#named_struct)
+- [row](#row)
+- [struct](#struct)
 
 ### `named_struct`
 
@@ -1313,9 +1315,124 @@ a struct type of fields `field_a` and `field_b`:
 +-------------------------------------------------------+
 ```
 
+### `row`
+
+_Alias of [struct](#struct)._
+
+### `struct`
+
+Returns an Arrow struct using the specified input expressions optionally named.
+Fields in the returned struct use the optional name or the `cN` naming convention.
+For example: `c0`, `c1`, `c2`, etc.
+
+```
+struct(expression1[, ..., expression_n])
+```
+
+#### Arguments
+
+- **expression1, expression_n**: Expression to include in the output struct. Can be a constant, column, or function, any combination of arithmetic or string operators.
+
+#### Example
+
+For example, this query converts two columns `a` and `b` to a single column with
+a struct type of fields `field_a` and `c1`:
+
+```sql
+> select * from t;
++---+---+
+| a | b |
++---+---+
+| 1 | 2 |
+| 3 | 4 |
++---+---+
+
+-- use default names `c0`, `c1`
+> select struct(a, b) from t;
++-----------------+
+| struct(t.a,t.b) |
++-----------------+
+| {c0: 1, c1: 2}  |
+| {c0: 3, c1: 4}  |
++-----------------+
+
+-- name the first field `field_a`
+select struct(a as field_a, b) from t;
++--------------------------------------------------+
+| named_struct(Utf8("field_a"),t.a,Utf8("c1"),t.b) |
++--------------------------------------------------+
+| {field_a: 1, c1: 2}                              |
+| {field_a: 3, c1: 4}                              |
++--------------------------------------------------+
+```
+
+#### Aliases
+
+- row
+
 ## Hashing Functions
 
+- [digest](#digest)
+- [md5](#md5)
 - [sha224](#sha224)
+- [sha256](#sha256)
+- [sha384](#sha384)
+- [sha512](#sha512)
+
+### `digest`
+
+Computes the binary hash of an expression using the specified algorithm.
+
+```
+digest(expression, algorithm)
+```
+
+#### Arguments
+
+- **expression**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
+- **algorithm**: String expression specifying algorithm to use. Must be one of:
+- md5
+- sha224
+- sha256
+- sha384
+- sha512
+- blake2s
+- blake2b
+- blake3
+
+#### Example
+
+```sql
+> select digest('foo', 'sha256');
++------------------------------------------+
+| digest(Utf8("foo"), Utf8("sha256"))      |
++------------------------------------------+
+| <binary_hash_result>                     |
++------------------------------------------+
+```
+
+### `md5`
+
+Computes an MD5 128-bit checksum for a string expression.
+
+```
+md5(expression)
+```
+
+#### Arguments
+
+- **expression**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
+
+#### Example
+
+```sql
+> select md5('foo');
++-------------------------------------+
+| md5(Utf8("foo"))                    |
++-------------------------------------+
+| <md5_checksum_result>               |
++-------------------------------------+
+```
 
 ### `sha224`
 
@@ -1328,6 +1445,86 @@ sha224(expression)
 #### Arguments
 
 - **expression**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
+
+#### Example
+
+```sql
+> select sha224('foo');
++------------------------------------------+
+| sha224(Utf8("foo"))                      |
++------------------------------------------+
+| <sha224_hash_result>                     |
++------------------------------------------+
+```
+
+### `sha256`
+
+Computes the SHA-256 hash of a binary string.
+
+```
+sha256(expression)
+```
+
+#### Arguments
+
+- **expression**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
+
+#### Example
+
+```sql
+> select sha256('foo');
++--------------------------------------+
+| sha256(Utf8("foo"))                  |
++--------------------------------------+
+| <sha256_hash_result>                 |
++--------------------------------------+
+```
+
+### `sha384`
+
+Computes the SHA-384 hash of a binary string.
+
+```
+sha384(expression)
+```
+
+#### Arguments
+
+- **expression**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
+
+#### Example
+
+```sql
+> select sha384('foo');
++-----------------------------------------+
+| sha384(Utf8("foo"))                     |
++-----------------------------------------+
+| <sha384_hash_result>                    |
++-----------------------------------------+
+```
+
+### `sha512`
+
+Computes the SHA-512 hash of a binary string.
+
+```
+sha512(expression)
+```
+
+#### Arguments
+
+- **expression**: String
+
+#### Example
+
+```sql
+> select sha512('foo');
++-------------------------------------------+
+| sha512(Utf8("foo"))                       |
++-------------------------------------------+
+| <sha512_hash_result>                      |
++-------------------------------------------+
+```
 
 ## Other Functions
 

@@ -52,7 +52,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         order_by: Vec<OrderByExpr>,
         planner_context: &mut PlannerContext,
     ) -> Result<LogicalPlan> {
-        // check for unsupported syntax first
+        // Check for unsupported syntax first
         if !select.cluster_by.is_empty() {
             return not_impl_err!("CLUSTER BY");
         }
@@ -69,17 +69,17 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             return not_impl_err!("SORT BY");
         }
 
-        // process `from` clause
+        // Process `from` clause
         let plan = self.plan_from_tables(select.from, planner_context)?;
         let empty_from = matches!(plan, LogicalPlan::EmptyRelation(_));
 
-        // process `where` clause
+        // Process `where` clause
         let base_plan = self.plan_selection(select.selection, plan, planner_context)?;
 
-        // handle named windows before processing the projection expression
+        // Handle named windows before processing the projection expression
         check_conflicting_windows(&select.named_window)?;
         match_window_definitions(&mut select.projection, &select.named_window)?;
-        // process the SELECT expressions
+        // Process the SELECT expressions
         let select_exprs = self.prepare_select_exprs(
             &base_plan,
             select.projection,
@@ -87,7 +87,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             planner_context,
         )?;
 
-        // having and group by clause may reference aliases defined in select projection
+        // Having and group by clause may reference aliases defined in select projection
         let projected_plan = self.project(base_plan.clone(), select_exprs.clone())?;
 
         // Place the fields of the base plan at the front so that when there are references
@@ -107,7 +107,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         )?;
         let order_by_rex = normalize_sorts(order_by_rex, &projected_plan)?;
 
-        // this alias map is resolved and looked up in both having exprs and group by exprs
+        // This alias map is resolved and looked up in both having exprs and group by exprs
         let alias_map = extract_aliases(&select_exprs);
 
         // Optionally the HAVING expression.
@@ -159,7 +159,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         planner_context,
                     )?;
 
-                    // aliases from the projection can conflict with same-named expressions in the input
+                    // Aliases from the projection can conflict with same-named expressions in the input
                     let mut alias_map = alias_map.clone();
                     for f in base_plan.schema().fields() {
                         alias_map.remove(f.name());
@@ -192,7 +192,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 .collect()
         };
 
-        // process group by, aggregation or having
+        // Process group by, aggregation or having
         let (plan, mut select_exprs_post_aggr, having_expr_post_aggr) = if !group_by_exprs
             .is_empty()
             || !aggr_exprs.is_empty()
@@ -219,7 +219,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             plan
         };
 
-        // process window function
+        // Process window function
         let window_func_exprs = find_window_exprs(&select_exprs_post_aggr);
 
         let plan = if window_func_exprs.is_empty() {
@@ -227,7 +227,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         } else {
             let plan = LogicalPlanBuilder::window_plan(plan, window_func_exprs.clone())?;
 
-            // re-write the projection
+            // Re-write the projection
             select_exprs_post_aggr = select_exprs_post_aggr
                 .iter()
                 .map(|expr| rebase_expr(expr, &window_func_exprs, &plan))
@@ -236,10 +236,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             plan
         };
 
-        // try process unnest expression or do the final projection
+        // Try processing unnest expression or do the final projection
         let plan = self.try_process_unnest(plan, select_exprs_post_aggr)?;
 
-        // process distinct clause
+        // Process distinct clause
         let plan = match select.distinct {
             None => Ok(plan),
             Some(Distinct::Distinct) => {
@@ -304,7 +304,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         // Each expr in select_exprs can contains multiple unnest stage
         // The transformation happen bottom up, one at a time for each iteration
-        // Only exaust the loop if no more unnest transformation is found
+        // Only exhaust the loop if no more unnest transformation is found
         for i in 0.. {
             let mut unnest_columns = vec![];
             // from which column used for projection, before the unnest happen
@@ -390,7 +390,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             ..
         } = agg;
 
-        // process unnest of group_by_exprs, and input of agg will be rewritten
+        // Process unnest of group_by_exprs, and input of agg will be rewritten
         // for example:
         //
         // ```
