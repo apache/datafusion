@@ -21,13 +21,13 @@ use std::any::Any;
 use std::collections::HashSet;
 use std::fmt::{Display, Formatter};
 
-use foldhash::fast::RandomState;
 use arrow::array::{downcast_integer, Array, ArrayRef, AsArray};
 use arrow::datatypes::{
     ArrowNativeType, ArrowNumericType, DataType, Int16Type, Int32Type, Int64Type,
     Int8Type, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
 };
 use arrow_schema::Field;
+use foldhash::fast::RandomState;
 
 use datafusion_common::cast::as_list_array;
 use datafusion_common::{exec_err, not_impl_err, Result, ScalarValue};

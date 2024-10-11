@@ -71,8 +71,8 @@ use datafusion_physical_expr::equivalence::join_equivalence_properties;
 use datafusion_physical_expr::intervals::cp_solver::ExprIntervalGraph;
 use datafusion_physical_expr::{PhysicalExprRef, PhysicalSortRequirement};
 
-use foldhash::fast::RandomState;
 use datafusion_physical_expr_common::sort_expr::LexRequirement;
+use foldhash::fast::{FixedState, RandomState};
 use futures::{ready, Stream, StreamExt};
 use hashbrown::HashSet;
 use parking_lot::Mutex;
@@ -177,7 +177,7 @@ pub struct SymmetricHashJoinExec {
     /// How the join is performed
     pub(crate) join_type: JoinType,
     /// Shares the `RandomState` for the hashing algorithm
-    random_state: RandomState,
+    random_state: FixedState,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
     /// Information of index and left / right placement of columns
@@ -231,7 +231,7 @@ impl SymmetricHashJoinExec {
             build_join_schema(&left_schema, &right_schema, join_type);
 
         // Initialize the random state for the join operation:
-        let random_state = RandomState::default();
+        let random_state = FixedState::default();
         let schema = Arc::new(schema);
         let cache =
             Self::compute_properties(&left, &right, Arc::clone(&schema), *join_type, &on);
@@ -547,7 +547,7 @@ struct SymmetricHashJoinStream {
     // Right globally sorted filter expr
     right_sorted_filter_expr: Option<SortedFilterExpr>,
     /// Random state used for hashing initialization
-    random_state: RandomState,
+    random_state: FixedState,
     /// If null_equals_null is true, null == null else null != null
     null_equals_null: bool,
     /// Metrics
@@ -786,7 +786,7 @@ pub(crate) fn join_with_probe_batch(
     filter: Option<&JoinFilter>,
     probe_batch: &RecordBatch,
     column_indices: &[ColumnIndex],
-    random_state: &RandomState,
+    random_state: &FixedState,
     null_equals_null: bool,
 ) -> Result<Option<RecordBatch>> {
     if build_hash_joiner.input_buffer.num_rows() == 0 || probe_batch.num_rows() == 0 {
@@ -879,7 +879,7 @@ fn lookup_join_hashmap(
     probe_batch: &RecordBatch,
     build_on: &[PhysicalExprRef],
     probe_on: &[PhysicalExprRef],
-    random_state: &RandomState,
+    random_state: &FixedState,
     null_equals_null: bool,
     hashes_buffer: &mut Vec<u64>,
     deleted_offset: Option<usize>,
@@ -1010,7 +1010,7 @@ impl OneSideHashJoiner {
     pub(crate) fn update_internal_state(
         &mut self,
         batch: &RecordBatch,
-        random_state: &RandomState,
+        random_state: &FixedState,
     ) -> Result<()> {
         // Merge the incoming batch with the existing input buffer:
         self.input_buffer = concat_batches(&batch.schema(), [&self.input_buffer, batch])?;

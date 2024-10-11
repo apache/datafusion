@@ -70,9 +70,9 @@ use datafusion_physical_expr::equivalence::{
 };
 use datafusion_physical_expr::PhysicalExprRef;
 
-use foldhash::fast::RandomState;
 use datafusion_expr::Operator;
 use datafusion_physical_expr_common::datum::compare_op_for_nested;
+use foldhash::fast::FixedState;
 use futures::{ready, Stream, StreamExt, TryStreamExt};
 use parking_lot::Mutex;
 
@@ -310,7 +310,7 @@ pub struct HashJoinExec {
     /// Future that consumes left input and builds the hash table
     left_fut: OnceAsync<JoinLeftData>,
     /// Shared the `RandomState` for the hashing algorithm
-    random_state: RandomState,
+    random_state: FixedState,
     /// Partitioning mode to use
     pub mode: PartitionMode,
     /// Execution metrics
@@ -355,7 +355,7 @@ impl HashJoinExec {
         let (join_schema, column_indices) =
             build_join_schema(&left_schema, &right_schema, join_type);
 
-        let random_state = RandomState::default();
+        let random_state = FixedState::default();
 
         let join_schema = Arc::new(join_schema);
 
@@ -798,7 +798,7 @@ impl ExecutionPlan for HashJoinExec {
 #[allow(clippy::too_many_arguments)]
 async fn collect_left_input(
     partition: Option<usize>,
-    random_state: RandomState,
+    random_state: FixedState,
     left: Arc<dyn ExecutionPlan>,
     on_left: Vec<PhysicalExprRef>,
     context: Arc<TaskContext>,
@@ -910,7 +910,7 @@ pub fn update_hash<T>(
     batch: &RecordBatch,
     hash_map: &mut T,
     offset: usize,
-    random_state: &RandomState,
+    random_state: &FixedState,
     hashes_buffer: &mut Vec<u64>,
     deleted_offset: usize,
     fifo_hashmap: bool,
@@ -1074,7 +1074,7 @@ struct HashJoinStream {
     /// right (probe) input
     right: SendableRecordBatchStream,
     /// Random state used for hashing initialization
-    random_state: RandomState,
+    random_state: FixedState,
     /// Metrics
     join_metrics: BuildProbeJoinMetrics,
     /// Information of index and left / right placement of columns

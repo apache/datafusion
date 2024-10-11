@@ -19,7 +19,6 @@
 
 use crate::aggregates::group_values::primitive::HashValue;
 use crate::aggregates::topk::heap::Comparable;
-use foldhash::fast::RandomState;
 use arrow::datatypes::i256;
 use arrow_array::builder::PrimitiveBuilder;
 use arrow_array::cast::AsArray;
@@ -30,6 +29,7 @@ use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano};
 use arrow_schema::DataType;
 use datafusion_common::DataFusionError;
 use datafusion_common::Result;
+use foldhash::fast::RandomState;
 use half::f16;
 use hashbrown::raw::RawTable;
 use std::fmt::Debug;

@@ -25,11 +25,11 @@ use std::fmt::Debug;
 use std::hash::Hash;
 use std::sync::Arc;
 
-use foldhash::fast::RandomState;
 use arrow::array::types::ArrowPrimitiveType;
 use arrow::array::ArrayRef;
 use arrow::array::PrimitiveArray;
 use arrow::datatypes::DataType;
+use foldhash::fast::RandomState;
 
 use datafusion_common::cast::{as_list_array, as_primitive_array};
 use datafusion_common::utils::array_into_list_array_nullable;

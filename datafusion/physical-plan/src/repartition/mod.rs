@@ -124,6 +124,8 @@ impl RepartitionExecState {
 
         // launch one async task per *input* partition
         let mut spawned_tasks = Vec::with_capacity(num_input_partitions);
+        let random_state = RandomState::default();
+
         for i in 0..num_input_partitions {
             let txs: HashMap<_, _> = channels
                 .iter()
@@ -141,6 +143,7 @@ impl RepartitionExecState {
                 partitioning.clone(),
                 r_metrics,
                 Arc::clone(&context),
+                random_state.clone(),
             ));
 
             // In a separate task, wait for each input to be done
@@ -198,7 +201,11 @@ impl BatchPartitioner {
     /// Create a new [`BatchPartitioner`] with the provided [`Partitioning`]
     ///
     /// The time spent repartitioning will be recorded to `timer`
-    pub fn try_new(partitioning: Partitioning, timer: metrics::Time) -> Result<Self> {
+    pub fn try_new(
+        partitioning: Partitioning,
+        timer: metrics::Time,
+        random_state: RandomState,
+    ) -> Result<Self> {
         let state = match partitioning {
             Partitioning::RoundRobinBatch(num_partitions) => {
                 BatchPartitionerState::RoundRobin {
@@ -209,7 +216,7 @@ impl BatchPartitioner {
             Partitioning::Hash(exprs, num_partitions) => BatchPartitionerState::Hash {
                 exprs,
                 num_partitions,
-                random_state: RandomState::default(),
+                random_state,
                 hash_buffer: vec![],
             },
             other => return not_impl_err!("Unsupported repartitioning scheme {other:?}"),
@@ -780,10 +787,13 @@ impl RepartitionExec {
         partitioning: Partitioning,
         metrics: RepartitionMetrics,
         context: Arc<TaskContext>,
+        random_state: RandomState,
     ) -> Result<()> {
-        let mut partitioner =
-            BatchPartitioner::try_new(partitioning, metrics.repartition_time.clone())?;
-
+        let mut partitioner = BatchPartitioner::try_new(
+            partitioning,
+            metrics.repartition_time.clone(),
+            random_state,
+        )?;
         // execute the child operator
         let timer = metrics.fetch_time.timer();
         let mut stream = input.execute(partition, context)?;
@@ -1034,6 +1044,7 @@ mod tests {
     use datafusion_common::{arrow_datafusion_err, assert_batches_sorted_eq, exec_err};
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
 
+    use futures::StreamExt;
     use tokio::task::JoinSet;
 
     #[tokio::test]
