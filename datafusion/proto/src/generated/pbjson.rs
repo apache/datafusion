@@ -1662,9 +1662,6 @@ impl serde::Serialize for BuiltInWindowFunction {
     {
         let variant = match self {
             Self::Unspecified => "UNSPECIFIED",
-            Self::Rank => "RANK",
-            Self::DenseRank => "DENSE_RANK",
-            Self::PercentRank => "PERCENT_RANK",
             Self::CumeDist => "CUME_DIST",
             Self::Ntile => "NTILE",
             Self::Lag => "LAG",
@@ -1684,9 +1681,6 @@ impl<'de> serde::Deserialize<'de> for BuiltInWindowFunction {
     {
         const FIELDS: &[&str] = &[
             "UNSPECIFIED",
-            "RANK",
-            "DENSE_RANK",
-            "PERCENT_RANK",
             "CUME_DIST",
             "NTILE",
             "LAG",
@@ -1735,9 +1729,6 @@ impl<'de> serde::Deserialize<'de> for BuiltInWindowFunction {
             {
                 match value {
                     "UNSPECIFIED" => Ok(BuiltInWindowFunction::Unspecified),
-                    "RANK" => Ok(BuiltInWindowFunction::Rank),
-                    "DENSE_RANK" => Ok(BuiltInWindowFunction::DenseRank),
-                    "PERCENT_RANK" => Ok(BuiltInWindowFunction::PercentRank),
                     "CUME_DIST" => Ok(BuiltInWindowFunction::CumeDist),
                     "NTILE" => Ok(BuiltInWindowFunction::Ntile),
                     "LAG" => Ok(BuiltInWindowFunction::Lag),

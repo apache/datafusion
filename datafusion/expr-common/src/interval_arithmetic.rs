@@ -1753,7 +1753,7 @@ impl NullableInterval {
                         }
                         _ => Ok(Self::MaybeNull { values }),
                     }
-                } else if op.is_comparison_operator() {
+                } else if op.supports_propagation() {
                     Ok(Self::Null {
                         datatype: DataType::Boolean,
                     })
