@@ -25,8 +25,8 @@ use crate::operator::Operator;
 use arrow::array::{new_empty_array, Array};
 use arrow::compute::can_cast_types;
 use arrow::datatypes::{
-    DataType, Field, FieldRef, Fields, TimeUnit, DECIMAL128_MAX_PRECISION,
-    DECIMAL128_MAX_SCALE, DECIMAL256_MAX_PRECISION, DECIMAL256_MAX_SCALE,
+    DataType, Field, FieldRef, TimeUnit, DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE,
+    DECIMAL256_MAX_PRECISION, DECIMAL256_MAX_SCALE,
 };
 use datafusion_common::{
     exec_datafusion_err, exec_err, internal_err, plan_datafusion_err, plan_err, Result,
@@ -536,8 +536,6 @@ pub fn try_type_union_resolution_with_struct(
         return internal_err!("Struct type is checked is the previous function, so this should be unreachable");
     };
 
-    println!("struct_types 1: {:?}", struct_types);
-
     for data_type in data_types.iter().skip(1) {
         if let DataType::Struct(fields) = data_type {
             let incoming_struct_types: Vec<DataType> =
@@ -562,8 +560,6 @@ pub fn try_type_union_resolution_with_struct(
             return exec_err!("Expect to get struct but got {}", data_type);
         }
     }
-
-    println!("struct_types: {:?}", struct_types);
 
     let mut final_struct_types = vec![];
     for s in data_types {
