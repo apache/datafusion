@@ -103,7 +103,7 @@ impl BuiltInWindowFunction {
         match self {
             BuiltInWindowFunction::Ntile => Ok(DataType::UInt64),
             BuiltInWindowFunction::CumeDist => Ok(DataType::Float64),
-            | BuiltInWindowFunction::FirstValue
+            BuiltInWindowFunction::FirstValue
             | BuiltInWindowFunction::LastValue
             | BuiltInWindowFunction::NthValue => Ok(input_expr_types[0].clone()),
         }

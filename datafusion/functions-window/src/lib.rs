@@ -31,8 +31,8 @@ use datafusion_expr::WindowUDF;
 
 #[macro_use]
 pub mod macros;
-pub mod lead_lag;
 pub mod dense_rank;
+pub mod lead_lag;
 pub mod percent_rank;
 pub mod rank;
 pub mod row_number;
@@ -40,9 +40,9 @@ mod utils;
 
 /// Fluent-style API for creating `Expr`s
 pub mod expr_fn {
+    pub use super::dense_rank::dense_rank;
     pub use super::lead_lag::lag;
     pub use super::lead_lag::lead;
-    pub use super::dense_rank::dense_rank;
     pub use super::percent_rank::percent_rank;
     pub use super::rank::rank;
     pub use super::row_number::row_number;

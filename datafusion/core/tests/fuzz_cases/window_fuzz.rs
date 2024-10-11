@@ -45,8 +45,8 @@ use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
 use test_utils::add_empty_batches;
 
 use datafusion::functions_window::row_number::row_number_udwf;
-use datafusion_functions_window::lead_lag::{lag_udwf, lead_udwf};
 use datafusion_functions_window::dense_rank::dense_rank_udwf;
+use datafusion_functions_window::lead_lag::{lag_udwf, lead_udwf};
 use datafusion_functions_window::rank::rank_udwf;
 use hashbrown::HashMap;
 use rand::distributions::Alphanumeric;
