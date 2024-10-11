@@ -113,8 +113,6 @@ datafusion-physical-plan = { path = "datafusion/physical-plan", version = "42.0.
 datafusion-proto = { path = "datafusion/proto", version = "42.0.0" }
 datafusion-proto-common = { path = "datafusion/proto-common", version = "42.0.0" }
 datafusion-sql = { path = "datafusion/sql", version = "42.0.0" }
-datafusion-sqllogictest = { path = "datafusion/sqllogictest", version = "42.0.0" }
-datafusion-substrait = { path = "datafusion/substrait", version = "42.0.0" }
 doc-comment = "0.3"
 env_logger = "0.11"
 futures = "0.3"
