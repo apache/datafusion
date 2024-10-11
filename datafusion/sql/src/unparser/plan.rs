@@ -550,6 +550,11 @@ impl Unparser<'_> {
                     );
                 }
 
+                // Covers cases where the UNION is a subquery and the projection is at the top level
+                if select.already_projected() {
+                    return self.derive(plan, relation);
+                }
+
                 let input_exprs: Vec<SetExpr> = union
                     .inputs
                     .iter()
