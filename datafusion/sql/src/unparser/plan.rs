@@ -21,7 +21,10 @@ use datafusion_common::{
     tree_node::{TransformedResult, TreeNode},
     Column, DataFusionError, Result, TableReference,
 };
-use datafusion_expr::{expr::Alias, Distinct, Expr, JoinConstraint, JoinType, Limit, LogicalPlan, LogicalPlanBuilder, Projection, Sort, SortExpr};
+use datafusion_expr::{
+    expr::Alias, Distinct, Expr, JoinConstraint, JoinType, Limit, LogicalPlan,
+    LogicalPlanBuilder, Projection, Sort, SortExpr,
+};
 use sqlparser::ast::{self, Ident, SetExpr};
 use std::sync::Arc;
 
@@ -355,13 +358,13 @@ impl Unparser<'_> {
                         input: Arc::clone(&sort.input),
                         fetch: None,
                     }));
-                    let limit = Arc::new(LogicalPlan::Limit(Limit { skip: 0, fetch: Some(fetch), input: new_sort }));
-                    return self.select_to_sql_recursively(
-                        &limit,
-                        query,
-                        select,
-                        relation,
-                    );
+                    let limit = Arc::new(LogicalPlan::Limit(Limit {
+                        skip: 0,
+                        fetch: Some(fetch),
+                        input: new_sort,
+                    }));
+                    return self
+                        .select_to_sql_recursively(&limit, query, select, relation);
                 }
                 // Sort can be top-level plan for derived table
                 if select.already_projected() {
