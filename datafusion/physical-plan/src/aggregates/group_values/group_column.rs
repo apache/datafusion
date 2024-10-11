@@ -28,10 +28,12 @@ use arrow::array::StringViewBuilder;
 use arrow::array::{Array, ArrayRef, ArrowPrimitiveType, AsArray};
 use arrow::buffer::OffsetBuffer;
 use arrow::buffer::ScalarBuffer;
+use arrow::datatypes::BinaryViewType;
 use arrow::datatypes::ByteArrayType;
 use arrow::datatypes::ByteViewType;
 use arrow::datatypes::DataType;
 use arrow::datatypes::GenericBinaryType;
+use arrow::datatypes::StringViewType;
 use arrow_array::BinaryViewArray;
 use arrow_array::GenericByteViewArray;
 use arrow_array::StringViewArray;
@@ -553,6 +555,129 @@ impl ByteGroupValueViewBuilder {
             &block[offset..offset + length]
         } else {
             &self.in_progress[offset..offset + length]
+        }
+    }
+}
+
+impl GroupColumn for ByteGroupValueViewBuilder {
+    fn equal_to(&self, lhs_row: usize, array: &ArrayRef, rhs_row: usize) -> bool {
+        todo!()
+    }
+
+    fn append_val(&mut self, array: &ArrayRef, row: usize) {
+        todo!()
+    }
+
+    fn len(&self) -> usize {
+        todo!()
+    }
+
+    fn size(&self) -> usize {
+        todo!()
+    }
+
+    fn build(self: Box<Self>) -> ArrayRef {
+        todo!()
+    }
+
+    fn take_n(&mut self, n: usize) -> ArrayRef {
+        debug_assert!(self.len() >= n);
+
+        // Take n for nulls
+        let null_buffer = self.nulls.take_n(n);
+
+        // Take n for values:
+        //   - Take first n `view`s from `views`
+        //
+        //   - Find the last non-inlined `view`, if all inlined,
+        //     we can build array and return happily, otherwise we
+        //     we need to continue to process related buffers
+        //
+        //   - Get the last related `buffer index`(let's name it `buffer index n`)
+        //     from last non-inlined `view`
+        //
+        //   - Take `0 ~ buffer index n-1` buffers, clone the `buffer index` buffer
+        //     (data part is wrapped by `Arc`, cheap to clone) if it is in `completed`,
+        //     or split
+        //
+        //   - Shift the `buffer index` of remaining non-inlined `views`
+        //
+        let first_n_views = self.views.drain(0..n).collect::<Vec<_>>();
+
+        let last_non_inlined_view = first_n_views
+            .iter()
+            .rev()
+            .find(|view| ((**view) as u32) > 12);
+
+        if let Some(view) = last_non_inlined_view {
+            let view = ByteView::from(*view);
+            let last_related_buffer_index = view.buffer_index as usize;
+            let mut taken_buffers = Vec::with_capacity(last_related_buffer_index + 1);
+
+            // Take `0 ~ last_related_buffer_index - 1` buffers
+            if !self.completed.is_empty() {
+                taken_buffers.extend(self.completed.drain(0..last_related_buffer_index));
+            }
+
+            // Process the `last_related_buffer_index` buffers
+            let last_buffer = if last_related_buffer_index < self.completed.len() {
+                // If it is in `completed`, simply clone
+                self.completed[last_related_buffer_index].clone()
+            } else {
+                // If it is `in_progress`, copied `0 ~ offset` part
+                let taken_last_buffer =
+                    self.in_progress[0..view.offset as usize].to_vec();
+                Buffer::from_vec(taken_last_buffer)
+            };
+            taken_buffers.push(last_buffer);
+
+            // Shift `buffer index` finally
+            self.views.iter_mut().for_each(|view| {
+                if (*view as u32) > 12 {
+                    let mut byte_view = ByteView::from(*view);
+                    byte_view.buffer_index -= last_related_buffer_index as u32;
+                    *view = byte_view.as_u128();
+                }
+            });
+
+            // Build array and return
+            let views = ScalarBuffer::from(first_n_views);
+            match self.output_type {
+                OutputType::Utf8View => {
+                    Arc::new(GenericByteViewArray::<StringViewType>::new(
+                        views,
+                        taken_buffers,
+                        null_buffer,
+                    ))
+                }
+                OutputType::BinaryView => {
+                    Arc::new(GenericByteViewArray::<BinaryViewType>::new(
+                        views,
+                        taken_buffers,
+                        null_buffer,
+                    ))
+                }
+                _ => unreachable!("View types should use `ArrowBytesViewMap`"),
+            }
+        } else {
+            let views = ScalarBuffer::from(first_n_views);
+            match self.output_type {
+                OutputType::Utf8View => {
+                    Arc::new(GenericByteViewArray::<StringViewType>::new(
+                        views,
+                        Vec::new(),
+                        null_buffer,
+                    ))
+                }
+                OutputType::BinaryView => {
+                    Arc::new(GenericByteViewArray::<BinaryViewType>::new(
+                        views,
+                        Vec::new(),
+                        null_buffer,
+                    ))
+                }
+                _ => unreachable!("View types should use `ArrowBytesViewMap`"),
+            }
         }
     }
 }
