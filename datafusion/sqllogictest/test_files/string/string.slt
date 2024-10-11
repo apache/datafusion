@@ -35,19 +35,6 @@ create table test_substr as
 select arrow_cast(col1, 'Utf8') as c1 from test_substr_base;
 
 # TODO: move it back to `string_query.slt.part` after fixing the issue
-# https://github.com/apache/datafusion/issues/12618
-query BB
-SELECT
-  ascii_1 ~* '^a.{3}e',
-  unicode_1 ~* '^d.*Фу'
-FROM test_basic_operator;
-----
-true false
-false false
-false true
-NULL NULL
-
-# TODO: move it back to `string_query.slt.part` after fixing the issue
 # see detail: https://github.com/apache/datafusion/issues/12637
 # Test pattern with wildcard characters
 query TTBBBB
@@ -61,23 +48,6 @@ from test_basic_operator;
 Andrew datafusion📊🔥 true false true false
 Xiangpeng datafusion数据融合 false true false true
 Raphael datafusionДатаФусион false false false false
-NULL NULL NULL NULL NULL NULL
-
-# TODO: move it back to `string_query.slt.part` after fixing the issue
-# see detail: https://github.com/apache/datafusion/issues/12670
-query IIIIII
-SELECT
-  STRPOS(ascii_1, 'e'),
-  STRPOS(ascii_1, 'ang'),
-  STRPOS(ascii_1, NULL),
-  STRPOS(unicode_1, 'и'),
-  STRPOS(unicode_1, 'ион'),
-  STRPOS(unicode_1, NULL)
-FROM test_basic_operator;
-----
-5 0 NULL 0 0 NULL
-7 3 NULL 0 0 NULL
-6 0 NULL 18 18 NULL
 NULL NULL NULL NULL NULL NULL
 
 #

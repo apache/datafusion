@@ -142,9 +142,6 @@ impl From<protobuf::BuiltInWindowFunction> for BuiltInWindowFunction {
     fn from(built_in_function: protobuf::BuiltInWindowFunction) -> Self {
         match built_in_function {
             protobuf::BuiltInWindowFunction::Unspecified => todo!(),
-            protobuf::BuiltInWindowFunction::Rank => Self::Rank,
-            protobuf::BuiltInWindowFunction::PercentRank => Self::PercentRank,
-            protobuf::BuiltInWindowFunction::DenseRank => Self::DenseRank,
             protobuf::BuiltInWindowFunction::Lag => Self::Lag,
             protobuf::BuiltInWindowFunction::Lead => Self::Lead,
             protobuf::BuiltInWindowFunction::FirstValue => Self::FirstValue,

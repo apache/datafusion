@@ -25,10 +25,9 @@ use datafusion_common::{
 };
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
-use datafusion_expr::{ColumnarValue, Expr, ScalarUDF};
+use datafusion_expr::{ColumnarValue, Expr, ScalarUDF, TypeSignature};
 
 use arrow::array::{ArrayRef, Float64Array, Int64Array};
-use datafusion_expr::TypeSignature::*;
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use std::any::Any;
 use std::sync::Arc;
@@ -52,7 +51,10 @@ impl PowerFunc {
         use DataType::*;
         Self {
             signature: Signature::one_of(
-                vec![Exact(vec![Int64, Int64]), Exact(vec![Float64, Float64])],
+                vec![
+                    TypeSignature::Exact(vec![Int64, Int64]),
+                    TypeSignature::Exact(vec![Float64, Float64]),
+                ],
                 Volatility::Immutable,
             ),
             aliases: vec![String::from("pow")],

@@ -642,18 +642,16 @@ true false
 false true
 NULL NULL
 
-# TODO: DictionaryString does not support ~* operator. Enable this after fixing the issue
-# see issue: https://github.com/apache/datafusion/issues/12618
-#query BB
-#SELECT
-#  ascii_1 ~* '^a.{3}e',
-#  unicode_1 ~* '^d.*Фу'
-#FROM test_basic_operator;
-#----
-#true false
-#false false
-#false true
-#NULL NULL
+query BB
+SELECT
+  ascii_1 ~* '^a.{3}e',
+  unicode_1 ~* '^d.*Фу'
+FROM test_basic_operator;
+----
+true false
+false false
+false true
+NULL NULL
 
 query BB
 SELECT
@@ -951,22 +949,20 @@ NULL NULL
 # Test STRPOS
 # --------------------------------------
 
-# TODO: DictionaryString does not support STRPOS. Enable this after fixing the issue
-# see issue: https://github.com/apache/datafusion/issues/12670
-#query IIIIII
-#SELECT
-#  STRPOS(ascii_1, 'e'),
-#  STRPOS(ascii_1, 'ang'),
-#  STRPOS(ascii_1, NULL),
-#  STRPOS(unicode_1, 'и'),
-#  STRPOS(unicode_1, 'ион'),
-#  STRPOS(unicode_1, NULL)
-#FROM test_basic_operator;
-#----
-#5 0 NULL 0 0 NULL
-#7 3 NULL 0 0 NULL
-#6 0 NULL 18 18 NULL
-#NULL NULL NULL NULL NULL NULL
+query IIIIII
+SELECT
+  STRPOS(ascii_1, 'e'),
+  STRPOS(ascii_1, 'ang'),
+  STRPOS(ascii_1, NULL),
+  STRPOS(unicode_1, 'и'),
+  STRPOS(unicode_1, 'ион'),
+  STRPOS(unicode_1, NULL)
+FROM test_basic_operator;
+----
+5 0 NULL 0 0 NULL
+7 3 NULL 0 0 NULL
+6 0 NULL 18 18 NULL
+NULL NULL NULL NULL NULL NULL
 
 # --------------------------------------
 # Test SUBSTR_INDEX

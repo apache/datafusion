@@ -142,10 +142,7 @@ fn get_bit_and_doc() -> &'static Documentation {
             .with_doc_section(DOC_SECTION_GENERAL)
             .with_description("Computes the bitwise AND of all non-null input values.")
             .with_syntax_example("bit_and(expression)")
-            .with_argument(
-                "expression",
-                "Expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators.",
-            )
+            .with_standard_argument("expression", "Integer")
             .build()
             .unwrap()
     })
@@ -159,10 +156,7 @@ fn get_bit_or_doc() -> &'static Documentation {
             .with_doc_section(DOC_SECTION_GENERAL)
             .with_description("Computes the bitwise OR of all non-null input values.")
             .with_syntax_example("bit_or(expression)")
-            .with_argument(
-                "expression",
-                "Expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators.",
-            )
+            .with_standard_argument("expression", "Integer")
             .build()
             .unwrap()
     })
@@ -174,12 +168,11 @@ fn get_bit_xor_doc() -> &'static Documentation {
     BIT_XOR_DOC.get_or_init(|| {
         Documentation::builder()
             .with_doc_section(DOC_SECTION_GENERAL)
-            .with_description("Computes the bitwise exclusive OR of all non-null input values.")
-            .with_syntax_example("bit_xor(expression)")
-            .with_argument(
-                "expression",
-                "Expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators.",
+            .with_description(
+                "Computes the bitwise exclusive OR of all non-null input values.",
             )
+            .with_syntax_example("bit_xor(expression)")
+            .with_standard_argument("expression", "Integer")
             .build()
             .unwrap()
     })

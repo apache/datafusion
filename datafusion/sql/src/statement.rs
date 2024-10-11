@@ -878,14 +878,14 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     }
                     None => None,
                 };
-                // at the moment functions can't be qualified `schema.name`
+                // At the moment functions can't be qualified `schema.name`
                 let name = match &name.0[..] {
                     [] => exec_err!("Function should have name")?,
                     [n] => n.value.clone(),
                     [..] => not_impl_err!("Qualified functions are not supported")?,
                 };
                 //
-                // convert resulting expression to data fusion expression
+                // Convert resulting expression to data fusion expression
                 //
                 let arg_types = args.as_ref().map(|arg| {
                     arg.iter().map(|t| t.data_type.clone()).collect::<Vec<_>>()
@@ -933,10 +933,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 func_desc,
                 ..
             } => {
-                // according to postgresql documentation it can be only one function
+                // According to postgresql documentation it can be only one function
                 // specified in drop statement
                 if let Some(desc) = func_desc.first() {
-                    // at the moment functions can't be qualified `schema.name`
+                    // At the moment functions can't be qualified `schema.name`
                     let name = match &desc.name.0[..] {
                         [] => exec_err!("Function should have name")?,
                         [n] => n.value.clone(),
@@ -1028,7 +1028,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         filter: Option<ShowStatementFilter>,
     ) -> Result<LogicalPlan> {
         if self.has_table("information_schema", "tables") {
-            // we only support the basic "SHOW TABLES"
+            // We only support the basic "SHOW TABLES"
             // https://github.com/apache/datafusion/issues/3188
             if db_name.is_some() || filter.is_some() || full || extended {
                 plan_err!("Unsupported parameters to SHOW TABLES")
@@ -1059,7 +1059,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     }
 
     fn copy_to_plan(&self, statement: CopyToStatement) -> Result<LogicalPlan> {
-        // determine if source is table or query and handle accordingly
+        // Determine if source is table or query and handle accordingly
         let copy_source = statement.source;
         let (input, input_schema, table_ref) = match copy_source {
             CopyToSource::Relation(object_name) => {
@@ -1100,7 +1100,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                             .to_string(),
                     )
                 };
-                // try to infer file format from file extension
+                // Try to infer file format from file extension
                 let extension: &str = &Path::new(&statement.target)
                     .extension()
                     .ok_or_else(e)?
@@ -1406,11 +1406,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let mut variable_lower = variable.to_lowercase();
 
         if variable_lower == "timezone" || variable_lower == "time.zone" {
-            // we could introduce alias in OptionDefinition if this string matching thing grows
+            // We could introduce alias in OptionDefinition if this string matching thing grows
             variable_lower = "datafusion.execution.time_zone".to_string();
         }
 
-        // parse value string from Expr
+        // Parse value string from Expr
         let value_string = match &value[0] {
             SQLExpr::Identifier(i) => ident_to_string(i),
             SQLExpr::Value(v) => match crate::utils::value_to_string(v) {
@@ -1419,7 +1419,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 }
                 Some(v) => v,
             },
-            // for capture signed number e.g. +8, -8
+            // For capture signed number e.g. +8, -8
             SQLExpr::UnaryOp { op, expr } => match op {
                 UnaryOperator::Plus => format!("+{expr}"),
                 UnaryOperator::Minus => format!("-{expr}"),
@@ -1614,10 +1614,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         // Get insert fields and target table's value indices
         //
-        // if value_indices[i] = Some(j), it means that the value of the i-th target table's column is
+        // If value_indices[i] = Some(j), it means that the value of the i-th target table's column is
         // derived from the j-th output of the source.
         //
-        // if value_indices[i] = None, it means that the value of the i-th target table's column is
+        // If value_indices[i] = None, it means that the value of the i-th target table's column is
         // not provided, and should be filled with a default value later.
         let (fields, value_indices) = if columns.is_empty() {
             // Empty means we're inserting into all columns of the table
@@ -1749,7 +1749,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let table_ref = self.object_name_to_table_reference(sql_table_name)?;
         let _ = self.context_provider.get_table_source(table_ref)?;
 
-        // treat both FULL and EXTENDED as the same
+        // Treat both FULL and EXTENDED as the same
         let select_list = if full || extended {
             "*"
         } else {
