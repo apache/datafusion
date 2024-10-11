@@ -108,7 +108,7 @@ fn print_docs(
             .collect::<Vec<_>>();
 
         // write out section header
-        let _ = writeln!(docs, "## {} ", doc_section.label);
+        let _ = writeln!(docs, "\n## {} \n", doc_section.label);
 
         if let Some(description) = doc_section.description {
             let _ = writeln!(docs, "{description}");
