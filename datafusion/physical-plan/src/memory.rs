@@ -34,10 +34,10 @@ use datafusion_common::{internal_err, project_schema, Result};
 use datafusion_execution::memory_pool::MemoryReservation;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{EquivalenceProperties, LexOrdering};
-
 use datafusion_physical_expr::equivalence::ProjectionMapping;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::utils::collect_columns;
+
 use futures::Stream;
 
 /// Execution plan for reading in-memory batches of data
