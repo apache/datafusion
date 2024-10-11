@@ -235,7 +235,7 @@ impl TableProvider for MemTable {
         if !sort_order.is_empty() {
             let df_schema = DFSchema::try_from(self.schema.as_ref().clone())?;
 
-            let mut file_sort_order = sort_order
+            let file_sort_order = sort_order
                 .iter()
                 .map(|sort_exprs| {
                     create_physical_sort_exprs(
@@ -245,31 +245,6 @@ impl TableProvider for MemTable {
                     )
                 })
                 .collect::<Result<Vec<_>>>()?;
-
-            // If there is a projection on the source, we also need to project orderings
-            if let Some(projection) = projection {
-                let base_eqp = EquivalenceProperties::new_with_orderings(
-                    self.schema(),
-                    &file_sort_order,
-                );
-                let proj_exprs = projection
-                    .iter()
-                    .map(|idx| {
-                        let name = self.schema.field(*idx).name();
-                        (
-                            Arc::new(Column::new(name, *idx)) as Arc<dyn PhysicalExpr>,
-                            name.to_string(),
-                        )
-                    })
-                    .collect::<Vec<_>>();
-                let projection_mapping =
-                    ProjectionMapping::try_new(&proj_exprs, &self.schema)?;
-                file_sort_order = base_eqp
-                    .project(&projection_mapping, exec.schema())
-                    .oeq_class
-                    .orderings;
-            }
-
             exec = exec.try_with_sort_information(file_sort_order)?;
         }
 
