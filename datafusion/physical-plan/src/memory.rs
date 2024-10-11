@@ -35,6 +35,7 @@ use datafusion_execution::memory_pool::MemoryReservation;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{EquivalenceProperties, LexOrdering};
 
+use datafusion_physical_expr::utils::collect_columns;
 use futures::Stream;
 
 /// Execution plan for reading in-memory batches of data
@@ -207,6 +208,19 @@ impl MemoryExec {
     /// [`EquivalenceProperties`], we can keep track of these equivalences
     /// and treat `a ASC` and `b DESC` as the same ordering requirement.
     pub fn with_sort_information(mut self, sort_information: Vec<LexOrdering>) -> Self {
+        debug_assert!({
+            let fields = self.schema.fields();
+            sort_information
+                .iter()
+                .flatten()
+                .flat_map(|expr| collect_columns(&expr.expr))
+                .all(|col| {
+                    fields
+                        .get(col.index())
+                        .map(|field| field.name() == col.name())
+                        .unwrap_or(false)
+                })
+        });
         self.sort_information = sort_information;
 
         // We need to update equivalence properties when updating sort information.

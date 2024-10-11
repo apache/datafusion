@@ -48,6 +48,7 @@ use datafusion_physical_expr::EquivalenceProperties;
 use datafusion_physical_plan::metrics::MetricsSet;
 
 use async_trait::async_trait;
+use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use futures::StreamExt;
 use log::debug;
 use parking_lot::Mutex;
@@ -245,8 +246,9 @@ impl TableProvider for MemTable {
                 })
                 .collect::<Result<Vec<_>>>()?;
 
+            // If there is a projection on the source, we also need to project orderings
             if let Some(projection) = projection {
-                let mut base_eqp = EquivalenceProperties::new_with_orderings(
+                let base_eqp = EquivalenceProperties::new_with_orderings(
                     self.schema(),
                     &file_sort_order,
                 );
@@ -254,8 +256,13 @@ impl TableProvider for MemTable {
                     .iter()
                     .map(|idx| self.schema.field(*idx).name())
                     .enumerate()
-                    .map(|(idx, name)| (Arc::new(Column::new(name, idx))))
-                    .collect();
+                    .map(|(idx, name)| {
+                        (
+                            Arc::new(Column::new(name, idx)) as Arc<dyn PhysicalExpr>,
+                            name.to_string(),
+                        )
+                    })
+                    .collect::<Vec<_>>();
                 let projection_mapping =
                     ProjectionMapping::try_new(&proj_exprs, &self.schema)?;
                 file_sort_order = base_eqp
