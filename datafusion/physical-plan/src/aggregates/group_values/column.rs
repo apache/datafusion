@@ -16,7 +16,8 @@
 // under the License.
 
 use crate::aggregates::group_values::group_column::{
-    ByteGroupValueBuilder, GroupColumn, PrimitiveGroupValueBuilder,
+    ByteGroupValueBuilder, ByteViewGroupValueBuilder, BytesOutputType, GroupColumn,
+    PrimitiveGroupValueBuilder,
 };
 use crate::aggregates::group_values::GroupValues;
 use ahash::RandomState;
@@ -26,13 +27,13 @@ use arrow::datatypes::{
     Int8Type, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
 };
 use arrow::record_batch::RecordBatch;
+use arrow_array::types::{BinaryViewType, StringViewType};
 use arrow_array::{Array, ArrayRef};
 use arrow_schema::{DataType, Schema, SchemaRef};
 use datafusion_common::hash_utils::create_hashes;
 use datafusion_common::{not_impl_err, DataFusionError, Result};
 use datafusion_execution::memory_pool::proxy::{RawTableAllocExt, VecAllocExt};
 use datafusion_expr::EmitTo;
-use datafusion_physical_expr::binary_map::OutputType;
 
 use hashbrown::raw::RawTable;
 
@@ -169,19 +170,29 @@ impl GroupValues for GroupValuesColumn {
                     &DataType::Date32 => instantiate_primitive!(v, nullable, Date32Type),
                     &DataType::Date64 => instantiate_primitive!(v, nullable, Date64Type),
                     &DataType::Utf8 => {
-                        let b = ByteGroupValueBuilder::<i32>::new(OutputType::Utf8);
+                        let b = ByteGroupValueBuilder::<i32>::new(BytesOutputType::Utf8);
                         v.push(Box::new(b) as _)
                     }
                     &DataType::LargeUtf8 => {
-                        let b = ByteGroupValueBuilder::<i64>::new(OutputType::Utf8);
+                        let b = ByteGroupValueBuilder::<i64>::new(BytesOutputType::Utf8);
                         v.push(Box::new(b) as _)
                     }
                     &DataType::Binary => {
-                        let b = ByteGroupValueBuilder::<i32>::new(OutputType::Binary);
+                        let b =
+                            ByteGroupValueBuilder::<i32>::new(BytesOutputType::Binary);
                         v.push(Box::new(b) as _)
                     }
                     &DataType::LargeBinary => {
-                        let b = ByteGroupValueBuilder::<i64>::new(OutputType::Binary);
+                        let b =
+                            ByteGroupValueBuilder::<i64>::new(BytesOutputType::Binary);
+                        v.push(Box::new(b) as _)
+                    }
+                    &DataType::Utf8View => {
+                        let b = ByteViewGroupValueBuilder::<StringViewType>::new();
+                        v.push(Box::new(b) as _)
+                    }
+                    &DataType::BinaryView => {
+                        let b = ByteViewGroupValueBuilder::<BinaryViewType>::new();
                         v.push(Box::new(b) as _)
                     }
                     dt => {

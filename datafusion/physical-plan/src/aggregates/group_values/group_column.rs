@@ -22,9 +22,6 @@ use arrow::array::GenericBinaryArray;
 use arrow::array::GenericStringArray;
 use arrow::array::OffsetSizeTrait;
 use arrow::array::PrimitiveArray;
-use arrow::array::PrimitiveBuilder;
-use arrow::array::StringBuilder;
-use arrow::array::StringViewBuilder;
 use arrow::array::{Array, ArrayRef, ArrowPrimitiveType, AsArray};
 use arrow::buffer::OffsetBuffer;
 use arrow::buffer::ScalarBuffer;
@@ -32,15 +29,14 @@ use arrow::datatypes::ByteArrayType;
 use arrow::datatypes::ByteViewType;
 use arrow::datatypes::DataType;
 use arrow::datatypes::GenericBinaryType;
-use arrow_array::BinaryViewArray;
 use arrow_array::GenericByteViewArray;
-use arrow_array::StringViewArray;
 use arrow_buffer::Buffer;
 use datafusion_common::utils::proxy::VecAllocExt;
+use std::marker::PhantomData;
 
 use crate::aggregates::group_values::null_builder::MaybeNullBufferBuilder;
 use arrow_array::types::GenericStringType;
-use datafusion_physical_expr_common::binary_map::{OutputType, INITIAL_BUFFER_CAPACITY};
+use datafusion_physical_expr_common::binary_map::INITIAL_BUFFER_CAPACITY;
 use std::mem;
 use std::sync::Arc;
 use std::vec;
@@ -69,6 +65,13 @@ pub trait GroupColumn: Send + Sync {
     /// Builds a new array from the first `n` stored rows, shifting the
     /// remaining rows to the start of the builder
     fn take_n(&mut self, n: usize) -> ArrayRef;
+}
+
+/// Should the builder output binary or UTF8?
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub(crate) enum BytesOutputType {
+    Binary,
+    Utf8,
 }
 
 /// An implementation of [`GroupColumn`] for primitive values
@@ -178,7 +181,7 @@ pub struct ByteGroupValueBuilder<O>
 where
     O: OffsetSizeTrait,
 {
-    output_type: OutputType,
+    bytes_output_type: BytesOutputType,
     buffer: BufferBuilder<u8>,
     /// Offsets into `buffer` for each distinct value. These offsets as used
     /// directly to create the final `GenericBinaryArray`. The `i`th string is
@@ -193,9 +196,9 @@ impl<O> ByteGroupValueBuilder<O>
 where
     O: OffsetSizeTrait,
 {
-    pub fn new(output_type: OutputType) -> Self {
+    pub fn new(bytes_output_type: BytesOutputType) -> Self {
         Self {
-            output_type,
+            bytes_output_type,
             buffer: BufferBuilder::new(INITIAL_BUFFER_CAPACITY),
             offsets: vec![O::default()],
             nulls: MaybeNullBufferBuilder::new(),
@@ -249,43 +252,41 @@ where
 {
     fn equal_to(&self, lhs_row: usize, column: &ArrayRef, rhs_row: usize) -> bool {
         // Sanity array type
-        match self.output_type {
-            OutputType::Binary => {
+        match self.bytes_output_type {
+            BytesOutputType::Binary => {
                 debug_assert!(matches!(
                     column.data_type(),
                     DataType::Binary | DataType::LargeBinary
                 ));
                 self.equal_to_inner::<GenericBinaryType<O>>(lhs_row, column, rhs_row)
             }
-            OutputType::Utf8 => {
+            BytesOutputType::Utf8 => {
                 debug_assert!(matches!(
                     column.data_type(),
                     DataType::Utf8 | DataType::LargeUtf8
                 ));
                 self.equal_to_inner::<GenericStringType<O>>(lhs_row, column, rhs_row)
             }
-            _ => unreachable!("View types should use `ArrowBytesViewMap`"),
         }
     }
 
     fn append_val(&mut self, column: &ArrayRef, row: usize) {
         // Sanity array type
-        match self.output_type {
-            OutputType::Binary => {
+        match self.bytes_output_type {
+            BytesOutputType::Binary => {
                 debug_assert!(matches!(
                     column.data_type(),
                     DataType::Binary | DataType::LargeBinary
                 ));
                 self.append_val_inner::<GenericBinaryType<O>>(column, row)
             }
-            OutputType::Utf8 => {
+            BytesOutputType::Utf8 => {
                 debug_assert!(matches!(
                     column.data_type(),
                     DataType::Utf8 | DataType::LargeUtf8
                 ));
                 self.append_val_inner::<GenericStringType<O>>(column, row)
             }
-            _ => unreachable!("View types should use `ArrowBytesViewMap`"),
         };
     }
 
@@ -301,7 +302,7 @@ where
 
     fn build(self: Box<Self>) -> ArrayRef {
         let Self {
-            output_type,
+            bytes_output_type: output_type,
             mut buffer,
             offsets,
             nulls,
@@ -314,13 +315,13 @@ where
         let offsets = unsafe { OffsetBuffer::new_unchecked(ScalarBuffer::from(offsets)) };
         let values = buffer.finish();
         match output_type {
-            OutputType::Binary => {
+            BytesOutputType::Binary => {
                 // SAFETY: the offsets were constructed correctly
                 Arc::new(unsafe {
                     GenericBinaryArray::new_unchecked(offsets, values, null_buffer)
                 })
             }
-            OutputType::Utf8 => {
+            BytesOutputType::Utf8 => {
                 // SAFETY:
                 // 1. the offsets were constructed safely
                 //
@@ -331,7 +332,6 @@ where
                     GenericStringArray::new_unchecked(offsets, values, null_buffer)
                 })
             }
-            _ => unreachable!("View types should use `ArrowBytesViewMap`"),
         }
     }
 
@@ -364,14 +364,14 @@ where
         let values = self.buffer.finish();
         self.buffer = remaining_buffer;
 
-        match self.output_type {
-            OutputType::Binary => {
+        match self.bytes_output_type {
+            BytesOutputType::Binary => {
                 // SAFETY: the offsets were constructed correctly
                 Arc::new(unsafe {
                     GenericBinaryArray::new_unchecked(offsets, values, null_buffer)
                 })
             }
-            OutputType::Utf8 => {
+            BytesOutputType::Utf8 => {
                 // SAFETY:
                 // 1. the offsets were constructed safely
                 //
@@ -382,7 +382,6 @@ where
                     GenericStringArray::new_unchecked(offsets, values, null_buffer)
                 })
             }
-            _ => unreachable!("View types should use `ArrowBytesViewMap`"),
         }
     }
 }
@@ -395,9 +394,7 @@ where
 /// 1. Efficient comparison of incoming rows to existing rows
 /// 2. Efficient construction of the final output array
 /// 3. Efficient to perform `take_n` comparing to use `GenericByteViewBuilder`
-pub struct ByteGroupValueViewBuilder {
-    output_type: OutputType,
-
+pub struct ByteViewGroupValueBuilder<B: ByteViewType> {
     /// The views of string values
     ///
     /// If string len <= 12, the view's format will be:
@@ -425,13 +422,24 @@ pub struct ByteGroupValueViewBuilder {
 
     /// Nulls
     nulls: MaybeNullBufferBuilder,
+
+    /// phantom data so the type requires <B>
+    _phantom: PhantomData<B>,
 }
 
-impl ByteGroupValueViewBuilder {
-    fn append_val_inner<B>(&mut self, array: &ArrayRef, row: usize)
-    where
-        B: ByteViewType,
-    {
+impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
+    pub fn new() -> Self {
+        Self {
+            views: vec![],
+            in_progress: Vec::with_capacity(INITIAL_BUFFER_CAPACITY),
+            completed: vec![],
+            max_block_size: INITIAL_BUFFER_CAPACITY,
+            nulls: MaybeNullBufferBuilder::new(),
+            _phantom: PhantomData {},
+        }
+    }
+
+    fn append_val_inner(&mut self, array: &ArrayRef, row: usize) {
         let arr = array.as_byte_view::<B>();
 
         // If a null row, set and return
@@ -479,10 +487,7 @@ impl ByteGroupValueViewBuilder {
         }
     }
 
-    fn equal_to_inner<B>(&self, lhs_row: usize, array: &ArrayRef, rhs_row: usize) -> bool
-    where
-        B: ByteViewType,
-    {
+    fn equal_to_inner(&self, lhs_row: usize, array: &ArrayRef, rhs_row: usize) -> bool {
         let array = array.as_byte_view::<B>();
 
         // Check if nulls equal firstly
@@ -557,6 +562,32 @@ impl ByteGroupValueViewBuilder {
     }
 }
 
+impl<B: ByteViewType> GroupColumn for ByteViewGroupValueBuilder<B> {
+    fn equal_to(&self, lhs_row: usize, array: &ArrayRef, rhs_row: usize) -> bool {
+        todo!()
+    }
+
+    fn append_val(&mut self, array: &ArrayRef, row: usize) {
+        todo!()
+    }
+
+    fn len(&self) -> usize {
+        todo!()
+    }
+
+    fn size(&self) -> usize {
+        todo!()
+    }
+
+    fn build(self: Box<Self>) -> ArrayRef {
+        todo!()
+    }
+
+    fn take_n(&mut self, n: usize) -> ArrayRef {
+        todo!()
+    }
+}
+
 /// Determines if the nullability of the existing and new input array can be used
 /// to short-circuit the comparison of the two values.
 ///
@@ -573,20 +604,16 @@ fn nulls_equal_to(lhs_null: bool, rhs_null: bool) -> Option<bool> {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use std::sync::Arc;
 
     use arrow::datatypes::Int64Type;
     use arrow_array::{ArrayRef, Int64Array, StringArray};
     use arrow_buffer::{BooleanBufferBuilder, NullBuffer};
-    use datafusion_physical_expr::binary_map::OutputType;
-
-    use crate::aggregates::group_values::group_column::PrimitiveGroupValueBuilder;
-
-    use super::{ByteGroupValueBuilder, GroupColumn};
 
     #[test]
     fn test_take_n() {
-        let mut builder = ByteGroupValueBuilder::<i32>::new(OutputType::Utf8);
+        let mut builder = ByteGroupValueBuilder::<i32>::new(BytesOutputType::Utf8);
         let array = Arc::new(StringArray::from(vec![Some("a"), None])) as ArrayRef;
         // a, null, null
         builder.append_val(&array, 0);
@@ -713,7 +740,7 @@ mod tests {
         //   - exist not null, input not null; values equal
 
         // Define PrimitiveGroupValueBuilder
-        let mut builder = ByteGroupValueBuilder::<i32>::new(OutputType::Utf8);
+        let mut builder = ByteGroupValueBuilder::<i32>::new(BytesOutputType::Utf8);
         let builder_array = Arc::new(StringArray::from(vec![
             None,
             None,
