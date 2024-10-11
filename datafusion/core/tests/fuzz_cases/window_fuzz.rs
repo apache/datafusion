@@ -46,6 +46,8 @@ use test_utils::add_empty_batches;
 
 use datafusion::functions_window::row_number::row_number_udwf;
 use datafusion_functions_window::lead_lag::{lag_udwf, lead_udwf};
+use datafusion_functions_window::dense_rank::dense_rank_udwf;
+use datafusion_functions_window::rank::rank_udwf;
 use hashbrown::HashMap;
 use rand::distributions::Alphanumeric;
 use rand::rngs::StdRng;
@@ -225,9 +227,9 @@ async fn bounded_window_causal_non_causal() -> Result<()> {
         // )
         (
             // Window function
-            WindowFunctionDefinition::BuiltInWindowFunction(BuiltInWindowFunction::Rank),
+            WindowFunctionDefinition::WindowUDF(rank_udwf()),
             // its name
-            "RANK",
+            "rank",
             // no argument
             vec![],
             // Expected causality, for None cases causality will be determined from window frame boundaries
@@ -239,11 +241,9 @@ async fn bounded_window_causal_non_causal() -> Result<()> {
         // )
         (
             // Window function
-            WindowFunctionDefinition::BuiltInWindowFunction(
-                BuiltInWindowFunction::DenseRank,
-            ),
+            WindowFunctionDefinition::WindowUDF(dense_rank_udwf()),
             // its name
-            "DENSE_RANK",
+            "dense_rank",
             // no argument
             vec![],
             // Expected causality, for None cases causality will be determined from window frame boundaries
@@ -383,19 +383,12 @@ fn get_random_function(
         );
         window_fn_map.insert(
             "rank",
-            (
-                WindowFunctionDefinition::BuiltInWindowFunction(
-                    BuiltInWindowFunction::Rank,
-                ),
-                vec![],
-            ),
+            (WindowFunctionDefinition::WindowUDF(rank_udwf()), vec![]),
         );
         window_fn_map.insert(
             "dense_rank",
             (
-                WindowFunctionDefinition::BuiltInWindowFunction(
-                    BuiltInWindowFunction::DenseRank,
-                ),
+                WindowFunctionDefinition::WindowUDF(dense_rank_udwf()),
                 vec![],
             ),
         );

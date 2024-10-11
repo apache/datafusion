@@ -21,7 +21,6 @@ mod built_in_window_function_expr;
 pub(crate) mod cume_dist;
 pub(crate) mod nth_value;
 pub(crate) mod ntile;
-pub(crate) mod rank;
 mod sliding_aggregate;
 mod window_expr;
 

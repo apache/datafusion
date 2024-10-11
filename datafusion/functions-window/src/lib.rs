@@ -32,6 +32,9 @@ use datafusion_expr::WindowUDF;
 #[macro_use]
 pub mod macros;
 pub mod lead_lag;
+pub mod dense_rank;
+pub mod percent_rank;
+pub mod rank;
 pub mod row_number;
 mod utils;
 
@@ -39,6 +42,9 @@ mod utils;
 pub mod expr_fn {
     pub use super::lead_lag::lag;
     pub use super::lead_lag::lead;
+    pub use super::dense_rank::dense_rank;
+    pub use super::percent_rank::percent_rank;
+    pub use super::rank::rank;
     pub use super::row_number::row_number;
 }
 
@@ -48,6 +54,9 @@ pub fn all_default_window_functions() -> Vec<Arc<WindowUDF>> {
         row_number::row_number_udwf(),
         lead_lag::lead_udwf(),
         lead_lag::lag_udwf(),
+        rank::rank_udwf(),
+        dense_rank::dense_rank_udwf(),
+        percent_rank::percent_rank_udwf(),
     ]
 }
 /// Registers all enabled packages with a [`FunctionRegistry`]

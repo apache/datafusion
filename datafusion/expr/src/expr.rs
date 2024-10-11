@@ -2575,15 +2575,6 @@ mod test {
     }
 
     #[test]
-    fn test_percent_rank_return_type() -> Result<()> {
-        let fun = find_df_window_func("percent_rank").unwrap();
-        let observed = fun.return_type(&[], &[], "")?;
-        assert_eq!(DataType::Float64, observed);
-
-        Ok(())
-    }
-
-    #[test]
     fn test_cume_dist_return_type() -> Result<()> {
         let fun = find_df_window_func("cume_dist").unwrap();
         let observed = fun.return_type(&[], &[], "")?;
@@ -2604,9 +2595,6 @@ mod test {
     #[test]
     fn test_window_function_case_insensitive() -> Result<()> {
         let names = vec![
-            "rank",
-            "dense_rank",
-            "percent_rank",
             "cume_dist",
             "ntile",
             "first_value",

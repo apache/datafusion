@@ -38,7 +38,6 @@ pub use crate::aggregate::stats::StatsType;
 pub use crate::window::cume_dist::{cume_dist, CumeDist};
 pub use crate::window::nth_value::NthValue;
 pub use crate::window::ntile::Ntile;
-pub use crate::window::rank::{dense_rank, percent_rank, rank, Rank, RankType};
 pub use crate::PhysicalSortExpr;
 
 pub use binary::{binary, similar_to, BinaryExpr};

@@ -1819,9 +1819,9 @@ pub enum BuiltInWindowFunction {
     /// <https://protobuf.dev/programming-guides/dos-donts/#unspecified-enum>
     Unspecified = 0,
     /// ROW_NUMBER = 0;
-    Rank = 1,
-    DenseRank = 2,
-    PercentRank = 3,
+    ///   RANK = 1;
+    ///   DENSE_RANK = 2;
+    ///   PERCENT_RANK = 3;
     CumeDist = 4,
     Ntile = 5,
     /// LAG = 6;
@@ -1838,9 +1838,6 @@ impl BuiltInWindowFunction {
     pub fn as_str_name(&self) -> &'static str {
         match self {
             Self::Unspecified => "UNSPECIFIED",
-            Self::Rank => "RANK",
-            Self::DenseRank => "DENSE_RANK",
-            Self::PercentRank => "PERCENT_RANK",
             Self::CumeDist => "CUME_DIST",
             Self::Ntile => "NTILE",
             Self::FirstValue => "FIRST_VALUE",
@@ -1852,9 +1849,6 @@ impl BuiltInWindowFunction {
     pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
         match value {
             "UNSPECIFIED" => Some(Self::Unspecified),
-            "RANK" => Some(Self::Rank),
-            "DENSE_RANK" => Some(Self::DenseRank),
-            "PERCENT_RANK" => Some(Self::PercentRank),
             "CUME_DIST" => Some(Self::CumeDist),
             "NTILE" => Some(Self::Ntile),
             "FIRST_VALUE" => Some(Self::FirstValue),

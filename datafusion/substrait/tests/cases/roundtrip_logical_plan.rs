@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::utils::test::read_json;
 use datafusion::arrow::array::ArrayRef;
 use datafusion::physical_plan::Accumulator;
 use datafusion::scalar::ScalarValue;
@@ -664,6 +665,17 @@ async fn simple_intersect() -> Result<()> {
 }
 
 #[tokio::test]
+async fn simple_intersect_consume() -> Result<()> {
+    let proto_plan = read_json("tests/testdata/test_plans/intersect.substrait.json");
+
+    assert_substrait_sql(
+        proto_plan,
+        "SELECT a FROM data INTERSECT SELECT a FROM data2",
+    )
+    .await
+}
+
+#[tokio::test]
 async fn simple_intersect_table_reuse() -> Result<()> {
     // Substrait does currently NOT maintain the alias of the tables.
     // Instead, when we consume Substrait, we add aliases before a join that'd otherwise collide.
@@ -1107,6 +1119,21 @@ async fn assert_expected_plan(
 
     let plan2str = format!("{plan2}");
     assert_eq!(expected_plan_str, &plan2str);
+
+    Ok(())
+}
+
+async fn assert_substrait_sql(substrait_plan: Plan, sql: &str) -> Result<()> {
+    let ctx = create_context().await?;
+
+    let expected = ctx.sql(sql).await?.into_optimized_plan()?;
+
+    let plan = from_substrait_plan(&ctx, &substrait_plan).await?;
+    let plan = ctx.state().optimize(&plan)?;
+
+    let planstr = format!("{plan}");
+    let expectedstr = format!("{expected}");
+    assert_eq!(planstr, expectedstr);
 
     Ok(())
 }
