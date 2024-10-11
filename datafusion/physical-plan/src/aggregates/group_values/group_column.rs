@@ -926,8 +926,10 @@ mod tests {
             Some("foo"),
             Some("bar"),
             Some("this string is also quite long"), // buffer 0
+            None,
             Some("this string is quite long"),      // buffer 1
-            Some("another string that is is quite long"),      // buffer 2
+            None,
+            Some("another string that is is quite long"),   // buffer 1
             Some("bar"),
         ]);
         let input_array: ArrayRef = Arc::new(input_array);
@@ -945,6 +947,7 @@ mod tests {
         // Add some new data after the first n
         let input_array = StringViewArray::from(vec![
             Some("short"),
+            None,
             Some("Some new data to add that is long"), // in buffer 0
             Some("short again"),
         ]);
@@ -955,16 +958,19 @@ mod tests {
 
         let result = Box::new(builder).build();
         let expected: ArrayRef = Arc::new(StringViewArray::from(vec![
-            // last three rows of the original input
+            // last rows of the original input
+            None,
             Some("this string is quite long"),
+            None,
             Some("another string that is is quite long"),
             Some("bar"),
-            // last three rows of the subsequent input
+            // the subsequent input
             Some("short"),
+            None,
             Some("Some new data to add that is long"), // in buffer 0
             Some("short again"),
         ]));
-        assert_eq!(result, expected);
+        assert_eq!(&result, &expected);
     }
 
 }
