@@ -190,6 +190,7 @@ impl WindowUDFImpl for WindowShift {
         }
     }
 }
+
 fn get_scalar_value_from_args(
     args: &[Arc<dyn PhysicalExpr>],
     index: usize,
@@ -208,6 +209,7 @@ fn get_scalar_value_from_args(
         None
     })
 }
+
 #[derive(Debug)]
 struct WindowShiftEvaluator {
     shift_offset: i64,
