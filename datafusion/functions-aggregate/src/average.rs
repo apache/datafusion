@@ -28,12 +28,13 @@ use arrow::datatypes::{
     Float64Type, UInt64Type,
 };
 use datafusion_common::{exec_err, not_impl_err, Result, ScalarValue};
+use datafusion_expr::aggregate_doc_sections::DOC_SECTION_GENERAL;
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::type_coercion::aggregates::{avg_return_type, coerce_avg_type};
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::Volatility::Immutable;
 use datafusion_expr::{
-    Accumulator, AggregateUDFImpl, EmitTo, GroupsAccumulator, ReversedUDAF, Signature,
+    Accumulator, AggregateUDFImpl, Documentation, EmitTo, GroupsAccumulator, ReversedUDAF, Signature,
 };
 
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::accumulate::NullState;
@@ -45,7 +46,7 @@ use datafusion_functions_aggregate_common::utils::DecimalAverager;
 use log::debug;
 use std::any::Any;
 use std::fmt::Debug;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 make_udaf_expr_and_func!(
     Avg,
@@ -235,7 +236,38 @@ impl AggregateUDFImpl for Avg {
         }
         coerce_avg_type(self.name(), arg_types)
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_avg_doc())
+    }
 }
+
+static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+
+fn get_avg_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_GENERAL)
+            .with_description(
+                "Returns the average of numeric values in the specified column.",
+            )
+            .with_syntax_example("avg(expression)")
+            .with_sql_example(r#"```sql
+> SELECT avg(column_name) FROM table_name;
++---------------------------+
+| avg(column_name)           |
++---------------------------+
+| 42.75                      |
++---------------------------+
+```"#, 
+            )
+            .with_argument("expression", "Expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators.")
+            .with_argument("Aliases: ", "`mean`")
+            .build()
+            .unwrap()
+    })
+}
+
 
 /// An accumulator to compute the average
 #[derive(Debug, Default)]

@@ -16,8 +16,8 @@
 // under the License.
 
 use std::collections::HashSet;
-use std::fmt::Formatter;
-use std::{fmt::Debug, sync::Arc};
+use std::fmt::{Formatter, Debug};
+use std::sync::{Arc, OnceLock};
 
 use arrow::array::{downcast_integer, ArrowNumericType};
 use arrow::{
@@ -33,10 +33,11 @@ use arrow::array::ArrowNativeTypeOp;
 use arrow::datatypes::ArrowNativeType;
 
 use datafusion_common::{DataFusionError, Result, ScalarValue};
+use datafusion_expr::aggregate_doc_sections::DOC_SECTION_GENERAL;
 use datafusion_expr::function::StateFieldsArgs;
 use datafusion_expr::{
     function::AccumulatorArgs, utils::format_state_name, Accumulator, AggregateUDFImpl,
-    Signature, Volatility,
+    Documentation, Signature, Volatility,
 };
 use datafusion_functions_aggregate_common::utils::Hashable;
 
@@ -152,7 +153,37 @@ impl AggregateUDFImpl for Median {
     fn aliases(&self) -> &[String] {
         &[]
     }
+    
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_median_doc())
+    }
 }
+
+static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+
+fn get_median_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_GENERAL)
+            .with_description(
+                "Returns the median value in the specified column.",
+            )
+            .with_syntax_example("median(expression)")
+            .with_sql_example(r#"```sql
+> SELECT median(column_name) FROM table_name;
++----------------------+
+| median(column_name)   |
++----------------------+
+| 45.5                 |
++----------------------+
+```"#,
+            )
+            .with_argument("expression", "Expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators.")
+            .build()
+            .unwrap()
+    })
+}
+
 
 /// The median accumulator accumulates the raw input values
 /// as `ScalarValue`s

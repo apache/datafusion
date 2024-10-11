@@ -21,7 +21,8 @@ use datafusion_functions_aggregate_common::aggregate::count_distinct::BytesViewD
 use datafusion_physical_expr::expressions;
 use std::collections::HashSet;
 use std::ops::BitAnd;
-use std::{fmt::Debug, sync::Arc};
+use std::fmt::Debug;
+use std::sync::{Arc, OnceLock};
 
 use arrow::{
     array::{ArrayRef, AsArray},
@@ -43,10 +44,11 @@ use arrow::{
 use datafusion_common::{
     downcast_value, internal_err, not_impl_err, DataFusionError, Result, ScalarValue,
 };
+use datafusion_expr::aggregate_doc_sections::DOC_SECTION_GENERAL;
 use datafusion_expr::function::StateFieldsArgs;
 use datafusion_expr::{
     function::AccumulatorArgs, utils::format_state_name, Accumulator, AggregateUDFImpl,
-    EmitTo, GroupsAccumulator, Signature, Volatility,
+    Documentation, EmitTo, GroupsAccumulator, Signature, Volatility,
 };
 use datafusion_expr::{Expr, ReversedUDAF, StatisticsArgs, TypeSignature};
 use datafusion_functions_aggregate_common::aggregate::count_distinct::{
@@ -324,7 +326,43 @@ impl AggregateUDFImpl for Count {
         }
         None
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_count_doc())
+    }
 }
+
+static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+
+fn get_count_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_GENERAL)
+            .with_description(
+                "Returns the number of non-null values in the specified column. To include null values in the total count, use `count(*)`.",
+            )
+            .with_syntax_example("count(expression)")
+            .with_sql_example(r#"```sql
+> SELECT count(column_name) FROM table_name;
++-----------------------+
+| count(column_name)     |
++-----------------------+
+| 100                   |
++-----------------------+
+
+> SELECT count(*) FROM table_name;
++------------------+
+| count(*)         |
++------------------+
+| 120              |
++------------------+
+```"#)
+            .with_argument("expression", "Expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators.")
+            .build()
+            .unwrap()
+    })
+}
+
 
 #[derive(Debug)]
 struct CountAccumulator {
