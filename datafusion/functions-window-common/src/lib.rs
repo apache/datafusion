@@ -20,4 +20,3 @@
 //! [DataFusion]: <https://crates.io/crates/datafusion>
 pub mod field;
 pub mod partition;
-pub mod utils;
