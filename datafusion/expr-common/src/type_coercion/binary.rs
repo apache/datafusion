@@ -28,9 +28,7 @@ use arrow::datatypes::{
     DataType, Field, FieldRef, Fields, TimeUnit, DECIMAL128_MAX_PRECISION,
     DECIMAL128_MAX_SCALE, DECIMAL256_MAX_PRECISION, DECIMAL256_MAX_SCALE,
 };
-use datafusion_common::{
-    exec_datafusion_err, plan_datafusion_err, plan_err, Result,
-};
+use datafusion_common::{exec_datafusion_err, plan_datafusion_err, plan_err, Result};
 
 /// The type signature of an instantiation of binary operator expression such as
 /// `lhs + rhs`
