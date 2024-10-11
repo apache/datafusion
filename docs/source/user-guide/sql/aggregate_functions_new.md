@@ -469,6 +469,15 @@ _Alias of [var](#var)._
 - [covar_pop](#covar_pop)
 - [covar_samp](#covar_samp)
 - [nth_value](#nth_value)
+- [regr_avgx](#regr_avgx)
+- [regr_avgy](#regr_avgy)
+- [regr_count](#regr_count)
+- [regr_intercept](#regr_intercept)
+- [regr_r2](#regr_r2)
+- [regr_slope](#regr_slope)
+- [regr_sxx](#regr_sxx)
+- [regr_sxy](#regr_sxy)
+- [regr_syy](#regr_syy)
 - [stddev](#stddev)
 - [stddev_pop](#stddev_pop)
 - [stddev_samp](#stddev_samp)
@@ -581,6 +590,123 @@ nth_value(expression, n ORDER BY expression)
 | 2       | 45000  | 45000                   |
 +---------+--------+-------------------------+
 ```
+
+### `regr_avgx`
+
+Computes the average of the independent variable (input) expression_x for the non-null paired data points.
+
+```
+regr_avgx(expression_y, expression_x)
+```
+
+#### Arguments
+
+- **expression_y**: Dependent variable expression to operate on. Can be a constant, column, or function, and any combination of operators.
+- **expression_x**: Independent variable expression to operate on. Can be a constant, column, or function, and any combination of operators.
+
+### `regr_avgy`
+
+Computes the average of the dependent variable (output) expression_y for the non-null paired data points.
+
+```
+regr_avgy(expression_y, expression_x)
+```
+
+#### Arguments
+
+- **expression_y**: Dependent variable expression to operate on. Can be a constant, column, or function, and any combination of operators.
+- **expression_x**: Independent variable expression to operate on. Can be a constant, column, or function, and any combination of operators.
+
+### `regr_count`
+
+Counts the number of non-null paired data points.
+
+```
+regr_count(expression_y, expression_x)
+```
+
+#### Arguments
+
+- **expression_y**: Dependent variable expression to operate on. Can be a constant, column, or function, and any combination of operators.
+- **expression_x**: Independent variable expression to operate on. Can be a constant, column, or function, and any combination of operators.
+
+### `regr_intercept`
+
+Computes the y-intercept of the linear regression line. For the equation (y = kx + b), this function returns b.
+
+```
+regr_intercept(expression_y, expression_x)
+```
+
+#### Arguments
+
+- **expression_y**: Dependent variable expression to operate on. Can be a constant, column, or function, and any combination of operators.
+- **expression_x**: Independent variable expression to operate on. Can be a constant, column, or function, and any combination of operators.
+
+### `regr_r2`
+
+Computes the square of the correlation coefficient between the independent and dependent variables.
+
+```
+regr_r2(expression_y, expression_x)
+```
+
+#### Arguments
+
+- **expression_y**: Dependent variable expression to operate on. Can be a constant, column, or function, and any combination of operators.
+- **expression_x**: Independent variable expression to operate on. Can be a constant, column, or function, and any combination of operators.
+
+### `regr_slope`
+
+Returns the slope of the linear regression line for non-null pairs in aggregate columns. Given input column Y and X: regr_slope(Y, X) returns the slope (k in Y = k\*X + b) using minimal RSS fitting.
+
+```
+regr_slope(expression_y, expression_x)
+```
+
+#### Arguments
+
+- **expression_y**: Expression expression to operate on. Can be a constant, column, or function, and any combination of operators.
+- **expression_x**: Expression expression to operate on. Can be a constant, column, or function, and any combination of operators.
+
+### `regr_sxx`
+
+Computes the sum of squares of the independent variable.
+
+```
+regr_sxx(expression_y, expression_x)
+```
+
+#### Arguments
+
+- **expression_y**: Dependent variable expression to operate on. Can be a constant, column, or function, and any combination of operators.
+- **expression_x**: Independent variable expression to operate on. Can be a constant, column, or function, and any combination of operators.
+
+### `regr_sxy`
+
+Computes the sum of products of paired data points.
+
+```
+regr_sxy(expression_y, expression_x)
+```
+
+#### Arguments
+
+- **expression_y**: Dependent variable expression to operate on. Can be a constant, column, or function, and any combination of operators.
+- **expression_x**: Independent variable expression to operate on. Can be a constant, column, or function, and any combination of operators.
+
+### `regr_syy`
+
+Computes the sum of squares of the dependent variable.
+
+```
+regr_syy(expression_y, expression_x)
+```
+
+#### Arguments
+
+- **expression_y**: Dependent variable expression to operate on. Can be a constant, column, or function, and any combination of operators.
+- **expression_x**: Independent variable expression to operate on. Can be a constant, column, or function, and any combination of operators.
 
 ### `stddev`
 
