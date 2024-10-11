@@ -44,7 +44,7 @@ encoding_expressions = ["base64", "hex"]
 regex_expressions = ["regex"]
 
 [dependencies]
-ahash = { workspace = true }
+foldhash = { workspace = true }
 arrow = { workspace = true }
 arrow-array = { workspace = true }
 arrow-buffer = { workspace = true }

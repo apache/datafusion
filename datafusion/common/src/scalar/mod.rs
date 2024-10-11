@@ -58,6 +58,7 @@ use arrow::{
 use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano, ScalarBuffer};
 use arrow_schema::{UnionFields, UnionMode};
 
+use foldhash::fast::FixedState;
 use half::f16;
 pub use struct_builder::ScalarStructBuilder;
 
@@ -770,8 +771,7 @@ impl std::hash::Hash for ScalarValue {
 fn hash_nested_array<H: std::hash::Hasher>(arr: ArrayRef, state: &mut H) {
     let arrays = vec![arr.to_owned()];
     let hashes_buffer = &mut vec![0; arr.len()];
-    let random_state = ahash::RandomState::with_seeds(0, 0, 0, 0);
-    let hashes = create_hashes(&arrays, &random_state, hashes_buffer).unwrap();
+    let hashes = create_hashes(&arrays, &FixedState::with_seed(0), hashes_buffer).unwrap();
     // Hash back to std::hash::Hasher
     hashes.hash(state);
 }

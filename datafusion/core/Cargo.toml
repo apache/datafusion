@@ -79,7 +79,7 @@ unicode_expressions = [
 ]
 
 [dependencies]
-ahash = { workspace = true }
+foldhash = { workspace = true }
 apache-avro = { version = "0.16", optional = true }
 arrow = { workspace = true }
 arrow-array = { workspace = true }

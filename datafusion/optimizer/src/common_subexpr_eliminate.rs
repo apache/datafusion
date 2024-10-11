@@ -164,7 +164,7 @@ enum FoundCommonExprs {
 impl CommonSubexprEliminate {
     pub fn new() -> Self {
         Self {
-            random_state: RandomState::new(),
+            random_state: RandomState::default(),
         }
     }
 

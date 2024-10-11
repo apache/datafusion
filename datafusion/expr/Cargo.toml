@@ -38,7 +38,7 @@ path = "src/lib.rs"
 [features]
 
 [dependencies]
-ahash = { workspace = true }
+foldhash = { workspace = true }
 arrow = { workspace = true }
 arrow-array = { workspace = true }
 arrow-buffer = { workspace = true }

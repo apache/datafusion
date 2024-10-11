@@ -21,7 +21,7 @@ use std::any::Any;
 use std::collections::HashSet;
 use std::fmt::{Display, Formatter};
 
-use ahash::RandomState;
+use foldhash::fast::RandomState;
 use arrow::array::{downcast_integer, Array, ArrayRef, AsArray};
 use arrow::datatypes::{
     ArrowNativeType, ArrowNumericType, DataType, Int16Type, Int32Type, Int64Type,

@@ -18,7 +18,7 @@
 //! [`ArrowBytesMap`] and [`ArrowBytesSet`] for storing maps/sets of values from
 //! StringArray / LargeStringArray / BinaryArray / LargeBinaryArray.
 
-use ahash::RandomState;
+use foldhash::fast::RandomState;
 use arrow::array::cast::AsArray;
 use arrow::array::types::{ByteArrayType, GenericBinaryType, GenericStringType};
 use arrow::array::{
@@ -249,7 +249,7 @@ where
             map_size: 0,
             buffer: BufferBuilder::new(INITIAL_BUFFER_CAPACITY),
             offsets: vec![O::default()], // first offset is always 0
-            random_state: RandomState::new(),
+            random_state: RandomState::default(),
             hashes_buffer: vec![],
             null: None,
         }

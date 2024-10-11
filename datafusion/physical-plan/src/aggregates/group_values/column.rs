@@ -19,7 +19,7 @@ use crate::aggregates::group_values::group_column::{
     ByteGroupValueBuilder, GroupColumn, PrimitiveGroupValueBuilder,
 };
 use crate::aggregates::group_values::GroupValues;
-use ahash::RandomState;
+use foldhash::fast::RandomState;
 use arrow::compute::cast;
 use arrow::datatypes::{
     Date32Type, Date64Type, Float32Type, Float64Type, Int16Type, Int32Type, Int64Type,

@@ -70,7 +70,7 @@ use datafusion_physical_expr::equivalence::{
 };
 use datafusion_physical_expr::PhysicalExprRef;
 
-use ahash::RandomState;
+use foldhash::fast::RandomState;
 use datafusion_expr::Operator;
 use datafusion_physical_expr_common::datum::compare_op_for_nested;
 use futures::{ready, Stream, StreamExt, TryStreamExt};
@@ -355,7 +355,7 @@ impl HashJoinExec {
         let (join_schema, column_indices) =
             build_join_schema(&left_schema, &right_schema, join_type);
 
-        let random_state = RandomState::with_seeds(0, 0, 0, 0);
+        let random_state = RandomState::default();
 
         let join_schema = Arc::new(join_schema);
 
@@ -3093,7 +3093,7 @@ mod tests {
             ("y", &vec![200, 300]),
         );
 
-        let random_state = RandomState::with_seeds(0, 0, 0, 0);
+        let random_state = RandomState::default();
         let hashes_buff = &mut vec![0; left.num_rows()];
         let hashes = create_hashes(
             &[Arc::clone(&left.columns()[0])],

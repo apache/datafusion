@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use ahash::RandomState;
+use foldhash::fast::RandomState;
 use datafusion_common::stats::Precision;
 use datafusion_functions_aggregate_common::aggregate::count_distinct::BytesViewDistinctCountAccumulator;
 use datafusion_physical_expr::expressions;

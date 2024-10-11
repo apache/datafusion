@@ -71,7 +71,7 @@ use datafusion_physical_expr::equivalence::join_equivalence_properties;
 use datafusion_physical_expr::intervals::cp_solver::ExprIntervalGraph;
 use datafusion_physical_expr::{PhysicalExprRef, PhysicalSortRequirement};
 
-use ahash::RandomState;
+use foldhash::fast::RandomState;
 use datafusion_physical_expr_common::sort_expr::LexRequirement;
 use futures::{ready, Stream, StreamExt};
 use hashbrown::HashSet;
@@ -231,7 +231,7 @@ impl SymmetricHashJoinExec {
             build_join_schema(&left_schema, &right_schema, join_type);
 
         // Initialize the random state for the join operation:
-        let random_state = RandomState::with_seeds(0, 0, 0, 0);
+        let random_state = RandomState::default();
         let schema = Arc::new(schema);
         let cache =
             Self::compute_properties(&left, &right, Arc::clone(&schema), *join_type, &on);

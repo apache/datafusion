@@ -25,7 +25,7 @@ use std::fmt::Debug;
 use std::hash::Hash;
 use std::sync::Arc;
 
-use ahash::RandomState;
+use foldhash::fast::RandomState;
 use arrow::array::types::ArrowPrimitiveType;
 use arrow::array::ArrayRef;
 use arrow::array::PrimitiveArray;
