@@ -34,8 +34,22 @@ use std::collections::VecDeque;
 use std::ops::{Neg, Range};
 use std::sync::Arc;
 
-get_or_init_udwf!(Lag, lag, "lag udwf", WindowShift::lag);
-get_or_init_udwf!(Lead, lead, "lead udwf", WindowShift::lead);
+get_or_init_udwf!(
+    Lag,
+    lag,
+    "Returns the row value that precedes the current row by a specified \
+    offset within partition. If no such row exists, then returns the \
+    default value.",
+    WindowShift::lag
+);
+get_or_init_udwf!(
+    Lead,
+    lead,
+    "Returns the value from a row that follows the current row by a \
+    specified offset within the partition. If no such row exists, then \
+    returns the default value.",
+    WindowShift::lead
+);
 
 /// Create an expression to represent the `lag` window function
 ///
