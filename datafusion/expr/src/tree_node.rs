@@ -31,7 +31,7 @@ use datafusion_common::{map_until_stop_and_collect, Result};
 /// Implementation of the [`TreeNode`] trait
 ///
 /// This allows logical expressions (`Expr`) to be traversed and transformed
-/// Facilitates tasks such as optimization and rewriting during query 
+/// Facilitates tasks such as optimization and rewriting during query
 /// planning.
 impl TreeNode for Expr {
     /// Applies a function `f` to each child expression of `self`.

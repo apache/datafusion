@@ -527,13 +527,13 @@ impl Expr {
 }
 
 /// Cast subquery in InSubquery/ScalarSubquery to a given type.
-/// 
+///
 /// 1. **Projection plan**: If the subquery is a projection (i.e. a SELECT statement with specific
 ///    columns), it casts the first expression in the projection to the target type and creates a
 ///    new projection with the casted expression.
 /// 2. **Non-projection plan**: If the subquery isn't a projection, it adds a projection to the plan
 ///    with the casted first column.
-/// 
+///
 pub fn cast_subquery(subquery: Subquery, cast_to_type: &DataType) -> Result<Subquery> {
     if subquery.subquery.schema().field(0).data_type() == cast_to_type {
         return Ok(subquery);
