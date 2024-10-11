@@ -676,6 +676,60 @@ async fn simple_intersect_consume() -> Result<()> {
 }
 
 #[tokio::test]
+async fn primary_intersect_consume() -> Result<()> {
+    let proto_plan =
+        read_json("tests/testdata/test_plans/intersect_primary.substrait.json");
+
+    assert_substrait_sql(
+        proto_plan,
+        "SELECT a FROM data INTERSECT (SELECT a FROM data2 UNION ALL SELECT a FROM data2)",
+    )
+    .await
+}
+
+#[tokio::test]
+async fn multiset_intersect_consume() -> Result<()> {
+    let proto_plan =
+        read_json("tests/testdata/test_plans/intersect_multiset.substrait.json");
+
+    assert_substrait_sql(
+        proto_plan,
+        "SELECT a FROM data INTERSECT SELECT a FROM data2 INTERSECT SELECT a FROM data2",
+    )
+    .await
+}
+
+#[tokio::test]
+async fn primary_except_consume() -> Result<()> {
+    let proto_plan = read_json("tests/testdata/test_plans/minus_primary.substrait.json");
+
+    assert_substrait_sql(
+        proto_plan,
+        "SELECT a FROM data EXCEPT SELECT a FROM data2 EXCEPT SELECT a FROM data2",
+    )
+    .await
+}
+
+#[tokio::test]
+async fn primary_except_all_consume() -> Result<()> {
+    let proto_plan =
+        read_json("tests/testdata/test_plans/minus_primary_all.substrait.json");
+
+    assert_substrait_sql(
+        proto_plan,
+        "SELECT a FROM data EXCEPT ALL SELECT a FROM data2 EXCEPT ALL SELECT a FROM data2",
+    )
+    .await
+}
+
+#[tokio::test]
+async fn union_distinct_consume() -> Result<()> {
+    let proto_plan = read_json("tests/testdata/test_plans/union_distinct.substrait.json");
+
+    assert_substrait_sql(proto_plan, "SELECT a FROM data UNION SELECT a FROM data2").await
+}
+
+#[tokio::test]
 async fn simple_intersect_table_reuse() -> Result<()> {
     // Substrait does currently NOT maintain the alias of the tables.
     // Instead, when we consume Substrait, we add aliases before a join that'd otherwise collide.
