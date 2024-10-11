@@ -439,6 +439,13 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
         }
     }
 
+    /// Set the max block size
+    #[cfg(test)]
+    fn with_max_block_size(mut self, max_block_size: usize) -> Self {
+        self.max_block_size = max_block_size;
+        self
+    }
+
     fn append_val_inner(&mut self, array: &ArrayRef, row: usize) {
         let arr = array.as_byte_view::<B>();
 
@@ -564,7 +571,6 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
     fn inner_take_n(&mut self, n: usize) -> ArrayRef {
         // take the views and then need to clear exisiting buffers
         todo!()
-
     }
 }
 
@@ -639,8 +645,8 @@ mod tests {
     use std::sync::Arc;
 
     use arrow::datatypes::Int64Type;
-    use arrow_array::{ArrayRef, Int64Array, StringArray, StringViewArray};
     use arrow_array::types::StringViewType;
+    use arrow_array::{ArrayRef, Int64Array, StringArray, StringViewArray};
     use arrow_buffer::{BooleanBufferBuilder, NullBuffer};
 
     #[test]
@@ -820,7 +826,32 @@ mod tests {
         assert!(builder.equal_to(5, &input_array, 5));
     }
 
+    #[test]
+    fn test_byte_view_append_val() {
+        let mut builder =
+            ByteViewGroupValueBuilder::<StringViewType>::new().with_max_block_size(30);
+        let builder_array = StringViewArray::from(vec![
+            Some("this string is quite long"), // in buffer 0
+            Some("foo"),
+            None,
+            Some("bar"),
+            Some("this string is also quite long"), // buffer 0
+            Some("this string is quite long"),      // buffer 1
+            Some("bar"),
+        ]);
+        let builder_array: ArrayRef = Arc::new(builder_array);
+        for row in 0..builder_array.len() {
+            builder.append_val(&builder_array, row);
+        }
 
+        let output = Box::new(builder).build();
+        assert_eq!(
+            output.as_string_view().data_buffers().len(),
+            2,
+            "output should have 2 buffers"
+        );
+        assert_eq!(&output, &builder_array)
+    }
 
     #[test]
     fn test_byte_view_equal_to() {
@@ -832,7 +863,6 @@ mod tests {
         //   - exist not null, input not null; values not equal
         //   - exist not null, input not null; values equal
 
-        // Define PrimitiveGroupValueBuilder
         let mut builder = ByteViewGroupValueBuilder::<StringViewType>::new();
         let builder_array = Arc::new(StringViewArray::from(vec![
             None,
@@ -854,14 +884,14 @@ mod tests {
         // Define input array
         let (views, buffer, _nulls) = StringViewArray::from(vec![
             Some("foo"),
-            Some("bar"), // set to null
+            Some("bar"),                       // set to null
             Some("this string is quite long"), // set to null
             None,
             None,
             Some("foo"),
             Some("baz"),
         ])
-            .into_parts();
+        .into_parts();
 
         // explicitly build a boolean buffer where one of the null values also happens to match
         let mut boolean_buffer_builder = BooleanBufferBuilder::new(6);
@@ -884,7 +914,5 @@ mod tests {
         assert!(!builder.equal_to(4, &input_array, 4));
         assert!(!builder.equal_to(5, &input_array, 5));
         assert!(builder.equal_to(6, &input_array, 6));
-
     }
-
 }
