@@ -33,6 +33,7 @@ use datafusion_expr::WindowUDF;
 pub mod macros;
 pub mod lead_lag;
 pub mod row_number;
+mod utils;
 
 /// Fluent-style API for creating `Expr`s
 pub mod expr_fn {

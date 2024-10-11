@@ -17,6 +17,7 @@
 
 //! Defines physical expression for `lead` and `lag` that can evaluated
 //! at runtime during query execution
+use crate::utils::{get_casted_value, get_scalar_value_from_args, get_signed_integer};
 use datafusion_common::arrow::array::ArrayRef;
 use datafusion_common::arrow::datatypes::DataType;
 use datafusion_common::arrow::datatypes::Field;
@@ -27,8 +28,6 @@ use datafusion_expr::{
 };
 use datafusion_functions_window_common::field::WindowUDFFieldArgs;
 use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
-use datafusion_functions_window_common::utils::{get_casted_value, get_signed_integer};
-use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use std::any::Any;
 use std::cmp::min;
 use std::collections::VecDeque;
@@ -189,25 +188,6 @@ impl WindowUDFImpl for WindowShift {
             WindowShiftKind::Lead => ReversedUDWF::Reversed(lead_udwf()),
         }
     }
-}
-
-fn get_scalar_value_from_args(
-    args: &[Arc<dyn PhysicalExpr>],
-    index: usize,
-) -> Result<Option<ScalarValue>> {
-    Ok(if let Some(field) = args.get(index) {
-        let tmp = field
-            .as_any()
-            .downcast_ref::<datafusion_physical_expr::expressions::Literal>()
-            .ok_or_else(|| DataFusionError::NotImplemented(
-                format!("There is only support Literal types for field at idx: {index} in Window Function"),
-            ))?
-            .value()
-            .clone();
-        Some(tmp)
-    } else {
-        None
-    })
 }
 
 #[derive(Debug)]
