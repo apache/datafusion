@@ -503,6 +503,25 @@ mod tests {
     use datafusion_physical_expr::expressions::{Column, Literal};
     use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 
+    fn test_i32_result(
+        expr: WindowShift,
+        partition_evaluator_args: PartitionEvaluatorArgs,
+        expected: Int32Array,
+    ) -> Result<()> {
+        let arr: ArrayRef = Arc::new(Int32Array::from(vec![1, -2, 3, -4, 5, -6, 7, 8]));
+        let values = vec![arr];
+        let num_rows = values.len();
+
+        let result = expr
+            .partition_evaluator(partition_evaluator_args)?
+            .evaluate_all(&values, num_rows)?;
+        let result = as_int32_array(&result)?;
+
+        assert_eq!(expected, *result);
+
+        Ok(())
+    }
+
     #[test]
     fn lead_lag_get_range() -> Result<()> {
         // LAG(2)
@@ -550,53 +569,6 @@ mod tests {
 
     #[test]
     fn test_lead_window_shift() -> Result<()> {
-        let values: ArrayRef =
-            Arc::new(Int32Array::from(vec![1, -2, 3, -4, 5, -6, 7, 8]));
-        let num_rows = values.len();
-
-        let first = Arc::new(Column::new("c3", 0)) as Arc<dyn PhysicalExpr>;
-        let second = Arc::new(Literal::new(ScalarValue::try_from(&DataType::Int32)?))
-            as Arc<dyn PhysicalExpr>;
-        let third = Arc::new(Literal::new(ScalarValue::try_from(&DataType::Int32)?))
-            as Arc<dyn PhysicalExpr>;
-        let input_exprs = &[first, second, third];
-        let input_types: &[DataType] =
-            &[DataType::Int32, DataType::Int32, DataType::Int32];
-
-        let actual = WindowShift::lead()
-            .partition_evaluator(PartitionEvaluatorArgs::new(
-                input_exprs,
-                input_types,
-                false,
-                false,
-            ))?
-            .evaluate_all(&[values], num_rows)?;
-        let actual = as_int32_array(actual.as_ref())?;
-
-        let expected = [
-            Some(-2),
-            Some(3),
-            Some(-4),
-            Some(5),
-            Some(-6),
-            Some(7),
-            Some(8),
-            None,
-        ]
-        .iter()
-        .collect::<Int32Array>();
-
-        assert_eq!(expected, *actual);
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_lag_window_shift() -> Result<()> {
-        let values: ArrayRef =
-            Arc::new(Int32Array::from(vec![1, -2, 3, -4, 5, -6, 7, 8]));
-        let num_rows = values.len();
-
         let first = Arc::new(Column::new("c3", 0)) as Arc<dyn PhysicalExpr>;
         let second =
             Arc::new(Literal::new(ScalarValue::Int32(Some(1)))) as Arc<dyn PhysicalExpr>;
@@ -606,40 +578,55 @@ mod tests {
         let input_types: &[DataType] =
             &[DataType::Int32, DataType::Int32, DataType::Int32];
 
-        let actual = WindowShift::lag()
-            .partition_evaluator(PartitionEvaluatorArgs::new(
-                input_exprs,
-                input_types,
-                false,
-                false,
-            ))?
-            .evaluate_all(&[values], num_rows)?;
-        let actual = as_int32_array(actual.as_ref())?;
+        test_i32_result(
+            WindowShift::lead(),
+            PartitionEvaluatorArgs::new(input_exprs, input_types, false, false),
+            [
+                Some(-2),
+                Some(3),
+                Some(-4),
+                Some(5),
+                Some(-6),
+                Some(7),
+                Some(8),
+                None,
+            ]
+            .iter()
+            .collect::<Int32Array>(),
+        )
+    }
 
-        let expected = [
-            None,
-            Some(1),
-            Some(-2),
-            Some(3),
-            Some(-4),
-            Some(5),
-            Some(-6),
-            Some(7),
-        ]
-        .iter()
-        .collect::<Int32Array>();
+    #[test]
+    fn test_lag_window_shift() -> Result<()> {
+        let first = Arc::new(Column::new("c3", 0)) as Arc<dyn PhysicalExpr>;
+        let second =
+            Arc::new(Literal::new(ScalarValue::Int32(Some(1)))) as Arc<dyn PhysicalExpr>;
+        let third = Arc::new(Literal::new(ScalarValue::try_from(&DataType::Int32)?))
+            as Arc<dyn PhysicalExpr>;
+        let input_exprs = &[first, second, third];
+        let input_types: &[DataType] =
+            &[DataType::Int32, DataType::Int32, DataType::Int32];
 
-        assert_eq!(expected, *actual);
-
-        Ok(())
+        test_i32_result(
+            WindowShift::lag(),
+            PartitionEvaluatorArgs::new(input_exprs, input_types, false, false),
+            [
+                None,
+                Some(1),
+                Some(-2),
+                Some(3),
+                Some(-4),
+                Some(5),
+                Some(-6),
+                Some(7),
+            ]
+            .iter()
+            .collect::<Int32Array>(),
+        )
     }
 
     #[test]
     fn test_lag_with_default() -> Result<()> {
-        let values: ArrayRef =
-            Arc::new(Int32Array::from(vec![1, -2, 3, -4, 5, -6, 7, 8]));
-        let num_rows = values.len();
-
         let first = Arc::new(Column::new("c3", 0)) as Arc<dyn PhysicalExpr>;
         let second =
             Arc::new(Literal::new(ScalarValue::Int32(Some(1)))) as Arc<dyn PhysicalExpr>;
@@ -649,31 +636,21 @@ mod tests {
         let input_types: &[DataType] =
             &[DataType::Int32, DataType::Int32, DataType::Int32];
 
-        let actual = WindowShift::lag()
-            .partition_evaluator(PartitionEvaluatorArgs::new(
-                input_exprs,
-                input_types,
-                false,
-                false,
-            ))?
-            .evaluate_all(&[values], num_rows)?;
-        let actual = as_int32_array(actual.as_ref())?;
-
-        let expected = [
-            Some(100),
-            Some(1),
-            Some(-2),
-            Some(3),
-            Some(-4),
-            Some(5),
-            Some(-6),
-            Some(7),
-        ]
-        .iter()
-        .collect::<Int32Array>();
-
-        assert_eq!(expected, *actual);
-
-        Ok(())
+        test_i32_result(
+            WindowShift::lag(),
+            PartitionEvaluatorArgs::new(input_exprs, input_types, false, false),
+            [
+                Some(100),
+                Some(1),
+                Some(-2),
+                Some(3),
+                Some(-4),
+                Some(5),
+                Some(-6),
+                Some(7),
+            ]
+            .iter()
+            .collect::<Int32Array>(),
+        )
     }
 }
