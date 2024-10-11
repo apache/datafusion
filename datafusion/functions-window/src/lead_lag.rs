@@ -490,14 +490,11 @@ mod tests {
         let arr: ArrayRef = Arc::new(Int32Array::from(vec![1, -2, 3, -4, 5, -6, 7, 8]));
         let values = vec![arr];
         let num_rows = values.len();
-
         let result = expr
             .partition_evaluator(partition_evaluator_args)?
             .evaluate_all(&values, num_rows)?;
         let result = as_int32_array(&result)?;
-
         assert_eq!(expected, *result);
-
         Ok(())
     }
 
