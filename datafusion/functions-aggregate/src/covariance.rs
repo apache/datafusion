@@ -138,18 +138,17 @@ fn get_covar_samp_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
         Documentation::builder()
             .with_doc_section(DOC_SECTION_STATISTICAL)
-            .with_description(
-                "Returns the sample covariance of a set of number pairs.",
-            )
+            .with_description("Returns the sample covariance of a set of number pairs.")
             .with_syntax_example("covar_samp(expression1, expression2)")
-            .with_sql_example(r#"```sql
+            .with_sql_example(
+                r#"```sql
 > SELECT covar_samp(column1, column2) FROM table_name;
 +-----------------------------------+
 | covar_samp(column1, column2)      |
 +-----------------------------------+
 | 8.25                              |
 +-----------------------------------+
-```"#, 
+```"#,
             )
             .with_standard_argument("expression1", "First")
             .with_standard_argument("expression2", "Second")
@@ -239,14 +238,15 @@ fn get_covar_pop_doc() -> &'static Documentation {
                 "Returns the population covariance of a set of number pairs.",
             )
             .with_syntax_example("covar_pop(expression1, expression2)")
-            .with_sql_example(r#"```sql
+            .with_sql_example(
+                r#"```sql
 > SELECT covar_pop(column1, column2) FROM table_name;
 +-----------------------------------+
 | covar_pop(column1, column2)       |
 +-----------------------------------+
 | 7.63                              |
 +-----------------------------------+
-```"#, 
+```"#,
             )
             .with_standard_argument("expression1", "First")
             .with_standard_argument("expression2", "Second")

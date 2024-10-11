@@ -146,18 +146,17 @@ fn get_stddev_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
         Documentation::builder()
             .with_doc_section(DOC_SECTION_STATISTICAL)
-            .with_description(
-                "Returns the standard deviation of a set of numbers.",
-            )
+            .with_description("Returns the standard deviation of a set of numbers.")
             .with_syntax_example("stddev(expression)")
-            .with_sql_example(r#"```sql
+            .with_sql_example(
+                r#"```sql
 > SELECT stddev(column_name) FROM table_name;
 +----------------------+
 | stddev(column_name)   |
 +----------------------+
 | 12.34                |
 +----------------------+
-```"#, 
+```"#,
             )
             .with_standard_argument("expression", "The")
             .build()
@@ -273,14 +272,15 @@ fn get_stddev_pop_doc() -> &'static Documentation {
                 "Returns the population standard deviation of a set of numbers.",
             )
             .with_syntax_example("stddev_pop(expression)")
-            .with_sql_example(r#"```sql
+            .with_sql_example(
+                r#"```sql
 > SELECT stddev_pop(column_name) FROM table_name;
 +--------------------------+
 | stddev_pop(column_name)   |
 +--------------------------+
 | 10.56                    |
 +--------------------------+
-```"#, 
+```"#,
             )
             .with_standard_argument("expression", "The")
             .build()
