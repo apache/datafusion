@@ -27,6 +27,8 @@ use datafusion_expr::{
 };
 use datafusion_functions_window_common::field::WindowUDFFieldArgs;
 use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
+use datafusion_functions_window_common::utils::{get_casted_value, get_signed_integer};
+use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use std::any::Any;
 use std::cmp::min;
 use std::collections::VecDeque;
@@ -144,23 +146,26 @@ impl WindowUDFImpl for WindowShift {
         &self,
         partition_evaluator_args: PartitionEvaluatorArgs,
     ) -> Result<Box<dyn PartitionEvaluator>> {
-        let shift_offset = scalar_at(&partition_evaluator_args, 1)?
-            .map(get_signed_integer)
-            .map_or(Ok(None), |v| v.map(Some))
-            .map(|n| self.kind.shift_offset(n))
-            .map(|offset| {
-                if partition_evaluator_args.is_reversed() {
-                    -offset
-                } else {
-                    offset
-                }
-            })?;
+        let shift_offset =
+            get_scalar_value_from_args(partition_evaluator_args.input_exprs(), 1)?
+                .map(get_signed_integer)
+                .map_or(Ok(None), |v| v.map(Some))
+                .map(|n| self.kind.shift_offset(n))
+                .map(|offset| {
+                    if partition_evaluator_args.is_reversed() {
+                        -offset
+                    } else {
+                        offset
+                    }
+                })?;
         let return_type = partition_evaluator_args
             .input_types()
             .first()
             .unwrap_or(&DataType::Null);
-        let default_value = scalar_at(&partition_evaluator_args, 2)
-            .and_then(|scalar| get_default_value(return_type, scalar))?;
+        let default_value = get_casted_value(
+            get_scalar_value_from_args(partition_evaluator_args.input_exprs(), 2)?,
+            return_type,
+        )?;
 
         Ok(Box::new(WindowShiftEvaluator {
             shift_offset,
@@ -185,49 +190,24 @@ impl WindowUDFImpl for WindowShift {
         }
     }
 }
-fn get_signed_integer(value: ScalarValue) -> Result<i64> {
-    if value.data_type().is_integer() {
-        value.cast_to(&DataType::Int64)?.try_into()
-    } else {
-        Err(DataFusionError::Execution(
-            "Expected an integer value".to_string(),
-        ))
-    }
-}
-
-fn get_default_value(
-    return_type: &DataType,
-    value: Option<ScalarValue>,
-) -> Result<ScalarValue> {
-    match value {
-        Some(default_value) if !default_value.is_null() => {
-            default_value.cast_to(return_type)
-        }
-        // If None or Null datatype
-        _ => ScalarValue::try_from(return_type),
-    }
-}
-
-fn scalar_at(
-    partition_evaluator_args: &PartitionEvaluatorArgs,
+fn get_scalar_value_from_args(
+    args: &[Arc<dyn PhysicalExpr>],
     index: usize,
 ) -> Result<Option<ScalarValue>> {
-    let value = if let Some(expr) = partition_evaluator_args.input_exprs().get(index) {
-        let inner = expr
+    Ok(if let Some(field) = args.get(index) {
+        let tmp = field
             .as_any()
             .downcast_ref::<datafusion_physical_expr::expressions::Literal>()
             .ok_or_else(|| DataFusionError::NotImplemented(
-                format!("There is only support Literal types for field at idx: {index} in Window Function."),
+                format!("There is only support Literal types for field at idx: {index} in Window Function"),
             ))?
             .value()
             .clone();
-        Some(inner)
+        Some(tmp)
     } else {
         None
-    };
-    Ok(value)
+    })
 }
-
 #[derive(Debug)]
 struct WindowShiftEvaluator {
     shift_offset: i64,
