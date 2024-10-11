@@ -19,7 +19,7 @@
 
 use std::any::Any;
 use std::fmt::Debug;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use arrow::compute::{and, filter, is_not_null};
 use arrow::{
@@ -30,11 +30,12 @@ use arrow::{
 use crate::covariance::CovarianceAccumulator;
 use crate::stddev::StddevAccumulator;
 use datafusion_common::{plan_err, Result, ScalarValue};
+use datafusion_expr::aggregate_doc_sections::DOC_SECTION_STATISTICAL;
 use datafusion_expr::{
     function::{AccumulatorArgs, StateFieldsArgs},
     type_coercion::aggregates::NUMERICS,
     utils::format_state_name,
-    Accumulator, AggregateUDFImpl, Signature, Volatility,
+    Accumulator, AggregateUDFImpl, Documentation, Signature, Volatility,
 };
 use datafusion_functions_aggregate_common::stats::StatsType;
 
@@ -107,6 +108,35 @@ impl AggregateUDFImpl for Correlation {
             ),
         ])
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_corr_doc())
+    }
+}
+
+static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+
+fn get_corr_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_STATISTICAL)
+            .with_description(
+                "Returns the coefficient of correlation between two numeric values.",
+            )
+            .with_syntax_example("corr(expression1, expression2)")
+            .with_sql_example(r#"```sql
+> SELECT corr(column1, column2) FROM table_name;
++--------------------------------+
+| corr(column1, column2)         |
++--------------------------------+
+| 0.85                           |
++--------------------------------+
+```"#)
+            .with_argument("expression1", "First expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators.")
+            .with_argument("expression2", "Second expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators.")
+            .build()
+            .unwrap()
+    })
 }
 
 /// An accumulator to compute correlation
