@@ -29,7 +29,7 @@ use arrow::datatypes::ByteArrayType;
 use arrow::datatypes::ByteViewType;
 use arrow::datatypes::DataType;
 use arrow::datatypes::GenericBinaryType;
-use arrow_array::GenericByteViewArray;
+use arrow_array::{GenericByteViewArray, StringViewArray};
 use arrow_buffer::Buffer;
 use datafusion_common::utils::proxy::VecAllocExt;
 use std::marker::PhantomData;
@@ -38,6 +38,7 @@ use crate::aggregates::group_values::null_builder::MaybeNullBufferBuilder;
 use arrow_array::types::GenericStringType;
 use datafusion_physical_expr_common::binary_map::INITIAL_BUFFER_CAPACITY;
 use std::mem;
+use std::str::from_utf8;
 use std::sync::Arc;
 use std::vec;
 
@@ -485,14 +486,20 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
 
         // If current block isn't big enough, flush it and create a new in progress block
         if require_cap > self.max_block_size {
-            let flushed_block = mem::replace(
-                &mut self.in_progress,
-                Vec::with_capacity(self.max_block_size),
-            );
-            let buffer = Buffer::from_vec(flushed_block);
-            self.completed.push(buffer);
+            self.finish_in_progress()
         }
     }
+
+    /// Finishes the current in progress block and appends it to self.completed
+    fn finish_in_progress(&mut self) {
+        let flushed_block = mem::replace(
+            &mut self.in_progress,
+            Vec::with_capacity(self.max_block_size),
+        );
+        let buffer = Buffer::from_vec(flushed_block);
+        self.completed.push(buffer);
+    }
+
 
     fn equal_to_inner(&self, lhs_row: usize, array: &ArrayRef, rhs_row: usize) -> bool {
         let array = array.as_byte_view::<B>();
@@ -569,9 +576,74 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
     }
 
     fn inner_take_n(&mut self, n: usize) -> ArrayRef {
-        // take the views and then need to clear exisiting buffers
-        todo!()
+        let views = self.views.drain(0..n).collect::<Vec<_>>();
+
+        let num_buffers_in_first_n = if let Some(idx) = higest_buffer_index(&views) {
+            let idx = idx as usize;
+            // if the views we are returning contain currently in progress
+            // buffer, finalize it
+            if idx > self.completed.len() {
+                self.finish_in_progress();
+            }
+            idx+1
+        } else {
+            0
+        };
+
+        let buffers = self.completed[0..num_buffers_in_first_n].to_vec();
+        let nulls = self.nulls.take_n(n);
+
+        // TODO: remove any buffers no longer referenced
+        if let Some(idx) = higest_buffer_index(&self.views) {
+            //if idx as usize <= self.completed.len() {
+            //    self.completed.drain()
+            //}
+            // update existing views to reflect removed buffers
+        }
+
+
+        // safety
+        // all input values came from arrays of the correct type (so were valid utf8 if string)
+        // all views were created correctly
+        let arr = unsafe {
+            GenericByteViewArray::<B>::new_unchecked(
+                views.into(),
+                buffers,
+                nulls,
+            )
+        };
+        Arc::new(arr)
     }
+}
+
+/// returns the highest buffer index referred to in a set og u128 views
+/// assumes that all buffer indexes are monotonically increasing
+///
+/// Returns `None` if no buffers are referenced (e.g. all views are inlined)
+fn higest_buffer_index(views: &[u128]) -> Option<u32> {
+    println!("Checking views");
+    for v in views.iter() {
+        let view_len = (*v as u32) as usize;
+        if view_len < 12 {
+            let prefix = unsafe { StringViewArray::inline_value(v, view_len) };
+            println!("len: {view_len} inline: {}", from_utf8(prefix).unwrap())
+        }
+        else {
+            println!(
+                "len: {view_len} val: {:?}",
+                 ByteView::from(*v)
+            );
+        }
+    }
+    views.iter().rev().find_map(|view| {
+        let view_len = *view as u32;
+        if view_len < 12 {
+            None // inline view
+        } else {
+            let view = ByteView::from(*view);
+            Some(view.buffer_index)
+        }
+    })
 }
 
 impl<B: ByteViewType> GroupColumn for ByteViewGroupValueBuilder<B> {
@@ -942,6 +1014,7 @@ mod tests {
         assert!(builder.in_progress.len() > 0);
 
         let first_4 = builder.take_n(4);
+        println!("{}", arrow::util::pretty::pretty_format_columns("first_4", &[first_4.clone()]).unwrap());
         assert_eq!(&first_4, &input_array.slice(0, 4));
 
         // Add some new data after the first n
