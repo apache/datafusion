@@ -124,16 +124,18 @@ fn get_corr_doc() -> &'static Documentation {
                 "Returns the coefficient of correlation between two numeric values.",
             )
             .with_syntax_example("corr(expression1, expression2)")
-            .with_sql_example(r#"```sql
+            .with_sql_example(
+                r#"```sql
 > SELECT corr(column1, column2) FROM table_name;
 +--------------------------------+
 | corr(column1, column2)         |
 +--------------------------------+
 | 0.85                           |
 +--------------------------------+
-```"#)
-            .with_argument("expression1", "First expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators.")
-            .with_argument("expression2", "Second expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators.")
+```"#,
+            )
+            .with_standard_argument("expression1", "First")
+            .with_standard_argument("expression2", "Second")
             .build()
             .unwrap()
     })
