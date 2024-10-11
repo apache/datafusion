@@ -103,6 +103,9 @@ impl WindowShiftKind {
         }
     }
 
+    /// In [`WindowShiftEvaluator`] a positive offset is used to signal
+    /// computation of `lag()`. So here we negate the input offset
+    /// value for computing `lead()`.
     fn shift_offset(&self, value: Option<i64>) -> i64 {
         match self {
             WindowShiftKind::Lag => value.unwrap_or(1),
