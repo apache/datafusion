@@ -378,8 +378,15 @@ drop view complex_view;
 statement ok
 create table t(a struct<r1 varchar, c int>, b struct<r2 varchar, c float>) as values (struct('red', 1), struct('blue', 2.3));
 
-query error Expect same keys for struct type but got mismatched pair r1,c and r2,c
+query error
 select [a, b] from t;
+----
+DataFusion error: Error during planning: Internal error: Failed to match any signature, errors: Execution error: User-defined coercion failed with Plan("Fail to find the valid type between [Struct([Field { name: \"r1\", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"c\", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }]), Struct([Field { name: \"r2\", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"c\", data_type: Float32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }])] for make_array"),Error during planning: The function expected 0 arguments but received 2.
+This was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker No function matches the given name and argument types 'make_array(Struct([Field { name: "r1", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "c", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }]), Struct([Field { name: "r2", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "c", data_type: Float32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }]))'. You might need to add explicit type casts.
+	Candidate functions:
+	make_array(UserDefined)
+	make_array()
+
 
 statement ok
 drop table t;
@@ -515,3 +522,16 @@ create table t(a struct(r varchar, c int), b struct(r varchar, c float)) as valu
 # TODO: This query should not fail
 statement error DataFusion error: Arrow error: Cast error: Cannot cast string 'a' to value of Int64 type
 create table t(a struct(r varchar, c int)) as values ({r: 'a', c: 1}), ({c: 2, r: 'b'});
+
+##################################
+## Test Array of Struct
+##################################
+
+query ?
+select [{r: 'a', c: 1}, {r: 'b', c: 2}];
+----
+[{r: a, c: 1}, {r: b, c: 2}]
+
+# Can't create a list of struct with different field types
+query error
+select [{r: 'a', c: 1}, {c: 2, r: 'b'}];
