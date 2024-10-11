@@ -523,11 +523,11 @@ SELECT MAP { 'a': 1, 'b': 3 };
 query error DataFusion error: Arrow error: Cast error: Cannot cast string 'a' to value of Int64 type
 SELECT MAP { 'a': 1, 2: 3 };
 
-# TODO(https://github.com/apache/datafusion/issues/11785): fix accessing map with non-string key
-# query ?
-# SELECT MAP { 1: 'a', 2: 'b', 3: 'c' }[1];
-# ----
-# a
+
+query T
+SELECT MAP { 1: 'a', 2: 'b', 3: 'c' }[1];
+----
+a
 
 # TODO(https://github.com/apache/datafusion/issues/11785): fix accessing map with non-string key
 # query ?
@@ -535,11 +535,43 @@ SELECT MAP { 'a': 1, 2: 3 };
 # ----
 # 1
 
-# TODO(https://github.com/apache/datafusion/issues/11785): fix accessing map with non-string key
-# query ?
-# SELECT MAKE_MAP(1, null, 2, 33, 3, null)[2];
-# ----
-# 33
+query I
+SELECT MAKE_MAP(1, null, 2, 33, 3, null)[2];
+----
+33
+
+query T
+SELECT MAP { 1.0: 'a', 2.0: 'b', 3.0: 'c' }[2.0];
+----
+b
+
+query T
+SELECT MAP { 1.0: 'a', 2.0: 'b', 3.0: 'c' }['2.0'];
+----
+b
+
+query T
+SELECT MAP { 1.0: 'a', 2.0: 'b', 3.0: 'c' }[2];
+----
+b
+
+query T
+SELECT MAP { 1.0: 'a', 2.0: 'b', 3.0: 'c' }['2'];
+----
+b
+
+query T
+SELECT MAP { 1: 'a', 2: 'b', 3: 'c' }[3];
+----
+c
+
+query T
+SELECT MAP { 1: 'a', 2: 'b', 3: 'c' }['3'];
+----
+c
+
+query error DataFusion error: Execution error: Could not convert Utf8 3\.0 to Int64
+SELECT MAP { 1: 'a', 2: 'b', 3: 'c' }['3.0'];
 
 ## cardinality
 
