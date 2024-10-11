@@ -561,19 +561,45 @@ impl ByteGroupValueViewBuilder {
 
 impl GroupColumn for ByteGroupValueViewBuilder {
     fn equal_to(&self, lhs_row: usize, array: &ArrayRef, rhs_row: usize) -> bool {
-        todo!()
+        match self.output_type {
+            OutputType::Utf8View => {
+                self.equal_to_inner::<StringViewType>(lhs_row, array, rhs_row)
+            }
+            OutputType::BinaryView => {
+                self.equal_to_inner::<BinaryViewType>(lhs_row, array, rhs_row)
+            }
+            _ => unreachable!("View types should use `ArrowBytesViewMap`"),
+        }
     }
 
     fn append_val(&mut self, array: &ArrayRef, row: usize) {
-        todo!()
+        match self.output_type {
+            OutputType::Utf8View => {
+                self.append_val_inner::<StringViewType>(array, row);
+            }
+            OutputType::BinaryView => {
+                self.append_val_inner::<BinaryViewType>(array, row);
+            }
+            _ => unreachable!("View types should use `ArrowBytesViewMap`"),
+        }
     }
 
     fn len(&self) -> usize {
-        todo!()
+        self.views.len()
     }
 
     fn size(&self) -> usize {
-        todo!()
+        let buffers_size = self
+            .completed
+            .iter()
+            .map(|buf| buf.capacity() * std::mem::size_of::<u8>())
+            .sum::<usize>();
+
+        self.nulls.allocated_size()
+            + self.views.capacity() * std::mem::size_of::<u128>()
+            + self.in_progress.capacity() * std::mem::size_of::<u8>()
+            + buffers_size
+            + std::mem::size_of::<Self>()
     }
 
     fn build(self: Box<Self>) -> ArrayRef {
@@ -582,8 +608,8 @@ impl GroupColumn for ByteGroupValueViewBuilder {
             views,
             in_progress,
             mut completed,
-            max_block_size,
             nulls,
+            ..
         } = *self;
 
         // Build nulls
