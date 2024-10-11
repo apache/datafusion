@@ -526,10 +526,10 @@ pub fn create_memory_table(
 ) -> Result<(Arc<dyn ExecutionPlan>, Arc<dyn ExecutionPlan>)> {
     let left_schema = left_partition[0].schema();
     let left = MemoryExec::try_new(&[left_partition], left_schema, None)?
-        .with_sort_information(left_sorted);
+        .try_with_sort_information(left_sorted)?;
     let right_schema = right_partition[0].schema();
     let right = MemoryExec::try_new(&[right_partition], right_schema, None)?
-        .with_sort_information(right_sorted);
+        .try_with_sort_information(right_sorted)?;
     Ok((Arc::new(left), Arc::new(right)))
 }
 

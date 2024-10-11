@@ -270,7 +270,7 @@ impl TableProvider for MemTable {
                     .orderings;
             }
 
-            exec = exec.with_sort_information(file_sort_order);
+            exec = exec.try_with_sort_information(file_sort_order)?;
         }
 
         Ok(Arc::new(exec))
