@@ -120,6 +120,8 @@ impl GroupValuesColumn {
                 | DataType::LargeBinary
                 | DataType::Date32
                 | DataType::Date64
+                | DataType::Utf8View
+                | DataType::BinaryView
         )
     }
 }
