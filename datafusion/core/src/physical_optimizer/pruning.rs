@@ -502,12 +502,6 @@ impl Default for ConstantUnhandledPredicateHook {
     }
 }
 
-impl ConstantUnhandledPredicateHook {
-    fn new(default: Arc<dyn PhysicalExpr>) -> Self {
-        Self { default }
-    }
-}
-
 impl UnhandledPredicateHook for ConstantUnhandledPredicateHook {
     fn handle(&self, _expr: &Arc<dyn PhysicalExpr>) -> Arc<dyn PhysicalExpr> {
         self.default.clone()
