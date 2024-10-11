@@ -44,13 +44,14 @@ use crate::{
     TableProviderFilterPushDown, TableSource, WriteOp,
 };
 
+use arrow::compute::can_cast_types;
 use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef};
 use datafusion_common::display::ToStringifiedPlan;
 use datafusion_common::file_options::file_type::FileType;
 use datafusion_common::{
-    get_target_functional_dependencies, internal_err, not_impl_err, plan_datafusion_err,
-    plan_err, Column, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
-    TableReference, ToDFSchema, UnnestOptions,
+    exec_err, get_target_functional_dependencies, internal_err, not_impl_err,
+    plan_datafusion_err, plan_err, Column, DFSchema, DFSchemaRef, DataFusionError,
+    Result, ScalarValue, TableReference, ToDFSchema, UnnestOptions,
 };
 use datafusion_expr_common::type_coercion::binary::type_union_resolution;
 
@@ -178,7 +179,10 @@ impl LogicalPlanBuilder {
     /// so it's usually better to override the default names with a table alias list.
     ///
     /// If the values include params/binders such as $1, $2, $3, etc, then the `param_data_types` should be provided.
-    pub fn values(mut values: Vec<Vec<Expr>>) -> Result<Self> {
+    pub fn values(
+        mut values: Vec<Vec<Expr>>,
+        schema: Option<&DFSchemaRef>,
+    ) -> Result<Self> {
         if values.is_empty() {
             return plan_err!("Values list cannot be empty");
         }
@@ -197,16 +201,75 @@ impl LogicalPlanBuilder {
             }
         }
 
-        let empty_schema = DFSchema::empty();
+        // Check the type of value against the schema
+        if let Some(schema) = schema {
+            let mut field_types: Vec<DataType> = Vec::with_capacity(n_cols);
+            assert_eq!(schema.fields().len(), n_cols);
+            for j in 0..n_cols {
+                let field_type = schema.field(j).data_type();
+                for row in values.iter() {
+                    let value = &row[j];
+                    let data_type = value.get_type(schema)?;
+
+                    if !data_type.equals_datatype(field_type) {
+                        if can_cast_types(&data_type, field_type) {
+                        } else {
+                            return exec_err!(
+                                "type mistmatch and can't cast to got {} and {}",
+                                data_type,
+                                field_type
+                            );
+                        }
+                    }
+                }
+                field_types.push(field_type.to_owned());
+            }
+            // wrap cast if data type is not same as common type.
+            for row in &mut values {
+                for (j, field_type) in field_types.iter().enumerate() {
+                    if let Expr::Literal(ScalarValue::Null) = row[j] {
+                        row[j] = Expr::Literal(ScalarValue::try_from(field_type)?);
+                    } else {
+                        row[j] =
+                            std::mem::take(&mut row[j]).cast_to(field_type, schema)?;
+                    }
+                }
+            }
+            let fields = field_types
+                .iter()
+                .enumerate()
+                .map(|(j, data_type)| {
+                    // naming is following convention https://www.postgresql.org/docs/current/queries-values.html
+                    let name = &format!("column{}", j + 1);
+                    Field::new(name, data_type.clone(), true)
+                })
+                .collect::<Vec<_>>();
+            let dfschema =
+                DFSchema::from_unqualified_fields(fields.into(), HashMap::new())?;
+            let schema = DFSchemaRef::new(dfschema);
+
+            Ok(Self::new(LogicalPlan::Values(Values { schema, values })))
+        } else {
+            // Infer from value itself
+            Self::infer_value(values)
+        }
+    }
+
+    fn infer_value(mut values: Vec<Vec<Expr>>) -> Result<Self> {
+        let n_cols = values[0].len();
+
+        let schema = DFSchema::empty();
+
         let mut field_types: Vec<DataType> = Vec::with_capacity(n_cols);
         for j in 0..n_cols {
             let mut common_type: Option<DataType> = None;
             for (i, row) in values.iter().enumerate() {
                 let value = &row[j];
-                let data_type = value.get_type(&empty_schema)?;
+                let data_type = value.get_type(&schema)?;
                 if data_type == DataType::Null {
                     continue;
                 }
+
                 if let Some(prev_type) = common_type {
                     // get common type of each column values.
                     let data_types = vec![prev_type.clone(), data_type.clone()];
@@ -228,8 +291,7 @@ impl LogicalPlanBuilder {
                 if let Expr::Literal(ScalarValue::Null) = row[j] {
                     row[j] = Expr::Literal(ScalarValue::try_from(field_type)?);
                 } else {
-                    row[j] =
-                        std::mem::take(&mut row[j]).cast_to(field_type, &empty_schema)?;
+                    row[j] = std::mem::take(&mut row[j]).cast_to(field_type, &schema)?;
                 }
             }
         }
@@ -2350,10 +2412,10 @@ mod tests {
     fn test_union_after_join() -> Result<()> {
         let values = vec![vec![lit(1)]];
 
-        let left = LogicalPlanBuilder::values(values.clone())?
+        let left = LogicalPlanBuilder::values(values.clone(), None)?
             .alias("left")?
             .build()?;
-        let right = LogicalPlanBuilder::values(values)?
+        let right = LogicalPlanBuilder::values(values, None)?
             .alias("right")?
             .build()?;
 

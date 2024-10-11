@@ -20,8 +20,8 @@ use arrow::compute::kernels::zip::zip;
 use arrow::compute::{and, is_not_null, is_null};
 use arrow::datatypes::DataType;
 use datafusion_common::{exec_err, ExprSchema, Result};
+use datafusion_expr::binary::try_type_union_resolution;
 use datafusion_expr::scalar_doc_sections::DOC_SECTION_CONDITIONAL;
-use datafusion_expr::type_coercion::binary::type_union_resolution;
 use datafusion_expr::{ColumnarValue, Documentation, Expr, ExprSchemable};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use itertools::Itertools;
@@ -154,9 +154,8 @@ impl ScalarUDFImpl for CoalesceFunc {
         if arg_types.is_empty() {
             return exec_err!("coalesce must have at least one argument");
         }
-        let new_type = type_union_resolution(arg_types)
-            .unwrap_or(arg_types.first().unwrap().clone());
-        Ok(vec![new_type; arg_types.len()])
+
+        try_type_union_resolution(arg_types)
     }
 
     fn documentation(&self) -> Option<&Documentation> {

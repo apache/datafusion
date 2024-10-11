@@ -392,12 +392,12 @@ create table t(a struct<r varchar, c int>, b struct<r varchar, c float>) as valu
 query T
 select arrow_typeof([a, b]) from t;
 ----
-List(Field { name: "item", data_type: Struct([Field { name: "r", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "c", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }]), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} })
+List(Field { name: "item", data_type: Struct([Field { name: "r", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "c", data_type: Float32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }]), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} })
 
 query ?
 select [a, b] from t;
 ----
-[{r: red, c: 1}, {r: blue, c: 2}]
+[{r: red, c: 1.0}, {r: blue, c: 2.3}]
 
 statement ok
 drop table t;
@@ -474,13 +474,12 @@ select coalesce(s1) from t;
 {a: 2, b: blue}
 {a: 3, b: green}
 
-# TODO: a's type should be float
 query T
-select arrow_typeof(coalesce(s1)) from t;
+select arrow_typeof(coalesce(s1, s2)) from t;
 ----
-Struct([Field { name: "a", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "b", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }])
-Struct([Field { name: "a", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "b", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }])
-Struct([Field { name: "a", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "b", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }])
+Struct([Field { name: "a", data_type: Float32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "b", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }])
+Struct([Field { name: "a", data_type: Float32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "b", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }])
+Struct([Field { name: "a", data_type: Float32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "b", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }])
 
 statement ok
 drop table t;
@@ -495,26 +494,32 @@ CREATE TABLE t (
   (row(3, 'green'), row(33.2, 'string3'))
 ;
 
-# TODO: second column should not be null
 query ?
-select coalesce(s1) from t;
+select coalesce(s1, s2) from t;
 ----
-{a: 1, b: red}
-NULL
-{a: 3, b: green}
+{a: 1.0, b: red}
+{a: 2.2, b: string2}
+{a: 3.0, b: green}
+
+query T
+select arrow_typeof(coalesce(s1, s2)) from t;
+----
+Struct([Field { name: "a", data_type: Float32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "b", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }])
+Struct([Field { name: "a", data_type: Float32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "b", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }])
+Struct([Field { name: "a", data_type: Float32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "b", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }])
 
 statement ok
 drop table t;
 
 # row() with incorrect order
-statement error DataFusion error: Arrow error: Cast error: Cannot cast string 'blue' to value of Float64 type
+statement error DataFusion error: Arrow error: Cast error: Cannot cast string 'blue' to value of Float32 type
 create table t(a struct(r varchar, c int), b struct(r varchar, c float)) as values 
     (row('red', 1), row(2.3, 'blue')),
     (row('purple', 1), row('green', 2.3));
 
 # out of order struct literal
 # TODO: This query should not fail
-statement error DataFusion error: Arrow error: Cast error: Cannot cast string 'a' to value of Int64 type
+statement error DataFusion error: Arrow error: Cast error: Cannot cast string 'b' to value of Int32 type
 create table t(a struct(r varchar, c int)) as values ({r: 'a', c: 1}), ({c: 2, r: 'b'});
 
 ##################################
@@ -529,3 +534,43 @@ select [{r: 'a', c: 1}, {r: 'b', c: 2}];
 # Can't create a list of struct with different field types
 query error
 select [{r: 'a', c: 1}, {c: 2, r: 'b'}];
+
+statement ok
+create table t(a struct(r varchar, c int), b struct(r varchar, c float)) as values (row('a', 1), row('b', 2.3));
+
+query T
+select arrow_typeof([a, b]) from t;
+----
+List(Field { name: "item", data_type: Struct([Field { name: "r", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "c", data_type: Float32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }]), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} })
+
+statement ok
+drop table t;
+
+# create table with different struct type is fine
+statement ok
+create table t(a struct(r varchar, c int), b struct(c float, r varchar)) as values (row('a', 1), row(2.3, 'b'));
+
+# create array with different struct type is not valid
+query error
+select arrow_typeof([a, b]) from t;
+
+statement ok
+drop table t;
+
+statement ok
+create table t(a struct(r varchar, c int, g float), b struct(r varchar, c float, g int)) as values (row('a', 1, 2.3), row('b', 2.3, 2));
+
+# type of each column should not coerced but perserve as it is
+query T
+select arrow_typeof(a) from t;
+----
+Struct([Field { name: "r", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "c", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "g", data_type: Float32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }])
+
+# type of each column should not coerced but perserve as it is
+query T
+select arrow_typeof(b) from t;
+----
+Struct([Field { name: "r", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "c", data_type: Float32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "g", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }])
+
+statement ok
+drop table t;

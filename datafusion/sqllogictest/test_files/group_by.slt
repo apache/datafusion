@@ -3360,7 +3360,8 @@ physical_plan
 05)--------CoalesceBatchesExec: target_batch_size=4
 06)----------RepartitionExec: partitioning=Hash([sn@0, amount@1], 8), input_partitions=8
 07)------------AggregateExec: mode=Partial, gby=[sn@0 as sn, amount@1 as amount], aggr=[]
-08)--------------MemoryExec: partitions=8, partition_sizes=[1, 0, 0, 0, 0, 0, 0, 0]
+08)--------------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+09)----------------MemoryExec: partitions=1, partition_sizes=[1]
 
 query IRI
 SELECT s.sn, s.amount, 2*s.sn
@@ -3430,9 +3431,9 @@ physical_plan
 07)------------AggregateExec: mode=Partial, gby=[sn@1 as sn, amount@2 as amount], aggr=[sum(l.amount)]
 08)--------------ProjectionExec: expr=[amount@1 as amount, sn@2 as sn, amount@3 as amount]
 09)----------------NestedLoopJoinExec: join_type=Inner, filter=sn@0 >= sn@1
-10)------------------CoalescePartitionsExec
-11)--------------------MemoryExec: partitions=8, partition_sizes=[1, 0, 0, 0, 0, 0, 0, 0]
-12)------------------MemoryExec: partitions=8, partition_sizes=[1, 0, 0, 0, 0, 0, 0, 0]
+10)------------------MemoryExec: partitions=1, partition_sizes=[1]
+11)------------------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+12)--------------------MemoryExec: partitions=1, partition_sizes=[1]
 
 query IRR
 SELECT r.sn, SUM(l.amount), r.amount
@@ -3579,8 +3580,7 @@ physical_plan
 08)--------------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
 09)----------------ProjectionExec: expr=[zip_code@0 as zip_code, country@1 as country, sn@2 as sn, ts@3 as ts, currency@4 as currency, amount@5 as amount, sum(l.amount) ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING@6 as sum_amount]
 10)------------------BoundedWindowAggExec: wdw=[sum(l.amount) ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING: Ok(Field { name: "sum(l.amount) ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(1)), end_bound: Following(UInt64(1)), is_causal: false }], mode=[Sorted]
-11)--------------------CoalescePartitionsExec
-12)----------------------MemoryExec: partitions=8, partition_sizes=[1, 0, 0, 0, 0, 0, 0, 0]
+11)--------------------MemoryExec: partitions=1, partition_sizes=[1]
 
 
 query ITIPTRR

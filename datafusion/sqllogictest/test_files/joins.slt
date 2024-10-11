@@ -3901,8 +3901,8 @@ SELECT * FROM (
 ) AS rhs ON lhs.b=rhs.b
 ----
 11 1 21 1
-14 2 22 2
 12 3 23 3
+14 2 22 2
 15 4 24 4
 
 query TT
@@ -3922,11 +3922,12 @@ logical_plan
 05)----Sort: right_table_no_nulls.b ASC NULLS LAST, fetch=10
 06)------TableScan: right_table_no_nulls projection=[a, b]
 physical_plan
-01)CoalesceBatchesExec: target_batch_size=3
-02)--HashJoinExec: mode=CollectLeft, join_type=Right, on=[(b@1, b@1)]
-03)----MemoryExec: partitions=1, partition_sizes=[1]
-04)----SortExec: TopK(fetch=10), expr=[b@1 ASC NULLS LAST], preserve_partitioning=[false]
-05)------MemoryExec: partitions=1, partition_sizes=[1]
+01)ProjectionExec: expr=[a@2 as a, b@3 as b, a@0 as a, b@1 as b]
+02)--CoalesceBatchesExec: target_batch_size=3
+03)----HashJoinExec: mode=CollectLeft, join_type=Left, on=[(b@1, b@1)]
+04)------SortExec: TopK(fetch=10), expr=[b@1 ASC NULLS LAST], preserve_partitioning=[false]
+05)--------MemoryExec: partitions=1, partition_sizes=[1]
+06)------MemoryExec: partitions=1, partition_sizes=[1]
 
 
 
@@ -3979,10 +3980,11 @@ logical_plan
 04)--SubqueryAlias: rhs
 05)----TableScan: right_table_no_nulls projection=[a, b]
 physical_plan
-01)CoalesceBatchesExec: target_batch_size=3
-02)--HashJoinExec: mode=CollectLeft, join_type=Right, on=[(b@1, b@1)]
-03)----MemoryExec: partitions=1, partition_sizes=[1]
-04)----MemoryExec: partitions=1, partition_sizes=[1]
+01)ProjectionExec: expr=[a@2 as a, b@3 as b, a@0 as a, b@1 as b]
+02)--CoalesceBatchesExec: target_batch_size=3
+03)----HashJoinExec: mode=CollectLeft, join_type=Left, on=[(b@1, b@1)]
+04)------MemoryExec: partitions=1, partition_sizes=[1]
+05)------MemoryExec: partitions=1, partition_sizes=[1]
 
 
 # Null build indices:
@@ -4038,11 +4040,12 @@ logical_plan
 05)----Sort: right_table_no_nulls.b ASC NULLS LAST, fetch=10
 06)------TableScan: right_table_no_nulls projection=[a, b]
 physical_plan
-01)CoalesceBatchesExec: target_batch_size=3
-02)--HashJoinExec: mode=CollectLeft, join_type=Right, on=[(b@1, b@1)]
-03)----MemoryExec: partitions=1, partition_sizes=[1]
-04)----SortExec: TopK(fetch=10), expr=[b@1 ASC NULLS LAST], preserve_partitioning=[false]
-05)------MemoryExec: partitions=1, partition_sizes=[1]
+01)ProjectionExec: expr=[a@2 as a, b@3 as b, a@0 as a, b@1 as b]
+02)--CoalesceBatchesExec: target_batch_size=3
+03)----HashJoinExec: mode=CollectLeft, join_type=Left, on=[(b@1, b@1)]
+04)------SortExec: TopK(fetch=10), expr=[b@1 ASC NULLS LAST], preserve_partitioning=[false]
+05)--------MemoryExec: partitions=1, partition_sizes=[1]
+06)------MemoryExec: partitions=1, partition_sizes=[1]
 
 
 # Test CROSS JOIN LATERAL syntax (planning)

@@ -643,7 +643,7 @@ NULL [4] [{c0: [2], c1: [[3], [4]]}]
 4 [3] [{c0: [2], c1: [[3], [4]]}]
 NULL [4] [{c0: [2], c1: [[3], [4]]}]
 
-## demonstrate where recursive unnest is impossible 
+## demonstrate where recursive unnest is impossible
 ## and need multiple unnesting logical plans
 ## e.g unnest -> field_access -> unnest
 query TT

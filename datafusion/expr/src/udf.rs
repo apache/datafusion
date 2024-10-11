@@ -23,7 +23,7 @@ use crate::sort_properties::{ExprProperties, SortProperties};
 use crate::{
     ColumnarValue, Documentation, Expr, ScalarFunctionImplementation, Signature,
 };
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, Field};
 use datafusion_common::{not_impl_err, ExprSchema, Result};
 use datafusion_expr_common::interval_arithmetic::Interval;
 use std::any::Any;
