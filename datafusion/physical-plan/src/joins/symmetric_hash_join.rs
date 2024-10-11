@@ -71,8 +71,8 @@ use datafusion_physical_expr::equivalence::join_equivalence_properties;
 use datafusion_physical_expr::intervals::cp_solver::ExprIntervalGraph;
 use datafusion_physical_expr::{PhysicalExprRef, PhysicalSortRequirement};
 
-use foldhash::fast::RandomState;
 use datafusion_physical_expr_common::sort_expr::LexRequirement;
+use foldhash::fast::RandomState;
 use futures::{ready, Stream, StreamExt};
 use hashbrown::HashSet;
 use parking_lot::Mutex;

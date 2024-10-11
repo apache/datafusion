@@ -70,9 +70,9 @@ use datafusion_physical_expr::equivalence::{
 };
 use datafusion_physical_expr::PhysicalExprRef;
 
-use foldhash::fast::RandomState;
 use datafusion_expr::Operator;
 use datafusion_physical_expr_common::datum::compare_op_for_nested;
+use foldhash::fast::RandomState;
 use futures::{ready, Stream, StreamExt, TryStreamExt};
 use parking_lot::Mutex;
 

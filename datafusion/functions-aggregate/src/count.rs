@@ -15,10 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use foldhash::fast::RandomState;
 use datafusion_common::stats::Precision;
 use datafusion_functions_aggregate_common::aggregate::count_distinct::BytesViewDistinctCountAccumulator;
 use datafusion_physical_expr::expressions;
+use foldhash::fast::RandomState;
 use std::collections::HashSet;
 use std::ops::BitAnd;
 use std::{fmt::Debug, sync::Arc};

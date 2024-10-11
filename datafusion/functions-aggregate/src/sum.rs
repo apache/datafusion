@@ -17,8 +17,8 @@
 
 //! Defines `SUM` and `SUM DISTINCT` aggregate accumulators
 
-use foldhash::fast::RandomState;
 use datafusion_expr::utils::AggregateOrderSensitivity;
+use foldhash::fast::RandomState;
 use std::any::Any;
 use std::collections::HashSet;
 

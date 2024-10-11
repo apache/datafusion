@@ -16,7 +16,6 @@
 // under the License.
 
 use crate::aggregates::group_values::GroupValues;
-use foldhash::fast::RandomState;
 use arrow::array::BooleanBufferBuilder;
 use arrow::buffer::NullBuffer;
 use arrow::datatypes::i256;
@@ -28,6 +27,7 @@ use arrow_schema::DataType;
 use datafusion_common::Result;
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
 use datafusion_expr::EmitTo;
+use foldhash::fast::RandomState;
 use half::f16;
 use hashbrown::raw::RawTable;
 use std::sync::Arc;
