@@ -88,10 +88,10 @@ impl WindowShiftKind {
         }
     }
 
-    fn shift_offset(&self, value: i64) -> i64 {
+    fn shift_offset(&self, value: Option<i64>) -> i64 {
         match self {
-            WindowShiftKind::Lag => value,
-            WindowShiftKind::Lead => value.neg(),
+            WindowShiftKind::Lag => value.unwrap_or(1),
+            WindowShiftKind::Lead => value.map(|v| v.neg()).unwrap_or(-1),
         }
     }
 }
@@ -146,11 +146,11 @@ impl WindowUDFImpl for WindowShift {
     ) -> Result<Box<dyn PartitionEvaluator>> {
         let shift_offset = scalar_at(&partition_evaluator_args, 1)?
             .map(get_signed_integer)
-            .unwrap_or(Ok(1))
+            .map_or(Ok(None), |v| v.map(Some))
             .map(|n| self.kind.shift_offset(n))
             .map(|offset| {
                 if partition_evaluator_args.is_reversed() {
-                    offset.neg()
+                    -offset
                 } else {
                     offset
                 }
