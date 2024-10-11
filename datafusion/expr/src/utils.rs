@@ -659,7 +659,7 @@ where
 
         Ok(TreeNodeRecursion::Continue)
     })
-    // Pre_visit always returns OK, so this will always too
+    // pre_visit always returns OK, so this will always too
     .expect("no way to return error during recursion");
     exprs
 }
@@ -672,7 +672,7 @@ where
     let mut err = Ok(());
     expr.apply(|expr| {
         if let Err(e) = f(expr) {
-            // Save the error for later (it may not be a DataFusionError
+            // Save the error for later (it may not be a DataFusionError)
             err = Err(e);
             Ok(TreeNodeRecursion::Stop)
         } else {
