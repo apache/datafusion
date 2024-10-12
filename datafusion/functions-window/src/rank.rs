@@ -63,23 +63,14 @@ pub struct Rank {
     name: String,
     signature: Signature,
     rank_type: RankType,
-    /// output data type
-    data_type: DataType,
 }
 
 impl Rank {
     pub fn new(name: String, rank_type: RankType) -> Self {
-        let data_type = if matches!(rank_type, RankType::Percent) {
-            DataType::Float64
-        } else {
-            DataType::UInt64
-        };
-
         Self {
             name,
             signature: Signature::any(0, Volatility::Immutable),
             rank_type,
-            data_type,
         }
     }
 
@@ -114,7 +105,7 @@ impl WindowUDFImpl for Rank {
     }
 
     fn name(&self) -> &str {
-        self.name.as_str()
+        &self.name
     }
 
     fn signature(&self) -> &Signature {
@@ -132,12 +123,13 @@ impl WindowUDFImpl for Rank {
     }
 
     fn field(&self, field_args: WindowUDFFieldArgs) -> Result<Field> {
+        let return_type = match self.rank_type {
+            RankType::Basic | RankType::Dense => DataType::UInt64,
+            RankType::Percent => DataType::Float64,
+        };
+
         let nullable = false;
-        Ok(Field::new(
-            field_args.name(),
-            self.data_type.clone(),
-            nullable,
-        ))
+        Ok(Field::new(field_args.name(), return_type, nullable))
     }
 
     fn sort_options(&self) -> Option<SortOptions> {
