@@ -39,6 +39,7 @@ use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::intervals::cp_solver::ExprIntervalGraph;
 use datafusion_physical_expr::utils::collect_columns;
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
+use fastbloom::BloomFilter;
 
 use hashbrown::raw::RawTable;
 use hashbrown::HashSet;
@@ -53,8 +54,14 @@ impl JoinHashMapType for PruningJoinHashMap {
     }
 
     /// Get mutable references to the hash map and the next.
-    fn get_mut(&mut self) -> (&mut RawTable<(u64, u64)>, &mut Self::NextType) {
-        (&mut self.map, &mut self.next)
+    fn get_mut(
+        &mut self,
+    ) -> (
+        &mut RawTable<(u64, u64)>,
+        &mut Self::NextType,
+        Option<&mut BloomFilter>,
+    ) {
+        (&mut self.map, &mut self.next, None)
     }
 
     /// Get a reference to the hash map.
@@ -65,6 +72,10 @@ impl JoinHashMapType for PruningJoinHashMap {
     /// Get a reference to the next.
     fn get_list(&self) -> &Self::NextType {
         &self.next
+    }
+
+    fn get_bloom_filter(&self) -> Option<&BloomFilter> {
+        None
     }
 }
 

@@ -52,6 +52,7 @@ use datafusion_physical_expr::utils::{collect_columns, merge_vectors};
 use datafusion_physical_expr::{
     LexOrdering, LexOrderingRef, PhysicalExpr, PhysicalExprRef, PhysicalSortExpr,
 };
+use fastbloom::BloomFilter;
 
 use futures::future::{BoxFuture, Shared};
 use futures::{ready, FutureExt};
@@ -121,6 +122,7 @@ use parking_lot::Mutex;
 /// ---------------------
 /// ```
 pub struct JoinHashMap {
+    bloom_filter: BloomFilter,
     // Stores hash value to last row index
     map: RawTable<(u64, u64)>,
     // Stores indices in chained list data structure
@@ -130,11 +132,16 @@ pub struct JoinHashMap {
 impl JoinHashMap {
     #[cfg(test)]
     pub(crate) fn new(map: RawTable<(u64, u64)>, next: Vec<u64>) -> Self {
-        Self { map, next }
+        Self {
+            bloom_filter: BloomFilter::with_num_bits(8388608).expected_items(10),
+            map,
+            next,
+        }
     }
 
     pub(crate) fn with_capacity(capacity: usize) -> Self {
         JoinHashMap {
+            bloom_filter: BloomFilter::with_num_bits(8388608).expected_items(capacity),
             map: RawTable::with_capacity(capacity),
             next: vec![0; capacity],
         }
@@ -195,11 +202,19 @@ pub trait JoinHashMapType {
     /// Extend with zero
     fn extend_zero(&mut self, len: usize);
     /// Returns mutable references to the hash map and the next.
-    fn get_mut(&mut self) -> (&mut RawTable<(u64, u64)>, &mut Self::NextType);
+    fn get_mut(
+        &mut self,
+    ) -> (
+        &mut RawTable<(u64, u64)>,
+        &mut Self::NextType,
+        Option<&mut BloomFilter>,
+    );
     /// Returns a reference to the hash map.
     fn get_map(&self) -> &RawTable<(u64, u64)>;
     /// Returns a reference to the next.
     fn get_list(&self) -> &Self::NextType;
+    /// Returns a reference to the bloom filter;
+    fn get_bloom_filter(&self) -> Option<&BloomFilter>;
 
     /// Updates hashmap from iterator of row indices & row hashes pairs.
     fn update_from_iter<'a>(
@@ -207,7 +222,7 @@ pub trait JoinHashMapType {
         iter: impl Iterator<Item = (usize, &'a u64)>,
         deleted_offset: usize,
     ) {
-        let (mut_map, mut_list) = self.get_mut();
+        let (mut_map, mut_list, mut_filter) = self.get_mut();
         for (row, hash_value) in iter {
             let item = mut_map.get_mut(*hash_value, |(hash, _)| *hash_value == *hash);
             if let Some((_, index)) = item {
@@ -224,6 +239,9 @@ pub trait JoinHashMapType {
                     (*hash_value, (row + 1) as u64),
                     |(hash, _)| *hash,
                 );
+                if let Some(&mut ref mut bloom_filter) = mut_filter {
+                    bloom_filter.insert(hash_value);
+                }
                 // chained list at `row` is already initialized with 0
                 // meaning end of list
             }
@@ -246,6 +264,11 @@ pub trait JoinHashMapType {
         let next_chain = self.get_list();
         for (row_idx, hash_value) in iter {
             // Get the hash and find it in the index
+            if let Some(bloom_filter) = self.get_bloom_filter() {
+                if !bloom_filter.contains(hash_value) {
+                    continue;
+                }
+            }
             if let Some((_, index)) =
                 hash_map.get(*hash_value, |(hash, _)| *hash_value == *hash)
             {
@@ -354,8 +377,14 @@ impl JoinHashMapType for JoinHashMap {
     fn extend_zero(&mut self, _: usize) {}
 
     /// Get mutable references to the hash map and the next.
-    fn get_mut(&mut self) -> (&mut RawTable<(u64, u64)>, &mut Self::NextType) {
-        (&mut self.map, &mut self.next)
+    fn get_mut(
+        &mut self,
+    ) -> (
+        &mut RawTable<(u64, u64)>,
+        &mut Self::NextType,
+        Option<&mut BloomFilter>,
+    ) {
+        (&mut self.map, &mut self.next, Some(&mut self.bloom_filter))
     }
 
     /// Get a reference to the hash map.
@@ -366,6 +395,10 @@ impl JoinHashMapType for JoinHashMap {
     /// Get a reference to the next.
     fn get_list(&self) -> &Self::NextType {
         &self.next
+    }
+
+    fn get_bloom_filter(&self) -> Option<&BloomFilter> {
+        Some(&self.bloom_filter)
     }
 }
 
