@@ -612,7 +612,8 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
 
         // The `n == len` case, we need to take all
         if self.len() == n {
-            return self.build_inner();
+            let cur_builder = std::mem::replace(self, Self::new());
+            return cur_builder.build_inner();
         }
 
         // The `n < len` case
@@ -650,7 +651,7 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
             // Check should we take the whole `last_related_buffer_index` buffer
             let take_whole_last_buffer = self.should_take_whole_buffer(
                 last_related_buffer_index,
-                view.offset + view.length,
+                (view.offset + view.length) as usize,
             );
 
             // Take related buffers
@@ -659,7 +660,7 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
             } else {
                 self.take_buffers_with_partial_last(
                     last_related_buffer_index,
-                    view.offset + view.length,
+                    (view.offset + view.length) as usize,
                 )
             };
 
@@ -667,7 +668,7 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
             let shifts = if take_whole_last_buffer {
                 last_related_buffer_index + 1
             } else {
-                last_non_inlined_view
+                last_related_buffer_index
             };
 
             self.views.iter_mut().for_each(|view| {
@@ -680,11 +681,7 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
 
             // Build array and return
             let views = ScalarBuffer::from(first_n_views);
-            Arc::new(GenericByteViewArray::<B>::new(
-                views,
-                taken_buffers,
-                null_buffer,
-            ))
+            Arc::new(GenericByteViewArray::<B>::new(views, buffers, null_buffer))
         } else {
             let views = ScalarBuffer::from(first_n_views);
             Arc::new(GenericByteViewArray::<B>::new(
