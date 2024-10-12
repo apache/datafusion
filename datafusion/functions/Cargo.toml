@@ -134,6 +134,11 @@ required-features = ["datetime_expressions"]
 
 [[bench]]
 harness = false
+name = "isnan"
+required-features = ["math_expressions"]
+
+[[bench]]
+harness = false
 name = "substr_index"
 required-features = ["unicode_expressions"]
 
