@@ -629,9 +629,10 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
         //   - Get the last related `buffer index`(let's name it `buffer index n`)
         //     from last non-inlined `view`
         //
-        //   - Take `0 ~ buffer index n-1` buffers, clone the `buffer index` buffer
-        //     (data part is wrapped by `Arc`, cheap to clone) if it is one of `completed`,
-        //     or copy to generate a new buffer for return if it is `in_progress`
+        //   - Take buffers, the key is that we need to know if we need to take
+        //     the whole last related buffer. The logic is a bit complex, you can
+        //     detail in `take_buffers_with_whole_last`, `take_buffers_with_partial_last`
+        //     and other related steps in following
         //
         //   - Shift the `buffer index` of remaining non-inlined `views`
         //
