@@ -85,11 +85,6 @@ impl Rank {
     pub fn percent_rank() -> Self {
         Rank::new("percent_rank".to_string(), RankType::Percent)
     }
-
-    /// Get rank_type of the rank in window function with order by
-    pub fn get_type(&self) -> RankType {
-        self.rank_type
-    }
 }
 
 #[derive(Debug, Copy, Clone)]
