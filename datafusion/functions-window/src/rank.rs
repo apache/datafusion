@@ -132,14 +132,12 @@ impl WindowUDFImpl for Rank {
     }
 
     fn field(&self, field_args: WindowUDFFieldArgs) -> Result<Field> {
-        match self.rank_type {
-            RankType::Basic | RankType::Dense => {
-                Ok(Field::new(field_args.name(), DataType::UInt64, false))
-            }
-            RankType::Percent => {
-                Ok(Field::new(field_args.name(), DataType::Float64, false))
-            }
-        }
+        let nullable = false;
+        Ok(Field::new(
+            field_args.name(),
+            self.data_type.clone(),
+            nullable,
+        ))
     }
 
     fn sort_options(&self) -> Option<SortOptions> {
@@ -219,7 +217,6 @@ impl PartitionEvaluator for RankEvaluator {
         ranks_in_partition: &[Range<usize>],
     ) -> Result<ArrayRef> {
         let result: ArrayRef = match self.rank_type {
-            // rank
             RankType::Basic => Arc::new(UInt64Array::from_iter_values(
                 ranks_in_partition
                     .iter()
@@ -232,7 +229,6 @@ impl PartitionEvaluator for RankEvaluator {
                     .flatten(),
             )),
 
-            // dense_rank
             RankType::Dense => Arc::new(UInt64Array::from_iter_values(
                 ranks_in_partition
                     .iter()

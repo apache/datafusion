@@ -31,8 +31,6 @@ use datafusion_expr::WindowUDF;
 
 #[macro_use]
 pub mod macros;
-// pub mod dense_rank;
-// pub mod percent_rank;
 pub mod rank;
 pub mod row_number;
 
