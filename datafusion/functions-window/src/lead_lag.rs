@@ -477,7 +477,7 @@ impl PartitionEvaluator for WindowShiftEvaluator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use datafusion_common::arrow::array::*;
+    use arrow::array::*;
     use datafusion_common::cast::as_int32_array;
     use datafusion_physical_expr::expressions::{Column, Literal};
     use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
