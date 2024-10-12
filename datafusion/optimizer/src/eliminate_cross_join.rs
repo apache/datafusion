@@ -96,6 +96,7 @@ impl OptimizerRule for EliminateCrossJoin {
                 filter.input.as_ref(),
                 LogicalPlan::Join(Join {
                     join_type: JoinType::Inner,
+                    null_equals_null: false,
                     ..
                 }) | LogicalPlan::CrossJoin(_)
             );
@@ -124,6 +125,7 @@ impl OptimizerRule for EliminateCrossJoin {
             plan,
             LogicalPlan::Join(Join {
                 join_type: JoinType::Inner,
+                null_equals_null: false,
                 ..
             })
         ) {
@@ -268,6 +270,7 @@ fn can_flatten_join_inputs(plan: &LogicalPlan) -> bool {
         match child {
             LogicalPlan::Join(Join {
                 join_type: JoinType::Inner,
+                null_equals_null: false,
                 ..
             })
             | LogicalPlan::CrossJoin(_) => {
