@@ -739,7 +739,7 @@ fn test_table_scan_pushdown() -> Result<()> {
         plan_to_sql(&table_scan_with_projection_alias)?;
     assert_eq!(
         format!("{}", table_scan_with_projection_alias),
-        "SELECT ta.id, ta.age FROM t1 AS ta"
+        "SELECT * FROM (SELECT ta.id, ta.age FROM t1 AS ta) AS ta"
     );
 
     let table_scan_with_projection_alias =
@@ -750,7 +750,7 @@ fn test_table_scan_pushdown() -> Result<()> {
         plan_to_sql(&table_scan_with_projection_alias)?;
     assert_eq!(
         format!("{}", table_scan_with_projection_alias),
-        "SELECT ta.age FROM t1 AS ta"
+        "SELECT * FROM (SELECT ta.age FROM t1 AS ta) AS ta"
     );
 
     let table_scan_with_no_projection_alias = table_scan(Some("t1"), &schema, None)?
