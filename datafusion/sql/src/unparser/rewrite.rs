@@ -329,6 +329,7 @@ fn find_projection(logical_plan: &LogicalPlan) -> Option<&Projection> {
         _ => None,
     }
 }
+
 /// A `TreeNodeRewriter` implementation that rewrites `Expr::Column` expressions by
 /// replacing the column's name with an alias if the column exists in the provided schema.
 ///
