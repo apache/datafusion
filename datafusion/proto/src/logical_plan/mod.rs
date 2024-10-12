@@ -602,7 +602,7 @@ impl AsLogicalPlan for LogicalPlanNode {
 
                 Ok(LogicalPlan::Ddl(DdlStatement::CreateView(CreateView {
                     name: from_table_reference(create_view.name.as_ref(), "CreateView")?,
-                    temporary: false,
+                    temporary: create_view.temporary,
                     input: Arc::new(plan),
                     or_replace: create_view.or_replace,
                     definition,
