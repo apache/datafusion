@@ -348,6 +348,11 @@ pub trait JoinHashMapType {
 
         let mut row_idx = to_skip;
         for hash_value in &hash_values[to_skip..] {
+            if let Some(bloom_filter) = self.get_bloom_filter() {
+                if !bloom_filter.contains(hash_value) {
+                    continue;
+                }
+            }
             if let Some((_, index)) =
                 hash_map.get(*hash_value, |(hash, _)| *hash_value == *hash)
             {
