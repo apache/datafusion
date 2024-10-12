@@ -18,6 +18,7 @@
 //! [`AggregateUDF`]: User Defined Aggregate Functions
 
 use std::any::Any;
+use std::cmp::Ordering;
 use std::fmt::{self, Debug, Formatter};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::Arc;
@@ -25,7 +26,8 @@ use std::vec;
 
 use arrow::datatypes::{DataType, Field};
 
-use datafusion_common::{exec_err, not_impl_err, Result, ScalarValue};
+use datafusion_common::{exec_err, not_impl_err, Result, ScalarValue, Statistics};
+use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 
 use crate::expr::AggregateFunction;
 use crate::function::{
@@ -35,7 +37,7 @@ use crate::groups_accumulator::GroupsAccumulator;
 use crate::utils::format_state_name;
 use crate::utils::AggregateOrderSensitivity;
 use crate::{Accumulator, Expr};
-use crate::{AccumulatorFactoryFunction, ReturnTypeFunction, Signature};
+use crate::{Documentation, Signature};
 
 /// Logical representation of a user-defined [aggregate function] (UDAF).
 ///
@@ -68,7 +70,7 @@ use crate::{AccumulatorFactoryFunction, ReturnTypeFunction, Signature};
 /// [`create_udaf`]: crate::expr_fn::create_udaf
 /// [`simple_udaf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/simple_udaf.rs
 /// [`advanced_udaf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/advanced_udaf.rs
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialOrd)]
 pub struct AggregateUDF {
     inner: Arc<dyn AggregateUDFImpl>,
 }
@@ -93,26 +95,23 @@ impl fmt::Display for AggregateUDF {
     }
 }
 
-impl AggregateUDF {
-    /// Create a new AggregateUDF
+/// Arguments passed to [`AggregateUDFImpl::value_from_stats`]
+pub struct StatisticsArgs<'a> {
+    /// The statistics of the aggregate input
+    pub statistics: &'a Statistics,
+    /// The resolved return type of the aggregate function
+    pub return_type: &'a DataType,
+    /// Whether the aggregate function is distinct.
     ///
-    /// See  [`AggregateUDFImpl`] for a more convenient way to create a
-    /// `AggregateUDF` using trait objects
-    #[deprecated(since = "34.0.0", note = "please implement AggregateUDFImpl instead")]
-    pub fn new(
-        name: &str,
-        signature: &Signature,
-        return_type: &ReturnTypeFunction,
-        accumulator: &AccumulatorFactoryFunction,
-    ) -> Self {
-        Self::new_from_impl(AggregateUDFLegacyWrapper {
-            name: name.to_owned(),
-            signature: signature.clone(),
-            return_type: Arc::clone(return_type),
-            accumulator: Arc::clone(accumulator),
-        })
-    }
+    /// ```sql
+    /// SELECT COUNT(DISTINCT column1) FROM t;
+    /// ```
+    pub is_distinct: bool,
+    /// The physical expression of arguments the aggregate function takes.
+    pub exprs: &'a [Arc<dyn PhysicalExpr>],
+}
 
+impl AggregateUDF {
     /// Create a new `AggregateUDF` from a `[AggregateUDFImpl]` trait object
     ///
     /// Note this is the same as using the `From` impl (`AggregateUDF::from`)
@@ -255,16 +254,34 @@ impl AggregateUDF {
     }
 
     /// Returns true if the function is max, false if the function is min
-    /// None in all other cases, used in certain optimizations or
+    /// None in all other cases, used in certain optimizations for
     /// or aggregate
-    ///
     pub fn is_descending(&self) -> Option<bool> {
         self.inner.is_descending()
+    }
+
+    /// Return the value of this aggregate function if it can be determined
+    /// entirely from statistics and arguments.
+    ///
+    /// See [`AggregateUDFImpl::value_from_stats`] for more details.
+    pub fn value_from_stats(
+        &self,
+        statistics_args: &StatisticsArgs,
+    ) -> Option<ScalarValue> {
+        self.inner.value_from_stats(statistics_args)
     }
 
     /// See [`AggregateUDFImpl::default_value`] for more details.
     pub fn default_value(&self, data_type: &DataType) -> Result<ScalarValue> {
         self.inner.default_value(data_type)
+    }
+
+    /// Returns the documentation for this Aggregate UDF.
+    ///
+    /// Documentation can be accessed programmatically as well as
+    /// generating publicly facing documentation.
+    pub fn documentation(&self) -> Option<&Documentation> {
+        self.inner.documentation()
     }
 }
 
@@ -290,25 +307,42 @@ where
 /// # Basic Example
 /// ```
 /// # use std::any::Any;
+/// # use std::sync::OnceLock;
 /// # use arrow::datatypes::DataType;
 /// # use datafusion_common::{DataFusionError, plan_err, Result};
-/// # use datafusion_expr::{col, ColumnarValue, Signature, Volatility, Expr};
+/// # use datafusion_expr::{col, ColumnarValue, Signature, Volatility, Expr, Documentation};
 /// # use datafusion_expr::{AggregateUDFImpl, AggregateUDF, Accumulator, function::{AccumulatorArgs, StateFieldsArgs}};
+/// # use datafusion_expr::window_doc_sections::DOC_SECTION_AGGREGATE;
 /// # use arrow::datatypes::Schema;
 /// # use arrow::datatypes::Field;
+///
 /// #[derive(Debug, Clone)]
 /// struct GeoMeanUdf {
-///   signature: Signature
+///   signature: Signature,
 /// }
 ///
 /// impl GeoMeanUdf {
 ///   fn new() -> Self {
 ///     Self {
-///       signature: Signature::uniform(1, vec![DataType::Float64], Volatility::Immutable)
+///       signature: Signature::uniform(1, vec![DataType::Float64], Volatility::Immutable),
 ///      }
 ///   }
 /// }
 ///
+/// static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+///
+/// fn get_doc() -> &'static Documentation {
+///     DOCUMENTATION.get_or_init(|| {
+///         Documentation::builder()
+///             .with_doc_section(DOC_SECTION_AGGREGATE)
+///             .with_description("calculates a geometric mean")
+///             .with_syntax_example("geo_mean(2.0)")
+///             .with_argument("arg1", "The Float64 number for the geometric mean")
+///             .build()
+///             .unwrap()
+///     })
+/// }
+///    
 /// /// Implement the AggregateUDFImpl trait for GeoMeanUdf
 /// impl AggregateUDFImpl for GeoMeanUdf {
 ///    fn as_any(&self) -> &dyn Any { self }
@@ -316,7 +350,7 @@ where
 ///    fn signature(&self) -> &Signature { &self.signature }
 ///    fn return_type(&self, args: &[DataType]) -> Result<DataType> {
 ///      if !matches!(args.get(0), Some(&DataType::Float64)) {
-///        return plan_err!("add_one only accepts Float64 arguments");
+///        return plan_err!("geo_mean only accepts Float64 arguments");
 ///      }
 ///      Ok(DataType::Float64)
 ///    }
@@ -327,6 +361,9 @@ where
 ///             Field::new("value", args.return_type.clone(), true),
 ///             Field::new("ordering", DataType::UInt32, true)
 ///        ])
+///    }
+///    fn documentation(&self) -> Option<&Documentation> {
+///        Some(get_doc())  
 ///    }
 /// }
 ///
@@ -575,12 +612,50 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
         None
     }
 
+    /// Return the value of this aggregate function if it can be determined
+    /// entirely from statistics and arguments.
+    ///
+    /// Using a [`ScalarValue`] rather than a runtime computation can significantly
+    /// improving query performance.
+    ///
+    /// For example, if the minimum value of column `x` is known to be `42` from
+    /// statistics, then the aggregate `MIN(x)` should return `Some(ScalarValue(42))`
+    fn value_from_stats(&self, _statistics_args: &StatisticsArgs) -> Option<ScalarValue> {
+        None
+    }
+
     /// Returns default value of the function given the input is all `null`.
     ///
     /// Most of the aggregate function return Null if input is Null,
     /// while `count` returns 0 if input is Null
     fn default_value(&self, data_type: &DataType) -> Result<ScalarValue> {
         ScalarValue::try_from(data_type)
+    }
+
+    /// Returns the documentation for this Aggregate UDF.
+    ///
+    /// Documentation can be accessed programmatically as well as
+    /// generating publicly facing documentation.
+    fn documentation(&self) -> Option<&Documentation> {
+        None
+    }
+}
+
+impl PartialEq for dyn AggregateUDFImpl {
+    fn eq(&self, other: &Self) -> bool {
+        self.equals(other)
+    }
+}
+
+// manual implementation of `PartialOrd`
+// There might be some wackiness with it, but this is based on the impl of eq for AggregateUDFImpl
+// https://users.rust-lang.org/t/how-to-compare-two-trait-objects-for-equality/88063/5
+impl PartialOrd for dyn AggregateUDFImpl {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        match self.name().partial_cmp(other.name()) {
+            Some(Ordering::Equal) => self.signature().partial_cmp(other.signature()),
+            cmp => cmp,
+        }
     }
 }
 
@@ -710,51 +785,147 @@ impl AggregateUDFImpl for AliasedAggregateUDFImpl {
     fn is_descending(&self) -> Option<bool> {
         self.inner.is_descending()
     }
-}
 
-/// Implementation of [`AggregateUDFImpl`] that wraps the function style pointers
-/// of the older API
-pub struct AggregateUDFLegacyWrapper {
-    /// name
-    name: String,
-    /// Signature (input arguments)
-    signature: Signature,
-    /// Return type
-    return_type: ReturnTypeFunction,
-    /// actual implementation
-    accumulator: AccumulatorFactoryFunction,
-}
-
-impl Debug for AggregateUDFLegacyWrapper {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        f.debug_struct("AggregateUDF")
-            .field("name", &self.name)
-            .field("signature", &self.signature)
-            .field("fun", &"<FUNC>")
-            .finish()
+    fn documentation(&self) -> Option<&Documentation> {
+        self.inner.documentation()
     }
 }
 
-impl AggregateUDFImpl for AggregateUDFLegacyWrapper {
-    fn as_any(&self) -> &dyn Any {
-        self
+// Aggregate UDF doc sections for use in public documentation
+pub mod aggregate_doc_sections {
+    use crate::DocSection;
+
+    pub fn doc_sections() -> Vec<DocSection> {
+        vec![
+            DOC_SECTION_GENERAL,
+            DOC_SECTION_STATISTICAL,
+            DOC_SECTION_APPROXIMATE,
+        ]
     }
 
-    fn name(&self) -> &str {
-        &self.name
+    pub const DOC_SECTION_GENERAL: DocSection = DocSection {
+        include: true,
+        label: "General Functions",
+        description: None,
+    };
+
+    pub const DOC_SECTION_STATISTICAL: DocSection = DocSection {
+        include: true,
+        label: "Statistical Functions",
+        description: None,
+    };
+
+    pub const DOC_SECTION_APPROXIMATE: DocSection = DocSection {
+        include: true,
+        label: "Approximate Functions",
+        description: None,
+    };
+}
+
+#[cfg(test)]
+mod test {
+    use crate::{AggregateUDF, AggregateUDFImpl};
+    use arrow::datatypes::{DataType, Field};
+    use datafusion_common::Result;
+    use datafusion_expr_common::accumulator::Accumulator;
+    use datafusion_expr_common::signature::{Signature, Volatility};
+    use datafusion_functions_aggregate_common::accumulator::{
+        AccumulatorArgs, StateFieldsArgs,
+    };
+    use std::any::Any;
+    use std::cmp::Ordering;
+
+    #[derive(Debug, Clone)]
+    struct AMeanUdf {
+        signature: Signature,
     }
 
-    fn signature(&self) -> &Signature {
-        &self.signature
+    impl AMeanUdf {
+        fn new() -> Self {
+            Self {
+                signature: Signature::uniform(
+                    1,
+                    vec![DataType::Float64],
+                    Volatility::Immutable,
+                ),
+            }
+        }
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        // Old API returns an Arc of the datatype for some reason
-        let res = (self.return_type)(arg_types)?;
-        Ok(res.as_ref().clone())
+    impl AggregateUDFImpl for AMeanUdf {
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+        fn name(&self) -> &str {
+            "a"
+        }
+        fn signature(&self) -> &Signature {
+            &self.signature
+        }
+        fn return_type(&self, _args: &[DataType]) -> Result<DataType> {
+            unimplemented!()
+        }
+        fn accumulator(
+            &self,
+            _acc_args: AccumulatorArgs,
+        ) -> Result<Box<dyn Accumulator>> {
+            unimplemented!()
+        }
+        fn state_fields(&self, _args: StateFieldsArgs) -> Result<Vec<Field>> {
+            unimplemented!()
+        }
     }
 
-    fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
-        (self.accumulator)(acc_args)
+    #[derive(Debug, Clone)]
+    struct BMeanUdf {
+        signature: Signature,
+    }
+    impl BMeanUdf {
+        fn new() -> Self {
+            Self {
+                signature: Signature::uniform(
+                    1,
+                    vec![DataType::Float64],
+                    Volatility::Immutable,
+                ),
+            }
+        }
+    }
+
+    impl AggregateUDFImpl for BMeanUdf {
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+        fn name(&self) -> &str {
+            "b"
+        }
+        fn signature(&self) -> &Signature {
+            &self.signature
+        }
+        fn return_type(&self, _args: &[DataType]) -> Result<DataType> {
+            unimplemented!()
+        }
+        fn accumulator(
+            &self,
+            _acc_args: AccumulatorArgs,
+        ) -> Result<Box<dyn Accumulator>> {
+            unimplemented!()
+        }
+        fn state_fields(&self, _args: StateFieldsArgs) -> Result<Vec<Field>> {
+            unimplemented!()
+        }
+    }
+
+    #[test]
+    fn test_partial_ord() {
+        // Test validates that partial ord is defined for AggregateUDF using the name and signature,
+        // not intended to exhaustively test all possibilities
+        let a1 = AggregateUDF::from(AMeanUdf::new());
+        let a2 = AggregateUDF::from(AMeanUdf::new());
+        assert_eq!(a1.partial_cmp(&a2), Some(Ordering::Equal));
+
+        let b1 = AggregateUDF::from(BMeanUdf::new());
+        assert!(a1 < b1);
+        assert!(!(a1 == b1));
     }
 }

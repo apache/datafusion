@@ -95,6 +95,16 @@ STORED AS CSV
 LOCATION 'foo.csv'
 OPTIONS ('format.delimiter' ';', 'format.column_index_truncate_length' '123')
 
+# Creating Temporary tables
+statement error DataFusion error: This feature is not implemented: Temporary tables not supported
+CREATE TEMPORARY TABLE my_temp_table (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL
+);
+
+statement error DataFusion error: This feature is not implemented: Temporary views not supported
+CREATE TEMPORARY VIEW my_temp_view AS SELECT id, name FROM my_table;
+
 # Partitioned table on a single file
 query error DataFusion error: Error during planning: Can't create a partitioned table backed by a single file, perhaps the URL is missing a trailing slash\?
 CREATE EXTERNAL TABLE single_file_partition(c1 int)
@@ -218,3 +228,62 @@ OPTIONS (
         format.delimiter '|',
         has_header false,
         compression gzip);
+
+# Create an external parquet table and infer schema to order by
+
+# query should succeed
+statement ok
+CREATE EXTERNAL TABLE t STORED AS parquet LOCATION '../../parquet-testing/data/alltypes_plain.parquet' WITH ORDER (id);
+
+## Verify that the table is created with a sort order. Explain should show output_ordering=[id@0 ASC]
+query TT
+EXPLAIN SELECT id FROM t ORDER BY id ASC;
+----
+logical_plan
+01)Sort: t.id ASC NULLS LAST
+02)--TableScan: t projection=[id]
+physical_plan ParquetExec: file_groups={1 group: [[WORKSPACE_ROOT/parquet-testing/data/alltypes_plain.parquet]]}, projection=[id], output_ordering=[id@0 ASC NULLS LAST]
+
+## Test a DESC order and verify that output_ordering is ASC from the previous OBRDER BY
+query TT
+EXPLAIN SELECT id FROM t ORDER BY id DESC;
+----
+logical_plan
+01)Sort: t.id DESC NULLS FIRST
+02)--TableScan: t projection=[id]
+physical_plan
+01)SortExec: expr=[id@0 DESC], preserve_partitioning=[false]
+02)--ParquetExec: file_groups={1 group: [[WORKSPACE_ROOT/parquet-testing/data/alltypes_plain.parquet]]}, projection=[id], output_ordering=[id@0 ASC NULLS LAST]
+
+statement ok
+DROP TABLE t;
+
+# Create table with non default sort order
+statement ok
+CREATE EXTERNAL TABLE t STORED AS parquet LOCATION '../../parquet-testing/data/alltypes_plain.parquet' WITH ORDER (id DESC NULLS FIRST);
+
+## Verify that the table is created with a sort order. Explain should show output_ordering=[id@0 DESC NULLS FIRST]
+query TT
+EXPLAIN SELECT id FROM t;
+----
+logical_plan TableScan: t projection=[id]
+physical_plan ParquetExec: file_groups={1 group: [[WORKSPACE_ROOT/parquet-testing/data/alltypes_plain.parquet]]}, projection=[id], output_ordering=[id@0 DESC]
+
+statement ok
+DROP TABLE t;
+
+# query should fail with bad column
+statement error DataFusion error: Error during planning: Column foo is not in schema
+CREATE EXTERNAL TABLE t STORED AS parquet LOCATION '../../parquet-testing/data/alltypes_plain.parquet' WITH ORDER (foo);
+
+# Create external table with qualified name should belong to the schema
+statement ok
+CREATE SCHEMA staging;
+
+statement ok
+CREATE EXTERNAL TABLE staging.foo STORED AS parquet LOCATION '../../parquet-testing/data/alltypes_plain.parquet';
+
+# Create external table with qualified name, but no schema should error
+statement error DataFusion error: Error during planning: failed to resolve schema: release
+CREATE EXTERNAL TABLE release.bar STORED AS parquet LOCATION '../../parquet-testing/data/alltypes_plain.parquet';
+

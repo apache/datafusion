@@ -20,20 +20,18 @@ use std::sync::Arc;
 
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::scalar::ScalarValue;
+use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::Result;
 use datafusion_physical_plan::aggregates::AggregateExec;
+use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion_physical_plan::projection::ProjectionExec;
-use datafusion_physical_plan::{expressions, ExecutionPlan, Statistics};
+use datafusion_physical_plan::udaf::{AggregateFunctionExpr, StatisticsArgs};
+use datafusion_physical_plan::{expressions, ExecutionPlan};
 
 use crate::PhysicalOptimizerRule;
-use datafusion_common::stats::Precision;
-use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_common::utils::expr::COUNT_STAR_EXPANSION;
-use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
-use datafusion_physical_plan::udaf::AggregateFunctionExpr;
 
 /// Optimizer that uses available statistics for aggregate functions
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct AggregateStatistics {}
 
 impl AggregateStatistics {
@@ -57,14 +55,19 @@ impl PhysicalOptimizerRule for AggregateStatistics {
             let stats = partial_agg_exec.input().statistics()?;
             let mut projections = vec![];
             for expr in partial_agg_exec.aggr_expr() {
-                if let Some((non_null_rows, name)) =
-                    take_optimizable_column_and_table_count(expr, &stats)
+                let field = expr.field();
+                let args = expr.expressions();
+                let statistics_args = StatisticsArgs {
+                    statistics: &stats,
+                    return_type: field.data_type(),
+                    is_distinct: expr.is_distinct(),
+                    exprs: args.as_slice(),
+                };
+                if let Some((optimizable_statistic, name)) =
+                    take_optimizable_value_from_statistics(&statistics_args, expr)
                 {
-                    projections.push((expressions::lit(non_null_rows), name.to_owned()));
-                } else if let Some((min, name)) = take_optimizable_min(expr, &stats) {
-                    projections.push((expressions::lit(min), name.to_owned()));
-                } else if let Some((max, name)) = take_optimizable_max(expr, &stats) {
-                    projections.push((expressions::lit(max), name.to_owned()));
+                    projections
+                        .push((expressions::lit(optimizable_statistic), name.to_owned()));
                 } else {
                     // TODO: we need all aggr_expr to be resolved (cf TODO fullres)
                     break;
@@ -135,160 +138,381 @@ fn take_optimizable(node: &dyn ExecutionPlan) -> Option<Arc<dyn ExecutionPlan>> 
     None
 }
 
-/// If this agg_expr is a count that can be exactly derived from the statistics, return it.
-fn take_optimizable_column_and_table_count(
-    agg_expr: &AggregateFunctionExpr,
-    stats: &Statistics,
-) -> Option<(ScalarValue, String)> {
-    let col_stats = &stats.column_statistics;
-    if is_non_distinct_count(agg_expr) {
-        if let Precision::Exact(num_rows) = stats.num_rows {
-            let exprs = agg_expr.expressions();
-            if exprs.len() == 1 {
-                // TODO optimize with exprs other than Column
-                if let Some(col_expr) =
-                    exprs[0].as_any().downcast_ref::<expressions::Column>()
-                {
-                    let current_val = &col_stats[col_expr.index()].null_count;
-                    if let &Precision::Exact(val) = current_val {
-                        return Some((
-                            ScalarValue::Int64(Some((num_rows - val) as i64)),
-                            agg_expr.name().to_string(),
-                        ));
-                    }
-                } else if let Some(lit_expr) =
-                    exprs[0].as_any().downcast_ref::<expressions::Literal>()
-                {
-                    if lit_expr.value() == &COUNT_STAR_EXPANSION {
-                        return Some((
-                            ScalarValue::Int64(Some(num_rows as i64)),
-                            agg_expr.name().to_string(),
-                        ));
-                    }
-                }
-            }
-        }
-    }
-    None
-}
-
-/// If this agg_expr is a min that is exactly defined in the statistics, return it.
-fn take_optimizable_min(
-    agg_expr: &AggregateFunctionExpr,
-    stats: &Statistics,
-) -> Option<(ScalarValue, String)> {
-    if let Precision::Exact(num_rows) = &stats.num_rows {
-        match *num_rows {
-            0 => {
-                // MIN/MAX with 0 rows is always null
-                if is_min(agg_expr) {
-                    if let Ok(min_data_type) =
-                        ScalarValue::try_from(agg_expr.field().unwrap().data_type())
-                    {
-                        return Some((min_data_type, agg_expr.name().to_string()));
-                    }
-                }
-            }
-            value if value > 0 => {
-                let col_stats = &stats.column_statistics;
-                if is_min(agg_expr) {
-                    let exprs = agg_expr.expressions();
-                    if exprs.len() == 1 {
-                        // TODO optimize with exprs other than Column
-                        if let Some(col_expr) =
-                            exprs[0].as_any().downcast_ref::<expressions::Column>()
-                        {
-                            if let Precision::Exact(val) =
-                                &col_stats[col_expr.index()].min_value
-                            {
-                                if !val.is_null() {
-                                    return Some((
-                                        val.clone(),
-                                        agg_expr.name().to_string(),
-                                    ));
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
-    None
-}
-
 /// If this agg_expr is a max that is exactly defined in the statistics, return it.
-fn take_optimizable_max(
+fn take_optimizable_value_from_statistics(
+    statistics_args: &StatisticsArgs,
     agg_expr: &AggregateFunctionExpr,
-    stats: &Statistics,
 ) -> Option<(ScalarValue, String)> {
-    if let Precision::Exact(num_rows) = &stats.num_rows {
-        match *num_rows {
-            0 => {
-                // MIN/MAX with 0 rows is always null
-                if is_max(agg_expr) {
-                    if let Ok(max_data_type) =
-                        ScalarValue::try_from(agg_expr.field().unwrap().data_type())
-                    {
-                        return Some((max_data_type, agg_expr.name().to_string()));
-                    }
-                }
+    let value = agg_expr.fun().value_from_stats(statistics_args);
+    value.map(|val| (val, agg_expr.name().to_string()))
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::aggregate_statistics::AggregateStatistics;
+    use crate::PhysicalOptimizerRule;
+    use datafusion_common::config::ConfigOptions;
+    use datafusion_common::utils::expr::COUNT_STAR_EXPANSION;
+    use datafusion_execution::TaskContext;
+    use datafusion_functions_aggregate::count::count_udaf;
+    use datafusion_physical_expr::aggregate::AggregateExprBuilder;
+    use datafusion_physical_expr::PhysicalExpr;
+    use datafusion_physical_plan::aggregates::AggregateExec;
+    use datafusion_physical_plan::projection::ProjectionExec;
+    use datafusion_physical_plan::udaf::AggregateFunctionExpr;
+    use datafusion_physical_plan::ExecutionPlan;
+    use std::sync::Arc;
+
+    use datafusion_common::Result;
+    use datafusion_expr_common::operator::Operator;
+
+    use datafusion_physical_plan::aggregates::PhysicalGroupBy;
+    use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
+    use datafusion_physical_plan::common;
+    use datafusion_physical_plan::filter::FilterExec;
+    use datafusion_physical_plan::memory::MemoryExec;
+
+    use arrow::array::Int32Array;
+    use arrow::datatypes::{DataType, Field, Schema};
+    use arrow::record_batch::RecordBatch;
+    use datafusion_common::cast::as_int64_array;
+    use datafusion_physical_expr::expressions::{self, cast};
+    use datafusion_physical_plan::aggregates::AggregateMode;
+
+    /// Describe the type of aggregate being tested
+    pub enum TestAggregate {
+        /// Testing COUNT(*) type aggregates
+        CountStar,
+
+        /// Testing for COUNT(column) aggregate
+        ColumnA(Arc<Schema>),
+    }
+
+    impl TestAggregate {
+        /// Create a new COUNT(*) aggregate
+        pub fn new_count_star() -> Self {
+            Self::CountStar
+        }
+
+        /// Create a new COUNT(column) aggregate
+        pub fn new_count_column(schema: &Arc<Schema>) -> Self {
+            Self::ColumnA(Arc::clone(schema))
+        }
+
+        /// Return appropriate expr depending if COUNT is for col or table (*)
+        pub fn count_expr(&self, schema: &Schema) -> AggregateFunctionExpr {
+            AggregateExprBuilder::new(count_udaf(), vec![self.column()])
+                .schema(Arc::new(schema.clone()))
+                .alias(self.column_name())
+                .build()
+                .unwrap()
+        }
+
+        /// what argument would this aggregate need in the plan?
+        fn column(&self) -> Arc<dyn PhysicalExpr> {
+            match self {
+                Self::CountStar => expressions::lit(COUNT_STAR_EXPANSION),
+                Self::ColumnA(s) => expressions::col("a", s).unwrap(),
             }
-            value if value > 0 => {
-                let col_stats = &stats.column_statistics;
-                if is_max(agg_expr) {
-                    let exprs = agg_expr.expressions();
-                    if exprs.len() == 1 {
-                        // TODO optimize with exprs other than Column
-                        if let Some(col_expr) =
-                            exprs[0].as_any().downcast_ref::<expressions::Column>()
-                        {
-                            if let Precision::Exact(val) =
-                                &col_stats[col_expr.index()].max_value
-                            {
-                                if !val.is_null() {
-                                    return Some((
-                                        val.clone(),
-                                        agg_expr.name().to_string(),
-                                    ));
-                                }
-                            }
-                        }
-                    }
-                }
+        }
+
+        /// What name would this aggregate produce in a plan?
+        pub fn column_name(&self) -> &'static str {
+            match self {
+                Self::CountStar => "COUNT(*)",
+                Self::ColumnA(_) => "COUNT(a)",
             }
-            _ => {}
+        }
+
+        /// What is the expected count?
+        pub fn expected_count(&self) -> i64 {
+            match self {
+                TestAggregate::CountStar => 3,
+                TestAggregate::ColumnA(_) => 2,
+            }
         }
     }
-    None
-}
 
-// TODO: Move this check into AggregateUDFImpl
-// https://github.com/apache/datafusion/issues/11153
-fn is_non_distinct_count(agg_expr: &AggregateFunctionExpr) -> bool {
-    if agg_expr.fun().name() == "count" && !agg_expr.is_distinct() {
-        return true;
+    /// Mock data using a MemoryExec which has an exact count statistic
+    fn mock_data() -> Result<Arc<MemoryExec>> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Int32, true),
+        ]));
+
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(Int32Array::from(vec![Some(1), Some(2), None])),
+                Arc::new(Int32Array::from(vec![Some(4), None, Some(6)])),
+            ],
+        )?;
+
+        Ok(Arc::new(MemoryExec::try_new(
+            &[vec![batch]],
+            Arc::clone(&schema),
+            None,
+        )?))
     }
-    false
-}
 
-// TODO: Move this check into AggregateUDFImpl
-// https://github.com/apache/datafusion/issues/11153
-fn is_min(agg_expr: &AggregateFunctionExpr) -> bool {
-    if agg_expr.fun().name().to_lowercase() == "min" {
-        return true;
+    /// Checks that the count optimization was applied and we still get the right result
+    async fn assert_count_optim_success(
+        plan: AggregateExec,
+        agg: TestAggregate,
+    ) -> Result<()> {
+        let task_ctx = Arc::new(TaskContext::default());
+        let plan: Arc<dyn ExecutionPlan> = Arc::new(plan);
+
+        let config = ConfigOptions::new();
+        let optimized =
+            AggregateStatistics::new().optimize(Arc::clone(&plan), &config)?;
+
+        // A ProjectionExec is a sign that the count optimization was applied
+        assert!(optimized.as_any().is::<ProjectionExec>());
+
+        // run both the optimized and nonoptimized plan
+        let optimized_result =
+            common::collect(optimized.execute(0, Arc::clone(&task_ctx))?).await?;
+        let nonoptimized_result = common::collect(plan.execute(0, task_ctx)?).await?;
+        assert_eq!(optimized_result.len(), nonoptimized_result.len());
+
+        //  and validate the results are the same and expected
+        assert_eq!(optimized_result.len(), 1);
+        check_batch(optimized_result.into_iter().next().unwrap(), &agg);
+        // check the non optimized one too to ensure types and names remain the same
+        assert_eq!(nonoptimized_result.len(), 1);
+        check_batch(nonoptimized_result.into_iter().next().unwrap(), &agg);
+
+        Ok(())
     }
-    false
-}
 
-// TODO: Move this check into AggregateUDFImpl
-// https://github.com/apache/datafusion/issues/11153
-fn is_max(agg_expr: &AggregateFunctionExpr) -> bool {
-    if agg_expr.fun().name().to_lowercase() == "max" {
-        return true;
+    fn check_batch(batch: RecordBatch, agg: &TestAggregate) {
+        let schema = batch.schema();
+        let fields = schema.fields();
+        assert_eq!(fields.len(), 1);
+
+        let field = &fields[0];
+        assert_eq!(field.name(), agg.column_name());
+        assert_eq!(field.data_type(), &DataType::Int64);
+        // note that nullabiolity differs
+
+        assert_eq!(
+            as_int64_array(batch.column(0)).unwrap().values(),
+            &[agg.expected_count()]
+        );
     }
-    false
-}
 
-// See tests in datafusion/core/tests/physical_optimizer
+    #[tokio::test]
+    async fn test_count_partial_direct_child() -> Result<()> {
+        // basic test case with the aggregation applied on a source with exact statistics
+        let source = mock_data()?;
+        let schema = source.schema();
+        let agg = TestAggregate::new_count_star();
+
+        let partial_agg = AggregateExec::try_new(
+            AggregateMode::Partial,
+            PhysicalGroupBy::default(),
+            vec![agg.count_expr(&schema)],
+            vec![None],
+            source,
+            Arc::clone(&schema),
+        )?;
+
+        let final_agg = AggregateExec::try_new(
+            AggregateMode::Final,
+            PhysicalGroupBy::default(),
+            vec![agg.count_expr(&schema)],
+            vec![None],
+            Arc::new(partial_agg),
+            Arc::clone(&schema),
+        )?;
+
+        assert_count_optim_success(final_agg, agg).await?;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_count_partial_with_nulls_direct_child() -> Result<()> {
+        // basic test case with the aggregation applied on a source with exact statistics
+        let source = mock_data()?;
+        let schema = source.schema();
+        let agg = TestAggregate::new_count_column(&schema);
+
+        let partial_agg = AggregateExec::try_new(
+            AggregateMode::Partial,
+            PhysicalGroupBy::default(),
+            vec![agg.count_expr(&schema)],
+            vec![None],
+            source,
+            Arc::clone(&schema),
+        )?;
+
+        let final_agg = AggregateExec::try_new(
+            AggregateMode::Final,
+            PhysicalGroupBy::default(),
+            vec![agg.count_expr(&schema)],
+            vec![None],
+            Arc::new(partial_agg),
+            Arc::clone(&schema),
+        )?;
+
+        assert_count_optim_success(final_agg, agg).await?;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_count_partial_indirect_child() -> Result<()> {
+        let source = mock_data()?;
+        let schema = source.schema();
+        let agg = TestAggregate::new_count_star();
+
+        let partial_agg = AggregateExec::try_new(
+            AggregateMode::Partial,
+            PhysicalGroupBy::default(),
+            vec![agg.count_expr(&schema)],
+            vec![None],
+            source,
+            Arc::clone(&schema),
+        )?;
+
+        // We introduce an intermediate optimization step between the partial and final aggregtator
+        let coalesce = CoalescePartitionsExec::new(Arc::new(partial_agg));
+
+        let final_agg = AggregateExec::try_new(
+            AggregateMode::Final,
+            PhysicalGroupBy::default(),
+            vec![agg.count_expr(&schema)],
+            vec![None],
+            Arc::new(coalesce),
+            Arc::clone(&schema),
+        )?;
+
+        assert_count_optim_success(final_agg, agg).await?;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_count_partial_with_nulls_indirect_child() -> Result<()> {
+        let source = mock_data()?;
+        let schema = source.schema();
+        let agg = TestAggregate::new_count_column(&schema);
+
+        let partial_agg = AggregateExec::try_new(
+            AggregateMode::Partial,
+            PhysicalGroupBy::default(),
+            vec![agg.count_expr(&schema)],
+            vec![None],
+            source,
+            Arc::clone(&schema),
+        )?;
+
+        // We introduce an intermediate optimization step between the partial and final aggregtator
+        let coalesce = CoalescePartitionsExec::new(Arc::new(partial_agg));
+
+        let final_agg = AggregateExec::try_new(
+            AggregateMode::Final,
+            PhysicalGroupBy::default(),
+            vec![agg.count_expr(&schema)],
+            vec![None],
+            Arc::new(coalesce),
+            Arc::clone(&schema),
+        )?;
+
+        assert_count_optim_success(final_agg, agg).await?;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_count_inexact_stat() -> Result<()> {
+        let source = mock_data()?;
+        let schema = source.schema();
+        let agg = TestAggregate::new_count_star();
+
+        // adding a filter makes the statistics inexact
+        let filter = Arc::new(FilterExec::try_new(
+            expressions::binary(
+                expressions::col("a", &schema)?,
+                Operator::Gt,
+                cast(expressions::lit(1u32), &schema, DataType::Int32)?,
+                &schema,
+            )?,
+            source,
+        )?);
+
+        let partial_agg = AggregateExec::try_new(
+            AggregateMode::Partial,
+            PhysicalGroupBy::default(),
+            vec![agg.count_expr(&schema)],
+            vec![None],
+            filter,
+            Arc::clone(&schema),
+        )?;
+
+        let final_agg = AggregateExec::try_new(
+            AggregateMode::Final,
+            PhysicalGroupBy::default(),
+            vec![agg.count_expr(&schema)],
+            vec![None],
+            Arc::new(partial_agg),
+            Arc::clone(&schema),
+        )?;
+
+        let conf = ConfigOptions::new();
+        let optimized =
+            AggregateStatistics::new().optimize(Arc::new(final_agg), &conf)?;
+
+        // check that the original ExecutionPlan was not replaced
+        assert!(optimized.as_any().is::<AggregateExec>());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_count_with_nulls_inexact_stat() -> Result<()> {
+        let source = mock_data()?;
+        let schema = source.schema();
+        let agg = TestAggregate::new_count_column(&schema);
+
+        // adding a filter makes the statistics inexact
+        let filter = Arc::new(FilterExec::try_new(
+            expressions::binary(
+                expressions::col("a", &schema)?,
+                Operator::Gt,
+                cast(expressions::lit(1u32), &schema, DataType::Int32)?,
+                &schema,
+            )?,
+            source,
+        )?);
+
+        let partial_agg = AggregateExec::try_new(
+            AggregateMode::Partial,
+            PhysicalGroupBy::default(),
+            vec![agg.count_expr(&schema)],
+            vec![None],
+            filter,
+            Arc::clone(&schema),
+        )?;
+
+        let final_agg = AggregateExec::try_new(
+            AggregateMode::Final,
+            PhysicalGroupBy::default(),
+            vec![agg.count_expr(&schema)],
+            vec![None],
+            Arc::new(partial_agg),
+            Arc::clone(&schema),
+        )?;
+
+        let conf = ConfigOptions::new();
+        let optimized =
+            AggregateStatistics::new().optimize(Arc::new(final_agg), &conf)?;
+
+        // check that the original ExecutionPlan was not replaced
+        assert!(optimized.as_any().is::<AggregateExec>());
+
+        Ok(())
+    }
+}

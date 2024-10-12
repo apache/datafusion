@@ -18,11 +18,16 @@
 use std::sync::Arc;
 
 use arrow_schema::TimeUnit;
+use datafusion_expr::Expr;
 use regex::Regex;
 use sqlparser::{
-    ast::{self, Ident, ObjectName, TimezoneInfo},
+    ast::{self, Function, Ident, ObjectName, TimezoneInfo},
     keywords::ALL_KEYWORDS,
 };
+
+use datafusion_common::Result;
+
+use super::{utils::date_part_to_sql, Unparser};
 
 /// `Dialect` to use for Unparsing
 ///
@@ -96,6 +101,30 @@ pub trait Dialect: Send + Sync {
 
         ast::DataType::Timestamp(None, tz_info)
     }
+
+    /// The SQL type to use for Arrow Date32 unparsing
+    /// Most dialects use Date, but some, like SQLite require TEXT
+    fn date32_cast_dtype(&self) -> sqlparser::ast::DataType {
+        sqlparser::ast::DataType::Date
+    }
+
+    /// Does the dialect support specifying column aliases as part of alias table definition?
+    /// (SELECT col1, col2 from my_table) AS my_table_alias(col1_alias, col2_alias)
+    fn supports_column_alias_in_table_alias(&self) -> bool {
+        true
+    }
+
+    /// Allows the dialect to override scalar function unparsing if the dialect has specific rules.
+    /// Returns None if the default unparsing should be used, or Some(ast::Expr) if there is
+    /// a custom implementation for the function.
+    fn scalar_function_to_sql_overrides(
+        &self,
+        _unparser: &Unparser,
+        _func_name: &str,
+        _args: &[Expr],
+    ) -> Result<Option<ast::Expr>> {
+        Ok(None)
+    }
 }
 
 /// `IntervalStyle` to use for unparsing
@@ -124,6 +153,7 @@ pub enum IntervalStyle {
 pub enum DateFieldExtractStyle {
     DatePart,
     Extract,
+    Strftime,
 }
 
 pub struct DefaultDialect {}
@@ -132,7 +162,7 @@ impl Dialect for DefaultDialect {
     fn identifier_quote_style(&self, identifier: &str) -> Option<char> {
         let identifier_regex = Regex::new(r"^[a-zA-Z_][a-zA-Z0-9_]*$").unwrap();
         let id_upper = identifier.to_uppercase();
-        // special case ignore "ID", see https://github.com/sqlparser-rs/sqlparser-rs/issues/1382
+        // Special case ignore "ID", see https://github.com/sqlparser-rs/sqlparser-rs/issues/1382
         // ID is a keyword in ClickHouse, but we don't want to quote it when unparsing SQL here
         if (id_upper != "ID" && ALL_KEYWORDS.contains(&id_upper.as_str()))
             || !identifier_regex.is_match(identifier)
@@ -157,6 +187,67 @@ impl Dialect for PostgreSqlDialect {
 
     fn float64_ast_dtype(&self) -> sqlparser::ast::DataType {
         sqlparser::ast::DataType::DoublePrecision
+    }
+
+    fn scalar_function_to_sql_overrides(
+        &self,
+        unparser: &Unparser,
+        func_name: &str,
+        args: &[Expr],
+    ) -> Result<Option<ast::Expr>> {
+        if func_name == "round" {
+            return Ok(Some(
+                self.round_to_sql_enforce_numeric(unparser, func_name, args)?,
+            ));
+        }
+
+        Ok(None)
+    }
+}
+
+impl PostgreSqlDialect {
+    fn round_to_sql_enforce_numeric(
+        &self,
+        unparser: &Unparser,
+        func_name: &str,
+        args: &[Expr],
+    ) -> Result<ast::Expr> {
+        let mut args = unparser.function_args_to_sql(args)?;
+
+        // Enforce the first argument to be Numeric
+        if let Some(ast::FunctionArg::Unnamed(ast::FunctionArgExpr::Expr(expr))) =
+            args.first_mut()
+        {
+            if let ast::Expr::Cast { data_type, .. } = expr {
+                // Don't create an additional cast wrapper if we can update the existing one
+                *data_type = ast::DataType::Numeric(ast::ExactNumberInfo::None);
+            } else {
+                // Wrap the expression in a new cast
+                *expr = ast::Expr::Cast {
+                    kind: ast::CastKind::Cast,
+                    expr: Box::new(expr.clone()),
+                    data_type: ast::DataType::Numeric(ast::ExactNumberInfo::None),
+                    format: None,
+                };
+            }
+        }
+
+        Ok(ast::Expr::Function(Function {
+            name: ast::ObjectName(vec![Ident {
+                value: func_name.to_string(),
+                quote_style: None,
+            }]),
+            args: ast::FunctionArguments::List(ast::FunctionArgumentList {
+                duplicate_treatment: None,
+                args,
+                clauses: vec![],
+            }),
+            filter: None,
+            null_treatment: None,
+            over: None,
+            within_group: vec![],
+            parameters: ast::FunctionArguments::None,
+        }))
     }
 }
 
@@ -198,6 +289,19 @@ impl Dialect for MySqlDialect {
     ) -> ast::DataType {
         ast::DataType::Datetime(None)
     }
+
+    fn scalar_function_to_sql_overrides(
+        &self,
+        unparser: &Unparser,
+        func_name: &str,
+        args: &[Expr],
+    ) -> Result<Option<ast::Expr>> {
+        if func_name == "date_part" {
+            return date_part_to_sql(unparser, self.date_field_extract_style(), args);
+        }
+
+        Ok(None)
+    }
 }
 
 pub struct SqliteDialect {}
@@ -205,6 +309,31 @@ pub struct SqliteDialect {}
 impl Dialect for SqliteDialect {
     fn identifier_quote_style(&self, _: &str) -> Option<char> {
         Some('`')
+    }
+
+    fn date_field_extract_style(&self) -> DateFieldExtractStyle {
+        DateFieldExtractStyle::Strftime
+    }
+
+    fn date32_cast_dtype(&self) -> sqlparser::ast::DataType {
+        sqlparser::ast::DataType::Text
+    }
+
+    fn supports_column_alias_in_table_alias(&self) -> bool {
+        false
+    }
+
+    fn scalar_function_to_sql_overrides(
+        &self,
+        unparser: &Unparser,
+        func_name: &str,
+        args: &[Expr],
+    ) -> Result<Option<ast::Expr>> {
+        if func_name == "date_part" {
+            return date_part_to_sql(unparser, self.date_field_extract_style(), args);
+        }
+
+        Ok(None)
     }
 }
 
@@ -220,6 +349,8 @@ pub struct CustomDialect {
     int64_cast_dtype: ast::DataType,
     timestamp_cast_dtype: ast::DataType,
     timestamp_tz_cast_dtype: ast::DataType,
+    date32_cast_dtype: sqlparser::ast::DataType,
+    supports_column_alias_in_table_alias: bool,
 }
 
 impl Default for CustomDialect {
@@ -239,12 +370,14 @@ impl Default for CustomDialect {
                 None,
                 TimezoneInfo::WithTimeZone,
             ),
+            date32_cast_dtype: sqlparser::ast::DataType::Date,
+            supports_column_alias_in_table_alias: true,
         }
     }
 }
 
 impl CustomDialect {
-    // create a CustomDialect
+    // Create a CustomDialect
     #[deprecated(note = "please use `CustomDialectBuilder` instead")]
     pub fn new(identifier_quote_style: Option<char>) -> Self {
         Self {
@@ -302,6 +435,27 @@ impl Dialect for CustomDialect {
             self.timestamp_cast_dtype.clone()
         }
     }
+
+    fn date32_cast_dtype(&self) -> sqlparser::ast::DataType {
+        self.date32_cast_dtype.clone()
+    }
+
+    fn supports_column_alias_in_table_alias(&self) -> bool {
+        self.supports_column_alias_in_table_alias
+    }
+
+    fn scalar_function_to_sql_overrides(
+        &self,
+        unparser: &Unparser,
+        func_name: &str,
+        args: &[Expr],
+    ) -> Result<Option<ast::Expr>> {
+        if func_name == "date_part" {
+            return date_part_to_sql(unparser, self.date_field_extract_style(), args);
+        }
+
+        Ok(None)
+    }
 }
 
 /// `CustomDialectBuilder` to build `CustomDialect` using builder pattern
@@ -330,6 +484,8 @@ pub struct CustomDialectBuilder {
     int64_cast_dtype: ast::DataType,
     timestamp_cast_dtype: ast::DataType,
     timestamp_tz_cast_dtype: ast::DataType,
+    date32_cast_dtype: ast::DataType,
+    supports_column_alias_in_table_alias: bool,
 }
 
 impl Default for CustomDialectBuilder {
@@ -355,6 +511,8 @@ impl CustomDialectBuilder {
                 None,
                 TimezoneInfo::WithTimeZone,
             ),
+            date32_cast_dtype: sqlparser::ast::DataType::Date,
+            supports_column_alias_in_table_alias: true,
         }
     }
 
@@ -371,6 +529,9 @@ impl CustomDialectBuilder {
             int64_cast_dtype: self.int64_cast_dtype,
             timestamp_cast_dtype: self.timestamp_cast_dtype,
             timestamp_tz_cast_dtype: self.timestamp_tz_cast_dtype,
+            date32_cast_dtype: self.date32_cast_dtype,
+            supports_column_alias_in_table_alias: self
+                .supports_column_alias_in_table_alias,
         }
     }
 
@@ -380,7 +541,7 @@ impl CustomDialectBuilder {
         self
     }
 
-    /// Customize the dialect to supports `NULLS FIRST` in `ORDER BY` clauses
+    /// Customize the dialect to support `NULLS FIRST` in `ORDER BY` clauses
     pub fn with_supports_nulls_first_in_sort(
         mut self,
         supports_nulls_first_in_sort: bool,
@@ -451,6 +612,20 @@ impl CustomDialectBuilder {
     ) -> Self {
         self.timestamp_cast_dtype = timestamp_cast_dtype;
         self.timestamp_tz_cast_dtype = timestamp_tz_cast_dtype;
+        self
+    }
+
+    pub fn with_date32_cast_dtype(mut self, date32_cast_dtype: ast::DataType) -> Self {
+        self.date32_cast_dtype = date32_cast_dtype;
+        self
+    }
+
+    /// Customize the dialect to support column aliases as part of alias table definition
+    pub fn with_supports_column_alias_in_table_alias(
+        mut self,
+        supports_column_alias_in_table_alias: bool,
+    ) -> Self {
+        self.supports_column_alias_in_table_alias = supports_column_alias_in_table_alias;
         self
     }
 }

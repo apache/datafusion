@@ -20,6 +20,7 @@ use std::sync::Arc;
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 
 use datafusion_common::{not_impl_err, plan_err, Constraints, Result, ScalarValue};
+use datafusion_expr::expr::Sort;
 use datafusion_expr::{
     CreateMemoryTable, DdlStatement, Distinct, Expr, LogicalPlan, LogicalPlanBuilder,
     Operator,
@@ -119,7 +120,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     pub(super) fn order_by(
         &self,
         plan: LogicalPlan,
-        order_by: Vec<Expr>,
+        order_by: Vec<Sort>,
     ) -> Result<LogicalPlan> {
         if order_by.is_empty() {
             return Ok(plan);
@@ -204,7 +205,7 @@ fn convert_usize_with_check(n: i64, arg_name: &str) -> Result<usize> {
 /// Returns the order by expressions from the query.
 fn to_order_by_exprs(order_by: Option<OrderBy>) -> Result<Vec<OrderByExpr>> {
     let Some(OrderBy { exprs, interpolate }) = order_by else {
-        // if no order by, return an empty array
+        // If no order by, return an empty array.
         return Ok(vec![]);
     };
     if let Some(_interpolate) = interpolate {

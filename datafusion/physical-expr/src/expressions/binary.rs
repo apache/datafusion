@@ -27,12 +27,11 @@ use crate::PhysicalExpr;
 use arrow::array::*;
 use arrow::compute::kernels::boolean::{and_kleene, not, or_kleene};
 use arrow::compute::kernels::cmp::*;
-use arrow::compute::kernels::comparison::{
-    regexp_is_match_utf8, regexp_is_match_utf8_scalar,
-};
+use arrow::compute::kernels::comparison::{regexp_is_match, regexp_is_match_scalar};
 use arrow::compute::kernels::concat_elements::concat_elements_utf8;
 use arrow::compute::{cast, ilike, like, nilike, nlike};
 use arrow::datatypes::*;
+use arrow_schema::ArrowError;
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::{internal_err, Result, ScalarValue};
 use datafusion_expr::interval_arithmetic::{apply_operator, Interval};
@@ -133,23 +132,26 @@ impl std::fmt::Display for BinaryExpr {
 }
 
 /// Invoke a boolean kernel on a pair of arrays
-macro_rules! boolean_op {
-    ($LEFT:expr, $RIGHT:expr, $OP:ident) => {{
-        let ll = as_boolean_array($LEFT).expect("boolean_op failed to downcast array");
-        let rr = as_boolean_array($RIGHT).expect("boolean_op failed to downcast array");
-        Ok(Arc::new($OP(&ll, &rr)?))
-    }};
+#[inline]
+fn boolean_op(
+    left: &dyn Array,
+    right: &dyn Array,
+    op: impl FnOnce(&BooleanArray, &BooleanArray) -> Result<BooleanArray, ArrowError>,
+) -> Result<Arc<(dyn Array + 'static)>, ArrowError> {
+    let ll = as_boolean_array(left).expect("boolean_op failed to downcast left array");
+    let rr = as_boolean_array(right).expect("boolean_op failed to downcast right array");
+    op(ll, rr).map(|t| Arc::new(t) as _)
 }
 
 macro_rules! binary_string_array_flag_op {
     ($LEFT:expr, $RIGHT:expr, $OP:ident, $NOT:expr, $FLAG:expr) => {{
         match $LEFT.data_type() {
-            DataType::Utf8 => {
+            DataType::Utf8View | DataType::Utf8 => {
                 compute_utf8_flag_op!($LEFT, $RIGHT, $OP, StringArray, $NOT, $FLAG)
-            }
+            },
             DataType::LargeUtf8 => {
                 compute_utf8_flag_op!($LEFT, $RIGHT, $OP, LargeStringArray, $NOT, $FLAG)
-            }
+            },
             other => internal_err!(
                 "Data type {:?} not supported for binary_string_array_flag_op operation '{}' on string array",
                 other, stringify!($OP)
@@ -175,7 +177,7 @@ macro_rules! compute_utf8_flag_op {
         } else {
             None
         };
-        let mut array = paste::expr! {[<$OP _utf8>]}(&ll, &rr, flag.as_ref())?;
+        let mut array = $OP(ll, rr, flag.as_ref())?;
         if $NOT {
             array = not(&array).unwrap();
         }
@@ -184,14 +186,37 @@ macro_rules! compute_utf8_flag_op {
 }
 
 macro_rules! binary_string_array_flag_op_scalar {
-    ($LEFT:expr, $RIGHT:expr, $OP:ident, $NOT:expr, $FLAG:expr) => {{
+    ($LEFT:ident, $RIGHT:expr, $OP:ident, $NOT:expr, $FLAG:expr) => {{
+        // This macro is slightly different from binary_string_array_flag_op because, when comparing with a scalar value,
+        // the query can be optimized in such a way that operands will be dicts, so we need to support it here
         let result: Result<Arc<dyn Array>> = match $LEFT.data_type() {
-            DataType::Utf8 => {
+            DataType::Utf8View | DataType::Utf8 => {
                 compute_utf8_flag_op_scalar!($LEFT, $RIGHT, $OP, StringArray, $NOT, $FLAG)
-            }
+            },
             DataType::LargeUtf8 => {
                 compute_utf8_flag_op_scalar!($LEFT, $RIGHT, $OP, LargeStringArray, $NOT, $FLAG)
-            }
+            },
+            DataType::Dictionary(_, _) => {
+                let values = $LEFT.as_any_dictionary().values();
+
+                match values.data_type() {
+                    DataType::Utf8View | DataType::Utf8 => compute_utf8_flag_op_scalar!(values, $RIGHT, $OP, StringArray, $NOT, $FLAG),
+                    DataType::LargeUtf8 => compute_utf8_flag_op_scalar!(values, $RIGHT, $OP, LargeStringArray, $NOT, $FLAG),
+                    other => internal_err!(
+                        "Data type {:?} not supported as a dictionary value type for binary_string_array_flag_op_scalar operation '{}' on string array",
+                        other, stringify!($OP)
+                    ),
+                }.map(
+                    // downcast_dictionary_array duplicates code per possible key type, so we aim to do all prep work before
+                    |evaluated_values| downcast_dictionary_array! {
+                        $LEFT => {
+                            let unpacked_dict = evaluated_values.take_iter($LEFT.keys().iter().map(|opt| opt.map(|v| v as _))).collect::<BooleanArray>();
+                            Arc::new(unpacked_dict) as _
+                        },
+                        _ => unreachable!(),
+                    }
+                )
+            },
             other => internal_err!(
                 "Data type {:?} not supported for binary_string_array_flag_op_scalar operation '{}' on string array",
                 other, stringify!($OP)
@@ -209,20 +234,32 @@ macro_rules! compute_utf8_flag_op_scalar {
             .downcast_ref::<$ARRAYTYPE>()
             .expect("compute_utf8_flag_op_scalar failed to downcast array");
 
-        if let ScalarValue::Utf8(Some(string_value))|ScalarValue::LargeUtf8(Some(string_value)) = $RIGHT {
-            let flag = if $FLAG { Some("i") } else { None };
-            let mut array =
-                paste::expr! {[<$OP _utf8_scalar>]}(&ll, &string_value, flag)?;
-            if $NOT {
-                array = not(&array).unwrap();
-            }
-            Ok(Arc::new(array))
-        } else {
-            internal_err!(
+        let string_value = match $RIGHT {
+            ScalarValue::Utf8(Some(string_value)) | ScalarValue::LargeUtf8(Some(string_value)) => string_value,
+            ScalarValue::Dictionary(_, value) => {
+                match *value {
+                    ScalarValue::Utf8(Some(string_value)) | ScalarValue::LargeUtf8(Some(string_value)) => string_value,
+                    other => return internal_err!(
+                            "compute_utf8_flag_op_scalar failed to cast dictionary value {} for operation '{}'",
+                            other, stringify!($OP)
+                        )
+                }
+            },
+            _ => return internal_err!(
                 "compute_utf8_flag_op_scalar failed to cast literal value {} for operation '{}'",
                 $RIGHT, stringify!($OP)
             )
+
+        };
+
+        let flag = $FLAG.then_some("i");
+        let mut array =
+            paste::expr! {[<$OP _scalar>]}(ll, &string_value, flag)?;
+        if $NOT {
+            array = not(&array).unwrap();
         }
+
+        Ok(Arc::new(array))
     }};
 }
 
@@ -427,7 +464,7 @@ impl PhysicalExpr for BinaryExpr {
                 // end-points of its children.
                 Ok(Some(vec![]))
             }
-        } else if self.op.is_comparison_operator() {
+        } else if self.op.supports_propagation() {
             Ok(
                 propagate_comparison(&self.op, interval, left_interval, right_interval)?
                     .map(|(left, right)| vec![left, right]),
@@ -596,7 +633,7 @@ impl BinaryExpr {
             | NotLikeMatch | NotILikeMatch => unreachable!(),
             And => {
                 if left_data_type == &DataType::Boolean {
-                    boolean_op!(&left, &right, and_kleene)
+                    Ok(boolean_op(&left, &right, and_kleene)?)
                 } else {
                     internal_err!(
                         "Cannot evaluate binary expression {:?} with types {:?} and {:?}",
@@ -608,7 +645,7 @@ impl BinaryExpr {
             }
             Or => {
                 if left_data_type == &DataType::Boolean {
-                    boolean_op!(&left, &right, or_kleene)
+                    Ok(boolean_op(&left, &right, or_kleene)?)
                 } else {
                     internal_err!(
                         "Cannot evaluate binary expression {:?} with types {:?} and {:?}",
@@ -675,6 +712,22 @@ pub fn binary(
     _input_schema: &Schema,
 ) -> Result<Arc<dyn PhysicalExpr>> {
     Ok(Arc::new(BinaryExpr::new(lhs, op, rhs)))
+}
+
+/// Create a similar to expression
+pub fn similar_to(
+    negated: bool,
+    case_insensitive: bool,
+    expr: Arc<dyn PhysicalExpr>,
+    pattern: Arc<dyn PhysicalExpr>,
+) -> Result<Arc<dyn PhysicalExpr>> {
+    let binary_op = match (negated, case_insensitive) {
+        (false, false) => Operator::RegexMatch,
+        (false, true) => Operator::RegexIMatch,
+        (true, false) => Operator::RegexNotMatch,
+        (true, true) => Operator::RegexNotIMatch,
+    };
+    Ok(Arc::new(BinaryExpr::new(expr, binary_op, pattern)))
 }
 
 #[cfg(test)]
@@ -932,6 +985,54 @@ mod tests {
             BooleanArray,
             DataType::Boolean,
             [true, false],
+        );
+        test_coercion!(
+            StringViewArray,
+            DataType::Utf8View,
+            vec!["abc"; 5],
+            StringArray,
+            DataType::Utf8,
+            vec!["^a", "^A", "(b|d)", "(B|D)", "^(b|c)"],
+            Operator::RegexMatch,
+            BooleanArray,
+            DataType::Boolean,
+            [true, false, true, false, false],
+        );
+        test_coercion!(
+            StringViewArray,
+            DataType::Utf8View,
+            vec!["abc"; 5],
+            StringArray,
+            DataType::Utf8,
+            vec!["^a", "^A", "(b|d)", "(B|D)", "^(b|c)"],
+            Operator::RegexIMatch,
+            BooleanArray,
+            DataType::Boolean,
+            [true, true, true, true, false],
+        );
+        test_coercion!(
+            StringArray,
+            DataType::Utf8,
+            vec!["abc"; 5],
+            StringViewArray,
+            DataType::Utf8View,
+            vec!["^a", "^A", "(b|d)", "(B|D)", "^(b|c)"],
+            Operator::RegexNotMatch,
+            BooleanArray,
+            DataType::Boolean,
+            [false, true, false, true, true],
+        );
+        test_coercion!(
+            StringArray,
+            DataType::Utf8,
+            vec!["abc"; 5],
+            StringViewArray,
+            DataType::Utf8View,
+            vec!["^a", "^A", "(b|d)", "(B|D)", "^(b|c)"],
+            Operator::RegexNotIMatch,
+            BooleanArray,
+            DataType::Boolean,
+            [false, false, false, false, true],
         );
         test_coercion!(
             StringArray,
@@ -4221,5 +4322,63 @@ mod tests {
             .to_string()
             .contains("Overflow happened on: 2147483647 * 2"));
         Ok(())
+    }
+
+    /// Test helper for SIMILAR TO binary operation
+    fn apply_similar_to(
+        schema: &SchemaRef,
+        va: Vec<&str>,
+        vb: Vec<&str>,
+        negated: bool,
+        case_insensitive: bool,
+        expected: &BooleanArray,
+    ) -> Result<()> {
+        let a = StringArray::from(va);
+        let b = StringArray::from(vb);
+        let op = similar_to(
+            negated,
+            case_insensitive,
+            col("a", schema)?,
+            col("b", schema)?,
+        )?;
+        let batch =
+            RecordBatch::try_new(Arc::clone(schema), vec![Arc::new(a), Arc::new(b)])?;
+        let result = op
+            .evaluate(&batch)?
+            .into_array(batch.num_rows())
+            .expect("Failed to convert to array");
+        assert_eq!(result.as_ref(), expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_similar_to() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Utf8, false),
+            Field::new("b", DataType::Utf8, false),
+        ]));
+
+        let expected = [Some(true), Some(false)].iter().collect();
+        // case-sensitive
+        apply_similar_to(
+            &schema,
+            vec!["hello world", "Hello World"],
+            vec!["hello.*", "hello.*"],
+            false,
+            false,
+            &expected,
+        )
+        .unwrap();
+        // case-insensitive
+        apply_similar_to(
+            &schema,
+            vec!["hello world", "bye"],
+            vec!["hello.*", "hello.*"],
+            false,
+            true,
+            &expected,
+        )
+        .unwrap();
     }
 }

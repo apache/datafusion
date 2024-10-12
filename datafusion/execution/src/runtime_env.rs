@@ -66,8 +66,12 @@ impl Debug for RuntimeEnv {
 }
 
 impl RuntimeEnv {
-    /// Create env based on configuration
+    #[deprecated(note = "please use `try_new` instead")]
     pub fn new(config: RuntimeConfig) -> Result<Self> {
+        Self::try_new(config)
+    }
+    /// Create env based on configuration
+    pub fn try_new(config: RuntimeConfig) -> Result<Self> {
         let RuntimeConfig {
             memory_pool,
             disk_manager,
@@ -100,7 +104,7 @@ impl RuntimeEnv {
     /// # use std::sync::Arc;
     /// # use url::Url;
     /// # use datafusion_execution::runtime_env::RuntimeEnv;
-    /// # let runtime_env = RuntimeEnv::new(Default::default()).unwrap();
+    /// # let runtime_env = RuntimeEnv::try_new(Default::default()).unwrap();
     /// let url = Url::try_from("file://").unwrap();
     /// let object_store = object_store::local::LocalFileSystem::new();
     /// // register the object store with the runtime environment
@@ -115,7 +119,7 @@ impl RuntimeEnv {
     /// # use std::sync::Arc;
     /// # use url::Url;
     /// # use datafusion_execution::runtime_env::RuntimeEnv;
-    /// # let runtime_env = RuntimeEnv::new(Default::default()).unwrap();
+    /// # let runtime_env = RuntimeEnv::try_new(Default::default()).unwrap();
     /// # // use local store for example as http feature is not enabled
     /// # let http_store = object_store::local::LocalFileSystem::new();
     /// // create a new object store via object_store::http::HttpBuilder;
@@ -245,5 +249,10 @@ impl RuntimeEnvBuilder {
             cache_manager: CacheManager::try_new(&self.cache_manager)?,
             object_store_registry: self.object_store_registry,
         })
+    }
+
+    /// Convenience method to create a new `Arc<RuntimeEnv>`
+    pub fn build_arc(self) -> Result<Arc<RuntimeEnv>> {
+        self.build().map(Arc::new)
     }
 }

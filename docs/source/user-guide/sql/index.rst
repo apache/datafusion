@@ -30,7 +30,10 @@ SQL Reference
    information_schema
    operators
    aggregate_functions
+   aggregate_functions_new
    window_functions
+   window_functions_new
    scalar_functions
+   scalar_functions_new
    sql_status
    write_options

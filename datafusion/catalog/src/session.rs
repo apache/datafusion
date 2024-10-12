@@ -24,9 +24,10 @@ use datafusion_execution::TaskContext;
 use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::{AggregateUDF, Expr, LogicalPlan, ScalarUDF, WindowUDF};
 use datafusion_physical_plan::{ExecutionPlan, PhysicalExpr};
+use parking_lot::{Mutex, RwLock};
 use std::any::Any;
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 
 /// Interface for accessing [`SessionState`] from the catalog.
 ///
@@ -134,5 +135,37 @@ impl From<&dyn Session> for TaskContext {
             state.window_functions().clone(),
             state.runtime_env().clone(),
         )
+    }
+}
+type SessionRefLock = Arc<Mutex<Option<Weak<RwLock<dyn Session>>>>>;
+/// The state store that stores the reference of the runtime session state.
+#[derive(Debug)]
+pub struct SessionStore {
+    session: SessionRefLock,
+}
+
+impl SessionStore {
+    /// Create a new [SessionStore]
+    pub fn new() -> Self {
+        Self {
+            session: Arc::new(Mutex::new(None)),
+        }
+    }
+
+    /// Set the session state of the store
+    pub fn with_state(&self, state: Weak<RwLock<dyn Session>>) {
+        let mut lock = self.session.lock();
+        *lock = Some(state);
+    }
+
+    /// Get the current session of the store
+    pub fn get_session(&self) -> Weak<RwLock<dyn Session>> {
+        self.session.lock().clone().unwrap()
+    }
+}
+
+impl Default for SessionStore {
+    fn default() -> Self {
+        Self::new()
     }
 }

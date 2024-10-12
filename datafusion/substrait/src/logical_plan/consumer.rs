@@ -31,9 +31,10 @@ use datafusion::logical_expr::expr::{Exists, InSubquery, Sort};
 
 use datafusion::logical_expr::{
     expr::find_df_window_func, Aggregate, BinaryExpr, Case, EmptyRelation, Expr,
-    ExprSchemable, LogicalPlan, Operator, Projection, Values,
+    ExprSchemable, LogicalPlan, Operator, Projection, SortExpr, Values,
 };
 use substrait::proto::expression::subquery::set_predicate::PredicateOp;
+use substrait::proto::expression_reference::ExprType;
 use url::Url;
 
 use crate::extensions::Extensions;
@@ -42,7 +43,7 @@ use crate::variation_const::{
     DECIMAL_128_TYPE_VARIATION_REF, DECIMAL_256_TYPE_VARIATION_REF,
     DEFAULT_CONTAINER_TYPE_VARIATION_REF, DEFAULT_TYPE_VARIATION_REF,
     INTERVAL_MONTH_DAY_NANO_TYPE_NAME, LARGE_CONTAINER_TYPE_VARIATION_REF,
-    UNSIGNED_INTEGER_TYPE_VARIATION_REF,
+    UNSIGNED_INTEGER_TYPE_VARIATION_REF, VIEW_CONTAINER_TYPE_VARIATION_REF,
 };
 #[allow(deprecated)]
 use crate::variation_const::{
@@ -53,6 +54,8 @@ use crate::variation_const::{
 };
 use datafusion::arrow::array::{new_empty_array, AsArray};
 use datafusion::common::scalar::ScalarStructBuilder;
+use datafusion::dataframe::DataFrame;
+use datafusion::logical_expr::builder::project;
 use datafusion::logical_expr::expr::InList;
 use datafusion::logical_expr::{
     col, expr, Cast, Extension, GroupingSet, Like, LogicalPlanBuilder, Partitioning,
@@ -94,7 +97,7 @@ use substrait::proto::{
     sort_field::{SortDirection, SortKind::*},
     AggregateFunction, Expression, NamedStruct, Plan, Rel, Type,
 };
-use substrait::proto::{FunctionArgument, SortField};
+use substrait::proto::{ExtendedExpression, FunctionArgument, SortField};
 
 // Substrait PrecisionTimestampTz indicates that the timestamp is relative to UTC, which
 // is the same as the expectation for any non-empty timezone in DF, so any non-empty timezone
@@ -249,6 +252,81 @@ pub async fn from_substrait_plan(
     }
 }
 
+/// An ExprContainer is a container for a collection of expressions with a common input schema
+///
+/// In addition, each expression is associated with a field, which defines the
+/// expression's output.  The data type and nullability of the field are calculated from the
+/// expression and the input schema.  However the names of the field (and its nested fields) are
+/// derived from the Substrait message.
+pub struct ExprContainer {
+    /// The input schema for the expressions
+    pub input_schema: DFSchemaRef,
+    /// The expressions
+    ///
+    /// Each item contains an expression and the field that defines the expected nullability and name of the expr's output
+    pub exprs: Vec<(Expr, Field)>,
+}
+
+/// Convert Substrait ExtendedExpression to ExprContainer
+///
+/// A Substrait ExtendedExpression message contains one or more expressions,
+/// with names for the outputs, and an input schema.  These pieces are all included
+/// in the ExprContainer.
+///
+/// This is a top-level message and can be used to send expressions (not plans)
+/// between systems.  This is often useful for scenarios like pushdown where filter
+/// expressions need to be sent to remote systems.
+pub async fn from_substrait_extended_expr(
+    ctx: &SessionContext,
+    extended_expr: &ExtendedExpression,
+) -> Result<ExprContainer> {
+    // Register function extension
+    let extensions = Extensions::try_from(&extended_expr.extensions)?;
+    if !extensions.type_variations.is_empty() {
+        return not_impl_err!("Type variation extensions are not supported");
+    }
+
+    let input_schema = DFSchemaRef::new(match &extended_expr.base_schema {
+        Some(base_schema) => from_substrait_named_struct(base_schema, &extensions),
+        None => {
+            plan_err!("required property `base_schema` missing from Substrait ExtendedExpression message")
+        }
+    }?);
+
+    // Parse expressions
+    let mut exprs = Vec::with_capacity(extended_expr.referred_expr.len());
+    for (expr_idx, substrait_expr) in extended_expr.referred_expr.iter().enumerate() {
+        let scalar_expr = match &substrait_expr.expr_type {
+            Some(ExprType::Expression(scalar_expr)) => Ok(scalar_expr),
+            Some(ExprType::Measure(_)) => {
+                not_impl_err!("Measure expressions are not yet supported")
+            }
+            None => {
+                plan_err!("required property `expr_type` missing from Substrait ExpressionReference message")
+            }
+        }?;
+        let expr =
+            from_substrait_rex(ctx, scalar_expr, &input_schema, &extensions).await?;
+        let (output_type, expected_nullability) =
+            expr.data_type_and_nullable(&input_schema)?;
+        let output_field = Field::new("", output_type, expected_nullability);
+        let mut names_idx = 0;
+        let output_field = rename_field(
+            &output_field,
+            &substrait_expr.output_names,
+            expr_idx,
+            &mut names_idx,
+            /*rename_self=*/ true,
+        )?;
+        exprs.push((expr, output_field));
+    }
+
+    Ok(ExprContainer {
+        input_schema,
+        exprs,
+    })
+}
+
 /// parse projection
 pub fn extract_projection(
     t: LogicalPlan,
@@ -276,6 +354,20 @@ pub fn extract_projection(
                             DFSchema::new_with_metadata(fields, HashMap::new())?,
                         );
                         Ok(LogicalPlan::TableScan(scan))
+                    }
+                    LogicalPlan::Projection(projection) => {
+                        // create another Projection around the Projection to handle the field masking
+                        let fields: Vec<Expr> = column_indices
+                            .into_iter()
+                            .map(|i| {
+                                let (qualifier, field) =
+                                    projection.schema.qualified_field(i);
+                                let column =
+                                    Column::new(qualifier.cloned(), field.name());
+                                Expr::Column(column)
+                            })
+                            .collect();
+                        project(LogicalPlan::Projection(projection), fields)
                     }
                     _ => plan_err!("unexpected plan for table"),
                 }
@@ -318,6 +410,68 @@ fn rename_expressions(
         .collect()
 }
 
+fn rename_field(
+    field: &Field,
+    dfs_names: &Vec<String>,
+    unnamed_field_suffix: usize, // If Substrait doesn't provide a name, we'll use this "c{unnamed_field_suffix}"
+    name_idx: &mut usize,        // Index into dfs_names
+    rename_self: bool, // Some fields (e.g. list items) don't have names in Substrait and this will be false to keep old name
+) -> Result<Field> {
+    let name = if rename_self {
+        next_struct_field_name(unnamed_field_suffix, dfs_names, name_idx)?
+    } else {
+        field.name().to_string()
+    };
+    match field.data_type() {
+        DataType::Struct(children) => {
+            let children = children
+                .iter()
+                .enumerate()
+                .map(|(child_idx, f)| {
+                    rename_field(
+                        f.as_ref(),
+                        dfs_names,
+                        child_idx,
+                        name_idx,
+                        /*rename_self=*/ true,
+                    )
+                })
+                .collect::<Result<_>>()?;
+            Ok(field
+                .to_owned()
+                .with_name(name)
+                .with_data_type(DataType::Struct(children)))
+        }
+        DataType::List(inner) => {
+            let renamed_inner = rename_field(
+                inner.as_ref(),
+                dfs_names,
+                0,
+                name_idx,
+                /*rename_self=*/ false,
+            )?;
+            Ok(field
+                .to_owned()
+                .with_data_type(DataType::List(FieldRef::new(renamed_inner)))
+                .with_name(name))
+        }
+        DataType::LargeList(inner) => {
+            let renamed_inner = rename_field(
+                inner.as_ref(),
+                dfs_names,
+                0,
+                name_idx,
+                /*rename_self= */ false,
+            )?;
+            Ok(field
+                .to_owned()
+                .with_data_type(DataType::LargeList(FieldRef::new(renamed_inner)))
+                .with_name(name))
+        }
+        _ => Ok(field.to_owned().with_name(name)),
+    }
+}
+
 /// Produce a version of the given schema with names matching the given list of names.
 /// Substrait doesn't deal with column (incl. nested struct field) names within the schema,
 /// but it does give us the list of expected names at the end of the plan, so we use this
@@ -326,59 +480,20 @@ fn make_renamed_schema(
     schema: &DFSchemaRef,
     dfs_names: &Vec<String>,
 ) -> Result<DFSchema> {
-    fn rename_inner_fields(
-        dtype: &DataType,
-        dfs_names: &Vec<String>,
-        name_idx: &mut usize,
-    ) -> Result<DataType> {
-        match dtype {
-            DataType::Struct(fields) => {
-                let fields = fields
-                    .iter()
-                    .map(|f| {
-                        let name = next_struct_field_name(0, dfs_names, name_idx)?;
-                        Ok((**f).to_owned().with_name(name).with_data_type(
-                            rename_inner_fields(f.data_type(), dfs_names, name_idx)?,
-                        ))
-                    })
-                    .collect::<Result<_>>()?;
-                Ok(DataType::Struct(fields))
-            }
-            DataType::List(inner) => Ok(DataType::List(FieldRef::new(
-                (**inner).to_owned().with_data_type(rename_inner_fields(
-                    inner.data_type(),
-                    dfs_names,
-                    name_idx,
-                )?),
-            ))),
-            DataType::LargeList(inner) => Ok(DataType::LargeList(FieldRef::new(
-                (**inner).to_owned().with_data_type(rename_inner_fields(
-                    inner.data_type(),
-                    dfs_names,
-                    name_idx,
-                )?),
-            ))),
-            _ => Ok(dtype.to_owned()),
-        }
-    }
-
     let mut name_idx = 0;
 
     let (qualifiers, fields): (_, Vec<Field>) = schema
         .iter()
-        .map(|(q, f)| {
-            let name = next_struct_field_name(0, dfs_names, &mut name_idx)?;
-            Ok((
-                q.cloned(),
-                (**f)
-                    .to_owned()
-                    .with_name(name)
-                    .with_data_type(rename_inner_fields(
-                        f.data_type(),
-                        dfs_names,
-                        &mut name_idx,
-                    )?),
-            ))
+        .enumerate()
+        .map(|(field_idx, (q, f))| {
+            let renamed_f = rename_field(
+                f.as_ref(),
+                dfs_names,
+                field_idx,
+                &mut name_idx,
+                /*rename_self=*/ true,
+            )?;
+            Ok((q.cloned(), renamed_f))
         })
         .collect::<Result<Vec<_>>>()?
         .into_iter()
@@ -640,6 +755,10 @@ pub async fn from_substrait_rel(
         }
         Some(RelType::Read(read)) => match &read.as_ref().read_type {
             Some(ReadType::NamedTable(nt)) => {
+                let named_struct = read.base_schema.as_ref().ok_or_else(|| {
+                    substrait_datafusion_err!("No base schema provided for Named Table")
+                })?;
+
                 let table_reference = match nt.names.len() {
                     0 => {
                         return plan_err!("No table name found in NamedTable");
@@ -657,7 +776,13 @@ pub async fn from_substrait_rel(
                         table: nt.names[2].clone().into(),
                     },
                 };
-                let t = ctx.table(table_reference).await?;
+
+                let substrait_schema =
+                    from_substrait_named_struct(named_struct, extensions)?
+                        .replace_qualifier(table_reference.clone());
+
+                let t = ctx.table(table_reference.clone()).await?;
+                let t = ensure_schema_compatability(t, substrait_schema)?;
                 let t = t.into_optimized_plan()?;
                 extract_projection(t, &read.projection)
             }
@@ -671,7 +796,7 @@ pub async fn from_substrait_rel(
                 if vt.values.is_empty() {
                     return Ok(LogicalPlan::EmptyRelation(EmptyRelation {
                         produce_one_row: false,
-                        schema,
+                        schema: DFSchemaRef::new(schema),
                     }));
                 }
 
@@ -704,7 +829,10 @@ pub async fn from_substrait_rel(
                     })
                     .collect::<Result<_>>()?;
 
-                Ok(LogicalPlan::Values(Values { schema, values }))
+                Ok(LogicalPlan::Values(Values {
+                    schema: DFSchemaRef::new(schema),
+                    values,
+                }))
             }
             Some(ReadType::LocalFiles(lf)) => {
                 fn extract_filename(name: &str) -> Option<String> {
@@ -757,6 +885,17 @@ pub async fn from_substrait_rel(
                         union_builder?.build()
                     } else {
                         not_impl_err!("Union relation requires at least one input")
+                    }
+                }
+                set_rel::SetOp::IntersectionPrimary => {
+                    if set.inputs.len() == 2 {
+                        LogicalPlanBuilder::intersect(
+                            from_substrait_rel(ctx, &set.inputs[0], extensions).await?,
+                            from_substrait_rel(ctx, &set.inputs[1], extensions).await?,
+                            false,
+                        )
+                    } else {
+                        not_impl_err!("Primary Intersect relation with more than two inputs isn't supported")
                     }
                 }
                 _ => not_impl_err!("Unsupported set operator: {set_op:?}"),
@@ -850,6 +989,87 @@ pub async fn from_substrait_rel(
     }
 }
 
+/// Ensures that the given Substrait schema is compatible with the schema as given by DataFusion
+///
+/// This means:
+/// 1. All fields present in the Substrait schema are present in the DataFusion schema. The
+///    DataFusion schema may have MORE fields, but not the other way around.
+/// 2. All fields are compatible. See [`ensure_field_compatability`] for details
+///
+/// This function returns a DataFrame with fields adjusted if necessary in the event that the
+/// Substrait schema is a subset of the DataFusion schema.
+fn ensure_schema_compatability(
+    table: DataFrame,
+    substrait_schema: DFSchema,
+) -> Result<DataFrame> {
+    let df_schema = table.schema().to_owned().strip_qualifiers();
+    if df_schema.logically_equivalent_names_and_types(&substrait_schema) {
+        return Ok(table);
+    }
+    let selected_columns = substrait_schema
+        .strip_qualifiers()
+        .fields()
+        .iter()
+        .map(|substrait_field| {
+            let df_field =
+                df_schema.field_with_unqualified_name(substrait_field.name())?;
+            ensure_field_compatability(df_field, substrait_field)?;
+            Ok(col(format!("\"{}\"", df_field.name())))
+        })
+        .collect::<Result<_>>()?;
+
+    table.select(selected_columns)
+}
+
+/// Ensures that the given Substrait field is compatible with the given DataFusion field
+///
+/// A field is compatible between Substrait and DataFusion if:
+/// 1. They have logically equivalent types.
+/// 2. They have the same nullability OR the Substrait field is nullable and the DataFusion fields
+///    is not nullable.
+///
+/// If a Substrait field is not nullable, the Substrait plan may be built around assuming it is not
+/// nullable. As such if DataFusion has that field as nullable the plan should be rejected.
+fn ensure_field_compatability(
+    datafusion_field: &Field,
+    substrait_field: &Field,
+) -> Result<()> {
+    if !DFSchema::datatype_is_logically_equal(
+        datafusion_field.data_type(),
+        substrait_field.data_type(),
+    ) {
+        return substrait_err!(
+            "Field '{}' in Substrait schema has a different type ({}) than the corresponding field in the table schema ({}).",
+            substrait_field.name(),
+            substrait_field.data_type(),
+            datafusion_field.data_type()
+        );
+    }
+
+    if !compatible_nullabilities(
+        datafusion_field.is_nullable(),
+        substrait_field.is_nullable(),
+    ) {
+        // TODO: from_substrait_struct_type needs to be updated to set the nullability correctly. It defaults to true for now.
+        return substrait_err!(
+            "Field '{}' is nullable in the DataFusion schema but not nullable in the Substrait schema.",
+            substrait_field.name()
+        );
+    }
+    Ok(())
+}
+
+/// Returns true if the DataFusion and Substrait nullabilities are compatible, false otherwise
+fn compatible_nullabilities(
+    datafusion_nullability: bool,
+    substrait_nullability: bool,
+) -> bool {
+    // DataFusion and Substrait have the same nullability
+    (datafusion_nullability == substrait_nullability)
+    // DataFusion is not nullable and Substrait is nullable
+     || (!datafusion_nullability && substrait_nullability)
+}
+
 /// (Re)qualify the sides of a join if needed, i.e. if the columns from one side would otherwise
 /// conflict with the columns from the other.  
 /// Substrait doesn't currently allow specifying aliases, neither for columns nor for tables. For
@@ -900,8 +1120,8 @@ pub async fn from_substrait_sorts(
     substrait_sorts: &Vec<SortField>,
     input_schema: &DFSchema,
     extensions: &Extensions,
-) -> Result<Vec<Expr>> {
-    let mut sorts: Vec<Expr> = vec![];
+) -> Result<Vec<Sort>> {
+    let mut sorts: Vec<Sort> = vec![];
     for s in substrait_sorts {
         let expr =
             from_substrait_rex(ctx, s.expr.as_ref().unwrap(), input_schema, extensions)
@@ -935,11 +1155,11 @@ pub async fn from_substrait_sorts(
             None => not_impl_err!("Sort without sort kind is invalid"),
         };
         let (asc, nulls_first) = asc_nullfirst.unwrap();
-        sorts.push(Expr::Sort(Sort {
-            expr: Box::new(expr),
+        sorts.push(Sort {
+            expr,
             asc,
             nulls_first,
-        }));
+        });
     }
     Ok(sorts)
 }
@@ -986,7 +1206,7 @@ pub async fn from_substrait_agg_func(
     input_schema: &DFSchema,
     extensions: &Extensions,
     filter: Option<Box<Expr>>,
-    order_by: Option<Vec<Expr>>,
+    order_by: Option<Vec<SortExpr>>,
     distinct: bool,
 ) -> Result<Arc<Expr>> {
     let args =
@@ -1432,6 +1652,7 @@ fn from_substrait_type(
             r#type::Kind::Binary(binary) => match binary.type_variation_reference {
                 DEFAULT_CONTAINER_TYPE_VARIATION_REF => Ok(DataType::Binary),
                 LARGE_CONTAINER_TYPE_VARIATION_REF => Ok(DataType::LargeBinary),
+                VIEW_CONTAINER_TYPE_VARIATION_REF => Ok(DataType::BinaryView),
                 v => not_impl_err!(
                     "Unsupported Substrait type variation {v} of type {s_kind:?}"
                 ),
@@ -1442,6 +1663,7 @@ fn from_substrait_type(
             r#type::Kind::String(string) => match string.type_variation_reference {
                 DEFAULT_CONTAINER_TYPE_VARIATION_REF => Ok(DataType::Utf8),
                 LARGE_CONTAINER_TYPE_VARIATION_REF => Ok(DataType::LargeUtf8),
+                VIEW_CONTAINER_TYPE_VARIATION_REF => Ok(DataType::Utf8View),
                 v => not_impl_err!(
                     "Unsupported Substrait type variation {v} of type {s_kind:?}"
                 ),
@@ -1569,14 +1791,14 @@ fn from_substrait_struct_type(
 }
 
 fn next_struct_field_name(
-    i: usize,
+    column_idx: usize,
     dfs_names: &[String],
     name_idx: &mut usize,
 ) -> Result<String> {
     if dfs_names.is_empty() {
         // If names are not given, create dummy names
         // c0, c1, ... align with e.g. SqlToRel::create_named_struct
-        Ok(format!("c{i}"))
+        Ok(format!("c{column_idx}"))
     } else {
         let name = dfs_names.get(*name_idx).cloned().ok_or_else(|| {
             substrait_datafusion_err!("Named schema must contain names for all fields")
@@ -1586,10 +1808,11 @@ fn next_struct_field_name(
     }
 }
 
-fn from_substrait_named_struct(
+/// Convert Substrait NamedStruct to DataFusion DFSchemaRef
+pub fn from_substrait_named_struct(
     base_schema: &NamedStruct,
     extensions: &Extensions,
-) -> Result<DFSchemaRef> {
+) -> Result<DFSchema> {
     let mut name_idx = 0;
     let fields = from_substrait_struct_type(
         base_schema.r#struct.as_ref().ok_or_else(|| {
@@ -1601,12 +1824,12 @@ fn from_substrait_named_struct(
     );
     if name_idx != base_schema.names.len() {
         return substrait_err!(
-                                "Names list must match exactly to nested schema, but found {} uses for {} names",
-                                name_idx,
-                                base_schema.names.len()
-                            );
+            "Names list must match exactly to nested schema, but found {} uses for {} names",
+            name_idx,
+            base_schema.names.len()
+        );
     }
-    Ok(DFSchemaRef::new(DFSchema::try_from(Schema::new(fields?))?))
+    DFSchema::try_from(Schema::new(fields?))
 }
 
 fn from_substrait_bound(
@@ -1759,6 +1982,7 @@ fn from_substrait_literal(
         Some(LiteralType::String(s)) => match lit.type_variation_reference {
             DEFAULT_CONTAINER_TYPE_VARIATION_REF => ScalarValue::Utf8(Some(s.clone())),
             LARGE_CONTAINER_TYPE_VARIATION_REF => ScalarValue::LargeUtf8(Some(s.clone())),
+            VIEW_CONTAINER_TYPE_VARIATION_REF => ScalarValue::Utf8View(Some(s.clone())),
             others => {
                 return substrait_err!("Unknown type variation reference {others}");
             }
@@ -1768,6 +1992,7 @@ fn from_substrait_literal(
             LARGE_CONTAINER_TYPE_VARIATION_REF => {
                 ScalarValue::LargeBinary(Some(b.clone()))
             }
+            VIEW_CONTAINER_TYPE_VARIATION_REF => ScalarValue::BinaryView(Some(b.clone())),
             others => {
                 return substrait_err!("Unknown type variation reference {others}");
             }
@@ -1949,14 +2174,19 @@ fn from_substrait_literal(
             // DF only supports millisecond precision, so for any more granular type we lose precision
             let milliseconds = match precision_mode {
                 Some(PrecisionMode::Microseconds(ms)) => ms / 1000,
+                None =>
+                    if *subseconds != 0 {
+                        return substrait_err!("Cannot set subseconds field of IntervalDayToSecond without setting precision");
+                    } else {
+                        0_i32
+                    }
                 Some(PrecisionMode::Precision(0)) => *subseconds as i32 * 1000,
                 Some(PrecisionMode::Precision(3)) => *subseconds as i32,
                 Some(PrecisionMode::Precision(6)) => (subseconds / 1000) as i32,
                 Some(PrecisionMode::Precision(9)) => (subseconds / 1000 / 1000) as i32,
                 _ => {
                     return not_impl_err!(
-                        "Unsupported Substrait interval day to second precision mode"
-                    )
+                    "Unsupported Substrait interval day to second precision mode: {precision_mode:?}")
                 }
             };
 

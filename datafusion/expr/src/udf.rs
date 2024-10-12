@@ -21,13 +21,14 @@ use crate::expr::schema_name_from_exprs_comma_seperated_without_space;
 use crate::simplify::{ExprSimplifyResult, SimplifyInfo};
 use crate::sort_properties::{ExprProperties, SortProperties};
 use crate::{
-    ColumnarValue, Expr, ReturnTypeFunction, ScalarFunctionImplementation, Signature,
+    ColumnarValue, Documentation, Expr, ScalarFunctionImplementation, Signature,
 };
 use arrow::datatypes::DataType;
 use datafusion_common::{not_impl_err, ExprSchema, Result};
 use datafusion_expr_common::interval_arithmetic::Interval;
 use std::any::Any;
-use std::fmt::{self, Debug, Formatter};
+use std::cmp::Ordering;
+use std::fmt::Debug;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::Arc;
 
@@ -64,6 +65,16 @@ impl PartialEq for ScalarUDF {
     }
 }
 
+// Manual implementation based on `ScalarUDFImpl::equals`
+impl PartialOrd for ScalarUDF {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        match self.name().partial_cmp(other.name()) {
+            Some(Ordering::Equal) => self.signature().partial_cmp(other.signature()),
+            cmp => cmp,
+        }
+    }
+}
+
 impl Eq for ScalarUDF {}
 
 impl Hash for ScalarUDF {
@@ -73,25 +84,6 @@ impl Hash for ScalarUDF {
 }
 
 impl ScalarUDF {
-    /// Create a new ScalarUDF from low level details.
-    ///
-    /// See  [`ScalarUDFImpl`] for a more convenient way to create a
-    /// `ScalarUDF` using trait objects
-    #[deprecated(since = "34.0.0", note = "please implement ScalarUDFImpl instead")]
-    pub fn new(
-        name: &str,
-        signature: &Signature,
-        return_type: &ReturnTypeFunction,
-        fun: &ScalarFunctionImplementation,
-    ) -> Self {
-        Self::new_from_impl(ScalarUdfLegacyWrapper {
-            name: name.to_owned(),
-            signature: signature.clone(),
-            return_type: Arc::clone(return_type),
-            fun: Arc::clone(fun),
-        })
-    }
-
     /// Create a new `ScalarUDF` from a `[ScalarUDFImpl]` trait object
     ///
     /// Note this is the same as using the `From` impl (`ScalarUDF::from`)
@@ -218,6 +210,7 @@ impl ScalarUDF {
 
     /// Returns a `ScalarFunctionImplementation` that can invoke the function
     /// during execution
+    #[deprecated(since = "42.0.0", note = "Use `invoke` or `invoke_no_args` instead")]
     pub fn fun(&self) -> ScalarFunctionImplementation {
         let captured = Arc::clone(&self.inner);
         Arc::new(move |args| captured.invoke(args))
@@ -283,6 +276,14 @@ impl ScalarUDF {
     pub fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
         self.inner.coerce_types(arg_types)
     }
+
+    /// Returns the documentation for this Scalar UDF.
+    ///
+    /// Documentation can be accessed programmatically as well as
+    /// generating publicly facing documentation.
+    pub fn documentation(&self) -> Option<&Documentation> {
+        self.inner.documentation()
+    }
 }
 
 impl<F> From<F> for ScalarUDF
@@ -307,21 +308,38 @@ where
 /// # Basic Example
 /// ```
 /// # use std::any::Any;
+/// # use std::sync::OnceLock;
 /// # use arrow::datatypes::DataType;
 /// # use datafusion_common::{DataFusionError, plan_err, Result};
-/// # use datafusion_expr::{col, ColumnarValue, Signature, Volatility};
+/// # use datafusion_expr::{col, ColumnarValue, Documentation, Signature, Volatility};
 /// # use datafusion_expr::{ScalarUDFImpl, ScalarUDF};
+/// # use datafusion_expr::scalar_doc_sections::DOC_SECTION_MATH;
+///
 /// #[derive(Debug)]
 /// struct AddOne {
-///   signature: Signature
+///   signature: Signature,
 /// }
 ///
 /// impl AddOne {
 ///   fn new() -> Self {
 ///     Self {
-///       signature: Signature::uniform(1, vec![DataType::Int32], Volatility::Immutable)
+///       signature: Signature::uniform(1, vec![DataType::Int32], Volatility::Immutable),
 ///      }
 ///   }
+/// }
+///  
+/// static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+///
+/// fn get_doc() -> &'static Documentation {
+///     DOCUMENTATION.get_or_init(|| {
+///         Documentation::builder()
+///             .with_doc_section(DOC_SECTION_MATH)
+///             .with_description("Add one to an int32")
+///             .with_syntax_example("add_one(2)")
+///             .with_argument("arg1", "The int32 number to add one to")
+///             .build()
+///             .unwrap()
+///     })
 /// }
 ///
 /// /// Implement the ScalarUDFImpl trait for AddOne
@@ -337,6 +355,9 @@ where
 ///    }
 ///    // The actual implementation would add one to the argument
 ///    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> { unimplemented!() }
+///    fn documentation(&self) -> Option<&Documentation> {
+///         Some(get_doc())
+///     }
 /// }
 ///
 /// // Create a new ScalarUDF from the implementation
@@ -566,8 +587,8 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     /// documentation for more details on type coercion
     ///
     /// For example, if your function requires a floating point arguments, but the user calls
-    /// it like `my_func(1::int)` (aka with `1` as an integer), coerce_types could return `[DataType::Float64]`
-    /// to ensure the argument was cast to `1::double`
+    /// it like `my_func(1::int)` (i.e. with `1` as an integer), coerce_types can return `[DataType::Float64]`
+    /// to ensure the argument is converted to `1::double`
     ///
     /// # Parameters
     /// * `arg_types`: The argument types of the arguments  this function with
@@ -604,6 +625,14 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
         self.name().hash(hasher);
         self.signature().hash(hasher);
         hasher.finish()
+    }
+
+    /// Returns the documentation for this Scalar UDF.
+    ///
+    /// Documentation can be accessed programmatically as well as
+    /// generating publicly facing documentation.
+    fn documentation(&self) -> Option<&Documentation> {
+        None
     }
 }
 
@@ -718,62 +747,100 @@ impl ScalarUDFImpl for AliasedScalarUDFImpl {
         self.aliases.hash(hasher);
         hasher.finish()
     }
-}
 
-/// Implementation of [`ScalarUDFImpl`] that wraps the function style pointers
-/// of the older API (see <https://github.com/apache/datafusion/pull/8578>
-/// for more details)
-struct ScalarUdfLegacyWrapper {
-    /// The name of the function
-    name: String,
-    /// The signature (the types of arguments that are supported)
-    signature: Signature,
-    /// Function that returns the return type given the argument types
-    return_type: ReturnTypeFunction,
-    /// actual implementation
-    ///
-    /// The fn param is the wrapped function but be aware that the function will
-    /// be passed with the slice / vec of columnar values (either scalar or array)
-    /// with the exception of zero param function, where a singular element vec
-    /// will be passed. In that case the single element is a null array to indicate
-    /// the batch's row count (so that the generative zero-argument function can know
-    /// the result array size).
-    fun: ScalarFunctionImplementation,
-}
-
-impl Debug for ScalarUdfLegacyWrapper {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        f.debug_struct("ScalarUDF")
-            .field("name", &self.name)
-            .field("signature", &self.signature)
-            .field("fun", &"<FUNC>")
-            .finish()
+    fn documentation(&self) -> Option<&Documentation> {
+        self.inner.documentation()
     }
 }
 
-impl ScalarUDFImpl for ScalarUdfLegacyWrapper {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-    fn name(&self) -> &str {
-        &self.name
+// Scalar UDF doc sections for use in public documentation
+pub mod scalar_doc_sections {
+    use crate::DocSection;
+
+    pub fn doc_sections() -> Vec<DocSection> {
+        vec![
+            DOC_SECTION_MATH,
+            DOC_SECTION_CONDITIONAL,
+            DOC_SECTION_STRING,
+            DOC_SECTION_BINARY_STRING,
+            DOC_SECTION_REGEX,
+            DOC_SECTION_DATETIME,
+            DOC_SECTION_ARRAY,
+            DOC_SECTION_STRUCT,
+            DOC_SECTION_MAP,
+            DOC_SECTION_HASHING,
+            DOC_SECTION_OTHER,
+        ]
     }
 
-    fn signature(&self) -> &Signature {
-        &self.signature
-    }
+    pub const DOC_SECTION_MATH: DocSection = DocSection {
+        include: true,
+        label: "Math Functions",
+        description: None,
+    };
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        // Old API returns an Arc of the datatype for some reason
-        let res = (self.return_type)(arg_types)?;
-        Ok(res.as_ref().clone())
-    }
+    pub const DOC_SECTION_CONDITIONAL: DocSection = DocSection {
+        include: true,
+        label: "Conditional Functions",
+        description: None,
+    };
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        (self.fun)(args)
-    }
+    pub const DOC_SECTION_STRING: DocSection = DocSection {
+        include: true,
+        label: "String Functions",
+        description: None,
+    };
 
-    fn aliases(&self) -> &[String] {
-        &[]
-    }
+    pub const DOC_SECTION_BINARY_STRING: DocSection = DocSection {
+        include: true,
+        label: "Binary String Functions",
+        description: None,
+    };
+
+    pub const DOC_SECTION_REGEX: DocSection = DocSection {
+        include: true,
+        label: "Regular Expression Functions",
+        description: Some(
+            r#"Apache DataFusion uses a [PCRE-like](https://en.wikibooks.org/wiki/Regular_Expressions/Perl-Compatible_Regular_Expressions)
+regular expression [syntax](https://docs.rs/regex/latest/regex/#syntax)
+(minus support for several features including look-around and backreferences).
+The following regular expression functions are supported:"#,
+        ),
+    };
+
+    pub const DOC_SECTION_DATETIME: DocSection = DocSection {
+        include: true,
+        label: "Time and Date Functions",
+        description: None,
+    };
+
+    pub const DOC_SECTION_ARRAY: DocSection = DocSection {
+        include: true,
+        label: "Array Functions",
+        description: None,
+    };
+
+    pub const DOC_SECTION_STRUCT: DocSection = DocSection {
+        include: true,
+        label: "Struct Functions",
+        description: None,
+    };
+
+    pub const DOC_SECTION_MAP: DocSection = DocSection {
+        include: true,
+        label: "Map Functions",
+        description: None,
+    };
+
+    pub const DOC_SECTION_HASHING: DocSection = DocSection {
+        include: true,
+        label: "Hashing Functions",
+        description: None,
+    };
+
+    pub const DOC_SECTION_OTHER: DocSection = DocSection {
+        include: true,
+        label: "Other Functions",
+        description: None,
+    };
 }

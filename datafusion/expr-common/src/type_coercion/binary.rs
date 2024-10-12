@@ -25,8 +25,8 @@ use crate::operator::Operator;
 use arrow::array::{new_empty_array, Array};
 use arrow::compute::can_cast_types;
 use arrow::datatypes::{
-    DataType, Field, FieldRef, TimeUnit, DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE,
-    DECIMAL256_MAX_PRECISION, DECIMAL256_MAX_SCALE,
+    DataType, Field, FieldRef, Fields, TimeUnit, DECIMAL128_MAX_PRECISION,
+    DECIMAL128_MAX_SCALE, DECIMAL256_MAX_PRECISION, DECIMAL256_MAX_SCALE,
 };
 use datafusion_common::{exec_datafusion_err, plan_datafusion_err, plan_err, Result};
 
@@ -370,6 +370,8 @@ impl From<&DataType> for TypeCategory {
 /// align with the behavior of Postgres. Therefore, we've made slight adjustments to the rules
 /// to better match the behavior of both Postgres and DuckDB. For example, we expect adjusted
 /// decimal precision and scale when coercing decimal types.
+///
+/// This function doesn't preserve correct field name and nullability for the struct type, we only care about data type.
 pub fn type_union_resolution(data_types: &[DataType]) -> Option<DataType> {
     if data_types.is_empty() {
         return None;
@@ -471,10 +473,56 @@ fn type_union_resolution_coercion(
             let new_value_type = type_union_resolution_coercion(value_type, other_type);
             new_value_type.map(|t| DataType::Dictionary(index_type.clone(), Box::new(t)))
         }
+        (DataType::List(lhs), DataType::List(rhs)) => {
+            let new_item_type =
+                type_union_resolution_coercion(lhs.data_type(), rhs.data_type());
+            new_item_type.map(|t| DataType::List(Arc::new(Field::new("item", t, true))))
+        }
+        (DataType::Struct(lhs), DataType::Struct(rhs)) => {
+            if lhs.len() != rhs.len() {
+                return None;
+            }
+
+            // Search the field in the right hand side with the SAME field name
+            fn search_corresponding_coerced_type(
+                lhs_field: &FieldRef,
+                rhs: &Fields,
+            ) -> Option<DataType> {
+                for rhs_field in rhs.iter() {
+                    if lhs_field.name() == rhs_field.name() {
+                        if let Some(t) = type_union_resolution_coercion(
+                            lhs_field.data_type(),
+                            rhs_field.data_type(),
+                        ) {
+                            return Some(t);
+                        } else {
+                            return None;
+                        }
+                    }
+                }
+
+                None
+            }
+
+            let types = lhs
+                .iter()
+                .map(|lhs_field| search_corresponding_coerced_type(lhs_field, rhs))
+                .collect::<Option<Vec<_>>>()?;
+
+            let fields = types
+                .into_iter()
+                .enumerate()
+                .map(|(i, datatype)| {
+                    Arc::new(Field::new(format!("c{i}"), datatype, true))
+                })
+                .collect::<Vec<FieldRef>>();
+            Some(DataType::Struct(fields.into()))
+        }
         _ => {
             // numeric coercion is the same as comparison coercion, both find the narrowest type
             // that can accommodate both types
             binary_numeric_coercion(lhs_type, rhs_type)
+                .or_else(|| temporal_coercion_nonstrict_timezone(lhs_type, rhs_type))
                 .or_else(|| string_coercion(lhs_type, rhs_type))
                 .or_else(|| numeric_string_coercion(lhs_type, rhs_type))
         }
@@ -505,22 +553,6 @@ pub fn comparison_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<D
         .or_else(|| string_temporal_coercion(lhs_type, rhs_type))
         .or_else(|| binary_coercion(lhs_type, rhs_type))
         .or_else(|| struct_coercion(lhs_type, rhs_type))
-}
-
-/// Coerce `lhs_type` and `rhs_type` to a common type for `VALUES` expression
-///
-/// For example `VALUES (1, 2), (3.0, 4.0)` where the first row is `Int32` and
-/// the second row is `Float64` will coerce to `Float64`
-///
-pub fn values_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
-    if lhs_type == rhs_type {
-        // same type => equality is possible
-        return Some(lhs_type.clone());
-    }
-    binary_numeric_coercion(lhs_type, rhs_type)
-        .or_else(|| temporal_coercion_nonstrict_timezone(lhs_type, rhs_type))
-        .or_else(|| string_coercion(lhs_type, rhs_type))
-        .or_else(|| binary_coercion(lhs_type, rhs_type))
 }
 
 /// Coerce `lhs_type` and `rhs_type` to a common type for the purposes of a comparison operation
@@ -969,12 +1001,32 @@ fn string_concat_internal_coercion(
 /// based on the observation that StringArray to StringViewArray is cheap but not vice versa.
 ///
 /// Between Utf8 and LargeUtf8, we coerce to LargeUtf8.
-fn string_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
+pub fn string_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
     use arrow::datatypes::DataType::*;
     match (lhs_type, rhs_type) {
         // If Utf8View is in any side, we coerce to Utf8View.
         (Utf8View, Utf8View | Utf8 | LargeUtf8) | (Utf8 | LargeUtf8, Utf8View) => {
             Some(Utf8View)
+        }
+        // Then, if LargeUtf8 is in any side, we coerce to LargeUtf8.
+        (LargeUtf8, Utf8 | LargeUtf8) | (Utf8, LargeUtf8) => Some(LargeUtf8),
+        // Utf8 coerces to Utf8
+        (Utf8, Utf8) => Some(Utf8),
+        _ => None,
+    }
+}
+
+/// This will be deprecated when binary operators native support
+/// for Utf8View (use `string_coercion` instead).
+fn regex_comparison_string_coercion(
+    lhs_type: &DataType,
+    rhs_type: &DataType,
+) -> Option<DataType> {
+    use arrow::datatypes::DataType::*;
+    match (lhs_type, rhs_type) {
+        // If Utf8View is in any side, we coerce to Utf8.
+        (Utf8View, Utf8View | Utf8 | LargeUtf8) | (Utf8 | LargeUtf8, Utf8View) => {
+            Some(Utf8)
         }
         // Then, if LargeUtf8 is in any side, we coerce to LargeUtf8.
         (LargeUtf8, Utf8 | LargeUtf8) | (Utf8, LargeUtf8) => Some(LargeUtf8),
@@ -1001,6 +1053,22 @@ fn list_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
     use arrow::datatypes::DataType::*;
     match (lhs_type, rhs_type) {
         (List(_), List(_)) => Some(lhs_type.clone()),
+        (LargeList(_), List(_)) => Some(lhs_type.clone()),
+        (List(_), LargeList(_)) => Some(rhs_type.clone()),
+        (LargeList(_), LargeList(_)) => Some(lhs_type.clone()),
+        (List(_), FixedSizeList(_, _)) => Some(lhs_type.clone()),
+        (FixedSizeList(_, _), List(_)) => Some(rhs_type.clone()),
+        // Coerce to the left side FixedSizeList type if the list lengths are the same,
+        // otherwise coerce to list with the left type for dynamic length
+        (FixedSizeList(lf, ls), FixedSizeList(_, rs)) => {
+            if ls == rs {
+                Some(lhs_type.clone())
+            } else {
+                Some(List(Arc::clone(lf)))
+            }
+        }
+        (LargeList(_), FixedSizeList(_, _)) => Some(lhs_type.clone()),
+        (FixedSizeList(_, _), LargeList(_)) => Some(rhs_type.clone()),
         _ => None,
     }
 }
@@ -1016,12 +1084,16 @@ fn binary_to_string_coercion(
     match (lhs_type, rhs_type) {
         (Binary, Utf8) => Some(Utf8),
         (Binary, LargeUtf8) => Some(LargeUtf8),
+        (BinaryView, Utf8) => Some(Utf8View),
+        (BinaryView, LargeUtf8) => Some(LargeUtf8),
         (LargeBinary, Utf8) => Some(LargeUtf8),
         (LargeBinary, LargeUtf8) => Some(LargeUtf8),
         (Utf8, Binary) => Some(Utf8),
         (Utf8, LargeBinary) => Some(LargeUtf8),
+        (Utf8, BinaryView) => Some(Utf8View),
         (LargeUtf8, Binary) => Some(LargeUtf8),
         (LargeUtf8, LargeBinary) => Some(LargeUtf8),
+        (LargeUtf8, BinaryView) => Some(LargeUtf8),
         _ => None,
     }
 }
@@ -1072,10 +1144,10 @@ fn regex_null_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataT
     }
 }
 
-/// coercion rules for regular expression comparison operations.
+/// Coercion rules for regular expression comparison operations.
 /// This is a union of string coercion rules and dictionary coercion rules
 pub fn regex_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
-    string_coercion(lhs_type, rhs_type)
+    regex_comparison_string_coercion(lhs_type, rhs_type)
         .or_else(|| dictionary_comparison_coercion(lhs_type, rhs_type, false))
         .or_else(|| regex_null_coercion(lhs_type, rhs_type))
 }
@@ -1884,6 +1956,63 @@ mod tests {
             DataType::Timestamp(TimeUnit::Second, utc),
             Operator::Eq,
             DataType::Timestamp(TimeUnit::Second, Some("Europe/Brussels".into()))
+        );
+
+        // list
+        let inner_field = Arc::new(Field::new("item", DataType::Int64, true));
+        test_coercion_binary_rule!(
+            DataType::List(Arc::clone(&inner_field)),
+            DataType::List(Arc::clone(&inner_field)),
+            Operator::Eq,
+            DataType::List(Arc::clone(&inner_field))
+        );
+        test_coercion_binary_rule!(
+            DataType::List(Arc::clone(&inner_field)),
+            DataType::LargeList(Arc::clone(&inner_field)),
+            Operator::Eq,
+            DataType::LargeList(Arc::clone(&inner_field))
+        );
+        test_coercion_binary_rule!(
+            DataType::LargeList(Arc::clone(&inner_field)),
+            DataType::List(Arc::clone(&inner_field)),
+            Operator::Eq,
+            DataType::LargeList(Arc::clone(&inner_field))
+        );
+        test_coercion_binary_rule!(
+            DataType::LargeList(Arc::clone(&inner_field)),
+            DataType::LargeList(Arc::clone(&inner_field)),
+            Operator::Eq,
+            DataType::LargeList(Arc::clone(&inner_field))
+        );
+        test_coercion_binary_rule!(
+            DataType::FixedSizeList(Arc::clone(&inner_field), 10),
+            DataType::FixedSizeList(Arc::clone(&inner_field), 10),
+            Operator::Eq,
+            DataType::FixedSizeList(Arc::clone(&inner_field), 10)
+        );
+        test_coercion_binary_rule!(
+            DataType::FixedSizeList(Arc::clone(&inner_field), 10),
+            DataType::LargeList(Arc::clone(&inner_field)),
+            Operator::Eq,
+            DataType::LargeList(Arc::clone(&inner_field))
+        );
+        test_coercion_binary_rule!(
+            DataType::LargeList(Arc::clone(&inner_field)),
+            DataType::FixedSizeList(Arc::clone(&inner_field), 10),
+            Operator::Eq,
+            DataType::LargeList(Arc::clone(&inner_field))
+        );
+        test_coercion_binary_rule!(
+            DataType::List(Arc::clone(&inner_field)),
+            DataType::FixedSizeList(Arc::clone(&inner_field), 10),
+            Operator::Eq,
+            DataType::List(Arc::clone(&inner_field))
+        );
+        test_coercion_binary_rule!(
+            DataType::FixedSizeList(Arc::clone(&inner_field), 10),
+            DataType::List(Arc::clone(&inner_field)),
+            Operator::Eq,
+            DataType::List(Arc::clone(&inner_field))
         );
 
         // TODO add other data type

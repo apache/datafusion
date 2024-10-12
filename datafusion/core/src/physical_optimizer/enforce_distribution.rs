@@ -176,7 +176,7 @@ use itertools::izip;
 ///
 /// This rule only chooses the exact match and satisfies the Distribution(a, b, c)
 /// by a HashPartition(a, b, c).
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct EnforceDistribution {}
 
 impl EnforceDistribution {
@@ -309,7 +309,7 @@ fn adjust_input_keys_ordering(
                 return reorder_partitioned_join_keys(
                     requirements,
                     on,
-                    vec![],
+                    &[],
                     &join_constructor,
                 )
                 .map(Transformed::yes);
@@ -373,7 +373,7 @@ fn adjust_input_keys_ordering(
         return reorder_partitioned_join_keys(
             requirements,
             on,
-            sort_options.clone(),
+            sort_options,
             &join_constructor,
         )
         .map(Transformed::yes);
@@ -421,7 +421,7 @@ fn adjust_input_keys_ordering(
 fn reorder_partitioned_join_keys<F>(
     mut join_plan: PlanWithKeyRequirements,
     on: &[(PhysicalExprRef, PhysicalExprRef)],
-    sort_options: Vec<SortOptions>,
+    sort_options: &[SortOptions],
     join_constructor: &F,
 ) -> Result<PlanWithKeyRequirements>
 where
@@ -1272,7 +1272,7 @@ fn ensure_distribution(
                         // Make sure to satisfy ordering requirement:
                         child = add_sort_above_with_check(
                             child,
-                            required_input_ordering.to_vec(),
+                            required_input_ordering.clone(),
                             None,
                         );
                     }

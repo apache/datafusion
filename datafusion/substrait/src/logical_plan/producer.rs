@@ -15,12 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use itertools::Itertools;
-use std::ops::Deref;
 use std::sync::Arc;
+use substrait::proto::expression_reference::ExprType;
 
 use arrow_buffer::ToByteSlice;
-use datafusion::arrow::datatypes::IntervalUnit;
+use datafusion::arrow::datatypes::{Field, IntervalUnit};
 use datafusion::logical_expr::{
     CrossJoin, Distinct, Like, Partitioning, WindowFrameUnits,
 };
@@ -38,13 +37,13 @@ use crate::variation_const::{
     DECIMAL_128_TYPE_VARIATION_REF, DECIMAL_256_TYPE_VARIATION_REF,
     DEFAULT_CONTAINER_TYPE_VARIATION_REF, DEFAULT_TYPE_VARIATION_REF,
     INTERVAL_MONTH_DAY_NANO_TYPE_NAME, LARGE_CONTAINER_TYPE_VARIATION_REF,
-    UNSIGNED_INTEGER_TYPE_VARIATION_REF,
+    UNSIGNED_INTEGER_TYPE_VARIATION_REF, VIEW_CONTAINER_TYPE_VARIATION_REF,
 };
 use datafusion::arrow::array::{Array, GenericListArray, OffsetSizeTrait};
 use datafusion::common::{
     exec_err, internal_err, not_impl_err, plan_err, substrait_datafusion_err,
+    substrait_err, DFSchemaRef, ToDFSchema,
 };
-use datafusion::common::{substrait_err, DFSchemaRef};
 #[allow(unused_imports)]
 use datafusion::logical_expr::expr::{
     Alias, BinaryExpr, Case, Cast, GroupingSet, InList, InSubquery, Sort, WindowFunction,
@@ -62,7 +61,11 @@ use substrait::proto::expression::literal::{
 use substrait::proto::expression::subquery::InPredicate;
 use substrait::proto::expression::window_function::BoundsType;
 use substrait::proto::read_rel::VirtualTable;
-use substrait::proto::{CrossRel, ExchangeRel};
+use substrait::proto::rel_common::EmitKind;
+use substrait::proto::rel_common::EmitKind::Emit;
+use substrait::proto::{
+    rel_common, CrossRel, ExchangeRel, ExpressionReference, ExtendedExpression, RelCommon,
+};
 use substrait::{
     proto::{
         aggregate_function::AggregationInvocation,
@@ -118,6 +121,56 @@ pub fn to_substrait_plan(plan: &LogicalPlan, ctx: &SessionContext) -> Result<Box
     }))
 }
 
+/// Serializes a collection of expressions to a Substrait ExtendedExpression message
+///
+/// The ExtendedExpression message is a top-level message that can be used to send
+/// expressions (not plans) between systems.
+///
+/// Each expression is also given names for the output type.  These are provided as a
+/// field and not a String (since the names may be nested, e.g. a struct).  The data
+/// type and nullability of this field is redundant (those can be determined by the
+/// Expr) and will be ignored.
+///
+/// Substrait also requires the input schema of the expressions to be included in the
+/// message.  The field names of the input schema will be serialized.
+pub fn to_substrait_extended_expr(
+    exprs: &[(&Expr, &Field)],
+    schema: &DFSchemaRef,
+    ctx: &SessionContext,
+) -> Result<Box<ExtendedExpression>> {
+    let mut extensions = Extensions::default();
+
+    let substrait_exprs = exprs
+        .iter()
+        .map(|(expr, field)| {
+            let substrait_expr = to_substrait_rex(
+                ctx,
+                expr,
+                schema,
+                /*col_ref_offset=*/ 0,
+                &mut extensions,
+            )?;
+            let mut output_names = Vec::new();
+            flatten_names(field, false, &mut output_names)?;
+            Ok(ExpressionReference {
+                output_names,
+                expr_type: Some(ExprType::Expression(substrait_expr)),
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let substrait_schema = to_substrait_named_struct(schema, &mut extensions)?;
+
+    Ok(Box::new(ExtendedExpression {
+        advanced_extensions: None,
+        expected_type_urls: vec![],
+        extension_uris: vec![],
+        extensions: extensions.into(),
+        version: Some(version::version_with_producer("datafusion")),
+        referred_expr: substrait_exprs,
+        base_schema: Some(substrait_schema),
+    }))
+}
+
 /// Convert DataFusion LogicalPlan to Substrait Rel
 pub fn to_substrait_rel(
     plan: &LogicalPlan,
@@ -140,19 +193,13 @@ pub fn to_substrait_rel(
                 maintain_singular_struct: false,
             });
 
+            let table_schema = scan.source.schema().to_dfschema_ref()?;
+            let base_schema = to_substrait_named_struct(&table_schema, extensions)?;
+
             Ok(Box::new(Rel {
                 rel_type: Some(RelType::Read(Box::new(ReadRel {
                     common: None,
-                    base_schema: Some(NamedStruct {
-                        names: scan
-                            .source
-                            .schema()
-                            .fields()
-                            .iter()
-                            .map(|f| f.name().to_owned())
-                            .collect(),
-                        r#struct: None,
-                    }),
+                    base_schema: Some(base_schema),
                     filter: None,
                     best_effort_filter: None,
                     projection,
@@ -226,9 +273,20 @@ pub fn to_substrait_rel(
                 .iter()
                 .map(|e| to_substrait_rex(ctx, e, p.input.schema(), 0, extensions))
                 .collect::<Result<Vec<_>>>()?;
+
+            let emit_kind = create_project_remapping(
+                expressions.len(),
+                p.input.as_ref().schema().fields().len(),
+            );
+            let common = RelCommon {
+                emit_kind: Some(emit_kind),
+                hint: None,
+                advanced_extension: None,
+            };
+
             Ok(Box::new(Rel {
                 rel_type: Some(RelType::Project(Box::new(ProjectRel {
-                    common: None,
+                    common: Some(common),
                     input: Some(to_substrait_rel(p.input.as_ref(), ctx, extensions)?),
                     expressions,
                     advanced_extension: None,
@@ -439,29 +497,15 @@ pub fn to_substrait_rel(
         }
         LogicalPlan::Window(window) => {
             let input = to_substrait_rel(window.input.as_ref(), ctx, extensions)?;
-            // If the input is a Project relation, we can just append the WindowFunction expressions
-            // before returning
-            // Otherwise, wrap the input in a Project relation before appending the WindowFunction
-            // expressions
-            let mut project_rel: Box<ProjectRel> = match &input.as_ref().rel_type {
-                Some(RelType::Project(p)) => Box::new(*p.clone()),
-                _ => {
-                    // Create Projection with field referencing all output fields in the input relation
-                    let expressions = (0..window.input.schema().fields().len())
-                        .map(substrait_field_ref)
-                        .collect::<Result<Vec<_>>>()?;
-                    Box::new(ProjectRel {
-                        common: None,
-                        input: Some(input),
-                        expressions,
-                        advanced_extension: None,
-                    })
-                }
-            };
-            // Parse WindowFunction expression
-            let mut window_exprs = vec![];
+
+            // create a field reference for each input field
+            let mut expressions = (0..window.input.schema().fields().len())
+                .map(substrait_field_ref)
+                .collect::<Result<Vec<_>>>()?;
+
+            // process and add each window function expression
             for expr in &window.window_expr {
-                window_exprs.push(to_substrait_rex(
+                expressions.push(to_substrait_rex(
                     ctx,
                     expr,
                     window.input.schema(),
@@ -469,8 +513,23 @@ pub fn to_substrait_rel(
                     extensions,
                 )?);
             }
-            // Append parsed WindowFunction expressions
-            project_rel.expressions.extend(window_exprs);
+
+            let emit_kind = create_project_remapping(
+                expressions.len(),
+                window.input.schema().fields().len(),
+            );
+            let common = RelCommon {
+                emit_kind: Some(emit_kind),
+                hint: None,
+                advanced_extension: None,
+            };
+            let project_rel = Box::new(ProjectRel {
+                common: Some(common),
+                input: Some(input),
+                expressions,
+                advanced_extension: None,
+            });
+
             Ok(Box::new(Rel {
                 rel_type: Some(RelType::Project(project_rel)),
             }))
@@ -560,49 +619,55 @@ pub fn to_substrait_rel(
     }
 }
 
+/// By default, a Substrait Project outputs all input fields followed by all expressions.
+/// A DataFusion Projection only outputs expressions. In order to keep the Substrait
+/// plan consistent with DataFusion, we must apply an output mapping that skips the input
+/// fields so that the Substrait Project will only output the expression fields.
+fn create_project_remapping(expr_count: usize, input_field_count: usize) -> EmitKind {
+    let expression_field_start = input_field_count;
+    let expression_field_end = expression_field_start + expr_count;
+    let output_mapping = (expression_field_start..expression_field_end)
+        .map(|i| i as i32)
+        .collect();
+    Emit(rel_common::Emit { output_mapping })
+}
+
+// Substrait wants a list of all field names, including nested fields from structs,
+// also from within e.g. lists and maps. However, it does not want the list and map field names
+// themselves - only proper structs fields are considered to have useful names.
+fn flatten_names(field: &Field, skip_self: bool, names: &mut Vec<String>) -> Result<()> {
+    if !skip_self {
+        names.push(field.name().to_string());
+    }
+    match field.data_type() {
+        DataType::Struct(fields) => {
+            for field in fields {
+                flatten_names(field, false, names)?;
+            }
+            Ok(())
+        }
+        DataType::List(l) => flatten_names(l, true, names),
+        DataType::LargeList(l) => flatten_names(l, true, names),
+        DataType::Map(m, _) => match m.data_type() {
+            DataType::Struct(key_and_value) if key_and_value.len() == 2 => {
+                flatten_names(&key_and_value[0], true, names)?;
+                flatten_names(&key_and_value[1], true, names)
+            }
+            _ => plan_err!("Map fields must contain a Struct with exactly 2 fields"),
+        },
+        _ => Ok(()),
+    }?;
+    Ok(())
+}
+
 fn to_substrait_named_struct(
     schema: &DFSchemaRef,
     extensions: &mut Extensions,
 ) -> Result<NamedStruct> {
-    // Substrait wants a list of all field names, including nested fields from structs,
-    // also from within e.g. lists and maps. However, it does not want the list and map field names
-    // themselves - only proper structs fields are considered to have useful names.
-    fn names_dfs(dtype: &DataType) -> Result<Vec<String>> {
-        match dtype {
-            DataType::Struct(fields) => {
-                let mut names = Vec::new();
-                for field in fields {
-                    names.push(field.name().to_string());
-                    names.extend(names_dfs(field.data_type())?);
-                }
-                Ok(names)
-            }
-            DataType::List(l) => names_dfs(l.data_type()),
-            DataType::LargeList(l) => names_dfs(l.data_type()),
-            DataType::Map(m, _) => match m.data_type() {
-                DataType::Struct(key_and_value) if key_and_value.len() == 2 => {
-                    let key_names =
-                        names_dfs(key_and_value.first().unwrap().data_type())?;
-                    let value_names =
-                        names_dfs(key_and_value.last().unwrap().data_type())?;
-                    Ok([key_names, value_names].concat())
-                }
-                _ => plan_err!("Map fields must contain a Struct with exactly 2 fields"),
-            },
-            _ => Ok(Vec::new()),
-        }
+    let mut names = Vec::with_capacity(schema.fields().len());
+    for field in schema.fields() {
+        flatten_names(field, false, &mut names)?;
     }
-
-    let names = schema
-        .fields()
-        .iter()
-        .map(|f| {
-            let mut names = vec![f.name().to_string()];
-            names.extend(names_dfs(f.data_type())?);
-            Ok(names)
-        })
-        .flatten_ok()
-        .collect::<Result<_>>()?;
 
     let field_types = r#type::Struct {
         types: schema
@@ -808,31 +873,20 @@ pub fn to_substrait_agg_measure(
 /// Converts sort expression to corresponding substrait `SortField`
 fn to_substrait_sort_field(
     ctx: &SessionContext,
-    expr: &Expr,
+    sort: &Sort,
     schema: &DFSchemaRef,
     extensions: &mut Extensions,
 ) -> Result<SortField> {
-    match expr {
-        Expr::Sort(sort) => {
-            let sort_kind = match (sort.asc, sort.nulls_first) {
-                (true, true) => SortDirection::AscNullsFirst,
-                (true, false) => SortDirection::AscNullsLast,
-                (false, true) => SortDirection::DescNullsFirst,
-                (false, false) => SortDirection::DescNullsLast,
-            };
-            Ok(SortField {
-                expr: Some(to_substrait_rex(
-                    ctx,
-                    sort.expr.deref(),
-                    schema,
-                    0,
-                    extensions,
-                )?),
-                sort_kind: Some(SortKind::Direction(sort_kind.into())),
-            })
-        }
-        _ => exec_err!("expects to receive sort expression"),
-    }
+    let sort_kind = match (sort.asc, sort.nulls_first) {
+        (true, true) => SortDirection::AscNullsFirst,
+        (true, false) => SortDirection::AscNullsLast,
+        (false, true) => SortDirection::DescNullsFirst,
+        (false, false) => SortDirection::DescNullsLast,
+    };
+    Ok(SortField {
+        expr: Some(to_substrait_rex(ctx, &sort.expr, schema, 0, extensions)?),
+        sort_kind: Some(SortKind::Direction(sort_kind.into())),
+    })
 }
 
 /// Return Substrait scalar function with two arguments
@@ -1462,6 +1516,12 @@ fn to_substrait_type(
                 nullability,
             })),
         }),
+        DataType::BinaryView => Ok(substrait::proto::Type {
+            kind: Some(r#type::Kind::Binary(r#type::Binary {
+                type_variation_reference: VIEW_CONTAINER_TYPE_VARIATION_REF,
+                nullability,
+            })),
+        }),
         DataType::Utf8 => Ok(substrait::proto::Type {
             kind: Some(r#type::Kind::String(r#type::String {
                 type_variation_reference: DEFAULT_CONTAINER_TYPE_VARIATION_REF,
@@ -1471,6 +1531,12 @@ fn to_substrait_type(
         DataType::LargeUtf8 => Ok(substrait::proto::Type {
             kind: Some(r#type::Kind::String(r#type::String {
                 type_variation_reference: LARGE_CONTAINER_TYPE_VARIATION_REF,
+                nullability,
+            })),
+        }),
+        DataType::Utf8View => Ok(substrait::proto::Type {
+            kind: Some(r#type::Kind::String(r#type::String {
+                type_variation_reference: VIEW_CONTAINER_TYPE_VARIATION_REF,
                 nullability,
             })),
         }),
@@ -1914,6 +1980,10 @@ fn to_substrait_literal(
             LiteralType::Binary(b.clone()),
             LARGE_CONTAINER_TYPE_VARIATION_REF,
         ),
+        ScalarValue::BinaryView(Some(b)) => (
+            LiteralType::Binary(b.clone()),
+            VIEW_CONTAINER_TYPE_VARIATION_REF,
+        ),
         ScalarValue::FixedSizeBinary(_, Some(b)) => (
             LiteralType::FixedBinary(b.clone()),
             DEFAULT_TYPE_VARIATION_REF,
@@ -1925,6 +1995,10 @@ fn to_substrait_literal(
         ScalarValue::LargeUtf8(Some(s)) => (
             LiteralType::String(s.clone()),
             LARGE_CONTAINER_TYPE_VARIATION_REF,
+        ),
+        ScalarValue::Utf8View(Some(s)) => (
+            LiteralType::String(s.clone()),
+            VIEW_CONTAINER_TYPE_VARIATION_REF,
         ),
         ScalarValue::Decimal128(v, p, s) if v.is_some() => (
             LiteralType::Decimal(Decimal {
@@ -2107,30 +2181,26 @@ fn try_to_substrait_field_reference(
 
 fn substrait_sort_field(
     ctx: &SessionContext,
-    expr: &Expr,
+    sort: &Sort,
     schema: &DFSchemaRef,
     extensions: &mut Extensions,
 ) -> Result<SortField> {
-    match expr {
-        Expr::Sort(Sort {
-            expr,
-            asc,
-            nulls_first,
-        }) => {
-            let e = to_substrait_rex(ctx, expr, schema, 0, extensions)?;
-            let d = match (asc, nulls_first) {
-                (true, true) => SortDirection::AscNullsFirst,
-                (true, false) => SortDirection::AscNullsLast,
-                (false, true) => SortDirection::DescNullsFirst,
-                (false, false) => SortDirection::DescNullsLast,
-            };
-            Ok(SortField {
-                expr: Some(e),
-                sort_kind: Some(SortKind::Direction(d as i32)),
-            })
-        }
-        _ => not_impl_err!("Expecting sort expression but got {expr:?}"),
-    }
+    let Sort {
+        expr,
+        asc,
+        nulls_first,
+    } = sort;
+    let e = to_substrait_rex(ctx, expr, schema, 0, extensions)?;
+    let d = match (asc, nulls_first) {
+        (true, true) => SortDirection::AscNullsFirst,
+        (true, false) => SortDirection::AscNullsLast,
+        (false, true) => SortDirection::DescNullsFirst,
+        (false, false) => SortDirection::DescNullsLast,
+    };
+    Ok(SortField {
+        expr: Some(e),
+        sort_kind: Some(SortKind::Direction(d as i32)),
+    })
 }
 
 fn substrait_field_ref(index: usize) -> Result<Expression> {
@@ -2153,14 +2223,16 @@ fn substrait_field_ref(index: usize) -> Result<Expression> {
 mod test {
     use super::*;
     use crate::logical_plan::consumer::{
-        from_substrait_literal_without_names, from_substrait_type_without_names,
+        from_substrait_extended_expr, from_substrait_literal_without_names,
+        from_substrait_named_struct, from_substrait_type_without_names,
     };
     use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano};
     use datafusion::arrow::array::{
         GenericListArray, Int64Builder, MapBuilder, StringBuilder,
     };
-    use datafusion::arrow::datatypes::Field;
+    use datafusion::arrow::datatypes::{Field, Fields, Schema};
     use datafusion::common::scalar::ScalarStructBuilder;
+    use datafusion::common::DFSchema;
     use std::collections::HashMap;
 
     #[test]
@@ -2351,8 +2423,10 @@ mod test {
         round_trip_type(DataType::Binary)?;
         round_trip_type(DataType::FixedSizeBinary(10))?;
         round_trip_type(DataType::LargeBinary)?;
+        round_trip_type(DataType::BinaryView)?;
         round_trip_type(DataType::Utf8)?;
         round_trip_type(DataType::LargeUtf8)?;
+        round_trip_type(DataType::Utf8View)?;
         round_trip_type(DataType::Decimal128(10, 2))?;
         round_trip_type(DataType::Decimal256(30, 2))?;
 
@@ -2433,5 +2507,102 @@ mod test {
         );
 
         Ok(())
+    }
+
+    #[test]
+    fn named_struct_names() -> Result<()> {
+        let mut extensions = Extensions::default();
+        let schema = DFSchemaRef::new(DFSchema::try_from(Schema::new(vec![
+            Field::new("int", DataType::Int32, true),
+            Field::new(
+                "struct",
+                DataType::Struct(Fields::from(vec![Field::new(
+                    "inner",
+                    DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))),
+                    true,
+                )])),
+                true,
+            ),
+            Field::new("trailer", DataType::Float64, true),
+        ]))?);
+
+        let named_struct = to_substrait_named_struct(&schema, &mut extensions)?;
+
+        // Struct field names should be flattened DFS style
+        // List field names should be omitted
+        assert_eq!(
+            named_struct.names,
+            vec!["int", "struct", "inner", "trailer"]
+        );
+
+        let roundtrip_schema = from_substrait_named_struct(&named_struct, &extensions)?;
+        assert_eq!(schema.as_ref(), &roundtrip_schema);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn extended_expressions() -> Result<()> {
+        let ctx = SessionContext::new();
+
+        // One expression, empty input schema
+        let expr = Expr::Literal(ScalarValue::Int32(Some(42)));
+        let field = Field::new("out", DataType::Int32, false);
+        let empty_schema = DFSchemaRef::new(DFSchema::empty());
+        let substrait =
+            to_substrait_extended_expr(&[(&expr, &field)], &empty_schema, &ctx)?;
+        let roundtrip_expr = from_substrait_extended_expr(&ctx, &substrait).await?;
+
+        assert_eq!(roundtrip_expr.input_schema, empty_schema);
+        assert_eq!(roundtrip_expr.exprs.len(), 1);
+
+        let (rt_expr, rt_field) = roundtrip_expr.exprs.first().unwrap();
+        assert_eq!(rt_field, &field);
+        assert_eq!(rt_expr, &expr);
+
+        // Multiple expressions, with column references
+        let expr1 = Expr::Column("c0".into());
+        let expr2 = Expr::Column("c1".into());
+        let out1 = Field::new("out1", DataType::Int32, true);
+        let out2 = Field::new("out2", DataType::Utf8, true);
+        let input_schema = DFSchemaRef::new(DFSchema::try_from(Schema::new(vec![
+            Field::new("c0", DataType::Int32, true),
+            Field::new("c1", DataType::Utf8, true),
+        ]))?);
+
+        let substrait = to_substrait_extended_expr(
+            &[(&expr1, &out1), (&expr2, &out2)],
+            &input_schema,
+            &ctx,
+        )?;
+        let roundtrip_expr = from_substrait_extended_expr(&ctx, &substrait).await?;
+
+        assert_eq!(roundtrip_expr.input_schema, input_schema);
+        assert_eq!(roundtrip_expr.exprs.len(), 2);
+
+        let mut exprs = roundtrip_expr.exprs.into_iter();
+
+        let (rt_expr, rt_field) = exprs.next().unwrap();
+        assert_eq!(rt_field, out1);
+        assert_eq!(rt_expr, expr1);
+
+        let (rt_expr, rt_field) = exprs.next().unwrap();
+        assert_eq!(rt_field, out2);
+        assert_eq!(rt_expr, expr2);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn invalid_extended_expression() {
+        let ctx = SessionContext::new();
+
+        // Not ok if input schema is missing field referenced by expr
+        let expr = Expr::Column("missing".into());
+        let field = Field::new("out", DataType::Int32, false);
+        let empty_schema = DFSchemaRef::new(DFSchema::empty());
+
+        let err = to_substrait_extended_expr(&[(&expr, &field)], &empty_schema, &ctx);
+
+        assert!(matches!(err, Err(DataFusionError::SchemaError(_, _))));
     }
 }

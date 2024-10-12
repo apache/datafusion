@@ -124,10 +124,12 @@ fn semi_join_with_join_filter() -> Result<()> {
     let plan = test_sql(sql)?;
     let expected = "Projection: test.col_utf8\
                     \n  LeftSemi Join: test.col_int32 = __correlated_sq_1.col_int32 Filter: test.col_uint32 != __correlated_sq_1.col_uint32\
-                    \n    TableScan: test projection=[col_int32, col_uint32, col_utf8]\
+                    \n    Filter: test.col_int32 IS NOT NULL\
+                    \n      TableScan: test projection=[col_int32, col_uint32, col_utf8]\
                     \n    SubqueryAlias: __correlated_sq_1\
                     \n      SubqueryAlias: t2\
-                    \n        TableScan: test projection=[col_int32, col_uint32]";
+                    \n        Filter: test.col_int32 IS NOT NULL\
+                    \n          TableScan: test projection=[col_int32, col_uint32]";
     assert_eq!(expected, format!("{plan}"));
     Ok(())
 }
@@ -144,7 +146,8 @@ fn anti_join_with_join_filter() -> Result<()> {
     \n    TableScan: test projection=[col_int32, col_uint32, col_utf8]\
     \n    SubqueryAlias: __correlated_sq_1\
     \n      SubqueryAlias: t2\
-    \n        TableScan: test projection=[col_int32, col_uint32]";
+    \n        Filter: test.col_int32 IS NOT NULL\
+    \n          TableScan: test projection=[col_int32, col_uint32]";
     assert_eq!(expected, format!("{plan}"));
     Ok(())
 }
@@ -155,11 +158,13 @@ fn where_exists_distinct() -> Result<()> {
                SELECT DISTINCT col_int32 FROM test t2 WHERE test.col_int32 = t2.col_int32)";
     let plan = test_sql(sql)?;
     let expected = "LeftSemi Join: test.col_int32 = __correlated_sq_1.col_int32\
-    \n  TableScan: test projection=[col_int32]\
+    \n  Filter: test.col_int32 IS NOT NULL\
+    \n    TableScan: test projection=[col_int32]\
     \n  SubqueryAlias: __correlated_sq_1\
     \n    Aggregate: groupBy=[[t2.col_int32]], aggr=[[]]\
     \n      SubqueryAlias: t2\
-    \n        TableScan: test projection=[col_int32]";
+    \n        Filter: test.col_int32 IS NOT NULL\
+    \n          TableScan: test projection=[col_int32]";
     assert_eq!(expected, format!("{plan}"));
     Ok(())
 }
@@ -172,12 +177,12 @@ fn intersect() -> Result<()> {
     let plan = test_sql(sql)?;
     let expected =
         "LeftSemi Join: test.col_int32 = test.col_int32, test.col_utf8 = test.col_utf8\
-    \n  Aggregate: groupBy=[[test.col_int32, test.col_utf8]], aggr=[[]]\
-    \n    LeftSemi Join: test.col_int32 = test.col_int32, test.col_utf8 = test.col_utf8\
-    \n      Aggregate: groupBy=[[test.col_int32, test.col_utf8]], aggr=[[]]\
-    \n        TableScan: test projection=[col_int32, col_utf8]\
-    \n      TableScan: test projection=[col_int32, col_utf8]\
-    \n  TableScan: test projection=[col_int32, col_utf8]";
+        \n  Aggregate: groupBy=[[test.col_int32, test.col_utf8]], aggr=[[]]\
+        \n    LeftSemi Join: test.col_int32 = test.col_int32, test.col_utf8 = test.col_utf8\
+        \n      Aggregate: groupBy=[[test.col_int32, test.col_utf8]], aggr=[[]]\
+        \n        TableScan: test projection=[col_int32, col_utf8]\
+        \n      TableScan: test projection=[col_int32, col_utf8]\
+        \n  TableScan: test projection=[col_int32, col_utf8]";
     assert_eq!(expected, format!("{plan}"));
     Ok(())
 }
@@ -340,7 +345,7 @@ fn select_wildcard_with_repeated_column() {
     let sql = "SELECT *, col_int32 FROM test";
     let err = test_sql(sql).expect_err("query should have failed");
     assert_eq!(
-        "expand_wildcard_rule\ncaused by\nError during planning: Projections require unique expression names but the expression \"test.col_int32\" at position 0 and \"test.col_int32\" at position 7 have the same name. Consider aliasing (\"AS\") one of them.",
+        "Schema error: Schema contains duplicate qualified field name test.col_int32",
         err.strip_backtrace()
     );
 }
@@ -356,6 +361,31 @@ fn select_wildcard_with_repeated_column_but_is_aliased() {
     assert_eq!(expected, format!("{plan}"));
 }
 
+#[test]
+fn select_correlated_predicate_subquery_with_uppercase_ident() {
+    let sql = r#"
+        SELECT *
+        FROM
+            test
+        WHERE
+            EXISTS (
+                SELECT 1
+                FROM (SELECT col_int32 as "COL_INT32", col_uint32 as "COL_UINT32" FROM test) "T1"
+                WHERE "T1"."COL_INT32" = test.col_int32
+            )
+    "#;
+    let plan = test_sql(sql).unwrap();
+    let expected = "LeftSemi Join: test.col_int32 = __correlated_sq_1.COL_INT32\
+    \n  Filter: test.col_int32 IS NOT NULL\
+    \n    TableScan: test projection=[col_int32, col_uint32, col_utf8, col_date32, col_date64, col_ts_nano_none, col_ts_nano_utc]\
+    \n  SubqueryAlias: __correlated_sq_1\
+    \n    SubqueryAlias: T1\
+    \n      Projection: test.col_int32 AS COL_INT32\
+    \n        Filter: test.col_int32 IS NOT NULL\
+    \n          TableScan: test projection=[col_int32]";
+    assert_eq!(expected, format!("{plan}"));
+}
+
 fn test_sql(sql: &str) -> Result<LogicalPlan> {
     // parse the SQL
     let dialect = GenericDialect {}; // or AnsiDialect, or your own dialect ...
@@ -366,7 +396,7 @@ fn test_sql(sql: &str) -> Result<LogicalPlan> {
         .with_udaf(count_udaf())
         .with_udaf(avg_udaf());
     let sql_to_rel = SqlToRel::new(&context_provider);
-    let plan = sql_to_rel.sql_statement_to_plan(statement.clone()).unwrap();
+    let plan = sql_to_rel.sql_statement_to_plan(statement.clone())?;
 
     let config = OptimizerContext::new().with_skip_failing_rules(false);
     let analyzer = Analyzer::new();

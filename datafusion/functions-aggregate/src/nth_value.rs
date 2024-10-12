@@ -20,29 +20,44 @@
 
 use std::any::Any;
 use std::collections::VecDeque;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use arrow::array::{new_empty_array, ArrayRef, AsArray, StructArray};
 use arrow_schema::{DataType, Field, Fields};
 
 use datafusion_common::utils::{array_into_list_array_nullable, get_row_at_idx};
 use datafusion_common::{exec_err, internal_err, not_impl_err, Result, ScalarValue};
+use datafusion_expr::aggregate_doc_sections::DOC_SECTION_STATISTICAL;
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{
-    Accumulator, AggregateUDFImpl, ReversedUDAF, Signature, Volatility,
+    lit, Accumulator, AggregateUDFImpl, Documentation, ExprFunctionExt, ReversedUDAF,
+    Signature, SortExpr, Volatility,
 };
 use datafusion_functions_aggregate_common::merge_arrays::merge_ordered_arrays;
 use datafusion_functions_aggregate_common::utils::ordering_fields;
 use datafusion_physical_expr::expressions::Literal;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 
-make_udaf_expr_and_func!(
-    NthValueAgg,
-    nth_value,
-    "Returns the nth value in a group of values.",
-    nth_value_udaf
-);
+create_func!(NthValueAgg, nth_value_udaf);
+
+/// Returns the nth value in a group of values.
+pub fn nth_value(
+    expr: datafusion_expr::Expr,
+    n: i64,
+    order_by: Vec<SortExpr>,
+) -> datafusion_expr::Expr {
+    let args = vec![expr, lit(n)];
+    if !order_by.is_empty() {
+        nth_value_udaf()
+            .call(args)
+            .order_by(order_by)
+            .build()
+            .unwrap()
+    } else {
+        nth_value_udaf().call(args)
+    }
+}
 
 /// Expression for a `NTH_VALUE(... ORDER BY ..., ...)` aggregation. In a multi
 /// partition setting, partial aggregations are computed for every partition,
@@ -147,6 +162,40 @@ impl AggregateUDFImpl for NthValueAgg {
     fn reverse_expr(&self) -> ReversedUDAF {
         ReversedUDAF::Reversed(nth_value_udaf())
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_nth_value_doc())
+    }
+}
+
+static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+
+fn get_nth_value_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_STATISTICAL)
+            .with_description(
+                "Returns the nth value in a group of values.",
+            )
+            .with_syntax_example("nth_value(expression, n ORDER BY expression)")
+            .with_sql_example(r#"```sql
+> SELECT dept_id, salary, NTH_VALUE(salary, 2) OVER (PARTITION BY dept_id ORDER BY salary ASC) AS second_salary_by_dept
+  FROM employee;
++---------+--------+-------------------------+
+| dept_id | salary | second_salary_by_dept   |
++---------+--------+-------------------------+
+| 1       | 30000  | NULL                    |
+| 1       | 40000  | 40000                   |
+| 1       | 50000  | 40000                   |
+| 2       | 35000  | NULL                    |
+| 2       | 45000  | 45000                   |
++---------+--------+-------------------------+
+```"#)
+            .with_standard_argument("expression", "The column or expression to retrieve the nth value from.")
+            .with_argument("n", "The position (nth) of the value to retrieve, based on the ordering.")
+            .build()
+            .unwrap()
+    })
 }
 
 #[derive(Debug)]

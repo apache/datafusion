@@ -18,7 +18,7 @@
 //! Math function: `log()`.
 
 use std::any::Any;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use super::power::PowerFunc;
 
@@ -29,9 +29,12 @@ use datafusion_common::{
     ScalarValue,
 };
 use datafusion_expr::expr::ScalarFunction;
+use datafusion_expr::scalar_doc_sections::DOC_SECTION_MATH;
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
-use datafusion_expr::{lit, ColumnarValue, Expr, ScalarUDF, TypeSignature::*};
+use datafusion_expr::{
+    lit, ColumnarValue, Documentation, Expr, ScalarUDF, TypeSignature::*,
+};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 
 #[derive(Debug)]
@@ -43,6 +46,22 @@ impl Default for LogFunc {
     fn default() -> Self {
         Self::new()
     }
+}
+
+static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+
+fn get_log_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_MATH)
+            .with_description("Returns the base-x logarithm of a number. Can either provide a specified base, or if omitted then takes the base-10 of a number.")
+            .with_syntax_example(r#"log(base, numeric_expression)
+log(numeric_expression)"#)
+            .with_standard_argument("base", "Base numeric")
+            .with_standard_argument("numeric_expression", "Numeric")
+            .build()
+            .unwrap()
+    })
 }
 
 impl LogFunc {
@@ -162,6 +181,10 @@ impl ScalarUDFImpl for LogFunc {
         };
 
         Ok(ColumnarValue::Array(arr))
+    }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_log_doc())
     }
 
     /// Simplify the `log` function by the relevant rules:

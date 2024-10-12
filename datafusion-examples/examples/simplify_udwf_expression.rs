@@ -17,16 +17,17 @@
 
 use std::any::Any;
 
-use arrow_schema::DataType;
+use arrow_schema::{DataType, Field};
 
 use datafusion::execution::context::SessionContext;
 use datafusion::functions_aggregate::average::avg_udaf;
 use datafusion::{error::Result, execution::options::CsvReadOptions};
-use datafusion_expr::function::WindowFunctionSimplification;
+use datafusion_expr::function::{WindowFunctionSimplification, WindowUDFFieldArgs};
 use datafusion_expr::{
     expr::WindowFunction, simplify::SimplifyInfo, Expr, PartitionEvaluator, Signature,
     Volatility, WindowUDF, WindowUDFImpl,
 };
+use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
 
 /// This UDWF will show how to use the WindowUDFImpl::simplify() API
 #[derive(Debug, Clone)]
@@ -60,11 +61,10 @@ impl WindowUDFImpl for SimplifySmoothItUdf {
         &self.signature
     }
 
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(DataType::Float64)
-    }
-
-    fn partition_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>> {
+    fn partition_evaluator(
+        &self,
+        _partition_evaluator_args: PartitionEvaluatorArgs,
+    ) -> Result<Box<dyn PartitionEvaluator>> {
         todo!()
     }
 
@@ -83,6 +83,10 @@ impl WindowUDFImpl for SimplifySmoothItUdf {
         };
 
         Some(Box::new(simplify))
+    }
+
+    fn field(&self, field_args: WindowUDFFieldArgs) -> Result<Field> {
+        Ok(Field::new(field_args.name(), DataType::Float64, true))
     }
 }
 

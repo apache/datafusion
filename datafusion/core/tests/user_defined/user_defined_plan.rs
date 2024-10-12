@@ -97,7 +97,8 @@ use datafusion::{
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::ScalarValue;
-use datafusion_expr::Projection;
+use datafusion_expr::tree_node::replace_sort_expression;
+use datafusion_expr::{Projection, SortExpr};
 use datafusion_optimizer::optimizer::ApplyOrder;
 use datafusion_optimizer::AnalyzerRule;
 
@@ -311,6 +312,7 @@ fn make_topk_context() -> SessionContext {
 
 // ------ The implementation of the TopK code follows -----
 
+#[derive(Debug)]
 struct TopKQueryPlanner {}
 
 #[async_trait]
@@ -334,7 +336,9 @@ impl QueryPlanner for TopKQueryPlanner {
     }
 }
 
+#[derive(Default, Debug)]
 struct TopKOptimizerRule {}
+
 impl OptimizerRule for TopKOptimizerRule {
     fn name(&self) -> &str {
         "topk"
@@ -386,13 +390,13 @@ impl OptimizerRule for TopKOptimizerRule {
     }
 }
 
-#[derive(PartialEq, Eq, Hash)]
+#[derive(PartialEq, Eq, PartialOrd, Hash)]
 struct TopKPlanNode {
     k: usize,
     input: LogicalPlan,
     /// The sort expression (this example only supports a single sort
     /// expr)
-    expr: Expr,
+    expr: SortExpr,
 }
 
 impl Debug for TopKPlanNode {
@@ -418,7 +422,7 @@ impl UserDefinedLogicalNodeCore for TopKPlanNode {
     }
 
     fn expressions(&self) -> Vec<Expr> {
-        vec![self.expr.clone()]
+        vec![self.expr.expr.clone()]
     }
 
     /// For example: `TopK: k=10`
@@ -436,8 +440,12 @@ impl UserDefinedLogicalNodeCore for TopKPlanNode {
         Ok(Self {
             k: self.k,
             input: inputs.swap_remove(0),
-            expr: exprs.swap_remove(0),
+            expr: replace_sort_expression(self.expr.clone(), exprs.swap_remove(0)),
         })
+    }
+
+    fn supports_limit_pushdown(&self) -> bool {
+        false // Disallow limit push-down by default
     }
 }
 
@@ -685,6 +693,7 @@ impl RecordBatchStream for TopKReader {
     }
 }
 
+#[derive(Default, Debug)]
 struct MyAnalyzerRule {}
 
 impl AnalyzerRule for MyAnalyzerRule {

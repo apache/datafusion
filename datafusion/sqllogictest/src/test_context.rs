@@ -98,6 +98,9 @@ impl TestContext {
                     return None;
                 }
             }
+            "dynamic_file.slt" => {
+                test_ctx.ctx = test_ctx.ctx.enable_url_table();
+            }
             "joins.slt" => {
                 info!("Registering partition table tables");
                 let example_udf = create_example_udf();
@@ -204,6 +207,7 @@ pub async fn register_partition_table(test_ctx: &mut TestContext) {
 
 // registers a LOCAL TEMPORARY table.
 pub async fn register_temp_table(ctx: &SessionContext) {
+    #[derive(Debug)]
     struct TestTable(TableType);
 
     #[async_trait]
@@ -310,8 +314,13 @@ pub async fn register_metadata_tables(ctx: &SessionContext) {
         String::from("metadata_key"),
         String::from("the name field"),
     )]));
+    let l_name =
+        Field::new("l_name", DataType::Utf8, true).with_metadata(HashMap::from([(
+            String::from("metadata_key"),
+            String::from("the l_name field"),
+        )]));
 
-    let schema = Schema::new(vec![id, name]).with_metadata(HashMap::from([(
+    let schema = Schema::new(vec![id, name, l_name]).with_metadata(HashMap::from([(
         String::from("metadata_key"),
         String::from("the entire schema"),
     )]));
@@ -321,6 +330,7 @@ pub async fn register_metadata_tables(ctx: &SessionContext) {
         vec![
             Arc::new(Int32Array::from(vec![Some(1), None, Some(3)])) as _,
             Arc::new(StringArray::from(vec![None, Some("bar"), Some("baz")])) as _,
+            Arc::new(StringArray::from(vec![None, Some("l_bar"), Some("l_baz")])) as _,
         ],
     )
     .unwrap();
@@ -356,7 +366,7 @@ fn create_example_udf() -> ScalarUDF {
         // Expects two f64 values:
         vec![DataType::Float64, DataType::Float64],
         // Returns an f64 value:
-        Arc::new(DataType::Float64),
+        DataType::Float64,
         Volatility::Immutable,
         adder,
     )

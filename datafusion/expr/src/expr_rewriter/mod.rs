@@ -19,16 +19,15 @@
 
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::fmt::Debug;
 use std::sync::Arc;
 
-use crate::expr::{Alias, Unnest};
+use crate::expr::{Alias, Sort, Unnest};
 use crate::logical_plan::Projection;
 use crate::{Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder};
 
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::tree_node::{
-    Transformed, TransformedResult, TreeNode, TreeNodeRewriter,
-};
+use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::TableReference;
 use datafusion_common::{Column, DFSchema, Result};
 
@@ -44,7 +43,7 @@ pub use order_by::rewrite_sort_cols_by_aggs;
 /// `Operator::ArrowAt`, but can be implemented by calling a function
 /// `array_concat` from the `functions-nested` crate.
 // This is not used in datafusion internally, but it is still helpful for downstream project so don't remove it.
-pub trait FunctionRewrite {
+pub trait FunctionRewrite: Debug {
     /// Return a human readable name for this rewrite
     fn name(&self) -> &str;
 
@@ -60,7 +59,7 @@ pub trait FunctionRewrite {
     ) -> Result<Transformed<Expr>>;
 }
 
-/// Recursively call [`Column::normalize_with_schemas`] on all [`Column`] expressions
+/// Recursively call `LogicalPlanBuilder::normalize` on all [`Column`] expressions
 /// in the `expr` expression tree.
 pub fn normalize_col(expr: Expr, plan: &LogicalPlan) -> Result<Expr> {
     expr.transform(|expr| {
@@ -114,6 +113,20 @@ pub fn normalize_cols(
     exprs
         .into_iter()
         .map(|e| normalize_col(e.into(), plan))
+        .collect()
+}
+
+pub fn normalize_sorts(
+    sorts: impl IntoIterator<Item = impl Into<Sort>>,
+    plan: &LogicalPlan,
+) -> Result<Vec<Sort>> {
+    sorts
+        .into_iter()
+        .map(|e| {
+            let sort = e.into();
+            normalize_col(sort.expr, plan)
+                .map(|expr| Sort::new(expr, sort.asc, sort.nulls_first))
+        })
         .collect()
 }
 
@@ -265,22 +278,10 @@ pub fn unalias(expr: Expr) -> Expr {
     }
 }
 
-/// Rewrites `expr` using `rewriter`, ensuring that the output has the
-/// same name as `expr` prior to rewrite, adding an alias if necessary.
-///
-/// This is important when optimizing plans to ensure the output
-/// schema of plan nodes don't change after optimization
-pub fn rewrite_preserving_name<R>(expr: Expr, rewriter: &mut R) -> Result<Expr>
-where
-    R: TreeNodeRewriter<Node = Expr>,
-{
-    let original_name = expr.name_for_alias()?;
-    let expr = expr.rewrite(rewriter)?.data;
-    expr.alias_if_changed(original_name)
-}
-
 /// Handles ensuring the name of rewritten expressions is not changed.
 ///
+/// This is important when optimizing plans to ensure the output
+/// schema of plan nodes don't change after optimization.
 /// For example, if an expression `1 + 2` is rewritten to `3`, the name of the
 /// expression should be preserved: `3 as "1 + 2"`
 ///
@@ -289,14 +290,24 @@ pub struct NamePreserver {
     use_alias: bool,
 }
 
-/// If the name of an expression is remembered, it will be preserved when
-/// rewriting the expression
-pub struct SavedName(Option<String>);
+/// If the qualified name of an expression is remembered, it will be preserved
+/// when rewriting the expression
+pub enum SavedName {
+    /// Saved qualified name to be preserved
+    Saved {
+        relation: Option<TableReference>,
+        name: String,
+    },
+    /// Name is not preserved
+    None,
+}
 
 impl NamePreserver {
     /// Create a new NamePreserver for rewriting the `expr` that is part of the specified plan
     pub fn new(plan: &LogicalPlan) -> Self {
         Self {
+            // The schema of Filter and Join nodes comes from their inputs rather than their output expressions,
+            // so there is no need to use aliases to preserve expression names.
             use_alias: !matches!(plan, LogicalPlan::Filter(_) | LogicalPlan::Join(_)),
         }
     }
@@ -308,24 +319,29 @@ impl NamePreserver {
         Self { use_alias: true }
     }
 
-    pub fn save(&self, expr: &Expr) -> Result<SavedName> {
-        let original_name = if self.use_alias {
-            Some(expr.name_for_alias()?)
+    pub fn save(&self, expr: &Expr) -> SavedName {
+        if self.use_alias {
+            let (relation, name) = expr.qualified_name();
+            SavedName::Saved { relation, name }
         } else {
-            None
-        };
-
-        Ok(SavedName(original_name))
+            SavedName::None
+        }
     }
 }
 
 impl SavedName {
-    /// Ensures the name of the rewritten expression is preserved
-    pub fn restore(self, expr: Expr) -> Result<Expr> {
-        let Self(original_name) = self;
-        match original_name {
-            Some(name) => expr.alias_if_changed(name),
-            None => Ok(expr),
+    /// Ensures the qualified name of the rewritten expression is preserved
+    pub fn restore(self, expr: Expr) -> Expr {
+        match self {
+            SavedName::Saved { relation, name } => {
+                let (new_relation, new_name) = expr.qualified_name();
+                if new_relation != relation || new_name != name {
+                    expr.alias_qualified(relation, name)
+                } else {
+                    expr
+                }
+            }
+            SavedName::None => expr,
         }
     }
 }
@@ -335,9 +351,9 @@ mod test {
     use std::ops::Add;
 
     use super::*;
-    use crate::expr::Sort;
     use crate::{col, lit, Cast};
     use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_common::tree_node::TreeNodeRewriter;
     use datafusion_common::ScalarValue;
 
     #[derive(Default)]
@@ -497,15 +513,19 @@ mod test {
         // change literal type from i32 to i64
         test_rewrite(col("a").add(lit(1i32)), col("a").add(lit(1i64)));
 
-        // SortExpr a+1 ==> b + 2
+        // test preserve qualifier
         test_rewrite(
-            Expr::Sort(Sort::new(Box::new(col("a").add(lit(1i32))), true, false)),
-            Expr::Sort(Sort::new(Box::new(col("b").add(lit(2i64))), true, false)),
+            Expr::Column(Column::new(Some("test"), "a")),
+            Expr::Column(Column::new_unqualified("test.a")),
+        );
+        test_rewrite(
+            Expr::Column(Column::new_unqualified("test.a")),
+            Expr::Column(Column::new(Some("test"), "a")),
         );
     }
 
-    /// rewrites `expr_from` to `rewrite_to` using
-    /// `rewrite_preserving_name` verifying the result is `expected_expr`
+    /// rewrites `expr_from` to `rewrite_to` while preserving the original qualified name
+    /// by using the `NamePreserver`
     fn test_rewrite(expr_from: Expr, rewrite_to: Expr) {
         struct TestRewriter {
             rewrite_to: Expr,
@@ -522,18 +542,12 @@ mod test {
         let mut rewriter = TestRewriter {
             rewrite_to: rewrite_to.clone(),
         };
-        let expr = rewrite_preserving_name(expr_from.clone(), &mut rewriter).unwrap();
+        let saved_name = NamePreserver { use_alias: true }.save(&expr_from);
+        let new_expr = expr_from.clone().rewrite(&mut rewriter).unwrap().data;
+        let new_expr = saved_name.restore(new_expr);
 
-        let original_name = match &expr_from {
-            Expr::Sort(Sort { expr, .. }) => expr.schema_name().to_string(),
-            expr => expr.schema_name().to_string(),
-        };
-
-        let new_name = match &expr {
-            Expr::Sort(Sort { expr, .. }) => expr.schema_name().to_string(),
-            expr => expr.schema_name().to_string(),
-        };
-
+        let original_name = expr_from.qualified_name();
+        let new_name = new_expr.qualified_name();
         assert_eq!(
             original_name, new_name,
             "mismatch rewriting expr_from: {expr_from} to {rewrite_to}"

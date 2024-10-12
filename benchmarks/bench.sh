@@ -77,7 +77,7 @@ parquet:                Benchmark of parquet reader's filtering speed
 sort:                   Benchmark of sorting speed
 clickbench_1:           ClickBench queries against a single parquet file
 clickbench_partitioned: ClickBench queries against a partitioned (100 files) parquet
-clickbench_extended:    ClickBench "inspired" queries against a single parquet (DataFusion specific)
+clickbench_extended:    ClickBench \"inspired\" queries against a single parquet (DataFusion specific)
 
 **********
 * Supported Configuration (Environment Variables)
@@ -106,7 +106,7 @@ while [[ $# -gt 0 ]]; do
             shift # past argument
             usage
             ;;
-        -*|--*)
+        -*)
             echo "Unknown option $1"
             exit 1
             ;;
@@ -142,6 +142,7 @@ main() {
                     data_tpch "10"
                     data_clickbench_1
                     data_clickbench_partitioned
+                    data_imdb
                     ;;
                 tpch)
                     data_tpch "1"
@@ -166,6 +167,9 @@ main() {
                 clickbench_extended)
                     data_clickbench_1
                     ;;
+                imdb)
+                    data_imdb
+                    ;;
                 *)
                     echo "Error: unknown benchmark '$BENCHMARK' for data generation"
                     usage
@@ -175,7 +179,7 @@ main() {
         run)
             # Parse positional parameters
             BENCHMARK=${ARG2:-"${BENCHMARK}"}
-            BRANCH_NAME=$(cd ${DATAFUSION_DIR} && git rev-parse --abbrev-ref HEAD)
+            BRANCH_NAME=$(cd "${DATAFUSION_DIR}" && git rev-parse --abbrev-ref HEAD)
             BRANCH_NAME=${BRANCH_NAME//\//_} # mind blowing syntax to replace / with _
             RESULTS_NAME=${RESULTS_NAME:-"${BRANCH_NAME}"}
             RESULTS_DIR=${RESULTS_DIR:-"$SCRIPT_DIR/results/$RESULTS_NAME"}
@@ -189,7 +193,7 @@ main() {
             echo "DATA_DIR: ${DATA_DIR}"
             echo "RESULTS_DIR: ${RESULTS_DIR}"
             echo "CARGO_COMMAND: ${CARGO_COMMAND}"
-            echo "PREFER_HASH_JOIN": ${PREFER_HASH_JOIN}
+            echo "PREFER_HASH_JOIN: ${PREFER_HASH_JOIN}"
             echo "***************************"
 
             # navigate to the appropriate directory
@@ -207,6 +211,7 @@ main() {
                     run_clickbench_1
                     run_clickbench_partitioned
                     run_clickbench_extended
+                    run_imdb
                     ;;
                 tpch)
                     run_tpch "1"
@@ -234,6 +239,9 @@ main() {
                     ;;
                 clickbench_extended)
                     run_clickbench_extended
+                    ;;
+                imdb)
+                    run_imdb
                     ;;
                 *)
                     echo "Error: unknown benchmark '$BENCHMARK' for run"
@@ -288,7 +296,7 @@ data_tpch() {
         echo " tbl files exist ($FILE exists)."
     else
         echo " creating tbl files with tpch_dbgen..."
-        docker run -v "${TPCH_DIR}":/data -it --rm ghcr.io/scalytics/tpch-docker:main -vf -s ${SCALE_FACTOR}
+        docker run -v "${TPCH_DIR}":/data -it --rm ghcr.io/scalytics/tpch-docker:main -vf -s "${SCALE_FACTOR}"
     fi
 
     # Copy expected answers into the ./data/answers directory if it does not already exist
@@ -325,7 +333,7 @@ run_tpch() {
     RESULTS_FILE="${RESULTS_DIR}/tpch_sf${SCALE_FACTOR}.json"
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running tpch benchmark..."
-    $CARGO_COMMAND --bin tpch -- benchmark datafusion --iterations 5 --path "${TPCH_DIR}" --prefer_hash_join ${PREFER_HASH_JOIN} --format parquet -o ${RESULTS_FILE}
+    $CARGO_COMMAND --bin tpch -- benchmark datafusion --iterations 5 --path "${TPCH_DIR}" --prefer_hash_join "${PREFER_HASH_JOIN}" --format parquet -o "${RESULTS_FILE}"
 }
 
 # Runs the tpch in memory
@@ -341,7 +349,7 @@ run_tpch_mem() {
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running tpch_mem benchmark..."
     # -m means in memory
-    $CARGO_COMMAND --bin tpch -- benchmark datafusion --iterations 5 --path "${TPCH_DIR}" --prefer_hash_join ${PREFER_HASH_JOIN} -m --format parquet -o ${RESULTS_FILE}
+    $CARGO_COMMAND --bin tpch -- benchmark datafusion --iterations 5 --path "${TPCH_DIR}" --prefer_hash_join "${PREFER_HASH_JOIN}" -m --format parquet -o "${RESULTS_FILE}"
 }
 
 # Runs the parquet filter benchmark
@@ -349,7 +357,7 @@ run_parquet() {
     RESULTS_FILE="${RESULTS_DIR}/parquet.json"
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running parquet filter benchmark..."
-    $CARGO_COMMAND --bin parquet -- filter --path "${DATA_DIR}" --prefer_hash_join ${PREFER_HASH_JOIN} --scale-factor 1.0 --iterations 5 -o ${RESULTS_FILE}
+    $CARGO_COMMAND --bin parquet -- filter --path "${DATA_DIR}" --prefer_hash_join "${PREFER_HASH_JOIN}" --scale-factor 1.0 --iterations 5 -o "${RESULTS_FILE}"
 }
 
 # Runs the sort benchmark
@@ -357,7 +365,7 @@ run_sort() {
     RESULTS_FILE="${RESULTS_DIR}/sort.json"
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running sort benchmark..."
-    $CARGO_COMMAND --bin parquet -- sort --path "${DATA_DIR}" --prefer_hash_join ${PREFER_HASH_JOIN} --scale-factor 1.0 --iterations 5 -o ${RESULTS_FILE}
+    $CARGO_COMMAND --bin parquet -- sort --path "${DATA_DIR}" --prefer_hash_join "${PREFER_HASH_JOIN}" --scale-factor 1.0 --iterations 5 -o "${RESULTS_FILE}"
 }
 
 
@@ -369,7 +377,7 @@ data_clickbench_1() {
     pushd "${DATA_DIR}" > /dev/null
 
     # Avoid downloading if it already exists and is the right size
-    OUTPUT_SIZE=`wc -c hits.parquet  2>/dev/null  | awk '{print $1}' || true`
+    OUTPUT_SIZE=$(wc -c hits.parquet  2>/dev/null  | awk '{print $1}' || true)
     echo -n "Checking hits.parquet..."
     if test "${OUTPUT_SIZE}" = "14779976446"; then
         echo -n "... found ${OUTPUT_SIZE} bytes ..."
@@ -393,7 +401,7 @@ data_clickbench_partitioned() {
     pushd "${DATA_DIR}/hits_partitioned" > /dev/null
 
     echo -n "Checking hits_partitioned..."
-    OUTPUT_SIZE=`wc -c * 2>/dev/null | tail -n 1  | awk '{print $1}' || true`
+    OUTPUT_SIZE=$(wc -c -- * 2>/dev/null | tail -n 1  | awk '{print $1}' || true)
     if test "${OUTPUT_SIZE}" = "14737666736"; then
         echo -n "... found ${OUTPUT_SIZE} bytes ..."
     else
@@ -411,7 +419,7 @@ run_clickbench_1() {
     RESULTS_FILE="${RESULTS_DIR}/clickbench_1.json"
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running clickbench (1 file) benchmark..."
-    $CARGO_COMMAND --bin dfbench -- clickbench  --iterations 5 --path "${DATA_DIR}/hits.parquet"  --queries-path "${SCRIPT_DIR}/queries/clickbench/queries.sql" -o ${RESULTS_FILE}
+    $CARGO_COMMAND --bin dfbench -- clickbench  --iterations 5 --path "${DATA_DIR}/hits.parquet"  --queries-path "${SCRIPT_DIR}/queries/clickbench/queries.sql" -o "${RESULTS_FILE}"
 }
 
  # Runs the clickbench benchmark with the partitioned parquet files
@@ -419,7 +427,7 @@ run_clickbench_partitioned() {
     RESULTS_FILE="${RESULTS_DIR}/clickbench_partitioned.json"
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running clickbench (partitioned, 100 files) benchmark..."
-    $CARGO_COMMAND --bin dfbench -- clickbench  --iterations 5 --path "${DATA_DIR}/hits_partitioned" --queries-path "${SCRIPT_DIR}/queries/clickbench/queries.sql" -o ${RESULTS_FILE}
+    $CARGO_COMMAND --bin dfbench -- clickbench  --iterations 5 --path "${DATA_DIR}/hits_partitioned" --queries-path "${SCRIPT_DIR}/queries/clickbench/queries.sql" -o "${RESULTS_FILE}"
 }
 
 # Runs the clickbench "extended" benchmark with a single large parquet file
@@ -427,8 +435,97 @@ run_clickbench_extended() {
     RESULTS_FILE="${RESULTS_DIR}/clickbench_extended.json"
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running clickbench (1 file) extended benchmark..."
-    $CARGO_COMMAND --bin dfbench -- clickbench  --iterations 5 --path "${DATA_DIR}/hits.parquet" --queries-path "${SCRIPT_DIR}/queries/clickbench/extended.sql" -o ${RESULTS_FILE}
+    $CARGO_COMMAND --bin dfbench -- clickbench  --iterations 5 --path "${DATA_DIR}/hits.parquet" --queries-path "${SCRIPT_DIR}/queries/clickbench/extended.sql" -o "${RESULTS_FILE}"
 }
+
+# Downloads the csv.gz files IMDB datasets from Peter Boncz's homepage(one of the JOB paper authors)
+# http://homepages.cwi.nl/~boncz/job/imdb.tgz
+data_imdb() {
+    local imdb_dir="${DATA_DIR}/imdb"
+    local imdb_temp_gz="${imdb_dir}/imdb.tgz"
+    local imdb_url="https://homepages.cwi.nl/~boncz/job/imdb.tgz"
+
+   # imdb has 21 files, we just separate them into 3 groups for better readability 
+    local first_required_files=(
+        "aka_name.parquet"    
+        "aka_title.parquet"
+        "cast_info.parquet"
+        "char_name.parquet"
+        "comp_cast_type.parquet"
+        "company_name.parquet"
+        "company_type.parquet"
+    )
+
+    local second_required_files=(
+        "complete_cast.parquet"
+        "info_type.parquet"
+        "keyword.parquet"
+        "kind_type.parquet"
+        "link_type.parquet"
+        "movie_companies.parquet"
+        "movie_info.parquet"
+    )
+
+    local third_required_files=(
+        "movie_info_idx.parquet"
+        "movie_keyword.parquet"
+        "movie_link.parquet"
+        "name.parquet"
+        "person_info.parquet"
+        "role_type.parquet"
+        "title.parquet"
+    )
+
+    # Combine the three arrays into one
+    local required_files=("${first_required_files[@]}" "${second_required_files[@]}" "${third_required_files[@]}")
+    local convert_needed=false
+
+    # Create directory if it doesn't exist
+    mkdir -p "${imdb_dir}"
+
+    # Check if required files exist
+    for file in "${required_files[@]}"; do
+        if [ ! -f "${imdb_dir}/${file}" ]; then
+            convert_needed=true
+            break
+        fi
+    done
+
+    if [ "$convert_needed" = true ]; then
+        if [ ! -f "${imdb_dir}/imdb.tgz" ]; then
+            echo "Downloading IMDB dataset..."
+            
+            # Download the dataset
+            curl -o "${imdb_temp_gz}" "${imdb_url}"
+            
+            # Extract the dataset
+            tar -xzvf "${imdb_temp_gz}" -C "${imdb_dir}"
+            $CARGO_COMMAND --bin imdb -- convert --input ${imdb_dir} --output ${imdb_dir} --format parquet
+        else 
+            echo "IMDB.tgz already exists."
+
+            # Extract the dataset
+            tar -xzvf "${imdb_temp_gz}" -C "${imdb_dir}"
+            $CARGO_COMMAND --bin imdb -- convert --input ${imdb_dir} --output ${imdb_dir} --format parquet
+        fi
+        echo "IMDB dataset downloaded and extracted."
+    else
+        echo "IMDB dataset already exists and contains required parquet files."
+    fi
+}
+
+# Runs the imdb benchmark
+run_imdb() {
+    IMDB_DIR="${DATA_DIR}/imdb"
+    
+    RESULTS_FILE="${RESULTS_DIR}/imdb.json"
+    echo "RESULTS_FILE: ${RESULTS_FILE}"
+    echo "Running imdb benchmark..."
+    $CARGO_COMMAND --bin imdb -- benchmark datafusion --iterations 5 --path "${IMDB_DIR}" --prefer_hash_join "${PREFER_HASH_JOIN}" --format parquet -o "${RESULTS_FILE}"
+}
+
+
+
 
 compare_benchmarks() {
     BASE_RESULTS_DIR="${SCRIPT_DIR}/results"
@@ -447,12 +544,12 @@ compare_benchmarks() {
     fi
 
     echo "Comparing ${BRANCH1} and ${BRANCH2}"
-    for bench in `ls ${BASE_RESULTS_DIR}/${BRANCH1}` ; do
-        RESULTS_FILE1="${BASE_RESULTS_DIR}/${BRANCH1}/${bench}"
-        RESULTS_FILE2="${BASE_RESULTS_DIR}/${BRANCH2}/${bench}"
+    for RESULTS_FILE1 in "${BASE_RESULTS_DIR}/${BRANCH1}"/*.json ; do
+	BENCH=$(basename "${RESULTS_FILE1}")
+        RESULTS_FILE2="${BASE_RESULTS_DIR}/${BRANCH2}/${BENCH}"
         if test -f "${RESULTS_FILE2}" ; then
             echo "--------------------"
-            echo "Benchmark ${bench}"
+            echo "Benchmark ${BENCH}"
             echo "--------------------"
             PATH=$VIRTUAL_ENV/bin:$PATH python3 "${SCRIPT_DIR}"/compare.py "${RESULTS_FILE1}" "${RESULTS_FILE2}"
         else
@@ -463,7 +560,7 @@ compare_benchmarks() {
 }
 
 setup_venv() {
-    python3 -m venv $VIRTUAL_ENV
+    python3 -m venv "$VIRTUAL_ENV"
     PATH=$VIRTUAL_ENV/bin:$PATH python3 -m pip install -r requirements.txt
 }
 

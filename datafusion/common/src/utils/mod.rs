@@ -35,7 +35,7 @@ use arrow_array::{
     Array, FixedSizeListArray, LargeListArray, ListArray, OffsetSizeTrait,
     RecordBatchOptions,
 };
-use arrow_schema::{DataType, Fields};
+use arrow_schema::DataType;
 use sqlparser::ast::Ident;
 use sqlparser::dialect::GenericDialect;
 use sqlparser::parser::Parser;
@@ -98,7 +98,7 @@ pub fn get_record_batch_at_indices(
     record_batch: &RecordBatch,
     indices: &PrimitiveArray<UInt32Type>,
 ) -> Result<RecordBatch> {
-    let new_columns = get_arrayref_at_indices(record_batch.columns(), indices)?;
+    let new_columns = take_arrays(record_batch.columns(), indices)?;
     RecordBatch::try_new_with_options(
         record_batch.schema(),
         new_columns,
@@ -291,10 +291,10 @@ pub(crate) fn parse_identifiers(s: &str) -> Result<Vec<Ident>> {
 }
 
 /// Construct a new [`Vec`] of [`ArrayRef`] from the rows of the `arrays` at the `indices`.
-pub fn get_arrayref_at_indices(
-    arrays: &[ArrayRef],
-    indices: &PrimitiveArray<UInt32Type>,
-) -> Result<Vec<ArrayRef>> {
+///
+/// TODO: use implementation in arrow-rs when available:
+/// <https://github.com/apache/arrow-rs/pull/6475>
+pub fn take_arrays(arrays: &[ArrayRef], indices: &dyn Array) -> Result<Vec<ArrayRef>> {
     arrays
         .iter()
         .map(|array| {
@@ -444,8 +444,13 @@ pub fn arrays_into_list_array(
 }
 
 /// Helper function to convert a ListArray into a vector of ArrayRefs.
-pub fn list_to_arrays<O: OffsetSizeTrait>(a: ArrayRef) -> Vec<ArrayRef> {
+pub fn list_to_arrays<O: OffsetSizeTrait>(a: &ArrayRef) -> Vec<ArrayRef> {
     a.as_list::<O>().iter().flatten().collect::<Vec<_>>()
+}
+
+/// Helper function to convert a FixedSizeListArray into a vector of ArrayRefs.
+pub fn fixed_size_list_to_arrays(a: &ArrayRef) -> Vec<ArrayRef> {
+    a.as_fixed_size_list().iter().flatten().collect::<Vec<_>>()
 }
 
 /// Get the base type of a data type.
@@ -754,21 +759,6 @@ pub fn combine_limit(
     (combined_skip, combined_fetch)
 }
 
-pub fn get_map_entry_field(data_type: &DataType) -> Result<&Fields> {
-    match data_type {
-        DataType::Map(field, _) => {
-            let field_data_type = field.data_type();
-            match field_data_type {
-                DataType::Struct(fields) => Ok(fields),
-                _ => {
-                    _internal_err!("Expected a Struct type, got {:?}", field_data_type)
-                }
-            }
-        }
-        _ => _internal_err!("Expected a Map type, got {:?}", data_type),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use crate::ScalarValue::Null;
@@ -1014,7 +1004,7 @@ mod tests {
     }
 
     #[test]
-    fn test_get_arrayref_at_indices() -> Result<()> {
+    fn test_take_arrays() -> Result<()> {
         let arrays: Vec<ArrayRef> = vec![
             Arc::new(Float64Array::from(vec![5.0, 7.0, 8.0, 9., 10.])),
             Arc::new(Float64Array::from(vec![2.0, 3.0, 3.0, 4.0, 5.0])),
@@ -1033,8 +1023,9 @@ mod tests {
             vec![2, 4],
         ];
         for row_indices in row_indices_vec {
-            let indices = PrimitiveArray::from_iter_values(row_indices.iter().cloned());
-            let chunk = get_arrayref_at_indices(&arrays, &indices)?;
+            let indices: PrimitiveArray<UInt32Type> =
+                PrimitiveArray::from_iter_values(row_indices.iter().cloned());
+            let chunk = take_arrays(&arrays, &indices)?;
             for (arr_orig, arr_chunk) in arrays.iter().zip(&chunk) {
                 for (idx, orig_idx) in row_indices.iter().enumerate() {
                     let res1 = ScalarValue::try_from_array(arr_orig, *orig_idx as usize)?;

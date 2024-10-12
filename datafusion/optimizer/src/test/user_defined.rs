@@ -33,7 +33,7 @@ pub fn new(input: LogicalPlan) -> LogicalPlan {
     LogicalPlan::Extension(Extension { node })
 }
 
-#[derive(PartialEq, Eq, Hash)]
+#[derive(PartialEq, Eq, PartialOrd, Hash)]
 struct TestUserDefinedPlanNode {
     input: LogicalPlan,
 }
@@ -75,5 +75,9 @@ impl UserDefinedLogicalNodeCore for TestUserDefinedPlanNode {
         Ok(Self {
             input: inputs.swap_remove(0),
         })
+    }
+
+    fn supports_limit_pushdown(&self) -> bool {
+        false // Disallow limit push-down by default
     }
 }

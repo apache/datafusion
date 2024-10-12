@@ -75,6 +75,10 @@ message LogicalExprNodeCollection {
   repeated LogicalExprNode logical_expr_nodes = 1;
 }
 
+message SortExprNodeCollection {
+  repeated SortExprNode sort_expr_nodes = 1;
+}
+
 message ListingTableScanNode {
   reserved 1; // was string table_name
   TableReference table_name = 14;
@@ -92,7 +96,7 @@ message ListingTableScanNode {
     datafusion_common.AvroFormat avro = 12;
     datafusion_common.NdJsonFormat json = 15;
   }
-  repeated LogicalExprNodeCollection file_sort_order = 13;
+  repeated SortExprNodeCollection file_sort_order = 13;
 }
 
 message ViewTableScanNode {
@@ -129,7 +133,7 @@ message SelectionNode {
 
 message SortNode {
   LogicalPlanNode input = 1;
-  repeated LogicalExprNode expr = 2;
+  repeated SortExprNode expr = 2;
   // Maximum number of highest/lowest rows to fetch; negative means no limit
   int64 fetch = 3;
 }
@@ -160,7 +164,7 @@ message CreateExternalTableNode {
   repeated string table_partition_cols = 5;
   bool if_not_exists = 6;
   string definition = 7;
-  repeated LogicalExprNodeCollection order_exprs = 10;
+  repeated SortExprNodeCollection order_exprs = 10;
   bool unbounded = 11;
   map<string, string> options = 8;
   datafusion_common.Constraints constraints = 12;
@@ -245,7 +249,7 @@ message DistinctNode {
 message DistinctOnNode {
   repeated LogicalExprNode on_expr = 1;
   repeated LogicalExprNode select_expr = 2;
-  repeated LogicalExprNode sort_expr = 3;
+  repeated SortExprNode sort_expr = 3;
   LogicalPlanNode input = 4;
 }
 
@@ -258,12 +262,34 @@ message CopyToNode {
 
 message UnnestNode {
   LogicalPlanNode input = 1;
-  repeated datafusion_common.Column exec_columns = 2;
-  repeated uint64 list_type_columns = 3;
+  repeated ColumnUnnestExec exec_columns = 2;
+  repeated ColumnUnnestListItem list_type_columns = 3;
   repeated uint64 struct_type_columns = 4;
   repeated uint64 dependency_indices = 5;
   datafusion_common.DfSchema schema = 6;
   UnnestOptions options = 7;
+}
+message ColumnUnnestListItem {
+  uint32 input_index = 1;
+  ColumnUnnestListRecursion recursion = 2;
+}
+
+message ColumnUnnestListRecursions {
+  repeated ColumnUnnestListRecursion recursions = 2;
+}
+
+message ColumnUnnestListRecursion {
+  datafusion_common.Column output_column = 1;
+  uint32 depth = 2;
+}
+
+message ColumnUnnestExec {
+  datafusion_common.Column column = 1;
+  oneof UnnestType {
+    ColumnUnnestListRecursions list = 2;
+    datafusion_common.EmptyMessage struct = 3;
+    datafusion_common.EmptyMessage inferred = 4;
+  }
 }
 
 message UnnestOptions {
@@ -320,7 +346,6 @@ message LogicalExprNode {
     BetweenNode between = 9;
     CaseNode case_ = 10;
     CastNode cast = 11;
-    SortExprNode sort = 12;
     NegativeNode negative = 13;
     InListNode in_list = 14;
     Wildcard wildcard = 15;
@@ -470,7 +495,7 @@ message AggregateUDFExprNode {
   repeated LogicalExprNode args = 2;
   bool distinct = 5;
   LogicalExprNode filter = 3;
-  repeated LogicalExprNode order_by = 4;
+  repeated SortExprNode order_by = 4;
   optional bytes fun_definition = 6;
 }
 
@@ -483,9 +508,9 @@ message ScalarUDFExprNode {
 enum BuiltInWindowFunction {
   UNSPECIFIED = 0; // https://protobuf.dev/programming-guides/dos-donts/#unspecified-enum
   // ROW_NUMBER = 0;
-  RANK = 1;
-  DENSE_RANK = 2;
-  PERCENT_RANK = 3;
+  //  RANK = 1;
+  //  DENSE_RANK = 2;
+  //  PERCENT_RANK = 3;
   CUME_DIST = 4;
   NTILE = 5;
   LAG = 6;
@@ -503,7 +528,7 @@ message WindowExprNode {
   }
   LogicalExprNode expr = 4;
   repeated LogicalExprNode partition_by = 5;
-  repeated LogicalExprNode order_by = 6;
+  repeated SortExprNode order_by = 6;
   // repeated LogicalExprNode filter = 7;
   WindowFrame window_frame = 8;
   optional bytes fun_definition = 10;
@@ -690,10 +715,11 @@ message PhysicalPlanNode {
     AnalyzeExecNode analyze = 23;
     JsonSinkExecNode json_sink = 24;
     SymmetricHashJoinExecNode symmetric_hash_join = 25;
-    InterleaveExecNode  interleave = 26;
+    InterleaveExecNode interleave = 26;
     PlaceholderRowExecNode placeholder_row = 27;
     CsvSinkExecNode csv_sink = 28;
     ParquetSinkExecNode parquet_sink = 29;
+    UnnestExecNode unnest = 30;
   }
 }
 
@@ -705,14 +731,21 @@ message PartitionColumn {
 
 message FileSinkConfig {
   reserved 6; // writer_mode
+  reserved 8; // was `overwrite` which has been superseded by `insert_op`
 
   string object_store_url = 1;
   repeated PartitionedFile file_groups = 2;
   repeated string table_paths = 3;
   datafusion_common.Schema output_schema = 4;
   repeated PartitionColumn table_partition_cols = 5;
-  bool overwrite = 8;
   bool keep_partition_by_columns = 9;
+  InsertOp insert_op = 10;
+}
+
+enum InsertOp {
+  Append = 0;
+  Overwrite = 1;
+  Replace = 2;
 }
 
 message JsonSink {
@@ -749,6 +782,19 @@ message ParquetSinkExecNode {
   ParquetSink sink = 2;
   datafusion_common.Schema sink_schema = 3;
   PhysicalSortExprNodeCollection sort_order = 4;
+}
+
+message UnnestExecNode {
+  PhysicalPlanNode input = 1;
+  datafusion_common.Schema schema = 2;
+  repeated ListUnnest list_type_columns = 3;
+  repeated uint64 struct_type_columns = 4;
+  UnnestOptions options = 5;
+}
+
+message ListUnnest {
+  uint32 index_in_input_schema = 1;
+  uint32 depth = 2;
 }
 
 message PhysicalExtensionNode {
@@ -910,6 +956,7 @@ message FilterExecNode {
   PhysicalPlanNode input = 1;
   PhysicalExprNode expr = 2;
   uint32 default_filter_selectivity = 3;
+  repeated uint32 projection = 9;
 }
 
 message FileGroup {

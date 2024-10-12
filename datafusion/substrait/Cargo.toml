@@ -26,7 +26,7 @@ repository = { workspace = true }
 license = { workspace = true }
 authors = { workspace = true }
 # Specify MSRV here as `cargo msrv` doesn't support workspace version
-rust-version = "1.76"
+rust-version = "1.78"
 
 [lints]
 workspace = true
@@ -39,8 +39,9 @@ datafusion = { workspace = true, default-features = true }
 itertools = { workspace = true }
 object_store = { workspace = true }
 pbjson-types = "0.7"
+# TODO use workspace version
 prost = "0.13"
-substrait = { version = "0.41", features = ["serde"] }
+substrait = { version = "0.42", features = ["serde"] }
 url = { workspace = true }
 
 [dev-dependencies]

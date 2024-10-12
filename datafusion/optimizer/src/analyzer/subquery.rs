@@ -16,7 +16,6 @@
 // under the License.
 
 use std::ops::Deref;
-use std::sync::Arc;
 
 use crate::analyzer::check_plan;
 use crate::utils::collect_subquery_cols;
@@ -246,7 +245,7 @@ fn check_aggregation_in_scalar_subquery(
     if !agg.group_expr.is_empty() {
         let correlated_exprs = get_correlated_expressions(inner_plan)?;
         let inner_subquery_cols =
-            collect_subquery_cols(&correlated_exprs, Arc::clone(agg.input.schema()))?;
+            collect_subquery_cols(&correlated_exprs, agg.input.schema())?;
         let mut group_columns = agg
             .group_expr
             .iter()
@@ -337,6 +336,7 @@ fn check_mixed_out_refer_in_window(window: &Window) -> Result<()> {
 
 #[cfg(test)]
 mod test {
+    use std::cmp::Ordering;
     use std::sync::Arc;
 
     use datafusion_common::{DFSchema, DFSchemaRef};
@@ -347,6 +347,12 @@ mod test {
     #[derive(Debug, PartialEq, Eq, Hash)]
     struct MockUserDefinedLogicalPlan {
         empty_schema: DFSchemaRef,
+    }
+
+    impl PartialOrd for MockUserDefinedLogicalPlan {
+        fn partial_cmp(&self, _other: &Self) -> Option<Ordering> {
+            None
+        }
     }
 
     impl UserDefinedLogicalNodeCore for MockUserDefinedLogicalPlan {
@@ -378,6 +384,10 @@ mod test {
             Ok(Self {
                 empty_schema: Arc::clone(&self.empty_schema),
             })
+        }
+
+        fn supports_limit_pushdown(&self) -> bool {
+            false // Disallow limit push-down by default
         }
     }
 

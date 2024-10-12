@@ -15,15 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::utils::test::read_json;
 use datafusion::arrow::array::ArrayRef;
 use datafusion::physical_plan::Accumulator;
 use datafusion::scalar::ScalarValue;
 use datafusion_substrait::logical_plan::{
     consumer::from_substrait_plan, producer::to_substrait_plan,
 };
-
-use std::hash::Hash;
-use std::sync::Arc;
+use std::cmp::Ordering;
 
 use datafusion::arrow::datatypes::{DataType, Field, IntervalUnit, Schema, TimeUnit};
 use datafusion::common::{not_impl_err, plan_err, DFSchema, DFSchemaRef};
@@ -32,10 +31,12 @@ use datafusion::execution::registry::SerializerRegistry;
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::logical_expr::{
     Extension, LogicalPlan, PartitionEvaluator, Repartition, UserDefinedLogicalNode,
-    Volatility,
+    Values, Volatility,
 };
 use datafusion::optimizer::simplify_expressions::expr_simplifier::THRESHOLD_INLINE_INLIST;
 use datafusion::prelude::*;
+use std::hash::Hash;
+use std::sync::Arc;
 
 use datafusion::execution::session_state::SessionStateBuilder;
 use substrait::proto::extensions::simple_extension_declaration::{
@@ -45,6 +46,7 @@ use substrait::proto::extensions::SimpleExtensionDeclaration;
 use substrait::proto::rel::RelType;
 use substrait::proto::{plan_rel, Plan, Rel};
 
+#[derive(Debug)]
 struct MockSerializerRegistry;
 
 impl SerializerRegistry for MockSerializerRegistry {
@@ -83,6 +85,17 @@ struct MockUserDefinedLogicalPlan {
     validation_bytes: Vec<u8>,
     inputs: Vec<LogicalPlan>,
     empty_schema: DFSchemaRef,
+}
+
+// `PartialOrd` needed for `UserDefinedLogicalNodeCore`, manual implementation necessary due to
+// the `empty_schema` field.
+impl PartialOrd for MockUserDefinedLogicalPlan {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        match self.validation_bytes.partial_cmp(&other.validation_bytes) {
+            Some(Ordering::Equal) => self.inputs.partial_cmp(&other.inputs),
+            cmp => cmp,
+        }
+    }
 }
 
 impl UserDefinedLogicalNode for MockUserDefinedLogicalPlan {
@@ -132,6 +145,14 @@ impl UserDefinedLogicalNode for MockUserDefinedLogicalPlan {
 
     fn dyn_eq(&self, _: &dyn UserDefinedLogicalNode) -> bool {
         unimplemented!()
+    }
+
+    fn dyn_ord(&self, _: &dyn UserDefinedLogicalNode) -> Option<Ordering> {
+        unimplemented!()
+    }
+
+    fn supports_limit_pushdown(&self) -> bool {
+        false // Disallow limit push-down by default
     }
 }
 
@@ -274,8 +295,9 @@ async fn aggregate_grouping_sets() -> Result<()> {
 async fn aggregate_grouping_rollup() -> Result<()> {
     assert_expected_plan(
         "SELECT a, c, e, avg(b) FROM data GROUP BY ROLLUP (a, c, e)",
-        "Aggregate: groupBy=[[GROUPING SETS ((data.a, data.c, data.e), (data.a, data.c), (data.a), ())]], aggr=[[avg(data.b)]]\
-        \n  TableScan: data projection=[a, b, c, e]",
+        "Projection: data.a, data.c, data.e, avg(data.b)\
+        \n  Aggregate: groupBy=[[GROUPING SETS ((data.a, data.c, data.e), (data.a, data.c), (data.a), ())]], aggr=[[avg(data.b)]]\
+        \n    TableScan: data projection=[a, b, c, e]",
         true
     ).await
 }
@@ -643,6 +665,17 @@ async fn simple_intersect() -> Result<()> {
 }
 
 #[tokio::test]
+async fn simple_intersect_consume() -> Result<()> {
+    let proto_plan = read_json("tests/testdata/test_plans/intersect.substrait.json");
+
+    assert_substrait_sql(
+        proto_plan,
+        "SELECT a FROM data INTERSECT SELECT a FROM data2",
+    )
+    .await
+}
+
+#[tokio::test]
 async fn simple_intersect_table_reuse() -> Result<()> {
     // Substrait does currently NOT maintain the alias of the tables.
     // Instead, when we consume Substrait, we add aliases before a join that'd otherwise collide.
@@ -716,8 +749,10 @@ async fn all_type_literal() -> Result<()> {
             date32_col = arrow_cast('2020-01-01', 'Date32') AND
             binary_col = arrow_cast('binary', 'Binary') AND
             large_binary_col = arrow_cast('large_binary', 'LargeBinary') AND
+            view_binary_col = arrow_cast('binary_view', 'BinaryView') AND
             utf8_col = arrow_cast('utf8', 'Utf8') AND
-            large_utf8_col = arrow_cast('large_utf8', 'LargeUtf8');",
+            large_utf8_col = arrow_cast('large_utf8', 'LargeUtf8') AND
+            view_utf8_col = arrow_cast('utf8_view', 'Utf8View');",
     )
         .await
 }
@@ -763,6 +798,18 @@ async fn roundtrip_values() -> Result<()> {
             ), \
             (Int64(NULL), Utf8(NULL), List(), LargeList(), Struct({c0:,int_field:,c2:}), List())",
     true).await
+}
+
+#[tokio::test]
+async fn roundtrip_values_no_columns() -> Result<()> {
+    let ctx = create_context().await?;
+    // "VALUES ()" is not yet supported by the SQL parser, so we construct the plan manually
+    let plan = LogicalPlan::Values(Values {
+        values: vec![vec![], vec![]], // two rows, no columns
+        schema: DFSchemaRef::new(DFSchema::empty()),
+    });
+    roundtrip_logical_plan_with_ctx(plan, ctx).await?;
+    Ok(())
 }
 
 #[tokio::test]
@@ -1076,6 +1123,21 @@ async fn assert_expected_plan(
     Ok(())
 }
 
+async fn assert_substrait_sql(substrait_plan: Plan, sql: &str) -> Result<()> {
+    let ctx = create_context().await?;
+
+    let expected = ctx.sql(sql).await?.into_optimized_plan()?;
+
+    let plan = from_substrait_plan(&ctx, &substrait_plan).await?;
+    let plan = ctx.state().optimize(&plan)?;
+
+    let planstr = format!("{plan}");
+    let expectedstr = format!("{expected}");
+    assert_eq!(planstr, expectedstr);
+
+    Ok(())
+}
+
 async fn roundtrip_fill_na(sql: &str) -> Result<()> {
     let ctx = create_context().await?;
     let df = ctx.sql(sql).await?;
@@ -1119,9 +1181,10 @@ async fn test_alias(sql_with_alias: &str, sql_no_alias: &str) -> Result<()> {
     Ok(())
 }
 
-async fn roundtrip_with_ctx(sql: &str, ctx: SessionContext) -> Result<Box<Plan>> {
-    let df = ctx.sql(sql).await?;
-    let plan = df.into_optimized_plan()?;
+async fn roundtrip_logical_plan_with_ctx(
+    plan: LogicalPlan,
+    ctx: SessionContext,
+) -> Result<Box<Plan>> {
     let proto = to_substrait_plan(&plan, &ctx)?;
     let plan2 = from_substrait_plan(&ctx, &proto).await?;
     let plan2 = ctx.state().optimize(&plan2)?;
@@ -1139,6 +1202,12 @@ async fn roundtrip_with_ctx(sql: &str, ctx: SessionContext) -> Result<Box<Plan>>
 
     DataFrame::new(ctx.state(), plan2).show().await?;
     Ok(proto)
+}
+
+async fn roundtrip_with_ctx(sql: &str, ctx: SessionContext) -> Result<Box<Plan>> {
+    let df = ctx.sql(sql).await?;
+    let plan = df.into_optimized_plan()?;
+    roundtrip_logical_plan_with_ctx(plan, ctx).await
 }
 
 async fn roundtrip(sql: &str) -> Result<()> {
@@ -1231,9 +1300,11 @@ async fn create_all_type_context() -> Result<SessionContext> {
         Field::new("date64_col", DataType::Date64, true),
         Field::new("binary_col", DataType::Binary, true),
         Field::new("large_binary_col", DataType::LargeBinary, true),
+        Field::new("view_binary_col", DataType::BinaryView, true),
         Field::new("fixed_size_binary_col", DataType::FixedSizeBinary(42), true),
         Field::new("utf8_col", DataType::Utf8, true),
         Field::new("large_utf8_col", DataType::LargeUtf8, true),
+        Field::new("view_utf8_col", DataType::Utf8View, true),
         Field::new_list("list_col", Field::new("item", DataType::Int64, true), true),
         Field::new_list(
             "large_list_col",

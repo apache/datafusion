@@ -33,16 +33,45 @@
 [discord-badge]: https://img.shields.io/discord/885562378132000778.svg?logo=discord&style=flat-square
 [discord-url]: https://discord.com/invite/Qw5gKqHxUM
 
-[Website](https://github.com/apache/datafusion) |
-[Guides](https://github.com/apache/datafusion/tree/main/docs) |
+[Website](https://datafusion.apache.org/) |
 [API Docs](https://docs.rs/datafusion/latest/datafusion/) |
 [Chat](https://discord.com/channels/885562378132000778/885562378132000781)
 
-<img src="./docs/source/_static/images/2x_bgwhite_original.png" width="512" alt="logo"/>
+<a href="https://datafusion.apache.org/">
+  <img src="./docs/source/_static/images/2x_bgwhite_original.png" width="512" alt="logo"/>
+</a>
 
-Apache DataFusion is a very fast, extensible query engine for building high-quality data-centric systems in
-[Rust](http://rustlang.org), using the [Apache Arrow](https://arrow.apache.org)
-in-memory format. [Python Bindings](https://github.com/apache/datafusion-python) are also available. DataFusion offers SQL and Dataframe APIs, excellent [performance](https://benchmark.clickhouse.com/), built-in support for CSV, Parquet, JSON, and Avro, extensive customization, and a great community.
+DataFusion is an extensible query engine written in [Rust] that
+uses [Apache Arrow] as its in-memory format.
+
+This crate provides libraries and binaries for developers building fast and
+feature rich database and analytic systems, customized to particular workloads.
+See [use cases] for examples. The following related subprojects target end users:
+
+- [DataFusion Python](https://github.com/apache/datafusion-python/) offers a Python interface for SQL and DataFrame
+  queries.
+- [DataFusion Ray](https://github.com/apache/datafusion-ray/) provides a distributed version of DataFusion that scales
+  out on Ray clusters.
+- [DataFusion Comet](https://github.com/apache/datafusion-comet/) is an accelerator for Apache Spark based on
+  DataFusion.
+
+"Out of the box,"
+DataFusion offers [SQL] and [`Dataframe`] APIs, excellent [performance],
+built-in support for CSV, Parquet, JSON, and Avro, extensive customization, and
+a great community.
+
+DataFusion features a full query planner, a columnar, streaming, multi-threaded,
+vectorized execution engine, and partitioned data sources. You can
+customize DataFusion at almost all points including additional data sources,
+query languages, functions, custom operators and more.
+See the [Architecture] section for more details.
+
+[rust]: http://rustlang.org
+[apache arrow]: https://arrow.apache.org
+[use cases]: https://datafusion.apache.org/user-guide/introduction.html#use-cases
+[python bindings]: https://github.com/apache/datafusion-python
+[performance]: https://benchmark.clickhouse.com/
+[architecture]: https://datafusion.apache.org/contributor-guide/architecture.html
 
 Here are links to some important information
 
@@ -97,9 +126,11 @@ Optional features:
 
 ## Rust Version Compatibility Policy
 
-DataFusion's Minimum Required Stable Rust Version (MSRV) policy is to support
-each stable Rust version for 6 months after it is
-[released](https://github.com/rust-lang/rust/blob/master/RELEASES.md). This
-generally translates to support for the most recent 3 to 4 stable Rust versions.
+DataFusion's Minimum Required Stable Rust Version (MSRV) policy is to support stable [4 latest
+Rust versions](https://releases.rs) OR the stable minor Rust version as of 4 months, whichever is lower.
+
+For example, given the releases `1.78.0`, `1.79.0`, `1.80.0`, `1.80.1` and `1.81.0` DataFusion will support 1.78.0, which is 3 minor versions prior to the most minor recent `1.81`.
+
+If a hotfix is released for the minimum supported Rust version (MSRV), the MSRV will be the minor version with all hotfixes, even if it surpasses the four-month window.
 
 We enforce this policy using a [MSRV CI Check](https://github.com/search?q=repo%3Aapache%2Fdatafusion+rust-version+language%3ATOML+path%3A%2F%5ECargo.toml%2F&type=code)

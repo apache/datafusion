@@ -32,9 +32,7 @@ use super::{
     DisplayAs, ExecutionPlanProperties, PlanProperties, RecordBatchStream,
     SendableRecordBatchStream, Statistics,
 };
-use crate::{
-    ColumnStatistics, DisplayFormatType, ExecutionPlan, Partitioning, PhysicalExpr,
-};
+use crate::{ColumnStatistics, DisplayFormatType, ExecutionPlan, PhysicalExpr};
 
 use arrow::datatypes::{Field, Schema, SchemaRef};
 use arrow::record_batch::{RecordBatch, RecordBatchOptions};
@@ -42,8 +40,9 @@ use datafusion_common::stats::Precision;
 use datafusion_common::Result;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::equivalence::ProjectionMapping;
-use datafusion_physical_expr::expressions::{Literal, UnKnownColumn};
+use datafusion_physical_expr::expressions::Literal;
 
+use crate::execution_plan::CardinalityEffect;
 use futures::stream::{Stream, StreamExt};
 use log::trace;
 
@@ -127,22 +126,8 @@ impl ProjectionExec {
 
         // Calculate output partitioning, which needs to respect aliases:
         let input_partition = input.output_partitioning();
-        let output_partitioning = if let Partitioning::Hash(exprs, part) = input_partition
-        {
-            let normalized_exprs = exprs
-                .iter()
-                .map(|expr| {
-                    input_eq_properties
-                        .project_expr(expr, projection_mapping)
-                        .unwrap_or_else(|| {
-                            Arc::new(UnKnownColumn::new(&expr.to_string()))
-                        })
-                })
-                .collect();
-            Partitioning::Hash(normalized_exprs, *part)
-        } else {
-            input_partition.clone()
-        };
+        let output_partitioning =
+            input_partition.project(projection_mapping, &input_eq_properties);
 
         Ok(PlanProperties::new(
             eq_properties,
@@ -249,11 +234,15 @@ impl ExecutionPlan for ProjectionExec {
     fn supports_limit_pushdown(&self) -> bool {
         true
     }
+
+    fn cardinality_effect(&self) -> CardinalityEffect {
+        CardinalityEffect::Equal
+    }
 }
 
 /// If e is a direct column reference, returns the field level
 /// metadata for that field, if any. Otherwise returns None
-fn get_field_metadata(
+pub(crate) fn get_field_metadata(
     e: &Arc<dyn PhysicalExpr>,
     input_schema: &Schema,
 ) -> Option<HashMap<String, String>> {

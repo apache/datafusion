@@ -1509,19 +1509,19 @@ SELECT val, ts1 - ts2 FROM foo ORDER BY ts2 - ts1;
 query ?
 SELECT i1 - i2 FROM bar;
 ----
-0 years 0 mons -1 days 0 hours 0 mins 0.000000000 secs
-0 years 2 mons -13 days 0 hours 0 mins 0.000000000 secs
-0 years 0 mons 1 days 2 hours 56 mins 0.000000000 secs
-0 years 0 mons 1 days 0 hours 0 mins -3.999999993 secs
+-1 days
+2 mons -13 days
+1 days 2 hours 56 mins
+1 days -3.999999993 secs
 
 # Interval + Interval
 query ?
 SELECT i1 + i2 FROM bar;
 ----
-0 years 0 mons 3 days 0 hours 0 mins 0.000000000 secs
-0 years 2 mons 13 days 0 hours 0 mins 0.000000000 secs
-0 years 0 mons 1 days 3 hours 4 mins 0.000000000 secs
-0 years 0 mons 1 days 0 hours 0 mins 4.000000007 secs
+3 days
+2 mons 13 days
+1 days 3 hours 4 mins
+1 days 4.000000007 secs
 
 # Timestamp - Interval
 query P
@@ -2858,7 +2858,7 @@ statement error
 select to_local_time('2024-04-01T00:00:20Z'::timestamp, 'some string');
 
 # invalid argument data type
-statement error DataFusion error: Execution error: The to_local_time function can only accept timestamp as the arg, got Utf8
+statement error The to_local_time function can only accept Timestamp as the arg got Utf8
 select to_local_time('2024-04-01T00:00:20Z');
 
 # invalid timezone

@@ -1,0 +1,267 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+#
+# Note: This file runs with a SessionContext that has the `enable_url_table` flag set
+#
+# dynamic select arrow file in the folder
+query ITB
+SELECT * FROM '../core/tests/data/partitioned_table_arrow/part=123' ORDER BY f0;
+----
+1 foo true
+2 bar false
+
+# Read partitioned file
+statement ok
+CREATE TABLE src_table_1 (
+  int_col INT,
+  string_col TEXT,
+  bigint_col BIGINT,
+  partition_col INT
+) AS VALUES
+(1, 'aaa', 100, 1),
+(2, 'bbb', 200, 1),
+(3, 'ccc', 300, 1),
+(4, 'ddd', 400, 1);
+
+statement ok
+CREATE TABLE src_table_2 (
+  int_col INT,
+  string_col TEXT,
+  bigint_col BIGINT,
+  partition_col INT
+) AS VALUES
+(5, 'eee', 500, 2),
+(6, 'fff', 600, 2),
+(7, 'ggg', 700, 2),
+(8, 'hhh', 800, 2);
+
+# Read partitioned csv file
+
+query I
+COPY  src_table_1 TO 'test_files/scratch/dynamic_file/csv_partitions'
+STORED AS CSV
+PARTITIONED BY (partition_col);
+----
+4
+
+query I
+COPY  src_table_2 TO 'test_files/scratch/dynamic_file/csv_partitions'
+STORED AS CSV
+PARTITIONED BY (partition_col);
+----
+4
+
+query ITIT rowsort
+SELECT int_col, string_col, bigint_col, partition_col FROM 'test_files/scratch/dynamic_file/csv_partitions';
+----
+1 aaa 100 1
+2 bbb 200 1
+3 ccc 300 1
+4 ddd 400 1
+5 eee 500 2
+6 fff 600 2
+7 ggg 700 2
+8 hhh 800 2
+
+# Read partitioned json file
+
+query I
+COPY  src_table_1 TO 'test_files/scratch/dynamic_file/json_partitions'
+STORED AS JSON
+PARTITIONED BY (partition_col);
+----
+4
+
+query I
+COPY  src_table_2 TO 'test_files/scratch/dynamic_file/json_partitions'
+STORED AS JSON
+PARTITIONED BY (partition_col);
+----
+4
+
+query ITIT rowsort
+SELECT int_col, string_col, bigint_col, partition_col FROM 'test_files/scratch/dynamic_file/json_partitions';
+----
+1 aaa 100 1
+2 bbb 200 1
+3 ccc 300 1
+4 ddd 400 1
+5 eee 500 2
+6 fff 600 2
+7 ggg 700 2
+8 hhh 800 2
+
+# Read partitioned arrow file
+
+query I
+COPY  src_table_1 TO 'test_files/scratch/dynamic_file/arrow_partitions'
+STORED AS ARROW
+PARTITIONED BY (partition_col);
+----
+4
+
+query I
+COPY  src_table_2 TO 'test_files/scratch/dynamic_file/arrow_partitions'
+STORED AS ARROW
+PARTITIONED BY (partition_col);
+----
+4
+
+query ITIT rowsort
+SELECT int_col, string_col, bigint_col, partition_col FROM 'test_files/scratch/dynamic_file/arrow_partitions';
+----
+1 aaa 100 1
+2 bbb 200 1
+3 ccc 300 1
+4 ddd 400 1
+5 eee 500 2
+6 fff 600 2
+7 ggg 700 2
+8 hhh 800 2
+
+# Read partitioned parquet file
+
+query I
+COPY  src_table_1 TO 'test_files/scratch/dynamic_file/parquet_partitions'
+STORED AS PARQUET
+PARTITIONED BY (partition_col);
+----
+4
+
+query I
+COPY  src_table_2 TO 'test_files/scratch/dynamic_file/parquet_partitions'
+STORED AS PARQUET
+PARTITIONED BY (partition_col);
+----
+4
+
+query ITIT rowsort
+select * from 'test_files/scratch/dynamic_file/parquet_partitions';
+----
+1 aaa 100 1
+2 bbb 200 1
+3 ccc 300 1
+4 ddd 400 1
+5 eee 500 2
+6 fff 600 2
+7 ggg 700 2
+8 hhh 800 2
+
+# Read partitioned parquet file with multiple partition columns
+
+query I
+COPY  src_table_1 TO 'test_files/scratch/dynamic_file/nested_partition'
+STORED AS PARQUET
+PARTITIONED BY (partition_col, string_col);
+----
+4
+
+query I
+COPY  src_table_2 TO 'test_files/scratch/dynamic_file/nested_partition'
+STORED AS PARQUET
+PARTITIONED BY (partition_col, string_col);
+----
+4
+
+query IITT rowsort
+select * from 'test_files/scratch/dynamic_file/nested_partition';
+----
+1 100 1 aaa
+2 200 1 bbb
+3 300 1 ccc
+4 400 1 ddd
+5 500 2 eee
+6 600 2 fff
+7 700 2 ggg
+8 800 2 hhh
+
+# read avro file
+query IT
+SELECT id, CAST(string_col AS varchar) FROM '../../testing/data/avro/alltypes_plain.avro'
+----
+4 0
+5 1
+6 0
+7 1
+2 0
+3 1
+0 0
+1 1
+
+# dynamic query snappy avro file
+query IT
+SELECT id, CAST(string_col AS varchar) FROM '../../testing/data/avro/alltypes_plain.snappy.avro'
+----
+4 0
+5 1
+6 0
+7 1
+2 0
+3 1
+0 0
+1 1
+
+# query the csv file dynamically with the config of current session
+query TT
+select * from '../core/tests/data/quote.csv';
+----
+~id0~ ~value0~
+~id1~ ~value1~
+~id2~ ~value2~
+~id3~ ~value3~
+~id4~ ~value4~
+~id5~ ~value5~
+~id6~ ~value6~
+~id7~ ~value7~
+~id8~ ~value8~
+~id9~ ~value9~
+
+query TTT
+DESCRIBE '../core/tests/data/aggregate_simple.csv';
+----
+c1 Float64 YES
+c2 Float64 YES
+c3 Boolean YES
+
+query IR rowsort
+SELECT a, b FROM '../core/tests/data/2.json'
+----
+-10 -3.5
+1 -3.5
+1 0.6
+1 0.6
+1 2
+1 2
+1 2
+1 2
+100000000000000 0.6
+2 0.6
+5 -3.5
+7 -3.5
+
+query IT
+SELECT id, CAST(string_col AS varchar) FROM '../../parquet-testing/data/alltypes_plain.parquet';
+----
+4 0
+5 1
+6 0
+7 1
+2 0
+3 1
+0 0
+1 1

@@ -66,7 +66,7 @@ macro_rules! export_functions {
 }
 
 /// Creates a singleton `ScalarUDF` of the `$UDF` function named `$GNAME` and a
-/// function named `$NAME` which returns that function named $NAME.
+/// function named `$NAME` which returns that singleton.
 ///
 /// This is used to ensure creating the list of `ScalarUDF` only happens once.
 macro_rules! make_udf_function {
@@ -75,7 +75,7 @@ macro_rules! make_udf_function {
         static $GNAME: std::sync::OnceLock<std::sync::Arc<datafusion_expr::ScalarUDF>> =
             std::sync::OnceLock::new();
 
-        #[doc = "Return a [`ScalarUDF`](datafusion_expr::ScalarUDF) for "]
+        #[doc = "Return a [`ScalarUDF`](datafusion_expr::ScalarUDF) implementation "]
         #[doc = stringify!($UDF)]
         pub fn $NAME() -> std::sync::Arc<datafusion_expr::ScalarUDF> {
             $GNAME
@@ -284,7 +284,7 @@ macro_rules! make_math_binary_udf {
             use arrow::datatypes::DataType;
             use datafusion_common::{exec_err, DataFusionError, Result};
             use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
-            use datafusion_expr::TypeSignature::*;
+            use datafusion_expr::TypeSignature;
             use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 
             #[derive(Debug)]
@@ -298,8 +298,8 @@ macro_rules! make_math_binary_udf {
                     Self {
                         signature: Signature::one_of(
                             vec![
-                                Exact(vec![Float32, Float32]),
-                                Exact(vec![Float64, Float64]),
+                                TypeSignature::Exact(vec![Float32, Float32]),
+                                TypeSignature::Exact(vec![Float64, Float64]),
                             ],
                             Volatility::Immutable,
                         ),

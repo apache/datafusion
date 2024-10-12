@@ -785,7 +785,7 @@ create or replace table dict_table as
 select arrow_cast(column1, 'Dictionary(Int32, Utf8)') as column1
 from strings;
 
-query ?
+query T
 select column1 from dict_table where column1 LIKE '%oo%';
 ----
 FooBar
@@ -793,14 +793,14 @@ Foo
 Foo
 FooBar
 
-query ?
+query T
 select column1 from dict_table where column1 NOT LIKE '%oo%';
 ----
 Bar
 Bar
 Baz
 
-query ?
+query T
 select column1 from dict_table where column1 ILIKE '%oO%';
 ----
 FooBar
@@ -808,7 +808,7 @@ Foo
 Foo
 FooBar
 
-query ?
+query T
 select column1 from dict_table where column1 NOT ILIKE '%oO%';
 ----
 Bar

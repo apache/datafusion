@@ -17,14 +17,14 @@
 
 use arrow::datatypes::Field;
 use datafusion_common::Result;
-use datafusion_common::{not_impl_err, Column, DFSchema, ScalarValue, TableReference};
+use datafusion_common::{Column, DFSchema, ScalarValue, TableReference};
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::planner::{ExprPlanner, PlannerResult, RawDictionaryExpr};
 use datafusion_expr::{lit, Expr};
 
 use super::named_struct;
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct CoreFunctionPlanner {}
 
 impl ExprPlanner for CoreFunctionPlanner {
@@ -70,19 +70,20 @@ impl ExprPlanner for CoreFunctionPlanner {
         qualifier: Option<&TableReference>,
         nested_names: &[String],
     ) -> Result<PlannerResult<Vec<Expr>>> {
-        // TODO: remove when can support multiple nested identifiers
-        if nested_names.len() > 1 {
-            return not_impl_err!(
-                "Nested identifiers not yet supported for column {}",
-                Column::from((qualifier, field)).quoted_flat_name()
-            );
-        }
-        let nested_name = nested_names[0].to_string();
-
         let col = Expr::Column(Column::from((qualifier, field)));
-        let get_field_args = vec![col, lit(ScalarValue::from(nested_name))];
-        Ok(PlannerResult::Planned(Expr::ScalarFunction(
-            ScalarFunction::new_udf(crate::core::get_field(), get_field_args),
-        )))
+
+        // Start with the base column expression
+        let mut expr = col;
+
+        // Iterate over nested_names and create nested get_field expressions
+        for nested_name in nested_names {
+            let get_field_args = vec![expr, lit(ScalarValue::from(nested_name.clone()))];
+            expr = Expr::ScalarFunction(ScalarFunction::new_udf(
+                crate::core::get_field(),
+                get_field_args,
+            ));
+        }
+
+        Ok(PlannerResult::Planned(expr))
     }
 }

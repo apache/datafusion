@@ -521,7 +521,7 @@ jobs:
         run: taplo format --check
 
   config-docs-check:
-    name: check configs.md is up-to-date
+    name: check configs.md and ***_functions.md is up-to-date
     needs: [ linux-build-lib ]
     runs-on: ubuntu-latest
     container:
@@ -541,6 +541,11 @@ jobs:
         run: |
           # If you encounter an error, run './dev/update_config_docs.sh' and commit
           ./dev/update_config_docs.sh
+          git diff --exit-code
+      - name: Check if any of the ***_functions.md has been modified
+        run: |
+          # If you encounter an error, run './dev/update_function_docs.sh' and commit
+          ./dev/update_function_docs.sh
           git diff --exit-code
 
   # Verify MSRV for the crates which are directly used by other projects:
@@ -569,9 +574,9 @@ jobs:
           #
           # To reproduce: 
           # 1. Install the version of Rust that is failing. Example: 
-          #    rustup install 1.76.0
+          #    rustup install 1.78.0
           # 2. Run the command that failed with that version. Example:
-          #    cargo +1.76.0 check -p datafusion
+          #    cargo +1.78.0 check -p datafusion
           # 
           # To resolve, either:
           # 1. Change your code to use older Rust features, 

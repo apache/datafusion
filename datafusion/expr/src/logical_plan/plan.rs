@@ -17,16 +17,19 @@
 
 //! Logical plan types
 
+use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Debug, Display, Formatter};
 use std::hash::{Hash, Hasher};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use super::dml::CopyTo;
 use super::DdlStatement;
 use crate::builder::{change_redundant_column, unnest_with_options};
 use crate::expr::{Placeholder, Sort as SortExpr, WindowFunction};
-use crate::expr_rewriter::{create_col_from_scalar_expr, normalize_cols, NamePreserver};
+use crate::expr_rewriter::{
+    create_col_from_scalar_expr, normalize_cols, normalize_sorts, NamePreserver,
+};
 use crate::logical_plan::display::{GraphvizVisitor, IndentVisitor};
 use crate::logical_plan::extension::UserDefinedLogicalNode;
 use crate::logical_plan::{DmlStatement, Statement};
@@ -48,9 +51,11 @@ use datafusion_common::{
     DFSchema, DFSchemaRef, DataFusionError, Dependency, FunctionalDependence,
     FunctionalDependencies, ParamValues, Result, TableReference, UnnestOptions,
 };
+use indexmap::IndexSet;
 
 // backwards compatibility
 use crate::display::PgJsonVisitor;
+use crate::tree_node::replace_sort_expressions;
 pub use datafusion_common::display::{PlanType, StringifiedPlan, ToStringifiedPlan};
 pub use datafusion_common::{JoinConstraint, JoinType};
 
@@ -187,7 +192,7 @@ pub use datafusion_common::{JoinConstraint, JoinType};
 /// # }
 /// ```
 ///
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
 pub enum LogicalPlan {
     /// Evaluates an arbitrary list of expressions (essentially a
     /// SELECT with an expression list) on its input.
@@ -599,12 +604,6 @@ impl LogicalPlan {
         }
     }
 
-    /// Returns a copy of this `LogicalPlan` with the new inputs
-    #[deprecated(since = "35.0.0", note = "please use `with_new_exprs` instead")]
-    pub fn with_new_inputs(&self, inputs: &[LogicalPlan]) -> Result<LogicalPlan> {
-        self.with_new_exprs(self.expressions(), inputs.to_vec())
-    }
-
     /// Recomputes schema and type information for this LogicalPlan if needed.
     ///
     /// Some `LogicalPlan`s may need to recompute their schema if the number or
@@ -802,40 +801,49 @@ impl LogicalPlan {
     pub fn with_new_exprs(
         &self,
         mut expr: Vec<Expr>,
-        mut inputs: Vec<LogicalPlan>,
+        inputs: Vec<LogicalPlan>,
     ) -> Result<LogicalPlan> {
         match self {
             // Since expr may be different than the previous expr, schema of the projection
             // may change. We need to use try_new method instead of try_new_with_schema method.
             LogicalPlan::Projection(Projection { .. }) => {
-                Projection::try_new(expr, Arc::new(inputs.swap_remove(0)))
-                    .map(LogicalPlan::Projection)
+                let input = self.only_input(inputs)?;
+                Projection::try_new(expr, Arc::new(input)).map(LogicalPlan::Projection)
             }
             LogicalPlan::Dml(DmlStatement {
                 table_name,
                 table_schema,
                 op,
                 ..
-            }) => Ok(LogicalPlan::Dml(DmlStatement::new(
-                table_name.clone(),
-                Arc::clone(table_schema),
-                op.clone(),
-                Arc::new(inputs.swap_remove(0)),
-            ))),
+            }) => {
+                self.assert_no_expressions(expr)?;
+                let input = self.only_input(inputs)?;
+                Ok(LogicalPlan::Dml(DmlStatement::new(
+                    table_name.clone(),
+                    Arc::clone(table_schema),
+                    op.clone(),
+                    Arc::new(input),
+                )))
+            }
             LogicalPlan::Copy(CopyTo {
                 input: _,
                 output_url,
                 file_type,
                 options,
                 partition_by,
-            }) => Ok(LogicalPlan::Copy(CopyTo {
-                input: Arc::new(inputs.swap_remove(0)),
-                output_url: output_url.clone(),
-                file_type: Arc::clone(file_type),
-                options: options.clone(),
-                partition_by: partition_by.clone(),
-            })),
+            }) => {
+                self.assert_no_expressions(expr)?;
+                let input = self.only_input(inputs)?;
+                Ok(LogicalPlan::Copy(CopyTo {
+                    input: Arc::new(input),
+                    output_url: output_url.clone(),
+                    file_type: Arc::clone(file_type),
+                    options: options.clone(),
+                    partition_by: partition_by.clone(),
+                }))
+            }
             LogicalPlan::Values(Values { schema, .. }) => {
+                self.assert_no_inputs(inputs)?;
                 Ok(LogicalPlan::Values(Values {
                     schema: Arc::clone(schema),
                     values: expr
@@ -845,50 +853,63 @@ impl LogicalPlan {
                 }))
             }
             LogicalPlan::Filter { .. } => {
-                assert_eq!(1, expr.len());
-                let predicate = expr.pop().unwrap();
+                let predicate = self.only_expr(expr)?;
+                let input = self.only_input(inputs)?;
 
-                Filter::try_new(predicate, Arc::new(inputs.swap_remove(0)))
-                    .map(LogicalPlan::Filter)
+                Filter::try_new(predicate, Arc::new(input)).map(LogicalPlan::Filter)
             }
             LogicalPlan::Repartition(Repartition {
                 partitioning_scheme,
                 ..
             }) => match partitioning_scheme {
                 Partitioning::RoundRobinBatch(n) => {
+                    self.assert_no_expressions(expr)?;
+                    let input = self.only_input(inputs)?;
                     Ok(LogicalPlan::Repartition(Repartition {
                         partitioning_scheme: Partitioning::RoundRobinBatch(*n),
-                        input: Arc::new(inputs.swap_remove(0)),
+                        input: Arc::new(input),
                     }))
                 }
-                Partitioning::Hash(_, n) => Ok(LogicalPlan::Repartition(Repartition {
-                    partitioning_scheme: Partitioning::Hash(expr, *n),
-                    input: Arc::new(inputs.swap_remove(0)),
-                })),
+                Partitioning::Hash(_, n) => {
+                    let input = self.only_input(inputs)?;
+                    Ok(LogicalPlan::Repartition(Repartition {
+                        partitioning_scheme: Partitioning::Hash(expr, *n),
+                        input: Arc::new(input),
+                    }))
+                }
                 Partitioning::DistributeBy(_) => {
+                    let input = self.only_input(inputs)?;
                     Ok(LogicalPlan::Repartition(Repartition {
                         partitioning_scheme: Partitioning::DistributeBy(expr),
-                        input: Arc::new(inputs.swap_remove(0)),
+                        input: Arc::new(input),
                     }))
                 }
             },
             LogicalPlan::Window(Window { window_expr, .. }) => {
                 assert_eq!(window_expr.len(), expr.len());
-                Window::try_new(expr, Arc::new(inputs.swap_remove(0)))
-                    .map(LogicalPlan::Window)
+                let input = self.only_input(inputs)?;
+                Window::try_new(expr, Arc::new(input)).map(LogicalPlan::Window)
             }
             LogicalPlan::Aggregate(Aggregate { group_expr, .. }) => {
+                let input = self.only_input(inputs)?;
                 // group exprs are the first expressions
                 let agg_expr = expr.split_off(group_expr.len());
 
-                Aggregate::try_new(Arc::new(inputs.swap_remove(0)), expr, agg_expr)
+                Aggregate::try_new(Arc::new(input), expr, agg_expr)
                     .map(LogicalPlan::Aggregate)
             }
-            LogicalPlan::Sort(Sort { fetch, .. }) => Ok(LogicalPlan::Sort(Sort {
-                expr,
-                input: Arc::new(inputs.swap_remove(0)),
-                fetch: *fetch,
-            })),
+            LogicalPlan::Sort(Sort {
+                expr: sort_expr,
+                fetch,
+                ..
+            }) => {
+                let input = self.only_input(inputs)?;
+                Ok(LogicalPlan::Sort(Sort {
+                    expr: replace_sort_expressions(sort_expr.clone(), expr),
+                    input: Arc::new(input),
+                    fetch: *fetch,
+                }))
+            }
             LogicalPlan::Join(Join {
                 join_type,
                 join_constraint,
@@ -896,8 +917,8 @@ impl LogicalPlan {
                 null_equals_null,
                 ..
             }) => {
-                let schema =
-                    build_join_schema(inputs[0].schema(), inputs[1].schema(), join_type)?;
+                let (left, right) = self.only_two_inputs(inputs)?;
+                let schema = build_join_schema(left.schema(), right.schema(), join_type)?;
 
                 let equi_expr_count = on.len();
                 assert!(expr.len() >= equi_expr_count);
@@ -926,8 +947,8 @@ impl LogicalPlan {
                 }).collect::<Result<Vec<(Expr, Expr)>>>()?;
 
                 Ok(LogicalPlan::Join(Join {
-                    left: Arc::new(inputs.swap_remove(0)),
-                    right: Arc::new(inputs.swap_remove(0)),
+                    left: Arc::new(left),
+                    right: Arc::new(right),
                     join_type: *join_type,
                     join_constraint: *join_constraint,
                     on: new_on,
@@ -937,28 +958,34 @@ impl LogicalPlan {
                 }))
             }
             LogicalPlan::CrossJoin(_) => {
-                let left = inputs.swap_remove(0);
-                let right = inputs.swap_remove(0);
+                self.assert_no_expressions(expr)?;
+                let (left, right) = self.only_two_inputs(inputs)?;
                 LogicalPlanBuilder::from(left).cross_join(right)?.build()
             }
             LogicalPlan::Subquery(Subquery {
                 outer_ref_columns, ..
             }) => {
-                let subquery = LogicalPlanBuilder::from(inputs.swap_remove(0)).build()?;
+                self.assert_no_expressions(expr)?;
+                let input = self.only_input(inputs)?;
+                let subquery = LogicalPlanBuilder::from(input).build()?;
                 Ok(LogicalPlan::Subquery(Subquery {
                     subquery: Arc::new(subquery),
                     outer_ref_columns: outer_ref_columns.clone(),
                 }))
             }
             LogicalPlan::SubqueryAlias(SubqueryAlias { alias, .. }) => {
-                SubqueryAlias::try_new(Arc::new(inputs.swap_remove(0)), alias.clone())
+                self.assert_no_expressions(expr)?;
+                let input = self.only_input(inputs)?;
+                SubqueryAlias::try_new(Arc::new(input), alias.clone())
                     .map(LogicalPlan::SubqueryAlias)
             }
             LogicalPlan::Limit(Limit { skip, fetch, .. }) => {
+                self.assert_no_expressions(expr)?;
+                let input = self.only_input(inputs)?;
                 Ok(LogicalPlan::Limit(Limit {
                     skip: *skip,
                     fetch: *fetch,
-                    input: Arc::new(inputs.swap_remove(0)),
+                    input: Arc::new(input),
                 }))
             }
             LogicalPlan::Ddl(DdlStatement::CreateMemoryTable(CreateMemoryTable {
@@ -967,31 +994,40 @@ impl LogicalPlan {
                 or_replace,
                 column_defaults,
                 ..
-            })) => Ok(LogicalPlan::Ddl(DdlStatement::CreateMemoryTable(
-                CreateMemoryTable {
-                    input: Arc::new(inputs.swap_remove(0)),
-                    constraints: Constraints::empty(),
-                    name: name.clone(),
-                    if_not_exists: *if_not_exists,
-                    or_replace: *or_replace,
-                    column_defaults: column_defaults.clone(),
-                },
-            ))),
+            })) => {
+                self.assert_no_expressions(expr)?;
+                let input = self.only_input(inputs)?;
+                Ok(LogicalPlan::Ddl(DdlStatement::CreateMemoryTable(
+                    CreateMemoryTable {
+                        input: Arc::new(input),
+                        constraints: Constraints::empty(),
+                        name: name.clone(),
+                        if_not_exists: *if_not_exists,
+                        or_replace: *or_replace,
+                        column_defaults: column_defaults.clone(),
+                    },
+                )))
+            }
             LogicalPlan::Ddl(DdlStatement::CreateView(CreateView {
                 name,
                 or_replace,
                 definition,
                 ..
-            })) => Ok(LogicalPlan::Ddl(DdlStatement::CreateView(CreateView {
-                input: Arc::new(inputs.swap_remove(0)),
-                name: name.clone(),
-                or_replace: *or_replace,
-                definition: definition.clone(),
-            }))),
+            })) => {
+                self.assert_no_expressions(expr)?;
+                let input = self.only_input(inputs)?;
+                Ok(LogicalPlan::Ddl(DdlStatement::CreateView(CreateView {
+                    input: Arc::new(input),
+                    name: name.clone(),
+                    or_replace: *or_replace,
+                    definition: definition.clone(),
+                })))
+            }
             LogicalPlan::Extension(e) => Ok(LogicalPlan::Extension(Extension {
                 node: e.node.with_exprs_and_inputs(expr, inputs)?,
             })),
             LogicalPlan::Union(Union { schema, .. }) => {
+                self.assert_no_expressions(expr)?;
                 let input_schema = inputs[0].schema();
                 // If inputs are not pruned do not change schema.
                 let schema = if schema.fields().len() == input_schema.fields().len() {
@@ -1006,23 +1042,25 @@ impl LogicalPlan {
             }
             LogicalPlan::Distinct(distinct) => {
                 let distinct = match distinct {
-                    Distinct::All(_) => Distinct::All(Arc::new(inputs.swap_remove(0))),
+                    Distinct::All(_) => {
+                        self.assert_no_expressions(expr)?;
+                        let input = self.only_input(inputs)?;
+                        Distinct::All(Arc::new(input))
+                    }
                     Distinct::On(DistinctOn {
                         on_expr,
                         select_expr,
                         ..
                     }) => {
+                        let input = self.only_input(inputs)?;
                         let sort_expr = expr.split_off(on_expr.len() + select_expr.len());
                         let select_expr = expr.split_off(on_expr.len());
+                        assert!(sort_expr.is_empty(), "with_new_exprs for Distinct does not support sort expressions");
                         Distinct::On(DistinctOn::try_new(
                             expr,
                             select_expr,
-                            if !sort_expr.is_empty() {
-                                Some(sort_expr)
-                            } else {
-                                None
-                            },
-                            Arc::new(inputs.swap_remove(0)),
+                            None, // no sort expressions accepted
+                            Arc::new(input),
                         )?)
                     }
                 };
@@ -1030,30 +1068,31 @@ impl LogicalPlan {
             }
             LogicalPlan::RecursiveQuery(RecursiveQuery {
                 name, is_distinct, ..
-            }) => Ok(LogicalPlan::RecursiveQuery(RecursiveQuery {
-                name: name.clone(),
-                static_term: Arc::new(inputs.swap_remove(0)),
-                recursive_term: Arc::new(inputs.swap_remove(0)),
-                is_distinct: *is_distinct,
-            })),
+            }) => {
+                self.assert_no_expressions(expr)?;
+                let (static_term, recursive_term) = self.only_two_inputs(inputs)?;
+                Ok(LogicalPlan::RecursiveQuery(RecursiveQuery {
+                    name: name.clone(),
+                    static_term: Arc::new(static_term),
+                    recursive_term: Arc::new(recursive_term),
+                    is_distinct: *is_distinct,
+                }))
+            }
             LogicalPlan::Analyze(a) => {
-                assert!(expr.is_empty());
-                assert_eq!(inputs.len(), 1);
+                self.assert_no_expressions(expr)?;
+                let input = self.only_input(inputs)?;
                 Ok(LogicalPlan::Analyze(Analyze {
                     verbose: a.verbose,
                     schema: Arc::clone(&a.schema),
-                    input: Arc::new(inputs.swap_remove(0)),
+                    input: Arc::new(input),
                 }))
             }
             LogicalPlan::Explain(e) => {
-                assert!(
-                    expr.is_empty(),
-                    "Invalid EXPLAIN command. Expression should empty"
-                );
-                assert_eq!(inputs.len(), 1, "Invalid EXPLAIN command. Inputs are empty");
+                self.assert_no_expressions(expr)?;
+                let input = self.only_input(inputs)?;
                 Ok(LogicalPlan::Explain(Explain {
                     verbose: e.verbose,
-                    plan: Arc::new(inputs.swap_remove(0)),
+                    plan: Arc::new(input),
                     stringified_plans: e.stringified_plans.clone(),
                     schema: Arc::clone(&e.schema),
                     logical_optimization_succeeded: e.logical_optimization_succeeded,
@@ -1061,13 +1100,17 @@ impl LogicalPlan {
             }
             LogicalPlan::Prepare(Prepare {
                 name, data_types, ..
-            }) => Ok(LogicalPlan::Prepare(Prepare {
-                name: name.clone(),
-                data_types: data_types.clone(),
-                input: Arc::new(inputs.swap_remove(0)),
-            })),
+            }) => {
+                self.assert_no_expressions(expr)?;
+                let input = self.only_input(inputs)?;
+                Ok(LogicalPlan::Prepare(Prepare {
+                    name: name.clone(),
+                    data_types: data_types.clone(),
+                    input: Arc::new(input),
+                }))
+            }
             LogicalPlan::TableScan(ts) => {
-                assert!(inputs.is_empty(), "{self:?}  should have no inputs");
+                self.assert_no_inputs(inputs)?;
                 Ok(LogicalPlan::TableScan(TableScan {
                     filters: expr,
                     ..ts.clone()
@@ -1075,26 +1118,89 @@ impl LogicalPlan {
             }
             LogicalPlan::EmptyRelation(_)
             | LogicalPlan::Ddl(_)
-            | LogicalPlan::Statement(_) => {
+            | LogicalPlan::Statement(_)
+            | LogicalPlan::DescribeTable(_) => {
                 // All of these plan types have no inputs / exprs so should not be called
-                assert!(expr.is_empty(), "{self:?} should have no exprs");
-                assert!(inputs.is_empty(), "{self:?}  should have no inputs");
+                self.assert_no_expressions(expr)?;
+                self.assert_no_inputs(inputs)?;
                 Ok(self.clone())
             }
-            LogicalPlan::DescribeTable(_) => Ok(self.clone()),
             LogicalPlan::Unnest(Unnest {
                 exec_columns: columns,
                 options,
                 ..
             }) => {
+                self.assert_no_expressions(expr)?;
+                let input = self.only_input(inputs)?;
                 // Update schema with unnested column type.
-                let input = inputs.swap_remove(0);
                 let new_plan =
                     unnest_with_options(input, columns.clone(), options.clone())?;
                 Ok(new_plan)
             }
         }
     }
+
+    /// Helper for [Self::with_new_exprs] to use when no expressions are expected.
+    #[inline]
+    #[allow(clippy::needless_pass_by_value)] // expr is moved intentionally to ensure it's not used again
+    fn assert_no_expressions(&self, expr: Vec<Expr>) -> Result<()> {
+        if !expr.is_empty() {
+            return internal_err!("{self:?} should have no exprs, got {:?}", expr);
+        }
+        Ok(())
+    }
+
+    /// Helper for [Self::with_new_exprs] to use when no inputs are expected.
+    #[inline]
+    #[allow(clippy::needless_pass_by_value)] // inputs is moved intentionally to ensure it's not used again
+    fn assert_no_inputs(&self, inputs: Vec<LogicalPlan>) -> Result<()> {
+        if !inputs.is_empty() {
+            return internal_err!("{self:?} should have no inputs, got: {:?}", inputs);
+        }
+        Ok(())
+    }
+
+    /// Helper for [Self::with_new_exprs] to use when exactly one expression is expected.
+    #[inline]
+    fn only_expr(&self, mut expr: Vec<Expr>) -> Result<Expr> {
+        if expr.len() != 1 {
+            return internal_err!(
+                "{self:?} should have exactly one expr, got {:?}",
+                expr
+            );
+        }
+        Ok(expr.remove(0))
+    }
+
+    /// Helper for [Self::with_new_exprs] to use when exactly one input is expected.
+    #[inline]
+    fn only_input(&self, mut inputs: Vec<LogicalPlan>) -> Result<LogicalPlan> {
+        if inputs.len() != 1 {
+            return internal_err!(
+                "{self:?} should have exactly one input, got {:?}",
+                inputs
+            );
+        }
+        Ok(inputs.remove(0))
+    }
+
+    /// Helper for [Self::with_new_exprs] to use when exactly two inputs are expected.
+    #[inline]
+    fn only_two_inputs(
+        &self,
+        mut inputs: Vec<LogicalPlan>,
+    ) -> Result<(LogicalPlan, LogicalPlan)> {
+        if inputs.len() != 2 {
+            return internal_err!(
+                "{self:?} should have exactly two inputs, got {:?}",
+                inputs
+            );
+        }
+        let right = inputs.remove(1);
+        let left = inputs.remove(0);
+        Ok((left, right))
+    }
+
     /// Replaces placeholder param values (like `$1`, `$2`) in [`LogicalPlan`]
     /// with the specified `param_values`.
     ///
@@ -1289,7 +1395,7 @@ impl LogicalPlan {
     /// referenced expressions into columns.
     ///
     /// See also: [`crate::utils::columnize_expr`]
-    pub(crate) fn columnized_output_exprs(&self) -> Result<Vec<(&Expr, Column)>> {
+    pub fn columnized_output_exprs(&self) -> Result<Vec<(&Expr, Column)>> {
         match self {
             LogicalPlan::Aggregate(aggregate) => Ok(aggregate
                 .output_expressions()?
@@ -1337,7 +1443,7 @@ impl LogicalPlan {
             let schema = Arc::clone(plan.schema());
             let name_preserver = NamePreserver::new(&plan);
             plan.map_expressions(|e| {
-                let original_name = name_preserver.save(&e)?;
+                let original_name = name_preserver.save(&e);
                 let transformed_expr =
                     e.infer_placeholder_types(&schema)?.transform_up(|e| {
                         if let Expr::Placeholder(Placeholder { id, .. }) = e {
@@ -1348,7 +1454,7 @@ impl LogicalPlan {
                         }
                     })?;
                 // Preserve name to avoid breaking column references to this expression
-                transformed_expr.map_data(|expr| original_name.restore(expr))
+                Ok(transformed_expr.update_data(|expr| original_name.restore(expr)))
             })
         })
         .map(|res| res.data)
@@ -1869,14 +1975,16 @@ impl LogicalPlan {
                         let input_columns = plan.schema().columns();
                         let list_type_columns = list_col_indices
                             .iter()
-                            .map(|i| &input_columns[*i])
-                            .collect::<Vec<&Column>>();
+                            .map(|(i,unnest_info)|
+                                format!("{}|depth={}", &input_columns[*i].to_string(),
+                                unnest_info.depth))
+                            .collect::<Vec<String>>();
                         let struct_type_columns = struct_col_indices
                             .iter()
                             .map(|i| &input_columns[*i])
                             .collect::<Vec<&Column>>();
                         // get items from input_columns indexed by list_col_indices
-                        write!(f, "Unnest: lists[{}] structs[{}]", 
+                        write!(f, "Unnest: lists[{}] structs[{}]",
                         expr_vec_fmt!(list_type_columns),
                         expr_vec_fmt!(struct_type_columns))
                     }
@@ -1908,6 +2016,13 @@ pub struct EmptyRelation {
     pub schema: DFSchemaRef,
 }
 
+// Manual implementation needed because of `schema` field. Comparison excludes this field.
+impl PartialOrd for EmptyRelation {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        self.produce_one_row.partial_cmp(&other.produce_one_row)
+    }
+}
+
 /// A variadic query operation, Recursive CTE.
 ///
 /// # Recursive Query Evaluation
@@ -1930,7 +2045,7 @@ pub struct EmptyRelation {
 ///   intermediate table, then empty the intermediate table.
 ///
 /// [Postgres Docs]: https://www.postgresql.org/docs/current/queries-with.html#QUERIES-WITH-RECURSIVE
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
 pub struct RecursiveQuery {
     /// Name of the query
     pub name: String,
@@ -1955,6 +2070,13 @@ pub struct Values {
     pub values: Vec<Vec<Expr>>,
 }
 
+// Manual implementation needed because of `schema` field. Comparison excludes this field.
+impl PartialOrd for Values {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        self.values.partial_cmp(&other.values)
+    }
+}
+
 /// Evaluates an arbitrary list of expressions (essentially a
 /// SELECT with an expression list) on its input.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
@@ -1967,6 +2089,16 @@ pub struct Projection {
     pub input: Arc<LogicalPlan>,
     /// The schema description of the output
     pub schema: DFSchemaRef,
+}
+
+// Manual implementation needed because of `schema` field. Comparison excludes this field.
+impl PartialOrd for Projection {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        match self.expr.partial_cmp(&other.expr) {
+            Some(Ordering::Equal) => self.input.partial_cmp(&other.input),
+            cmp => cmp,
+        }
+    }
 }
 
 impl Projection {
@@ -2020,11 +2152,13 @@ impl Projection {
 /// the `Result` will contain the schema; otherwise, it will contain an error.
 pub fn projection_schema(input: &LogicalPlan, exprs: &[Expr]) -> Result<Arc<DFSchema>> {
     let metadata = input.schema().metadata().clone();
-    let mut schema =
-        DFSchema::new_with_metadata(exprlist_to_fields(exprs, input)?, metadata)?;
-    schema = schema.with_functional_dependencies(calc_func_dependencies_for_project(
-        exprs, input,
-    )?)?;
+
+    let schema =
+        DFSchema::new_with_metadata(exprlist_to_fields(exprs, input)?, metadata)?
+            .with_functional_dependencies(calc_func_dependencies_for_project(
+                exprs, input,
+            )?)?;
+
     Ok(Arc::new(schema))
 }
 
@@ -2066,6 +2200,16 @@ impl SubqueryAlias {
     }
 }
 
+// Manual implementation needed because of `schema` field. Comparison excludes this field.
+impl PartialOrd for SubqueryAlias {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        match self.input.partial_cmp(&other.input) {
+            Some(Ordering::Equal) => self.alias.partial_cmp(&other.alias),
+            cmp => cmp,
+        }
+    }
+}
+
 /// Filters rows from its input that do not match an
 /// expression (essentially a WHERE clause with a predicate
 /// expression).
@@ -2077,7 +2221,7 @@ impl SubqueryAlias {
 ///
 /// Filter should not be created directly but instead use `try_new()`
 /// and that these fields are only pub to support pattern matching
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
 #[non_exhaustive]
 pub struct Filter {
     /// The predicate expression, which must have Boolean type.
@@ -2103,6 +2247,17 @@ impl Filter {
         Self::try_new_internal(predicate, input, true)
     }
 
+    fn is_allowed_filter_type(data_type: &DataType) -> bool {
+        match data_type {
+            // Interpret NULL as a missing boolean value.
+            DataType::Boolean | DataType::Null => true,
+            DataType::Dictionary(_, value_type) => {
+                Filter::is_allowed_filter_type(value_type.as_ref())
+            }
+            _ => false,
+        }
+    }
+
     fn try_new_internal(
         predicate: Expr,
         input: Arc<LogicalPlan>,
@@ -2113,8 +2268,7 @@ impl Filter {
         // construction (such as with correlated subqueries) so we make a best effort here and
         // ignore errors resolving the expression against the schema.
         if let Ok(predicate_type) = predicate.get_type(input.schema()) {
-            // Interpret NULL as a missing boolean value.
-            if predicate_type != DataType::Boolean && predicate_type != DataType::Null {
+            if !Filter::is_allowed_filter_type(&predicate_type) {
                 return plan_err!(
                     "Cannot create filter with non-boolean predicate '{predicate}' returning {predicate_type}"
                 );
@@ -2293,6 +2447,16 @@ impl Window {
     }
 }
 
+// Manual implementation needed because of `schema` field. Comparison excludes this field.
+impl PartialOrd for Window {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        match self.input.partial_cmp(&other.input) {
+            Some(Ordering::Equal) => self.window_expr.partial_cmp(&other.window_expr),
+            cmp => cmp,
+        }
+    }
+}
+
 /// Produces rows from a table provider by reference or from the context
 #[derive(Clone)]
 pub struct TableScan {
@@ -2334,6 +2498,37 @@ impl PartialEq for TableScan {
 }
 
 impl Eq for TableScan {}
+
+// Manual implementation needed because of `source` and `projected_schema` fields.
+// Comparison excludes these field.
+impl PartialOrd for TableScan {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        #[derive(PartialEq, PartialOrd)]
+        struct ComparableTableScan<'a> {
+            /// The name of the table
+            pub table_name: &'a TableReference,
+            /// Optional column indices to use as a projection
+            pub projection: &'a Option<Vec<usize>>,
+            /// Optional expressions to be used as filters by the table provider
+            pub filters: &'a Vec<Expr>,
+            /// Optional number of rows to read
+            pub fetch: &'a Option<usize>,
+        }
+        let comparable_self = ComparableTableScan {
+            table_name: &self.table_name,
+            projection: &self.projection,
+            filters: &self.filters,
+            fetch: &self.fetch,
+        };
+        let comparable_other = ComparableTableScan {
+            table_name: &other.table_name,
+            projection: &other.projection,
+            filters: &other.filters,
+            fetch: &other.fetch,
+        };
+        comparable_self.partial_cmp(&comparable_other)
+    }
+}
 
 impl Hash for TableScan {
     fn hash<H: Hasher>(&self, state: &mut H) {
@@ -2410,8 +2605,18 @@ pub struct CrossJoin {
     pub schema: DFSchemaRef,
 }
 
+// Manual implementation needed because of `schema` field. Comparison excludes this field.
+impl PartialOrd for CrossJoin {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        match self.left.partial_cmp(&other.left) {
+            Some(Ordering::Equal) => self.right.partial_cmp(&other.right),
+            cmp => cmp,
+        }
+    }
+}
+
 /// Repartition the plan based on a partitioning scheme.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
 pub struct Repartition {
     /// The incoming logical plan
     pub input: Arc<LogicalPlan>,
@@ -2428,9 +2633,16 @@ pub struct Union {
     pub schema: DFSchemaRef,
 }
 
+// Manual implementation needed because of `schema` field. Comparison excludes this field.
+impl PartialOrd for Union {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        self.inputs.partial_cmp(&other.inputs)
+    }
+}
+
 /// Prepare a statement but do not execute it. Prepare statements can have 0 or more
 /// `Expr::Placeholder` expressions that are filled in during execution
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
 pub struct Prepare {
     /// The name of the statement
     pub name: String,
@@ -2470,6 +2682,15 @@ pub struct DescribeTable {
     pub output_schema: DFSchemaRef,
 }
 
+// Manual implementation of `PartialOrd`, returning none since there are no comparable types in
+// `DescribeTable`. This allows `LogicalPlan` to derive `PartialOrd`.
+impl PartialOrd for DescribeTable {
+    fn partial_cmp(&self, _other: &Self) -> Option<Ordering> {
+        // There is no relevant comparison for schemas
+        None
+    }
+}
+
 /// Produces a relation with string representations of
 /// various parts of the plan
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -2486,6 +2707,36 @@ pub struct Explain {
     pub logical_optimization_succeeded: bool,
 }
 
+// Manual implementation needed because of `schema` field. Comparison excludes this field.
+impl PartialOrd for Explain {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        #[derive(PartialEq, PartialOrd)]
+        struct ComparableExplain<'a> {
+            /// Should extra (detailed, intermediate plans) be included?
+            pub verbose: &'a bool,
+            /// The logical plan that is being EXPLAIN'd
+            pub plan: &'a Arc<LogicalPlan>,
+            /// Represent the various stages plans have gone through
+            pub stringified_plans: &'a Vec<StringifiedPlan>,
+            /// Used by physical planner to check if should proceed with planning
+            pub logical_optimization_succeeded: &'a bool,
+        }
+        let comparable_self = ComparableExplain {
+            verbose: &self.verbose,
+            plan: &self.plan,
+            stringified_plans: &self.stringified_plans,
+            logical_optimization_succeeded: &self.logical_optimization_succeeded,
+        };
+        let comparable_other = ComparableExplain {
+            verbose: &other.verbose,
+            plan: &other.plan,
+            stringified_plans: &other.stringified_plans,
+            logical_optimization_succeeded: &other.logical_optimization_succeeded,
+        };
+        comparable_self.partial_cmp(&comparable_other)
+    }
+}
+
 /// Runs the actual plan, and then prints the physical plan with
 /// with execution metrics.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -2496,6 +2747,16 @@ pub struct Analyze {
     pub input: Arc<LogicalPlan>,
     /// The output schema of the explain (2 columns of text)
     pub schema: DFSchemaRef,
+}
+
+// Manual implementation needed because of `schema` field. Comparison excludes this field.
+impl PartialOrd for Analyze {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        match self.verbose.partial_cmp(&other.verbose) {
+            Some(Ordering::Equal) => self.input.partial_cmp(&other.input),
+            cmp => cmp,
+        }
+    }
 }
 
 /// Extension operator defined outside of DataFusion
@@ -2518,8 +2779,14 @@ impl PartialEq for Extension {
     }
 }
 
+impl PartialOrd for Extension {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        self.node.partial_cmp(&other.node)
+    }
+}
+
 /// Produces the first `n` tuples from its input and discards the rest.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
 pub struct Limit {
     /// Number of rows to skip before fetch
     pub skip: usize,
@@ -2531,7 +2798,7 @@ pub struct Limit {
 }
 
 /// Removes duplicate rows from the input
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
 pub enum Distinct {
     /// Plain `DISTINCT` referencing all selection expressions
     All(Arc<LogicalPlan>),
@@ -2559,7 +2826,7 @@ pub struct DistinctOn {
     /// The `ORDER BY` clause, whose initial expressions must match those of the `ON` clause when
     /// present. Note that those matching expressions actually wrap the `ON` expressions with
     /// additional info pertaining to the sorting procedure (i.e. ASC/DESC, and NULLS FIRST/LAST).
-    pub sort_expr: Option<Vec<Expr>>,
+    pub sort_expr: Option<Vec<SortExpr>>,
     /// The logical plan that is being DISTINCT'd
     pub input: Arc<LogicalPlan>,
     /// The schema description of the DISTINCT ON output
@@ -2571,7 +2838,7 @@ impl DistinctOn {
     pub fn try_new(
         on_expr: Vec<Expr>,
         select_expr: Vec<Expr>,
-        sort_expr: Option<Vec<Expr>>,
+        sort_expr: Option<Vec<SortExpr>>,
         input: Arc<LogicalPlan>,
     ) -> Result<Self> {
         if on_expr.is_empty() {
@@ -2606,20 +2873,15 @@ impl DistinctOn {
     /// Try to update `self` with a new sort expressions.
     ///
     /// Validates that the sort expressions are a super-set of the `ON` expressions.
-    pub fn with_sort_expr(mut self, sort_expr: Vec<Expr>) -> Result<Self> {
-        let sort_expr = normalize_cols(sort_expr, self.input.as_ref())?;
+    pub fn with_sort_expr(mut self, sort_expr: Vec<SortExpr>) -> Result<Self> {
+        let sort_expr = normalize_sorts(sort_expr, self.input.as_ref())?;
 
         // Check that the left-most sort expressions are the same as the `ON` expressions.
         let mut matched = true;
         for (on, sort) in self.on_expr.iter().zip(sort_expr.iter()) {
-            match sort {
-                Expr::Sort(SortExpr { expr, .. }) => {
-                    if on != &**expr {
-                        matched = false;
-                        break;
-                    }
-                }
-                _ => return plan_err!("Not a sort expression: {sort}"),
+            if on != &sort.expr {
+                matched = false;
+                break;
             }
         }
 
@@ -2631,6 +2893,38 @@ impl DistinctOn {
 
         self.sort_expr = Some(sort_expr);
         Ok(self)
+    }
+}
+
+// Manual implementation needed because of `schema` field. Comparison excludes this field.
+impl PartialOrd for DistinctOn {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        #[derive(PartialEq, PartialOrd)]
+        struct ComparableDistinctOn<'a> {
+            /// The `DISTINCT ON` clause expression list
+            pub on_expr: &'a Vec<Expr>,
+            /// The selected projection expression list
+            pub select_expr: &'a Vec<Expr>,
+            /// The `ORDER BY` clause, whose initial expressions must match those of the `ON` clause when
+            /// present. Note that those matching expressions actually wrap the `ON` expressions with
+            /// additional info pertaining to the sorting procedure (i.e. ASC/DESC, and NULLS FIRST/LAST).
+            pub sort_expr: &'a Option<Vec<SortExpr>>,
+            /// The logical plan that is being DISTINCT'd
+            pub input: &'a Arc<LogicalPlan>,
+        }
+        let comparable_self = ComparableDistinctOn {
+            on_expr: &self.on_expr,
+            select_expr: &self.select_expr,
+            sort_expr: &self.sort_expr,
+            input: &self.input,
+        };
+        let comparable_other = ComparableDistinctOn {
+            on_expr: &other.on_expr,
+            select_expr: &other.select_expr,
+            sort_expr: &other.sort_expr,
+            input: &other.input,
+        };
+        comparable_self.partial_cmp(&comparable_other)
     }
 }
 
@@ -2671,6 +2965,15 @@ impl Aggregate {
                 .into_iter()
                 .map(|(q, f)| (q, f.as_ref().clone().with_nullable(true).into()))
                 .collect::<Vec<_>>();
+            qualified_fields.push((
+                None,
+                Field::new(
+                    Self::INTERNAL_GROUPING_ID,
+                    Self::grouping_id_type(qualified_fields.len()),
+                    false,
+                )
+                .into(),
+            ));
         }
 
         qualified_fields.extend(exprlist_to_fields(aggr_expr.as_slice(), &input)?);
@@ -2722,9 +3025,19 @@ impl Aggregate {
         })
     }
 
+    fn is_grouping_set(&self) -> bool {
+        matches!(self.group_expr.as_slice(), [Expr::GroupingSet(_)])
+    }
+
     /// Get the output expressions.
     fn output_expressions(&self) -> Result<Vec<&Expr>> {
+        static INTERNAL_ID_EXPR: OnceLock<Expr> = OnceLock::new();
         let mut exprs = grouping_set_to_exprlist(self.group_expr.as_slice())?;
+        if self.is_grouping_set() {
+            exprs.push(INTERNAL_ID_EXPR.get_or_init(|| {
+                Expr::Column(Column::from_name(Self::INTERNAL_GROUPING_ID))
+            }));
+        }
         exprs.extend(self.aggr_expr.iter());
         debug_assert!(exprs.len() == self.schema.fields().len());
         Ok(exprs)
@@ -2735,6 +3048,56 @@ impl Aggregate {
     /// GroupingSet, etc. In these case we need to get inner expression lengths.
     pub fn group_expr_len(&self) -> Result<usize> {
         grouping_set_expr_count(&self.group_expr)
+    }
+
+    /// Returns the data type of the grouping id.
+    /// The grouping ID value is a bitmask where each set bit
+    /// indicates that the corresponding grouping expression is
+    /// null
+    pub fn grouping_id_type(group_exprs: usize) -> DataType {
+        if group_exprs <= 8 {
+            DataType::UInt8
+        } else if group_exprs <= 16 {
+            DataType::UInt16
+        } else if group_exprs <= 32 {
+            DataType::UInt32
+        } else {
+            DataType::UInt64
+        }
+    }
+
+    /// Internal column used when the aggregation is a grouping set.
+    ///
+    /// This column contains a bitmask where each bit represents a grouping
+    /// expression. The least significant bit corresponds to the rightmost
+    /// grouping expression. A bit value of 0 indicates that the corresponding
+    /// column is included in the grouping set, while a value of 1 means it is excluded.
+    ///
+    /// For example, for the grouping expressions CUBE(a, b), the grouping ID
+    /// column will have the following values:
+    ///     0b00: Both `a` and `b` are included
+    ///     0b01: `b` is excluded
+    ///     0b10: `a` is excluded
+    ///     0b11: Both `a` and `b` are excluded
+    ///
+    /// This internal column is necessary because excluded columns are replaced
+    /// with `NULL` values. To handle these cases correctly, we must distinguish
+    /// between an actual `NULL` value in a column and a column being excluded from the set.
+    pub const INTERNAL_GROUPING_ID: &'static str = "__grouping_id";
+}
+
+// Manual implementation needed because of `schema` field. Comparison excludes this field.
+impl PartialOrd for Aggregate {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        match self.input.partial_cmp(&other.input) {
+            Some(Ordering::Equal) => {
+                match self.group_expr.partial_cmp(&other.group_expr) {
+                    Some(Ordering::Equal) => self.aggr_expr.partial_cmp(&other.aggr_expr),
+                    cmp => cmp,
+                }
+            }
+            cmp => cmp,
+        }
     }
 }
 
@@ -2763,6 +3126,8 @@ fn calc_func_dependencies_for_aggregate(
         let group_by_expr_names = group_expr
             .iter()
             .map(|item| item.schema_name().to_string())
+            .collect::<IndexSet<_>>()
+            .into_iter()
             .collect::<Vec<_>>();
         let aggregate_func_dependencies = aggregate_functional_dependencies(
             input.schema(),
@@ -2800,22 +3165,28 @@ fn calc_func_dependencies_for_project(
                         .filter_map(|(qualifier, f)| {
                             let flat_name = qualifier
                                 .map(|t| format!("{}.{}", t, f.name()))
-                                .unwrap_or(f.name().clone());
+                                .unwrap_or_else(|| f.name().clone());
                             input_fields.iter().position(|item| *item == flat_name)
                         })
                         .collect::<Vec<_>>(),
                 )
             }
-            Expr::Alias(alias) => Ok(input_fields
-                .iter()
-                .position(|item| *item == format!("{}", alias.expr))
-                .map(|i| vec![i])
-                .unwrap_or(vec![])),
-            _ => Ok(input_fields
-                .iter()
-                .position(|item| *item == format!("{}", expr))
-                .map(|i| vec![i])
-                .unwrap_or(vec![])),
+            Expr::Alias(alias) => {
+                let name = format!("{}", alias.expr);
+                Ok(input_fields
+                    .iter()
+                    .position(|item| *item == name)
+                    .map(|i| vec![i])
+                    .unwrap_or(vec![]))
+            }
+            _ => {
+                let name = format!("{}", expr);
+                Ok(input_fields
+                    .iter()
+                    .position(|item| *item == name)
+                    .map(|i| vec![i])
+                    .unwrap_or(vec![]))
+            }
         })
         .collect::<Result<Vec<_>>>()?
         .into_iter()
@@ -2830,10 +3201,10 @@ fn calc_func_dependencies_for_project(
 }
 
 /// Sorts its input according to a list of sort expressions.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
 pub struct Sort {
     /// The sort expressions
-    pub expr: Vec<Expr>,
+    pub expr: Vec<SortExpr>,
     /// The incoming logical plan
     pub input: Arc<LogicalPlan>,
     /// Optional fetch limit
@@ -2896,8 +3267,50 @@ impl Join {
     }
 }
 
+// Manual implementation needed because of `schema` field. Comparison excludes this field.
+impl PartialOrd for Join {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        #[derive(PartialEq, PartialOrd)]
+        struct ComparableJoin<'a> {
+            /// Left input
+            pub left: &'a Arc<LogicalPlan>,
+            /// Right input
+            pub right: &'a Arc<LogicalPlan>,
+            /// Equijoin clause expressed as pairs of (left, right) join expressions
+            pub on: &'a Vec<(Expr, Expr)>,
+            /// Filters applied during join (non-equi conditions)
+            pub filter: &'a Option<Expr>,
+            /// Join type
+            pub join_type: &'a JoinType,
+            /// Join constraint
+            pub join_constraint: &'a JoinConstraint,
+            /// If null_equals_null is true, null == null else null != null
+            pub null_equals_null: &'a bool,
+        }
+        let comparable_self = ComparableJoin {
+            left: &self.left,
+            right: &self.right,
+            on: &self.on,
+            filter: &self.filter,
+            join_type: &self.join_type,
+            join_constraint: &self.join_constraint,
+            null_equals_null: &self.null_equals_null,
+        };
+        let comparable_other = ComparableJoin {
+            left: &other.left,
+            right: &other.right,
+            on: &other.on,
+            filter: &other.filter,
+            join_type: &other.join_type,
+            join_constraint: &other.join_constraint,
+            null_equals_null: &other.null_equals_null,
+        };
+        comparable_self.partial_cmp(&comparable_other)
+    }
+}
+
 /// Subquery
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Hash)]
 pub struct Subquery {
     /// The subquery
     pub subquery: Arc<LogicalPlan>,
@@ -2933,7 +3346,7 @@ impl Debug for Subquery {
 /// See [`Partitioning`] for more details on partitioning
 ///
 /// [`Partitioning`]: https://docs.rs/datafusion/latest/datafusion/physical_expr/enum.Partitioning.html#
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
 pub enum Partitioning {
     /// Allocate batches using a round-robin algorithm and the specified number of partitions
     RoundRobinBatch(usize),
@@ -2944,6 +3357,70 @@ pub enum Partitioning {
     DistributeBy(Vec<Expr>),
 }
 
+/// Represents the unnesting operation on a column based on the context (a known struct
+/// column, a list column, or let the planner infer the unnesting type).
+///
+/// The inferred unnesting type works for both struct and list column, but the unnesting
+/// will only be done once (depth = 1). In case recursion is needed on a multi-dimensional
+/// list type, use [`ColumnUnnestList`]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd)]
+pub enum ColumnUnnestType {
+    // Unnesting a list column, a vector of ColumnUnnestList is used because
+    // a column can be unnested at different levels, resulting different output columns
+    List(Vec<ColumnUnnestList>),
+    // for struct, there can only be one unnest performed on one column at a time
+    Struct,
+    // Infer the unnest type based on column schema
+    // If column is a list column, the unnest depth will be 1
+    // This value is to support sugar syntax of old api in Dataframe (unnest(either_list_or_struct_column))
+    Inferred,
+}
+
+impl fmt::Display for ColumnUnnestType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ColumnUnnestType::List(lists) => {
+                let list_strs: Vec<String> =
+                    lists.iter().map(|list| list.to_string()).collect();
+                write!(f, "List([{}])", list_strs.join(", "))
+            }
+            ColumnUnnestType::Struct => write!(f, "Struct"),
+            ColumnUnnestType::Inferred => write!(f, "Inferred"),
+        }
+    }
+}
+
+/// Represent the unnesting operation on a list column, such as the recursion depth and
+/// the output column name after unnesting
+///
+/// Example: given `ColumnUnnestList { output_column: "output_name", depth: 2 }`
+///
+/// ```text
+///   input             output_name
+///  ┌─────────┐      ┌─────────┐
+///  │{{1,2}}  │      │ 1       │
+///  ├─────────┼─────►├─────────┤           
+///  │{{3}}    │      │ 2       │           
+///  ├─────────┤      ├─────────┤           
+///  │{{4},{5}}│      │ 3       │           
+///  └─────────┘      ├─────────┤           
+///                   │ 4       │           
+///                   ├─────────┤           
+///                   │ 5       │           
+///                   └─────────┘           
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd)]
+pub struct ColumnUnnestList {
+    pub output_column: Column,
+    pub depth: usize,
+}
+
+impl fmt::Display for ColumnUnnestList {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}|depth={}", self.output_column, self.depth)
+    }
+}
+
 /// Unnest a column that contains a nested list type. See
 /// [`UnnestOptions`] for more details.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -2951,10 +3428,10 @@ pub struct Unnest {
     /// The incoming logical plan
     pub input: Arc<LogicalPlan>,
     /// Columns to run unnest on, can be a list of (List/Struct) columns
-    pub exec_columns: Vec<Column>,
+    pub exec_columns: Vec<(Column, ColumnUnnestType)>,
     /// refer to the indices(in the input schema) of columns
     /// that have type list to run unnest on
-    pub list_type_columns: Vec<usize>,
+    pub list_type_columns: Vec<(usize, ColumnUnnestList)>,
     /// refer to the indices (in the input schema) of columns
     /// that have type struct to run unnest on
     pub struct_type_columns: Vec<usize>,
@@ -2965,6 +3442,47 @@ pub struct Unnest {
     pub schema: DFSchemaRef,
     /// Options
     pub options: UnnestOptions,
+}
+
+// Manual implementation needed because of `schema` field. Comparison excludes this field.
+impl PartialOrd for Unnest {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        #[derive(PartialEq, PartialOrd)]
+        struct ComparableUnnest<'a> {
+            /// The incoming logical plan
+            pub input: &'a Arc<LogicalPlan>,
+            /// Columns to run unnest on, can be a list of (List/Struct) columns
+            pub exec_columns: &'a Vec<(Column, ColumnUnnestType)>,
+            /// refer to the indices(in the input schema) of columns
+            /// that have type list to run unnest on
+            pub list_type_columns: &'a Vec<(usize, ColumnUnnestList)>,
+            /// refer to the indices (in the input schema) of columns
+            /// that have type struct to run unnest on
+            pub struct_type_columns: &'a Vec<usize>,
+            /// Having items aligned with the output columns
+            /// representing which column in the input schema each output column depends on
+            pub dependency_indices: &'a Vec<usize>,
+            /// Options
+            pub options: &'a UnnestOptions,
+        }
+        let comparable_self = ComparableUnnest {
+            input: &self.input,
+            exec_columns: &self.exec_columns,
+            list_type_columns: &self.list_type_columns,
+            struct_type_columns: &self.struct_type_columns,
+            dependency_indices: &self.dependency_indices,
+            options: &self.options,
+        };
+        let comparable_other = ComparableUnnest {
+            input: &other.input,
+            exec_columns: &other.exec_columns,
+            list_type_columns: &other.list_type_columns,
+            struct_type_columns: &other.struct_type_columns,
+            dependency_indices: &other.dependency_indices,
+            options: &other.options,
+        };
+        comparable_self.partial_cmp(&comparable_other)
+    }
 }
 
 #[cfg(test)]
@@ -3578,5 +4096,41 @@ digraph {
                         \n    TableScan: ?table?";
         let actual = format!("{}", plan.display_indent());
         assert_eq!(expected.to_string(), actual)
+    }
+
+    #[test]
+    fn test_plan_partial_ord() {
+        let empty_relation = LogicalPlan::EmptyRelation(EmptyRelation {
+            produce_one_row: false,
+            schema: Arc::new(DFSchema::empty()),
+        });
+
+        let describe_table = LogicalPlan::DescribeTable(DescribeTable {
+            schema: Arc::new(Schema::new(vec![Field::new(
+                "foo",
+                DataType::Int32,
+                false,
+            )])),
+            output_schema: DFSchemaRef::new(DFSchema::empty()),
+        });
+
+        let describe_table_clone = LogicalPlan::DescribeTable(DescribeTable {
+            schema: Arc::new(Schema::new(vec![Field::new(
+                "foo",
+                DataType::Int32,
+                false,
+            )])),
+            output_schema: DFSchemaRef::new(DFSchema::empty()),
+        });
+
+        assert_eq!(
+            empty_relation.partial_cmp(&describe_table),
+            Some(Ordering::Less)
+        );
+        assert_eq!(
+            describe_table.partial_cmp(&empty_relation),
+            Some(Ordering::Greater)
+        );
+        assert_eq!(describe_table.partial_cmp(&describe_table_clone), None);
     }
 }

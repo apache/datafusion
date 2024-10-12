@@ -838,10 +838,10 @@ LEFT JOIN department AS d
 ON (e.name = 'Alice' OR e.name = 'Bob');
 ----
 1 Alice HR
-2 Bob HR
 1 Alice Engineering
-2 Bob Engineering
 1 Alice Sales
+2 Bob HR
+2 Bob Engineering
 2 Bob Sales
 3 Carol NULL
 
@@ -853,10 +853,10 @@ RIGHT JOIN employees AS e
 ON (e.name = 'Alice' OR e.name = 'Bob');
 ----
 1 Alice HR
-2 Bob HR
 1 Alice Engineering
-2 Bob Engineering
 1 Alice Sales
+2 Bob HR
+2 Bob Engineering
 2 Bob Sales
 3 Carol NULL
 
@@ -868,10 +868,10 @@ FULL JOIN employees AS e
 ON (e.name = 'Alice' OR e.name = 'Bob');
 ----
 1 Alice HR
-2 Bob HR
 1 Alice Engineering
-2 Bob Engineering
 1 Alice Sales
+2 Bob HR
+2 Bob Engineering
 2 Bob Sales
 3 Carol NULL
 
@@ -1178,3 +1178,51 @@ drop table t1;
 
 statement ok
 drop table t0;
+
+# Test decorrelate query with the uppercase table name and column name
+statement ok
+create table "T1"("C1" int, "C2" int);
+
+statement ok
+create table "T2"("C1" int, "C3" int);
+
+statement ok
+select "C1" from "T1" where not exists (select 1 from "T2" where "T1"."C1" = "T2"."C1")
+
+statement ok
+create table t1(c1 int, c2 int);
+
+statement ok
+create table t2(c1 int, c3 int);
+
+statement ok
+select "C1" from (select c1 as "C1", c2 as "C2" from t1) as "T1" where not exists (select 1 from (select c1 as "C1", c3 as "C3" from t2) as "T2" where "T1"."C1" = "T2"."C1")
+
+statement ok
+drop table "T1";
+
+statement ok
+drop table "T2";
+
+statement ok
+drop table t1;
+
+statement ok
+drop table t2;
+
+# Test SQLancer issue: https://github.com/apache/datafusion/issues/12337
+statement ok
+create table t1(v1 int) as values(100);
+
+## Query with Ambiguous column reference
+query error DataFusion error: Schema error: Schema contains duplicate qualified field name t1\.v1
+select count(*)
+from t1
+right outer join t1
+on t1.v1 > 0;
+
+query error DataFusion error: Schema error: Schema contains duplicate qualified field name t1\.v1
+select t1.v1 from t1 join t1 using(v1) cross join (select struct('foo' as v1) as t1);
+
+statement ok
+drop table t1;

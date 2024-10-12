@@ -25,7 +25,7 @@
 ## with metadata in SQL.
 
 query IT
-select * from table_with_metadata;
+select id, name from table_with_metadata;
 ----
 1 NULL
 NULL bar
@@ -57,6 +57,73 @@ WHERE "data"."id" = "samples"."id";
 ----
 1
 3
+
+
+
+# Regression test: prevent field metadata loss per https://github.com/apache/datafusion/issues/12687
+query I
+select count(distinct name) from table_with_metadata;
+----
+2
+
+# Regression test: prevent field metadata loss per https://github.com/apache/datafusion/issues/12687
+query I
+select approx_median(distinct id) from table_with_metadata;
+----
+2
+
+# Regression test: prevent field metadata loss per https://github.com/apache/datafusion/issues/12687
+statement ok
+select array_agg(distinct id) from table_with_metadata;
+
+query I
+select distinct id from table_with_metadata order by id;
+----
+1
+3
+NULL
+
+query I
+select count(id) from table_with_metadata;
+----
+2
+
+query I
+select count(id) cnt from table_with_metadata group by name order by cnt;
+----
+0
+1
+1
+
+
+
+# Regression test: missing schema metadata, when aggregate on cross join
+query I
+SELECT count("data"."id")
+FROM
+  (
+   SELECT "id" FROM "table_with_metadata"
+  ) as "data",
+  (
+    SELECT "id" FROM "table_with_metadata"
+  ) as "samples";
+----
+6
+
+# Regression test: missing field metadata, from the NULL field on the left side of the union
+query ITT
+(SELECT id, NULL::string as name, l_name FROM "table_with_metadata")
+  UNION
+(SELECT id, name, NULL::string as l_name FROM "table_with_metadata")
+ORDER BY id, name, l_name;
+----
+1 NULL NULL
+3 baz NULL
+3 NULL l_baz
+NULL bar NULL
+NULL NULL l_bar
+
+
 
 statement ok
 drop table table_with_metadata;

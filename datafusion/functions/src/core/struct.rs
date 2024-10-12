@@ -18,10 +18,11 @@
 use arrow::array::{ArrayRef, StructArray};
 use arrow::datatypes::{DataType, Field, Fields};
 use datafusion_common::{exec_err, Result};
-use datafusion_expr::ColumnarValue;
+use datafusion_expr::scalar_doc_sections::DOC_SECTION_STRUCT;
+use datafusion_expr::{ColumnarValue, Documentation};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use std::any::Any;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 fn array_struct(args: &[ArrayRef]) -> Result<ArrayRef> {
     // do not accept 0 arguments.
@@ -29,23 +30,23 @@ fn array_struct(args: &[ArrayRef]) -> Result<ArrayRef> {
         return exec_err!("struct requires at least one argument");
     }
 
-    let vec: Vec<_> = args
+    let fields = args
         .iter()
         .enumerate()
         .map(|(i, arg)| {
             let field_name = format!("c{i}");
-            Ok((
-                Arc::new(Field::new(
-                    field_name.as_str(),
-                    arg.data_type().clone(),
-                    true,
-                )),
-                Arc::clone(arg),
-            ))
+            Ok(Arc::new(Field::new(
+                field_name.as_str(),
+                arg.data_type().clone(),
+                true,
+            )))
         })
-        .collect::<Result<Vec<_>>>()?;
+        .collect::<Result<Vec<_>>>()?
+        .into();
 
-    Ok(Arc::new(StructArray::from(vec)))
+    let arrays = args.to_vec();
+
+    Ok(Arc::new(StructArray::new(fields, arrays, None)))
 }
 
 /// put values in a struct array.
@@ -53,9 +54,11 @@ fn struct_expr(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     let arrays = ColumnarValue::values_to_arrays(args)?;
     Ok(ColumnarValue::Array(array_struct(arrays.as_slice())?))
 }
+
 #[derive(Debug)]
 pub struct StructFunc {
     signature: Signature,
+    aliases: Vec<String>,
 }
 
 impl Default for StructFunc {
@@ -68,6 +71,7 @@ impl StructFunc {
     pub fn new() -> Self {
         Self {
             signature: Signature::variadic_any(Volatility::Immutable),
+            aliases: vec![String::from("row")],
         }
     }
 }
@@ -78,6 +82,10 @@ impl ScalarUDFImpl for StructFunc {
     }
     fn name(&self) -> &str {
         "struct"
+    }
+
+    fn aliases(&self) -> &[String] {
+        &self.aliases
     }
 
     fn signature(&self) -> &Signature {
@@ -96,49 +104,56 @@ impl ScalarUDFImpl for StructFunc {
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
         struct_expr(args)
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_struct_doc())
+    }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use arrow::array::Int64Array;
-    use datafusion_common::cast::as_struct_array;
-    use datafusion_common::ScalarValue;
+static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
-    #[test]
-    fn test_struct() {
-        // struct(1, 2, 3) = {"c0": 1, "c1": 2, "c2": 3}
-        let args = [
-            ColumnarValue::Scalar(ScalarValue::Int64(Some(1))),
-            ColumnarValue::Scalar(ScalarValue::Int64(Some(2))),
-            ColumnarValue::Scalar(ScalarValue::Int64(Some(3))),
-        ];
-        let struc = struct_expr(&args)
-            .expect("failed to initialize function struct")
-            .into_array(1)
-            .expect("Failed to convert to array");
-        let result =
-            as_struct_array(&struc).expect("failed to initialize function struct");
-        assert_eq!(
-            &Int64Array::from(vec![1]),
-            Arc::clone(result.column_by_name("c0").unwrap())
-                .as_any()
-                .downcast_ref::<Int64Array>()
-                .unwrap()
-        );
-        assert_eq!(
-            &Int64Array::from(vec![2]),
-            Arc::clone(result.column_by_name("c1").unwrap())
-                .as_any()
-                .downcast_ref::<Int64Array>()
-                .unwrap()
-        );
-        assert_eq!(
-            &Int64Array::from(vec![3]),
-            Arc::clone(result.column_by_name("c2").unwrap())
-                .as_any()
-                .downcast_ref::<Int64Array>()
-                .unwrap()
-        );
-    }
+fn get_struct_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_STRUCT)
+            .with_description("Returns an Arrow struct using the specified input expressions optionally named.
+Fields in the returned struct use the optional name or the `cN` naming convention.
+For example: `c0`, `c1`, `c2`, etc.")
+            .with_syntax_example("struct(expression1[, ..., expression_n])")
+            .with_sql_example(r#"For example, this query converts two columns `a` and `b` to a single column with
+a struct type of fields `field_a` and `c1`:
+```sql
+> select * from t;
++---+---+
+| a | b |
++---+---+
+| 1 | 2 |
+| 3 | 4 |
++---+---+
+
+-- use default names `c0`, `c1`
+> select struct(a, b) from t;
++-----------------+
+| struct(t.a,t.b) |
++-----------------+
+| {c0: 1, c1: 2}  |
+| {c0: 3, c1: 4}  |
++-----------------+
+
+-- name the first field `field_a`
+select struct(a as field_a, b) from t;
++--------------------------------------------------+
+| named_struct(Utf8("field_a"),t.a,Utf8("c1"),t.b) |
++--------------------------------------------------+
+| {field_a: 1, c1: 2}                              |
+| {field_a: 3, c1: 4}                              |
++--------------------------------------------------+
+```
+"#)
+            .with_argument(
+                "expression1, expression_n",
+                "Expression to include in the output struct. Can be a constant, column, or function, any combination of arithmetic or string operators.")
+            .build()
+            .unwrap()
+    })
 }

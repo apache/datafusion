@@ -37,12 +37,14 @@ use crate::physical_planner::create_physical_sort_exprs;
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
+use datafusion_catalog::Session;
 use datafusion_common::{not_impl_err, plan_err, Constraints, DFSchema, SchemaExt};
 use datafusion_execution::TaskContext;
+use datafusion_expr::dml::InsertOp;
+use datafusion_expr::SortExpr;
 use datafusion_physical_plan::metrics::MetricsSet;
 
 use async_trait::async_trait;
-use datafusion_catalog::Session;
 use futures::StreamExt;
 use log::debug;
 use parking_lot::Mutex;
@@ -64,7 +66,7 @@ pub struct MemTable {
     column_defaults: HashMap<String, Expr>,
     /// Optional pre-known sort order(s). Must be `SortExpr`s.
     /// inserting data into this table removes the order
-    pub sort_order: Arc<Mutex<Vec<Vec<Expr>>>>,
+    pub sort_order: Arc<Mutex<Vec<Vec<SortExpr>>>>,
 }
 
 impl MemTable {
@@ -118,7 +120,7 @@ impl MemTable {
     ///
     /// Note that multiple sort orders are supported, if some are known to be
     /// equivalent,
-    pub fn with_sort_order(self, mut sort_order: Vec<Vec<Expr>>) -> Self {
+    pub fn with_sort_order(self, mut sort_order: Vec<Vec<SortExpr>>) -> Self {
         std::mem::swap(self.sort_order.lock().as_mut(), &mut sort_order);
         self
     }
@@ -239,7 +241,7 @@ impl TableProvider for MemTable {
                     )
                 })
                 .collect::<Result<Vec<_>>>()?;
-            exec = exec.with_sort_information(file_sort_order);
+            exec = exec.try_with_sort_information(file_sort_order)?;
         }
 
         Ok(Arc::new(exec))
@@ -261,7 +263,7 @@ impl TableProvider for MemTable {
         &self,
         _state: &dyn Session,
         input: Arc<dyn ExecutionPlan>,
-        overwrite: bool,
+        insert_op: InsertOp,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         // If we are inserting into the table, any sort order may be messed up so reset it here
         *self.sort_order.lock() = vec![];
@@ -273,11 +275,23 @@ impl TableProvider for MemTable {
             .logically_equivalent_names_and_types(&input.schema())
         {
             return plan_err!(
-                "Inserting query must have the same schema with the table."
+                "Inserting query must have the same schema with the table. \
+                Expected: {:?}, got: {:?}",
+                self.schema()
+                    .fields()
+                    .iter()
+                    .map(|field| field.data_type())
+                    .collect::<Vec<_>>(),
+                input
+                    .schema()
+                    .fields()
+                    .iter()
+                    .map(|field| field.data_type())
+                    .collect::<Vec<_>>()
             );
         }
-        if overwrite {
-            return not_impl_err!("Overwrite not implemented for MemoryTable yet");
+        if insert_op != InsertOp::Append {
+            return not_impl_err!("{insert_op} not implemented for MemoryTable yet");
         }
         let sink = Arc::new(MemSink::new(self.batches.clone()));
         Ok(Arc::new(DataSinkExec::new(
@@ -625,7 +639,8 @@ mod tests {
         let scan_plan = LogicalPlanBuilder::scan("source", source, None)?.build()?;
         // Create an insert plan to insert the source data into the initial table
         let insert_into_table =
-            LogicalPlanBuilder::insert_into(scan_plan, "t", &schema, false)?.build()?;
+            LogicalPlanBuilder::insert_into(scan_plan, "t", &schema, InsertOp::Append)?
+                .build()?;
         // Create a physical plan from the insert plan
         let plan = session_ctx
             .state()

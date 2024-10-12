@@ -23,14 +23,14 @@ pub mod bool_op;
 pub mod nulls;
 pub mod prim_op;
 
+use arrow::array::new_empty_array;
 use arrow::{
     array::{ArrayRef, AsArray, BooleanArray, PrimitiveArray},
     compute,
     datatypes::UInt32Type,
 };
 use datafusion_common::{
-    arrow_datafusion_err, utils::get_arrayref_at_indices, DataFusionError, Result,
-    ScalarValue,
+    arrow_datafusion_err, utils::take_arrays, DataFusionError, Result, ScalarValue,
 };
 use datafusion_expr_common::accumulator::Accumulator;
 use datafusion_expr_common::groups_accumulator::{EmitTo, GroupsAccumulator};
@@ -42,6 +42,52 @@ use datafusion_expr_common::groups_accumulator::{EmitTo, GroupsAccumulator};
 /// they are not as fast as a specialized `GroupsAccumulator`. This
 /// interface bridges the gap so the group by operator only operates
 /// in terms of [`Accumulator`].
+///
+/// Internally, this adapter creates a new [`Accumulator`] for each group which
+/// stores the state for that group. This both requires an allocation for each
+/// Accumulator, internal indices, as well as whatever internal allocations the
+/// Accumulator itself requires.
+///
+/// For example, a `MinAccumulator` that computes the minimum string value with
+/// a [`ScalarValue::Utf8`]. That will require at least two allocations per group
+/// (one for the `MinAccumulator` and one for the `ScalarValue::Utf8`).
+///
+/// ```text
+///                       ┌─────────────────────────────────┐
+///                       │MinAccumulator {                 │
+///                ┌─────▶│ min: ScalarValue::Utf8("A")     │───────┐
+///                │      │}                                │       │
+///                │      └─────────────────────────────────┘       └───────▶   "A"
+///    ┌─────┐     │      ┌─────────────────────────────────┐
+///    │  0  │─────┘      │MinAccumulator {                 │
+///    ├─────┤     ┌─────▶│ min: ScalarValue::Utf8("Z")     │───────────────▶   "Z"
+///    │  1  │─────┘      │}                                │
+///    └─────┘            └─────────────────────────────────┘                   ...
+///      ...                 ...
+///    ┌─────┐            ┌────────────────────────────────┐
+///    │ N-2 │            │MinAccumulator {                │
+///    ├─────┤            │  min: ScalarValue::Utf8("A")   │────────────────▶   "A"
+///    │ N-1 │─────┐      │}                               │
+///    └─────┘     │      └────────────────────────────────┘
+///                │      ┌────────────────────────────────┐        ┌───────▶   "Q"
+///                │      │MinAccumulator {                │        │
+///                └─────▶│  min: ScalarValue::Utf8("Q")   │────────┘
+///                       │}                               │
+///                       └────────────────────────────────┘
+///
+///
+///  Logical group         Current Min/Max value for that group stored
+///     number             as a ScalarValue which points to an
+///                        indivdually allocated String
+///
+///```
+///
+/// # Optimizations
+///
+/// The adapter minimizes the number of calls to [`Accumulator::update_batch`]
+/// by first collecting the input rows for each group into a contiguous array
+/// using [`compute::take`]
+///
 pub struct GroupsAccumulatorAdapter {
     factory: Box<dyn Fn() -> Result<Box<dyn Accumulator>> + Send>,
 
@@ -61,9 +107,9 @@ struct AccumulatorState {
     /// [`Accumulator`] that stores the per-group state
     accumulator: Box<dyn Accumulator>,
 
-    // scratch space: indexes in the input array that will be fed to
-    // this accumulator. Stores indexes as `u32` to match the arrow
-    // `take` kernel input.
+    /// scratch space: indexes in the input array that will be fed to
+    /// this accumulator. Stores indexes as `u32` to match the arrow
+    /// `take` kernel input.
     indices: Vec<u32>,
 }
 
@@ -193,7 +239,7 @@ impl GroupsAccumulatorAdapter {
         // reorder the values and opt_filter by batch_indices so that
         // all values for each group are contiguous, then invoke the
         // accumulator once per group with values
-        let values = get_arrayref_at_indices(values, &batch_indices)?;
+        let values = take_arrays(values, &batch_indices)?;
         let opt_filter = get_filter_at_indices(opt_filter, &batch_indices)?;
 
         // invoke each accumulator with the appropriate rows, first
@@ -207,9 +253,12 @@ impl GroupsAccumulatorAdapter {
             let state = &mut self.states[group_idx];
             sizes_pre += state.size();
 
-            let values_to_accumulate =
-                slice_and_maybe_filter(&values, opt_filter.as_ref(), offsets)?;
-            (f)(state.accumulator.as_mut(), &values_to_accumulate)?;
+            let values_to_accumulate = slice_and_maybe_filter(
+                &values,
+                opt_filter.as_ref().map(|f| f.as_boolean()),
+                offsets,
+            )?;
+            f(state.accumulator.as_mut(), &values_to_accumulate)?;
 
             // clear out the state so they are empty for next
             // iteration
@@ -290,6 +339,7 @@ impl GroupsAccumulator for GroupsAccumulatorAdapter {
         result
     }
 
+    // filtered_null_mask(opt_filter, &values);
     fn state(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
         let vec_size_pre = self.states.allocated_size();
         let states = emit_to.take_needed(&mut self.states);
@@ -348,6 +398,58 @@ impl GroupsAccumulator for GroupsAccumulatorAdapter {
     fn size(&self) -> usize {
         self.allocation_bytes
     }
+
+    fn convert_to_state(
+        &self,
+        values: &[ArrayRef],
+        opt_filter: Option<&BooleanArray>,
+    ) -> Result<Vec<ArrayRef>> {
+        let num_rows = values[0].len();
+
+        // If there are no rows, return empty arrays
+        if num_rows == 0 {
+            // create empty accumulator to get the state types
+            let empty_state = (self.factory)()?.state()?;
+            let empty_arrays = empty_state
+                .into_iter()
+                .map(|state_val| new_empty_array(&state_val.data_type()))
+                .collect::<Vec<_>>();
+
+            return Ok(empty_arrays);
+        }
+
+        // Each row has its respective group
+        let mut results = vec![];
+        for row_idx in 0..num_rows {
+            // Create the empty accumulator for converting
+            let mut converted_accumulator = (self.factory)()?;
+
+            // Convert row to states
+            let values_to_accumulate =
+                slice_and_maybe_filter(values, opt_filter, &[row_idx, row_idx + 1])?;
+            converted_accumulator.update_batch(&values_to_accumulate)?;
+            let states = converted_accumulator.state()?;
+
+            // Resize results to have enough columns according to the converted states
+            results.resize_with(states.len(), || Vec::with_capacity(num_rows));
+
+            // Add the states to results
+            for (idx, state_val) in states.into_iter().enumerate() {
+                results[idx].push(state_val);
+            }
+        }
+
+        let arrays = results
+            .into_iter()
+            .map(ScalarValue::iter_to_array)
+            .collect::<Result<Vec<_>>>()?;
+
+        Ok(arrays)
+    }
+
+    fn supports_convert_to_state(&self) -> bool {
+        true
+    }
 }
 
 /// Extension trait for [`Vec`] to account for allocations.
@@ -384,7 +486,7 @@ fn get_filter_at_indices(
 // Copied from physical-plan
 pub(crate) fn slice_and_maybe_filter(
     aggr_array: &[ArrayRef],
-    filter_opt: Option<&ArrayRef>,
+    filter_opt: Option<&BooleanArray>,
     offsets: &[usize],
 ) -> Result<Vec<ArrayRef>> {
     let (offset, length) = (offsets[0], offsets[1] - offsets[0]);
@@ -394,13 +496,12 @@ pub(crate) fn slice_and_maybe_filter(
         .collect();
 
     if let Some(f) = filter_opt {
-        let filter_array = f.slice(offset, length);
-        let filter_array = filter_array.as_boolean();
+        let filter = f.slice(offset, length);
 
         sliced_arrays
             .iter()
             .map(|array| {
-                compute::filter(array, filter_array).map_err(|e| arrow_datafusion_err!(e))
+                compute::filter(&array, &filter).map_err(|e| arrow_datafusion_err!(e))
             })
             .collect()
     } else {

@@ -37,15 +37,15 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             }
             UnaryOperator::Minus => {
                 match expr {
-                    // optimization: if it's a number literal, we apply the negative operator
+                    // Optimization: if it's a number literal, we apply the negative operator
                     // here directly to calculate the new literal.
                     SQLExpr::Value(Value::Number(n, _)) => {
                         self.parse_sql_number(&n, true)
                     }
                     SQLExpr::Interval(interval) => {
-                        self.sql_interval_to_expr(true, interval, schema, planner_context)
+                        self.sql_interval_to_expr(true, interval)
                     }
-                    // not a literal, apply negative operator on expression
+                    // Not a literal, apply negative operator on expression
                     _ => Ok(Expr::Negative(Box::new(self.sql_expr_to_logical_expr(
                         expr,
                         schema,

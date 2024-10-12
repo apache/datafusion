@@ -29,7 +29,7 @@ mod sp_repartition_fuzz_tests {
         metrics::{BaselineMetrics, ExecutionPlanMetricsSet},
         repartition::RepartitionExec,
         sorts::sort_preserving_merge::SortPreservingMergeExec,
-        sorts::streaming_merge::streaming_merge,
+        sorts::streaming_merge::StreamingMergeBuilder,
         stream::RecordBatchStreamAdapter,
         ExecutionPlan, Partitioning,
     };
@@ -80,7 +80,7 @@ mod sp_repartition_fuzz_tests {
         // Define a and f are aliases
         eq_properties.add_equal_conditions(col_a, col_f)?;
         // Column e has constant value.
-        eq_properties = eq_properties.add_constants([ConstExpr::from(col_e)]);
+        eq_properties = eq_properties.with_constants([ConstExpr::from(col_e)]);
 
         // Randomly order columns for sorting
         let mut rng = StdRng::seed_from_u64(seed);
@@ -246,15 +246,14 @@ mod sp_repartition_fuzz_tests {
                 MemoryConsumer::new("test".to_string()).register(context.memory_pool());
 
             // Internally SortPreservingMergeExec uses this function for merging.
-            let res = streaming_merge(
-                streams,
-                schema,
-                &exprs,
-                BaselineMetrics::new(&ExecutionPlanMetricsSet::new(), 0),
-                1,
-                None,
-                mem_reservation,
-            )?;
+            let res = StreamingMergeBuilder::new()
+                .with_streams(streams)
+                .with_schema(schema)
+                .with_expressions(&exprs)
+                .with_metrics(BaselineMetrics::new(&ExecutionPlanMetricsSet::new(), 0))
+                .with_batch_size(1)
+                .with_reservation(mem_reservation)
+                .build()?;
             let res = collect(res).await?;
             // Contains the merged result.
             let res = concat_batches(&res[0].schema(), &res)?;
@@ -359,7 +358,8 @@ mod sp_repartition_fuzz_tests {
         let running_source = Arc::new(
             MemoryExec::try_new(&[input1.clone()], schema.clone(), None)
                 .unwrap()
-                .with_sort_information(vec![sort_keys.clone()]),
+                .try_with_sort_information(vec![sort_keys.clone()])
+                .unwrap(),
         );
         let hash_exprs = vec![col("c", &schema).unwrap()];
 

@@ -29,7 +29,10 @@ use arrow::{
     },
     record_batch::RecordBatch,
 };
-use arrow_array::{Array, Float32Array, Float64Array, UnionArray};
+use arrow_array::{
+    Array, BooleanArray, DictionaryArray, Float32Array, Float64Array, Int8Array,
+    UnionArray,
+};
 use arrow_buffer::ScalarBuffer;
 use arrow_schema::{ArrowError, UnionFields, UnionMode};
 use datafusion_functions_aggregate::count::count_udaf;
@@ -184,7 +187,7 @@ async fn test_count_wildcard_on_window() -> Result<()> {
             WindowFunctionDefinition::AggregateUDF(count_udaf()),
             vec![wildcard()],
         ))
-        .order_by(vec![Expr::Sort(Sort::new(Box::new(col("a")), false, true))])
+        .order_by(vec![Sort::new(col("a"), false, true)])
         .window_frame(WindowFrame::new_bounds(
             WindowFrameUnits::Range,
             WindowFrameBound::Preceding(ScalarValue::UInt32(Some(6))),
@@ -352,7 +355,7 @@ async fn sort_on_unprojected_columns() -> Result<()> {
         .unwrap()
         .select(vec![col("a")])
         .unwrap()
-        .sort(vec![Expr::Sort(Sort::new(Box::new(col("b")), false, true))])
+        .sort(vec![Sort::new(col("b"), false, true)])
         .unwrap();
     let results = df.collect().await.unwrap();
 
@@ -396,7 +399,7 @@ async fn sort_on_distinct_columns() -> Result<()> {
         .unwrap()
         .distinct()
         .unwrap()
-        .sort(vec![Expr::Sort(Sort::new(Box::new(col("a")), false, true))])
+        .sort(vec![Sort::new(col("a"), false, true)])
         .unwrap();
     let results = df.collect().await.unwrap();
 
@@ -435,7 +438,7 @@ async fn sort_on_distinct_unprojected_columns() -> Result<()> {
         .await?
         .select(vec![col("a")])?
         .distinct()?
-        .sort(vec![Expr::Sort(Sort::new(Box::new(col("b")), false, true))])
+        .sort(vec![Sort::new(col("b"), false, true)])
         .unwrap_err();
     assert_eq!(err.strip_backtrace(), "Error during planning: For SELECT DISTINCT, ORDER BY expressions b must appear in select list");
     Ok(())
@@ -599,8 +602,8 @@ async fn test_grouping_sets() -> Result<()> {
         .await?
         .aggregate(vec![grouping_set_expr], vec![count(col("a"))])?
         .sort(vec![
-            Expr::Sort(Sort::new(Box::new(col("a")), false, true)),
-            Expr::Sort(Sort::new(Box::new(col("b")), false, true)),
+            Sort::new(col("a"), false, true),
+            Sort::new(col("b"), false, true),
         ])?;
 
     let results = df.collect().await?;
@@ -640,8 +643,8 @@ async fn test_grouping_sets_count() -> Result<()> {
         .await?
         .aggregate(vec![grouping_set_expr], vec![count(lit(1))])?
         .sort(vec![
-            Expr::Sort(Sort::new(Box::new(col("c1")), false, true)),
-            Expr::Sort(Sort::new(Box::new(col("c2")), false, true)),
+            Sort::new(col("c1"), false, true),
+            Sort::new(col("c2"), false, true),
         ])?;
 
     let results = df.collect().await?;
@@ -687,8 +690,8 @@ async fn test_grouping_set_array_agg_with_overflow() -> Result<()> {
             ],
         )?
         .sort(vec![
-            Expr::Sort(Sort::new(Box::new(col("c1")), false, true)),
-            Expr::Sort(Sort::new(Box::new(col("c2")), false, true)),
+            Sort::new(col("c1"), false, true),
+            Sort::new(col("c2"), false, true),
         ])?;
 
     let results = df.collect().await?;
@@ -1388,7 +1391,7 @@ async fn unnest_with_redundant_columns() -> Result<()> {
     let optimized_plan = df.clone().into_optimized_plan()?;
     let expected = vec![
         "Projection: shapes.shape_id [shape_id:UInt32]",
-        "  Unnest: lists[shape_id2] structs[] [shape_id:UInt32, shape_id2:UInt32;N]",
+        "  Unnest: lists[shape_id2|depth=1] structs[] [shape_id:UInt32, shape_id2:UInt32;N]",
         "    Aggregate: groupBy=[[shapes.shape_id]], aggr=[[array_agg(shapes.shape_id) AS shape_id2]] [shape_id:UInt32, shape_id2:List(Field { name: \"item\", data_type: UInt32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} });N]",
         "      TableScan: shapes projection=[shape_id] [shape_id:UInt32]",
     ];
@@ -2362,4 +2365,106 @@ async fn dense_union_is_null() {
         "+----------+",
     ];
     assert_batches_sorted_eq!(expected, &result_df.collect().await.unwrap());
+}
+
+#[tokio::test]
+async fn boolean_dictionary_as_filter() {
+    let values = vec![Some(true), Some(false), None, Some(true)];
+    let keys = vec![0, 0, 1, 2, 1, 3, 1];
+    let values_array = BooleanArray::from(values);
+    let keys_array = Int8Array::from(keys);
+    let array =
+        DictionaryArray::new(keys_array, Arc::new(values_array) as Arc<dyn Array>);
+    let array = Arc::new(array);
+
+    let field = Field::new(
+        "my_dict",
+        DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Boolean)),
+        true,
+    );
+    let schema = Arc::new(Schema::new(vec![field]));
+
+    let batch = RecordBatch::try_new(schema, vec![array.clone()]).unwrap();
+
+    let ctx = SessionContext::new();
+
+    ctx.register_batch("dict_batch", batch).unwrap();
+
+    let df = ctx.table("dict_batch").await.unwrap();
+
+    // view_all
+    let expected = [
+        "+---------+",
+        "| my_dict |",
+        "+---------+",
+        "| true    |",
+        "| true    |",
+        "| false   |",
+        "|         |",
+        "| false   |",
+        "| true    |",
+        "| false   |",
+        "+---------+",
+    ];
+    assert_batches_eq!(expected, &df.clone().collect().await.unwrap());
+
+    let result_df = df.clone().filter(col("my_dict")).unwrap();
+    let expected = [
+        "+---------+",
+        "| my_dict |",
+        "+---------+",
+        "| true    |",
+        "| true    |",
+        "| true    |",
+        "+---------+",
+    ];
+    assert_batches_eq!(expected, &result_df.collect().await.unwrap());
+
+    // test nested dictionary
+    let keys = vec![0, 2]; // 0 -> true, 2 -> false
+    let keys_array = Int8Array::from(keys);
+    let nested_array = DictionaryArray::new(keys_array, array);
+
+    let field = Field::new(
+        "my_nested_dict",
+        DataType::Dictionary(
+            Box::new(DataType::Int8),
+            Box::new(DataType::Dictionary(
+                Box::new(DataType::Int8),
+                Box::new(DataType::Boolean),
+            )),
+        ),
+        true,
+    );
+
+    let schema = Arc::new(Schema::new(vec![field]));
+
+    let batch = RecordBatch::try_new(schema, vec![Arc::new(nested_array)]).unwrap();
+
+    ctx.register_batch("nested_dict_batch", batch).unwrap();
+
+    let df = ctx.table("nested_dict_batch").await.unwrap();
+
+    // view_all
+    let expected = [
+        "+----------------+",
+        "| my_nested_dict |",
+        "+----------------+",
+        "| true           |",
+        "| false          |",
+        "+----------------+",
+    ];
+
+    assert_batches_eq!(expected, &df.clone().collect().await.unwrap());
+
+    let result_df = df.clone().filter(col("my_nested_dict")).unwrap();
+    let expected = [
+        "+----------------+",
+        "| my_nested_dict |",
+        "+----------------+",
+        "| true           |",
+        "+----------------+",
+    ];
+
+    assert_batches_eq!(expected, &result_df.collect().await.unwrap());
 }

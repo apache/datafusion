@@ -16,18 +16,20 @@
 // under the License.
 
 use crate::utils::make_scalar_function;
-use arrow::array::{ArrayRef, OffsetSizeTrait};
+use arrow::array::{Array, ArrayRef, AsArray, GenericStringArray, StringViewArray};
+use arrow::compute::regexp_is_match;
 use arrow::datatypes::DataType;
-use arrow::datatypes::DataType::Boolean;
-use datafusion_common::cast::as_generic_string_array;
+use arrow::datatypes::DataType::{Boolean, LargeUtf8, Utf8, Utf8View};
+use datafusion_common::exec_err;
 use datafusion_common::DataFusionError;
 use datafusion_common::Result;
-use datafusion_common::{arrow_datafusion_err, exec_err};
-use datafusion_expr::ScalarUDFImpl;
-use datafusion_expr::TypeSignature::Exact;
-use datafusion_expr::{ColumnarValue, Signature, Volatility};
+use datafusion_expr::scalar_doc_sections::DOC_SECTION_STRING;
+use datafusion_expr::{
+    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+};
 use std::any::Any;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
+
 #[derive(Debug)]
 pub struct ContainsFunc {
     signature: Signature,
@@ -41,12 +43,8 @@ impl Default for ContainsFunc {
 
 impl ContainsFunc {
     pub fn new() -> Self {
-        use DataType::*;
         Self {
-            signature: Signature::one_of(
-                vec![Exact(vec![Utf8, Utf8]), Exact(vec![LargeUtf8, LargeUtf8])],
-                Volatility::Immutable,
-            ),
+            signature: Signature::string(2, Volatility::Immutable),
         }
     }
 }
@@ -69,75 +67,79 @@ impl ScalarUDFImpl for ContainsFunc {
     }
 
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        match args[0].data_type() {
-            DataType::Utf8 => make_scalar_function(contains::<i32>, vec![])(args),
-            DataType::LargeUtf8 => make_scalar_function(contains::<i64>, vec![])(args),
-            other => {
-                exec_err!("unsupported data type {other:?} for function contains")
-            }
-        }
+        make_scalar_function(contains, vec![])(args)
+    }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_contains_doc())
     }
 }
 
-/// use regexp_is_match_utf8_scalar to do the calculation for contains
-pub fn contains<T: OffsetSizeTrait>(
-    args: &[ArrayRef],
-) -> Result<ArrayRef, DataFusionError> {
-    let mod_str = as_generic_string_array::<T>(&args[0])?;
-    let match_str = as_generic_string_array::<T>(&args[1])?;
-    let res = arrow::compute::kernels::comparison::regexp_is_match_utf8(
-        mod_str, match_str, None,
-    )
-    .map_err(|e| arrow_datafusion_err!(e))?;
+static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
-    Ok(Arc::new(res) as ArrayRef)
+fn get_contains_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_STRING)
+            .with_description(
+                "Return true if search_str is found within string (case-sensitive).",
+            )
+            .with_syntax_example("contains(str, search_str)")
+            .with_sql_example(
+                r#"```sql
+> select contains('the quick brown fox', 'row');
++---------------------------------------------------+
+| contains(Utf8("the quick brown fox"),Utf8("row")) |
++---------------------------------------------------+
+| true                                              |
++---------------------------------------------------+
+```"#,
+            )
+            .with_standard_argument("str", "String")
+            .with_argument("search_str", "The string to search for in str.")
+            .build()
+            .unwrap()
+    })
 }
 
-#[cfg(test)]
-mod tests {
-    use crate::string::contains::ContainsFunc;
-    use crate::utils::test::test_function;
-    use arrow::array::Array;
-    use arrow::{array::BooleanArray, datatypes::DataType::Boolean};
-    use datafusion_common::Result;
-    use datafusion_common::ScalarValue;
-    use datafusion_expr::ColumnarValue;
-    use datafusion_expr::ScalarUDFImpl;
-    #[test]
-    fn test_functions() -> Result<()> {
-        test_function!(
-            ContainsFunc::new(),
-            &[
-                ColumnarValue::Scalar(ScalarValue::from("alphabet")),
-                ColumnarValue::Scalar(ScalarValue::from("alph")),
-            ],
-            Ok(Some(true)),
-            bool,
-            Boolean,
-            BooleanArray
-        );
-        test_function!(
-            ContainsFunc::new(),
-            &[
-                ColumnarValue::Scalar(ScalarValue::from("alphabet")),
-                ColumnarValue::Scalar(ScalarValue::from("dddddd")),
-            ],
-            Ok(Some(false)),
-            bool,
-            Boolean,
-            BooleanArray
-        );
-        test_function!(
-            ContainsFunc::new(),
-            &[
-                ColumnarValue::Scalar(ScalarValue::from("alphabet")),
-                ColumnarValue::Scalar(ScalarValue::from("pha")),
-            ],
-            Ok(Some(true)),
-            bool,
-            Boolean,
-            BooleanArray
-        );
-        Ok(())
+/// use regexp_is_match_utf8_scalar to do the calculation for contains
+pub fn contains(args: &[ArrayRef]) -> Result<ArrayRef, DataFusionError> {
+    match (args[0].data_type(), args[1].data_type()) {
+        (Utf8View, Utf8View) => {
+            let mod_str = args[0].as_string_view();
+            let match_str = args[1].as_string_view();
+            let res = regexp_is_match::<
+                StringViewArray,
+                StringViewArray,
+                GenericStringArray<i32>,
+            >(mod_str, match_str, None)?;
+
+            Ok(Arc::new(res) as ArrayRef)
+        }
+        (Utf8, Utf8) => {
+            let mod_str = args[0].as_string::<i32>();
+            let match_str = args[1].as_string::<i32>();
+            let res = regexp_is_match::<
+                GenericStringArray<i32>,
+                GenericStringArray<i32>,
+                GenericStringArray<i32>,
+            >(mod_str, match_str, None)?;
+
+            Ok(Arc::new(res) as ArrayRef)
+        }
+        (LargeUtf8, LargeUtf8) => {
+            let mod_str = args[0].as_string::<i64>();
+            let match_str = args[1].as_string::<i64>();
+            let res = regexp_is_match::<
+                GenericStringArray<i64>,
+                GenericStringArray<i64>,
+                GenericStringArray<i32>,
+            >(mod_str, match_str, None)?;
+
+            Ok(Arc::new(res) as ArrayRef)
+        }
+        other => {
+            exec_err!("Unsupported data type {other:?} for function `contains`.")
+        }
     }
 }

@@ -36,7 +36,7 @@ use datafusion_expr::utils::conjunction;
 use datafusion_expr::{expr, EmptyRelation, Expr, LogicalPlan, LogicalPlanBuilder};
 
 /// Optimizer rule for rewriting subquery filters to joins
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct ScalarSubqueryToJoin {}
 
 impl ScalarSubqueryToJoin {
@@ -54,7 +54,7 @@ impl ScalarSubqueryToJoin {
     fn extract_subquery_exprs(
         &self,
         predicate: &Expr,
-        alias_gen: Arc<AliasGenerator>,
+        alias_gen: &Arc<AliasGenerator>,
     ) -> Result<(Vec<(Subquery, String)>, Expr)> {
         let mut extract = ExtractScalarSubQuery {
             sub_query_info: vec![],
@@ -223,12 +223,12 @@ fn contains_scalar_subquery(expr: &Expr) -> bool {
         .expect("Inner is always Ok")
 }
 
-struct ExtractScalarSubQuery {
+struct ExtractScalarSubQuery<'a> {
     sub_query_info: Vec<(Subquery, String)>,
-    alias_gen: Arc<AliasGenerator>,
+    alias_gen: &'a Arc<AliasGenerator>,
 }
 
-impl TreeNodeRewriter for ExtractScalarSubQuery {
+impl TreeNodeRewriter for ExtractScalarSubQuery<'_> {
     type Node = Expr;
 
     fn f_down(&mut self, expr: Expr) -> Result<Transformed<Expr>> {

@@ -34,6 +34,7 @@ mod partition_evaluator;
 mod table_source;
 mod udaf;
 mod udf;
+mod udf_docs;
 mod udwf;
 
 pub mod conditional_expressions;
@@ -90,9 +91,12 @@ pub use logical_plan::*;
 pub use partition_evaluator::PartitionEvaluator;
 pub use sqlparser;
 pub use table_source::{TableProviderFilterPushDown, TableSource, TableType};
-pub use udaf::{AggregateUDF, AggregateUDFImpl, ReversedUDAF};
-pub use udf::{ScalarUDF, ScalarUDFImpl};
-pub use udwf::{WindowUDF, WindowUDFImpl};
+pub use udaf::{
+    aggregate_doc_sections, AggregateUDF, AggregateUDFImpl, ReversedUDAF, StatisticsArgs,
+};
+pub use udf::{scalar_doc_sections, ScalarUDF, ScalarUDFImpl};
+pub use udf_docs::{DocSection, Documentation, DocumentationBuilder};
+pub use udwf::{window_doc_sections, ReversedUDWF, WindowUDF, WindowUDFImpl};
 pub use window_frame::{WindowFrame, WindowFrameBound, WindowFrameUnits};
 
 #[cfg(test)]

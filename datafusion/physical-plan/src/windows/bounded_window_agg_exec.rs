@@ -49,8 +49,8 @@ use arrow::{
 use datafusion_common::hash_utils::create_hashes;
 use datafusion_common::stats::Precision;
 use datafusion_common::utils::{
-    evaluate_partition_ranges, get_arrayref_at_indices, get_at_indices,
-    get_record_batch_at_indices, get_row_at_idx,
+    evaluate_partition_ranges, get_at_indices, get_record_batch_at_indices,
+    get_row_at_idx, take_arrays,
 };
 use datafusion_common::{arrow_datafusion_err, exec_err, DataFusionError, Result};
 use datafusion_execution::TaskContext;
@@ -257,17 +257,11 @@ impl ExecutionPlan for BoundedWindowAggExec {
     fn required_input_ordering(&self) -> Vec<Option<LexRequirement>> {
         let partition_bys = self.window_expr()[0].partition_by();
         let order_keys = self.window_expr()[0].order_by();
-        if self.input_order_mode != InputOrderMode::Sorted
-            || self.ordered_partition_by_indices.len() >= partition_bys.len()
-        {
-            let partition_bys = self
-                .ordered_partition_by_indices
-                .iter()
-                .map(|idx| &partition_bys[*idx]);
-            vec![calc_requirements(partition_bys, order_keys)]
-        } else {
-            vec![calc_requirements(partition_bys, order_keys)]
-        }
+        let partition_bys = self
+            .ordered_partition_by_indices
+            .iter()
+            .map(|idx| &partition_bys[*idx]);
+        vec![calc_requirements(partition_bys, order_keys)]
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
@@ -542,7 +536,7 @@ impl PartitionSearcher for LinearSearch {
         // We should emit columns according to row index ordering.
         let sorted_indices = sort_to_indices(&all_indices, None, None)?;
         // Construct new column according to row ordering. This fixes ordering
-        get_arrayref_at_indices(&new_columns, &sorted_indices).map(Some)
+        take_arrays(&new_columns, &sorted_indices).map(Some)
     }
 
     fn evaluate_partition_batches(
@@ -551,7 +545,7 @@ impl PartitionSearcher for LinearSearch {
         window_expr: &[Arc<dyn WindowExpr>],
     ) -> Result<Vec<(PartitionKey, RecordBatch)>> {
         let partition_bys =
-            self.evaluate_partition_by_column_values(record_batch, window_expr)?;
+            evaluate_partition_by_column_values(record_batch, window_expr)?;
         // NOTE: In Linear or PartiallySorted modes, we are sure that
         //       `partition_bys` are not empty.
         // Calculate indices for each partition and construct a new record
@@ -618,25 +612,6 @@ impl LinearSearch {
         }
     }
 
-    /// Calculates partition by expression results for each window expression
-    /// on `record_batch`.
-    fn evaluate_partition_by_column_values(
-        &self,
-        record_batch: &RecordBatch,
-        window_expr: &[Arc<dyn WindowExpr>],
-    ) -> Result<Vec<ArrayRef>> {
-        window_expr[0]
-            .partition_by()
-            .iter()
-            .map(|item| match item.evaluate(record_batch)? {
-                ColumnarValue::Array(array) => Ok(array),
-                ColumnarValue::Scalar(scalar) => {
-                    scalar.to_array_of_size(record_batch.num_rows())
-                }
-            })
-            .collect()
-    }
-
     /// Calculate indices of each partition (according to PARTITION BY expression)
     /// `columns` contain partition by expression results.
     fn get_per_partition_indices(
@@ -683,7 +658,7 @@ impl LinearSearch {
         window_expr: &[Arc<dyn WindowExpr>],
     ) -> Result<Vec<(PartitionKey, Vec<u32>)>> {
         let partition_by_columns =
-            self.evaluate_partition_by_column_values(input_buffer, window_expr)?;
+            evaluate_partition_by_column_values(input_buffer, window_expr)?;
         // Reset the row_map state:
         self.row_map_out.clear();
         let mut partition_indices: Vec<(PartitionKey, Vec<u32>)> = vec![];
@@ -850,6 +825,24 @@ impl SortedSearch {
             minima
         })
     }
+}
+
+/// Calculates partition by expression results for each window expression
+/// on `record_batch`.
+fn evaluate_partition_by_column_values(
+    record_batch: &RecordBatch,
+    window_expr: &[Arc<dyn WindowExpr>],
+) -> Result<Vec<ArrayRef>> {
+    window_expr[0]
+        .partition_by()
+        .iter()
+        .map(|item| match item.evaluate(record_batch)? {
+            ColumnarValue::Array(array) => Ok(array),
+            ColumnarValue::Scalar(scalar) => {
+                scalar.to_array_of_size(record_batch.num_rows())
+            }
+        })
+        .collect()
 }
 
 /// Stream for the bounded window aggregation plan.

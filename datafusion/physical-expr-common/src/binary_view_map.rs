@@ -88,8 +88,9 @@ impl ArrowBytesViewSet {
 /// values that can produce the set of keys on
 /// output as `GenericBinaryViewArray` without copies.
 ///
-/// Equivalent to `HashSet<String, V>` but with better performance for arrow
-/// data.
+/// Equivalent to `HashSet<String, V>` but with better performance if you need
+/// to emit the keys as an Arrow `StringViewArray` / `BinaryViewArray`. For other
+/// purposes it is the same as a `HashMap<String, V>`
 ///
 /// # Generic Arguments
 ///
@@ -149,7 +150,7 @@ where
             output_type,
             map: hashbrown::raw::RawTable::with_capacity(INITIAL_MAP_CAPACITY),
             map_size: 0,
-            builder: GenericByteViewBuilder::new().with_block_size(2 * 1024 * 1024),
+            builder: GenericByteViewBuilder::new(),
             random_state: RandomState::new(),
             hashes_buffer: vec![],
             null: None,

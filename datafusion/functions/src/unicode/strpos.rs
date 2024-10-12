@@ -16,18 +16,17 @@
 // under the License.
 
 use std::any::Any;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
-use arrow::array::{
-    ArrayAccessor, ArrayIter, ArrayRef, ArrowPrimitiveType, AsArray, PrimitiveArray,
-};
-use arrow::datatypes::{ArrowNativeType, DataType, Int32Type, Int64Type};
-
-use datafusion_common::{exec_err, Result};
-use datafusion_expr::TypeSignature::Exact;
-use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
-
+use crate::string::common::StringArrayType;
 use crate::utils::{make_scalar_function, utf8_to_int_type};
+use arrow::array::{ArrayRef, ArrowPrimitiveType, AsArray, PrimitiveArray};
+use arrow::datatypes::{ArrowNativeType, DataType, Int32Type, Int64Type};
+use datafusion_common::{exec_err, Result};
+use datafusion_expr::scalar_doc_sections::DOC_SECTION_STRING;
+use datafusion_expr::{
+    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+};
 
 #[derive(Debug)]
 pub struct StrposFunc {
@@ -43,20 +42,8 @@ impl Default for StrposFunc {
 
 impl StrposFunc {
     pub fn new() -> Self {
-        use DataType::*;
         Self {
-            signature: Signature::one_of(
-                vec![
-                    Exact(vec![Utf8, Utf8]),
-                    Exact(vec![Utf8, LargeUtf8]),
-                    Exact(vec![LargeUtf8, Utf8]),
-                    Exact(vec![LargeUtf8, LargeUtf8]),
-                    Exact(vec![Utf8View, Utf8View]),
-                    Exact(vec![Utf8View, Utf8]),
-                    Exact(vec![Utf8View, LargeUtf8]),
-                ],
-                Volatility::Immutable,
-            ),
+            signature: Signature::string(2, Volatility::Immutable),
             aliases: vec![String::from("instr"), String::from("position")],
         }
     }
@@ -86,6 +73,33 @@ impl ScalarUDFImpl for StrposFunc {
     fn aliases(&self) -> &[String] {
         &self.aliases
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_strpos_doc())
+    }
+}
+
+static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+
+fn get_strpos_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_STRING)
+            .with_description("Returns the starting position of a specified substring in a string. Positions begin at 1. If the substring does not exist in the string, the function returns 0.")
+            .with_syntax_example("strpos(str, substr)")
+            .with_sql_example(r#"```sql
+> select strpos('datafusion', 'fus');
++----------------------------------------+
+| strpos(Utf8("datafusion"),Utf8("fus")) |
++----------------------------------------+
+| 5                                      |
++----------------------------------------+ 
+```"#)
+            .with_standard_argument("str", "String")
+            .with_argument("substr", "Substring expression to search for.")
+            .build()
+            .unwrap()
+    })
 }
 
 fn strpos(args: &[ArrayRef]) -> Result<ArrayRef> {
@@ -140,24 +154,43 @@ fn calculate_strpos<'a, V1, V2, T: ArrowPrimitiveType>(
     substring_array: V2,
 ) -> Result<ArrayRef>
 where
-    V1: ArrayAccessor<Item = &'a str>,
-    V2: ArrayAccessor<Item = &'a str>,
+    V1: StringArrayType<'a, Item = &'a str>,
+    V2: StringArrayType<'a, Item = &'a str>,
 {
-    let string_iter = ArrayIter::new(string_array);
-    let substring_iter = ArrayIter::new(substring_array);
+    let ascii_only = substring_array.is_ascii() && string_array.is_ascii();
+    let string_iter = string_array.iter();
+    let substring_iter = substring_array.iter();
 
     let result = string_iter
         .zip(substring_iter)
         .map(|(string, substring)| match (string, substring) {
             (Some(string), Some(substring)) => {
-                // The `find` method returns the byte index of the substring.
-                // We count the number of chars up to that byte index.
-                T::Native::from_usize(
-                    string
-                        .find(substring)
-                        .map(|x| string[..x].chars().count() + 1)
-                        .unwrap_or(0),
-                )
+                // If only ASCII characters are present, we can use the slide window method to find
+                // the sub vector in the main vector. This is faster than string.find() method.
+                if ascii_only {
+                    // If the substring is empty, the result is 1.
+                    if substring.as_bytes().is_empty() {
+                        T::Native::from_usize(1)
+                    } else {
+                        T::Native::from_usize(
+                            string
+                                .as_bytes()
+                                .windows(substring.as_bytes().len())
+                                .position(|w| w == substring.as_bytes())
+                                .map(|x| x + 1)
+                                .unwrap_or(0),
+                        )
+                    }
+                } else {
+                    // The `find` method returns the byte index of the substring.
+                    // We count the number of chars up to that byte index.
+                    T::Native::from_usize(
+                        string
+                            .find(substring)
+                            .map(|x| string[..x].chars().count() + 1)
+                            .unwrap_or(0),
+                    )
+                }
             }
             _ => None,
         })
@@ -201,6 +234,8 @@ mod tests {
         test_strpos!("alphabet", "z" -> 0; Utf8 Utf8 i32 Int32 Int32Array);
         test_strpos!("alphabet", "" -> 1; Utf8 Utf8 i32 Int32 Int32Array);
         test_strpos!("", "a" -> 0; Utf8 Utf8 i32 Int32 Int32Array);
+        test_strpos!("", "" -> 1; Utf8 Utf8 i32 Int32 Int32Array);
+        test_strpos!("ДатаФусион数据融合📊🔥", "📊" -> 15; Utf8 Utf8 i32 Int32 Int32Array);
 
         // LargeUtf8 and LargeUtf8 combinations
         test_strpos!("alphabet", "ph" -> 3; LargeUtf8 LargeUtf8 i64 Int64 Int64Array);
@@ -208,6 +243,8 @@ mod tests {
         test_strpos!("alphabet", "z" -> 0; LargeUtf8 LargeUtf8 i64 Int64 Int64Array);
         test_strpos!("alphabet", "" -> 1; LargeUtf8 LargeUtf8 i64 Int64 Int64Array);
         test_strpos!("", "a" -> 0; LargeUtf8 LargeUtf8 i64 Int64 Int64Array);
+        test_strpos!("", "" -> 1; LargeUtf8 LargeUtf8 i64 Int64 Int64Array);
+        test_strpos!("ДатаФусион数据融合📊🔥", "📊" -> 15; LargeUtf8 LargeUtf8 i64 Int64 Int64Array);
 
         // Utf8 and LargeUtf8 combinations
         test_strpos!("alphabet", "ph" -> 3; Utf8 LargeUtf8 i32 Int32 Int32Array);
@@ -215,6 +252,8 @@ mod tests {
         test_strpos!("alphabet", "z" -> 0; Utf8 LargeUtf8 i32 Int32 Int32Array);
         test_strpos!("alphabet", "" -> 1; Utf8 LargeUtf8 i32 Int32 Int32Array);
         test_strpos!("", "a" -> 0; Utf8 LargeUtf8 i32 Int32 Int32Array);
+        test_strpos!("", "" -> 1; Utf8 LargeUtf8 i32 Int32 Int32Array);
+        test_strpos!("ДатаФусион数据融合📊🔥", "📊" -> 15; Utf8 LargeUtf8 i32 Int32 Int32Array);
 
         // LargeUtf8 and Utf8 combinations
         test_strpos!("alphabet", "ph" -> 3; LargeUtf8 Utf8 i64 Int64 Int64Array);
@@ -222,6 +261,8 @@ mod tests {
         test_strpos!("alphabet", "z" -> 0; LargeUtf8 Utf8 i64 Int64 Int64Array);
         test_strpos!("alphabet", "" -> 1; LargeUtf8 Utf8 i64 Int64 Int64Array);
         test_strpos!("", "a" -> 0; LargeUtf8 Utf8 i64 Int64 Int64Array);
+        test_strpos!("", "" -> 1; LargeUtf8 Utf8 i64 Int64 Int64Array);
+        test_strpos!("ДатаФусион数据融合📊🔥", "📊" -> 15; LargeUtf8 Utf8 i64 Int64 Int64Array);
 
         // Utf8View and Utf8View combinations
         test_strpos!("alphabet", "ph" -> 3; Utf8View Utf8View i32 Int32 Int32Array);
@@ -229,6 +270,8 @@ mod tests {
         test_strpos!("alphabet", "z" -> 0; Utf8View Utf8View i32 Int32 Int32Array);
         test_strpos!("alphabet", "" -> 1; Utf8View Utf8View i32 Int32 Int32Array);
         test_strpos!("", "a" -> 0; Utf8View Utf8View i32 Int32 Int32Array);
+        test_strpos!("", "" -> 1; Utf8View Utf8View i32 Int32 Int32Array);
+        test_strpos!("ДатаФусион数据融合📊🔥", "📊" -> 15; Utf8View Utf8View i32 Int32 Int32Array);
 
         // Utf8View and Utf8 combinations
         test_strpos!("alphabet", "ph" -> 3; Utf8View Utf8 i32 Int32 Int32Array);
@@ -236,6 +279,8 @@ mod tests {
         test_strpos!("alphabet", "z" -> 0; Utf8View Utf8 i32 Int32 Int32Array);
         test_strpos!("alphabet", "" -> 1; Utf8View Utf8 i32 Int32 Int32Array);
         test_strpos!("", "a" -> 0; Utf8View Utf8 i32 Int32 Int32Array);
+        test_strpos!("", "" -> 1; Utf8View Utf8 i32 Int32 Int32Array);
+        test_strpos!("ДатаФусион数据融合📊🔥", "📊" -> 15; Utf8View Utf8 i32 Int32 Int32Array);
 
         // Utf8View and LargeUtf8 combinations
         test_strpos!("alphabet", "ph" -> 3; Utf8View LargeUtf8 i32 Int32 Int32Array);
@@ -243,5 +288,7 @@ mod tests {
         test_strpos!("alphabet", "z" -> 0; Utf8View LargeUtf8 i32 Int32 Int32Array);
         test_strpos!("alphabet", "" -> 1; Utf8View LargeUtf8 i32 Int32 Int32Array);
         test_strpos!("", "a" -> 0; Utf8View LargeUtf8 i32 Int32 Int32Array);
+        test_strpos!("", "" -> 1; Utf8View LargeUtf8 i32 Int32 Int32Array);
+        test_strpos!("ДатаФусион数据融合📊🔥", "📊" -> 15; Utf8View LargeUtf8 i32 Int32 Int32Array);
     }
 }

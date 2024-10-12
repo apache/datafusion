@@ -69,7 +69,7 @@ value
 :::
 
 :::{note}
-Since `&&` and `||` are existed as logical operators in Rust, but those are not overloadable and not works with expression API.
+Since `&&` and `||` are logical operators in Rust and cannot be overloaded these are not available in the expression API.
 :::
 
 ## Bitwise Expressions
@@ -151,7 +151,7 @@ but these operators always return a `bool` which makes them not work with the ex
 | trunc(x)              | truncate toward zero                              |
 
 :::{note}
-Unlike to some databases the math functions in Datafusion works the same way as Rust math functions, avoiding failing on corner cases e.g
+Unlike to some databases the math functions in Datafusion works the same way as Rust math functions, avoiding failing on corner cases e.g.
 
 ```sql
 select log(-1), log(0), sqrt(-1);
@@ -211,6 +211,7 @@ select log(-1), log(0), sqrt(-1);
 
 | Syntax                                         | Description                                                                                                                                                                                                             |
 | ---------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| array_any_value(array)                         | Returns the first non-null element in the array. `array_any_value([NULL, 1, 2, 3]) -> 1`                                                                                                                                |
 | array_append(array, element)                   | Appends an element to the end of an array. `array_append([1, 2, 3], 4) -> [1, 2, 3, 4]`                                                                                                                                 |
 | array_concat(array[, ..., array_n])            | Concatenates arrays. `array_concat([1, 2, 3], [4, 5, 6]) -> [1, 2, 3, 4, 5, 6]`                                                                                                                                         |
 | array_has(array, element)                      | Returns true if the array contains the element `array_has([1,2,3], 1) -> true`                                                                                                                                          |

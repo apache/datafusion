@@ -30,7 +30,7 @@ use crate::PhysicalExpr;
 use arrow::array::{Array, ArrayRef};
 use arrow::datatypes::{DataType, Field};
 use datafusion_common::Result;
-use datafusion_common::{exec_err, ScalarValue};
+use datafusion_common::ScalarValue;
 use datafusion_expr::window_state::WindowAggState;
 use datafusion_expr::PartitionEvaluator;
 
@@ -86,16 +86,13 @@ impl NthValue {
         n: i64,
         ignore_nulls: bool,
     ) -> Result<Self> {
-        match n {
-            0 => exec_err!("NTH_VALUE expects n to be non-zero"),
-            _ => Ok(Self {
-                name: name.into(),
-                expr,
-                data_type,
-                kind: NthValueKind::Nth(n),
-                ignore_nulls,
-            }),
-        }
+        Ok(Self {
+            name: name.into(),
+            expr,
+            data_type,
+            kind: NthValueKind::Nth(n),
+            ignore_nulls,
+        })
     }
 
     /// Get the NTH_VALUE kind
@@ -188,10 +185,7 @@ impl PartitionEvaluator for NthValueEvaluator {
                         // Negative index represents reverse direction.
                         (n_range >= reverse_index, true)
                     }
-                    Ordering::Equal => {
-                        // The case n = 0 is not valid for the NTH_VALUE function.
-                        unreachable!();
-                    }
+                    Ordering::Equal => (true, false),
                 }
             }
         };
@@ -298,10 +292,7 @@ impl PartitionEvaluator for NthValueEvaluator {
                                 )
                             }
                         }
-                        Ordering::Equal => {
-                            // The case n = 0 is not valid for the NTH_VALUE function.
-                            unreachable!();
-                        }
+                        Ordering::Equal => ScalarValue::try_from(arr.data_type()),
                     }
                 }
             }

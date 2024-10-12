@@ -18,22 +18,24 @@
 //! [`VarianceSample`]: variance sample aggregations.
 //! [`VariancePopulation`]: variance population aggregations.
 
-use std::{fmt::Debug, sync::Arc};
-
 use arrow::{
     array::{Array, ArrayRef, BooleanArray, Float64Array, UInt64Array},
     buffer::NullBuffer,
     compute::kernels::cast,
     datatypes::{DataType, Field},
 };
+use std::sync::OnceLock;
+use std::{fmt::Debug, sync::Arc};
 
 use datafusion_common::{
     downcast_value, not_impl_err, plan_err, DataFusionError, Result, ScalarValue,
 };
+use datafusion_expr::aggregate_doc_sections::DOC_SECTION_GENERAL;
 use datafusion_expr::{
     function::{AccumulatorArgs, StateFieldsArgs},
     utils::format_state_name,
-    Accumulator, AggregateUDFImpl, GroupsAccumulator, Signature, Volatility,
+    Accumulator, AggregateUDFImpl, Documentation, GroupsAccumulator, Signature,
+    Volatility,
 };
 use datafusion_functions_aggregate_common::{
     aggregate::groups_accumulator::accumulate::accumulate, stats::StatsType,
@@ -79,7 +81,10 @@ impl VarianceSample {
     pub fn new() -> Self {
         Self {
             aliases: vec![String::from("var_sample"), String::from("var_samp")],
-            signature: Signature::numeric(1, Volatility::Immutable),
+            signature: Signature::coercible(
+                vec![DataType::Float64],
+                Volatility::Immutable,
+            ),
         }
     }
 }
@@ -97,11 +102,7 @@ impl AggregateUDFImpl for VarianceSample {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        if !arg_types[0].is_numeric() {
-            return plan_err!("Variance requires numeric input types");
-        }
-
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
         Ok(DataType::Float64)
     }
 
@@ -136,6 +137,26 @@ impl AggregateUDFImpl for VarianceSample {
     ) -> Result<Box<dyn GroupsAccumulator>> {
         Ok(Box::new(VarianceGroupsAccumulator::new(StatsType::Sample)))
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_variance_sample_doc())
+    }
+}
+
+static VARIANCE_SAMPLE_DOC: OnceLock<Documentation> = OnceLock::new();
+
+fn get_variance_sample_doc() -> &'static Documentation {
+    VARIANCE_SAMPLE_DOC.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_GENERAL)
+            .with_description(
+                "Returns the statistical sample variance of a set of numbers.",
+            )
+            .with_syntax_example("var(expression)")
+            .with_standard_argument("expression", "Numeric")
+            .build()
+            .unwrap()
+    })
 }
 
 pub struct VariancePopulation {
@@ -223,6 +244,25 @@ impl AggregateUDFImpl for VariancePopulation {
             StatsType::Population,
         )))
     }
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_variance_population_doc())
+    }
+}
+
+static VARIANCE_POPULATION_DOC: OnceLock<Documentation> = OnceLock::new();
+
+fn get_variance_population_doc() -> &'static Documentation {
+    VARIANCE_POPULATION_DOC.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_GENERAL)
+            .with_description(
+                "Returns the statistical population variance of a set of numbers.",
+            )
+            .with_syntax_example("var_pop(expression)")
+            .with_standard_argument("expression", "Numeric")
+            .build()
+            .unwrap()
+    })
 }
 
 /// An accumulator to compute variance
@@ -471,7 +511,7 @@ impl VarianceGroupsAccumulator {
 
         if let StatsType::Sample = self.stats_type {
             counts.iter_mut().for_each(|count| {
-                *count -= 1;
+                *count = count.saturating_sub(1);
             });
         }
         let nulls = NullBuffer::from_iter(counts.iter().map(|&count| count != 0));

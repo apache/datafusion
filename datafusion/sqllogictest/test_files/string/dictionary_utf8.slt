@@ -1,0 +1,68 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+include ./init_data.slt.part
+
+# --------------------------------------
+# Setup test tables with different physical string types
+# and repeat tests in `string_query.slt.part`
+# --------------------------------------
+statement ok
+create table test_basic_operator as
+select
+    arrow_cast(column1, 'Dictionary(Int32, Utf8)') as ascii_1,
+    arrow_cast(column2, 'Dictionary(Int32, Utf8)') as ascii_2,
+    arrow_cast(column3, 'Dictionary(Int32, Utf8)') as unicode_1,
+    arrow_cast(column4, 'Dictionary(Int32, Utf8)') as unicode_2
+from test_source;
+
+statement ok
+create table test_substr as
+select arrow_cast(col1, 'Dictionary(Int32, Utf8)') as c1 from test_substr_base;
+
+statement ok
+drop table test_source
+
+# TODO: move it back to `string_query.slt.part` after fixing the issue
+# see detail: https://github.com/apache/datafusion/issues/12637
+# Test pattern with wildcard characters
+query TTBBBB
+select ascii_1, unicode_1,
+       ascii_1 like 'An%' as ascii_like,
+       unicode_1 like '%ion数据%' as unicode_like,
+       ascii_1 ilike 'An%' as ascii_ilike,
+       unicode_1 ilike '%ion数据%' as unicode_ilik
+from test_basic_operator;
+----
+Andrew datafusion📊🔥 true false true false
+Xiangpeng datafusion数据融合 false true false true
+Raphael datafusionДатаФусион false false false false
+NULL NULL NULL NULL NULL NULL
+
+#
+# common test for string-like functions and operators
+#
+include ./string_query.slt.part
+
+#
+# Clean up
+#
+statement ok
+drop table test_basic_operator;
+
+statement ok
+drop table test_substr_base;

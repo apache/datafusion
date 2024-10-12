@@ -18,23 +18,25 @@
 //! The table implementation.
 
 use std::collections::HashMap;
-use std::str::FromStr;
-use std::{any::Any, sync::Arc};
+use std::{any::Any, str::FromStr, sync::Arc};
 
 use super::helpers::{expr_applicable_for_cols, pruned_partition_list, split_files};
-use super::PartitionedFile;
+use super::{ListingTableUrl, PartitionedFile};
 
-use super::ListingTableUrl;
-use crate::datasource::{create_ordering, get_statistics_with_limit};
 use crate::datasource::{
-    file_format::{file_compression_type::FileCompressionType, FileFormat},
+    create_ordering,
+    file_format::{
+        file_compression_type::FileCompressionType, FileFormat, FilePushdownSupport,
+    },
+    get_statistics_with_limit,
     physical_plan::{FileScanConfig, FileSinkConfig},
 };
 use crate::execution::context::SessionState;
 use datafusion_catalog::TableProvider;
-use datafusion_common::{DataFusionError, Result};
-use datafusion_expr::TableType;
+use datafusion_common::{config_err, DataFusionError, Result};
+use datafusion_expr::dml::InsertOp;
 use datafusion_expr::{utils::conjunction, Expr, TableProviderFilterPushDown};
+use datafusion_expr::{SortExpr, TableType};
 use datafusion_physical_plan::{empty::EmptyExec, ExecutionPlan, Statistics};
 
 use arrow::datatypes::{DataType, Field, SchemaBuilder, SchemaRef};
@@ -43,14 +45,16 @@ use datafusion_common::{
     config_datafusion_err, internal_err, plan_err, project_schema, Constraints,
     SchemaExt, ToDFSchema,
 };
-use datafusion_execution::cache::cache_manager::FileStatisticsCache;
-use datafusion_execution::cache::cache_unit::DefaultFileStatisticsCache;
+use datafusion_execution::cache::{
+    cache_manager::FileStatisticsCache, cache_unit::DefaultFileStatisticsCache,
+};
 use datafusion_physical_expr::{
     create_physical_expr, LexOrdering, PhysicalSortRequirement,
 };
 
 use async_trait::async_trait;
 use datafusion_catalog::Session;
+use datafusion_physical_expr_common::sort_expr::LexRequirement;
 use futures::{future, stream, StreamExt, TryStreamExt};
 use itertools::Itertools;
 use object_store::ObjectStore;
@@ -188,6 +192,38 @@ impl ListingTableConfig {
     pub async fn infer(self, state: &SessionState) -> Result<Self> {
         self.infer_options(state).await?.infer_schema(state).await
     }
+
+    /// Infer the partition columns from the path. Requires `self.options` to be set prior to using.
+    pub async fn infer_partitions_from_path(self, state: &SessionState) -> Result<Self> {
+        match self.options {
+            Some(options) => {
+                let Some(url) = self.table_paths.first() else {
+                    return config_err!("No table path found");
+                };
+                let partitions = options
+                    .infer_partitions(state, url)
+                    .await?
+                    .into_iter()
+                    .map(|col_name| {
+                        (
+                            col_name,
+                            DataType::Dictionary(
+                                Box::new(DataType::UInt16),
+                                Box::new(DataType::Utf8),
+                            ),
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                let options = options.with_table_partition_cols(partitions);
+                Ok(Self {
+                    table_paths: self.table_paths,
+                    file_schema: self.file_schema,
+                    options: Some(options),
+                })
+            }
+            None => config_err!("No `ListingOptions` set for inferring schema"),
+        }
+    }
 }
 
 /// Options for creating a [`ListingTable`]
@@ -222,19 +258,19 @@ pub struct ListingOptions {
     ///       ordering (encapsulated by a `Vec<Expr>`). If there aren't
     ///       multiple equivalent orderings, the outer `Vec` will have a
     ///       single element.
-    pub file_sort_order: Vec<Vec<Expr>>,
+    pub file_sort_order: Vec<Vec<SortExpr>>,
 }
 
 impl ListingOptions {
     /// Creates an options instance with the given format
     /// Default values:
-    /// - no file extension filter
+    /// - use default file extension filter
     /// - no input partition to discover
     /// - one target partition
     /// - stat collection
     pub fn new(format: Arc<dyn FileFormat>) -> Self {
         Self {
-            file_extension: String::new(),
+            file_extension: format.get_ext(),
             format,
             table_partition_cols: vec![],
             collect_stat: true,
@@ -245,6 +281,7 @@ impl ListingOptions {
 
     /// Set file extension on [`ListingOptions`] and returns self.
     ///
+    /// # Example
     /// ```
     /// # use std::sync::Arc;
     /// # use datafusion::prelude::SessionContext;
@@ -259,6 +296,33 @@ impl ListingOptions {
     /// ```
     pub fn with_file_extension(mut self, file_extension: impl Into<String>) -> Self {
         self.file_extension = file_extension.into();
+        self
+    }
+
+    /// Optionally set file extension on [`ListingOptions`] and returns self.
+    ///
+    /// If `file_extension` is `None`, the file extension will not be changed
+    ///
+    /// # Example
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use datafusion::prelude::SessionContext;
+    /// # use datafusion::datasource::{listing::ListingOptions, file_format::parquet::ParquetFormat};
+    /// let extension = Some(".parquet");
+    /// let listing_options = ListingOptions::new(Arc::new(
+    ///     ParquetFormat::default()
+    ///   ))
+    ///   .with_file_extension_opt(extension);
+    ///
+    /// assert_eq!(listing_options.file_extension, ".parquet");
+    /// ```
+    pub fn with_file_extension_opt<S>(mut self, file_extension: Option<S>) -> Self
+    where
+        S: Into<String>,
+    {
+        if let Some(file_extension) = file_extension {
+            self.file_extension = file_extension.into();
+        }
         self
     }
 
@@ -385,7 +449,7 @@ impl ListingOptions {
     ///
     /// assert_eq!(listing_options.file_sort_order, file_sort_order);
     /// ```
-    pub fn with_file_sort_order(mut self, file_sort_order: Vec<Vec<Expr>>) -> Self {
+    pub fn with_file_sort_order(mut self, file_sort_order: Vec<Vec<SortExpr>>) -> Self {
         self.file_sort_order = file_sort_order;
         self
     }
@@ -473,7 +537,7 @@ impl ListingOptions {
     /// Infer the partitioning at the given path on the provided object store.
     /// For performance reasons, it doesn't read all the files on disk
     /// and therefore may fail to detect invalid partitioning.
-    async fn infer_partitions(
+    pub(crate) async fn infer_partitions(
         &self,
         state: &SessionState,
         table_path: &ListingTableUrl,
@@ -615,6 +679,7 @@ impl ListingOptions {
 /// # Ok(())
 /// # }
 /// ```
+#[derive(Debug)]
 pub struct ListingTable {
     table_paths: Vec<ListingTableUrl>,
     /// File fields only
@@ -789,19 +854,36 @@ impl TableProvider for ListingTable {
             .map(|col| Ok(self.table_schema.field_with_name(&col.0)?.clone()))
             .collect::<Result<Vec<_>>>()?;
 
-        let filters = if let Some(expr) = conjunction(filters.to_vec()) {
-            // NOTE: Use the table schema (NOT file schema) here because `expr` may contain references to partition columns.
-            let table_df_schema = self.table_schema.as_ref().clone().to_dfschema()?;
-            let filters =
-                create_physical_expr(&expr, &table_df_schema, state.execution_props())?;
-            Some(filters)
-        } else {
-            None
-        };
+        // If the filters can be resolved using only partition cols, there is no need to
+        // pushdown it to TableScan, otherwise, `unhandled` pruning predicates will be generated
+        let table_partition_col_names = table_partition_cols
+            .iter()
+            .map(|field| field.name().as_str())
+            .collect::<Vec<_>>();
+        let filters = filters
+            .iter()
+            .filter(|filter| {
+                !expr_applicable_for_cols(&table_partition_col_names, filter)
+            })
+            .cloned()
+            .collect::<Vec<_>>();
 
-        let object_store_url = if let Some(url) = self.table_paths.first() {
-            url.object_store()
-        } else {
+        let filters = conjunction(filters.to_vec())
+            .map(|expr| -> Result<_> {
+                // NOTE: Use the table schema (NOT file schema) here because `expr` may contain references to partition columns.
+                let table_df_schema = self.table_schema.as_ref().clone().to_dfschema()?;
+                let filters = create_physical_expr(
+                    &expr,
+                    &table_df_schema,
+                    state.execution_props(),
+                )?;
+                Ok(Some(filters))
+            })
+            .unwrap_or(Ok(None))?;
+
+        let Some(object_store_url) =
+            self.table_paths.first().map(ListingTableUrl::object_store)
+        else {
             return Ok(Arc::new(EmptyExec::new(Arc::new(Schema::empty()))));
         };
 
@@ -826,7 +908,7 @@ impl TableProvider for ListingTable {
         &self,
         filters: &[&Expr],
     ) -> Result<Vec<TableProviderFilterPushDown>> {
-        let support: Vec<_> = filters
+        filters
             .iter()
             .map(|filter| {
                 if expr_applicable_for_cols(
@@ -834,20 +916,29 @@ impl TableProvider for ListingTable {
                         .options
                         .table_partition_cols
                         .iter()
-                        .map(|x| x.0.clone())
+                        .map(|col| col.0.as_str())
                         .collect::<Vec<_>>(),
                     filter,
                 ) {
                     // if filter can be handled by partition pruning, it is exact
-                    TableProviderFilterPushDown::Exact
-                } else {
-                    // otherwise, we still might be able to handle the filter with file
-                    // level mechanisms such as Parquet row group pruning.
-                    TableProviderFilterPushDown::Inexact
+                    return Ok(TableProviderFilterPushDown::Exact);
                 }
+
+                // if we can't push it down completely with only the filename-based/path-based
+                // column names, then we should check if we can do parquet predicate pushdown
+                let supports_pushdown = self.options.format.supports_filters_pushdown(
+                    &self.file_schema,
+                    &self.table_schema,
+                    &[filter],
+                )?;
+
+                if supports_pushdown == FilePushdownSupport::Supported {
+                    return Ok(TableProviderFilterPushDown::Exact);
+                }
+
+                Ok(TableProviderFilterPushDown::Inexact)
             })
-            .collect();
-        Ok(support)
+            .collect()
     }
 
     fn get_table_definition(&self) -> Option<&str> {
@@ -858,16 +949,28 @@ impl TableProvider for ListingTable {
         &self,
         state: &dyn Session,
         input: Arc<dyn ExecutionPlan>,
-        overwrite: bool,
+        insert_op: InsertOp,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         // Check that the schema of the plan matches the schema of this table.
         if !self
             .schema()
             .logically_equivalent_names_and_types(&input.schema())
         {
+            // Return an error if schema of the input query does not match with the table schema.
             return plan_err!(
-                // Return an error if schema of the input query does not match with the table schema.
-                "Inserting query must have the same schema with the table."
+                "Inserting query must have the same schema with the table. \
+                Expected: {:?}, got: {:?}",
+                self.schema()
+                    .fields()
+                    .iter()
+                    .map(|field| field.data_type())
+                    .collect::<Vec<_>>(),
+                input
+                    .schema()
+                    .fields()
+                    .iter()
+                    .map(|field| field.data_type())
+                    .collect::<Vec<_>>()
             );
         }
 
@@ -905,12 +1008,11 @@ impl TableProvider for ListingTable {
             file_groups,
             output_schema: self.schema(),
             table_partition_cols: self.options.table_partition_cols.clone(),
-            overwrite,
+            insert_op,
             keep_partition_by_columns,
         };
 
-        let unsorted: Vec<Vec<Expr>> = vec![];
-        let order_requirements = if self.options().file_sort_order != unsorted {
+        let order_requirements = if !self.options().file_sort_order.is_empty() {
             // Multiple sort orders in outer vec are equivalent, so we pass only the first one
             let ordering = self
                 .try_create_output_ordering()?
@@ -920,12 +1022,12 @@ impl TableProvider for ListingTable {
                 ))?
                 .clone();
             // Converts Vec<Vec<SortExpr>> into type required by execution plan to specify its required input ordering
-            Some(
+            Some(LexRequirement::new(
                 ordering
                     .into_iter()
                     .map(PhysicalSortRequirement::from)
                     .collect::<Vec<_>>(),
-            )
+            ))
         } else {
             None
         };
@@ -1160,11 +1262,6 @@ mod tests {
         // (file_sort_order, expected_result)
         let cases = vec![
             (vec![], Ok(vec![])),
-            // not a sort expr
-            (
-                vec![vec![col("string_col")]],
-                Err("Expected Expr::Sort in output_ordering, but got string_col"),
-            ),
             // sort expr, but non column
             (
                 vec![vec![
@@ -1190,20 +1287,13 @@ mod tests {
                     col("int_col").sort(false, true),
                 ]],
                 Ok(vec![vec![
-                    PhysicalSortExpr {
-                        expr: physical_col("string_col", &schema).unwrap(),
-                        options: SortOptions {
-                            descending: false,
-                            nulls_first: false,
-                        },
-                    },
-                    PhysicalSortExpr {
-                        expr: physical_col("int_col", &schema).unwrap(),
-                        options: SortOptions {
-                            descending: true,
-                            nulls_first: true,
-                        },
-                    },
+                    PhysicalSortExpr::new_default(physical_col("string_col", &schema).unwrap())
+                    .asc()
+                    .nulls_last(),
+
+                    PhysicalSortExpr::new_default(physical_col("int_col", &schema).unwrap())
+                    .desc()
+                    .nulls_first()
                 ]])
             ),
         ];
@@ -1293,6 +1383,7 @@ mod tests {
             "test:///bucket/key-prefix/",
             12,
             5,
+            Some(""),
         )
         .await?;
 
@@ -1307,6 +1398,7 @@ mod tests {
             "test:///bucket/key-prefix/",
             4,
             4,
+            Some(""),
         )
         .await?;
 
@@ -1322,12 +1414,19 @@ mod tests {
             "test:///bucket/key-prefix/",
             2,
             2,
+            Some(""),
         )
         .await?;
 
         // no files => no groups
-        assert_list_files_for_scan_grouping(&[], "test:///bucket/key-prefix/", 2, 0)
-            .await?;
+        assert_list_files_for_scan_grouping(
+            &[],
+            "test:///bucket/key-prefix/",
+            2,
+            0,
+            Some(""),
+        )
+        .await?;
 
         // files that don't match the prefix
         assert_list_files_for_scan_grouping(
@@ -1339,6 +1438,21 @@ mod tests {
             "test:///bucket/key-prefix/",
             10,
             2,
+            Some(""),
+        )
+        .await?;
+
+        // files that don't match the prefix or the default file extention
+        assert_list_files_for_scan_grouping(
+            &[
+                "bucket/key-prefix/file0.avro",
+                "bucket/key-prefix/file1.parquet",
+                "bucket/other-prefix/roguefile.avro",
+            ],
+            "test:///bucket/key-prefix/",
+            10,
+            1,
+            None,
         )
         .await?;
         Ok(())
@@ -1359,6 +1473,7 @@ mod tests {
             &["test:///bucket/key1/", "test:///bucket/key2/"],
             12,
             5,
+            Some(""),
         )
         .await?;
 
@@ -1375,6 +1490,7 @@ mod tests {
             &["test:///bucket/key1/", "test:///bucket/key2/"],
             5,
             5,
+            Some(""),
         )
         .await?;
 
@@ -1391,11 +1507,13 @@ mod tests {
             &["test:///bucket/key1/"],
             2,
             2,
+            Some(""),
         )
         .await?;
 
         // no files => no groups
-        assert_list_files_for_multi_paths(&[], &["test:///bucket/key1/"], 2, 0).await?;
+        assert_list_files_for_multi_paths(&[], &["test:///bucket/key1/"], 2, 0, Some(""))
+            .await?;
 
         // files that don't match the prefix
         assert_list_files_for_multi_paths(
@@ -1410,6 +1528,24 @@ mod tests {
             &["test:///bucket/key3/"],
             2,
             1,
+            Some(""),
+        )
+        .await?;
+
+        // files that don't match the prefix or the default file ext
+        assert_list_files_for_multi_paths(
+            &[
+                "bucket/key1/file0.avro",
+                "bucket/key1/file1.csv",
+                "bucket/key1/file2.avro",
+                "bucket/key2/file3.csv",
+                "bucket/key2/file4.avro",
+                "bucket/key3/file5.csv",
+            ],
+            &["test:///bucket/key1/", "test:///bucket/key3/"],
+            2,
+            2,
+            None,
         )
         .await?;
         Ok(())
@@ -1437,6 +1573,7 @@ mod tests {
         table_prefix: &str,
         target_partitions: usize,
         output_partitioning: usize,
+        file_ext: Option<&str>,
     ) -> Result<()> {
         let ctx = SessionContext::new();
         register_test_store(&ctx, &files.iter().map(|f| (*f, 10)).collect::<Vec<_>>());
@@ -1444,7 +1581,7 @@ mod tests {
         let format = AvroFormat {};
 
         let opt = ListingOptions::new(Arc::new(format))
-            .with_file_extension("")
+            .with_file_extension_opt(file_ext)
             .with_target_partitions(target_partitions);
 
         let schema = Schema::new(vec![Field::new("a", DataType::Boolean, false)]);
@@ -1470,6 +1607,7 @@ mod tests {
         table_prefix: &[&str],
         target_partitions: usize,
         output_partitioning: usize,
+        file_ext: Option<&str>,
     ) -> Result<()> {
         let ctx = SessionContext::new();
         register_test_store(&ctx, &files.iter().map(|f| (*f, 10)).collect::<Vec<_>>());
@@ -1477,7 +1615,7 @@ mod tests {
         let format = AvroFormat {};
 
         let opt = ListingOptions::new(Arc::new(format))
-            .with_file_extension("")
+            .with_file_extension_opt(file_ext)
             .with_target_partitions(target_partitions);
 
         let schema = Schema::new(vec![Field::new("a", DataType::Boolean, false)]);
@@ -1625,7 +1763,7 @@ mod tests {
             "100".into(),
         );
         config_map.insert(
-            "datafusion.execution.parquet.staistics_enabled".into(),
+            "datafusion.execution.parquet.statistics_enabled".into(),
             "none".into(),
         );
         config_map.insert(
@@ -1699,7 +1837,7 @@ mod tests {
             "100".into(),
         );
         config_map.insert(
-            "datafusion.execution.parquet.staistics_enabled".into(),
+            "datafusion.execution.parquet.statistics_enabled".into(),
             "none".into(),
         );
         config_map.insert(
@@ -1787,7 +1925,7 @@ mod tests {
         // Create the initial context, schema, and batch.
         let session_ctx = match session_config_map {
             Some(cfg) => {
-                let config = SessionConfig::from_string_hash_map(cfg)?;
+                let config = SessionConfig::from_string_hash_map(&cfg)?;
                 SessionContext::new_with_config(config)
             }
             None => SessionContext::new(),
@@ -1885,7 +2023,8 @@ mod tests {
         // Therefore, we will have 8 partitions in the final plan.
         // Create an insert plan to insert the source data into the initial table
         let insert_into_table =
-            LogicalPlanBuilder::insert_into(scan_plan, "t", &schema, false)?.build()?;
+            LogicalPlanBuilder::insert_into(scan_plan, "t", &schema, InsertOp::Append)?
+                .build()?;
         // Create a physical plan from the insert plan
         let plan = session_ctx
             .state()
@@ -1985,7 +2124,7 @@ mod tests {
         // Create the initial context
         let session_ctx = match session_config_map {
             Some(cfg) => {
-                let config = SessionConfig::from_string_hash_map(cfg)?;
+                let config = SessionConfig::from_string_hash_map(&cfg)?;
                 SessionContext::new_with_config(config)
             }
             None => SessionContext::new(),

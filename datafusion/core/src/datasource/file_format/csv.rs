@@ -46,6 +46,7 @@ use datafusion_common::{
     exec_err, not_impl_err, DataFusionError, GetExt, DEFAULT_CSV_EXTENSION,
 };
 use datafusion_execution::TaskContext;
+use datafusion_expr::dml::InsertOp;
 use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_plan::metrics::MetricsSet;
 
@@ -247,6 +248,13 @@ impl CsvFormat {
         self
     }
 
+    /// The character used to indicate the end of a row.
+    /// - default to None (CRLF)
+    pub fn with_terminator(mut self, terminator: Option<u8>) -> Self {
+        self.options.terminator = terminator;
+        self
+    }
+
     /// Specifies whether newlines in (quoted) values are supported.
     ///
     /// Parsing newlines in quoted values may be affected by execution behaviour such as
@@ -359,6 +367,7 @@ impl FileFormat for CsvFormat {
             .with_has_header(has_header)
             .with_delimeter(self.options.delimiter)
             .with_quote(self.options.quote)
+            .with_terminator(self.options.terminator)
             .with_escape(self.options.escape)
             .with_comment(self.options.comment)
             .with_newlines_in_values(newlines_in_values)
@@ -374,7 +383,7 @@ impl FileFormat for CsvFormat {
         conf: FileSinkConfig,
         order_requirements: Option<LexRequirement>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        if conf.overwrite {
+        if conf.insert_op != InsertOp::Append {
             return not_impl_err!("Overwrites are not implemented yet for CSV");
         }
 
@@ -762,7 +771,7 @@ mod tests {
                 "c7: Int64",
                 "c8: Int64",
                 "c9: Int64",
-                "c10: Int64",
+                "c10: Utf8",
                 "c11: Float64",
                 "c12: Float64",
                 "c13: Utf8"
@@ -898,7 +907,7 @@ mod tests {
             Field::new("c7", DataType::Int64, true),
             Field::new("c8", DataType::Int64, true),
             Field::new("c9", DataType::Int64, true),
-            Field::new("c10", DataType::Int64, true),
+            Field::new("c10", DataType::Utf8, true),
             Field::new("c11", DataType::Float64, true),
             Field::new("c12", DataType::Float64, true),
             Field::new("c13", DataType::Utf8, true),

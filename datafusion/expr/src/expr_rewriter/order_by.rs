@@ -17,9 +17,9 @@
 
 //! Rewrite for order by expressions
 
-use crate::expr::{Alias, Sort};
+use crate::expr::Alias;
 use crate::expr_rewriter::normalize_col;
-use crate::{Cast, Expr, ExprSchemable, LogicalPlan, TryCast};
+use crate::{expr::Sort, Cast, Expr, LogicalPlan, TryCast};
 
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{Column, Result};
@@ -27,28 +27,18 @@ use datafusion_common::{Column, Result};
 /// Rewrite sort on aggregate expressions to sort on the column of aggregate output
 /// For example, `max(x)` is written to `col("max(x)")`
 pub fn rewrite_sort_cols_by_aggs(
-    exprs: impl IntoIterator<Item = impl Into<Expr>>,
+    sorts: impl IntoIterator<Item = impl Into<Sort>>,
     plan: &LogicalPlan,
-) -> Result<Vec<Expr>> {
-    exprs
+) -> Result<Vec<Sort>> {
+    sorts
         .into_iter()
         .map(|e| {
-            let expr = e.into();
-            match expr {
-                Expr::Sort(Sort {
-                    expr,
-                    asc,
-                    nulls_first,
-                }) => {
-                    let sort = Expr::Sort(Sort::new(
-                        Box::new(rewrite_sort_col_by_aggs(*expr, plan)?),
-                        asc,
-                        nulls_first,
-                    ));
-                    Ok(sort)
-                }
-                expr => Ok(expr),
-            }
+            let sort = e.into();
+            Ok(Sort::new(
+                rewrite_sort_col_by_aggs(sort.expr, plan)?,
+                sort.asc,
+                sort.nulls_first,
+            ))
         })
         .collect()
 }
@@ -87,11 +77,8 @@ fn rewrite_in_terms_of_projection(
     expr.transform(|expr| {
         // search for unnormalized names first such as "c1" (such as aliases)
         if let Some(found) = proj_exprs.iter().find(|a| (**a) == expr) {
-            let col = Expr::Column(
-                found
-                    .to_field(input.schema())
-                    .map(|(qualifier, field)| Column::new(qualifier, field.name()))?,
-            );
+            let (qualifier, field_name) = found.qualified_name();
+            let col = Expr::Column(Column::new(qualifier, field_name));
             return Ok(Transformed::yes(col));
         }
 
@@ -289,8 +276,8 @@ mod test {
 
     struct TestCase {
         desc: &'static str,
-        input: Expr,
-        expected: Expr,
+        input: Sort,
+        expected: Sort,
     }
 
     impl TestCase {
@@ -332,7 +319,7 @@ mod test {
         .unwrap()
     }
 
-    fn sort(expr: Expr) -> Expr {
+    fn sort(expr: Expr) -> Sort {
         let asc = true;
         let nulls_first = true;
         expr.sort(asc, nulls_first)
