@@ -289,7 +289,7 @@ macro_rules! join_expr_tests {
                     ScalarValue::$SCALAR(Some(10 as $type)),
                     (Operator::Gt, Operator::Lt),
                 ),
-                // left_col - 1 > right_col + 5 AND left_col + 3 < right_col + 10
+                // left_col - 1 > right_col + 3 AND left_col + 3 < right_col + 15
                 1 => gen_conjunctive_numerical_expr(
                     left_col,
                     right_col,
@@ -300,9 +300,9 @@ macro_rules! join_expr_tests {
                         Operator::Plus,
                     ),
                     ScalarValue::$SCALAR(Some(1 as $type)),
-                    ScalarValue::$SCALAR(Some(5 as $type)),
                     ScalarValue::$SCALAR(Some(3 as $type)),
-                    ScalarValue::$SCALAR(Some(10 as $type)),
+                    ScalarValue::$SCALAR(Some(3 as $type)),
+                    ScalarValue::$SCALAR(Some(15 as $type)),
                     (Operator::Gt, Operator::Lt),
                 ),
                 // left_col - 1 > right_col + 5 AND left_col - 3 < right_col + 10
@@ -353,7 +353,8 @@ macro_rules! join_expr_tests {
                     ScalarValue::$SCALAR(Some(3 as $type)),
                     (Operator::Gt, Operator::Lt),
                 ),
-                // left_col - 2 >= right_col - 5 AND left_col - 7 <= right_col - 3
+                // left_col - 2 >= right_col + 5 AND left_col + 7 <= right_col - 3
+                // (filters all input rows)
                 5 => gen_conjunctive_numerical_expr(
                     left_col,
                     right_col,
@@ -369,7 +370,7 @@ macro_rules! join_expr_tests {
                     ScalarValue::$SCALAR(Some(3 as $type)),
                     (Operator::GtEq, Operator::LtEq),
                 ),
-                // left_col - 28 >= right_col - 11 AND left_col - 21 <= right_col - 39
+                // left_col + 28 >= right_col - 11 AND left_col + 21 <= right_col + 39
                 6 => gen_conjunctive_numerical_expr(
                     left_col,
                     right_col,
@@ -385,7 +386,7 @@ macro_rules! join_expr_tests {
                     ScalarValue::$SCALAR(Some(39 as $type)),
                     (Operator::Gt, Operator::LtEq),
                 ),
-                // left_col - 28 >= right_col - 11 AND left_col - 21 <= right_col + 39
+                // left_col + 28 >= right_col - 11 AND left_col - 21 <= right_col + 39
                 7 => gen_conjunctive_numerical_expr(
                     left_col,
                     right_col,
