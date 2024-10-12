@@ -327,15 +327,15 @@ macro_rules! create_array {
 ///
 /// Example:
 /// ```
-/// use datafusion_common::{create_batch, create_array};
-/// let batch = create_batch!(
+/// use datafusion_common::{record_batch, create_array};
+/// let batch = record_batch!(
 ///     ("a", Int32, vec![1, 2, 3]),
 ///     ("b", Float64, vec![Some(4.0), None, Some(5.0)]),
 ///     ("c", Utf8, vec!["alpha", "beta", "gamma"])
 /// );
 /// ```
 #[macro_export]
-macro_rules! create_batch {
+macro_rules! record_batch {
     ($(($name: expr, $type: ident, $values: expr)),*) => {
         {
             let schema = std::sync::Arc::new(arrow_schema::Schema::new(vec![
@@ -358,6 +358,9 @@ macro_rules! create_batch {
 
 #[cfg(test)]
 mod tests {
+    use crate::cast::{as_float64_array, as_int32_array, as_string_array};
+    use crate::error::Result;
+
     use super::*;
     use std::env;
 
@@ -412,13 +415,42 @@ mod tests {
     }
 
     #[test]
-    fn test_create_record_batch() {
-        let batch = create_batch!(
-            ("a", Int32, vec![1, 2, 3]),
-            ("b", Float64, vec![Some(4.0), None, Some(5.0)]),
-            ("c", Utf8, vec!["alpha", "beta", "gamma"])
-        );
+    fn test_create_record_batch() -> Result<()> {
+        use arrow_array::Array;
 
-        assert!(batch.is_ok());
+        let batch = record_batch!(
+            ("a", Int32, vec![1, 2, 3, 4]),
+            ("b", Float64, vec![Some(4.0), None, Some(5.0), None]),
+            ("c", Utf8, vec!["alpha", "beta", "gamma", "delta"])
+        )?;
+
+        assert_eq!(3, batch.num_columns());
+        assert_eq!(4, batch.num_rows());
+
+        let values: Vec<_> = as_int32_array(batch.column(0))?
+            .values()
+            .iter()
+            .map(|v| v.to_owned())
+            .collect();
+        assert_eq!(values, vec![1, 2, 3, 4]);
+
+        let values: Vec<_> = as_float64_array(batch.column(1))?
+            .values()
+            .iter()
+            .map(|v| v.to_owned())
+            .collect();
+        assert_eq!(values, vec![4.0, 0.0, 5.0, 0.0]);
+
+        let nulls: Vec<_> = as_float64_array(batch.column(1))?
+            .nulls()
+            .unwrap()
+            .iter()
+            .collect();
+        assert_eq!(nulls, vec![true, false, true, false]);
+
+        let values: Vec<_> = as_string_array(batch.column(2))?.iter().flatten().collect();
+        assert_eq!(values, vec!["alpha", "beta", "gamma", "delta"]);
+
+        Ok(())
     }
 }
