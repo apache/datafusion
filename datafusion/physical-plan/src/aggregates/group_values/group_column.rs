@@ -947,4 +947,152 @@ mod tests {
         assert!(!builder.equal_to(4, &input_array, 4));
         assert!(builder.equal_to(5, &input_array, 5));
     }
+
+    #[test]
+    fn test_byte_view_append_val() {
+        let mut builder =
+            ByteViewGroupValueBuilder::<StringViewType>::new().with_max_block_size(60);
+        let builder_array = StringViewArray::from(vec![
+            Some("this string is quite long"), // in buffer 0
+            Some("foo"),
+            None,
+            Some("bar"),
+            Some("this string is also quite long"), // buffer 0
+            Some("this string is quite long"),      // buffer 1
+            Some("bar"),
+        ]);
+        let builder_array: ArrayRef = Arc::new(builder_array);
+        for row in 0..builder_array.len() {
+            builder.append_val(&builder_array, row);
+        }
+
+        let output = Box::new(builder).build();
+        // should be 2 output buffers to hold all the data
+        assert_eq!(output.as_string_view().data_buffers().len(), 2,);
+        assert_eq!(&output, &builder_array)
+    }
+
+    #[test]
+    fn test_byte_view_equal_to() {
+        // Will cover such cases:
+        //   - exist null, input not null
+        //   - exist null, input null; values not equal
+        //   - exist null, input null; values equal
+        //   - exist not null, input null
+        //   - exist not null, input not null; values not equal
+        //   - exist not null, input not null; values equal
+
+        let mut builder = ByteViewGroupValueBuilder::<StringViewType>::new();
+        let builder_array = Arc::new(StringViewArray::from(vec![
+            None,
+            None,
+            None,
+            Some("foo"),
+            Some("bar"),
+            Some("this string is quite long"),
+            Some("baz"),
+        ])) as ArrayRef;
+        builder.append_val(&builder_array, 0);
+        builder.append_val(&builder_array, 1);
+        builder.append_val(&builder_array, 2);
+        builder.append_val(&builder_array, 3);
+        builder.append_val(&builder_array, 4);
+        builder.append_val(&builder_array, 5);
+        builder.append_val(&builder_array, 6);
+
+        // Define input array
+        let (views, buffer, _nulls) = StringViewArray::from(vec![
+            Some("foo"),
+            Some("bar"),                       // set to null
+            Some("this string is quite long"), // set to null
+            None,
+            None,
+            Some("foo"),
+            Some("baz"),
+        ])
+        .into_parts();
+
+        // explicitly build a boolean buffer where one of the null values also happens to match
+        let mut boolean_buffer_builder = BooleanBufferBuilder::new(6);
+        boolean_buffer_builder.append(true);
+        boolean_buffer_builder.append(false); // this sets Some("bar") to null above
+        boolean_buffer_builder.append(false); // this sets Some("thisstringisquitelong") to null above
+        boolean_buffer_builder.append(false);
+        boolean_buffer_builder.append(false);
+        boolean_buffer_builder.append(true);
+        boolean_buffer_builder.append(true);
+        let nulls = NullBuffer::new(boolean_buffer_builder.finish());
+        let input_array =
+            Arc::new(StringViewArray::new(views, buffer, Some(nulls))) as ArrayRef;
+
+        // Check
+        assert!(!builder.equal_to(0, &input_array, 0));
+        assert!(builder.equal_to(1, &input_array, 1));
+        assert!(builder.equal_to(2, &input_array, 2));
+        assert!(!builder.equal_to(3, &input_array, 3));
+        assert!(!builder.equal_to(4, &input_array, 4));
+        assert!(!builder.equal_to(5, &input_array, 5));
+        assert!(builder.equal_to(6, &input_array, 6));
+    }
+
+    #[test]
+    fn test_byte_view_take_n() {
+        let mut builder =
+            ByteViewGroupValueBuilder::<StringViewType>::new().with_max_block_size(60);
+        let input_array = StringViewArray::from(vec![
+            Some("this string is quite long"), // in buffer 0
+            Some("foo"),
+            Some("bar"),
+            Some("this string is also quite long"), // buffer 0
+            None,
+            Some("this string is quite long"), // buffer 1
+            None,
+            Some("another string that is is quite long"), // buffer 1
+            Some("bar"),
+        ]);
+        let input_array: ArrayRef = Arc::new(input_array);
+        for row in 0..input_array.len() {
+            builder.append_val(&input_array, row);
+        }
+
+        // should be 2 completed, one in progress buffer to hold all output
+        assert_eq!(builder.completed.len(), 2);
+        assert!(builder.in_progress.len() > 0);
+
+        let first_4 = builder.take_n(4);
+        println!(
+            "{}",
+            arrow::util::pretty::pretty_format_columns("first_4", &[first_4.clone()])
+                .unwrap()
+        );
+        assert_eq!(&first_4, &input_array.slice(0, 4));
+
+        // Add some new data after the first n
+        let input_array = StringViewArray::from(vec![
+            Some("short"),
+            None,
+            Some("Some new data to add that is long"), // in buffer 0
+            Some("short again"),
+        ]);
+        let input_array: ArrayRef = Arc::new(input_array);
+        for row in 0..input_array.len() {
+            builder.append_val(&input_array, row);
+        }
+
+        let result = Box::new(builder).build();
+        let expected: ArrayRef = Arc::new(StringViewArray::from(vec![
+            // last rows of the original input
+            None,
+            Some("this string is quite long"),
+            None,
+            Some("another string that is is quite long"),
+            Some("bar"),
+            // the subsequent input
+            Some("short"),
+            None,
+            Some("Some new data to add that is long"), // in buffer 0
+            Some("short again"),
+        ]));
+        assert_eq!(&result, &expected);
+    }
 }
