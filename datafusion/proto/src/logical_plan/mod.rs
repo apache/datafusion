@@ -579,6 +579,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                             .clone(),
                         order_exprs,
                         if_not_exists: create_extern_table.if_not_exists,
+                        temporary: create_extern_table.temporary,
                         definition,
                         unbounded: create_extern_table.unbounded,
                         options: create_extern_table.options.clone(),
@@ -601,6 +602,7 @@ impl AsLogicalPlan for LogicalPlanNode {
 
                 Ok(LogicalPlan::Ddl(DdlStatement::CreateView(CreateView {
                     name: from_table_reference(create_view.name.as_ref(), "CreateView")?,
+                    temporary: false,
                     input: Arc::new(plan),
                     or_replace: create_view.or_replace,
                     definition,
@@ -1386,6 +1388,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     options,
                     constraints,
                     column_defaults,
+                    temporary,
                 },
             )) => {
                 let mut converted_order_exprs: Vec<SortExprNodeCollection> = vec![];
@@ -1412,6 +1415,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                             schema: Some(df_schema.try_into()?),
                             table_partition_cols: table_partition_cols.clone(),
                             if_not_exists: *if_not_exists,
+                            temporary: *temporary,
                             order_exprs: converted_order_exprs,
                             definition: definition.clone().unwrap_or_default(),
                             unbounded: *unbounded,
@@ -1427,6 +1431,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                 input,
                 or_replace,
                 definition,
+                temporary,
             })) => Ok(protobuf::LogicalPlanNode {
                 logical_plan_type: Some(LogicalPlanType::CreateView(Box::new(
                     protobuf::CreateViewNode {
@@ -1436,6 +1441,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                             extension_codec,
                         )?)),
                         or_replace: *or_replace,
+                        temporary: *temporary,
                         definition: definition.clone().unwrap_or_default(),
                     },
                 ))),
