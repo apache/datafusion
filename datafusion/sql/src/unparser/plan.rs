@@ -496,6 +496,11 @@ impl Unparser<'_> {
                     plan,
                     Some(plan_alias.alias.clone()),
                 )?;
+                if !select.already_projected() {
+                    select.projection(vec![ast::SelectItem::Wildcard(
+                        ast::WildcardAdditionalOptions::default(),
+                    )]);
+                }
                 if !columns.is_empty()
                     && !self.dialect.supports_column_alias_in_table_alias()
                 {

@@ -667,6 +667,48 @@ where
 }
 
 #[test]
+fn test_table_scan_alias() -> Result<()> {
+    let schema = Schema::new(vec![
+        Field::new("id", DataType::Utf8, false),
+        Field::new("age", DataType::Utf8, false),
+    ]);
+
+    let plan = table_scan(Some("t1"), &schema, None)?
+        .project(vec![col("id")])?
+        .alias("a")?
+        .build()?;
+    let sql = plan_to_sql(&plan)?;
+    assert_eq!(
+        format!("{}", sql),
+        "SELECT * FROM (SELECT t1.id FROM t1) AS a"
+    );
+
+    let plan = table_scan(Some("t1"), &schema, None)?
+        .project(vec![col("id")])?
+        .alias("a")?
+        .build()?;
+
+    let sql = plan_to_sql(&plan)?;
+    assert_eq!(
+        format!("{}", sql),
+        "SELECT * FROM (SELECT t1.id FROM t1) AS a"
+    );
+
+    let plan = table_scan(Some("t1"), &schema, None)?
+        .filter(col("id").gt(lit(5)))?
+        .project(vec![col("id")])?
+        .alias("a")?
+        .build()?;
+    println!("{}", plan.display_indent());
+    let sql = plan_to_sql(&plan)?;
+    assert_eq!(
+        format!("{}", sql),
+        "SELECT * FROM (SELECT t1.id FROM t1 WHERE (t1.id > 5)) AS a"
+    );
+    Ok(())
+}
+
+#[test]
 fn test_table_scan_pushdown() -> Result<()> {
     let schema = Schema::new(vec![
         Field::new("id", DataType::Utf8, false),
