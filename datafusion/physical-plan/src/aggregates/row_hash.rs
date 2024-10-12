@@ -892,7 +892,7 @@ impl GroupedHashAggregateStream {
                 + self.current_group_indices.allocated_size(),
         );
 
-        if let Ok(_) = reservation_result {
+        if reservation_result.is_ok() {
             self.spill_state
                 .peak_mem_used
                 .set_max(self.reservation.size());
