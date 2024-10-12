@@ -589,12 +589,13 @@ mod tests {
 
     #[test]
     fn test_lag_with_default() -> Result<()> {
-        let first = Arc::new(Column::new("c3", 0)) as Arc<dyn PhysicalExpr>;
-        let second =
+        let expr = Arc::new(Column::new("c3", 0)) as Arc<dyn PhysicalExpr>;
+        let shift_offset =
             Arc::new(Literal::new(ScalarValue::Int32(Some(1)))) as Arc<dyn PhysicalExpr>;
-        let third = Arc::new(Literal::new(ScalarValue::Int32(Some(100))))
+        let default_value = Arc::new(Literal::new(ScalarValue::Int32(Some(100))))
             as Arc<dyn PhysicalExpr>;
-        let input_exprs = &[first, second, third];
+
+        let input_exprs = &[expr, shift_offset, default_value];
         let input_types: &[DataType] =
             &[DataType::Int32, DataType::Int32, DataType::Int32];
 
