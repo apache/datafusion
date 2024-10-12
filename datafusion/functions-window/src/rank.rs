@@ -43,19 +43,19 @@ define_udwf_and_expr!(
     Rank::basic
 );
 
-// define_udwf_and_expr!(
-//     Rank,
-//     dense_rank,
-//     "Returns rank of the current row without gaps. This function counts peer groups",
-//     Rank::dense_rank
-// );
+define_udwf_and_expr!(
+    DenseRank,
+    dense_rank,
+    "Returns rank of the current row without gaps. This function counts peer groups",
+    Rank::dense_rank
+);
 
-// define_udwf_and_expr!(
-//     Rank,
-//     percent_rank,
-//     "Returns the relative rank of the current row: (rank - 1) / (total rows - 1)",
-//     Rank::percent_rank
-// );
+define_udwf_and_expr!(
+    PercentRank,
+    percent_rank,
+    "Returns the relative rank of the current row: (rank - 1) / (total rows - 1)",
+    Rank::percent_rank
+);
 
 /// rank expression
 #[derive(Debug)]
@@ -69,11 +69,17 @@ pub struct Rank {
 
 impl Rank {
     pub fn new(name: String, rank_type: RankType) -> Self {
+        let data_type = if matches!(rank_type, RankType::Percent) {
+            DataType::Float64
+        } else {
+            DataType::UInt64
+        };
+
         Self {
             name,
             signature: Signature::any(0, Volatility::Immutable),
             rank_type,
-            data_type: DataType::UInt64,
+            data_type,
         }
     }
 
