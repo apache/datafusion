@@ -40,12 +40,6 @@ impl fmt::Display for BuiltInWindowFunction {
 /// [window function]: https://en.wikipedia.org/wiki/Window_function_(SQL)
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash, EnumIter)]
 pub enum BuiltInWindowFunction {
-    /// rank of the current row with gaps; same as row_number of its first peer
-    Rank,
-    /// rank of the current row without gaps; this function counts peer groups
-    DenseRank,
-    /// relative rank of the current row: (rank - 1) / (total rows - 1)
-    PercentRank,
     /// relative rank of the current row: (number of rows preceding or peer with current row) / (total rows)
     CumeDist,
     /// returns value evaluated at the row that is offset rows before the current row within the partition;
@@ -70,9 +64,6 @@ impl BuiltInWindowFunction {
     pub fn name(&self) -> &str {
         use BuiltInWindowFunction::*;
         match self {
-            Rank => "RANK",
-            DenseRank => "DENSE_RANK",
-            PercentRank => "PERCENT_RANK",
             CumeDist => "CUME_DIST",
             Lag => "LAG",
             Lead => "LEAD",
@@ -87,9 +78,6 @@ impl FromStr for BuiltInWindowFunction {
     type Err = DataFusionError;
     fn from_str(name: &str) -> Result<BuiltInWindowFunction> {
         Ok(match name.to_uppercase().as_str() {
-            "RANK" => BuiltInWindowFunction::Rank,
-            "DENSE_RANK" => BuiltInWindowFunction::DenseRank,
-            "PERCENT_RANK" => BuiltInWindowFunction::PercentRank,
             "CUME_DIST" => BuiltInWindowFunction::CumeDist,
             "LAG" => BuiltInWindowFunction::Lag,
             "LEAD" => BuiltInWindowFunction::Lead,
@@ -123,11 +111,7 @@ impl BuiltInWindowFunction {
             })?;
 
         match self {
-            BuiltInWindowFunction::Rank
-            | BuiltInWindowFunction::DenseRank => Ok(DataType::UInt64),
-            BuiltInWindowFunction::PercentRank | BuiltInWindowFunction::CumeDist => {
-                Ok(DataType::Float64)
-            }
+            BuiltInWindowFunction::CumeDist => Ok(DataType::Float64),
             BuiltInWindowFunction::Lag
             | BuiltInWindowFunction::Lead
             | BuiltInWindowFunction::FirstValue
@@ -140,10 +124,7 @@ impl BuiltInWindowFunction {
     pub fn signature(&self) -> Signature {
         // note: the physical expression must accept the type returned by this function or the execution panics.
         match self {
-            BuiltInWindowFunction::Rank
-            | BuiltInWindowFunction::DenseRank
-            | BuiltInWindowFunction::PercentRank
-            | BuiltInWindowFunction::CumeDist => Signature::any(0, Volatility::Immutable),
+            BuiltInWindowFunction::CumeDist => Signature::any(0, Volatility::Immutable),
             BuiltInWindowFunction::Lag | BuiltInWindowFunction::Lead => {
                 Signature::one_of(
                     vec![

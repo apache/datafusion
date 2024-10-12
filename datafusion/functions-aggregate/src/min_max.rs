@@ -17,21 +17,6 @@
 //! [`Max`] and [`MaxAccumulator`] accumulator for the `max` function
 //! [`Min`] and [`MinAccumulator`] accumulator for the `min` function
 
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
-
 use arrow::array::{
     ArrayRef, BinaryArray, BinaryViewArray, BooleanArray, Date32Array, Date64Array,
     Decimal128Array, Decimal256Array, Float16Array, Float32Array, Float64Array,
@@ -53,6 +38,7 @@ use datafusion_common::stats::Precision;
 use datafusion_common::{
     downcast_value, exec_err, internal_err, ColumnStatistics, DataFusionError, Result,
 };
+use datafusion_expr::aggregate_doc_sections::DOC_SECTION_GENERAL;
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::prim_op::PrimitiveGroupsAccumulator;
 use datafusion_physical_expr::expressions;
 use std::fmt::Debug;
@@ -66,11 +52,13 @@ use arrow::datatypes::{
 
 use datafusion_common::ScalarValue;
 use datafusion_expr::{
-    function::AccumulatorArgs, Accumulator, AggregateUDFImpl, Signature, Volatility,
+    function::AccumulatorArgs, Accumulator, AggregateUDFImpl, Documentation, Signature,
+    Volatility,
 };
 use datafusion_expr::{GroupsAccumulator, StatisticsArgs};
 use half::f16;
 use std::ops::Deref;
+use std::sync::OnceLock;
 
 fn get_min_max_result_type(input_types: &[DataType]) -> Result<Vec<DataType>> {
     // make sure that the input types only has one element.
@@ -336,6 +324,35 @@ impl AggregateUDFImpl for Max {
     fn value_from_stats(&self, statistics_args: &StatisticsArgs) -> Option<ScalarValue> {
         self.value_from_statistics(statistics_args)
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_max_doc())
+    }
+}
+
+static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+
+fn get_max_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_GENERAL)
+            .with_description(
+                "Returns the maximum value in the specified column.",
+            )
+            .with_syntax_example("max(expression)")
+            .with_sql_example(r#"```sql
+> SELECT max(column_name) FROM table_name;
++----------------------+
+| max(column_name)      |
++----------------------+
+| 150                  |
++----------------------+
+```"#, 
+            )
+            .with_argument("expression", "Expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators.")
+            .build()
+            .unwrap()
+    })
 }
 
 // Statically-typed version of min/max(array) -> ScalarValue for string types
@@ -1134,7 +1151,35 @@ impl AggregateUDFImpl for Min {
     fn reverse_expr(&self) -> datafusion_expr::ReversedUDAF {
         datafusion_expr::ReversedUDAF::Identical
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_min_doc())
+    }
 }
+
+fn get_min_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_GENERAL)
+            .with_description(
+                "Returns the minimum value in the specified column.",
+            )
+            .with_syntax_example("min(expression)")
+            .with_sql_example(r#"```sql
+> SELECT min(column_name) FROM table_name;
++----------------------+
+| min(column_name)      |
++----------------------+
+| 12                   |
++----------------------+
+```"#, 
+            )
+            .with_argument("expression", "Expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators.")
+            .build()
+            .unwrap()
+    })
+}
+
 /// An accumulator to compute the minimum value
 #[derive(Debug)]
 pub struct MinAccumulator {
@@ -1240,26 +1285,24 @@ impl Accumulator for SlidingMinAccumulator {
     }
 }
 
-//
-// Moving min and moving max
-// The implementation is taken from https://github.com/spebern/moving_min_max/blob/master/src/lib.rs.
-
-// Keep track of the minimum or maximum value in a sliding window.
-//
-// `moving min max` provides one data structure for keeping track of the
-// minimum value and one for keeping track of the maximum value in a sliding
-// window.
-//
-// Each element is stored with the current min/max. One stack to push and another one for pop. If pop stack is empty,
-// push to this stack all elements popped from first stack while updating their current min/max. Now pop from
-// the second stack (MovingMin/Max struct works as a queue). To find the minimum element of the queue,
-// look at the smallest/largest two elements of the individual stacks, then take the minimum of those two values.
-//
-// The complexity of the operations are
-// - O(1) for getting the minimum/maximum
-// - O(1) for push
-// - amortized O(1) for pop
-
+/// Keep track of the minimum value in a sliding window.
+///
+/// The implementation is taken from <https://github.com/spebern/moving_min_max/blob/master/src/lib.rs>
+///
+/// `moving min max` provides one data structure for keeping track of the
+/// minimum value and one for keeping track of the maximum value in a sliding
+/// window.
+///
+/// Each element is stored with the current min/max. One stack to push and another one for pop. If pop stack is empty,
+/// push to this stack all elements popped from first stack while updating their current min/max. Now pop from
+/// the second stack (MovingMin/Max struct works as a queue). To find the minimum element of the queue,
+/// look at the smallest/largest two elements of the individual stacks, then take the minimum of those two values.
+///
+/// The complexity of the operations are
+/// - O(1) for getting the minimum/maximum
+/// - O(1) for push
+/// - amortized O(1) for pop
+///
 /// ```
 /// # use datafusion_functions_aggregate::min_max::MovingMin;
 /// let mut moving_min = MovingMin::<i32>::new();
@@ -1375,6 +1418,11 @@ impl<T: Clone + PartialOrd> MovingMin<T> {
         self.len() == 0
     }
 }
+
+/// Keep track of the maximum value in a sliding window.
+///
+/// See [`MovingMin`] for more details.
+///
 /// ```
 /// # use datafusion_functions_aggregate::min_max::MovingMax;
 /// let mut moving_max = MovingMax::<i32>::new();

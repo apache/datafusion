@@ -27,9 +27,7 @@ use crate::PhysicalExpr;
 use arrow::array::*;
 use arrow::compute::kernels::boolean::{and_kleene, not, or_kleene};
 use arrow::compute::kernels::cmp::*;
-use arrow::compute::kernels::comparison::{
-    regexp_is_match_utf8, regexp_is_match_utf8_scalar,
-};
+use arrow::compute::kernels::comparison::{regexp_is_match, regexp_is_match_scalar};
 use arrow::compute::kernels::concat_elements::concat_elements_utf8;
 use arrow::compute::{cast, ilike, like, nilike, nlike};
 use arrow::datatypes::*;
@@ -179,7 +177,7 @@ macro_rules! compute_utf8_flag_op {
         } else {
             None
         };
-        let mut array = paste::expr! {[<$OP _utf8>]}(&ll, &rr, flag.as_ref())?;
+        let mut array = $OP(ll, rr, flag.as_ref())?;
         if $NOT {
             array = not(&array).unwrap();
         }
@@ -188,13 +186,36 @@ macro_rules! compute_utf8_flag_op {
 }
 
 macro_rules! binary_string_array_flag_op_scalar {
-    ($LEFT:expr, $RIGHT:expr, $OP:ident, $NOT:expr, $FLAG:expr) => {{
+    ($LEFT:ident, $RIGHT:expr, $OP:ident, $NOT:expr, $FLAG:expr) => {{
+        // This macro is slightly different from binary_string_array_flag_op because, when comparing with a scalar value,
+        // the query can be optimized in such a way that operands will be dicts, so we need to support it here
         let result: Result<Arc<dyn Array>> = match $LEFT.data_type() {
             DataType::Utf8View | DataType::Utf8 => {
                 compute_utf8_flag_op_scalar!($LEFT, $RIGHT, $OP, StringArray, $NOT, $FLAG)
             },
             DataType::LargeUtf8 => {
                 compute_utf8_flag_op_scalar!($LEFT, $RIGHT, $OP, LargeStringArray, $NOT, $FLAG)
+            },
+            DataType::Dictionary(_, _) => {
+                let values = $LEFT.as_any_dictionary().values();
+
+                match values.data_type() {
+                    DataType::Utf8View | DataType::Utf8 => compute_utf8_flag_op_scalar!(values, $RIGHT, $OP, StringArray, $NOT, $FLAG),
+                    DataType::LargeUtf8 => compute_utf8_flag_op_scalar!(values, $RIGHT, $OP, LargeStringArray, $NOT, $FLAG),
+                    other => internal_err!(
+                        "Data type {:?} not supported as a dictionary value type for binary_string_array_flag_op_scalar operation '{}' on string array",
+                        other, stringify!($OP)
+                    ),
+                }.map(
+                    // downcast_dictionary_array duplicates code per possible key type, so we aim to do all prep work before
+                    |evaluated_values| downcast_dictionary_array! {
+                        $LEFT => {
+                            let unpacked_dict = evaluated_values.take_iter($LEFT.keys().iter().map(|opt| opt.map(|v| v as _))).collect::<BooleanArray>();
+                            Arc::new(unpacked_dict) as _
+                        },
+                        _ => unreachable!(),
+                    }
+                )
             },
             other => internal_err!(
                 "Data type {:?} not supported for binary_string_array_flag_op_scalar operation '{}' on string array",
@@ -213,20 +234,32 @@ macro_rules! compute_utf8_flag_op_scalar {
             .downcast_ref::<$ARRAYTYPE>()
             .expect("compute_utf8_flag_op_scalar failed to downcast array");
 
-        if let ScalarValue::Utf8(Some(string_value)) | ScalarValue::LargeUtf8(Some(string_value)) = $RIGHT {
-            let flag = $FLAG.then_some("i");
-            let mut array =
-                paste::expr! {[<$OP _utf8_scalar>]}(&ll, &string_value, flag)?;
-            if $NOT {
-                array = not(&array).unwrap();
-            }
-            Ok(Arc::new(array))
-        } else {
-            internal_err!(
+        let string_value = match $RIGHT {
+            ScalarValue::Utf8(Some(string_value)) | ScalarValue::LargeUtf8(Some(string_value)) => string_value,
+            ScalarValue::Dictionary(_, value) => {
+                match *value {
+                    ScalarValue::Utf8(Some(string_value)) | ScalarValue::LargeUtf8(Some(string_value)) => string_value,
+                    other => return internal_err!(
+                            "compute_utf8_flag_op_scalar failed to cast dictionary value {} for operation '{}'",
+                            other, stringify!($OP)
+                        )
+                }
+            },
+            _ => return internal_err!(
                 "compute_utf8_flag_op_scalar failed to cast literal value {} for operation '{}'",
                 $RIGHT, stringify!($OP)
             )
+
+        };
+
+        let flag = $FLAG.then_some("i");
+        let mut array =
+            paste::expr! {[<$OP _scalar>]}(ll, &string_value, flag)?;
+        if $NOT {
+            array = not(&array).unwrap();
         }
+
+        Ok(Arc::new(array))
     }};
 }
 
@@ -431,7 +464,7 @@ impl PhysicalExpr for BinaryExpr {
                 // end-points of its children.
                 Ok(Some(vec![]))
             }
-        } else if self.op.is_comparison_operator() {
+        } else if self.op.supports_propagation() {
             Ok(
                 propagate_comparison(&self.op, interval, left_interval, right_interval)?
                     .map(|(left, right)| vec![left, right]),
