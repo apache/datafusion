@@ -545,18 +545,11 @@ mod tests {
 
     #[test]
     fn test_lead_window_shift() -> Result<()> {
-        let first = Arc::new(Column::new("c3", 0)) as Arc<dyn PhysicalExpr>;
-        let second =
-            Arc::new(Literal::new(ScalarValue::Int32(Some(1)))) as Arc<dyn PhysicalExpr>;
-        let third = Arc::new(Literal::new(ScalarValue::try_from(&DataType::Int32)?))
-            as Arc<dyn PhysicalExpr>;
-        let input_exprs = &[first, second, third];
-        let input_types: &[DataType] =
-            &[DataType::Int32, DataType::Int32, DataType::Int32];
+        let expr = Arc::new(Column::new("c3", 0)) as Arc<dyn PhysicalExpr>;
 
         test_i32_result(
             WindowShift::lead(),
-            PartitionEvaluatorArgs::new(input_exprs, input_types, false, false),
+            PartitionEvaluatorArgs::new(&[expr], &[DataType::Int32], false, false),
             [
                 Some(-2),
                 Some(3),
@@ -574,18 +567,11 @@ mod tests {
 
     #[test]
     fn test_lag_window_shift() -> Result<()> {
-        let first = Arc::new(Column::new("c3", 0)) as Arc<dyn PhysicalExpr>;
-        let second =
-            Arc::new(Literal::new(ScalarValue::Int32(Some(1)))) as Arc<dyn PhysicalExpr>;
-        let third = Arc::new(Literal::new(ScalarValue::try_from(&DataType::Int32)?))
-            as Arc<dyn PhysicalExpr>;
-        let input_exprs = &[first, second, third];
-        let input_types: &[DataType] =
-            &[DataType::Int32, DataType::Int32, DataType::Int32];
+        let expr = Arc::new(Column::new("c3", 0)) as Arc<dyn PhysicalExpr>;
 
         test_i32_result(
             WindowShift::lag(),
-            PartitionEvaluatorArgs::new(input_exprs, input_types, false, false),
+            PartitionEvaluatorArgs::new(&[expr], &[DataType::Int32], false, false),
             [
                 None,
                 Some(1),
