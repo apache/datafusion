@@ -460,14 +460,14 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
     {
         let arr = array.as_byte_view::<B>();
 
-        // If a null row, set and return
+        // Null row case, set and return
         if arr.is_null(row) {
             self.nulls.append(true);
             self.views.push(0);
             return;
         }
 
-        // Not null case
+        // Not null row case
         self.nulls.append(false);
         let value: &[u8] = arr.value(row).as_ref();
 
@@ -578,6 +578,177 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
             &self.in_progress[offset..offset + length]
         }
     }
+
+    fn build_inner(self: Self) -> ArrayRef {
+        let Self {
+            views,
+            in_progress,
+            mut completed,
+            nulls,
+            ..
+        } = self;
+
+        // Build nulls
+        let null_buffer = nulls.build();
+
+        // Build values
+        // Flush `in_process` firstly
+        if !in_progress.is_empty() {
+            let buffer = Buffer::from(in_progress);
+            completed.push(buffer);
+        }
+
+        let views = ScalarBuffer::from(views);
+
+        Arc::new(GenericByteViewArray::<B>::new(
+            views,
+            completed,
+            null_buffer,
+        ))
+    }
+
+    fn take_n_inner(&mut self, n: usize) -> ArrayRef {
+        debug_assert!(self.len() >= n);
+
+        // The `n == len` case, we need to take all
+        if self.len() == n {
+            return self.build_inner();
+        }
+
+        // The `n < len` case
+        // Take n for nulls
+        let null_buffer = self.nulls.take_n(n);
+
+        // Take n for values:
+        //   - Take first n `view`s from `views`
+        //
+        //   - Find the last non-inlined `view`, if all inlined,
+        //     we can build array and return happily, otherwise we
+        //     we need to continue to process related buffers
+        //
+        //   - Get the last related `buffer index`(let's name it `buffer index n`)
+        //     from last non-inlined `view`
+        //
+        //   - Take `0 ~ buffer index n-1` buffers, clone the `buffer index` buffer
+        //     (data part is wrapped by `Arc`, cheap to clone) if it is one of `completed`,
+        //     or copy to generate a new buffer for return if it is `in_progress`
+        //
+        //   - Shift the `buffer index` of remaining non-inlined `views`
+        //
+        let first_n_views = self.views.drain(0..n).collect::<Vec<_>>();
+
+        let last_non_inlined_view = first_n_views
+            .iter()
+            .rev()
+            .find(|view| ((**view) as u32) > 12);
+
+        if let Some(view) = last_non_inlined_view {
+            let view = ByteView::from(*view);
+            let last_related_buffer_index = view.buffer_index as usize;
+
+            // Check should we take the whole `last_related_buffer_index` buffer
+            let take_whole_last_buffer = self.should_take_whole_buffer(
+                last_related_buffer_index,
+                view.offset + view.length,
+            );
+
+            // Take related buffers
+            let buffers = if take_whole_last_buffer {
+                self.take_buffers_with_whole_last(last_related_buffer_index)
+            } else {
+                self.take_buffers_with_partial_last(
+                    last_related_buffer_index,
+                    view.offset + view.length,
+                )
+            };
+
+            // Shift `buffer index`s finally
+            let shifts = if take_whole_last_buffer {
+                last_related_buffer_index + 1
+            } else {
+                last_non_inlined_view
+            };
+
+            self.views.iter_mut().for_each(|view| {
+                if (*view as u32) > 12 {
+                    let mut byte_view = ByteView::from(*view);
+                    byte_view.buffer_index -= shifts as u32;
+                    *view = byte_view.as_u128();
+                }
+            });
+
+            // Build array and return
+            let views = ScalarBuffer::from(first_n_views);
+            Arc::new(GenericByteViewArray::<B>::new(
+                views,
+                taken_buffers,
+                null_buffer,
+            ))
+        } else {
+            let views = ScalarBuffer::from(first_n_views);
+            Arc::new(GenericByteViewArray::<B>::new(
+                views,
+                Vec::new(),
+                null_buffer,
+            ))
+        }
+    }
+
+    fn take_buffers_with_whole_last(
+        &mut self,
+        last_related_buffer_index: usize,
+    ) -> Vec<Buffer> {
+        if last_related_buffer_index == self.completed.len() {
+            self.flush_in_progress();
+        }
+        self.completed
+            .drain(0..last_related_buffer_index + 1)
+            .collect()
+    }
+
+    fn take_buffers_with_partial_last(
+        &mut self,
+        last_related_buffer_index: usize,
+        take_len: usize,
+    ) -> Vec<Buffer> {
+        let mut take_buffers = Vec::with_capacity(last_related_buffer_index + 1);
+
+        // Take `0 ~ last_related_buffer_index - 1` buffers
+        if !self.completed.is_empty() || last_related_buffer_index == 0 {
+            take_buffers.extend(self.completed.drain(0..last_related_buffer_index));
+        }
+
+        // Process the `last_related_buffer_index` buffers
+        let last_buffer = if last_related_buffer_index < self.completed.len() {
+            // If it is in `completed`, simply clone
+            self.completed[last_related_buffer_index].clone()
+        } else {
+            // If it is `in_progress`, copied `0 ~ offset` part
+            let taken_last_buffer = self.in_progress[0..take_len].to_vec();
+            Buffer::from_vec(taken_last_buffer)
+        };
+        take_buffers.push(last_buffer);
+
+        take_buffers
+    }
+
+    #[inline]
+    fn should_take_whole_buffer(&self, buffer_index: usize, take_len: usize) -> bool {
+        if buffer_index < self.completed.len() {
+            take_len == self.completed[buffer_index].len()
+        } else {
+            take_len == self.in_progress.len()
+        }
+    }
+
+    fn flush_in_progress(&mut self) {
+        let flushed_block = mem::replace(
+            &mut self.in_progress,
+            Vec::with_capacity(self.max_block_size),
+        );
+        let buffer = Buffer::from_vec(flushed_block);
+        self.completed.push(buffer);
+    }
 }
 
 impl<B: ByteViewType> GroupColumn for ByteViewGroupValueBuilder<B> {
@@ -608,108 +779,11 @@ impl<B: ByteViewType> GroupColumn for ByteViewGroupValueBuilder<B> {
     }
 
     fn build(self: Box<Self>) -> ArrayRef {
-        let Self {
-            views,
-            in_progress,
-            mut completed,
-            nulls,
-            ..
-        } = *self;
-
-        // Build nulls
-        let null_buffer = nulls.build();
-
-        // Build values
-        // Flush `in_process` firstly
-        if !in_progress.is_empty() {
-            let buffer = Buffer::from(in_progress);
-            completed.push(buffer);
-        }
-
-        let views = ScalarBuffer::from(views);
-
-        Arc::new(GenericByteViewArray::<B>::new(
-            views,
-            completed,
-            null_buffer,
-        ))
+        Self::build_inner(*self)
     }
 
     fn take_n(&mut self, n: usize) -> ArrayRef {
-        debug_assert!(self.len() >= n);
-
-        // Take n for nulls
-        let null_buffer = self.nulls.take_n(n);
-
-        // Take n for values:
-        //   - Take first n `view`s from `views`
-        //
-        //   - Find the last non-inlined `view`, if all inlined,
-        //     we can build array and return happily, otherwise we
-        //     we need to continue to process related buffers
-        //
-        //   - Get the last related `buffer index`(let's name it `buffer index n`)
-        //     from last non-inlined `view`
-        //
-        //   - Take `0 ~ buffer index n-1` buffers, clone the `buffer index` buffer
-        //     (data part is wrapped by `Arc`, cheap to clone) if it is in `completed`,
-        //     or split
-        //
-        //   - Shift the `buffer index` of remaining non-inlined `views`
-        //
-        let first_n_views = self.views.drain(0..n).collect::<Vec<_>>();
-
-        let last_non_inlined_view = first_n_views
-            .iter()
-            .rev()
-            .find(|view| ((**view) as u32) > 12);
-
-        if let Some(view) = last_non_inlined_view {
-            let view = ByteView::from(*view);
-            let last_related_buffer_index = view.buffer_index as usize;
-            let mut taken_buffers = Vec::with_capacity(last_related_buffer_index + 1);
-
-            // Take `0 ~ last_related_buffer_index - 1` buffers
-            if !self.completed.is_empty() {
-                taken_buffers.extend(self.completed.drain(0..last_related_buffer_index));
-            }
-
-            // Process the `last_related_buffer_index` buffers
-            let last_buffer = if last_related_buffer_index < self.completed.len() {
-                // If it is in `completed`, simply clone
-                self.completed[last_related_buffer_index].clone()
-            } else {
-                // If it is `in_progress`, copied `0 ~ offset` part
-                let taken_last_buffer =
-                    self.in_progress[0..view.offset as usize].to_vec();
-                Buffer::from_vec(taken_last_buffer)
-            };
-            taken_buffers.push(last_buffer);
-
-            // Shift `buffer index` finally
-            self.views.iter_mut().for_each(|view| {
-                if (*view as u32) > 12 {
-                    let mut byte_view = ByteView::from(*view);
-                    byte_view.buffer_index -= last_related_buffer_index as u32;
-                    *view = byte_view.as_u128();
-                }
-            });
-
-            // Build array and return
-            let views = ScalarBuffer::from(first_n_views);
-            Arc::new(GenericByteViewArray::<B>::new(
-                views,
-                taken_buffers,
-                null_buffer,
-            ))
-        } else {
-            let views = ScalarBuffer::from(first_n_views);
-            Arc::new(GenericByteViewArray::<B>::new(
-                views,
-                Vec::new(),
-                null_buffer,
-            ))
-        }
+        self.take_n_inner(n)
     }
 }
 
@@ -731,7 +805,10 @@ fn nulls_equal_to(lhs_null: bool, rhs_null: bool) -> Option<bool> {
 mod tests {
     use std::sync::Arc;
 
-    use arrow::{array::AsArray, datatypes::{Int64Type, StringViewType}};
+    use arrow::{
+        array::AsArray,
+        datatypes::{Int64Type, StringViewType},
+    };
     use arrow_array::{ArrayRef, Int64Array, StringArray, StringViewArray};
     use arrow_buffer::{BooleanBufferBuilder, NullBuffer};
     use datafusion_physical_expr::binary_map::OutputType;
