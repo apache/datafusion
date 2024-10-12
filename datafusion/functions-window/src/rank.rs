@@ -45,16 +45,16 @@ define_udwf_and_expr!(
 
 // define_udwf_and_expr!(
 //     Rank,
-//     percent_rank,
-//     "Returns the relative rank of the current row: (rank - 1) / (total rows - 1)",
-//     Rank::percent_rank
-// );
-//
-// define_udwf_and_expr!(
-//     Rank,
 //     dense_rank,
 //     "Returns rank of the current row without gaps. This function counts peer groups",
 //     Rank::dense_rank
+// );
+
+// define_udwf_and_expr!(
+//     Rank,
+//     percent_rank,
+//     "Returns the relative rank of the current row: (rank - 1) / (total rows - 1)",
+//     Rank::percent_rank
 // );
 
 /// rank expression
@@ -270,7 +270,7 @@ impl PartitionEvaluator for RankEvaluator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use datafusion_common::cast::as_uint64_array;
+    use datafusion_common::cast::{as_float64_array, as_uint64_array};
 
     fn test_with_rank(expr: &Rank, expected: Vec<u64>) -> Result<()> {
         test_i32_result(expr, vec![0..2, 2..3, 3..6, 6..7, 7..8], expected)
@@ -296,11 +296,59 @@ mod tests {
         Ok(())
     }
 
+    fn test_f64_result(
+        expr: &Rank,
+        num_rows: usize,
+        ranks: Vec<Range<usize>>,
+        expected: Vec<f64>,
+    ) -> Result<()> {
+        let args = PartitionEvaluatorArgs::default();
+        let result = expr
+            .partition_evaluator(args)?
+            .evaluate_all_with_rank(num_rows, &ranks)?;
+        let result = as_float64_array(&result)?;
+        let result = result.values();
+        assert_eq!(expected, *result);
+        Ok(())
+    }
+
     #[test]
     fn test_rank() -> Result<()> {
         let r = Rank::basic();
         test_without_rank(&r, vec![1; 8])?;
         test_with_rank(&r, vec![1, 1, 3, 4, 4, 4, 7, 8])?;
+        Ok(())
+    }
+
+    #[test]
+    fn test_dense_rank() -> Result<()> {
+        let r = Rank::dense_rank();
+        test_without_rank(&r, vec![1; 8])?;
+        test_with_rank(&r, vec![1, 1, 2, 3, 3, 3, 4, 5])?;
+        Ok(())
+    }
+
+    #[test]
+    #[allow(clippy::single_range_in_vec_init)]
+    fn test_percent_rank() -> Result<()> {
+        let r = Rank::percent_rank();
+
+        // empty case
+        let expected = vec![0.0; 0];
+        test_f64_result(&r, 0, vec![0..0; 0], expected)?;
+
+        // singleton case
+        let expected = vec![0.0];
+        test_f64_result(&r, 1, vec![0..1], expected)?;
+
+        // uniform case
+        let expected = vec![0.0; 7];
+        test_f64_result(&r, 7, vec![0..7], expected)?;
+
+        // non-trivial case
+        let expected = vec![0.0, 0.0, 0.0, 0.5, 0.5, 0.5, 0.5];
+        test_f64_result(&r, 7, vec![0..3, 3..7], expected)?;
+
         Ok(())
     }
 }
