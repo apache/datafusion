@@ -20,8 +20,7 @@ use datafusion_common::{
     internal_err, not_impl_err, Column, DataFusionError, Result, TableReference,
 };
 use datafusion_expr::{
-    expr::Alias, Distinct, Expr, JoinConstraint, JoinType, LogicalPlan,
-    LogicalPlanBuilder, Projection, SortExpr,
+   expr::Alias, Distinct, Expr, JoinConstraint, JoinType, LogicalPlan, LogicalPlanBuilder, Projection, SortExpr
 };
 use sqlparser::ast::{self, Ident, SetExpr};
 use std::sync::Arc;
@@ -37,8 +36,7 @@ use super::{
         subquery_alias_inner_query_and_columns,
     },
     utils::{
-        find_agg_node_within_select, find_window_nodes_within_select,
-        unproject_window_exprs,
+        find_agg_node_within_select, find_window_nodes_within_select, unproject_sort_expr, unproject_window_exprs
     },
     Unparser,
 };
@@ -299,6 +297,7 @@ impl Unparser<'_> {
                     let filter_expr = self.expr_to_sql(&unprojected)?;
                     select.having(Some(filter_expr));
                 } else {
+
                     let filter_expr = self.expr_to_sql(&filter.predicate)?;
                     select.selection(Some(filter_expr));
                 }
@@ -345,38 +344,13 @@ impl Unparser<'_> {
                     );
                 };
 
-                let sort_exprs: &Vec<SortExpr> =
-                    // In case of aggregation there could be columns containing aggregation functions we need to unproject
-                    match find_agg_node_within_select(plan, select.already_projected()) {
-                        Some(agg) => &sort
-                            .expr
-                            .iter()
-                            .map(|sort_expr| {
-                                let mut sort_expr = sort_expr.clone();
+                let agg = find_agg_node_within_select(plan, select.already_projected());
+                // unproject sort expressions
+                let sort_exprs: Vec<SortExpr> = sort.expr.iter().map(|sort_expr| {
+                    unproject_sort_expr(sort_expr, agg, sort.input.as_ref())
+                }).collect::<Result<Vec<_>>>()?;
 
-                                // ORDER BY can't have aliases, this indicates that the column was not properly unparsed, update it
-                                if let Expr::Alias(alias) = &sort_expr.expr {
-                                    sort_expr.expr = *alias.expr.clone();
-                                }
-
-                                // Unproject the sort expression if it is a column from the aggregation
-                                if let Expr::Column(c) = &sort_expr.expr {
-                                    if c.relation.is_none() && agg.schema.is_column_from_schema(&c) {
-                                        sort_expr.expr = unproject_agg_exprs(
-                                            &sort_expr.expr,
-                                            agg,
-                                            None,
-                                        )?;
-                                    }
-                                }
-
-                                Ok::<_, DataFusionError>(sort_expr)
-                            })
-                            .collect::<Result<Vec<_>>>()?,
-                        None => &sort.expr,
-                    };
-
-                query_ref.order_by(self.sorts_to_sql(sort_exprs)?);
+                query_ref.order_by(self.sorts_to_sql(&sort_exprs)?);
 
                 self.select_to_sql_recursively(
                     sort.input.as_ref(),
@@ -680,7 +654,7 @@ impl Unparser<'_> {
         }
     }
 
-    fn sorts_to_sql(&self, sort_exprs: &Vec<SortExpr>) -> Result<Vec<ast::OrderByExpr>> {
+    fn sorts_to_sql(&self, sort_exprs: &[SortExpr]) -> Result<Vec<ast::OrderByExpr>> {
         sort_exprs
             .iter()
             .map(|sort_expr| self.sort_to_sql(sort_expr))

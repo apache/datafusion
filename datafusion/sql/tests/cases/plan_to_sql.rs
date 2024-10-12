@@ -22,6 +22,7 @@ use arrow_schema::*;
 use datafusion_common::{DFSchema, Result, TableReference};
 use datafusion_expr::test::function_stub::{count_udaf, max_udaf, min_udaf, sum_udaf};
 use datafusion_expr::{col, lit, table_scan, wildcard, LogicalPlanBuilder};
+use datafusion_functions::unicode;
 use datafusion_sql::planner::{ContextProvider, PlannerContext, SqlToRel};
 use datafusion_sql::unparser::dialect::{
     DefaultDialect as UnparserDefaultDialect, Dialect as UnparserDialect,
@@ -643,6 +644,7 @@ fn sql_round_trip(query: &str, expect: &str) {
     let context = MockContextProvider {
         state: MockSessionState::default()
         .with_aggregate_function(sum_udaf())
+        .with_scalar_function(Arc::new(unicode::substr().as_ref().clone()))
     };
     let sql_to_rel = SqlToRel::new(&context);
     let plan = sql_to_rel.sql_statement_to_plan(statement).unwrap();
@@ -814,14 +816,22 @@ fn test_interval_lhs_lt() {
 }
 
 #[test]
-fn test_order_by_with_aggr_to_sql() {
+fn test_order_by_to_sql() {
+    // order by aggregation function
     sql_round_trip(
         r#"SELECT id, first_name, SUM(id) FROM person GROUP BY id, first_name ORDER BY SUM(id) ASC, first_name DESC, id, first_name LIMIT 10"#,
         r#"SELECT person.id, person.first_name, sum(person.id) FROM person GROUP BY person.id, person.first_name ORDER BY sum(person.id) ASC NULLS LAST, person.first_name DESC NULLS FIRST, person.id ASC NULLS LAST, person.first_name ASC NULLS LAST LIMIT 10"#,
     );
 
+    // order by aggregation function alias
     sql_round_trip(
         r#"SELECT id, first_name, SUM(id) as total_sum FROM person GROUP BY id, first_name ORDER BY total_sum ASC, first_name DESC, id, first_name LIMIT 10"#,
         r#"SELECT person.id, person.first_name, sum(person.id) AS total_sum FROM person GROUP BY person.id, person.first_name ORDER BY total_sum ASC NULLS LAST, person.first_name DESC NULLS FIRST, person.id ASC NULLS LAST, person.first_name ASC NULLS LAST LIMIT 10"#,
+    );
+
+    // order by scalar function from projection
+    sql_round_trip(
+        r#"SELECT id, first_name, substr(first_name,0,5) FROM person ORDER BY id, substr(first_name,0,5)"#,
+        r#"SELECT person.id, person.first_name, substr(person.first_name, 0, 5) FROM person ORDER BY person.id ASC NULLS LAST, substr(person.first_name, 0, 5) ASC NULLS LAST"#,
     );
 }
