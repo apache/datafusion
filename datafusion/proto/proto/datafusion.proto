@@ -526,7 +526,7 @@ message WindowExprNode {
     string udaf = 3;
     string udwf = 9;
   }
-  LogicalExprNode expr = 4;
+  repeated LogicalExprNode exprs = 4;
   repeated LogicalExprNode partition_by = 5;
   repeated SortExprNode order_by = 6;
   // repeated LogicalExprNode filter = 7;
