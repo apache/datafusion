@@ -257,6 +257,7 @@ pub(super) fn subquery_alias_inner_query_and_columns(
 
     (outer_projections.input.as_ref(), columns)
 }
+
 /// Injects column aliases into a subquery's logical plan. The function searches for a `Projection`
 /// within the given plan, which may be wrapped by other operators (e.g., LIMIT, SORT).
 /// If the top-level plan is a `Projection`, it directly injects the column aliases.
