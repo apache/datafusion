@@ -43,9 +43,12 @@ use datafusion_common::utils::proxy::VecAllocExt;
 use crate::aggregates::group_values::null_builder::MaybeNullBufferBuilder;
 use arrow_array::types::GenericStringType;
 use datafusion_physical_expr_common::binary_map::{OutputType, INITIAL_BUFFER_CAPACITY};
+use std::marker::PhantomData;
 use std::mem;
 use std::sync::Arc;
 use std::vec;
+
+const BYTE_VIEW_MAX_BLOCK_SIZE: usize = 2 * 1024 * 1024;
 
 /// Trait for storing a single column of group values in [`GroupValuesColumn`]
 ///
@@ -397,9 +400,7 @@ where
 /// 1. Efficient comparison of incoming rows to existing rows
 /// 2. Efficient construction of the final output array
 /// 3. Efficient to perform `take_n` comparing to use `GenericByteViewBuilder`
-pub struct ByteGroupValueViewBuilder {
-    output_type: OutputType,
-
+pub struct ByteViewGroupValueBuilder<B: ByteViewType> {
     /// The views of string values
     ///
     /// If string len <= 12, the view's format will be:
@@ -423,14 +424,37 @@ pub struct ByteGroupValueViewBuilder {
     /// `in_progress` will be flushed into `completed`, and create new `in_progress`
     /// when found its remaining capacity(`max_block_size` - `len(in_progress)`),
     /// is no enough to store the appended value.
+    ///
+    /// Currently it is fixed at 2MB.
     max_block_size: usize,
 
     /// Nulls
     nulls: MaybeNullBufferBuilder,
+
+    /// phantom data so the type requires <B>
+    _phantom: PhantomData<B>,
 }
 
-impl ByteGroupValueViewBuilder {
-    fn append_val_inner<B>(&mut self, array: &ArrayRef, row: usize)
+impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
+    fn new() -> Self {
+        Self {
+            views: Vec::new(),
+            in_progress: Vec::new(),
+            completed: Vec::new(),
+            max_block_size: BYTE_VIEW_MAX_BLOCK_SIZE,
+            nulls: MaybeNullBufferBuilder::new(),
+            _phantom: PhantomData {},
+        }
+    }
+
+    /// Set the max block size
+    #[cfg(test)]
+    fn with_max_block_size(mut self, max_block_size: usize) -> Self {
+        self.max_block_size = max_block_size;
+        self
+    }
+
+    fn append_val_inner(&mut self, array: &ArrayRef, row: usize)
     where
         B: ByteViewType,
     {
@@ -481,10 +505,7 @@ impl ByteGroupValueViewBuilder {
         }
     }
 
-    fn equal_to_inner<B>(&self, lhs_row: usize, array: &ArrayRef, rhs_row: usize) -> bool
-    where
-        B: ByteViewType,
-    {
+    fn equal_to_inner(&self, lhs_row: usize, array: &ArrayRef, rhs_row: usize) -> bool {
         let array = array.as_byte_view::<B>();
 
         // Check if nulls equal firstly
@@ -559,29 +580,13 @@ impl ByteGroupValueViewBuilder {
     }
 }
 
-impl GroupColumn for ByteGroupValueViewBuilder {
+impl<B: ByteViewType> GroupColumn for ByteViewGroupValueBuilder<B> {
     fn equal_to(&self, lhs_row: usize, array: &ArrayRef, rhs_row: usize) -> bool {
-        match self.output_type {
-            OutputType::Utf8View => {
-                self.equal_to_inner::<StringViewType>(lhs_row, array, rhs_row)
-            }
-            OutputType::BinaryView => {
-                self.equal_to_inner::<BinaryViewType>(lhs_row, array, rhs_row)
-            }
-            _ => unreachable!("String/Binary type should use ByteGroupValueBuilder"),
-        }
+        self.equal_to_inner(lhs_row, array, rhs_row)
     }
 
     fn append_val(&mut self, array: &ArrayRef, row: usize) {
-        match self.output_type {
-            OutputType::Utf8View => {
-                self.append_val_inner::<StringViewType>(array, row);
-            }
-            OutputType::BinaryView => {
-                self.append_val_inner::<BinaryViewType>(array, row);
-            }
-            _ => unreachable!("String/Binary type should use ByteGroupValueBuilder"),
-        }
+        self.append_val_inner(array, row)
     }
 
     fn len(&self) -> usize {
@@ -604,7 +609,6 @@ impl GroupColumn for ByteGroupValueViewBuilder {
 
     fn build(self: Box<Self>) -> ArrayRef {
         let Self {
-            output_type,
             views,
             in_progress,
             mut completed,
@@ -623,23 +627,12 @@ impl GroupColumn for ByteGroupValueViewBuilder {
         }
 
         let views = ScalarBuffer::from(views);
-        match output_type {
-            OutputType::Utf8View => {
-                Arc::new(GenericByteViewArray::<StringViewType>::new(
-                    views,
-                    completed,
-                    null_buffer,
-                ))
-            }
-            OutputType::BinaryView => {
-                Arc::new(GenericByteViewArray::<BinaryViewType>::new(
-                    views,
-                    completed,
-                    null_buffer,
-                ))
-            }
-            _ => unreachable!("String/Binary type should use ByteGroupValueBuilder"),
-        }
+
+        Arc::new(GenericByteViewArray::<B>::new(
+            views,
+            completed,
+            null_buffer,
+        ))
     }
 
     fn take_n(&mut self, n: usize) -> ArrayRef {
@@ -704,42 +697,18 @@ impl GroupColumn for ByteGroupValueViewBuilder {
 
             // Build array and return
             let views = ScalarBuffer::from(first_n_views);
-            match self.output_type {
-                OutputType::Utf8View => {
-                    Arc::new(GenericByteViewArray::<StringViewType>::new(
-                        views,
-                        taken_buffers,
-                        null_buffer,
-                    ))
-                }
-                OutputType::BinaryView => {
-                    Arc::new(GenericByteViewArray::<BinaryViewType>::new(
-                        views,
-                        taken_buffers,
-                        null_buffer,
-                    ))
-                }
-                _ => unreachable!("String/Binary type should use ByteGroupValueBuilder"),
-            }
+            Arc::new(GenericByteViewArray::<B>::new(
+                views,
+                taken_buffers,
+                null_buffer,
+            ))
         } else {
             let views = ScalarBuffer::from(first_n_views);
-            match self.output_type {
-                OutputType::Utf8View => {
-                    Arc::new(GenericByteViewArray::<StringViewType>::new(
-                        views,
-                        Vec::new(),
-                        null_buffer,
-                    ))
-                }
-                OutputType::BinaryView => {
-                    Arc::new(GenericByteViewArray::<BinaryViewType>::new(
-                        views,
-                        Vec::new(),
-                        null_buffer,
-                    ))
-                }
-                _ => unreachable!("String/Binary type should use ByteGroupValueBuilder"),
-            }
+            Arc::new(GenericByteViewArray::<B>::new(
+                views,
+                Vec::new(),
+                null_buffer,
+            ))
         }
     }
 }
@@ -762,12 +731,14 @@ fn nulls_equal_to(lhs_null: bool, rhs_null: bool) -> Option<bool> {
 mod tests {
     use std::sync::Arc;
 
-    use arrow::datatypes::Int64Type;
-    use arrow_array::{ArrayRef, Int64Array, StringArray};
+    use arrow::{array::AsArray, datatypes::{Int64Type, StringViewType}};
+    use arrow_array::{ArrayRef, Int64Array, StringArray, StringViewArray};
     use arrow_buffer::{BooleanBufferBuilder, NullBuffer};
     use datafusion_physical_expr::binary_map::OutputType;
 
-    use crate::aggregates::group_values::group_column::PrimitiveGroupValueBuilder;
+    use crate::aggregates::group_values::group_column::{
+        ByteViewGroupValueBuilder, PrimitiveGroupValueBuilder,
+    };
 
     use super::{ByteGroupValueBuilder, GroupColumn};
 
