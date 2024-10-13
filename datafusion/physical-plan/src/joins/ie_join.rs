@@ -106,7 +106,7 @@ pub struct IEJoinExec {
     pairs: Arc<Mutex<u64>>,
     /// Information of index and left / right placement of columns
     column_indices: Vec<ColumnIndex>,
-    // TODO: add metric and memory reservation
+    // TODO: add memory reservation?
     /// execution metrics
     metrics: ExecutionPlanMetricsSet,
     /// cache holding plan properties like equivalences, output partitioning etc.
@@ -821,7 +821,8 @@ impl IEJoinStream {
         // mark the order of l1, the index i means this element is the ith element of l1(sorted by condition 1)
         let permutation = UInt64Array::from(
             std::iter::successors(Some(0_u64), |&x| {
-                if x < (valid as u64) {
+                if x < ((valid as u64) - 1) {
+                    // range 0..valid
                     Some(x + 1)
                 } else {
                     None
