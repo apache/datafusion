@@ -1110,7 +1110,7 @@ mod tests {
         //   3. Take non-inlined + partial last buffer in `completed`
         //   4. Take non-inlined + whole last buffer in `completed`
         //   5. Take non-inlined + partial last `in_progress`
-        //   6. Take non-inlined + while last buffer in `in_progress`
+        //   6. Take non-inlined + whole last buffer in `in_progress`
         //   7. Take all views at once
 
         let mut builder =
