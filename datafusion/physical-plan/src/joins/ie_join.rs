@@ -28,7 +28,8 @@ use crate::joins::utils::{
     inequality_conditions_to_sort_exprs, is_loose_inequality_operator, ColumnIndex,
     JoinFilter, OnceAsync, OnceFut,
 };
-use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
+use crate::metrics::{self, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
+use crate::sorts::sort::sort_batch;
 use crate::{
     collect, execution_mode_from_children, DisplayAs, DisplayFormatType, Distribution,
     ExecutionMode, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
@@ -36,9 +37,8 @@ use crate::{
 };
 use arrow::array::{make_comparator, AsArray, UInt64Builder};
 
+use arrow::compute::concat;
 use arrow::compute::kernels::sort::SortOptions;
-use arrow::compute::kernels::take::take;
-use arrow::compute::{concat, lexsort_to_indices, SortColumn};
 use arrow::datatypes::{Int64Type, Schema, SchemaRef, UInt64Type};
 use arrow::record_batch::RecordBatch;
 use arrow_array::{ArrayRef, Int64Array, UInt64Array};
@@ -312,15 +312,17 @@ impl ExecutionPlan for IEJoinExec {
 
     fn execute(
         &self,
-        _partition: usize,
+        partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
+        let join_metrics = IEJoinMetrics::new(partition, &self.metrics);
         let iejoin_data = self.iejoin_data.once(|| {
             collect_iejoin_data(
                 Arc::clone(&self.left),
                 Arc::clone(&self.right),
                 Arc::clone(&self.left_conditions),
                 Arc::clone(&self.right_conditions),
+                join_metrics.clone(),
                 Arc::clone(&context),
             )
         });
@@ -334,6 +336,7 @@ impl ExecutionPlan for IEJoinExec {
             column_indices: self.column_indices.clone(),
             pairs: Arc::clone(&self.pairs),
             finished: false,
+            join_metrics,
         }))
     }
 
@@ -352,53 +355,122 @@ impl ExecutionPlan for IEJoinExec {
     }
 }
 
+/// Metrics for iejoin
+#[derive(Debug, Clone)]
+struct IEJoinMetrics {
+    /// Total time for collecting init data of both sides
+    pub(crate) load_time: metrics::Time,
+    /// Number of batches of left side
+    pub(crate) left_input_batches: metrics::Count,
+    /// Number of batches of right side
+    pub(crate) right_input_batches: metrics::Count,
+    /// Number of rows of left side
+    pub(crate) left_input_rows: metrics::Count,
+    /// Number of rows of right side
+    pub(crate) right_input_rows: metrics::Count,
+    /// Memory used by collecting init data
+    pub(crate) load_mem_used: metrics::Gauge,
+    /// Total time for joining intersection blocks of input table
+    pub(crate) join_time: metrics::Time,
+    /// Number of batches produced by this operator
+    pub(crate) output_batches: metrics::Count,
+    /// Number of rows produced by this operator
+    pub(crate) output_rows: metrics::Count,
+    /// Number of pairs of left and right blocks are skipped because of no intersection
+    pub(crate) skipped_pairs: metrics::Count,
+}
+
+impl IEJoinMetrics {
+    pub fn new(partition: usize, metrics: &ExecutionPlanMetricsSet) -> Self {
+        let load_time = MetricBuilder::new(metrics).subset_time("load_time", partition);
+        let left_input_batches =
+            MetricBuilder::new(metrics).counter("left_input_batches", partition);
+        let right_input_batches =
+            MetricBuilder::new(metrics).counter("right_input_batches", partition);
+        let left_input_rows =
+            MetricBuilder::new(metrics).counter("left_input_rows", partition);
+        let right_input_rows =
+            MetricBuilder::new(metrics).counter("right_input_rows", partition);
+        let load_mem_used = MetricBuilder::new(metrics).gauge("load_mem_used", partition);
+        let join_time = MetricBuilder::new(metrics).subset_time("join_time", partition);
+        let output_batches =
+            MetricBuilder::new(metrics).counter("output_batches", partition);
+        let output_rows = MetricBuilder::new(metrics).counter("output_rows", partition);
+        let skipped_pairs =
+            MetricBuilder::new(metrics).counter("skipped_pairs", partition);
+        Self {
+            load_time,
+            left_input_batches,
+            right_input_batches,
+            left_input_rows,
+            right_input_rows,
+            load_mem_used,
+            join_time,
+            output_batches,
+            output_rows,
+            skipped_pairs,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 /// SortedBlock contains arrays that are sorted by specified columns
 // TODO: use struct support spill?
 pub struct SortedBlock {
-    pub array: Vec<ArrayRef>,
+    pub data: RecordBatch,
     pub sort_options: Vec<(usize, SortOptions)>,
 }
 
 impl SortedBlock {
     pub fn new(array: Vec<ArrayRef>, sort_options: Vec<(usize, SortOptions)>) -> Self {
-        Self {
-            array,
-            sort_options,
-        }
+        let schema = Arc::new(Schema::new({
+            array
+                .iter()
+                .enumerate()
+                .map(|(i, array)| {
+                    arrow_schema::Field::new(
+                        format!("col{}", i),
+                        array.data_type().clone(),
+                        true,
+                    )
+                })
+                .collect::<Vec<_>>()
+        }));
+        let data = RecordBatch::try_new(schema, array).unwrap();
+        Self { data, sort_options }
     }
 
     /// sort the block by the specified columns
     pub fn sort_by_columns(&mut self) -> Result<()> {
-        let sort_columns = self
+        let sort_exprs = self
             .sort_options
             .iter()
-            .map(|(i, opt)| SortColumn {
-                values: Arc::clone(&self.array[*i]),
-                options: Some(*opt),
+            .map(|(i, sort_options)| PhysicalSortExpr {
+                expr: Arc::new(datafusion_physical_expr::expressions::Column::new(
+                    &format!("col{}", *i),
+                    *i,
+                )),
+                options: *sort_options,
             })
             .collect::<Vec<_>>();
-        // TODO: should handle list type?
-        let indices = lexsort_to_indices(&sort_columns, None)?;
-        self.array = self
-            .array
-            .iter()
-            .map(|array| take(array, &indices, None))
-            .collect::<Result<_, _>>()?;
+        self.data = sort_batch(&self.data, &sort_exprs, None)?;
         Ok(())
     }
 
     pub fn arrays(&self) -> &[ArrayRef] {
-        &self.array
+        self.data.columns()
+    }
+
+    pub fn data(&self) -> &RecordBatch {
+        &self.data
     }
 
     pub fn slice(&self, range: Range<usize>) -> Self {
-        let array = self
-            .array
-            .iter()
-            .map(|array| array.slice(range.start, range.end - range.start))
-            .collect();
-        SortedBlock::new(array, self.sort_options.clone())
+        let data = self.data.slice(range.start, range.len());
+        SortedBlock {
+            data,
+            sort_options: self.sort_options.clone(),
+        }
     }
 }
 
@@ -420,31 +492,56 @@ async fn collect_iejoin_data(
     right: Arc<dyn ExecutionPlan>,
     left_conditions: Arc<[PhysicalSortExpr; 2]>,
     right_conditions: Arc<[PhysicalSortExpr; 2]>,
+    join_metrics: IEJoinMetrics,
     context: Arc<TaskContext>,
 ) -> Result<IEJoinData> {
     // the left and right data are sort by condition 1 already (the `try_iejoin` rewrite rule has done this), collect it directly
     let left_data = collect(left, Arc::clone(&context)).await?;
+    join_metrics.left_input_batches.add(left_data.len());
     let right_data = collect(right, Arc::clone(&context)).await?;
+    join_metrics.right_input_batches.add(right_data.len());
     let left_blocks = left_data
         .iter()
         .map(|batch| {
             let columns = left_conditions
                 .iter()
-                .map(|expr| expr.expr.evaluate(batch)?.into_array(batch.num_rows()))
+                .map(|expr| {
+                    join_metrics.left_input_rows.add(batch.num_rows());
+                    join_metrics
+                        .load_mem_used
+                        .add(batch.get_array_memory_size());
+                    expr.expr.evaluate(batch)?.into_array(batch.num_rows())
+                })
                 .collect::<Result<Vec<_>>>()?;
             Ok(SortedBlock::new(columns, vec![]))
         })
         .collect::<Result<Vec<_>>>()?;
+    left_blocks.iter().for_each(|block| {
+        join_metrics
+            .load_mem_used
+            .add(block.data().get_array_memory_size())
+    });
     let right_blocks = right_data
         .iter()
         .map(|batch| {
             let columns = right_conditions
                 .iter()
-                .map(|expr| expr.expr.evaluate(batch)?.into_array(batch.num_rows()))
+                .map(|expr| {
+                    join_metrics.right_input_rows.add(batch.num_rows());
+                    join_metrics
+                        .load_mem_used
+                        .add(batch.get_array_memory_size());
+                    expr.expr.evaluate(batch)?.into_array(batch.num_rows())
+                })
                 .collect::<Result<Vec<_>>>()?;
             Ok(SortedBlock::new(columns, vec![]))
         })
         .collect::<Result<Vec<_>>>()?;
+    right_blocks.iter().for_each(|block| {
+        join_metrics
+            .load_mem_used
+            .add(block.data().get_array_memory_size())
+    });
     Ok(IEJoinData {
         left_data,
         right_data,
@@ -473,6 +570,8 @@ struct IEJoinStream {
     pairs: Arc<Mutex<u64>>,
     /// finished
     finished: bool,
+    /// join metrics
+    join_metrics: IEJoinMetrics,
 }
 
 impl IEJoinStream {
@@ -484,10 +583,12 @@ impl IEJoinStream {
             return Poll::Ready(None);
         }
 
+        let load_timer = self.join_metrics.load_time.timer();
         let iejoin_data = match ready!(self.iejoin_data.get_shared(cx)) {
             Ok(data) => data,
             Err(e) => return Poll::Ready(Some(Err(e))),
         };
+        load_timer.done();
 
         // get the size of left and right blocks
         let (n, m) = (iejoin_data.left_data.len(), iejoin_data.right_data.len());
@@ -519,11 +620,13 @@ impl IEJoinStream {
             right_block,
             &self.sort_options[0],
         ) {
+            self.join_metrics.skipped_pairs.add(1);
             return Poll::Ready(Some(Ok(RecordBatch::new_empty(Arc::clone(
                 &self.schema,
             )))));
         }
 
+        let join_timer = self.join_metrics.join_time.timer();
         // compute the join result
         // TODO: should return batches one by one if the result size larger than the batch size in config?
         let batch = IEJoinStream::compute(
@@ -537,6 +640,9 @@ impl IEJoinStream {
             &self.schema,
             &self.column_indices,
         )?;
+        join_timer.done();
+        self.join_metrics.output_batches.add(1);
+        self.join_metrics.output_rows.add(batch.num_rows());
         Poll::Ready(Some(Ok(batch)))
     }
 
