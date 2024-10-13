@@ -760,20 +760,8 @@ impl IEJoinStream {
         // store index of left table and right table
         // -i in (-n..-1) means it is index i in left table, j in (1..m) means it is index j in right table
         let indexes = concat(&[
-            &Int64Array::from(
-                std::iter::successors(
-                    Some(-1),
-                    |&x| if x > -n { Some(x - 1) } else { None },
-                )
-                .collect::<Vec<_>>(),
-            ),
-            &Int64Array::from(
-                std::iter::successors(
-                    Some(1),
-                    |&x| if x < m { Some(x + 1) } else { None },
-                )
-                .collect::<Vec<_>>(),
-            ),
+            &Int64Array::from((1..=n).map(|i| -i).collect::<Vec<_>>()),
+            &Int64Array::from((1..=m).collect::<Vec<_>>()),
         ])?;
         let mut l1 = SortedBlock::new(
             vec![cond1, indexes, cond2],
@@ -812,17 +800,7 @@ impl IEJoinStream {
             .clone();
 
         // mark the order of l1, the index i means this element is the ith element of l1(sorted by condition 1)
-        let permutation = UInt64Array::from(
-            std::iter::successors(Some(0_u64), |&x| {
-                if x < ((valid as u64) - 1) {
-                    // range 0..valid
-                    Some(x + 1)
-                } else {
-                    None
-                }
-            })
-            .collect::<Vec<_>>(),
-        );
+        let permutation = UInt64Array::from((0..valid as u64).collect::<Vec<_>>());
 
         let mut l2 = SortedBlock::new(
             vec![
