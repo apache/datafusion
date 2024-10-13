@@ -424,7 +424,7 @@ pub struct ByteViewGroupValueBuilder<B: ByteViewType> {
     /// Nulls
     nulls: MaybeNullBufferBuilder,
 
-    /// phantom data so the type requires <B>
+    /// phantom data so the type requires `<B>`
     _phantom: PhantomData<B>,
 }
 
