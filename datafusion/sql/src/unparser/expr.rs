@@ -2269,7 +2269,7 @@ mod tests {
             let unparser = Unparser::new(&dialect);
             let expr = Expr::Cast(Cast {
                 expr: Box::new(col("a")),
-                data_type: DataType::Int64,
+                data_type: DataType::Int32,
             });
             let ast = unparser.expr_to_sql(&expr)?;
 
