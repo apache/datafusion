@@ -185,7 +185,7 @@ required-features = ["unicode_expressions"]
 [[bench]]
 harness = false
 name = "cot"
-required-features = ["unicode_expressions"]
+required-features = ["math_expressions"]
 
 [[bench]]
 harness = false
