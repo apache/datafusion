@@ -23,8 +23,7 @@ use datafusion_common::{
     Column, DataFusionError, Result, ScalarValue,
 };
 use datafusion_expr::{
-    utils::grouping_set_to_exprlist, Aggregate, Expr, LogicalPlan, Projection, SortExpr,
-    Window,
+    utils::grouping_set_to_exprlist, Aggregate, Expr, LogicalPlan, Projection, SortExpr, Window
 };
 use sqlparser::ast;
 
@@ -119,21 +118,12 @@ pub(crate) fn unproject_agg_exprs(
             if let Expr::Column(c) = sub_expr {
                 if let Some(unprojected_expr) = find_agg_expr(agg, &c)? {
                     Ok(Transformed::yes(unprojected_expr.clone()))
-                } else if let Some(mut unprojected_expr) =
+                } else if let Some(unprojected_expr) =
                     windows.and_then(|w| find_window_expr(w, &c.name).cloned())
                 {
-                    if let Expr::WindowFunction(func) = &mut unprojected_expr {
-                        // Window function can contain an aggregation column, e.g., 'avg(sum(ss_sales_price)) over ...' that needs to be unprojected
-                        func.args.iter_mut().try_for_each(|arg| {
-                            if let Expr::Column(c) = arg {
-                                if let Some(expr) = find_agg_expr(agg, c)? {
-                                    *arg = expr.clone();
-                                }
-                            }
-                            Ok::<(), DataFusionError>(())
-                        })?;
-                    }
-                    Ok(Transformed::yes(unprojected_expr))
+                    // Window function can contain an aggregation columns, e.g., 'avg(sum(ss_sales_price)) over ...' that needs to be unprojected
+                    return Ok(Transformed::yes(unproject_agg_exprs(&unprojected_expr, agg, None)?));
+                    
                 } else {
                     internal_err!(
                         "Tried to unproject agg expr for column '{}' that was not found in the provided Aggregate!", &c.name
