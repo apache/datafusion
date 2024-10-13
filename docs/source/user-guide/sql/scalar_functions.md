@@ -569,37 +569,12 @@ Apache DataFusion uses a [PCRE-like] regular expression [syntax]
 (minus support for several features including look-around and backreferences).
 The following regular expression functions are supported:
 
-- [regexp_count](#regex_count)
 - [regexp_like](#regexp_like)
 - [regexp_match](#regexp_match)
 - [regexp_replace](#regexp_replace)
 
 [pcre-like]: https://en.wikibooks.org/wiki/Regular_Expressions/Perl-Compatible_Regular_Expressions
 [syntax]: https://docs.rs/regex/latest/regex/#syntax
-
-### `regexp_count`
-
-Returns the number of matchs that a [regular expression] has in a string.
-
-```
-regexp_count(str, regexp[, start, flags])
-```
-
-#### Arguments
-
-- **str**: String expression to operate on.
-  Can be a constant, column, or function, and any combination of string operators.
-- **regexp**: Regular expression to test against the string expression.
-  Can be a constant, column, or function.
-- **start**: Optional start position to search for the regular expression.
-  Can be a constant, column, or function.
-- **flags**: Optional regular expression flags that control the behavior of the
-  regular expression. The following flags are supported:
-  - **i**: case-insensitive: letters match both upper and lower case
-  - **m**: multi-line mode: ^ and $ match begin/end of line
-  - **s**: allow . to match \n
-  - **R**: enables CRLF mode: when multi-line mode is enabled, \r\n is used
-  - **U**: swap the meaning of x* and x*?
 
 ### `regexp_like`
 
