@@ -680,14 +680,32 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
 
             // Build array and return
             let views = ScalarBuffer::from(first_n_views);
-            Arc::new(GenericByteViewArray::<B>::new(views, buffers, null_buffer))
+
+            // Safety:
+            // * all views were correctly made
+            // * (if utf8): Input was valid Utf8 so buffer contents are
+            // valid utf8 as well
+            unsafe {
+                Arc::new(GenericByteViewArray::<B>::new_unchecked(
+                    views,
+                    buffers,
+                    null_buffer,
+                ))
+            }
         } else {
             let views = ScalarBuffer::from(first_n_views);
-            Arc::new(GenericByteViewArray::<B>::new(
-                views,
-                Vec::new(),
-                null_buffer,
-            ))
+
+            // Safety:
+            // * all views were correctly made
+            // * (if utf8): Input was valid Utf8 so buffer contents are
+            // valid utf8 as well
+            unsafe {
+                Arc::new(GenericByteViewArray::<B>::new_unchecked(
+                    views,
+                    Vec::new(),
+                    null_buffer,
+                ))
+            }
         }
     }
 
@@ -1090,7 +1108,7 @@ mod tests {
         //   3. Take non-inlined + partial last buffer in `completed`
         //   4. Take non-inlined + whole last buffer in `completed`
         //   5. Take non-inlined + partial last `in_progress`
-        //   6. Take non-inlined + while last buffer in ``in_progress`
+        //   6. Take non-inlined + while last buffer in `in_progress`
         //   7. Take all views at once
 
         let mut builder =
