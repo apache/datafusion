@@ -22,9 +22,6 @@ use arrow::array::GenericBinaryArray;
 use arrow::array::GenericStringArray;
 use arrow::array::OffsetSizeTrait;
 use arrow::array::PrimitiveArray;
-use arrow::array::PrimitiveBuilder;
-use arrow::array::StringBuilder;
-use arrow::array::StringViewBuilder;
 use arrow::array::{Array, ArrayRef, ArrowPrimitiveType, AsArray};
 use arrow::buffer::OffsetBuffer;
 use arrow::buffer::ScalarBuffer;
@@ -33,10 +30,7 @@ use arrow::datatypes::ByteArrayType;
 use arrow::datatypes::ByteViewType;
 use arrow::datatypes::DataType;
 use arrow::datatypes::GenericBinaryType;
-use arrow::datatypes::StringViewType;
-use arrow_array::BinaryViewArray;
 use arrow_array::GenericByteViewArray;
-use arrow_array::StringViewArray;
 use arrow_buffer::Buffer;
 use datafusion_common::utils::proxy::VecAllocExt;
 
@@ -579,7 +573,7 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
         }
     }
 
-    fn build_inner(self: Self) -> ArrayRef {
+    fn build_inner(self) -> ArrayRef {
         let Self {
             views,
             in_progress,
@@ -1103,13 +1097,16 @@ mod tests {
 
         // should be 2 completed, one in progress buffer to hold all output
         assert_eq!(builder.completed.len(), 2);
-        assert!(builder.in_progress.len() > 0);
+        assert!(!builder.in_progress.is_empty());
 
         let first_4 = builder.take_n(4);
         println!(
             "{}",
-            arrow::util::pretty::pretty_format_columns("first_4", &[first_4.clone()])
-                .unwrap()
+            arrow::util::pretty::pretty_format_columns(
+                "first_4",
+                &[Arc::clone(&first_4)]
+            )
+            .unwrap()
         );
         assert_eq!(&first_4, &input_array.slice(0, 4));
 
