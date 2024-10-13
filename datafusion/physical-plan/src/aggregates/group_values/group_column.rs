@@ -592,11 +592,17 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
 
         let views = ScalarBuffer::from(views);
 
-        Arc::new(GenericByteViewArray::<B>::new(
-            views,
-            completed,
-            null_buffer,
-        ))
+        // Safety:
+        // * all views were correctly made
+        // * (if utf8): Input was valid Utf8 so buffer contents are
+        // valid utf8 as well
+        unsafe {
+            Arc::new(GenericByteViewArray::<B>::new_unchecked(
+                views,
+                completed,
+                null_buffer,
+            ))
+        }
     }
 
     fn take_n_inner(&mut self, n: usize) -> ArrayRef {
