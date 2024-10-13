@@ -230,7 +230,7 @@ impl DisplayAs for IEJoinExec {
                     .join(", ");
                 write!(
                     f,
-                    "IEJoinExec: mode={:?}, join_type={:?}, inequality_conditions=[{}], {}",
+                    "IEJoinExec: mode={:?}, join_type={:?}, inequality_conditions=[{}]{}",
                     self.cache.execution_mode,
                     self.join_type,
                     display_inequality_conditions,
@@ -276,10 +276,7 @@ impl ExecutionPlan for IEJoinExec {
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
-        vec![
-            Distribution::UnspecifiedDistribution,
-            Distribution::UnspecifiedDistribution,
-        ]
+        vec![Distribution::SinglePartition, Distribution::SinglePartition]
     }
 
     fn required_input_ordering(
@@ -497,21 +494,18 @@ async fn collect_iejoin_data(
 ) -> Result<IEJoinData> {
     // the left and right data are sort by condition 1 already (the `try_iejoin` rewrite rule has done this), collect it directly
     let left_data = collect(left, Arc::clone(&context)).await?;
-    join_metrics.left_input_batches.add(left_data.len());
     let right_data = collect(right, Arc::clone(&context)).await?;
-    join_metrics.right_input_batches.add(right_data.len());
     let left_blocks = left_data
         .iter()
         .map(|batch| {
+            join_metrics.left_input_batches.add(1);
+            join_metrics.left_input_rows.add(batch.num_rows());
+            join_metrics
+                .load_mem_used
+                .add(batch.get_array_memory_size());
             let columns = left_conditions
                 .iter()
-                .map(|expr| {
-                    join_metrics.left_input_rows.add(batch.num_rows());
-                    join_metrics
-                        .load_mem_used
-                        .add(batch.get_array_memory_size());
-                    expr.expr.evaluate(batch)?.into_array(batch.num_rows())
-                })
+                .map(|expr| expr.expr.evaluate(batch)?.into_array(batch.num_rows()))
                 .collect::<Result<Vec<_>>>()?;
             Ok(SortedBlock::new(columns, vec![]))
         })
@@ -524,15 +518,14 @@ async fn collect_iejoin_data(
     let right_blocks = right_data
         .iter()
         .map(|batch| {
+            join_metrics.right_input_batches.add(1);
+            join_metrics.right_input_rows.add(batch.num_rows());
+            join_metrics
+                .load_mem_used
+                .add(batch.get_array_memory_size());
             let columns = right_conditions
                 .iter()
-                .map(|expr| {
-                    join_metrics.right_input_rows.add(batch.num_rows());
-                    join_metrics
-                        .load_mem_used
-                        .add(batch.get_array_memory_size());
-                    expr.expr.evaluate(batch)?.into_array(batch.num_rows())
-                })
+                .map(|expr| expr.expr.evaluate(batch)?.into_array(batch.num_rows()))
                 .collect::<Result<Vec<_>>>()?;
             Ok(SortedBlock::new(columns, vec![]))
         })
