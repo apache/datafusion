@@ -27,7 +27,7 @@ use arrow::datatypes::DataType;
 use unicode_segmentation::UnicodeSegmentation;
 use DataType::{LargeUtf8, Utf8, Utf8View};
 
-use crate::string::common::StringArrayType;
+use crate::strings::StringArrayType;
 use crate::utils::{make_scalar_function, utf8_to_str_type};
 use datafusion_common::cast::as_int64_array;
 use datafusion_common::{exec_err, Result};
