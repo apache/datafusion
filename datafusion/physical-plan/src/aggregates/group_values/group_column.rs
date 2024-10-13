@@ -25,7 +25,6 @@ use arrow::array::PrimitiveArray;
 use arrow::array::{Array, ArrayRef, ArrowPrimitiveType, AsArray};
 use arrow::buffer::OffsetBuffer;
 use arrow::buffer::ScalarBuffer;
-use arrow::datatypes::BinaryViewType;
 use arrow::datatypes::ByteArrayType;
 use arrow::datatypes::ByteViewType;
 use arrow::datatypes::DataType;
@@ -430,7 +429,7 @@ pub struct ByteViewGroupValueBuilder<B: ByteViewType> {
 }
 
 impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
-    fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             views: Vec::new(),
             in_progress: Vec::new(),
@@ -442,7 +441,6 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
     }
 
     /// Set the max block size
-    #[cfg(test)]
     fn with_max_block_size(mut self, max_block_size: usize) -> Self {
         self.max_block_size = max_block_size;
         self
@@ -606,7 +604,8 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
 
         // The `n == len` case, we need to take all
         if self.len() == n {
-            let cur_builder = std::mem::replace(self, Self::new());
+            let new_builder = Self::new().with_max_block_size(self.max_block_size);
+            let cur_builder = std::mem::replace(self, new_builder);
             return cur_builder.build_inner();
         }
 
@@ -1077,6 +1076,8 @@ mod tests {
 
     #[test]
     fn test_byte_view_take_n() {
+        // ####### Define cases and init #######
+
         // `take_n` is really complex, we should consider and test following situations:
         //   1. Take nulls
         //   2. Take all `inlined`s
@@ -1114,80 +1115,79 @@ mod tests {
             None,
             Some("bar"),
             Some("this string is quite long"),
-            // Finally, we insert the whole array again for testing situation 7
+            // Insert 4 and just take 3 to ensure it will go the path of situation 6
+            None,
+            // Finally, we create a new builder,  insert the whole array and then
+            // take whole at once for testing situation 7
         ]);
+
         let input_array: ArrayRef = Arc::new(input_array);
-        for row in 0..input_array.len() {
+        let first_ones_to_append = 16; // For testing situation 1~5
+        let second_ones_to_append = 3; // For testing situation 6
+        let final_ones_to_append = input_array.len(); // For testing situation 7
+
+        // ####### Test situation 1~5 #######
+        for row in 0..first_ones_to_append {
             builder.append_val(&input_array, row);
         }
 
-        // should be 2 completed, one in progress buffer to hold all output
         assert_eq!(builder.completed.len(), 2);
-        println!("{}", builder.in_progress.len());
-        assert!(!builder.in_progress.is_empty());
+        assert_eq!(builder.in_progress.len(), 59);
 
-        // Take all `inlined`s
+        // Situation 1
         let taken_array = builder.take_n(2);
-        println!(
-            "{}",
-            arrow::util::pretty::pretty_format_columns(
-                "taken_array",
-                &[Arc::clone(&taken_array)]
-            )
-            .unwrap()
-        );
         assert_eq!(&taken_array, &input_array.slice(0, 2));
 
-        // Take non-inlined + partial buffer 0
+        // Situation 2
+        let taken_array = builder.take_n(3);
+        assert_eq!(&taken_array, &input_array.slice(2, 3));
+
+        // Situation 3
+        let taken_array = builder.take_n(3);
+        assert_eq!(&taken_array, &input_array.slice(5, 3));
+
         let taken_array = builder.take_n(1);
-        println!(
-            "{}",
-            arrow::util::pretty::pretty_format_columns(
-                "taken_array",
-                &[Arc::clone(&taken_array)]
-            )
-            .unwrap()
-        );
-        assert_eq!(&taken_array, &input_array.slice(2, 1));
+        assert_eq!(&taken_array, &input_array.slice(8, 1));
 
-        // Take non-inlined + remaining partial buffer 0
+        // Situation 4
+        let taken_array = builder.take_n(3);
+        assert_eq!(&taken_array, &input_array.slice(9, 3));
+
+        // Situation 5
+        let taken_array = builder.take_n(3);
+        assert_eq!(&taken_array, &input_array.slice(12, 3));
+
         let taken_array = builder.take_n(1);
-        println!(
-            "{}",
-            arrow::util::pretty::pretty_format_columns(
-                "taken_array",
-                &[Arc::clone(&taken_array)]
-            )
-            .unwrap()
-        );
-        assert_eq!(&taken_array, &input_array.slice(3, 1));
+        assert_eq!(&taken_array, &input_array.slice(15, 1));
 
-        // Add some new data after the first n
-        // let input_array = StringViewArray::from(vec![
-        //     Some("short"),
-        //     None,
-        //     Some("Some new data to add that is long"), // in buffer 0
-        //     Some("short again"),
-        // ]);
-        // let input_array: ArrayRef = Arc::new(input_array);
-        // for row in 0..input_array.len() {
-        //     builder.append_val(&input_array, row);
-        // }
+        // ####### Test situation 6 #######
+        assert!(builder.completed.is_empty());
+        assert!(builder.in_progress.is_empty());
+        assert!(builder.views.is_empty());
 
-        // let result = Box::new(builder).build();
-        // let expected: ArrayRef = Arc::new(StringViewArray::from(vec![
-        //     // last rows of the original input
-        //     None,
-        //     Some("this string is quite long"),
-        //     None,
-        //     Some("another string that is is quite long"),
-        //     Some("bar"),
-        //     // the subsequent input
-        //     Some("short"),
-        //     None,
-        //     Some("Some new data to add that is long"), // in buffer 0
-        //     Some("short again"),
-        // ]));
-        // assert_eq!(&result, &expected);
+        for row in first_ones_to_append..first_ones_to_append + second_ones_to_append {
+            builder.append_val(&input_array, row);
+        }
+
+        assert!(builder.completed.is_empty());
+        assert_eq!(builder.in_progress.len(), 25);
+
+        let taken_array = builder.take_n(3);
+        assert_eq!(&taken_array, &input_array.slice(16, 3));
+
+        // ####### Test situation 7 #######
+        // Create a new builder
+        let mut builder =
+            ByteViewGroupValueBuilder::<StringViewType>::new().with_max_block_size(60);
+
+        for row in 0..final_ones_to_append {
+            builder.append_val(&input_array, row);
+        }
+
+        assert_eq!(builder.completed.len(), 3);
+        assert_eq!(builder.in_progress.len(), 25);
+
+        let taken_array = builder.take_n(final_ones_to_append);
+        assert_eq!(&taken_array, &input_array);
     }
 }
