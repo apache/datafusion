@@ -624,8 +624,8 @@ impl CustomDialectBuilder {
     }
 
     /// Customize the dialect with a specific SQL type for Int32 casting: Integer, SIGNED, etc.
-    pub fn with_int64_cast_dtype(mut self, int64_cast_dtype: ast::DataType) -> Self {
-        self.int64_cast_dtype = int64_cast_dtype;
+    pub fn with_int32_cast_dtype(mut self, int32_cast_dtype: ast::DataType) -> Self {
+        self.int32_cast_dtype = int32_cast_dtype;
         self
     }
 
