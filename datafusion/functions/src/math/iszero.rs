@@ -18,11 +18,11 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use arrow::array::{ArrayRef, BooleanArray, Float32Array, Float64Array};
-use arrow::datatypes::DataType;
+use arrow::array::{ArrayRef, AsArray, BooleanArray};
 use arrow::datatypes::DataType::{Boolean, Float32, Float64};
+use arrow::datatypes::{DataType, Float32Type, Float64Type};
 
-use datafusion_common::{exec_err, DataFusionError, Result};
+use datafusion_common::{exec_err, Result};
 use datafusion_expr::ColumnarValue;
 use datafusion_expr::TypeSignature::Exact;
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
@@ -77,20 +77,14 @@ impl ScalarUDFImpl for IsZeroFunc {
 /// Iszero SQL function
 pub fn iszero(args: &[ArrayRef]) -> Result<ArrayRef> {
     match args[0].data_type() {
-        Float64 => Ok(Arc::new(make_function_scalar_inputs_return_type!(
-            &args[0],
-            "x",
-            Float64Array,
-            BooleanArray,
-            { |x: f64| { x == 0_f64 } }
+        Float64 => Ok(Arc::new(BooleanArray::from_unary(
+            args[0].as_primitive::<Float64Type>(),
+            |x| x == 0.0,
         )) as ArrayRef),
 
-        Float32 => Ok(Arc::new(make_function_scalar_inputs_return_type!(
-            &args[0],
-            "x",
-            Float32Array,
-            BooleanArray,
-            { |x: f32| { x == 0_f32 } }
+        Float32 => Ok(Arc::new(BooleanArray::from_unary(
+            args[0].as_primitive::<Float32Type>(),
+            |x| x == 0.0,
         )) as ArrayRef),
 
         other => exec_err!("Unsupported data type {other:?} for function iszero"),

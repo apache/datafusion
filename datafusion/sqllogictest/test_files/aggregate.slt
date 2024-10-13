@@ -6076,3 +6076,13 @@ ORDER BY k;
 ----
 1 1.8125 6.8007813 Float16 Float16
 2 8.5 8.5 Float16 Float16
+
+statement ok
+CREATE TABLE t1(v1 int);
+
+# issue: https://github.com/apache/datafusion/issues/12814 
+statement error DataFusion error: Error during planning: Aggregate functions are not allowed in the WHERE clause. Consider using HAVING instead
+SELECT v1 FROM t1 WHERE ((count(v1) % 1) << 1) > 0;
+
+statement ok
+DROP TABLE t1;

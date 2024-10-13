@@ -23,10 +23,11 @@ use datafusion_common::cast::{as_map_array, as_struct_array};
 use datafusion_common::{
     exec_err, plan_datafusion_err, plan_err, ExprSchema, Result, ScalarValue,
 };
-use datafusion_expr::{ColumnarValue, Expr, ExprSchemable};
+use datafusion_expr::scalar_doc_sections::DOC_SECTION_OTHER;
+use datafusion_expr::{ColumnarValue, Documentation, Expr, ExprSchemable};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use std::any::Any;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 #[derive(Debug)]
 pub struct GetFieldFunc {
@@ -133,7 +134,7 @@ impl ScalarUDFImpl for GetFieldFunc {
                     DataType::Struct(fields) if fields.len() == 2 => {
                         // Arrow's MapArray is essentially a ListArray of structs with two columns. They are
                         // often named "key", and "value", but we don't require any specific naming here;
-                        // instead, we assume that the second columnis the "value" column both here and in
+                        // instead, we assume that the second column is the "value" column both here and in
                         // execution.
                         let value_field = fields.get(1).expect("fields should have exactly two members");
                         Ok(value_field.data_type().clone())
@@ -155,7 +156,7 @@ impl ScalarUDFImpl for GetFieldFunc {
                 "Only UTF8 strings are valid as an indexed field in a struct"
             ),
             (DataType::Null, _) => Ok(DataType::Null),
-            (other, _) => plan_err!("The expression to get an indexed field is only valid for `List`, `Struct`, `Map` or `Null` types, got {other}"),
+            (other, _) => plan_err!("The expression to get an indexed field is only valid for `Struct`, `Map` or `Null` types, got {other}"),
         }
     }
 
@@ -190,7 +191,7 @@ impl ScalarUDFImpl for GetFieldFunc {
                 let keys = arrow::compute::kernels::cmp::eq(&key_scalar, map_array.keys())?;
 
                 // note that this array has more entries than the expected output/input size
-                // because maparray is flatten
+                // because map_array is flattened
                 let original_data =  map_array.entries().column(1).to_data();
                 let capacity = Capacities::Array(original_data.len());
                 let mut mutable =
@@ -205,7 +206,7 @@ impl ScalarUDFImpl for GetFieldFunc {
                                         keys.slice(start, end-start).
                                         iter().enumerate().
                                         find(|(_, t)| t.unwrap());
-                    if maybe_matched.is_none(){
+                    if maybe_matched.is_none() {
                         mutable.extend_nulls(1);
                         continue
                     }
@@ -224,14 +225,67 @@ impl ScalarUDFImpl for GetFieldFunc {
                 }
             }
             (DataType::Struct(_), name) => exec_err!(
-                "get indexed field is only possible on struct with utf8 indexes. \
-                             Tried with {name:?} index"
+                "get_field is only possible on struct with utf8 indexes. \
+                             Received with {name:?} index"
             ),
             (DataType::Null, _) => Ok(ColumnarValue::Scalar(ScalarValue::Null)),
             (dt, name) => exec_err!(
-                "get indexed field is only possible on lists with int64 indexes or struct \
-                                         with utf8 indexes. Tried {dt:?} with {name:?} index"
+                "get_field is only possible on maps with utf8 indexes or struct \
+                                         with utf8 indexes. Received {dt:?} with {name:?} index"
             ),
         }
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_getfield_doc())
+    }
+}
+
+static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+
+fn get_getfield_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_OTHER)
+            .with_description(r#"Returns a field within a map or a struct with the given key.
+Note: most users invoke `get_field` indirectly via field access
+syntax such as `my_struct_col['field_name']` which results in a call to
+`get_field(my_struct_col, 'field_name')`."#)
+            .with_syntax_example("get_field(expression1, expression2)")
+            .with_sql_example(r#"```sql
+> create table t (idx varchar, v varchar) as values ('data','fusion'), ('apache', 'arrow');
+> select struct(idx, v) from t as c;
++-------------------------+
+| struct(c.idx,c.v)       |
++-------------------------+
+| {c0: data, c1: fusion}  |
+| {c0: apache, c1: arrow} |
++-------------------------+
+> select get_field((select struct(idx, v) from t), 'c0');
++-----------------------+
+| struct(t.idx,t.v)[c0] |
++-----------------------+
+| data                  |
+| apache                |
++-----------------------+
+> select get_field((select struct(idx, v) from t), 'c1');
++-----------------------+
+| struct(t.idx,t.v)[c1] |
++-----------------------+
+| fusion                |
+| arrow                 |
++-----------------------+
+```
+ "#)
+            .with_argument(
+                "expression1",
+                "The map or struct to retrieve a field for."
+            )
+            .with_argument(
+                "expression2",
+                "The field name in the map or struct to retrieve data for. Must evaluate to a string."
+            )
+            .build()
+            .unwrap()
+    })
 }

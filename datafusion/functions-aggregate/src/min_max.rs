@@ -40,6 +40,7 @@ use datafusion_common::stats::Precision;
 use datafusion_common::{
     downcast_value, exec_err, internal_err, ColumnStatistics, DataFusionError, Result,
 };
+use datafusion_expr::aggregate_doc_sections::DOC_SECTION_GENERAL;
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::prim_op::PrimitiveGroupsAccumulator;
 use datafusion_physical_expr::expressions;
 use std::fmt::Debug;
@@ -54,11 +55,13 @@ use arrow::datatypes::{
 use crate::min_max::min_max_bytes::MinMaxBytesAccumulator;
 use datafusion_common::ScalarValue;
 use datafusion_expr::{
-    function::AccumulatorArgs, Accumulator, AggregateUDFImpl, Signature, Volatility,
+    function::AccumulatorArgs, Accumulator, AggregateUDFImpl, Documentation, Signature,
+    Volatility,
 };
 use datafusion_expr::{GroupsAccumulator, StatisticsArgs};
 use half::f16;
 use std::ops::Deref;
+use std::sync::OnceLock;
 
 fn get_min_max_result_type(input_types: &[DataType]) -> Result<Vec<DataType>> {
     // make sure that the input types only has one element.
@@ -330,6 +333,35 @@ impl AggregateUDFImpl for Max {
     fn value_from_stats(&self, statistics_args: &StatisticsArgs) -> Option<ScalarValue> {
         self.value_from_statistics(statistics_args)
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_max_doc())
+    }
+}
+
+static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+
+fn get_max_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_GENERAL)
+            .with_description(
+                "Returns the maximum value in the specified column.",
+            )
+            .with_syntax_example("max(expression)")
+            .with_sql_example(r#"```sql
+> SELECT max(column_name) FROM table_name;
++----------------------+
+| max(column_name)      |
++----------------------+
+| 150                  |
++----------------------+
+```"#, 
+            )
+            .with_argument("expression", "Expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators.")
+            .build()
+            .unwrap()
+    })
 }
 
 // Statically-typed version of min/max(array) -> ScalarValue for string types
@@ -1134,7 +1166,35 @@ impl AggregateUDFImpl for Min {
     fn reverse_expr(&self) -> datafusion_expr::ReversedUDAF {
         datafusion_expr::ReversedUDAF::Identical
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_min_doc())
+    }
 }
+
+fn get_min_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_GENERAL)
+            .with_description(
+                "Returns the minimum value in the specified column.",
+            )
+            .with_syntax_example("min(expression)")
+            .with_sql_example(r#"```sql
+> SELECT min(column_name) FROM table_name;
++----------------------+
+| min(column_name)      |
++----------------------+
+| 12                   |
++----------------------+
+```"#, 
+            )
+            .with_argument("expression", "Expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators.")
+            .build()
+            .unwrap()
+    })
+}
+
 /// An accumulator to compute the minimum value
 #[derive(Debug)]
 pub struct MinAccumulator {
