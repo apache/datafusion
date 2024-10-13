@@ -732,7 +732,7 @@ impl IEJoinStream {
     /// | value | 1 | 2 | 3 | 4 |
     /// |-------|---|---|---|---|
     /// | id    | left1 | right1 | left2 | right2 |
-    /// The l1_indexes array is [1, -1, 2, -2], the negative value means it is the index of right table, the positive value means it is the index of left table, the absolute value is the index of original recordbatch
+    /// The l1_indexes array is [-1, 1, -2, 2], the negative value means it is the index of left table, the positive value means it is the index of right table, the absolute value is the index of original recordbatch
     /// Sort by condition 2, we get l2:
     /// | value | 4 | 5 | 6 | 7 |
     /// |-------|---|---|---|---|
