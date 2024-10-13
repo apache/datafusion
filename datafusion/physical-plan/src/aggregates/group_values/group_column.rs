@@ -645,29 +645,29 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
 
         if let Some(view) = last_non_inlined_view {
             let view = ByteView::from(*view);
-            let last_related_buffer_index = view.buffer_index as usize;
+            let last_remaining_buffer_index = view.buffer_index as usize;
 
-            // Check should we take the whole `last_related_buffer_index` buffer
+            // Check should we take the whole `last_remaining_buffer_index` buffer
             let take_whole_last_buffer = self.should_take_whole_buffer(
-                last_related_buffer_index,
+                last_remaining_buffer_index,
                 (view.offset + view.length) as usize,
             );
 
             // Take related buffers
             let buffers = if take_whole_last_buffer {
-                self.take_buffers_with_whole_last(last_related_buffer_index)
+                self.take_buffers_with_whole_last(last_remaining_buffer_index)
             } else {
                 self.take_buffers_with_partial_last(
-                    last_related_buffer_index,
+                    last_remaining_buffer_index,
                     (view.offset + view.length) as usize,
                 )
             };
 
             // Shift `buffer index`s finally
             let shifts = if take_whole_last_buffer {
-                last_related_buffer_index + 1
+                last_remaining_buffer_index + 1
             } else {
-                last_related_buffer_index
+                last_remaining_buffer_index
             };
 
             self.views.iter_mut().for_each(|view| {
@@ -711,35 +711,35 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
 
     fn take_buffers_with_whole_last(
         &mut self,
-        last_related_buffer_index: usize,
+        last_remaining_buffer_index: usize,
     ) -> Vec<Buffer> {
-        if last_related_buffer_index == self.completed.len() {
+        if last_remaining_buffer_index == self.completed.len() {
             self.flush_in_progress();
         }
         self.completed
-            .drain(0..last_related_buffer_index + 1)
+            .drain(0..last_remaining_buffer_index + 1)
             .collect()
     }
 
     fn take_buffers_with_partial_last(
         &mut self,
-        last_related_buffer_index: usize,
-        take_len: usize,
+        last_remaining_buffer_index: usize,
+        last_take_len: usize,
     ) -> Vec<Buffer> {
-        let mut take_buffers = Vec::with_capacity(last_related_buffer_index + 1);
+        let mut take_buffers = Vec::with_capacity(last_remaining_buffer_index + 1);
 
-        // Take `0 ~ last_related_buffer_index - 1` buffers
-        if !self.completed.is_empty() || last_related_buffer_index == 0 {
-            take_buffers.extend(self.completed.drain(0..last_related_buffer_index));
+        // Take `0 ~ last_remaining_buffer_index - 1` buffers
+        if !self.completed.is_empty() || last_remaining_buffer_index == 0 {
+            take_buffers.extend(self.completed.drain(0..last_remaining_buffer_index));
         }
 
-        // Process the `last_related_buffer_index` buffers
-        let last_buffer = if last_related_buffer_index < self.completed.len() {
+        // Process the `last_remaining_buffer_index` buffers
+        let last_buffer = if last_remaining_buffer_index < self.completed.len() {
             // If it is in `completed`, simply clone
-            self.completed[last_related_buffer_index].clone()
+            self.completed[last_remaining_buffer_index].clone()
         } else {
             // If it is `in_progress`, copied `0 ~ offset` part
-            let taken_last_buffer = self.in_progress[0..take_len].to_vec();
+            let taken_last_buffer = self.in_progress[0..last_take_len].to_vec();
             Buffer::from_vec(taken_last_buffer)
         };
         take_buffers.push(last_buffer);
