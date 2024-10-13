@@ -1044,18 +1044,39 @@ mod tests {
         //   - exist null, input null; values not equal
         //   - exist null, input null; values equal
         //   - exist not null, input null
-        //   - exist not null, input not null; values not equal
-        //   - exist not null, input not null; values equal
+        //   - exist not null, input not null; value lens not equal
+        //   - exist not null, input not null; value not equal(inlined case)
+        //   - exist not null, input not null; value equal(inlined case)
+        //
+        //   - exist not null, input not null; value not equal
+        //     (non-inlined case + prefix not equal)
+        //
+        //   - exist not null, input not null; value not equal
+        //     (non-inlined case + value in `completed`)
+        //
+        //   - exist not null, input not null; value equal
+        //     (non-inlined case + value in `completed`)
+        //
+        //   - exist not null, input not null; value not equal
+        //     (non-inlined case + value in `in_progress`)
+        //
+        //   - exist not null, input not null; value equal
+        //     (non-inlined case + value in `in_progress`)
 
-        let mut builder = ByteViewGroupValueBuilder::<StringViewType>::new();
+        // Set the block size to 40 for ensuring some unlined values are in `in_progress`,
+        // and some are in `completed`, so both two branches in `value` function can be covered.
+        let mut builder =
+            ByteViewGroupValueBuilder::<StringViewType>::new().with_max_block_size(60);
         let builder_array = Arc::new(StringViewArray::from(vec![
             None,
             None,
             None,
             Some("foo"),
+            Some("bazz"),
+            Some("foo"),
             Some("bar"),
-            Some("this string is quite long"),
-            Some("baz"),
+            Some("I am a long string for test eq in completed"),
+            Some("I am a long string for test eq in progress"),
         ])) as ArrayRef;
         builder.append_val(&builder_array, 0);
         builder.append_val(&builder_array, 1);
@@ -1064,26 +1085,38 @@ mod tests {
         builder.append_val(&builder_array, 4);
         builder.append_val(&builder_array, 5);
         builder.append_val(&builder_array, 6);
+        builder.append_val(&builder_array, 7);
+        builder.append_val(&builder_array, 8);
 
         // Define input array
         let (views, buffer, _nulls) = StringViewArray::from(vec![
             Some("foo"),
-            Some("bar"),                       // set to null
-            Some("this string is quite long"), // set to null
+            Some("bar"), // set to null
             None,
             None,
-            Some("foo"),
             Some("baz"),
+            Some("oof"),
+            Some("bar"),
+            Some("i am a long string for test eq in completed"),
+            Some("I am a long string for test eq in COMPLETED"),
+            Some("I am a long string for test eq in completed"),
+            Some("I am a long string for test eq in PROGRESS"),
+            Some("I am a long string for test eq in progress"),
         ])
         .into_parts();
 
         // explicitly build a boolean buffer where one of the null values also happens to match
-        let mut boolean_buffer_builder = BooleanBufferBuilder::new(6);
+        let mut boolean_buffer_builder = BooleanBufferBuilder::new(9);
         boolean_buffer_builder.append(true);
         boolean_buffer_builder.append(false); // this sets Some("bar") to null above
-        boolean_buffer_builder.append(false); // this sets Some("thisstringisquitelong") to null above
         boolean_buffer_builder.append(false);
         boolean_buffer_builder.append(false);
+        boolean_buffer_builder.append(true);
+        boolean_buffer_builder.append(true);
+        boolean_buffer_builder.append(true);
+        boolean_buffer_builder.append(true);
+        boolean_buffer_builder.append(true);
+        boolean_buffer_builder.append(true);
         boolean_buffer_builder.append(true);
         boolean_buffer_builder.append(true);
         let nulls = NullBuffer::new(boolean_buffer_builder.finish());
@@ -1098,6 +1131,11 @@ mod tests {
         assert!(!builder.equal_to(4, &input_array, 4));
         assert!(!builder.equal_to(5, &input_array, 5));
         assert!(builder.equal_to(6, &input_array, 6));
+        assert!(!builder.equal_to(7, &input_array, 7));
+        assert!(!builder.equal_to(7, &input_array, 8));
+        assert!(builder.equal_to(7, &input_array, 9));
+        assert!(!builder.equal_to(8, &input_array, 10));
+        assert!(builder.equal_to(8, &input_array, 11));
     }
 
     #[test]
@@ -1149,7 +1187,7 @@ mod tests {
 
         let input_array: ArrayRef = Arc::new(input_array);
         let first_ones_to_append = 16; // For testing situation 1~5
-        let second_ones_to_append = 3; // For testing situation 6
+        let second_ones_to_append = 4; // For testing situation 6
         let final_ones_to_append = input_array.len(); // For testing situation 7
 
         // ####### Test situation 1~5 #######
