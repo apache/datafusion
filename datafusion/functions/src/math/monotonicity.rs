@@ -604,17 +604,3 @@ pub fn get_tanh_doc() -> &'static Documentation {
             .unwrap()
     })
 }
-
-pub fn get_pow_doc() -> &'static Documentation {
-    static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_MATH)
-            .with_description(
-                "_Alias of [power](#power)._",
-            )
-            .build()
-            .unwrap()
-    })
-}
