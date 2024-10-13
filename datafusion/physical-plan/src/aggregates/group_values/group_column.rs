@@ -643,42 +643,8 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
             .rev()
             .find(|view| ((**view) as u32) > 12);
 
-        if let Some(view) = last_non_inlined_view {
-            let view = ByteView::from(*view);
-            let last_remaining_buffer_index = view.buffer_index as usize;
-
-            // Check should we take the whole `last_remaining_buffer_index` buffer
-            let take_whole_last_buffer = self.should_take_whole_buffer(
-                last_remaining_buffer_index,
-                (view.offset + view.length) as usize,
-            );
-
-            // Take related buffers
-            let buffers = if take_whole_last_buffer {
-                self.take_buffers_with_whole_last(last_remaining_buffer_index)
-            } else {
-                self.take_buffers_with_partial_last(
-                    last_remaining_buffer_index,
-                    (view.offset + view.length) as usize,
-                )
-            };
-
-            // Shift `buffer index`s finally
-            let shifts = if take_whole_last_buffer {
-                last_remaining_buffer_index + 1
-            } else {
-                last_remaining_buffer_index
-            };
-
-            self.views.iter_mut().for_each(|view| {
-                if (*view as u32) > 12 {
-                    let mut byte_view = ByteView::from(*view);
-                    byte_view.buffer_index -= shifts as u32;
-                    *view = byte_view.as_u128();
-                }
-            });
-
-            // Build array and return
+        // All taken views inlined
+        let Some(view) = last_non_inlined_view else {
             let views = ScalarBuffer::from(first_n_views);
 
             // Safety:
@@ -686,26 +652,62 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
             // * (if utf8): Input was valid Utf8 so buffer contents are
             // valid utf8 as well
             unsafe {
-                Arc::new(GenericByteViewArray::<B>::new_unchecked(
-                    views,
-                    buffers,
-                    null_buffer,
-                ))
-            }
-        } else {
-            let views = ScalarBuffer::from(first_n_views);
-
-            // Safety:
-            // * all views were correctly made
-            // * (if utf8): Input was valid Utf8 so buffer contents are
-            // valid utf8 as well
-            unsafe {
-                Arc::new(GenericByteViewArray::<B>::new_unchecked(
+                return Arc::new(GenericByteViewArray::<B>::new_unchecked(
                     views,
                     Vec::new(),
                     null_buffer,
-                ))
+                ));
             }
+        };
+
+        // Unfortunately, some taken views non-inlined
+        let view = ByteView::from(*view);
+        let last_remaining_buffer_index = view.buffer_index as usize;
+
+        // Check should we take the whole `last_remaining_buffer_index` buffer
+        let take_whole_last_buffer = self.should_take_whole_buffer(
+            last_remaining_buffer_index,
+            (view.offset + view.length) as usize,
+        );
+
+        // Take related buffers
+        let buffers = if take_whole_last_buffer {
+            self.take_buffers_with_whole_last(last_remaining_buffer_index)
+        } else {
+            self.take_buffers_with_partial_last(
+                last_remaining_buffer_index,
+                (view.offset + view.length) as usize,
+            )
+        };
+
+        // Shift `buffer index`s finally
+        let shifts = if take_whole_last_buffer {
+            last_remaining_buffer_index + 1
+        } else {
+            last_remaining_buffer_index
+        };
+
+        self.views.iter_mut().for_each(|view| {
+            if (*view as u32) > 12 {
+                let mut byte_view = ByteView::from(*view);
+                byte_view.buffer_index -= shifts as u32;
+                *view = byte_view.as_u128();
+            }
+        });
+
+        // Build array and return
+        let views = ScalarBuffer::from(first_n_views);
+
+        // Safety:
+        // * all views were correctly made
+        // * (if utf8): Input was valid Utf8 so buffer contents are
+        // valid utf8 as well
+        unsafe {
+            Arc::new(GenericByteViewArray::<B>::new_unchecked(
+                views,
+                buffers,
+                null_buffer,
+            ))
         }
     }
 
