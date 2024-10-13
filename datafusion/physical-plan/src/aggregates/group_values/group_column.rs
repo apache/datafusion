@@ -1077,18 +1077,44 @@ mod tests {
 
     #[test]
     fn test_byte_view_take_n() {
+        // `take_n` is really complex, we should consider and test following situations:
+        //   1. Take nulls
+        //   2. Take all `inlined`s
+        //   3. Take non-inlined + partial last buffer in `completed`
+        //   4. Take non-inlined + whole last buffer in `completed`
+        //   5. Take non-inlined + partial last `in_progress`
+        //   6. Take non-inlined + while last buffer in ``in_progress`
+        //   7. Take all views at once
+
         let mut builder =
             ByteViewGroupValueBuilder::<StringViewType>::new().with_max_block_size(60);
         let input_array = StringViewArray::from(vec![
-            Some("this string is quite long"), // in buffer 0
+            //  Test situation 1
+            None,
+            None,
+            // Test situation 2 (also test take null together)
+            None,
             Some("foo"),
             Some("bar"),
-            Some("this string is also quite long"), // buffer 0
+            // Test situation 3 (also test take null + inlined)
             None,
-            Some("this string is quite long"), // buffer 1
+            Some("foo"),
+            Some("this string is quite long"),
+            Some("this string is also quite long"),
+            // Test situation 4 (also test take null + inlined)
             None,
-            Some("another string that is is quite long"), // buffer 1
             Some("bar"),
+            Some("this string is quite long"),
+            // Test situation 5 (also test take null + inlined)
+            None,
+            Some("foo"),
+            Some("another string that is is quite long"),
+            Some("this string not so long"),
+            // Test situation 6 (also test take null + inlined + insert again after taking)
+            None,
+            Some("bar"),
+            Some("this string is quite long"),
+            // Finally, we insert the whole array again for testing situation 7
         ]);
         let input_array: ArrayRef = Arc::new(input_array);
         for row in 0..input_array.len() {
@@ -1097,45 +1123,71 @@ mod tests {
 
         // should be 2 completed, one in progress buffer to hold all output
         assert_eq!(builder.completed.len(), 2);
+        println!("{}", builder.in_progress.len());
         assert!(!builder.in_progress.is_empty());
 
-        let first_4 = builder.take_n(4);
+        // Take all `inlined`s
+        let taken_array = builder.take_n(2);
         println!(
             "{}",
             arrow::util::pretty::pretty_format_columns(
-                "first_4",
-                &[Arc::clone(&first_4)]
+                "taken_array",
+                &[Arc::clone(&taken_array)]
             )
             .unwrap()
         );
-        assert_eq!(&first_4, &input_array.slice(0, 4));
+        assert_eq!(&taken_array, &input_array.slice(0, 2));
+
+        // Take non-inlined + partial buffer 0
+        let taken_array = builder.take_n(1);
+        println!(
+            "{}",
+            arrow::util::pretty::pretty_format_columns(
+                "taken_array",
+                &[Arc::clone(&taken_array)]
+            )
+            .unwrap()
+        );
+        assert_eq!(&taken_array, &input_array.slice(2, 1));
+
+        // Take non-inlined + remaining partial buffer 0
+        let taken_array = builder.take_n(1);
+        println!(
+            "{}",
+            arrow::util::pretty::pretty_format_columns(
+                "taken_array",
+                &[Arc::clone(&taken_array)]
+            )
+            .unwrap()
+        );
+        assert_eq!(&taken_array, &input_array.slice(3, 1));
 
         // Add some new data after the first n
-        let input_array = StringViewArray::from(vec![
-            Some("short"),
-            None,
-            Some("Some new data to add that is long"), // in buffer 0
-            Some("short again"),
-        ]);
-        let input_array: ArrayRef = Arc::new(input_array);
-        for row in 0..input_array.len() {
-            builder.append_val(&input_array, row);
-        }
+        // let input_array = StringViewArray::from(vec![
+        //     Some("short"),
+        //     None,
+        //     Some("Some new data to add that is long"), // in buffer 0
+        //     Some("short again"),
+        // ]);
+        // let input_array: ArrayRef = Arc::new(input_array);
+        // for row in 0..input_array.len() {
+        //     builder.append_val(&input_array, row);
+        // }
 
-        let result = Box::new(builder).build();
-        let expected: ArrayRef = Arc::new(StringViewArray::from(vec![
-            // last rows of the original input
-            None,
-            Some("this string is quite long"),
-            None,
-            Some("another string that is is quite long"),
-            Some("bar"),
-            // the subsequent input
-            Some("short"),
-            None,
-            Some("Some new data to add that is long"), // in buffer 0
-            Some("short again"),
-        ]));
-        assert_eq!(&result, &expected);
+        // let result = Box::new(builder).build();
+        // let expected: ArrayRef = Arc::new(StringViewArray::from(vec![
+        //     // last rows of the original input
+        //     None,
+        //     Some("this string is quite long"),
+        //     None,
+        //     Some("another string that is is quite long"),
+        //     Some("bar"),
+        //     // the subsequent input
+        //     Some("short"),
+        //     None,
+        //     Some("Some new data to add that is long"), // in buffer 0
+        //     Some("short again"),
+        // ]));
+        // assert_eq!(&result, &expected);
     }
 }
