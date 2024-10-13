@@ -122,7 +122,7 @@ fn get_regexp_match_doc() -> &'static Documentation {
             .with_description("Returns a list of [regular expression](https://docs.rs/regex/latest/regex/#syntax) matches in a string.")
             .with_syntax_example("regexp_match(str, regexp[, flags])")
             .with_sql_example(r#"```sql
-            select regexp_match('Köln', '[a-zA-Z]ö[a-zA-Z]{2}');
+            > select regexp_match('Köln', '[a-zA-Z]ö[a-zA-Z]{2}');
             +---------------------------------------------------------+
             | regexp_match(Utf8("Köln"),Utf8("[a-zA-Z]ö[a-zA-Z]{2}")) |
             +---------------------------------------------------------+

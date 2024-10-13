@@ -126,20 +126,20 @@ impl ScalarUDFImpl for RegexpReplaceFunc {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_regexp_match_doc())
+        Some(get_regexp_replace_doc())
     }
 }
 
 static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
-fn get_regexp_match_doc() -> &'static Documentation {
+fn get_regexp_replace_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
     Documentation::builder()
         .with_doc_section(DOC_SECTION_REGEX)
         .with_description("Replaces substrings in a string that match a [regular expression](https://docs.rs/regex/latest/regex/#syntax).")
         .with_syntax_example("regexp_replace(str, regexp, replacement[, flags])")
         .with_sql_example(r#"```sql
-        SELECT regexp_replace('foobarbaz', 'b(..)', 'X\\1Y', 'g');
+> select regexp_replace('foobarbaz', 'b(..)', 'X\\1Y', 'g');
 +------------------------------------------------------------------------+
 | regexp_replace(Utf8("foobarbaz"),Utf8("b(..)"),Utf8("X\1Y"),Utf8("g")) |
 +------------------------------------------------------------------------+
