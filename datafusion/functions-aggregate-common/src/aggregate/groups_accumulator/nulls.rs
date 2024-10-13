@@ -113,7 +113,7 @@ pub fn apply_filter_as_nulls(
 
 /// Replaces the nulls in the input array with the given `NullBuffer`
 ///
-/// Can replace when upstreamed in arrow-rs: <https://github.com/apache/arrow-rs/issues/6528>
+/// TODO: replace when upstreamed in arrow-rs: <https://github.com/apache/arrow-rs/issues/6528>
 pub fn set_nulls_dyn(input: &dyn Array, nulls: Option<NullBuffer>) -> Result<ArrayRef> {
     if let Some(nulls) = nulls.as_ref() {
         assert_eq!(nulls.len(), input.len());
