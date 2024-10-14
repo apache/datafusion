@@ -95,6 +95,8 @@ pub fn udf_doc(args: TokenStream, input: TokenStream) -> TokenStream {
 
     eprintln!("doc_section_include=cc{doc_section_include:?}cc");
     let doc_section_include: bool = doc_section_include.unwrap().value().parse().unwrap();
+    let doc_section_description = doc_section_desc.map(|desc| quote!{ Some(#desc)}).unwrap_or(quote!{ None });
+
 
     let expanded = quote! {
         #input
@@ -109,7 +111,7 @@ pub fn udf_doc(args: TokenStream, input: TokenStream) -> TokenStream {
                 fn documentation_test(&self) -> Option<&DocumentationTest> {
                     Some(DOCUMENTATION_TEST.get_or_init(|| {
                         DocumentationTest::builder()
-                        .with_doc_section(DocSectionTest { include: #doc_section_include, label: #doc_section_lbl, description: Some("") })
+                        .with_doc_section(DocSectionTest { include: #doc_section_include, label: #doc_section_lbl, description: #doc_section_description })
                         .with_description(#description.to_string())
                         .with_syntax_example(#syntax_example.to_string())
                         .build()
