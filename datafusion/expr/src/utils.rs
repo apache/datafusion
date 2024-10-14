@@ -600,7 +600,7 @@ pub fn group_window_expr_by_sort_keys(
 /// Collect all deeply nested `Expr::AggregateFunction`.
 /// They are returned in order of occurrence (depth
 /// first), with duplicates omitted.
-pub fn find_aggregate_exprs(exprs: &[Expr]) -> Vec<Expr> {
+pub fn find_aggregate_exprs<'a>(exprs: impl IntoIterator<Item = &'a Expr>) -> Vec<Expr> {
     find_exprs_in_exprs(exprs, &|nested_expr| {
         matches!(nested_expr, Expr::AggregateFunction { .. })
     })
@@ -625,12 +625,15 @@ pub fn find_out_reference_exprs(expr: &Expr) -> Vec<Expr> {
 /// Search the provided `Expr`'s, and all of their nested `Expr`, for any that
 /// pass the provided test. The returned `Expr`'s are deduplicated and returned
 /// in order of appearance (depth first).
-fn find_exprs_in_exprs<F>(exprs: &[Expr], test_fn: &F) -> Vec<Expr>
+fn find_exprs_in_exprs<'a, F>(
+    exprs: impl IntoIterator<Item = &'a Expr>,
+    test_fn: &F,
+) -> Vec<Expr>
 where
     F: Fn(&Expr) -> bool,
 {
     exprs
-        .iter()
+        .into_iter()
         .flat_map(|expr| find_exprs_in_expr(expr, test_fn))
         .fold(vec![], |mut acc, expr| {
             if !acc.contains(&expr) {
