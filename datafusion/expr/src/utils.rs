@@ -205,7 +205,7 @@ pub fn enumerate_grouping_sets(group_expr: Vec<Expr>) -> Result<Vec<Expr>> {
     if !has_grouping_set || group_expr.len() == 1 {
         return Ok(group_expr);
     }
-    // only process mix grouping sets
+    // Only process mix grouping sets
     let partial_sets = group_expr
         .iter()
         .map(|expr| {
@@ -234,7 +234,7 @@ pub fn enumerate_grouping_sets(group_expr: Vec<Expr>) -> Result<Vec<Expr>> {
         })
         .collect::<Result<Vec<_>>>()?;
 
-    // cross join
+    // Cross Join
     let grouping_sets = partial_sets
         .into_iter()
         .map(Ok)
@@ -342,7 +342,7 @@ fn get_excluded_columns(
     // Excluded columns should be unique
     let n_elem = idents.len();
     let unique_idents = idents.into_iter().collect::<HashSet<_>>();
-    // if HashSet size, and vector length are different, this means that some of the excluded columns
+    // If HashSet size, and vector length are different, this means that some of the excluded columns
     // are not unique. In this case return error.
     if n_elem != unique_idents.len() {
         return plan_err!("EXCLUDE or EXCEPT contains duplicate column names");
@@ -466,7 +466,7 @@ pub fn expand_qualified_wildcard(
 }
 
 /// (expr, "is the SortExpr for window (either comes from PARTITION BY or ORDER BY columns)")
-/// if bool is true SortExpr comes from `PARTITION BY` column, if false comes from `ORDER BY` column
+/// If bool is true SortExpr comes from `PARTITION BY` column, if false comes from `ORDER BY` column
 type WindowSortKey = Vec<(Sort, bool)>;
 
 /// Generate a sort key for a given window expr's partition_by and order_by expr
@@ -573,7 +573,7 @@ pub fn compare_sort_expr(
     Ordering::Equal
 }
 
-/// group a slice of window expression expr by their order by expressions
+/// Group a slice of window expression expr by their order by expressions
 pub fn group_window_expr_by_sort_keys(
     window_expr: Vec<Expr>,
 ) -> Result<Vec<(WindowSortKey, Vec<Expr>)>> {
@@ -656,7 +656,7 @@ where
             if !(exprs.contains(expr)) {
                 exprs.push(expr.clone())
             }
-            // stop recursing down this expr once we find a match
+            // Stop recursing down this expr once we find a match
             return Ok(TreeNodeRecursion::Jump);
         }
 
@@ -675,7 +675,7 @@ where
     let mut err = Ok(());
     expr.apply(|expr| {
         if let Err(e) = f(expr) {
-            // save the error for later (it may not be a DataFusionError
+            // Save the error for later (it may not be a DataFusionError)
             err = Err(e);
             Ok(TreeNodeRecursion::Stop)
         } else {
@@ -694,7 +694,7 @@ pub fn exprlist_to_fields<'a>(
     exprs: impl IntoIterator<Item = &'a Expr>,
     plan: &LogicalPlan,
 ) -> Result<Vec<(Option<TableReference>, Arc<Field>)>> {
-    // look for exact match in plan's output schema
+    // Look for exact match in plan's output schema
     let wildcard_schema = find_base_plan(plan).schema();
     let input_schema = plan.schema();
     let result = exprs
@@ -953,8 +953,8 @@ pub(crate) fn find_column_indexes_referenced_by_expr(
     indexes
 }
 
-/// can this data type be used in hash join equal conditions??
-/// data types here come from function 'equal_rows', if more data types are supported
+/// Can this data type be used in hash join equal conditions??
+/// Data types here come from function 'equal_rows', if more data types are supported
 /// in equal_rows(hash join), add those data types here to generate join logical plan.
 pub fn can_hash(data_type: &DataType) -> bool {
     match data_type {
