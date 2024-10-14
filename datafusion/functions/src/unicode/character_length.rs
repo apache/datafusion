@@ -103,7 +103,7 @@ fn get_character_length_doc() -> &'static Documentation {
 +------------------------------------+
 ```"#,
             )
-            .with_standard_argument("str", "String")
+            .with_standard_argument("str", Some("String"))
             .with_related_udf("bit_length")
             .with_related_udf("octet_length")
             .build()

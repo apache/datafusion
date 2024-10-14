@@ -108,7 +108,7 @@ fn get_overlay_doc() -> &'static Documentation {
 | Thomas                                                 |
 +--------------------------------------------------------+
 ```"#)
-            .with_standard_argument("str", "String")
+            .with_standard_argument("str", Some("String"))
             .with_argument("substr", "Substring to replace in str.")
             .with_argument("pos", "The start position to start the replace in str.")
             .with_argument("count", "The count of characters to be replaced from start position of str. If not specified, will use substr length instead.")

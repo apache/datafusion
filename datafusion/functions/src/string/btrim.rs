@@ -122,7 +122,7 @@ fn get_btrim_doc() -> &'static Documentation {
 | datafusion                                |
 +-------------------------------------------+
 ```"#)
-            .with_standard_argument("str", "String")
+            .with_standard_argument("str", Some("String"))
             .with_argument("trim_str", "String expression to operate on. Can be a constant, column, or function, and any combination of operators. _Default is whitespace characters._")
             .with_related_udf("ltrim")
             .with_related_udf("rtrim")

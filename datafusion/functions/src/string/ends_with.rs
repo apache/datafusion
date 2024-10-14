@@ -103,7 +103,7 @@ fn get_ends_with_doc() -> &'static Documentation {
 +--------------------------------------------+
 ```"#,
             )
-            .with_standard_argument("str", "String")
+            .with_standard_argument("str", Some("String"))
             .with_argument("substr", "Substring to test for.")
             .build()
             .unwrap()

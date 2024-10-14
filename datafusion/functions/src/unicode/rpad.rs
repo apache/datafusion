@@ -140,7 +140,7 @@ fn get_rpad_doc() -> &'static Documentation {
 ```"#)
             .with_standard_argument(
                 "str",
-                "String",
+                Some("String"),
             )
             .with_argument("n", "String length to pad to.")
             .with_argument("padding_str",

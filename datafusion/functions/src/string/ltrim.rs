@@ -122,7 +122,7 @@ fn get_ltrim_doc() -> &'static Documentation {
 | datafusion___                             |
 +-------------------------------------------+
 ```"#)
-            .with_standard_argument("str", "String")
+            .with_standard_argument("str", Some("String"))
             .with_argument("trim_str", "String expression to trim from the beginning of the input string. Can be a constant, column, or function, and any combination of arithmetic operators. _Default is whitespace characters._")
             .with_related_udf("btrim")
             .with_related_udf("rtrim")

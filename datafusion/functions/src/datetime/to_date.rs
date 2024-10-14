@@ -111,7 +111,7 @@ Note: `to_date` returns Date32, which represents its values as the number of day
 
 Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/to_date.rs)
 "#)
-            .with_standard_argument("expression", "String")
+            .with_standard_argument("expression", Some("String"))
             .with_argument(
                 "format_n",
                 "Optional [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) strings to use to parse the expression. Formats will be tried in the order

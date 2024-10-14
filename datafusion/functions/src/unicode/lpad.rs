@@ -119,7 +119,7 @@ fn get_lpad_doc() -> &'static Documentation {
 | helloDolly                                  |
 +---------------------------------------------+
 ```"#)
-            .with_standard_argument("str", "String")
+            .with_standard_argument("str", Some("String"))
             .with_argument("n", "String length to pad to.")
             .with_argument("padding_str", "Optional string expression to pad with. Can be a constant, column, or function, and any combination of string operators. _Default is a space._")
             .with_related_udf("rpad")
