@@ -1255,7 +1255,7 @@ regexp_match(str, regexp[, flags])
 #### Example
 
 ```sql
-            select regexp_match('Köln', '[a-zA-Z]ö[a-zA-Z]{2}');
+            > select regexp_match('Köln', '[a-zA-Z]ö[a-zA-Z]{2}');
             +---------------------------------------------------------+
             | regexp_match(Utf8("Köln"),Utf8("[a-zA-Z]ö[a-zA-Z]{2}")) |
             +---------------------------------------------------------+
@@ -1296,7 +1296,7 @@ regexp_replace(str, regexp, replacement[, flags])
 #### Example
 
 ```sql
-        SELECT regexp_replace('foobarbaz', 'b(..)', 'X\\1Y', 'g');
+> select regexp_replace('foobarbaz', 'b(..)', 'X\\1Y', 'g');
 +------------------------------------------------------------------------+
 | regexp_replace(Utf8("foobarbaz"),Utf8("b(..)"),Utf8("X\1Y"),Utf8("g")) |
 +------------------------------------------------------------------------+
