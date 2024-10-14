@@ -29,10 +29,10 @@ use crate::{execution_props::ExecutionProps, Expr, ExprSchemable};
 /// information in without having to create `DFSchema` objects. If you
 /// have a [`DFSchemaRef`] you can use [`SimplifyContext`]
 pub trait SimplifyInfo {
-    /// returns true if this Expr has boolean type
+    /// Returns true if this Expr has boolean type
     fn is_boolean_type(&self, expr: &Expr) -> Result<bool>;
 
-    /// returns true of this expr is nullable (could possibly be NULL)
+    /// Returns true of this expr is nullable (could possibly be NULL)
     fn nullable(&self, expr: &Expr) -> Result<bool>;
 
     /// Returns details needed for partial expression evaluation
@@ -72,7 +72,7 @@ impl<'a> SimplifyContext<'a> {
 }
 
 impl<'a> SimplifyInfo for SimplifyContext<'a> {
-    /// returns true if this Expr has boolean type
+    /// Returns true if this Expr has boolean type
     fn is_boolean_type(&self, expr: &Expr) -> Result<bool> {
         if let Some(schema) = &self.schema {
             if let Ok(DataType::Boolean) = expr.get_type(schema) {
@@ -113,7 +113,7 @@ impl<'a> SimplifyInfo for SimplifyContext<'a> {
 pub enum ExprSimplifyResult {
     /// The function call was simplified to an entirely new Expr
     Simplified(Expr),
-    /// the function call could not be simplified, and the arguments
+    /// The function call could not be simplified, and the arguments
     /// are return unmodified.
     Original(Vec<Expr>),
 }
