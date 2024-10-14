@@ -22,7 +22,7 @@ use arrow_array::{ArrayRef, Int32Array, Int64Array, StringArray};
 use datafusion::functions::crypto::{sha224, sha256, sha384, sha512};
 use datafusion_common::cast::as_binary_array;
 use datafusion_common::{exec_err, internal_err, DataFusionError, ScalarValue};
-use datafusion_expr::{ColumnarValue, ScalarFunctionImplementation};
+use datafusion_expr::{ColumnarValue, ScalarUDF};
 use std::sync::Arc;
 
 /// Spark compatible murmur3 hash (just `hash` in Spark) in vectorized execution fashion
@@ -115,31 +115,31 @@ pub fn spark_xxhash64(args: &[ColumnarValue]) -> Result<ColumnarValue, DataFusio
 
 /// `sha224` function that simulates Spark's `sha2` expression with bit width 224
 pub fn spark_sha224(args: &[ColumnarValue]) -> Result<ColumnarValue, DataFusionError> {
-    wrap_digest_result_as_hex_string(args, sha224().fun())
+    wrap_digest_result_as_hex_string(args, sha224())
 }
 
 /// `sha256` function that simulates Spark's `sha2` expression with bit width 0 or 256
 pub fn spark_sha256(args: &[ColumnarValue]) -> Result<ColumnarValue, DataFusionError> {
-    wrap_digest_result_as_hex_string(args, sha256().fun())
+    wrap_digest_result_as_hex_string(args, sha256())
 }
 
 /// `sha384` function that simulates Spark's `sha2` expression with bit width 384
 pub fn spark_sha384(args: &[ColumnarValue]) -> Result<ColumnarValue, DataFusionError> {
-    wrap_digest_result_as_hex_string(args, sha384().fun())
+    wrap_digest_result_as_hex_string(args, sha384())
 }
 
 /// `sha512` function that simulates Spark's `sha2` expression with bit width 512
 pub fn spark_sha512(args: &[ColumnarValue]) -> Result<ColumnarValue, DataFusionError> {
-    wrap_digest_result_as_hex_string(args, sha512().fun())
+    wrap_digest_result_as_hex_string(args, sha512())
 }
 
 // Spark requires hex string as the result of sha2 functions, we have to wrap the
 // result of digest functions as hex string
 fn wrap_digest_result_as_hex_string(
     args: &[ColumnarValue],
-    digest: ScalarFunctionImplementation,
+    digest: Arc<ScalarUDF>,
 ) -> Result<ColumnarValue, DataFusionError> {
-    let value = digest(args)?;
+    let value = digest.invoke(args)?;
     match value {
         ColumnarValue::Array(array) => {
             let binary_array = as_binary_array(&array)?;
