@@ -76,11 +76,6 @@ pub fn expr_to_sql(expr: &Expr) -> Result<ast::Expr> {
     unparser.expr_to_sql(expr)
 }
 
-pub fn sort_to_sql(sort: &Sort) -> Result<ast::OrderByExpr> {
-    let unparser = Unparser::default();
-    unparser.sort_to_sql(sort)
-}
-
 const LOWEST: &BinaryOperator = &BinaryOperator::Or;
 // closest precedence we have to IS operator is BitwiseAnd (any other) in PG docs
 // (https://www.postgresql.org/docs/7.2/sql-precedence.html)
@@ -221,9 +216,10 @@ impl Unparser<'_> {
                         ast::WindowFrameUnits::Groups
                     }
                 };
-                let order_by: Vec<ast::OrderByExpr> = order_by
+
+                let order_by =order_by
                     .iter()
-                    .map(sort_to_sql)
+                    .map(|sort_expr| self.sort_to_sql(sort_expr))
                     .collect::<Result<Vec<_>>>()?;
 
                 let start_bound = self.convert_bound(&window_frame.start_bound)?;
