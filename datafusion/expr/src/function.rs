@@ -28,6 +28,7 @@ pub use datafusion_functions_aggregate_common::accumulator::{
 };
 
 pub use datafusion_functions_window_common::field::WindowUDFFieldArgs;
+pub use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
 
 #[derive(Debug, Clone, Copy)]
 pub enum Hint {
