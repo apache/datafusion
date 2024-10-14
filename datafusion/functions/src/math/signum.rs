@@ -18,11 +18,11 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use arrow::array::{ArrayRef, Float32Array, Float64Array};
-use arrow::datatypes::DataType;
+use arrow::array::{ArrayRef, AsArray};
 use arrow::datatypes::DataType::{Float32, Float64};
+use arrow::datatypes::{DataType, Float32Type, Float64Type};
 
-use datafusion_common::{exec_err, DataFusionError, Result};
+use datafusion_common::{exec_err, Result};
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::ColumnarValue;
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
@@ -86,37 +86,33 @@ impl ScalarUDFImpl for SignumFunc {
 /// signum SQL function
 pub fn signum(args: &[ArrayRef]) -> Result<ArrayRef> {
     match args[0].data_type() {
-        Float64 => Ok(Arc::new(make_function_scalar_inputs_return_type!(
-            &args[0],
-            "signum",
-            Float64Array,
-            Float64Array,
-            {
-                |x: f64| {
-                    if x == 0_f64 {
-                        0_f64
-                    } else {
-                        x.signum()
-                    }
-                }
-            }
-        )) as ArrayRef),
+        Float64 => Ok(Arc::new(
+            args[0]
+                .as_primitive::<Float64Type>()
+                .unary::<_, Float64Type>(
+                    |x: f64| {
+                        if x == 0_f64 {
+                            0_f64
+                        } else {
+                            x.signum()
+                        }
+                    },
+                ),
+        ) as ArrayRef),
 
-        Float32 => Ok(Arc::new(make_function_scalar_inputs_return_type!(
-            &args[0],
-            "signum",
-            Float32Array,
-            Float32Array,
-            {
-                |x: f32| {
-                    if x == 0_f32 {
-                        0_f32
-                    } else {
-                        x.signum()
-                    }
-                }
-            }
-        )) as ArrayRef),
+        Float32 => Ok(Arc::new(
+            args[0]
+                .as_primitive::<Float32Type>()
+                .unary::<_, Float32Type>(
+                    |x: f32| {
+                        if x == 0_f32 {
+                            0_f32
+                        } else {
+                            x.signum()
+                        }
+                    },
+                ),
+        ) as ArrayRef),
 
         other => exec_err!("Unsupported data type {other:?} for function signum"),
     }
