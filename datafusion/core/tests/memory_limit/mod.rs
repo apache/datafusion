@@ -840,7 +840,7 @@ impl TableProvider for SortedTableProvider {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let mem_exec =
             MemoryExec::try_new(&self.batches, self.schema(), projection.cloned())?
-                .with_sort_information(self.sort_information.clone());
+                .try_with_sort_information(self.sort_information.clone())?;
 
         Ok(Arc::new(mem_exec))
     }
