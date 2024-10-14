@@ -440,6 +440,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                                 if_not_exists,
                                 or_replace,
                                 column_defaults,
+                                temporary,
                             },
                         )))
                     }
@@ -463,6 +464,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                                 if_not_exists,
                                 or_replace,
                                 column_defaults,
+                                temporary,
                             },
                         )))
                     }
@@ -498,9 +500,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 if if_not_exists {
                     return not_impl_err!("If not exists not supported")?;
                 }
-                if temporary {
-                    return not_impl_err!("Temporary views not supported")?;
-                }
                 if to.is_some() {
                     return not_impl_err!("To not supported")?;
                 }
@@ -526,6 +525,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     input: Arc::new(plan),
                     or_replace,
                     definition: sql,
+                    temporary,
                 })))
             }
             Statement::ShowCreate { obj_type, obj_name } => match obj_type {
@@ -1198,6 +1198,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             location,
             table_partition_cols,
             if_not_exists,
+            temporary,
             order_exprs,
             unbounded,
             options,
@@ -1250,6 +1251,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 file_type,
                 table_partition_cols,
                 if_not_exists,
+                temporary,
                 definition,
                 order_exprs: ordered_exprs,
                 unbounded,
