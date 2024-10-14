@@ -224,6 +224,9 @@ pub trait JoinHashMapType {
     ) {
         let (mut_map, mut_list, mut_filter) = self.get_mut();
         for (row, hash_value) in iter {
+            if let Some(&mut ref mut bloom_filter) = mut_filter {
+                bloom_filter.insert(hash_value);
+            }
             let item = mut_map.get_mut(*hash_value, |(hash, _)| *hash_value == *hash);
             if let Some((_, index)) = item {
                 // Already exists: add index to next array
@@ -239,9 +242,6 @@ pub trait JoinHashMapType {
                     (*hash_value, (row + 1) as u64),
                     |(hash, _)| *hash,
                 );
-                if let Some(&mut ref mut bloom_filter) = mut_filter {
-                    bloom_filter.insert(hash_value);
-                }
                 // chained list at `row` is already initialized with 0
                 // meaning end of list
             }
@@ -264,11 +264,11 @@ pub trait JoinHashMapType {
         let next_chain = self.get_list();
         for (row_idx, hash_value) in iter {
             // Get the hash and find it in the index
-            if let Some(bloom_filter) = self.get_bloom_filter() {
-                if !bloom_filter.contains(hash_value) {
-                    continue;
-                }
-            }
+            // if let Some(bloom_filter) = self.get_bloom_filter() {
+            //     if !bloom_filter.contains(hash_value) {
+            //         continue;
+            //     }
+            // }
             if let Some((_, index)) =
                 hash_map.get(*hash_value, |(hash, _)| *hash_value == *hash)
             {
@@ -348,11 +348,11 @@ pub trait JoinHashMapType {
 
         let mut row_idx = to_skip;
         for hash_value in &hash_values[to_skip..] {
-            if let Some(bloom_filter) = self.get_bloom_filter() {
-                if !bloom_filter.contains(hash_value) {
-                    continue;
-                }
-            }
+            // if let Some(bloom_filter) = self.get_bloom_filter() {
+            //     if !bloom_filter.contains(hash_value) {
+            //         continue;
+            //     }
+            // }
             if let Some((_, index)) =
                 hash_map.get(*hash_value, |(hash, _)| *hash_value == *hash)
             {
