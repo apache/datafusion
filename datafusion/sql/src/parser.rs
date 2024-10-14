@@ -194,6 +194,8 @@ pub struct CreateExternalTable {
     pub order_exprs: Vec<LexOrdering>,
     /// Option to not error if table already exists
     pub if_not_exists: bool,
+    /// Whether the table is a temporary table
+    pub temporary: bool,
     /// Infinite streams?
     pub unbounded: bool,
     /// Table(provider) specific options
@@ -699,6 +701,10 @@ impl<'a> DFParser<'a> {
         &mut self,
         unbounded: bool,
     ) -> Result<Statement, ParserError> {
+        let temporary = self
+            .parser
+            .parse_one_of_keywords(&[Keyword::TEMP, Keyword::TEMPORARY])
+            .is_some();
         self.parser.expect_keyword(Keyword::TABLE)?;
         let if_not_exists =
             self.parser
@@ -820,6 +826,7 @@ impl<'a> DFParser<'a> {
             table_partition_cols: builder.table_partition_cols.unwrap_or(vec![]),
             order_exprs: builder.order_exprs,
             if_not_exists,
+            temporary,
             unbounded,
             options: builder.options.unwrap_or(Vec::new()),
             constraints,
@@ -924,6 +931,7 @@ mod tests {
             table_partition_cols: vec![],
             order_exprs: vec![],
             if_not_exists: false,
+            temporary: false,
             unbounded: false,
             options: vec![],
             constraints: vec![],
@@ -940,6 +948,7 @@ mod tests {
             table_partition_cols: vec![],
             order_exprs: vec![],
             if_not_exists: false,
+            temporary: false,
             unbounded: false,
             options: vec![],
             constraints: vec![],
@@ -957,6 +966,7 @@ mod tests {
             table_partition_cols: vec![],
             order_exprs: vec![],
             if_not_exists: false,
+            temporary: false,
             unbounded: false,
             options: vec![],
             constraints: vec![],
@@ -974,6 +984,7 @@ mod tests {
             table_partition_cols: vec![],
             order_exprs: vec![],
             if_not_exists: false,
+            temporary: false,
             unbounded: false,
             options: vec![(
                 "format.delimiter".into(),
@@ -994,6 +1005,7 @@ mod tests {
             table_partition_cols: vec!["p1".to_string(), "p2".to_string()],
             order_exprs: vec![],
             if_not_exists: false,
+            temporary: false,
             unbounded: false,
             options: vec![],
             constraints: vec![],
@@ -1021,6 +1033,7 @@ mod tests {
                 table_partition_cols: vec![],
                 order_exprs: vec![],
                 if_not_exists: false,
+                temporary: false,
                 unbounded: false,
                 options: vec![(
                     "format.compression".into(),
@@ -1041,6 +1054,7 @@ mod tests {
             table_partition_cols: vec![],
             order_exprs: vec![],
             if_not_exists: false,
+            temporary: false,
             unbounded: false,
             options: vec![],
             constraints: vec![],
@@ -1057,6 +1071,7 @@ mod tests {
             table_partition_cols: vec![],
             order_exprs: vec![],
             if_not_exists: false,
+            temporary: false,
             unbounded: false,
             options: vec![],
             constraints: vec![],
@@ -1073,6 +1088,7 @@ mod tests {
             table_partition_cols: vec![],
             order_exprs: vec![],
             if_not_exists: false,
+            temporary: false,
             unbounded: false,
             options: vec![],
             constraints: vec![],
@@ -1090,6 +1106,7 @@ mod tests {
             table_partition_cols: vec![],
             order_exprs: vec![],
             if_not_exists: true,
+            temporary: false,
             unbounded: false,
             options: vec![],
             constraints: vec![],
@@ -1110,6 +1127,7 @@ mod tests {
             table_partition_cols: vec!["p1".to_string()],
             order_exprs: vec![],
             if_not_exists: false,
+            temporary: false,
             unbounded: false,
             options: vec![],
             constraints: vec![],
@@ -1140,6 +1158,7 @@ mod tests {
             table_partition_cols: vec![],
             order_exprs: vec![],
             if_not_exists: false,
+            temporary: false,
             unbounded: false,
             options: vec![("k1".into(), Value::SingleQuotedString("v1".into()))],
             constraints: vec![],
@@ -1157,6 +1176,7 @@ mod tests {
             table_partition_cols: vec![],
             order_exprs: vec![],
             if_not_exists: false,
+            temporary: false,
             unbounded: false,
             options: vec![
                 ("k1".into(), Value::SingleQuotedString("v1".into())),
@@ -1204,6 +1224,7 @@ mod tests {
                     with_fill: None,
                 }]],
                 if_not_exists: false,
+                temporary: false,
                 unbounded: false,
                 options: vec![],
                 constraints: vec![],
@@ -1244,6 +1265,7 @@ mod tests {
                 },
             ]],
             if_not_exists: false,
+            temporary: false,
             unbounded: false,
             options: vec![],
             constraints: vec![],
@@ -1279,6 +1301,7 @@ mod tests {
                 with_fill: None,
             }]],
             if_not_exists: false,
+            temporary: false,
             unbounded: false,
             options: vec![],
             constraints: vec![],
@@ -1323,6 +1346,7 @@ mod tests {
                 with_fill: None,
             }]],
             if_not_exists: true,
+            temporary: false,
             unbounded: true,
             options: vec![
                 (

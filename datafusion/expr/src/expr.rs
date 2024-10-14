@@ -722,7 +722,7 @@ impl WindowFunctionDefinition {
         }
     }
 
-    /// the signatures supported by the function `fun`.
+    /// The signatures supported by the function `fun`.
     pub fn signature(&self) -> Signature {
         match self {
             WindowFunctionDefinition::BuiltInWindowFunction(fun) => fun.signature(),
@@ -846,7 +846,7 @@ pub fn find_df_window_func(name: &str) -> Option<WindowFunctionDefinition> {
 /// EXISTS expression
 #[derive(Clone, PartialEq, Eq, PartialOrd, Hash, Debug)]
 pub struct Exists {
-    /// subquery that will produce a single column of data
+    /// Subquery that will produce a single column of data
     pub subquery: Subquery,
     /// Whether the expression is negated
     pub negated: bool,
@@ -1329,7 +1329,7 @@ impl Expr {
                     expr,
                     Expr::Exists { .. } | Expr::ScalarSubquery(_) | Expr::InSubquery(_)
                 ) {
-                    // subqueries could contain aliases so don't recurse into those
+                    // Subqueries could contain aliases so don't recurse into those
                     TreeNodeRecursion::Jump
                 } else {
                     TreeNodeRecursion::Continue
@@ -1346,7 +1346,7 @@ impl Expr {
                 }
             },
         )
-        // unreachable code: internal closure doesn't return err
+        // Unreachable code: internal closure doesn't return err
         .unwrap()
     }
 
@@ -1416,7 +1416,7 @@ impl Expr {
         ))
     }
 
-    /// return `self NOT BETWEEN low AND high`
+    /// Return `self NOT BETWEEN low AND high`
     pub fn not_between(self, low: Expr, high: Expr) -> Expr {
         Expr::Between(Between::new(
             Box::new(self),
@@ -1817,7 +1817,7 @@ impl Expr {
     }
 }
 
-// modifies expr if it is a placeholder with datatype of right
+// Modifies expr if it is a placeholder with datatype of right
 fn rewrite_placeholder(expr: &mut Expr, other: &Expr, schema: &DFSchema) -> Result<()> {
     if let Expr::Placeholder(Placeholder { id: _, data_type }) = expr {
         if data_type.is_none() {
@@ -1890,7 +1890,7 @@ impl<'a> Display for SchemaDisplay<'a> {
 
                 Ok(())
             }
-            // expr is not shown since it is aliased
+            // Expr is not shown since it is aliased
             Expr::Alias(Alias { name, .. }) => write!(f, "{name}"),
             Expr::Between(Between {
                 expr,
@@ -1945,7 +1945,7 @@ impl<'a> Display for SchemaDisplay<'a> {
 
                 write!(f, "END")
             }
-            // cast expr is not shown to be consistant with Postgres and Spark <https://github.com/apache/datafusion/pull/3222>
+            // Cast expr is not shown to be consistant with Postgres and Spark <https://github.com/apache/datafusion/pull/3222>
             Expr::Cast(Cast { expr, .. }) | Expr::TryCast(TryCast { expr, .. }) => {
                 write!(f, "{}", SchemaDisplay(expr))
             }
@@ -2415,7 +2415,7 @@ mod test {
         let expected_canonical = "CAST(Float32(1.23) AS Utf8)";
         assert_eq!(expected_canonical, expr.canonical_name());
         assert_eq!(expected_canonical, format!("{expr}"));
-        // note that CAST intentionally has a name that is different from its `Display`
+        // Note that CAST intentionally has a name that is different from its `Display`
         // representation. CAST does not change the name of expressions.
         assert_eq!("Float32(1.23)", expr.schema_name().to_string());
         Ok(())
