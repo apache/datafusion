@@ -571,7 +571,6 @@ async fn tpcds_physical_q9() -> Result<()> {
     create_physical_plan(9).await
 }
 
-#[ignore] // Physical plan does not support logical expression Exists(<subquery>)
 #[tokio::test]
 async fn tpcds_physical_q10() -> Result<()> {
     create_physical_plan(10).await
@@ -697,7 +696,6 @@ async fn tpcds_physical_q34() -> Result<()> {
     create_physical_plan(34).await
 }
 
-#[ignore] // Physical plan does not support logical expression Exists(<subquery>)
 #[tokio::test]
 async fn tpcds_physical_q35() -> Result<()> {
     create_physical_plan(35).await
@@ -750,7 +748,6 @@ async fn tpcds_physical_q44() -> Result<()> {
     create_physical_plan(44).await
 }
 
-#[ignore] // Physical plan does not support logical expression (<subquery>)
 #[tokio::test]
 async fn tpcds_physical_q45() -> Result<()> {
     create_physical_plan(45).await
