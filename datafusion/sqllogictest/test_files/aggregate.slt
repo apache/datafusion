@@ -1385,6 +1385,24 @@ NaN
 statement ok
 DROP TABLE tmp_percentile_cont;
 
+# Test for issue where approx_percentile_cont_with_weight
+
+statement ok
+CREATE TABLE t1(v1 BOOL);
+
+statement ok
+INSERT INTO t1 VALUES (TRUE);
+
+# ISSUE: https://github.com/apache/datafusion/issues/12716
+# This test verifies that approx_percentile_cont_with_weight does not panic when given 'NaN' and returns 'inf'
+query R
+SELECT approx_percentile_cont_with_weight('NaN'::DOUBLE, 0, 0) FROM t1 WHERE t1.v1;
+----
+Infinity
+
+statement ok
+DROP TABLE t1;
+
 # csv_query_cube_avg
 query TIR
 SELECT c1, c2, AVG(c3) FROM aggregate_test_100 GROUP BY CUBE (c1, c2) ORDER BY c1, c2
@@ -3520,6 +3538,18 @@ SELECT MIN(value), MAX(value) FROM integers_with_nulls
 ----
 1 5
 
+# grouping_sets with null values
+query II rowsort
+SELECT value, min(value) FROM integers_with_nulls GROUP BY CUBE(value)
+----
+1 1
+3 3
+4 4
+5 5
+NULL 1
+NULL NULL
+
+
 statement ok
 DROP TABLE integers_with_nulls;
 
@@ -3787,6 +3817,180 @@ DROP TABLE min_bool;
 #################
 # Min_Max End #
 #################
+
+
+
+#################
+# min_max on strings/binary with null values and groups
+#################
+
+statement ok
+CREATE TABLE strings (value TEXT, id int);
+
+statement ok
+INSERT INTO strings VALUES
+ ('c', 1),
+ ('d', 1),
+ ('a', 3),
+ ('c', 1),
+ ('b', 1),
+ (NULL, 1),
+ (NULL, 4),
+ ('d', 1),
+ ('z', 2),
+ ('c', 1),
+ ('a', 2);
+
+############ Utf8 ############
+
+query IT
+SELECT id, MIN(value) FROM strings GROUP BY id ORDER BY id;
+----
+1 b
+2 a
+3 a
+4 NULL
+
+query IT
+SELECT id, MAX(value) FROM strings GROUP BY id ORDER BY id;
+----
+1 d
+2 z
+3 a
+4 NULL
+
+############ LargeUtf8 ############
+
+statement ok
+CREATE VIEW large_strings AS SELECT id, arrow_cast(value, 'LargeUtf8') as value FROM strings;
+
+
+query IT
+SELECT id, MIN(value) FROM large_strings GROUP BY id ORDER BY id;
+----
+1 b
+2 a
+3 a
+4 NULL
+
+query IT
+SELECT id, MAX(value) FROM large_strings GROUP BY id ORDER BY id;
+----
+1 d
+2 z
+3 a
+4 NULL
+
+statement ok
+DROP VIEW large_strings
+
+############ Utf8View ############
+
+statement ok
+CREATE VIEW string_views AS SELECT id, arrow_cast(value, 'Utf8View') as value FROM strings;
+
+
+query IT
+SELECT id, MIN(value) FROM string_views GROUP BY id ORDER BY id;
+----
+1 b
+2 a
+3 a
+4 NULL
+
+query IT
+SELECT id, MAX(value) FROM string_views GROUP BY id ORDER BY id;
+----
+1 d
+2 z
+3 a
+4 NULL
+
+statement ok
+DROP VIEW string_views
+
+############ Binary ############
+
+statement ok
+CREATE VIEW binary AS SELECT id, arrow_cast(value, 'Binary') as value FROM strings;
+
+
+query I?
+SELECT id, MIN(value) FROM binary GROUP BY id ORDER BY id;
+----
+1 62
+2 61
+3 61
+4 NULL
+
+query I?
+SELECT id, MAX(value) FROM binary GROUP BY id ORDER BY id;
+----
+1 64
+2 7a
+3 61
+4 NULL
+
+statement ok
+DROP VIEW binary
+
+############ LargeBinary ############
+
+statement ok
+CREATE VIEW large_binary AS SELECT id, arrow_cast(value, 'LargeBinary') as value FROM strings;
+
+
+query I?
+SELECT id, MIN(value) FROM large_binary GROUP BY id ORDER BY id;
+----
+1 62
+2 61
+3 61
+4 NULL
+
+query I?
+SELECT id, MAX(value) FROM large_binary GROUP BY id ORDER BY id;
+----
+1 64
+2 7a
+3 61
+4 NULL
+
+statement ok
+DROP VIEW large_binary
+
+############ BinaryView ############
+
+statement ok
+CREATE VIEW binary_views AS SELECT id, arrow_cast(value, 'BinaryView') as value FROM strings;
+
+
+query I?
+SELECT id, MIN(value) FROM binary_views GROUP BY id ORDER BY id;
+----
+1 62
+2 61
+3 61
+4 NULL
+
+query I?
+SELECT id, MAX(value) FROM binary_views GROUP BY id ORDER BY id;
+----
+1 64
+2 7a
+3 61
+4 NULL
+
+statement ok
+DROP VIEW binary_views
+
+statement ok
+DROP TABLE strings;
+
+#################
+# End min_max on strings/binary with null values and groups
+#################
+
 
 statement ok
 create table bool_aggregate_functions (
@@ -4879,16 +5083,18 @@ query TT
 EXPLAIN SELECT c2, c3 FROM aggregate_test_100 group by rollup(c2, c3) limit 3;
 ----
 logical_plan
-01)Limit: skip=0, fetch=3
-02)--Aggregate: groupBy=[[ROLLUP (aggregate_test_100.c2, aggregate_test_100.c3)]], aggr=[[]]
-03)----TableScan: aggregate_test_100 projection=[c2, c3]
+01)Projection: aggregate_test_100.c2, aggregate_test_100.c3
+02)--Limit: skip=0, fetch=3
+03)----Aggregate: groupBy=[[ROLLUP (aggregate_test_100.c2, aggregate_test_100.c3)]], aggr=[[]]
+04)------TableScan: aggregate_test_100 projection=[c2, c3]
 physical_plan
-01)GlobalLimitExec: skip=0, fetch=3
-02)--AggregateExec: mode=Final, gby=[c2@0 as c2, c3@1 as c3], aggr=[], lim=[3]
-03)----CoalescePartitionsExec
-04)------AggregateExec: mode=Partial, gby=[(NULL as c2, NULL as c3), (c2@0 as c2, NULL as c3), (c2@0 as c2, c3@1 as c3)], aggr=[]
-05)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-06)----------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c2, c3], has_header=true
+01)ProjectionExec: expr=[c2@0 as c2, c3@1 as c3]
+02)--GlobalLimitExec: skip=0, fetch=3
+03)----AggregateExec: mode=Final, gby=[c2@0 as c2, c3@1 as c3, __grouping_id@2 as __grouping_id], aggr=[], lim=[3]
+04)------CoalescePartitionsExec
+05)--------AggregateExec: mode=Partial, gby=[(NULL as c2, NULL as c3), (c2@0 as c2, NULL as c3), (c2@0 as c2, c3@1 as c3)], aggr=[]
+06)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+07)------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c2, c3], has_header=true
 
 query II
 SELECT c2, c3 FROM aggregate_test_100 group by rollup(c2, c3) limit 3;
@@ -5870,3 +6076,13 @@ ORDER BY k;
 ----
 1 1.8125 6.8007813 Float16 Float16
 2 8.5 8.5 Float16 Float16
+
+statement ok
+CREATE TABLE t1(v1 int);
+
+# issue: https://github.com/apache/datafusion/issues/12814 
+statement error DataFusion error: Error during planning: Aggregate functions are not allowed in the WHERE clause. Consider using HAVING instead
+SELECT v1 FROM t1 WHERE ((count(v1) % 1) << 1) > 0;
+
+statement ok
+DROP TABLE t1;

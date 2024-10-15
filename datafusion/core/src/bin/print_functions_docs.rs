@@ -20,10 +20,16 @@ use datafusion_expr::{
     aggregate_doc_sections, scalar_doc_sections, window_doc_sections, AggregateUDF,
     DocSection, Documentation, ScalarUDF, WindowUDF,
 };
+use hashbrown::HashSet;
 use itertools::Itertools;
 use std::env::args;
 use std::fmt::Write as _;
 
+/// Print documentation for all functions of a given type to stdout
+///
+/// Usage: `cargo run --bin print_functions_docs -- <type>`
+///
+/// Called from `dev/update_function_docs.sh`
 fn main() {
     let args: Vec<String> = args().collect();
 
@@ -83,9 +89,12 @@ fn print_docs(
 ) -> String {
     let mut docs = "".to_string();
 
+    // Ensure that all providers have documentation
+    let mut providers_with_no_docs = HashSet::new();
+
     // doc sections only includes sections that have 'include' == true
     for doc_section in doc_sections {
-        // make sure there is a function that is in this doc section
+        // make sure there is at least one function that is in this doc section
         if !&providers.iter().any(|f| {
             if let Some(documentation) = f.get_documentation() {
                 documentation.doc_section == doc_section
@@ -96,19 +105,21 @@ fn print_docs(
             continue;
         }
 
+        // filter out functions that are not in this doc section
         let providers: Vec<&Box<dyn DocProvider>> = providers
             .iter()
             .filter(|&f| {
                 if let Some(documentation) = f.get_documentation() {
                     documentation.doc_section == doc_section
                 } else {
+                    providers_with_no_docs.insert(f.get_name());
                     false
                 }
             })
             .collect::<Vec<_>>();
 
         // write out section header
-        let _ = writeln!(docs, "## {} ", doc_section.label);
+        let _ = writeln!(docs, "\n## {} \n", doc_section.label);
 
         if let Some(description) = doc_section.description {
             let _ = writeln!(docs, "{description}");
@@ -130,13 +141,14 @@ fn print_docs(
                 .find(|f| f.get_name() == name || f.get_aliases().contains(&name))
                 .unwrap();
 
-            let name = f.get_name();
             let aliases = f.get_aliases();
             let documentation = f.get_documentation();
 
             // if this name is an alias we need to display what it's an alias of
             if aliases.contains(&name) {
-                let _ = write!(docs, "_Alias of [{name}](#{name})._");
+                let fname = f.get_name();
+                let _ = writeln!(docs, r#"### `{name}`"#);
+                let _ = writeln!(docs, "_Alias of [{fname}](#{fname})._");
                 continue;
             }
 
@@ -183,10 +195,10 @@ fn print_docs(
 
             // next, aliases
             if !f.get_aliases().is_empty() {
-                let _ = write!(docs, "#### Aliases");
+                let _ = writeln!(docs, "#### Aliases");
 
                 for alias in f.get_aliases() {
-                    let _ = writeln!(docs, "- {alias}");
+                    let _ = writeln!(docs, "- {}", alias.replace("_", r#"\_"#));
                 }
             }
 
@@ -201,9 +213,19 @@ fn print_docs(
         }
     }
 
+    // If there are any functions that do not have documentation, print them out
+    // eventually make this an error: https://github.com/apache/datafusion/issues/12872
+    if !providers_with_no_docs.is_empty() {
+        eprintln!("INFO: The following functions do not have documentation:");
+        for f in providers_with_no_docs {
+            eprintln!("  - {f}");
+        }
+    }
+
     docs
 }
 
+/// Trait for accessing name / aliases / documentation for differnet functions
 trait DocProvider {
     fn get_name(&self) -> String;
     fn get_aliases(&self) -> Vec<String>;

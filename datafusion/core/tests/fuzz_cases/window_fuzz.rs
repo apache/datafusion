@@ -45,6 +45,8 @@ use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
 use test_utils::add_empty_batches;
 
 use datafusion::functions_window::row_number::row_number_udwf;
+use datafusion_functions_window::dense_rank::dense_rank_udwf;
+use datafusion_functions_window::rank::rank_udwf;
 use hashbrown::HashMap;
 use rand::distributions::Alphanumeric;
 use rand::rngs::StdRng;
@@ -224,9 +226,9 @@ async fn bounded_window_causal_non_causal() -> Result<()> {
         // )
         (
             // Window function
-            WindowFunctionDefinition::BuiltInWindowFunction(BuiltInWindowFunction::Rank),
+            WindowFunctionDefinition::WindowUDF(rank_udwf()),
             // its name
-            "RANK",
+            "rank",
             // no argument
             vec![],
             // Expected causality, for None cases causality will be determined from window frame boundaries
@@ -238,11 +240,9 @@ async fn bounded_window_causal_non_causal() -> Result<()> {
         // )
         (
             // Window function
-            WindowFunctionDefinition::BuiltInWindowFunction(
-                BuiltInWindowFunction::DenseRank,
-            ),
+            WindowFunctionDefinition::WindowUDF(dense_rank_udwf()),
             // its name
-            "DENSE_RANK",
+            "dense_rank",
             // no argument
             vec![],
             // Expected causality, for None cases causality will be determined from window frame boundaries
@@ -382,19 +382,12 @@ fn get_random_function(
         );
         window_fn_map.insert(
             "rank",
-            (
-                WindowFunctionDefinition::BuiltInWindowFunction(
-                    BuiltInWindowFunction::Rank,
-                ),
-                vec![],
-            ),
+            (WindowFunctionDefinition::WindowUDF(rank_udwf()), vec![]),
         );
         window_fn_map.insert(
             "dense_rank",
             (
-                WindowFunctionDefinition::BuiltInWindowFunction(
-                    BuiltInWindowFunction::DenseRank,
-                ),
+                WindowFunctionDefinition::WindowUDF(dense_rank_udwf()),
                 vec![],
             ),
         );
@@ -654,7 +647,7 @@ async fn run_window_test(
     ];
     let mut exec1 = Arc::new(
         MemoryExec::try_new(&[vec![concat_input_record]], schema.clone(), None)?
-            .with_sort_information(vec![source_sort_keys.clone()]),
+            .try_with_sort_information(vec![source_sort_keys.clone()])?,
     ) as _;
     // Table is ordered according to ORDER BY a, b, c In linear test we use PARTITION BY b, ORDER BY a
     // For WindowAggExec  to produce correct result it need table to be ordered by b,a. Hence add a sort.
@@ -680,7 +673,7 @@ async fn run_window_test(
     )?) as _;
     let exec2 = Arc::new(
         MemoryExec::try_new(&[input1.clone()], schema.clone(), None)?
-            .with_sort_information(vec![source_sort_keys.clone()]),
+            .try_with_sort_information(vec![source_sort_keys.clone()])?,
     );
     let running_window_exec = Arc::new(BoundedWindowAggExec::try_new(
         vec![create_window_expr(

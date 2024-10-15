@@ -5152,8 +5152,6 @@ drop table test_case_expr
 statement ok
 drop table t;
 
-# TODO: Current grouping set result is not align with Postgres and DuckDB, we might want to change the result
-# See https://github.com/apache/datafusion/issues/12570
 # test multi group by for binary type with nulls
 statement ok
 create table t(a int, b bytea) as values (1, 0xa), (1, 0xa), (2, null), (null, 0xb), (null, 0xb);
@@ -5162,11 +5160,14 @@ query I?I
 select a, b, count(*) from t group by grouping sets ((a, b), (a), (b));
 ----
 1 0a 2
-2 NULL 2
-NULL 0b 4
+2 NULL 1
+NULL 0b 2
 1 NULL 2
-NULL NULL 3
+2 NULL 1
+NULL NULL 2
 NULL 0a 2
+NULL NULL 1
+NULL 0b 2
 
 statement ok
 drop table t;

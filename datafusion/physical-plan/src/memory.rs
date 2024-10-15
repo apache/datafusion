@@ -33,6 +33,9 @@ use arrow::record_batch::RecordBatch;
 use datafusion_common::{internal_err, project_schema, Result};
 use datafusion_execution::memory_pool::MemoryReservation;
 use datafusion_execution::TaskContext;
+use datafusion_physical_expr::equivalence::ProjectionMapping;
+use datafusion_physical_expr::expressions::Column;
+use datafusion_physical_expr::utils::collect_columns;
 use datafusion_physical_expr::{EquivalenceProperties, LexOrdering};
 
 use futures::Stream;
@@ -206,16 +209,63 @@ impl MemoryExec {
     /// where both `a ASC` and `b DESC` can describe the table ordering. With
     /// [`EquivalenceProperties`], we can keep track of these equivalences
     /// and treat `a ASC` and `b DESC` as the same ordering requirement.
-    pub fn with_sort_information(mut self, sort_information: Vec<LexOrdering>) -> Self {
-        self.sort_information = sort_information;
+    ///
+    /// Note that if there is an internal projection, that projection will be
+    /// also applied to the given `sort_information`.
+    pub fn try_with_sort_information(
+        mut self,
+        mut sort_information: Vec<LexOrdering>,
+    ) -> Result<Self> {
+        // All sort expressions must refer to the original schema
+        let fields = self.schema.fields();
+        let ambiguous_column = sort_information
+            .iter()
+            .flatten()
+            .flat_map(|expr| collect_columns(&expr.expr))
+            .find(|col| {
+                fields
+                    .get(col.index())
+                    .map(|field| field.name() != col.name())
+                    .unwrap_or(true)
+            });
+        if let Some(col) = ambiguous_column {
+            return internal_err!(
+                "Column {:?} is not found in the original schema of the MemoryExec",
+                col
+            );
+        }
 
+        // If there is a projection on the source, we also need to project orderings
+        if let Some(projection) = &self.projection {
+            let base_eqp = EquivalenceProperties::new_with_orderings(
+                self.original_schema(),
+                &sort_information,
+            );
+            let proj_exprs = projection
+                .iter()
+                .map(|idx| {
+                    let base_schema = self.original_schema();
+                    let name = base_schema.field(*idx).name();
+                    (Arc::new(Column::new(name, *idx)) as _, name.to_string())
+                })
+                .collect::<Vec<_>>();
+            let projection_mapping =
+                ProjectionMapping::try_new(&proj_exprs, &self.original_schema())?;
+            sort_information = base_eqp
+                .project(&projection_mapping, self.schema())
+                .oeq_class
+                .orderings;
+        }
+
+        self.sort_information = sort_information;
         // We need to update equivalence properties when updating sort information.
         let eq_properties = EquivalenceProperties::new_with_orderings(
             self.schema(),
             &self.sort_information,
         );
         self.cache = self.cache.with_eq_properties(eq_properties);
-        self
+
+        Ok(self)
     }
 
     pub fn original_schema(&self) -> SchemaRef {
@@ -347,7 +397,7 @@ mod tests {
 
         let sort_information = vec![sort1.clone(), sort2.clone()];
         let mem_exec = MemoryExec::try_new(&[vec![]], schema, None)?
-            .with_sort_information(sort_information);
+            .try_with_sort_information(sort_information)?;
 
         assert_eq!(
             mem_exec.properties().output_ordering().unwrap(),

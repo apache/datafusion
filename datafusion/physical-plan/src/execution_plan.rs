@@ -416,6 +416,11 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     fn fetch(&self) -> Option<usize> {
         None
     }
+
+    /// Gets the effect on cardinality, if known
+    fn cardinality_effect(&self) -> CardinalityEffect {
+        CardinalityEffect::Unknown
+    }
 }
 
 /// Extension trait provides an easy API to fetch various properties of
@@ -896,6 +901,20 @@ pub fn get_plan_string(plan: &Arc<dyn ExecutionPlan>) -> Vec<String> {
     let formatted = displayable(plan.as_ref()).indent(true).to_string();
     let actual: Vec<&str> = formatted.trim().lines().collect();
     actual.iter().map(|elem| elem.to_string()).collect()
+}
+
+/// Indicates the effect an execution plan operator will have on the cardinality
+/// of its input stream
+pub enum CardinalityEffect {
+    /// Unknown effect. This is the default
+    Unknown,
+    /// The operator is guaranteed to produce exactly one row for
+    /// each input row
+    Equal,
+    /// The operator may produce fewer output rows than it receives input rows
+    LowerEqual,
+    /// The operator may produce more output rows than it receives input rows
+    GreaterEqual,
 }
 
 #[cfg(test)]

@@ -163,6 +163,7 @@ message CreateExternalTableNode {
   datafusion_common.DfSchema schema = 4;
   repeated string table_partition_cols = 5;
   bool if_not_exists = 6;
+  bool temporary = 14;
   string definition = 7;
   repeated SortExprNodeCollection order_exprs = 10;
   bool unbounded = 11;
@@ -200,6 +201,7 @@ message CreateViewNode {
   TableReference name = 5;
   LogicalPlanNode input = 2;
   bool or_replace = 3;
+  bool temporary = 6;
   string definition = 4;
 }
 
@@ -508,9 +510,9 @@ message ScalarUDFExprNode {
 enum BuiltInWindowFunction {
   UNSPECIFIED = 0; // https://protobuf.dev/programming-guides/dos-donts/#unspecified-enum
   // ROW_NUMBER = 0;
-  RANK = 1;
-  DENSE_RANK = 2;
-  PERCENT_RANK = 3;
+  //  RANK = 1;
+  //  DENSE_RANK = 2;
+  //  PERCENT_RANK = 3;
   CUME_DIST = 4;
   NTILE = 5;
   LAG = 6;
@@ -739,7 +741,7 @@ message FileSinkConfig {
   datafusion_common.Schema output_schema = 4;
   repeated PartitionColumn table_partition_cols = 5;
   bool keep_partition_by_columns = 9;
-  InsertOp insert_op = 10; 
+  InsertOp insert_op = 10;
 }
 
 enum InsertOp {

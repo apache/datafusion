@@ -23,6 +23,7 @@ pub mod bool_op;
 pub mod nulls;
 pub mod prim_op;
 
+use arrow::array::new_empty_array;
 use arrow::{
     array::{ArrayRef, AsArray, BooleanArray, PrimitiveArray},
     compute,
@@ -404,6 +405,18 @@ impl GroupsAccumulator for GroupsAccumulatorAdapter {
         opt_filter: Option<&BooleanArray>,
     ) -> Result<Vec<ArrayRef>> {
         let num_rows = values[0].len();
+
+        // If there are no rows, return empty arrays
+        if num_rows == 0 {
+            // create empty accumulator to get the state types
+            let empty_state = (self.factory)()?.state()?;
+            let empty_arrays = empty_state
+                .into_iter()
+                .map(|state_val| new_empty_array(&state_val.data_type()))
+                .collect::<Vec<_>>();
+
+            return Ok(empty_arrays);
+        }
 
         // Each row has its respective group
         let mut results = vec![];

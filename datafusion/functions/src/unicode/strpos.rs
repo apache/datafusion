@@ -16,16 +16,17 @@
 // under the License.
 
 use std::any::Any;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
+use crate::strings::StringArrayType;
+use crate::utils::{make_scalar_function, utf8_to_int_type};
 use arrow::array::{ArrayRef, ArrowPrimitiveType, AsArray, PrimitiveArray};
 use arrow::datatypes::{ArrowNativeType, DataType, Int32Type, Int64Type};
-
-use crate::string::common::StringArrayType;
-use crate::utils::{make_scalar_function, utf8_to_int_type};
 use datafusion_common::{exec_err, Result};
-use datafusion_expr::TypeSignature::Exact;
-use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::scalar_doc_sections::DOC_SECTION_STRING;
+use datafusion_expr::{
+    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+};
 
 #[derive(Debug)]
 pub struct StrposFunc {
@@ -41,20 +42,8 @@ impl Default for StrposFunc {
 
 impl StrposFunc {
     pub fn new() -> Self {
-        use DataType::*;
         Self {
-            signature: Signature::one_of(
-                vec![
-                    Exact(vec![Utf8, Utf8]),
-                    Exact(vec![Utf8, LargeUtf8]),
-                    Exact(vec![LargeUtf8, Utf8]),
-                    Exact(vec![LargeUtf8, LargeUtf8]),
-                    Exact(vec![Utf8View, Utf8View]),
-                    Exact(vec![Utf8View, Utf8]),
-                    Exact(vec![Utf8View, LargeUtf8]),
-                ],
-                Volatility::Immutable,
-            ),
+            signature: Signature::string(2, Volatility::Immutable),
             aliases: vec![String::from("instr"), String::from("position")],
         }
     }
@@ -84,6 +73,33 @@ impl ScalarUDFImpl for StrposFunc {
     fn aliases(&self) -> &[String] {
         &self.aliases
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_strpos_doc())
+    }
+}
+
+static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+
+fn get_strpos_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_STRING)
+            .with_description("Returns the starting position of a specified substring in a string. Positions begin at 1. If the substring does not exist in the string, the function returns 0.")
+            .with_syntax_example("strpos(str, substr)")
+            .with_sql_example(r#"```sql
+> select strpos('datafusion', 'fus');
++----------------------------------------+
+| strpos(Utf8("datafusion"),Utf8("fus")) |
++----------------------------------------+
+| 5                                      |
++----------------------------------------+ 
+```"#)
+            .with_standard_argument("str", "String")
+            .with_argument("substr", "Substring expression to search for.")
+            .build()
+            .unwrap()
+    })
 }
 
 fn strpos(args: &[ArrayRef]) -> Result<ArrayRef> {

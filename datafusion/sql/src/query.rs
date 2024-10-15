@@ -150,6 +150,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     input: Arc::new(plan),
                     if_not_exists: false,
                     or_replace: false,
+                    temporary: false,
                     column_defaults: vec![],
                 },
             ))),
@@ -205,7 +206,7 @@ fn convert_usize_with_check(n: i64, arg_name: &str) -> Result<usize> {
 /// Returns the order by expressions from the query.
 fn to_order_by_exprs(order_by: Option<OrderBy>) -> Result<Vec<OrderByExpr>> {
     let Some(OrderBy { exprs, interpolate }) = order_by else {
-        // if no order by, return an empty array
+        // If no order by, return an empty array.
         return Ok(vec![]);
     };
     if let Some(_interpolate) = interpolate {

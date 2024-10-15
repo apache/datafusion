@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::utils::test::read_json;
 use datafusion::arrow::array::ArrayRef;
 use datafusion::physical_plan::Accumulator;
 use datafusion::scalar::ScalarValue;
@@ -68,8 +69,7 @@ impl SerializerRegistry for MockSerializerRegistry {
         &self,
         name: &str,
         bytes: &[u8],
-    ) -> Result<std::sync::Arc<dyn datafusion::logical_expr::UserDefinedLogicalNode>>
-    {
+    ) -> Result<Arc<dyn datafusion::logical_expr::UserDefinedLogicalNode>> {
         if name == "MockUserDefinedLogicalPlan" {
             MockUserDefinedLogicalPlan::deserialize(bytes)
         } else {
@@ -294,8 +294,9 @@ async fn aggregate_grouping_sets() -> Result<()> {
 async fn aggregate_grouping_rollup() -> Result<()> {
     assert_expected_plan(
         "SELECT a, c, e, avg(b) FROM data GROUP BY ROLLUP (a, c, e)",
-        "Aggregate: groupBy=[[GROUPING SETS ((data.a, data.c, data.e), (data.a, data.c), (data.a), ())]], aggr=[[avg(data.b)]]\
-        \n  TableScan: data projection=[a, b, c, e]",
+        "Projection: data.a, data.c, data.e, avg(data.b)\
+        \n  Aggregate: groupBy=[[GROUPING SETS ((data.a, data.c, data.e), (data.a, data.c), (data.a), ())]], aggr=[[avg(data.b)]]\
+        \n    TableScan: data projection=[a, b, c, e]",
         true
     ).await
 }
@@ -471,12 +472,12 @@ async fn roundtrip_inlist_5() -> Result<()> {
     \n  Subquery:\
     \n    Projection: data2.a\
     \n      Filter: data2.f IN ([Utf8(\"b\"), Utf8(\"c\"), Utf8(\"d\")])\
-    \n        TableScan: data2 projection=[a, b, c, d, e, f]\
+    \n        TableScan: data2\
     \n  TableScan: data projection=[a, f], partial_filters=[data.f = Utf8(\"a\") OR data.f = Utf8(\"b\") OR data.f = Utf8(\"c\") OR data.a IN (<subquery>)]\
     \n    Subquery:\
     \n      Projection: data2.a\
     \n        Filter: data2.f IN ([Utf8(\"b\"), Utf8(\"c\"), Utf8(\"d\")])\
-    \n          TableScan: data2 projection=[a, b, c, d, e, f]",
+    \n          TableScan: data2",
     true).await
 }
 
@@ -660,6 +661,17 @@ async fn simple_intersect() -> Result<()> {
         true
     )
         .await
+}
+
+#[tokio::test]
+async fn simple_intersect_consume() -> Result<()> {
+    let proto_plan = read_json("tests/testdata/test_plans/intersect.substrait.json");
+
+    assert_substrait_sql(
+        proto_plan,
+        "SELECT a FROM data INTERSECT SELECT a FROM data2",
+    )
+    .await
 }
 
 #[tokio::test]
@@ -1106,6 +1118,21 @@ async fn assert_expected_plan(
 
     let plan2str = format!("{plan2}");
     assert_eq!(expected_plan_str, &plan2str);
+
+    Ok(())
+}
+
+async fn assert_substrait_sql(substrait_plan: Plan, sql: &str) -> Result<()> {
+    let ctx = create_context().await?;
+
+    let expected = ctx.sql(sql).await?.into_optimized_plan()?;
+
+    let plan = from_substrait_plan(&ctx, &substrait_plan).await?;
+    let plan = ctx.state().optimize(&plan)?;
+
+    let planstr = format!("{plan}");
+    let expectedstr = format!("{expected}");
+    assert_eq!(planstr, expectedstr);
 
     Ok(())
 }

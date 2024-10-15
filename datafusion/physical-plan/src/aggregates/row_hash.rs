@@ -102,6 +102,19 @@ struct SpillState {
 
     /// true when streaming merge is in progress
     is_stream_merging: bool,
+
+    // ========================================================================
+    // METRICS:
+    // ========================================================================
+    /// Peak memory used for buffered data.
+    /// Calculated as sum of peak memory values across partitions
+    peak_mem_used: metrics::Gauge,
+    /// count of spill files during the execution of the operator
+    spill_count: metrics::Count,
+    /// total spilled bytes during the execution of the operator
+    spilled_bytes: metrics::Count,
+    /// total spilled rows during the execution of the operator
+    spilled_rows: metrics::Count,
 }
 
 /// Tracks if the aggregate should skip partial aggregations
@@ -138,6 +151,9 @@ struct SkipAggregationProbe {
     /// make any effect (set either while probing or on probing completion)
     is_locked: bool,
 
+    // ========================================================================
+    // METRICS:
+    // ========================================================================
     /// Number of rows where state was output without aggregation.
     ///
     /// * If 0, all input rows were aggregated (should_skip was always false)
@@ -449,13 +465,13 @@ impl GroupedHashAggregateStream {
         let aggregate_arguments = aggregates::aggregate_expressions(
             &agg.aggr_expr,
             &agg.mode,
-            agg_group_by.expr.len(),
+            agg_group_by.num_group_exprs(),
         )?;
         // arguments for aggregating spilled data is the same as the one for final aggregation
         let merging_aggregate_arguments = aggregates::aggregate_expressions(
             &agg.aggr_expr,
             &AggregateMode::Final,
-            agg_group_by.expr.len(),
+            agg_group_by.num_group_exprs(),
         )?;
 
         let filter_expressions = match agg.mode {
@@ -473,7 +489,7 @@ impl GroupedHashAggregateStream {
             .map(create_group_accumulator)
             .collect::<Result<_>>()?;
 
-        let group_schema = group_schema(&agg_schema, agg_group_by.expr.len());
+        let group_schema = group_schema(&agg.input().schema(), &agg_group_by)?;
         let spill_expr = group_schema
             .fields
             .into_iter()
@@ -510,6 +526,11 @@ impl GroupedHashAggregateStream {
             is_stream_merging: false,
             merging_aggregate_arguments,
             merging_group_by: PhysicalGroupBy::new_single(agg_group_by.expr.clone()),
+            peak_mem_used: MetricBuilder::new(&agg.metrics)
+                .gauge("peak_mem_used", partition),
+            spill_count: MetricBuilder::new(&agg.metrics).spill_count(partition),
+            spilled_bytes: MetricBuilder::new(&agg.metrics).spilled_bytes(partition),
+            spilled_rows: MetricBuilder::new(&agg.metrics).spilled_rows(partition),
         };
 
         // Skip aggregation is supported if:
@@ -865,11 +886,19 @@ impl GroupedHashAggregateStream {
 
     fn update_memory_reservation(&mut self) -> Result<()> {
         let acc = self.accumulators.iter().map(|x| x.size()).sum::<usize>();
-        self.reservation.try_resize(
+        let reservation_result = self.reservation.try_resize(
             acc + self.group_values.size()
                 + self.group_ordering.size()
                 + self.current_group_indices.allocated_size(),
-        )
+        );
+
+        if reservation_result.is_ok() {
+            self.spill_state
+                .peak_mem_used
+                .set_max(self.reservation.size());
+        }
+
+        reservation_result
     }
 
     /// Create an output RecordBatch with the group keys and
@@ -946,6 +975,14 @@ impl GroupedHashAggregateStream {
             self.batch_size,
         )?;
         self.spill_state.spills.push(spillfile);
+
+        // Update metrics
+        self.spill_state.spill_count.add(1);
+        self.spill_state
+            .spilled_bytes
+            .add(sorted.get_array_memory_size());
+        self.spill_state.spilled_rows.add(sorted.num_rows());
+
         Ok(())
     }
 

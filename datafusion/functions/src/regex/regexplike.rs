@@ -26,8 +26,7 @@ use datafusion_common::{
     cast::as_generic_string_array, internal_err, DataFusionError, Result,
 };
 use datafusion_expr::scalar_doc_sections::DOC_SECTION_REGEX;
-use datafusion_expr::TypeSignature::*;
-use datafusion_expr::{ColumnarValue, Documentation};
+use datafusion_expr::{ColumnarValue, Documentation, TypeSignature};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use std::any::Any;
 use std::sync::{Arc, OnceLock};
@@ -87,10 +86,10 @@ impl RegexpLikeFunc {
         Self {
             signature: Signature::one_of(
                 vec![
-                    Exact(vec![Utf8, Utf8]),
-                    Exact(vec![LargeUtf8, LargeUtf8]),
-                    Exact(vec![Utf8, Utf8, Utf8]),
-                    Exact(vec![LargeUtf8, LargeUtf8, LargeUtf8]),
+                    TypeSignature::Exact(vec![Utf8, Utf8]),
+                    TypeSignature::Exact(vec![LargeUtf8, LargeUtf8]),
+                    TypeSignature::Exact(vec![Utf8, Utf8, Utf8]),
+                    TypeSignature::Exact(vec![LargeUtf8, LargeUtf8, LargeUtf8]),
                 ],
                 Volatility::Immutable,
             ),
