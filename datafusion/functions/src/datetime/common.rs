@@ -27,7 +27,7 @@ use chrono::format::{parse, Parsed, StrftimeItems};
 use chrono::LocalResult::Single;
 use chrono::{DateTime, TimeZone, Utc};
 
-use crate::string::common::StringArrayType;
+use crate::strings::StringArrayType;
 use datafusion_common::cast::as_generic_string_array;
 use datafusion_common::{
     exec_err, unwrap_or_internal_err, DataFusionError, Result, ScalarType, ScalarValue,
