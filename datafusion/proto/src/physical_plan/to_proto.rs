@@ -49,7 +49,7 @@ use crate::protobuf::{
 use super::PhysicalExtensionCodec;
 
 pub fn serialize_physical_aggr_expr(
-    aggr_expr: AggregateFunctionExpr,
+    aggr_expr: Arc<AggregateFunctionExpr>,
     codec: &dyn PhysicalExtensionCodec,
 ) -> Result<protobuf::PhysicalExprNode> {
     let expressions = serialize_physical_exprs(&aggr_expr.expressions(), codec)?;
