@@ -43,7 +43,6 @@ use datafusion_proto::{
     },
     protobuf::LogicalExprList,
 };
-use futures::executor::block_on;
 use prost::Message;
 
 use crate::{
@@ -290,7 +289,21 @@ impl ExportedTableProvider {
             }
         };
 
-        let plan = block_on(provider.scan(&ctx.state(), projections, &filters, limit))?;
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| {
+                DataFusionError::Execution(format!(
+                    "Error getting runtime during scan(): {}",
+                    e
+                ))
+            })?;
+        let plan = runtime.block_on(provider.scan(
+            &ctx.state(),
+            projections,
+            &filters,
+            limit,
+        ))?;
 
         FFI_ExecutionPlan::new(plan, ctx.task_ctx())
     }

@@ -34,7 +34,7 @@ use datafusion::{
     error::DataFusionError,
     execution::{RecordBatchStream, SendableRecordBatchStream},
 };
-use futures::{executor::block_on, Stream, TryStreamExt};
+use futures::{Stream, TryStreamExt};
 
 pub fn record_batch_to_arrow_stream(
     stream: SendableRecordBatchStream,
@@ -139,7 +139,17 @@ impl ExportedRecordBatchStream {
     pub fn get_next(&mut self, out: *mut FFI_ArrowArray) -> i32 {
         let private_data = self.get_private_data();
 
-        let maybe_batch = block_on(private_data.stream.try_next());
+        let runtime = match tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+        {
+            Ok(r) => r,
+            Err(_e) => {
+                return 1;
+            }
+        };
+        // let maybe_batch = block_on(private_data.stream.try_next());
+        let maybe_batch = runtime.block_on(private_data.stream.try_next());
 
         match maybe_batch {
             Ok(None) => {

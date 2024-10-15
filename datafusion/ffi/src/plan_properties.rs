@@ -296,7 +296,6 @@ impl ForeignPlanProperties {
         }
 
         let partitioning = {
-            println!("ForeignPlanProperties::new buff {:?}", buff);
             let data = slice::from_raw_parts(buff, buff_size as usize);
 
             let proto_partitioning = Partitioning::decode(data)
