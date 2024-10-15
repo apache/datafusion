@@ -125,7 +125,7 @@ NULL NULL l_bar
 
 
 
-statement error DataFusion error: Internal error: Physical input schema should be the same as the one converted from logical input schema..
+query P rowsort
 SELECT ts
 FROM ((
     SELECT now() AS ts
@@ -137,6 +137,8 @@ FROM ((
 GROUP BY ts
 ORDER BY ts
 LIMIT 1;
+----
+2020-09-08T13:42:29.190855123Z
 
 
 statement ok
