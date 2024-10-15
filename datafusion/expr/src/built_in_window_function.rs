@@ -67,7 +67,6 @@ impl BuiltInWindowFunction {
         use BuiltInWindowFunction::*;
         match self {
             CumeDist => "CUME_DIST",
-            Ntile => "NTILE",
             Lag => "LAG",
             Lead => "LEAD",
             FirstValue => "first_value",
@@ -82,7 +81,6 @@ impl FromStr for BuiltInWindowFunction {
     fn from_str(name: &str) -> Result<BuiltInWindowFunction> {
         Ok(match name.to_uppercase().as_str() {
             "CUME_DIST" => BuiltInWindowFunction::CumeDist,
-            "NTILE" => BuiltInWindowFunction::Ntile,
             "LAG" => BuiltInWindowFunction::Lag,
             "LEAD" => BuiltInWindowFunction::Lead,
             "FIRST_VALUE" => BuiltInWindowFunction::FirstValue,
@@ -115,7 +113,6 @@ impl BuiltInWindowFunction {
             })?;
 
         match self {
-            BuiltInWindowFunction::Ntile => Ok(DataType::UInt64),
             BuiltInWindowFunction::CumeDist => Ok(DataType::Float64),
             BuiltInWindowFunction::Lag
             | BuiltInWindowFunction::Lead
@@ -142,21 +139,7 @@ impl BuiltInWindowFunction {
             }
             BuiltInWindowFunction::FirstValue | BuiltInWindowFunction::LastValue => {
                 Signature::any(1, Volatility::Immutable)
-            }
-            BuiltInWindowFunction::Ntile => Signature::uniform(
-                1,
-                vec![
-                    DataType::UInt64,
-                    DataType::UInt32,
-                    DataType::UInt16,
-                    DataType::UInt8,
-                    DataType::Int64,
-                    DataType::Int32,
-                    DataType::Int16,
-                    DataType::Int8,
-                ],
-                Volatility::Immutable,
-            ),
+            },
             BuiltInWindowFunction::NthValue => Signature::any(2, Volatility::Immutable),
         }
     }
