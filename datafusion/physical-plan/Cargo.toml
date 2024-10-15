@@ -39,7 +39,7 @@ name = "datafusion_physical_plan"
 path = "src/lib.rs"
 
 [dependencies]
-ahash = { workspace = true }
+foldhash = { workspace = true }
 arrow = { workspace = true }
 arrow-array = { workspace = true }
 arrow-buffer = { workspace = true }

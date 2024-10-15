@@ -43,7 +43,7 @@ use datafusion_common::{
 use datafusion_expr::ColumnarValue;
 use datafusion_physical_expr_common::datum::compare_with_eq;
 
-use ahash::RandomState;
+use foldhash::fast::RandomState;
 use hashbrown::hash_map::RawEntryMut;
 use hashbrown::HashMap;
 
@@ -154,7 +154,7 @@ where
     T: ArrayAccessor,
     T::Item: IsEqual,
 {
-    let state = RandomState::new();
+    let state = RandomState::default();
     let mut map: HashMap<usize, (), ()> =
         HashMap::with_capacity_and_hasher(array.len(), ());
 

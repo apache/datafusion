@@ -16,7 +16,6 @@
 // under the License.
 
 use crate::aggregates::group_values::GroupValues;
-use ahash::RandomState;
 use arrow::array::BooleanBufferBuilder;
 use arrow::buffer::NullBuffer;
 use arrow::datatypes::i256;
@@ -28,6 +27,7 @@ use arrow_schema::DataType;
 use datafusion_common::Result;
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
 use datafusion_expr::EmitTo;
+use foldhash::fast::RandomState;
 use half::f16;
 use hashbrown::raw::RawTable;
 use std::sync::Arc;
@@ -42,6 +42,7 @@ macro_rules! hash_integer {
         $(impl HashValue for $t {
             #[cfg(not(feature = "force_hash_collisions"))]
             fn hash(&self, state: &RandomState) -> u64 {
+                use std::hash::BuildHasher;
                 state.hash_one(self)
             }
 
@@ -61,6 +62,7 @@ macro_rules! hash_float {
         $(impl HashValue for $t {
             #[cfg(not(feature = "force_hash_collisions"))]
             fn hash(&self, state: &RandomState) -> u64 {
+                use std::hash::BuildHasher;
                 state.hash_one(self.to_bits())
             }
 
