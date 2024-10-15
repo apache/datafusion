@@ -161,7 +161,7 @@ macro_rules! downcast_arg {
 /// $UNARY_FUNC: the unary function to apply to the argument
 /// $OUTPUT_ORDERING: the output ordering calculation method of the function
 macro_rules! make_math_unary_udf {
-    ($UDF:ident, $GNAME:ident, $NAME:ident, $UNARY_FUNC:ident, $OUTPUT_ORDERING:expr, $EVALUATE_BOUNDS:expr) => {
+    ($UDF:ident, $GNAME:ident, $NAME:ident, $UNARY_FUNC:ident, $OUTPUT_ORDERING:expr, $EVALUATE_BOUNDS:expr, $GET_DOC:expr) => {
         make_udf_function!($NAME::$UDF, $GNAME, $NAME);
 
         mod $NAME {
@@ -173,7 +173,9 @@ macro_rules! make_math_unary_udf {
             use datafusion_common::{exec_err, DataFusionError, Result};
             use datafusion_expr::interval_arithmetic::Interval;
             use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
-            use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
+            use datafusion_expr::{
+                ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+            };
 
             #[derive(Debug)]
             pub struct $UDF {
@@ -257,6 +259,10 @@ macro_rules! make_math_unary_udf {
                     };
                     Ok(ColumnarValue::Array(arr))
                 }
+
+                fn documentation(&self) -> Option<&Documentation> {
+                    Some($GET_DOC())
+                }
             }
         }
     };
@@ -273,7 +279,7 @@ macro_rules! make_math_unary_udf {
 /// $BINARY_FUNC: the binary function to apply to the argument
 /// $OUTPUT_ORDERING: the output ordering calculation method of the function
 macro_rules! make_math_binary_udf {
-    ($UDF:ident, $GNAME:ident, $NAME:ident, $BINARY_FUNC:ident, $OUTPUT_ORDERING:expr) => {
+    ($UDF:ident, $GNAME:ident, $NAME:ident, $BINARY_FUNC:ident, $OUTPUT_ORDERING:expr, $GET_DOC:expr) => {
         make_udf_function!($NAME::$UDF, $GNAME, $NAME);
 
         mod $NAME {
@@ -285,7 +291,9 @@ macro_rules! make_math_binary_udf {
             use datafusion_common::{exec_err, DataFusionError, Result};
             use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
             use datafusion_expr::TypeSignature;
-            use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
+            use datafusion_expr::{
+                ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+            };
 
             #[derive(Debug)]
             pub struct $UDF {
@@ -365,6 +373,10 @@ macro_rules! make_math_binary_udf {
                         }
                     };
                     Ok(ColumnarValue::Array(arr))
+                }
+
+                fn documentation(&self) -> Option<&Documentation> {
+                    Some($GET_DOC())
                 }
             }
         }
