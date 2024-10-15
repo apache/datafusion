@@ -17,7 +17,22 @@
 
 use std::sync::Arc;
 
-use arrow_schema::{DataType, IntervalUnit, TimeUnit};
+use arrow_schema::{DataType, Field, Fields, IntervalUnit, TimeUnit, UnionFields};
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct NativeField {
+    name: String,
+    native_type: NativeType,
+    nullable: bool,
+}
+
+pub type NativeFieldRef = Arc<NativeField>;
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct NativeFields(Arc<[NativeFieldRef]>);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct NativeUnionFields(Arc<[(i8, NativeFieldRef)]>);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum NativeType {
@@ -123,15 +138,11 @@ pub enum NativeType {
     /// DataType::Timestamp(TimeUnit::Second, Some("string".to_string().into()));
     /// ```
     Timestamp(TimeUnit, Option<Arc<str>>),
-    /// A signed 32-bit date representing the elapsed time since UNIX epoch (1970-01-01)
+    /// A signed date representing the elapsed time since UNIX epoch (1970-01-01)
     /// in days.
     Date,
-    /// A signed 32-bit time representing the elapsed time since midnight in the unit of `TimeUnit`.
-    /// Must be either seconds or milliseconds.
-    Time32(TimeUnit),
-    /// A signed 64-bit time representing the elapsed time since midnight in the unit of `TimeUnit`.
-    /// Must be either microseconds or nanoseconds.
-    Time64(TimeUnit),
+    /// A signed time representing the elapsed time since midnight in the unit of `TimeUnit`.
+    Time(TimeUnit),
     /// Measure of elapsed time in either seconds, milliseconds, microseconds or nanoseconds.
     Duration(TimeUnit),
     /// A "calendar" interval which models types that don't necessarily
@@ -146,14 +157,14 @@ pub enum NativeType {
     /// A variable-length string in Unicode with UTF-8 encoding.
     Utf8,
     /// A list of some logical data type with variable length.
-    List(Box<NativeType>),
+    List(NativeFieldRef),
     /// A list of some logical data type with fixed length.
-    FixedSizeList(Box<NativeType>, i32),
+    FixedSizeList(NativeFieldRef, i32),
     /// A nested datatype that contains a number of sub-fields.
-    Struct(Box<[(String, NativeType)]>),
+    Struct(NativeFields),
     /// A nested datatype that can represent slots of differing types.
-    Union(Box<[(i8, NativeType)]>),
-    /// Exact 128-bit width decimal value with precision and scale
+    Union(NativeUnionFields),
+    /// Decimal value with precision and scale
     ///
     /// * precision is the total number of digits
     /// * scale is the number of digits past the decimal
@@ -166,36 +177,22 @@ pub enum NativeType {
     ///
     /// For example the number 12300 could be treated as a decimal
     /// has precision 3 and scale -2.
-    Decimal128(u8, i8),
-    /// Exact 256-bit width decimal value with precision and scale
+    Decimal(u8, i8),
+    /// A Map is a type that an association between a key and a value.
     ///
-    /// * precision is the total number of digits
-    /// * scale is the number of digits past the decimal
-    ///
-    /// For example the number 123.45 has precision 5 and scale 2.
-    ///
-    /// In certain situations, scale could be negative number. For
-    /// negative scale, it is the number of padding 0 to the right
-    /// of the digits.
-    ///
-    /// For example the number 12300 could be treated as a decimal
-    /// has precision 3 and scale -2.
-    Decimal256(u8, i8),
-    /// A Map is a logical nested type that is represented as
-    ///
-    /// `List<entries: Struct<key: K, value: V>>`
-    ///
-    /// The keys and values are each respectively contiguous.
     /// The key and value types are not constrained, but keys should be
     /// hashable and unique.
-    /// Whether the keys are sorted can be set in the `bool` after the `Field`.
     ///
     /// In a field with Map type, the field has a child Struct field, which then
     /// has two children: key type and the second the value type. The names of the
     /// child fields may be respectively "entries", "key", and "value", but this is
     /// not enforced.
-    Map(Box<NativeType>),
+    Map(NativeFieldRef),
 }
+
+// The following From<DataType>, From<Field>, ... implementations are temporary
+// mapping solutions to provide backwards compatibility while transitioning from
+// the purely physical system to a logical / physical system.
 
 impl From<DataType> for NativeType {
     fn from(value: DataType) -> Self {
@@ -214,41 +211,69 @@ impl From<DataType> for NativeType {
             DataType::Float16 => Float16,
             DataType::Float32 => Float32,
             DataType::Float64 => Float64,
-            DataType::Timestamp(time_unit, arc) => Timestamp(time_unit, arc),
+            DataType::Timestamp(tu, tz) => Timestamp(tu, tz),
             DataType::Date32 | DataType::Date64 => Date,
-            DataType::Time32(time_unit) => Time32(time_unit),
-            DataType::Time64(time_unit) => Time64(time_unit),
-            DataType::Duration(time_unit) => Duration(time_unit),
-            DataType::Interval(interval_unit) => Interval(interval_unit),
+            DataType::Time32(tu) | DataType::Time64(tu) => Time(tu),
+            DataType::Duration(tu) => Duration(tu),
+            DataType::Interval(iu) => Interval(iu),
             DataType::Binary | DataType::LargeBinary | DataType::BinaryView => Binary,
             DataType::FixedSizeBinary(size) => FixedSizeBinary(size),
             DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => Utf8,
             DataType::List(field)
             | DataType::ListView(field)
             | DataType::LargeList(field)
-            | DataType::LargeListView(field) => {
-                List(Box::new(field.data_type().clone().into()))
-            }
+            | DataType::LargeListView(field) => List(Arc::new(field.as_ref().into())),
             DataType::FixedSizeList(field, size) => {
-                FixedSizeList(Box::new(field.data_type().clone().into()), size)
+                FixedSizeList(Arc::new(field.as_ref().into()), size)
             }
-            DataType::Struct(fields) => Struct(
-                fields
-                    .into_iter()
-                    .map(|field| (field.name().clone(), field.data_type().clone().into()))
-                    .collect(),
-            ),
-            DataType::Union(union_fields, _) => Union(
-                union_fields
-                    .iter()
-                    .map(|(i, field)| (i, field.data_type().clone().into()))
-                    .collect(),
-            ),
+            DataType::Struct(fields) => Struct(NativeFields::from(&fields)),
+            DataType::Union(union_fields, _) => {
+                Union(NativeUnionFields::from(&union_fields))
+            }
             DataType::Dictionary(_, data_type) => data_type.as_ref().clone().into(),
-            DataType::Decimal128(p, s) => Decimal128(p, s),
-            DataType::Decimal256(p, s) => Decimal256(p, s),
-            DataType::Map(field, _) => Map(Box::new(field.data_type().clone().into())),
+            DataType::Decimal128(p, s) | DataType::Decimal256(p, s) => Decimal(p, s),
+            DataType::Map(field, _) => Map(Arc::new(field.as_ref().into())),
             DataType::RunEndEncoded(_, field) => field.data_type().clone().into(),
         }
+    }
+}
+
+impl From<&Field> for NativeField {
+    fn from(value: &Field) -> Self {
+        Self {
+            name: value.name().clone(),
+            native_type: value.data_type().clone().into(),
+            nullable: value.is_nullable(),
+        }
+    }
+}
+
+impl From<&Fields> for NativeFields {
+    fn from(value: &Fields) -> Self {
+        value
+            .iter()
+            .map(|field| Arc::new(NativeField::from(field.as_ref())))
+            .collect()
+    }
+}
+
+impl FromIterator<NativeFieldRef> for NativeFields {
+    fn from_iter<T: IntoIterator<Item = NativeFieldRef>>(iter: T) -> Self {
+        Self(iter.into_iter().collect())
+    }
+}
+
+impl From<&UnionFields> for NativeUnionFields {
+    fn from(value: &UnionFields) -> Self {
+        value
+            .iter()
+            .map(|(i, field)| (i, Arc::new(NativeField::from(field.as_ref()))))
+            .collect()
+    }
+}
+
+impl FromIterator<(i8, NativeFieldRef)> for NativeUnionFields {
+    fn from_iter<T: IntoIterator<Item = (i8, NativeFieldRef)>>(iter: T) -> Self {
+        Self(iter.into_iter().collect())
     }
 }
