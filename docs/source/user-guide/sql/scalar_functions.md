@@ -624,8 +624,8 @@ to_unixtime(expression[, ..., format_n])
 ```
 
 ## Array Functions
-- [unnest](#unnest)
 
+- [unnest](#unnest)
 
 ### `unnest`
 
