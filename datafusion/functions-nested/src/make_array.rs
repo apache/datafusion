@@ -27,12 +27,12 @@ use arrow_array::{
 use arrow_buffer::OffsetBuffer;
 use arrow_schema::DataType::{LargeList, List, Null};
 use arrow_schema::{DataType, Field};
-use datafusion_common::{exec_err, internal_err};
 use datafusion_common::{plan_err, utils::array_into_list_array_nullable, Result};
-use datafusion_expr::binary::type_union_resolution;
+use datafusion_expr::binary::{
+    try_type_union_resolution_with_struct, type_union_resolution,
+};
 use datafusion_expr::TypeSignature;
 use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
-use itertools::Itertools;
 
 use crate::utils::make_scalar_function;
 
@@ -107,33 +107,16 @@ impl ScalarUDFImpl for MakeArray {
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        if let Some(new_type) = type_union_resolution(arg_types) {
-            // TODO: Move the logic to type_union_resolution if this applies to other functions as well
-            // Handle struct where we only change the data type but preserve the field name and nullability.
-            // Since field name is the key of the struct, so it shouldn't be updated to the common column name like "c0" or "c1"
-            let is_struct_and_has_same_key = are_all_struct_and_have_same_key(arg_types)?;
-            if is_struct_and_has_same_key {
-                let data_types: Vec<_> = if let DataType::Struct(fields) = &arg_types[0] {
-                    fields.iter().map(|f| f.data_type().to_owned()).collect()
-                } else {
-                    return internal_err!("Struct type is checked is the previous function, so this should be unreachable");
-                };
-
-                let mut final_struct_types = vec![];
-                for s in arg_types {
-                    let mut new_fields = vec![];
-                    if let DataType::Struct(fields) = s {
-                        for (i, f) in fields.iter().enumerate() {
-                            let field = Arc::unwrap_or_clone(Arc::clone(f))
-                                .with_data_type(data_types[i].to_owned());
-                            new_fields.push(Arc::new(field));
-                        }
-                    }
-                    final_struct_types.push(DataType::Struct(new_fields.into()))
-                }
-                return Ok(final_struct_types);
+        let mut errors = vec![];
+        match try_type_union_resolution_with_struct(arg_types) {
+            Ok(r) => return Ok(r),
+            Err(e) => {
+                errors.push(e);
             }
+        }
 
+        if let Some(new_type) = type_union_resolution(arg_types) {
+            // TODO: Move FixedSizeList to List in type_union_resolution
             if let DataType::FixedSizeList(field, _) = new_type {
                 Ok(vec![DataType::List(field); arg_types.len()])
             } else if new_type.is_null() {
@@ -143,32 +126,13 @@ impl ScalarUDFImpl for MakeArray {
             }
         } else {
             plan_err!(
-                "Fail to find the valid type between {:?} for {}",
+                "Fail to find the valid type between {:?} for {}, errors are {:?}",
                 arg_types,
-                self.name()
+                self.name(),
+                errors
             )
         }
     }
-}
-
-fn are_all_struct_and_have_same_key(data_types: &[DataType]) -> Result<bool> {
-    let mut keys_string: Option<String> = None;
-    for data_type in data_types {
-        if let DataType::Struct(fields) = data_type {
-            let keys = fields.iter().map(|f| f.name().to_owned()).join(",");
-            if let Some(ref k) = keys_string {
-                if *k != keys {
-                    return exec_err!("Expect same keys for struct type but got mismatched pair {} and {}", *k, keys);
-                }
-            } else {
-                keys_string = Some(keys);
-            }
-        } else {
-            return Ok(false);
-        }
-    }
-
-    Ok(true)
 }
 
 // Empty array is a special case that is useful for many other array functions
