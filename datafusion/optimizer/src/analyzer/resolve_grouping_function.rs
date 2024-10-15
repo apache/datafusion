@@ -27,7 +27,9 @@ use crate::analyzer::AnalyzerRule;
 use arrow::datatypes::DataType;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_common::{Column, DFSchemaRef, DataFusionError, Result, ScalarValue};
+use datafusion_common::{
+    internal_datafusion_err, plan_err, Column, DFSchemaRef, Result, ScalarValue,
+};
 use datafusion_expr::expr::{AggregateFunction, Alias};
 use datafusion_expr::logical_plan::LogicalPlan;
 use datafusion_expr::utils::grouping_set_to_exprlist;
@@ -57,6 +59,10 @@ impl AnalyzerRule for ResolveGroupingFunction {
     }
 }
 
+/// Create a map from grouping expr to index in the internal grouping id.
+///
+/// For more details on how the grouping id bitmap works the documentation for
+/// [[Aggregate::INTERNAL_GROUPING_ID]]
 fn group_expr_to_bitmap_index(group_expr: &[Expr]) -> Result<HashMap<&Expr, usize>> {
     Ok(grouping_set_to_exprlist(group_expr)?
         .into_iter()
@@ -151,6 +157,7 @@ fn contains_grouping_function(exprs: &[Expr]) -> bool {
     exprs.iter().any(is_grouping_function)
 }
 
+/// Validate that the arguments to the grouping function are in the group by clause.
 fn validate_args(
     function: &AggregateFunction,
     group_by_expr: &HashMap<&Expr, usize>,
@@ -160,11 +167,11 @@ fn validate_args(
         .iter()
         .find(|expr| !group_by_expr.contains_key(expr));
     if let Some(expr) = expr_not_in_group_by {
-        Err(DataFusionError::Plan(format!(
+        plan_err!(
             "Argument {} to grouping function is not in grouping columns {}",
             expr,
             group_by_expr.keys().map(|e| e.to_string()).join(", ")
-        )))
+        )
     } else {
         Ok(())
     }
@@ -181,7 +188,7 @@ fn grouping_function_on_id(
     // Postgres allows grouping function for group by without grouping sets, the result is then
     // always 0
     if !is_grouping_set {
-        return Ok(Expr::Literal(ScalarValue::from(0u32)));
+        return Ok(Expr::Literal(ScalarValue::from(0i32)));
     }
 
     let group_by_expr_count = group_by_expr.len();
@@ -206,7 +213,7 @@ fn grouping_function_on_id(
             .enumerate()
             .all(|(idx, expr)| group_by_expr.get(expr) == Some(&idx))
     {
-        return Ok(cast(grouping_id_column, DataType::UInt32));
+        return Ok(cast(grouping_id_column, DataType::Int32));
     }
 
     args.iter()
@@ -232,11 +239,9 @@ fn grouping_function_on_id(
             bit_exprs
                 .into_iter()
                 .reduce(bitwise_or)
-                .map(|expr| cast(expr, DataType::UInt32))
+                .map(|expr| cast(expr, DataType::Int32))
         })
         .ok_or_else(|| {
-            DataFusionError::Internal(
-                "Grouping sets should contains at least one element".to_string(),
-            )
+            internal_datafusion_err!("Grouping sets should contains at least one element")
         })
 }

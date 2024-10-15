@@ -197,7 +197,7 @@ b NULL 0 1 1 2
 NULL 2 1 0 2 1
 NULL 3 1 0 2 1
 
-# postgres allows grounping function for group by without grouping sets/rollup/cube
+# postgres allows grouping function for GROUP BY without GROUPING SETS/ROLLUP/CUBE
 query TI
 select c1, grouping(c1) from test group by c1 order by c1;
 ----
