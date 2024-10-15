@@ -673,7 +673,7 @@ impl DefaultPhysicalPlanner {
                     logical_input_schema.as_ref().clone().into();
 
                 if physical_input_schema != physical_input_schema_from_logical {
-                    return internal_err!("Physical input schema should be the same as the one converted from logical input schema.");
+                    log::warn!("Physical input schema should be the same as the one converted from logical input schema, but did not match for logical plan:\n{}", input.display_indent());
                 }
 
                 let groups = self.create_grouping_physical_expr(
