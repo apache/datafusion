@@ -37,7 +37,7 @@ mod tests {
             plan_str,
             "Projection: nation.n_name\
             \n  Filter: contains(nation.n_name, Utf8(\"IA\"))\
-            \n    TableScan: nation projection=[n_nationkey, n_name, n_regionkey, n_comment]"
+            \n    TableScan: nation"
         );
         Ok(())
     }
