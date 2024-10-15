@@ -123,6 +123,15 @@ ORDER BY id, name, l_name;
 NULL bar NULL
 NULL NULL l_bar
 
+# Regression test: missing field metadata from left side of the union when right side is chosen
+statement error DataFusion error: Internal error: Physical input schema should be the same as the one converted from logical input schema..
+select name from (
+  SELECT nonnull_name as name FROM "table_with_metadata"
+  UNION ALL
+  SELECT NULL::string as name
+) group by name order by name;
+
+
 
 
 query P rowsort
