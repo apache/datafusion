@@ -22,7 +22,8 @@ use datafusion_common::{
     Column, DataFusionError, Result, TableReference,
 };
 use datafusion_expr::{
-   expr::Alias, Distinct, Expr, JoinConstraint, JoinType, LogicalPlan, LogicalPlanBuilder, Projection, SortExpr
+    expr::Alias, Distinct, Expr, JoinConstraint, JoinType, LogicalPlan,
+    LogicalPlanBuilder, Projection, SortExpr,
 };
 use sqlparser::ast::{self, Ident, SetExpr};
 use std::sync::Arc;
@@ -38,7 +39,8 @@ use super::{
         subquery_alias_inner_query_and_columns, TableAliasRewriter,
     },
     utils::{
-        find_agg_node_within_select, find_window_nodes_within_select, unproject_sort_expr, unproject_window_exprs
+        find_agg_node_within_select, find_window_nodes_within_select,
+        unproject_sort_expr, unproject_window_exprs,
     },
     Unparser,
 };
@@ -299,7 +301,6 @@ impl Unparser<'_> {
                     let filter_expr = self.expr_to_sql(&unprojected)?;
                     select.having(Some(filter_expr));
                 } else {
-
                     let filter_expr = self.expr_to_sql(&filter.predicate)?;
                     select.selection(Some(filter_expr));
                 }
@@ -362,17 +363,21 @@ impl Unparser<'_> {
                 };
 
                 if let Some(fetch) = sort.fetch {
-                	query_ref.limit(Some(ast::Expr::Value(ast::Value::Number(
-                       fetch.to_string(),
-                       false,
+                    query_ref.limit(Some(ast::Expr::Value(ast::Value::Number(
+                        fetch.to_string(),
+                        false,
                     ))));
                 };
 
                 let agg = find_agg_node_within_select(plan, select.already_projected());
                 // unproject sort expressions
-                let sort_exprs: Vec<SortExpr> = sort.expr.iter().map(|sort_expr| {
-                    unproject_sort_expr(sort_expr, agg, sort.input.as_ref())
-                }).collect::<Result<Vec<_>>>()?;
+                let sort_exprs: Vec<SortExpr> = sort
+                    .expr
+                    .iter()
+                    .map(|sort_expr| {
+                        unproject_sort_expr(sort_expr, agg, sort.input.as_ref())
+                    })
+                    .collect::<Result<Vec<_>>>()?;
 
                 query_ref.order_by(self.sorts_to_sql(&sort_exprs)?);
 

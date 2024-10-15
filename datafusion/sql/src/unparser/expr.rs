@@ -225,7 +225,7 @@ impl Unparser<'_> {
                     }
                 };
 
-                let order_by =order_by
+                let order_by = order_by
                     .iter()
                     .map(|sort_expr| self.sort_to_sql(sort_expr))
                     .collect::<Result<Vec<_>>>()?;
