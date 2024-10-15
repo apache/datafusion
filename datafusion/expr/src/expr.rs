@@ -1653,6 +1653,75 @@ impl Expr {
             | Expr::Placeholder(..) => false,
         }
     }
+
+    /// Check whether the expression depends only on the columns in the given schema.
+    /// Ensuring that for any specific tuple of column values, the expression consistently yields
+    /// the same result.
+    pub fn is_consistent_with_schema(&self, schema: &DFSchema) -> bool {
+        let mut is_applicable = true;
+        self.apply(|expr| match expr {
+            Expr::Column(column) => {
+                is_applicable &= schema.has_column(column);
+                if is_applicable {
+                    Ok(TreeNodeRecursion::Jump)
+                } else {
+                    Ok(TreeNodeRecursion::Stop)
+                }
+            }
+            Expr::Literal(_)
+            | Expr::Alias(_)
+            | Expr::OuterReferenceColumn(_, _)
+            | Expr::ScalarVariable(_, _)
+            | Expr::Not(_)
+            | Expr::IsNotNull(_)
+            | Expr::IsNull(_)
+            | Expr::IsTrue(_)
+            | Expr::IsFalse(_)
+            | Expr::IsUnknown(_)
+            | Expr::IsNotTrue(_)
+            | Expr::IsNotFalse(_)
+            | Expr::IsNotUnknown(_)
+            | Expr::Negative(_)
+            | Expr::Cast(_)
+            | Expr::TryCast(_)
+            | Expr::BinaryExpr(_)
+            | Expr::Between(_)
+            | Expr::Like(_)
+            | Expr::SimilarTo(_)
+            | Expr::InList(_)
+            | Expr::Exists(_)
+            | Expr::InSubquery(_)
+            | Expr::ScalarSubquery(_)
+            | Expr::GroupingSet(_)
+            | Expr::Case(_) => Ok(TreeNodeRecursion::Continue),
+
+            Expr::ScalarFunction(scalar_function) => {
+                match scalar_function.func.signature().volatility {
+                    Volatility::Immutable => Ok(TreeNodeRecursion::Continue),
+                    // TODO: Stable functions could be `applicable`, but that would require access to the context
+                    Volatility::Stable | Volatility::Volatile => {
+                        is_applicable = false;
+                        Ok(TreeNodeRecursion::Stop)
+                    }
+                }
+            }
+
+            // TODO other expressions are not handled yet:
+            // - AGGREGATE and WINDOW should not end up in filter conditions, except maybe in some edge cases
+            // - Can `Wildcard` be considered as a `Literal`?
+            // - ScalarVariable could be `applicable`, but that would require access to the context
+            Expr::AggregateFunction { .. }
+            | Expr::WindowFunction { .. }
+            | Expr::Wildcard { .. }
+            | Expr::Unnest { .. }
+            | Expr::Placeholder(_) => {
+                is_applicable = false;
+                Ok(TreeNodeRecursion::Stop)
+            }
+        })
+        .unwrap();
+        is_applicable
+    }
 }
 
 impl HashNode for Expr {
