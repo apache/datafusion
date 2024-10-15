@@ -125,5 +125,19 @@ NULL NULL l_bar
 
 
 
+statement error DataFusion error: Internal error: Physical input schema should be the same as the one converted from logical input schema..
+SELECT ts
+FROM ((
+    SELECT now() AS ts
+    FROM table_with_metadata
+) UNION ALL (
+        SELECT ts
+    FROM table_with_metadata
+))
+GROUP BY ts
+ORDER BY ts
+LIMIT 1;
+
+
 statement ok
 drop table table_with_metadata;
