@@ -147,11 +147,6 @@ impl DocumentationBuilder {
 
     /// Add a standard "expression" argument to the documentation
     ///
-    /// This is similar to  [`Self::with_argument`] except that  a standard
-    /// description is appended to the end: `"Can be a constant, column, or
-    /// function, and any combination of arithmetic operators."` There is
-    /// also a default option for if the argument was "expression".
-    ///
     /// The argument is rendered like below if Some() is passed through:
     ///
     /// ```text
@@ -168,15 +163,12 @@ impl DocumentationBuilder {
     pub fn with_standard_argument(
         self,
         arg_name: impl Into<String>,
-        expression_type: Option<&str>, // Changed from Option<T>
+        expression_type: Option<&str>,
     ) -> Self {
-        let description = match expression_type {
-            Some(expr_type) => format!(
-                "{} expression to operate on. Can be a constant, column, or function, and any combination of operators.",
-                expr_type
-            ),
-            None => "The expression to operate on. Can be a constant, column, or function, and any combination of operators.".to_string(),
-        };
+        let description = format!(
+            "{} expression to operate on. Can be a constant, column, or function, and any combination of operators.",
+            expression_type.unwrap_or("The")
+        );
         self.with_argument(arg_name, description)
     }
 
