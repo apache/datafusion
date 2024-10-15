@@ -25,9 +25,12 @@ use arrow_schema::DataType::{LargeList, List, Null};
 use arrow_schema::{DataType, FieldRef};
 use datafusion_common::cast::{as_large_list_array, as_list_array};
 use datafusion_common::{exec_err, Result};
-use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::scalar_doc_sections::DOC_SECTION_ARRAY;
+use datafusion_expr::{
+    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+};
 use std::any::Any;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 make_udf_expr_and_func!(
     ArrayReverse,
@@ -76,6 +79,39 @@ impl ScalarUDFImpl for ArrayReverse {
     fn aliases(&self) -> &[String] {
         &self.aliases
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_array_reverse_doc())
+    }
+}
+
+static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+
+fn get_array_reverse_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_ARRAY)
+            .with_description(
+                "Returns the array with the order of the elements reversed.",
+            )
+            .with_syntax_example("array_reverse(array)")
+            .with_sql_example(
+                r#"```sql
+> select array_reverse([1, 2, 3, 4]);
++------------------------------------------------------------+
+| array_reverse(List([1, 2, 3, 4]))                          |
++------------------------------------------------------------+
+| [4, 3, 2, 1]                                               |
++------------------------------------------------------------+
+```"#,
+            )
+            .with_argument(
+                "array",
+                "Array expression. Can be a constant, column, or function, and any combination of array operators.",
+            )
+            .build()
+            .unwrap()
+    })
 }
 
 /// array_reverse SQL function
