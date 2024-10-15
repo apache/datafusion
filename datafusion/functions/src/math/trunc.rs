@@ -28,7 +28,9 @@ use datafusion_common::{exec_err, DataFusionError, Result};
 use datafusion_expr::scalar_doc_sections::DOC_SECTION_MATH;
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::TypeSignature::Exact;
-use datafusion_expr::{ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{
+    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+};
 
 #[derive(Debug)]
 pub struct TruncFunc {

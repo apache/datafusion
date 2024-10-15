@@ -25,7 +25,9 @@ use arrow::datatypes::{DataType, Float32Type, Float64Type};
 use datafusion_common::{exec_err, DataFusionError, Result};
 use datafusion_expr::scalar_doc_sections::DOC_SECTION_MATH;
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
-use datafusion_expr::{ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{
+    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+};
 
 use crate::utils::make_scalar_function;
 

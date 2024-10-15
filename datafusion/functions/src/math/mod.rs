@@ -95,7 +95,14 @@ make_math_unary_udf!(
     super::bounds::unbounded_bounds,
     super::get_atanh_doc
 );
-make_math_binary_udf!(Atan2, ATAN2, atan2, atan2, super::atan2_order, super::get_atan2_doc);
+make_math_binary_udf!(
+    Atan2,
+    ATAN2,
+    atan2,
+    atan2,
+    super::atan2_order,
+    super::get_atan2_doc
+);
 make_math_unary_udf!(
     CbrtFunc,
     CBRT,

@@ -25,7 +25,9 @@ use arrow::datatypes::DataType::Int64;
 use arrow::error::ArrowError;
 use datafusion_common::{arrow_datafusion_err, exec_err, DataFusionError, Result};
 use datafusion_expr::scalar_doc_sections::DOC_SECTION_MATH;
-use datafusion_expr::{ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{
+    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+};
 
 use super::gcd::unsigned_gcd;
 use crate::utils::make_scalar_function;

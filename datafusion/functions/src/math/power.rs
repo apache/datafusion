@@ -26,8 +26,7 @@ use datafusion_common::{
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::scalar_doc_sections::DOC_SECTION_MATH;
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
-use datafusion_expr::{
-    ColumnarValue, Documentation, Expr, ScalarUDF, TypeSignature};
+use datafusion_expr::{ColumnarValue, Documentation, Expr, ScalarUDF, TypeSignature};
 
 use arrow::array::{ArrayRef, Float64Array, Int64Array};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};

@@ -24,10 +24,9 @@ use arrow::datatypes::DataType::Float64;
 use rand::{thread_rng, Rng};
 
 use datafusion_common::{not_impl_err, Result};
-use datafusion_expr::ColumnarValue;
 use datafusion_expr::scalar_doc_sections::DOC_SECTION_MATH;
-use datafusion_expr::{
-    Documentation, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::ColumnarValue;
+use datafusion_expr::{Documentation, ScalarUDFImpl, Signature, Volatility};
 
 #[derive(Debug)]
 pub struct RandomFunc {

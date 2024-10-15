@@ -173,7 +173,9 @@ macro_rules! make_math_unary_udf {
             use datafusion_common::{exec_err, DataFusionError, Result};
             use datafusion_expr::interval_arithmetic::Interval;
             use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
-            use datafusion_expr::{ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility};
+            use datafusion_expr::{
+                ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+            };
 
             #[derive(Debug)]
             pub struct $UDF {
@@ -289,7 +291,9 @@ macro_rules! make_math_binary_udf {
             use datafusion_common::{exec_err, DataFusionError, Result};
             use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
             use datafusion_expr::TypeSignature;
-            use datafusion_expr::{ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility};
+            use datafusion_expr::{
+                ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+            };
 
             #[derive(Debug)]
             pub struct $UDF {

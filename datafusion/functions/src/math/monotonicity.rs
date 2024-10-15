@@ -19,8 +19,8 @@ use std::sync::OnceLock;
 
 use datafusion_common::{exec_err, Result, ScalarValue};
 use datafusion_expr::interval_arithmetic::Interval;
-use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::scalar_doc_sections::DOC_SECTION_MATH;
+use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::Documentation;
 
 /// Non-increasing on the interval \[−1, 1\], undefined otherwise.
@@ -44,9 +44,7 @@ pub fn get_acos_doc() -> &'static Documentation {
     DOCUMENTATION_ACOS.get_or_init(|| {
         Documentation::builder()
             .with_doc_section(DOC_SECTION_MATH)
-            .with_description(
-                "Returns the arc cosine or inverse cosine of a number.",
-            )
+            .with_description("Returns the arc cosine or inverse cosine of a number.")
             .with_syntax_example("acos(numeric_expression)")
             .with_standard_argument("numeric_expression", "Numeric")
             .build()
@@ -108,9 +106,7 @@ pub fn get_asin_doc() -> &'static Documentation {
     DOCUMENTATION_ASIN.get_or_init(|| {
         Documentation::builder()
             .with_doc_section(DOC_SECTION_MATH)
-            .with_description(
-                "Returns the arc sine or inverse sine of a number.",
-            )
+            .with_description("Returns the arc sine or inverse sine of a number.")
             .with_syntax_example("asin(numeric_expression)")
             .with_standard_argument("numeric_expression", "Numeric")
             .build()
@@ -150,9 +146,7 @@ pub fn get_atan_doc() -> &'static Documentation {
     DOCUMENTATION_ATAN.get_or_init(|| {
         Documentation::builder()
             .with_doc_section(DOC_SECTION_MATH)
-            .with_description(
-                "Returns the arc tangent or inverse tangent of a number.",
-            )
+            .with_description("Returns the arc tangent or inverse tangent of a number.")
             .with_syntax_example("atan(numeric_expression)")
             .with_standard_argument("numeric_expression", "Numeric")
             .build()
@@ -227,9 +221,7 @@ pub fn get_cbrt_doc() -> &'static Documentation {
     DOCUMENTATION_CBRT.get_or_init(|| {
         Documentation::builder()
             .with_doc_section(DOC_SECTION_MATH)
-            .with_description(
-                "Returns the cube root of a number.",
-            )
+            .with_description("Returns the cube root of a number.")
             .with_syntax_example("cbrt(numeric_expression)")
             .with_standard_argument("numeric_expression", "Numeric")
             .build()
@@ -271,9 +263,7 @@ pub fn get_cos_doc() -> &'static Documentation {
     DOCUMENTATION_COS.get_or_init(|| {
         Documentation::builder()
             .with_doc_section(DOC_SECTION_MATH)
-            .with_description(
-                "Returns the cosine of a number.",
-            )
+            .with_description("Returns the cosine of a number.")
             .with_syntax_example("cos(numeric_expression)")
             .with_standard_argument("numeric_expression", "Numeric")
             .build()
@@ -303,9 +293,7 @@ pub fn get_cosh_doc() -> &'static Documentation {
     DOCUMENTATION_COSH.get_or_init(|| {
         Documentation::builder()
             .with_doc_section(DOC_SECTION_MATH)
-            .with_description(
-                "Returns the hyperbolic cosine of a number.",
-            )
+            .with_description("Returns the hyperbolic cosine of a number.")
             .with_syntax_example("cosh(numeric_expression)")
             .with_standard_argument("numeric_expression", "Numeric")
             .build()
@@ -324,9 +312,7 @@ pub fn get_degrees_doc() -> &'static Documentation {
     DOCUMENTATION_DEGREES.get_or_init(|| {
         Documentation::builder()
             .with_doc_section(DOC_SECTION_MATH)
-            .with_description(
-                "Converts radians to degrees.",
-            )
+            .with_description("Converts radians to degrees.")
             .with_syntax_example("degrees(numeric_expression)")
             .with_standard_argument("numeric_expression", "Numeric")
             .build()
@@ -345,9 +331,7 @@ pub fn get_exp_doc() -> &'static Documentation {
     DOCUMENTATION_EXP.get_or_init(|| {
         Documentation::builder()
             .with_doc_section(DOC_SECTION_MATH)
-            .with_description(
-                "Returns the base-e exponential of a number.",
-            )
+            .with_description("Returns the base-e exponential of a number.")
             .with_syntax_example("exp(numeric_expression)")
             .with_standard_argument("numeric_expression", "Numeric")
             .build()
@@ -396,9 +380,7 @@ pub fn get_ln_doc() -> &'static Documentation {
     DOCUMENTATION_LN.get_or_init(|| {
         Documentation::builder()
             .with_doc_section(DOC_SECTION_MATH)
-            .with_description(
-                "Returns the natural logarithm of a number.",
-            )
+            .with_description("Returns the natural logarithm of a number.")
             .with_syntax_example("ln(numeric_expression)")
             .with_standard_argument("numeric_expression", "Numeric")
             .build()
@@ -426,9 +408,7 @@ pub fn get_log2_doc() -> &'static Documentation {
     DOCUMENTATION_LOG2.get_or_init(|| {
         Documentation::builder()
             .with_doc_section(DOC_SECTION_MATH)
-            .with_description(
-                "Returns the base-2 logarithm of a number.",
-            )
+            .with_description("Returns the base-2 logarithm of a number.")
             .with_syntax_example("log2(numeric_expression)")
             .with_standard_argument("numeric_expression", "Numeric")
             .build()
@@ -456,9 +436,7 @@ pub fn get_log10_doc() -> &'static Documentation {
     DOCUMENTATION_LOG10.get_or_init(|| {
         Documentation::builder()
             .with_doc_section(DOC_SECTION_MATH)
-            .with_description(
-                "Returns the base-10 logarithm of a number.",
-            )
+            .with_description("Returns the base-10 logarithm of a number.")
             .with_syntax_example("log10(numeric_expression)")
             .with_standard_argument("numeric_expression", "Numeric")
             .build()
@@ -477,9 +455,7 @@ pub fn get_radians_doc() -> &'static Documentation {
     DOCUMENTATION_RADIONS.get_or_init(|| {
         Documentation::builder()
             .with_doc_section(DOC_SECTION_MATH)
-            .with_description(
-                "Converts degrees to radians.",
-            )
+            .with_description("Converts degrees to radians.")
             .with_syntax_example("radians(numeric_expression)")
             .with_standard_argument("numeric_expression", "Numeric")
             .build()
@@ -500,9 +476,7 @@ pub fn get_sin_doc() -> &'static Documentation {
     DOCUMENTATION_SIN.get_or_init(|| {
         Documentation::builder()
             .with_doc_section(DOC_SECTION_MATH)
-            .with_description(
-                "Returns the sine of a number.",
-            )
+            .with_description("Returns the sine of a number.")
             .with_syntax_example("sin(numeric_expression)")
             .with_standard_argument("numeric_expression", "Numeric")
             .build()
@@ -521,9 +495,7 @@ pub fn get_sinh_doc() -> &'static Documentation {
     DOCUMENTATION_SINH.get_or_init(|| {
         Documentation::builder()
             .with_doc_section(DOC_SECTION_MATH)
-            .with_description(
-                "Returns the hyperbolic sine of a number.",
-            )
+            .with_description("Returns the hyperbolic sine of a number.")
             .with_syntax_example("sinh(numeric_expression)")
             .with_standard_argument("numeric_expression", "Numeric")
             .build()
@@ -551,9 +523,7 @@ pub fn get_sqrt_doc() -> &'static Documentation {
     DOCUMENTATION_SQRT.get_or_init(|| {
         Documentation::builder()
             .with_doc_section(DOC_SECTION_MATH)
-            .with_description(
-                "Returns the square root of a number.",
-            )
+            .with_description("Returns the square root of a number.")
             .with_syntax_example("sqrt(numeric_expression)")
             .with_standard_argument("numeric_expression", "Numeric")
             .build()
@@ -574,9 +544,7 @@ pub fn get_tan_doc() -> &'static Documentation {
     DOCUMENTATION_TAN.get_or_init(|| {
         Documentation::builder()
             .with_doc_section(DOC_SECTION_MATH)
-            .with_description(
-                "Returns the tangent of a number.",
-            )
+            .with_description("Returns the tangent of a number.")
             .with_syntax_example("tan(numeric_expression)")
             .with_standard_argument("numeric_expression", "Numeric")
             .build()
@@ -595,9 +563,7 @@ pub fn get_tanh_doc() -> &'static Documentation {
     DOCUMENTATION_TANH.get_or_init(|| {
         Documentation::builder()
             .with_doc_section(DOC_SECTION_MATH)
-            .with_description(
-                "Returns the hyperbolic tangent of a number.",
-            )
+            .with_description("Returns the hyperbolic tangent of a number.")
             .with_syntax_example("tanh(numeric_expression)")
             .with_standard_argument("numeric_expression", "Numeric")
             .build()
