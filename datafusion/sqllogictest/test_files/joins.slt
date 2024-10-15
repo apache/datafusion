@@ -2130,7 +2130,7 @@ physical_plan
 09)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 10)--------MemoryExec: partitions=1, partition_sizes=[1]
 
-query II
+query II rowsort
 SELECT join_t1.t1_id, join_t2.t2_id
 FROM (select t1_id from join_t1 where join_t1.t1_id > 22) as join_t1
 RIGHT JOIN (select t2_id from join_t2 where join_t2.t2_id > 11) as join_t2
