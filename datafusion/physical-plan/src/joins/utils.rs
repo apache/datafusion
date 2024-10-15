@@ -30,8 +30,8 @@ use crate::{
 };
 
 use arrow::array::{
-    downcast_array, new_null_array, Array, BooleanBufferBuilder, UInt32Array,
-    UInt32Builder, UInt64Array,
+    downcast_array, new_null_array, Array, BooleanBufferBuilder, MutableArrayData,
+    UInt32Array, UInt32Builder, UInt64Array,
 };
 use arrow::compute;
 use arrow::datatypes::{Field, Schema, SchemaBuilder, UInt32Type, UInt64Type};
@@ -1356,17 +1356,34 @@ pub(crate) fn append_right_indices(
         if right_unmatched_indices.is_empty() {
             (left_indices, right_indices)
         } else {
+            let left_size = left_indices.len();
+            let right_size = right_indices.len();
             let unmatched_size = right_unmatched_indices.len();
+
+            let left_indices_data = left_indices.into_data();
+            let right_indices_data = right_indices.into_data();
+            let right_unmatched_indices_data = right_unmatched_indices.into_data();
+
             // the new left indices: left_indices + null array
+            let mut new_left_indices = MutableArrayData::new(
+                vec![&left_indices_data],
+                true,
+                left_size + unmatched_size,
+            );
+            new_left_indices.extend(0, 0, left_size);
+            new_left_indices.extend_nulls(unmatched_size);
+            let new_left_indices = UInt64Array::from(new_left_indices.freeze());
+
             // the new right indices: right_indices + right_unmatched_indices
-            let new_left_indices = left_indices
-                .iter()
-                .chain(std::iter::repeat(None).take(unmatched_size))
-                .collect();
-            let new_right_indices = right_indices
-                .iter()
-                .chain(right_unmatched_indices.iter())
-                .collect();
+            let mut new_right_indices = MutableArrayData::new(
+                vec![&right_indices_data, &right_unmatched_indices_data],
+                false,
+                right_size + unmatched_size,
+            );
+            new_right_indices.extend(0, 0, right_size);
+            new_right_indices.extend(1, 0, unmatched_size);
+            let new_right_indices = UInt32Array::from(new_right_indices.freeze());
+
             (new_left_indices, new_right_indices)
         }
     }
@@ -1635,6 +1652,87 @@ pub(crate) fn asymmetric_join_output_partitioning(
     }
 }
 
+pub(crate) trait BatchTransformer: Debug + Clone {
+    /// Sets the next `RecordBatch` to be processed.
+    fn set_batch(&mut self, batch: RecordBatch);
+
+    /// Retrieves the next `RecordBatch` from the transformer.
+    /// Returns `None` if all batches have been produced.
+    /// The boolean flag indicates whether the batch is the last one.
+    fn next(&mut self) -> Option<(RecordBatch, bool)>;
+}
+
+#[derive(Debug, Clone)]
+/// A batch transformer that does nothing.
+pub(crate) struct NoopBatchTransformer {
+    /// RecordBatch to be processed
+    batch: Option<RecordBatch>,
+}
+
+impl NoopBatchTransformer {
+    pub fn new() -> Self {
+        Self { batch: None }
+    }
+}
+
+impl BatchTransformer for NoopBatchTransformer {
+    fn set_batch(&mut self, batch: RecordBatch) {
+        self.batch = Some(batch);
+    }
+
+    fn next(&mut self) -> Option<(RecordBatch, bool)> {
+        self.batch.take().map(|batch| (batch, true))
+    }
+}
+
+#[derive(Debug, Clone)]
+/// Splits large batches into smaller batches with a maximum number of rows.
+pub(crate) struct BatchSplitter {
+    /// RecordBatch to be split
+    batch: Option<RecordBatch>,
+    /// Maximum number of rows in a split batch
+    batch_size: usize,
+    /// Current row index
+    row_index: usize,
+}
+
+impl BatchSplitter {
+    /// Creates a new `BatchSplitter` with the specified batch size.
+    pub(crate) fn new(batch_size: usize) -> Self {
+        Self {
+            batch: None,
+            batch_size,
+            row_index: 0,
+        }
+    }
+}
+
+impl BatchTransformer for BatchSplitter {
+    fn set_batch(&mut self, batch: RecordBatch) {
+        self.batch = Some(batch);
+        self.row_index = 0;
+    }
+
+    fn next(&mut self) -> Option<(RecordBatch, bool)> {
+        let Some(batch) = &self.batch else {
+            return None;
+        };
+
+        let remaining_rows = batch.num_rows() - self.row_index;
+        let rows_to_slice = remaining_rows.min(self.batch_size);
+        let sliced_batch = batch.slice(self.row_index, rows_to_slice);
+        self.row_index += rows_to_slice;
+
+        let mut last = false;
+        if self.row_index >= batch.num_rows() {
+            self.batch = None;
+            last = true;
+        }
+
+        Some((sliced_batch, last))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::pin::Pin;
@@ -1643,10 +1741,11 @@ mod tests {
 
     use arrow::datatypes::{DataType, Fields};
     use arrow::error::{ArrowError, Result as ArrowResult};
+    use arrow_array::Int32Array;
     use arrow_schema::SortOptions;
-
     use datafusion_common::stats::Precision::{Absent, Exact, Inexact};
     use datafusion_common::{arrow_datafusion_err, arrow_err, ScalarValue};
+    use rstest::rstest;
 
     fn check(
         left: &[Column],
@@ -2553,5 +2652,50 @@ mod tests {
         }
 
         Ok(())
+    }
+
+    fn create_test_batch(num_rows: usize) -> RecordBatch {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+        let data = Arc::new(Int32Array::from_iter_values(0..num_rows as i32));
+        RecordBatch::try_new(schema, vec![data]).unwrap()
+    }
+
+    fn assert_split_batches(
+        batches: Vec<(RecordBatch, bool)>,
+        batch_size: usize,
+        num_rows: usize,
+    ) {
+        let mut row_count = 0;
+        for (batch, last) in batches.into_iter() {
+            assert_eq!(batch.num_rows(), (num_rows - row_count).min(batch_size));
+            let column = batch
+                .column(0)
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .unwrap();
+            for i in 0..batch.num_rows() {
+                assert_eq!(column.value(i), i as i32 + row_count as i32);
+            }
+            row_count += batch.num_rows();
+            assert_eq!(last, row_count == num_rows);
+        }
+    }
+
+    #[rstest]
+    #[test]
+    fn test_batch_splitter(
+        #[values(1, 3, 11)] batch_size: usize,
+        #[values(1, 6, 50)] num_rows: usize,
+    ) {
+        let mut splitter = BatchSplitter::new(batch_size);
+        splitter.set_batch(create_test_batch(num_rows));
+
+        let mut batches = Vec::with_capacity(num_rows.div_ceil(batch_size));
+        while let Some(batch) = splitter.next() {
+            batches.push(batch);
+        }
+
+        assert!(splitter.next().is_none());
+        assert_split_batches(batches, batch_size, num_rows);
     }
 }

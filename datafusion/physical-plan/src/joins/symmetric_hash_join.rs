@@ -32,7 +32,6 @@ use std::task::{Context, Poll};
 use std::vec;
 
 use crate::common::SharedMemoryReservation;
-use crate::handle_state;
 use crate::joins::hash_join::{equal_rows_arr, update_hash};
 use crate::joins::stream_join_utils::{
     calculate_filter_expr_intervals, combine_two_batches,
@@ -42,8 +41,9 @@ use crate::joins::stream_join_utils::{
 };
 use crate::joins::utils::{
     apply_join_filter_to_indices, build_batch_from_indices, build_join_schema,
-    check_join_is_valid, symmetric_join_output_partitioning, ColumnIndex, JoinFilter,
-    JoinHashMapType, JoinOn, JoinOnRef, StatefulStreamResult,
+    check_join_is_valid, symmetric_join_output_partitioning, BatchSplitter,
+    BatchTransformer, ColumnIndex, JoinFilter, JoinHashMapType, JoinOn, JoinOnRef,
+    NoopBatchTransformer, StatefulStreamResult,
 };
 use crate::{
     execution_mode_from_children,
@@ -494,6 +494,10 @@ impl ExecutionPlan for SymmetricHashJoinExec {
 
         let right_stream = self.right.execute(partition, Arc::clone(&context))?;
 
+        let batch_size = context.session_config().batch_size();
+        let enforce_batch_size_in_joins =
+            context.session_config().enforce_batch_size_in_joins();
+
         let reservation = Arc::new(Mutex::new(
             MemoryConsumer::new(format!("SymmetricHashJoinStream[{partition}]"))
                 .register(context.memory_pool()),
@@ -502,29 +506,52 @@ impl ExecutionPlan for SymmetricHashJoinExec {
             reservation.lock().try_grow(g.size())?;
         }
 
-        Ok(Box::pin(SymmetricHashJoinStream {
-            left_stream,
-            right_stream,
-            schema: self.schema(),
-            filter: self.filter.clone(),
-            join_type: self.join_type,
-            random_state: self.random_state.clone(),
-            left: left_side_joiner,
-            right: right_side_joiner,
-            column_indices: self.column_indices.clone(),
-            metrics: StreamJoinMetrics::new(partition, &self.metrics),
-            graph,
-            left_sorted_filter_expr,
-            right_sorted_filter_expr,
-            null_equals_null: self.null_equals_null,
-            state: SHJStreamState::PullRight,
-            reservation,
-        }))
+        if enforce_batch_size_in_joins {
+            Ok(Box::pin(SymmetricHashJoinStream {
+                left_stream,
+                right_stream,
+                schema: self.schema(),
+                filter: self.filter.clone(),
+                join_type: self.join_type,
+                random_state: self.random_state.clone(),
+                left: left_side_joiner,
+                right: right_side_joiner,
+                column_indices: self.column_indices.clone(),
+                metrics: StreamJoinMetrics::new(partition, &self.metrics),
+                graph,
+                left_sorted_filter_expr,
+                right_sorted_filter_expr,
+                null_equals_null: self.null_equals_null,
+                state: SHJStreamState::PullRight,
+                reservation,
+                batch_transformer: BatchSplitter::new(batch_size),
+            }))
+        } else {
+            Ok(Box::pin(SymmetricHashJoinStream {
+                left_stream,
+                right_stream,
+                schema: self.schema(),
+                filter: self.filter.clone(),
+                join_type: self.join_type,
+                random_state: self.random_state.clone(),
+                left: left_side_joiner,
+                right: right_side_joiner,
+                column_indices: self.column_indices.clone(),
+                metrics: StreamJoinMetrics::new(partition, &self.metrics),
+                graph,
+                left_sorted_filter_expr,
+                right_sorted_filter_expr,
+                null_equals_null: self.null_equals_null,
+                state: SHJStreamState::PullRight,
+                reservation,
+                batch_transformer: NoopBatchTransformer::new(),
+            }))
+        }
     }
 }
 
 /// A stream that issues [RecordBatch]es as they arrive from the right  of the join.
-struct SymmetricHashJoinStream {
+struct SymmetricHashJoinStream<T> {
     /// Input streams
     left_stream: SendableRecordBatchStream,
     right_stream: SendableRecordBatchStream,
@@ -556,15 +583,19 @@ struct SymmetricHashJoinStream {
     reservation: SharedMemoryReservation,
     /// State machine for input execution
     state: SHJStreamState,
+    /// Transforms the output batch before returning.
+    batch_transformer: T,
 }
 
-impl RecordBatchStream for SymmetricHashJoinStream {
+impl<T: BatchTransformer + Unpin + Send> RecordBatchStream
+    for SymmetricHashJoinStream<T>
+{
     fn schema(&self) -> SchemaRef {
         Arc::clone(&self.schema)
     }
 }
 
-impl Stream for SymmetricHashJoinStream {
+impl<T: BatchTransformer + Unpin + Send> Stream for SymmetricHashJoinStream<T> {
     type Item = Result<RecordBatch>;
 
     fn poll_next(
@@ -1140,7 +1171,7 @@ impl OneSideHashJoiner {
 /// - Transition to `BothExhausted { final_result: true }`:
 ///   - Occurs in `prepare_for_final_results_after_exhaustion` when both streams are
 ///     exhausted, indicating completion of processing and availability of final results.
-impl SymmetricHashJoinStream {
+impl<T: BatchTransformer> SymmetricHashJoinStream<T> {
     /// Implements the main polling logic for the join stream.
     ///
     /// This method continuously checks the state of the join stream and
@@ -1159,26 +1190,45 @@ impl SymmetricHashJoinStream {
         cx: &mut Context<'_>,
     ) -> Poll<Option<Result<RecordBatch>>> {
         loop {
-            return match self.state() {
-                SHJStreamState::PullRight => {
-                    handle_state!(ready!(self.fetch_next_from_right_stream(cx)))
+            match self.batch_transformer.next() {
+                None => {
+                    let result = match self.state() {
+                        SHJStreamState::PullRight => {
+                            ready!(self.fetch_next_from_right_stream(cx))
+                        }
+                        SHJStreamState::PullLeft => {
+                            ready!(self.fetch_next_from_left_stream(cx))
+                        }
+                        SHJStreamState::RightExhausted => {
+                            ready!(self.handle_right_stream_end(cx))
+                        }
+                        SHJStreamState::LeftExhausted => {
+                            ready!(self.handle_left_stream_end(cx))
+                        }
+                        SHJStreamState::BothExhausted {
+                            final_result: false,
+                        } => self.prepare_for_final_results_after_exhaustion(),
+                        SHJStreamState::BothExhausted { final_result: true } => {
+                            return Poll::Ready(None);
+                        }
+                    };
+
+                    match result? {
+                        StatefulStreamResult::Ready(None) => {
+                            return Poll::Ready(None);
+                        }
+                        StatefulStreamResult::Ready(Some(batch)) => {
+                            self.batch_transformer.set_batch(batch);
+                        }
+                        _ => {}
+                    }
                 }
-                SHJStreamState::PullLeft => {
-                    handle_state!(ready!(self.fetch_next_from_left_stream(cx)))
+                Some((batch, _)) => {
+                    self.metrics.output_batches.add(1);
+                    self.metrics.output_rows.add(batch.num_rows());
+                    return Poll::Ready(Some(Ok(batch)));
                 }
-                SHJStreamState::RightExhausted => {
-                    handle_state!(ready!(self.handle_right_stream_end(cx)))
-                }
-                SHJStreamState::LeftExhausted => {
-                    handle_state!(ready!(self.handle_left_stream_end(cx)))
-                }
-                SHJStreamState::BothExhausted {
-                    final_result: false,
-                } => {
-                    handle_state!(self.prepare_for_final_results_after_exhaustion())
-                }
-                SHJStreamState::BothExhausted { final_result: true } => Poll::Ready(None),
-            };
+            }
         }
     }
     /// Asynchronously pulls the next batch from the right stream.
@@ -1384,11 +1434,8 @@ impl SymmetricHashJoinStream {
         // Combine the left and right results:
         let result = combine_two_batches(&self.schema, left_result, right_result)?;
 
-        // Update the metrics and return the result:
-        if let Some(batch) = &result {
-            // Update the metrics:
-            self.metrics.output_batches.add(1);
-            self.metrics.output_rows.add(batch.num_rows());
+        // Return the result:
+        if result.is_some() {
             return Ok(StatefulStreamResult::Ready(result));
         }
         Ok(StatefulStreamResult::Continue)
@@ -1523,11 +1570,6 @@ impl SymmetricHashJoinStream {
         let capacity = self.size();
         self.metrics.stream_memory_usage.set(capacity);
         self.reservation.lock().try_resize(capacity)?;
-        // Update the metrics if we have a batch; otherwise, continue the loop.
-        if let Some(batch) = &result {
-            self.metrics.output_batches.add(1);
-            self.metrics.output_rows.add(batch.num_rows());
-        }
         Ok(result)
     }
 }

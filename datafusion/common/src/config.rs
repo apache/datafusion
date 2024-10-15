@@ -338,6 +338,12 @@ config_namespace! {
         /// if the source of statistics is accurate.
         /// We plan to make this the default in the future.
         pub use_row_number_estimates_to_optimize_partitioning: bool, default = false
+
+        /// Should DataFusion enforce batch size in joins or not. By default,
+        /// DataFusion will not enforce batch size in joins. Enforcing batch size
+        /// in joins can help to avoid out-of-memory errors when joining large
+        /// tables with a highly-selective join filter.
+        pub enforce_batch_size_in_joins: bool, default = false
     }
 }
 
