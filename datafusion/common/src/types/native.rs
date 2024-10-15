@@ -19,6 +19,8 @@ use std::sync::Arc;
 
 use arrow_schema::{DataType, Field, Fields, IntervalUnit, TimeUnit, UnionFields};
 
+use super::{LogicalType, TypeSignature};
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct NativeField {
     name: String,
@@ -188,6 +190,16 @@ pub enum NativeType {
     /// child fields may be respectively "entries", "key", and "value", but this is
     /// not enforced.
     Map(NativeFieldRef),
+}
+
+impl LogicalType for NativeType {
+    fn native(&self) -> &NativeType {
+        self
+    }
+
+    fn signature(&self) -> TypeSignature<'_> {
+        TypeSignature::Native(self)
+    }
 }
 
 // The following From<DataType>, From<Field>, ... implementations are temporary
