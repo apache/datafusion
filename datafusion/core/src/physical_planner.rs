@@ -658,6 +658,8 @@ impl DefaultPhysicalPlanner {
                     logical_input_schema.as_ref().clone().into();
 
                 if physical_input_schema != physical_input_schema_from_logical {
+                    // println!("physical_input_schema: {:?}", physical_input_schema);
+                    // println!("physical_input_schema_from_logical: {:?}", physical_input_schema_from_logical);
                     return internal_err!("Physical input schema should be the same as the one converted from logical input schema.");
                 }
 
