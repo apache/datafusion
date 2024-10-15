@@ -36,7 +36,7 @@ workspace = true
 core_expressions = []
 crypto_expressions = ["md-5", "sha2", "blake2", "blake3"]
 # enable datetime functions
-datetime_expressions = []
+datetime_expressions = ["string_expressions"]
 # Enable encoding by default so the doctests work. In general don't automatically enable all packages.
 default = [
     "core_expressions",
