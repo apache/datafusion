@@ -25,7 +25,7 @@ pub enum TypeSignature<'a> {
     /// Represents a built-in native type.
     Native(&'a NativeType),
     /// Represents an arrow-compatible extension type.
-    /// (https://arrow.apache.org/docs/format/Columnar.html#extension-types)
+    /// (<https://arrow.apache.org/docs/format/Columnar.html#extension-types>)
     ///
     /// The `name` should contain the same value as 'ARROW:extension:name'.
     Extension {
