@@ -15,13 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! `rank` window function implementation
+//! Implementation of `rank`, `dense_rank`, and `percent_rank` window functions,
+//! which can be evaluated at runtime during query execution.
 
 use std::any::Any;
 use std::fmt::Debug;
 use std::iter;
 use std::ops::Range;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use crate::define_udwf_and_expr;
 use datafusion_common::arrow::array::ArrayRef;
@@ -31,7 +32,10 @@ use datafusion_common::arrow::datatypes::DataType;
 use datafusion_common::arrow::datatypes::Field;
 use datafusion_common::utils::get_row_at_idx;
 use datafusion_common::{exec_err, Result, ScalarValue};
-use datafusion_expr::{PartitionEvaluator, Signature, Volatility, WindowUDFImpl};
+use datafusion_expr::window_doc_sections::DOC_SECTION_RANKING;
+use datafusion_expr::{
+    Documentation, PartitionEvaluator, Signature, Volatility, WindowUDFImpl,
+};
 use datafusion_functions_window_common::field;
 use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
 use field::WindowUDFFieldArgs;
@@ -57,7 +61,7 @@ define_udwf_and_expr!(
     Rank::percent_rank
 );
 
-/// rank expression
+/// Rank calculates the rank in the window function with order by
 #[derive(Debug)]
 pub struct Rank {
     name: String,
@@ -66,6 +70,7 @@ pub struct Rank {
 }
 
 impl Rank {
+    /// Create a new `rank` function with the specified name and rank type
     pub fn new(name: String, rank_type: RankType) -> Self {
         Self {
             name,
@@ -74,14 +79,17 @@ impl Rank {
         }
     }
 
+    /// Create a `rank` window function
     pub fn basic() -> Self {
         Rank::new("rank".to_string(), RankType::Basic)
     }
 
+    /// Create a `dense_rank` window function
     pub fn dense_rank() -> Self {
         Rank::new("dense_rank".to_string(), RankType::Dense)
     }
 
+    /// Create a `percent_rank` window function
     pub fn percent_rank() -> Self {
         Rank::new("percent_rank".to_string(), RankType::Percent)
     }
@@ -92,6 +100,56 @@ pub enum RankType {
     Basic,
     Dense,
     Percent,
+}
+
+static RANK_DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+
+fn get_rank_doc() -> &'static Documentation {
+    RANK_DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_RANKING)
+            .with_description(
+                "Returns the rank of the current row within its partition, allowing \
+                gaps between ranks. This function provides a ranking similar to `row_number`, but \
+                skips ranks for identical values.",
+            )
+            .with_syntax_example("rank()")
+            .build()
+            .unwrap()
+    })
+}
+
+static DENSE_RANK_DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+
+fn get_dense_rank_doc() -> &'static Documentation {
+    DENSE_RANK_DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_RANKING)
+            .with_description(
+                "Returns the rank of the current row without gaps. This function ranks \
+                rows in a dense manner, meaning consecutive ranks are assigned even for identical \
+                values.",
+            )
+            .with_syntax_example("dense_rank()")
+            .build()
+            .unwrap()
+    })
+}
+
+static PERCENT_RANK_DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+
+fn get_percent_rank_doc() -> &'static Documentation {
+    PERCENT_RANK_DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_RANKING)
+            .with_description(
+                "Returns the percentage rank of the current row within its partition. \
+                The value ranges from 0 to 1 and is computed as `(rank - 1) / (total_rows - 1)`.",
+            )
+            .with_syntax_example("percent_rank()")
+            .build()
+            .unwrap()
+    })
 }
 
 impl WindowUDFImpl for Rank {
@@ -132,6 +190,14 @@ impl WindowUDFImpl for Rank {
             descending: false,
             nulls_first: false,
         })
+    }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        match self.rank_type {
+            RankType::Basic => Some(get_rank_doc()),
+            RankType::Dense => Some(get_dense_rank_doc()),
+            RankType::Percent => Some(get_percent_rank_doc()),
+        }
     }
 }
 
