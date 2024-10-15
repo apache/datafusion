@@ -122,7 +122,7 @@ use parking_lot::Mutex;
 /// ---------------------
 /// ```
 pub struct JoinHashMap {
-    bloom_filter: BloomFilter,
+    bloom_filter: Option<BloomFilter>,
     // Stores hash value to last row index
     map: RawTable<(u64, u64)>,
     // Stores indices in chained list data structure
@@ -133,7 +133,7 @@ impl JoinHashMap {
     #[cfg(test)]
     pub(crate) fn new(map: RawTable<(u64, u64)>, next: Vec<u64>) -> Self {
         Self {
-            bloom_filter: BloomFilter::with_num_bits(8388608).expected_items(10),
+            bloom_filter: None,
             map,
             next,
         }
@@ -141,7 +141,9 @@ impl JoinHashMap {
 
     pub(crate) fn with_capacity(capacity: usize) -> Self {
         JoinHashMap {
-            bloom_filter: BloomFilter::with_num_bits(8388608).expected_items(capacity),
+            bloom_filter: Some(
+                BloomFilter::with_num_bits(8388608).expected_items(capacity),
+            ),
             map: RawTable::with_capacity(capacity),
             next: vec![0; capacity],
         }
@@ -264,11 +266,11 @@ pub trait JoinHashMapType {
         let next_chain = self.get_list();
         for (row_idx, hash_value) in iter {
             // Get the hash and find it in the index
-            // if let Some(bloom_filter) = self.get_bloom_filter() {
-            //     if !bloom_filter.contains(hash_value) {
-            //         continue;
-            //     }
-            // }
+            if let Some(bloom_filter) = self.get_bloom_filter() {
+                if !bloom_filter.contains(hash_value) {
+                    continue;
+                }
+            }
             if let Some((_, index)) =
                 hash_map.get(*hash_value, |(hash, _)| *hash_value == *hash)
             {
@@ -348,11 +350,12 @@ pub trait JoinHashMapType {
 
         let mut row_idx = to_skip;
         for hash_value in &hash_values[to_skip..] {
-            // if let Some(bloom_filter) = self.get_bloom_filter() {
-            //     if !bloom_filter.contains(hash_value) {
-            //         continue;
-            //     }
-            // }
+            if let Some(bloom_filter) = self.get_bloom_filter() {
+                if !bloom_filter.contains(hash_value) {
+                    row_idx += 1;
+                    continue;
+                }
+            }
             if let Some((_, index)) =
                 hash_map.get(*hash_value, |(hash, _)| *hash_value == *hash)
             {
@@ -389,7 +392,7 @@ impl JoinHashMapType for JoinHashMap {
         &mut Self::NextType,
         Option<&mut BloomFilter>,
     ) {
-        (&mut self.map, &mut self.next, Some(&mut self.bloom_filter))
+        (&mut self.map, &mut self.next, self.bloom_filter.as_mut())
     }
 
     /// Get a reference to the hash map.
@@ -403,7 +406,7 @@ impl JoinHashMapType for JoinHashMap {
     }
 
     fn get_bloom_filter(&self) -> Option<&BloomFilter> {
-        Some(&self.bloom_filter)
+        self.bloom_filter.as_ref()
     }
 }
 
