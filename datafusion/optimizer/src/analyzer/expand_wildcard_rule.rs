@@ -26,7 +26,9 @@ use datafusion_expr::expr::PlannedReplaceSelectItem;
 use datafusion_expr::utils::{
     expand_qualified_wildcard, expand_wildcard, find_base_plan,
 };
-use datafusion_expr::{Expr, LogicalPlan, Projection, SubqueryAlias};
+use datafusion_expr::{
+    Distinct, DistinctOn, Expr, LogicalPlan, Projection, SubqueryAlias,
+};
 
 #[derive(Default, Debug)]
 pub struct ExpandWildcardRule {}
@@ -59,11 +61,24 @@ fn expand_internal(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
                     .map(LogicalPlan::Projection)?,
             ))
         }
-        // Teh schema of the plan should also be updated if the child plan is transformed.
+        // The schema of the plan should also be updated if the child plan is transformed.
         LogicalPlan::SubqueryAlias(SubqueryAlias { input, alias, .. }) => {
             Ok(Transformed::yes(
                 SubqueryAlias::try_new(input, alias).map(LogicalPlan::SubqueryAlias)?,
             ))
+        }
+        LogicalPlan::Distinct(Distinct::On(distinct_on)) => {
+            let projected_expr =
+                expand_exprlist(&distinct_on.input, distinct_on.select_expr)?;
+            validate_unique_names("Distinct", projected_expr.iter())?;
+            Ok(Transformed::yes(LogicalPlan::Distinct(Distinct::On(
+                DistinctOn::try_new(
+                    distinct_on.on_expr,
+                    projected_expr,
+                    distinct_on.sort_expr,
+                    distinct_on.input,
+                )?,
+            ))))
         }
         _ => Ok(Transformed::no(plan)),
     }
@@ -237,6 +252,18 @@ mod tests {
         \n        Projection: test.a [a:UInt32]\
         \n          TableScan: test [a:UInt32, b:UInt32, c:UInt32]\
         \n    TableScan: test [a:UInt32, b:UInt32, c:UInt32]";
+        assert_plan_eq(plan, expected)
+    }
+
+    #[test]
+    fn test_expand_wildcard_in_distinct_on() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .distinct_on(vec![col("a")], vec![wildcard()], None)?
+            .build()?;
+        let expected = "\
+        DistinctOn: on_expr=[[test.a]], select_expr=[[test.a, test.b, test.c]], sort_expr=[[]] [a:UInt32, b:UInt32, c:UInt32]\
+        \n  TableScan: test [a:UInt32, b:UInt32, c:UInt32]";
         assert_plan_eq(plan, expected)
     }
 
