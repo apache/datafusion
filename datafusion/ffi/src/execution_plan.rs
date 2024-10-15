@@ -198,7 +198,6 @@ impl FFI_ExecutionPlan {
                 e
             ))
         })?;
-        println!("FFI_ExecutionPlan::new name {:?}", name);
 
         let private_data = Box::new(ExecutionPlanPrivateData {
             plan,
@@ -254,10 +253,8 @@ impl ForeignExecutionPlan {
         ))?;
         let name_ptr = name_fn(&plan);
 
-        println!("ForeignExecutionPlan::new name_ptr {:?}", name_ptr);
         let name_cstr = CStr::from_ptr(name_ptr);
 
-        println!("    CStr {:?}", name_cstr);
         let name = name_cstr
             .to_str()
             .map_err(|e| {
@@ -348,7 +345,6 @@ impl ExecutionPlan for ForeignExecutionPlan {
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> datafusion::error::Result<Arc<dyn ExecutionPlan>> {
-        println!("Cloning ForeignExecutionPlan {}", self.name);
         Ok(Arc::new(ForeignExecutionPlan {
             plan: self.plan.clone(),
             name: self.name.clone(),

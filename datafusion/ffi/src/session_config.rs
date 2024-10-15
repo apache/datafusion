@@ -150,7 +150,6 @@ impl ForeignSessionConfig {
             let mut values: *const *const c_char = null_mut();
             config_options(config, &mut num_keys, &mut keys, &mut values);
             let num_keys = num_keys as usize;
-            println!("Received {} key value pairs", num_keys);
 
             let keys: Vec<String> = slice::from_raw_parts(keys, num_keys)
                 .iter()
