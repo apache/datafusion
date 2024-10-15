@@ -124,13 +124,17 @@ NULL bar NULL
 NULL NULL l_bar
 
 # Regression test: missing field metadata from left side of the union when right side is chosen
-statement error DataFusion error: Internal error: Physical input schema should be the same as the one converted from logical input schema..
+query T
 select name from (
   SELECT nonnull_name as name FROM "table_with_metadata"
   UNION ALL
   SELECT NULL::string as name
 ) group by name order by name;
-
+----
+no_bar
+no_baz
+no_foo
+NULL
 
 
 
