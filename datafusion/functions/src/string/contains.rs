@@ -128,3 +128,31 @@ pub fn contains(args: &[ArrayRef]) -> Result<ArrayRef, DataFusionError> {
         }
     }
 }
+
+#[cfg(test)]
+mod test {
+    use super::ContainsFunc;
+    use arrow::array::{BooleanArray, StringArray};
+    use datafusion_common::ScalarValue;
+    use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
+    use std::sync::Arc;
+
+    #[test]
+    fn test_contains_udf() {
+        let udf = ContainsFunc::new();
+        let array = ColumnarValue::Array(Arc::new(StringArray::from(vec![
+            Some("xxx?()"),
+            Some("yyy?()"),
+        ])));
+        let scalar = ColumnarValue::Scalar(ScalarValue::Utf8(Some("x?(".to_string())));
+        let actual = udf.invoke(&[array, scalar]).unwrap();
+        let expect = ColumnarValue::Array(Arc::new(BooleanArray::from(vec![
+            Some(true),
+            Some(false),
+        ])));
+        assert_eq!(
+            *actual.into_array(2).unwrap(),
+            *expect.into_array(2).unwrap()
+        );
+    }
+}
