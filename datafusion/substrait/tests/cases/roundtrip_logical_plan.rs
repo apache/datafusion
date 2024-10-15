@@ -69,8 +69,7 @@ impl SerializerRegistry for MockSerializerRegistry {
         &self,
         name: &str,
         bytes: &[u8],
-    ) -> Result<std::sync::Arc<dyn datafusion::logical_expr::UserDefinedLogicalNode>>
-    {
+    ) -> Result<Arc<dyn datafusion::logical_expr::UserDefinedLogicalNode>> {
         if name == "MockUserDefinedLogicalPlan" {
             MockUserDefinedLogicalPlan::deserialize(bytes)
         } else {
