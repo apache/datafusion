@@ -712,23 +712,20 @@ fn test_table_scan_alias() -> Result<()> {
         None,
         vec![col("id").gt(lit(1)), col("age").lt(lit(2))],
     )?
-        .project(vec![col("id")])?
-        .alias("a")?.build()?;
+    .project(vec![col("id")])?
+    .alias("a")?
+    .build()?;
     let table_scan_with_two_filter = plan_to_sql(&table_scan_with_two_filter)?;
     assert_eq!(
         format!("{}", table_scan_with_two_filter),
         "SELECT * FROM (SELECT t1.id FROM t1 WHERE ((t1.id > 1) AND (t1.age < 2))) AS a"
     );
 
-    let table_scan_with_fetch = table_scan_with_filter_and_fetch(
-        Some("t1"),
-        &schema,
-        None,
-        vec![],
-        Some(10)
-    )?
-        .project(vec![col("id")])?
-        .alias("a")?.build()?;
+    let table_scan_with_fetch =
+        table_scan_with_filter_and_fetch(Some("t1"), &schema, None, vec![], Some(10))?
+            .project(vec![col("id")])?
+            .alias("a")?
+            .build()?;
     let table_scan_with_fetch = plan_to_sql(&table_scan_with_fetch)?;
     assert_eq!(
         format!("{}", table_scan_with_fetch),
@@ -740,10 +737,11 @@ fn test_table_scan_alias() -> Result<()> {
         &schema,
         Some(vec![0, 1]),
         vec![col("id").gt(lit(1))],
-        Some(10)
+        Some(10),
     )?
-        .project(vec![col("id")])?
-        .alias("a")?.build()?;
+    .project(vec![col("id")])?
+    .alias("a")?
+    .build()?;
     let table_scan_with_pushdown_all = plan_to_sql(&table_scan_with_pushdown_all)?;
     assert_eq!(
         format!("{}", table_scan_with_pushdown_all),

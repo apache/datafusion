@@ -15,15 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::unparser::utils::unproject_agg_exprs;
-use datafusion_common::{
-    internal_err, not_impl_err,
-    tree_node::{TransformedResult, TreeNode},
-    Column, DataFusionError, Result, TableReference,
-};
-use datafusion_expr::{expr::Alias, Distinct, Expr, JoinConstraint, JoinType, LogicalPlan, LogicalPlanBuilder, Projection, SortExpr, TableScan};
-use sqlparser::ast::{self, Ident, SetExpr};
-use std::sync::Arc;
 use super::{
     ast::{
         BuilderError, DerivedRelationBuilder, QueryBuilder, RelationBuilder,
@@ -40,6 +31,18 @@ use super::{
     },
     Unparser,
 };
+use crate::unparser::utils::unproject_agg_exprs;
+use datafusion_common::{
+    internal_err, not_impl_err,
+    tree_node::{TransformedResult, TreeNode},
+    Column, DataFusionError, Result, TableReference,
+};
+use datafusion_expr::{
+    expr::Alias, Distinct, Expr, JoinConstraint, JoinType, LogicalPlan,
+    LogicalPlanBuilder, Projection, SortExpr, TableScan,
+};
+use sqlparser::ast::{self, Ident, SetExpr};
+use std::sync::Arc;
 
 /// Convert a DataFusion [`LogicalPlan`] to [`ast::Statement`]
 ///
@@ -245,7 +248,9 @@ impl Unparser<'_> {
     ) -> Result<()> {
         match plan {
             LogicalPlan::TableScan(scan) => {
-                 if let Some(unparsed_table_scan) = Self::unparse_table_scan_pushdown(plan, None)? {
+                if let Some(unparsed_table_scan) =
+                    Self::unparse_table_scan_pushdown(plan, None)?
+                {
                     return self.select_to_sql_recursively(
                         &unparsed_table_scan,
                         query,
@@ -576,9 +581,7 @@ impl Unparser<'_> {
     }
 
     fn is_scan_with_pushdown(scan: &TableScan) -> bool {
-        scan.projection.is_some()
-            || !scan.filters.is_empty()
-            || scan.fetch.is_some()
+        scan.projection.is_some() || !scan.filters.is_empty() || scan.fetch.is_some()
     }
 
     /// Try to unparse a table scan with pushdown operations into a new subquery plan.
