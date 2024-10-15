@@ -705,6 +705,50 @@ fn test_table_scan_alias() -> Result<()> {
         format!("{}", sql),
         "SELECT * FROM (SELECT t1.id FROM t1 WHERE (t1.id > 5)) AS a"
     );
+
+    let table_scan_with_two_filter = table_scan_with_filters(
+        Some("t1"),
+        &schema,
+        None,
+        vec![col("id").gt(lit(1)), col("age").lt(lit(2))],
+    )?
+        .project(vec![col("id")])?
+        .alias("a")?.build()?;
+    let table_scan_with_two_filter = plan_to_sql(&table_scan_with_two_filter)?;
+    assert_eq!(
+        format!("{}", table_scan_with_two_filter),
+        "SELECT * FROM (SELECT t1.id FROM t1 WHERE ((t1.id > 1) AND (t1.age < 2))) AS a"
+    );
+
+    let table_scan_with_fetch = table_scan_with_filter_and_fetch(
+        Some("t1"),
+        &schema,
+        None,
+        vec![],
+        Some(10)
+    )?
+        .project(vec![col("id")])?
+        .alias("a")?.build()?;
+    let table_scan_with_fetch = plan_to_sql(&table_scan_with_fetch)?;
+    assert_eq!(
+        format!("{}", table_scan_with_fetch),
+        "SELECT * FROM (SELECT t1.id FROM (SELECT * FROM t1 LIMIT 10)) AS a"
+    );
+
+    let table_scan_with_pushdown_all = table_scan_with_filter_and_fetch(
+        Some("t1"),
+        &schema,
+        Some(vec![0, 1]),
+        vec![col("id").gt(lit(1))],
+        Some(10)
+    )?
+        .project(vec![col("id")])?
+        .alias("a")?.build()?;
+    let table_scan_with_pushdown_all = plan_to_sql(&table_scan_with_pushdown_all)?;
+    assert_eq!(
+        format!("{}", table_scan_with_pushdown_all),
+        "SELECT * FROM (SELECT t1.id FROM (SELECT t1.id, t1.age FROM t1 WHERE (t1.id > 1) LIMIT 10)) AS a"
+    );
     Ok(())
 }
 
@@ -714,7 +758,6 @@ fn test_table_scan_pushdown() -> Result<()> {
         Field::new("id", DataType::Utf8, false),
         Field::new("age", DataType::Utf8, false),
     ]);
-
     let scan_with_projection =
         table_scan(Some("t1"), &schema, Some(vec![0, 1]))?.build()?;
     let scan_with_projection = plan_to_sql(&scan_with_projection)?;
@@ -739,7 +782,7 @@ fn test_table_scan_pushdown() -> Result<()> {
         plan_to_sql(&table_scan_with_projection_alias)?;
     assert_eq!(
         format!("{}", table_scan_with_projection_alias),
-        "SELECT * FROM (SELECT ta.id, ta.age FROM t1 AS ta) AS ta"
+        "SELECT ta.id, ta.age FROM t1 AS ta"
     );
 
     let table_scan_with_projection_alias =
@@ -750,7 +793,7 @@ fn test_table_scan_pushdown() -> Result<()> {
         plan_to_sql(&table_scan_with_projection_alias)?;
     assert_eq!(
         format!("{}", table_scan_with_projection_alias),
-        "SELECT * FROM (SELECT ta.age FROM t1 AS ta) AS ta"
+        "SELECT ta.age FROM t1 AS ta"
     );
 
     let table_scan_with_no_projection_alias = table_scan(Some("t1"), &schema, None)?
