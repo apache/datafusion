@@ -102,7 +102,7 @@ fn get_contains_doc() -> &'static Documentation {
     })
 }
 
-/// use regexp_is_match_utf8_scalar to do the calculation for contains
+/// use `arrow::compute::contains` to do the calculation for contains
 pub fn contains(args: &[ArrayRef]) -> Result<ArrayRef, DataFusionError> {
     match (args[0].data_type(), args[1].data_type()) {
         (Utf8View, Utf8View) => {
