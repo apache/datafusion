@@ -144,6 +144,20 @@ fn criterion_benchmark(c: &mut Criterion) {
         })
     });
 
+    c.bench_function("physical_select_aggregates_from_200", |b| {
+        let mut aggregates = String::new();
+        for i in 0..200 {
+            if i > 0 {
+                aggregates.push_str(", ");
+            }
+            aggregates.push_str(format!("MAX(a{})", i).as_str());
+        }
+        let query = format!("SELECT {} FROM t1", aggregates);
+        b.iter(|| {
+            physical_plan(&ctx, &query);
+        });
+    });
+
     // --- TPC-H ---
 
     let tpch_ctx = register_defs(SessionContext::new(), tpch_schemas());
