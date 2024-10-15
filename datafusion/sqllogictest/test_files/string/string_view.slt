@@ -83,6 +83,14 @@ drop table test_source
 ## StringView Function test
 ########
 
+query I
+select octet_length(column1_utf8view) from test;
+----
+6
+9
+7
+NULL
+
 query error DataFusion error: Arrow error: Compute error: bit_length not supported for Utf8View
 select bit_length(column1_utf8view) from test;
 
