@@ -58,6 +58,9 @@ pub trait GroupColumn: Send + Sync {
     fn equal_to(&self, lhs_row: usize, array: &ArrayRef, rhs_row: usize) -> bool;
     /// Appends the row at `row` in `array` to this builder
     fn append_val(&mut self, array: &ArrayRef, row: usize);
+
+    fn append_non_nullable_val(&mut self, array: &ArrayRef, row: usize);
+
     /// Returns the number of rows stored in this builder
     fn len(&self) -> usize;
     /// Returns the number of bytes used by this [`GroupColumn`]
@@ -216,6 +219,17 @@ where
             self.buffer.append_slice(value);
             self.offsets.push(O::usize_as(self.buffer.len()));
         }
+    }
+
+    fn append_non_nullable_val_inner<B>(&mut self, array: &ArrayRef, row: usize)
+    where
+        B: ByteArrayType,
+    {
+        let arr = array.as_bytes::<B>();
+        self.nulls.append(false);
+        let value: &[u8] = arr.value(row).as_ref();
+        self.buffer.append_slice(value);
+        self.offsets.push(O::usize_as(self.buffer.len()));
     }
 
     fn equal_to_inner<B>(&self, lhs_row: usize, array: &ArrayRef, rhs_row: usize) -> bool
@@ -383,6 +397,27 @@ where
             _ => unreachable!("View types should use `ArrowBytesViewMap`"),
         }
     }
+    
+    fn append_non_nullable_val(&mut self, array: &ArrayRef, row: usize) {
+        // Sanity array type
+        match self.output_type {
+            OutputType::Binary => {
+                debug_assert!(matches!(
+                    column.data_type(),
+                    DataType::Binary | DataType::LargeBinary
+                ));
+                self.append_val_inner::<GenericBinaryType<O>>(column, row)
+            }
+            OutputType::Utf8 => {
+                debug_assert!(matches!(
+                    column.data_type(),
+                    DataType::Utf8 | DataType::LargeUtf8
+                ));
+                self.append_val_inner::<GenericStringType<O>>(column, row)
+            }
+            _ => unreachable!("View types should use `ArrowBytesViewMap`"),
+        };
+    }    
 }
 
 /// An implementation of [`GroupColumn`] for binary view and utf8 view types.
