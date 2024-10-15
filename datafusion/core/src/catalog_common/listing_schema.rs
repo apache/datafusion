@@ -136,6 +136,7 @@ impl ListingSchemaProvider {
                             file_type: self.format.clone(),
                             table_partition_cols: vec![],
                             if_not_exists: false,
+                            temporary: false,
                             definition: None,
                             order_exprs: vec![],
                             unbounded: false,

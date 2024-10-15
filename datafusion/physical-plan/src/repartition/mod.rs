@@ -1677,7 +1677,8 @@ mod test {
         Arc::new(
             MemoryExec::try_new(&[vec![]], Arc::clone(schema), None)
                 .unwrap()
-                .with_sort_information(vec![sort_exprs]),
+                .try_with_sort_information(vec![sort_exprs])
+                .unwrap(),
         )
     }
 }
