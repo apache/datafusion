@@ -166,7 +166,7 @@ fn get_make_array_doc() -> &'static Documentation {
         Documentation::builder()
             .with_doc_section(DOC_SECTION_ARRAY)
             .with_description(
-                "Returns an Arrow array using the specified input expressions.",
+                "Returns an array using the specified input expressions.",
             )
             .with_syntax_example("make_array(expression1[, ..., expression_n])")
             .with_sql_example(
