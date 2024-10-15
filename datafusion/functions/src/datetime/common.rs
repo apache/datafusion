@@ -224,7 +224,7 @@ where
     }
 }
 
-// given a function that maps a `&str`, `&str` to an arrow native type,
+// Given a function that maps a `&str`, `&str` to an arrow native type,
 // returns a `ColumnarValue` where the function is applied to either a `ArrayRef` or `ScalarValue`
 // depending on the `args`'s variant.
 pub(crate) fn handle_multiple<O, F, S, M>(
