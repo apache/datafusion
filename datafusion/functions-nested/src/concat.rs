@@ -17,7 +17,8 @@
 
 //! [`ScalarUDFImpl`] definitions for `array_append`, `array_prepend` and `array_concat` functions.
 
-use std::{any::Any, cmp::Ordering, sync::Arc};
+use std::sync::{Arc, OnceLock};
+use std::{any::Any, cmp::Ordering};
 
 use arrow::array::{Capacities, MutableArrayData};
 use arrow_array::{Array, ArrayRef, GenericListArray, OffsetSizeTrait};
@@ -27,9 +28,10 @@ use datafusion_common::Result;
 use datafusion_common::{
     cast::as_generic_list_array, exec_err, not_impl_err, plan_err, utils::list_ndims,
 };
+use datafusion_expr::scalar_doc_sections::DOC_SECTION_ARRAY;
 use datafusion_expr::{
-    type_coercion::binary::get_wider_type, ColumnarValue, ScalarUDFImpl, Signature,
-    Volatility,
+    type_coercion::binary::get_wider_type, ColumnarValue, Documentation, ScalarUDFImpl,
+    Signature, Volatility,
 };
 
 use crate::utils::{align_array_dimensions, check_datatypes, make_scalar_function};
@@ -91,6 +93,43 @@ impl ScalarUDFImpl for ArrayAppend {
     fn aliases(&self) -> &[String] {
         &self.aliases
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_array_append_doc())
+    }
+}
+
+static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+
+fn get_array_append_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_ARRAY)
+            .with_description(
+                "Appends an element to the end of an array.",
+            )
+            .with_syntax_example("array_append(array, element)")
+            .with_sql_example(
+                r#"```sql
+> select array_append([1, 2, 3], 4);
++--------------------------------------+
+| array_append(List([1,2,3]),Int64(4)) |
++--------------------------------------+
+| [1, 2, 3, 4]                         |
++--------------------------------------+
+```"#,
+            )
+            .with_argument(
+                "array",
+                "Array expression. Can be a constant, column, or function, and any combination of array operators.",
+            )
+            .with_argument(
+                "element",
+                "Element to append to the array.",
+            )
+            .build()
+            .unwrap()
+    })
 }
 
 make_udf_expr_and_func!(
@@ -150,6 +189,41 @@ impl ScalarUDFImpl for ArrayPrepend {
     fn aliases(&self) -> &[String] {
         &self.aliases
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_array_prepend_doc())
+    }
+}
+
+fn get_array_prepend_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_ARRAY)
+            .with_description(
+                "Prepends an element to the beginning of an array.",
+            )
+            .with_syntax_example("array_prepend(element, array)")
+            .with_sql_example(
+                r#"```sql
+> select array_prepend(1, [2, 3, 4]);
++---------------------------------------+
+| array_prepend(Int64(1),List([2,3,4])) |
++---------------------------------------+
+| [1, 2, 3, 4]                          |
++---------------------------------------+
+```"#,
+            )
+            .with_argument(
+                "element",
+                "Element to prepend to the array.",
+            )
+            .with_argument(
+                "array",
+                "Array expression. Can be a constant, column, or function, and any combination of array operators.",
+            )
+            .build()
+            .unwrap()
+    })
 }
 
 make_udf_expr_and_func!(
@@ -233,6 +307,41 @@ impl ScalarUDFImpl for ArrayConcat {
     fn aliases(&self) -> &[String] {
         &self.aliases
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_array_concat_doc())
+    }
+}
+
+fn get_array_concat_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_ARRAY)
+            .with_description(
+                "Concatenates arrays.",
+            )
+            .with_syntax_example("array_concat(array[, ..., array_n])")
+            .with_sql_example(
+                r#"```sql
+> select array_concat([1, 2], [3, 4], [5, 6]);
++---------------------------------------------------+
+| array_concat(List([1,2]),List([3,4]),List([5,6])) |
++---------------------------------------------------+
+| [1, 2, 3, 4, 5, 6]                                |
++---------------------------------------------------+
+```"#,
+            )
+            .with_argument(
+                "array",
+                "Array expression to concatenate. Can be a constant, column, or function, and any combination of array operators.",
+            )
+            .with_argument(
+                "array_n",
+                "Subsequent array column or literal array to concatenate.",
+            )
+            .build()
+            .unwrap()
+    })
 }
 
 /// Array_concat/Array_cat SQL function

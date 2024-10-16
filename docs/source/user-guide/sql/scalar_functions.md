@@ -72,94 +72,8 @@ See [date_part](#date_part).
 
 ## Array Functions
 
-- [array_any_value](#array_any_value)
-- [array_append](#array_append)
-- [array_sort](#array_sort)
-- [array_cat](#array_cat)
-- [array_concat](#array_concat)
-- [array_contains](#array_contains)
-- [array_dims](#array_dims)
-- [array_distance](#array_distance)
-- [array_distinct](#array_distinct)
-- [array_has](#array_has)
-- [array_has_all](#array_has_all)
-- [array_has_any](#array_has_any)
-- [array_element](#array_element)
-- [array_empty](#array_empty)
-- [array_except](#array_except)
-- [array_extract](#array_extract)
-- [array_fill](#array_fill)
-- [array_indexof](#array_indexof)
-- [array_intersect](#array_intersect)
-- [array_join](#array_join)
-- [array_length](#array_length)
-- [array_ndims](#array_ndims)
-- [array_prepend](#array_prepend)
-- [array_pop_front](#array_pop_front)
-- [array_pop_back](#array_pop_back)
-- [array_position](#array_position)
-- [array_positions](#array_positions)
-- [array_push_back](#array_push_back)
-- [array_push_front](#array_push_front)
-- [array_repeat](#array_repeat)
-- [array_resize](#array_resize)
-- [array_remove](#array_remove)
-- [array_remove_n](#array_remove_n)
-- [array_remove_all](#array_remove_all)
-- [array_replace](#array_replace)
-- [array_replace_n](#array_replace_n)
-- [array_replace_all](#array_replace_all)
-- [array_reverse](#array_reverse)
-- [array_slice](#array_slice)
-- [array_to_string](#array_to_string)
-- [array_union](#array_union)
-- [cardinality](#cardinality)
-- [empty](#empty)
-- [flatten](#flatten)
-- [generate_series](#generate_series)
-- [list_any_value](#list_any_value)
-- [list_append](#list_append)
-- [list_sort](#list_sort)
-- [list_cat](#list_cat)
-- [list_concat](#list_concat)
-- [list_dims](#list_dims)
-- [list_distance](#list_distance)
-- [list_distinct](#list_distinct)
-- [list_element](#list_element)
-- [list_except](#list_except)
-- [list_extract](#list_extract)
-- [list_has](#list_has)
-- [list_has_all](#list_has_all)
-- [list_has_any](#list_has_any)
-- [list_indexof](#list_indexof)
-- [list_intersect](#list_intersect)
-- [list_join](#list_join)
-- [list_length](#list_length)
-- [list_ndims](#list_ndims)
-- [list_prepend](#list_prepend)
-- [list_pop_back](#list_pop_back)
-- [list_pop_front](#list_pop_front)
-- [list_position](#list_position)
-- [list_positions](#list_positions)
-- [list_push_back](#list_push_back)
-- [list_push_front](#list_push_front)
-- [list_repeat](#list_repeat)
-- [list_resize](#list_resize)
-- [list_remove](#list_remove)
-- [list_remove_n](#list_remove_n)
-- [list_remove_all](#list_remove_all)
-- [list_replace](#list_replace)
-- [list_replace_n](#list_replace_n)
-- [list_replace_all](#list_replace_all)
-- [list_slice](#list_slice)
-- [list_to_string](#list_to_string)
-- [list_union](#list_union)
-- [make_array](#make_array)
-- [make_list](#make_list)
-- [string_to_array](#string_to_array)
-- [string_to_list](#string_to_list)
-- [trim_array](#trim_array)
 - [unnest](#unnest)
+<<<<<<< HEAD
 - [range](#range)
 
 ### `array_any_value`
@@ -1483,6 +1397,8 @@ trim_array(array, n)
 - **array**: Array expression.
   Can be a constant, column, or function, and any combination of array operators.
 - **n**: Element to trim the array.
+=======
+>>>>>>> apache/main
 
 ### `unnest`
 
@@ -1526,6 +1442,7 @@ Transforms an array into rows.
 +-----------------------------------+
 ```
 
+<<<<<<< HEAD
 ### `range`
 
 Returns an Arrow array between start and stop with step. `SELECT range(2, 10, 3) -> [2, 5, 8]` or
@@ -1574,6 +1491,8 @@ are not allowed
 
 - generate_series
 
+=======
+>>>>>>> apache/main
 ## Struct Functions
 
 - [unnest](#unnest-struct)

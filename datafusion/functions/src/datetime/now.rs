@@ -21,7 +21,7 @@ use arrow::datatypes::TimeUnit::Nanosecond;
 use std::any::Any;
 use std::sync::OnceLock;
 
-use datafusion_common::{internal_err, Result, ScalarValue};
+use datafusion_common::{internal_err, ExprSchema, Result, ScalarValue};
 use datafusion_expr::scalar_doc_sections::DOC_SECTION_DATETIME;
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
 use datafusion_expr::{
@@ -89,6 +89,10 @@ impl ScalarUDFImpl for NowFunc {
     }
     fn documentation(&self) -> Option<&Documentation> {
         Some(get_to_unixtime_doc())
+    }
+
+    fn is_nullable(&self, _args: &[Expr], _schema: &dyn ExprSchema) -> bool {
+        false
     }
 }
 
