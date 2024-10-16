@@ -817,7 +817,12 @@ impl Stream for SMJStream {
                         match self.current_ordering {
                             Ordering::Less | Ordering::Equal => {
                                 if !streamed_exhausted {
-                                    if self.filter.is_some() && matches!(self.join_type, JoinType::Left | JoinType::LeftSemi) {
+                                    if self.filter.is_some()
+                                        && matches!(
+                                            self.join_type,
+                                            JoinType::Left | JoinType::LeftSemi
+                                        )
+                                    {
                                         self.freeze_all()?;
 
                                         if !self.output_record_batches.batches.is_empty()
@@ -883,7 +888,11 @@ impl Stream for SMJStream {
                         self.freeze_all()?;
                         if !self.output_record_batches.batches.is_empty() {
                             let record_batch = self.output_record_batch_and_reset()?;
-                            let record_batch = if !(self.filter.is_some() && matches!(self.join_type, JoinType::Left | JoinType::LeftSemi)) {
+                            let record_batch = if !(self.filter.is_some()
+                                && matches!(
+                                    self.join_type,
+                                    JoinType::Left | JoinType::LeftSemi
+                                )) {
                                 record_batch
                             } else {
                                 RecordBatch::new_empty(Arc::clone(&self.schema))
@@ -898,7 +907,12 @@ impl Stream for SMJStream {
                     self.freeze_all()?;
 
                     if !self.output_record_batches.batches.is_empty() {
-                        if self.filter.is_some() && matches!(self.join_type, JoinType::Left | JoinType::LeftSemi) {
+                        if self.filter.is_some()
+                            && matches!(
+                                self.join_type,
+                                JoinType::Left | JoinType::LeftSemi
+                            )
+                        {
                             let out = self.filter_joined_batch()?;
                             return Poll::Ready(Some(Ok(out)));
                         } else {
@@ -1627,7 +1641,9 @@ impl SMJStream {
             self.output_size -= record_batch.num_rows();
         }
 
-        if !(self.filter.is_some() && matches!(self.join_type, JoinType::Left | JoinType::LeftSemi)) {
+        if !(self.filter.is_some()
+            && matches!(self.join_type, JoinType::Left | JoinType::LeftSemi))
+        {
             self.output_record_batches.batches.clear();
         }
         Ok(record_batch)
