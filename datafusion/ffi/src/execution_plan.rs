@@ -15,11 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{
-    ffi::{c_void, CString},
-    pin::Pin,
-    sync::Arc,
-};
+use std::{ffi::c_void, pin::Pin, sync::Arc};
 
 use abi_stable::{
     std_types::{RResult, RStr, RString, RVec},
@@ -71,9 +67,7 @@ unsafe impl Sync for FFI_ExecutionPlan {}
 
 pub struct ExecutionPlanPrivateData {
     pub plan: Arc<dyn ExecutionPlan>,
-    pub children: Vec<FFI_ExecutionPlan>,
     pub context: Arc<TaskContext>,
-    pub name: CString,
 }
 
 unsafe extern "C" fn properties_fn_wrapper(
@@ -147,9 +141,32 @@ impl Clone for FFI_ExecutionPlan {
     }
 }
 
-// Since the trait ExecutionPlan requires borrowed values, we wrap our FFI.
-// This struct exists on the consumer side (datafusion-python, for example) and not
-// in the provider's side.
+impl FFI_ExecutionPlan {
+    /// This function is called on the provider's side.
+    pub fn new(plan: Arc<dyn ExecutionPlan>, context: Arc<TaskContext>) -> Result<Self> {
+        let private_data = Box::new(ExecutionPlanPrivateData { plan, context });
+
+        Ok(Self {
+            properties: properties_fn_wrapper,
+            children: children_fn_wrapper,
+            name: name_fn_wrapper,
+            execute: execute_fn_wrapper,
+            clone: clone_fn_wrapper,
+            release: release_fn_wrapper,
+            private_data: Box::into_raw(private_data) as *mut c_void,
+        })
+    }
+}
+
+impl Drop for FFI_ExecutionPlan {
+    fn drop(&mut self) {
+        unsafe { (self.release)(self) }
+    }
+}
+
+/// The ForeignExecutionPlan is to be used by the caller of the plan, so it has
+/// no knowledge or access to the private data. All interaction with the plan
+/// must occur through the functions defined in FFI_ExecutionPlan.
 #[derive(Debug)]
 pub struct ForeignExecutionPlan {
     name: String,
@@ -172,48 +189,6 @@ impl DisplayAs for ForeignExecutionPlan {
             "FFI_ExecutionPlan(number_of_children={})",
             self.children.len(),
         )
-    }
-}
-
-impl FFI_ExecutionPlan {
-    /// This function is called on the provider's side.
-    pub fn new(plan: Arc<dyn ExecutionPlan>, context: Arc<TaskContext>) -> Result<Self> {
-        let maybe_children: Result<Vec<_>> = plan
-            .children()
-            .into_iter()
-            .map(|child| FFI_ExecutionPlan::new(Arc::clone(child), Arc::clone(&context)))
-            .collect();
-        let children = maybe_children?;
-
-        let name = CString::new(plan.name()).map_err(|e| {
-            DataFusionError::Plan(format!(
-                "Unable to convert name to CString in FFI_ExecutionPlan: {}",
-                e
-            ))
-        })?;
-
-        let private_data = Box::new(ExecutionPlanPrivateData {
-            plan,
-            children,
-            context,
-            name,
-        });
-
-        Ok(Self {
-            properties: properties_fn_wrapper,
-            children: children_fn_wrapper,
-            name: name_fn_wrapper,
-            execute: execute_fn_wrapper,
-            clone: clone_fn_wrapper,
-            release: release_fn_wrapper,
-            private_data: Box::into_raw(private_data) as *mut c_void,
-        })
-    }
-}
-
-impl Drop for FFI_ExecutionPlan {
-    fn drop(&mut self) {
-        unsafe { (self.release)(self) }
     }
 }
 
