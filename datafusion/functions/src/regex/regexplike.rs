@@ -158,6 +158,7 @@ fn regexp_like_func(args: &[ArrayRef]) -> Result<ArrayRef> {
 /// # }
 /// ```
 pub fn regexp_like<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
+    #[allow(deprecated)]
     match args.len() {
         2 => {
             let values = as_generic_string_array::<T>(&args[0])?;

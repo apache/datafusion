@@ -257,11 +257,13 @@ pub(crate) fn coerce_file_schema_to_view_type(
             |field| match (table_fields.get(field.name()), field.data_type()) {
                 (Some(DataType::Utf8View), DataType::Utf8)
                 | (Some(DataType::Utf8View), DataType::LargeUtf8) => Arc::new(
-                    Field::new(field.name(), DataType::Utf8View, field.is_nullable()),
+                    Field::new(field.name(), DataType::Utf8View, field.is_nullable())
+                        .with_metadata(field.metadata().to_owned()),
                 ),
                 (Some(DataType::BinaryView), DataType::Binary)
                 | (Some(DataType::BinaryView), DataType::LargeBinary) => Arc::new(
-                    Field::new(field.name(), DataType::BinaryView, field.is_nullable()),
+                    Field::new(field.name(), DataType::BinaryView, field.is_nullable())
+                        .with_metadata(field.metadata().to_owned()),
                 ),
                 _ => field.clone(),
             },
