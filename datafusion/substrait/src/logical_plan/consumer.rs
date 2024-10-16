@@ -229,14 +229,16 @@ pub async fn from_substrait_plan(
                         match plan {
                             // If the last node of the plan produces expressions, bake the renames into those expressions.
                             // This isn't necessary for correctness, but helps with roundtrip tests.
-                            LogicalPlan::Projection(p) => Ok(LogicalPlan::Projection(Projection::try_new(rename_expressions(p.expr, p.input.schema(), &renamed_schema)?, p.input)?)),
+                            LogicalPlan::Projection(p) => Ok(LogicalPlan::Projection(Projection::try_new(rename_expressions(p.expr, p.input.schema(), renamed_schema.fields())?, p.input)?)),
                             LogicalPlan::Aggregate(a) => {
-                                let new_aggr_exprs = rename_expressions(a.aggr_expr, a.input.schema(), &renamed_schema)?;
-                                Ok(LogicalPlan::Aggregate(Aggregate::try_new(a.input, a.group_expr, new_aggr_exprs)?))
+                                let (group_fields, expr_fields) = renamed_schema.fields().split_at(a.group_expr.len());
+                                let new_group_exprs = rename_expressions(a.group_expr, a.input.schema(), group_fields)?;
+                                let new_aggr_exprs = rename_expressions(a.aggr_expr, a.input.schema(), expr_fields)?;
+                                Ok(LogicalPlan::Aggregate(Aggregate::try_new(a.input, new_group_exprs, new_aggr_exprs)?))
                             },
                             // There are probably more plans where we could bake things in, can add them later as needed.
                             // Otherwise, add a new Project to handle the renaming.
-                            _ => Ok(LogicalPlan::Projection(Projection::try_new(rename_expressions(plan.schema().columns().iter().map(|c| col(c.to_owned())), plan.schema(), &renamed_schema)?, Arc::new(plan))?))
+                            _ => Ok(LogicalPlan::Projection(Projection::try_new(rename_expressions(plan.schema().columns().iter().map(|c| col(c.to_owned())), plan.schema(), renamed_schema.fields())?, Arc::new(plan))?))
                         }
                     }
                 },
@@ -364,11 +366,11 @@ pub fn apply_masking(
 fn rename_expressions(
     exprs: impl IntoIterator<Item = Expr>,
     input_schema: &DFSchema,
-    new_schema: &DFSchema,
+    new_schema_fields: &[Arc<Field>],
 ) -> Result<Vec<Expr>> {
     exprs
         .into_iter()
-        .zip(new_schema.fields())
+        .zip(new_schema_fields)
         .map(|(old_expr, new_field)| {
             // Check if type (i.e. nested struct field names) match, use Cast to rename if needed
             let new_expr = if &old_expr.get_type(input_schema)? != new_field.data_type() {
