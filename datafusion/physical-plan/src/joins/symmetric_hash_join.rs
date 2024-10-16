@@ -465,23 +465,27 @@ impl ExecutionPlan for SymmetricHashJoinExec {
                  consider using RepartitionExec"
             );
         }
-        // If `filter_state` and `filter` are both present, then calculate sorted filter expressions
-        // for both sides, and build an expression graph.
-        let (left_sorted_filter_expr, right_sorted_filter_expr, graph) =
-            match (&self.left_sort_exprs, &self.right_sort_exprs, &self.filter) {
-                (Some(left_sort_exprs), Some(right_sort_exprs), Some(filter)) => {
-                    let (left, right, graph) = prepare_sorted_exprs(
-                        filter,
-                        &self.left,
-                        &self.right,
-                        left_sort_exprs,
-                        right_sort_exprs,
-                    )?;
-                    (Some(left), Some(right), Some(graph))
-                }
-                // If `filter_state` or `filter` is not present, then return None for all three values:
-                _ => (None, None, None),
-            };
+        // If `filter_state` and `filter` are both present, then calculate sorted
+        // filter expressions for both sides, and build an expression graph.
+        let (left_sorted_filter_expr, right_sorted_filter_expr, graph) = match (
+            self.left_sort_exprs(),
+            self.right_sort_exprs(),
+            &self.filter,
+        ) {
+            (Some(left_sort_exprs), Some(right_sort_exprs), Some(filter)) => {
+                let (left, right, graph) = prepare_sorted_exprs(
+                    filter,
+                    &self.left,
+                    &self.right,
+                    left_sort_exprs,
+                    right_sort_exprs,
+                )?;
+                (Some(left), Some(right), Some(graph))
+            }
+            // If `filter_state` or `filter` is not present, then return None
+            // for all three values:
+            _ => (None, None, None),
+        };
 
         let (on_left, on_right) = self.on.iter().cloned().unzip();
 
@@ -1758,15 +1762,15 @@ mod tests {
         let filter_expr = complicated_filter(&intermediate_schema)?;
         let column_indices = vec![
             ColumnIndex {
-                index: 0,
+                index: left_schema.index_of("la1")?,
                 side: JoinSide::Left,
             },
             ColumnIndex {
-                index: 4,
+                index: left_schema.index_of("la2")?,
                 side: JoinSide::Left,
             },
             ColumnIndex {
-                index: 0,
+                index: right_schema.index_of("ra1")?,
                 side: JoinSide::Right,
             },
         ];
@@ -1813,10 +1817,7 @@ mod tests {
             vec![right_sorted],
         )?;
 
-        let on = vec![(
-            Arc::new(Column::new_with_schema("lc1", left_schema)?) as _,
-            Arc::new(Column::new_with_schema("rc1", right_schema)?) as _,
-        )];
+        let on = vec![(col("lc1", left_schema)?, col("rc1", right_schema)?)];
 
         let intermediate_schema = Schema::new(vec![
             Field::new("left", DataType::Int32, true),
@@ -1867,10 +1868,7 @@ mod tests {
         let (left, right) =
             create_memory_table(left_partition, right_partition, vec![], vec![])?;
 
-        let on = vec![(
-            Arc::new(Column::new_with_schema("lc1", left_schema)?) as _,
-            Arc::new(Column::new_with_schema("rc1", right_schema)?) as _,
-        )];
+        let on = vec![(col("lc1", left_schema)?, col("rc1", right_schema)?)];
 
         let intermediate_schema = Schema::new(vec![
             Field::new("left", DataType::Int32, true),
@@ -1919,10 +1917,7 @@ mod tests {
         let (left, right) =
             create_memory_table(left_partition, right_partition, vec![], vec![])?;
 
-        let on = vec![(
-            Arc::new(Column::new_with_schema("lc1", left_schema)?) as _,
-            Arc::new(Column::new_with_schema("rc1", right_schema)?) as _,
-        )];
+        let on = vec![(col("lc1", left_schema)?, col("rc1", right_schema)?)];
         experiment(left, right, None, join_type, on, task_ctx).await?;
         Ok(())
     }
@@ -1968,10 +1963,7 @@ mod tests {
             vec![right_sorted],
         )?;
 
-        let on = vec![(
-            Arc::new(Column::new_with_schema("lc1", left_schema)?) as _,
-            Arc::new(Column::new_with_schema("rc1", right_schema)?) as _,
-        )];
+        let on = vec![(col("lc1", left_schema)?, col("rc1", right_schema)?)];
 
         let intermediate_schema = Schema::new(vec![
             Field::new("left", DataType::Int32, true),
@@ -2029,10 +2021,7 @@ mod tests {
             vec![right_sorted],
         )?;
 
-        let on = vec![(
-            Arc::new(Column::new_with_schema("lc1", left_schema)?) as _,
-            Arc::new(Column::new_with_schema("rc1", right_schema)?) as _,
-        )];
+        let on = vec![(col("lc1", left_schema)?, col("rc1", right_schema)?)];
 
         let intermediate_schema = Schema::new(vec![
             Field::new("left", DataType::Int32, true),
@@ -2090,10 +2079,7 @@ mod tests {
             vec![right_sorted],
         )?;
 
-        let on = vec![(
-            Arc::new(Column::new_with_schema("lc1", left_schema)?) as _,
-            Arc::new(Column::new_with_schema("rc1", right_schema)?) as _,
-        )];
+        let on = vec![(col("lc1", left_schema)?, col("rc1", right_schema)?)];
 
         let intermediate_schema = Schema::new(vec![
             Field::new("left", DataType::Int32, true),
@@ -2153,10 +2139,7 @@ mod tests {
             vec![right_sorted],
         )?;
 
-        let on = vec![(
-            Arc::new(Column::new_with_schema("lc1", left_schema)?) as _,
-            Arc::new(Column::new_with_schema("rc1", right_schema)?) as _,
-        )];
+        let on = vec![(col("lc1", left_schema)?, col("rc1", right_schema)?)];
 
         let intermediate_schema = Schema::new(vec![
             Field::new("left", DataType::Int32, true),
@@ -2212,10 +2195,7 @@ mod tests {
             vec![right_sorted],
         )?;
 
-        let on = vec![(
-            Arc::new(Column::new_with_schema("lc1", left_schema)?) as _,
-            Arc::new(Column::new_with_schema("rc1", right_schema)?) as _,
-        )];
+        let on = vec![(col("lc1", left_schema)?, col("rc1", right_schema)?)];
 
         let intermediate_schema = Schema::new(vec![
             Field::new("0", DataType::Int32, true),
@@ -2279,10 +2259,7 @@ mod tests {
             vec![right_sorted],
         )?;
 
-        let on = vec![(
-            Arc::new(Column::new_with_schema("lc1", left_schema)?) as _,
-            Arc::new(Column::new_with_schema("rc1", right_schema)?) as _,
-        )];
+        let on = vec![(col("lc1", left_schema)?, col("rc1", right_schema)?)];
 
         let intermediate_schema = Schema::new(vec![
             Field::new("0", DataType::Int32, true),
@@ -2338,10 +2315,7 @@ mod tests {
 
         let left_schema = &left_partition[0].schema();
         let right_schema = &right_partition[0].schema();
-        let on = vec![(
-            Arc::new(Column::new_with_schema("lc1", left_schema)?) as _,
-            Arc::new(Column::new_with_schema("rc1", right_schema)?) as _,
-        )];
+        let on = vec![(col("lc1", left_schema)?, col("rc1", right_schema)?)];
         let left_sorted = vec![PhysicalSortExpr {
             expr: col("lt1", left_schema)?,
             options: SortOptions {
@@ -2422,10 +2396,7 @@ mod tests {
 
         let left_schema = &left_partition[0].schema();
         let right_schema = &right_partition[0].schema();
-        let on = vec![(
-            Arc::new(Column::new_with_schema("lc1", left_schema)?) as _,
-            Arc::new(Column::new_with_schema("rc1", right_schema)?) as _,
-        )];
+        let on = vec![(col("lc1", left_schema)?, col("rc1", right_schema)?)];
         let left_sorted = vec![PhysicalSortExpr {
             expr: col("li1", left_schema)?,
             options: SortOptions {
@@ -2515,10 +2486,7 @@ mod tests {
             vec![right_sorted],
         )?;
 
-        let on = vec![(
-            Arc::new(Column::new_with_schema("lc1", left_schema)?) as _,
-            Arc::new(Column::new_with_schema("rc1", right_schema)?) as _,
-        )];
+        let on = vec![(col("lc1", left_schema)?, col("rc1", right_schema)?)];
 
         let intermediate_schema = Schema::new(vec![
             Field::new("left", DataType::Float64, true),

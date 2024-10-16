@@ -1228,16 +1228,18 @@ impl ConfigField for TableOptions {
     fn set(&mut self, key: &str, value: &str) -> Result<()> {
         // Extensions are handled in the public `ConfigOptions::set`
         let (key, rem) = key.split_once('.').unwrap_or((key, ""));
-        let Some(format) = &self.current_format else {
-            return _config_err!("Specify a format for TableOptions");
-        };
         match key {
-            "format" => match format {
-                #[cfg(feature = "parquet")]
-                ConfigFileType::PARQUET => self.parquet.set(rem, value),
-                ConfigFileType::CSV => self.csv.set(rem, value),
-                ConfigFileType::JSON => self.json.set(rem, value),
-            },
+            "format" => {
+                let Some(format) = &self.current_format else {
+                    return _config_err!("Specify a format for TableOptions");
+                };
+                match format {
+                    #[cfg(feature = "parquet")]
+                    ConfigFileType::PARQUET => self.parquet.set(rem, value),
+                    ConfigFileType::CSV => self.csv.set(rem, value),
+                    ConfigFileType::JSON => self.json.set(rem, value),
+                }
+            }
             _ => _config_err!("Config value \"{key}\" not found on TableOptions"),
         }
     }

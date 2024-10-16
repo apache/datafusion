@@ -235,10 +235,11 @@ impl NestedLoopJoinExec {
             asymmetric_join_output_partitioning(left, right, &join_type);
 
         // Determine execution mode:
-        let mut mode = execution_mode_from_children([left, right]);
-        if mode.is_unbounded() {
-            mode = ExecutionMode::PipelineBreaking;
-        }
+        let mode = if left.execution_mode().is_unbounded() {
+            ExecutionMode::PipelineBreaking
+        } else {
+            execution_mode_from_children([left, right])
+        };
 
         PlanProperties::new(eq_properties, output_partitioning, mode)
     }
@@ -842,7 +843,7 @@ impl<T: BatchTransformer + Unpin + Send> RecordBatchStream for NestedLoopJoinStr
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::{
         common, expressions::Column, memory::MemoryExec, repartition::RepartitionExec,
@@ -969,7 +970,7 @@ mod tests {
         JoinFilter::new(filter_expression, column_indices, intermediate_schema)
     }
 
-    async fn multi_partitioned_join_collect(
+    pub(crate) async fn multi_partitioned_join_collect(
         left: Arc<dyn ExecutionPlan>,
         right: Arc<dyn ExecutionPlan>,
         join_type: &JoinType,

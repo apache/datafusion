@@ -546,15 +546,16 @@ pub struct ColumnIndex {
     pub side: JoinSide,
 }
 
-/// Filter applied before join output
+/// Filter applied before join output. Fields are crate-public to allow
+/// downstream implementations to experiment with custom joins.
 #[derive(Debug, Clone)]
 pub struct JoinFilter {
     /// Filter expression
-    expression: Arc<dyn PhysicalExpr>,
+    pub(crate) expression: Arc<dyn PhysicalExpr>,
     /// Column indices required to construct intermediate batch for filtering
-    column_indices: Vec<ColumnIndex>,
+    pub(crate) column_indices: Vec<ColumnIndex>,
     /// Physical schema of intermediate batch
-    schema: Schema,
+    pub(crate) schema: Schema,
 }
 
 impl JoinFilter {
@@ -1743,7 +1744,6 @@ mod tests {
     use arrow::error::{ArrowError, Result as ArrowResult};
     use arrow_array::Int32Array;
     use arrow_schema::SortOptions;
-
     use datafusion_common::stats::Precision::{Absent, Exact, Inexact};
     use datafusion_common::{arrow_datafusion_err, arrow_err, ScalarValue};
 
