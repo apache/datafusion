@@ -140,8 +140,8 @@ pub trait Accumulator: Send + Sync + Debug {
     /// to be summed together)
     ///
     /// Some accumulators can return multiple values for their
-    /// intermediate states. For example, the average accumulator 
-    /// tracks `sum` and `n`, and this function should return a vector 
+    /// intermediate states. For example, the average accumulator
+    /// tracks `sum` and `n`, and this function should return a vector
     /// of two values, sum and n.
     ///
     /// Note that [`ScalarValue::List`] can be used to pass multiple
