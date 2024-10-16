@@ -43,7 +43,7 @@ mod tests {
         assert_eq!(
             format!("{}", plan),
             "Projection: NOT DATA.D AS EXPR$0\
-            \n  TableScan: DATA projection=[D]"
+            \n  TableScan: DATA"
         );
         Ok(())
     }
@@ -69,7 +69,7 @@ mod tests {
             format!("{}", plan),
             "Projection: sum(DATA.D) PARTITION BY [DATA.PART] ORDER BY [DATA.ORD ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND UNBOUNDED FOLLOWING AS LEAD_EXPR\
             \n  WindowAggr: windowExpr=[[sum(DATA.D) PARTITION BY [DATA.PART] ORDER BY [DATA.ORD ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND UNBOUNDED FOLLOWING]]\
-            \n    TableScan: DATA projection=[D, PART, ORD]"
+            \n    TableScan: DATA"
         );
         Ok(())
     }

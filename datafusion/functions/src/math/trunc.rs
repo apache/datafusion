@@ -16,7 +16,7 @@
 // under the License.
 
 use std::any::Any;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use crate::utils::make_scalar_function;
 
@@ -25,9 +25,12 @@ use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::{Float32, Float64};
 use datafusion_common::ScalarValue::Int64;
 use datafusion_common::{exec_err, DataFusionError, Result};
+use datafusion_expr::scalar_doc_sections::DOC_SECTION_MATH;
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::TypeSignature::Exact;
-use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{
+    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+};
 
 #[derive(Debug)]
 pub struct TruncFunc {
@@ -100,6 +103,31 @@ impl ScalarUDFImpl for TruncFunc {
             Ok(SortProperties::Unordered)
         }
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_trunc_doc())
+    }
+}
+
+static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+
+fn get_trunc_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_MATH)
+            .with_description(
+                "Truncates a number to a whole number or truncated to the specified decimal places.",
+            )
+            .with_syntax_example("trunc(numeric_expression[, decimal_places])")
+            .with_standard_argument("numeric_expression", "Numeric")
+            .with_argument("decimal_places", r#"Optional. The number of decimal places to
+  truncate to. Defaults to 0 (truncate to a whole number). If
+  `decimal_places` is a positive integer, truncates digits to the
+  right of the decimal point. If `decimal_places` is a negative
+  integer, replaces digits to the left of the decimal point with `0`."#)
+            .build()
+            .unwrap()
+    })
 }
 
 /// Truncate(numeric, decimalPrecision) and trunc(numeric) SQL function
