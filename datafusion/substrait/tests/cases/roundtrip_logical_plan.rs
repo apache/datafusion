@@ -700,6 +700,18 @@ async fn multiset_intersect_consume() -> Result<()> {
 }
 
 #[tokio::test]
+async fn multiset_intersect_all_consume() -> Result<()> {
+    let proto_plan =
+        read_json("tests/testdata/test_plans/intersect_multiset_all.substrait.json");
+
+    assert_substrait_sql(
+        proto_plan,
+        "SELECT a FROM data INTERSECT ALL SELECT a FROM data2 INTERSECT ALL SELECT a FROM data2",
+    )
+    .await
+}
+
+#[tokio::test]
 async fn primary_except_consume() -> Result<()> {
     let proto_plan = read_json("tests/testdata/test_plans/minus_primary.substrait.json");
 
