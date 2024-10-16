@@ -194,9 +194,35 @@ create table ts_utf8_data(ts varchar(100), format varchar(100)) as values
   ('1926632005', '%s'),
   ('2000-01-01T01:01:01+07:00', '%+');
 
+statement ok
+create table ts_largeutf8_data as
+select arrow_cast(ts, 'LargeUtf8') as ts, arrow_cast(format, 'LargeUtf8') as format from ts_utf8_data;
+
+statement ok
+create table ts_utf8view_data as
+select arrow_cast(ts, 'Utf8View') as ts, arrow_cast(format, 'Utf8View') as format from ts_utf8_data;
+
 # verify date data using tables with formatting options
 query D
 SELECT to_date(t.ts, t.format) from ts_utf8_data as t
+----
+2020-09-08
+2031-01-19
+2020-09-08
+2031-01-19
+1999-12-31
+
+query D
+SELECT to_date(t.ts, t.format) from ts_largeutf8_data as t
+----
+2020-09-08
+2031-01-19
+2020-09-08
+2031-01-19
+1999-12-31
+
+query D
+SELECT to_date(t.ts, t.format) from ts_utf8view_data as t
 ----
 2020-09-08
 2031-01-19
@@ -214,6 +240,24 @@ SELECT to_date(t.ts, '%Y-%m-%d %H/%M/%S%#z', '%+', '%s', '%d-%m-%Y %H:%M:%S%#z')
 2031-01-19
 1999-12-31
 
+query D
+SELECT to_date(t.ts, '%Y-%m-%d %H/%M/%S%#z', '%+', '%s', '%d-%m-%Y %H:%M:%S%#z') from ts_largeutf8_data as t
+----
+2020-09-08
+2031-01-19
+2020-09-08
+2031-01-19
+1999-12-31
+
+query D
+SELECT to_date(t.ts, '%Y-%m-%d %H/%M/%S%#z', '%+', '%s', '%d-%m-%Y %H:%M:%S%#z') from ts_utf8view_data as t
+----
+2020-09-08
+2031-01-19
+2020-09-08
+2031-01-19
+1999-12-31
+
 # verify date data using tables with formatting options where at least one column cannot be parsed
 query error Error parsing timestamp from '1926632005' using format '%d-%m-%Y %H:%M:%S%#z': input contains invalid characters
 SELECT to_date(t.ts, '%Y-%m-%d %H/%M/%S%#z', '%+', '%d-%m-%Y %H:%M:%S%#z') from ts_utf8_data as t
@@ -221,6 +265,24 @@ SELECT to_date(t.ts, '%Y-%m-%d %H/%M/%S%#z', '%+', '%d-%m-%Y %H:%M:%S%#z') from 
 # verify date data using tables with formatting options where one of the formats is invalid
 query D
 SELECT to_date(t.ts, '%Y-%m-%d %H/%M/%S%#z', '%s', '%q', '%d-%m-%Y %H:%M:%S%#z', '%+') from ts_utf8_data as t
+----
+2020-09-08
+2031-01-19
+2020-09-08
+2031-01-19
+1999-12-31
+
+query D
+SELECT to_date(t.ts, '%Y-%m-%d %H/%M/%S%#z', '%s', '%q', '%d-%m-%Y %H:%M:%S%#z', '%+') from ts_largeutf8_data as t
+----
+2020-09-08
+2031-01-19
+2020-09-08
+2031-01-19
+1999-12-31
+
+query D
+SELECT to_date(t.ts, '%Y-%m-%d %H/%M/%S%#z', '%s', '%q', '%d-%m-%Y %H:%M:%S%#z', '%+') from ts_utf8view_data as t
 ----
 2020-09-08
 2031-01-19
