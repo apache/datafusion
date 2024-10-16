@@ -15,20 +15,19 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{
-    ffi::{c_char, c_int, c_void, CString},
-    ptr::addr_of,
-};
+use std::{ffi::c_void, sync::Arc, task::Poll};
 
-use arrow::{
-    array::StructArray,
-    ffi::{FFI_ArrowArray, FFI_ArrowSchema},
-    ffi_stream::FFI_ArrowArrayStream,
+use abi_stable::{
+    std_types::{ROption, RResult, RString},
+    StableAbi,
 };
+use arrow::array::{Array, RecordBatch};
 use arrow::{
-    array::{Array, RecordBatch, RecordBatchReader},
-    ffi_stream::ArrowArrayStreamReader,
+    array::{make_array, StructArray},
+    datatypes::{Schema, SchemaRef},
+    ffi::{from_ffi, to_ffi, FFI_ArrowArray, FFI_ArrowSchema},
 };
+use async_ffi::{ContextExt, FfiContext, FfiPoll};
 use datafusion::error::Result;
 use datafusion::{
     error::DataFusionError,
@@ -36,181 +35,156 @@ use datafusion::{
 };
 use futures::{Stream, TryStreamExt};
 
-pub fn record_batch_to_arrow_stream(
-    stream: SendableRecordBatchStream,
-) -> FFI_ArrowArrayStream {
-    let private_data = Box::new(RecoredBatchStreamPrivateData {
-        stream,
-        last_error: None,
+#[repr(C)]
+#[derive(Debug, StableAbi)]
+pub struct WrappedArray {
+    #[sabi(unsafe_opaque_field)]
+    array: FFI_ArrowArray,
+
+    schema: WrappedSchema,
+}
+
+#[repr(C)]
+#[derive(Debug, StableAbi)]
+pub struct WrappedSchema(#[sabi(unsafe_opaque_field)] FFI_ArrowSchema);
+
+impl From<SchemaRef> for WrappedSchema {
+    fn from(value: SchemaRef) -> Self {
+        let schema = FFI_ArrowSchema::try_from(value.as_ref());
+        WrappedSchema(schema.unwrap_or(FFI_ArrowSchema::empty()))
+    }
+}
+
+#[repr(C)]
+#[derive(Debug, StableAbi)]
+#[allow(missing_docs)]
+#[allow(non_camel_case_types)]
+pub struct FFI_RecordBatchStream {
+    pub poll_next:
+        unsafe extern "C" fn(
+            stream: &Self,
+            cx: &mut FfiContext,
+        ) -> FfiPoll<ROption<RResult<WrappedArray, RString>>>,
+
+    pub schema: unsafe extern "C" fn(stream: &Self) -> WrappedSchema,
+
+    pub private_data: *mut c_void,
+}
+
+impl FFI_RecordBatchStream {
+    pub fn new(stream: SendableRecordBatchStream) -> Self {
+        FFI_RecordBatchStream {
+            poll_next: poll_next_fn_wrapper,
+            schema: schema_fn_wrapper,
+            private_data: Box::into_raw(Box::new(stream)) as *mut c_void,
+        }
+    }
+}
+
+unsafe impl Send for FFI_RecordBatchStream {}
+
+unsafe extern "C" fn schema_fn_wrapper(stream: &FFI_RecordBatchStream) -> WrappedSchema {
+    let stream = stream.private_data as *const SendableRecordBatchStream;
+
+    (*stream).schema().into()
+}
+
+fn record_batch_to_wrapped_array(
+    record_batch: RecordBatch,
+) -> RResult<WrappedArray, RString> {
+    let struct_array = StructArray::from(record_batch);
+    match to_ffi(&struct_array.to_data()) {
+        Ok((array, schema)) => RResult::ROk(WrappedArray {
+            array,
+            schema: WrappedSchema(schema),
+        }),
+        Err(e) => RResult::RErr(e.to_string().into()),
+    }
+}
+
+// probably want to use pub unsafe fn from_ffi(array: FFI_ArrowArray, schema: &FFI_ArrowSchema) -> Result<ArrayData> {
+fn maybe_record_batch_to_wrapped_stream(
+    record_batch: Option<Result<RecordBatch>>,
+) -> ROption<RResult<WrappedArray, RString>> {
+    match record_batch {
+        Some(Ok(record_batch)) => {
+            ROption::RSome(record_batch_to_wrapped_array(record_batch))
+        }
+        Some(Err(e)) => ROption::RSome(RResult::RErr(e.to_string().into())),
+        None => ROption::RNone,
+    }
+}
+
+unsafe extern "C" fn poll_next_fn_wrapper(
+    stream: &FFI_RecordBatchStream,
+    cx: &mut FfiContext,
+) -> FfiPoll<ROption<RResult<WrappedArray, RString>>> {
+    let stream = stream.private_data as *mut SendableRecordBatchStream;
+
+    let poll_result = cx.with_context(|std_cx| {
+        (*stream)
+            .try_poll_next_unpin(std_cx)
+            .map(maybe_record_batch_to_wrapped_stream)
     });
 
-    FFI_ArrowArrayStream {
-        get_schema: Some(get_schema),
-        get_next: Some(get_next),
-        get_last_error: Some(get_last_error),
-        release: Some(release_stream),
-        private_data: Box::into_raw(private_data) as *mut c_void,
-    }
+    poll_result.into()
 }
 
-struct RecoredBatchStreamPrivateData {
-    stream: SendableRecordBatchStream,
-    last_error: Option<CString>,
-}
-
-// callback used to drop [FFI_ArrowArrayStream] when it is exported.
-unsafe extern "C" fn release_stream(stream: *mut FFI_ArrowArrayStream) {
-    if stream.is_null() {
-        return;
-    }
-    let stream = &mut *stream;
-
-    stream.get_schema = None;
-    stream.get_next = None;
-    stream.get_last_error = None;
-
-    let private_data =
-        Box::from_raw(stream.private_data as *mut RecoredBatchStreamPrivateData);
-    drop(private_data);
-
-    stream.release = None;
-}
-
-// The callback used to get array schema
-unsafe extern "C" fn get_schema(
-    stream: *mut FFI_ArrowArrayStream,
-    schema: *mut FFI_ArrowSchema,
-) -> c_int {
-    ExportedRecordBatchStream { stream }.get_schema(schema)
-}
-
-// The callback used to get next array
-unsafe extern "C" fn get_next(
-    stream: *mut FFI_ArrowArrayStream,
-    array: *mut FFI_ArrowArray,
-) -> c_int {
-    ExportedRecordBatchStream { stream }.get_next(array)
-}
-
-// The callback used to get the error from last operation on the `FFI_ArrowArrayStream`
-unsafe extern "C" fn get_last_error(stream: *mut FFI_ArrowArrayStream) -> *const c_char {
-    let mut ffi_stream = ExportedRecordBatchStream { stream };
-    // The consumer should not take ownership of this string, we should return
-    // a const pointer to it.
-    match ffi_stream.get_last_error() {
-        Some(err_string) => err_string.as_ptr(),
-        None => std::ptr::null(),
-    }
-}
-
-struct ExportedRecordBatchStream {
-    stream: *mut FFI_ArrowArrayStream,
-}
-
-impl ExportedRecordBatchStream {
-    fn get_private_data(&mut self) -> &mut RecoredBatchStreamPrivateData {
-        unsafe {
-            &mut *((*self.stream).private_data as *mut RecoredBatchStreamPrivateData)
-        }
-    }
-
-    pub fn get_schema(&mut self, out: *mut FFI_ArrowSchema) -> i32 {
-        let private_data = self.get_private_data();
-        let stream = &private_data.stream;
-
-        let schema = FFI_ArrowSchema::try_from(stream.schema().as_ref());
-
-        match schema {
-            Ok(schema) => {
-                unsafe { std::ptr::copy(addr_of!(schema), out, 1) };
-                std::mem::forget(schema);
-                0
-            }
-            Err(ref err) => {
-                private_data.last_error = Some(
-                    CString::new(err.to_string())
-                        .expect("Error string has a null byte in it."),
-                );
-                1
-            }
-        }
-    }
-
-    pub fn get_next(&mut self, out: *mut FFI_ArrowArray) -> i32 {
-        let private_data = self.get_private_data();
-
-        let runtime = match tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-        {
-            Ok(r) => r,
-            Err(_e) => {
-                return 1;
-            }
-        };
-        // let maybe_batch = block_on(private_data.stream.try_next());
-        let maybe_batch = runtime.block_on(private_data.stream.try_next());
-
-        match maybe_batch {
-            Ok(None) => {
-                // Marks ArrowArray released to indicate reaching the end of stream.
-                unsafe { std::ptr::write(out, FFI_ArrowArray::empty()) }
-                0
-            }
-            Ok(Some(batch)) => {
-                let struct_array = StructArray::from(batch);
-                let array = FFI_ArrowArray::new(&struct_array.to_data());
-
-                unsafe { std::ptr::write_unaligned(out, array) };
-                0
-            }
-            Err(err) => {
-                private_data.last_error = Some(
-                    CString::new(err.to_string())
-                        .expect("Error string has a null byte in it."),
-                );
-                1
-            }
-        }
-    }
-
-    pub fn get_last_error(&mut self) -> Option<&CString> {
-        self.get_private_data().last_error.as_ref()
-    }
-}
-
-pub struct ConsumerRecordBatchStream {
-    reader: ArrowArrayStreamReader,
-}
-
-impl TryFrom<FFI_ArrowArrayStream> for ConsumerRecordBatchStream {
-    type Error = DataFusionError;
-
-    fn try_from(value: FFI_ArrowArrayStream) -> std::result::Result<Self, Self::Error> {
-        let reader = ArrowArrayStreamReader::try_new(value)?;
-
-        Ok(Self { reader })
-    }
-}
-
-impl RecordBatchStream for ConsumerRecordBatchStream {
+impl RecordBatchStream for FFI_RecordBatchStream {
     fn schema(&self) -> arrow::datatypes::SchemaRef {
-        self.reader.schema()
+        let wrapped_schema = unsafe { (self.schema)(self) };
+        let schema = Schema::try_from(&wrapped_schema.0);
+        Arc::new(schema.unwrap_or(Schema::empty()))
     }
 }
 
-impl Stream for ConsumerRecordBatchStream {
+fn wrapped_array_to_record_batch(array: WrappedArray) -> Result<RecordBatch> {
+    let array_data =
+        unsafe { from_ffi(array.array, &array.schema.0).map_err(DataFusionError::from)? };
+    let array = make_array(array_data);
+    let struct_array = array
+        .as_any()
+        .downcast_ref::<StructArray>()
+        .ok_or(DataFusionError::Execution(
+        "Unexpected array type during record batch collection in FFI_RecordBatchStream"
+            .to_string(),
+    ))?;
+
+    Ok(struct_array.into())
+}
+
+fn maybe_wrapped_array_to_record_batch(
+    array: ROption<RResult<WrappedArray, RString>>,
+) -> Option<Result<RecordBatch>> {
+    match array {
+        ROption::RSome(RResult::ROk(wrapped_array)) => {
+            Some(wrapped_array_to_record_batch(wrapped_array))
+        }
+        ROption::RSome(RResult::RErr(e)) => {
+            Some(Err(DataFusionError::Execution(e.to_string())))
+        }
+        ROption::RNone => None,
+    }
+}
+
+impl Stream for FFI_RecordBatchStream {
     type Item = Result<RecordBatch>;
 
     fn poll_next(
-        mut self: std::pin::Pin<&mut Self>,
-        _cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Option<Self::Item>> {
-        let batch = self
-            .reader
-            .next()
-            .map(|v| v.map_err(|e| DataFusionError::ArrowError(e, None)));
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> Poll<Option<Self::Item>> {
+        let poll_result =
+            unsafe { cx.with_ffi_context(|ffi_cx| (self.poll_next)(&self, ffi_cx)) };
 
-        std::task::Poll::Ready(batch)
+        match poll_result {
+            FfiPoll::Ready(array) => {
+                Poll::Ready(maybe_wrapped_array_to_record_batch(array))
+            }
+            FfiPoll::Pending => Poll::Pending,
+            FfiPoll::Panicked => Poll::Ready(Some(Err(DataFusionError::Execution(
+                "Error occurred during poll_next on FFI_RecordBatchStream".to_string(),
+            )))),
+        }
     }
 }

@@ -15,18 +15,17 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{
-    any::Any,
-    ffi::{c_int, c_uint, c_void},
-    ptr::{addr_of, null},
-    slice,
-    sync::Arc,
-};
+use std::{any::Any, ffi::c_void, sync::Arc};
 
+use abi_stable::{
+    std_types::{ROption, RResult, RString, RVec},
+    StableAbi,
+};
 use arrow::{
     datatypes::{Schema, SchemaRef},
     ffi::FFI_ArrowSchema,
 };
+use async_ffi::{FfiFuture, FutureExt};
 use async_trait::async_trait;
 use datafusion::{
     catalog::{Session, TableProvider},
@@ -46,6 +45,7 @@ use datafusion_proto::{
 use prost::Message;
 
 use crate::{
+    plan_properties::WrappedSchema,
     session_config::ForeignSessionConfig,
     table_source::{FFI_TableProviderFilterPushDown, FFI_TableType},
 };
@@ -58,39 +58,29 @@ use datafusion::error::Result;
 
 /// A stable interface for creating a DataFusion TableProvider.
 #[repr(C)]
-#[derive(Debug)]
+#[derive(Debug, StableAbi)]
 #[allow(non_camel_case_types)]
 pub struct FFI_TableProvider {
-    pub schema: Option<
-        unsafe extern "C" fn(provider: *const FFI_TableProvider) -> FFI_ArrowSchema,
-    >,
-    pub scan: Option<
-        unsafe extern "C" fn(
-            provider: *const FFI_TableProvider,
-            session_config: *const FFI_SessionConfig,
-            n_projections: c_uint,
-            projections: *const c_uint,
-            filter_buffer_size: c_uint,
-            filter_buffer: *const u8,
-            limit: c_int,
-            err_code: *mut c_int,
-        ) -> FFI_ExecutionPlan,
-    >,
-    pub table_type:
-        Option<unsafe extern "C" fn(provider: *const FFI_TableProvider) -> FFI_TableType>,
+    pub schema: unsafe extern "C" fn(provider: &Self) -> WrappedSchema,
+    pub scan: unsafe extern "C" fn(
+        provider: &Self,
+        session_config: &FFI_SessionConfig,
+        projections: RVec<usize>,
+        filters_serialized: RVec<u8>,
+        limit: ROption<usize>,
+    ) -> FfiFuture<RResult<FFI_ExecutionPlan, RString>>,
 
-    pub supports_filters_pushdown: Option<
-        unsafe extern "C" fn(
-            provider: *const FFI_TableProvider,
-            filter_buff_size: c_uint,
-            filter_buffer: *const u8,
-            num_filters: &mut c_int,
-            out: &mut *const FFI_TableProviderFilterPushDown,
-        ) -> c_int,
-    >,
+    pub table_type: unsafe extern "C" fn(provider: &Self) -> FFI_TableType,
 
-    pub clone: Option<unsafe extern "C" fn(plan: *const Self) -> Self>,
-    pub release: Option<unsafe extern "C" fn(arg: *mut Self)>,
+    pub supports_filters_pushdown:
+        unsafe extern "C" fn(
+            provider: &Self,
+            filters_serialized: RVec<u8>,
+        )
+            -> RResult<RVec<FFI_TableProviderFilterPushDown>, RString>,
+
+    pub clone: unsafe extern "C" fn(provider: &Self) -> Self,
+    pub release: unsafe extern "C" fn(arg: &mut Self),
     pub private_data: *mut c_void,
 }
 
@@ -99,149 +89,131 @@ unsafe impl Sync for FFI_TableProvider {}
 
 struct ProviderPrivateData {
     provider: Arc<dyn TableProvider + Send>,
-    last_filter_pushdowns: Vec<FFI_TableProviderFilterPushDown>,
 }
 
 /// Wrapper struct to provide access functions from the FFI interface to the underlying
 /// TableProvider. This struct is allowed to access `private_data` because it lives on
 /// the provider's side of the FFI interace.
-struct ExportedTableProvider(*const FFI_TableProvider);
+struct ExportedTableProvider<'a>(&'a FFI_TableProvider);
 
-unsafe extern "C" fn schema_fn_wrapper(
-    provider: *const FFI_TableProvider,
-) -> FFI_ArrowSchema {
-    ExportedTableProvider(provider).schema()
+unsafe extern "C" fn schema_fn_wrapper(provider: &FFI_TableProvider) -> WrappedSchema {
+    WrappedSchema(ExportedTableProvider(provider).schema())
 }
 
 unsafe extern "C" fn table_type_fn_wrapper(
-    provider: *const FFI_TableProvider,
+    provider: &FFI_TableProvider,
 ) -> FFI_TableType {
     ExportedTableProvider(provider).table_type()
 }
 
 unsafe extern "C" fn supports_filters_pushdown_fn_wrapper(
-    provider: *const FFI_TableProvider,
-    filter_buff_size: c_uint,
-    filter_buffer: *const u8,
-    num_filters: &mut c_int,
-    out: &mut *const FFI_TableProviderFilterPushDown,
-) -> c_int {
-    let results = ExportedTableProvider(provider)
-        .supports_filters_pushdown(filter_buff_size, filter_buffer);
-
-    match results {
-        Ok((num_pushdowns, pushdowns_ptr)) => {
-            *num_filters = num_pushdowns as c_int;
-            std::ptr::copy(addr_of!(pushdowns_ptr), out, 1);
-            0
-        }
-        Err(_e) => 1,
-    }
+    provider: &FFI_TableProvider,
+    filters_serialized: RVec<u8>,
+) -> RResult<RVec<FFI_TableProviderFilterPushDown>, RString> {
+    ExportedTableProvider(provider)
+        .supports_filters_pushdown(&filters_serialized)
+        .map_err(|e| e.to_string().into())
+        .into()
 }
 
 unsafe extern "C" fn scan_fn_wrapper(
-    provider: *const FFI_TableProvider,
-    session_config: *const FFI_SessionConfig,
-    n_projections: c_uint,
-    projections: *const c_uint,
-    filter_buffer_size: c_uint,
-    filter_buffer: *const u8,
-    limit: c_int,
-    err_code: *mut c_int,
-) -> FFI_ExecutionPlan {
-    let config = match ForeignSessionConfig::new(session_config) {
-        Ok(c) => c,
-        Err(_) => {
-            *err_code = 1;
-            return FFI_ExecutionPlan::empty();
-        }
-    };
-    let session = SessionStateBuilder::new()
-        .with_default_features()
-        .with_config(config.0)
-        .build();
-    let ctx = SessionContext::new_with_state(session);
+    provider: &FFI_TableProvider,
+    session_config: &FFI_SessionConfig,
+    projections: RVec<usize>,
+    filters_serialized: RVec<u8>,
+    limit: ROption<usize>,
+) -> FfiFuture<RResult<FFI_ExecutionPlan, RString>> {
+    let private_data = provider.private_data as *mut ProviderPrivateData;
+    let internal_provider = &(*private_data).provider;
+    let session_config = session_config.clone();
 
-    let num_projections: usize = n_projections.try_into().unwrap_or(0);
+    async move {
+        let config = match ForeignSessionConfig::new(&session_config) {
+            Ok(c) => c,
+            Err(e) => return RResult::RErr(e.to_string().into()),
+        };
+        let session = SessionStateBuilder::new()
+            .with_default_features()
+            .with_config(config.0)
+            .build();
+        let ctx = SessionContext::new_with_state(session);
 
-    let projections: Vec<usize> =
-        std::slice::from_raw_parts(projections, num_projections)
-            .iter()
-            .filter_map(|v| (*v).try_into().ok())
-            .collect();
-    let maybe_projections = match projections.is_empty() {
-        true => None,
-        false => Some(&projections),
-    };
+        let filters = match filters_serialized.is_empty() {
+            true => vec![],
+            false => {
+                let default_ctx = SessionContext::new();
+                let codec = DefaultLogicalExtensionCodec {};
 
-    let limit = limit.try_into().ok();
+                let proto_filters =
+                    match LogicalExprList::decode(filters_serialized.as_ref()) {
+                        Ok(f) => f,
+                        Err(e) => return RResult::RErr(e.to_string().into()),
+                    };
 
-    let plan = ExportedTableProvider(provider).provider_scan(
-        &ctx,
-        maybe_projections,
-        filter_buffer_size,
-        filter_buffer,
-        limit,
-    );
+                match parse_exprs(proto_filters.expr.iter(), &default_ctx, &codec) {
+                    Ok(f) => f,
+                    Err(e) => return RResult::RErr(e.to_string().into()),
+                }
+            }
+        };
 
-    match plan {
-        Ok(plan) => {
-            *err_code = 0;
-            plan
-        }
-        Err(_) => {
-            *err_code = 1;
-            FFI_ExecutionPlan::empty()
-        }
+        let projections: Vec<_> = projections.into_iter().collect();
+        let maybe_projections = match projections.is_empty() {
+            true => None,
+            false => Some(&projections),
+        };
+
+        let plan = match internal_provider
+            .scan(&ctx.state(), maybe_projections, &filters, limit.into())
+            .await
+        {
+            Ok(p) => p,
+            Err(e) => return RResult::RErr(e.to_string().into()),
+        };
+
+        FFI_ExecutionPlan::new(plan, ctx.task_ctx())
+            .map_err(|e| e.to_string().into())
+            .into()
     }
+    .into_ffi()
 }
 
-unsafe extern "C" fn clone_fn_wrapper(
-    provider: *const FFI_TableProvider,
-) -> FFI_TableProvider {
-    if provider.is_null() {
-        return FFI_TableProvider::empty();
-    }
-
-    let private_data = (*provider).private_data as *const ProviderPrivateData;
-    let table_provider = unsafe { Arc::clone(&(*private_data).provider) };
-    FFI_TableProvider::new(table_provider)
-}
-
-unsafe extern "C" fn release_fn_wrapper(provider: *mut FFI_TableProvider) {
-    if provider.is_null() {
-        return;
-    }
-    let provider = &mut *provider;
-
-    provider.schema = None;
-    provider.scan = None;
-    provider.table_type = None;
-    provider.supports_filters_pushdown = None;
-
+unsafe extern "C" fn release_fn_wrapper(provider: &mut FFI_TableProvider) {
     let private_data = Box::from_raw(provider.private_data as *mut ProviderPrivateData);
-
     drop(private_data);
+}
 
-    provider.release = None;
+unsafe extern "C" fn clone_fn_wrapper(provider: &FFI_TableProvider) -> FFI_TableProvider {
+    let old_private_data = provider.private_data as *const ProviderPrivateData;
+
+    let private_data = Box::into_raw(Box::new(ProviderPrivateData {
+        provider: Arc::clone(&(*old_private_data).provider),
+    })) as *mut c_void;
+
+    FFI_TableProvider {
+        schema: schema_fn_wrapper,
+        scan: scan_fn_wrapper,
+        table_type: table_type_fn_wrapper,
+        supports_filters_pushdown: supports_filters_pushdown_fn_wrapper,
+        clone: clone_fn_wrapper,
+        release: release_fn_wrapper,
+        private_data,
+    }
 }
 
 impl Drop for FFI_TableProvider {
     fn drop(&mut self) {
-        match self.release {
-            None => (),
-            Some(release) => unsafe { release(self as *mut FFI_TableProvider) },
-        };
+        unsafe { (self.release)(self) }
     }
 }
 
-impl ExportedTableProvider {
+impl<'a> ExportedTableProvider<'a> {
     fn private_data(&self) -> &ProviderPrivateData {
-        unsafe { &*((*self.0).private_data as *const ProviderPrivateData) }
+        unsafe { &*(self.0.private_data as *const ProviderPrivateData) }
     }
 
     fn mut_private_data(&mut self) -> &mut ProviderPrivateData {
-        unsafe { &mut *((*self.0).private_data as *mut ProviderPrivateData) }
+        unsafe { &mut *(self.0.private_data as *mut ProviderPrivateData) }
     }
 
     pub fn schema(&self) -> FFI_ArrowSchema {
@@ -261,129 +233,49 @@ impl ExportedTableProvider {
         provider.table_type().into()
     }
 
-    pub fn provider_scan(
+    pub fn supports_filters_pushdown(
         &mut self,
-        ctx: &SessionContext,
-        projections: Option<&Vec<usize>>,
-        filter_buffer_size: c_uint,
-        filter_buffer: *const u8,
-        limit: Option<usize>,
-    ) -> Result<FFI_ExecutionPlan> {
-        let private_data = self.private_data();
-        let provider = &private_data.provider;
+        filters_serialized: &[u8],
+    ) -> Result<RVec<FFI_TableProviderFilterPushDown>> {
+        let default_ctx = SessionContext::new();
+        let codec = DefaultLogicalExtensionCodec {};
 
-        let filters = match filter_buffer_size > 0 {
-            false => vec![],
-            true => {
-                let default_ctx = SessionContext::new();
-                let codec = DefaultLogicalExtensionCodec {};
-
-                let data = unsafe {
-                    slice::from_raw_parts(filter_buffer, filter_buffer_size as usize)
-                };
-
-                let proto_filters = LogicalExprList::decode(data)
-                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        let filters = match filters_serialized.is_empty() {
+            true => vec![],
+            false => {
+                let proto_filters = LogicalExprList::decode(filters_serialized)
+                    .map_err(|e| DataFusionError::Plan(e.to_string()))?;
 
                 parse_exprs(proto_filters.expr.iter(), &default_ctx, &codec)?
             }
         };
+        let filters_borrowed: Vec<&Expr> = filters.iter().collect();
 
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .map_err(|e| {
-                DataFusionError::Execution(format!(
-                    "Error getting runtime during scan(): {}",
-                    e
-                ))
-            })?;
-        let plan = runtime.block_on(provider.scan(
-            &ctx.state(),
-            projections,
-            &filters,
-            limit,
-        ))?;
+        let private_data = self.mut_private_data();
+        let results: RVec<_> = private_data
+            .provider
+            .supports_filters_pushdown(&filters_borrowed)?
+            .iter()
+            .map(|v| v.into())
+            .collect();
 
-        FFI_ExecutionPlan::new(plan, ctx.task_ctx())
-    }
-
-    pub fn supports_filters_pushdown(
-        &mut self,
-        buffer_size: c_uint,
-        filter_buffer: *const u8,
-    ) -> Result<(usize, *const FFI_TableProviderFilterPushDown)> {
-        unsafe {
-            let default_ctx = SessionContext::new();
-            let codec = DefaultLogicalExtensionCodec {};
-
-            let filters = match buffer_size > 0 {
-                false => vec![],
-                true => {
-                    let data = slice::from_raw_parts(filter_buffer, buffer_size as usize);
-
-                    let proto_filters = LogicalExprList::decode(data)
-                        .map_err(|e| DataFusionError::External(Box::new(e)))?;
-
-                    parse_exprs(proto_filters.expr.iter(), &default_ctx, &codec)?
-                }
-            };
-            let filters_borrowed: Vec<&Expr> = filters.iter().collect();
-
-            let private_data = self.mut_private_data();
-            private_data.last_filter_pushdowns = private_data
-                .provider
-                .supports_filters_pushdown(&filters_borrowed)?
-                .iter()
-                .map(|v| v.into())
-                .collect();
-
-            Ok((
-                private_data.last_filter_pushdowns.len(),
-                private_data.last_filter_pushdowns.as_ptr(),
-            ))
-        }
+        Ok(results)
     }
 }
 
 impl FFI_TableProvider {
     /// Creates a new [`FFI_TableProvider`].
     pub fn new(provider: Arc<dyn TableProvider + Send>) -> Self {
-        let private_data = Box::new(ProviderPrivateData {
-            provider,
-            last_filter_pushdowns: Vec::default(),
-        });
+        let private_data = Box::new(ProviderPrivateData { provider });
 
         Self {
-            schema: Some(schema_fn_wrapper),
-            scan: Some(scan_fn_wrapper),
-            table_type: Some(table_type_fn_wrapper),
-            supports_filters_pushdown: Some(supports_filters_pushdown_fn_wrapper),
-            release: Some(release_fn_wrapper),
-            clone: Some(clone_fn_wrapper),
+            schema: schema_fn_wrapper,
+            scan: scan_fn_wrapper,
+            table_type: table_type_fn_wrapper,
+            supports_filters_pushdown: supports_filters_pushdown_fn_wrapper,
+            clone: clone_fn_wrapper,
+            release: release_fn_wrapper,
             private_data: Box::into_raw(private_data) as *mut c_void,
-        }
-    }
-
-    /// Create a FFI_TableProvider from a raw pointer
-    ///
-    /// # Safety
-    ///
-    /// This function assumes the raw pointer is valid and takes onwership of it.
-    pub unsafe fn from_raw(raw_provider: *mut FFI_TableProvider) -> Self {
-        std::ptr::replace(raw_provider, Self::empty())
-    }
-
-    /// Creates a new empty [FFI_ArrowArrayStream]. Used to import from the C Stream Interface.
-    pub fn empty() -> Self {
-        Self {
-            schema: None,
-            scan: None,
-            table_type: None,
-            supports_filters_pushdown: None,
-            release: None,
-            clone: None,
-            private_data: std::ptr::null_mut(),
         }
     }
 }
@@ -399,8 +291,14 @@ unsafe impl Send for ForeignTableProvider {}
 unsafe impl Sync for ForeignTableProvider {}
 
 impl ForeignTableProvider {
-    pub fn new(provider: FFI_TableProvider) -> Self {
-        Self(provider)
+    pub fn new(provider: &FFI_TableProvider) -> Self {
+        Self(provider.clone())
+    }
+}
+
+impl Clone for FFI_TableProvider {
+    fn clone(&self) -> Self {
+        unsafe { (self.clone)(self) }
     }
 }
 
@@ -412,23 +310,14 @@ impl TableProvider for ForeignTableProvider {
 
     fn schema(&self) -> SchemaRef {
         let schema = unsafe {
-            let schema_fn = self.0.schema;
-            schema_fn
-                .map(|func| func(&self.0))
-                .and_then(|s| Schema::try_from(&s).ok())
-                .unwrap_or(Schema::empty())
+            let wrapped_schema = (self.0.schema)(&self.0);
+            Schema::try_from(&wrapped_schema.0).unwrap_or(Schema::empty())
         };
         Arc::new(schema)
     }
 
     fn table_type(&self) -> TableType {
-        unsafe {
-            let table_type_fn = self.0.table_type;
-            table_type_fn
-                .map(|func| func(&self.0))
-                .unwrap_or(FFI_TableType::Base)
-                .into()
-        }
+        unsafe { (self.0.table_type)(&self.0).into() }
     }
 
     async fn scan(
@@ -438,51 +327,35 @@ impl TableProvider for ForeignTableProvider {
         filters: &[Expr],
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let scan_fn = self.0.scan.ok_or(DataFusionError::NotImplemented(
-            "Scan not defined on FFI_TableProvider".to_string(),
-        ))?;
-
         let session_config = FFI_SessionConfig::new(session.config());
 
-        let n_projections = projection.map(|p| p.len()).unwrap_or(0) as c_uint;
-        let projections: Vec<c_uint> = projection
-            .map(|p| p.iter().map(|v| *v as c_uint).collect())
-            .unwrap_or_default();
-        let projections_ptr = projections.as_ptr();
+        let projections: Option<RVec<usize>> =
+            projection.map(|p| p.iter().map(|v| v.to_owned()).collect());
 
         let codec = DefaultLogicalExtensionCodec {};
         let filter_list = LogicalExprList {
             expr: serialize_exprs(filters, &codec)?,
         };
-        let filter_bytes = filter_list.encode_to_vec();
-        let filter_buffer_size = filter_bytes.len() as c_uint;
-        let filter_buffer = filter_bytes.as_ptr();
+        let filters_serialized = filter_list.encode_to_vec().into();
 
-        let limit = match limit {
-            Some(l) => l as c_int,
-            None => -1,
-        };
-
-        let mut err_code = 0;
         let plan = unsafe {
-            let plan_ptr = scan_fn(
+            let maybe_plan = (self.0.scan)(
                 &self.0,
                 &session_config,
-                n_projections,
-                projections_ptr,
-                filter_buffer_size,
-                filter_buffer,
-                limit,
-                &mut err_code,
-            );
+                projections.unwrap_or_default(),
+                filters_serialized,
+                limit.into(),
+            )
+            .await;
 
-            if 0 != err_code {
-                return Err(datafusion::error::DataFusionError::Internal(
-                    "Unable to perform scan via FFI".to_string(),
-                ));
+            match maybe_plan {
+                RResult::ROk(p) => ForeignExecutionPlan::new(p)?,
+                RResult::RErr(_) => {
+                    return Err(datafusion::error::DataFusionError::Internal(
+                        "Unable to perform scan via FFI".to_string(),
+                    ))
+                }
             }
-
-            ForeignExecutionPlan::new(plan_ptr)?
         };
 
         Ok(Arc::new(plan))
@@ -500,35 +373,15 @@ impl TableProvider for ForeignTableProvider {
             let expr_list = LogicalExprList {
                 expr: serialize_exprs(filter.iter().map(|f| f.to_owned()), &codec)?,
             };
-            let expr_bytes = expr_list.encode_to_vec();
-            let buffer_size = expr_bytes.len();
-            let buffer = expr_bytes.as_ptr();
+            let serialized_filters = expr_list.encode_to_vec();
 
-            let pushdown_fn =
-                self.0
-                    .supports_filters_pushdown
-                    .ok_or(DataFusionError::Plan(
-                        "FFI_TableProvider does not implement supports_filters_pushdown"
-                            .to_string(),
-                    ))?;
-            let mut num_return = 0;
-            let mut pushdowns = null();
-            let err_code = pushdown_fn(
-                &self.0,
-                buffer_size as c_uint,
-                buffer,
-                &mut num_return,
-                &mut pushdowns,
-            );
-            let num_return = num_return as usize;
-            let pushdowns_slice = slice::from_raw_parts(pushdowns, num_return);
+            let pushdown_fn = self.0.supports_filters_pushdown;
 
-            match err_code {
-                0 => Ok(pushdowns_slice.iter().map(|v| v.into()).collect()),
-                _ => Err(DataFusionError::Plan(
-                    "Error occurred during FFI call to supports_filters_pushdown"
-                        .to_string(),
-                )),
+            let pushdowns = pushdown_fn(&self.0, serialized_filters.into());
+
+            match pushdowns {
+                RResult::ROk(p) => Ok(p.iter().map(|v| v.into()).collect()),
+                RResult::RErr(e) => Err(DataFusionError::Plan(e.to_string())),
             }
         }
     }
@@ -568,7 +421,7 @@ mod tests {
 
         let ffi_provider = FFI_TableProvider::new(provider);
 
-        let foreign_table_provider = ForeignTableProvider::new(ffi_provider);
+        let foreign_table_provider = ForeignTableProvider::new(&ffi_provider);
 
         ctx.register_table("t", Arc::new(foreign_table_provider))?;
 

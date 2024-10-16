@@ -16,13 +16,15 @@
 // under the License.
 
 use std::{
-    ffi::{c_char, c_void, CStr, CString},
+    ffi::{c_void, CString},
     pin::Pin,
-    ptr::null_mut,
-    slice,
     sync::Arc,
 };
 
+use abi_stable::{
+    std_types::{RResult, RStr, RString, RVec},
+    StableAbi,
+};
 use arrow::ffi_stream::FFI_ArrowArrayStream;
 use datafusion::error::Result;
 use datafusion::{
@@ -31,127 +33,118 @@ use datafusion::{
     physical_plan::{DisplayAs, ExecutionPlan, PlanProperties},
 };
 
-use crate::plan_properties::{FFI_PlanProperties, ForeignPlanProperties};
-
-use super::record_batch_stream::{
-    record_batch_to_arrow_stream, ConsumerRecordBatchStream,
+use crate::{
+    plan_properties::{FFI_PlanProperties, ForeignPlanProperties},
+    record_batch_stream::FFI_RecordBatchStream,
 };
 
 #[repr(C)]
-#[derive(Debug)]
+#[derive(Debug, StableAbi)]
+pub struct WrappedArrayStream(#[sabi(unsafe_opaque_field)] pub FFI_ArrowArrayStream);
+
+#[repr(C)]
+#[derive(Debug, StableAbi)]
 #[allow(missing_docs)]
 #[allow(non_camel_case_types)]
 pub struct FFI_ExecutionPlan {
-    pub properties: Option<
-        unsafe extern "C" fn(plan: *const FFI_ExecutionPlan) -> FFI_PlanProperties,
-    >,
+    pub properties: unsafe extern "C" fn(plan: &Self) -> FFI_PlanProperties,
 
-    pub children: Option<
-        unsafe extern "C" fn(
-            plan: *const FFI_ExecutionPlan,
-            num_children: &mut usize,
-            err_code: &mut i32,
-        ) -> *const FFI_ExecutionPlan,
-    >,
+    pub children: unsafe extern "C" fn(
+        plan: &Self,
+    )
+        -> RResult<RVec<FFI_ExecutionPlan>, RStr<'static>>,
 
-    pub name:
-        Option<unsafe extern "C" fn(plan: *const FFI_ExecutionPlan) -> *const c_char>,
+    pub name: unsafe extern "C" fn(plan: &Self) -> RString,
 
-    pub execute: Option<
-        unsafe extern "C" fn(
-            plan: *const FFI_ExecutionPlan,
-            partition: usize,
-            err_code: &mut i32,
-        ) -> FFI_ArrowArrayStream,
-    >,
+    pub execute: unsafe extern "C" fn(
+        plan: &Self,
+        partition: usize,
+    ) -> RResult<FFI_RecordBatchStream, RString>,
 
-    pub clone:
-        Option<unsafe extern "C" fn(plan: *const FFI_ExecutionPlan) -> FFI_ExecutionPlan>,
-
-    pub release: Option<unsafe extern "C" fn(arg: *mut Self)>,
+    pub clone: unsafe extern "C" fn(plan: &Self) -> Self,
+    pub release: unsafe extern "C" fn(arg: &mut Self),
     pub private_data: *mut c_void,
 }
 
+unsafe impl Send for FFI_ExecutionPlan {}
+unsafe impl Sync for FFI_ExecutionPlan {}
+
 pub struct ExecutionPlanPrivateData {
     pub plan: Arc<dyn ExecutionPlan>,
-    pub last_error: Option<CString>,
     pub children: Vec<FFI_ExecutionPlan>,
     pub context: Arc<TaskContext>,
     pub name: CString,
 }
 
 unsafe extern "C" fn properties_fn_wrapper(
-    plan: *const FFI_ExecutionPlan,
+    plan: &FFI_ExecutionPlan,
 ) -> FFI_PlanProperties {
-    let private_data = (*plan).private_data as *const ExecutionPlanPrivateData;
-    let properties = (*private_data).plan.properties();
+    let private_data = plan.private_data as *const ExecutionPlanPrivateData;
+    let plan = &(*private_data).plan;
 
-    FFI_PlanProperties::new(properties.clone()).unwrap_or(FFI_PlanProperties::empty())
+    FFI_PlanProperties::new(plan.properties())
 }
 
 unsafe extern "C" fn children_fn_wrapper(
-    plan: *const FFI_ExecutionPlan,
-    num_children: &mut usize,
-    err_code: &mut i32,
-) -> *const FFI_ExecutionPlan {
-    let private_data = (*plan).private_data as *const ExecutionPlanPrivateData;
+    plan: &FFI_ExecutionPlan,
+) -> RResult<RVec<FFI_ExecutionPlan>, RStr<'static>> {
+    let private_data = plan.private_data as *const ExecutionPlanPrivateData;
+    let plan = &(*private_data).plan;
+    let ctx = &(*private_data).context;
 
-    *num_children = (*private_data).children.len();
-    *err_code = 0;
+    let maybe_children: Result<Vec<_>> = plan
+        .children()
+        .into_iter()
+        .map(|child| FFI_ExecutionPlan::new(Arc::clone(child), Arc::clone(ctx)))
+        .collect();
 
-    (*private_data).children.as_ptr()
+    match maybe_children {
+        Ok(c) => RResult::ROk(c.into()),
+        Err(_) => RResult::RErr(
+            "Error occurred during collection of FFI_ExecutionPlan children".into(),
+        ),
+    }
 }
 
 unsafe extern "C" fn execute_fn_wrapper(
-    plan: *const FFI_ExecutionPlan,
+    plan: &FFI_ExecutionPlan,
     partition: usize,
-    err_code: &mut i32,
-) -> FFI_ArrowArrayStream {
-    let private_data = (*plan).private_data as *const ExecutionPlanPrivateData;
+) -> RResult<FFI_RecordBatchStream, RString> {
+    let private_data = plan.private_data as *const ExecutionPlanPrivateData;
+    let plan = &(*private_data).plan;
+    let ctx = &(*private_data).context;
 
-    let record_batch_stream = match (*private_data)
-        .plan
-        .execute(partition, Arc::clone(&(*private_data).context))
-    {
-        Ok(rbs) => rbs,
-        Err(_e) => {
-            *err_code = 1;
-            return FFI_ArrowArrayStream::empty();
-        }
-    };
-
-    record_batch_to_arrow_stream(record_batch_stream)
-}
-unsafe extern "C" fn name_fn_wrapper(plan: *const FFI_ExecutionPlan) -> *const c_char {
-    let private_data = (*plan).private_data as *const ExecutionPlanPrivateData;
-    (*private_data).name.as_ptr()
-}
-
-unsafe extern "C" fn release_fn_wrapper(plan: *mut FFI_ExecutionPlan) {
-    if plan.is_null() {
-        return;
+    match plan.execute(partition, Arc::clone(ctx)) {
+        Ok(rbs) => RResult::ROk(FFI_RecordBatchStream::new(rbs)),
+        Err(e) => RResult::RErr(
+            format!("Error occurred during FFI_ExecutionPlan execute: {}", e).into(),
+        ),
     }
-    let plan = &mut *plan;
+}
+unsafe extern "C" fn name_fn_wrapper(plan: &FFI_ExecutionPlan) -> RString {
+    let private_data = plan.private_data as *const ExecutionPlanPrivateData;
+    let plan = &(*private_data).plan;
 
-    plan.properties = None;
-    plan.children = None;
-    plan.name = None;
-    plan.execute = None;
+    plan.name().into()
+}
 
+unsafe extern "C" fn release_fn_wrapper(plan: &mut FFI_ExecutionPlan) {
     let private_data = Box::from_raw(plan.private_data as *mut ExecutionPlanPrivateData);
     drop(private_data);
-
-    plan.release = None;
 }
 
-unsafe extern "C" fn clone_fn_wrapper(
-    plan: *const FFI_ExecutionPlan,
-) -> FFI_ExecutionPlan {
-    let private_data = (*plan).private_data as *const ExecutionPlanPrivateData;
+unsafe extern "C" fn clone_fn_wrapper(plan: &FFI_ExecutionPlan) -> FFI_ExecutionPlan {
+    let private_data = plan.private_data as *const ExecutionPlanPrivateData;
     let plan_data = &(*private_data);
 
     FFI_ExecutionPlan::new(Arc::clone(&plan_data.plan), Arc::clone(&plan_data.context))
         .unwrap()
+}
+
+impl Clone for FFI_ExecutionPlan {
+    fn clone(&self) -> Self {
+        unsafe { (self.clone)(self) }
+    }
 }
 
 // Since the trait ExecutionPlan requires borrowed values, we wrap our FFI.
@@ -203,40 +196,24 @@ impl FFI_ExecutionPlan {
             plan,
             children,
             context,
-            last_error: None,
             name,
         });
 
         Ok(Self {
-            properties: Some(properties_fn_wrapper),
-            children: Some(children_fn_wrapper),
-            name: Some(name_fn_wrapper),
-            execute: Some(execute_fn_wrapper),
-            release: Some(release_fn_wrapper),
-            clone: Some(clone_fn_wrapper),
+            properties: properties_fn_wrapper,
+            children: children_fn_wrapper,
+            name: name_fn_wrapper,
+            execute: execute_fn_wrapper,
+            clone: clone_fn_wrapper,
+            release: release_fn_wrapper,
             private_data: Box::into_raw(private_data) as *mut c_void,
         })
-    }
-
-    pub fn empty() -> Self {
-        Self {
-            properties: None,
-            children: None,
-            name: None,
-            execute: None,
-            release: None,
-            clone: None,
-            private_data: null_mut(),
-        }
     }
 }
 
 impl Drop for FFI_ExecutionPlan {
     fn drop(&mut self) {
-        match self.release {
-            None => (),
-            Some(release) => unsafe { release(self) },
-        };
+        unsafe { (self.release)(self) }
     }
 }
 
@@ -248,57 +225,25 @@ impl ForeignExecutionPlan {
     /// The caller must ensure the pointer provided points to a valid implementation
     /// of FFI_ExecutionPlan
     pub unsafe fn new(plan: FFI_ExecutionPlan) -> Result<Self> {
-        let name_fn = plan.name.ok_or(DataFusionError::NotImplemented(
-            "name() not implemented on FFI_ExecutionPlan".to_string(),
-        ))?;
-        let name_ptr = name_fn(&plan);
+        let name = (plan.name)(&plan).into();
 
-        let name_cstr = CStr::from_ptr(name_ptr);
+        let properties = ForeignPlanProperties::new((plan.properties)(&plan))?;
 
-        let name = name_cstr
-            .to_str()
-            .map_err(|e| {
-                DataFusionError::Plan(format!(
-                    "Unable to convert CStr name in FFI_ExecutionPlan: {}",
-                    e
-                ))
-            })?
-            .to_string();
+        let children = match (plan.children)(&plan) {
+            RResult::ROk(children_rvec) => {
+                let maybe_children: Result<Vec<_>> = children_rvec
+                    .iter()
+                    .map(|child| ForeignExecutionPlan::new(child.clone()))
+                    .collect();
 
-        let properties = unsafe {
-            let properties_fn =
-                plan.properties.ok_or(DataFusionError::NotImplemented(
-                    "properties not implemented on FFI_ExecutionPlan".to_string(),
-                ))?;
-
-            ForeignPlanProperties::new(properties_fn(&plan))?
-        };
-
-        let children = unsafe {
-            let children_fn = plan.children.ok_or(DataFusionError::NotImplemented(
-                "children not implemented on FFI_ExecutionPlan".to_string(),
-            ))?;
-            let mut num_children = 0;
-            let mut err_code = 0;
-            let children_ptr = children_fn(&plan, &mut num_children, &mut err_code);
-
-            if err_code != 0 {
-                return Err(DataFusionError::Plan(
-                    "Error getting children for FFI_ExecutionPlan".to_string(),
-                ));
+                maybe_children?
+                    .into_iter()
+                    .map(|child| Arc::new(child) as Arc<dyn ExecutionPlan>)
+                    .collect()
             }
-
-            let ffi_vec = slice::from_raw_parts(children_ptr, num_children);
-            let maybe_children: Result<Vec<_>> = ffi_vec
-                .iter()
-                .map(|child| {
-                    let child_plan = ForeignExecutionPlan::new(child.clone());
-
-                    child_plan.map(|c| Arc::new(c) as Arc<dyn ExecutionPlan>)
-                })
-                .collect();
-
-            maybe_children?
+            RResult::RErr(e) => {
+                return Err(DataFusionError::Execution(e.to_string()));
+            }
         };
 
         Ok(Self {
@@ -307,17 +252,6 @@ impl ForeignExecutionPlan {
             properties: properties.0,
             children,
         })
-    }
-}
-
-impl Clone for FFI_ExecutionPlan {
-    fn clone(&self) -> Self {
-        unsafe {
-            let clone_fn = self
-                .clone
-                .expect("FFI_ExecutionPlan does not have clone defined.");
-            clone_fn(self)
-        }
     }
 }
 
@@ -356,23 +290,18 @@ impl ExecutionPlan for ForeignExecutionPlan {
     fn execute(
         &self,
         partition: usize,
-        _context: Arc<datafusion::execution::TaskContext>,
-    ) -> datafusion::error::Result<datafusion::execution::SendableRecordBatchStream> {
+        _context: Arc<TaskContext>,
+    ) -> Result<SendableRecordBatchStream> {
         unsafe {
-            let execute_fn = self.plan.execute.ok_or(DataFusionError::Execution(
-                "execute is not defined on FFI_ExecutionPlan".to_string(),
-            ))?;
-
-            let mut err_code = 0;
-            let arrow_stream = execute_fn(&self.plan, partition, &mut err_code);
-
-            match err_code {
-                0 => ConsumerRecordBatchStream::try_from(arrow_stream)
-                    .map(|v| Pin::new(Box::new(v)) as SendableRecordBatchStream),
-                _ => Err(DataFusionError::Execution(
-                    "Error occurred during FFI call to FFI_ExecutionPlan execute."
-                        .to_string(),
-                )),
+            match (self.plan.execute)(&self.plan, partition) {
+                RResult::ROk(stream) => {
+                    let stream = Pin::new(Box::new(stream)) as SendableRecordBatchStream;
+                    Ok(stream)
+                }
+                RResult::RErr(e) => Err(DataFusionError::Execution(format!(
+                    "Error occurred during FFI call to FFI_ExecutionPlan execute. {}",
+                    e
+                ))),
             }
         }
     }
