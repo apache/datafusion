@@ -84,6 +84,11 @@ select case when current_time() = (now()::bigint % 86400000000000)::time then 'O
 ----
 OK
 
+query B
+select now() = current_timestamp;
+----
+true
+
 ##########
 ## Timestamp Handling Tests
 ##########

@@ -28,6 +28,7 @@ use datafusion_expr::{ColumnarValue, Expr, ScalarUDFImpl, Signature, Volatility}
 #[derive(Debug)]
 pub struct NowFunc {
     signature: Signature,
+    aliases: Vec<String>,
 }
 
 impl Default for NowFunc {
@@ -40,6 +41,7 @@ impl NowFunc {
     pub fn new() -> Self {
         Self {
             signature: Signature::uniform(0, vec![], Volatility::Stable),
+            aliases: vec!["current_timestamp".to_string()],
         }
     }
 }
@@ -83,5 +85,9 @@ impl ScalarUDFImpl for NowFunc {
         Ok(ExprSimplifyResult::Simplified(Expr::Literal(
             ScalarValue::TimestampNanosecond(now_ts, Some("+00:00".into())),
         )))
+    }
+
+    fn aliases(&self) -> &[String] {
+        &self.aliases
     }
 }
