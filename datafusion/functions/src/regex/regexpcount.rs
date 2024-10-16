@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::string::common::StringArrayType;
+use crate::strings::StringArrayType;
 use arrow::array::{Array, ArrayRef, AsArray, Datum, Int64Array};
 use arrow::datatypes::{DataType, Int64Type};
 use arrow::datatypes::{
@@ -120,7 +120,12 @@ fn get_regexp_count_doc() -> &'static Documentation {
             .with_description("Returns the number of matches that a [regular expression](https://docs.rs/regex/latest/regex/#syntax) has in a string.")
             .with_syntax_example("regexp_count(str, regexp[, start, flags])")
             .with_sql_example(r#"```sql
->
+> select regexp_count('abcAbAbc', 'abc', 2, 'i');
++---------------------------------------------------------------+
+| regexp_count(Utf8("abcAbAbc"),Utf8("abc"),Int64(2),Utf8("i")) |
++---------------------------------------------------------------+
+| 1                                                             |
++---------------------------------------------------------------+
 ```"#)
             .with_standard_argument("str", "String")
             .with_standard_argument("regexp","Regular")
@@ -613,17 +618,10 @@ mod tests {
 
     #[test]
     fn test_regexp_count() {
-        test_case_sensitive_regexp_count_scalar::<GenericStringArray<i32>>();
-        test_case_sensitive_regexp_count_scalar::<GenericStringArray<i64>>();
-        test_case_sensitive_regexp_count_scalar::<StringViewArray>();
-
-        test_case_sensitive_regexp_count_scalar_start::<GenericStringArray<i32>>();
-        test_case_sensitive_regexp_count_scalar_start::<GenericStringArray<i64>>();
-        test_case_sensitive_regexp_count_scalar_start::<StringViewArray>();
-
-        test_case_insensitive_regexp_count_scalar_flags::<GenericStringArray<i32>>();
-        test_case_insensitive_regexp_count_scalar_flags::<GenericStringArray<i64>>();
-        test_case_insensitive_regexp_count_scalar_flags::<StringViewArray>();
+        test_case_sensitive_regexp_count_scalar();
+        test_case_sensitive_regexp_count_scalar_start();
+        test_case_insensitive_regexp_count_scalar_flags();
+        test_case_sensitive_regexp_count_start_scalar_complex();
 
         test_case_sensitive_regexp_count_array::<GenericStringArray<i32>>();
         test_case_sensitive_regexp_count_array::<GenericStringArray<i64>>();
@@ -637,66 +635,182 @@ mod tests {
         test_case_insensitive_regexp_count_array_flags::<GenericStringArray<i64>>();
         test_case_insensitive_regexp_count_array_flags::<StringViewArray>();
 
-        test_case_sensitive_regexp_count_start_scalar_complex::<GenericStringArray<i32>>(
-        );
-        test_case_sensitive_regexp_count_start_scalar_complex::<GenericStringArray<i64>>(
-        );
-        test_case_sensitive_regexp_count_start_scalar_complex::<StringViewArray>();
-
         test_case_sensitive_regexp_count_array_complex::<GenericStringArray<i32>>();
         test_case_sensitive_regexp_count_array_complex::<GenericStringArray<i64>>();
         test_case_sensitive_regexp_count_array_complex::<StringViewArray>();
     }
 
-    fn test_case_sensitive_regexp_count_scalar<A>()
-    where
-        A: From<Vec<&'static str>> + Array + 'static,
-    {
-        let values = A::from(vec!["", "aabca", "abcabc", "abcAbcab", "abcabcabc"]);
-        let regex = A::from(vec!["abc"; 1]);
-        let start = Int64Array::from(vec![2]);
+    fn test_case_sensitive_regexp_count_scalar() {
+        let values = ["", "aabca", "abcabc", "abcAbcab", "abcabcabc"];
+        let regex = "abc";
+        let expected: Vec<i64> = vec![0, 1, 2, 1, 3];
 
-        let expected = Int64Array::from(vec![0, 1, 1, 0, 2]);
+        values.iter().enumerate().for_each(|(pos, &v)| {
+            // utf8
+            let v_sv = ScalarValue::Utf8(Some(v.to_string()));
+            let regex_sv = ScalarValue::Utf8(Some(regex.to_string()));
+            let expected = expected.get(pos).cloned();
 
-        let re = regexp_count_func(&[Arc::new(values), Arc::new(regex), Arc::new(start)])
-            .unwrap();
-        assert_eq!(re.as_ref(), &expected);
+            let re = RegexpCountFunc::new()
+                .invoke(&[ColumnarValue::Scalar(v_sv), ColumnarValue::Scalar(regex_sv)]);
+            match re {
+                Ok(ColumnarValue::Scalar(ScalarValue::Int64(v))) => {
+                    assert_eq!(v, expected, "regexp_count scalar test failed");
+                }
+                _ => panic!("Unexpected result"),
+            }
+
+            // largeutf8
+            let v_sv = ScalarValue::LargeUtf8(Some(v.to_string()));
+            let regex_sv = ScalarValue::LargeUtf8(Some(regex.to_string()));
+
+            let re = RegexpCountFunc::new()
+                .invoke(&[ColumnarValue::Scalar(v_sv), ColumnarValue::Scalar(regex_sv)]);
+            match re {
+                Ok(ColumnarValue::Scalar(ScalarValue::Int64(v))) => {
+                    assert_eq!(v, expected, "regexp_count scalar test failed");
+                }
+                _ => panic!("Unexpected result"),
+            }
+
+            // utf8view
+            let v_sv = ScalarValue::Utf8View(Some(v.to_string()));
+            let regex_sv = ScalarValue::Utf8View(Some(regex.to_string()));
+
+            let re = RegexpCountFunc::new()
+                .invoke(&[ColumnarValue::Scalar(v_sv), ColumnarValue::Scalar(regex_sv)]);
+            match re {
+                Ok(ColumnarValue::Scalar(ScalarValue::Int64(v))) => {
+                    assert_eq!(v, expected, "regexp_count scalar test failed");
+                }
+                _ => panic!("Unexpected result"),
+            }
+        });
     }
 
-    fn test_case_sensitive_regexp_count_scalar_start<A>()
-    where
-        A: From<Vec<&'static str>> + Array + 'static,
-    {
-        let values = A::from(vec!["", "aabca", "abcabc", "abcAbcab", "abcabcabc"]);
-        let regex = A::from(vec!["abc"; 1]);
-        let start = Int64Array::from(vec![2]);
+    fn test_case_sensitive_regexp_count_scalar_start() {
+        let values = ["", "aabca", "abcabc", "abcAbcab", "abcabcabc"];
+        let regex = "abc";
+        let start = 2;
+        let expected: Vec<i64> = vec![0, 1, 1, 0, 2];
 
-        let expected = Int64Array::from(vec![0, 1, 1, 0, 2]);
+        values.iter().enumerate().for_each(|(pos, &v)| {
+            // utf8
+            let v_sv = ScalarValue::Utf8(Some(v.to_string()));
+            let regex_sv = ScalarValue::Utf8(Some(regex.to_string()));
+            let start_sv = ScalarValue::Int64(Some(start));
+            let expected = expected.get(pos).cloned();
 
-        let re = regexp_count_func(&[Arc::new(values), Arc::new(regex), Arc::new(start)])
-            .unwrap();
-        assert_eq!(re.as_ref(), &expected);
+            let re = RegexpCountFunc::new().invoke(&[
+                ColumnarValue::Scalar(v_sv),
+                ColumnarValue::Scalar(regex_sv),
+                ColumnarValue::Scalar(start_sv.clone()),
+            ]);
+            match re {
+                Ok(ColumnarValue::Scalar(ScalarValue::Int64(v))) => {
+                    assert_eq!(v, expected, "regexp_count scalar test failed");
+                }
+                _ => panic!("Unexpected result"),
+            }
+
+            // largeutf8
+            let v_sv = ScalarValue::LargeUtf8(Some(v.to_string()));
+            let regex_sv = ScalarValue::LargeUtf8(Some(regex.to_string()));
+
+            let re = RegexpCountFunc::new().invoke(&[
+                ColumnarValue::Scalar(v_sv),
+                ColumnarValue::Scalar(regex_sv),
+                ColumnarValue::Scalar(start_sv.clone()),
+            ]);
+            match re {
+                Ok(ColumnarValue::Scalar(ScalarValue::Int64(v))) => {
+                    assert_eq!(v, expected, "regexp_count scalar test failed");
+                }
+                _ => panic!("Unexpected result"),
+            }
+
+            // utf8view
+            let v_sv = ScalarValue::Utf8View(Some(v.to_string()));
+            let regex_sv = ScalarValue::Utf8View(Some(regex.to_string()));
+
+            let re = RegexpCountFunc::new().invoke(&[
+                ColumnarValue::Scalar(v_sv),
+                ColumnarValue::Scalar(regex_sv),
+                ColumnarValue::Scalar(start_sv),
+            ]);
+            match re {
+                Ok(ColumnarValue::Scalar(ScalarValue::Int64(v))) => {
+                    assert_eq!(v, expected, "regexp_count scalar test failed");
+                }
+                _ => panic!("Unexpected result"),
+            }
+        });
     }
 
-    fn test_case_insensitive_regexp_count_scalar_flags<A>()
-    where
-        A: From<Vec<&'static str>> + Array + 'static,
-    {
-        let values = A::from(vec!["", "aabca", "abcabc", "abcAbcab", "abcabcabc"]);
-        let regex = A::from(vec!["abc"; 1]);
-        let start = Int64Array::from(vec![1]);
-        let flags = A::from(vec!["i"]);
+    fn test_case_insensitive_regexp_count_scalar_flags() {
+        let values = ["", "aabca", "abcabc", "abcAbcab", "abcabcabc"];
+        let regex = "abc";
+        let start = 1;
+        let flags = "i";
+        let expected: Vec<i64> = vec![0, 1, 2, 2, 3];
 
-        let expected = Int64Array::from(vec![0, 1, 2, 2, 3]);
+        values.iter().enumerate().for_each(|(pos, &v)| {
+            // utf8
+            let v_sv = ScalarValue::Utf8(Some(v.to_string()));
+            let regex_sv = ScalarValue::Utf8(Some(regex.to_string()));
+            let start_sv = ScalarValue::Int64(Some(start));
+            let flags_sv = ScalarValue::Utf8(Some(flags.to_string()));
+            let expected = expected.get(pos).cloned();
 
-        let re = regexp_count_func(&[
-            Arc::new(values),
-            Arc::new(regex),
-            Arc::new(start),
-            Arc::new(flags),
-        ])
-        .unwrap();
-        assert_eq!(re.as_ref(), &expected);
+            let re = RegexpCountFunc::new().invoke(&[
+                ColumnarValue::Scalar(v_sv),
+                ColumnarValue::Scalar(regex_sv),
+                ColumnarValue::Scalar(start_sv.clone()),
+                ColumnarValue::Scalar(flags_sv.clone()),
+            ]);
+            match re {
+                Ok(ColumnarValue::Scalar(ScalarValue::Int64(v))) => {
+                    assert_eq!(v, expected, "regexp_count scalar test failed");
+                }
+                _ => panic!("Unexpected result"),
+            }
+
+            // largeutf8
+            let v_sv = ScalarValue::LargeUtf8(Some(v.to_string()));
+            let regex_sv = ScalarValue::LargeUtf8(Some(regex.to_string()));
+            let flags_sv = ScalarValue::LargeUtf8(Some(flags.to_string()));
+
+            let re = RegexpCountFunc::new().invoke(&[
+                ColumnarValue::Scalar(v_sv),
+                ColumnarValue::Scalar(regex_sv),
+                ColumnarValue::Scalar(start_sv.clone()),
+                ColumnarValue::Scalar(flags_sv.clone()),
+            ]);
+            match re {
+                Ok(ColumnarValue::Scalar(ScalarValue::Int64(v))) => {
+                    assert_eq!(v, expected, "regexp_count scalar test failed");
+                }
+                _ => panic!("Unexpected result"),
+            }
+
+            // utf8view
+            let v_sv = ScalarValue::Utf8View(Some(v.to_string()));
+            let regex_sv = ScalarValue::Utf8View(Some(regex.to_string()));
+            let flags_sv = ScalarValue::Utf8View(Some(flags.to_string()));
+
+            let re = RegexpCountFunc::new().invoke(&[
+                ColumnarValue::Scalar(v_sv),
+                ColumnarValue::Scalar(regex_sv),
+                ColumnarValue::Scalar(start_sv),
+                ColumnarValue::Scalar(flags_sv.clone()),
+            ]);
+            match re {
+                Ok(ColumnarValue::Scalar(ScalarValue::Int64(v))) => {
+                    assert_eq!(v, expected, "regexp_count scalar test failed");
+                }
+                _ => panic!("Unexpected result"),
+            }
+        });
     }
 
     fn test_case_sensitive_regexp_count_array<A>()
@@ -748,25 +862,70 @@ mod tests {
         assert_eq!(re.as_ref(), &expected);
     }
 
-    fn test_case_sensitive_regexp_count_start_scalar_complex<A>()
-    where
-        A: From<Vec<&'static str>> + Array + 'static,
-    {
-        let values = A::from(vec!["", "aAbca", "abcabc", "abcAbcabc", "abcabcAbc"]);
-        let regex = A::from(vec!["", "abc", "a", "bc", "ab"]);
-        let start = Int64Array::from(vec![5]);
-        let flags = A::from(vec!["", "i", "", "", "i"]);
+    fn test_case_sensitive_regexp_count_start_scalar_complex() {
+        let values = ["", "aabca", "abcabc", "abcAbcab", "abcabcabc"];
+        let regex = ["", "abc", "a", "bc", "ab"];
+        let start = 5;
+        let flags = ["", "i", "", "", "i"];
+        let expected: Vec<i64> = vec![0, 0, 0, 1, 1];
 
-        let expected = Int64Array::from(vec![0, 0, 0, 2, 1]);
+        values.iter().enumerate().for_each(|(pos, &v)| {
+            // utf8
+            let v_sv = ScalarValue::Utf8(Some(v.to_string()));
+            let regex_sv = ScalarValue::Utf8(regex.get(pos).map(|s| s.to_string()));
+            let start_sv = ScalarValue::Int64(Some(start));
+            let flags_sv = ScalarValue::Utf8(flags.get(pos).map(|f| f.to_string()));
+            let expected = expected.get(pos).cloned();
 
-        let re = regexp_count_func(&[
-            Arc::new(values),
-            Arc::new(regex),
-            Arc::new(start),
-            Arc::new(flags),
-        ])
-        .unwrap();
-        assert_eq!(re.as_ref(), &expected);
+            let re = RegexpCountFunc::new().invoke(&[
+                ColumnarValue::Scalar(v_sv),
+                ColumnarValue::Scalar(regex_sv),
+                ColumnarValue::Scalar(start_sv.clone()),
+                ColumnarValue::Scalar(flags_sv.clone()),
+            ]);
+            match re {
+                Ok(ColumnarValue::Scalar(ScalarValue::Int64(v))) => {
+                    assert_eq!(v, expected, "regexp_count scalar test failed");
+                }
+                _ => panic!("Unexpected result"),
+            }
+
+            // largeutf8
+            let v_sv = ScalarValue::LargeUtf8(Some(v.to_string()));
+            let regex_sv = ScalarValue::LargeUtf8(regex.get(pos).map(|s| s.to_string()));
+            let flags_sv = ScalarValue::LargeUtf8(flags.get(pos).map(|f| f.to_string()));
+
+            let re = RegexpCountFunc::new().invoke(&[
+                ColumnarValue::Scalar(v_sv),
+                ColumnarValue::Scalar(regex_sv),
+                ColumnarValue::Scalar(start_sv.clone()),
+                ColumnarValue::Scalar(flags_sv.clone()),
+            ]);
+            match re {
+                Ok(ColumnarValue::Scalar(ScalarValue::Int64(v))) => {
+                    assert_eq!(v, expected, "regexp_count scalar test failed");
+                }
+                _ => panic!("Unexpected result"),
+            }
+
+            // utf8view
+            let v_sv = ScalarValue::Utf8View(Some(v.to_string()));
+            let regex_sv = ScalarValue::Utf8View(regex.get(pos).map(|s| s.to_string()));
+            let flags_sv = ScalarValue::Utf8View(flags.get(pos).map(|f| f.to_string()));
+
+            let re = RegexpCountFunc::new().invoke(&[
+                ColumnarValue::Scalar(v_sv),
+                ColumnarValue::Scalar(regex_sv),
+                ColumnarValue::Scalar(start_sv),
+                ColumnarValue::Scalar(flags_sv.clone()),
+            ]);
+            match re {
+                Ok(ColumnarValue::Scalar(ScalarValue::Int64(v))) => {
+                    assert_eq!(v, expected, "regexp_count scalar test failed");
+                }
+                _ => panic!("Unexpected result"),
+            }
+        });
     }
 
     fn test_case_sensitive_regexp_count_array_complex<A>()
