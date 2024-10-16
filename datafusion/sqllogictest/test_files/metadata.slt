@@ -58,8 +58,6 @@ WHERE "data"."id" = "samples"."id";
 1
 3
 
-statement ok
-drop table table_with_metadata;
 
 # Regression test: missing schema metadata, when aggregate on cross join
 query I
@@ -86,5 +84,9 @@ ORDER BY id, name, l_name;
 3 NULL l_baz
 NULL bar NULL
 NULL NULL l_bar
+
+statement ok
+drop table table_with_metadata;
+
 
 
