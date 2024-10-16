@@ -50,8 +50,8 @@ use datafusion_common::display::ToStringifiedPlan;
 use datafusion_common::file_options::file_type::FileType;
 use datafusion_common::{
     get_target_functional_dependencies, internal_err, not_impl_err, plan_datafusion_err,
-    plan_err, Column, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
-    TableReference, ToDFSchema, UnnestOptions,
+    plan_err, Column, DFSchema, DFSchemaRef, DataFusionError, FunctionalDependencies,
+    Result, ScalarValue, TableReference, ToDFSchema, UnnestOptions,
 };
 
 /// Default table name for unnamed table
@@ -1374,7 +1374,12 @@ pub fn validate_unique_names<'a>(
 pub fn union(left_plan: LogicalPlan, right_plan: LogicalPlan) -> Result<LogicalPlan> {
     // Temporarily use the schema from the left input and later rely on the analyzer to
     // coerce the two schemas into a common one.
-    let schema = Arc::clone(left_plan.schema());
+
+    // Functional Dependencies doesn't preserve after UNION operation
+    let schema = (**left_plan.schema()).clone();
+    let schema =
+        Arc::new(schema.with_functional_dependencies(FunctionalDependencies::empty())?);
+
     Ok(LogicalPlan::Union(Union {
         inputs: vec![Arc::new(left_plan), Arc::new(right_plan)],
         schema,

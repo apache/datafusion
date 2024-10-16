@@ -2318,6 +2318,54 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_aggregate_with_union() -> Result<()> {
+        let df = test_table().await?;
+
+        let df1 = df
+            .clone()
+            // GROUP BY `c1`
+            .aggregate(vec![col("c1")], vec![min(col("c2"))])?
+            // SELECT `c1` , min(c2) as `result`
+            .select(vec![col("c1"), min(col("c2")).alias("result")])?;
+        let df2 = df
+            .clone()
+            // GROUP BY `c1`
+            .aggregate(vec![col("c1")], vec![max(col("c3"))])?
+            // SELECT `c1` , max(c3) as `result`
+            .select(vec![col("c1"), max(col("c3")).alias("result")])?;
+
+        let df_union = df1.union(df2)?;
+        let df = df_union
+            // GROUP BY `c1`
+            .aggregate(
+                vec![col("c1")],
+                vec![sum(col("result")).alias("sum_result")],
+            )?
+            // SELECT `c1`, sum(result) as `sum_result`
+            .select(vec![(col("c1")), col("sum_result")])?;
+
+        let df_results = df.collect().await?;
+
+        #[rustfmt::skip]
+        assert_batches_sorted_eq!(
+            [
+                "+----+------------+",
+                "| c1 | sum_result |",
+                "+----+------------+",
+                "| a  | 84         |",
+                "| b  | 69         |",
+                "| c  | 124        |",
+                "| d  | 126        |",
+                "| e  | 121        |",
+                "+----+------------+"
+            ],
+            &df_results
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_aggregate_subexpr() -> Result<()> {
         let df = test_table().await?;
 
