@@ -254,22 +254,25 @@ impl ParquetFormat {
         self.options.global.schema_force_view_types
     }
 
-    /// If true, will use view types (StringView and BinaryView).
-    ///
-    /// Refer to [`Self::force_view_types`].
+    /// If true, will use view types. See [`Self::force_view_types`] for details
     pub fn with_force_view_types(mut self, use_views: bool) -> Self {
         self.options.global.schema_force_view_types = use_views;
         self
     }
 
-    /// Return `true` if binary type will be read as string.
+    /// Return `true` if binary types will be read as strings.
+    ///
+    /// If this returns true, DataFusion will instruct the parquet reader
+    /// to read binary columns such as `Binary` or `BinaryView` as the
+    /// corresponding string type such as `Utf8` or `LargeUtf8`.
+    /// The parquet reader has special optimizations for `Utf8` and `LargeUtf8`
+    /// validation, and such queries are significantly faster than reading
+    /// binary columns and then casting to string columns.
     pub fn binary_as_string(&self) -> bool {
         self.options.global.binary_as_string
     }
 
-    /// If true, will read binary type as string.
-    ///
-    /// Refer to [`Self::binary_as_string`].
+    /// If true, will read binary types as strings. See [`Self::binary_as_string`] for details
     pub fn with_binary_as_string(mut self, binary_as_string: bool) -> Self {
         self.options.global.binary_as_string = binary_as_string;
         self

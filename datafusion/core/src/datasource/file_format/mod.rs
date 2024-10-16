@@ -236,6 +236,8 @@ pub fn file_type_to_format(
 }
 
 /// Transform a schema to use view types for Utf8 and Binary
+///
+/// See [parquet::ParquetFormat::force_view_types] for details
 pub fn transform_schema_to_view(schema: &Schema) -> Schema {
     let transformed_fields: Vec<Arc<Field>> = schema
         .fields
@@ -302,7 +304,7 @@ pub(crate) fn coerce_file_schema_to_view_type(
     ))
 }
 
-/// Transform a schema to force binary types to be strings
+/// Transform a schema so that any binary types are strings
 pub fn transform_binary_to_string(schema: &Schema) -> Schema {
     let transformed_fields: Vec<Arc<Field>> = schema
         .fields
@@ -316,6 +318,10 @@ pub fn transform_binary_to_string(schema: &Schema) -> Schema {
                 Field::new(field.name(), DataType::LargeUtf8, field.is_nullable())
                     .with_metadata(field.metadata().to_owned()),
             ),
+            DataType::BinaryView => Arc::new(
+                Field::new(field.name(), DataType::BinaryView, field.is_nullable())
+                    .with_metadata(field.metadata().to_owned()),
+            ),
             _ => field.clone(),
         })
         .collect();
@@ -323,6 +329,8 @@ pub fn transform_binary_to_string(schema: &Schema) -> Schema {
 }
 
 /// If the table schema uses a string type, coerce the file schema to use a string type.
+///
+/// See [parquet::ParquetFormat::binary_as_string] for details
 pub(crate) fn coerce_file_schema_to_string_type(
     table_schema: &Schema,
     file_schema: &Schema,
@@ -338,7 +346,9 @@ pub(crate) fn coerce_file_schema_to_string_type(
         .iter()
         .map(
             |field| match (table_fields.get(field.name()), field.data_type()) {
-                (Some(DataType::Utf8), DataType::Binary) => {
+                // table schema uses string type, coerce the file schema to use string type
+                (Some(DataType::Utf8),
+                    DataType::Binary | DataType::LargeBinary | DataType::BinaryView) => {
                     transform = true;
                     Arc::new(Field::new(
                         field.name(),
@@ -346,7 +356,8 @@ pub(crate) fn coerce_file_schema_to_string_type(
                         field.is_nullable(),
                     ))
                 }
-                (Some(DataType::LargeUtf8), DataType::LargeBinary) => {
+                // table schema uses large string type, coerce the file schema to use large string type
+                (Some(DataType::LargeUtf8), DataType::Binary | DataType::LargeBinary | DataType::BinaryView) => {
                     transform = true;
                     Arc::new(Field::new(
                         field.name(),
@@ -354,9 +365,7 @@ pub(crate) fn coerce_file_schema_to_string_type(
                         field.is_nullable(),
                     ))
                 }
-                // If `schema_force_view_types` is enabled, the actual data could be `Binary` or `LargeBinary`
-                // because we will first change the table schema for binary-to-string coercion, then apply the
-                // string-to-view transformation. So we need all binary types to be coerced to `Utf8View` here.
+                // table schema uses string view type, coerce the file schema to use view type
                 (
                     Some(DataType::Utf8View),
                     DataType::Binary | DataType::LargeBinary | DataType::BinaryView,
