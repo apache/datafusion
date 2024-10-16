@@ -69,6 +69,7 @@ use parquet::arrow::arrow_writer::{
 use parquet::arrow::{
     arrow_to_parquet_schema, parquet_to_arrow_schema, AsyncArrowWriter,
 };
+#[allow(deprecated)]
 use parquet::file::footer::{decode_footer, decode_metadata};
 use parquet::file::metadata::{ParquetMetaData, RowGroupMetaData};
 use parquet::file::properties::WriterProperties;
@@ -448,6 +449,7 @@ pub async fn fetch_parquet_metadata(
     let mut footer = [0; 8];
     footer.copy_from_slice(&suffix[suffix_len - 8..suffix_len]);
 
+    #[allow(deprecated)]
     let length = decode_footer(&footer)?;
 
     if meta.size < length + 8 {
@@ -470,10 +472,12 @@ pub async fn fetch_parquet_metadata(
         metadata.put(remaining_metadata.as_ref());
         metadata.put(&suffix[..suffix_len - 8]);
 
+        #[allow(deprecated)]
         Ok(decode_metadata(metadata.as_ref())?)
     } else {
         let metadata_start = meta.size - length - 8;
 
+        #[allow(deprecated)]
         Ok(decode_metadata(
             &suffix[metadata_start - footer_start..suffix_len - 8],
         )?)
