@@ -4942,3 +4942,51 @@ statement ok
 DROP TABLE t;
 
 ## end test handle NULL and 0 of NTH_VALUE
+
+## test handle NULL of lead
+
+statement ok
+create table t1(v1 int);
+
+statement ok
+insert into t1 values (1);
+
+query B
+SELECT LEAD(NULL, 0, false) OVER () FROM t1;
+----
+NULL
+
+query B
+SELECT LAG(NULL, 0, false) OVER () FROM t1;
+----
+NULL
+
+query B
+SELECT LEAD(NULL, 1, false) OVER () FROM t1;
+----
+false
+
+query B
+SELECT LAG(NULL, 1, false) OVER () FROM t1;
+----
+false
+
+statement ok
+insert into t1 values (2);
+
+query B
+SELECT LEAD(NULL, 1, false) OVER () FROM t1;
+----
+NULL
+false
+
+query B
+SELECT LAG(NULL, 1, false) OVER () FROM t1;
+----
+false
+NULL
+
+statement ok
+DROP TABLE t1;
+
+## end test handle NULL of lead
