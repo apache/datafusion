@@ -39,8 +39,11 @@ use datafusion_common::cast::{
     as_generic_string_array, as_large_list_array, as_list_array, as_string_array,
 };
 use datafusion_common::exec_err;
-use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
-use std::sync::Arc;
+use datafusion_expr::scalar_doc_sections::DOC_SECTION_ARRAY;
+use datafusion_expr::{
+    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+};
+use std::sync::{Arc, OnceLock};
 
 macro_rules! to_string {
     ($ARG:expr, $ARRAY:expr, $DELIMITER:expr, $NULL_STRING:expr, $WITH_NULL_STRING:expr, $ARRAY_TYPE:ident) => {{
@@ -159,6 +162,43 @@ impl ScalarUDFImpl for ArrayToString {
     fn aliases(&self) -> &[String] {
         &self.aliases
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_array_to_string_doc())
+    }
+}
+
+static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+
+fn get_array_to_string_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_ARRAY)
+            .with_description(
+                "Converts each element to its text representation.",
+            )
+            .with_syntax_example("array_to_string(array, delimiter)")
+            .with_sql_example(
+                r#"```sql
+> select array_to_string([[1, 2, 3, 4], [5, 6, 7, 8]], ',');
++----------------------------------------------------+
+| array_to_string(List([1,2,3,4,5,6,7,8]),Utf8(",")) |
++----------------------------------------------------+
+| 1,2,3,4,5,6,7,8                                    |
++----------------------------------------------------+
+```"#,
+            )
+            .with_argument(
+                "array",
+                "Array expression. Can be a constant, column, or function, and any combination of array operators.",
+            )
+            .with_argument(
+                "delimiter",
+                "Array element separator.",
+            )
+            .build()
+            .unwrap()
+    })
 }
 
 make_udf_expr_and_func!(
@@ -228,6 +268,51 @@ impl ScalarUDFImpl for StringToArray {
     fn aliases(&self) -> &[String] {
         &self.aliases
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_string_to_array_doc())
+    }
+}
+
+fn get_string_to_array_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_ARRAY)
+            .with_description(
+                "Splits a string into an array of substrings based on a delimiter. Any substrings matching the optional `null_str` argument are replaced with NULL.",
+            )
+            .with_syntax_example("string_to_array(str, delimiter[, null_str])")
+            .with_sql_example(
+                r#"```sql
+> select string_to_array('abc##def', '##');
++-----------------------------------+
+| string_to_array(Utf8('abc##def'))  |
++-----------------------------------+
+| ['abc', 'def']                    |
++-----------------------------------+
+> select string_to_array('abc def', ' ', 'def');
++---------------------------------------------+
+| string_to_array(Utf8('abc def'), Utf8(' '), Utf8('def')) |
++---------------------------------------------+
+| ['abc', NULL]                               |
++---------------------------------------------+
+```"#,
+            )
+            .with_argument(
+                "str",
+                "String expression to split.",
+            )
+            .with_argument(
+                "delimiter",
+                "Delimiter string to split on.",
+            )
+            .with_argument(
+                "null_str",
+                "Substring values to be replaced with `NULL`.",
+            )
+            .build()
+            .unwrap()
+    })
 }
 
 /// Array_to_string SQL function
