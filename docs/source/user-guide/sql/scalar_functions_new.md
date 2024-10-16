@@ -3179,7 +3179,7 @@ _Alias of [array_union](#array_union)._
 
 ### `make_array`
 
-Returns an Arrow array using the specified input expressions.
+Returns an array using the specified input expressions.
 
 ```
 make_array(expression1[, ..., expression_n])
