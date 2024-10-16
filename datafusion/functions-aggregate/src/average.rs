@@ -253,17 +253,17 @@ fn get_avg_doc() -> &'static Documentation {
                 "Returns the average of numeric values in the specified column.",
             )
             .with_syntax_example("avg(expression)")
-            .with_sql_example(r#"```sql
+            .with_sql_example(
+                r#"```sql
 > SELECT avg(column_name) FROM table_name;
 +---------------------------+
 | avg(column_name)           |
 +---------------------------+
 | 42.75                      |
 +---------------------------+
-```"#, 
+```"#,
             )
-            .with_argument("expression", "Expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators.")
-            .with_argument("Aliases: ", "`mean`")
+            .with_standard_argument("expression", "The")
             .build()
             .unwrap()
     })

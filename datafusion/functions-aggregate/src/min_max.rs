@@ -345,20 +345,19 @@ fn get_max_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
         Documentation::builder()
             .with_doc_section(DOC_SECTION_GENERAL)
-            .with_description(
-                "Returns the maximum value in the specified column.",
-            )
+            .with_description("Returns the maximum value in the specified column.")
             .with_syntax_example("max(expression)")
-            .with_sql_example(r#"```sql
+            .with_sql_example(
+                r#"```sql
 > SELECT max(column_name) FROM table_name;
 +----------------------+
 | max(column_name)      |
 +----------------------+
 | 150                  |
 +----------------------+
-```"#, 
+```"#,
             )
-            .with_argument("expression", "Expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators.")
+            .with_standard_argument("expression", "The")
             .build()
             .unwrap()
     })
@@ -1176,20 +1175,19 @@ fn get_min_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
         Documentation::builder()
             .with_doc_section(DOC_SECTION_GENERAL)
-            .with_description(
-                "Returns the minimum value in the specified column.",
-            )
+            .with_description("Returns the minimum value in the specified column.")
             .with_syntax_example("min(expression)")
-            .with_sql_example(r#"```sql
+            .with_sql_example(
+                r#"```sql
 > SELECT min(column_name) FROM table_name;
 +----------------------+
 | min(column_name)      |
 +----------------------+
 | 12                   |
 +----------------------+
-```"#, 
+```"#,
             )
-            .with_argument("expression", "Expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators.")
+            .with_standard_argument("expression", "The")
             .build()
             .unwrap()
     })
