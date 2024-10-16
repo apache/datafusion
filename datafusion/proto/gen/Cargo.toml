@@ -20,7 +20,7 @@ name = "gen"
 description = "Code generation for proto"
 version = "0.1.0"
 edition = { workspace = true }
-rust-version = "1.78"
+rust-version = "1.79"
 authors = { workspace = true }
 homepage = { workspace = true }
 repository = { workspace = true }
