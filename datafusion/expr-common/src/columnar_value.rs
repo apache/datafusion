@@ -17,8 +17,7 @@
 
 //! [`ColumnarValue`] represents the result of evaluating an expression.
 
-use arrow::array::ArrayRef;
-use arrow::array::NullArray;
+use arrow::array::{Array, ArrayRef, NullArray};
 use arrow::compute::{kernels, CastOptions};
 use arrow::datatypes::{DataType, TimeUnit};
 use datafusion_common::format::DEFAULT_CAST_OPTIONS;
@@ -216,6 +215,17 @@ impl ColumnarValue {
                 let cast_scalar = ScalarValue::try_from_array(&cast_array, 0)?;
                 Ok(ColumnarValue::Scalar(cast_scalar))
             }
+        }
+    }
+
+    /// Converts an [`ArrayRef`] to a [`ColumnarValue`] based on the supplied arguments.
+    /// This is useful for scalar UDF implementations to fulfil their contract:
+    /// if all arguments are scalar values, the result should also be a scalar value.
+    pub fn from_args_and_result(args: &[Self], result: ArrayRef) -> Result<Self> {
+        if result.len() == 1 && args.iter().all(|arg| matches!(arg, Self::Scalar(_))) {
+            Ok(Self::Scalar(ScalarValue::try_from_array(&result, 0)?))
+        } else {
+            Ok(Self::Array(result))
         }
     }
 }
