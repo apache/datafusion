@@ -27,6 +27,7 @@ use crate::PhysicalExpr;
 use arrow::array::*;
 use arrow::compute::kernels::boolean::{and_kleene, not, or_kleene};
 use arrow::compute::kernels::cmp::*;
+#[allow(deprecated)]
 use arrow::compute::kernels::comparison::{
     regexp_is_match_utf8, regexp_is_match_utf8_scalar,
 };
@@ -147,6 +148,7 @@ fn boolean_op(
 
 macro_rules! binary_string_array_flag_op {
     ($LEFT:expr, $RIGHT:expr, $OP:ident, $NOT:expr, $FLAG:expr) => {{
+        #[allow(deprecated)]
         match $LEFT.data_type() {
             DataType::Utf8View | DataType::Utf8 => {
                 compute_utf8_flag_op!($LEFT, $RIGHT, $OP, StringArray, $NOT, $FLAG)
@@ -189,6 +191,7 @@ macro_rules! compute_utf8_flag_op {
 
 macro_rules! binary_string_array_flag_op_scalar {
     ($LEFT:expr, $RIGHT:expr, $OP:ident, $NOT:expr, $FLAG:expr) => {{
+        #[allow(deprecated)]
         let result: Result<Arc<dyn Array>> = match $LEFT.data_type() {
             DataType::Utf8View | DataType::Utf8 => {
                 compute_utf8_flag_op_scalar!($LEFT, $RIGHT, $OP, StringArray, $NOT, $FLAG)
