@@ -18,11 +18,11 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use arrow::array::{ArrayRef, Float32Array, Float64Array};
-use arrow::datatypes::DataType;
+use arrow::array::{ArrayRef, AsArray};
 use arrow::datatypes::DataType::{Float32, Float64};
+use arrow::datatypes::{DataType, Float32Type, Float64Type};
 
-use datafusion_common::{exec_err, DataFusionError, Result};
+use datafusion_common::{exec_err, Result};
 use datafusion_expr::ColumnarValue;
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 
@@ -85,18 +85,16 @@ impl ScalarUDFImpl for CotFunc {
 ///cot SQL function
 fn cot(args: &[ArrayRef]) -> Result<ArrayRef> {
     match args[0].data_type() {
-        Float64 => Ok(Arc::new(make_function_scalar_inputs!(
-            &args[0],
-            "x",
-            Float64Array,
-            { compute_cot64 }
-        )) as ArrayRef),
-        Float32 => Ok(Arc::new(make_function_scalar_inputs!(
-            &args[0],
-            "x",
-            Float32Array,
-            { compute_cot32 }
-        )) as ArrayRef),
+        Float64 => Ok(Arc::new(
+            args[0]
+                .as_primitive::<Float64Type>()
+                .unary::<_, Float64Type>(|x: f64| compute_cot64(x)),
+        ) as ArrayRef),
+        Float32 => Ok(Arc::new(
+            args[0]
+                .as_primitive::<Float32Type>()
+                .unary::<_, Float32Type>(|x: f32| compute_cot32(x)),
+        ) as ArrayRef),
         other => exec_err!("Unsupported data type {other:?} for function cot"),
     }
 }
