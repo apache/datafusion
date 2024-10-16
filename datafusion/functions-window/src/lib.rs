@@ -31,16 +31,12 @@ use datafusion_expr::WindowUDF;
 
 #[macro_use]
 pub mod macros;
-pub mod dense_rank;
-pub mod percent_rank;
 pub mod rank;
 pub mod row_number;
 
 /// Fluent-style API for creating `Expr`s
 pub mod expr_fn {
-    pub use super::dense_rank::dense_rank;
-    pub use super::percent_rank::percent_rank;
-    pub use super::rank::rank;
+    pub use super::rank::{dense_rank, percent_rank, rank};
     pub use super::row_number::row_number;
 }
 
@@ -49,8 +45,8 @@ pub fn all_default_window_functions() -> Vec<Arc<WindowUDF>> {
     vec![
         row_number::row_number_udwf(),
         rank::rank_udwf(),
-        dense_rank::dense_rank_udwf(),
-        percent_rank::percent_rank_udwf(),
+        rank::dense_rank_udwf(),
+        rank::percent_rank_udwf(),
     ]
 }
 /// Registers all enabled packages with a [`FunctionRegistry`]

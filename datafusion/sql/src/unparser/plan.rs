@@ -357,6 +357,12 @@ impl Unparser<'_> {
                     return self.derive(plan, relation);
                 }
                 if let Some(query_ref) = query {
+                    if let Some(fetch) = sort.fetch {
+                        query_ref.limit(Some(ast::Expr::Value(ast::Value::Number(
+                            fetch.to_string(),
+                            false,
+                        ))));
+                    }
                     query_ref.order_by(self.sorts_to_sql(sort.expr.clone())?);
                 } else {
                     return internal_err!(

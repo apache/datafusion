@@ -217,6 +217,41 @@ fn get_casted_value(
     }
 }
 
+/// Rewrites the NULL expression (1st argument) with an expression
+/// which is the same data type as the default value (3rd argument).
+/// Also rewrites the return type with the same data type as the
+/// default value.
+///
+/// If a default value is not provided, or it is NULL the original
+/// expression (1st argument) and return type is returned without
+/// any modifications.
+fn rewrite_null_expr_and_data_type(
+    args: &[Arc<dyn PhysicalExpr>],
+    expr_type: &DataType,
+) -> Result<(Arc<dyn PhysicalExpr>, DataType)> {
+    assert!(!args.is_empty());
+    let expr = Arc::clone(&args[0]);
+
+    // The input expression and the return is type is unchanged
+    // when the input expression is not NULL.
+    if !expr_type.is_null() {
+        return Ok((expr, expr_type.clone()));
+    }
+
+    get_scalar_value_from_args(args, 2)?
+        .and_then(|value| {
+            ScalarValue::try_from(value.data_type().clone())
+                .map(|sv| {
+                    Ok((
+                        Arc::new(Literal::new(sv)) as Arc<dyn PhysicalExpr>,
+                        value.data_type().clone(),
+                    ))
+                })
+                .ok()
+        })
+        .unwrap_or(Ok((expr, expr_type.clone())))
+}
+
 fn create_built_in_window_expr(
     fun: &BuiltInWindowFunction,
     args: &[Arc<dyn PhysicalExpr>],
@@ -252,15 +287,17 @@ fn create_built_in_window_expr(
             }
         }
         BuiltInWindowFunction::Lag => {
-            let arg = Arc::clone(&args[0]);
+            // rewrite NULL expression and the return datatype
+            let (arg, out_data_type) =
+                rewrite_null_expr_and_data_type(args, out_data_type)?;
             let shift_offset = get_scalar_value_from_args(args, 1)?
                 .map(get_signed_integer)
                 .map_or(Ok(None), |v| v.map(Some))?;
             let default_value =
-                get_casted_value(get_scalar_value_from_args(args, 2)?, out_data_type)?;
+                get_casted_value(get_scalar_value_from_args(args, 2)?, &out_data_type)?;
             Arc::new(lag(
                 name,
-                out_data_type.clone(),
+                default_value.data_type().clone(),
                 arg,
                 shift_offset,
                 default_value,
@@ -268,15 +305,17 @@ fn create_built_in_window_expr(
             ))
         }
         BuiltInWindowFunction::Lead => {
-            let arg = Arc::clone(&args[0]);
+            // rewrite NULL expression and the return datatype
+            let (arg, out_data_type) =
+                rewrite_null_expr_and_data_type(args, out_data_type)?;
             let shift_offset = get_scalar_value_from_args(args, 1)?
                 .map(get_signed_integer)
                 .map_or(Ok(None), |v| v.map(Some))?;
             let default_value =
-                get_casted_value(get_scalar_value_from_args(args, 2)?, out_data_type)?;
+                get_casted_value(get_scalar_value_from_args(args, 2)?, &out_data_type)?;
             Arc::new(lead(
                 name,
-                out_data_type.clone(),
+                default_value.data_type().clone(),
                 arg,
                 shift_offset,
                 default_value,

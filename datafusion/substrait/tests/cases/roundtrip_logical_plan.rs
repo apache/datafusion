@@ -69,8 +69,7 @@ impl SerializerRegistry for MockSerializerRegistry {
         &self,
         name: &str,
         bytes: &[u8],
-    ) -> Result<std::sync::Arc<dyn datafusion::logical_expr::UserDefinedLogicalNode>>
-    {
+    ) -> Result<Arc<dyn datafusion::logical_expr::UserDefinedLogicalNode>> {
         if name == "MockUserDefinedLogicalPlan" {
             MockUserDefinedLogicalPlan::deserialize(bytes)
         } else {
@@ -473,12 +472,12 @@ async fn roundtrip_inlist_5() -> Result<()> {
     \n  Subquery:\
     \n    Projection: data2.a\
     \n      Filter: data2.f IN ([Utf8(\"b\"), Utf8(\"c\"), Utf8(\"d\")])\
-    \n        TableScan: data2 projection=[a, b, c, d, e, f]\
+    \n        TableScan: data2\
     \n  TableScan: data projection=[a, f], partial_filters=[data.f = Utf8(\"a\") OR data.f = Utf8(\"b\") OR data.f = Utf8(\"c\") OR data.a IN (<subquery>)]\
     \n    Subquery:\
     \n      Projection: data2.a\
     \n        Filter: data2.f IN ([Utf8(\"b\"), Utf8(\"c\"), Utf8(\"d\")])\
-    \n          TableScan: data2 projection=[a, b, c, d, e, f]",
+    \n          TableScan: data2",
     true).await
 }
 
@@ -662,6 +661,19 @@ async fn simple_intersect() -> Result<()> {
         true
     )
         .await
+}
+
+#[tokio::test]
+async fn aggregate_wo_projection_consume() -> Result<()> {
+    let proto_plan =
+        read_json("tests/testdata/test_plans/aggregate_no_project.substrait.json");
+
+    assert_expected_plan_substrait(
+        proto_plan,
+        "Aggregate: groupBy=[[data.a]], aggr=[[count(data.a) AS countA]]\
+        \n  TableScan: data projection=[a]",
+    )
+    .await
 }
 
 #[tokio::test]
@@ -1123,12 +1135,29 @@ async fn assert_expected_plan(
     Ok(())
 }
 
+async fn assert_expected_plan_substrait(
+    substrait_plan: Plan,
+    expected_plan_str: &str,
+) -> Result<()> {
+    let ctx = create_context().await?;
+
+    let plan = from_substrait_plan(&ctx, &substrait_plan).await?;
+
+    let plan = ctx.state().optimize(&plan)?;
+
+    let planstr = format!("{plan}");
+    assert_eq!(planstr, expected_plan_str);
+
+    Ok(())
+}
+
 async fn assert_substrait_sql(substrait_plan: Plan, sql: &str) -> Result<()> {
     let ctx = create_context().await?;
 
     let expected = ctx.sql(sql).await?.into_optimized_plan()?;
 
     let plan = from_substrait_plan(&ctx, &substrait_plan).await?;
+
     let plan = ctx.state().optimize(&plan)?;
 
     let planstr = format!("{plan}");

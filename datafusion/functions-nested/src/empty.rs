@@ -23,9 +23,12 @@ use arrow_schema::DataType;
 use arrow_schema::DataType::{Boolean, FixedSizeList, LargeList, List};
 use datafusion_common::cast::as_generic_list_array;
 use datafusion_common::{exec_err, plan_err, Result};
-use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::scalar_doc_sections::DOC_SECTION_ARRAY;
+use datafusion_expr::{
+    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+};
 use std::any::Any;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 make_udf_expr_and_func!(
     ArrayEmpty,
@@ -77,6 +80,39 @@ impl ScalarUDFImpl for ArrayEmpty {
     fn aliases(&self) -> &[String] {
         &self.aliases
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_empty_doc())
+    }
+}
+
+static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+
+fn get_empty_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_ARRAY)
+            .with_description(
+                "Returns 1 for an empty array or 0 for a non-empty array.",
+            )
+            .with_syntax_example("empty(array)")
+            .with_sql_example(
+                r#"```sql
+> select empty([1]);
++------------------+
+| empty(List([1])) |
++------------------+
+| 0                |
++------------------+
+```"#,
+            )
+            .with_argument(
+                "array",
+                "Array expression. Can be a constant, column, or function, and any combination of array operators.",
+            )
+            .build()
+            .unwrap()
+    })
 }
 
 /// Array_empty SQL function

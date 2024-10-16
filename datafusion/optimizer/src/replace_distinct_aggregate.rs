@@ -16,8 +16,10 @@
 // under the License.
 
 //! [`ReplaceDistinctWithAggregate`] replaces `DISTINCT ...` with `GROUP BY ...`
+
 use crate::optimizer::{ApplyOrder, ApplyOrder::BottomUp};
 use crate::{OptimizerConfig, OptimizerRule};
+use std::sync::Arc;
 
 use datafusion_common::tree_node::Transformed;
 use datafusion_common::{Column, Result};
@@ -110,7 +112,7 @@ impl OptimizerRule for ReplaceDistinctWithAggregate {
                 let expr_cnt = on_expr.len();
 
                 // Construct the aggregation expression to be used to fetch the selected expressions.
-                let first_value_udaf: std::sync::Arc<datafusion_expr::AggregateUDF> =
+                let first_value_udaf: Arc<datafusion_expr::AggregateUDF> =
                     config.function_registry().unwrap().udaf("first_value")?;
                 let aggr_expr = select_expr.into_iter().map(|e| {
                     if let Some(order_by) = &sort_expr {

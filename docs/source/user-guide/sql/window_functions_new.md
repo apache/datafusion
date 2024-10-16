@@ -157,7 +157,34 @@ All [aggregate functions](aggregate_functions.md) can be used as window function
 
 ## Ranking Functions
 
+- [dense_rank](#dense_rank)
+- [percent_rank](#percent_rank)
+- [rank](#rank)
 - [row_number](#row_number)
+
+### `dense_rank`
+
+Returns the rank of the current row without gaps. This function ranks rows in a dense manner, meaning consecutive ranks are assigned even for identical values.
+
+```
+dense_rank()
+```
+
+### `percent_rank`
+
+Returns the percentage rank of the current row within its partition. The value ranges from 0 to 1 and is computed as `(rank - 1) / (total_rows - 1)`.
+
+```
+percent_rank()
+```
+
+### `rank`
+
+Returns the rank of the current row within its partition, allowing gaps between ranks. This function provides a ranking similar to `row_number`, but skips ranks for identical values.
+
+```
+rank()
+```
 
 ### `row_number`
 

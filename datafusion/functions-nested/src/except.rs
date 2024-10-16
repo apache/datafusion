@@ -24,10 +24,13 @@ use arrow_array::{Array, ArrayRef, GenericListArray, OffsetSizeTrait};
 use arrow_buffer::OffsetBuffer;
 use arrow_schema::{DataType, FieldRef};
 use datafusion_common::{exec_err, internal_err, Result};
-use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::scalar_doc_sections::DOC_SECTION_ARRAY;
+use datafusion_expr::{
+    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+};
 use std::any::Any;
 use std::collections::HashSet;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 make_udf_expr_and_func!(
     ArrayExcept,
@@ -78,6 +81,49 @@ impl ScalarUDFImpl for ArrayExcept {
     fn aliases(&self) -> &[String] {
         &self.aliases
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_array_except_doc())
+    }
+}
+
+static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+
+fn get_array_except_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_ARRAY)
+            .with_description(
+                "Returns an array of the elements that appear in the first array but not in the second.",
+            )
+            .with_syntax_example("array_except(array1, array2)")
+            .with_sql_example(
+                r#"```sql
+> select array_except([1, 2, 3, 4], [5, 6, 3, 4]);
++----------------------------------------------------+
+| array_except([1, 2, 3, 4], [5, 6, 3, 4]);           |
++----------------------------------------------------+
+| [1, 2]                                              |
++----------------------------------------------------+
+> select array_except([1, 2, 3, 4], [3, 4, 5, 6]);
++----------------------------------------------------+
+| array_except([1, 2, 3, 4], [3, 4, 5, 6]);           |
++----------------------------------------------------+
+| [1, 2]                                              |
++----------------------------------------------------+
+```"#,
+            )
+            .with_argument(
+                "array1",
+                "Array expression. Can be a constant, column, or function, and any combination of array operators.",
+            )
+            .with_argument(
+                "array2",
+                "Array expression. Can be a constant, column, or function, and any combination of array operators.",
+            )
+            .build()
+            .unwrap()
+    })
 }
 
 /// Array_except SQL function

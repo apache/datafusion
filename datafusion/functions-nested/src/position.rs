@@ -19,9 +19,12 @@
 
 use arrow_schema::DataType::{LargeList, List, UInt64};
 use arrow_schema::{DataType, Field};
-use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::scalar_doc_sections::DOC_SECTION_ARRAY;
+use datafusion_expr::{
+    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+};
 use std::any::Any;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use arrow_array::types::UInt64Type;
 use arrow_array::{
@@ -86,6 +89,53 @@ impl ScalarUDFImpl for ArrayPosition {
     fn aliases(&self) -> &[String] {
         &self.aliases
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_array_position_doc())
+    }
+}
+
+static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+
+fn get_array_position_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_ARRAY)
+            .with_description(
+                "Returns the position of the first occurrence of the specified element in the array.",
+            )
+            .with_syntax_example("array_position(array, element)\narray_position(array, element, index)")
+            .with_sql_example(
+                r#"```sql
+> select array_position([1, 2, 2, 3, 1, 4], 2);
++----------------------------------------------+
+| array_position(List([1,2,2,3,1,4]),Int64(2)) |
++----------------------------------------------+
+| 2                                            |
++----------------------------------------------+
+> select array_position([1, 2, 2, 3, 1, 4], 2, 3);
++----------------------------------------------------+
+| array_position(List([1,2,2,3,1,4]),Int64(2), Int64(3)) |
++----------------------------------------------------+
+| 3                                                  |
++----------------------------------------------------+
+```"#,
+            )
+            .with_argument(
+                "array",
+                "Array expression. Can be a constant, column, or function, and any combination of array operators.",
+            )
+            .with_argument(
+                "element",
+                "Element to search for position in the array.",
+            )
+            .with_argument(
+                "index",
+                "Index at which to start searching.",
+            )
+            .build()
+            .unwrap()
+    })
 }
 
 /// Array_position SQL function
@@ -210,6 +260,41 @@ impl ScalarUDFImpl for ArrayPositions {
     fn aliases(&self) -> &[String] {
         &self.aliases
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_array_positions_doc())
+    }
+}
+
+fn get_array_positions_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_ARRAY)
+            .with_description(
+                "Searches for an element in the array, returns all occurrences.",
+            )
+            .with_syntax_example("array_positions(array, element)")
+            .with_sql_example(
+                r#"```sql
+> select array_positions([1, 2, 2, 3, 1, 4], 2);
++-----------------------------------------------+
+| array_positions(List([1,2,2,3,1,4]),Int64(2)) |
++-----------------------------------------------+
+| [2, 3]                                        |
++-----------------------------------------------+
+```"#,
+            )
+            .with_argument(
+                "array",
+                "Array expression. Can be a constant, column, or function, and any combination of array operators.",
+            )
+            .with_argument(
+                "element",
+                "Element to search for positions in the array.",
+            )
+            .build()
+            .unwrap()
+    })
 }
 
 /// Array_positions SQL function

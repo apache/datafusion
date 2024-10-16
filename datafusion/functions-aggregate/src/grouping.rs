@@ -63,7 +63,7 @@ impl Grouping {
     /// Create a new GROUPING aggregate function.
     pub fn new() -> Self {
         Self {
-            signature: Signature::any(1, Volatility::Immutable),
+            signature: Signature::variadic_any(Volatility::Immutable),
         }
     }
 }

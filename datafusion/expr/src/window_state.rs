@@ -48,7 +48,7 @@ pub struct WindowAggState {
     /// Keeps track of how many rows should be generated to be in sync with input record_batch.
     // (For each row in the input record batch we need to generate a window result).
     pub n_row_result_missing: usize,
-    /// flag indicating whether we have received all data for this partition
+    /// Flag indicating whether we have received all data for this partition
     pub is_end: bool,
 }
 

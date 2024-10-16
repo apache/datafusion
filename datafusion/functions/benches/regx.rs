@@ -83,12 +83,8 @@ fn criterion_benchmark(c: &mut Criterion) {
 
         b.iter(|| {
             black_box(
-                regexp_like::<i32>(&[
-                    Arc::clone(&data),
-                    Arc::clone(&regex),
-                    Arc::clone(&flags),
-                ])
-                .expect("regexp_like should work on valid values"),
+                regexp_like(&[Arc::clone(&data), Arc::clone(&regex), Arc::clone(&flags)])
+                    .expect("regexp_like should work on valid values"),
             )
         })
     });

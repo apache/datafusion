@@ -64,7 +64,7 @@ impl CaseBuilder {
     }
 
     fn build(&self) -> Result<Expr> {
-        // collect all "then" expressions
+        // Collect all "then" expressions
         let mut then_expr = self.then_expr.clone();
         if let Some(e) = &self.else_expr {
             then_expr.push(e.as_ref().to_owned());
@@ -79,7 +79,7 @@ impl CaseBuilder {
             .collect::<Result<Vec<_>>>()?;
 
         if then_types.contains(&DataType::Null) {
-            // cannot verify types until execution type
+            // Cannot verify types until execution type
         } else {
             let unique_types: HashSet<&DataType> = then_types.iter().collect();
             if unique_types.len() != 1 {

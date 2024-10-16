@@ -16,7 +16,7 @@
 // under the License.
 
 use std::any::Any;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use crate::utils::make_scalar_function;
 
@@ -27,9 +27,12 @@ use arrow::datatypes::DataType::{Float32, Float64, Int32};
 use datafusion_common::{
     exec_datafusion_err, exec_err, DataFusionError, Result, ScalarValue,
 };
+use datafusion_expr::scalar_doc_sections::DOC_SECTION_MATH;
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::TypeSignature::Exact;
-use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{
+    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+};
 
 #[derive(Debug)]
 pub struct RoundFunc {
@@ -97,6 +100,28 @@ impl ScalarUDFImpl for RoundFunc {
             Ok(SortProperties::Unordered)
         }
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_round_doc())
+    }
+}
+
+static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+
+fn get_round_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_MATH)
+            .with_description("Rounds a number to the nearest integer.")
+            .with_syntax_example("round(numeric_expression[, decimal_places])")
+            .with_standard_argument("numeric_expression", "Numeric")
+            .with_argument(
+                "decimal_places",
+                "Optional. The number of decimal places to round to. Defaults to 0.",
+            )
+            .build()
+            .unwrap()
+    })
 }
 
 /// Round SQL function

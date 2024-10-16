@@ -19,7 +19,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use super::{get_imdb_table_schema, get_query_sql, IMDB_TABLES};
-use crate::{BenchmarkRun, CommonOpt};
+use crate::util::{BenchmarkRun, CommonOpt};
 
 use arrow::record_batch::RecordBatch;
 use arrow::util::pretty::{self, pretty_format_batches};
@@ -489,6 +489,7 @@ mod tests {
 
     use super::*;
 
+    use crate::util::CommonOpt;
     use datafusion::common::exec_err;
     use datafusion::error::Result;
     use datafusion_proto::bytes::{

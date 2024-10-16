@@ -37,28 +37,28 @@ impl fmt::Display for BuiltInWindowFunction {
 
 /// A [window function] built in to DataFusion
 ///
-/// [window function]: https://en.wikipedia.org/wiki/Window_function_(SQL)
+/// [Window Function]: https://en.wikipedia.org/wiki/Window_function_(SQL)
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash, EnumIter)]
 pub enum BuiltInWindowFunction {
-    /// relative rank of the current row: (number of rows preceding or peer with current row) / (total rows)
+    /// Relative rank of the current row: (number of rows preceding or peer with current row) / (total rows)
     CumeDist,
-    /// integer ranging from 1 to the argument value, dividing the partition as equally as possible
+    /// Integer ranging from 1 to the argument value, dividing the partition as equally as possible
     Ntile,
-    /// returns value evaluated at the row that is offset rows before the current row within the partition;
-    /// if there is no such row, instead return default (which must be of the same type as value).
+    /// Returns value evaluated at the row that is offset rows before the current row within the partition;
+    /// If there is no such row, instead return default (which must be of the same type as value).
     /// Both offset and default are evaluated with respect to the current row.
     /// If omitted, offset defaults to 1 and default to null
     Lag,
-    /// returns value evaluated at the row that is offset rows after the current row within the partition;
-    /// if there is no such row, instead return default (which must be of the same type as value).
+    /// Returns value evaluated at the row that is offset rows after the current row within the partition;
+    /// If there is no such row, instead return default (which must be of the same type as value).
     /// Both offset and default are evaluated with respect to the current row.
     /// If omitted, offset defaults to 1 and default to null
     Lead,
-    /// returns value evaluated at the row that is the first row of the window frame
+    /// Returns value evaluated at the row that is the first row of the window frame
     FirstValue,
-    /// returns value evaluated at the row that is the last row of the window frame
+    /// Returns value evaluated at the row that is the last row of the window frame
     LastValue,
-    /// returns value evaluated at the row that is the nth row of the window frame (counting from 1); null if no such row
+    /// Returns value evaluated at the row that is the nth row of the window frame (counting from 1); returns null if no such row
     NthValue,
 }
 
@@ -99,10 +99,10 @@ impl BuiltInWindowFunction {
         // Note that this function *must* return the same type that the respective physical expression returns
         // or the execution panics.
 
-        // verify that this is a valid set of data types for this function
+        // Verify that this is a valid set of data types for this function
         data_types(input_expr_types, &self.signature())
-            // original errors are all related to wrong function signature
-            // aggregate them for better error message
+            // Original errors are all related to wrong function signature
+            // Aggregate them for better error message
             .map_err(|_| {
                 plan_datafusion_err!(
                     "{}",
@@ -125,9 +125,9 @@ impl BuiltInWindowFunction {
         }
     }
 
-    /// the signatures supported by the built-in window function `fun`.
+    /// The signatures supported by the built-in window function `fun`.
     pub fn signature(&self) -> Signature {
-        // note: the physical expression must accept the type returned by this function or the execution panics.
+        // Note: The physical expression must accept the type returned by this function or the execution panics.
         match self {
             BuiltInWindowFunction::CumeDist => Signature::any(0, Volatility::Immutable),
             BuiltInWindowFunction::Lag | BuiltInWindowFunction::Lead => {

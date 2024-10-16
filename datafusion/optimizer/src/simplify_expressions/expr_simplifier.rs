@@ -1020,7 +1020,9 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 && !info.get_data_type(&left)?.is_floating()
                 && is_one(&right) =>
             {
-                Transformed::yes(lit(0))
+                Transformed::yes(Expr::Literal(ScalarValue::new_zero(
+                    &info.get_data_type(&left)?,
+                )?))
             }
 
             //
@@ -2163,11 +2165,11 @@ mod tests {
 
     #[test]
     fn test_simplify_modulo_by_one_non_null() {
-        let expr = col("c2_non_null") % lit(1);
-        let expected = lit(0);
+        let expr = col("c3_non_null") % lit(1);
+        let expected = lit(0_i64);
         assert_eq!(simplify(expr), expected);
         let expr =
-            col("c2_non_null") % lit(ScalarValue::Decimal128(Some(10000000000), 31, 10));
+            col("c3_non_null") % lit(ScalarValue::Decimal128(Some(10000000000), 31, 10));
         assert_eq!(simplify(expr), expected);
     }
 

@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::strings::StringArrayType;
 use crate::utils::utf8_to_str_type;
 use arrow::array::{
     ArrayRef, GenericStringArray, Int64Array, OffsetSizeTrait, StringViewArray,
@@ -29,8 +30,6 @@ use datafusion_expr::{ColumnarValue, Documentation, TypeSignature, Volatility};
 use datafusion_expr::{ScalarUDFImpl, Signature};
 use std::any::Any;
 use std::sync::{Arc, OnceLock};
-
-use super::common::StringArrayType;
 
 #[derive(Debug)]
 pub struct SplitPartFunc {

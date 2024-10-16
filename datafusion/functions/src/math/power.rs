@@ -24,13 +24,14 @@ use datafusion_common::{
     DataFusionError, Result, ScalarValue,
 };
 use datafusion_expr::expr::ScalarFunction;
+use datafusion_expr::scalar_doc_sections::DOC_SECTION_MATH;
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
-use datafusion_expr::{ColumnarValue, Expr, ScalarUDF, TypeSignature};
+use datafusion_expr::{ColumnarValue, Documentation, Expr, ScalarUDF, TypeSignature};
 
 use arrow::array::{ArrayRef, Float64Array, Int64Array};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use std::any::Any;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use super::log::LogFunc;
 
@@ -164,6 +165,27 @@ impl ScalarUDFImpl for PowerFunc {
             _ => Ok(ExprSimplifyResult::Original(vec![base, exponent])),
         }
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_power_doc())
+    }
+}
+
+static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+
+fn get_power_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_MATH)
+            .with_description(
+                "Returns a base expression raised to the power of an exponent.",
+            )
+            .with_syntax_example("power(base, exponent)")
+            .with_standard_argument("base", "Numeric")
+            .with_standard_argument("exponent", "Exponent numeric")
+            .build()
+            .unwrap()
+    })
 }
 
 /// Return true if this function call is a call to `Log`

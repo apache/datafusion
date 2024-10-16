@@ -18,7 +18,7 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use arrow::datatypes::DataType::Timestamp;
+use arrow::datatypes::DataType::*;
 use arrow::datatypes::TimeUnit::{Microsecond, Millisecond, Nanosecond, Second};
 use arrow::datatypes::{
     ArrowTimestampType, DataType, TimeUnit, TimestampMicrosecondType,
@@ -162,16 +162,16 @@ impl ScalarUDFImpl for ToTimestampFunc {
         }
 
         match args[0].data_type() {
-            DataType::Int32 | DataType::Int64 => args[0]
+            Int32 | Int64 => args[0]
                 .cast_to(&Timestamp(Second, None), None)?
                 .cast_to(&Timestamp(Nanosecond, None), None),
-            DataType::Null | DataType::Float64 | Timestamp(_, None) => {
+            Null | Float64 | Timestamp(_, None) => {
                 args[0].cast_to(&Timestamp(Nanosecond, None), None)
             }
-            DataType::Timestamp(_, Some(tz)) => {
+            Timestamp(_, Some(tz)) => {
                 args[0].cast_to(&Timestamp(Nanosecond, Some(tz)), None)
             }
-            DataType::Utf8 => {
+            Utf8View | LargeUtf8 | Utf8 => {
                 to_timestamp_impl::<TimestampNanosecondType>(args, "to_timestamp")
             }
             other => {
@@ -215,13 +215,11 @@ impl ScalarUDFImpl for ToTimestampSecondsFunc {
         }
 
         match args[0].data_type() {
-            DataType::Null | DataType::Int32 | DataType::Int64 | Timestamp(_, None) => {
+            Null | Int32 | Int64 | Timestamp(_, None) => {
                 args[0].cast_to(&Timestamp(Second, None), None)
             }
-            DataType::Timestamp(_, Some(tz)) => {
-                args[0].cast_to(&Timestamp(Second, Some(tz)), None)
-            }
-            DataType::Utf8 => {
+            Timestamp(_, Some(tz)) => args[0].cast_to(&Timestamp(Second, Some(tz)), None),
+            Utf8View | LargeUtf8 | Utf8 => {
                 to_timestamp_impl::<TimestampSecondType>(args, "to_timestamp_seconds")
             }
             other => {
@@ -265,13 +263,13 @@ impl ScalarUDFImpl for ToTimestampMillisFunc {
         }
 
         match args[0].data_type() {
-            DataType::Null | DataType::Int32 | DataType::Int64 | Timestamp(_, None) => {
+            Null | Int32 | Int64 | Timestamp(_, None) => {
                 args[0].cast_to(&Timestamp(Millisecond, None), None)
             }
-            DataType::Timestamp(_, Some(tz)) => {
+            Timestamp(_, Some(tz)) => {
                 args[0].cast_to(&Timestamp(Millisecond, Some(tz)), None)
             }
-            DataType::Utf8 => {
+            Utf8View | LargeUtf8 | Utf8 => {
                 to_timestamp_impl::<TimestampMillisecondType>(args, "to_timestamp_millis")
             }
             other => {
@@ -315,13 +313,13 @@ impl ScalarUDFImpl for ToTimestampMicrosFunc {
         }
 
         match args[0].data_type() {
-            DataType::Null | DataType::Int32 | DataType::Int64 | Timestamp(_, None) => {
+            Null | Int32 | Int64 | Timestamp(_, None) => {
                 args[0].cast_to(&Timestamp(Microsecond, None), None)
             }
-            DataType::Timestamp(_, Some(tz)) => {
+            Timestamp(_, Some(tz)) => {
                 args[0].cast_to(&Timestamp(Microsecond, Some(tz)), None)
             }
-            DataType::Utf8 => {
+            Utf8View | LargeUtf8 | Utf8 => {
                 to_timestamp_impl::<TimestampMicrosecondType>(args, "to_timestamp_micros")
             }
             other => {
@@ -365,13 +363,13 @@ impl ScalarUDFImpl for ToTimestampNanosFunc {
         }
 
         match args[0].data_type() {
-            DataType::Null | DataType::Int32 | DataType::Int64 | Timestamp(_, None) => {
+            Null | Int32 | Int64 | Timestamp(_, None) => {
                 args[0].cast_to(&Timestamp(Nanosecond, None), None)
             }
-            DataType::Timestamp(_, Some(tz)) => {
+            Timestamp(_, Some(tz)) => {
                 args[0].cast_to(&Timestamp(Nanosecond, Some(tz)), None)
             }
-            DataType::Utf8 => {
+            Utf8View | LargeUtf8 | Utf8 => {
                 to_timestamp_impl::<TimestampNanosecondType>(args, "to_timestamp_nanos")
             }
             other => {

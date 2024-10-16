@@ -1686,12 +1686,24 @@ mod tests {
 
         let metrics = merged_aggregate.metrics().unwrap();
         let output_rows = metrics.output_rows().unwrap();
+        let spill_count = metrics.spill_count().unwrap();
+        let spilled_bytes = metrics.spilled_bytes().unwrap();
+        let spilled_rows = metrics.spilled_rows().unwrap();
+
         if spill {
             // When spilling, the output rows metrics become partial output size + final output size
             // This is because final aggregation starts while partial aggregation is still emitting
             assert_eq!(8, output_rows);
+
+            assert!(spill_count > 0);
+            assert!(spilled_bytes > 0);
+            assert!(spilled_rows > 0);
         } else {
             assert_eq!(3, output_rows);
+
+            assert_eq!(0, spill_count);
+            assert_eq!(0, spilled_bytes);
+            assert_eq!(0, spilled_rows);
         }
 
         Ok(())
