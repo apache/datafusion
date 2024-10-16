@@ -108,28 +108,29 @@ order by t1.x nulls first, t1.y nulls first, t1.z, t2.x, t2.y, t2.z;
 statement ok
 create table tt2 (x int);
 
-statement ok
-insert into tt2 select * from unnest(generate_series(9));
-
-query II
-select t1.x, t1.y
-from (
-    select (case when x < 100 then null else 99 end) x, (case when x < 100 then 99 else 99 end) y
-    from tt2
-) t1 left join tt2 t2
-on t1.x < t2.x and t1.y < t2.x
-order by t1.x nulls first, t1.y nulls first;
-----
-NULL 99
-NULL 99
-NULL 99
-NULL 99
-NULL 99
-NULL 99
-NULL 99
-NULL 99
-NULL 99
-NULL 99
+# left iejoin not implement yet.
+# statement ok
+# insert into tt2 select * from unnest(generate_series(9));
+# 
+# query II
+# select t1.x, t1.y
+# from (
+#     select (case when x < 100 then null else 99 end) x, (case when x < 100 then 99 else 99 end) y
+#     from tt2
+# ) t1 left join tt2 t2
+# on t1.x < t2.x and t1.y < t2.x
+# order by t1.x nulls first, t1.y nulls first;
+# ----
+# NULL 99
+# NULL 99
+# NULL 99
+# NULL 99
+# NULL 99
+# NULL 99
+# NULL 99
+# NULL 99
+# NULL 99
+# NULL 99
 
 # Test all nulls table
 statement ok
@@ -195,11 +196,11 @@ SELECT
     i + 1 AS end
 FROM unnest(generate_series(10001, 20001)) tbl(i);
 
-# query II
-# SELECT lhs.begin, rhs.begin
-# FROM lhs, rhs
-# WHERE lhs.begin < rhs.end AND rhs.begin < lhs.end;
-# ----
-# 10001 10001
+query II
+SELECT lhs.begin, rhs.begin
+FROM lhs, rhs
+WHERE lhs.begin < rhs.end AND rhs.begin < lhs.end;
+----
+10001 10001
 
 # TODO: use metric to check no overlap blocks pair be pruned
