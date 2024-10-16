@@ -42,9 +42,7 @@ use datafusion_common::{
     ScalarValue,
 };
 use datafusion_physical_expr::utils::{collect_columns, Guarantee, LiteralGuarantee};
-use datafusion_physical_expr::{
-    expressions as phys_expr, PhysicalExprRef,
-};
+use datafusion_physical_expr::{expressions as phys_expr, PhysicalExprRef};
 
 use log::trace;
 
