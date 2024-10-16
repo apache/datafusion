@@ -262,6 +262,24 @@ fn roundtrip_statement_with_dialect() -> Result<()> {
     }
     let tests: Vec<TestStatementWithDialect> = vec![
         TestStatementWithDialect {
+            sql: "select min(ta.j1_id) as j1_min from j1 ta order by min(ta.j1_id) limit 10;",
+            expected:
+                // top projection sort gets derived into a subquery
+                // for MySQL, this subquery needs an alias
+                "SELECT `j1_min` FROM (SELECT min(`ta`.`j1_id`) AS `j1_min`, min(`ta`.`j1_id`) FROM `j1` AS `ta` ORDER BY min(`ta`.`j1_id`) ASC) AS `derived_sort` LIMIT 10",
+            parser_dialect: Box::new(MySqlDialect {}),
+            unparser_dialect: Box::new(UnparserMySqlDialect {}),
+        },
+        TestStatementWithDialect {
+            sql: "select min(ta.j1_id) as j1_min from j1 ta order by min(ta.j1_id) limit 10;",
+            expected:
+                // top projection sort still gets derived into a subquery in default dialect
+                // except for the default dialect, the subquery is left non-aliased
+                "SELECT j1_min FROM (SELECT min(ta.j1_id) AS j1_min, min(ta.j1_id) FROM j1 AS ta ORDER BY min(ta.j1_id) ASC NULLS LAST) LIMIT 10",
+            parser_dialect: Box::new(GenericDialect {}),
+            unparser_dialect: Box::new(UnparserDefaultDialect {}),
+        },
+        TestStatementWithDialect {
             sql: "select ta.j1_id from j1 ta order by j1_id limit 10;",
             expected:
                 "SELECT `ta`.`j1_id` FROM `j1` AS `ta` ORDER BY `ta`.`j1_id` ASC LIMIT 10",

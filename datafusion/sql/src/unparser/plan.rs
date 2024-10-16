@@ -222,9 +222,14 @@ impl Unparser<'_> {
         Ok(())
     }
 
-    fn derive(&self, plan: &LogicalPlan, relation: &mut RelationBuilder) -> Result<()> {
+    fn derive(
+        &self,
+        plan: &LogicalPlan,
+        relation: &mut RelationBuilder,
+        alias: Option<ast::TableAlias>,
+    ) -> Result<()> {
         let mut derived_builder = DerivedRelationBuilder::default();
-        derived_builder.lateral(false).alias(None).subquery({
+        derived_builder.lateral(false).alias(alias).subquery({
             let inner_statement = self.plan_to_sql(plan)?;
             if let ast::Statement::Query(inner_query) = inner_statement {
                 inner_query
@@ -237,6 +242,22 @@ impl Unparser<'_> {
         relation.derived(derived_builder);
 
         Ok(())
+    }
+
+    fn derive_with_dialect_alias(
+        &self,
+        alias: &str,
+        plan: &LogicalPlan,
+        relation: &mut RelationBuilder,
+    ) -> Result<()> {
+        match self.dialect.requires_derived_table_alias() {
+            false => self.derive(plan, relation, None),
+            true => self.derive(
+                plan,
+                relation,
+                Some(self.new_table_alias(alias.to_string(), vec![])),
+            ),
+        }
     }
 
     fn select_to_sql_recursively(
@@ -284,7 +305,11 @@ impl Unparser<'_> {
 
                 // Projection can be top-level plan for derived table
                 if select.already_projected() {
-                    return self.derive(plan, relation);
+                    return self.derive_with_dialect_alias(
+                        "derived_projection",
+                        plan,
+                        relation,
+                    );
                 }
                 self.reconstruct_select_statement(plan, p, select)?;
                 self.select_to_sql_recursively(p.input.as_ref(), query, select, relation)
@@ -311,8 +336,13 @@ impl Unparser<'_> {
             LogicalPlan::Limit(limit) => {
                 // Limit can be top-level plan for derived table
                 if select.already_projected() {
-                    return self.derive(plan, relation);
+                    return self.derive_with_dialect_alias(
+                        "derived_limit",
+                        plan,
+                        relation,
+                    );
                 }
+
                 if let Some(fetch) = limit.fetch {
                     let Some(query) = query.as_mut() else {
                         return internal_err!(
@@ -350,7 +380,11 @@ impl Unparser<'_> {
             LogicalPlan::Sort(sort) => {
                 // Sort can be top-level plan for derived table
                 if select.already_projected() {
-                    return self.derive(plan, relation);
+                    return self.derive_with_dialect_alias(
+                        "derived_sort",
+                        plan,
+                        relation,
+                    );
                 }
                 let Some(query_ref) = query else {
                     return internal_err!(
@@ -396,7 +430,11 @@ impl Unparser<'_> {
             LogicalPlan::Distinct(distinct) => {
                 // Distinct can be top-level plan for derived table
                 if select.already_projected() {
-                    return self.derive(plan, relation);
+                    return self.derive_with_dialect_alias(
+                        "derived_distinct",
+                        plan,
+                        relation,
+                    );
                 }
                 let (select_distinct, input) = match distinct {
                     Distinct::All(input) => (ast::Distinct::Distinct, input.as_ref()),
@@ -559,7 +597,11 @@ impl Unparser<'_> {
 
                 // Covers cases where the UNION is a subquery and the projection is at the top level
                 if select.already_projected() {
-                    return self.derive(plan, relation);
+                    return self.derive_with_dialect_alias(
+                        "derived_union",
+                        plan,
+                        relation,
+                    );
                 }
 
                 let input_exprs: Vec<SetExpr> = union
