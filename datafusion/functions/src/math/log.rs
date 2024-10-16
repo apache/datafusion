@@ -22,8 +22,8 @@ use std::sync::{Arc, OnceLock};
 
 use super::power::PowerFunc;
 
-use arrow::array::{ArrayRef, Float32Array, Float64Array};
-use arrow::datatypes::DataType;
+use arrow::array::{ArrayRef, AsArray, Float32Array, Float64Array};
+use arrow::datatypes::{DataType, Float32Type, Float64Type};
 use datafusion_common::{
     exec_err, internal_err, plan_datafusion_err, plan_err, DataFusionError, Result,
     ScalarValue,
@@ -139,11 +139,11 @@ impl ScalarUDFImpl for LogFunc {
         // note in f64::log params order is different than in sql. e.g in sql log(base, x) == f64::log(x, base)
         let arr: ArrayRef = match args[0].data_type() {
             DataType::Float64 => match base {
-                ColumnarValue::Scalar(ScalarValue::Float32(Some(base))) => {
-                    Arc::new(make_function_scalar_inputs!(x, "x", Float64Array, {
-                        |value: f64| f64::log(value, base as f64)
-                    }))
-                }
+                ColumnarValue::Scalar(ScalarValue::Float64(Some(base))) => Arc::new(
+                    args[0]
+                        .as_primitive::<Float64Type>()
+                        .unary::<_, Float64Type>(|value: f64| f64::log(value, base)),
+                ),
                 ColumnarValue::Array(base) => Arc::new(make_function_inputs2!(
                     x,
                     base,
@@ -158,11 +158,11 @@ impl ScalarUDFImpl for LogFunc {
             },
 
             DataType::Float32 => match base {
-                ColumnarValue::Scalar(ScalarValue::Float32(Some(base))) => {
-                    Arc::new(make_function_scalar_inputs!(x, "x", Float32Array, {
-                        |value: f32| f32::log(value, base)
-                    }))
-                }
+                ColumnarValue::Scalar(ScalarValue::Float32(Some(base))) => Arc::new(
+                    args[0]
+                        .as_primitive::<Float32Type>()
+                        .unary::<_, Float32Type>(|value: f32| f32::log(value, base)),
+                ),
                 ColumnarValue::Array(base) => Arc::new(make_function_inputs2!(
                     x,
                     base,
