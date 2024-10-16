@@ -38,6 +38,31 @@ ORDER BY 1, 2
 s1	s3
 s4	s3
 
+query TT
+EXPLAIN
+SELECT s1.rid, s2.rid
+FROM west s1, west s2
+WHERE s1.time > s2.time AND s1.cost < s2.cost
+ORDER BY 1, 2
+----
+logical_plan
+01)Sort: s1.rid ASC NULLS LAST, s2.rid ASC NULLS LAST
+02)--Projection: s1.rid, s2.rid
+03)----Inner Join:  Filter: s2.time < s1.time AND s2.cost > s1.cost
+04)------SubqueryAlias: s1
+05)--------TableScan: west projection=[rid, time, cost]
+06)------SubqueryAlias: s2
+07)--------TableScan: west projection=[rid, time, cost]
+physical_plan
+01)SortPreservingMergeExec: [rid@0 ASC NULLS LAST,rid@1 ASC NULLS LAST]
+02)--SortExec: expr=[rid@0 ASC NULLS LAST,rid@1 ASC NULLS LAST], preserve_partitioning=[true]
+03)----ProjectionExec: expr=[rid@0 as rid, rid@3 as rid]
+04)------IEJoinExec: mode=Bounded, join_type=Inner, inequality_conditions=[(time@0 > time@2), (cost@1 < cost@3)]
+05)--------SortExec: expr=[time@1 DESC NULLS LAST], preserve_partitioning=[false]
+06)----------MemoryExec: partitions=1, partition_sizes=[1]
+07)--------SortExec: expr=[time@1 DESC NULLS LAST], preserve_partitioning=[false]
+08)----------MemoryExec: partitions=1, partition_sizes=[1]
+
 # Qt
 query TT
 SELECT east.rid, west.rid
@@ -133,5 +158,48 @@ SELECT *
 FROM all_null AS a, test AS b 
 WHERE (a.x BETWEEN b.x AND b.x);
 ----
+
+statement ok
+DROP TABLE IF EXISTS lhs;
+
+statement ok
+DROP TABLE IF EXISTS rhs;
+
+statement ok
+CREATE TABLE lhs (
+    id INT,
+    begin INT,
+    end INT
+);
+
+statement ok
+INSERT INTO lhs (id, begin, end)
+SELECT
+    i AS id,
+    i AS begin,
+    i + 1 AS end
+FROM unnest(generate_series(1, 10001)) tbl(i);
+
+statement ok
+CREATE TABLE rhs (
+    id INT,
+    begin INT,
+    end INT
+);
+
+statement ok
+INSERT INTO rhs (id, begin, end)
+SELECT
+    i - 10000 AS id,
+    i AS begin,
+    i + 1 AS end
+FROM unnest(generate_series(10001, 20001)) tbl(i);
+
+# query II
+# SELECT lhs.begin, rhs.begin
+# FROM lhs, rhs
+# WHERE lhs.begin < rhs.end AND rhs.begin < lhs.end;
+# ----
+# 10001 10001
 
 # TODO: use metric to check no overlap blocks pair be pruned

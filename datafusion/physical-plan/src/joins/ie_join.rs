@@ -76,6 +76,7 @@ use parking_lot::Mutex;
 ///
 /// To get the final result, we need to get all the pairs (i, j) in l2 such that i < j and p\[i\] < p\[j\] and e_i is from right table and e_j is from left table. We can do this by the following steps:
 /// 1. Traverse l2 from left to right, at offset j, we can maintain BtreeSet or bitmap to record all the p\[i\] that i < j, then find all the pairs (i, j) in l2 such that p\[i\] < p\[j\].
+/// See more detailed example in `compute_permutation` and `build_join_indices` function.
 ///
 /// To parallel the above algorithm, we can sort t1 and t2 by time (condition 1) firstly, and repartition the data into N partitions, then join t1\[i\] and t2\[j\] respectively. And if the minimum time of t1\[i\] is greater than the maximum time of t2\[j\], we can skip the join of t1\[i\] and t2\[j\] because there is no join result between them according to condition 1.
 #[derive(Debug)]
@@ -790,7 +791,6 @@ impl IEJoinStream {
         );
         l1.sort_by_columns()?;
         // ignore the null values of the first condition
-        // TODO: test all null result.
         let valid = (l1.arrays()[0].len() - l1.arrays()[0].null_count()) as i64;
         let l1 = l1.slice(0..valid as usize);
 
@@ -850,8 +850,19 @@ impl IEJoinStream {
     ) -> Result<(UInt64Array, UInt64Array)> {
         let mut left_builder = UInt64Builder::new();
         let mut right_builder = UInt64Builder::new();
+        // left_order\[i\] = l means there are l elements from left table in l1\[0..=i\], also means element i is the l-th smallest element in left recordbatch.
+        let mut left_order = UInt64Array::builder(l1_indexes.len());
+        let mut l_pos = 0;
+        for ind in l1_indexes.values().iter() {
+            if *ind < 0 {
+                l_pos += 1;
+            }
+            left_order.append_value(l_pos);
+        }
+        let left_order = left_order.finish();
         // use btree map to maintain all p\[i\], for i in 0..j, map\[s\]=t means range \[s, t\) is valid
         // our target is to find all pair(i, j) that i<j and p\[i\] < p\[j\] and i from left table and j from right table here
+        // range_map use key as end index and value as start index to represent a interval [start, end)
         let mut range_map = BTreeMap::<u64, u64>::new();
         for p in permutation.values().iter() {
             // get the index of original recordbatch
@@ -859,20 +870,23 @@ impl IEJoinStream {
             if l1_index < 0 {
                 // index from left table
                 // insert p in to range_map
-                IEJoinStream::insert_range_map(&mut range_map, *p);
+                IEJoinStream::insert_range_map(&mut range_map, unsafe {
+                    left_order.value_unchecked(*p as usize) as u64
+                });
                 continue;
             }
             // index from right table, remap to 0..m
             let right_index = (l1_index - 1) as u64;
-            for range in range_map.range(0..{ *p }) {
-                let (start, end) = range;
-                let (start, end) = (*start, std::cmp::min(*end, *p));
-                for left_l1_index in start..end {
-                    // get all p\[i\] in range(start, end) and remap it to original recordbatch index in left table
-                    left_builder.append_value(
-                        (-unsafe { l1_indexes.value_unchecked(left_l1_index as usize) }
-                            - 1) as u64,
-                    );
+            // r\[right_index] in right table and l\[0..=rp\] in left table statisfy comparsion requirement of condition1
+            let rp = unsafe { left_order.value_unchecked(*p as usize) as u64 };
+            for range in range_map.iter() {
+                let (end, start) = range;
+                if *start > rp {
+                    break;
+                }
+                let (start, end) = (*start, std::cmp::min(*end, rp + 1));
+                for left_index in start..end {
+                    left_builder.append_value(left_index - 1);
                     // append right index
                     right_builder.append_value(right_index);
                 }
@@ -881,27 +895,45 @@ impl IEJoinStream {
         Ok((left_builder.finish(), right_builder.finish()))
     }
 
+    #[inline]
     fn insert_range_map(range_map: &mut BTreeMap<u64, u64>, p: u64) {
         let mut range = (p, p + 1);
-        // merge it with next consecutive range
-        // for example, if range_map is [(1, 2), (3, 4), (5, 6)], then insert(2) will make it [(1, 2), (2, 4), (5, 6)]
-        if let Some(end) = range_map.get(&(p + 1)) {
-            range = (p, *end);
-            range_map.remove(&(p + 1));
-        }
         let mut need_insert = true;
-        let up_range = range_map.range_mut(0..p);
+        let mut need_remove = false;
+        // merge it with prev consecutive range
+        // for example, if range_map is [(1, 2), (3, 4), (5, 6)], then insert(2) will make it [(1, 3), (3, 4), (5, 6)]
+        let mut iter = range_map.range_mut(p..);
+        let mut interval = iter.next();
+        let mut move_next = false;
+        if let Some(ref interval) = interval {
+            if interval.0 == &p {
+                // merge prev range, update current range.start
+                range = (*interval.1, p + 1);
+                // remove prev range
+                need_remove = true;
+                // move to next range
+                move_next = true;
+            }
+        }
+        if move_next {
+            interval = iter.next();
+        }
         // if previous range is consecutive, merge them
-        // follow the example, [(1, 2), (2, 4), (5, 6)] will be merged into [(1, 4), (5, 6)]
-        if let Some(head) = up_range.last() {
-            if head.1 == &p {
-                *head.1 = range.1;
+        // follow the example, [(1, 3), (3, 4), (5, 6)] will be merged into [(1, 4), (5, 6)]
+        if let Some(ref mut interval) = interval {
+            if *interval.1 == range.1 {
+                // merge into next range, update next range.start
+                *interval.1 = range.0;
+                // already merge into next range, no need to insert current range
                 need_insert = false;
             }
         }
+        if need_remove {
+            range_map.remove(&p);
+        }
         // if this range is not consecutive with previous one, insert it
         if need_insert {
-            range_map.insert(range.0, range.1);
+            range_map.insert(range.1, range.0);
         }
     }
 }
@@ -933,6 +965,23 @@ mod tests {
     use datafusion_expr::Operator;
     use datafusion_physical_expr::expressions::{BinaryExpr, Column, Literal};
     use datafusion_physical_expr::PhysicalExpr;
+
+    use itertools::Itertools;
+
+    #[test]
+    fn test_insert_range_map() {
+        let mut range_map = BTreeMap::new();
+        // shuffle 0..8 and insert it into range_map
+        let values = (0..8).collect::<Vec<_>>();
+        // test for all permutation of 0..8
+        for permutaion in values.iter().permutations(values.len()) {
+            range_map.clear();
+            for v in permutaion.iter() {
+                IEJoinStream::insert_range_map(&mut range_map, **v as u64);
+            }
+            assert_eq!(range_map.len(), 1);
+        }
+    }
 
     fn build_table(
         a: (&str, &Vec<Option<i32>>),
