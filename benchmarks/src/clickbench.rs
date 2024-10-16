@@ -18,6 +18,7 @@
 use std::path::Path;
 use std::path::PathBuf;
 
+use crate::util::{BenchmarkRun, CommonOpt};
 use datafusion::{
     error::{DataFusionError, Result},
     prelude::SessionContext,
@@ -25,8 +26,6 @@ use datafusion::{
 use datafusion_common::exec_datafusion_err;
 use datafusion_common::instant::Instant;
 use structopt::StructOpt;
-
-use crate::{BenchmarkRun, CommonOpt};
 
 /// Run the clickbench benchmark
 ///
