@@ -2191,6 +2191,14 @@ create table ts_utf8_data(ts varchar(100), format varchar(100)) as values
   ('1926632005', '%s'),
   ('2000-01-01T01:01:01+07:00', '%+');
 
+statement ok
+create table ts_largeutf8_data as
+select arrow_cast(ts, 'LargeUtf8') as ts, arrow_cast(format, 'LargeUtf8') as format from ts_utf8_data;
+
+statement ok
+create table ts_utf8view_data as
+select arrow_cast(ts, 'Utf8View') as ts, arrow_cast(format, 'Utf8View') as format from ts_utf8_data;
+
 # verify timestamp data using tables with formatting options
 query P
 SELECT to_timestamp(t.ts, t.format) from ts_utf8_data as t
@@ -2201,15 +2209,76 @@ SELECT to_timestamp(t.ts, t.format) from ts_utf8_data as t
 2031-01-19T23:33:25
 1999-12-31T18:01:01
 
-# verify timestamp data using tables with formatting options
-query P
-SELECT to_timestamp(t.ts, '%Y-%m-%d %H/%M/%S%#z', '%+', '%s', '%d-%m-%Y %H:%M:%S%#z') from ts_utf8_data as t
+query PPPPP
+SELECT to_timestamp(t.ts, t.format),
+       to_timestamp_seconds(t.ts, t.format),
+       to_timestamp_millis(t.ts, t.format),
+       to_timestamp_micros(t.ts, t.format),
+       to_timestamp_nanos(t.ts, t.format)
+       from ts_largeutf8_data as t
 ----
-2020-09-08T12:00:00
-2031-01-19T18:33:25
-2020-09-08T12:00:00
-2031-01-19T23:33:25
-1999-12-31T18:01:01
+2020-09-08T12:00:00 2020-09-08T12:00:00 2020-09-08T12:00:00 2020-09-08T12:00:00 2020-09-08T12:00:00
+2031-01-19T18:33:25 2031-01-19T18:33:25 2031-01-19T18:33:25 2031-01-19T18:33:25 2031-01-19T18:33:25
+2020-09-08T12:00:00 2020-09-08T12:00:00 2020-09-08T12:00:00 2020-09-08T12:00:00 2020-09-08T12:00:00
+2031-01-19T23:33:25 2031-01-19T23:33:25 2031-01-19T23:33:25 2031-01-19T23:33:25 2031-01-19T23:33:25
+1999-12-31T18:01:01 1999-12-31T18:01:01 1999-12-31T18:01:01 1999-12-31T18:01:01 1999-12-31T18:01:01
+
+query PPPPP
+SELECT to_timestamp(t.ts, t.format),
+       to_timestamp_seconds(t.ts, t.format),
+       to_timestamp_millis(t.ts, t.format),
+       to_timestamp_micros(t.ts, t.format),
+       to_timestamp_nanos(t.ts, t.format)
+       from ts_utf8view_data as t
+----
+2020-09-08T12:00:00 2020-09-08T12:00:00 2020-09-08T12:00:00 2020-09-08T12:00:00 2020-09-08T12:00:00
+2031-01-19T18:33:25 2031-01-19T18:33:25 2031-01-19T18:33:25 2031-01-19T18:33:25 2031-01-19T18:33:25
+2020-09-08T12:00:00 2020-09-08T12:00:00 2020-09-08T12:00:00 2020-09-08T12:00:00 2020-09-08T12:00:00
+2031-01-19T23:33:25 2031-01-19T23:33:25 2031-01-19T23:33:25 2031-01-19T23:33:25 2031-01-19T23:33:25
+1999-12-31T18:01:01 1999-12-31T18:01:01 1999-12-31T18:01:01 1999-12-31T18:01:01 1999-12-31T18:01:01
+
+# verify timestamp data using tables with formatting options
+query PPPPP
+SELECT to_timestamp(t.ts, '%Y-%m-%d %H/%M/%S%#z', '%+', '%s', '%d-%m-%Y %H:%M:%S%#z'),
+       to_timestamp_seconds(t.ts, '%Y-%m-%d %H/%M/%S%#z', '%+', '%s', '%d-%m-%Y %H:%M:%S%#z'),
+       to_timestamp_millis(t.ts, '%Y-%m-%d %H/%M/%S%#z', '%+', '%s', '%d-%m-%Y %H:%M:%S%#z'),
+       to_timestamp_micros(t.ts, '%Y-%m-%d %H/%M/%S%#z', '%+', '%s', '%d-%m-%Y %H:%M:%S%#z'),
+       to_timestamp_nanos(t.ts, '%Y-%m-%d %H/%M/%S%#z', '%+', '%s', '%d-%m-%Y %H:%M:%S%#z')
+       from ts_utf8_data as t
+----
+2020-09-08T12:00:00 2020-09-08T12:00:00 2020-09-08T12:00:00 2020-09-08T12:00:00 2020-09-08T12:00:00
+2031-01-19T18:33:25 2031-01-19T18:33:25 2031-01-19T18:33:25 2031-01-19T18:33:25 2031-01-19T18:33:25
+2020-09-08T12:00:00 2020-09-08T12:00:00 2020-09-08T12:00:00 2020-09-08T12:00:00 2020-09-08T12:00:00
+2031-01-19T23:33:25 2031-01-19T23:33:25 2031-01-19T23:33:25 2031-01-19T23:33:25 2031-01-19T23:33:25
+1999-12-31T18:01:01 1999-12-31T18:01:01 1999-12-31T18:01:01 1999-12-31T18:01:01 1999-12-31T18:01:01
+
+query PPPPP
+SELECT to_timestamp(t.ts, '%Y-%m-%d %H/%M/%S%#z', '%+', '%s', '%d-%m-%Y %H:%M:%S%#z'),
+       to_timestamp_seconds(t.ts, '%Y-%m-%d %H/%M/%S%#z', '%+', '%s', '%d-%m-%Y %H:%M:%S%#z'),
+       to_timestamp_millis(t.ts, '%Y-%m-%d %H/%M/%S%#z', '%+', '%s', '%d-%m-%Y %H:%M:%S%#z'),
+       to_timestamp_micros(t.ts, '%Y-%m-%d %H/%M/%S%#z', '%+', '%s', '%d-%m-%Y %H:%M:%S%#z'),
+       to_timestamp_nanos(t.ts, '%Y-%m-%d %H/%M/%S%#z', '%+', '%s', '%d-%m-%Y %H:%M:%S%#z')
+       from ts_largeutf8_data as t
+----
+2020-09-08T12:00:00 2020-09-08T12:00:00 2020-09-08T12:00:00 2020-09-08T12:00:00 2020-09-08T12:00:00
+2031-01-19T18:33:25 2031-01-19T18:33:25 2031-01-19T18:33:25 2031-01-19T18:33:25 2031-01-19T18:33:25
+2020-09-08T12:00:00 2020-09-08T12:00:00 2020-09-08T12:00:00 2020-09-08T12:00:00 2020-09-08T12:00:00
+2031-01-19T23:33:25 2031-01-19T23:33:25 2031-01-19T23:33:25 2031-01-19T23:33:25 2031-01-19T23:33:25
+1999-12-31T18:01:01 1999-12-31T18:01:01 1999-12-31T18:01:01 1999-12-31T18:01:01 1999-12-31T18:01:01
+
+query PPPPP
+SELECT to_timestamp(t.ts, '%Y-%m-%d %H/%M/%S%#z', '%+', '%s', '%d-%m-%Y %H:%M:%S%#z'),
+       to_timestamp_seconds(t.ts, '%Y-%m-%d %H/%M/%S%#z', '%+', '%s', '%d-%m-%Y %H:%M:%S%#z'),
+       to_timestamp_millis(t.ts, '%Y-%m-%d %H/%M/%S%#z', '%+', '%s', '%d-%m-%Y %H:%M:%S%#z'),
+       to_timestamp_micros(t.ts, '%Y-%m-%d %H/%M/%S%#z', '%+', '%s', '%d-%m-%Y %H:%M:%S%#z'),
+       to_timestamp_nanos(t.ts, '%Y-%m-%d %H/%M/%S%#z', '%+', '%s', '%d-%m-%Y %H:%M:%S%#z')
+       from ts_utf8view_data as t
+----
+2020-09-08T12:00:00 2020-09-08T12:00:00 2020-09-08T12:00:00 2020-09-08T12:00:00 2020-09-08T12:00:00
+2031-01-19T18:33:25 2031-01-19T18:33:25 2031-01-19T18:33:25 2031-01-19T18:33:25 2031-01-19T18:33:25
+2020-09-08T12:00:00 2020-09-08T12:00:00 2020-09-08T12:00:00 2020-09-08T12:00:00 2020-09-08T12:00:00
+2031-01-19T23:33:25 2031-01-19T23:33:25 2031-01-19T23:33:25 2031-01-19T23:33:25 2031-01-19T23:33:25
+1999-12-31T18:01:01 1999-12-31T18:01:01 1999-12-31T18:01:01 1999-12-31T18:01:01 1999-12-31T18:01:01
 
 # verify timestamp data using tables with formatting options where at least one column cannot be parsed
 query error Error parsing timestamp from '1926632005' using format '%d-%m-%Y %H:%M:%S%#z': input contains invalid characters
@@ -2218,6 +2287,24 @@ SELECT to_timestamp(t.ts, '%Y-%m-%d %H/%M/%S%#z', '%+', '%d-%m-%Y %H:%M:%S%#z') 
 # verify timestamp data using tables with formatting options where one of the formats is invalid
 query P
 SELECT to_timestamp(t.ts, '%Y-%m-%d %H/%M/%S%#z', '%s', '%q', '%d-%m-%Y %H:%M:%S%#z', '%+') from ts_utf8_data as t
+----
+2020-09-08T12:00:00
+2031-01-19T18:33:25
+2020-09-08T12:00:00
+2031-01-19T23:33:25
+1999-12-31T18:01:01
+
+query P
+SELECT to_timestamp(t.ts, '%Y-%m-%d %H/%M/%S%#z', '%s', '%q', '%d-%m-%Y %H:%M:%S%#z', '%+') from ts_largeutf8_data as t
+----
+2020-09-08T12:00:00
+2031-01-19T18:33:25
+2020-09-08T12:00:00
+2031-01-19T23:33:25
+1999-12-31T18:01:01
+
+query P
+SELECT to_timestamp(t.ts, '%Y-%m-%d %H/%M/%S%#z', '%s', '%q', '%d-%m-%Y %H:%M:%S%#z', '%+') from ts_utf8view_data as t
 ----
 2020-09-08T12:00:00
 2031-01-19T18:33:25
