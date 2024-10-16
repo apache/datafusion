@@ -338,6 +338,7 @@ fn find_inner_join(
                 filter: None,
                 schema: join_schema,
                 null_equals_null: false,
+                filter_pushdown_info: None,
             }));
         }
     }
