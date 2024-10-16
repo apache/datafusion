@@ -183,26 +183,22 @@ pub fn swap_hash_join(
         partition_mode,
         hash_join.null_equals_null(),
     )?;
+    // if there is embeded projection in HashJoinExec, no need to add projection again.
     if matches!(
         hash_join.join_type(),
         JoinType::LeftSemi
             | JoinType::RightSemi
             | JoinType::LeftAnti
             | JoinType::RightAnti
-    ) {
+    ) || hash_join.projection.is_some()
+    {
         Ok(Arc::new(new_join))
     } else {
         // TODO avoid adding ProjectionExec again and again, only adding Final Projection
-        let mut reverted_cols =
-            swap_reverting_projection(&left.schema(), &right.schema());
-        if let Some(proj) = hash_join.projection.as_ref() {
-            reverted_cols = proj
-                .iter()
-                .map(|&col_idx| reverted_cols[col_idx].clone())
-                .collect();
-        }
-
-        let proj = ProjectionExec::try_new(reverted_cols, Arc::new(new_join))?;
+        let proj = ProjectionExec::try_new(
+            swap_reverting_projection(&left.schema(), &right.schema()),
+            Arc::new(new_join),
+        )?;
         Ok(Arc::new(proj))
     }
 }
@@ -1311,12 +1307,8 @@ mod tests_statistical {
         )?);
         let swapped = swap_hash_join(&join.clone(), PartitionMode::Partitioned)
             .expect("swap_hash_join must support joins with projections");
-        let swapped_proj = swapped
-            .as_any()
-            .downcast_ref::<ProjectionExec>()
-            .expect("a proj is required to swap columns back to their original order");
-        assert_eq!(swapped_proj.expr().len(), 1);
-        assert_eq!(swapped_proj.expr()[0].1, "small_col".to_string());
+        assert_eq!(swapped.schema().fields.len(), 1);
+        assert_eq!(swapped.schema().fields[0].name(), "small_col");
         Ok(())
     }
 
