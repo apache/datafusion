@@ -1200,8 +1200,10 @@ mod tests {
 
     use arrow::array::{Float64Array, UInt32Array};
     use arrow::compute::{concat_batches, SortOptions};
-    use arrow::datatypes::DataType;
-    use arrow_array::{Float32Array, Int32Array};
+    use arrow::datatypes::{DataType, Int32Type};
+    use arrow_array::{
+        DictionaryArray, Float32Array, Int32Array, StructArray, UInt64Array,
+    };
     use datafusion_common::{
         assert_batches_eq, assert_batches_sorted_eq, internal_err, DataFusionError,
         ScalarValue,
@@ -1214,6 +1216,7 @@ mod tests {
     use datafusion_functions_aggregate::count::count_udaf;
     use datafusion_functions_aggregate::first_last::{first_value_udaf, last_value_udaf};
     use datafusion_functions_aggregate::median::median_udaf;
+    use datafusion_functions_aggregate::sum::sum_udaf;
     use datafusion_physical_expr::expressions::lit;
     use datafusion_physical_expr::PhysicalSortExpr;
 
@@ -2312,6 +2315,127 @@ mod tests {
             "+-----+-----+-------+----------+",
         ];
         assert_batches_sorted_eq!(expected, &output);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_agg_exec_struct_of_dicts() -> Result<()> {
+        let batch = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![
+                Field::new(
+                    "labels".to_string(),
+                    DataType::Struct(
+                        vec![
+                            Field::new_dict(
+                                "a".to_string(),
+                                DataType::Dictionary(
+                                    Box::new(DataType::Int32),
+                                    Box::new(DataType::Utf8),
+                                ),
+                                true,
+                                0,
+                                false,
+                            ),
+                            Field::new_dict(
+                                "b".to_string(),
+                                DataType::Dictionary(
+                                    Box::new(DataType::Int32),
+                                    Box::new(DataType::Utf8),
+                                ),
+                                true,
+                                0,
+                                false,
+                            ),
+                        ]
+                        .into(),
+                    ),
+                    false,
+                ),
+                Field::new("value", DataType::UInt64, false),
+            ])),
+            vec![
+                Arc::new(StructArray::from(vec![
+                    (
+                        Arc::new(Field::new_dict(
+                            "a".to_string(),
+                            DataType::Dictionary(
+                                Box::new(DataType::Int32),
+                                Box::new(DataType::Utf8),
+                            ),
+                            true,
+                            0,
+                            false,
+                        )),
+                        Arc::new(
+                            vec![Some("a"), None, Some("a")]
+                                .into_iter()
+                                .collect::<DictionaryArray<Int32Type>>(),
+                        ) as ArrayRef,
+                    ),
+                    (
+                        Arc::new(Field::new_dict(
+                            "b".to_string(),
+                            DataType::Dictionary(
+                                Box::new(DataType::Int32),
+                                Box::new(DataType::Utf8),
+                            ),
+                            true,
+                            0,
+                            false,
+                        )),
+                        Arc::new(
+                            vec![Some("b"), Some("c"), Some("b")]
+                                .into_iter()
+                                .collect::<DictionaryArray<Int32Type>>(),
+                        ) as ArrayRef,
+                    ),
+                ])),
+                Arc::new(UInt64Array::from(vec![1, 1, 1])),
+            ],
+        )
+        .expect("Failed to create RecordBatch");
+
+        let group_by = PhysicalGroupBy::new_single(vec![(
+            col("labels", &batch.schema())?,
+            "labels".to_string(),
+        )]);
+
+        let aggr_expr = vec![AggregateExprBuilder::new(
+            sum_udaf(),
+            vec![col("value", &batch.schema())?],
+        )
+        .schema(Arc::clone(&batch.schema()))
+        .alias(String::from("SUM(value)"))
+        .build()?];
+
+        let input = Arc::new(MemoryExec::try_new(
+            &[vec![batch.clone()]],
+            Arc::<arrow_schema::Schema>::clone(&batch.schema()),
+            None,
+        )?);
+        let aggregate_exec = Arc::new(AggregateExec::try_new(
+            AggregateMode::FinalPartitioned,
+            group_by,
+            aggr_expr,
+            vec![None],
+            Arc::clone(&input) as Arc<dyn ExecutionPlan>,
+            batch.schema(),
+        )?);
+
+        let session_config = SessionConfig::default();
+        let ctx = TaskContext::default().with_session_config(session_config);
+        let output = collect(aggregate_exec.execute(0, Arc::new(ctx))?).await?;
+
+        let expected = [
+            "+--------------+------------+",
+            "| labels       | SUM(value) |",
+            "+--------------+------------+",
+            "| {a: a, b: b} | 2          |",
+            "| {a: , b: c}  | 1          |",
+            "+--------------+------------+",
+        ];
+        assert_batches_eq!(expected, &output);
 
         Ok(())
     }
