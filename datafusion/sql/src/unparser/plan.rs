@@ -20,7 +20,8 @@ use datafusion_common::{
     internal_err, not_impl_err, Column, DataFusionError, Result, TableReference,
 };
 use datafusion_expr::{
-   expr::Alias, Distinct, Expr, JoinConstraint, JoinType, LogicalPlan, LogicalPlanBuilder, Projection, SortExpr
+    expr::Alias, Distinct, Expr, JoinConstraint, JoinType, LogicalPlan,
+    LogicalPlanBuilder, Projection, SortExpr,
 };
 use sqlparser::ast::{self, Ident, SetExpr};
 use std::sync::Arc;
@@ -36,7 +37,8 @@ use super::{
         subquery_alias_inner_query_and_columns,
     },
     utils::{
-        find_agg_node_within_select, find_window_nodes_within_select, unproject_sort_expr, unproject_window_exprs
+        find_agg_node_within_select, find_window_nodes_within_select,
+        unproject_sort_expr, unproject_window_exprs,
     },
     Unparser,
 };
@@ -219,9 +221,14 @@ impl Unparser<'_> {
         Ok(())
     }
 
-    fn derive(&self, plan: &LogicalPlan, relation: &mut RelationBuilder) -> Result<()> {
+    fn derive(
+        &self,
+        plan: &LogicalPlan,
+        relation: &mut RelationBuilder,
+        alias: Option<ast::TableAlias>,
+    ) -> Result<()> {
         let mut derived_builder = DerivedRelationBuilder::default();
-        derived_builder.lateral(false).alias(None).subquery({
+        derived_builder.lateral(false).alias(alias).subquery({
             let inner_statement = self.plan_to_sql(plan)?;
             if let ast::Statement::Query(inner_query) = inner_statement {
                 inner_query
@@ -234,6 +241,22 @@ impl Unparser<'_> {
         relation.derived(derived_builder);
 
         Ok(())
+    }
+
+    fn derive_with_dialect_alias(
+        &self,
+        alias: &str,
+        plan: &LogicalPlan,
+        relation: &mut RelationBuilder,
+    ) -> Result<()> {
+        match self.dialect.requires_derived_table_alias() {
+            false => self.derive(plan, relation, None),
+            true => self.derive(
+                plan,
+                relation,
+                Some(self.new_table_alias(alias.to_string(), vec![])),
+            ),
+        }
     }
 
     fn select_to_sql_recursively(
@@ -284,7 +307,11 @@ impl Unparser<'_> {
 
                 // Projection can be top-level plan for derived table
                 if select.already_projected() {
-                    return self.derive(plan, relation);
+                    return self.derive_with_dialect_alias(
+                        "derived_projection",
+                        plan,
+                        relation,
+                    );
                 }
                 self.reconstruct_select_statement(plan, p, select)?;
                 self.select_to_sql_recursively(p.input.as_ref(), query, select, relation)
@@ -297,7 +324,6 @@ impl Unparser<'_> {
                     let filter_expr = self.expr_to_sql(&unprojected)?;
                     select.having(Some(filter_expr));
                 } else {
-
                     let filter_expr = self.expr_to_sql(&filter.predicate)?;
                     select.selection(Some(filter_expr));
                 }
@@ -312,8 +338,13 @@ impl Unparser<'_> {
             LogicalPlan::Limit(limit) => {
                 // Limit can be top-level plan for derived table
                 if select.already_projected() {
-                    return self.derive(plan, relation);
+                    return self.derive_with_dialect_alias(
+                        "derived_limit",
+                        plan,
+                        relation,
+                    );
                 }
+
                 if let Some(fetch) = limit.fetch {
                     let Some(query) = query.as_mut() else {
                         return internal_err!(
@@ -336,7 +367,11 @@ impl Unparser<'_> {
             LogicalPlan::Sort(sort) => {
                 // Sort can be top-level plan for derived table
                 if select.already_projected() {
-                    return self.derive(plan, relation);
+                    return self.derive_with_dialect_alias(
+                        "derived_sort",
+                        plan,
+                        relation,
+                    );
                 }
                 let Some(query_ref) = query else {
                     return internal_err!(
@@ -346,9 +381,13 @@ impl Unparser<'_> {
 
                 let agg = find_agg_node_within_select(plan, select.already_projected());
                 // unproject sort expressions
-                let sort_exprs: Vec<SortExpr> = sort.expr.iter().map(|sort_expr| {
-                    unproject_sort_expr(sort_expr, agg, sort.input.as_ref())
-                }).collect::<Result<Vec<_>>>()?;
+                let sort_exprs: Vec<SortExpr> = sort
+                    .expr
+                    .iter()
+                    .map(|sort_expr| {
+                        unproject_sort_expr(sort_expr, agg, sort.input.as_ref())
+                    })
+                    .collect::<Result<Vec<_>>>()?;
 
                 query_ref.order_by(self.sorts_to_sql(&sort_exprs)?);
 
@@ -371,7 +410,11 @@ impl Unparser<'_> {
             LogicalPlan::Distinct(distinct) => {
                 // Distinct can be top-level plan for derived table
                 if select.already_projected() {
-                    return self.derive(plan, relation);
+                    return self.derive_with_dialect_alias(
+                        "derived_distinct",
+                        plan,
+                        relation,
+                    );
                 }
                 let (select_distinct, input) = match distinct {
                     Distinct::All(input) => (ast::Distinct::Distinct, input.as_ref()),
@@ -526,7 +569,11 @@ impl Unparser<'_> {
 
                 // Covers cases where the UNION is a subquery and the projection is at the top level
                 if select.already_projected() {
-                    return self.derive(plan, relation);
+                    return self.derive_with_dialect_alias(
+                        "derived_union",
+                        plan,
+                        relation,
+                    );
                 }
 
                 let input_exprs: Vec<SetExpr> = union

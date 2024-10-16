@@ -120,6 +120,12 @@ pub trait Dialect: Send + Sync {
         true
     }
 
+    /// Whether the dialect requires a table alias for any subquery in the FROM clause
+    /// This affects behavior when deriving logical plans for Sort, Limit, etc.
+    fn requires_derived_table_alias(&self) -> bool {
+        false
+    }
+
     fn scalar_function_to_sql_overrides(
         &self,
         _unparser: &Unparser,
@@ -297,6 +303,10 @@ impl Dialect for MySqlDialect {
         ast::DataType::Datetime(None)
     }
 
+    fn requires_derived_table_alias(&self) -> bool {
+        true
+    }
+
     fn scalar_function_to_sql_overrides(
         &self,
         unparser: &Unparser,
@@ -359,6 +369,7 @@ pub struct CustomDialect {
     timestamp_tz_cast_dtype: ast::DataType,
     date32_cast_dtype: sqlparser::ast::DataType,
     supports_column_alias_in_table_alias: bool,
+    requires_derived_table_alias: bool,
 }
 
 impl Default for CustomDialect {
@@ -381,6 +392,7 @@ impl Default for CustomDialect {
             ),
             date32_cast_dtype: sqlparser::ast::DataType::Date,
             supports_column_alias_in_table_alias: true,
+            requires_derived_table_alias: false,
         }
     }
 }
@@ -469,6 +481,10 @@ impl Dialect for CustomDialect {
 
         Ok(None)
     }
+
+    fn requires_derived_table_alias(&self) -> bool {
+        self.requires_derived_table_alias
+    }
 }
 
 /// `CustomDialectBuilder` to build `CustomDialect` using builder pattern
@@ -500,6 +516,7 @@ pub struct CustomDialectBuilder {
     timestamp_tz_cast_dtype: ast::DataType,
     date32_cast_dtype: ast::DataType,
     supports_column_alias_in_table_alias: bool,
+    requires_derived_table_alias: bool,
 }
 
 impl Default for CustomDialectBuilder {
@@ -528,6 +545,7 @@ impl CustomDialectBuilder {
             ),
             date32_cast_dtype: sqlparser::ast::DataType::Date,
             supports_column_alias_in_table_alias: true,
+            requires_derived_table_alias: false,
         }
     }
 
@@ -548,6 +566,7 @@ impl CustomDialectBuilder {
             date32_cast_dtype: self.date32_cast_dtype,
             supports_column_alias_in_table_alias: self
                 .supports_column_alias_in_table_alias,
+            requires_derived_table_alias: self.requires_derived_table_alias,
         }
     }
 
@@ -648,6 +667,14 @@ impl CustomDialectBuilder {
         supports_column_alias_in_table_alias: bool,
     ) -> Self {
         self.supports_column_alias_in_table_alias = supports_column_alias_in_table_alias;
+        self
+    }
+
+    pub fn with_requires_derived_table_alias(
+        mut self,
+        requires_derived_table_alias: bool,
+    ) -> Self {
+        self.requires_derived_table_alias = requires_derived_table_alias;
         self
     }
 }
