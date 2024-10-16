@@ -519,6 +519,33 @@
   </a>
   <ul class="nav section-nav flex-column">
    <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#dense-rank">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       dense_rank
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#percent-rank">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       percent_rank
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#rank">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       rank
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
     <a class="reference internal nav-link" href="#row-number">
      <code class="docutils literal notranslate">
       <span class="pre">
@@ -695,8 +722,32 @@ Instead, the rows retain their separate identities. Behind the scenes, the windo
 <section id="ranking-functions">
 <h2>Ranking Functions<a class="headerlink" href="#ranking-functions" title="Link to this heading">¶</a></h2>
 <ul class="simple">
+<li><p><a class="reference internal" href="#dense-rank">dense_rank</a></p></li>
+<li><p><a class="reference internal" href="#percent-rank">percent_rank</a></p></li>
+<li><p><a class="reference internal" href="#rank">rank</a></p></li>
 <li><p><a class="reference internal" href="#row-number">row_number</a></p></li>
 </ul>
+<section id="dense-rank">
+<h3><code class="docutils literal notranslate"><span class="pre">dense_rank</span></code><a class="headerlink" href="#dense-rank" title="Link to this heading">¶</a></h3>
+<p>Returns the rank of the current row without gaps. This function ranks rows in a dense manner, meaning consecutive ranks are assigned even for identical values.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">dense_rank</span><span class="p">()</span>
+</pre></div>
+</div>
+</section>
+<section id="percent-rank">
+<h3><code class="docutils literal notranslate"><span class="pre">percent_rank</span></code><a class="headerlink" href="#percent-rank" title="Link to this heading">¶</a></h3>
+<p>Returns the percentage rank of the current row within its partition. The value ranges from 0 to 1 and is computed as <code class="docutils literal notranslate"><span class="pre">(rank</span> <span class="pre">-</span> <span class="pre">1)</span> <span class="pre">/</span> <span class="pre">(total_rows</span> <span class="pre">-</span> <span class="pre">1)</span></code>.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">percent_rank</span><span class="p">()</span>
+</pre></div>
+</div>
+</section>
+<section id="rank">
+<h3><code class="docutils literal notranslate"><span class="pre">rank</span></code><a class="headerlink" href="#rank" title="Link to this heading">¶</a></h3>
+<p>Returns the rank of the current row within its partition, allowing gaps between ranks. This function provides a ranking similar to <code class="docutils literal notranslate"><span class="pre">row_number</span></code>, but skips ranks for identical values.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">rank</span><span class="p">()</span>
+</pre></div>
+</div>
+</section>
 <section id="row-number">
 <h3><code class="docutils literal notranslate"><span class="pre">row_number</span></code><a class="headerlink" href="#row-number" title="Link to this heading">¶</a></h3>
 <p>Number of the current row within its partition, counting from 1.</p>
