@@ -20,14 +20,17 @@ use arrow::{
     error::ArrowError,
 };
 use std::any::Any;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::Int64;
 
 use crate::utils::make_scalar_function;
 use datafusion_common::{arrow_datafusion_err, exec_err, DataFusionError, Result};
-use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::scalar_doc_sections::DOC_SECTION_MATH;
+use datafusion_expr::{
+    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+};
 
 #[derive(Debug)]
 pub struct FactorialFunc {
@@ -68,6 +71,24 @@ impl ScalarUDFImpl for FactorialFunc {
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
         make_scalar_function(factorial, vec![])(args)
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_factorial_doc())
+    }
+}
+
+static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+
+fn get_factorial_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_MATH)
+            .with_description("Factorial. Returns 1 if value is less than 2.")
+            .with_syntax_example("factorial(numeric_expression)")
+            .with_standard_argument("numeric_expression", "Numeric")
+            .build()
+            .unwrap()
+    })
 }
 
 /// Factorial SQL function

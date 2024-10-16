@@ -28,6 +28,7 @@ pub use datafusion_functions_aggregate_common::accumulator::{
 };
 
 pub use datafusion_functions_window_common::field::WindowUDFFieldArgs;
+pub use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
 
 #[derive(Debug, Clone, Copy)]
 pub enum Hint {
@@ -67,7 +68,7 @@ pub type StateTypeFunction =
 /// * 'aggregate_function': [crate::expr::AggregateFunction] for which simplified has been invoked
 /// * 'info': [crate::simplify::SimplifyInfo]
 ///
-/// closure returns simplified [Expr] or an error.
+///Cclosure returns simplified [Expr] or an error.
 pub type AggregateFunctionSimplification = Box<
     dyn Fn(
         crate::expr::AggregateFunction,
@@ -80,7 +81,7 @@ pub type AggregateFunctionSimplification = Box<
 /// * 'window_function': [crate::expr::WindowFunction] for which simplified has been invoked
 /// * 'info': [crate::simplify::SimplifyInfo]
 ///
-/// closure returns simplified [Expr] or an error.
+/// Closure returns simplified [Expr] or an error.
 pub type WindowFunctionSimplification = Box<
     dyn Fn(
         crate::expr::WindowFunction,

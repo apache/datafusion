@@ -21,9 +21,9 @@ use std::sync::{Arc, OnceLock};
 
 use arrow::datatypes::DataType;
 
-use crate::string::common::*;
 use crate::string::concat::simplify_concat;
 use crate::string::concat_ws;
+use crate::strings::{ColumnarValueRef, StringArrayBuilder};
 use datafusion_common::cast::{as_string_array, as_string_view_array};
 use datafusion_common::{exec_err, internal_err, plan_err, Result, ScalarValue};
 use datafusion_expr::expr::ScalarFunction;

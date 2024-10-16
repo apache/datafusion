@@ -17,6 +17,8 @@
 //! [`Max`] and [`MaxAccumulator`] accumulator for the `max` function
 //! [`Min`] and [`MinAccumulator`] accumulator for the `min` function
 
+mod min_max_bytes;
+
 use arrow::array::{
     ArrayRef, BinaryArray, BinaryViewArray, BooleanArray, Date32Array, Date64Array,
     Decimal128Array, Decimal256Array, Float16Array, Float32Array, Float64Array,
@@ -50,6 +52,7 @@ use arrow::datatypes::{
     TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
 };
 
+use crate::min_max::min_max_bytes::MinMaxBytesAccumulator;
 use datafusion_common::ScalarValue;
 use datafusion_expr::{
     function::AccumulatorArgs, Accumulator, AggregateUDFImpl, Documentation, Signature,
@@ -104,7 +107,7 @@ impl Default for Max {
 /// the specified [`ArrowPrimitiveType`].
 ///
 /// [`ArrowPrimitiveType`]: arrow::datatypes::ArrowPrimitiveType
-macro_rules! instantiate_max_accumulator {
+macro_rules! primitive_max_accumulator {
     ($DATA_TYPE:ident, $NATIVE:ident, $PRIMTYPE:ident) => {{
         Ok(Box::new(
             PrimitiveGroupsAccumulator::<$PRIMTYPE, _>::new($DATA_TYPE, |cur, new| {
@@ -123,7 +126,7 @@ macro_rules! instantiate_max_accumulator {
 ///
 ///
 /// [`ArrowPrimitiveType`]: arrow::datatypes::ArrowPrimitiveType
-macro_rules! instantiate_min_accumulator {
+macro_rules! primitive_min_accumulator {
     ($DATA_TYPE:ident, $NATIVE:ident, $PRIMTYPE:ident) => {{
         Ok(Box::new(
             PrimitiveGroupsAccumulator::<$PRIMTYPE, _>::new(&$DATA_TYPE, |cur, new| {
@@ -231,6 +234,12 @@ impl AggregateUDFImpl for Max {
                 | Time32(_)
                 | Time64(_)
                 | Timestamp(_, _)
+                | Utf8
+                | LargeUtf8
+                | Utf8View
+                | Binary
+                | LargeBinary
+                | BinaryView
         )
     }
 
@@ -242,58 +251,58 @@ impl AggregateUDFImpl for Max {
         use TimeUnit::*;
         let data_type = args.return_type;
         match data_type {
-            Int8 => instantiate_max_accumulator!(data_type, i8, Int8Type),
-            Int16 => instantiate_max_accumulator!(data_type, i16, Int16Type),
-            Int32 => instantiate_max_accumulator!(data_type, i32, Int32Type),
-            Int64 => instantiate_max_accumulator!(data_type, i64, Int64Type),
-            UInt8 => instantiate_max_accumulator!(data_type, u8, UInt8Type),
-            UInt16 => instantiate_max_accumulator!(data_type, u16, UInt16Type),
-            UInt32 => instantiate_max_accumulator!(data_type, u32, UInt32Type),
-            UInt64 => instantiate_max_accumulator!(data_type, u64, UInt64Type),
+            Int8 => primitive_max_accumulator!(data_type, i8, Int8Type),
+            Int16 => primitive_max_accumulator!(data_type, i16, Int16Type),
+            Int32 => primitive_max_accumulator!(data_type, i32, Int32Type),
+            Int64 => primitive_max_accumulator!(data_type, i64, Int64Type),
+            UInt8 => primitive_max_accumulator!(data_type, u8, UInt8Type),
+            UInt16 => primitive_max_accumulator!(data_type, u16, UInt16Type),
+            UInt32 => primitive_max_accumulator!(data_type, u32, UInt32Type),
+            UInt64 => primitive_max_accumulator!(data_type, u64, UInt64Type),
             Float16 => {
-                instantiate_max_accumulator!(data_type, f16, Float16Type)
+                primitive_max_accumulator!(data_type, f16, Float16Type)
             }
             Float32 => {
-                instantiate_max_accumulator!(data_type, f32, Float32Type)
+                primitive_max_accumulator!(data_type, f32, Float32Type)
             }
             Float64 => {
-                instantiate_max_accumulator!(data_type, f64, Float64Type)
+                primitive_max_accumulator!(data_type, f64, Float64Type)
             }
-            Date32 => instantiate_max_accumulator!(data_type, i32, Date32Type),
-            Date64 => instantiate_max_accumulator!(data_type, i64, Date64Type),
+            Date32 => primitive_max_accumulator!(data_type, i32, Date32Type),
+            Date64 => primitive_max_accumulator!(data_type, i64, Date64Type),
             Time32(Second) => {
-                instantiate_max_accumulator!(data_type, i32, Time32SecondType)
+                primitive_max_accumulator!(data_type, i32, Time32SecondType)
             }
             Time32(Millisecond) => {
-                instantiate_max_accumulator!(data_type, i32, Time32MillisecondType)
+                primitive_max_accumulator!(data_type, i32, Time32MillisecondType)
             }
             Time64(Microsecond) => {
-                instantiate_max_accumulator!(data_type, i64, Time64MicrosecondType)
+                primitive_max_accumulator!(data_type, i64, Time64MicrosecondType)
             }
             Time64(Nanosecond) => {
-                instantiate_max_accumulator!(data_type, i64, Time64NanosecondType)
+                primitive_max_accumulator!(data_type, i64, Time64NanosecondType)
             }
             Timestamp(Second, _) => {
-                instantiate_max_accumulator!(data_type, i64, TimestampSecondType)
+                primitive_max_accumulator!(data_type, i64, TimestampSecondType)
             }
             Timestamp(Millisecond, _) => {
-                instantiate_max_accumulator!(data_type, i64, TimestampMillisecondType)
+                primitive_max_accumulator!(data_type, i64, TimestampMillisecondType)
             }
             Timestamp(Microsecond, _) => {
-                instantiate_max_accumulator!(data_type, i64, TimestampMicrosecondType)
+                primitive_max_accumulator!(data_type, i64, TimestampMicrosecondType)
             }
             Timestamp(Nanosecond, _) => {
-                instantiate_max_accumulator!(data_type, i64, TimestampNanosecondType)
+                primitive_max_accumulator!(data_type, i64, TimestampNanosecondType)
             }
             Decimal128(_, _) => {
-                instantiate_max_accumulator!(data_type, i128, Decimal128Type)
+                primitive_max_accumulator!(data_type, i128, Decimal128Type)
             }
             Decimal256(_, _) => {
-                instantiate_max_accumulator!(data_type, i256, Decimal256Type)
+                primitive_max_accumulator!(data_type, i256, Decimal256Type)
             }
-
-            // It would be nice to have a fast implementation for Strings as well
-            // https://github.com/apache/datafusion/issues/6906
+            Utf8 | LargeUtf8 | Utf8View | Binary | LargeBinary | BinaryView => {
+                Ok(Box::new(MinMaxBytesAccumulator::new_max(data_type.clone())))
+            }
 
             // This is only reached if groups_accumulator_supported is out of sync
             _ => internal_err!("GroupsAccumulator not supported for max({})", data_type),
@@ -1057,6 +1066,12 @@ impl AggregateUDFImpl for Min {
                 | Time32(_)
                 | Time64(_)
                 | Timestamp(_, _)
+                | Utf8
+                | LargeUtf8
+                | Utf8View
+                | Binary
+                | LargeBinary
+                | BinaryView
         )
     }
 
@@ -1068,58 +1083,58 @@ impl AggregateUDFImpl for Min {
         use TimeUnit::*;
         let data_type = args.return_type;
         match data_type {
-            Int8 => instantiate_min_accumulator!(data_type, i8, Int8Type),
-            Int16 => instantiate_min_accumulator!(data_type, i16, Int16Type),
-            Int32 => instantiate_min_accumulator!(data_type, i32, Int32Type),
-            Int64 => instantiate_min_accumulator!(data_type, i64, Int64Type),
-            UInt8 => instantiate_min_accumulator!(data_type, u8, UInt8Type),
-            UInt16 => instantiate_min_accumulator!(data_type, u16, UInt16Type),
-            UInt32 => instantiate_min_accumulator!(data_type, u32, UInt32Type),
-            UInt64 => instantiate_min_accumulator!(data_type, u64, UInt64Type),
+            Int8 => primitive_min_accumulator!(data_type, i8, Int8Type),
+            Int16 => primitive_min_accumulator!(data_type, i16, Int16Type),
+            Int32 => primitive_min_accumulator!(data_type, i32, Int32Type),
+            Int64 => primitive_min_accumulator!(data_type, i64, Int64Type),
+            UInt8 => primitive_min_accumulator!(data_type, u8, UInt8Type),
+            UInt16 => primitive_min_accumulator!(data_type, u16, UInt16Type),
+            UInt32 => primitive_min_accumulator!(data_type, u32, UInt32Type),
+            UInt64 => primitive_min_accumulator!(data_type, u64, UInt64Type),
             Float16 => {
-                instantiate_min_accumulator!(data_type, f16, Float16Type)
+                primitive_min_accumulator!(data_type, f16, Float16Type)
             }
             Float32 => {
-                instantiate_min_accumulator!(data_type, f32, Float32Type)
+                primitive_min_accumulator!(data_type, f32, Float32Type)
             }
             Float64 => {
-                instantiate_min_accumulator!(data_type, f64, Float64Type)
+                primitive_min_accumulator!(data_type, f64, Float64Type)
             }
-            Date32 => instantiate_min_accumulator!(data_type, i32, Date32Type),
-            Date64 => instantiate_min_accumulator!(data_type, i64, Date64Type),
+            Date32 => primitive_min_accumulator!(data_type, i32, Date32Type),
+            Date64 => primitive_min_accumulator!(data_type, i64, Date64Type),
             Time32(Second) => {
-                instantiate_min_accumulator!(data_type, i32, Time32SecondType)
+                primitive_min_accumulator!(data_type, i32, Time32SecondType)
             }
             Time32(Millisecond) => {
-                instantiate_min_accumulator!(data_type, i32, Time32MillisecondType)
+                primitive_min_accumulator!(data_type, i32, Time32MillisecondType)
             }
             Time64(Microsecond) => {
-                instantiate_min_accumulator!(data_type, i64, Time64MicrosecondType)
+                primitive_min_accumulator!(data_type, i64, Time64MicrosecondType)
             }
             Time64(Nanosecond) => {
-                instantiate_min_accumulator!(data_type, i64, Time64NanosecondType)
+                primitive_min_accumulator!(data_type, i64, Time64NanosecondType)
             }
             Timestamp(Second, _) => {
-                instantiate_min_accumulator!(data_type, i64, TimestampSecondType)
+                primitive_min_accumulator!(data_type, i64, TimestampSecondType)
             }
             Timestamp(Millisecond, _) => {
-                instantiate_min_accumulator!(data_type, i64, TimestampMillisecondType)
+                primitive_min_accumulator!(data_type, i64, TimestampMillisecondType)
             }
             Timestamp(Microsecond, _) => {
-                instantiate_min_accumulator!(data_type, i64, TimestampMicrosecondType)
+                primitive_min_accumulator!(data_type, i64, TimestampMicrosecondType)
             }
             Timestamp(Nanosecond, _) => {
-                instantiate_min_accumulator!(data_type, i64, TimestampNanosecondType)
+                primitive_min_accumulator!(data_type, i64, TimestampNanosecondType)
             }
             Decimal128(_, _) => {
-                instantiate_min_accumulator!(data_type, i128, Decimal128Type)
+                primitive_min_accumulator!(data_type, i128, Decimal128Type)
             }
             Decimal256(_, _) => {
-                instantiate_min_accumulator!(data_type, i256, Decimal256Type)
+                primitive_min_accumulator!(data_type, i256, Decimal256Type)
             }
-
-            // It would be nice to have a fast implementation for Strings as well
-            // https://github.com/apache/datafusion/issues/6906
+            Utf8 | LargeUtf8 | Utf8View | Binary | LargeBinary | BinaryView => {
+                Ok(Box::new(MinMaxBytesAccumulator::new_min(data_type.clone())))
+            }
 
             // This is only reached if groups_accumulator_supported is out of sync
             _ => internal_err!("GroupsAccumulator not supported for min({})", data_type),

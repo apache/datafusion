@@ -180,16 +180,14 @@ impl LogicalExtensionCodec for CsvLogicalExtensionCodec {
         _table_ref: &TableReference,
         _schema: arrow::datatypes::SchemaRef,
         _ctx: &datafusion::prelude::SessionContext,
-    ) -> datafusion_common::Result<
-        std::sync::Arc<dyn datafusion::datasource::TableProvider>,
-    > {
+    ) -> datafusion_common::Result<Arc<dyn datafusion::datasource::TableProvider>> {
         not_impl_err!("Method not implemented")
     }
 
     fn try_encode_table_provider(
         &self,
         _table_ref: &TableReference,
-        _node: std::sync::Arc<dyn datafusion::datasource::TableProvider>,
+        _node: Arc<dyn datafusion::datasource::TableProvider>,
         _buf: &mut Vec<u8>,
     ) -> datafusion_common::Result<()> {
         not_impl_err!("Method not implemented")
@@ -292,16 +290,14 @@ impl LogicalExtensionCodec for JsonLogicalExtensionCodec {
         _table_ref: &TableReference,
         _schema: arrow::datatypes::SchemaRef,
         _ctx: &datafusion::prelude::SessionContext,
-    ) -> datafusion_common::Result<
-        std::sync::Arc<dyn datafusion::datasource::TableProvider>,
-    > {
+    ) -> datafusion_common::Result<Arc<dyn datafusion::datasource::TableProvider>> {
         not_impl_err!("Method not implemented")
     }
 
     fn try_encode_table_provider(
         &self,
         _table_ref: &TableReference,
-        _node: std::sync::Arc<dyn datafusion::datasource::TableProvider>,
+        _node: Arc<dyn datafusion::datasource::TableProvider>,
         _buf: &mut Vec<u8>,
     ) -> datafusion_common::Result<()> {
         not_impl_err!("Method not implemented")
@@ -591,16 +587,14 @@ impl LogicalExtensionCodec for ParquetLogicalExtensionCodec {
         _table_ref: &TableReference,
         _schema: arrow::datatypes::SchemaRef,
         _ctx: &datafusion::prelude::SessionContext,
-    ) -> datafusion_common::Result<
-        std::sync::Arc<dyn datafusion::datasource::TableProvider>,
-    > {
+    ) -> datafusion_common::Result<Arc<dyn datafusion::datasource::TableProvider>> {
         not_impl_err!("Method not implemented")
     }
 
     fn try_encode_table_provider(
         &self,
         _table_ref: &TableReference,
-        _node: std::sync::Arc<dyn datafusion::datasource::TableProvider>,
+        _node: Arc<dyn datafusion::datasource::TableProvider>,
         _buf: &mut Vec<u8>,
     ) -> datafusion_common::Result<()> {
         not_impl_err!("Method not implemented")
@@ -681,16 +675,14 @@ impl LogicalExtensionCodec for ArrowLogicalExtensionCodec {
         _table_ref: &TableReference,
         _schema: arrow::datatypes::SchemaRef,
         _ctx: &datafusion::prelude::SessionContext,
-    ) -> datafusion_common::Result<
-        std::sync::Arc<dyn datafusion::datasource::TableProvider>,
-    > {
+    ) -> datafusion_common::Result<Arc<dyn datafusion::datasource::TableProvider>> {
         not_impl_err!("Method not implemented")
     }
 
     fn try_encode_table_provider(
         &self,
         _table_ref: &TableReference,
-        _node: std::sync::Arc<dyn datafusion::datasource::TableProvider>,
+        _node: Arc<dyn datafusion::datasource::TableProvider>,
         _buf: &mut Vec<u8>,
     ) -> datafusion_common::Result<()> {
         not_impl_err!("Method not implemented")
@@ -741,16 +733,14 @@ impl LogicalExtensionCodec for AvroLogicalExtensionCodec {
         _table_ref: &TableReference,
         _schema: arrow::datatypes::SchemaRef,
         _cts: &datafusion::prelude::SessionContext,
-    ) -> datafusion_common::Result<
-        std::sync::Arc<dyn datafusion::datasource::TableProvider>,
-    > {
+    ) -> datafusion_common::Result<Arc<dyn datafusion::datasource::TableProvider>> {
         not_impl_err!("Method not implemented")
     }
 
     fn try_encode_table_provider(
         &self,
         _table_ref: &TableReference,
-        _node: std::sync::Arc<dyn datafusion::datasource::TableProvider>,
+        _node: Arc<dyn datafusion::datasource::TableProvider>,
         _buf: &mut Vec<u8>,
     ) -> datafusion_common::Result<()> {
         not_impl_err!("Method not implemented")

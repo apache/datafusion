@@ -35,7 +35,301 @@ the rest of the documentation.
 
 ## Math Functions
 
+- [abs](#abs)
+- [acos](#acos)
+- [acosh](#acosh)
+- [asin](#asin)
+- [asinh](#asinh)
+- [atan](#atan)
+- [atan2](#atan2)
+- [atanh](#atanh)
+- [cbrt](#cbrt)
+- [ceil](#ceil)
+- [cos](#cos)
+- [cosh](#cosh)
+- [degrees](#degrees)
+- [exp](#exp)
+- [factorial](#factorial)
+- [floor](#floor)
+- [gcd](#gcd)
+- [isnan](#isnan)
+- [iszero](#iszero)
+- [lcm](#lcm)
+- [ln](#ln)
 - [log](#log)
+- [log10](#log10)
+- [log2](#log2)
+- [nanvl](#nanvl)
+- [pi](#pi)
+- [pow](#pow)
+- [power](#power)
+- [radians](#radians)
+- [random](#random)
+- [round](#round)
+- [signum](#signum)
+- [sin](#sin)
+- [sinh](#sinh)
+- [sqrt](#sqrt)
+- [tan](#tan)
+- [tanh](#tanh)
+- [trunc](#trunc)
+
+### `abs`
+
+Returns the absolute value of a number.
+
+```
+abs(numeric_expression)
+```
+
+#### Arguments
+
+- **numeric_expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
+
+### `acos`
+
+Returns the arc cosine or inverse cosine of a number.
+
+```
+acos(numeric_expression)
+```
+
+#### Arguments
+
+- **numeric_expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
+
+### `acosh`
+
+Returns the area hyperbolic cosine or inverse hyperbolic cosine of a number.
+
+```
+acosh(numeric_expression)
+```
+
+#### Arguments
+
+- **numeric_expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
+
+### `asin`
+
+Returns the arc sine or inverse sine of a number.
+
+```
+asin(numeric_expression)
+```
+
+#### Arguments
+
+- **numeric_expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
+
+### `asinh`
+
+Returns the area hyperbolic sine or inverse hyperbolic sine of a number.
+
+```
+asinh(numeric_expression)
+```
+
+#### Arguments
+
+- **numeric_expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
+
+### `atan`
+
+Returns the arc tangent or inverse tangent of a number.
+
+```
+atan(numeric_expression)
+```
+
+#### Arguments
+
+- **numeric_expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
+
+### `atan2`
+
+Returns the arc tangent or inverse tangent of `expression_y / expression_x`.
+
+```
+atan2(expression_y, expression_x)
+```
+
+#### Arguments
+
+- **expression_y**: First numeric expression to operate on.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
+- **expression_x**: Second numeric expression to operate on.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
+
+### `atanh`
+
+Returns the area hyperbolic tangent or inverse hyperbolic tangent of a number.
+
+```
+atanh(numeric_expression)
+```
+
+#### Arguments
+
+- **numeric_expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
+
+### `cbrt`
+
+Returns the cube root of a number.
+
+```
+cbrt(numeric_expression)
+```
+
+#### Arguments
+
+- **numeric_expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
+
+### `ceil`
+
+Returns the nearest integer greater than or equal to a number.
+
+```
+ceil(numeric_expression)
+```
+
+#### Arguments
+
+- **numeric_expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
+
+### `cos`
+
+Returns the cosine of a number.
+
+```
+cos(numeric_expression)
+```
+
+#### Arguments
+
+- **numeric_expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
+
+### `cosh`
+
+Returns the hyperbolic cosine of a number.
+
+```
+cosh(numeric_expression)
+```
+
+#### Arguments
+
+- **numeric_expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
+
+### `degrees`
+
+Converts radians to degrees.
+
+```
+degrees(numeric_expression)
+```
+
+#### Arguments
+
+- **numeric_expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
+
+### `exp`
+
+Returns the base-e exponential of a number.
+
+```
+exp(numeric_expression)
+```
+
+#### Arguments
+
+- **numeric_expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
+
+### `factorial`
+
+Factorial. Returns 1 if value is less than 2.
+
+```
+factorial(numeric_expression)
+```
+
+#### Arguments
+
+- **numeric_expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
+
+### `floor`
+
+Returns the nearest integer less than or equal to a number.
+
+```
+floor(numeric_expression)
+```
+
+#### Arguments
+
+- **numeric_expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
+
+### `gcd`
+
+Returns the greatest common divisor of `expression_x` and `expression_y`. Returns 0 if both inputs are zero.
+
+```
+gcd(expression_x, expression_y)
+```
+
+#### Arguments
+
+- **expression_x**: First numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
+- **expression_y**: Second numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
+
+### `isnan`
+
+Returns true if a given number is +NaN or -NaN otherwise returns false.
+
+```
+isnan(numeric_expression)
+```
+
+#### Arguments
+
+- **numeric_expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
+
+### `iszero`
+
+Returns true if a given number is +0.0 or -0.0 otherwise returns false.
+
+```
+iszero(numeric_expression)
+```
+
+#### Arguments
+
+- **numeric_expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
+
+### `lcm`
+
+Returns the least common multiple of `expression_x` and `expression_y`. Returns 0 if either input is zero.
+
+```
+lcm(expression_x, expression_y)
+```
+
+#### Arguments
+
+- **expression_x**: First numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
+- **expression_y**: Second numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
+
+### `ln`
+
+Returns the natural logarithm of a number.
+
+```
+ln(numeric_expression)
+```
+
+#### Arguments
+
+- **numeric_expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
 
 ### `log`
 
@@ -50,6 +344,198 @@ log(numeric_expression)
 
 - **base**: Base numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
 - **numeric_expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
+
+### `log10`
+
+Returns the base-10 logarithm of a number.
+
+```
+log10(numeric_expression)
+```
+
+#### Arguments
+
+- **numeric_expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
+
+### `log2`
+
+Returns the base-2 logarithm of a number.
+
+```
+log2(numeric_expression)
+```
+
+#### Arguments
+
+- **numeric_expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
+
+### `nanvl`
+
+Returns the first argument if it's not _NaN_.
+Returns the second argument otherwise.
+
+```
+nanvl(expression_x, expression_y)
+```
+
+#### Arguments
+
+- **expression_x**: Numeric expression to return if it's not _NaN_. Can be a constant, column, or function, and any combination of arithmetic operators.
+- **expression_y**: Numeric expression to return if the first expression is _NaN_. Can be a constant, column, or function, and any combination of arithmetic operators.
+
+### `pi`
+
+Returns an approximate value of π.
+
+```
+pi()
+```
+
+### `pow`
+
+_Alias of [power](#power)._
+
+### `power`
+
+Returns a base expression raised to the power of an exponent.
+
+```
+power(base, exponent)
+```
+
+#### Arguments
+
+- **base**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
+- **exponent**: Exponent numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
+
+#### Aliases
+
+- pow
+
+### `radians`
+
+Converts degrees to radians.
+
+```
+radians(numeric_expression)
+```
+
+#### Arguments
+
+- **numeric_expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
+
+### `random`
+
+Returns a random float value in the range [0, 1).
+The random seed is unique to each row.
+
+```
+random()
+```
+
+### `round`
+
+Rounds a number to the nearest integer.
+
+```
+round(numeric_expression[, decimal_places])
+```
+
+#### Arguments
+
+- **numeric_expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
+- **decimal_places**: Optional. The number of decimal places to round to. Defaults to 0.
+
+### `signum`
+
+Returns the sign of a number.
+Negative numbers return `-1`.
+Zero and positive numbers return `1`.
+
+```
+signum(numeric_expression)
+```
+
+#### Arguments
+
+- **numeric_expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
+
+### `sin`
+
+Returns the sine of a number.
+
+```
+sin(numeric_expression)
+```
+
+#### Arguments
+
+- **numeric_expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
+
+### `sinh`
+
+Returns the hyperbolic sine of a number.
+
+```
+sinh(numeric_expression)
+```
+
+#### Arguments
+
+- **numeric_expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
+
+### `sqrt`
+
+Returns the square root of a number.
+
+```
+sqrt(numeric_expression)
+```
+
+#### Arguments
+
+- **numeric_expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
+
+### `tan`
+
+Returns the tangent of a number.
+
+```
+tan(numeric_expression)
+```
+
+#### Arguments
+
+- **numeric_expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
+
+### `tanh`
+
+Returns the hyperbolic tangent of a number.
+
+```
+tanh(numeric_expression)
+```
+
+#### Arguments
+
+- **numeric_expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
+
+### `trunc`
+
+Truncates a number to a whole number or truncated to the specified decimal places.
+
+```
+trunc(numeric_expression[, decimal_places])
+```
+
+#### Arguments
+
+- **numeric_expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
+- **decimal_places**: Optional. The number of decimal places to
+  truncate to. Defaults to 0 (truncate to a whole number). If
+  `decimal_places` is a positive integer, truncates digits to the
+  right of the decimal point. If `decimal_places` is a negative
+  integer, replaces digits to the left of the decimal point with `0`.
 
 ## Conditional Functions
 
@@ -1191,6 +1677,8 @@ regular expression [syntax](https://docs.rs/regex/latest/regex/#syntax)
 The following regular expression functions are supported:
 
 - [regexp_like](#regexp_like)
+- [regexp_match](#regexp_match)
+- [regexp_replace](#regexp_replace)
 
 ### `regexp_like`
 
@@ -1226,6 +1714,86 @@ SELECT regexp_like('aBc', '(b|d)', 'i');
 +--------------------------------------------------+
 | true                                             |
 +--------------------------------------------------+
+```
+
+Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/regexp.rs)
+
+### `regexp_match`
+
+Returns a list of [regular expression](https://docs.rs/regex/latest/regex/#syntax) matches in a string.
+
+```
+regexp_match(str, regexp[, flags])
+```
+
+#### Arguments
+
+- **str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
+- **regexp**: Regular expression to match against.
+  Can be a constant, column, or function.
+- **flags**: Optional regular expression flags that control the behavior of the regular expression. The following flags are supported:
+  - **i**: case-insensitive: letters match both upper and lower case
+  - **m**: multi-line mode: ^ and $ match begin/end of line
+  - **s**: allow . to match \n
+  - **R**: enables CRLF mode: when multi-line mode is enabled, \r\n is used
+  - **U**: swap the meaning of x* and x*?
+
+#### Example
+
+```sql
+            > select regexp_match('Köln', '[a-zA-Z]ö[a-zA-Z]{2}');
+            +---------------------------------------------------------+
+            | regexp_match(Utf8("Köln"),Utf8("[a-zA-Z]ö[a-zA-Z]{2}")) |
+            +---------------------------------------------------------+
+            | [Köln]                                                  |
+            +---------------------------------------------------------+
+            SELECT regexp_match('aBc', '(b|d)', 'i');
+            +---------------------------------------------------+
+            | regexp_match(Utf8("aBc"),Utf8("(b|d)"),Utf8("i")) |
+            +---------------------------------------------------+
+            | [B]                                               |
+            +---------------------------------------------------+
+```
+
+Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/regexp.rs)
+
+### `regexp_replace`
+
+Replaces substrings in a string that match a [regular expression](https://docs.rs/regex/latest/regex/#syntax).
+
+```
+regexp_replace(str, regexp, replacement[, flags])
+```
+
+#### Arguments
+
+- **str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
+- **regexp**: Regular expression to match against.
+  Can be a constant, column, or function.
+- **replacement**: Replacement string expression to operate on. Can be a constant, column, or function, and any combination of operators.
+- **flags**: Optional regular expression flags that control the behavior of the regular expression. The following flags are supported:
+- **g**: (global) Search globally and don't return after the first match
+- **i**: case-insensitive: letters match both upper and lower case
+- **m**: multi-line mode: ^ and $ match begin/end of line
+- **s**: allow . to match \n
+- **R**: enables CRLF mode: when multi-line mode is enabled, \r\n is used
+- **U**: swap the meaning of x* and x*?
+
+#### Example
+
+```sql
+> select regexp_replace('foobarbaz', 'b(..)', 'X\\1Y', 'g');
++------------------------------------------------------------------------+
+| regexp_replace(Utf8("foobarbaz"),Utf8("b(..)"),Utf8("X\1Y"),Utf8("g")) |
++------------------------------------------------------------------------+
+| fooXarYXazY                                                            |
++------------------------------------------------------------------------+
+SELECT regexp_replace('aBc', '(b|d)', 'Ab\\1a', 'i');
++-------------------------------------------------------------------+
+| regexp_replace(Utf8("aBc"),Utf8("(b|d)"),Utf8("Ab\1a"),Utf8("i")) |
++-------------------------------------------------------------------+
+| aAbBac                                                            |
++-------------------------------------------------------------------+
 ```
 
 Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/regexp.rs)
