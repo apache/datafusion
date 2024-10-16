@@ -47,9 +47,7 @@ use datafusion::functions_aggregate::expr_fn::{
 };
 use datafusion::functions_aggregate::min_max::max_udaf;
 use datafusion::functions_nested::map::map;
-use datafusion::functions_window::dense_rank::dense_rank;
-use datafusion::functions_window::percent_rank::percent_rank;
-use datafusion::functions_window::rank::{rank, rank_udwf};
+use datafusion::functions_window::rank::{dense_rank, percent_rank, rank, rank_udwf};
 use datafusion::functions_window::row_number::row_number;
 use datafusion::prelude::*;
 use datafusion::test_util::{TestTableFactory, TestTableProvider};
