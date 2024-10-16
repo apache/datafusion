@@ -91,27 +91,62 @@ struct ProviderPrivateData {
     provider: Arc<dyn TableProvider + Send>,
 }
 
-/// Wrapper struct to provide access functions from the FFI interface to the underlying
-/// TableProvider. This struct is allowed to access `private_data` because it lives on
-/// the provider's side of the FFI interace.
-struct ExportedTableProvider<'a>(&'a FFI_TableProvider);
-
 unsafe extern "C" fn schema_fn_wrapper(provider: &FFI_TableProvider) -> WrappedSchema {
-    WrappedSchema(ExportedTableProvider(provider).schema())
+    let private_data = provider.private_data as *const ProviderPrivateData;
+    let provider = &(*private_data).provider;
+
+    // This does silently fail because TableProvider does not return a result.
+    // It expects schema to always pass.
+    let ffi_schema = FFI_ArrowSchema::try_from(provider.schema().as_ref())
+        .unwrap_or(FFI_ArrowSchema::empty());
+
+    WrappedSchema(ffi_schema)
 }
 
 unsafe extern "C" fn table_type_fn_wrapper(
     provider: &FFI_TableProvider,
 ) -> FFI_TableType {
-    ExportedTableProvider(provider).table_type()
+    let private_data = provider.private_data as *const ProviderPrivateData;
+    let provider = &(*private_data).provider;
+
+    provider.table_type().into()
+}
+
+fn supports_filters_pushdown_internal(
+    provider: &Arc<dyn TableProvider + Send>,
+    filters_serialized: &[u8],
+) -> Result<RVec<FFI_TableProviderFilterPushDown>> {
+    let default_ctx = SessionContext::new();
+    let codec = DefaultLogicalExtensionCodec {};
+
+    let filters = match filters_serialized.is_empty() {
+        true => vec![],
+        false => {
+            let proto_filters = LogicalExprList::decode(filters_serialized)
+                .map_err(|e| DataFusionError::Plan(e.to_string()))?;
+
+            parse_exprs(proto_filters.expr.iter(), &default_ctx, &codec)?
+        }
+    };
+    let filters_borrowed: Vec<&Expr> = filters.iter().collect();
+
+    let results: RVec<_> = provider
+        .supports_filters_pushdown(&filters_borrowed)?
+        .iter()
+        .map(|v| v.into())
+        .collect();
+
+    Ok(results)
 }
 
 unsafe extern "C" fn supports_filters_pushdown_fn_wrapper(
     provider: &FFI_TableProvider,
     filters_serialized: RVec<u8>,
 ) -> RResult<RVec<FFI_TableProviderFilterPushDown>, RString> {
-    ExportedTableProvider(provider)
-        .supports_filters_pushdown(&filters_serialized)
+    let private_data = provider.private_data as *const ProviderPrivateData;
+    let provider = &(*private_data).provider;
+
+    supports_filters_pushdown_internal(provider, &filters_serialized)
         .map_err(|e| e.to_string().into())
         .into()
 }
@@ -204,62 +239,6 @@ unsafe extern "C" fn clone_fn_wrapper(provider: &FFI_TableProvider) -> FFI_Table
 impl Drop for FFI_TableProvider {
     fn drop(&mut self) {
         unsafe { (self.release)(self) }
-    }
-}
-
-impl<'a> ExportedTableProvider<'a> {
-    fn private_data(&self) -> &ProviderPrivateData {
-        unsafe { &*(self.0.private_data as *const ProviderPrivateData) }
-    }
-
-    fn mut_private_data(&mut self) -> &mut ProviderPrivateData {
-        unsafe { &mut *(self.0.private_data as *mut ProviderPrivateData) }
-    }
-
-    pub fn schema(&self) -> FFI_ArrowSchema {
-        let private_data = self.private_data();
-        let provider = &private_data.provider;
-
-        // This does silently fail because TableProvider does not return a result
-        // so we expect it to always pass.
-        FFI_ArrowSchema::try_from(provider.schema().as_ref())
-            .unwrap_or(FFI_ArrowSchema::empty())
-    }
-
-    pub fn table_type(&self) -> FFI_TableType {
-        let private_data = self.private_data();
-        let provider = &private_data.provider;
-
-        provider.table_type().into()
-    }
-
-    pub fn supports_filters_pushdown(
-        &mut self,
-        filters_serialized: &[u8],
-    ) -> Result<RVec<FFI_TableProviderFilterPushDown>> {
-        let default_ctx = SessionContext::new();
-        let codec = DefaultLogicalExtensionCodec {};
-
-        let filters = match filters_serialized.is_empty() {
-            true => vec![],
-            false => {
-                let proto_filters = LogicalExprList::decode(filters_serialized)
-                    .map_err(|e| DataFusionError::Plan(e.to_string()))?;
-
-                parse_exprs(proto_filters.expr.iter(), &default_ctx, &codec)?
-            }
-        };
-        let filters_borrowed: Vec<&Expr> = filters.iter().collect();
-
-        let private_data = self.mut_private_data();
-        let results: RVec<_> = private_data
-            .provider
-            .supports_filters_pushdown(&filters_borrowed)?
-            .iter()
-            .map(|v| v.into())
-            .collect();
-
-        Ok(results)
     }
 }
 
