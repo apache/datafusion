@@ -15,14 +15,16 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use core::slice;
-use std::{
-    ffi::{c_uint, c_void},
-    ptr::null_mut,
-    sync::Arc,
-};
+use std::{ffi::c_void, sync::Arc};
 
-use arrow::{datatypes::Schema, ffi::FFI_ArrowSchema};
+use abi_stable::{
+    std_types::{
+        RResult::{self, RErr, ROk},
+        RStr, RVec,
+    },
+    StableAbi,
+};
+use arrow::ffi::FFI_ArrowSchema;
 use datafusion::{
     error::{DataFusionError, Result},
     physical_expr::EquivalenceProperties,
@@ -42,7 +44,7 @@ use prost::Message;
 // TODO: should we just make ExecutionMode repr(C)?
 #[repr(C)]
 #[allow(non_camel_case_types)]
-#[derive(Clone)]
+#[derive(Clone, StableAbi)]
 pub enum FFI_ExecutionMode {
     Bounded,
     Unbounded,
@@ -70,119 +72,83 @@ impl From<FFI_ExecutionMode> for ExecutionMode {
 }
 
 #[repr(C)]
-#[derive(Debug)]
+#[derive(Debug, StableAbi)]
+pub struct WrappedSchema(#[sabi(unsafe_opaque_field)] pub FFI_ArrowSchema);
+
+#[repr(C)]
+#[derive(Debug, StableAbi)]
 #[allow(missing_docs)]
 #[allow(non_camel_case_types)]
 pub struct FFI_PlanProperties {
     // Returns protobuf serialized bytes of the partitioning
-    pub output_partitioning: Option<
-        unsafe extern "C" fn(
-            plan: *const FFI_PlanProperties,
-            buffer_size: &mut c_uint,
-        ) -> *const u8,
-    >,
+    pub output_partitioning:
+        unsafe extern "C" fn(plan: &Self) -> RResult<RVec<u8>, RStr<'static>>,
 
-    pub execution_mode: Option<
-        unsafe extern "C" fn(plan: *const FFI_PlanProperties) -> FFI_ExecutionMode,
-    >,
+    pub execution_mode: unsafe extern "C" fn(plan: &Self) -> FFI_ExecutionMode,
 
     // PhysicalSortExprNodeCollection proto
-    pub output_ordering: Option<
-        unsafe extern "C" fn(
-            plan: *const FFI_PlanProperties,
-            buffer_size: &mut usize,
-        ) -> *const u8,
-    >,
+    pub output_ordering:
+        unsafe extern "C" fn(plan: &Self) -> RResult<RVec<u8>, RStr<'static>>,
 
-    pub schema:
-        Option<unsafe extern "C" fn(plan: *const FFI_PlanProperties) -> FFI_ArrowSchema>,
+    pub schema: unsafe extern "C" fn(plan: &Self) -> WrappedSchema,
 
-    pub release: Option<unsafe extern "C" fn(arg: *mut Self)>,
+    pub release: unsafe extern "C" fn(arg: &mut Self),
 
     pub private_data: *mut c_void,
 }
 
 struct PlanPropertiesPrivateData {
-    output_partitioning: Vec<u8>,
-    execution_mode: FFI_ExecutionMode,
-    output_ordering: Vec<u8>,
-    schema: Arc<Schema>,
+    props: PlanProperties,
 }
 
 unsafe extern "C" fn output_partitioning_fn_wrapper(
-    properties: *const FFI_PlanProperties,
-    buffer_size: &mut c_uint,
-) -> *const u8 {
-    let private_data = (*properties).private_data as *const PlanPropertiesPrivateData;
-    *buffer_size = (*private_data).output_partitioning.len() as c_uint;
-    (*private_data).output_partitioning.as_ptr()
+    properties: &FFI_PlanProperties,
+) -> RResult<RVec<u8>, RStr<'static>> {
+    let private_data = properties.private_data as *const PlanPropertiesPrivateData;
+    let props = &(*private_data).props;
+
+    let codec = DefaultPhysicalExtensionCodec {};
+    let partitioning_data =
+        match serialize_partitioning(props.output_partitioning(), &codec) {
+            Ok(p) => p,
+            Err(_) => {
+                return RErr(
+                    "unable to serialize output_partitioning in FFI_PlanProperties"
+                        .into(),
+                )
+            }
+        };
+    let output_partitioning = partitioning_data.encode_to_vec();
+
+    ROk(output_partitioning.into())
 }
 
 unsafe extern "C" fn execution_mode_fn_wrapper(
-    properties: *const FFI_PlanProperties,
+    properties: &FFI_PlanProperties,
 ) -> FFI_ExecutionMode {
-    let private_data = (*properties).private_data as *const PlanPropertiesPrivateData;
-    (*private_data).execution_mode.clone()
+    let private_data = properties.private_data as *const PlanPropertiesPrivateData;
+    let props = &(*private_data).props;
+    props.execution_mode().into()
 }
 
 unsafe extern "C" fn output_ordering_fn_wrapper(
-    properties: *const FFI_PlanProperties,
-    buffer_size: &mut usize,
-) -> *const u8 {
-    let private_data = (*properties).private_data as *const PlanPropertiesPrivateData;
-    *buffer_size = (*private_data).output_ordering.len();
-    (*private_data).output_ordering.as_ptr()
-}
+    properties: &FFI_PlanProperties,
+) -> RResult<RVec<u8>, RStr<'static>> {
+    let private_data = properties.private_data as *const PlanPropertiesPrivateData;
+    let props = &(*private_data).props;
 
-unsafe extern "C" fn schema_fn_wrapper(
-    properties: *const FFI_PlanProperties,
-) -> FFI_ArrowSchema {
-    let private_data = (*properties).private_data as *const PlanPropertiesPrivateData;
-    FFI_ArrowSchema::try_from((*private_data).schema.as_ref())
-        .unwrap_or(FFI_ArrowSchema::empty())
-}
-
-unsafe extern "C" fn release_fn_wrapper(props: *mut FFI_PlanProperties) {
-    if props.is_null() {
-        return;
-    }
-
-    let props = &mut *props;
-
-    props.execution_mode = None;
-    props.output_partitioning = None;
-    props.execution_mode = None;
-    props.output_ordering = None;
-    props.schema = None;
-
-    let private_data =
-        Box::from_raw(props.private_data as *mut PlanPropertiesPrivateData);
-    drop(private_data);
-
-    props.release = None;
-}
-
-impl Drop for FFI_PlanProperties {
-    fn drop(&mut self) {
-        match self.release {
-            None => (),
-            Some(release) => unsafe { release(self) },
-        };
-    }
-}
-
-impl FFI_PlanProperties {
-    pub fn new(props: PlanProperties) -> Result<Self> {
-        let partitioning = props.output_partitioning();
-
-        let codec = DefaultPhysicalExtensionCodec {};
-        let partitioning_data = serialize_partitioning(partitioning, &codec)?;
-        let output_partitioning = partitioning_data.encode_to_vec();
-
-        let output_ordering = match props.output_ordering() {
+    let codec = DefaultPhysicalExtensionCodec {};
+    let output_ordering =
+        match props.output_ordering() {
             Some(ordering) => {
                 let physical_sort_expr_nodes =
-                    serialize_physical_sort_exprs(ordering.to_owned(), &codec)?;
+                    match serialize_physical_sort_exprs(ordering.to_owned(), &codec) {
+                        Ok(v) => v,
+                        Err(_) => return RErr(
+                            "unable to serialize output_ordering in FFI_PlanProperties"
+                                .into(),
+                        ),
+                    };
 
                 let ordering_data = PhysicalSortExprNodeCollection {
                     physical_sort_expr_nodes,
@@ -192,34 +158,44 @@ impl FFI_PlanProperties {
             }
             None => Vec::default(),
         };
+    ROk(output_ordering.into())
+}
 
+unsafe extern "C" fn schema_fn_wrapper(properties: &FFI_PlanProperties) -> WrappedSchema {
+    let private_data = properties.private_data as *const PlanPropertiesPrivateData;
+    let props = &(*private_data).props;
+
+    let schema = props.eq_properties.schema();
+    WrappedSchema(
+        FFI_ArrowSchema::try_from(schema.as_ref()).unwrap_or(FFI_ArrowSchema::empty()),
+    )
+}
+
+unsafe extern "C" fn release_fn_wrapper(props: &mut FFI_PlanProperties) {
+    let private_data =
+        Box::from_raw(props.private_data as *mut PlanPropertiesPrivateData);
+    drop(private_data);
+}
+
+impl Drop for FFI_PlanProperties {
+    fn drop(&mut self) {
+        unsafe { (self.release)(self) }
+    }
+}
+
+impl FFI_PlanProperties {
+    pub fn new(props: &PlanProperties) -> Self {
         let private_data = Box::new(PlanPropertiesPrivateData {
-            output_partitioning,
-            output_ordering,
-            execution_mode: props.execution_mode.into(),
-            schema: Arc::clone(props.eq_properties.schema()),
+            props: props.clone(),
         });
 
-        let ffi_props = FFI_PlanProperties {
-            output_partitioning: Some(output_partitioning_fn_wrapper),
-            execution_mode: Some(execution_mode_fn_wrapper),
-            output_ordering: Some(output_ordering_fn_wrapper),
-            schema: Some(schema_fn_wrapper),
-            release: Some(release_fn_wrapper),
+        FFI_PlanProperties {
+            output_partitioning: output_partitioning_fn_wrapper,
+            execution_mode: execution_mode_fn_wrapper,
+            output_ordering: output_ordering_fn_wrapper,
+            schema: schema_fn_wrapper,
+            release: release_fn_wrapper,
             private_data: Box::into_raw(private_data) as *mut c_void,
-        };
-
-        Ok(ffi_props)
-    }
-
-    pub fn empty() -> Self {
-        Self {
-            output_partitioning: None,
-            execution_mode: None,
-            output_ordering: None,
-            schema: None,
-            release: None,
-            private_data: null_mut(),
         }
     }
 }
@@ -236,39 +212,18 @@ impl ForeignPlanProperties {
     /// provided, so the user must ensure it remains valid for the lifetime
     /// of the returned struct.
     pub unsafe fn new(ffi_props: FFI_PlanProperties) -> Result<Self> {
-        let schema_fn = ffi_props.schema.ok_or(DataFusionError::NotImplemented(
-            "schema() not implemented on FFI_PlanProperties".to_string(),
-        ))?;
-        let ffi_schema = schema_fn(&ffi_props);
-        let schema = (&ffi_schema).try_into()?;
-
-        let ordering_fn =
-            ffi_props
-                .output_ordering
-                .ok_or(DataFusionError::NotImplemented(
-                    "output_ordering() not implemented on FFI_PlanProperties".to_string(),
-                ))?;
-        let mut buff_size = 0;
-        let buff = ordering_fn(&ffi_props, &mut buff_size);
-        if buff.is_null() {
-            return Err(DataFusionError::Plan(
-                "Error occurred during FFI call to output_ordering in FFI_PlanProperties"
-                    .to_string(),
-            ));
-        }
+        let ffi_schema = (ffi_props.schema)(&ffi_props);
+        let schema = (&ffi_schema.0).try_into()?;
 
         // TODO Extend FFI to get the registry and codex
         let default_ctx = SessionContext::new();
         let codex = DefaultPhysicalExtensionCodec {};
 
-        let orderings = match buff_size == 0 {
-            true => None,
-            false => {
-                let data = slice::from_raw_parts(buff, buff_size);
-
-                let proto_output_ordering = PhysicalSortExprNodeCollection::decode(data)
-                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
-
+        let orderings = match (ffi_props.output_ordering)(&ffi_props) {
+            ROk(ordering_vec) => {
+                let proto_output_ordering =
+                    PhysicalSortExprNodeCollection::decode(ordering_vec.as_ref())
+                        .map_err(|e| DataFusionError::External(Box::new(e)))?;
                 Some(parse_physical_sort_exprs(
                     &proto_output_ordering.physical_sort_expr_nodes,
                     &default_ctx,
@@ -276,47 +231,26 @@ impl ForeignPlanProperties {
                     &codex,
                 )?)
             }
+            RErr(e) => return Err(DataFusionError::Plan(e.to_string())),
         };
 
-        let mut buff_size = 0;
-
-        let partitioning_fn =
-            ffi_props
-                .output_partitioning
-                .ok_or(DataFusionError::NotImplemented(
-                    "output_partitioning() not implemented on FFI_PlanProperties"
-                        .to_string(),
-                ))?;
-        let buff = partitioning_fn(&ffi_props, &mut buff_size);
-        if buff.is_null() && buff_size != 0 {
-            return Err(DataFusionError::Plan(
-                "Error occurred during FFI call to output_partitioning in FFI_PlanProperties"
-                    .to_string(),
-            ));
-        }
-
-        let partitioning = {
-            let data = slice::from_raw_parts(buff, buff_size as usize);
-
-            let proto_partitioning = Partitioning::decode(data)
-                .map_err(|e| DataFusionError::External(Box::new(e)))?;
-            // TODO: Validate this unwrap is safe.
-            parse_protobuf_partitioning(
-                Some(&proto_partitioning),
-                &default_ctx,
-                &schema,
-                &codex,
-            )?
-            .unwrap()
+        let partitioning = match (ffi_props.output_partitioning)(&ffi_props) {
+            ROk(partitioning_vec) => {
+                let proto_output_partitioning =
+                    Partitioning::decode(partitioning_vec.as_ref())
+                        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                parse_protobuf_partitioning(
+                    Some(&proto_output_partitioning),
+                    &default_ctx,
+                    &schema,
+                    &codex,
+                )?
+                .unwrap()
+            }
+            RErr(e) => return Err(DataFusionError::Plan(e.to_string())),
         };
 
-        let execution_mode_fn =
-            ffi_props
-                .execution_mode
-                .ok_or(DataFusionError::NotImplemented(
-                    "execution_mode() not implemented on FFI_PlanProperties".to_string(),
-                ))?;
-        let execution_mode: ExecutionMode = execution_mode_fn(&ffi_props).into();
+        let execution_mode: ExecutionMode = (ffi_props.execution_mode)(&ffi_props).into();
 
         let eq_properties = match orderings {
             Some(ordering) => {
@@ -351,7 +285,7 @@ mod tests {
             ExecutionMode::Unbounded,
         );
 
-        let local_props_ptr = FFI_PlanProperties::new(original_props.clone())?;
+        let local_props_ptr = FFI_PlanProperties::new(&original_props);
 
         let foreign_props = unsafe { ForeignPlanProperties::new(local_props_ptr)? };
 
