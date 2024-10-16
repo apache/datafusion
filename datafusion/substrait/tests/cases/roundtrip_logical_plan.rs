@@ -664,6 +664,19 @@ async fn simple_intersect() -> Result<()> {
 }
 
 #[tokio::test]
+async fn aggregate_wo_projection_consume() -> Result<()> {
+    let proto_plan =
+        read_json("tests/testdata/test_plans/aggregate_no_project.substrait.json");
+
+    assert_expected_plan_substrait(
+        proto_plan,
+        "Aggregate: groupBy=[[data.a]], aggr=[[count(data.a) AS countA]]\
+        \n  TableScan: data projection=[a]",
+    )
+    .await
+}
+
+#[tokio::test]
 async fn simple_intersect_consume() -> Result<()> {
     let proto_plan = read_json("tests/testdata/test_plans/intersect.substrait.json");
 
@@ -1122,12 +1135,29 @@ async fn assert_expected_plan(
     Ok(())
 }
 
+async fn assert_expected_plan_substrait(
+    substrait_plan: Plan,
+    expected_plan_str: &str,
+) -> Result<()> {
+    let ctx = create_context().await?;
+
+    let plan = from_substrait_plan(&ctx, &substrait_plan).await?;
+
+    let plan = ctx.state().optimize(&plan)?;
+
+    let planstr = format!("{plan}");
+    assert_eq!(planstr, expected_plan_str);
+
+    Ok(())
+}
+
 async fn assert_substrait_sql(substrait_plan: Plan, sql: &str) -> Result<()> {
     let ctx = create_context().await?;
 
     let expected = ctx.sql(sql).await?.into_optimized_plan()?;
 
     let plan = from_substrait_plan(&ctx, &substrait_plan).await?;
+
     let plan = ctx.state().optimize(&plan)?;
 
     let planstr = format!("{plan}");
