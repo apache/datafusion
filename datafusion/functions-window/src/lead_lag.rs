@@ -17,7 +17,10 @@
 
 //! `lead` and `lag` window function implementations
 
-use crate::utils::{get_casted_value, get_scalar_value_from_args, get_signed_integer};
+use crate::utils::{
+    get_casted_value, get_scalar_value_from_args, get_signed_integer,
+    rewrite_null_expr_and_data_type,
+};
 use datafusion_common::arrow::array::ArrayRef;
 use datafusion_common::arrow::datatypes::DataType;
 use datafusion_common::arrow::datatypes::Field;
@@ -178,9 +181,14 @@ impl WindowUDFImpl for WindowShift {
             .input_types()
             .first()
             .unwrap_or(&DataType::Null);
+        // See https://github.com/apache/datafusion/pull/12811
+        let (_expr, return_type) = rewrite_null_expr_and_data_type(
+            partition_evaluator_args.input_exprs(),
+            return_type,
+        )?;
         let default_value = get_casted_value(
             get_scalar_value_from_args(partition_evaluator_args.input_exprs(), 2)?,
-            return_type,
+            &return_type,
         )?;
 
         Ok(Box::new(WindowShiftEvaluator {

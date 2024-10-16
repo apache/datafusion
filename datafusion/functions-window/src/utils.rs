@@ -17,6 +17,7 @@
 
 use datafusion_common::arrow::datatypes::DataType;
 use datafusion_common::{exec_err, DataFusionError, ScalarValue};
+use datafusion_physical_expr::expressions::Literal;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use std::sync::Arc;
 
@@ -43,6 +44,41 @@ pub(crate) fn get_casted_value(
     }
 }
 
+/// Rewrites the NULL expression (1st argument) with an expression
+/// which is the same data type as the default value (3rd argument).
+/// Also rewrites the return type with the same data type as the
+/// default value.
+///
+/// If a default value is not provided, or it is NULL the original
+/// expression (1st argument) and return type is returned without
+/// any modifications.
+pub(crate) fn rewrite_null_expr_and_data_type(
+    args: &[Arc<dyn PhysicalExpr>],
+    expr_type: &DataType,
+) -> datafusion_common::Result<(Arc<dyn PhysicalExpr>, DataType)> {
+    assert!(!args.is_empty());
+    let expr = Arc::clone(&args[0]);
+
+    // The input expression and the return is type is unchanged
+    // when the input expression is not NULL.
+    if !expr_type.is_null() {
+        return Ok((expr, expr_type.clone()));
+    }
+
+    get_scalar_value_from_args(args, 2)?
+        .and_then(|value| {
+            ScalarValue::try_from(value.data_type().clone())
+                .map(|sv| {
+                    Ok((
+                        Arc::new(Literal::new(sv)) as Arc<dyn PhysicalExpr>,
+                        value.data_type().clone(),
+                    ))
+                })
+                .ok()
+        })
+        .unwrap_or(Ok((expr, expr_type.clone())))
+}
+
 pub(crate) fn get_scalar_value_from_args(
     args: &[Arc<dyn PhysicalExpr>],
     index: usize,
@@ -50,7 +86,7 @@ pub(crate) fn get_scalar_value_from_args(
     Ok(if let Some(field) = args.get(index) {
         let tmp = field
             .as_any()
-            .downcast_ref::<datafusion_physical_expr::expressions::Literal>()
+            .downcast_ref::<Literal>()
             .ok_or_else(|| DataFusionError::NotImplemented(
                 format!("There is only support Literal types for field at idx: {index} in Window Function"),
             ))?
