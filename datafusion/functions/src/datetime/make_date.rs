@@ -158,8 +158,6 @@ impl ScalarUDFImpl for MakeDateFunc {
 
 static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
-// TODO
-// Additional examples can be found here
 fn get_make_date_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
         Documentation::builder()

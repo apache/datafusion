@@ -107,9 +107,6 @@ impl ScalarUDFImpl for CurrentDateFunc {
 
 static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
-// TODO
-// look into this
-// fix the hyperlink for the alias
 fn get_current_date_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
         Documentation::builder()

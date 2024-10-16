@@ -145,9 +145,6 @@ impl ScalarUDFImpl for ToCharFunc {
 
 static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
-// TODO
-// add anchor link
-// add anchor link in arguments
 fn get_to_char_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
         Documentation::builder()
