@@ -76,7 +76,7 @@ use parking_lot::Mutex;
 ///
 /// To get the final result, we need to get all the pairs (i, j) in l2 such that i < j and p\[i\] < p\[j\] and e_i is from right table and e_j is from left table. We can do this by the following steps:
 /// 1. Traverse l2 from left to right, at offset j, we can maintain BtreeSet or bitmap to record all the p\[i\] that i < j, then find all the pairs (i, j) in l2 such that p\[i\] < p\[j\].
-/// See more detailed example in `compute_permutation` and `build_join_indices` function.
+///    See more detailed example in `compute_permutation` and `build_join_indices` function.
 ///
 /// To parallel the above algorithm, we can sort t1 and t2 by time (condition 1) firstly, and repartition the data into N partitions, then join t1\[i\] and t2\[j\] respectively. And if the minimum time of t1\[i\] is greater than the maximum time of t2\[j\], we can skip the join of t1\[i\] and t2\[j\] because there is no join result between them according to condition 1.
 #[derive(Debug)]
@@ -871,14 +871,14 @@ impl IEJoinStream {
                 // index from left table
                 // insert p in to range_map
                 IEJoinStream::insert_range_map(&mut range_map, unsafe {
-                    left_order.value_unchecked(*p as usize) as u64
+                    left_order.value_unchecked(*p as usize)
                 });
                 continue;
             }
             // index from right table, remap to 0..m
             let right_index = (l1_index - 1) as u64;
             // r\[right_index] in right table and l\[0..=rp\] in left table statisfy comparsion requirement of condition1
-            let rp = unsafe { left_order.value_unchecked(*p as usize) as u64 };
+            let rp = unsafe { left_order.value_unchecked(*p as usize) };
             for range in range_map.iter() {
                 let (end, start) = range;
                 if *start > rp {
