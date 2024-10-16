@@ -73,12 +73,17 @@ pub struct GroupValuesColumn {
 
     /// Random state for creating hashes
     random_state: RandomState,
+
+    column_nullables_buffer: Vec<bool>,
+
+    append_rows_buffer: Vec<usize>,
 }
 
 impl GroupValuesColumn {
     /// Create a new instance of GroupValuesColumn if supported for the specified schema
     pub fn try_new(schema: SchemaRef) -> Result<Self> {
         let map = RawTable::with_capacity(0);
+        let num_cols = schema.fields.len();
         Ok(Self {
             schema,
             map,
@@ -86,6 +91,8 @@ impl GroupValuesColumn {
             group_values: vec![],
             hashes_buffer: Default::default(),
             random_state: Default::default(),
+            column_nullables_buffer: vec![false; num_cols],
+            append_rows_buffer: Vec::new(),
         })
     }
 
@@ -144,6 +151,13 @@ macro_rules! instantiate_primitive {
             $v.push(Box::new(b) as _)
         }
     };
+}
+
+fn append_col_value<C>(mut core: C, array: &ArrayRef, row: usize)
+where
+    C: FnMut(&ArrayRef, usize),
+{
+    core(array, row);
 }
 
 impl GroupValues for GroupValuesColumn {
@@ -213,6 +227,14 @@ impl GroupValues for GroupValuesColumn {
         batch_hashes.resize(n_rows, 0);
         create_hashes(cols, &self.random_state, batch_hashes)?;
 
+        // 1.2 Check if columns nullable
+        for (col_idx, col) in cols.iter().enumerate() {
+            self.column_nullables_buffer[col_idx] = (col.null_count() != 0);
+        }
+
+        // 1.3 Check and record which rows of the input should be appended
+        self.append_rows_buffer.clear();
+        let mut current_group_idx = self.group_values[0].len();
         for (row, &target_hash) in batch_hashes.iter().enumerate() {
             let entry = self.map.get_mut(target_hash, |(exist_hash, group_idx)| {
                 // Somewhat surprisingly, this closure can be called even if the
@@ -249,29 +271,36 @@ impl GroupValues for GroupValuesColumn {
                     // Add new entry to aggr_state and save newly created index
                     // let group_idx = group_values.num_rows();
                     // group_values.push(group_rows.row(row));
-
-                    let mut checklen = 0;
-                    let group_idx = self.group_values[0].len();
-                    for (i, group_value) in self.group_values.iter_mut().enumerate() {
-                        group_value.append_val(&cols[i], row);
-                        let len = group_value.len();
-                        if i == 0 {
-                            checklen = len;
-                        } else {
-                            debug_assert_eq!(checklen, len);
-                        }
-                    }
+                    let prev_group_idx = current_group_idx;
 
                     // for hasher function, use precomputed hash value
                     self.map.insert_accounted(
-                        (target_hash, group_idx),
+                        (target_hash, prev_group_idx),
                         |(hash, _group_index)| *hash,
                         &mut self.map_size,
                     );
-                    group_idx
+                    self.append_rows_buffer.push(row);
+                    current_group_idx += 1;
+
+                    prev_group_idx
                 }
             };
             groups.push(group_idx);
+        }
+
+        // 1.4 Vectorized append values
+        for (col_idx, col) in cols.iter().enumerate() {
+            let col_nullable = self.column_nullables_buffer[col_idx];
+            let group_value = &mut self.group_values[col_idx];
+            if col_nullable {
+                for &row in self.append_rows_buffer.iter() {
+                    group_value.append_val(&cols[col_idx], row);
+                }
+            } else {
+                for &row in self.append_rows_buffer.iter() {
+                    group_value.append_non_nullable_val(&cols[col_idx], row);
+                }
+            }
         }
 
         Ok(())
