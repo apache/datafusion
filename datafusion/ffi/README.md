@@ -31,11 +31,11 @@ repository, but many other use cases may exist. We envision at least two
 use cases.
 
 1. `datafusion-python` which will use the FFI to provide external services such
-as a `TableProvider` without needing to re-export the entire `datafusion-python`
-code base. With `datafusion-ffi` these packages do not need `datafusion-python`
-as a dependency at all.
+   as a `TableProvider` without needing to re-export the entire `datafusion-python`
+   code base. With `datafusion-ffi` these packages do not need `datafusion-python`
+   as a dependency at all.
 2. Users may want to create a modular interface that allows runtime loading of
-libraries.
+   libraries.
 
 ## Struct Layout
 
@@ -45,7 +45,7 @@ their internal counterparts. In the following example, we will refer to the
 
 Each of the exposted structs in this crate is provided with a variant prefixed
 with `Foreign`. This variant is designed to be used by the consumer of the
-foreign code. The `Foreign` structs should *never* access the `private_data`
+foreign code. The `Foreign` structs should _never_ access the `private_data`
 fields. Instead they should only access the data returned through the function
 calls defined on the `FFI_` structs. The second purpose of the `Foreign`
 structs is to contain additional data that may be needed by the traits that
