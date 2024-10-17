@@ -24,18 +24,22 @@ extern crate datafusion;
 use std::sync::Arc;
 
 use arrow::{
-    array::{ArrayRef, Int64Array, StringArray},
+    array::{ArrayRef, Int32Array, Int64Array, StringArray},
+    datatypes::{Field, Schema, SchemaRef},
     record_batch::RecordBatch,
 };
 use tokio::runtime::Runtime;
 
-use datafusion::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion::physical_plan::{
     collect,
     expressions::{col, PhysicalSortExpr},
     memory::MemoryExec,
 };
 use datafusion::prelude::SessionContext;
+use datafusion::{
+    physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec,
+    physical_planner::DefaultPhysicalPlanner, physical_planner::PhysicalPlanner,
+};
 
 // Initialise the operator using the provided record batches and the sort key
 // as inputs. All record batches must have the same schema.
@@ -129,7 +133,7 @@ fn batches(
     rbs
 }
 
-fn criterion_benchmark(c: &mut Criterion) {
+fn bench_sort_preserving_merge_operator(c: &mut Criterion) {
     let small_batch = batches(1, 100, 10, 0).remove(0);
     let large_batch = batches(1, 1000, 1, 0).remove(0);
 
@@ -183,5 +187,67 @@ fn criterion_benchmark(c: &mut Criterion) {
     }
 }
 
-criterion_group!(benches, criterion_benchmark);
+/// Aimed at tracking inefficiencies at the stage of creating/optimizing a physical plan.
+fn bench_creation_many_columns(c: &mut Criterion) {
+    const COLUMNS_NUM: usize = 500;
+
+    let ctx = SessionContext::new();
+    let mut fields = vec![];
+    let mut columns = vec![];
+    for i in 0..COLUMNS_NUM {
+        fields.push(Field::new(
+            format!("attribute{}", i),
+            datafusion::arrow::datatypes::DataType::Int32,
+            true,
+        ));
+        columns.push(Int32Array::from(vec![1]));
+    }
+
+    // A fictive batch.
+    let batch = RecordBatch::try_new(
+        SchemaRef::new(Schema::new(fields)),
+        columns
+            .into_iter()
+            .map(|it| Arc::new(it) as Arc<dyn arrow_array::Array>)
+            .collect(),
+    )
+    .unwrap();
+
+    ctx.register_batch("t", batch).unwrap();
+
+    let mut aggregates = String::new();
+    for i in 0..COLUMNS_NUM {
+        if i > 0 {
+            aggregates.push_str(", ");
+        }
+        aggregates.push_str(format!("MAX(attribute{})", i).as_str());
+    }
+
+    // SELECT max(attr0), ..., max(attrN) FROM t.
+    let query = format!("SELECT {} FROM t", aggregates);
+    let rt = Runtime::new().unwrap();
+    let logical_plan = Arc::new(rt.block_on(async {
+        let statement = ctx.state().sql_to_statement(&query, "Generic").unwrap();
+        ctx.state().statement_to_plan(statement).await.unwrap()
+    }));
+
+    c.bench_function("phys_plan_creation_many_columns", |b| {
+        let rt = Runtime::new().unwrap();
+        let planner = DefaultPhysicalPlanner::default();
+
+        b.iter(|| {
+            let plan = Arc::clone(&logical_plan);
+            rt.block_on(async {
+                planner.create_physical_plan(&plan, &ctx.state()).await
+            })
+            .unwrap();
+        });
+    });
+}
+
+criterion_group!(
+    benches,
+    bench_sort_preserving_merge_operator,
+    bench_creation_many_columns
+);
 criterion_main!(benches);

@@ -41,7 +41,7 @@ use crate::{expressions::PhysicalSortExpr, reverse_order_bys, PhysicalExpr};
 /// See comments on [`WindowExpr`] for more details.
 #[derive(Debug)]
 pub struct SlidingAggregateWindowExpr {
-    aggregate: AggregateFunctionExpr,
+    aggregate: Arc<AggregateFunctionExpr>,
     partition_by: Vec<Arc<dyn PhysicalExpr>>,
     order_by: Vec<PhysicalSortExpr>,
     window_frame: Arc<WindowFrame>,
@@ -50,7 +50,7 @@ pub struct SlidingAggregateWindowExpr {
 impl SlidingAggregateWindowExpr {
     /// Create a new (sliding) aggregate window function expression.
     pub fn new(
-        aggregate: AggregateFunctionExpr,
+        aggregate: Arc<AggregateFunctionExpr>,
         partition_by: &[Arc<dyn PhysicalExpr>],
         order_by: &[PhysicalSortExpr],
         window_frame: Arc<WindowFrame>,
@@ -121,14 +121,14 @@ impl WindowExpr for SlidingAggregateWindowExpr {
             let reverse_window_frame = self.window_frame.reverse();
             if reverse_window_frame.start_bound.is_unbounded() {
                 Arc::new(PlainAggregateWindowExpr::new(
-                    reverse_expr,
+                    Arc::new(reverse_expr),
                     &self.partition_by.clone(),
                     &reverse_order_bys(&self.order_by),
                     Arc::new(self.window_frame.reverse()),
                 )) as _
             } else {
                 Arc::new(SlidingAggregateWindowExpr::new(
-                    reverse_expr,
+                    Arc::new(reverse_expr),
                     &self.partition_by.clone(),
                     &reverse_order_bys(&self.order_by),
                     Arc::new(self.window_frame.reverse()),
@@ -159,7 +159,10 @@ impl WindowExpr for SlidingAggregateWindowExpr {
             })
             .collect::<Vec<_>>();
         Some(Arc::new(SlidingAggregateWindowExpr {
-            aggregate: self.aggregate.with_new_expressions(args, vec![])?,
+            aggregate: self
+                .aggregate
+                .with_new_expressions(args, vec![])
+                .map(Arc::new)?,
             partition_by: partition_bys,
             order_by: new_order_by,
             window_frame: Arc::clone(&self.window_frame),

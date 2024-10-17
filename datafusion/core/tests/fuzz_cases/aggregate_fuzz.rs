@@ -405,6 +405,7 @@ async fn run_aggregate_test(input1: Vec<RecordBatch>, group_by_columns: Vec<&str
                 .schema(Arc::clone(&schema))
                 .alias("sum1")
                 .build()
+                .map(Arc::new)
                 .unwrap(),
         ];
     let expr = group_by_columns

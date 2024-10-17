@@ -591,7 +591,7 @@ impl GroupedHashAggregateStream {
 /// that is supported by the aggregate, or a
 /// [`GroupsAccumulatorAdapter`] if not.
 pub(crate) fn create_group_accumulator(
-    agg_expr: &AggregateFunctionExpr,
+    agg_expr: &Arc<AggregateFunctionExpr>,
 ) -> Result<Box<dyn GroupsAccumulator>> {
     if agg_expr.groups_accumulator_supported() {
         agg_expr.create_groups_accumulator()
@@ -601,7 +601,7 @@ pub(crate) fn create_group_accumulator(
             "Creating GroupsAccumulatorAdapter for {}: {agg_expr:?}",
             agg_expr.name()
         );
-        let agg_expr_captured = agg_expr.clone();
+        let agg_expr_captured = Arc::clone(agg_expr);
         let factory = move || agg_expr_captured.create_accumulator();
         Ok(Box::new(GroupsAccumulatorAdapter::new(factory)))
     }
