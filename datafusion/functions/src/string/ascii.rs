@@ -20,10 +20,11 @@ use arrow::array::{ArrayAccessor, ArrayIter, ArrayRef, AsArray, Int32Array};
 use arrow::datatypes::DataType;
 use arrow::error::ArrowError;
 use datafusion_common::{internal_err, Result};
-use datafusion_expr::ColumnarValue;
+use datafusion_expr::scalar_doc_sections::DOC_SECTION_STRING;
+use datafusion_expr::{ColumnarValue, Documentation};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use std::any::Any;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 #[derive(Debug)]
 pub struct AsciiFunc {
@@ -38,13 +39,8 @@ impl Default for AsciiFunc {
 
 impl AsciiFunc {
     pub fn new() -> Self {
-        use DataType::*;
         Self {
-            signature: Signature::uniform(
-                1,
-                vec![Utf8, LargeUtf8, Utf8View],
-                Volatility::Immutable,
-            ),
+            signature: Signature::string(1, Volatility::Immutable),
         }
     }
 }
@@ -71,6 +67,43 @@ impl ScalarUDFImpl for AsciiFunc {
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
         make_scalar_function(ascii, vec![])(args)
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_ascii_doc())
+    }
+}
+
+static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+
+fn get_ascii_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_STRING)
+            .with_description(
+                "Returns the Unicode character code of the first character in a string.",
+            )
+            .with_syntax_example("ascii(str)")
+            .with_sql_example(
+                r#"```sql
+> select ascii('abc');
++--------------------+
+| ascii(Utf8("abc")) |
++--------------------+
+| 97                 |
++--------------------+
+> select ascii('🚀');
++-------------------+
+| ascii(Utf8("🚀")) |
++-------------------+
+| 128640            |
++-------------------+
+```"#,
+            )
+            .with_standard_argument("str", "String")
+            .with_related_udf("chr")
+            .build()
+            .unwrap()
+    })
 }
 
 fn calculate_ascii<'a, V>(array: V) -> Result<ArrayRef, ArrowError>

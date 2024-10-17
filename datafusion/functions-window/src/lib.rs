@@ -29,16 +29,25 @@ use log::debug;
 use datafusion_expr::registry::FunctionRegistry;
 use datafusion_expr::WindowUDF;
 
+#[macro_use]
+pub mod macros;
+pub mod rank;
 pub mod row_number;
 
 /// Fluent-style API for creating `Expr`s
 pub mod expr_fn {
+    pub use super::rank::{dense_rank, percent_rank, rank};
     pub use super::row_number::row_number;
 }
 
 /// Returns all default window functions
 pub fn all_default_window_functions() -> Vec<Arc<WindowUDF>> {
-    vec![row_number::row_number_udwf()]
+    vec![
+        row_number::row_number_udwf(),
+        rank::rank_udwf(),
+        rank::dense_rank_udwf(),
+        rank::percent_rank_udwf(),
+    ]
 }
 /// Registers all enabled packages with a [`FunctionRegistry`]
 pub fn register_all(

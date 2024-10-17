@@ -39,6 +39,7 @@ use futures::Stream;
 /// A fallible [`PartitionedStream`] of [`Cursor`] and [`RecordBatch`]
 type CursorStream<C> = Box<dyn PartitionedStream<Output = Result<(C, RecordBatch)>>>;
 
+/// Merges a stream of sorted cursors and record batches into a single sorted stream
 #[derive(Debug)]
 pub(crate) struct SortPreservingMergeStream<C: CursorValues> {
     in_progress: BatchBuilder,

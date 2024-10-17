@@ -87,13 +87,14 @@ mod test {
 
     wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
 
-    #[wasm_bindgen_test]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test)]
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
     fn datafusion_test() {
         basic_exprs();
         basic_parse();
     }
 
-    #[wasm_bindgen_test]
+    #[wasm_bindgen_test(unsupported = tokio::test)]
     async fn basic_execute() {
         let sql = "SELECT 2 + 2;";
 

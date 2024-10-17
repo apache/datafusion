@@ -69,11 +69,18 @@ impl UrlTableFactory for DynamicListTableFactory {
             .ok_or_else(|| plan_datafusion_err!("get current SessionStore error"))?;
 
         match ListingTableConfig::new(table_url.clone())
-            .infer(state)
+            .infer_options(state)
             .await
         {
-            Ok(cfg) => ListingTable::try_new(cfg)
-                .map(|table| Some(Arc::new(table) as Arc<dyn TableProvider>)),
+            Ok(cfg) => {
+                let cfg = cfg
+                    .infer_partitions_from_path(state)
+                    .await?
+                    .infer_schema(state)
+                    .await?;
+                ListingTable::try_new(cfg)
+                    .map(|table| Some(Arc::new(table) as Arc<dyn TableProvider>))
+            }
             Err(_) => Ok(None),
         }
     }

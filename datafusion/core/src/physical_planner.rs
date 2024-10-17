@@ -71,7 +71,7 @@ use datafusion_common::{
     exec_err, internal_datafusion_err, internal_err, not_impl_err, plan_err, DFSchema,
     ScalarValue,
 };
-use datafusion_expr::dml::CopyTo;
+use datafusion_expr::dml::{CopyTo, InsertOp};
 use datafusion_expr::expr::{
     physical_name, AggregateFunction, Alias, GroupingSet, WindowFunction,
 };
@@ -529,7 +529,7 @@ impl DefaultPhysicalPlanner {
                     file_groups: vec![],
                     output_schema: Arc::new(schema),
                     table_partition_cols,
-                    overwrite: false,
+                    insert_op: InsertOp::Append,
                     keep_partition_by_columns,
                 };
 
@@ -542,7 +542,7 @@ impl DefaultPhysicalPlanner {
             }
             LogicalPlan::Dml(DmlStatement {
                 table_name,
-                op: WriteOp::InsertInto,
+                op: WriteOp::Insert(insert_op),
                 ..
             }) => {
                 let name = table_name.table();
@@ -550,23 +550,7 @@ impl DefaultPhysicalPlanner {
                 if let Some(provider) = schema.table(name).await? {
                     let input_exec = children.one()?;
                     provider
-                        .insert_into(session_state, input_exec, false)
-                        .await?
-                } else {
-                    return exec_err!("Table '{table_name}' does not exist");
-                }
-            }
-            LogicalPlan::Dml(DmlStatement {
-                table_name,
-                op: WriteOp::InsertOverwrite,
-                ..
-            }) => {
-                let name = table_name.table();
-                let schema = session_state.schema_for_ref(table_name.clone())?;
-                if let Some(provider) = schema.table(name).await? {
-                    let input_exec = children.one()?;
-                    provider
-                        .insert_into(session_state, input_exec, true)
+                        .insert_into(session_state, input_exec, *insert_op)
                         .await?
                 } else {
                     return exec_err!("Table '{table_name}' does not exist");
@@ -708,10 +692,6 @@ impl DefaultPhysicalPlanner {
                     physical_input_schema.clone(),
                 )?);
 
-                // update group column indices based on partial aggregate plan evaluation
-                let final_group: Vec<Arc<dyn PhysicalExpr>> =
-                    initial_aggr.output_group_expr();
-
                 let can_repartition = !groups.is_empty()
                     && session_state.config().target_partitions() > 1
                     && session_state.config().repartition_aggregations();
@@ -732,13 +712,7 @@ impl DefaultPhysicalPlanner {
                     AggregateMode::Final
                 };
 
-                let final_grouping_set = PhysicalGroupBy::new_single(
-                    final_group
-                        .iter()
-                        .enumerate()
-                        .map(|(i, expr)| (expr.clone(), groups.expr()[i].1.clone()))
-                        .collect(),
-                );
+                let final_grouping_set = initial_aggr.group_expr().as_final();
 
                 Arc::new(AggregateExec::try_new(
                     next_partition_mode,
@@ -2361,7 +2335,7 @@ mod tests {
             .expect("hash aggregate");
         assert_eq!(
             "sum(aggregate_test_100.c3)",
-            final_hash_agg.schema().field(2).name()
+            final_hash_agg.schema().field(3).name()
         );
         // we need access to the input to the partial aggregate so that other projects can
         // implement serde
@@ -2572,6 +2546,10 @@ mod tests {
             _inputs: Vec<LogicalPlan>,
         ) -> Result<Self> {
             unimplemented!("NoOp");
+        }
+
+        fn supports_limit_pushdown(&self) -> bool {
+            false // Disallow limit push-down by default
         }
     }
 

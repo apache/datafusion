@@ -30,7 +30,6 @@ use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::JoinType;
 use datafusion_physical_expr_common::physical_expr::format_physical_expr_list;
 
-#[derive(Debug, Clone)]
 /// A structure representing a expression known to be constant in a physical execution plan.
 ///
 /// The `ConstExpr` struct encapsulates an expression that is constant during the execution
@@ -41,9 +40,10 @@ use datafusion_physical_expr_common::physical_expr::format_physical_expr_list;
 ///
 /// - `expr`: Constant expression for a node in the physical plan.
 ///
-/// - `across_partitions`: A boolean flag indicating whether the constant expression is
-///   valid across partitions. If set to `true`, the constant expression has same value for all partitions.
-///   If set to `false`, the constant expression may have different values for different partitions.
+/// - `across_partitions`: A boolean flag indicating whether the constant
+///   expression is the same across partitions. If set to `true`, the constant
+///   expression has same value for all partitions. If set to `false`, the
+///   constant expression may have different values for different partitions.
 ///
 /// # Example
 ///
@@ -56,9 +56,20 @@ use datafusion_physical_expr_common::physical_expr::format_physical_expr_list;
 /// // create a constant expression from a physical expression
 /// let const_expr = ConstExpr::from(col);
 /// ```
+#[derive(Debug, Clone)]
 pub struct ConstExpr {
+    /// The  expression that is known to be constant (e.g. a `Column`)
     expr: Arc<dyn PhysicalExpr>,
+    /// Does the constant have the same value across all partitions? See
+    /// struct docs for more details
     across_partitions: bool,
+}
+
+impl PartialEq for ConstExpr {
+    fn eq(&self, other: &Self) -> bool {
+        self.across_partitions == other.across_partitions
+            && self.expr.eq(other.expr.as_any())
+    }
 }
 
 impl ConstExpr {
@@ -74,11 +85,17 @@ impl ConstExpr {
         }
     }
 
+    /// Set the `across_partitions` flag
+    ///
+    /// See struct docs for more details
     pub fn with_across_partitions(mut self, across_partitions: bool) -> Self {
         self.across_partitions = across_partitions;
         self
     }
 
+    /// Is the  expression the same across all partitions?
+    ///
+    /// See struct docs for more details
     pub fn across_partitions(&self) -> bool {
         self.across_partitions
     }
@@ -100,6 +117,31 @@ impl ConstExpr {
             expr,
             across_partitions: self.across_partitions,
         })
+    }
+
+    /// Returns true if this constant expression is equal to the given expression
+    pub fn eq_expr(&self, other: impl AsRef<dyn PhysicalExpr>) -> bool {
+        self.expr.eq(other.as_ref().as_any())
+    }
+
+    /// Returns a [`Display`]able list of `ConstExpr`.
+    pub fn format_list(input: &[ConstExpr]) -> impl Display + '_ {
+        struct DisplayableList<'a>(&'a [ConstExpr]);
+        impl<'a> Display for DisplayableList<'a> {
+            fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                let mut first = true;
+                for const_expr in self.0 {
+                    if first {
+                        first = false;
+                    } else {
+                        write!(f, ",")?;
+                    }
+                    write!(f, "{}", const_expr)?;
+                }
+                Ok(())
+            }
+        }
+        DisplayableList(input)
     }
 }
 

@@ -17,7 +17,9 @@
 
 //! [`ScalarUDFImpl`] definitions for `make_array` function.
 
-use std::{any::Any, sync::Arc};
+use std::any::Any;
+use std::sync::{Arc, OnceLock};
+use std::vec;
 
 use arrow::array::{ArrayData, Capacities, MutableArrayData};
 use arrow_array::{
@@ -26,11 +28,15 @@ use arrow_array::{
 use arrow_buffer::OffsetBuffer;
 use arrow_schema::DataType::{LargeList, List, Null};
 use arrow_schema::{DataType, Field};
-use datafusion_common::internal_err;
+use datafusion_common::{exec_err, internal_err};
 use datafusion_common::{plan_err, utils::array_into_list_array_nullable, Result};
-use datafusion_expr::type_coercion::binary::comparison_coercion;
+use datafusion_expr::binary::type_union_resolution;
+use datafusion_expr::scalar_doc_sections::DOC_SECTION_ARRAY;
 use datafusion_expr::TypeSignature;
-use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{
+    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+};
+use itertools::Itertools;
 
 use crate::utils::make_scalar_function;
 
@@ -82,19 +88,12 @@ impl ScalarUDFImpl for MakeArray {
         match arg_types.len() {
             0 => Ok(empty_array_type()),
             _ => {
-                let mut expr_type = DataType::Null;
-                for arg_type in arg_types {
-                    if !arg_type.equals_datatype(&DataType::Null) {
-                        expr_type = arg_type.clone();
-                        break;
-                    }
-                }
-
-                if expr_type.is_null() {
-                    expr_type = DataType::Int64;
-                }
-
-                Ok(List(Arc::new(Field::new("item", expr_type, true))))
+                // At this point, all the type in array should be coerced to the same one
+                Ok(List(Arc::new(Field::new(
+                    "item",
+                    arg_types[0].to_owned(),
+                    true,
+                ))))
             }
         }
     }
@@ -112,23 +111,101 @@ impl ScalarUDFImpl for MakeArray {
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        let new_type = arg_types.iter().skip(1).try_fold(
-            arg_types.first().unwrap().clone(),
-            |acc, x| {
-                // The coerced types found by `comparison_coercion` are not guaranteed to be
-                // coercible for the arguments. `comparison_coercion` returns more loose
-                // types that can be coerced to both `acc` and `x` for comparison purpose.
-                // See `maybe_data_types` for the actual coercion.
-                let coerced_type = comparison_coercion(&acc, x);
-                if let Some(coerced_type) = coerced_type {
-                    Ok(coerced_type)
+        if let Some(new_type) = type_union_resolution(arg_types) {
+            // TODO: Move the logic to type_union_resolution if this applies to other functions as well
+            // Handle struct where we only change the data type but preserve the field name and nullability.
+            // Since field name is the key of the struct, so it shouldn't be updated to the common column name like "c0" or "c1"
+            let is_struct_and_has_same_key = are_all_struct_and_have_same_key(arg_types)?;
+            if is_struct_and_has_same_key {
+                let data_types: Vec<_> = if let DataType::Struct(fields) = &arg_types[0] {
+                    fields.iter().map(|f| f.data_type().to_owned()).collect()
                 } else {
-                    internal_err!("Coercion from {acc:?} to {x:?} failed.")
+                    return internal_err!("Struct type is checked is the previous function, so this should be unreachable");
+                };
+
+                let mut final_struct_types = vec![];
+                for s in arg_types {
+                    let mut new_fields = vec![];
+                    if let DataType::Struct(fields) = s {
+                        for (i, f) in fields.iter().enumerate() {
+                            let field = Arc::unwrap_or_clone(Arc::clone(f))
+                                .with_data_type(data_types[i].to_owned());
+                            new_fields.push(Arc::new(field));
+                        }
+                    }
+                    final_struct_types.push(DataType::Struct(new_fields.into()))
                 }
-            },
-        )?;
-        Ok(vec![new_type; arg_types.len()])
+                return Ok(final_struct_types);
+            }
+
+            if let DataType::FixedSizeList(field, _) = new_type {
+                Ok(vec![DataType::List(field); arg_types.len()])
+            } else if new_type.is_null() {
+                Ok(vec![DataType::Int64; arg_types.len()])
+            } else {
+                Ok(vec![new_type; arg_types.len()])
+            }
+        } else {
+            plan_err!(
+                "Fail to find the valid type between {:?} for {}",
+                arg_types,
+                self.name()
+            )
+        }
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_make_array_doc())
+    }
+}
+
+static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+
+fn get_make_array_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_ARRAY)
+            .with_description(
+                "Returns an array using the specified input expressions.",
+            )
+            .with_syntax_example("make_array(expression1[, ..., expression_n])")
+            .with_sql_example(
+                r#"```sql
+> select make_array(1, 2, 3, 4, 5);
++----------------------------------------------------------+
+| make_array(Int64(1),Int64(2),Int64(3),Int64(4),Int64(5)) |
++----------------------------------------------------------+
+| [1, 2, 3, 4, 5]                                          |
++----------------------------------------------------------+
+```"#,
+            )
+            .with_argument(
+                "expression_n",
+                "Expression to include in the output array. Can be a constant, column, or function, and any combination of arithmetic or string operators.",
+            )
+            .build()
+            .unwrap()
+    })
+}
+
+fn are_all_struct_and_have_same_key(data_types: &[DataType]) -> Result<bool> {
+    let mut keys_string: Option<String> = None;
+    for data_type in data_types {
+        if let DataType::Struct(fields) = data_type {
+            let keys = fields.iter().map(|f| f.name().to_owned()).join(",");
+            if let Some(ref k) = keys_string {
+                if *k != keys {
+                    return exec_err!("Expect same keys for struct type but got mismatched pair {} and {}", *k, keys);
+                }
+            } else {
+                keys_string = Some(keys);
+            }
+        } else {
+            return Ok(false);
+        }
+    }
+
+    Ok(true)
 }
 
 // Empty array is a special case that is useful for many other array functions

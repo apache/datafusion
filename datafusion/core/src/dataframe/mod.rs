@@ -52,6 +52,7 @@ use datafusion_common::config::{CsvOptions, JsonOptions};
 use datafusion_common::{
     plan_err, Column, DFSchema, DataFusionError, ParamValues, SchemaError, UnnestOptions,
 };
+use datafusion_expr::dml::InsertOp;
 use datafusion_expr::{case, is_null, lit, SortExpr};
 use datafusion_expr::{
     utils::COUNT_STAR_EXPANSION, TableProviderFilterPushDown, UNNAMED_TABLE,
@@ -66,8 +67,9 @@ use datafusion_catalog::Session;
 /// Contains options that control how data is
 /// written out from a DataFrame
 pub struct DataFrameWriteOptions {
-    /// Controls if existing data should be overwritten
-    overwrite: bool,
+    /// Controls how new data should be written to the table, determining whether
+    /// to append, overwrite, or replace existing data.
+    insert_op: InsertOp,
     /// Controls if all partitions should be coalesced into a single output file
     /// Generally will have slower performance when set to true.
     single_file_output: bool,
@@ -80,14 +82,15 @@ impl DataFrameWriteOptions {
     /// Create a new DataFrameWriteOptions with default values
     pub fn new() -> Self {
         DataFrameWriteOptions {
-            overwrite: false,
+            insert_op: InsertOp::Append,
             single_file_output: false,
             partition_by: vec![],
         }
     }
-    /// Set the overwrite option to true or false
-    pub fn with_overwrite(mut self, overwrite: bool) -> Self {
-        self.overwrite = overwrite;
+
+    /// Set the insert operation
+    pub fn with_insert_operation(mut self, insert_op: InsertOp) -> Self {
+        self.insert_op = insert_op;
         self
     }
 
@@ -532,9 +535,26 @@ impl DataFrame {
         group_expr: Vec<Expr>,
         aggr_expr: Vec<Expr>,
     ) -> Result<DataFrame> {
+        let is_grouping_set = matches!(group_expr.as_slice(), [Expr::GroupingSet(_)]);
+        let aggr_expr_len = aggr_expr.len();
         let plan = LogicalPlanBuilder::from(self.plan)
             .aggregate(group_expr, aggr_expr)?
             .build()?;
+        let plan = if is_grouping_set {
+            let grouping_id_pos = plan.schema().fields().len() - 1 - aggr_expr_len;
+            // For grouping sets we do a project to not expose the internal grouping id
+            let exprs = plan
+                .schema()
+                .columns()
+                .into_iter()
+                .enumerate()
+                .filter(|(idx, _)| *idx != grouping_id_pos)
+                .map(|(_, column)| Expr::Column(column))
+                .collect::<Vec<_>>();
+            LogicalPlanBuilder::from(plan).project(exprs)?.build()?
+        } else {
+            plan
+        };
         Ok(DataFrame {
             session_state: self.session_state,
             plan,
@@ -1525,7 +1545,7 @@ impl DataFrame {
             self.plan,
             table_name.to_owned(),
             &arrow_schema,
-            write_options.overwrite,
+            write_options.insert_op,
         )?
         .build()?;
 
@@ -1566,10 +1586,11 @@ impl DataFrame {
         options: DataFrameWriteOptions,
         writer_options: Option<CsvOptions>,
     ) -> Result<Vec<RecordBatch>, DataFusionError> {
-        if options.overwrite {
-            return Err(DataFusionError::NotImplemented(
-                "Overwrites are not implemented for DataFrame::write_csv.".to_owned(),
-            ));
+        if options.insert_op != InsertOp::Append {
+            return Err(DataFusionError::NotImplemented(format!(
+                "{} is not implemented for DataFrame::write_csv.",
+                options.insert_op
+            )));
         }
 
         let format = if let Some(csv_opts) = writer_options {
@@ -1626,10 +1647,11 @@ impl DataFrame {
         options: DataFrameWriteOptions,
         writer_options: Option<JsonOptions>,
     ) -> Result<Vec<RecordBatch>, DataFusionError> {
-        if options.overwrite {
-            return Err(DataFusionError::NotImplemented(
-                "Overwrites are not implemented for DataFrame::write_json.".to_owned(),
-            ));
+        if options.insert_op != InsertOp::Append {
+            return Err(DataFusionError::NotImplemented(format!(
+                "{} is not implemented for DataFrame::write_json.",
+                options.insert_op
+            )));
         }
 
         let format = if let Some(json_opts) = writer_options {
@@ -2965,9 +2987,7 @@ mod tests {
             JoinType::Inner,
             Some(Expr::Literal(ScalarValue::Null)),
         )?;
-        let expected_plan = "CrossJoin:\
-        \n  TableScan: a projection=[c1], full_filters=[Boolean(NULL)]\
-        \n  TableScan: b projection=[c1]";
+        let expected_plan = "EmptyRelation";
         assert_eq!(expected_plan, format!("{}", join.into_optimized_plan()?));
 
         // JOIN ON expression must be boolean type
@@ -3372,52 +3392,6 @@ mod tests {
             ],
             &df_results
         );
-        Ok(())
-    }
-
-    // Table 't1' self join
-    // Supplementary test of issue: https://github.com/apache/datafusion/issues/7790
-    #[tokio::test]
-    async fn with_column_self_join() -> Result<()> {
-        let df = test_table().await?.select_columns(&["c1"])?;
-        let ctx = SessionContext::new();
-
-        ctx.register_table("t1", df.into_view())?;
-
-        let df = ctx
-            .table("t1")
-            .await?
-            .join(
-                ctx.table("t1").await?,
-                JoinType::Inner,
-                &["c1"],
-                &["c1"],
-                None,
-            )?
-            .sort(vec![
-                // make the test deterministic
-                col("t1.c1").sort(true, true),
-            ])?
-            .limit(0, Some(1))?;
-
-        let df_results = df.clone().collect().await?;
-        assert_batches_sorted_eq!(
-            [
-                "+----+----+",
-                "| c1 | c1 |",
-                "+----+----+",
-                "| a  | a  |",
-                "+----+----+",
-            ],
-            &df_results
-        );
-
-        let actual_err = df.clone().with_column("new_column", lit(true)).unwrap_err();
-        let expected_err = "Error during planning: Projections require unique expression names \
-            but the expression \"t1.c1\" at position 0 and \"t1.c1\" at position 1 have the same name. \
-            Consider aliasing (\"AS\") one of them.";
-        assert_eq!(actual_err.strip_backtrace(), expected_err);
-
         Ok(())
     }
 

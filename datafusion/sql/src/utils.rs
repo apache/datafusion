@@ -202,7 +202,7 @@ pub(crate) fn resolve_aliases_to_exprs(
     .data()
 }
 
-/// given a slice of window expressions sharing the same sort key, find their common partition
+/// Given a slice of window expressions sharing the same sort key, find their common partition
 /// keys.
 pub fn window_expr_common_partition_keys(window_exprs: &[Expr]) -> Result<&[Expr]> {
     let all_partition_keys = window_exprs
@@ -321,7 +321,7 @@ A full example of how the transformation works:
 struct RecursiveUnnestRewriter<'a> {
     input_schema: &'a DFSchemaRef,
     root_expr: &'a Expr,
-    // useful to detect which child expr is a part of/ not a part of unnest operation
+    // Useful to detect which child expr is a part of/ not a part of unnest operation
     top_most_unnest: Option<Unnest>,
     consecutive_unnest: Vec<Option<Unnest>>,
     inner_projection_exprs: &'a mut Vec<Expr>,
@@ -485,7 +485,7 @@ impl<'a> TreeNodeRewriter for RecursiveUnnestRewriter<'a> {
             if traversing_unnest == self.top_most_unnest.as_ref().unwrap() {
                 self.top_most_unnest = None;
             }
-            // find inside consecutive_unnest, the sequence of continous unnest exprs
+            // Find inside consecutive_unnest, the sequence of continous unnest exprs
 
             // Get the latest consecutive unnest exprs
             // and check if current upward traversal is the returning to the root expr
@@ -592,7 +592,9 @@ pub(crate) fn rewrite_recursive_unnest_bottom_up(
     } = original_expr.clone().rewrite(&mut rewriter)?;
 
     if !transformed {
-        if matches!(&transformed_expr, Expr::Column(_)) {
+        if matches!(&transformed_expr, Expr::Column(_))
+            || matches!(&transformed_expr, Expr::Wildcard { .. })
+        {
             push_projection_dedupl(inner_projection_exprs, transformed_expr.clone());
             Ok(vec![transformed_expr])
         } else {
@@ -685,7 +687,7 @@ mod tests {
             &mut inner_projection_exprs,
             &original_expr,
         )?;
-        // only the bottom most unnest exprs are transformed
+        // Only the bottom most unnest exprs are transformed
         assert_eq!(
             transformed_exprs,
             vec![col("unnest_placeholder(3d_col,depth=2)")
@@ -703,7 +705,7 @@ mod tests {
             &unnest_placeholder_columns,
         );
 
-        // still reference struct_col in original schema but with alias,
+        // Still reference struct_col in original schema but with alias,
         // to avoid colliding with the projection on the column itself if any
         assert_eq!(
             inner_projection_exprs,
@@ -733,7 +735,7 @@ mod tests {
             vec!["unnest_placeholder(3d_col)=>[unnest_placeholder(3d_col,depth=2)|depth=2, unnest_placeholder(3d_col,depth=1)|depth=1]"],
             &unnest_placeholder_columns,
         );
-        // still reference struct_col in original schema but with alias,
+        // Still reference struct_col in original schema but with alias,
         // to avoid colliding with the projection on the column itself if any
         assert_eq!(
             inner_projection_exprs,
@@ -798,7 +800,7 @@ mod tests {
             vec!["unnest_placeholder(struct_col)"],
             &unnest_placeholder_columns,
         );
-        // still reference struct_col in original schema but with alias,
+        // Still reference struct_col in original schema but with alias,
         // to avoid colliding with the projection on the column itself if any
         assert_eq!(
             inner_projection_exprs,
@@ -820,7 +822,7 @@ mod tests {
             ],
             &unnest_placeholder_columns,
         );
-        // only transform the unnest children
+        // Only transform the unnest children
         assert_eq!(
             transformed_exprs,
             vec![col("unnest_placeholder(array_col,depth=1)")
@@ -828,8 +830,8 @@ mod tests {
                 .add(lit(1i64))]
         );
 
-        // keep appending to the current vector
-        // still reference array_col in original schema but with alias,
+        // Keep appending to the current vector
+        // Still reference array_col in original schema but with alias,
         // to avoid colliding with the projection on the column itself if any
         assert_eq!(
             inner_projection_exprs,
@@ -842,10 +844,10 @@ mod tests {
         Ok(())
     }
 
-    // unnest -> field access -> unnest
+    // Unnest -> field access -> unnest
     #[test]
     fn test_transform_non_consecutive_unnests() -> Result<()> {
-        // list of struct
+        // List of struct
         // [struct{'subfield1':list(i64), 'subfield2':list(utf8)}]
         let schema = Schema::new(vec![
             Field::new(

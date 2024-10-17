@@ -18,6 +18,7 @@
 use std::fmt::Display;
 use std::hash::Hash;
 use std::sync::Arc;
+use std::vec::IntoIter;
 
 use crate::equivalence::add_offset_to_expr;
 use crate::{LexOrdering, PhysicalExpr, PhysicalSortExpr};
@@ -36,7 +37,7 @@ use arrow_schema::SortOptions;
 ///
 /// Here, both `vec![a ASC, b ASC]` and `vec![c DESC, d ASC]` describe the table
 /// ordering. In this case, we say that these orderings are equivalent.
-#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+#[derive(Debug, Clone, Eq, PartialEq, Hash, Default)]
 pub struct OrderingEquivalenceClass {
     pub orderings: Vec<LexOrdering>,
 }
@@ -44,7 +45,7 @@ pub struct OrderingEquivalenceClass {
 impl OrderingEquivalenceClass {
     /// Creates new empty ordering equivalence class.
     pub fn empty() -> Self {
-        Self { orderings: vec![] }
+        Default::default()
     }
 
     /// Clears (empties) this ordering equivalence class.
@@ -197,6 +198,15 @@ impl OrderingEquivalenceClass {
     }
 }
 
+impl IntoIterator for OrderingEquivalenceClass {
+    type Item = LexOrdering;
+    type IntoIter = IntoIter<LexOrdering>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.orderings.into_iter()
+    }
+}
+
 /// This function constructs a duplicate-free `LexOrdering` by filtering out
 /// duplicate entries that have same physical expression inside. For example,
 /// `vec![a ASC, a DESC]` collapses to `vec![a ASC]`.
@@ -229,10 +239,10 @@ impl Display for OrderingEquivalenceClass {
         write!(f, "[")?;
         let mut iter = self.orderings.iter();
         if let Some(ordering) = iter.next() {
-            write!(f, "{}", PhysicalSortExpr::format_list(ordering))?;
+            write!(f, "[{}]", PhysicalSortExpr::format_list(ordering))?;
         }
         for ordering in iter {
-            write!(f, "{}", PhysicalSortExpr::format_list(ordering))?;
+            write!(f, ", [{}]", PhysicalSortExpr::format_list(ordering))?;
         }
         write!(f, "]")?;
         Ok(())
@@ -244,9 +254,8 @@ mod tests {
     use std::sync::Arc;
 
     use crate::equivalence::tests::{
-        convert_to_orderings, convert_to_sort_exprs, create_random_schema,
-        create_test_params, create_test_schema, generate_table_for_eq_properties,
-        is_table_same_after_sort,
+        convert_to_orderings, convert_to_sort_exprs, create_test_params,
+        create_test_schema, generate_table_for_eq_properties, is_table_same_after_sort,
     };
     use crate::equivalence::{
         EquivalenceClass, EquivalenceGroup, EquivalenceProperties,
@@ -260,8 +269,6 @@ mod tests {
     use arrow_schema::SortOptions;
     use datafusion_common::{DFSchema, Result};
     use datafusion_expr::{Operator, ScalarUDF};
-
-    use itertools::Itertools;
 
     #[test]
     fn test_ordering_satisfy() -> Result<()> {
@@ -758,137 +765,6 @@ mod tests {
                 "{err_msg}"
             );
         }
-        Ok(())
-    }
-
-    #[test]
-    fn test_ordering_satisfy_with_equivalence_random() -> Result<()> {
-        const N_RANDOM_SCHEMA: usize = 5;
-        const N_ELEMENTS: usize = 125;
-        const N_DISTINCT: usize = 5;
-        const SORT_OPTIONS: SortOptions = SortOptions {
-            descending: false,
-            nulls_first: false,
-        };
-
-        for seed in 0..N_RANDOM_SCHEMA {
-            // Create a random schema with random properties
-            let (test_schema, eq_properties) = create_random_schema(seed as u64)?;
-            // Generate a data that satisfies properties given
-            let table_data_with_properties =
-                generate_table_for_eq_properties(&eq_properties, N_ELEMENTS, N_DISTINCT)?;
-            let col_exprs = [
-                col("a", &test_schema)?,
-                col("b", &test_schema)?,
-                col("c", &test_schema)?,
-                col("d", &test_schema)?,
-                col("e", &test_schema)?,
-                col("f", &test_schema)?,
-            ];
-
-            for n_req in 0..=col_exprs.len() {
-                for exprs in col_exprs.iter().combinations(n_req) {
-                    let requirement = exprs
-                        .into_iter()
-                        .map(|expr| PhysicalSortExpr {
-                            expr: Arc::clone(expr),
-                            options: SORT_OPTIONS,
-                        })
-                        .collect::<Vec<_>>();
-                    let expected = is_table_same_after_sort(
-                        requirement.clone(),
-                        table_data_with_properties.clone(),
-                    )?;
-                    let err_msg = format!(
-                        "Error in test case requirement:{:?}, expected: {:?}, eq_properties.oeq_class: {:?}, eq_properties.eq_group: {:?}, eq_properties.constants: {:?}",
-                        requirement, expected, eq_properties.oeq_class, eq_properties.eq_group, eq_properties.constants
-                    );
-                    // Check whether ordering_satisfy API result and
-                    // experimental result matches.
-                    assert_eq!(
-                        eq_properties.ordering_satisfy(&requirement),
-                        expected,
-                        "{}",
-                        err_msg
-                    );
-                }
-            }
-        }
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_ordering_satisfy_with_equivalence_complex_random() -> Result<()> {
-        const N_RANDOM_SCHEMA: usize = 100;
-        const N_ELEMENTS: usize = 125;
-        const N_DISTINCT: usize = 5;
-        const SORT_OPTIONS: SortOptions = SortOptions {
-            descending: false,
-            nulls_first: false,
-        };
-
-        for seed in 0..N_RANDOM_SCHEMA {
-            // Create a random schema with random properties
-            let (test_schema, eq_properties) = create_random_schema(seed as u64)?;
-            // Generate a data that satisfies properties given
-            let table_data_with_properties =
-                generate_table_for_eq_properties(&eq_properties, N_ELEMENTS, N_DISTINCT)?;
-
-            let test_fun = ScalarUDF::new_from_impl(TestScalarUDF::new());
-            let floor_a = crate::udf::create_physical_expr(
-                &test_fun,
-                &[col("a", &test_schema)?],
-                &test_schema,
-                &[],
-                &DFSchema::empty(),
-            )?;
-            let a_plus_b = Arc::new(BinaryExpr::new(
-                col("a", &test_schema)?,
-                Operator::Plus,
-                col("b", &test_schema)?,
-            )) as Arc<dyn PhysicalExpr>;
-            let exprs = [
-                col("a", &test_schema)?,
-                col("b", &test_schema)?,
-                col("c", &test_schema)?,
-                col("d", &test_schema)?,
-                col("e", &test_schema)?,
-                col("f", &test_schema)?,
-                floor_a,
-                a_plus_b,
-            ];
-
-            for n_req in 0..=exprs.len() {
-                for exprs in exprs.iter().combinations(n_req) {
-                    let requirement = exprs
-                        .into_iter()
-                        .map(|expr| PhysicalSortExpr {
-                            expr: Arc::clone(expr),
-                            options: SORT_OPTIONS,
-                        })
-                        .collect::<Vec<_>>();
-                    let expected = is_table_same_after_sort(
-                        requirement.clone(),
-                        table_data_with_properties.clone(),
-                    )?;
-                    let err_msg = format!(
-                        "Error in test case requirement:{:?}, expected: {:?}, eq_properties.oeq_class: {:?}, eq_properties.eq_group: {:?}, eq_properties.constants: {:?}",
-                        requirement, expected, eq_properties.oeq_class, eq_properties.eq_group, eq_properties.constants
-                    );
-                    // Check whether ordering_satisfy API result and
-                    // experimental result matches.
-
-                    assert_eq!(
-                        eq_properties.ordering_satisfy(&requirement),
-                        (expected | false),
-                        "{}",
-                        err_msg
-                    );
-                }
-            }
-        }
-
         Ok(())
     }
 

@@ -257,17 +257,11 @@ impl ExecutionPlan for BoundedWindowAggExec {
     fn required_input_ordering(&self) -> Vec<Option<LexRequirement>> {
         let partition_bys = self.window_expr()[0].partition_by();
         let order_keys = self.window_expr()[0].order_by();
-        if self.input_order_mode != InputOrderMode::Sorted
-            || self.ordered_partition_by_indices.len() >= partition_bys.len()
-        {
-            let partition_bys = self
-                .ordered_partition_by_indices
-                .iter()
-                .map(|idx| &partition_bys[*idx]);
-            vec![calc_requirements(partition_bys, order_keys)]
-        } else {
-            vec![calc_requirements(partition_bys, order_keys)]
-        }
+        let partition_bys = self
+            .ordered_partition_by_indices
+            .iter()
+            .map(|idx| &partition_bys[*idx]);
+        vec![calc_requirements(partition_bys, order_keys)]
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {

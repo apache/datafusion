@@ -348,8 +348,11 @@ VALUES (1),()
 statement error DataFusion error: Error during planning: Inconsistent data length across values list: got 2 values in row 1 but expected 1
 VALUES (1),(1,2)
 
-statement error DataFusion error: Error during planning: Inconsistent data type across values list at row 1 column 0
+query I
 VALUES (1),('2')
+----
+1
+2
 
 query R
 VALUES (1),(2.0)
@@ -357,8 +360,11 @@ VALUES (1),(2.0)
 1
 2
 
-statement error DataFusion error: Error during planning: Inconsistent data type across values list at row 1 column 1
+query II
 VALUES (1,2), (1,'2')
+----
+1 2
+1 2
 
 query IT
 VALUES (1,'a'),(NULL,'b'),(3,'c')

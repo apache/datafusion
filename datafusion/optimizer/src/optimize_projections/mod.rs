@@ -895,6 +895,10 @@ mod tests {
             // Since schema is same. Output columns requires their corresponding version in the input columns.
             Some(vec![output_columns.to_vec()])
         }
+
+        fn supports_limit_pushdown(&self) -> bool {
+            false // Disallow limit push-down by default
+        }
     }
 
     #[derive(Debug, Hash, PartialEq, Eq)]
@@ -990,6 +994,10 @@ mod tests {
                 }
             }
             Some(vec![left_reqs, right_reqs])
+        }
+
+        fn supports_limit_pushdown(&self) -> bool {
+            false // Disallow limit push-down by default
         }
     }
 

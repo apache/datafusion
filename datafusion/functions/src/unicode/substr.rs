@@ -16,9 +16,9 @@
 // under the License.
 
 use std::any::Any;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
-use crate::string::common::{make_and_append_view, StringArrayType};
+use crate::strings::{make_and_append_view, StringArrayType};
 use crate::utils::{make_scalar_function, utf8_to_str_type};
 use arrow::array::{
     Array, ArrayIter, ArrayRef, AsArray, GenericStringArray, Int64Array, OffsetSizeTrait,
@@ -28,7 +28,10 @@ use arrow::datatypes::DataType;
 use arrow_buffer::{NullBufferBuilder, ScalarBuffer};
 use datafusion_common::cast::as_int64_array;
 use datafusion_common::{exec_err, plan_err, Result};
-use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::scalar_doc_sections::DOC_SECTION_STRING;
+use datafusion_expr::{
+    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+};
 
 #[derive(Debug)]
 pub struct SubstrFunc {
@@ -81,6 +84,13 @@ impl ScalarUDFImpl for SubstrFunc {
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        if arg_types.len() < 2 || arg_types.len() > 3 {
+            return plan_err!(
+                "The {} function requires 2 or 3 arguments, but got {}.",
+                self.name(),
+                arg_types.len()
+            );
+        }
         let first_data_type = match &arg_types[0] {
             DataType::Null => Ok(DataType::Utf8),
             DataType::LargeUtf8 | DataType::Utf8View | DataType::Utf8 => Ok(arg_types[0].clone()),
@@ -138,6 +148,34 @@ impl ScalarUDFImpl for SubstrFunc {
             ])
         }
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_substr_doc())
+    }
+}
+
+static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+
+fn get_substr_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_STRING)
+            .with_description("Extracts a substring of a specified number of characters from a specific starting position in a string.")
+            .with_syntax_example("substr(str, start_pos[, length])")
+            .with_sql_example(r#"```sql
+> select substr('datafusion', 5, 3);
++----------------------------------------------+
+| substr(Utf8("datafusion"),Int64(5),Int64(3)) |
++----------------------------------------------+
+| fus                                          |
++----------------------------------------------+ 
+```"#)
+            .with_standard_argument("str", "String")
+            .with_argument("start_pos", "Character position to start the substring at. The first character in the string has a position of 1.")
+            .with_argument("length", "Number of characters to extract. If not specified, returns the rest of the string after the start position.")
+            .build()
+            .unwrap()
+    })
 }
 
 /// Extracts the substring of string starting at the start'th character, and extending for count characters if that is specified. (Same as substring(string from start for count).)

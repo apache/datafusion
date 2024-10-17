@@ -226,7 +226,12 @@ impl DFSchema {
 
         for (field, qualifier) in self.inner.fields().iter().zip(&self.field_qualifiers) {
             if let Some(qualifier) = qualifier {
-                qualified_names.insert((qualifier, field.name()));
+                if !qualified_names.insert((qualifier, field.name())) {
+                    return _schema_err!(SchemaError::DuplicateQualifiedField {
+                        qualifier: Box::new(qualifier.clone()),
+                        name: field.name().to_string(),
+                    });
+                }
             } else if !unqualified_names.insert(field.name()) {
                 return _schema_err!(SchemaError::DuplicateUnqualifiedField {
                     name: field.name().to_string()
@@ -398,33 +403,6 @@ impl DFSchema {
             self.field_with_qualified_name(qualifier, name)
         } else {
             self.field_with_unqualified_name(name)
-        }
-    }
-
-    /// Check whether the column reference is ambiguous
-    pub fn check_ambiguous_name(
-        &self,
-        qualifier: Option<&TableReference>,
-        name: &str,
-    ) -> Result<()> {
-        let count = self
-            .iter()
-            .filter(|(field_q, f)| match (field_q, qualifier) {
-                (Some(q1), Some(q2)) => q1.resolved_eq(q2) && f.name() == name,
-                (None, None) => f.name() == name,
-                _ => false,
-            })
-            .take(2)
-            .count();
-        if count > 1 {
-            _schema_err!(SchemaError::AmbiguousReference {
-                field: Column {
-                    relation: None,
-                    name: name.to_string(),
-                },
-            })
-        } else {
-            Ok(())
         }
     }
 
@@ -1165,7 +1143,10 @@ mod tests {
         let left = DFSchema::try_from_qualified_schema("t1", &test_schema_1())?;
         let right = DFSchema::try_from_qualified_schema("t1", &test_schema_1())?;
         let join = left.join(&right);
-        assert!(join.err().is_none());
+        assert_eq!(
+            join.unwrap_err().strip_backtrace(),
+            "Schema error: Schema contains duplicate qualified field name t1.c0",
+        );
         Ok(())
     }
 

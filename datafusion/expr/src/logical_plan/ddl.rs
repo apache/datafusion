@@ -202,6 +202,8 @@ pub struct CreateExternalTable {
     pub table_partition_cols: Vec<String>,
     /// Option to not error if table already exists
     pub if_not_exists: bool,
+    /// Whether the table is a temporary table
+    pub temporary: bool,
     /// SQL used to create the table, if available
     pub definition: Option<String>,
     /// Order expressions supplied by user
@@ -298,6 +300,8 @@ pub struct CreateMemoryTable {
     pub or_replace: bool,
     /// Default values for columns
     pub column_defaults: Vec<(String, Expr)>,
+    /// Wheter the table is `TableType::Temporary`
+    pub temporary: bool,
 }
 
 /// Creates a view.
@@ -311,6 +315,8 @@ pub struct CreateView {
     pub or_replace: bool,
     /// SQL used to create the view, if available
     pub definition: Option<String>,
+    /// Wheter the view is ephemeral
+    pub temporary: bool,
 }
 
 /// Creates a catalog (aka "Database").

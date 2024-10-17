@@ -15,18 +15,18 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::{ArrayRef, OffsetSizeTrait};
-use arrow::datatypes::DataType;
-use std::any::Any;
-
-use datafusion_common::{exec_err, Result};
-use datafusion_expr::function::Hint;
-use datafusion_expr::TypeSignature::*;
-use datafusion_expr::{ColumnarValue, Volatility};
-use datafusion_expr::{ScalarUDFImpl, Signature};
-
 use crate::string::common::*;
 use crate::utils::{make_scalar_function, utf8_to_str_type};
+use arrow::array::{ArrayRef, OffsetSizeTrait};
+use arrow::datatypes::DataType;
+use datafusion_common::{exec_err, Result};
+use datafusion_expr::function::Hint;
+use datafusion_expr::scalar_doc_sections::DOC_SECTION_STRING;
+use datafusion_expr::{
+    ColumnarValue, Documentation, ScalarUDFImpl, Signature, TypeSignature, Volatility,
+};
+use std::any::Any;
+use std::sync::OnceLock;
 
 /// Returns the longest string with leading and trailing characters removed. If the characters are not specified, whitespace is removed.
 /// btrim('xyxtrimyyx', 'xyz') = 'trim'
@@ -49,18 +49,9 @@ impl Default for BTrimFunc {
 
 impl BTrimFunc {
     pub fn new() -> Self {
-        use DataType::*;
         Self {
             signature: Signature::one_of(
-                vec![
-                    // Planner attempts coercion to the target type starting with the most preferred candidate.
-                    // For example, given input `(Utf8View, Utf8)`, it first tries coercing to `(Utf8View, Utf8View)`.
-                    // If that fails, it proceeds to `(Utf8, Utf8)`.
-                    Exact(vec![Utf8View, Utf8View]),
-                    Exact(vec![Utf8, Utf8]),
-                    Exact(vec![Utf8View]),
-                    Exact(vec![Utf8]),
-                ],
+                vec![TypeSignature::String(2), TypeSignature::String(1)],
                 Volatility::Immutable,
             ),
             aliases: vec![String::from("trim")],
@@ -109,6 +100,35 @@ impl ScalarUDFImpl for BTrimFunc {
     fn aliases(&self) -> &[String] {
         &self.aliases
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_btrim_doc())
+    }
+}
+
+static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+
+fn get_btrim_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_STRING)
+            .with_description("Trims the specified trim string from the start and end of a string. If no trim string is provided, all whitespace is removed from the start and end of the input string.")
+            .with_syntax_example("btrim(str[, trim_str])")
+            .with_sql_example(r#"```sql
+> select btrim('__datafusion____', '_');
++-------------------------------------------+
+| btrim(Utf8("__datafusion____"),Utf8("_")) |
++-------------------------------------------+
+| datafusion                                |
++-------------------------------------------+
+```"#)
+            .with_standard_argument("str", "String")
+            .with_argument("trim_str", "String expression to operate on. Can be a constant, column, or function, and any combination of operators. _Default is whitespace characters._")
+            .with_related_udf("ltrim")
+            .with_related_udf("rtrim")
+            .build()
+            .unwrap()
+    })
 }
 
 #[cfg(test)]

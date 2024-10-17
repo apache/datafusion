@@ -68,6 +68,7 @@
 //!
 //!  // Receive a substrait protobuf from somewhere, and turn it into a LogicalPlan
 //!  let logical_round_trip = logical_plan::consumer::from_substrait_plan(&ctx, &substrait_plan).await?;
+//!  let logical_round_trip = ctx.state().optimize(&logical_round_trip)?;
 //!  assert_eq!(format!("{:?}", plan), format!("{:?}", logical_round_trip));
 //! # Ok(())
 //! # }

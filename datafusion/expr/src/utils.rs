@@ -19,6 +19,7 @@
 
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
+use std::ops::Deref;
 use std::sync::Arc;
 
 use crate::expr::{Alias, Sort, WildcardOptions, WindowFunction};
@@ -38,6 +39,7 @@ use datafusion_common::{
     DataFusionError, Result, TableReference,
 };
 
+use indexmap::IndexSet;
 use sqlparser::ast::{ExceptSelectItem, ExcludeSelectItem};
 
 pub use datafusion_functions_aggregate_common::order::AggregateOrderSensitivity;
@@ -65,9 +67,10 @@ pub fn grouping_set_expr_count(group_expr: &[Expr]) -> Result<usize> {
                 "Invalid group by expressions, GroupingSet must be the only expression"
             );
         }
-        Ok(grouping_set.distinct_expr().len())
+        // Groupings sets have an additional interal column for the grouping id
+        Ok(grouping_set.distinct_expr().len() + 1)
     } else {
-        Ok(group_expr.len())
+        grouping_set_to_exprlist(group_expr).map(|exprs| exprs.len())
     }
 }
 
@@ -202,7 +205,7 @@ pub fn enumerate_grouping_sets(group_expr: Vec<Expr>) -> Result<Vec<Expr>> {
     if !has_grouping_set || group_expr.len() == 1 {
         return Ok(group_expr);
     }
-    // only process mix grouping sets
+    // Only process mix grouping sets
     let partial_sets = group_expr
         .iter()
         .map(|expr| {
@@ -231,7 +234,7 @@ pub fn enumerate_grouping_sets(group_expr: Vec<Expr>) -> Result<Vec<Expr>> {
         })
         .collect::<Result<Vec<_>>>()?;
 
-    // cross join
+    // Cross Join
     let grouping_sets = partial_sets
         .into_iter()
         .map(Ok)
@@ -260,7 +263,11 @@ pub fn grouping_set_to_exprlist(group_expr: &[Expr]) -> Result<Vec<&Expr>> {
         }
         Ok(grouping_set.distinct_expr())
     } else {
-        Ok(group_expr.iter().collect())
+        Ok(group_expr
+            .iter()
+            .collect::<IndexSet<_>>()
+            .into_iter()
+            .collect())
     }
 }
 
@@ -335,7 +342,7 @@ fn get_excluded_columns(
     // Excluded columns should be unique
     let n_elem = idents.len();
     let unique_idents = idents.into_iter().collect::<HashSet<_>>();
-    // if HashSet size, and vector length are different, this means that some of the excluded columns
+    // If HashSet size, and vector length are different, this means that some of the excluded columns
     // are not unique. In this case return error.
     if n_elem != unique_idents.len() {
         return plan_err!("EXCLUDE or EXCEPT contains duplicate column names");
@@ -459,7 +466,7 @@ pub fn expand_qualified_wildcard(
 }
 
 /// (expr, "is the SortExpr for window (either comes from PARTITION BY or ORDER BY columns)")
-/// if bool is true SortExpr comes from `PARTITION BY` column, if false comes from `ORDER BY` column
+/// If bool is true SortExpr comes from `PARTITION BY` column, if false comes from `ORDER BY` column
 type WindowSortKey = Vec<(Sort, bool)>;
 
 /// Generate a sort key for a given window expr's partition_by and order_by expr
@@ -566,7 +573,7 @@ pub fn compare_sort_expr(
     Ordering::Equal
 }
 
-/// group a slice of window expression expr by their order by expressions
+/// Group a slice of window expression expr by their order by expressions
 pub fn group_window_expr_by_sort_keys(
     window_expr: Vec<Expr>,
 ) -> Result<Vec<(WindowSortKey, Vec<Expr>)>> {
@@ -593,7 +600,7 @@ pub fn group_window_expr_by_sort_keys(
 /// Collect all deeply nested `Expr::AggregateFunction`.
 /// They are returned in order of occurrence (depth
 /// first), with duplicates omitted.
-pub fn find_aggregate_exprs(exprs: &[Expr]) -> Vec<Expr> {
+pub fn find_aggregate_exprs<'a>(exprs: impl IntoIterator<Item = &'a Expr>) -> Vec<Expr> {
     find_exprs_in_exprs(exprs, &|nested_expr| {
         matches!(nested_expr, Expr::AggregateFunction { .. })
     })
@@ -618,12 +625,15 @@ pub fn find_out_reference_exprs(expr: &Expr) -> Vec<Expr> {
 /// Search the provided `Expr`'s, and all of their nested `Expr`, for any that
 /// pass the provided test. The returned `Expr`'s are deduplicated and returned
 /// in order of appearance (depth first).
-fn find_exprs_in_exprs<F>(exprs: &[Expr], test_fn: &F) -> Vec<Expr>
+fn find_exprs_in_exprs<'a, F>(
+    exprs: impl IntoIterator<Item = &'a Expr>,
+    test_fn: &F,
+) -> Vec<Expr>
 where
     F: Fn(&Expr) -> bool,
 {
     exprs
-        .iter()
+        .into_iter()
         .flat_map(|expr| find_exprs_in_expr(expr, test_fn))
         .fold(vec![], |mut acc, expr| {
             if !acc.contains(&expr) {
@@ -646,7 +656,7 @@ where
             if !(exprs.contains(expr)) {
                 exprs.push(expr.clone())
             }
-            // stop recursing down this expr once we find a match
+            // Stop recursing down this expr once we find a match
             return Ok(TreeNodeRecursion::Jump);
         }
 
@@ -665,7 +675,7 @@ where
     let mut err = Ok(());
     expr.apply(|expr| {
         if let Err(e) = f(expr) {
-            // save the error for later (it may not be a DataFusionError
+            // Save the error for later (it may not be a DataFusionError)
             err = Err(e);
             Ok(TreeNodeRecursion::Stop)
         } else {
@@ -684,7 +694,7 @@ pub fn exprlist_to_fields<'a>(
     exprs: impl IntoIterator<Item = &'a Expr>,
     plan: &LogicalPlan,
 ) -> Result<Vec<(Option<TableReference>, Arc<Field>)>> {
-    // look for exact match in plan's output schema
+    // Look for exact match in plan's output schema
     let wildcard_schema = find_base_plan(plan).schema();
     let input_schema = plan.schema();
     let result = exprs
@@ -758,6 +768,15 @@ pub fn find_base_plan(input: &LogicalPlan) -> &LogicalPlan {
     match input {
         LogicalPlan::Window(window) => find_base_plan(&window.input),
         LogicalPlan::Aggregate(agg) => find_base_plan(&agg.input),
+        // [SqlToRel::try_process_unnest] will convert Expr(Unnest(Expr)) to Projection/Unnest/Projection
+        // We should expand the wildcard expression based on the input plan of the inner Projection.
+        LogicalPlan::Unnest(unnest) => {
+            if let LogicalPlan::Projection(projection) = unnest.input.deref() {
+                find_base_plan(&projection.input)
+            } else {
+                input
+            }
+        }
         LogicalPlan::Filter(filter) => {
             if filter.having {
                 // If a filter is used for a having clause, its input plan is an aggregation.
@@ -934,8 +953,8 @@ pub(crate) fn find_column_indexes_referenced_by_expr(
     indexes
 }
 
-/// can this data type be used in hash join equal conditions??
-/// data types here come from function 'equal_rows', if more data types are supported
+/// Can this data type be used in hash join equal conditions??
+/// Data types here come from function 'equal_rows', if more data types are supported
 /// in equal_rows(hash join), add those data types here to generate join logical plan.
 pub fn can_hash(data_type: &DataType) -> bool {
     match data_type {

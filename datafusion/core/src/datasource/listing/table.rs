@@ -33,7 +33,8 @@ use crate::datasource::{
 };
 use crate::execution::context::SessionState;
 use datafusion_catalog::TableProvider;
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{config_err, DataFusionError, Result};
+use datafusion_expr::dml::InsertOp;
 use datafusion_expr::{utils::conjunction, Expr, TableProviderFilterPushDown};
 use datafusion_expr::{SortExpr, TableType};
 use datafusion_physical_plan::{empty::EmptyExec, ExecutionPlan, Statistics};
@@ -190,6 +191,38 @@ impl ListingTableConfig {
     /// Convenience wrapper for calling `infer_options` and `infer_schema`
     pub async fn infer(self, state: &SessionState) -> Result<Self> {
         self.infer_options(state).await?.infer_schema(state).await
+    }
+
+    /// Infer the partition columns from the path. Requires `self.options` to be set prior to using.
+    pub async fn infer_partitions_from_path(self, state: &SessionState) -> Result<Self> {
+        match self.options {
+            Some(options) => {
+                let Some(url) = self.table_paths.first() else {
+                    return config_err!("No table path found");
+                };
+                let partitions = options
+                    .infer_partitions(state, url)
+                    .await?
+                    .into_iter()
+                    .map(|col_name| {
+                        (
+                            col_name,
+                            DataType::Dictionary(
+                                Box::new(DataType::UInt16),
+                                Box::new(DataType::Utf8),
+                            ),
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                let options = options.with_table_partition_cols(partitions);
+                Ok(Self {
+                    table_paths: self.table_paths,
+                    file_schema: self.file_schema,
+                    options: Some(options),
+                })
+            }
+            None => config_err!("No `ListingOptions` set for inferring schema"),
+        }
     }
 }
 
@@ -504,7 +537,7 @@ impl ListingOptions {
     /// Infer the partitioning at the given path on the provided object store.
     /// For performance reasons, it doesn't read all the files on disk
     /// and therefore may fail to detect invalid partitioning.
-    async fn infer_partitions(
+    pub(crate) async fn infer_partitions(
         &self,
         state: &SessionState,
         table_path: &ListingTableUrl,
@@ -749,6 +782,16 @@ impl ListingTable {
     }
 }
 
+// Expressions can be used for parttion pruning if they can be evaluated using
+// only the partiton columns and there are partition columns.
+fn can_be_evaluted_for_partition_pruning(
+    partition_column_names: &[&str],
+    expr: &Expr,
+) -> bool {
+    !partition_column_names.is_empty()
+        && expr_applicable_for_cols(partition_column_names, expr)
+}
+
 #[async_trait]
 impl TableProvider for ListingTable {
     fn as_any(&self) -> &dyn Any {
@@ -774,10 +817,28 @@ impl TableProvider for ListingTable {
         filters: &[Expr],
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        // extract types of partition columns
+        let table_partition_cols = self
+            .options
+            .table_partition_cols
+            .iter()
+            .map(|col| Ok(self.table_schema.field_with_name(&col.0)?.clone()))
+            .collect::<Result<Vec<_>>>()?;
+
+        let table_partition_col_names = table_partition_cols
+            .iter()
+            .map(|field| field.name().as_str())
+            .collect::<Vec<_>>();
+        // If the filters can be resolved using only partition cols, there is no need to
+        // pushdown it to TableScan, otherwise, `unhandled` pruning predicates will be generated
+        let (partition_filters, filters): (Vec<_>, Vec<_>) =
+            filters.iter().cloned().partition(|filter| {
+                can_be_evaluted_for_partition_pruning(&table_partition_col_names, filter)
+            });
         // TODO (https://github.com/apache/datafusion/issues/11600) remove downcast_ref from here?
         let session_state = state.as_any().downcast_ref::<SessionState>().unwrap();
         let (mut partitioned_file_lists, statistics) = self
-            .list_files_for_scan(session_state, filters, limit)
+            .list_files_for_scan(session_state, &partition_filters, limit)
             .await?;
 
         // if no files need to be read, return an `EmptyExec`
@@ -812,28 +873,6 @@ impl TableProvider for ListingTable {
             }
             None => {} // no ordering required
         };
-
-        // extract types of partition columns
-        let table_partition_cols = self
-            .options
-            .table_partition_cols
-            .iter()
-            .map(|col| Ok(self.table_schema.field_with_name(&col.0)?.clone()))
-            .collect::<Result<Vec<_>>>()?;
-
-        // If the filters can be resolved using only partition cols, there is no need to
-        // pushdown it to TableScan, otherwise, `unhandled` pruning predicates will be generated
-        let table_partition_col_names = table_partition_cols
-            .iter()
-            .map(|field| field.name().as_str())
-            .collect::<Vec<_>>();
-        let filters = filters
-            .iter()
-            .filter(|filter| {
-                !expr_applicable_for_cols(&table_partition_col_names, filter)
-            })
-            .cloned()
-            .collect::<Vec<_>>();
 
         let filters = conjunction(filters.to_vec())
             .map(|expr| -> Result<_> {
@@ -875,18 +914,17 @@ impl TableProvider for ListingTable {
         &self,
         filters: &[&Expr],
     ) -> Result<Vec<TableProviderFilterPushDown>> {
+        let partition_column_names = self
+            .options
+            .table_partition_cols
+            .iter()
+            .map(|col| col.0.as_str())
+            .collect::<Vec<_>>();
         filters
             .iter()
             .map(|filter| {
-                if expr_applicable_for_cols(
-                    &self
-                        .options
-                        .table_partition_cols
-                        .iter()
-                        .map(|col| col.0.as_str())
-                        .collect::<Vec<_>>(),
-                    filter,
-                ) {
+                if can_be_evaluted_for_partition_pruning(&partition_column_names, filter)
+                {
                     // if filter can be handled by partition pruning, it is exact
                     return Ok(TableProviderFilterPushDown::Exact);
                 }
@@ -916,7 +954,7 @@ impl TableProvider for ListingTable {
         &self,
         state: &dyn Session,
         input: Arc<dyn ExecutionPlan>,
-        overwrite: bool,
+        insert_op: InsertOp,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         // Check that the schema of the plan matches the schema of this table.
         if !self
@@ -975,7 +1013,7 @@ impl TableProvider for ListingTable {
             file_groups,
             output_schema: self.schema(),
             table_partition_cols: self.options.table_partition_cols.clone(),
-            overwrite,
+            insert_op,
             keep_partition_by_columns,
         };
 
@@ -1990,7 +2028,8 @@ mod tests {
         // Therefore, we will have 8 partitions in the final plan.
         // Create an insert plan to insert the source data into the initial table
         let insert_into_table =
-            LogicalPlanBuilder::insert_into(scan_plan, "t", &schema, false)?.build()?;
+            LogicalPlanBuilder::insert_into(scan_plan, "t", &schema, InsertOp::Append)?
+                .build()?;
         // Create a physical plan from the insert plan
         let plan = session_ctx
             .state()

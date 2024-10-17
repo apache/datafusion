@@ -43,6 +43,7 @@ datafusion-expr = { workspace = true }
 datafusion-functions-window-common = { workspace = true }
 datafusion-physical-expr-common = { workspace = true }
 log = { workspace = true }
+paste = "1.0.15"
 
 [dev-dependencies]
 arrow = { workspace = true }

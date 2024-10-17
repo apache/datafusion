@@ -62,6 +62,7 @@ dashmap = { workspace = true }
 datafusion = { workspace = true, default-features = true, features = ["avro"] }
 datafusion-common = { workspace = true, default-features = true }
 datafusion-expr = { workspace = true }
+datafusion-functions-window-common = { workspace = true }
 datafusion-optimizer = { workspace = true, default-features = true }
 datafusion-physical-expr = { workspace = true, default-features = true }
 datafusion-proto = { workspace = true }

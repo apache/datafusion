@@ -35,7 +35,6 @@ use crate::logical_plan::{
     Projection, Repartition, Sort, SubqueryAlias, TableScan, Union, Unnest, Values,
     Window,
 };
-use crate::type_coercion::binary::values_coercion;
 use crate::utils::{
     can_hash, columnize_expr, compare_sort_expr, expr_to_columns,
     find_valid_equijoin_key_pair, group_window_expr_by_sort_keys,
@@ -45,6 +44,8 @@ use crate::{
     TableProviderFilterPushDown, TableSource, WriteOp,
 };
 
+use super::dml::InsertOp;
+use super::plan::ColumnUnnestList;
 use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef};
 use datafusion_common::display::ToStringifiedPlan;
 use datafusion_common::file_options::file_type::FileType;
@@ -53,8 +54,7 @@ use datafusion_common::{
     plan_err, Column, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
     TableReference, ToDFSchema, UnnestOptions,
 };
-
-use super::plan::ColumnUnnestList;
+use datafusion_expr_common::type_coercion::binary::type_union_resolution;
 
 /// Default table name for unnamed table
 pub const UNNAMED_TABLE: &str = "?table?";
@@ -208,7 +208,8 @@ impl LogicalPlanBuilder {
                 }
                 if let Some(prev_type) = common_type {
                     // get common type of each column values.
-                    let Some(new_type) = values_coercion(&data_type, &prev_type) else {
+                    let data_types = vec![prev_type.clone(), data_type.clone()];
+                    let Some(new_type) = type_union_resolution(&data_types) else {
                         return plan_err!("Inconsistent data type across values list at row {i} column {j}. Was {prev_type} but found {data_type}");
                     };
                     common_type = Some(new_type);
@@ -307,20 +308,14 @@ impl LogicalPlanBuilder {
         input: LogicalPlan,
         table_name: impl Into<TableReference>,
         table_schema: &Schema,
-        overwrite: bool,
+        insert_op: InsertOp,
     ) -> Result<Self> {
         let table_schema = table_schema.clone().to_dfschema_ref()?;
-
-        let op = if overwrite {
-            WriteOp::InsertOverwrite
-        } else {
-            WriteOp::InsertInto
-        };
 
         Ok(Self::new(LogicalPlan::Dml(DmlStatement::new(
             table_name.into(),
             table_schema,
-            op,
+            WriteOp::Insert(insert_op),
             Arc::new(input),
         ))))
     }
@@ -1577,7 +1572,7 @@ pub fn unnest(input: LogicalPlan, columns: Vec<Column>) -> Result<LogicalPlan> {
     unnest_with_options(input, unnestings, UnnestOptions::default())
 }
 
-// get the data type of a multi-dimensional type after unnesting it
+// Get the data type of a multi-dimensional type after unnesting it
 // with a given depth
 fn get_unnested_list_datatype_recursive(
     data_type: &DataType,

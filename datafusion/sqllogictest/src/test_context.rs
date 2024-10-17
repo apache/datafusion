@@ -314,17 +314,34 @@ pub async fn register_metadata_tables(ctx: &SessionContext) {
         String::from("metadata_key"),
         String::from("the name field"),
     )]));
+    let l_name =
+        Field::new("l_name", DataType::Utf8, true).with_metadata(HashMap::from([(
+            String::from("metadata_key"),
+            String::from("the l_name field"),
+        )]));
+    let ts = Field::new("ts", DataType::Timestamp(TimeUnit::Nanosecond, None), false)
+        .with_metadata(HashMap::from([(
+            String::from("metadata_key"),
+            String::from("ts non-nullable field"),
+        )]));
 
-    let schema = Schema::new(vec![id, name]).with_metadata(HashMap::from([(
-        String::from("metadata_key"),
-        String::from("the entire schema"),
-    )]));
+    let schema =
+        Schema::new(vec![id, name, l_name, ts]).with_metadata(HashMap::from([(
+            String::from("metadata_key"),
+            String::from("the entire schema"),
+        )]));
 
     let batch = RecordBatch::try_new(
         Arc::new(schema),
         vec![
             Arc::new(Int32Array::from(vec![Some(1), None, Some(3)])) as _,
             Arc::new(StringArray::from(vec![None, Some("bar"), Some("baz")])) as _,
+            Arc::new(StringArray::from(vec![None, Some("l_bar"), Some("l_baz")])) as _,
+            Arc::new(TimestampNanosecondArray::from(vec![
+                1599572549190855123,
+                1599572549190855123,
+                1599572549190855123,
+            ])) as _,
         ],
     )
     .unwrap();

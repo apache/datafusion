@@ -19,7 +19,15 @@
 
 # Window Functions
 
-A _window function_ performs a calculation across a set of table rows that are somehow related to the current row. This is comparable to the type of calculation that can be done with an aggregate function. However, window functions do not cause rows to become grouped into a single output row like non-window aggregate calls would. Instead, the rows retain their separate identities. Behind the scenes, the window function is able to access more than just the current row of the query result
+A _window function_ performs a calculation across a set of table rows that are somehow related to the current row.
+
+Note: this documentation is in the process of being migrated to be [automatically created from the codebase].
+Please see the [Window Functions (new)](window_functions_new.md) page for
+the rest of the documentation.
+
+[automatically created from the codebase]: https://github.com/apache/datafusion/issues/12740
+
+Window functions are comparable to the type of calculation that can be done with an aggregate function. However, window functions do not cause rows to become grouped into a single output row like non-window aggregate calls would. Instead, the rows retain their separate identities. Behind the scenes, the window function is able to access more than just the current row of the query result
 
 Here is an example that shows how to compare each employee's salary with the average salary in his or her department:
 
@@ -140,18 +148,9 @@ All [aggregate functions](aggregate_functions.md) can be used as window function
 
 ## Ranking functions
 
-- [row_number](#row_number)
 - [rank](#rank)
 - [dense_rank](#dense_rank)
 - [ntile](#ntile)
-
-### `row_number`
-
-Number of the current row within its partition, counting from 1.
-
-```sql
-row_number()
-```
 
 ### `rank`
 

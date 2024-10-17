@@ -24,8 +24,8 @@ use datafusion::physical_expr::window::{NthValueKind, SlidingAggregateWindowExpr
 use datafusion::physical_expr::{PhysicalSortExpr, ScalarFunctionExpr};
 use datafusion::physical_plan::expressions::{
     BinaryExpr, CaseExpr, CastExpr, Column, CumeDist, InListExpr, IsNotNullExpr,
-    IsNullExpr, Literal, NegativeExpr, NotExpr, NthValue, Ntile, Rank, RankType,
-    TryCastExpr, WindowShift,
+    IsNullExpr, Literal, NegativeExpr, NotExpr, NthValue, Ntile, TryCastExpr,
+    WindowShift,
 };
 use datafusion::physical_plan::udaf::AggregateFunctionExpr;
 use datafusion::physical_plan::windows::{BuiltInWindowExpr, PlainAggregateWindowExpr};
@@ -109,14 +109,7 @@ pub fn serialize_physical_window_expr(
         let expr = built_in_window_expr.get_built_in_func_expr();
         let built_in_fn_expr = expr.as_any();
 
-        let builtin_fn = if let Some(rank_expr) = built_in_fn_expr.downcast_ref::<Rank>()
-        {
-            match rank_expr.get_type() {
-                RankType::Basic => protobuf::BuiltInWindowFunction::Rank,
-                RankType::Dense => protobuf::BuiltInWindowFunction::DenseRank,
-                RankType::Percent => protobuf::BuiltInWindowFunction::PercentRank,
-            }
-        } else if built_in_fn_expr.downcast_ref::<CumeDist>().is_some() {
+        let builtin_fn = if built_in_fn_expr.downcast_ref::<CumeDist>().is_some() {
             protobuf::BuiltInWindowFunction::CumeDist
         } else if let Some(ntile_expr) = built_in_fn_expr.downcast_ref::<Ntile>() {
             args.insert(
@@ -642,8 +635,8 @@ impl TryFrom<&FileSinkConfig> for protobuf::FileSinkConfig {
             table_paths,
             output_schema: Some(conf.output_schema.as_ref().try_into()?),
             table_partition_cols,
-            overwrite: conf.overwrite,
             keep_partition_by_columns: conf.keep_partition_by_columns,
+            insert_op: conf.insert_op as i32,
         })
     }
 }

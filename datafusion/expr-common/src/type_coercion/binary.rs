@@ -25,8 +25,8 @@ use crate::operator::Operator;
 use arrow::array::{new_empty_array, Array};
 use arrow::compute::can_cast_types;
 use arrow::datatypes::{
-    DataType, Field, FieldRef, TimeUnit, DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE,
-    DECIMAL256_MAX_PRECISION, DECIMAL256_MAX_SCALE,
+    DataType, Field, FieldRef, Fields, TimeUnit, DECIMAL128_MAX_PRECISION,
+    DECIMAL128_MAX_SCALE, DECIMAL256_MAX_PRECISION, DECIMAL256_MAX_SCALE,
 };
 use datafusion_common::{exec_datafusion_err, plan_datafusion_err, plan_err, Result};
 
@@ -191,7 +191,7 @@ fn signature(lhs: &DataType, op: &Operator, rhs: &DataType) -> Result<Signature>
     }
 }
 
-/// returns the resulting type of a binary expression evaluating the `op` with the left and right hand types
+/// Returns the resulting type of a binary expression evaluating the `op` with the left and right hand types
 pub fn get_result_type(
     lhs: &DataType,
     op: &Operator,
@@ -370,17 +370,19 @@ impl From<&DataType> for TypeCategory {
 /// align with the behavior of Postgres. Therefore, we've made slight adjustments to the rules
 /// to better match the behavior of both Postgres and DuckDB. For example, we expect adjusted
 /// decimal precision and scale when coercing decimal types.
+///
+/// This function doesn't preserve correct field name and nullability for the struct type, we only care about data type.
 pub fn type_union_resolution(data_types: &[DataType]) -> Option<DataType> {
     if data_types.is_empty() {
         return None;
     }
 
-    // if all the data_types is the same return first one
+    // If all the data_types is the same return first one
     if data_types.iter().all(|t| t == &data_types[0]) {
         return Some(data_types[0].clone());
     }
 
-    // if all the data_types are null, return string
+    // If all the data_types are null, return string
     if data_types.iter().all(|t| t == &DataType::Null) {
         return Some(DataType::Utf8);
     }
@@ -399,7 +401,7 @@ pub fn type_union_resolution(data_types: &[DataType]) -> Option<DataType> {
         return None;
     }
 
-    // check if there is only one category excluding Unknown
+    // Check if there is only one category excluding Unknown
     let categories: HashSet<TypeCategory> = HashSet::from_iter(
         data_types_category
             .iter()
@@ -471,10 +473,56 @@ fn type_union_resolution_coercion(
             let new_value_type = type_union_resolution_coercion(value_type, other_type);
             new_value_type.map(|t| DataType::Dictionary(index_type.clone(), Box::new(t)))
         }
+        (DataType::List(lhs), DataType::List(rhs)) => {
+            let new_item_type =
+                type_union_resolution_coercion(lhs.data_type(), rhs.data_type());
+            new_item_type.map(|t| DataType::List(Arc::new(Field::new("item", t, true))))
+        }
+        (DataType::Struct(lhs), DataType::Struct(rhs)) => {
+            if lhs.len() != rhs.len() {
+                return None;
+            }
+
+            // Search the field in the right hand side with the SAME field name
+            fn search_corresponding_coerced_type(
+                lhs_field: &FieldRef,
+                rhs: &Fields,
+            ) -> Option<DataType> {
+                for rhs_field in rhs.iter() {
+                    if lhs_field.name() == rhs_field.name() {
+                        if let Some(t) = type_union_resolution_coercion(
+                            lhs_field.data_type(),
+                            rhs_field.data_type(),
+                        ) {
+                            return Some(t);
+                        } else {
+                            return None;
+                        }
+                    }
+                }
+
+                None
+            }
+
+            let types = lhs
+                .iter()
+                .map(|lhs_field| search_corresponding_coerced_type(lhs_field, rhs))
+                .collect::<Option<Vec<_>>>()?;
+
+            let fields = types
+                .into_iter()
+                .enumerate()
+                .map(|(i, datatype)| {
+                    Arc::new(Field::new(format!("c{i}"), datatype, true))
+                })
+                .collect::<Vec<FieldRef>>();
+            Some(DataType::Struct(fields.into()))
+        }
         _ => {
-            // numeric coercion is the same as comparison coercion, both find the narrowest type
+            // Numeric coercion is the same as comparison coercion, both find the narrowest type
             // that can accommodate both types
             binary_numeric_coercion(lhs_type, rhs_type)
+                .or_else(|| temporal_coercion_nonstrict_timezone(lhs_type, rhs_type))
                 .or_else(|| string_coercion(lhs_type, rhs_type))
                 .or_else(|| numeric_string_coercion(lhs_type, rhs_type))
         }
@@ -505,22 +553,6 @@ pub fn comparison_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<D
         .or_else(|| string_temporal_coercion(lhs_type, rhs_type))
         .or_else(|| binary_coercion(lhs_type, rhs_type))
         .or_else(|| struct_coercion(lhs_type, rhs_type))
-}
-
-/// Coerce `lhs_type` and `rhs_type` to a common type for `VALUES` expression
-///
-/// For example `VALUES (1, 2), (3.0, 4.0)` where the first row is `Int32` and
-/// the second row is `Float64` will coerce to `Float64`
-///
-pub fn values_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
-    if lhs_type == rhs_type {
-        // same type => equality is possible
-        return Some(lhs_type.clone());
-    }
-    binary_numeric_coercion(lhs_type, rhs_type)
-        .or_else(|| temporal_coercion_nonstrict_timezone(lhs_type, rhs_type))
-        .or_else(|| string_coercion(lhs_type, rhs_type))
-        .or_else(|| binary_coercion(lhs_type, rhs_type))
 }
 
 /// Coerce `lhs_type` and `rhs_type` to a common type for the purposes of a comparison operation
@@ -598,7 +630,7 @@ pub fn binary_numeric_coercion(
         return Some(t);
     }
 
-    // these are ordered from most informative to least informative so
+    // These are ordered from most informative to least informative so
     // that the coercion does not lose information via truncation
     match (lhs_type, rhs_type) {
         (Float64, _) | (_, Float64) => Some(Float64),
@@ -824,12 +856,12 @@ fn mathematics_numerical_coercion(
 ) -> Option<DataType> {
     use arrow::datatypes::DataType::*;
 
-    // error on any non-numeric type
+    // Error on any non-numeric type
     if !both_numeric_or_null_and_numeric(lhs_type, rhs_type) {
         return None;
     };
 
-    // these are ordered from most informative to least informative so
+    // These are ordered from most informative to least informative so
     // that the coercion removes the least amount of information
     match (lhs_type, rhs_type) {
         (Dictionary(_, lhs_value_type), Dictionary(_, rhs_value_type)) => {
@@ -969,7 +1001,7 @@ fn string_concat_internal_coercion(
 /// based on the observation that StringArray to StringViewArray is cheap but not vice versa.
 ///
 /// Between Utf8 and LargeUtf8, we coerce to LargeUtf8.
-fn string_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
+pub fn string_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
     use arrow::datatypes::DataType::*;
     match (lhs_type, rhs_type) {
         // If Utf8View is in any side, we coerce to Utf8View.
@@ -1090,7 +1122,7 @@ fn binary_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType>
     }
 }
 
-/// coercion rules for like operations.
+/// Coercion rules for like operations.
 /// This is a union of string coercion rules and dictionary coercion rules
 pub fn like_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
     string_coercion(lhs_type, rhs_type)
@@ -1101,7 +1133,7 @@ pub fn like_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataTyp
         .or_else(|| null_coercion(lhs_type, rhs_type))
 }
 
-/// coercion rules for regular expression comparison operations with NULL input.
+/// Coercion rules for regular expression comparison operations with NULL input.
 fn regex_null_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
     use arrow::datatypes::DataType::*;
     match (lhs_type, rhs_type) {
@@ -1263,7 +1295,7 @@ fn timeunit_coercion(lhs_unit: &TimeUnit, rhs_unit: &TimeUnit) -> TimeUnit {
     }
 }
 
-/// coercion rules from NULL type. Since NULL can be casted to any other type in arrow,
+/// Coercion rules from NULL type. Since NULL can be casted to any other type in arrow,
 /// either lhs or rhs is NULL, if NULL can be casted to type of the other side, the coercion is valid.
 fn null_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
     match (lhs_type, rhs_type) {

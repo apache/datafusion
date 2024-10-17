@@ -35,7 +35,7 @@ pub const TIMEZONE_WILDCARD: &str = "+TZ";
 /// valid length. It exists to avoid the need to enumerate all possible fixed size list lengths.
 pub const FIXED_SIZE_LIST_WILDCARD: i32 = i32::MIN;
 
-///A function's volatility, which defines the functions eligibility for certain optimizations
+/// A function's volatility, which defines the functions eligibility for certain optimizations
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Hash)]
 pub enum Volatility {
     /// An immutable function will always return the same output when given the same
@@ -86,7 +86,7 @@ pub enum Volatility {
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
 pub enum TypeSignature {
-    /// One or more arguments of an common type out of a list of valid types.
+    /// One or more arguments of a common type out of a list of valid types.
     ///
     /// # Examples
     /// A function such as `concat` is `Variadic(vec![DataType::Utf8, DataType::LargeUtf8])`
@@ -125,6 +125,11 @@ pub enum TypeSignature {
     /// Fixed number of arguments of numeric types.
     /// See <https://docs.rs/arrow/latest/arrow/datatypes/enum.DataType.html#method.is_numeric> to know which type is considered numeric
     Numeric(usize),
+    /// Fixed number of arguments of all the same string types.
+    /// The precedence of type from high to low is Utf8View, LargeUtf8 and Utf8.
+    /// Null is considerd as `Utf8` by default
+    /// Dictionary with string value type is also handled.
+    String(usize),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
@@ -190,8 +195,11 @@ impl TypeSignature {
                     .collect::<Vec<String>>()
                     .join(", ")]
             }
+            TypeSignature::String(num) => {
+                vec![format!("String({num})")]
+            }
             TypeSignature::Numeric(num) => {
-                vec![format!("Numeric({})", num)]
+                vec![format!("Numeric({num})")]
             }
             TypeSignature::Exact(types) | TypeSignature::Coercible(types) => {
                 vec![Self::join_types(types, ", ")]
@@ -276,6 +284,14 @@ impl Signature {
     pub fn numeric(arg_count: usize, volatility: Volatility) -> Self {
         Self {
             type_signature: TypeSignature::Numeric(arg_count),
+            volatility,
+        }
+    }
+
+    /// A specified number of numeric arguments
+    pub fn string(arg_count: usize, volatility: Volatility) -> Self {
+        Self {
+            type_signature: TypeSignature::String(arg_count),
             volatility,
         }
     }

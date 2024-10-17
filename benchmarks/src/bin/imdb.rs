@@ -35,8 +35,16 @@ static ALLOC: snmalloc_rs::SnMalloc = snmalloc_rs::SnMalloc;
 static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 #[derive(Debug, StructOpt)]
+#[structopt(about = "benchmark command")]
+enum BenchmarkSubCommandOpt {
+    #[structopt(name = "datafusion")]
+    DataFusionBenchmark(imdb::RunOpt),
+}
+
+#[derive(Debug, StructOpt)]
 #[structopt(name = "IMDB", about = "IMDB Dataset Processing.")]
 enum ImdbOpt {
+    Benchmark(BenchmarkSubCommandOpt),
     Convert(imdb::ConvertOpt),
 }
 
@@ -44,6 +52,9 @@ enum ImdbOpt {
 pub async fn main() -> Result<()> {
     env_logger::init();
     match ImdbOpt::from_args() {
+        ImdbOpt::Benchmark(BenchmarkSubCommandOpt::DataFusionBenchmark(opt)) => {
+            opt.run().await
+        }
         ImdbOpt::Convert(opt) => opt.run().await,
     }
 }

@@ -20,7 +20,9 @@
 use crate::expr::schema_name_from_exprs_comma_seperated_without_space;
 use crate::simplify::{ExprSimplifyResult, SimplifyInfo};
 use crate::sort_properties::{ExprProperties, SortProperties};
-use crate::{ColumnarValue, Expr, ScalarFunctionImplementation, Signature};
+use crate::{
+    ColumnarValue, Documentation, Expr, ScalarFunctionImplementation, Signature,
+};
 use arrow::datatypes::DataType;
 use datafusion_common::{not_impl_err, ExprSchema, Result};
 use datafusion_expr_common::interval_arithmetic::Interval;
@@ -274,6 +276,14 @@ impl ScalarUDF {
     pub fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
         self.inner.coerce_types(arg_types)
     }
+
+    /// Returns the documentation for this Scalar UDF.
+    ///
+    /// Documentation can be accessed programmatically as well as
+    /// generating publicly facing documentation.
+    pub fn documentation(&self) -> Option<&Documentation> {
+        self.inner.documentation()
+    }
 }
 
 impl<F> From<F> for ScalarUDF
@@ -298,21 +308,38 @@ where
 /// # Basic Example
 /// ```
 /// # use std::any::Any;
+/// # use std::sync::OnceLock;
 /// # use arrow::datatypes::DataType;
 /// # use datafusion_common::{DataFusionError, plan_err, Result};
-/// # use datafusion_expr::{col, ColumnarValue, Signature, Volatility};
+/// # use datafusion_expr::{col, ColumnarValue, Documentation, Signature, Volatility};
 /// # use datafusion_expr::{ScalarUDFImpl, ScalarUDF};
+/// # use datafusion_expr::scalar_doc_sections::DOC_SECTION_MATH;
+///
 /// #[derive(Debug)]
 /// struct AddOne {
-///   signature: Signature
+///   signature: Signature,
 /// }
 ///
 /// impl AddOne {
 ///   fn new() -> Self {
 ///     Self {
-///       signature: Signature::uniform(1, vec![DataType::Int32], Volatility::Immutable)
+///       signature: Signature::uniform(1, vec![DataType::Int32], Volatility::Immutable),
 ///      }
 ///   }
+/// }
+///  
+/// static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+///
+/// fn get_doc() -> &'static Documentation {
+///     DOCUMENTATION.get_or_init(|| {
+///         Documentation::builder()
+///             .with_doc_section(DOC_SECTION_MATH)
+///             .with_description("Add one to an int32")
+///             .with_syntax_example("add_one(2)")
+///             .with_argument("arg1", "The int32 number to add one to")
+///             .build()
+///             .unwrap()
+///     })
 /// }
 ///
 /// /// Implement the ScalarUDFImpl trait for AddOne
@@ -328,6 +355,9 @@ where
 ///    }
 ///    // The actual implementation would add one to the argument
 ///    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> { unimplemented!() }
+///    fn documentation(&self) -> Option<&Documentation> {
+///         Some(get_doc())
+///     }
 /// }
 ///
 /// // Create a new ScalarUDF from the implementation
@@ -596,6 +626,14 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
         self.signature().hash(hasher);
         hasher.finish()
     }
+
+    /// Returns the documentation for this Scalar UDF.
+    ///
+    /// Documentation can be accessed programmatically as well as
+    /// generating publicly facing documentation.
+    fn documentation(&self) -> Option<&Documentation> {
+        None
+    }
 }
 
 /// ScalarUDF that adds an alias to the underlying function. It is better to
@@ -709,4 +747,100 @@ impl ScalarUDFImpl for AliasedScalarUDFImpl {
         self.aliases.hash(hasher);
         hasher.finish()
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        self.inner.documentation()
+    }
+}
+
+// Scalar UDF doc sections for use in public documentation
+pub mod scalar_doc_sections {
+    use crate::DocSection;
+
+    pub fn doc_sections() -> Vec<DocSection> {
+        vec![
+            DOC_SECTION_MATH,
+            DOC_SECTION_CONDITIONAL,
+            DOC_SECTION_STRING,
+            DOC_SECTION_BINARY_STRING,
+            DOC_SECTION_REGEX,
+            DOC_SECTION_DATETIME,
+            DOC_SECTION_ARRAY,
+            DOC_SECTION_STRUCT,
+            DOC_SECTION_MAP,
+            DOC_SECTION_HASHING,
+            DOC_SECTION_OTHER,
+        ]
+    }
+
+    pub const DOC_SECTION_MATH: DocSection = DocSection {
+        include: true,
+        label: "Math Functions",
+        description: None,
+    };
+
+    pub const DOC_SECTION_CONDITIONAL: DocSection = DocSection {
+        include: true,
+        label: "Conditional Functions",
+        description: None,
+    };
+
+    pub const DOC_SECTION_STRING: DocSection = DocSection {
+        include: true,
+        label: "String Functions",
+        description: None,
+    };
+
+    pub const DOC_SECTION_BINARY_STRING: DocSection = DocSection {
+        include: true,
+        label: "Binary String Functions",
+        description: None,
+    };
+
+    pub const DOC_SECTION_REGEX: DocSection = DocSection {
+        include: true,
+        label: "Regular Expression Functions",
+        description: Some(
+            r#"Apache DataFusion uses a [PCRE-like](https://en.wikibooks.org/wiki/Regular_Expressions/Perl-Compatible_Regular_Expressions)
+regular expression [syntax](https://docs.rs/regex/latest/regex/#syntax)
+(minus support for several features including look-around and backreferences).
+The following regular expression functions are supported:"#,
+        ),
+    };
+
+    pub const DOC_SECTION_DATETIME: DocSection = DocSection {
+        include: true,
+        label: "Time and Date Functions",
+        description: None,
+    };
+
+    pub const DOC_SECTION_ARRAY: DocSection = DocSection {
+        include: true,
+        label: "Array Functions",
+        description: None,
+    };
+
+    pub const DOC_SECTION_STRUCT: DocSection = DocSection {
+        include: true,
+        label: "Struct Functions",
+        description: None,
+    };
+
+    pub const DOC_SECTION_MAP: DocSection = DocSection {
+        include: true,
+        label: "Map Functions",
+        description: None,
+    };
+
+    pub const DOC_SECTION_HASHING: DocSection = DocSection {
+        include: true,
+        label: "Hashing Functions",
+        description: None,
+    };
+
+    pub const DOC_SECTION_OTHER: DocSection = DocSection {
+        include: true,
+        label: "Other Functions",
+        description: None,
+    };
 }

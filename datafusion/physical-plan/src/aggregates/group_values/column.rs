@@ -16,14 +16,16 @@
 // under the License.
 
 use crate::aggregates::group_values::group_column::{
-    ByteGroupValueBuilder, GroupColumn, PrimitiveGroupValueBuilder,
+    ByteGroupValueBuilder, ByteViewGroupValueBuilder, GroupColumn,
+    PrimitiveGroupValueBuilder,
 };
 use crate::aggregates::group_values::GroupValues;
 use ahash::RandomState;
 use arrow::compute::cast;
 use arrow::datatypes::{
-    Date32Type, Date64Type, Float32Type, Float64Type, Int16Type, Int32Type, Int64Type,
-    Int8Type, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
+    BinaryViewType, Date32Type, Date64Type, Float32Type, Float64Type, Int16Type,
+    Int32Type, Int64Type, Int8Type, StringViewType, UInt16Type, UInt32Type, UInt64Type,
+    UInt8Type,
 };
 use arrow::record_batch::RecordBatch;
 use arrow_array::{Array, ArrayRef};
@@ -36,7 +38,9 @@ use datafusion_physical_expr::binary_map::OutputType;
 
 use hashbrown::raw::RawTable;
 
-/// Compare GroupValue Rows column by column
+/// A [`GroupValues`] that stores multiple columns of group values.
+///
+///
 pub struct GroupValuesColumn {
     /// The output schema
     schema: SchemaRef,
@@ -55,8 +59,13 @@ pub struct GroupValuesColumn {
     map_size: usize,
 
     /// The actual group by values, stored column-wise. Compare from
-    /// the left to right, each column is stored as `ArrayRowEq`.
-    /// This is shown faster than the row format
+    /// the left to right, each column is stored as [`GroupColumn`].
+    ///
+    /// Performance tests showed that this design is faster than using the
+    /// more general purpose [`GroupValuesRows`]. See the ticket for details:
+    /// <https://github.com/apache/datafusion/pull/12269>
+    ///
+    /// [`GroupValuesRows`]: crate::aggregates::group_values::row::GroupValuesRows
     group_values: Vec<Box<dyn GroupColumn>>,
 
     /// reused buffer to store hashes
@@ -112,8 +121,29 @@ impl GroupValuesColumn {
                 | DataType::LargeBinary
                 | DataType::Date32
                 | DataType::Date64
+                | DataType::Utf8View
+                | DataType::BinaryView
         )
     }
+}
+
+/// instantiates a [`PrimitiveGroupValueBuilder`] and pushes it into $v
+///
+/// Arguments:
+/// `$v`: the vector to push the new builder into
+/// `$nullable`: whether the input can contains nulls
+/// `$t`: the primitive type of the builder
+///
+macro_rules! instantiate_primitive {
+    ($v:expr, $nullable:expr, $t:ty) => {
+        if $nullable {
+            let b = PrimitiveGroupValueBuilder::<$t, true>::new();
+            $v.push(Box::new(b) as _)
+        } else {
+            let b = PrimitiveGroupValueBuilder::<$t, false>::new();
+            $v.push(Box::new(b) as _)
+        }
+    };
 }
 
 impl GroupValues for GroupValuesColumn {
@@ -126,54 +156,22 @@ impl GroupValues for GroupValuesColumn {
             for f in self.schema.fields().iter() {
                 let nullable = f.is_nullable();
                 match f.data_type() {
-                    &DataType::Int8 => {
-                        let b = PrimitiveGroupValueBuilder::<Int8Type>::new(nullable);
-                        v.push(Box::new(b) as _)
-                    }
-                    &DataType::Int16 => {
-                        let b = PrimitiveGroupValueBuilder::<Int16Type>::new(nullable);
-                        v.push(Box::new(b) as _)
-                    }
-                    &DataType::Int32 => {
-                        let b = PrimitiveGroupValueBuilder::<Int32Type>::new(nullable);
-                        v.push(Box::new(b) as _)
-                    }
-                    &DataType::Int64 => {
-                        let b = PrimitiveGroupValueBuilder::<Int64Type>::new(nullable);
-                        v.push(Box::new(b) as _)
-                    }
-                    &DataType::UInt8 => {
-                        let b = PrimitiveGroupValueBuilder::<UInt8Type>::new(nullable);
-                        v.push(Box::new(b) as _)
-                    }
-                    &DataType::UInt16 => {
-                        let b = PrimitiveGroupValueBuilder::<UInt16Type>::new(nullable);
-                        v.push(Box::new(b) as _)
-                    }
-                    &DataType::UInt32 => {
-                        let b = PrimitiveGroupValueBuilder::<UInt32Type>::new(nullable);
-                        v.push(Box::new(b) as _)
-                    }
-                    &DataType::UInt64 => {
-                        let b = PrimitiveGroupValueBuilder::<UInt64Type>::new(nullable);
-                        v.push(Box::new(b) as _)
-                    }
+                    &DataType::Int8 => instantiate_primitive!(v, nullable, Int8Type),
+                    &DataType::Int16 => instantiate_primitive!(v, nullable, Int16Type),
+                    &DataType::Int32 => instantiate_primitive!(v, nullable, Int32Type),
+                    &DataType::Int64 => instantiate_primitive!(v, nullable, Int64Type),
+                    &DataType::UInt8 => instantiate_primitive!(v, nullable, UInt8Type),
+                    &DataType::UInt16 => instantiate_primitive!(v, nullable, UInt16Type),
+                    &DataType::UInt32 => instantiate_primitive!(v, nullable, UInt32Type),
+                    &DataType::UInt64 => instantiate_primitive!(v, nullable, UInt64Type),
                     &DataType::Float32 => {
-                        let b = PrimitiveGroupValueBuilder::<Float32Type>::new(nullable);
-                        v.push(Box::new(b) as _)
+                        instantiate_primitive!(v, nullable, Float32Type)
                     }
                     &DataType::Float64 => {
-                        let b = PrimitiveGroupValueBuilder::<Float64Type>::new(nullable);
-                        v.push(Box::new(b) as _)
+                        instantiate_primitive!(v, nullable, Float64Type)
                     }
-                    &DataType::Date32 => {
-                        let b = PrimitiveGroupValueBuilder::<Date32Type>::new(nullable);
-                        v.push(Box::new(b) as _)
-                    }
-                    &DataType::Date64 => {
-                        let b = PrimitiveGroupValueBuilder::<Date64Type>::new(nullable);
-                        v.push(Box::new(b) as _)
-                    }
+                    &DataType::Date32 => instantiate_primitive!(v, nullable, Date32Type),
+                    &DataType::Date64 => instantiate_primitive!(v, nullable, Date64Type),
                     &DataType::Utf8 => {
                         let b = ByteGroupValueBuilder::<i32>::new(OutputType::Utf8);
                         v.push(Box::new(b) as _)
@@ -188,6 +186,14 @@ impl GroupValues for GroupValuesColumn {
                     }
                     &DataType::LargeBinary => {
                         let b = ByteGroupValueBuilder::<i64>::new(OutputType::Binary);
+                        v.push(Box::new(b) as _)
+                    }
+                    &DataType::Utf8View => {
+                        let b = ByteViewGroupValueBuilder::<StringViewType>::new();
+                        v.push(Box::new(b) as _)
+                    }
+                    &DataType::BinaryView => {
+                        let b = ByteViewGroupValueBuilder::<BinaryViewType>::new();
                         v.push(Box::new(b) as _)
                     }
                     dt => {

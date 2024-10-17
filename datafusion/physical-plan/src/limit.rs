@@ -34,6 +34,7 @@ use arrow::record_batch::RecordBatch;
 use datafusion_common::{internal_err, Result};
 use datafusion_execution::TaskContext;
 
+use crate::execution_plan::CardinalityEffect;
 use futures::stream::{Stream, StreamExt};
 use log::trace;
 
@@ -335,6 +336,10 @@ impl ExecutionPlan for LocalLimitExec {
 
     fn supports_limit_pushdown(&self) -> bool {
         true
+    }
+
+    fn cardinality_effect(&self) -> CardinalityEffect {
+        CardinalityEffect::LowerEqual
     }
 }
 

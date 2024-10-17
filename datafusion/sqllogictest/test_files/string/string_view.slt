@@ -37,19 +37,6 @@ select arrow_cast(col1, 'Utf8View') as c1 from test_substr_base;
 statement ok
 drop table test_source
 
-# TODO: move it back to `string_query.slt.part` after fixing the issue
-# https://github.com/apache/datafusion/issues/12618
-query BB
-SELECT
-  ascii_1 ~* '^a.{3}e',
-  unicode_1 ~* '^d.*Фу'
-FROM test_basic_operator;
-----
-true false
-false false
-false true
-NULL NULL
-
 #
 # common test for string-like functions and operators
 #
@@ -91,6 +78,29 @@ FROM test_source;
 
 statement ok
 drop table test_source
+
+########
+## StringView Function test
+########
+
+query I
+select octet_length(column1_utf8view) from test;
+----
+6
+9
+7
+NULL
+
+query error DataFusion error: Arrow error: Compute error: bit_length not supported for Utf8View
+select bit_length(column1_utf8view) from test;
+
+query T
+select btrim(column1_large_utf8) from test;
+----
+Andrew
+Xiangpeng
+Raphael
+NULL
 
 ########
 ## StringView to Other Types column
@@ -299,9 +309,8 @@ EXPLAIN SELECT
 FROM test;
 ----
 logical_plan
-01)Projection: starts_with(__common_expr_1, test.column2_utf8view) AS c1, starts_with(test.column1_utf8, test.column2_utf8) AS c3, starts_with(__common_expr_1, CAST(test.column2_large_utf8 AS Utf8View)) AS c4
-02)--Projection: CAST(test.column1_utf8 AS Utf8View) AS __common_expr_1, test.column1_utf8, test.column2_utf8, test.column2_large_utf8, test.column2_utf8view
-03)----TableScan: test projection=[column1_utf8, column2_utf8, column2_large_utf8, column2_utf8view]
+01)Projection: starts_with(CAST(test.column1_utf8 AS Utf8View), test.column2_utf8view) AS c1, starts_with(test.column1_utf8, test.column2_utf8) AS c3, starts_with(CAST(test.column1_utf8 AS LargeUtf8), test.column2_large_utf8) AS c4
+02)--TableScan: test projection=[column1_utf8, column2_utf8, column2_large_utf8, column2_utf8view]
 
 query BBB
  SELECT
@@ -591,7 +600,7 @@ EXPLAIN SELECT
 FROM test;
 ----
 logical_plan
-01)Projection: contains(test.column1_utf8view, Utf8("foo")) AS c1, contains(test.column1_utf8view, test.column2_utf8view) AS c2, contains(test.column1_utf8view, test.column2_large_utf8) AS c3, contains(test.column1_utf8, test.column2_utf8view) AS c4, contains(test.column1_utf8, test.column2_utf8) AS c5, contains(test.column1_utf8, test.column2_large_utf8) AS c6, contains(test.column1_large_utf8, test.column1_utf8view) AS c7, contains(test.column1_large_utf8, test.column2_utf8) AS c8, contains(test.column1_large_utf8, test.column2_large_utf8) AS c9
+01)Projection: contains(test.column1_utf8view, Utf8View("foo")) AS c1, contains(test.column1_utf8view, test.column2_utf8view) AS c2, contains(test.column1_utf8view, CAST(test.column2_large_utf8 AS Utf8View)) AS c3, contains(CAST(test.column1_utf8 AS Utf8View), test.column2_utf8view) AS c4, contains(test.column1_utf8, test.column2_utf8) AS c5, contains(CAST(test.column1_utf8 AS LargeUtf8), test.column2_large_utf8) AS c6, contains(CAST(test.column1_large_utf8 AS Utf8View), test.column1_utf8view) AS c7, contains(test.column1_large_utf8, CAST(test.column2_utf8 AS LargeUtf8)) AS c8, contains(test.column1_large_utf8, test.column2_large_utf8) AS c9
 02)--TableScan: test projection=[column1_utf8, column2_utf8, column1_large_utf8, column2_large_utf8, column1_utf8view, column2_utf8view]
 
 ## Ensure no casts for ENDS_WITH
@@ -713,7 +722,7 @@ EXPLAIN SELECT
 FROM test;
 ----
 logical_plan
-01)Projection: regexp_like(CAST(test.column1_utf8view AS Utf8), Utf8("^https?://(?:www\.)?([^/]+)/.*$")) AS k
+01)Projection: regexp_like(test.column1_utf8view, Utf8("^https?://(?:www\.)?([^/]+)/.*$")) AS k
 02)--TableScan: test projection=[column1_utf8view]
 
 ## Ensure no casts for REGEXP_MATCH
@@ -835,7 +844,7 @@ EXPLAIN SELECT
 FROM test;
 ----
 logical_plan
-01)Projection: strpos(test.column1_utf8view, Utf8("f")) AS c, strpos(test.column1_utf8view, test.column2_utf8view) AS c2
+01)Projection: strpos(test.column1_utf8view, Utf8View("f")) AS c, strpos(test.column1_utf8view, test.column2_utf8view) AS c2
 02)--TableScan: test projection=[column1_utf8view, column2_utf8view]
 
 ## Ensure no casts for SUBSTR
@@ -890,6 +899,26 @@ FROM test;
 ----
 logical_plan
 01)Projection: find_in_set(test.column1_utf8view, Utf8View("a,b,c,d")) AS c
+02)--TableScan: test projection=[column1_utf8view]
+
+## Ensure no casts for to_date
+query TT
+EXPLAIN SELECT
+  to_date(column1_utf8view, 'a,b,c,d') as c
+FROM test;
+----
+logical_plan
+01)Projection: to_date(test.column1_utf8view, Utf8("a,b,c,d")) AS c
+02)--TableScan: test projection=[column1_utf8view]
+
+## Ensure no casts for to_timestamp
+query TT
+EXPLAIN SELECT
+  to_timestamp(column1_utf8view, 'a,b,c,d') as c
+FROM test;
+----
+logical_plan
+01)Projection: to_timestamp(test.column1_utf8view, Utf8("a,b,c,d")) AS c
 02)--TableScan: test projection=[column1_utf8view]
 
 ## Ensure no casts for binary operators

@@ -1662,9 +1662,6 @@ impl serde::Serialize for BuiltInWindowFunction {
     {
         let variant = match self {
             Self::Unspecified => "UNSPECIFIED",
-            Self::Rank => "RANK",
-            Self::DenseRank => "DENSE_RANK",
-            Self::PercentRank => "PERCENT_RANK",
             Self::CumeDist => "CUME_DIST",
             Self::Ntile => "NTILE",
             Self::Lag => "LAG",
@@ -1684,9 +1681,6 @@ impl<'de> serde::Deserialize<'de> for BuiltInWindowFunction {
     {
         const FIELDS: &[&str] = &[
             "UNSPECIFIED",
-            "RANK",
-            "DENSE_RANK",
-            "PERCENT_RANK",
             "CUME_DIST",
             "NTILE",
             "LAG",
@@ -1735,9 +1729,6 @@ impl<'de> serde::Deserialize<'de> for BuiltInWindowFunction {
             {
                 match value {
                     "UNSPECIFIED" => Ok(BuiltInWindowFunction::Unspecified),
-                    "RANK" => Ok(BuiltInWindowFunction::Rank),
-                    "DENSE_RANK" => Ok(BuiltInWindowFunction::DenseRank),
-                    "PERCENT_RANK" => Ok(BuiltInWindowFunction::PercentRank),
                     "CUME_DIST" => Ok(BuiltInWindowFunction::CumeDist),
                     "NTILE" => Ok(BuiltInWindowFunction::Ntile),
                     "LAG" => Ok(BuiltInWindowFunction::Lag),
@@ -3202,6 +3193,9 @@ impl serde::Serialize for CreateExternalTableNode {
         if self.if_not_exists {
             len += 1;
         }
+        if self.temporary {
+            len += 1;
+        }
         if !self.definition.is_empty() {
             len += 1;
         }
@@ -3238,6 +3232,9 @@ impl serde::Serialize for CreateExternalTableNode {
         }
         if self.if_not_exists {
             struct_ser.serialize_field("ifNotExists", &self.if_not_exists)?;
+        }
+        if self.temporary {
+            struct_ser.serialize_field("temporary", &self.temporary)?;
         }
         if !self.definition.is_empty() {
             struct_ser.serialize_field("definition", &self.definition)?;
@@ -3276,6 +3273,7 @@ impl<'de> serde::Deserialize<'de> for CreateExternalTableNode {
             "tablePartitionCols",
             "if_not_exists",
             "ifNotExists",
+            "temporary",
             "definition",
             "order_exprs",
             "orderExprs",
@@ -3294,6 +3292,7 @@ impl<'de> serde::Deserialize<'de> for CreateExternalTableNode {
             Schema,
             TablePartitionCols,
             IfNotExists,
+            Temporary,
             Definition,
             OrderExprs,
             Unbounded,
@@ -3327,6 +3326,7 @@ impl<'de> serde::Deserialize<'de> for CreateExternalTableNode {
                             "schema" => Ok(GeneratedField::Schema),
                             "tablePartitionCols" | "table_partition_cols" => Ok(GeneratedField::TablePartitionCols),
                             "ifNotExists" | "if_not_exists" => Ok(GeneratedField::IfNotExists),
+                            "temporary" => Ok(GeneratedField::Temporary),
                             "definition" => Ok(GeneratedField::Definition),
                             "orderExprs" | "order_exprs" => Ok(GeneratedField::OrderExprs),
                             "unbounded" => Ok(GeneratedField::Unbounded),
@@ -3358,6 +3358,7 @@ impl<'de> serde::Deserialize<'de> for CreateExternalTableNode {
                 let mut schema__ = None;
                 let mut table_partition_cols__ = None;
                 let mut if_not_exists__ = None;
+                let mut temporary__ = None;
                 let mut definition__ = None;
                 let mut order_exprs__ = None;
                 let mut unbounded__ = None;
@@ -3401,6 +3402,12 @@ impl<'de> serde::Deserialize<'de> for CreateExternalTableNode {
                                 return Err(serde::de::Error::duplicate_field("ifNotExists"));
                             }
                             if_not_exists__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Temporary => {
+                            if temporary__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("temporary"));
+                            }
+                            temporary__ = Some(map_.next_value()?);
                         }
                         GeneratedField::Definition => {
                             if definition__.is_some() {
@@ -3451,6 +3458,7 @@ impl<'de> serde::Deserialize<'de> for CreateExternalTableNode {
                     schema: schema__,
                     table_partition_cols: table_partition_cols__.unwrap_or_default(),
                     if_not_exists: if_not_exists__.unwrap_or_default(),
+                    temporary: temporary__.unwrap_or_default(),
                     definition: definition__.unwrap_or_default(),
                     order_exprs: order_exprs__.unwrap_or_default(),
                     unbounded: unbounded__.unwrap_or_default(),
@@ -3480,6 +3488,9 @@ impl serde::Serialize for CreateViewNode {
         if self.or_replace {
             len += 1;
         }
+        if self.temporary {
+            len += 1;
+        }
         if !self.definition.is_empty() {
             len += 1;
         }
@@ -3492,6 +3503,9 @@ impl serde::Serialize for CreateViewNode {
         }
         if self.or_replace {
             struct_ser.serialize_field("orReplace", &self.or_replace)?;
+        }
+        if self.temporary {
+            struct_ser.serialize_field("temporary", &self.temporary)?;
         }
         if !self.definition.is_empty() {
             struct_ser.serialize_field("definition", &self.definition)?;
@@ -3510,6 +3524,7 @@ impl<'de> serde::Deserialize<'de> for CreateViewNode {
             "input",
             "or_replace",
             "orReplace",
+            "temporary",
             "definition",
         ];
 
@@ -3518,6 +3533,7 @@ impl<'de> serde::Deserialize<'de> for CreateViewNode {
             Name,
             Input,
             OrReplace,
+            Temporary,
             Definition,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
@@ -3543,6 +3559,7 @@ impl<'de> serde::Deserialize<'de> for CreateViewNode {
                             "name" => Ok(GeneratedField::Name),
                             "input" => Ok(GeneratedField::Input),
                             "orReplace" | "or_replace" => Ok(GeneratedField::OrReplace),
+                            "temporary" => Ok(GeneratedField::Temporary),
                             "definition" => Ok(GeneratedField::Definition),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
@@ -3566,6 +3583,7 @@ impl<'de> serde::Deserialize<'de> for CreateViewNode {
                 let mut name__ = None;
                 let mut input__ = None;
                 let mut or_replace__ = None;
+                let mut temporary__ = None;
                 let mut definition__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
@@ -3587,6 +3605,12 @@ impl<'de> serde::Deserialize<'de> for CreateViewNode {
                             }
                             or_replace__ = Some(map_.next_value()?);
                         }
+                        GeneratedField::Temporary => {
+                            if temporary__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("temporary"));
+                            }
+                            temporary__ = Some(map_.next_value()?);
+                        }
                         GeneratedField::Definition => {
                             if definition__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("definition"));
@@ -3599,6 +3623,7 @@ impl<'de> serde::Deserialize<'de> for CreateViewNode {
                     name: name__,
                     input: input__,
                     or_replace: or_replace__.unwrap_or_default(),
+                    temporary: temporary__.unwrap_or_default(),
                     definition: definition__.unwrap_or_default(),
                 })
             }
@@ -5832,10 +5857,10 @@ impl serde::Serialize for FileSinkConfig {
         if !self.table_partition_cols.is_empty() {
             len += 1;
         }
-        if self.overwrite {
+        if self.keep_partition_by_columns {
             len += 1;
         }
-        if self.keep_partition_by_columns {
+        if self.insert_op != 0 {
             len += 1;
         }
         let mut struct_ser = serializer.serialize_struct("datafusion.FileSinkConfig", len)?;
@@ -5854,11 +5879,13 @@ impl serde::Serialize for FileSinkConfig {
         if !self.table_partition_cols.is_empty() {
             struct_ser.serialize_field("tablePartitionCols", &self.table_partition_cols)?;
         }
-        if self.overwrite {
-            struct_ser.serialize_field("overwrite", &self.overwrite)?;
-        }
         if self.keep_partition_by_columns {
             struct_ser.serialize_field("keepPartitionByColumns", &self.keep_partition_by_columns)?;
+        }
+        if self.insert_op != 0 {
+            let v = InsertOp::try_from(self.insert_op)
+                .map_err(|_| serde::ser::Error::custom(format!("Invalid variant {}", self.insert_op)))?;
+            struct_ser.serialize_field("insertOp", &v)?;
         }
         struct_ser.end()
     }
@@ -5880,9 +5907,10 @@ impl<'de> serde::Deserialize<'de> for FileSinkConfig {
             "outputSchema",
             "table_partition_cols",
             "tablePartitionCols",
-            "overwrite",
             "keep_partition_by_columns",
             "keepPartitionByColumns",
+            "insert_op",
+            "insertOp",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -5892,8 +5920,8 @@ impl<'de> serde::Deserialize<'de> for FileSinkConfig {
             TablePaths,
             OutputSchema,
             TablePartitionCols,
-            Overwrite,
             KeepPartitionByColumns,
+            InsertOp,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -5920,8 +5948,8 @@ impl<'de> serde::Deserialize<'de> for FileSinkConfig {
                             "tablePaths" | "table_paths" => Ok(GeneratedField::TablePaths),
                             "outputSchema" | "output_schema" => Ok(GeneratedField::OutputSchema),
                             "tablePartitionCols" | "table_partition_cols" => Ok(GeneratedField::TablePartitionCols),
-                            "overwrite" => Ok(GeneratedField::Overwrite),
                             "keepPartitionByColumns" | "keep_partition_by_columns" => Ok(GeneratedField::KeepPartitionByColumns),
+                            "insertOp" | "insert_op" => Ok(GeneratedField::InsertOp),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -5946,8 +5974,8 @@ impl<'de> serde::Deserialize<'de> for FileSinkConfig {
                 let mut table_paths__ = None;
                 let mut output_schema__ = None;
                 let mut table_partition_cols__ = None;
-                let mut overwrite__ = None;
                 let mut keep_partition_by_columns__ = None;
+                let mut insert_op__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::ObjectStoreUrl => {
@@ -5980,17 +6008,17 @@ impl<'de> serde::Deserialize<'de> for FileSinkConfig {
                             }
                             table_partition_cols__ = Some(map_.next_value()?);
                         }
-                        GeneratedField::Overwrite => {
-                            if overwrite__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("overwrite"));
-                            }
-                            overwrite__ = Some(map_.next_value()?);
-                        }
                         GeneratedField::KeepPartitionByColumns => {
                             if keep_partition_by_columns__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("keepPartitionByColumns"));
                             }
                             keep_partition_by_columns__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::InsertOp => {
+                            if insert_op__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("insertOp"));
+                            }
+                            insert_op__ = Some(map_.next_value::<InsertOp>()? as i32);
                         }
                     }
                 }
@@ -6000,8 +6028,8 @@ impl<'de> serde::Deserialize<'de> for FileSinkConfig {
                     table_paths: table_paths__.unwrap_or_default(),
                     output_schema: output_schema__,
                     table_partition_cols: table_partition_cols__.unwrap_or_default(),
-                    overwrite: overwrite__.unwrap_or_default(),
                     keep_partition_by_columns: keep_partition_by_columns__.unwrap_or_default(),
+                    insert_op: insert_op__.unwrap_or_default(),
                 })
             }
         }
@@ -7196,6 +7224,80 @@ impl<'de> serde::Deserialize<'de> for InListNode {
             }
         }
         deserializer.deserialize_struct("datafusion.InListNode", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for InsertOp {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let variant = match self {
+            Self::Append => "Append",
+            Self::Overwrite => "Overwrite",
+            Self::Replace => "Replace",
+        };
+        serializer.serialize_str(variant)
+    }
+}
+impl<'de> serde::Deserialize<'de> for InsertOp {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "Append",
+            "Overwrite",
+            "Replace",
+        ];
+
+        struct GeneratedVisitor;
+
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = InsertOp;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                write!(formatter, "expected one of: {:?}", &FIELDS)
+            }
+
+            fn visit_i64<E>(self, v: i64) -> std::result::Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                i32::try_from(v)
+                    .ok()
+                    .and_then(|x| x.try_into().ok())
+                    .ok_or_else(|| {
+                        serde::de::Error::invalid_value(serde::de::Unexpected::Signed(v), &self)
+                    })
+            }
+
+            fn visit_u64<E>(self, v: u64) -> std::result::Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                i32::try_from(v)
+                    .ok()
+                    .and_then(|x| x.try_into().ok())
+                    .ok_or_else(|| {
+                        serde::de::Error::invalid_value(serde::de::Unexpected::Unsigned(v), &self)
+                    })
+            }
+
+            fn visit_str<E>(self, value: &str) -> std::result::Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                match value {
+                    "Append" => Ok(InsertOp::Append),
+                    "Overwrite" => Ok(InsertOp::Overwrite),
+                    "Replace" => Ok(InsertOp::Replace),
+                    _ => Err(serde::de::Error::unknown_variant(value, FIELDS)),
+                }
+            }
+        }
+        deserializer.deserialize_any(GeneratedVisitor)
     }
 }
 impl serde::Serialize for InterleaveExecNode {

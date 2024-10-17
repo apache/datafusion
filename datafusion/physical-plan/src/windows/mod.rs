@@ -21,10 +21,7 @@ use std::borrow::Borrow;
 use std::sync::Arc;
 
 use crate::{
-    expressions::{
-        cume_dist, dense_rank, lag, lead, percent_rank, rank, Literal, NthValue, Ntile,
-        PhysicalSortExpr,
-    },
+    expressions::{cume_dist, lag, lead, Literal, NthValue, Ntile, PhysicalSortExpr},
     ExecutionPlan, ExecutionPlanProperties, InputOrderMode, PhysicalExpr,
 };
 
@@ -34,8 +31,8 @@ use datafusion_common::{
     exec_datafusion_err, exec_err, DataFusionError, Result, ScalarValue,
 };
 use datafusion_expr::{
-    BuiltInWindowFunction, PartitionEvaluator, WindowFrame, WindowFunctionDefinition,
-    WindowUDF,
+    BuiltInWindowFunction, PartitionEvaluator, ReversedUDWF, WindowFrame,
+    WindowFunctionDefinition, WindowUDF,
 };
 use datafusion_physical_expr::aggregate::{AggregateExprBuilder, AggregateFunctionExpr};
 use datafusion_physical_expr::equivalence::collapse_lex_req;
@@ -52,6 +49,7 @@ mod window_agg_exec;
 
 pub use bounded_window_agg_exec::BoundedWindowAggExec;
 use datafusion_functions_window_common::field::WindowUDFFieldArgs;
+use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
 use datafusion_physical_expr::expressions::Column;
 pub use datafusion_physical_expr::window::{
     BuiltInWindowExpr, PlainAggregateWindowExpr, WindowExpr,
@@ -130,7 +128,7 @@ pub fn create_window_expr(
         }
         // TODO: Ordering not supported for Window UDFs yet
         WindowFunctionDefinition::WindowUDF(fun) => Arc::new(BuiltInWindowExpr::new(
-            create_udwf_window_expr(fun, args, input_schema, name)?,
+            create_udwf_window_expr(fun, args, input_schema, name, ignore_nulls)?,
             partition_by,
             order_by,
             window_frame,
@@ -185,20 +183,26 @@ fn get_scalar_value_from_args(
 }
 
 fn get_signed_integer(value: ScalarValue) -> Result<i64> {
-    if !value.data_type().is_integer() {
-        return Err(DataFusionError::Execution(
-            "Expected an integer value".to_string(),
-        ));
+    if value.is_null() {
+        return Ok(0);
     }
+
+    if !value.data_type().is_integer() {
+        return exec_err!("Expected an integer value");
+    }
+
     value.cast_to(&DataType::Int64)?.try_into()
 }
 
 fn get_unsigned_integer(value: ScalarValue) -> Result<u64> {
-    if !value.data_type().is_integer() {
-        return Err(DataFusionError::Execution(
-            "Expected an integer value".to_string(),
-        ));
+    if value.is_null() {
+        return Ok(0);
     }
+
+    if !value.data_type().is_integer() {
+        return exec_err!("Expected an integer value");
+    }
+
     value.cast_to(&DataType::UInt64)?.try_into()
 }
 
@@ -213,6 +217,41 @@ fn get_casted_value(
     }
 }
 
+/// Rewrites the NULL expression (1st argument) with an expression
+/// which is the same data type as the default value (3rd argument).
+/// Also rewrites the return type with the same data type as the
+/// default value.
+///
+/// If a default value is not provided, or it is NULL the original
+/// expression (1st argument) and return type is returned without
+/// any modifications.
+fn rewrite_null_expr_and_data_type(
+    args: &[Arc<dyn PhysicalExpr>],
+    expr_type: &DataType,
+) -> Result<(Arc<dyn PhysicalExpr>, DataType)> {
+    assert!(!args.is_empty());
+    let expr = Arc::clone(&args[0]);
+
+    // The input expression and the return is type is unchanged
+    // when the input expression is not NULL.
+    if !expr_type.is_null() {
+        return Ok((expr, expr_type.clone()));
+    }
+
+    get_scalar_value_from_args(args, 2)?
+        .and_then(|value| {
+            ScalarValue::try_from(value.data_type().clone())
+                .map(|sv| {
+                    Ok((
+                        Arc::new(Literal::new(sv)) as Arc<dyn PhysicalExpr>,
+                        value.data_type().clone(),
+                    ))
+                })
+                .ok()
+        })
+        .unwrap_or(Ok((expr, expr_type.clone())))
+}
+
 fn create_built_in_window_expr(
     fun: &BuiltInWindowFunction,
     args: &[Arc<dyn PhysicalExpr>],
@@ -224,9 +263,6 @@ fn create_built_in_window_expr(
     let out_data_type: &DataType = input_schema.field_with_name(&name)?.data_type();
 
     Ok(match fun {
-        BuiltInWindowFunction::Rank => Arc::new(rank(name, out_data_type)),
-        BuiltInWindowFunction::DenseRank => Arc::new(dense_rank(name, out_data_type)),
-        BuiltInWindowFunction::PercentRank => Arc::new(percent_rank(name, out_data_type)),
         BuiltInWindowFunction::CumeDist => Arc::new(cume_dist(name, out_data_type)),
         BuiltInWindowFunction::Ntile => {
             let n = get_scalar_value_from_args(args, 0)?.ok_or_else(|| {
@@ -251,15 +287,17 @@ fn create_built_in_window_expr(
             }
         }
         BuiltInWindowFunction::Lag => {
-            let arg = Arc::clone(&args[0]);
+            // rewrite NULL expression and the return datatype
+            let (arg, out_data_type) =
+                rewrite_null_expr_and_data_type(args, out_data_type)?;
             let shift_offset = get_scalar_value_from_args(args, 1)?
                 .map(get_signed_integer)
                 .map_or(Ok(None), |v| v.map(Some))?;
             let default_value =
-                get_casted_value(get_scalar_value_from_args(args, 2)?, out_data_type)?;
+                get_casted_value(get_scalar_value_from_args(args, 2)?, &out_data_type)?;
             Arc::new(lag(
                 name,
-                out_data_type.clone(),
+                default_value.data_type().clone(),
                 arg,
                 shift_offset,
                 default_value,
@@ -267,15 +305,17 @@ fn create_built_in_window_expr(
             ))
         }
         BuiltInWindowFunction::Lead => {
-            let arg = Arc::clone(&args[0]);
+            // rewrite NULL expression and the return datatype
+            let (arg, out_data_type) =
+                rewrite_null_expr_and_data_type(args, out_data_type)?;
             let shift_offset = get_scalar_value_from_args(args, 1)?
                 .map(get_signed_integer)
                 .map_or(Ok(None), |v| v.map(Some))?;
             let default_value =
-                get_casted_value(get_scalar_value_from_args(args, 2)?, out_data_type)?;
+                get_casted_value(get_scalar_value_from_args(args, 2)?, &out_data_type)?;
             Arc::new(lead(
                 name,
-                out_data_type.clone(),
+                default_value.data_type().clone(),
                 arg,
                 shift_offset,
                 default_value,
@@ -329,6 +369,7 @@ fn create_udwf_window_expr(
     args: &[Arc<dyn PhysicalExpr>],
     input_schema: &Schema,
     name: String,
+    ignore_nulls: bool,
 ) -> Result<Arc<dyn BuiltInWindowFunctionExpr>> {
     // need to get the types into an owned vec for some reason
     let input_types: Vec<_> = args
@@ -341,6 +382,8 @@ fn create_udwf_window_expr(
         args: args.to_vec(),
         input_types,
         name,
+        is_reversed: false,
+        ignore_nulls,
     }))
 }
 
@@ -353,6 +396,12 @@ struct WindowUDFExpr {
     name: String,
     /// Types of input expressions
     input_types: Vec<DataType>,
+    /// This is set to `true` only if the user-defined window function
+    /// expression supports evaluation in reverse order, and the
+    /// evaluation order is reversed.
+    is_reversed: bool,
+    /// Set to `true` if `IGNORE NULLS` is defined, `false` otherwise.
+    ignore_nulls: bool,
 }
 
 impl BuiltInWindowFunctionExpr for WindowUDFExpr {
@@ -370,7 +419,13 @@ impl BuiltInWindowFunctionExpr for WindowUDFExpr {
     }
 
     fn create_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>> {
-        self.fun.partition_evaluator_factory()
+        self.fun
+            .partition_evaluator_factory(PartitionEvaluatorArgs::new(
+                &self.args,
+                &self.input_types,
+                self.is_reversed,
+                self.ignore_nulls,
+            ))
     }
 
     fn name(&self) -> &str {
@@ -378,7 +433,18 @@ impl BuiltInWindowFunctionExpr for WindowUDFExpr {
     }
 
     fn reverse_expr(&self) -> Option<Arc<dyn BuiltInWindowFunctionExpr>> {
-        None
+        match self.fun.reverse_expr() {
+            ReversedUDWF::Identical => Some(Arc::new(self.clone())),
+            ReversedUDWF::NotSupported => None,
+            ReversedUDWF::Reversed(fun) => Some(Arc::new(WindowUDFExpr {
+                fun,
+                args: self.args.clone(),
+                name: self.name.clone(),
+                input_types: self.input_types.clone(),
+                is_reversed: !self.is_reversed,
+                ignore_nulls: self.ignore_nulls,
+            })),
+        }
     }
 
     fn get_result_ordering(&self, schema: &SchemaRef) -> Option<PhysicalSortExpr> {

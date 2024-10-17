@@ -82,6 +82,7 @@ pub mod windows;
 pub mod work_table;
 
 pub mod udaf {
+    pub use datafusion_expr::StatisticsArgs;
     pub use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
 }
 

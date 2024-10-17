@@ -228,6 +228,16 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     /// [`TryStreamExt`]: futures::stream::TryStreamExt
     /// [`RecordBatchStreamAdapter`]: crate::stream::RecordBatchStreamAdapter
     ///
+    /// # Error handling
+    ///
+    /// Any error that occurs during execution is sent as an `Err` in the output
+    /// stream.
+    ///
+    /// `ExecutionPlan` implementations in DataFusion cancel additional work
+    /// immediately once an error occurs. The rationale is that if the overall
+    /// query will return an error,  any additional work such as continued
+    /// polling of inputs will be wasted as it will be thrown away.
+    ///
     /// # Cancellation / Aborting Execution
     ///
     /// The [`Stream`] that is returned must ensure that any allocated resources
@@ -405,6 +415,11 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     /// Gets the fetch count for the operator, `None` means there is no fetch.
     fn fetch(&self) -> Option<usize> {
         None
+    }
+
+    /// Gets the effect on cardinality, if known
+    fn cardinality_effect(&self) -> CardinalityEffect {
+        CardinalityEffect::Unknown
     }
 }
 
@@ -886,6 +901,20 @@ pub fn get_plan_string(plan: &Arc<dyn ExecutionPlan>) -> Vec<String> {
     let formatted = displayable(plan.as_ref()).indent(true).to_string();
     let actual: Vec<&str> = formatted.trim().lines().collect();
     actual.iter().map(|elem| elem.to_string()).collect()
+}
+
+/// Indicates the effect an execution plan operator will have on the cardinality
+/// of its input stream
+pub enum CardinalityEffect {
+    /// Unknown effect. This is the default
+    Unknown,
+    /// The operator is guaranteed to produce exactly one row for
+    /// each input row
+    Equal,
+    /// The operator may produce fewer output rows than it receives input rows
+    LowerEqual,
+    /// The operator may produce more output rows than it receives input rows
+    GreaterEqual,
 }
 
 #[cfg(test)]

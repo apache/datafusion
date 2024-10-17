@@ -681,7 +681,7 @@ impl<T> Transformed<T> {
         }
     }
 
-    /// Create a `Transformed` with `transformed and [`TreeNodeRecursion::Continue`].
+    /// Create a `Transformed` with `transformed` and [`TreeNodeRecursion::Continue`].
     pub fn new_transformed(data: T, transformed: bool) -> Self {
         Self::new(data, transformed, TreeNodeRecursion::Continue)
     }

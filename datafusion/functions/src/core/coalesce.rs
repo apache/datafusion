@@ -15,17 +15,18 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
-
 use arrow::array::{new_null_array, BooleanArray};
 use arrow::compute::kernels::zip::zip;
 use arrow::compute::{and, is_not_null, is_null};
 use arrow::datatypes::DataType;
 use datafusion_common::{exec_err, ExprSchema, Result};
+use datafusion_expr::scalar_doc_sections::DOC_SECTION_CONDITIONAL;
 use datafusion_expr::type_coercion::binary::type_union_resolution;
-use datafusion_expr::{ColumnarValue, Expr, ExprSchemable};
+use datafusion_expr::{ColumnarValue, Documentation, Expr, ExprSchemable};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use itertools::Itertools;
+use std::any::Any;
+use std::sync::OnceLock;
 
 #[derive(Debug)]
 pub struct CoalesceFunc {
@@ -140,6 +141,36 @@ impl ScalarUDFImpl for CoalesceFunc {
             .unwrap_or(arg_types.first().unwrap().clone());
         Ok(vec![new_type; arg_types.len()])
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_coalesce_doc())
+    }
+}
+
+static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+
+fn get_coalesce_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_CONDITIONAL)
+            .with_description("Returns the first of its arguments that is not _null_. Returns _null_ if all arguments are _null_. This function is often used to substitute a default value for _null_ values.")
+            .with_syntax_example("coalesce(expression1[, ..., expression_n])")
+            .with_sql_example(r#"```sql
+> select coalesce(null, null, 'datafusion');
++----------------------------------------+
+| coalesce(NULL,NULL,Utf8("datafusion")) |
++----------------------------------------+
+| datafusion                             |
++----------------------------------------+
+```"#,
+            )
+            .with_argument(
+                "expression1, expression_n",
+                "Expression to use if previous expressions are _null_. Can be a constant, column, or function, and any combination of arithmetic operators. Pass as many expression arguments as necessary."
+            )
+            .build()
+            .unwrap()
+    })
 }
 
 #[cfg(test)]

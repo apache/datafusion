@@ -32,9 +32,15 @@ rust-version = { workspace = true }
 workspace = true
 
 [dependencies]
+arrow = { workspace = true }
 arrow-schema = { workspace = true }
 datafusion-common = { workspace = true, default-features = true }
 datafusion-execution = { workspace = true }
+datafusion-expr-common = { workspace = true, default-features = true }
 datafusion-physical-expr = { workspace = true }
 datafusion-physical-plan = { workspace = true }
 itertools = { workspace = true }
+
+[dev-dependencies]
+datafusion-functions-aggregate = { workspace = true }
+tokio = { workspace = true }

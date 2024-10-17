@@ -40,8 +40,9 @@ use datafusion_common::stats::Precision;
 use datafusion_common::Result;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::equivalence::ProjectionMapping;
-use datafusion_physical_expr::expressions::Literal;
+use datafusion_physical_expr::expressions::{CastExpr, Literal};
 
+use crate::execution_plan::CardinalityEffect;
 use futures::stream::{Stream, StreamExt};
 use log::trace;
 
@@ -233,14 +234,22 @@ impl ExecutionPlan for ProjectionExec {
     fn supports_limit_pushdown(&self) -> bool {
         true
     }
+
+    fn cardinality_effect(&self) -> CardinalityEffect {
+        CardinalityEffect::Equal
+    }
 }
 
 /// If e is a direct column reference, returns the field level
 /// metadata for that field, if any. Otherwise returns None
-fn get_field_metadata(
+pub(crate) fn get_field_metadata(
     e: &Arc<dyn PhysicalExpr>,
     input_schema: &Schema,
 ) -> Option<HashMap<String, String>> {
+    if let Some(cast) = e.as_any().downcast_ref::<CastExpr>() {
+        return get_field_metadata(cast.expr(), input_schema);
+    }
+
     // Look up field by index in schema (not NAME as there can be more than one
     // column with the same name)
     e.as_any()

@@ -456,7 +456,6 @@ impl<'a> TreeNodeRewriter for TypeCoercionRewriter<'a> {
                     self.schema,
                     &func,
                 )?;
-                let new_expr = coerce_arguments_for_fun(new_expr, self.schema, &func)?;
                 Ok(Transformed::yes(Expr::ScalarFunction(
                     ScalarFunction::new_udf(func, new_expr),
                 )))
@@ -754,30 +753,6 @@ fn coerce_arguments_for_signature_with_aggregate_udf(
         .enumerate()
         .map(|(i, expr)| expr.cast_to(&new_types[i], schema))
         .collect()
-}
-
-fn coerce_arguments_for_fun(
-    expressions: Vec<Expr>,
-    schema: &DFSchema,
-    fun: &Arc<ScalarUDF>,
-) -> Result<Vec<Expr>> {
-    // Cast Fixedsizelist to List for array functions
-    if fun.name() == "make_array" {
-        expressions
-            .into_iter()
-            .map(|expr| {
-                let data_type = expr.get_type(schema).unwrap();
-                if let DataType::FixedSizeList(field, _) = data_type {
-                    let to_type = DataType::List(Arc::clone(&field));
-                    expr.cast_to(&to_type, schema)
-                } else {
-                    Ok(expr)
-                }
-            })
-            .collect()
-    } else {
-        Ok(expressions)
-    }
 }
 
 fn coerce_case_expression(case: Case, schema: &DFSchema) -> Result<Case> {

@@ -42,14 +42,23 @@
 </a>
 
 DataFusion is an extensible query engine written in [Rust] that
-uses [Apache Arrow] as its in-memory format. DataFusion's target users are
-developers building fast and feature rich database and analytic systems,
-customized to particular workloads. See [use cases] for examples.
+uses [Apache Arrow] as its in-memory format.
 
-"Out of the box," DataFusion offers [SQL] and [`Dataframe`] APIs,
-excellent [performance], built-in support for CSV, Parquet, JSON, and Avro,
-extensive customization, and a great community.
-[Python Bindings] are also available.
+This crate provides libraries and binaries for developers building fast and
+feature rich database and analytic systems, customized to particular workloads.
+See [use cases] for examples. The following related subprojects target end users:
+
+- [DataFusion Python](https://github.com/apache/datafusion-python/) offers a Python interface for SQL and DataFrame
+  queries.
+- [DataFusion Ray](https://github.com/apache/datafusion-ray/) provides a distributed version of DataFusion that scales
+  out on Ray clusters.
+- [DataFusion Comet](https://github.com/apache/datafusion-comet/) is an accelerator for Apache Spark based on
+  DataFusion.
+
+"Out of the box,"
+DataFusion offers [SQL] and [`Dataframe`] APIs, excellent [performance],
+built-in support for CSV, Parquet, JSON, and Avro, extensive customization, and
+a great community.
 
 DataFusion features a full query planner, a columnar, streaming, multi-threaded,
 vectorized execution engine, and partitioned data sources. You can
