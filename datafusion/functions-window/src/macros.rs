@@ -303,7 +303,7 @@ macro_rules! create_udwf_expr {
     ($UDWF:ident, $OUT_FN_NAME:ident, $DOC:expr) => {
         paste::paste! {
             #[doc = " Create a [`WindowFunction`](datafusion_expr::Expr::WindowFunction) expression for"]
-            #[doc = concat!(" [`", stringify!($UDWF), "`] user-defined window function.")]
+            #[doc = concat!(" `", stringify!($UDWF), "` user-defined window function.")]
             #[doc = ""]
             #[doc = concat!(" ", $DOC)]
             pub fn $OUT_FN_NAME() -> datafusion_expr::Expr {
@@ -316,7 +316,7 @@ macro_rules! create_udwf_expr {
     ($UDWF:ident, $OUT_FN_NAME:ident, [$($PARAM:ident),+], $DOC:expr) => {
         paste::paste! {
             #[doc = " Create a [`WindowFunction`](datafusion_expr::Expr::WindowFunction) expression for"]
-            #[doc = concat!(" [`", stringify!($UDWF), "`] user-defined window function.")]
+            #[doc = concat!(" `", stringify!($UDWF), "` user-defined window function.")]
             #[doc = ""]
             #[doc = concat!(" ", $DOC)]
             pub fn $OUT_FN_NAME(

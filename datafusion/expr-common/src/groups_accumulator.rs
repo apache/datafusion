@@ -111,8 +111,7 @@ pub trait GroupsAccumulator: Send {
     ///
     /// * `values`: the input arguments to the accumulator
     ///
-    /// * `group_indices`: To which groups do the rows in `values`
-    ///   belong, group id)
+    /// * `group_indices`: The group indices to which each row in `values` belongs.
     ///
     /// * `opt_filter`: if present, only update aggregate state using
     ///   `values[i]` if `opt_filter[i]` is true
@@ -185,9 +184,9 @@ pub trait GroupsAccumulator: Send {
     /// differ. See [`Self::state`] for more details on how state is
     /// used and merged.
     ///
-    /// * `values`: arrays produced from calling `state` previously to the accumulator
+    /// * `values`: arrays produced from previously calling `state` on other accumulators.
     ///
-    /// Other arguments are the same as for [`Self::update_batch`];
+    /// Other arguments are the same as for [`Self::update_batch`].
     fn merge_batch(
         &mut self,
         values: &[ArrayRef],
@@ -196,7 +195,7 @@ pub trait GroupsAccumulator: Send {
         total_num_groups: usize,
     ) -> Result<()>;
 
-    /// Converts an input batch directly the intermediate aggregate state.
+    /// Converts an input batch directly to the intermediate aggregate state.
     ///
     /// This is the equivalent of treating each input row as its own group. It
     /// is invoked when the Partial phase of a multi-phase aggregation is not
