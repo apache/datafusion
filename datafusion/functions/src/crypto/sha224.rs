@@ -58,6 +58,16 @@ fn get_sha224_doc() -> &'static Documentation {
             .with_doc_section(DOC_SECTION_HASHING)
             .with_description("Computes the SHA-224 hash of a binary string.")
             .with_syntax_example("sha224(expression)")
+            .with_sql_example(
+                r#"```sql
+> select sha224('foo');
++------------------------------------------+
+| sha224(Utf8("foo"))                      |
++------------------------------------------+
+| <sha224_hash_result>                     |
++------------------------------------------+
+```"#,
+            )
             .with_standard_argument("expression", "String")
             .build()
             .unwrap()

@@ -780,7 +780,7 @@ mod tests {
                 };
                 sort_info.push(sort_expr);
             }
-            exec = exec.with_sort_information(vec![sort_info]);
+            exec = exec.try_with_sort_information(vec![sort_info]).unwrap();
         }
 
         Arc::new(exec)

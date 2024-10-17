@@ -3577,9 +3577,8 @@ impl fmt::Display for ScalarValue {
                     columns
                         .iter()
                         .zip(fields.iter())
-                        .enumerate()
-                        .map(|(index, (column, field))| {
-                            if nulls.is_some_and(|b| b.is_null(index)) {
+                        .map(|(column, field)| {
+                            if nulls.is_some_and(|b| b.is_null(0)) {
                                 format!("{}:NULL", field.name())
                             } else if let DataType::Struct(_) = field.data_type() {
                                 let sv = ScalarValue::Struct(Arc::new(
@@ -3875,7 +3874,7 @@ mod tests {
     use arrow::compute::{is_null, kernels};
     use arrow::error::ArrowError;
     use arrow::util::pretty::pretty_format_columns;
-    use arrow_buffer::Buffer;
+    use arrow_buffer::{Buffer, NullBuffer};
     use arrow_schema::Fields;
     use chrono::NaiveDate;
     use rand::Rng;
@@ -6585,6 +6584,43 @@ mod tests {
             "+-------------+",
             "| {a: 1, b: } |",
             "+-------------+",
+        ];
+        assert_batches_eq!(&expected, &[batch]);
+    }
+
+    #[test]
+    fn test_null_bug() {
+        let field_a = Field::new("a", DataType::Int32, true);
+        let field_b = Field::new("b", DataType::Int32, true);
+        let fields = Fields::from(vec![field_a, field_b]);
+
+        let array_a = Arc::new(Int32Array::from_iter_values([1]));
+        let array_b = Arc::new(Int32Array::from_iter_values([2]));
+        let arrays: Vec<ArrayRef> = vec![array_a, array_b];
+
+        let mut not_nulls = BooleanBufferBuilder::new(1);
+        not_nulls.append(true);
+        let not_nulls = not_nulls.finish();
+        let not_nulls = Some(NullBuffer::new(not_nulls));
+
+        let ar = StructArray::new(fields, arrays, not_nulls);
+        let s = ScalarValue::Struct(Arc::new(ar));
+
+        assert_eq!(s.to_string(), "{a:1,b:2}");
+        assert_eq!(format!("{s:?}"), r#"Struct({a:1,b:2})"#);
+
+        let ScalarValue::Struct(arr) = s else {
+            panic!("Expected struct");
+        };
+
+        //verify compared to arrow display
+        let batch = RecordBatch::try_from_iter(vec![("s", arr as _)]).unwrap();
+        let expected = [
+            "+--------------+",
+            "| s            |",
+            "+--------------+",
+            "| {a: 1, b: 2} |",
+            "+--------------+",
         ];
         assert_batches_eq!(&expected, &[batch]);
     }

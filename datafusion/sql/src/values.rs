@@ -31,7 +31,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             rows,
         } = values;
 
-        // values should not be based on any other schema
+        // Values should not be based on any other schema
         let schema = DFSchema::empty();
         let values = rows
             .into_iter()

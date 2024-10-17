@@ -48,6 +48,7 @@ use datafusion_functions_aggregate::{
     min_max::min_udaf,
 };
 use datafusion_functions_aggregate::{average::avg_udaf, grouping::grouping_udaf};
+use datafusion_functions_window::rank::rank_udwf;
 use rstest::rstest;
 use sqlparser::dialect::{Dialect, GenericDialect, HiveDialect, MySqlDialect};
 
@@ -2633,6 +2634,7 @@ fn logical_plan_with_dialect_and_options(
         .with_aggregate_function(min_udaf())
         .with_aggregate_function(max_udaf())
         .with_aggregate_function(grouping_udaf())
+        .with_window_function(rank_udwf())
         .with_expr_planner(Arc::new(CoreFunctionPlanner::default()));
 
     let context = MockContextProvider { state };
@@ -3059,8 +3061,8 @@ fn rank_partition_grouping() {
             from
                 person
             group by rollup(state, last_name)";
-    let expected = "Projection: sum(person.age) AS total_sum, person.state, person.last_name, grouping(person.state) + grouping(person.last_name) AS x, RANK() PARTITION BY [grouping(person.state) + grouping(person.last_name), CASE WHEN grouping(person.last_name) = Int64(0) THEN person.state END] ORDER BY [sum(person.age) DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS the_rank\
-        \n  WindowAggr: windowExpr=[[RANK() PARTITION BY [grouping(person.state) + grouping(person.last_name), CASE WHEN grouping(person.last_name) = Int64(0) THEN person.state END] ORDER BY [sum(person.age) DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]\
+    let expected = "Projection: sum(person.age) AS total_sum, person.state, person.last_name, grouping(person.state) + grouping(person.last_name) AS x, rank() PARTITION BY [grouping(person.state) + grouping(person.last_name), CASE WHEN grouping(person.last_name) = Int64(0) THEN person.state END] ORDER BY [sum(person.age) DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS the_rank\
+        \n  WindowAggr: windowExpr=[[rank() PARTITION BY [grouping(person.state) + grouping(person.last_name), CASE WHEN grouping(person.last_name) = Int64(0) THEN person.state END] ORDER BY [sum(person.age) DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]\
         \n    Aggregate: groupBy=[[ROLLUP (person.state, person.last_name)]], aggr=[[sum(person.age), grouping(person.state), grouping(person.last_name)]]\
         \n      TableScan: person";
     quick_test(sql, expected);

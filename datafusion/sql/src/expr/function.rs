@@ -237,7 +237,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             }
         }
 
-        // user-defined function (UDF) should have precedence
+        // User-defined function (UDF) should have precedence
         if let Some(fm) = self.context_provider.get_function_meta(&name) {
             let args = self.function_args_to_expr(args, schema, planner_context)?;
             return Ok(Expr::ScalarFunction(ScalarFunction::new_udf(fm, args)));
@@ -260,12 +260,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             );
         }
 
-        // then, window function
+        // Then, window function
         if let Some(WindowType::WindowSpec(window)) = over {
             let partition_by = window
                 .partition_by
                 .into_iter()
-                // ignore window spec PARTITION BY for scalar values
+                // Ignore window spec PARTITION BY for scalar values
                 // as they do not change and thus do not generate new partitions
                 .filter(|e| !matches!(e, sqlparser::ast::Expr::Value { .. },))
                 .map(|e| self.sql_expr_to_logical_expr(e, schema, planner_context))
@@ -383,7 +383,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         &self,
         name: &str,
     ) -> Result<WindowFunctionDefinition> {
-        // check udaf first
+        // Check udaf first
         let udaf = self.context_provider.get_aggregate_meta(name);
         // Use the builtin window function instead of the user-defined aggregate function
         if udaf.as_ref().is_some_and(|udaf| {
@@ -434,7 +434,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             }),
             FunctionArg::Unnamed(FunctionArgExpr::QualifiedWildcard(object_name)) => {
                 let qualifier = self.object_name_to_table_reference(object_name)?;
-                // sanity check on qualifier with schema
+                // Sanity check on qualifier with schema
                 let qualified_indices = schema.fields_indices_with_qualified(&qualifier);
                 if qualified_indices.is_empty() {
                     return plan_err!("Invalid qualifier {qualifier}");
