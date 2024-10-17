@@ -140,8 +140,7 @@ impl ScalarUDFImpl for LogFunc {
         let arr: ArrayRef = match args[0].data_type() {
             DataType::Float64 => match base {
                 ColumnarValue::Scalar(ScalarValue::Float64(Some(base))) => Arc::new(
-                    args[0]
-                        .as_primitive::<Float64Type>()
+                    x.as_primitive::<Float64Type>()
                         .unary::<_, Float64Type>(|value: f64| f64::log(value, base)),
                 ),
                 ColumnarValue::Array(base) => Arc::new(make_function_inputs2!(
@@ -159,8 +158,7 @@ impl ScalarUDFImpl for LogFunc {
 
             DataType::Float32 => match base {
                 ColumnarValue::Scalar(ScalarValue::Float32(Some(base))) => Arc::new(
-                    args[0]
-                        .as_primitive::<Float32Type>()
+                    x.as_primitive::<Float32Type>()
                         .unary::<_, Float32Type>(|value: f32| f32::log(value, base)),
                 ),
                 ColumnarValue::Array(base) => Arc::new(make_function_inputs2!(
