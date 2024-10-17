@@ -228,6 +228,7 @@ pub fn to_substrait_rel(
                     advanced_extension: None,
                     read_type: Some(ReadType::VirtualTable(VirtualTable {
                         values: vec![],
+                        expressions: vec![],
                     })),
                 }))),
             }))
@@ -264,7 +265,10 @@ pub fn to_substrait_rel(
                     best_effort_filter: None,
                     projection: None,
                     advanced_extension: None,
-                    read_type: Some(ReadType::VirtualTable(VirtualTable { values })),
+                    read_type: Some(ReadType::VirtualTable(VirtualTable {
+                        values,
+                        expressions: vec![],
+                    })),
                 }))),
             }))
         }
