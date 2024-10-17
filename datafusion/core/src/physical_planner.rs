@@ -1049,10 +1049,7 @@ impl DefaultPhysicalPlanner {
                         && matches!(
                             join_type,
                             JoinType::Inner
-                                | JoinType::Full
-                                | JoinType::Left
-                                | JoinType::Right
-                        )
+                        ) && !null_equals_null
                     {
                         // no on and filter, use cross join
                         Arc::new(CrossJoinExec::new(physical_left, physical_right))
