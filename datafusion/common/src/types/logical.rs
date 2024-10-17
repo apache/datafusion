@@ -56,6 +56,8 @@ pub type LogicalTypeRef = Arc<dyn LogicalType>;
 /// extension types:
 ///
 /// ```
+/// use datafusion_common::types::{LogicalType, NativeType, TypeSignature};
+///
 /// struct JSON {}
 ///
 /// impl LogicalType for JSON {
