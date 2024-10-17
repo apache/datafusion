@@ -681,7 +681,7 @@ explain SELECT t1_id, (SELECT t2_id FROM t2 limit 0) FROM t1
 ----
 logical_plan
 01)Projection: t1.t1_id, __scalar_sq_1.t2_id AS t2_id
-02)--Cross Join: 
+02)--Left Join: 
 03)----TableScan: t1 projection=[t1_id]
 04)----EmptyRelation
 
@@ -725,7 +725,7 @@ explain select (select count(*) from t1) as b, (select count(1) from t2)
 ----
 logical_plan
 01)Projection: __scalar_sq_1.count(*) AS b, __scalar_sq_2.count(Int64(1)) AS count(Int64(1))
-02)--Cross Join: 
+02)--Left Join: 
 03)----SubqueryAlias: __scalar_sq_1
 04)------Aggregate: groupBy=[[]], aggr=[[count(Int64(1)) AS count(*)]]
 05)--------TableScan: t1 projection=[]
@@ -741,7 +741,7 @@ explain select (select count(*) from t1) as b, (select count(1) from t2)
 ----
 logical_plan
 01)Projection: __scalar_sq_1.count(*) AS b, __scalar_sq_2.count(Int64(1)) AS count(Int64(1))
-02)--Cross Join: 
+02)--Left Join: 
 03)----SubqueryAlias: __scalar_sq_1
 04)------Aggregate: groupBy=[[]], aggr=[[count(Int64(1)) AS count(*)]]
 05)--------TableScan: t1 projection=[]
