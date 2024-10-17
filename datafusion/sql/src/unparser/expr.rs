@@ -15,10 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use datafusion_expr::expr::Unnest;
 use sqlparser::ast::Value::SingleQuotedString;
 use sqlparser::ast::{
-    self, BinaryOperator, Expr as AstExpr, Function, Ident, Interval, ObjectName,
-    TimezoneInfo, UnaryOperator,
+    self, BinaryOperator, Expr as AstExpr, Function, Ident, Interval, ObjectName, TimezoneInfo, UnaryOperator
 };
 use std::sync::Arc;
 use std::vec;
@@ -458,7 +458,7 @@ impl Unparser<'_> {
                 Ok(ast::Expr::Value(ast::Value::Placeholder(p.id.to_string())))
             }
             Expr::OuterReferenceColumn(_, col) => self.col_to_sql(col),
-            Expr::Unnest(_) => not_impl_err!("Unsupported Expr conversion: {expr:?}"),
+            Expr::Unnest(unnest) => self.unnest_to_sql(unnest),
         }
     }
 
@@ -1336,6 +1336,29 @@ impl Unparser<'_> {
         }
     }
 
+    /// Converts an UNNEST operation to an AST expression by wrapping it as a function call,
+    /// since there is no direct representation for UNNEST in the AST.
+    fn unnest_to_sql(&self, unnest: &Unnest) -> Result<ast::Expr> {
+        let args = self.function_args_to_sql(std::slice::from_ref(&unnest.expr))?;
+
+        Ok(ast::Expr::Function(Function {
+            name: ast::ObjectName(vec![Ident {
+                value: "UNNEST".to_string(),
+                quote_style: None,
+            }]),
+            args: ast::FunctionArguments::List(ast::FunctionArgumentList {
+                duplicate_treatment: None,
+                args,
+                clauses: vec![],
+            }),
+            filter: None,
+            null_treatment: None,
+            over: None,
+            within_group: vec![],
+            parameters: ast::FunctionArguments::None,
+        }))
+    }
+
     fn arrow_dtype_to_ast_dtype(&self, data_type: &DataType) -> Result<ast::DataType> {
         match data_type {
             DataType::Null => {
@@ -1850,6 +1873,15 @@ mod tests {
                     data_type: DataType::Decimal128(10, -2),
                 }),
                 r#"CAST(a AS DECIMAL(12,0))"#,
+            ),
+            (
+                Expr::Unnest(Unnest {
+                    expr: Box::new(Expr::Column(Column {
+                        relation: Some(TableReference::partial("schema", "table")),
+                        name: "array_col".to_string(),
+                    })),
+                }),
+                r#"UNNEST("schema"."table".array_col)"#
             ),
         ];
 

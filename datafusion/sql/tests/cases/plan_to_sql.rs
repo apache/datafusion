@@ -877,3 +877,11 @@ FROM person
 GROUP BY person.id, person.first_name"#.replace("\n", " ").as_str(),
     );
 }
+
+#[test]
+fn test_unnest_to_sql() {
+    sql_round_trip(
+        r#"SELECT unnest(array_col) as u1, struct_col, array_col FROM unnest_table WHERE array_col != NULL ORDER BY struct_col, array_col"#,
+        r#"SELECT UNNEST(unnest_table.array_col) AS u1, unnest_table.struct_col, unnest_table.array_col FROM unnest_table WHERE (unnest_table.array_col <> NULL) ORDER BY unnest_table.struct_col ASC NULLS LAST, unnest_table.array_col ASC NULLS LAST"#,
+    );
+}

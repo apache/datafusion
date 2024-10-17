@@ -21,7 +21,7 @@ use datafusion_common::{
     Column, DataFusionError, Result, ScalarValue,
 };
 use datafusion_expr::{
-    utils::grouping_set_to_exprlist, Aggregate, Expr, LogicalPlan, Projection, SortExpr, Window
+    expr, utils::grouping_set_to_exprlist, Aggregate, Expr, LogicalPlan, Projection, SortExpr, Unnest, Window
 };
 use sqlparser::ast;
 
@@ -56,6 +56,30 @@ pub(crate) fn find_agg_node_within_select(
         }
     } else {
         find_agg_node_within_select(input, already_projected)
+    }
+}
+
+/// Recursively searches children of [LogicalPlan] to find Unnest node if exist
+pub(crate) fn find_unnest_node_within_select(
+    plan: &LogicalPlan,
+) -> Option<&Unnest> {
+    // Note that none of the nodes that have a corresponding node can have more
+    // than 1 input node. E.g. Projection / Filter always have 1 input node.
+    let input = plan.inputs();
+    let input = if input.len() > 1 {
+        return None;
+    } else {
+        input.first()?
+    };
+
+    if let LogicalPlan::Unnest(unnest) = input {
+        Some(unnest)
+    } else if let LogicalPlan::TableScan(_) = input {
+        None
+    } else if let LogicalPlan::Projection(_) = input {
+        None
+    } else {
+        find_unnest_node_within_select(input)
     }
 }
 
@@ -101,18 +125,48 @@ pub(crate) fn find_window_nodes_within_select<'a>(
     }
 }
 
+/// Recursively identify Column expressions and transform them into the appropriate unnest expression
+///
+/// For example, if expr contains the column expr "UNNEST(make_array(Int64(1),Int64(2),Int64(2),Int64(5),NULL))" it will be transformed
+/// into an actual unnest expression UNNEST([1, 2, 2, 5, NULL])
+pub(crate) fn unproject_unnest_expr(
+    expr: Expr,
+    unnest: &Unnest,
+) -> Result<Expr> {
+    expr.transform(|sub_expr| {
+            if let Expr::Column(col_ref) = &sub_expr {
+                // Check if the column is among the columns to run unnest on
+                if unnest.exec_columns.iter().find(|e| e.name == col_ref.name).is_some() {
+                    if let LogicalPlan::Projection(Projection { expr, schema, .. }) = unnest.input.as_ref() {
+                        if let Ok(idx) = schema.index_of_column(col_ref) {
+                            if let Some(unprojected_expr) = expr.get(idx) {
+                                let unnest_expr = Expr::Unnest(expr::Unnest::new(unprojected_expr.clone()));
+                                return Ok(Transformed::no(unnest_expr));
+                            }
+                        }
+                    }
+                    return internal_err!(
+                        "Tried to unproject unnest expr for column '{}' that was not found in the provided Unnest!", &col_ref.name
+                    )
+                }
+            }
+
+            Ok(Transformed::no(sub_expr))
+
+        }).map(|e| e.data)
+    }
+
 /// Recursively identify all Column expressions and transform them into the appropriate
 /// aggregate expression contained in agg.
 ///
 /// For example, if expr contains the column expr "COUNT(*)" it will be transformed
 /// into an actual aggregate expression COUNT(*) as identified in the aggregate node.
 pub(crate) fn unproject_agg_exprs(
-    expr: &Expr,
+    expr: Expr,
     agg: &Aggregate,
     windows: Option<&[&Window]>,
 ) -> Result<Expr> {
-    expr.clone()
-        .transform(|sub_expr| {
+    expr.transform(|sub_expr| {
             if let Expr::Column(c) = sub_expr {
                 if let Some(unprojected_expr) = find_agg_expr(agg, &c)? {
                     Ok(Transformed::yes(unprojected_expr.clone()))
@@ -121,7 +175,7 @@ pub(crate) fn unproject_agg_exprs(
                 {   
                     if matches!([&unprojected_expr], [Expr::WindowFunction(_)]) {
                          // Window function can contain an aggregation columns, e.g., 'avg(sum(ss_sales_price)) over ...' that needs to be unprojected
-                        return Ok(Transformed::yes(unproject_agg_exprs(&unprojected_expr, agg, None)?));
+                        return Ok(Transformed::yes(unproject_agg_exprs(unprojected_expr, agg, None)?));
                     } else {
                         Ok(Transformed::yes(unprojected_expr))
                     }
@@ -143,9 +197,8 @@ pub(crate) fn unproject_agg_exprs(
 ///
 /// For example, if expr contains the column expr "COUNT(*) PARTITION BY id" it will be transformed
 /// into an actual window expression as identified in the window node.
-pub(crate) fn unproject_window_exprs(expr: &Expr, windows: &[&Window]) -> Result<Expr> {
-    expr.clone()
-        .transform(|sub_expr| {
+pub(crate) fn unproject_window_exprs(expr: Expr, windows: &[&Window]) -> Result<Expr> {
+    expr.transform(|sub_expr| {
             if let Expr::Column(c) = sub_expr {
                 if let Some(unproj) = find_window_expr(windows, &c.name) {
                     Ok(Transformed::yes(unproj.clone()))
@@ -213,7 +266,7 @@ pub(crate) fn unproject_sort_expr(
     // In case of aggregation there could be columns containing aggregation functions we need to unproject
     if let Some(agg) = agg {
         if agg.schema.is_column_from_schema(col_ref) {
-            let new_expr = unproject_agg_exprs(&sort_expr.expr, agg, None)?;
+            let new_expr = unproject_agg_exprs(sort_expr.expr, agg, None)?;
             sort_expr.expr = new_expr;
             return Ok::<_, DataFusionError>(sort_expr);
         }
