@@ -107,6 +107,7 @@ pub fn to_substrait_plan(plan: &LogicalPlan, ctx: &SessionContext) -> Result<Box
     // Generate PlanRel(s)
     // Note: Only 1 relation tree is currently supported
 
+    // We have to expand wildcard expressions first as wildcards can't be represented in substrait
     let plan = Arc::new(ExpandWildcardRule::new())
         .analyze(plan.clone(), &ConfigOptions::default())?;
 
