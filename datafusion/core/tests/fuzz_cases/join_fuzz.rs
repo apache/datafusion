@@ -125,8 +125,6 @@ async fn test_left_join_1k() {
 }
 
 #[tokio::test]
-// flaky for HjSmj case
-// https://github.com/apache/datafusion/issues/12359
 async fn test_left_join_1k_filtered() {
     JoinFuzzTestCase::new(
         make_staggered_batches(1000),
@@ -134,7 +132,7 @@ async fn test_left_join_1k_filtered() {
         JoinType::Left,
         Some(Box::new(col_lt_col_filter)),
     )
-    .run_test(&[JoinTestType::NljHj], false)
+    .run_test(&[JoinTestType::HjSmj, JoinTestType::NljHj], false)
     .await
 }
 
@@ -229,6 +227,7 @@ async fn test_anti_join_1k() {
 #[tokio::test]
 // flaky for HjSmj case, giving 1 rows difference sometimes
 // https://github.com/apache/datafusion/issues/11555
+#[ignore]
 async fn test_anti_join_1k_filtered() {
     JoinFuzzTestCase::new(
         make_staggered_batches(1000),
@@ -515,14 +514,11 @@ impl JoinFuzzTestCase {
                     "input2",
                 );
 
-                if join_tests.contains(&JoinTestType::NljHj)
-                    && join_tests.contains(&JoinTestType::NljHj)
-                    && nlj_rows != hj_rows
-                {
+                if join_tests.contains(&JoinTestType::NljHj) && nlj_rows != hj_rows {
                     println!("=============== HashJoinExec ==================");
                     hj_formatted_sorted.iter().for_each(|s| println!("{}", s));
                     println!("=============== NestedLoopJoinExec ==================");
-                    smj_formatted_sorted.iter().for_each(|s| println!("{}", s));
+                    nlj_formatted_sorted.iter().for_each(|s| println!("{}", s));
 
                     Self::save_partitioned_batches_as_parquet(
                         &nlj_collected,
