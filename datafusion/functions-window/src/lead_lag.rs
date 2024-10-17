@@ -17,10 +17,7 @@
 
 //! `lead` and `lag` window function implementations
 
-use crate::utils::{
-    get_casted_value, get_scalar_value_from_args, get_signed_integer,
-    rewrite_null_expr_and_data_type,
-};
+use crate::utils::{get_scalar_value_from_args, get_signed_integer};
 use datafusion_common::arrow::array::ArrayRef;
 use datafusion_common::arrow::datatypes::DataType;
 use datafusion_common::arrow::datatypes::Field;
@@ -29,8 +26,10 @@ use datafusion_expr::{
     Literal, PartitionEvaluator, ReversedUDWF, Signature, TypeSignature, Volatility,
     WindowUDFImpl,
 };
+use datafusion_functions_window_common::expr::ExpressionArgs;
 use datafusion_functions_window_common::field::WindowUDFFieldArgs;
 use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
+use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use std::any::Any;
 use std::cmp::min;
 use std::collections::VecDeque;
@@ -161,6 +160,17 @@ impl WindowUDFImpl for WindowShift {
         &self.signature
     }
 
+    /// Handles the case where `NULL` expression is passed as an
+    /// argument to `lead`/`lag`. The type is refined depending
+    /// on the default value argument.
+    ///
+    /// For more details see: <https://github.com/apache/datafusion/issues/12717>
+    fn expressions(&self, expr_args: ExpressionArgs) -> Vec<Arc<dyn PhysicalExpr>> {
+        parse_expr(expr_args.input_exprs(), expr_args.input_types())
+            .into_iter()
+            .collect::<Vec<_>>()
+    }
+
     fn partition_evaluator(
         &self,
         partition_evaluator_args: PartitionEvaluatorArgs,
@@ -177,18 +187,9 @@ impl WindowUDFImpl for WindowShift {
                         offset
                     }
                 })?;
-        let return_type = partition_evaluator_args
-            .input_types()
-            .first()
-            .unwrap_or(&DataType::Null);
-        // See https://github.com/apache/datafusion/pull/12811
-        let (_expr, return_type) = rewrite_null_expr_and_data_type(
+        let default_value = parse_default_value(
             partition_evaluator_args.input_exprs(),
-            return_type,
-        )?;
-        let default_value = get_casted_value(
-            get_scalar_value_from_args(partition_evaluator_args.input_exprs(), 2)?,
-            &return_type,
+            partition_evaluator_args.input_types(),
         )?;
 
         Ok(Box::new(WindowShiftEvaluator {
@@ -200,11 +201,9 @@ impl WindowUDFImpl for WindowShift {
     }
 
     fn field(&self, field_args: WindowUDFFieldArgs) -> Result<Field> {
-        Ok(Field::new(
-            field_args.name(),
-            field_args.get_input_type(0).unwrap(),
-            true,
-        ))
+        let return_type = parse_expr_type(field_args.input_types())?;
+
+        Ok(Field::new(field_args.name(), return_type, true))
     }
 
     fn reverse_expr(&self) -> ReversedUDWF {
@@ -213,6 +212,74 @@ impl WindowUDFImpl for WindowShift {
             WindowShiftKind::Lead => ReversedUDWF::Reversed(lead_udwf()),
         }
     }
+}
+
+/// When `lead`/`lag` is evaluated on a `NULL` expression we attempt to
+/// refine it by matching it with the type of the default value.
+///
+/// For e.g. in `lead(NULL, 1, false)` the generic `ScalarValue::Null`
+/// is refined into `ScalarValue::Boolean(None)`. Only the type is
+/// refined, the expression value remains `NULL`.
+///
+/// When the window function is evaluated with `NULL` expression
+/// this guarantees that the type matches with that of the default
+/// value.
+///
+/// For more details see: <https://github.com/apache/datafusion/issues/12717>
+fn parse_expr(
+    input_exprs: &[Arc<dyn PhysicalExpr>],
+    input_types: &[DataType],
+) -> Result<Arc<dyn PhysicalExpr>> {
+    assert!(!input_exprs.is_empty());
+    assert!(!input_types.is_empty());
+
+    let expr = Arc::clone(input_exprs.first().unwrap());
+    let expr_type = input_types.first().unwrap();
+
+    // Handles the most common case where NULL is unexpected
+    if !expr_type.is_null() {
+        return Ok(expr);
+    }
+
+    let default_value = get_scalar_value_from_args(input_exprs, 2)?;
+    default_value.map_or(Ok(expr), |value| {
+        ScalarValue::try_from(&value.data_type()).map(|v| {
+            Arc::new(datafusion_physical_expr::expressions::Literal::new(v))
+                as Arc<dyn PhysicalExpr>
+        })
+    })
+}
+
+/// Returns the data type of the default value(if provided) when the
+/// expression is `NULL`.
+///
+/// Otherwise, returns the expression type unchanged.
+fn parse_expr_type(input_types: &[DataType]) -> Result<DataType> {
+    assert!(!input_types.is_empty());
+    let expr_type = input_types.first().unwrap_or(&DataType::Null);
+
+    // Handles the most common case where NULL is unexpected
+    if !expr_type.is_null() {
+        return Ok(expr_type.clone());
+    }
+
+    let default_value_type = input_types.get(2).unwrap_or(&DataType::Null);
+    Ok(default_value_type.clone())
+}
+
+/// Handles type coercion and null value refinement for default value
+/// argument depending on the data type of the input expression.
+fn parse_default_value(
+    input_exprs: &[Arc<dyn PhysicalExpr>],
+    input_types: &[DataType],
+) -> Result<ScalarValue> {
+    let expr_type = parse_expr_type(input_types)?;
+    let unparsed = get_scalar_value_from_args(input_exprs, 2)?;
+
+    unparsed
+        .filter(|v| !v.data_type().is_null())
+        .map(|v| v.cast_to(&expr_type))
+        .unwrap_or(ScalarValue::try_from(expr_type))
 }
 
 #[derive(Debug)]

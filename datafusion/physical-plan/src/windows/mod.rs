@@ -48,6 +48,7 @@ mod utils;
 mod window_agg_exec;
 
 pub use bounded_window_agg_exec::BoundedWindowAggExec;
+use datafusion_functions_window_common::expr::ExpressionArgs;
 use datafusion_functions_window_common::field::WindowUDFFieldArgs;
 use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
 use datafusion_physical_expr::expressions::Column;
@@ -333,7 +334,8 @@ impl BuiltInWindowFunctionExpr for WindowUDFExpr {
     }
 
     fn expressions(&self) -> Vec<Arc<dyn PhysicalExpr>> {
-        self.args.clone()
+        self.fun
+            .expressions(ExpressionArgs::new(&self.args, &self.input_types))
     }
 
     fn create_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>> {
