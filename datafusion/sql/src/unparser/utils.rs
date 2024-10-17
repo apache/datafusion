@@ -20,7 +20,7 @@ use std::cmp::Ordering;
 use datafusion_common::{
     internal_err,
     tree_node::{Transformed, TreeNode},
-    Column, DataFusionError, Result, ScalarValue,
+    Column, Result, ScalarValue,
 };
 use datafusion_expr::{
     utils::grouping_set_to_exprlist, Aggregate, Expr, LogicalPlan, Projection, SortExpr,
@@ -208,11 +208,11 @@ pub(crate) fn unproject_sort_expr(
     }
 
     let Expr::Column(ref col_ref) = sort_expr.expr else {
-        return Ok::<_, DataFusionError>(sort_expr);
+        return Ok(sort_expr);
     };
 
     if col_ref.relation.is_some() {
-        return Ok::<_, DataFusionError>(sort_expr);
+        return Ok(sort_expr);
     };
 
     // In case of aggregation there could be columns containing aggregation functions we need to unproject
@@ -220,7 +220,7 @@ pub(crate) fn unproject_sort_expr(
         if agg.schema.is_column_from_schema(col_ref) {
             let new_expr = unproject_agg_exprs(&sort_expr.expr, agg, None)?;
             sort_expr.expr = new_expr;
-            return Ok::<_, DataFusionError>(sort_expr);
+            return Ok(sort_expr);
         }
     }
 
@@ -233,10 +233,10 @@ pub(crate) fn unproject_sort_expr(
                 sort_expr.expr = Expr::ScalarFunction(scalar_fn.clone());
             }
         }
-        return Ok::<_, DataFusionError>(sort_expr);
+        return Ok(sort_expr);
     }
 
-    Ok::<_, DataFusionError>(sort_expr)
+    Ok(sort_expr)
 }
 
 /// Converts a date_part function to SQL, tailoring it to the supported date field extraction style.
