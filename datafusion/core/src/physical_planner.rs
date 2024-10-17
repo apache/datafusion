@@ -78,7 +78,7 @@ use datafusion_expr::expr::{
 use datafusion_expr::expr_rewriter::unnormalize_cols;
 use datafusion_expr::logical_plan::builder::wrap_projection_for_join_if_necessary;
 use datafusion_expr::{
-    DescribeTable, DmlStatement, Extension, Filter, RecursiveQuery, SortExpr,
+    DescribeTable, DmlStatement, Extension, Filter, JoinType, RecursiveQuery, SortExpr,
     StringifiedPlan, WindowFrame, WindowFrameBound, WriteOp,
 };
 use datafusion_physical_expr::aggregate::{AggregateExprBuilder, AggregateFunctionExpr};
@@ -1045,7 +1045,15 @@ impl DefaultPhysicalPlanner {
                     session_state.config_options().optimizer.prefer_hash_join;
 
                 let join: Arc<dyn ExecutionPlan> = if join_on.is_empty() {
-                    if join_filter.is_none() {
+                    if join_filter.is_none()
+                        && matches!(
+                            join_type,
+                            JoinType::Inner
+                                | JoinType::Full
+                                | JoinType::Left
+                                | JoinType::Right
+                        )
+                    {
                         // no on and filter, use cross join
                         Arc::new(CrossJoinExec::new(physical_left, physical_right))
                     } else {
