@@ -63,17 +63,23 @@ impl AggregationFuzzerBuilder {
     }
 
     /// Adds random SQL queries to the fuzzer along with the table name
-    pub fn add_query_builder(mut self, query_builder: QueryBuilder) -> Self {
+    pub fn add_query_builder(mut self, mut query_builder: QueryBuilder) -> Self {
         const NUM_QUERIES: usize = 10;
         for _ in 0..NUM_QUERIES {
-            self = self.add_sql(&query_builder.generate_query());
+            let sql = query_builder.generate_query();
+            self.candidate_sqls.push(Arc::from(sql));
+        }
+        // also add several queries limited to grouping on the group by columns only, if any
+        // So if the data is sorted on `a,b` only group by `a,b` or`a` or `b`
+        if let Some(data_gen_config) = &self.data_gen_config {
+            for sort_keys in &data_gen_config.sort_keys_set {
+                let group_by_columns = sort_keys.iter().map(|s| s.as_str());
+                query_builder = query_builder.with_group_by_columns(group_by_columns);
+                let sql = query_builder.generate_query();
+                self.candidate_sqls.push(Arc::from(sql));
+            }
         }
         self.table_name(query_builder.table_name())
-    }
-
-    fn add_sql(mut self, sql: &str) -> Self {
-        self.candidate_sqls.push(Arc::from(sql));
-        self
     }
 
     pub fn table_name(mut self, table_name: &str) -> Self {
@@ -359,7 +365,7 @@ fn format_batches_with_limit(batches: &[RecordBatch]) -> impl std::fmt::Display 
 /// ```sql
 /// SELECT AGG(..) FROM table_name GROUP BY <group_by_columns>
 ///```
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct QueryBuilder {
     /// The name of the table to query
     table_name: String,
@@ -417,8 +423,7 @@ impl QueryBuilder {
         mut self,
         group_by: impl IntoIterator<Item = &'a str>,
     ) -> Self {
-        let group_by = group_by.into_iter().map(String::from);
-        self.group_by_columns.extend(group_by);
+        self.group_by_columns = group_by.into_iter().map(String::from).collect();
         self
     }
 

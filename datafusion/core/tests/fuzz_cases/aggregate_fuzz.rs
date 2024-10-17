@@ -172,15 +172,21 @@ fn baseline_config() -> DatasetGeneratorConfig {
         // TODO add support for utf8view in data generator
         // ColumnDescr::new("utf8view", DataType::Utf8View),
         // todo binary
+        // low cardinality columns
+        ColumnDescr::new("u8_low", DataType::UInt8).with_max_num_distinct(10),
+        ColumnDescr::new("utf8_low", DataType::Utf8).with_max_num_distinct(10),
     ];
+
+    let min_num_rows = 512;
+    let max_num_rows = 1024;
 
     DatasetGeneratorConfig {
         columns,
-        rows_num_range: (512, 1024),
+        rows_num_range: (min_num_rows, max_num_rows),
         sort_keys_set: vec![
             // low cardinality to try and get many repeated runs
-            vec![String::from("u8")],
-            vec![String::from("utf8"), String::from("u8")],
+            vec![String::from("u8_low")],
+            vec![String::from("utf8_low"), String::from("u8_low")],
         ],
     }
 }
