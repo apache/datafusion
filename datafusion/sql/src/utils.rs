@@ -630,7 +630,7 @@ mod tests {
         l: Vec<&str>,
         r: &HashMap<Column, Option<Vec<ColumnUnnestList>>>,
     ) {
-        let r_formatted: Vec<String> = r
+        let mut r_formatted: Vec<String> = r
             .iter()
             .map(|i| match i.1 {
                 None => format!("{}", i.0),
@@ -644,7 +644,9 @@ mod tests {
                 ),
             })
             .collect();
-        let l_formatted: Vec<String> = l.iter().map(|i| i.to_string()).collect();
+        let mut l_formatted: Vec<String> = l.iter().map(|i| i.to_string()).collect();
+        r_formatted.sort();
+        l_formatted.sort();
         assert_eq!(l_formatted, r_formatted);
     }
 
