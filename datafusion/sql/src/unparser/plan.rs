@@ -27,7 +27,7 @@ use super::{
     },
     utils::{
         find_agg_node_within_select, find_window_nodes_within_select,
-        unproject_window_exprs,
+        unproject_sort_expr, unproject_window_exprs,
     },
     Unparser,
 };
@@ -352,19 +352,30 @@ impl Unparser<'_> {
                 if select.already_projected() {
                     return self.derive(plan, relation);
                 }
-                if let Some(query_ref) = query {
-                    if let Some(fetch) = sort.fetch {
-                        query_ref.limit(Some(ast::Expr::Value(ast::Value::Number(
-                            fetch.to_string(),
-                            false,
-                        ))));
-                    }
-                    query_ref.order_by(self.sorts_to_sql(sort.expr.clone())?);
-                } else {
+                let Some(query_ref) = query else {
                     return internal_err!(
                         "Sort operator only valid in a statement context."
                     );
-                }
+                };
+
+                if let Some(fetch) = sort.fetch {
+                    query_ref.limit(Some(ast::Expr::Value(ast::Value::Number(
+                        fetch.to_string(),
+                        false,
+                    ))));
+                };
+
+                let agg = find_agg_node_within_select(plan, select.already_projected());
+                // unproject sort expressions
+                let sort_exprs: Vec<SortExpr> = sort
+                    .expr
+                    .iter()
+                    .map(|sort_expr| {
+                        unproject_sort_expr(sort_expr, agg, sort.input.as_ref())
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+
+                query_ref.order_by(self.sorts_to_sql(&sort_exprs)?);
 
                 self.select_to_sql_recursively(
                     sort.input.as_ref(),
@@ -402,7 +413,7 @@ impl Unparser<'_> {
                             .collect::<Result<Vec<_>>>()?;
                         if let Some(sort_expr) = &on.sort_expr {
                             if let Some(query_ref) = query {
-                                query_ref.order_by(self.sorts_to_sql(sort_expr.clone())?);
+                                query_ref.order_by(self.sorts_to_sql(sort_expr)?);
                             } else {
                                 return internal_err!(
                                     "Sort operator only valid in a statement context."
@@ -544,6 +555,11 @@ impl Unparser<'_> {
                         "UNION ALL expected 2 inputs, but found {}",
                         union.inputs.len()
                     );
+                }
+
+                // Covers cases where the UNION is a subquery and the projection is at the top level
+                if select.already_projected() {
+                    return self.derive(plan, relation);
                 }
 
                 let input_exprs: Vec<SetExpr> = union
@@ -691,7 +707,7 @@ impl Unparser<'_> {
         }
     }
 
-    fn sorts_to_sql(&self, sort_exprs: Vec<SortExpr>) -> Result<Vec<ast::OrderByExpr>> {
+    fn sorts_to_sql(&self, sort_exprs: &[SortExpr]) -> Result<Vec<ast::OrderByExpr>> {
         sort_exprs
             .iter()
             .map(|sort_expr| self.sort_to_sql(sort_expr))

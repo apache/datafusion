@@ -22,6 +22,9 @@ use arrow_schema::*;
 use datafusion_common::{DFSchema, Result, TableReference};
 use datafusion_expr::test::function_stub::{count_udaf, max_udaf, min_udaf, sum_udaf};
 use datafusion_expr::{col, lit, table_scan, wildcard, LogicalPlanBuilder};
+use datafusion_functions::unicode;
+use datafusion_functions_aggregate::grouping::grouping_udaf;
+use datafusion_functions_window::rank::rank_udwf;
 use datafusion_sql::planner::{ContextProvider, PlannerContext, SqlToRel};
 use datafusion_sql::unparser::dialect::{
     DefaultDialect as UnparserDefaultDialect, Dialect as UnparserDialect,
@@ -139,6 +142,13 @@ fn roundtrip_statement() -> Result<()> {
             SELECT j2_string as string FROM j2
             ORDER BY string DESC
             LIMIT 10"#,
+            r#"SELECT col1, id FROM (
+                SELECT j1_string AS col1, j1_id AS id FROM j1
+                UNION ALL
+                SELECT j2_string AS col1, j2_id AS id FROM j2
+                UNION ALL
+                SELECT j3_string AS col1, j3_id AS id FROM j3
+            ) AS subquery GROUP BY col1, id ORDER BY col1 ASC, id ASC"#,
             "SELECT id, count(*) over (PARTITION BY first_name ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING),
             last_name, sum(id) over (PARTITION BY first_name ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING),
             first_name from person",
@@ -657,7 +667,12 @@ where
         .unwrap();
 
     let context = MockContextProvider {
-        state: MockSessionState::default(),
+        state: MockSessionState::default()
+            .with_aggregate_function(sum_udaf())
+            .with_aggregate_function(max_udaf())
+            .with_aggregate_function(grouping_udaf())
+            .with_window_function(rank_udwf())
+            .with_scalar_function(Arc::new(unicode::substr().as_ref().clone())),
     };
     let sql_to_rel = SqlToRel::new(&context);
     let plan = sql_to_rel.sql_statement_to_plan(statement).unwrap();
@@ -968,4 +983,50 @@ fn test_with_offset0() {
 #[test]
 fn test_with_offset95() {
     sql_round_trip(MySqlDialect {}, "select 1 offset 95", "SELECT 1 OFFSET 95");
+}
+
+#[test]
+fn test_order_by_to_sql() {
+    // order by aggregation function
+    sql_round_trip(
+        GenericDialect {},
+        r#"SELECT id, first_name, SUM(id) FROM person GROUP BY id, first_name ORDER BY SUM(id) ASC, first_name DESC, id, first_name LIMIT 10"#,
+        r#"SELECT person.id, person.first_name, sum(person.id) FROM person GROUP BY person.id, person.first_name ORDER BY sum(person.id) ASC NULLS LAST, person.first_name DESC NULLS FIRST, person.id ASC NULLS LAST, person.first_name ASC NULLS LAST LIMIT 10"#,
+    );
+
+    // order by aggregation function alias
+    sql_round_trip(
+        GenericDialect {},
+        r#"SELECT id, first_name, SUM(id) as total_sum FROM person GROUP BY id, first_name ORDER BY total_sum ASC, first_name DESC, id, first_name LIMIT 10"#,
+        r#"SELECT person.id, person.first_name, sum(person.id) AS total_sum FROM person GROUP BY person.id, person.first_name ORDER BY total_sum ASC NULLS LAST, person.first_name DESC NULLS FIRST, person.id ASC NULLS LAST, person.first_name ASC NULLS LAST LIMIT 10"#,
+    );
+
+    // order by scalar function from projection
+    sql_round_trip(
+        GenericDialect {},
+        r#"SELECT id, first_name, substr(first_name,0,5) FROM person ORDER BY id, substr(first_name,0,5)"#,
+        r#"SELECT person.id, person.first_name, substr(person.first_name, 0, 5) FROM person ORDER BY person.id ASC NULLS LAST, substr(person.first_name, 0, 5) ASC NULLS LAST"#,
+    );
+}
+
+#[test]
+fn test_aggregation_to_sql() {
+    sql_round_trip(
+        GenericDialect {},
+        r#"SELECT id, first_name,
+        SUM(id) AS total_sum,
+        SUM(id) OVER (PARTITION BY first_name ROWS BETWEEN 5 PRECEDING AND 2 FOLLOWING) AS moving_sum,
+        MAX(SUM(id)) OVER (PARTITION BY first_name ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS max_total,
+        rank() OVER (PARTITION BY grouping(id) + grouping(age), CASE WHEN grouping(age) = 0 THEN id END ORDER BY sum(id) DESC) AS rank_within_parent_1,
+        rank() OVER (PARTITION BY grouping(age) + grouping(id), CASE WHEN (CAST(grouping(age) AS BIGINT) = 0) THEN id END ORDER BY sum(id) DESC) AS rank_within_parent_2
+        FROM person
+        GROUP BY id, first_name;"#,
+        r#"SELECT person.id, person.first_name,
+sum(person.id) AS total_sum, sum(person.id) OVER (PARTITION BY person.first_name ROWS BETWEEN '5' PRECEDING AND '2' FOLLOWING) AS moving_sum,
+max(sum(person.id)) OVER (PARTITION BY person.first_name ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS max_total,
+rank() OVER (PARTITION BY (grouping(person.id) + grouping(person.age)), CASE WHEN (grouping(person.age) = 0) THEN person.id END ORDER BY sum(person.id) DESC NULLS FIRST RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS rank_within_parent_1,
+rank() OVER (PARTITION BY (grouping(person.age) + grouping(person.id)), CASE WHEN (CAST(grouping(person.age) AS BIGINT) = 0) THEN person.id END ORDER BY sum(person.id) DESC NULLS FIRST RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS rank_within_parent_2
+FROM person
+GROUP BY person.id, person.first_name"#.replace("\n", " ").as_str(),
+    );
 }
