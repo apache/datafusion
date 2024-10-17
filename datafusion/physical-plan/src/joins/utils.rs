@@ -30,8 +30,8 @@ use crate::{
 };
 
 use arrow::array::{
-    downcast_array, new_null_array, Array, BooleanBufferBuilder, MutableArrayData,
-    UInt32Array, UInt32Builder, UInt64Array,
+    downcast_array, new_null_array, Array, BooleanBufferBuilder, UInt32Array,
+    UInt32Builder, UInt64Array,
 };
 use arrow::compute;
 use arrow::datatypes::{Field, Schema, SchemaBuilder, UInt32Type, UInt64Type};
@@ -43,7 +43,7 @@ use datafusion_common::cast::as_boolean_array;
 use datafusion_common::stats::Precision;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{
-    plan_err, DataFusionError, JoinSide, JoinType, Result, SharedResult,
+    internal_err, plan_err, DataFusionError, JoinSide, JoinType, Result, SharedResult,
 };
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_physical_expr::equivalence::add_offset_to_expr;
@@ -1281,15 +1281,15 @@ pub(crate) fn adjust_indices_by_join_type(
     adjust_range: Range<usize>,
     join_type: JoinType,
     preserve_order_for_right: bool,
-) -> (UInt64Array, UInt32Array) {
+) -> Result<(UInt64Array, UInt32Array)> {
     match join_type {
         JoinType::Inner => {
             // matched
-            (left_indices, right_indices)
+            Ok((left_indices, right_indices))
         }
         JoinType::Left => {
             // matched
-            (left_indices, right_indices)
+            Ok((left_indices, right_indices))
             // unmatched left row will be produced in the end of loop, and it has been set in the left visited bitmap
         }
         JoinType::Right => {
@@ -1308,22 +1308,22 @@ pub(crate) fn adjust_indices_by_join_type(
             // need to remove the duplicated record in the right side
             let right_indices = get_semi_indices(adjust_range, &right_indices);
             // the left_indices will not be used later for the `right semi` join
-            (left_indices, right_indices)
+            Ok((left_indices, right_indices))
         }
         JoinType::RightAnti => {
             // need to remove the duplicated record in the right side
             // get the anti index for the right side
             let right_indices = get_anti_indices(adjust_range, &right_indices);
             // the left_indices will not be used later for the `right anti` join
-            (left_indices, right_indices)
+            Ok((left_indices, right_indices))
         }
         JoinType::LeftSemi | JoinType::LeftAnti => {
             // matched or unmatched left row will be produced in the end of loop
             // When visit the right batch, we can output the matched left row and don't need to wait the end of loop
-            (
+            Ok((
                 UInt64Array::from_iter_values(vec![]),
                 UInt32Array::from_iter_values(vec![]),
-            )
+            ))
         }
     }
 }
@@ -1348,44 +1348,34 @@ pub(crate) fn append_right_indices(
     right_indices: UInt32Array,
     adjust_range: Range<usize>,
     preserve_order_for_right: bool,
-) -> (UInt64Array, UInt32Array) {
+) -> Result<(UInt64Array, UInt32Array)> {
     if preserve_order_for_right {
-        append_probe_indices_in_order(left_indices, right_indices, adjust_range)
+        Ok(append_probe_indices_in_order(
+            left_indices,
+            right_indices,
+            adjust_range,
+        ))
     } else {
         let right_unmatched_indices = get_anti_indices(adjust_range, &right_indices);
 
         if right_unmatched_indices.is_empty() {
-            (left_indices, right_indices)
+            Ok((left_indices, right_indices))
         } else {
-            let left_size = left_indices.len();
-            let right_size = right_indices.len();
-            let unmatched_size = right_unmatched_indices.len();
-
-            let left_indices_data = left_indices.into_data();
-            let right_indices_data = right_indices.into_data();
-            let right_unmatched_indices_data = right_unmatched_indices.into_data();
-
             // the new left indices: left_indices + null array
-            let mut new_left_indices = MutableArrayData::new(
-                vec![&left_indices_data],
-                true,
-                left_size + unmatched_size,
-            );
-            new_left_indices.extend(0, 0, left_size);
-            new_left_indices.extend_nulls(unmatched_size);
-            let new_left_indices = UInt64Array::from(new_left_indices.freeze());
+            let Ok(mut new_left_indices_builder) = left_indices.into_builder() else {
+                return internal_err!("Failed to convert left indices to builder");
+            };
+            new_left_indices_builder.append_nulls(right_unmatched_indices.len());
+            let new_left_indices = UInt64Array::from(new_left_indices_builder.finish());
 
             // the new right indices: right_indices + right_unmatched_indices
-            let mut new_right_indices = MutableArrayData::new(
-                vec![&right_indices_data, &right_unmatched_indices_data],
-                false,
-                right_size + unmatched_size,
-            );
-            new_right_indices.extend(0, 0, right_size);
-            new_right_indices.extend(1, 0, unmatched_size);
-            let new_right_indices = UInt32Array::from(new_right_indices.freeze());
+            let Ok(mut new_right_indices_builder) = right_indices.into_builder() else {
+                return internal_err!("Failed to convert right indices to builder");
+            };
+            new_right_indices_builder.append_slice(right_unmatched_indices.values());
+            let new_right_indices = UInt32Array::from(new_right_indices_builder.finish());
 
-            (new_left_indices, new_right_indices)
+            Ok((new_left_indices, new_right_indices))
         }
     }
 }

@@ -804,7 +804,7 @@ fn join_left_and_right_batch(
         0..right_batch.num_rows(),
         join_type,
         right_side_ordered,
-    );
+    )?;
 
     build_batch_from_indices(
         schema,
