@@ -106,7 +106,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn read_with_listing_table_url() -> Result<()> {
+    async fn read_with_non_parsed_listing_table_url() -> Result<()> {
         let ctx = SessionContext::new();
 
         let urls: Vec<ListingTableUrl> =

@@ -1,4 +1,0 @@
-create schema staging;
-create external table staging.foo stored as csv location 'foo.csv';
-select * from staging.foo;
-
