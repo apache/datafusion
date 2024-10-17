@@ -5148,3 +5148,63 @@ NULL
 
 statement ok
 drop table test_case_expr
+
+statement ok
+drop table t;
+
+# test multi group by for binary type with nulls
+statement ok
+create table t(a int, b bytea) as values (1, 0xa), (1, 0xa), (2, null), (null, 0xb), (null, 0xb);
+
+query I?I
+select a, b, count(*) from t group by grouping sets ((a, b), (a), (b));
+----
+1 0a 2
+2 NULL 1
+NULL 0b 2
+1 NULL 2
+2 NULL 1
+NULL NULL 2
+NULL 0a 2
+NULL NULL 1
+NULL 0b 2
+
+statement ok
+drop table t;
+
+# test multi group by for binary type without nulls
+statement ok
+create table t(a int, b bytea) as values (1, 0xa), (1, 0xa), (2, 0xb), (3, 0xb), (3, 0xb);
+
+query I?I
+select a, b, count(*) from t group by grouping sets ((a, b), (a), (b));
+----
+1 0a 2
+2 0b 1
+3 0b 2
+1 NULL 2
+2 NULL 1
+3 NULL 2
+NULL 0a 2
+NULL 0b 3
+
+statement ok
+drop table t;
+
+# test multi group by int + utf8
+statement ok
+create table t(a int, b varchar) as values (1, 'a'), (1, 'a'), (2, 'ab'), (3, 'abc'), (3, 'cba'), (null, null), (null, 'a'), (null, null), (null, 'a'), (1, 'null');
+
+query ITI rowsort
+select a, b, count(*) from t group by a, b;
+----
+1 a 2
+1 null 1
+2 ab 1
+3 abc 1
+3 cba 1
+NULL NULL 2
+NULL a 2
+
+statement ok
+drop table t;

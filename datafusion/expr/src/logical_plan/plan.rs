@@ -20,7 +20,7 @@
 use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Debug, Display, Formatter};
 use std::hash::{Hash, Hasher};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use super::dml::CopyTo;
 use super::DdlStatement;
@@ -2780,6 +2780,15 @@ impl Aggregate {
                 .into_iter()
                 .map(|(q, f)| (q, f.as_ref().clone().with_nullable(true).into()))
                 .collect::<Vec<_>>();
+            qualified_fields.push((
+                None,
+                Field::new(
+                    Self::INTERNAL_GROUPING_ID,
+                    Self::grouping_id_type(qualified_fields.len()),
+                    false,
+                )
+                .into(),
+            ));
         }
 
         qualified_fields.extend(exprlist_to_fields(aggr_expr.as_slice(), &input)?);
@@ -2831,9 +2840,19 @@ impl Aggregate {
         })
     }
 
+    fn is_grouping_set(&self) -> bool {
+        matches!(self.group_expr.as_slice(), [Expr::GroupingSet(_)])
+    }
+
     /// Get the output expressions.
     fn output_expressions(&self) -> Result<Vec<&Expr>> {
+        static INTERNAL_ID_EXPR: OnceLock<Expr> = OnceLock::new();
         let mut exprs = grouping_set_to_exprlist(self.group_expr.as_slice())?;
+        if self.is_grouping_set() {
+            exprs.push(INTERNAL_ID_EXPR.get_or_init(|| {
+                Expr::Column(Column::from_name(Self::INTERNAL_GROUPING_ID))
+            }));
+        }
         exprs.extend(self.aggr_expr.iter());
         debug_assert!(exprs.len() == self.schema.fields().len());
         Ok(exprs)
@@ -2845,6 +2864,41 @@ impl Aggregate {
     pub fn group_expr_len(&self) -> Result<usize> {
         grouping_set_expr_count(&self.group_expr)
     }
+
+    /// Returns the data type of the grouping id.
+    /// The grouping ID value is a bitmask where each set bit
+    /// indicates that the corresponding grouping expression is
+    /// null
+    pub fn grouping_id_type(group_exprs: usize) -> DataType {
+        if group_exprs <= 8 {
+            DataType::UInt8
+        } else if group_exprs <= 16 {
+            DataType::UInt16
+        } else if group_exprs <= 32 {
+            DataType::UInt32
+        } else {
+            DataType::UInt64
+        }
+    }
+
+    /// Internal column used when the aggregation is a grouping set.
+    ///
+    /// This column contains a bitmask where each bit represents a grouping
+    /// expression. The least significant bit corresponds to the rightmost
+    /// grouping expression. A bit value of 0 indicates that the corresponding
+    /// column is included in the grouping set, while a value of 1 means it is excluded.
+    ///
+    /// For example, for the grouping expressions CUBE(a, b), the grouping ID
+    /// column will have the following values:
+    ///     0b00: Both `a` and `b` are included
+    ///     0b01: `b` is excluded
+    ///     0b10: `a` is excluded
+    ///     0b11: Both `a` and `b` are excluded
+    ///
+    /// This internal column is necessary because excluded columns are replaced
+    /// with `NULL` values. To handle these cases correctly, we must distinguish
+    /// between an actual `NULL` value in a column and a column being excluded from the set.
+    pub const INTERNAL_GROUPING_ID: &'static str = "__grouping_id";
 }
 
 /// Checks whether any expression in `group_expr` contains `Expr::GroupingSet`.

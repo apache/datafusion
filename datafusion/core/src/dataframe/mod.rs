@@ -430,9 +430,26 @@ impl DataFrame {
         group_expr: Vec<Expr>,
         aggr_expr: Vec<Expr>,
     ) -> Result<DataFrame> {
+        let is_grouping_set = matches!(group_expr.as_slice(), [Expr::GroupingSet(_)]);
+        let aggr_expr_len = aggr_expr.len();
         let plan = LogicalPlanBuilder::from(self.plan)
             .aggregate(group_expr, aggr_expr)?
             .build()?;
+        let plan = if is_grouping_set {
+            let grouping_id_pos = plan.schema().fields().len() - 1 - aggr_expr_len;
+            // For grouping sets we do a project to not expose the internal grouping id
+            let exprs = plan
+                .schema()
+                .columns()
+                .into_iter()
+                .enumerate()
+                .filter(|(idx, _)| *idx != grouping_id_pos)
+                .map(|(_, column)| Expr::Column(column))
+                .collect::<Vec<_>>();
+            LogicalPlanBuilder::from(plan).project(exprs)?.build()?
+        } else {
+            plan
+        };
         Ok(DataFrame {
             session_state: self.session_state,
             plan,

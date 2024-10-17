@@ -3512,6 +3512,18 @@ SELECT MIN(value), MAX(value) FROM integers_with_nulls
 ----
 1 5
 
+# grouping_sets with null values
+query II rowsort
+SELECT value, min(value) FROM integers_with_nulls GROUP BY CUBE(value)
+----
+1 1
+3 3
+4 4
+5 5
+NULL 1
+NULL NULL
+
+
 statement ok
 DROP TABLE integers_with_nulls;
 
@@ -4871,16 +4883,18 @@ query TT
 EXPLAIN SELECT c2, c3 FROM aggregate_test_100 group by rollup(c2, c3) limit 3;
 ----
 logical_plan
-01)Limit: skip=0, fetch=3
-02)--Aggregate: groupBy=[[ROLLUP (aggregate_test_100.c2, aggregate_test_100.c3)]], aggr=[[]]
-03)----TableScan: aggregate_test_100 projection=[c2, c3]
+01)Projection: aggregate_test_100.c2, aggregate_test_100.c3
+02)--Limit: skip=0, fetch=3
+03)----Aggregate: groupBy=[[ROLLUP (aggregate_test_100.c2, aggregate_test_100.c3)]], aggr=[[]]
+04)------TableScan: aggregate_test_100 projection=[c2, c3]
 physical_plan
-01)GlobalLimitExec: skip=0, fetch=3
-02)--AggregateExec: mode=Final, gby=[c2@0 as c2, c3@1 as c3], aggr=[], lim=[3]
-03)----CoalescePartitionsExec
-04)------AggregateExec: mode=Partial, gby=[(NULL as c2, NULL as c3), (c2@0 as c2, NULL as c3), (c2@0 as c2, c3@1 as c3)], aggr=[]
-05)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-06)----------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c2, c3], has_header=true
+01)ProjectionExec: expr=[c2@0 as c2, c3@1 as c3]
+02)--GlobalLimitExec: skip=0, fetch=3
+03)----AggregateExec: mode=Final, gby=[c2@0 as c2, c3@1 as c3, __grouping_id@2 as __grouping_id], aggr=[], lim=[3]
+04)------CoalescePartitionsExec
+05)--------AggregateExec: mode=Partial, gby=[(NULL as c2, NULL as c3), (c2@0 as c2, NULL as c3), (c2@0 as c2, c3@1 as c3)], aggr=[]
+06)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+07)------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c2, c3], has_header=true
 
 query II
 SELECT c2, c3 FROM aggregate_test_100 group by rollup(c2, c3) limit 3;

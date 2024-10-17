@@ -65,9 +65,10 @@ pub fn grouping_set_expr_count(group_expr: &[Expr]) -> Result<usize> {
                 "Invalid group by expressions, GroupingSet must be the only expression"
             );
         }
-        Ok(grouping_set.distinct_expr().len())
+        // Groupings sets have an additional interal column for the grouping id
+        Ok(grouping_set.distinct_expr().len() + 1)
     } else {
-        Ok(group_expr.len())
+        grouping_set_to_exprlist(group_expr).map(|exprs| exprs.len())
     }
 }
 
