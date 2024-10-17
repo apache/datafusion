@@ -42,6 +42,7 @@ async-ffi = { version = "0.5.0", features = ["abi_stable"] }
 async-trait = { workspace = true }
 datafusion = { workspace = true, default-features = true }
 datafusion-proto = { workspace = true }
+doc-comment = { workspace = true }
 futures = { workspace = true }
 prost = { workspace = true }
 tokio = { workspace = true }
