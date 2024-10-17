@@ -191,15 +191,17 @@ fn get_bool_and_doc() -> &'static Documentation {
                 "Returns true if all non-null input values are true, otherwise false.",
             )
             .with_syntax_example("bool_and(expression)")
-            .with_sql_example(r#"```sql
+            .with_sql_example(
+                r#"```sql
 > SELECT bool_and(column_name) FROM table_name;
 +----------------------------+
 | bool_and(column_name)       |
 +----------------------------+
 | true                        |
 +----------------------------+
-```"#)
-            .with_argument("expression", "Expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators.")
+```"#,
+            )
+            .with_standard_argument("expression", "The")
             .build()
             .unwrap()
     })
@@ -338,15 +340,17 @@ fn get_bool_or_doc() -> &'static Documentation {
                 "Returns true if any non-null input value is true, otherwise false.",
             )
             .with_syntax_example("bool_or(expression)")
-            .with_sql_example(r#"```sql
+            .with_sql_example(
+                r#"```sql
 > SELECT bool_or(column_name) FROM table_name;
 +----------------------------+
 | bool_or(column_name)        |
 +----------------------------+
 | true                        |
 +----------------------------+
-```"#)
-            .with_standard_argument("expression", "Expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators.")
+```"#,
+            )
+            .with_standard_argument("expression", "The")
             .build()
             .unwrap()
     })

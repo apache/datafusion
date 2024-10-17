@@ -27,12 +27,15 @@ use arrow::row::{RowConverter, SortField};
 use arrow_schema::DataType::{FixedSizeList, LargeList, List, Null};
 use datafusion_common::cast::{as_large_list_array, as_list_array};
 use datafusion_common::{exec_err, internal_err, Result};
-use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::scalar_doc_sections::DOC_SECTION_ARRAY;
+use datafusion_expr::{
+    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+};
 use itertools::Itertools;
 use std::any::Any;
 use std::collections::HashSet;
 use std::fmt::{Display, Formatter};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 // Create static instances of ScalarUDFs for each function
 make_udf_expr_and_func!(
@@ -102,6 +105,49 @@ impl ScalarUDFImpl for ArrayUnion {
     fn aliases(&self) -> &[String] {
         &self.aliases
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_array_union_doc())
+    }
+}
+
+static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+
+fn get_array_union_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_ARRAY)
+            .with_description(
+                "Returns an array of elements that are present in both arrays (all elements from both arrays) with out duplicates.",
+            )
+            .with_syntax_example("array_union(array1, array2)")
+            .with_sql_example(
+                r#"```sql
+> select array_union([1, 2, 3, 4], [5, 6, 3, 4]);
++----------------------------------------------------+
+| array_union([1, 2, 3, 4], [5, 6, 3, 4]);           |
++----------------------------------------------------+
+| [1, 2, 3, 4, 5, 6]                                 |
++----------------------------------------------------+
+> select array_union([1, 2, 3, 4], [5, 6, 7, 8]);
++----------------------------------------------------+
+| array_union([1, 2, 3, 4], [5, 6, 7, 8]);           |
++----------------------------------------------------+
+| [1, 2, 3, 4, 5, 6, 7, 8]                           |
++----------------------------------------------------+
+```"#,
+            )
+            .with_argument(
+                "array1",
+                "Array expression. Can be a constant, column, or function, and any combination of array operators.",
+            )
+            .with_argument(
+                "array2",
+                "Array expression. Can be a constant, column, or function, and any combination of array operators.",
+            )
+            .build()
+            .unwrap()
+    })
 }
 
 #[derive(Debug)]
@@ -147,6 +193,47 @@ impl ScalarUDFImpl for ArrayIntersect {
     fn aliases(&self) -> &[String] {
         &self.aliases
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_array_intersect_doc())
+    }
+}
+
+fn get_array_intersect_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_ARRAY)
+            .with_description(
+                "Returns an array of elements in the intersection of array1 and array2.",
+            )
+            .with_syntax_example("array_intersect(array1, array2)")
+            .with_sql_example(
+                r#"```sql
+> select array_intersect([1, 2, 3, 4], [5, 6, 3, 4]);
++----------------------------------------------------+
+| array_intersect([1, 2, 3, 4], [5, 6, 3, 4]);       |
++----------------------------------------------------+
+| [3, 4]                                             |
++----------------------------------------------------+
+> select array_intersect([1, 2, 3, 4], [5, 6, 7, 8]);
++----------------------------------------------------+
+| array_intersect([1, 2, 3, 4], [5, 6, 7, 8]);       |
++----------------------------------------------------+
+| []                                                 |
++----------------------------------------------------+
+```"#,
+            )
+            .with_argument(
+                "array1",
+                "Array expression. Can be a constant, column, or function, and any combination of array operators.",
+            )
+            .with_argument(
+                "array2",
+                "Array expression. Can be a constant, column, or function, and any combination of array operators.",
+            )
+            .build()
+            .unwrap()
+    })
 }
 
 #[derive(Debug)]
@@ -202,6 +289,37 @@ impl ScalarUDFImpl for ArrayDistinct {
     fn aliases(&self) -> &[String] {
         &self.aliases
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_array_distinct_doc())
+    }
+}
+
+fn get_array_distinct_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_ARRAY)
+            .with_description(
+                "Returns distinct values from the array after removing duplicates.",
+            )
+            .with_syntax_example("array_distinct(array)")
+            .with_sql_example(
+                r#"```sql
+> select array_distinct([1, 3, 2, 3, 1, 2, 4]);
++---------------------------------+
+| array_distinct(List([1,2,3,4])) |
++---------------------------------+
+| [1, 2, 3, 4]                    |
++---------------------------------+
+```"#,
+            )
+            .with_argument(
+                "array",
+                "Array expression. Can be a constant, column, or function, and any combination of array operators.",
+            )
+            .build()
+            .unwrap()
+    })
 }
 
 /// array_distinct SQL function
