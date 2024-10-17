@@ -4050,7 +4050,7 @@ EXPLAIN SELECT lhs.c, rhs.c, lhs.sum1, rhs.sum1
 ----
 logical_plan
 01)Projection: lhs.c, rhs.c, lhs.sum1, rhs.sum1
-02)--CrossJoin:
+02)--Cross Join:
 03)----SubqueryAlias: lhs
 04)------Projection: multiple_ordered_table_with_pk.c, sum(multiple_ordered_table_with_pk.d) AS sum1
 05)--------Aggregate: groupBy=[[multiple_ordered_table_with_pk.c]], aggr=[[sum(CAST(multiple_ordered_table_with_pk.d AS Int64))]]

@@ -722,7 +722,7 @@ logical_plan
 03)----Projection: Int64(1) AS val
 04)------EmptyRelation
 05)----Projection: Int64(2) AS val
-06)------CrossJoin:
+06)------Cross Join:
 07)--------Filter: recursive_cte.val < Int64(2)
 08)----------TableScan: recursive_cte
 09)--------SubqueryAlias: sub_cte

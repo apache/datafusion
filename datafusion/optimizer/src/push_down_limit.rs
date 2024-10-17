@@ -254,10 +254,9 @@ fn push_down_join(mut join: Join, limit: usize) -> Transformed<Join> {
 
     let (left_limit, right_limit) = if is_no_join_condition(&join) {
         match join.join_type {
-            Left | Right | Full => (Some(limit), Some(limit)),
+            Left | Right | Full | Inner => (Some(limit), Some(limit)),
             LeftAnti | LeftSemi => (Some(limit), None),
             RightAnti | RightSemi => (None, Some(limit)),
-            Inner => (None, None),
         }
     } else {
         match join.join_type {
@@ -1116,7 +1115,7 @@ mod test {
             .build()?;
 
         let expected = "Limit: skip=0, fetch=1000\
-        \n  CrossJoin:\
+        \n  Cross Join: \
         \n    Limit: skip=0, fetch=1000\
         \n      TableScan: test, fetch=1000\
         \n    Limit: skip=0, fetch=1000\
@@ -1136,7 +1135,7 @@ mod test {
             .build()?;
 
         let expected = "Limit: skip=1000, fetch=1000\
-        \n  CrossJoin:\
+        \n  Cross Join: \
         \n    Limit: skip=0, fetch=2000\
         \n      TableScan: test, fetch=2000\
         \n    Limit: skip=0, fetch=2000\

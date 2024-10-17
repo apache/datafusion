@@ -67,7 +67,7 @@ logical_plan
 01)Dml: op=[Update] table=[t1]
 02)--Projection: t1.a AS a, t2.b AS b, CAST(t2.a AS Float64) AS c, CAST(Int64(1) AS Int32) AS d
 03)----Filter: t1.a = t2.a AND t1.b > Utf8("foo") AND t2.c > Float64(1)
-04)------CrossJoin:
+04)------Cross Join:
 05)--------TableScan: t1
 06)--------TableScan: t2
 
@@ -86,7 +86,7 @@ logical_plan
 01)Dml: op=[Update] table=[t1]
 02)--Projection: t.a AS a, t2.b AS b, CAST(t.a AS Float64) AS c, CAST(Int64(1) AS Int32) AS d
 03)----Filter: t.a = t2.a AND t.b > Utf8("foo") AND t2.c > Float64(1)
-04)------CrossJoin:
+04)------Cross Join:
 05)--------SubqueryAlias: t
 06)----------TableScan: t1
 07)--------TableScan: t2

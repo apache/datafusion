@@ -898,7 +898,7 @@ fn natural_right_join() {
 fn natural_join_no_common_becomes_cross_join() {
     let sql = "SELECT * FROM person a NATURAL JOIN lineitem b";
     let expected = "Projection: *\
-                        \n  CrossJoin:\
+                        \n  Cross Join: \
                         \n    SubqueryAlias: a\
                         \n      TableScan: person\
                         \n    SubqueryAlias: b\
@@ -2744,8 +2744,8 @@ fn cross_join_not_to_inner_join() {
         "select person.id from person, orders, lineitem where person.id = person.age;";
     let expected = "Projection: person.id\
                                     \n  Filter: person.id = person.age\
-                                    \n    CrossJoin:\
-                                    \n      CrossJoin:\
+                                    \n    Cross Join: \
+                                    \n      Cross Join: \
                                     \n        TableScan: person\
                                     \n        TableScan: orders\
                                     \n      TableScan: lineitem";
@@ -2842,11 +2842,11 @@ fn exists_subquery_schema_outer_schema_overlap() {
         \n    Subquery:\
         \n      Projection: person.first_name\
         \n        Filter: person.id = p2.id AND person.last_name = outer_ref(p.last_name) AND person.state = outer_ref(p.state)\
-        \n          CrossJoin:\
+        \n          Cross Join: \
         \n            TableScan: person\
         \n            SubqueryAlias: p2\
         \n              TableScan: person\
-        \n    CrossJoin:\
+        \n    Cross Join: \
         \n      TableScan: person\
         \n      SubqueryAlias: p\
         \n        TableScan: person";
@@ -2934,10 +2934,10 @@ fn scalar_subquery_reference_outer_field() {
         \n      Projection: count(*)\
         \n        Aggregate: groupBy=[[]], aggr=[[count(*)]]\
         \n          Filter: outer_ref(j2.j2_id) = j1.j1_id AND j1.j1_id = j3.j3_id\
-        \n            CrossJoin:\
+        \n            Cross Join: \
         \n              TableScan: j1\
         \n              TableScan: j3\
-        \n    CrossJoin:\
+        \n    Cross Join: \
         \n      TableScan: j1\
         \n      TableScan: j2";
 
@@ -3123,7 +3123,7 @@ fn join_on_complex_condition() {
 fn lateral_constant() {
     let sql = "SELECT * FROM j1, LATERAL (SELECT 1) AS j2";
     let expected = "Projection: *\
-            \n  CrossJoin:\
+            \n  Cross Join: \
             \n    TableScan: j1\
             \n    SubqueryAlias: j2\
             \n      Subquery:\
@@ -3138,7 +3138,7 @@ fn lateral_comma_join() {
             j1, \
             LATERAL (SELECT * FROM j2 WHERE j1_id < j2_id) AS j2";
     let expected = "Projection: j1.j1_string, j2.j2_string\
-            \n  CrossJoin:\
+            \n  Cross Join: \
             \n    TableScan: j1\
             \n    SubqueryAlias: j2\
             \n      Subquery:\
@@ -3154,7 +3154,7 @@ fn lateral_comma_join_referencing_join_rhs() {
             \n  j1 JOIN (j2 JOIN j3 ON(j2_id = j3_id - 2)) ON(j1_id = j2_id),\
             \n  LATERAL (SELECT * FROM j3 WHERE j3_string = j2_string) as j4;";
     let expected = "Projection: *\
-            \n  CrossJoin:\
+            \n  Cross Join: \
             \n    Inner Join:  Filter: j1.j1_id = j2.j2_id\
             \n      TableScan: j1\
             \n      Inner Join:  Filter: j2.j2_id = j3.j3_id - Int64(2)\
@@ -3178,12 +3178,12 @@ fn lateral_comma_join_with_shadowing() {
               ) as j2\
             ) as j2;";
     let expected = "Projection: *\
-            \n  CrossJoin:\
+            \n  Cross Join: \
             \n    TableScan: j1\
             \n    SubqueryAlias: j2\
             \n      Subquery:\
             \n        Projection: *\
-            \n          CrossJoin:\
+            \n          Cross Join: \
             \n            TableScan: j1\
             \n            SubqueryAlias: j2\
             \n              Subquery:\
@@ -3215,7 +3215,7 @@ fn lateral_nested_left_join() {
             j1, \
             (j2 LEFT JOIN LATERAL (SELECT * FROM j3 WHERE j1_id + j2_id = j3_id) AS j3 ON(true))";
     let expected = "Projection: *\
-            \n  CrossJoin:\
+            \n  Cross Join: \
             \n    TableScan: j1\
             \n    Left Join:  Filter: Boolean(true)\
             \n      TableScan: j2\
@@ -4281,7 +4281,7 @@ fn test_table_alias() {
 
     let expected = "Projection: *\
         \n  SubqueryAlias: f\
-        \n    CrossJoin:\
+        \n    Cross Join: \
         \n      SubqueryAlias: t1\
         \n        Projection: person.id\
         \n          TableScan: person\
@@ -4299,7 +4299,7 @@ fn test_table_alias() {
     let expected = "Projection: *\
         \n  SubqueryAlias: f\
         \n    Projection: t1.id AS c1, t2.age AS c2\
-        \n      CrossJoin:\
+        \n      Cross Join: \
         \n        SubqueryAlias: t1\
         \n          Projection: person.id\
         \n            TableScan: person\
