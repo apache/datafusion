@@ -3154,7 +3154,7 @@ fn lateral_comma_join_referencing_join_rhs() {
             \n  j1 JOIN (j2 JOIN j3 ON(j2_id = j3_id - 2)) ON(j1_id = j2_id),\
             \n  LATERAL (SELECT * FROM j3 WHERE j3_string = j2_string) as j4;";
     let expected = "Projection: *\
-            \n  Cross Join:\
+            \n  Cross Join: \
             \n    Inner Join:  Filter: j1.j1_id = j2.j2_id\
             \n      TableScan: j1\
             \n      Inner Join:  Filter: j2.j2_id = j3.j3_id - Int64(2)\
@@ -3178,12 +3178,12 @@ fn lateral_comma_join_with_shadowing() {
               ) as j2\
             ) as j2;";
     let expected = "Projection: *\
-            \n  Cross Join:\
+            \n  Cross Join: \
             \n    TableScan: j1\
             \n    SubqueryAlias: j2\
             \n      Subquery:\
             \n        Projection: *\
-            \n          Cross Join:\
+            \n          Cross Join: \
             \n            TableScan: j1\
             \n            SubqueryAlias: j2\
             \n              Subquery:\
