@@ -183,7 +183,13 @@ async fn simple_select() -> Result<()> {
 
 #[tokio::test]
 async fn wildcard_select() -> Result<()> {
-    roundtrip("SELECT * FROM data").await
+    assert_expected_plan_unoptimized(
+        "SELECT * FROM data",
+        "Projection: data.a, data.b, data.c, data.d, data.e, data.f\
+        \n  TableScan: data",
+        true,
+    )
+    .await
 }
 
 #[tokio::test]
@@ -1170,6 +1176,32 @@ async fn verify_post_join_filter_value(proto: Box<Plan>) -> Result<()> {
             None => return plan_err!("Cannot parse plan relation: None"),
         }
     }
+
+    Ok(())
+}
+
+async fn assert_expected_plan_unoptimized(
+    sql: &str,
+    expected_plan_str: &str,
+    assert_schema: bool,
+) -> Result<()> {
+    let ctx = create_context().await?;
+    let df = ctx.sql(sql).await?;
+    let plan = df.into_unoptimized_plan();
+    let proto = to_substrait_plan(&plan, &ctx)?;
+    let plan2 = from_substrait_plan(&ctx, &proto).await?;
+
+    println!("{plan}");
+    println!("{plan2}");
+
+    println!("{proto:?}");
+
+    if assert_schema {
+        assert_eq!(plan.schema(), plan2.schema());
+    }
+
+    let plan2str = format!("{plan2}");
+    assert_eq!(expected_plan_str, &plan2str);
 
     Ok(())
 }
