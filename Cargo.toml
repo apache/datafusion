@@ -58,7 +58,7 @@ homepage = "https://datafusion.apache.org"
 license = "Apache-2.0"
 readme = "README.md"
 repository = "https://github.com/apache/datafusion"
-rust-version = "1.78"
+rust-version = "1.79"
 version = "42.0.0"
 
 [workspace.dependencies]
