@@ -39,6 +39,14 @@ on:
   workflow_dispatch:
 
 jobs:
+  # Check license header
+  license-header-check:
+    runs-on: ubuntu-20.04
+    name: Check License Header
+    steps:
+      - uses: actions/checkout@v4
+      - uses: korandoru/hawkeye@v5
+
   # Check crate compiles
   linux-build-lib:
     name: cargo check
