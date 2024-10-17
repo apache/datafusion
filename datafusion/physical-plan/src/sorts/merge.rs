@@ -234,12 +234,12 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
 
             let stream_idx = self.loser_tree[0];
             if self.advance(stream_idx) {
-                if stream_idx == self.records.0 {
-                    self.records.1 += 1
-                } else {
-                    self.records.1 = 0;
-                }
-                println!("records: {:?}", self.records);
+                // if stream_idx == self.records.0 {
+                //     self.records.1 += 1
+                // } else {
+                //     self.records.1 = 0;
+                // }
+                // println!("records: {:?}", self.records);
                 self.loser_tree_adjusted = false;
                 self.in_progress.push_row(stream_idx);
 
