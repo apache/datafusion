@@ -1,0 +1,233 @@
+# Test smaller batches
+
+statement ok
+set datafusion.execution.target_partitions = 2;
+
+statement ok
+set datafusion.execution.batch_size = 4;
+
+
+statement ok
+CREATE EXTERNAL TABLE annotated_data_finite2 (
+  a0 INT,
+  a INT,
+  b INT,
+  c INT,
+  d INT
+)
+STORED AS CSV
+WITH ORDER (a ASC, b ASC, c ASC)
+LOCATION '../core/tests/data/low_card_spm_small_batch.csv'
+OPTIONS ('format.has_header' 'true');
+
+
+query TT
+EXPLAIN SELECT *
+FROM annotated_data_finite2
+WHERE a=0
+ORDER BY b, c;
+----
+logical_plan
+01)Sort: annotated_data_finite2.b ASC NULLS LAST, annotated_data_finite2.c ASC NULLS LAST
+02)--Filter: annotated_data_finite2.a = Int32(0)
+03)----TableScan: annotated_data_finite2 projection=[a0, a, b, c, d], partial_filters=[annotated_data_finite2.a = Int32(0)]
+physical_plan
+01)SortPreservingMergeExec: [b@2 ASC NULLS LAST,c@3 ASC NULLS LAST]
+02)--CoalesceBatchesExec: target_batch_size=4
+03)----FilterExec: a@1 = 0
+04)------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+05)--------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/low_card_spm_small_batch.csv]]}, projection=[a0, a, b, c, d], output_ordering=[a@1 ASC NULLS LAST, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST], has_header=true
+
+query IIIII
+SELECT *
+FROM annotated_data_finite2
+WHERE a=0
+ORDER BY b, c;
+----
+0 0 0 0 1
+0 0 0 0 1
+0 0 0 0 1
+0 0 0 0 1
+0 0 0 0 1
+0 0 0 0 1
+0 0 0 0 1
+0 0 0 0 1
+0 0 0 0 1
+0 0 0 0 1
+0 0 0 0 1
+0 0 0 0 1
+0 0 0 0 1
+0 0 0 0 1
+0 0 0 0 1
+0 0 0 0 1
+0 0 0 0 1
+0 0 0 0 1
+0 0 0 0 1
+0 0 0 0 1
+0 0 0 0 1
+0 0 0 0 1
+0 0 0 0 1
+0 0 0 0 1
+0 0 0 0 1
+0 0 0 0 1
+0 0 0 0 1
+0 0 0 0 1
+0 0 0 0 1
+0 0 0 0 1
+0 0 0 0 1
+0 0 0 0 1
+0 0 0 0 1
+0 0 0 0 1
+0 0 0 0 1
+0 0 0 0 1
+0 0 0 0 1
+0 0 0 0 1
+0 0 0 0 1
+0 0 0 0 1
+0 0 0 0 1
+0 0 0 0 1
+0 0 0 0 1
+0 0 0 0 1
+0 0 0 0 1
+0 0 0 0 1
+0 0 0 0 1
+0 0 0 0 1
+0 0 0 0 1
+0 0 0 0 1
+0 0 0 0 1
+0 0 0 0 1
+0 0 0 0 1
+0 0 0 0 1
+0 0 0 0 1
+0 0 0 0 1
+0 0 0 0 1
+0 0 0 0 1
+0 0 0 0 1
+0 0 0 0 1
+0 0 0 0 1
+0 0 0 0 1
+0 0 0 0 1
+0 0 0 0 1
+0 0 0 0 1
+0 0 0 0 1
+0 0 0 0 1
+0 0 0 0 1
+0 0 0 0 1
+0 0 0 0 1
+0 0 0 0 1
+0 0 0 0 1
+0 0 0 0 1
+0 0 0 0 1
+0 0 0 0 1
+0 0 0 0 1
+0 0 0 0 1
+0 0 0 0 1
+0 0 0 0 1
+0 0 0 0 1
+0 0 0 0 1
+0 0 0 1 1
+0 0 0 1 1
+0 0 0 1 1
+0 0 0 1 1
+0 0 0 1 1
+0 0 0 1 1
+0 0 0 1 1
+0 0 0 1 1
+0 0 0 1 1
+0 0 0 1 1
+0 0 0 1 1
+0 0 0 1 1
+0 0 0 1 1
+0 0 0 1 1
+0 0 0 1 1
+0 0 0 1 1
+0 0 0 1 1
+0 0 0 1 1
+0 0 0 1 1
+0 0 0 1 1
+0 0 0 1 1
+0 0 0 1 1
+0 0 0 1 1
+0 0 0 1 1
+0 0 0 1 1
+0 0 0 1 1
+0 0 0 1 1
+0 0 0 1 1
+0 0 0 1 1
+0 0 0 1 1
+0 0 0 1 1
+0 0 0 1 1
+0 0 0 1 1
+0 0 0 1 1
+0 0 0 1 1
+0 0 0 1 1
+0 0 0 1 1
+0 0 0 1 1
+0 0 0 1 1
+0 0 0 1 1
+0 0 0 1 1
+0 0 0 1 1
+0 0 0 1 1
+0 0 0 1 1
+0 0 0 1 1
+0 0 0 1 1
+0 0 0 1 1
+0 0 0 1 1
+0 0 0 1 1
+0 0 0 1 1
+0 0 0 1 1
+0 0 0 1 1
+0 0 0 1 1
+0 0 0 1 1
+0 0 0 1 1
+0 0 0 1 1
+0 0 0 1 1
+0 0 0 1 1
+0 0 0 1 1
+0 0 0 1 1
+0 0 0 1 1
+0 0 0 1 1
+0 0 0 1 1
+0 0 0 1 1
+0 0 0 1 1
+0 0 0 1 1
+0 0 0 1 1
+0 0 0 1 1
+0 0 0 1 1
+0 0 0 1 1
+0 0 0 1 1
+0 0 0 1 1
+0 0 0 1 1
+0 0 0 1 1
+0 0 0 1 1
+0 0 0 1 1
+0 0 0 1 1
+0 0 0 1 1
+0 0 0 1 1
+0 0 0 1 1
+0 0 0 1 1
+0 0 0 1 1
+0 0 0 1 1
+0 0 0 1 1
+0 0 0 1 1
+0 0 0 1 1
+0 0 0 1 1
+0 0 0 1 1
+0 0 0 1 1
+0 0 0 1 1
+0 0 0 1 1
+0 0 0 1 1
+0 0 0 1 1
+0 0 0 1 1
+0 0 0 1 1
+0 0 0 1 1
+0 0 0 1 1
+0 0 0 1 1
+0 0 0 1 1
+0 0 0 1 1
+0 0 0 1 1
+0 0 0 1 1
+0 0 0 1 1
+
+statement ok
+drop table annotated_data_finite2;

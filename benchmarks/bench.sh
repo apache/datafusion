@@ -231,6 +231,9 @@ main() {
                 sort)
                     run_sort
                     ;;
+                spm)
+                    run_spm
+                    ;;
                 clickbench_1)
                     run_clickbench_1
                     ;;
@@ -420,6 +423,13 @@ run_clickbench_1() {
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running clickbench (1 file) benchmark..."
     $CARGO_COMMAND --bin dfbench -- clickbench  --iterations 5 --path "${DATA_DIR}/hits.parquet"  --queries-path "${SCRIPT_DIR}/queries/clickbench/queries.sql" -o "${RESULTS_FILE}"
+}
+
+run_spm() {
+    RESULTS_FILE="${RESULTS_DIR}/spm.json"
+    echo "RESULTS_FILE: ${RESULTS_FILE}"
+    echo "Running spm benchmark..."
+    $CARGO_COMMAND --bin dfbench -- spm  --iterations 5 --path "${DATA_DIR}/low_card_spm_small_batch.csv"  --queries-path "${SCRIPT_DIR}/queries/spm/queries.sql" -o "${RESULTS_FILE}"
 }
 
  # Runs the clickbench benchmark with the partitioned parquet files

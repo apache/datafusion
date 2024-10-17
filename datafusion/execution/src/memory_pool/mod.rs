@@ -292,6 +292,8 @@ impl MemoryReservation {
     pub fn try_grow(&mut self, capacity: usize) -> Result<()> {
         self.registration.pool.try_grow(self, capacity)?;
         self.size += capacity;
+        // TODO: Remove. For measuring the memory between the change
+        // println!("self.size: {:?}", self.size);
         Ok(())
     }
 
