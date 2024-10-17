@@ -143,8 +143,8 @@ fn get_regr_docs() -> &'static HashMap<RegrType, Documentation> {
                     Given input column Y and X: regr_slope(Y, X) returns the slope (k in Y = k*X + b) using minimal RSS fitting.",
                 )
                 .with_syntax_example("regr_slope(expression_y, expression_x)")
-                .with_standard_argument("expression_y", "Expression")
-                .with_standard_argument("expression_x", "Expression")
+                .with_standard_argument("expression_y", "Dependent variable")
+                .with_standard_argument("expression_x", "Independent variable")
                 .build()
                 .unwrap()
         );

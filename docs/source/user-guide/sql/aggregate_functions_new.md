@@ -665,8 +665,8 @@ regr_slope(expression_y, expression_x)
 
 #### Arguments
 
-- **expression_y**: Expression expression to operate on. Can be a constant, column, or function, and any combination of operators.
-- **expression_x**: Expression expression to operate on. Can be a constant, column, or function, and any combination of operators.
+- **expression_y**: Dependent variable expression to operate on. Can be a constant, column, or function, and any combination of operators.
+- **expression_x**: Independent variable expression to operate on. Can be a constant, column, or function, and any combination of operators.
 
 ### `regr_sxx`
 
