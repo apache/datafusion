@@ -1223,8 +1223,8 @@ pub fn satisfy_greater(
         }
     }
 
-    // Only the lower bound of left hand side and the upper bound of the right
-    // hand side can change after propagating the greater-than operation.
+    // Only the lower bound of left-hand side and the upper bound of the right-hand
+    // side can change after propagating the greater-than operation.
     let new_left_lower = if left.lower.is_null() || left.lower <= right.lower {
         if strict {
             next_value(right.lower.clone())
@@ -1753,7 +1753,7 @@ impl NullableInterval {
                         }
                         _ => Ok(Self::MaybeNull { values }),
                     }
-                } else if op.is_comparison_operator() {
+                } else if op.supports_propagation() {
                     Ok(Self::Null {
                         datatype: DataType::Boolean,
                     })

@@ -262,6 +262,7 @@ fn push_down_join(mut join: Join, limit: usize) -> Transformed<Join> {
         match join.join_type {
             Left => (Some(limit), None),
             Right => (None, Some(limit)),
+            Full => (Some(limit), Some(limit)),
             _ => (None, None),
         }
     };

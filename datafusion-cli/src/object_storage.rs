@@ -495,7 +495,7 @@ mod tests {
 
         if let LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) = &mut plan {
             ctx.register_table_options_extension_from_scheme(scheme);
-            let mut table_options = ctx.state().default_table_options().clone();
+            let mut table_options = ctx.state().default_table_options();
             table_options.alter_with_string_hash_map(&cmd.options)?;
             let aws_options = table_options.extensions.get::<AwsOptions>().unwrap();
             let builder =
@@ -540,7 +540,7 @@ mod tests {
 
         if let LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) = &mut plan {
             ctx.register_table_options_extension_from_scheme(scheme);
-            let mut table_options = ctx.state().default_table_options().clone();
+            let mut table_options = ctx.state().default_table_options();
             table_options.alter_with_string_hash_map(&cmd.options)?;
             let aws_options = table_options.extensions.get::<AwsOptions>().unwrap();
             let err = get_s3_object_store_builder(table_url.as_ref(), aws_options)
@@ -566,7 +566,7 @@ mod tests {
 
         if let LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) = &mut plan {
             ctx.register_table_options_extension_from_scheme(scheme);
-            let mut table_options = ctx.state().default_table_options().clone();
+            let mut table_options = ctx.state().default_table_options();
             table_options.alter_with_string_hash_map(&cmd.options)?;
             let aws_options = table_options.extensions.get::<AwsOptions>().unwrap();
             // ensure this isn't an error
@@ -594,7 +594,7 @@ mod tests {
 
         if let LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) = &mut plan {
             ctx.register_table_options_extension_from_scheme(scheme);
-            let mut table_options = ctx.state().default_table_options().clone();
+            let mut table_options = ctx.state().default_table_options();
             table_options.alter_with_string_hash_map(&cmd.options)?;
             let aws_options = table_options.extensions.get::<AwsOptions>().unwrap();
             let builder = get_oss_object_store_builder(table_url.as_ref(), aws_options)?;
@@ -631,7 +631,7 @@ mod tests {
 
         if let LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) = &mut plan {
             ctx.register_table_options_extension_from_scheme(scheme);
-            let mut table_options = ctx.state().default_table_options().clone();
+            let mut table_options = ctx.state().default_table_options();
             table_options.alter_with_string_hash_map(&cmd.options)?;
             let gcp_options = table_options.extensions.get::<GcpOptions>().unwrap();
             let builder = get_gcs_object_store_builder(table_url.as_ref(), gcp_options)?;

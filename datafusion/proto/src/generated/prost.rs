@@ -240,6 +240,8 @@ pub struct CreateExternalTableNode {
     pub table_partition_cols: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
     #[prost(bool, tag = "6")]
     pub if_not_exists: bool,
+    #[prost(bool, tag = "14")]
+    pub temporary: bool,
     #[prost(string, tag = "7")]
     pub definition: ::prost::alloc::string::String,
     #[prost(message, repeated, tag = "10")]
@@ -303,6 +305,8 @@ pub struct CreateViewNode {
     pub input: ::core::option::Option<::prost::alloc::boxed::Box<LogicalPlanNode>>,
     #[prost(bool, tag = "3")]
     pub or_replace: bool,
+    #[prost(bool, tag = "6")]
+    pub temporary: bool,
     #[prost(string, tag = "4")]
     pub definition: ::prost::alloc::string::String,
 }
@@ -1819,9 +1823,9 @@ pub enum BuiltInWindowFunction {
     /// <https://protobuf.dev/programming-guides/dos-donts/#unspecified-enum>
     Unspecified = 0,
     /// ROW_NUMBER = 0;
-    Rank = 1,
-    DenseRank = 2,
-    PercentRank = 3,
+    ///   RANK = 1;
+    ///   DENSE_RANK = 2;
+    ///   PERCENT_RANK = 3;
     CumeDist = 4,
     Ntile = 5,
     Lag = 6,
@@ -1838,9 +1842,6 @@ impl BuiltInWindowFunction {
     pub fn as_str_name(&self) -> &'static str {
         match self {
             Self::Unspecified => "UNSPECIFIED",
-            Self::Rank => "RANK",
-            Self::DenseRank => "DENSE_RANK",
-            Self::PercentRank => "PERCENT_RANK",
             Self::CumeDist => "CUME_DIST",
             Self::Ntile => "NTILE",
             Self::Lag => "LAG",
@@ -1854,9 +1855,6 @@ impl BuiltInWindowFunction {
     pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
         match value {
             "UNSPECIFIED" => Some(Self::Unspecified),
-            "RANK" => Some(Self::Rank),
-            "DENSE_RANK" => Some(Self::DenseRank),
-            "PERCENT_RANK" => Some(Self::PercentRank),
             "CUME_DIST" => Some(Self::CumeDist),
             "NTILE" => Some(Self::Ntile),
             "LAG" => Some(Self::Lag),

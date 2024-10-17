@@ -415,6 +415,12 @@ impl HashJoinExec {
         &self.join_type
     }
 
+    /// The schema after join. Please be careful when using this schema,
+    /// if there is a projection, the schema isn't the same as the output schema.
+    pub fn join_schema(&self) -> &SchemaRef {
+        &self.join_schema
+    }
+
     /// The partitioning mode of this hash join
     pub fn partition_mode(&self) -> &PartitionMode {
         &self.mode

@@ -1455,6 +1455,7 @@ name = "datafusion-functions-window-common"
 version = "42.0.0"
 dependencies = [
  "datafusion-common",
+ "datafusion-physical-expr-common",
 ]
 
 [[package]]
@@ -1486,23 +1487,19 @@ dependencies = [
  "arrow-ord",
  "arrow-schema",
  "arrow-string",
- "base64 0.22.1",
  "chrono",
  "datafusion-common",
- "datafusion-execution",
  "datafusion-expr",
  "datafusion-expr-common",
  "datafusion-functions-aggregate-common",
  "datafusion-physical-expr-common",
  "half",
  "hashbrown 0.14.5",
- "hex",
  "indexmap",
  "itertools",
  "log",
  "paste",
  "petgraph",
- "regex",
 ]
 
 [[package]]
@@ -1521,9 +1518,11 @@ dependencies = [
 name = "datafusion-physical-optimizer"
 version = "42.0.0"
 dependencies = [
+ "arrow",
  "arrow-schema",
  "datafusion-common",
  "datafusion-execution",
+ "datafusion-expr-common",
  "datafusion-physical-expr",
  "datafusion-physical-plan",
  "itertools",
@@ -1545,7 +1544,6 @@ dependencies = [
  "datafusion-common-runtime",
  "datafusion-execution",
  "datafusion-expr",
- "datafusion-functions-aggregate",
  "datafusion-functions-aggregate-common",
  "datafusion-functions-window-common",
  "datafusion-physical-expr",
@@ -2879,9 +2877,9 @@ dependencies = [
 
 [[package]]
 name = "proc-macro2"
-version = "1.0.86"
+version = "1.0.87"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5e719e8df665df0d1c8fbfd238015744736151d4445ec0836b8e628aae103b77"
+checksum = "b3e4daa0dcf6feba26f985457cdf104d4b4256fc5a09547140f3631bb076b19a"
 dependencies = [
  "unicode-ident",
 ]

@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Defines physical expression for `row_number` that can evaluated at runtime during query execution
+//! `row_number` window function implementation
 
 use datafusion_common::arrow::array::ArrayRef;
 use datafusion_common::arrow::array::UInt64Array;
@@ -28,6 +28,7 @@ use datafusion_expr::{
     Documentation, PartitionEvaluator, Signature, Volatility, WindowUDFImpl,
 };
 use datafusion_functions_window_common::field;
+use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
 use field::WindowUDFFieldArgs;
 use std::any::Any;
 use std::fmt::Debug;
@@ -89,7 +90,10 @@ impl WindowUDFImpl for RowNumber {
         &self.signature
     }
 
-    fn partition_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>> {
+    fn partition_evaluator(
+        &self,
+        _partition_evaluator_args: PartitionEvaluatorArgs,
+    ) -> Result<Box<dyn PartitionEvaluator>> {
         Ok(Box::<NumRowsEvaluator>::default())
     }
 
@@ -162,7 +166,7 @@ mod tests {
         let num_rows = values.len();
 
         let actual = RowNumber::default()
-            .partition_evaluator()?
+            .partition_evaluator(PartitionEvaluatorArgs::default())?
             .evaluate_all(&[values], num_rows)?;
         let actual = as_uint64_array(&actual)?;
 
@@ -178,7 +182,7 @@ mod tests {
         let num_rows = values.len();
 
         let actual = RowNumber::default()
-            .partition_evaluator()?
+            .partition_evaluator(PartitionEvaluatorArgs::default())?
             .evaluate_all(&[values], num_rows)?;
         let actual = as_uint64_array(&actual)?;
 

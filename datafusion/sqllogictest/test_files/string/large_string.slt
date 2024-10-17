@@ -59,19 +59,6 @@ Xiangpeng datafusion数据融合 false true false true
 Raphael datafusionДатаФусион false false false false
 NULL NULL NULL NULL NULL NULL
 
-# TODO: move it back to `string_query.slt.part` after fixing the issue
-# https://github.com/apache/datafusion/issues/12618
-query BB
-SELECT
-  ascii_1 ~* '^a.{3}e',
-  unicode_1 ~* '^d.*Фу'
-FROM test_basic_operator;
-----
-true false
-false false
-false true
-NULL NULL
-
 #
 # common test for string-like functions and operators
 #

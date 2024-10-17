@@ -1020,7 +1020,9 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 && !info.get_data_type(&left)?.is_floating()
                 && is_one(&right) =>
             {
-                Transformed::yes(lit(0))
+                Transformed::yes(Expr::Literal(ScalarValue::new_zero(
+                    &info.get_data_type(&left)?,
+                )?))
             }
 
             //
@@ -1781,6 +1783,8 @@ fn inlist_except(mut l1: InList, l2: &InList) -> Result<Expr> {
 
 #[cfg(test)]
 mod tests {
+    use crate::simplify_expressions::SimplifyContext;
+    use crate::test::test_table_scan_with_name;
     use datafusion_common::{assert_contains, DFSchemaRef, ToDFSchema};
     use datafusion_expr::{
         function::{
@@ -1791,14 +1795,12 @@ mod tests {
         *,
     };
     use datafusion_functions_window_common::field::WindowUDFFieldArgs;
+    use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
     use std::{
         collections::HashMap,
         ops::{BitAnd, BitOr, BitXor},
         sync::Arc,
     };
-
-    use crate::simplify_expressions::SimplifyContext;
-    use crate::test::test_table_scan_with_name;
 
     use super::*;
 
@@ -2163,11 +2165,11 @@ mod tests {
 
     #[test]
     fn test_simplify_modulo_by_one_non_null() {
-        let expr = col("c2_non_null") % lit(1);
-        let expected = lit(0);
+        let expr = col("c3_non_null") % lit(1);
+        let expected = lit(0_i64);
         assert_eq!(simplify(expr), expected);
         let expr =
-            col("c2_non_null") % lit(ScalarValue::Decimal128(Some(10000000000), 31, 10));
+            col("c3_non_null") % lit(ScalarValue::Decimal128(Some(10000000000), 31, 10));
         assert_eq!(simplify(expr), expected);
     }
 
@@ -3896,7 +3898,10 @@ mod tests {
             }
         }
 
-        fn partition_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>> {
+        fn partition_evaluator(
+            &self,
+            _partition_evaluator_args: PartitionEvaluatorArgs,
+        ) -> Result<Box<dyn PartitionEvaluator>> {
             unimplemented!("not needed for tests")
         }
 

@@ -842,6 +842,26 @@ fn test_table_scan_pushdown() -> Result<()> {
 }
 
 #[test]
+fn test_sort_with_push_down_fetch() -> Result<()> {
+    let schema = Schema::new(vec![
+        Field::new("id", DataType::Utf8, false),
+        Field::new("age", DataType::Utf8, false),
+    ]);
+
+    let plan = table_scan(Some("t1"), &schema, None)?
+        .project(vec![col("id"), col("age")])?
+        .sort_with_limit(vec![col("age").sort(true, true)], Some(10))?
+        .build()?;
+
+    let sql = plan_to_sql(&plan)?;
+    assert_eq!(
+        format!("{}", sql),
+        "SELECT t1.id, t1.age FROM t1 ORDER BY t1.age ASC NULLS FIRST LIMIT 10"
+    );
+    Ok(())
+}
+
+#[test]
 fn test_interval_lhs_eq() {
     sql_round_trip(
         GenericDialect {},

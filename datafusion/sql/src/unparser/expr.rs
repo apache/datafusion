@@ -82,7 +82,7 @@ pub fn sort_to_sql(sort: &Sort) -> Result<ast::OrderByExpr> {
 }
 
 const LOWEST: &BinaryOperator = &BinaryOperator::Or;
-// closest precedence we have to IS operator is BitwiseAnd (any other) in PG docs
+// Closest precedence we have to IS operator is BitwiseAnd (any other) in PG docs
 // (https://www.postgresql.org/docs/7.2/sql-precedence.html)
 const IS: &BinaryOperator = &BinaryOperator::BitwiseAnd;
 
@@ -698,7 +698,7 @@ impl Unparser<'_> {
         match expr {
             ast::Expr::Nested(_) | ast::Expr::Identifier(_) | ast::Expr::Value(_) => 100,
             ast::Expr::BinaryOp { op, .. } => self.sql_op_precedence(op),
-            // closest precedence we currently have to Between is PGLikeMatch
+            // Closest precedence we currently have to Between is PGLikeMatch
             // (https://www.postgresql.org/docs/7.2/sql-precedence.html)
             ast::Expr::Between { .. } => {
                 self.sql_op_precedence(&ast::BinaryOperator::PGLikeMatch)
@@ -1141,7 +1141,7 @@ impl Unparser<'_> {
             return Ok(ast::Expr::Interval(interval));
         }
 
-        // calculate the best single interval to represent the provided days and microseconds
+        // Calculate the best single interval to represent the provided days and microseconds
 
         let microseconds = microseconds + (days as i64 * 24 * 60 * 60 * 1_000_000);
 

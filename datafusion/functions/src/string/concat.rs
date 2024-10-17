@@ -20,8 +20,10 @@ use arrow::datatypes::DataType;
 use std::any::Any;
 use std::sync::{Arc, OnceLock};
 
-use crate::string::common::*;
 use crate::string::concat;
+use crate::strings::{
+    ColumnarValueRef, LargeStringArrayBuilder, StringArrayBuilder, StringViewArrayBuilder,
+};
 use datafusion_common::cast::{as_string_array, as_string_view_array};
 use datafusion_common::{internal_err, plan_err, Result, ScalarValue};
 use datafusion_expr::expr::ScalarFunction;

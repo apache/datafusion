@@ -130,3 +130,6 @@ order by c9
 
 query error DataFusion error: Arrow error: Cast error: Cannot cast string 'foo' to value of Int64 type
 create table foo as values (1), ('foo');
+
+query error No function matches
+select 1 group by substr('');

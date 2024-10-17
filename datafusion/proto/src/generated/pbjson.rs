@@ -1662,9 +1662,6 @@ impl serde::Serialize for BuiltInWindowFunction {
     {
         let variant = match self {
             Self::Unspecified => "UNSPECIFIED",
-            Self::Rank => "RANK",
-            Self::DenseRank => "DENSE_RANK",
-            Self::PercentRank => "PERCENT_RANK",
             Self::CumeDist => "CUME_DIST",
             Self::Ntile => "NTILE",
             Self::Lag => "LAG",
@@ -1684,9 +1681,6 @@ impl<'de> serde::Deserialize<'de> for BuiltInWindowFunction {
     {
         const FIELDS: &[&str] = &[
             "UNSPECIFIED",
-            "RANK",
-            "DENSE_RANK",
-            "PERCENT_RANK",
             "CUME_DIST",
             "NTILE",
             "LAG",
@@ -1735,9 +1729,6 @@ impl<'de> serde::Deserialize<'de> for BuiltInWindowFunction {
             {
                 match value {
                     "UNSPECIFIED" => Ok(BuiltInWindowFunction::Unspecified),
-                    "RANK" => Ok(BuiltInWindowFunction::Rank),
-                    "DENSE_RANK" => Ok(BuiltInWindowFunction::DenseRank),
-                    "PERCENT_RANK" => Ok(BuiltInWindowFunction::PercentRank),
                     "CUME_DIST" => Ok(BuiltInWindowFunction::CumeDist),
                     "NTILE" => Ok(BuiltInWindowFunction::Ntile),
                     "LAG" => Ok(BuiltInWindowFunction::Lag),
@@ -3202,6 +3193,9 @@ impl serde::Serialize for CreateExternalTableNode {
         if self.if_not_exists {
             len += 1;
         }
+        if self.temporary {
+            len += 1;
+        }
         if !self.definition.is_empty() {
             len += 1;
         }
@@ -3238,6 +3232,9 @@ impl serde::Serialize for CreateExternalTableNode {
         }
         if self.if_not_exists {
             struct_ser.serialize_field("ifNotExists", &self.if_not_exists)?;
+        }
+        if self.temporary {
+            struct_ser.serialize_field("temporary", &self.temporary)?;
         }
         if !self.definition.is_empty() {
             struct_ser.serialize_field("definition", &self.definition)?;
@@ -3276,6 +3273,7 @@ impl<'de> serde::Deserialize<'de> for CreateExternalTableNode {
             "tablePartitionCols",
             "if_not_exists",
             "ifNotExists",
+            "temporary",
             "definition",
             "order_exprs",
             "orderExprs",
@@ -3294,6 +3292,7 @@ impl<'de> serde::Deserialize<'de> for CreateExternalTableNode {
             Schema,
             TablePartitionCols,
             IfNotExists,
+            Temporary,
             Definition,
             OrderExprs,
             Unbounded,
@@ -3327,6 +3326,7 @@ impl<'de> serde::Deserialize<'de> for CreateExternalTableNode {
                             "schema" => Ok(GeneratedField::Schema),
                             "tablePartitionCols" | "table_partition_cols" => Ok(GeneratedField::TablePartitionCols),
                             "ifNotExists" | "if_not_exists" => Ok(GeneratedField::IfNotExists),
+                            "temporary" => Ok(GeneratedField::Temporary),
                             "definition" => Ok(GeneratedField::Definition),
                             "orderExprs" | "order_exprs" => Ok(GeneratedField::OrderExprs),
                             "unbounded" => Ok(GeneratedField::Unbounded),
@@ -3358,6 +3358,7 @@ impl<'de> serde::Deserialize<'de> for CreateExternalTableNode {
                 let mut schema__ = None;
                 let mut table_partition_cols__ = None;
                 let mut if_not_exists__ = None;
+                let mut temporary__ = None;
                 let mut definition__ = None;
                 let mut order_exprs__ = None;
                 let mut unbounded__ = None;
@@ -3401,6 +3402,12 @@ impl<'de> serde::Deserialize<'de> for CreateExternalTableNode {
                                 return Err(serde::de::Error::duplicate_field("ifNotExists"));
                             }
                             if_not_exists__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Temporary => {
+                            if temporary__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("temporary"));
+                            }
+                            temporary__ = Some(map_.next_value()?);
                         }
                         GeneratedField::Definition => {
                             if definition__.is_some() {
@@ -3451,6 +3458,7 @@ impl<'de> serde::Deserialize<'de> for CreateExternalTableNode {
                     schema: schema__,
                     table_partition_cols: table_partition_cols__.unwrap_or_default(),
                     if_not_exists: if_not_exists__.unwrap_or_default(),
+                    temporary: temporary__.unwrap_or_default(),
                     definition: definition__.unwrap_or_default(),
                     order_exprs: order_exprs__.unwrap_or_default(),
                     unbounded: unbounded__.unwrap_or_default(),
@@ -3480,6 +3488,9 @@ impl serde::Serialize for CreateViewNode {
         if self.or_replace {
             len += 1;
         }
+        if self.temporary {
+            len += 1;
+        }
         if !self.definition.is_empty() {
             len += 1;
         }
@@ -3492,6 +3503,9 @@ impl serde::Serialize for CreateViewNode {
         }
         if self.or_replace {
             struct_ser.serialize_field("orReplace", &self.or_replace)?;
+        }
+        if self.temporary {
+            struct_ser.serialize_field("temporary", &self.temporary)?;
         }
         if !self.definition.is_empty() {
             struct_ser.serialize_field("definition", &self.definition)?;
@@ -3510,6 +3524,7 @@ impl<'de> serde::Deserialize<'de> for CreateViewNode {
             "input",
             "or_replace",
             "orReplace",
+            "temporary",
             "definition",
         ];
 
@@ -3518,6 +3533,7 @@ impl<'de> serde::Deserialize<'de> for CreateViewNode {
             Name,
             Input,
             OrReplace,
+            Temporary,
             Definition,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
@@ -3543,6 +3559,7 @@ impl<'de> serde::Deserialize<'de> for CreateViewNode {
                             "name" => Ok(GeneratedField::Name),
                             "input" => Ok(GeneratedField::Input),
                             "orReplace" | "or_replace" => Ok(GeneratedField::OrReplace),
+                            "temporary" => Ok(GeneratedField::Temporary),
                             "definition" => Ok(GeneratedField::Definition),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
@@ -3566,6 +3583,7 @@ impl<'de> serde::Deserialize<'de> for CreateViewNode {
                 let mut name__ = None;
                 let mut input__ = None;
                 let mut or_replace__ = None;
+                let mut temporary__ = None;
                 let mut definition__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
@@ -3587,6 +3605,12 @@ impl<'de> serde::Deserialize<'de> for CreateViewNode {
                             }
                             or_replace__ = Some(map_.next_value()?);
                         }
+                        GeneratedField::Temporary => {
+                            if temporary__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("temporary"));
+                            }
+                            temporary__ = Some(map_.next_value()?);
+                        }
                         GeneratedField::Definition => {
                             if definition__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("definition"));
@@ -3599,6 +3623,7 @@ impl<'de> serde::Deserialize<'de> for CreateViewNode {
                     name: name__,
                     input: input__,
                     or_replace: or_replace__.unwrap_or_default(),
+                    temporary: temporary__.unwrap_or_default(),
                     definition: definition__.unwrap_or_default(),
                 })
             }

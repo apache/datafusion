@@ -809,11 +809,11 @@ mod tests {
                 .collect::<Vec<_>>();
             let child1 = Arc::new(
                 MemoryExec::try_new(&[], Arc::clone(&schema), None)?
-                    .with_sort_information(first_orderings),
+                    .try_with_sort_information(first_orderings)?,
             );
             let child2 = Arc::new(
                 MemoryExec::try_new(&[], Arc::clone(&schema), None)?
-                    .with_sort_information(second_orderings),
+                    .try_with_sort_information(second_orderings)?,
             );
 
             let mut union_expected_eq = EquivalenceProperties::new(Arc::clone(&schema));
