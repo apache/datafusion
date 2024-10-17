@@ -20,11 +20,11 @@ use std::sync::{Arc, OnceLock};
 
 use crate::utils::make_scalar_function;
 
-use arrow::array::{ArrayRef, Float32Array, Float64Array, Int64Array};
-use arrow::datatypes::DataType;
+use arrow::array::{ArrayRef, AsArray, PrimitiveArray};
 use arrow::datatypes::DataType::{Float32, Float64};
+use arrow::datatypes::{DataType, Float32Type, Float64Type, Int64Type};
 use datafusion_common::ScalarValue::Int64;
-use datafusion_common::{exec_err, DataFusionError, Result};
+use datafusion_common::{exec_err, Result};
 use datafusion_expr::scalar_doc_sections::DOC_SECTION_MATH;
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::TypeSignature::Exact;
@@ -139,8 +139,8 @@ fn trunc(args: &[ArrayRef]) -> Result<ArrayRef> {
         );
     }
 
-    //if only one arg then invoke toolchain trunc(num) and precision = 0 by default
-    //or then invoke the compute_truncate method to process precision
+    // If only one arg then invoke toolchain trunc(num) and precision = 0 by default
+    // or then invoke the compute_truncate method to process precision
     let num = &args[0];
     let precision = if args.len() == 1 {
         ColumnarValue::Scalar(Int64(Some(0)))
@@ -148,35 +148,57 @@ fn trunc(args: &[ArrayRef]) -> Result<ArrayRef> {
         ColumnarValue::Array(Arc::clone(&args[1]))
     };
 
-    match args[0].data_type() {
+    match num.data_type() {
         Float64 => match precision {
-            ColumnarValue::Scalar(Int64(Some(0))) => Ok(Arc::new(
-                make_function_scalar_inputs!(num, "num", Float64Array, { f64::trunc }),
-            ) as ArrayRef),
-            ColumnarValue::Array(precision) => Ok(Arc::new(make_function_inputs2!(
-                num,
-                precision,
-                "x",
-                "y",
-                Float64Array,
-                Int64Array,
-                { compute_truncate64 }
-            )) as ArrayRef),
+            ColumnarValue::Scalar(Int64(Some(0))) => {
+                Ok(Arc::new(
+                    args[0]
+                        .as_primitive::<Float64Type>()
+                        .unary::<_, Float64Type>(|x: f64| {
+                            if x == 0_f64 {
+                                0_f64
+                            } else {
+                                x.trunc()
+                            }
+                        }),
+                ) as ArrayRef)
+            }
+            ColumnarValue::Array(precision) => {
+                let num_array = num.as_primitive::<Float64Type>();
+                let precision_array = precision.as_primitive::<Int64Type>();
+                let result: PrimitiveArray<Float64Type> =
+                    arrow::compute::binary(num_array, precision_array, |x, y| {
+                        compute_truncate64(x, y)
+                    })?;
+
+                Ok(Arc::new(result) as ArrayRef)
+            }
             _ => exec_err!("trunc function requires a scalar or array for precision"),
         },
         Float32 => match precision {
-            ColumnarValue::Scalar(Int64(Some(0))) => Ok(Arc::new(
-                make_function_scalar_inputs!(num, "num", Float32Array, { f32::trunc }),
-            ) as ArrayRef),
-            ColumnarValue::Array(precision) => Ok(Arc::new(make_function_inputs2!(
-                num,
-                precision,
-                "x",
-                "y",
-                Float32Array,
-                Int64Array,
-                { compute_truncate32 }
-            )) as ArrayRef),
+            ColumnarValue::Scalar(Int64(Some(0))) => {
+                Ok(Arc::new(
+                    args[0]
+                        .as_primitive::<Float32Type>()
+                        .unary::<_, Float32Type>(|x: f32| {
+                            if x == 0_f32 {
+                                0_f32
+                            } else {
+                                x.trunc()
+                            }
+                        }),
+                ) as ArrayRef)
+            }
+            ColumnarValue::Array(precision) => {
+                let num_array = num.as_primitive::<Float32Type>();
+                let precision_array = precision.as_primitive::<Int64Type>();
+                let result: PrimitiveArray<Float32Type> =
+                    arrow::compute::binary(num_array, precision_array, |x, y| {
+                        compute_truncate32(x, y)
+                    })?;
+
+                Ok(Arc::new(result) as ArrayRef)
+            }
             _ => exec_err!("trunc function requires a scalar or array for precision"),
         },
         other => exec_err!("Unsupported data type {other:?} for function trunc"),
