@@ -20,6 +20,7 @@ use std::{cmp::Ordering, hash::Hash, sync::Arc};
 
 use super::NativeType;
 
+/// Signature that uniquely identifies a type among other types.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum TypeSignature<'a> {
     /// Represents a built-in native type.
@@ -113,42 +114,5 @@ impl Hash for dyn LogicalType {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.signature().hash(state);
         self.native().hash(state);
-    }
-}
-
-#[cfg(test)]
-mod test {
-    #![allow(dead_code)]
-
-    use super::{LogicalType, TypeParameter, TypeSignature};
-    use crate::types::NativeType;
-
-    struct MagicalType {}
-
-    impl LogicalType for MagicalType {
-        fn native(&self) -> &NativeType {
-            &NativeType::Utf8
-        }
-
-        fn signature(&self) -> TypeSignature<'_> {
-            TypeSignature::Extension {
-                name: "MagicalType",
-                parameters: &[TypeParameter::Type(TypeSignature::Native(
-                    &NativeType::Boolean,
-                ))],
-            }
-        }
-    }
-
-    fn test(logical_type: &dyn LogicalType) {
-        match logical_type.signature() {
-            TypeSignature::Extension {
-                name: "MagicalType",
-                parameters:
-                    [TypeParameter::Type(TypeSignature::Native(NativeType::Boolean))],
-            } => {}
-            TypeSignature::Native(NativeType::Binary) => todo!(),
-            _ => unimplemented!(),
-        };
     }
 }
