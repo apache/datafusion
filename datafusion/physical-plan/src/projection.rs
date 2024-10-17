@@ -237,7 +237,7 @@ impl ExecutionPlan for ProjectionExec {
 
 /// If e is a direct column reference, returns the field level
 /// metadata for that field, if any. Otherwise returns None
-fn get_field_metadata(
+pub(crate) fn get_field_metadata(
     e: &Arc<dyn PhysicalExpr>,
     input_schema: &Schema,
 ) -> Option<HashMap<String, String>> {
