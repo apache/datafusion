@@ -25,7 +25,7 @@ use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{internal_err, Result};
 use datafusion_expr::expr::{BinaryExpr, Expr};
 use datafusion_expr::logical_plan::{
-    CrossJoin, Filter, Join, JoinConstraint, JoinType, LogicalPlan, Projection,
+    Filter, Join, JoinConstraint, JoinType, LogicalPlan, Projection,
 };
 use datafusion_expr::utils::{can_hash, find_valid_equijoin_key_pair};
 use datafusion_expr::{build_join_schema, ExprSchemable, Operator};
@@ -351,10 +351,15 @@ fn find_inner_join(
         &JoinType::Inner,
     )?);
 
-    Ok(LogicalPlan::CrossJoin(CrossJoin {
+    Ok(LogicalPlan::Join(Join {
         left: Arc::new(left_input),
         right: Arc::new(right),
         schema: join_schema,
+        on: vec![],
+        filter: None,
+        join_type: JoinType::Inner,
+        join_constraint: JoinConstraint::On,
+        null_equals_null: false,
     }))
 }
 
