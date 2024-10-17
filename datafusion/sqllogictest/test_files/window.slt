@@ -4971,6 +4971,26 @@ SELECT LAG(NULL, 1, false) OVER () FROM t1;
 ----
 false
 
+query B
+SELECT LEAD(NULL, 0, true) OVER () FROM t1;
+----
+NULL
+
+query B
+SELECT LAG(NULL, 0, true) OVER () FROM t1;
+----
+NULL
+
+query B
+SELECT LEAD(NULL, 1, true) OVER () FROM t1;
+----
+true
+
+query B
+SELECT LAG(NULL, 1, true) OVER () FROM t1;
+----
+true
+
 statement ok
 insert into t1 values (2);
 
@@ -4984,6 +5004,18 @@ query B
 SELECT LAG(NULL, 1, false) OVER () FROM t1;
 ----
 false
+NULL
+
+query B
+SELECT LEAD(NULL, 1, true) OVER () FROM t1;
+----
+NULL
+true
+
+query B
+SELECT LAG(NULL, 1, true) OVER () FROM t1;
+----
+true
 NULL
 
 statement ok
