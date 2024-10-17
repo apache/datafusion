@@ -15,19 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::unparser::utils::unproject_agg_exprs;
-use datafusion_common::{
-    internal_err, not_impl_err,
-    tree_node::{TransformedResult, TreeNode},
-    Column, DataFusionError, Result, TableReference,
-};
-use datafusion_expr::{
-    expr::Alias, Distinct, Expr, JoinConstraint, JoinType, LogicalPlan,
-    LogicalPlanBuilder, Projection, SortExpr,
-};
-use sqlparser::ast::{self, Ident, SetExpr};
-use std::sync::Arc;
-
 use super::{
     ast::{
         BuilderError, DerivedRelationBuilder, QueryBuilder, RelationBuilder,
@@ -44,6 +31,18 @@ use super::{
     },
     Unparser,
 };
+use crate::unparser::utils::unproject_agg_exprs;
+use datafusion_common::{
+    internal_err, not_impl_err,
+    tree_node::{TransformedResult, TreeNode},
+    Column, DataFusionError, Result, TableReference,
+};
+use datafusion_expr::{
+    expr::Alias, Distinct, Expr, JoinConstraint, JoinType, LogicalPlan,
+    LogicalPlanBuilder, Projection, SortExpr, TableScan,
+};
+use sqlparser::ast::{self, Ident, SetExpr};
+use std::sync::Arc;
 
 /// Convert a DataFusion [`LogicalPlan`] to [`ast::Statement`]
 ///
@@ -249,12 +248,9 @@ impl Unparser<'_> {
     ) -> Result<()> {
         match plan {
             LogicalPlan::TableScan(scan) => {
-                if scan.projection.is_some()
-                    || !scan.filters.is_empty()
-                    || scan.fetch.is_some()
+                if let Some(unparsed_table_scan) =
+                    Self::unparse_table_scan_pushdown(plan, None)?
                 {
-                    let unparsed_table_scan =
-                        Self::unparse_table_scan_pushdown(plan, None)?;
                     return self.select_to_sql_recursively(
                         &unparsed_table_scan,
                         query,
@@ -498,10 +494,18 @@ impl Unparser<'_> {
             LogicalPlan::SubqueryAlias(plan_alias) => {
                 let (plan, mut columns) =
                     subquery_alias_inner_query_and_columns(plan_alias);
-                let plan = Self::unparse_table_scan_pushdown(
+                let unparsed_table_scan = Self::unparse_table_scan_pushdown(
                     plan,
                     Some(plan_alias.alias.clone()),
                 )?;
+                // if the child plan is a TableScan with pushdown operations, we don't need to
+                // create an additional subquery for it
+                if !select.already_projected() && unparsed_table_scan.is_none() {
+                    select.projection(vec![ast::SelectItem::Wildcard(
+                        ast::WildcardAdditionalOptions::default(),
+                    )]);
+                }
+                let plan = unparsed_table_scan.unwrap_or_else(|| plan.clone());
                 if !columns.is_empty()
                     && !self.dialect.supports_column_alias_in_table_alias()
                 {
@@ -582,12 +586,21 @@ impl Unparser<'_> {
         }
     }
 
+    fn is_scan_with_pushdown(scan: &TableScan) -> bool {
+        scan.projection.is_some() || !scan.filters.is_empty() || scan.fetch.is_some()
+    }
+
+    /// Try to unparse a table scan with pushdown operations into a new subquery plan.
+    /// If the table scan is without any pushdown operations, return None.
     fn unparse_table_scan_pushdown(
         plan: &LogicalPlan,
         alias: Option<TableReference>,
-    ) -> Result<LogicalPlan> {
+    ) -> Result<Option<LogicalPlan>> {
         match plan {
             LogicalPlan::TableScan(table_scan) => {
+                if !Self::is_scan_with_pushdown(table_scan) {
+                    return Ok(None);
+                }
                 let mut filter_alias_rewriter =
                     alias.as_ref().map(|alias_name| TableAliasRewriter {
                         table_schema: table_scan.source.schema(),
@@ -648,18 +661,15 @@ impl Unparser<'_> {
                     builder = builder.limit(0, Some(fetch))?;
                 }
 
-                builder.build()
+                Ok(Some(builder.build()?))
             }
             LogicalPlan::SubqueryAlias(subquery_alias) => {
-                let new_plan = Self::unparse_table_scan_pushdown(
+                Self::unparse_table_scan_pushdown(
                     &subquery_alias.input,
                     Some(subquery_alias.alias.clone()),
-                )?;
-                LogicalPlanBuilder::from(new_plan)
-                    .alias(subquery_alias.alias.clone())?
-                    .build()
+                )
             }
-            _ => Ok(plan.clone()),
+            _ => Ok(None),
         }
     }
 
