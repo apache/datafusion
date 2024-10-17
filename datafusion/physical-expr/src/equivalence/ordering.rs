@@ -267,7 +267,6 @@ mod tests {
     use crate::{ConstExpr, PhysicalExpr, PhysicalSortExpr};
 
     use arrow::datatypes::{DataType, Field, Schema};
-    use arrow::util::pretty::print_batches;
     use arrow_schema::SortOptions;
     use datafusion_common::{DFSchema, Result};
     use datafusion_expr::{Operator, ScalarUDF};
