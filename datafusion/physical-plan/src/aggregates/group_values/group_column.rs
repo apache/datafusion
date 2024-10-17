@@ -58,6 +58,9 @@ pub trait GroupColumn: Send + Sync {
     fn equal_to(&self, lhs_row: usize, array: &ArrayRef, rhs_row: usize) -> bool;
     /// Appends the row at `row` in `array` to this builder
     fn append_val(&mut self, array: &ArrayRef, row: usize);
+
+    fn append_non_nullable_val(&mut self, array: &ArrayRef, row: usize);
+
     /// Returns the number of rows stored in this builder
     fn len(&self) -> usize;
     /// Returns the number of bytes used by this [`GroupColumn`]
@@ -216,6 +219,17 @@ where
             self.buffer.append_slice(value);
             self.offsets.push(O::usize_as(self.buffer.len()));
         }
+    }
+
+    fn append_non_nullable_val_inner<B>(&mut self, array: &ArrayRef, row: usize)
+    where
+        B: ByteArrayType,
+    {
+        let arr = array.as_bytes::<B>();
+        self.nulls.append(false);
+        let value: &[u8] = arr.value(row).as_ref();
+        self.buffer.append_slice(value);
+        self.offsets.push(O::usize_as(self.buffer.len()));
     }
 
     fn equal_to_inner<B>(&self, lhs_row: usize, array: &ArrayRef, rhs_row: usize) -> bool
@@ -382,6 +396,446 @@ where
             }
             _ => unreachable!("View types should use `ArrowBytesViewMap`"),
         }
+    }
+    
+    fn append_non_nullable_val(&mut self, array: &ArrayRef, row: usize) {
+        // Sanity array type
+        match self.output_type {
+            OutputType::Binary => {
+                debug_assert!(matches!(
+                    column.data_type(),
+                    DataType::Binary | DataType::LargeBinary
+                ));
+                self.append_val_inner::<GenericBinaryType<O>>(column, row)
+            }
+            OutputType::Utf8 => {
+                debug_assert!(matches!(
+                    column.data_type(),
+                    DataType::Utf8 | DataType::LargeUtf8
+                ));
+                self.append_val_inner::<GenericStringType<O>>(column, row)
+            }
+            _ => unreachable!("View types should use `ArrowBytesViewMap`"),
+        };
+    }    
+}
+
+/// An implementation of [`GroupColumn`] for binary view and utf8 view types.
+///
+/// Stores a collection of binary view or utf8 view group values in a buffer
+/// whose structure is similar to `GenericByteViewArray`, and we can get benefits:
+///
+/// 1. Efficient comparison of incoming rows to existing rows
+/// 2. Efficient construction of the final output array
+/// 3. Efficient to perform `take_n` comparing to use `GenericByteViewBuilder`
+pub struct ByteViewGroupValueBuilder<B: ByteViewType> {
+    /// The views of string values
+    ///
+    /// If string len <= 12, the view's format will be:
+    ///   string(12B) | len(4B)
+    ///
+    /// If string len > 12, its format will be:
+    ///     offset(4B) | buffer_index(4B) | prefix(4B) | len(4B)
+    views: Vec<u128>,
+
+    /// The progressing block
+    ///
+    /// New values will be inserted into it until its capacity
+    /// is not enough(detail can see `max_block_size`).
+    in_progress: Vec<u8>,
+
+    /// The completed blocks
+    completed: Vec<Buffer>,
+
+    /// The max size of `in_progress`
+    ///
+    /// `in_progress` will be flushed into `completed`, and create new `in_progress`
+    /// when found its remaining capacity(`max_block_size` - `len(in_progress)`),
+    /// is no enough to store the appended value.
+    ///
+    /// Currently it is fixed at 2MB.
+    max_block_size: usize,
+
+    /// Nulls
+    nulls: MaybeNullBufferBuilder,
+
+    /// phantom data so the type requires `<B>`
+    _phantom: PhantomData<B>,
+}
+
+impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
+    pub fn new() -> Self {
+        Self {
+            views: Vec::new(),
+            in_progress: Vec::new(),
+            completed: Vec::new(),
+            max_block_size: BYTE_VIEW_MAX_BLOCK_SIZE,
+            nulls: MaybeNullBufferBuilder::new(),
+            _phantom: PhantomData {},
+        }
+    }
+
+    /// Set the max block size
+    fn with_max_block_size(mut self, max_block_size: usize) -> Self {
+        self.max_block_size = max_block_size;
+        self
+    }
+
+    fn append_val_inner(&mut self, array: &ArrayRef, row: usize)
+    where
+        B: ByteViewType,
+    {
+        let arr = array.as_byte_view::<B>();
+
+        // Null row case, set and return
+        if arr.is_null(row) {
+            self.nulls.append(true);
+            self.views.push(0);
+            return;
+        }
+
+        // Not null row case
+        self.nulls.append(false);
+        let value: &[u8] = arr.value(row).as_ref();
+
+        let value_len = value.len();
+        let view = if value_len <= 12 {
+            make_view(value, 0, 0)
+        } else {
+            // Ensure big enough block to hold the value firstly
+            self.ensure_in_progress_big_enough(value_len);
+
+            // Append value
+            let buffer_index = self.completed.len();
+            let offset = self.in_progress.len();
+            self.in_progress.extend_from_slice(value);
+
+            make_view(value, buffer_index as u32, offset as u32)
+        };
+
+        // Append view
+        self.views.push(view);
+    }
+
+    fn ensure_in_progress_big_enough(&mut self, value_len: usize) {
+        debug_assert!(value_len > 12);
+        let require_cap = self.in_progress.len() + value_len;
+
+        // If current block isn't big enough, flush it and create a new in progress block
+        if require_cap > self.max_block_size {
+            let flushed_block = mem::replace(
+                &mut self.in_progress,
+                Vec::with_capacity(self.max_block_size),
+            );
+            let buffer = Buffer::from_vec(flushed_block);
+            self.completed.push(buffer);
+        }
+    }
+
+    fn equal_to_inner(&self, lhs_row: usize, array: &ArrayRef, rhs_row: usize) -> bool {
+        let array = array.as_byte_view::<B>();
+
+        // Check if nulls equal firstly
+        let exist_null = self.nulls.is_null(lhs_row);
+        let input_null = array.is_null(rhs_row);
+        if let Some(result) = nulls_equal_to(exist_null, input_null) {
+            return result;
+        }
+
+        // Otherwise, we need to check their values
+        let exist_view = self.views[lhs_row];
+        let exist_view_len = exist_view as u32;
+
+        let input_view = array.views()[rhs_row];
+        let input_view_len = input_view as u32;
+
+        // The check logic
+        //   - Check len equality
+        //   - If inlined, check inlined value
+        //   - If non-inlined, check prefix and then check value in buffer
+        //     when needed
+        if exist_view_len != input_view_len {
+            return false;
+        }
+
+        if exist_view_len <= 12 {
+            let exist_inline = unsafe {
+                GenericByteViewArray::<B>::inline_value(
+                    &exist_view,
+                    exist_view_len as usize,
+                )
+            };
+            let input_inline = unsafe {
+                GenericByteViewArray::<B>::inline_value(
+                    &input_view,
+                    input_view_len as usize,
+                )
+            };
+            exist_inline == input_inline
+        } else {
+            let exist_prefix =
+                unsafe { GenericByteViewArray::<B>::inline_value(&exist_view, 4) };
+            let input_prefix =
+                unsafe { GenericByteViewArray::<B>::inline_value(&input_view, 4) };
+
+            if exist_prefix != input_prefix {
+                return false;
+            }
+
+            let exist_full = {
+                let byte_view = ByteView::from(exist_view);
+                self.value(
+                    byte_view.buffer_index as usize,
+                    byte_view.offset as usize,
+                    byte_view.length as usize,
+                )
+            };
+            let input_full: &[u8] = unsafe { array.value_unchecked(rhs_row).as_ref() };
+            exist_full == input_full
+        }
+    }
+
+    fn value(&self, buffer_index: usize, offset: usize, length: usize) -> &[u8] {
+        debug_assert!(buffer_index <= self.completed.len());
+
+        if buffer_index < self.completed.len() {
+            let block = &self.completed[buffer_index];
+            &block[offset..offset + length]
+        } else {
+            &self.in_progress[offset..offset + length]
+        }
+    }
+
+    fn build_inner(self) -> ArrayRef {
+        let Self {
+            views,
+            in_progress,
+            mut completed,
+            nulls,
+            ..
+        } = self;
+
+        // Build nulls
+        let null_buffer = nulls.build();
+
+        // Build values
+        // Flush `in_process` firstly
+        if !in_progress.is_empty() {
+            let buffer = Buffer::from(in_progress);
+            completed.push(buffer);
+        }
+
+        let views = ScalarBuffer::from(views);
+
+        // Safety:
+        // * all views were correctly made
+        // * (if utf8): Input was valid Utf8 so buffer contents are
+        // valid utf8 as well
+        unsafe {
+            Arc::new(GenericByteViewArray::<B>::new_unchecked(
+                views,
+                completed,
+                null_buffer,
+            ))
+        }
+    }
+
+    fn take_n_inner(&mut self, n: usize) -> ArrayRef {
+        debug_assert!(self.len() >= n);
+
+        // The `n == len` case, we need to take all
+        if self.len() == n {
+            let new_builder = Self::new().with_max_block_size(self.max_block_size);
+            let cur_builder = std::mem::replace(self, new_builder);
+            return cur_builder.build_inner();
+        }
+
+        // The `n < len` case
+        // Take n for nulls
+        let null_buffer = self.nulls.take_n(n);
+
+        // Take n for values:
+        //   - Take first n `view`s from `views`
+        //
+        //   - Find the last non-inlined `view`, if all inlined,
+        //     we can build array and return happily, otherwise we
+        //     we need to continue to process related buffers
+        //
+        //   - Get the last related `buffer index`(let's name it `buffer index n`)
+        //     from last non-inlined `view`
+        //
+        //   - Take buffers, the key is that we need to know if we need to take
+        //     the whole last related buffer. The logic is a bit complex, you can
+        //     detail in `take_buffers_with_whole_last`, `take_buffers_with_partial_last`
+        //     and other related steps in following
+        //
+        //   - Shift the `buffer index` of remaining non-inlined `views`
+        //
+        let first_n_views = self.views.drain(0..n).collect::<Vec<_>>();
+
+        let last_non_inlined_view = first_n_views
+            .iter()
+            .rev()
+            .find(|view| ((**view) as u32) > 12);
+
+        // All taken views inlined
+        let Some(view) = last_non_inlined_view else {
+            let views = ScalarBuffer::from(first_n_views);
+
+            // Safety:
+            // * all views were correctly made
+            // * (if utf8): Input was valid Utf8 so buffer contents are
+            // valid utf8 as well
+            unsafe {
+                return Arc::new(GenericByteViewArray::<B>::new_unchecked(
+                    views,
+                    Vec::new(),
+                    null_buffer,
+                ));
+            }
+        };
+
+        // Unfortunately, some taken views non-inlined
+        let view = ByteView::from(*view);
+        let last_remaining_buffer_index = view.buffer_index as usize;
+
+        // Check should we take the whole `last_remaining_buffer_index` buffer
+        let take_whole_last_buffer = self.should_take_whole_buffer(
+            last_remaining_buffer_index,
+            (view.offset + view.length) as usize,
+        );
+
+        // Take related buffers
+        let buffers = if take_whole_last_buffer {
+            self.take_buffers_with_whole_last(last_remaining_buffer_index)
+        } else {
+            self.take_buffers_with_partial_last(
+                last_remaining_buffer_index,
+                (view.offset + view.length) as usize,
+            )
+        };
+
+        // Shift `buffer index`s finally
+        let shifts = if take_whole_last_buffer {
+            last_remaining_buffer_index + 1
+        } else {
+            last_remaining_buffer_index
+        };
+
+        self.views.iter_mut().for_each(|view| {
+            if (*view as u32) > 12 {
+                let mut byte_view = ByteView::from(*view);
+                byte_view.buffer_index -= shifts as u32;
+                *view = byte_view.as_u128();
+            }
+        });
+
+        // Build array and return
+        let views = ScalarBuffer::from(first_n_views);
+
+        // Safety:
+        // * all views were correctly made
+        // * (if utf8): Input was valid Utf8 so buffer contents are
+        // valid utf8 as well
+        unsafe {
+            Arc::new(GenericByteViewArray::<B>::new_unchecked(
+                views,
+                buffers,
+                null_buffer,
+            ))
+        }
+    }
+
+    fn take_buffers_with_whole_last(
+        &mut self,
+        last_remaining_buffer_index: usize,
+    ) -> Vec<Buffer> {
+        if last_remaining_buffer_index == self.completed.len() {
+            self.flush_in_progress();
+        }
+        self.completed
+            .drain(0..last_remaining_buffer_index + 1)
+            .collect()
+    }
+
+    fn take_buffers_with_partial_last(
+        &mut self,
+        last_remaining_buffer_index: usize,
+        last_take_len: usize,
+    ) -> Vec<Buffer> {
+        let mut take_buffers = Vec::with_capacity(last_remaining_buffer_index + 1);
+
+        // Take `0 ~ last_remaining_buffer_index - 1` buffers
+        if !self.completed.is_empty() || last_remaining_buffer_index == 0 {
+            take_buffers.extend(self.completed.drain(0..last_remaining_buffer_index));
+        }
+
+        // Process the `last_remaining_buffer_index` buffers
+        let last_buffer = if last_remaining_buffer_index < self.completed.len() {
+            // If it is in `completed`, simply clone
+            self.completed[last_remaining_buffer_index].clone()
+        } else {
+            // If it is `in_progress`, copied `0 ~ offset` part
+            let taken_last_buffer = self.in_progress[0..last_take_len].to_vec();
+            Buffer::from_vec(taken_last_buffer)
+        };
+        take_buffers.push(last_buffer);
+
+        take_buffers
+    }
+
+    #[inline]
+    fn should_take_whole_buffer(&self, buffer_index: usize, take_len: usize) -> bool {
+        if buffer_index < self.completed.len() {
+            take_len == self.completed[buffer_index].len()
+        } else {
+            take_len == self.in_progress.len()
+        }
+    }
+
+    fn flush_in_progress(&mut self) {
+        let flushed_block = mem::replace(
+            &mut self.in_progress,
+            Vec::with_capacity(self.max_block_size),
+        );
+        let buffer = Buffer::from_vec(flushed_block);
+        self.completed.push(buffer);
+    }
+}
+
+impl<B: ByteViewType> GroupColumn for ByteViewGroupValueBuilder<B> {
+    fn equal_to(&self, lhs_row: usize, array: &ArrayRef, rhs_row: usize) -> bool {
+        self.equal_to_inner(lhs_row, array, rhs_row)
+    }
+
+    fn append_val(&mut self, array: &ArrayRef, row: usize) {
+        self.append_val_inner(array, row)
+    }
+
+    fn len(&self) -> usize {
+        self.views.len()
+    }
+
+    fn size(&self) -> usize {
+        let buffers_size = self
+            .completed
+            .iter()
+            .map(|buf| buf.capacity() * std::mem::size_of::<u8>())
+            .sum::<usize>();
+
+        self.nulls.allocated_size()
+            + self.views.capacity() * std::mem::size_of::<u128>()
+            + self.in_progress.capacity() * std::mem::size_of::<u8>()
+            + buffers_size
+            + std::mem::size_of::<Self>()
+    }
+
+    fn build(self: Box<Self>) -> ArrayRef {
+        Self::build_inner(*self)
+    }
+
+    fn take_n(&mut self, n: usize) -> ArrayRef {
+        self.take_n_inner(n)
     }
 }
 
