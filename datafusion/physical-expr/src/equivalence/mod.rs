@@ -75,13 +75,18 @@ mod tests {
     use super::*;
     use crate::expressions::col;
     use crate::PhysicalSortExpr;
+    use std::cmp::Ordering;
 
     use arrow::compute::{lexsort_to_indices, SortColumn};
     use arrow::datatypes::{DataType, Field, Schema};
-    use arrow_array::{ArrayRef, Float64Array, RecordBatch, UInt32Array};
+    use arrow_array::{ArrayRef, Float64Array, PrimitiveArray, RecordBatch, UInt32Array};
     use arrow_schema::{SchemaRef, SortOptions};
     use datafusion_common::{plan_datafusion_err, Result};
 
+    use datafusion_common::utils::{
+        compare_rows, get_record_batch_at_indices, get_row_at_idx,
+    };
+    use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexOrderingRef};
     use itertools::izip;
     use rand::rngs::StdRng;
     use rand::{Rng, SeedableRng};
@@ -452,5 +457,82 @@ mod tests {
             .collect();
 
         Ok(RecordBatch::try_from_iter(res)?)
+    }
+
+    fn get_sort_columns(
+        batch: &RecordBatch,
+        ordering: LexOrderingRef,
+    ) -> Result<Vec<SortColumn>> {
+        ordering
+            .iter()
+            .map(|expr| expr.evaluate_to_sort_column(batch))
+            .collect::<Result<Vec<_>>>()
+    }
+
+    // Generate a table that satisfies the given equivalence properties; i.e.
+    // equivalences, ordering equivalences, and constants.
+    pub fn generate_table_for_orderings(
+        orderings: Vec<LexOrdering>,
+        schema: SchemaRef,
+        n_elem: usize,
+        n_distinct: usize,
+    ) -> Result<RecordBatch> {
+        let mut rng = StdRng::seed_from_u64(23);
+
+        // Utility closure to generate random array
+        let mut generate_random_array = |num_elems: usize, max_val: usize| -> ArrayRef {
+            let values: Vec<f64> = (0..num_elems)
+                .map(|_| rng.gen_range(0..max_val) as f64 / 2.0)
+                .collect();
+            Arc::new(Float64Array::from_iter_values(values))
+        };
+
+        let arrays = schema
+            .fields
+            .iter()
+            .map(|field| (field.name(), generate_random_array(n_elem, n_distinct)))
+            .collect::<Vec<_>>();
+        let batch = RecordBatch::try_from_iter(arrays)?;
+
+        assert!(!orderings.is_empty());
+
+        let sort_columns = get_sort_columns(&batch, &orderings[0])?;
+        let sort_indices = lexsort_to_indices(&sort_columns, None)?;
+
+        let mut batch = get_record_batch_at_indices(&batch, &sort_indices)?;
+
+        for ordering in orderings.iter().skip(1) {
+            let sort_columns = get_sort_columns(&batch, ordering)?;
+            let sort_options = sort_columns
+                .iter()
+                .map(|sort_col| sort_col.options.unwrap())
+                .collect::<Vec<_>>();
+            let sort_col_values = sort_columns
+                .into_iter()
+                .map(|sort_col| sort_col.values)
+                .collect::<Vec<_>>();
+            let mut keep_indices = vec![];
+            let mut cur_idx = 0;
+            let mut next_idx = 1;
+            while next_idx < batch.num_rows() {
+                let cur_row = get_row_at_idx(&sort_col_values, cur_idx)?;
+                let next_row = get_row_at_idx(&sort_col_values, next_idx)?;
+
+                if compare_rows(&cur_row, &next_row, &sort_options)? == Ordering::Greater
+                {
+                    next_idx += 1;
+                } else {
+                    keep_indices.push(cur_idx as u32);
+                    cur_idx = next_idx;
+                    next_idx += 1;
+                }
+            }
+            batch = get_record_batch_at_indices(
+                &batch,
+                &PrimitiveArray::from_iter_values(keep_indices),
+            )?;
+        }
+
+        Ok(batch)
     }
 }
