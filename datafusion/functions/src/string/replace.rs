@@ -96,9 +96,9 @@ fn get_replace_doc() -> &'static Documentation {
 | ABcdbaBA                                        |
 +-------------------------------------------------+
 ```"#)
-            .with_standard_argument("str", "String")
-            .with_standard_argument("substr", "Substring expression to replace in the input string. Substring expression")
-            .with_standard_argument("replacement", "Replacement substring")
+            .with_standard_argument("str", Some("String"))
+            .with_standard_argument("substr", Some("Substring expression to replace in the input string. Substring"))
+            .with_standard_argument("replacement", Some("Replacement substring"))
             .build()
             .unwrap()
     })

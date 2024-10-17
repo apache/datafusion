@@ -295,11 +295,8 @@ fn get_concat_ws_doc() -> &'static Documentation {
                 "separator",
                 "Separator to insert between concatenated strings.",
             )
-            .with_standard_argument("str", "String")
-            .with_standard_argument(
-                "str_n",
-                "Subsequent string expressions to concatenate.",
-            )
+            .with_standard_argument("str", Some("String"))
+            .with_argument("str_n", "Subsequent string expressions to concatenate.")
             .with_related_udf("concat")
             .build()
             .unwrap()

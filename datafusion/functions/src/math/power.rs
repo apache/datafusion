@@ -181,8 +181,8 @@ fn get_power_doc() -> &'static Documentation {
                 "Returns a base expression raised to the power of an exponent.",
             )
             .with_syntax_example("power(base, exponent)")
-            .with_standard_argument("base", "Numeric")
-            .with_standard_argument("exponent", "Exponent numeric")
+            .with_standard_argument("base", Some("Numeric"))
+            .with_standard_argument("exponent", Some("Exponent numeric"))
             .build()
             .unwrap()
     })

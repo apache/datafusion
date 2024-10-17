@@ -119,7 +119,7 @@ fn get_trunc_doc() -> &'static Documentation {
                 "Truncates a number to a whole number or truncated to the specified decimal places.",
             )
             .with_syntax_example("trunc(numeric_expression[, decimal_places])")
-            .with_standard_argument("numeric_expression", "Numeric")
+            .with_standard_argument("numeric_expression", Some("Numeric"))
             .with_argument("decimal_places", r#"Optional. The number of decimal places to
   truncate to. Defaults to 0 (truncate to a whole number). If
   `decimal_places` is a positive integer, truncates digits to the

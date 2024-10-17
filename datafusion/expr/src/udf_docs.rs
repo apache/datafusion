@@ -147,23 +147,29 @@ impl DocumentationBuilder {
 
     /// Add a standard "expression" argument to the documentation
     ///
-    /// This is similar to  [`Self::with_argument`] except that  a standard
-    /// description is appended to the end: `"Can be a constant, column, or
-    /// function, and any combination of arithmetic operators."`
-    ///
-    /// The argument is rendered like
+    /// The argument is rendered like below if Some() is passed through:
     ///
     /// ```text
     /// <arg_name>:
     ///   <expression_type> expression to operate on. Can be a constant, column, or function, and any combination of operators.
     /// ```
+    ///
+    /// The argument is rendered like below if None is passed through:
+    ///
+    ///  ```text
+    /// <arg_name>:
+    ///   The expression to operate on. Can be a constant, column, or function, and any combination of operators.
+    /// ```
     pub fn with_standard_argument(
         self,
         arg_name: impl Into<String>,
-        expression_type: impl AsRef<str>,
+        expression_type: Option<&str>,
     ) -> Self {
-        let expression_type = expression_type.as_ref();
-        self.with_argument(arg_name, format!("{expression_type} expression to operate on. Can be a constant, column, or function, and any combination of operators."))
+        let description = format!(
+            "{} expression to operate on. Can be a constant, column, or function, and any combination of operators.",
+            expression_type.unwrap_or("The")
+        );
+        self.with_argument(arg_name, description)
     }
 
     pub fn with_related_udf(mut self, related_udf: impl Into<String>) -> Self {

@@ -145,7 +145,7 @@ fn get_approx_median_doc() -> &'static Documentation {
 +-----------------------------------+
 ```"#,
             )
-            .with_standard_argument("expression", "The")
+            .with_standard_argument("expression", None)
             .build()
             .unwrap()
     })
