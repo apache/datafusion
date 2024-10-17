@@ -17,7 +17,7 @@
 
 //! Join related functionality used both on logical and physical plans
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Debug};
 use std::future::Future;
 use std::ops::{IndexMut, Range};
@@ -46,13 +46,16 @@ use datafusion_common::{
     plan_err, DataFusionError, JoinSide, JoinType, Result, SharedResult,
 };
 use datafusion_expr::interval_arithmetic::Interval;
+use datafusion_expr::Operator;
 use datafusion_physical_expr::equivalence::add_offset_to_expr;
+use datafusion_physical_expr::expressions::BinaryExpr;
 use datafusion_physical_expr::expressions::Column;
-use datafusion_physical_expr::utils::{collect_columns, merge_vectors};
+use datafusion_physical_expr::utils::{collect_columns, map_columns, merge_vectors};
 use datafusion_physical_expr::{
     LexOrdering, LexOrderingRef, PhysicalExpr, PhysicalExprRef, PhysicalSortExpr,
 };
 
+use arrow::compute::kernels::sort::SortOptions;
 use futures::future::{BoxFuture, Shared};
 use futures::{ready, FutureExt};
 use hashbrown::raw::RawTable;
@@ -379,6 +382,130 @@ impl fmt::Debug for JoinHashMap {
 pub type JoinOn = Vec<(PhysicalExprRef, PhysicalExprRef)>;
 /// Reference for JoinOn.
 pub type JoinOnRef<'a> = &'a [(PhysicalExprRef, PhysicalExprRef)];
+
+pub fn is_ineuqality_operator(op: &Operator) -> bool {
+    matches!(
+        op,
+        Operator::NotEq | Operator::Lt | Operator::LtEq | Operator::Gt | Operator::GtEq
+    )
+}
+
+pub fn is_loose_inequality_operator(op: &Operator) -> bool {
+    matches!(op, Operator::LtEq | Operator::GtEq)
+}
+
+/// Swaps the left and right expressions of a binary expression, like `a < b` to `b > a`.
+/// If this is not a binary expression or the operator can't be swapped, the expression is returned as is.
+pub fn swap_binary_expr(expr: &PhysicalExprRef) -> PhysicalExprRef {
+    match expr.as_any().downcast_ref::<BinaryExpr>() {
+        Some(binary) => {
+            if let Some(swapped_op) = binary.op().swap() {
+                Arc::new(BinaryExpr::new(
+                    Arc::clone(binary.right()),
+                    swapped_op,
+                    Arc::clone(binary.left()),
+                ))
+            } else {
+                Arc::clone(expr)
+            }
+        }
+        None => Arc::clone(expr),
+    }
+}
+
+/// Checks whether the inequality condition is valid.
+/// The inequality condition is valid if the expressions are not null and the expressions are not equal, and left expression is from left schema and right expression is from right schema.
+pub fn check_inequality_condition(inequality_condition: &JoinFilter) -> Result<()> {
+    if let Some(binary) = inequality_condition
+        .expression()
+        .as_any()
+        .downcast_ref::<BinaryExpr>()
+    {
+        if !(is_ineuqality_operator(binary.op()) && *binary.op() != Operator::NotEq) {
+            return plan_err!(
+                    "Inequality conditions must be an inequality binary expression, but got {}",
+                    binary.op()
+                );
+        }
+        let column_indices = &inequality_condition.column_indices;
+        // check if left expression is from left table
+        let left_expr_columns = collect_columns(binary.left());
+        let left_expr_in_left = left_expr_columns
+            .iter()
+            .all(|c| column_indices[c.index()].side == JoinSide::Left);
+        // check if right expression is from right table
+        let right_expr_columns = collect_columns(binary.right());
+        let right_expr_in_right = right_expr_columns
+            .iter()
+            .all(|c| column_indices[c.index()].side == JoinSide::Right);
+        if left_expr_columns.is_empty() || right_expr_columns.is_empty() {
+            return plan_err!(
+                "Inequality condition shouldn't be constant expression, but got {}",
+                inequality_condition.expression()
+            );
+        }
+        if !left_expr_in_left || !right_expr_in_right {
+            return plan_err!("Left/right side expression of inequality condition should be from left/right side of join, but got {} and {}",
+                binary.left(),
+                binary.right()
+            );
+        }
+    } else {
+        return plan_err!(
+            "Inequality conditions must be an inequality binary expression, but got {}",
+            inequality_condition.expression()
+        );
+    }
+    Ok(())
+}
+
+/// convert inequality conditions to sort expressions of each side and the operator
+/// for example, if the inequality condition is `a < b`, then the sort expressions for left and right side are `a asc` and `b asc` respectively
+pub fn inequality_conditions_to_sort_exprs(
+    inequality_conditions: &[JoinFilter],
+) -> Result<Vec<(PhysicalSortExpr, PhysicalSortExpr, Operator)>> {
+    inequality_conditions
+        .iter()
+        .map(|filter| {
+            let expr = filter.expression();
+            let binary = expr.as_any().downcast_ref::<BinaryExpr>().unwrap();
+            let sort_option = match binary.op() {
+                Operator::Lt | Operator::LtEq => SortOptions {
+                    descending: false,
+                    nulls_first: false,
+                },
+                Operator::Gt | Operator::GtEq => SortOptions {
+                    descending: true,
+                    nulls_first: false,
+                },
+                _ => unreachable!(),
+            };
+            // remap the column in join schema to origin table, because we need to use the original column index to sort left and right table independently
+            let (left_map, right_map): (Vec<_>, Vec<_>) = filter
+                .column_indices()
+                .iter()
+                .enumerate()
+                .partition(|(_, index)| index.side == JoinSide::Left);
+            let left_map = HashMap::from_iter(
+                left_map.iter().map(|(idx, index)| (*idx, index.index)),
+            );
+            let right_map = HashMap::from_iter(
+                right_map.iter().map(|(idx, index)| (*idx, index.index)),
+            );
+            Ok((
+                PhysicalSortExpr::new(
+                    map_columns(Arc::clone(binary.left()), &left_map)?,
+                    sort_option,
+                ),
+                PhysicalSortExpr::new(
+                    map_columns(Arc::clone(binary.right()), &right_map)?,
+                    sort_option,
+                ),
+                *binary.op(),
+            ))
+        })
+        .collect()
+}
 
 /// Checks whether the schemas "left" and "right" and columns "on" represent a valid join.
 /// They are valid whenever their columns' intersection equals the set `on`
@@ -1183,14 +1310,17 @@ pub(crate) fn get_final_indices_from_bit_map(
     (left_indices, right_indices)
 }
 
-pub(crate) fn apply_join_filter_to_indices(
+pub(crate) fn apply_join_filter_to_indices<
+    L: ArrowPrimitiveType,
+    R: ArrowPrimitiveType,
+>(
     build_input_buffer: &RecordBatch,
     probe_batch: &RecordBatch,
-    build_indices: UInt64Array,
-    probe_indices: UInt32Array,
+    build_indices: PrimitiveArray<L>,
+    probe_indices: PrimitiveArray<R>,
     filter: &JoinFilter,
     build_side: JoinSide,
-) -> Result<(UInt64Array, UInt32Array)> {
+) -> Result<(PrimitiveArray<L>, PrimitiveArray<R>)> {
     if build_indices.is_empty() && probe_indices.is_empty() {
         return Ok((build_indices, probe_indices));
     };
@@ -1220,12 +1350,12 @@ pub(crate) fn apply_join_filter_to_indices(
 
 /// Returns a new [RecordBatch] by combining the `left` and `right` according to `indices`.
 /// The resulting batch has [Schema] `schema`.
-pub(crate) fn build_batch_from_indices(
+pub(crate) fn build_batch_from_indices<L: ArrowPrimitiveType, R: ArrowPrimitiveType>(
     schema: &Schema,
     build_input_buffer: &RecordBatch,
     probe_batch: &RecordBatch,
-    build_indices: &UInt64Array,
-    probe_indices: &UInt32Array,
+    build_indices: &PrimitiveArray<L>,
+    probe_indices: &PrimitiveArray<R>,
     column_indices: &[ColumnIndex],
     build_side: JoinSide,
 ) -> Result<RecordBatch> {
@@ -1646,7 +1776,10 @@ mod tests {
     use arrow_schema::SortOptions;
 
     use datafusion_common::stats::Precision::{Absent, Exact, Inexact};
-    use datafusion_common::{arrow_datafusion_err, arrow_err, ScalarValue};
+    use datafusion_common::{
+        arrow_datafusion_err, arrow_err, assert_contains, ScalarValue,
+    };
+    use datafusion_physical_expr::expressions::{BinaryExpr, Literal};
 
     fn check(
         left: &[Column],
@@ -2552,6 +2685,107 @@ mod tests {
             );
         }
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_inequality_condition() -> Result<()> {
+        let column_indices = vec![
+            ColumnIndex {
+                index: 1,
+                side: JoinSide::Left,
+            },
+            ColumnIndex {
+                index: 2,
+                side: JoinSide::Left,
+            },
+            ColumnIndex {
+                index: 1,
+                side: JoinSide::Right,
+            },
+        ];
+        let intermediate_schema = Schema::new(vec![
+            Field::new("x", DataType::Int32, true),
+            Field::new("y", DataType::Int32, true),
+            Field::new("x", DataType::Int32, true),
+        ]);
+        // test left.x!=8, it will fail because of the not eq operator
+        let filter = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("x", 0)),
+            Operator::NotEq,
+            Arc::new(Literal::new(ScalarValue::Int32(Some(8)))),
+        )) as Arc<dyn PhysicalExpr>;
+        let join_filter =
+            JoinFilter::new(filter, column_indices.clone(), intermediate_schema.clone());
+        let actual = format!("{:?}", check_inequality_condition(&join_filter));
+        assert_contains!(
+            actual,
+            "Inequality conditions must be an inequality binary expression, but got !="
+        );
+        // test left.x>8, it will fail because of the constant expression
+        let filter = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("x", 0)),
+            Operator::Gt,
+            Arc::new(Literal::new(ScalarValue::Int32(Some(8)))),
+        )) as Arc<dyn PhysicalExpr>;
+        let join_filter =
+            JoinFilter::new(filter, column_indices.clone(), intermediate_schema.clone());
+        let actual = format!("{:?}", check_inequality_condition(&join_filter));
+        assert_contains!(
+            actual,
+            "Inequality condition shouldn't be constant expression, but got x@0 > 8"
+        );
+        // test rigth.x * left.y >= left.x, it will fail because of the left side expression contains column from right table
+        let filter = Arc::new(BinaryExpr::new(
+            Arc::new(BinaryExpr::new(
+                Arc::new(Column::new("x", 2)),
+                Operator::Multiply,
+                Arc::new(Column::new("y", 1)),
+            )),
+            Operator::GtEq,
+            Arc::new(Column::new("x", 0)),
+        )) as Arc<dyn PhysicalExpr>;
+        let join_filter =
+            JoinFilter::new(filter, column_indices.clone(), intermediate_schema.clone());
+        let actual = format!("{:?}", check_inequality_condition(&join_filter));
+        assert_contains!(
+            actual,
+            "Left/right side expression of inequality condition should be from left/right side of join, but got x@2 * y@1 and x@0"
+        );
+        // test left.x + left.y >= left.x, this will be ok
+        let filter = Arc::new(BinaryExpr::new(
+            Arc::new(BinaryExpr::new(
+                Arc::new(Column::new("x", 0)),
+                Operator::Plus,
+                Arc::new(Column::new("y", 1)),
+            )),
+            Operator::GtEq,
+            Arc::new(Column::new("x", 2)),
+        )) as Arc<dyn PhysicalExpr>;
+        let join_filter =
+            JoinFilter::new(filter, column_indices.clone(), intermediate_schema.clone());
+        let actual = format!("{:?}", check_inequality_condition(&join_filter));
+        assert_eq!(actual, "Ok(())");
+        let res = inequality_conditions_to_sort_exprs(&[join_filter])?;
+        let (left_expr, right_expr, operator) = res.first().unwrap();
+        assert_eq!(left_expr.to_string(), "x@1 + y@2 DESC NULLS LAST");
+        assert_eq!(right_expr.to_string(), "x@1 DESC NULLS LAST");
+        assert_eq!(*operator, Operator::GtEq);
+        // test left.x < left.x, this will be ok
+        let filter = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("x", 0)),
+            Operator::Lt,
+            Arc::new(Column::new("x", 2)),
+        )) as Arc<dyn PhysicalExpr>;
+        let join_filter =
+            JoinFilter::new(filter, column_indices.clone(), intermediate_schema.clone());
+        let actual = format!("{:?}", check_inequality_condition(&join_filter));
+        assert_eq!(actual, "Ok(())");
+        let res = inequality_conditions_to_sort_exprs(&[join_filter])?;
+        let (left_expr, right_expr, operator) = res.first().unwrap();
+        assert_eq!(left_expr.to_string(), "x@1 ASC NULLS LAST");
+        assert_eq!(right_expr.to_string(), "x@1 ASC NULLS LAST");
+        assert_eq!(*operator, Operator::Lt);
         Ok(())
     }
 }
