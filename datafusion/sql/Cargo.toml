@@ -57,6 +57,7 @@ ctor = { workspace = true }
 datafusion-functions = { workspace = true, default-features = true }
 datafusion-functions-aggregate = { workspace = true }
 datafusion-functions-window = { workspace = true }
+datafusion-functions-nested = { workspace = true }
 env_logger = { workspace = true }
 paste = "^1.0"
 rstest = { workspace = true }
