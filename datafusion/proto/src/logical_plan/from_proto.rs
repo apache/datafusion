@@ -142,8 +142,6 @@ impl From<protobuf::BuiltInWindowFunction> for BuiltInWindowFunction {
     fn from(built_in_function: protobuf::BuiltInWindowFunction) -> Self {
         match built_in_function {
             protobuf::BuiltInWindowFunction::Unspecified => todo!(),
-            protobuf::BuiltInWindowFunction::Lag => Self::Lag,
-            protobuf::BuiltInWindowFunction::Lead => Self::Lead,
             protobuf::BuiltInWindowFunction::FirstValue => Self::FirstValue,
             protobuf::BuiltInWindowFunction::CumeDist => Self::CumeDist,
             protobuf::BuiltInWindowFunction::Ntile => Self::Ntile,
@@ -286,10 +284,7 @@ pub fn parse_expr(
                         .map_err(|_| Error::unknown("BuiltInWindowFunction", *i))?
                         .into();
 
-                    let args =
-                        parse_optional_expr(expr.expr.as_deref(), registry, codec)?
-                            .map(|e| vec![e])
-                            .unwrap_or_else(Vec::new);
+                    let args = parse_exprs(&expr.exprs, registry, codec)?;
 
                     Expr::WindowFunction(WindowFunction::new(
                         expr::WindowFunctionDefinition::BuiltInWindowFunction(
@@ -309,10 +304,7 @@ pub fn parse_expr(
                         None => registry.udaf(udaf_name)?,
                     };
 
-                    let args =
-                        parse_optional_expr(expr.expr.as_deref(), registry, codec)?
-                            .map(|e| vec![e])
-                            .unwrap_or_else(Vec::new);
+                    let args = parse_exprs(&expr.exprs, registry, codec)?;
                     Expr::WindowFunction(WindowFunction::new(
                         expr::WindowFunctionDefinition::AggregateUDF(udaf_function),
                         args,
@@ -329,10 +321,7 @@ pub fn parse_expr(
                         None => registry.udwf(udwf_name)?,
                     };
 
-                    let args =
-                        parse_optional_expr(expr.expr.as_deref(), registry, codec)?
-                            .map(|e| vec![e])
-                            .unwrap_or_else(Vec::new);
+                    let args = parse_exprs(&expr.exprs, registry, codec)?;
                     Expr::WindowFunction(WindowFunction::new(
                         expr::WindowFunctionDefinition::WindowUDF(udwf_function),
                         args,

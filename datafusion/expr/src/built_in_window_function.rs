@@ -22,7 +22,7 @@ use std::str::FromStr;
 
 use crate::type_coercion::functions::data_types;
 use crate::utils;
-use crate::{Signature, TypeSignature, Volatility};
+use crate::{Signature, Volatility};
 use datafusion_common::{plan_datafusion_err, plan_err, DataFusionError, Result};
 
 use arrow::datatypes::DataType;
@@ -44,17 +44,7 @@ pub enum BuiltInWindowFunction {
     CumeDist,
     /// Integer ranging from 1 to the argument value, dividing the partition as equally as possible
     Ntile,
-    /// Returns value evaluated at the row that is offset rows before the current row within the partition;
-    /// If there is no such row, instead return default (which must be of the same type as value).
-    /// Both offset and default are evaluated with respect to the current row.
-    /// If omitted, offset defaults to 1 and default to null
-    Lag,
-    /// Returns value evaluated at the row that is offset rows after the current row within the partition;
-    /// If there is no such row, instead return default (which must be of the same type as value).
-    /// Both offset and default are evaluated with respect to the current row.
-    /// If omitted, offset defaults to 1 and default to null
-    Lead,
-    /// Returns value evaluated at the row that is the first row of the window frame
+    /// returns value evaluated at the row that is the first row of the window frame
     FirstValue,
     /// Returns value evaluated at the row that is the last row of the window frame
     LastValue,
@@ -68,8 +58,6 @@ impl BuiltInWindowFunction {
         match self {
             CumeDist => "CUME_DIST",
             Ntile => "NTILE",
-            Lag => "LAG",
-            Lead => "LEAD",
             FirstValue => "first_value",
             LastValue => "last_value",
             NthValue => "NTH_VALUE",
@@ -83,8 +71,6 @@ impl FromStr for BuiltInWindowFunction {
         Ok(match name.to_uppercase().as_str() {
             "CUME_DIST" => BuiltInWindowFunction::CumeDist,
             "NTILE" => BuiltInWindowFunction::Ntile,
-            "LAG" => BuiltInWindowFunction::Lag,
-            "LEAD" => BuiltInWindowFunction::Lead,
             "FIRST_VALUE" => BuiltInWindowFunction::FirstValue,
             "LAST_VALUE" => BuiltInWindowFunction::LastValue,
             "NTH_VALUE" => BuiltInWindowFunction::NthValue,
@@ -117,9 +103,7 @@ impl BuiltInWindowFunction {
         match self {
             BuiltInWindowFunction::Ntile => Ok(DataType::UInt64),
             BuiltInWindowFunction::CumeDist => Ok(DataType::Float64),
-            BuiltInWindowFunction::Lag
-            | BuiltInWindowFunction::Lead
-            | BuiltInWindowFunction::FirstValue
+            BuiltInWindowFunction::FirstValue
             | BuiltInWindowFunction::LastValue
             | BuiltInWindowFunction::NthValue => Ok(input_expr_types[0].clone()),
         }
@@ -130,16 +114,6 @@ impl BuiltInWindowFunction {
         // Note: The physical expression must accept the type returned by this function or the execution panics.
         match self {
             BuiltInWindowFunction::CumeDist => Signature::any(0, Volatility::Immutable),
-            BuiltInWindowFunction::Lag | BuiltInWindowFunction::Lead => {
-                Signature::one_of(
-                    vec![
-                        TypeSignature::Any(1),
-                        TypeSignature::Any(2),
-                        TypeSignature::Any(3),
-                    ],
-                    Volatility::Immutable,
-                )
-            }
             BuiltInWindowFunction::FirstValue | BuiltInWindowFunction::LastValue => {
                 Signature::any(1, Volatility::Immutable)
             }

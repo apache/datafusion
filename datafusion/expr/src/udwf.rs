@@ -34,8 +34,10 @@ use crate::{
     Signature,
 };
 use datafusion_common::{not_impl_err, Result};
+use datafusion_functions_window_common::expr::ExpressionArgs;
 use datafusion_functions_window_common::field::WindowUDFFieldArgs;
 use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
+use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 
 /// Logical representation of a user-defined window function (UDWF)
 /// A UDWF is different from a UDF in that it is stateful across batches.
@@ -149,6 +151,12 @@ impl WindowUDF {
         self.inner.simplify()
     }
 
+    /// Expressions that are passed to the [`PartitionEvaluator`].
+    ///
+    /// See [`WindowUDFImpl::expressions`] for more details.
+    pub fn expressions(&self, expr_args: ExpressionArgs) -> Vec<Arc<dyn PhysicalExpr>> {
+        self.inner.expressions(expr_args)
+    }
     /// Return a `PartitionEvaluator` for evaluating this window function
     pub fn partition_evaluator_factory(
         &self,
@@ -301,6 +309,14 @@ pub trait WindowUDFImpl: Debug + Send + Sync {
     /// Returns the function's [`Signature`] for information about what input
     /// types are accepted and the function's Volatility.
     fn signature(&self) -> &Signature;
+
+    /// Returns the expressions that are passed to the [`PartitionEvaluator`].
+    fn expressions(&self, expr_args: ExpressionArgs) -> Vec<Arc<dyn PhysicalExpr>> {
+        expr_args
+            .input_exprs()
+            .first()
+            .map_or(vec![], |expr| vec![Arc::clone(expr)])
+    }
 
     /// Invoke the function, returning the [`PartitionEvaluator`] instance
     fn partition_evaluator(
@@ -478,6 +494,13 @@ impl WindowUDFImpl for AliasedWindowUDFImpl {
 
     fn signature(&self) -> &Signature {
         self.inner.signature()
+    }
+
+    fn expressions(&self, expr_args: ExpressionArgs) -> Vec<Arc<dyn PhysicalExpr>> {
+        expr_args
+            .input_exprs()
+            .first()
+            .map_or(vec![], |expr| vec![Arc::clone(expr)])
     }
 
     fn partition_evaluator(

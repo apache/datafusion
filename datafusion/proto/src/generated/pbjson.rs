@@ -1664,8 +1664,6 @@ impl serde::Serialize for BuiltInWindowFunction {
             Self::Unspecified => "UNSPECIFIED",
             Self::CumeDist => "CUME_DIST",
             Self::Ntile => "NTILE",
-            Self::Lag => "LAG",
-            Self::Lead => "LEAD",
             Self::FirstValue => "FIRST_VALUE",
             Self::LastValue => "LAST_VALUE",
             Self::NthValue => "NTH_VALUE",
@@ -1683,8 +1681,6 @@ impl<'de> serde::Deserialize<'de> for BuiltInWindowFunction {
             "UNSPECIFIED",
             "CUME_DIST",
             "NTILE",
-            "LAG",
-            "LEAD",
             "FIRST_VALUE",
             "LAST_VALUE",
             "NTH_VALUE",
@@ -1731,8 +1727,6 @@ impl<'de> serde::Deserialize<'de> for BuiltInWindowFunction {
                     "UNSPECIFIED" => Ok(BuiltInWindowFunction::Unspecified),
                     "CUME_DIST" => Ok(BuiltInWindowFunction::CumeDist),
                     "NTILE" => Ok(BuiltInWindowFunction::Ntile),
-                    "LAG" => Ok(BuiltInWindowFunction::Lag),
-                    "LEAD" => Ok(BuiltInWindowFunction::Lead),
                     "FIRST_VALUE" => Ok(BuiltInWindowFunction::FirstValue),
                     "LAST_VALUE" => Ok(BuiltInWindowFunction::LastValue),
                     "NTH_VALUE" => Ok(BuiltInWindowFunction::NthValue),
@@ -21157,7 +21151,7 @@ impl serde::Serialize for WindowExprNode {
     {
         use serde::ser::SerializeStruct;
         let mut len = 0;
-        if self.expr.is_some() {
+        if !self.exprs.is_empty() {
             len += 1;
         }
         if !self.partition_by.is_empty() {
@@ -21176,8 +21170,8 @@ impl serde::Serialize for WindowExprNode {
             len += 1;
         }
         let mut struct_ser = serializer.serialize_struct("datafusion.WindowExprNode", len)?;
-        if let Some(v) = self.expr.as_ref() {
-            struct_ser.serialize_field("expr", v)?;
+        if !self.exprs.is_empty() {
+            struct_ser.serialize_field("exprs", &self.exprs)?;
         }
         if !self.partition_by.is_empty() {
             struct_ser.serialize_field("partitionBy", &self.partition_by)?;
@@ -21218,7 +21212,7 @@ impl<'de> serde::Deserialize<'de> for WindowExprNode {
         D: serde::Deserializer<'de>,
     {
         const FIELDS: &[&str] = &[
-            "expr",
+            "exprs",
             "partition_by",
             "partitionBy",
             "order_by",
@@ -21235,7 +21229,7 @@ impl<'de> serde::Deserialize<'de> for WindowExprNode {
 
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
-            Expr,
+            Exprs,
             PartitionBy,
             OrderBy,
             WindowFrame,
@@ -21264,7 +21258,7 @@ impl<'de> serde::Deserialize<'de> for WindowExprNode {
                         E: serde::de::Error,
                     {
                         match value {
-                            "expr" => Ok(GeneratedField::Expr),
+                            "exprs" => Ok(GeneratedField::Exprs),
                             "partitionBy" | "partition_by" => Ok(GeneratedField::PartitionBy),
                             "orderBy" | "order_by" => Ok(GeneratedField::OrderBy),
                             "windowFrame" | "window_frame" => Ok(GeneratedField::WindowFrame),
@@ -21291,7 +21285,7 @@ impl<'de> serde::Deserialize<'de> for WindowExprNode {
                 where
                     V: serde::de::MapAccess<'de>,
             {
-                let mut expr__ = None;
+                let mut exprs__ = None;
                 let mut partition_by__ = None;
                 let mut order_by__ = None;
                 let mut window_frame__ = None;
@@ -21299,11 +21293,11 @@ impl<'de> serde::Deserialize<'de> for WindowExprNode {
                 let mut window_function__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
-                        GeneratedField::Expr => {
-                            if expr__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("expr"));
+                        GeneratedField::Exprs => {
+                            if exprs__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("exprs"));
                             }
-                            expr__ = map_.next_value()?;
+                            exprs__ = Some(map_.next_value()?);
                         }
                         GeneratedField::PartitionBy => {
                             if partition_by__.is_some() {
@@ -21352,7 +21346,7 @@ impl<'de> serde::Deserialize<'de> for WindowExprNode {
                     }
                 }
                 Ok(WindowExprNode {
-                    expr: expr__,
+                    exprs: exprs__.unwrap_or_default(),
                     partition_by: partition_by__.unwrap_or_default(),
                     order_by: order_by__.unwrap_or_default(),
                     window_frame: window_frame__,

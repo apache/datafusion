@@ -47,8 +47,10 @@ use datafusion::functions_aggregate::expr_fn::{
 };
 use datafusion::functions_aggregate::min_max::max_udaf;
 use datafusion::functions_nested::map::map;
-use datafusion::functions_window::rank::{dense_rank, percent_rank, rank, rank_udwf};
-use datafusion::functions_window::row_number::row_number;
+use datafusion::functions_window::expr_fn::{
+    dense_rank, lag, lead, percent_rank, rank, row_number,
+};
+use datafusion::functions_window::rank::rank_udwf;
 use datafusion::prelude::*;
 use datafusion::test_util::{TestTableFactory, TestTableProvider};
 use datafusion_common::config::TableOptions;
@@ -942,6 +944,12 @@ async fn roundtrip_expr_api() -> Result<()> {
         rank(),
         dense_rank(),
         percent_rank(),
+        lead(col("b"), None, None),
+        lead(col("b"), Some(2), None),
+        lead(col("b"), Some(2), Some(ScalarValue::from(100))),
+        lag(col("b"), None, None),
+        lag(col("b"), Some(2), None),
+        lag(col("b"), Some(2), Some(ScalarValue::from(100))),
         nth_value(col("b"), 1, vec![]),
         nth_value(
             col("b"),

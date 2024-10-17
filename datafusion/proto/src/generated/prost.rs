@@ -538,7 +538,7 @@ pub mod logical_expr_node {
         TryCast(::prost::alloc::boxed::Box<super::TryCastNode>),
         /// window expressions
         #[prost(message, tag = "18")]
-        WindowExpr(::prost::alloc::boxed::Box<super::WindowExprNode>),
+        WindowExpr(super::WindowExprNode),
         /// AggregateUDF expressions
         #[prost(message, tag = "19")]
         AggregateUdfExpr(::prost::alloc::boxed::Box<super::AggregateUdfExprNode>),
@@ -735,8 +735,8 @@ pub struct ScalarUdfExprNode {
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct WindowExprNode {
-    #[prost(message, optional, boxed, tag = "4")]
-    pub expr: ::core::option::Option<::prost::alloc::boxed::Box<LogicalExprNode>>,
+    #[prost(message, repeated, tag = "4")]
+    pub exprs: ::prost::alloc::vec::Vec<LogicalExprNode>,
     #[prost(message, repeated, tag = "5")]
     pub partition_by: ::prost::alloc::vec::Vec<LogicalExprNode>,
     #[prost(message, repeated, tag = "6")]
@@ -1828,8 +1828,8 @@ pub enum BuiltInWindowFunction {
     ///   PERCENT_RANK = 3;
     CumeDist = 4,
     Ntile = 5,
-    Lag = 6,
-    Lead = 7,
+    /// LAG = 6;
+    /// LEAD = 7;
     FirstValue = 8,
     LastValue = 9,
     NthValue = 10,
@@ -1844,8 +1844,6 @@ impl BuiltInWindowFunction {
             Self::Unspecified => "UNSPECIFIED",
             Self::CumeDist => "CUME_DIST",
             Self::Ntile => "NTILE",
-            Self::Lag => "LAG",
-            Self::Lead => "LEAD",
             Self::FirstValue => "FIRST_VALUE",
             Self::LastValue => "LAST_VALUE",
             Self::NthValue => "NTH_VALUE",
@@ -1857,8 +1855,6 @@ impl BuiltInWindowFunction {
             "UNSPECIFIED" => Some(Self::Unspecified),
             "CUME_DIST" => Some(Self::CumeDist),
             "NTILE" => Some(Self::Ntile),
-            "LAG" => Some(Self::Lag),
-            "LEAD" => Some(Self::Lead),
             "FIRST_VALUE" => Some(Self::FirstValue),
             "LAST_VALUE" => Some(Self::LastValue),
             "NTH_VALUE" => Some(Self::NthValue),
