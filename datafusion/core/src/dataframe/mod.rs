@@ -2987,7 +2987,7 @@ mod tests {
             JoinType::Inner,
             Some(Expr::Literal(ScalarValue::Null)),
         )?;
-        let expected_plan = "Inner Join: \
+        let expected_plan = "Cross Join: \
         \n  TableScan: a projection=[c1], full_filters=[Boolean(NULL)]\
         \n  TableScan: b projection=[c1]";
         assert_eq!(expected_plan, format!("{}", join.into_optimized_plan()?));
