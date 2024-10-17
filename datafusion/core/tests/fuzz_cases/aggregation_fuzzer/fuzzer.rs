@@ -63,8 +63,13 @@ impl AggregationFuzzerBuilder {
     }
 
     /// Adds random SQL queries to the fuzzer along with the table name
+    ///
+    /// Adds
+    /// - 3 random queries
+    /// - 3 random queries for each group by selected from the sort keys
+    /// - 1 random query with no grouping
     pub fn add_query_builder(mut self, mut query_builder: QueryBuilder) -> Self {
-        const NUM_QUERIES: usize = 10;
+        const NUM_QUERIES: usize = 3;
         for _ in 0..NUM_QUERIES {
             let sql = query_builder.generate_query();
             self.candidate_sqls.push(Arc::from(sql));
@@ -75,10 +80,17 @@ impl AggregationFuzzerBuilder {
             for sort_keys in &data_gen_config.sort_keys_set {
                 let group_by_columns = sort_keys.iter().map(|s| s.as_str());
                 query_builder = query_builder.with_group_by_columns(group_by_columns);
-                let sql = query_builder.generate_query();
-                self.candidate_sqls.push(Arc::from(sql));
+                for _ in 0..NUM_QUERIES {
+                    let sql = query_builder.generate_query();
+                    self.candidate_sqls.push(Arc::from(sql));
+                }
             }
         }
+        // also add a query with no grouping
+        query_builder = query_builder.with_group_by_columns(vec![]);
+        let sql = query_builder.generate_query();
+        self.candidate_sqls.push(Arc::from(sql));
+
         self.table_name(query_builder.table_name())
     }
 
@@ -502,7 +514,9 @@ impl QueryBuilder {
 
         let mut already_used = HashSet::new();
         let mut group_by = vec![];
-        while group_by.len() < num_group_by && group_by.len() < already_used.len() {
+        while group_by.len() < num_group_by
+            && already_used.len() != self.group_by_columns.len()
+        {
             let idx = rng.gen_range(0..self.group_by_columns.len());
             if already_used.insert(idx) {
                 group_by.push(self.group_by_columns[idx].clone());
