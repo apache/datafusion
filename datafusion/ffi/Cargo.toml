@@ -36,12 +36,12 @@ name = "datafusion_ffi"
 path = "src/lib.rs"
 
 [dependencies]
+abi_stable = "0.11.3"
 arrow = { workspace = true, features = ["ffi"] }
+async-ffi = { version = "0.5.0", features = ["abi_stable"] }
+async-trait = { workspace = true }
 datafusion = { workspace = true, default-features = true }
 datafusion-proto = { workspace = true }
 futures = { workspace = true }
-async-trait = { workspace = true }
-tokio = { workspace = true }
 prost = { workspace = true }
-abi_stable = "0.11.3"
-async-ffi = { version = "0.5.0", features = ["abi_stable"] }
+tokio = { workspace = true }
