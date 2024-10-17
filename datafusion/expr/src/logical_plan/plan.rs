@@ -1870,7 +1870,7 @@ impl LogicalPlan {
                             .as_ref()
                             .map(|expr| format!(" Filter: {expr}"))
                             .unwrap_or_else(|| "".to_string());
-                        let join_type = if filter.is_none() && keys.is_empty() && matches!(join_type, JoinType::Inner| JoinType::Left|  JoinType::Right| JoinType::Full) {
+                        let join_type = if filter.is_none() && keys.is_empty() && matches!(join_type, JoinType::Inner) {
                             "Cross".to_string()
                         } else {
                             join_type.to_string()
