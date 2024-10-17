@@ -1045,14 +1045,19 @@ impl DefaultPhysicalPlanner {
                     session_state.config_options().optimizer.prefer_hash_join;
 
                 let join: Arc<dyn ExecutionPlan> = if join_on.is_empty() {
-                    // there is no equal join condition, use the nested loop join
-                    // TODO optimize the plan, and use the config of `target_partitions` and `repartition_joins`
-                    Arc::new(NestedLoopJoinExec::try_new(
-                        physical_left,
-                        physical_right,
-                        join_filter,
-                        join_type,
-                    )?)
+                    if join_filter.is_none() {
+                        // no on and filter, use cross join 
+                        Arc::new(CrossJoinExec::new(physical_left, physical_right))
+                    } else {
+                        // there is no equal join condition, use the nested loop join
+                        // TODO optimize the plan, and use the config of `target_partitions` and `repartition_joins`
+                        Arc::new(NestedLoopJoinExec::try_new(
+                            physical_left,
+                            physical_right,
+                            join_filter,
+                            join_type,
+                        )?)
+                    }
                 } else if session_state.config().target_partitions() > 1
                     && session_state.config().repartition_joins()
                     && !prefer_hash_join

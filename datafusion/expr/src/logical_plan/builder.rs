@@ -30,8 +30,8 @@ use crate::expr_rewriter::{
     rewrite_sort_cols_by_aggs,
 };
 use crate::logical_plan::{
-    Aggregate, Analyze, CrossJoin, Distinct, DistinctOn, EmptyRelation, Explain, Filter,
-    Join, JoinConstraint, JoinType, Limit, LogicalPlan, Partitioning, PlanType, Prepare,
+    Aggregate, Analyze, Distinct, DistinctOn, EmptyRelation, Explain, Filter, Join,
+    JoinConstraint, JoinType, Limit, LogicalPlan, Partitioning, PlanType, Prepare,
     Projection, Repartition, Sort, SubqueryAlias, TableScan, Union, Unnest, Values,
     Window,
 };
