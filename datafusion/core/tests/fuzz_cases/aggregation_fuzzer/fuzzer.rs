@@ -62,7 +62,7 @@ impl AggregationFuzzerBuilder {
         }
     }
 
-    /// Adds n random SQL queries to the fuzzer along with the table name
+    /// Adds random SQL queries to the fuzzer along with the table name
     pub fn add_query_builder(mut self, query_builder: QueryBuilder) -> Self {
         const NUM_QUERIES: usize = 10;
         for _ in 0..NUM_QUERIES {
@@ -71,7 +71,7 @@ impl AggregationFuzzerBuilder {
         self.table_name(query_builder.table_name())
     }
 
-    pub fn add_sql(mut self, sql: &str) -> Self {
+    fn add_sql(mut self, sql: &str) -> Self {
         self.candidate_sqls.push(Arc::from(sql));
         self
     }
@@ -445,8 +445,18 @@ impl QueryBuilder {
         query
     }
 
-    /// Generate a random number of aggregate functions (potentially repeating).
+    /// Generate a some random aggregate function invocations (potentially repeating).
     ///
+    /// Each aggregate function invocation is of the form
+    ///
+    /// ```sql
+    /// function_name(<DISTINCT> argument) as alias
+    /// ```
+    ///
+    /// where
+    /// * `function_names` are randomly selected from [`Self::aggregate_functions`]
+    /// * `<DISTINCT> argument` is randomly selected from [`Self::arguments`]
+    /// * `alias` is a unique alias `colN` for the column (to avoid duplicate column names)
     fn random_aggregate_functions(&self) -> Vec<String> {
         const MAX_NUM_FUNCTIONS: usize = 5;
         let mut rng = thread_rng();

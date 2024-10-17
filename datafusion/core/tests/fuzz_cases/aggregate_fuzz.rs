@@ -60,14 +60,15 @@ use crate::fuzz_cases::aggregation_fuzzer::{
 // The test framework handles varying combinations of arguments (data types),
 // sortedness, and grouping parameters
 //
-// TODO: Test on floating point values (where output needs to be compared with some
+// TODO: Test floating point values (where output needs to be compared with some
 // acceptable range due to floating point rounding)
 //
 // TODO: test other aggregate functions
 // - AVG (unstable given the wide range of inputs)
 //
 // TODO: specific test for ordering (ensure all group by columns are ordered)
-
+//  Currently the data is sorted by random columns, so there are almost no
+//  repeated runs. To improve coverage we should also sort by lower cardinality columns
 #[tokio::test(flavor = "multi_thread")]
 async fn test_min() {
     let data_gen_config = baseline_config();
