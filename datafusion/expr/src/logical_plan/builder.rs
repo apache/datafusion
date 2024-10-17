@@ -1568,8 +1568,7 @@ impl TableSource for LogicalTableSource {
 
 /// Create a [`LogicalPlan::Unnest`] plan
 pub fn unnest(input: LogicalPlan, columns: Vec<Column>) -> Result<LogicalPlan> {
-    let unnestings = columns.into_iter().map(|c| c).collect();
-    unnest_with_options(input, unnestings, UnnestOptions::default())
+    unnest_with_options(input, columns, UnnestOptions::default())
 }
 
 // Get the data type of a multi-dimensional type after unnesting it
