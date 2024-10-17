@@ -502,7 +502,7 @@ impl QueryBuilder {
 
         let mut already_used = HashSet::new();
         let mut group_by = vec![];
-        while group_by.len() < num_group_by {
+        while group_by.len() < num_group_by && group_by.len() < already_used.len() {
             let idx = rng.gen_range(0..self.group_by_columns.len());
             if already_used.insert(idx) {
                 group_by.push(self.group_by_columns[idx].clone());
