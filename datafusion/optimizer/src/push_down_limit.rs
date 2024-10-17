@@ -1114,7 +1114,7 @@ mod test {
             .build()?;
 
         let expected = "Limit: skip=0, fetch=1000\
-        \n  Inner Join: \
+        \n  Cross Join: \
         \n    Limit: skip=0, fetch=1000\
         \n      TableScan: test, fetch=1000\
         \n    Limit: skip=0, fetch=1000\
@@ -1134,7 +1134,7 @@ mod test {
             .build()?;
 
         let expected = "Limit: skip=1000, fetch=1000\
-        \n  Inner Join: \
+        \n  Cross Join: \
         \n    Limit: skip=0, fetch=2000\
         \n      TableScan: test, fetch=2000\
         \n    Limit: skip=0, fetch=2000\
