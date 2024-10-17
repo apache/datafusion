@@ -1046,7 +1046,7 @@ impl DefaultPhysicalPlanner {
 
                 let join: Arc<dyn ExecutionPlan> = if join_on.is_empty() {
                     if join_filter.is_none() {
-                        // no on and filter, use cross join 
+                        // no on and filter, use cross join
                         Arc::new(CrossJoinExec::new(physical_left, physical_right))
                     } else {
                         // there is no equal join condition, use the nested loop join
