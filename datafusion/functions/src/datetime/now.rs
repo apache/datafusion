@@ -86,7 +86,7 @@ impl ScalarUDFImpl for NowFunc {
             ScalarValue::TimestampNanosecond(now_ts, Some("+00:00".into())),
         )))
     }
-
+    
     fn aliases(&self) -> &[String] {
         &self.aliases
     }
