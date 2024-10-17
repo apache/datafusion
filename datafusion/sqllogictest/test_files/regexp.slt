@@ -16,18 +16,18 @@
 # under the License.
 
 statement ok
-CREATE TABLE t (str varchar, pattern varchar, flags varchar) AS VALUES
-    ('abc',       '^(a)', 'i'),
-    ('ABC',       '^(A).*', 'i'),
-    ('aBc',       '(b|d)', 'i'),
-    ('AbC',       '(B|D)', null),
-    ('aBC',       '^(b|c)', null),
-    ('4000',      '\b4([1-9]\d\d|\d[1-9]\d|\d\d[1-9])\b', null),
-    ('4010',      '\b4([1-9]\d\d|\d[1-9]\d|\d\d[1-9])\b', null),
-    ('Düsseldorf','[\p{Letter}-]+', null),
-    ('Москва',    '[\p{L}-]+', null),
-    ('Köln',      '[a-zA-Z]ö[a-zA-Z]{2}', null),
-    ('إسرائيل',   '^\p{Arabic}+$', null);
+CREATE TABLE t (str varchar, pattern varchar, start int, flags varchar) AS VALUES
+    ('abc',       '^(a)', 1, 'i'),
+    ('ABC',       '^(A).*', 1, 'i'),
+    ('aBc',       '(b|d)', 1, 'i'),
+    ('AbC',       '(B|D)', 2, null),
+    ('aBC',       '^(b|c)', 3, null),
+    ('4000',      '\b4([1-9]\d\d|\d[1-9]\d|\d\d[1-9])\b', 1, null),
+    ('4010',      '\b4([1-9]\d\d|\d[1-9]\d|\d\d[1-9])\b', 2, null),
+    ('Düsseldorf','[\p{Letter}-]+', 3, null),
+    ('Москва',    '[\p{L}-]+', 4, null),
+    ('Köln',      '[a-zA-Z]ö[a-zA-Z]{2}', 1, null),
+    ('إسرائيل',   '^\p{Arabic}+$', 2, null);
 
 #
 # regexp_like tests
@@ -459,6 +459,313 @@ query B
 SELECT NULL not iLIKE NULL;
 ----
 NULL
+
+# regexp_count tests
+
+# regexp_count tests from postgresql
+# https://github.com/postgres/postgres/blob/56d23855c864b7384970724f3ad93fb0fc319e51/src/test/regress/sql/strings.sql#L226-L235
+
+query I
+SELECT regexp_count('123123123123123', '(12)3');
+----
+5
+
+query I
+SELECT regexp_count('123123123123', '123', 1);
+----
+4
+
+query I
+SELECT regexp_count('123123123123', '123', 3);
+----
+3
+
+query I
+SELECT regexp_count('123123123123', '123', 33);
+----
+0
+
+query I
+SELECT regexp_count('ABCABCABCABC', 'Abc', 1, '');
+----
+0
+
+query I
+SELECT regexp_count('ABCABCABCABC', 'Abc', 1, 'i');
+----
+4
+
+statement error
+External error: query failed: DataFusion error: Arrow error: Compute error: regexp_count() requires start to be 1 based
+SELECT regexp_count('123123123123', '123', 0);
+
+statement error
+External error: query failed: DataFusion error: Arrow error: Compute error: regexp_count() requires start to be 1 based
+SELECT regexp_count('123123123123', '123', -3);
+
+statement error
+External error: statement failed: DataFusion error: Arrow error: Compute error: regexp_count() does not support global flag
+SELECT regexp_count('123123123123', '123', 1, 'g');
+
+query I
+SELECT regexp_count(str, '\w') from t;
+----
+3
+3
+3
+3
+3
+4
+4
+10
+6
+4
+7
+
+query I
+SELECT regexp_count(str, '\w{2}', start) from t;
+----
+1
+1
+1
+1
+0
+2
+1
+4
+1
+2
+3
+
+query I
+SELECT regexp_count(str, 'ab', 1, 'i') from t;
+----
+1
+1
+1
+1
+1
+0
+0
+0
+0
+0
+0
+
+
+query I
+SELECT regexp_count(str, pattern) from t;
+----
+1
+1
+0
+0
+0
+0
+1
+1
+1
+1
+1
+
+query I
+SELECT regexp_count(str, pattern, start) from t;
+----
+1
+1
+0
+0
+0
+0
+0
+1
+1
+1
+1
+
+query I
+SELECT regexp_count(str, pattern, start, flags) from t;
+----
+1
+1
+1
+0
+0
+0
+0
+1
+1
+1
+1
+
+# test type coercion
+query I
+SELECT regexp_count(arrow_cast(str, 'Utf8'), arrow_cast(pattern, 'LargeUtf8'),  arrow_cast(start, 'Int32'), flags) from t;
+----
+1
+1
+1
+0
+0
+0
+0
+1
+1
+1
+1
+
+# test string views
+
+statement ok
+CREATE TABLE t_stringview AS
+SELECT arrow_cast(str, 'Utf8View') as str, arrow_cast(pattern, 'Utf8View') as pattern, arrow_cast(start, 'Int64') as start, arrow_cast(flags, 'Utf8View') as flags FROM t;
+
+query I
+SELECT regexp_count(str, '\w') from t;
+----
+3
+3
+3
+3
+3
+4
+4
+10
+6
+4
+7
+
+query I
+SELECT regexp_count(str, '\w{2}', start) from t;
+----
+1
+1
+1
+1
+0
+2
+1
+4
+1
+2
+3
+
+query I
+SELECT regexp_count(str, 'ab', 1, 'i') from t;
+----
+1
+1
+1
+1
+1
+0
+0
+0
+0
+0
+0
+
+
+query I
+SELECT regexp_count(str, pattern) from t;
+----
+1
+1
+0
+0
+0
+0
+1
+1
+1
+1
+1
+
+query I
+SELECT regexp_count(str, pattern, start) from t;
+----
+1
+1
+0
+0
+0
+0
+0
+1
+1
+1
+1
+
+query I
+SELECT regexp_count(str, pattern, start, flags) from t;
+----
+1
+1
+1
+0
+0
+0
+0
+1
+1
+1
+1
+
+# test type coercion
+query I
+SELECT regexp_count(arrow_cast(str, 'Utf8'), arrow_cast(pattern, 'LargeUtf8'),  arrow_cast(start, 'Int32'), flags) from t;
+----
+1
+1
+1
+0
+0
+0
+0
+1
+1
+1
+1
+
+# NULL tests
+
+query I
+SELECT regexp_count(NULL, NULL);
+----
+0
+
+query I
+SELECT regexp_count(NULL, 'a');
+----
+0
+
+query I
+SELECT regexp_count('a', NULL);
+----
+0
+
+query I
+SELECT regexp_count(NULL, NULL, NULL, NULL);
+----
+0
+
+statement ok
+CREATE TABLE empty_table (str varchar, pattern varchar, start int, flags varchar);
+
+query I
+SELECT regexp_count(str, pattern, start, flags) from empty_table;
+----
+
+statement ok
+INSERT INTO empty_table VALUES ('a', NULL, 1, 'i'), (NULL, 'a', 1, 'i'), (NULL, NULL, 1, 'i'), (NULL, NULL, NULL, 'i');
+
+query I
+SELECT regexp_count(str, pattern, start, flags) from empty_table;
+----
+0
+0
+0
+0
 
 statement ok
 drop table t;
