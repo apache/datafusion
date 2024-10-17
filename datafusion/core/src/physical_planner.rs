@@ -1045,12 +1045,7 @@ impl DefaultPhysicalPlanner {
                     session_state.config_options().optimizer.prefer_hash_join;
 
                 let join: Arc<dyn ExecutionPlan> = if join_on.is_empty() {
-                    if join_filter.is_none()
-                        && matches!(
-                            join_type,
-                            JoinType::Inner
-                        ) && !null_equals_null
-                    {
+                    if join_filter.is_none() && matches!(join_type, JoinType::Inner) {
                         // no on and filter, use cross join
                         Arc::new(CrossJoinExec::new(physical_left, physical_right))
                     } else {
