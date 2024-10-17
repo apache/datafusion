@@ -950,9 +950,14 @@ impl LogicalPlanBuilder {
     pub fn cross_join(self, right: LogicalPlan) -> Result<Self> {
         let join_schema =
             build_join_schema(self.plan.schema(), right.schema(), &JoinType::Inner)?;
-        Ok(Self::new(LogicalPlan::CrossJoin(CrossJoin {
+        Ok(Self::new(LogicalPlan::Join(Join {
             left: self.plan,
             right: Arc::new(right),
+            on: vec![],
+            filter: None,
+            join_type: JoinType::Inner,
+            join_constraint: JoinConstraint::On,
+            null_equals_null: false,
             schema: DFSchemaRef::new(join_schema),
         })))
     }
