@@ -20,10 +20,10 @@ use std::sync::{Arc, OnceLock};
 
 use crate::utils::make_scalar_function;
 
-use arrow::array::{ArrayRef, Float32Array, Float64Array, Int32Array};
+use arrow::array::{ArrayRef, AsArray, Float32Array, Float64Array, Int32Array};
 use arrow::compute::{cast_with_options, CastOptions};
-use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::{Float32, Float64, Int32};
+use arrow::datatypes::{DataType, Float32Type, Float64Type};
 use datafusion_common::{
     exec_datafusion_err, exec_err, DataFusionError, Result, ScalarValue,
 };
@@ -148,17 +148,18 @@ pub fn round(args: &[ArrayRef]) -> Result<ArrayRef> {
                     )
                 })?;
 
-                Ok(Arc::new(make_function_scalar_inputs!(
-                    &args[0],
-                    "value",
-                    Float64Array,
-                    {
-                        |value: f64| {
-                            (value * 10.0_f64.powi(decimal_places)).round()
-                                / 10.0_f64.powi(decimal_places)
-                        }
-                    }
-                )) as ArrayRef)
+                Ok(Arc::new(
+                    args[0]
+                        .as_primitive::<Float64Type>()
+                        .unary::<_, Float64Type>(|value: f64| {
+                            if value == 0_f64 {
+                                0_f64
+                            } else {
+                                (value * 10.0_f64.powi(decimal_places)).round()
+                                    / 10.0_f64.powi(decimal_places)
+                            }
+                        }),
+                ) as ArrayRef)
             }
             ColumnarValue::Array(decimal_places) => {
                 let options = CastOptions {
@@ -197,17 +198,18 @@ pub fn round(args: &[ArrayRef]) -> Result<ArrayRef> {
                     )
                 })?;
 
-                Ok(Arc::new(make_function_scalar_inputs!(
-                    &args[0],
-                    "value",
-                    Float32Array,
-                    {
-                        |value: f32| {
-                            (value * 10.0_f32.powi(decimal_places)).round()
-                                / 10.0_f32.powi(decimal_places)
-                        }
-                    }
-                )) as ArrayRef)
+                Ok(Arc::new(
+                    args[0]
+                        .as_primitive::<Float32Type>()
+                        .unary::<_, Float32Type>(|value: f32| {
+                            if value == 0_f32 {
+                                0_f32
+                            } else {
+                                (value * 10.0_f32.powi(decimal_places)).round()
+                                    / 10.0_f32.powi(decimal_places)
+                            }
+                        }),
+                ) as ArrayRef)
             }
             ColumnarValue::Array(_) => {
                 let ColumnarValue::Array(decimal_places) =
