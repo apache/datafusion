@@ -34,7 +34,7 @@ COMMAND=
 BENCHMARK=all
 DATAFUSION_DIR=${DATAFUSION_DIR:-$SCRIPT_DIR/..}
 DATA_DIR=${DATA_DIR:-$SCRIPT_DIR/data}
-DATA_SPM_DIR=${DATA_DIR:-$SCRIPT_DIR/spm_data}
+DATA_SPM_DIR=${DATA_SPM_DIR:-$SCRIPT_DIR/spm_data}
 CARGO_COMMAND=${CARGO_COMMAND:-"cargo run --release"}
 PREFER_HASH_JOIN=${PREFER_HASH_JOIN:-true}
 VIRTUAL_ENV=${VIRTUAL_ENV:-$SCRIPT_DIR/venv}
@@ -430,6 +430,7 @@ run_spm() {
     RESULTS_FILE="${RESULTS_DIR}/spm.json"
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running spm benchmark..."
+    echo "Path: ${DATA_SPM_DIR}"
     $CARGO_COMMAND --bin dfbench -- spm  --iterations 5 --path "${DATA_SPM_DIR}/low_card_spm_small_batch.csv"  --queries-path "${SCRIPT_DIR}/queries/spm/queries.sql" -o "${RESULTS_FILE}"
     $CARGO_COMMAND --bin dfbench -- spm  --iterations 5 --path "${DATA_SPM_DIR}/low_card_spm.csv"  --queries-path "${SCRIPT_DIR}/queries/spm/queries.sql" -o "${RESULTS_FILE}"
 }
