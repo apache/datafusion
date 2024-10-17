@@ -84,6 +84,8 @@ pub trait GroupColumn: Send + Sync {
 pub struct PrimitiveGroupValueBuilder<T: ArrowPrimitiveType, const NULLABLE: bool> {
     group_values: Vec<T::Native>,
     nulls: MaybeNullBufferBuilder,
+    nullable_call: usize,
+    non_nullable_call: usize,
 }
 
 impl<T, const NULLABLE: bool> PrimitiveGroupValueBuilder<T, NULLABLE>
@@ -95,6 +97,8 @@ where
         Self {
             group_values: vec![],
             nulls: MaybeNullBufferBuilder::new(),
+            nullable_call: 0,
+            non_nullable_call: 0,
         }
     }
 }
@@ -116,8 +120,8 @@ impl<T: ArrowPrimitiveType, const NULLABLE: bool> GroupColumn
         self.group_values[lhs_row] == array.as_primitive::<T>().value(rhs_row)
     }
 
-    
     fn append_val(&mut self, array: &ArrayRef, row: usize) {
+        self.nullable_call += 1;
         // Perf: skip null check if input can't have nulls
         if NULLABLE {
             if array.is_null(row) {
@@ -133,6 +137,7 @@ impl<T: ArrowPrimitiveType, const NULLABLE: bool> GroupColumn
     }
 
     fn append_non_nullable_val(&mut self, array: &ArrayRef, row: usize) {
+        self.non_nullable_call += 1;
         if NULLABLE {
             self.nulls.append(false);
             self.group_values.push(array.as_primitive::<T>().value(row));
@@ -153,7 +158,13 @@ impl<T: ArrowPrimitiveType, const NULLABLE: bool> GroupColumn
         let Self {
             group_values,
             nulls,
+            nullable_call,
+            non_nullable_call,
         } = *self;
+
+        println!(
+            "### nullable_call:{nullable_call}, non_nullable_call:{non_nullable_call}"
+        );
 
         let nulls = nulls.build();
         if !NULLABLE {
@@ -198,6 +209,10 @@ where
     offsets: Vec<O>,
     /// Nulls
     nulls: MaybeNullBufferBuilder,
+
+    nullable_call: usize,
+
+    non_nullable_call: usize,
 }
 
 impl<O> ByteGroupValueBuilder<O>
@@ -210,6 +225,8 @@ where
             buffer: BufferBuilder::new(INITIAL_BUFFER_CAPACITY),
             offsets: vec![O::default()],
             nulls: MaybeNullBufferBuilder::new(),
+            nullable_call: 0,
+            non_nullable_call: 0,
         }
     }
 
@@ -217,6 +234,7 @@ where
     where
         B: ByteArrayType,
     {
+        self.nullable_call += 1;
         let arr = array.as_bytes::<B>();
         if arr.is_null(row) {
             self.nulls.append(true);
@@ -235,6 +253,7 @@ where
     where
         B: ByteArrayType,
     {
+        self.non_nullable_call += 1;
         let arr = array.as_bytes::<B>();
         self.nulls.append(false);
         let value: &[u8] = arr.value(row).as_ref();
@@ -330,7 +349,7 @@ where
             }
             _ => unreachable!("View types should use `ArrowBytesViewMap`"),
         };
-    } 
+    }
 
     fn len(&self) -> usize {
         self.offsets.len() - 1
@@ -348,7 +367,13 @@ where
             mut buffer,
             offsets,
             nulls,
+            nullable_call,
+            non_nullable_call,
         } = *self;
+
+        println!(
+            "### nullable_call:{nullable_call}, non_nullable_call:{non_nullable_call}"
+        );
 
         let null_buffer = nulls.build();
 
@@ -427,7 +452,7 @@ where
             }
             _ => unreachable!("View types should use `ArrowBytesViewMap`"),
         }
-    }   
+    }
 }
 
 /// An implementation of [`GroupColumn`] for binary view and utf8 view types.
@@ -469,6 +494,10 @@ pub struct ByteViewGroupValueBuilder<B: ByteViewType> {
     /// Nulls
     nulls: MaybeNullBufferBuilder,
 
+    nullable_call: usize,
+
+    non_nullable_call: usize,
+
     /// phantom data so the type requires `<B>`
     _phantom: PhantomData<B>,
 }
@@ -482,6 +511,8 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
             max_block_size: BYTE_VIEW_MAX_BLOCK_SIZE,
             nulls: MaybeNullBufferBuilder::new(),
             _phantom: PhantomData {},
+            nullable_call: 0,
+            non_nullable_call: 0,
         }
     }
 
@@ -495,6 +526,7 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
     where
         B: ByteViewType,
     {
+        self.nullable_call += 1;
         let arr = array.as_byte_view::<B>();
 
         // Null row case, set and return
@@ -531,6 +563,7 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
     where
         B: ByteViewType,
     {
+        self.non_nullable_call += 1;
         let arr = array.as_byte_view::<B>();
 
         // Not null row case
@@ -666,6 +699,10 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
 
         let views = ScalarBuffer::from(views);
 
+        println!(
+            "### nullable_call:{}, non_nullable_call:{}",
+            self.nullable_call, self.non_nullable_call
+        );
         // Safety:
         // * all views were correctly made
         // * (if utf8): Input was valid Utf8 so buffer contents are
@@ -850,7 +887,7 @@ impl<B: ByteViewType> GroupColumn for ByteViewGroupValueBuilder<B> {
     fn append_val(&mut self, array: &ArrayRef, row: usize) {
         self.append_val_inner(array, row)
     }
-   
+
     fn append_non_nullable_val(&mut self, array: &ArrayRef, row: usize) {
         self.append_val_non_nullable_inner(array, row);
     }
