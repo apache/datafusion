@@ -151,11 +151,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         .build()
                 }
             }
-            JoinConstraint::None => {
-                LogicalPlanBuilder::from(left)
-                    .join_on(right, join_type, [])?
-                    .build()
-            }
+            JoinConstraint::None => LogicalPlanBuilder::from(left)
+                .join_on(right, join_type, [])?
+                .build(),
         }
     }
 }
