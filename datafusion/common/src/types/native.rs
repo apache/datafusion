@@ -15,12 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::sync::Arc;
+use std::{ops::Deref, sync::Arc};
 
 use arrow_schema::{DataType, Field, Fields, IntervalUnit, TimeUnit, UnionFields};
 
 use super::{LogicalType, TypeSignature};
 
+/// A record of a native type, its name and its nullability.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct NativeField {
     name: String,
@@ -28,19 +29,55 @@ pub struct NativeField {
     nullable: bool,
 }
 
+impl NativeField {
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub fn native_type(&self) -> &NativeType {
+        &self.native_type
+    }
+
+    pub fn nullable(&self) -> bool {
+        self.nullable
+    }
+}
+
+/// A reference counted [`NativeField`].
 pub type NativeFieldRef = Arc<NativeField>;
 
+/// A cheaply cloneable, owned collection of [`NativeFieldRef`].
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct NativeFields(Arc<[NativeFieldRef]>);
 
+impl Deref for NativeFields {
+    type Target = [NativeFieldRef];
+
+    fn deref(&self) -> &Self::Target {
+        self.0.as_ref()
+    }
+}
+
+/// A cheaply cloneable, owned collection of [`NativeFieldRef`] and their
+/// corresponding type ids.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct NativeUnionFields(Arc<[(i8, NativeFieldRef)]>);
 
+impl Deref for NativeUnionFields {
+    type Target = [(i8, NativeFieldRef)];
+
+    fn deref(&self) -> &Self::Target {
+        self.0.as_ref()
+    }
+}
+
+/// Representation of a type that DataFusion can handle natively. It is a subset
+/// of the physical variants in Arrow's native [`DataType`].
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum NativeType {
     /// Null type
     Null,
-    /// A boolean datatype representing the values `true` and `false`.
+    /// A boolean type representing the values `true` and `false`.
     Boolean,
     /// A signed 8-bit integer.
     Int8,
@@ -162,9 +199,9 @@ pub enum NativeType {
     List(NativeFieldRef),
     /// A list of some logical data type with fixed length.
     FixedSizeList(NativeFieldRef, i32),
-    /// A nested datatype that contains a number of sub-fields.
+    /// A nested type that contains a number of sub-fields.
     Struct(NativeFields),
-    /// A nested datatype that can represent slots of differing types.
+    /// A nested type that can represent slots of differing types.
     Union(NativeUnionFields),
     /// Decimal value with precision and scale
     ///

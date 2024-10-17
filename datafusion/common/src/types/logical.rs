@@ -40,9 +40,37 @@ pub enum TypeParameter<'a> {
     Number(i128),
 }
 
-/// A reference counted [`LogicalType`]
+/// A reference counted [`LogicalType`].
 pub type LogicalTypeRef = Arc<dyn LogicalType>;
 
+/// Representation of a logical type with its signature and its native backing
+/// type.
+///
+/// The logical type is meant to be used during the DataFusion logical planning
+/// phase in order to reason about logical types without worrying about their
+/// underlying physical implementation.
+///
+/// ### Extension types
+///
+/// [`LogicalType`] is a trait in order to allow the possibility of declaring
+/// extension types:
+///
+/// ```
+/// struct JSON {}
+///
+/// impl LogicalType for JSON {
+///     fn native(&self) -> &NativeType {
+///         &NativeType::Utf8
+///     }
+///
+///    fn signature(&self) -> TypeSignature<'_> {
+///        TypeSignature::Extension {
+///            name: "JSON",
+///            parameters: &[],
+///        }
+///    }
+/// }
+/// ```
 pub trait LogicalType: Sync + Send {
     fn native(&self) -> &NativeType;
     fn signature(&self) -> TypeSignature<'_>;
