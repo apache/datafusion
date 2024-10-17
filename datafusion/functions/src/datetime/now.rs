@@ -21,7 +21,7 @@ use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::Timestamp;
 use arrow::datatypes::TimeUnit::Nanosecond;
 
-use datafusion_common::{internal_err, Result, ScalarValue};
+use datafusion_common::{internal_err, ExprSchema, Result, ScalarValue};
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
 use datafusion_expr::{ColumnarValue, Expr, ScalarUDFImpl, Signature, Volatility};
 
@@ -86,8 +86,12 @@ impl ScalarUDFImpl for NowFunc {
             ScalarValue::TimestampNanosecond(now_ts, Some("+00:00".into())),
         )))
     }
-    
+  
     fn aliases(&self) -> &[String] {
         &self.aliases
+    }
+
+    fn is_nullable(&self, _args: &[Expr], _schema: &dyn ExprSchema) -> bool {
+        false
     }
 }

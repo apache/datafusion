@@ -194,5 +194,15 @@ required-features = ["unicode_expressions"]
 
 [[bench]]
 harness = false
+name = "cot"
+required-features = ["math_expressions"]
+
+[[bench]]
+harness = false
 name = "strpos"
 required-features = ["unicode_expressions"]
+
+[[bench]]
+harness = false
+name = "trunc"
+required-features = ["math_expressions"]
