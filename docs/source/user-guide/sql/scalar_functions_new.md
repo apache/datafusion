@@ -35,7 +35,301 @@ the rest of the documentation.
 
 ## Math Functions
 
+- [abs](#abs)
+- [acos](#acos)
+- [acosh](#acosh)
+- [asin](#asin)
+- [asinh](#asinh)
+- [atan](#atan)
+- [atan2](#atan2)
+- [atanh](#atanh)
+- [cbrt](#cbrt)
+- [ceil](#ceil)
+- [cos](#cos)
+- [cosh](#cosh)
+- [degrees](#degrees)
+- [exp](#exp)
+- [factorial](#factorial)
+- [floor](#floor)
+- [gcd](#gcd)
+- [isnan](#isnan)
+- [iszero](#iszero)
+- [lcm](#lcm)
+- [ln](#ln)
 - [log](#log)
+- [log10](#log10)
+- [log2](#log2)
+- [nanvl](#nanvl)
+- [pi](#pi)
+- [pow](#pow)
+- [power](#power)
+- [radians](#radians)
+- [random](#random)
+- [round](#round)
+- [signum](#signum)
+- [sin](#sin)
+- [sinh](#sinh)
+- [sqrt](#sqrt)
+- [tan](#tan)
+- [tanh](#tanh)
+- [trunc](#trunc)
+
+### `abs`
+
+Returns the absolute value of a number.
+
+```
+abs(numeric_expression)
+```
+
+#### Arguments
+
+- **numeric_expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
+
+### `acos`
+
+Returns the arc cosine or inverse cosine of a number.
+
+```
+acos(numeric_expression)
+```
+
+#### Arguments
+
+- **numeric_expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
+
+### `acosh`
+
+Returns the area hyperbolic cosine or inverse hyperbolic cosine of a number.
+
+```
+acosh(numeric_expression)
+```
+
+#### Arguments
+
+- **numeric_expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
+
+### `asin`
+
+Returns the arc sine or inverse sine of a number.
+
+```
+asin(numeric_expression)
+```
+
+#### Arguments
+
+- **numeric_expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
+
+### `asinh`
+
+Returns the area hyperbolic sine or inverse hyperbolic sine of a number.
+
+```
+asinh(numeric_expression)
+```
+
+#### Arguments
+
+- **numeric_expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
+
+### `atan`
+
+Returns the arc tangent or inverse tangent of a number.
+
+```
+atan(numeric_expression)
+```
+
+#### Arguments
+
+- **numeric_expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
+
+### `atan2`
+
+Returns the arc tangent or inverse tangent of `expression_y / expression_x`.
+
+```
+atan2(expression_y, expression_x)
+```
+
+#### Arguments
+
+- **expression_y**: First numeric expression to operate on.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
+- **expression_x**: Second numeric expression to operate on.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
+
+### `atanh`
+
+Returns the area hyperbolic tangent or inverse hyperbolic tangent of a number.
+
+```
+atanh(numeric_expression)
+```
+
+#### Arguments
+
+- **numeric_expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
+
+### `cbrt`
+
+Returns the cube root of a number.
+
+```
+cbrt(numeric_expression)
+```
+
+#### Arguments
+
+- **numeric_expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
+
+### `ceil`
+
+Returns the nearest integer greater than or equal to a number.
+
+```
+ceil(numeric_expression)
+```
+
+#### Arguments
+
+- **numeric_expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
+
+### `cos`
+
+Returns the cosine of a number.
+
+```
+cos(numeric_expression)
+```
+
+#### Arguments
+
+- **numeric_expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
+
+### `cosh`
+
+Returns the hyperbolic cosine of a number.
+
+```
+cosh(numeric_expression)
+```
+
+#### Arguments
+
+- **numeric_expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
+
+### `degrees`
+
+Converts radians to degrees.
+
+```
+degrees(numeric_expression)
+```
+
+#### Arguments
+
+- **numeric_expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
+
+### `exp`
+
+Returns the base-e exponential of a number.
+
+```
+exp(numeric_expression)
+```
+
+#### Arguments
+
+- **numeric_expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
+
+### `factorial`
+
+Factorial. Returns 1 if value is less than 2.
+
+```
+factorial(numeric_expression)
+```
+
+#### Arguments
+
+- **numeric_expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
+
+### `floor`
+
+Returns the nearest integer less than or equal to a number.
+
+```
+floor(numeric_expression)
+```
+
+#### Arguments
+
+- **numeric_expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
+
+### `gcd`
+
+Returns the greatest common divisor of `expression_x` and `expression_y`. Returns 0 if both inputs are zero.
+
+```
+gcd(expression_x, expression_y)
+```
+
+#### Arguments
+
+- **expression_x**: First numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
+- **expression_y**: Second numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
+
+### `isnan`
+
+Returns true if a given number is +NaN or -NaN otherwise returns false.
+
+```
+isnan(numeric_expression)
+```
+
+#### Arguments
+
+- **numeric_expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
+
+### `iszero`
+
+Returns true if a given number is +0.0 or -0.0 otherwise returns false.
+
+```
+iszero(numeric_expression)
+```
+
+#### Arguments
+
+- **numeric_expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
+
+### `lcm`
+
+Returns the least common multiple of `expression_x` and `expression_y`. Returns 0 if either input is zero.
+
+```
+lcm(expression_x, expression_y)
+```
+
+#### Arguments
+
+- **expression_x**: First numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
+- **expression_y**: Second numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
+
+### `ln`
+
+Returns the natural logarithm of a number.
+
+```
+ln(numeric_expression)
+```
+
+#### Arguments
+
+- **numeric_expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
 
 ### `log`
 
@@ -50,6 +344,198 @@ log(numeric_expression)
 
 - **base**: Base numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
 - **numeric_expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
+
+### `log10`
+
+Returns the base-10 logarithm of a number.
+
+```
+log10(numeric_expression)
+```
+
+#### Arguments
+
+- **numeric_expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
+
+### `log2`
+
+Returns the base-2 logarithm of a number.
+
+```
+log2(numeric_expression)
+```
+
+#### Arguments
+
+- **numeric_expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
+
+### `nanvl`
+
+Returns the first argument if it's not _NaN_.
+Returns the second argument otherwise.
+
+```
+nanvl(expression_x, expression_y)
+```
+
+#### Arguments
+
+- **expression_x**: Numeric expression to return if it's not _NaN_. Can be a constant, column, or function, and any combination of arithmetic operators.
+- **expression_y**: Numeric expression to return if the first expression is _NaN_. Can be a constant, column, or function, and any combination of arithmetic operators.
+
+### `pi`
+
+Returns an approximate value of π.
+
+```
+pi()
+```
+
+### `pow`
+
+_Alias of [power](#power)._
+
+### `power`
+
+Returns a base expression raised to the power of an exponent.
+
+```
+power(base, exponent)
+```
+
+#### Arguments
+
+- **base**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
+- **exponent**: Exponent numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
+
+#### Aliases
+
+- pow
+
+### `radians`
+
+Converts degrees to radians.
+
+```
+radians(numeric_expression)
+```
+
+#### Arguments
+
+- **numeric_expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
+
+### `random`
+
+Returns a random float value in the range [0, 1).
+The random seed is unique to each row.
+
+```
+random()
+```
+
+### `round`
+
+Rounds a number to the nearest integer.
+
+```
+round(numeric_expression[, decimal_places])
+```
+
+#### Arguments
+
+- **numeric_expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
+- **decimal_places**: Optional. The number of decimal places to round to. Defaults to 0.
+
+### `signum`
+
+Returns the sign of a number.
+Negative numbers return `-1`.
+Zero and positive numbers return `1`.
+
+```
+signum(numeric_expression)
+```
+
+#### Arguments
+
+- **numeric_expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
+
+### `sin`
+
+Returns the sine of a number.
+
+```
+sin(numeric_expression)
+```
+
+#### Arguments
+
+- **numeric_expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
+
+### `sinh`
+
+Returns the hyperbolic sine of a number.
+
+```
+sinh(numeric_expression)
+```
+
+#### Arguments
+
+- **numeric_expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
+
+### `sqrt`
+
+Returns the square root of a number.
+
+```
+sqrt(numeric_expression)
+```
+
+#### Arguments
+
+- **numeric_expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
+
+### `tan`
+
+Returns the tangent of a number.
+
+```
+tan(numeric_expression)
+```
+
+#### Arguments
+
+- **numeric_expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
+
+### `tanh`
+
+Returns the hyperbolic tangent of a number.
+
+```
+tanh(numeric_expression)
+```
+
+#### Arguments
+
+- **numeric_expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
+
+### `trunc`
+
+Truncates a number to a whole number or truncated to the specified decimal places.
+
+```
+trunc(numeric_expression[, decimal_places])
+```
+
+#### Arguments
+
+- **numeric_expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
+- **decimal_places**: Optional. The number of decimal places to
+  truncate to. Defaults to 0 (truncate to a whole number). If
+  `decimal_places` is a positive integer, truncates digits to the
+  right of the decimal point. If `decimal_places` is a negative
+  integer, replaces digits to the left of the decimal point with `0`.
 
 ## Conditional Functions
 
@@ -1355,6 +1841,1436 @@ to_date('2017-05-31', '%Y-%m-%d')
 ```
 
 Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/to_date.rs)
+
+## Array Functions
+
+- [array_any_value](#array_any_value)
+- [array_append](#array_append)
+- [array_cat](#array_cat)
+- [array_concat](#array_concat)
+- [array_contains](#array_contains)
+- [array_dims](#array_dims)
+- [array_distance](#array_distance)
+- [array_distinct](#array_distinct)
+- [array_element](#array_element)
+- [array_empty](#array_empty)
+- [array_except](#array_except)
+- [array_extract](#array_extract)
+- [array_has](#array_has)
+- [array_has_all](#array_has_all)
+- [array_has_any](#array_has_any)
+- [array_indexof](#array_indexof)
+- [array_intersect](#array_intersect)
+- [array_join](#array_join)
+- [array_length](#array_length)
+- [array_ndims](#array_ndims)
+- [array_pop_back](#array_pop_back)
+- [array_pop_front](#array_pop_front)
+- [array_position](#array_position)
+- [array_positions](#array_positions)
+- [array_prepend](#array_prepend)
+- [array_push_back](#array_push_back)
+- [array_push_front](#array_push_front)
+- [array_remove](#array_remove)
+- [array_remove_all](#array_remove_all)
+- [array_remove_n](#array_remove_n)
+- [array_repeat](#array_repeat)
+- [array_replace](#array_replace)
+- [array_replace_all](#array_replace_all)
+- [array_replace_n](#array_replace_n)
+- [array_resize](#array_resize)
+- [array_reverse](#array_reverse)
+- [array_slice](#array_slice)
+- [array_sort](#array_sort)
+- [array_to_string](#array_to_string)
+- [array_union](#array_union)
+- [cardinality](#cardinality)
+- [empty](#empty)
+- [flatten](#flatten)
+- [generate_series](#generate_series)
+- [list_any_value](#list_any_value)
+- [list_append](#list_append)
+- [list_cat](#list_cat)
+- [list_concat](#list_concat)
+- [list_contains](#list_contains)
+- [list_dims](#list_dims)
+- [list_distance](#list_distance)
+- [list_distinct](#list_distinct)
+- [list_element](#list_element)
+- [list_empty](#list_empty)
+- [list_except](#list_except)
+- [list_extract](#list_extract)
+- [list_has](#list_has)
+- [list_has_all](#list_has_all)
+- [list_has_any](#list_has_any)
+- [list_indexof](#list_indexof)
+- [list_intersect](#list_intersect)
+- [list_join](#list_join)
+- [list_length](#list_length)
+- [list_ndims](#list_ndims)
+- [list_pop_back](#list_pop_back)
+- [list_pop_front](#list_pop_front)
+- [list_position](#list_position)
+- [list_positions](#list_positions)
+- [list_prepend](#list_prepend)
+- [list_push_back](#list_push_back)
+- [list_push_front](#list_push_front)
+- [list_remove](#list_remove)
+- [list_remove_all](#list_remove_all)
+- [list_remove_n](#list_remove_n)
+- [list_repeat](#list_repeat)
+- [list_replace](#list_replace)
+- [list_replace_all](#list_replace_all)
+- [list_replace_n](#list_replace_n)
+- [list_resize](#list_resize)
+- [list_reverse](#list_reverse)
+- [list_slice](#list_slice)
+- [list_sort](#list_sort)
+- [list_to_string](#list_to_string)
+- [list_union](#list_union)
+- [make_array](#make_array)
+- [make_list](#make_list)
+- [range](#range)
+- [string_to_array](#string_to_array)
+- [string_to_list](#string_to_list)
+
+### `array_any_value`
+
+Extracts the element with the index n from the array.
+
+```
+array_element(array, index)
+```
+
+#### Arguments
+
+- **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+- **index**: Index to extract the element from the array.
+
+#### Example
+
+```sql
+> select array_element([1, 2, 3, 4], 3);
++-----------------------------------------+
+| array_element(List([1,2,3,4]),Int64(3)) |
++-----------------------------------------+
+| 3                                       |
++-----------------------------------------+
+```
+
+#### Aliases
+
+- list_any_value
+
+### `array_append`
+
+Appends an element to the end of an array.
+
+```
+array_append(array, element)
+```
+
+#### Arguments
+
+- **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+- **element**: Element to append to the array.
+
+#### Example
+
+```sql
+> select array_append([1, 2, 3], 4);
++--------------------------------------+
+| array_append(List([1,2,3]),Int64(4)) |
++--------------------------------------+
+| [1, 2, 3, 4]                         |
++--------------------------------------+
+```
+
+#### Aliases
+
+- list_append
+- array_push_back
+- list_push_back
+
+### `array_cat`
+
+_Alias of [array_concat](#array_concat)._
+
+### `array_concat`
+
+Appends an element to the end of an array.
+
+```
+array_append(array, element)
+```
+
+#### Arguments
+
+- **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+- **element**: Element to append to the array.
+
+#### Example
+
+```sql
+> select array_append([1, 2, 3], 4);
++--------------------------------------+
+| array_append(List([1,2,3]),Int64(4)) |
++--------------------------------------+
+| [1, 2, 3, 4]                         |
++--------------------------------------+
+```
+
+#### Aliases
+
+- array_cat
+- list_concat
+- list_cat
+
+### `array_contains`
+
+_Alias of [array_has](#array_has)._
+
+### `array_dims`
+
+Returns an array of the array's dimensions.
+
+```
+array_dims(array)
+```
+
+#### Arguments
+
+- **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+
+#### Example
+
+```sql
+> select array_dims([[1, 2, 3], [4, 5, 6]]);
++---------------------------------+
+| array_dims(List([1,2,3,4,5,6])) |
++---------------------------------+
+| [2, 3]                          |
++---------------------------------+
+```
+
+#### Aliases
+
+- list_dims
+
+### `array_distance`
+
+Returns the Euclidean distance between two input arrays of equal length.
+
+```
+array_distance(array1, array2)
+```
+
+#### Arguments
+
+- **array1**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+- **array2**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+
+#### Example
+
+```sql
+> select array_distance([1, 2], [1, 4]);
++------------------------------------+
+| array_distance(List([1,2], [1,4])) |
++------------------------------------+
+| 2.0                                |
++------------------------------------+
+```
+
+#### Aliases
+
+- list_distance
+
+### `array_distinct`
+
+Returns distinct values from the array after removing duplicates.
+
+```
+array_distinct(array)
+```
+
+#### Arguments
+
+- **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+
+#### Example
+
+```sql
+> select array_distinct([1, 3, 2, 3, 1, 2, 4]);
++---------------------------------+
+| array_distinct(List([1,2,3,4])) |
++---------------------------------+
+| [1, 2, 3, 4]                    |
++---------------------------------+
+```
+
+#### Aliases
+
+- list_distinct
+
+### `array_element`
+
+Extracts the element with the index n from the array.
+
+```
+array_element(array, index)
+```
+
+#### Arguments
+
+- **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+- **index**: Index to extract the element from the array.
+
+#### Example
+
+```sql
+> select array_element([1, 2, 3, 4], 3);
++-----------------------------------------+
+| array_element(List([1,2,3,4]),Int64(3)) |
++-----------------------------------------+
+| 3                                       |
++-----------------------------------------+
+```
+
+#### Aliases
+
+- array_extract
+- list_element
+- list_extract
+
+### `array_empty`
+
+_Alias of [empty](#empty)._
+
+### `array_except`
+
+Returns an array of the elements that appear in the first array but not in the second.
+
+```
+array_except(array1, array2)
+```
+
+#### Arguments
+
+- **array1**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+- **array2**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+
+#### Example
+
+```sql
+> select array_except([1, 2, 3, 4], [5, 6, 3, 4]);
++----------------------------------------------------+
+| array_except([1, 2, 3, 4], [5, 6, 3, 4]);           |
++----------------------------------------------------+
+| [1, 2]                                              |
++----------------------------------------------------+
+> select array_except([1, 2, 3, 4], [3, 4, 5, 6]);
++----------------------------------------------------+
+| array_except([1, 2, 3, 4], [3, 4, 5, 6]);           |
++----------------------------------------------------+
+| [1, 2]                                              |
++----------------------------------------------------+
+```
+
+#### Aliases
+
+- list_except
+
+### `array_extract`
+
+_Alias of [array_element](#array_element)._
+
+### `array_has`
+
+Returns true if the array contains the element.
+
+```
+array_has(array, element)
+```
+
+#### Arguments
+
+- **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+- **element**: Scalar or Array expression. Can be a constant, column, or function, and any combination of array operators.
+
+#### Example
+
+```sql
+> select array_has([1, 2, 3], 2);
++-----------------------------+
+| array_has(List([1,2,3]), 2) |
++-----------------------------+
+| true                        |
++-----------------------------+
+```
+
+#### Aliases
+
+- list_has
+- array_contains
+- list_contains
+
+### `array_has_all`
+
+Returns true if the array contains the element.
+
+```
+array_has(array, element)
+```
+
+#### Arguments
+
+- **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+- **element**: Scalar or Array expression. Can be a constant, column, or function, and any combination of array operators.
+
+#### Example
+
+```sql
+> select array_has([1, 2, 3], 2);
++-----------------------------+
+| array_has(List([1,2,3]), 2) |
++-----------------------------+
+| true                        |
++-----------------------------+
+```
+
+#### Aliases
+
+- list_has_all
+
+### `array_has_any`
+
+Returns true if the array contains the element.
+
+```
+array_has(array, element)
+```
+
+#### Arguments
+
+- **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+- **element**: Scalar or Array expression. Can be a constant, column, or function, and any combination of array operators.
+
+#### Example
+
+```sql
+> select array_has([1, 2, 3], 2);
++-----------------------------+
+| array_has(List([1,2,3]), 2) |
++-----------------------------+
+| true                        |
++-----------------------------+
+```
+
+#### Aliases
+
+- list_has_any
+
+### `array_indexof`
+
+_Alias of [array_position](#array_position)._
+
+### `array_intersect`
+
+Returns distinct values from the array after removing duplicates.
+
+```
+array_distinct(array)
+```
+
+#### Arguments
+
+- **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+
+#### Example
+
+```sql
+> select array_distinct([1, 3, 2, 3, 1, 2, 4]);
++---------------------------------+
+| array_distinct(List([1,2,3,4])) |
++---------------------------------+
+| [1, 2, 3, 4]                    |
++---------------------------------+
+```
+
+#### Aliases
+
+- list_intersect
+
+### `array_join`
+
+_Alias of [array_to_string](#array_to_string)._
+
+### `array_length`
+
+Returns the length of the array dimension.
+
+```
+array_length(array, dimension)
+```
+
+#### Arguments
+
+- **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+- **dimension**: Array dimension.
+
+#### Example
+
+```sql
+> select array_length([1, 2, 3, 4, 5], 1);
++-------------------------------------------+
+| array_length(List([1,2,3,4,5]), 1)        |
++-------------------------------------------+
+| 5                                         |
++-------------------------------------------+
+```
+
+#### Aliases
+
+- list_length
+
+### `array_ndims`
+
+Returns an array of the array's dimensions.
+
+```
+array_dims(array)
+```
+
+#### Arguments
+
+- **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+
+#### Example
+
+```sql
+> select array_dims([[1, 2, 3], [4, 5, 6]]);
++---------------------------------+
+| array_dims(List([1,2,3,4,5,6])) |
++---------------------------------+
+| [2, 3]                          |
++---------------------------------+
+```
+
+#### Aliases
+
+- list_ndims
+
+### `array_pop_back`
+
+Extracts the element with the index n from the array.
+
+```
+array_element(array, index)
+```
+
+#### Arguments
+
+- **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+- **index**: Index to extract the element from the array.
+
+#### Example
+
+```sql
+> select array_element([1, 2, 3, 4], 3);
++-----------------------------------------+
+| array_element(List([1,2,3,4]),Int64(3)) |
++-----------------------------------------+
+| 3                                       |
++-----------------------------------------+
+```
+
+#### Aliases
+
+- list_pop_back
+
+### `array_pop_front`
+
+Extracts the element with the index n from the array.
+
+```
+array_element(array, index)
+```
+
+#### Arguments
+
+- **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+- **index**: Index to extract the element from the array.
+
+#### Example
+
+```sql
+> select array_element([1, 2, 3, 4], 3);
++-----------------------------------------+
+| array_element(List([1,2,3,4]),Int64(3)) |
++-----------------------------------------+
+| 3                                       |
++-----------------------------------------+
+```
+
+#### Aliases
+
+- list_pop_front
+
+### `array_position`
+
+Returns the position of the first occurrence of the specified element in the array.
+
+```
+array_position(array, element)
+array_position(array, element, index)
+```
+
+#### Arguments
+
+- **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+- **element**: Element to search for position in the array.
+- **index**: Index at which to start searching.
+
+#### Example
+
+```sql
+> select array_position([1, 2, 2, 3, 1, 4], 2);
++----------------------------------------------+
+| array_position(List([1,2,2,3,1,4]),Int64(2)) |
++----------------------------------------------+
+| 2                                            |
++----------------------------------------------+
+> select array_position([1, 2, 2, 3, 1, 4], 2, 3);
++----------------------------------------------------+
+| array_position(List([1,2,2,3,1,4]),Int64(2), Int64(3)) |
++----------------------------------------------------+
+| 3                                                  |
++----------------------------------------------------+
+```
+
+#### Aliases
+
+- list_position
+- array_indexof
+- list_indexof
+
+### `array_positions`
+
+Returns the position of the first occurrence of the specified element in the array.
+
+```
+array_position(array, element)
+array_position(array, element, index)
+```
+
+#### Arguments
+
+- **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+- **element**: Element to search for position in the array.
+- **index**: Index at which to start searching.
+
+#### Example
+
+```sql
+> select array_position([1, 2, 2, 3, 1, 4], 2);
++----------------------------------------------+
+| array_position(List([1,2,2,3,1,4]),Int64(2)) |
++----------------------------------------------+
+| 2                                            |
++----------------------------------------------+
+> select array_position([1, 2, 2, 3, 1, 4], 2, 3);
++----------------------------------------------------+
+| array_position(List([1,2,2,3,1,4]),Int64(2), Int64(3)) |
++----------------------------------------------------+
+| 3                                                  |
++----------------------------------------------------+
+```
+
+#### Aliases
+
+- list_positions
+
+### `array_prepend`
+
+Appends an element to the end of an array.
+
+```
+array_append(array, element)
+```
+
+#### Arguments
+
+- **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+- **element**: Element to append to the array.
+
+#### Example
+
+```sql
+> select array_append([1, 2, 3], 4);
++--------------------------------------+
+| array_append(List([1,2,3]),Int64(4)) |
++--------------------------------------+
+| [1, 2, 3, 4]                         |
++--------------------------------------+
+```
+
+#### Aliases
+
+- list_prepend
+- array_push_front
+- list_push_front
+
+### `array_push_back`
+
+_Alias of [array_append](#array_append)._
+
+### `array_push_front`
+
+_Alias of [array_prepend](#array_prepend)._
+
+### `array_remove`
+
+Removes the first element from the array equal to the given value.
+
+```
+array_remove(array, element)
+```
+
+#### Arguments
+
+- **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+- **element**: Element to be removed from the array.
+
+#### Example
+
+```sql
+> select array_remove([1, 2, 2, 3, 2, 1, 4], 2);
++----------------------------------------------+
+| array_remove(List([1,2,2,3,2,1,4]),Int64(2)) |
++----------------------------------------------+
+| [1, 2, 3, 2, 1, 4]                           |
++----------------------------------------------+
+```
+
+#### Aliases
+
+- list_remove
+
+### `array_remove_all`
+
+Removes the first element from the array equal to the given value.
+
+```
+array_remove(array, element)
+```
+
+#### Arguments
+
+- **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+- **element**: Element to be removed from the array.
+
+#### Example
+
+```sql
+> select array_remove([1, 2, 2, 3, 2, 1, 4], 2);
++----------------------------------------------+
+| array_remove(List([1,2,2,3,2,1,4]),Int64(2)) |
++----------------------------------------------+
+| [1, 2, 3, 2, 1, 4]                           |
++----------------------------------------------+
+```
+
+#### Aliases
+
+- list_remove_all
+
+### `array_remove_n`
+
+Removes the first element from the array equal to the given value.
+
+```
+array_remove(array, element)
+```
+
+#### Arguments
+
+- **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+- **element**: Element to be removed from the array.
+
+#### Example
+
+```sql
+> select array_remove([1, 2, 2, 3, 2, 1, 4], 2);
++----------------------------------------------+
+| array_remove(List([1,2,2,3,2,1,4]),Int64(2)) |
++----------------------------------------------+
+| [1, 2, 3, 2, 1, 4]                           |
++----------------------------------------------+
+```
+
+#### Aliases
+
+- list_remove_n
+
+### `array_repeat`
+
+Returns an array containing element `count` times.
+
+```
+array_repeat(element, count)
+```
+
+#### Arguments
+
+- **element**: Element expression. Can be a constant, column, or function, and any combination of array operators.
+- **count**: Value of how many times to repeat the element.
+
+#### Example
+
+```sql
+> select array_repeat(1, 3);
++---------------------------------+
+| array_repeat(Int64(1),Int64(3)) |
++---------------------------------+
+| [1, 1, 1]                       |
++---------------------------------+
+> select array_repeat([1, 2], 2);
++------------------------------------+
+| array_repeat(List([1,2]),Int64(2)) |
++------------------------------------+
+| [[1, 2], [1, 2]]                   |
++------------------------------------+
+```
+
+#### Aliases
+
+- list_repeat
+
+### `array_replace`
+
+Replaces the first `max` occurrences of the specified element with another specified element.
+
+```
+array_replace_n(array, from, to, max)
+```
+
+#### Arguments
+
+- **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+- **from**: Initial element.
+- **to**: Final element.
+- **max**: Number of first occurrences to replace.
+
+#### Example
+
+```sql
+> select array_replace_n([1, 2, 2, 3, 2, 1, 4], 2, 5, 2);
++-------------------------------------------------------------------+
+| array_replace_n(List([1,2,2,3,2,1,4]),Int64(2),Int64(5),Int64(2)) |
++-------------------------------------------------------------------+
+| [1, 5, 5, 3, 2, 1, 4]                                             |
++-------------------------------------------------------------------+
+```
+
+#### Aliases
+
+- list_replace
+
+### `array_replace_all`
+
+Replaces the first `max` occurrences of the specified element with another specified element.
+
+```
+array_replace_n(array, from, to, max)
+```
+
+#### Arguments
+
+- **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+- **from**: Initial element.
+- **to**: Final element.
+- **max**: Number of first occurrences to replace.
+
+#### Example
+
+```sql
+> select array_replace_n([1, 2, 2, 3, 2, 1, 4], 2, 5, 2);
++-------------------------------------------------------------------+
+| array_replace_n(List([1,2,2,3,2,1,4]),Int64(2),Int64(5),Int64(2)) |
++-------------------------------------------------------------------+
+| [1, 5, 5, 3, 2, 1, 4]                                             |
++-------------------------------------------------------------------+
+```
+
+#### Aliases
+
+- list_replace_all
+
+### `array_replace_n`
+
+Replaces the first `max` occurrences of the specified element with another specified element.
+
+```
+array_replace_n(array, from, to, max)
+```
+
+#### Arguments
+
+- **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+- **from**: Initial element.
+- **to**: Final element.
+- **max**: Number of first occurrences to replace.
+
+#### Example
+
+```sql
+> select array_replace_n([1, 2, 2, 3, 2, 1, 4], 2, 5, 2);
++-------------------------------------------------------------------+
+| array_replace_n(List([1,2,2,3,2,1,4]),Int64(2),Int64(5),Int64(2)) |
++-------------------------------------------------------------------+
+| [1, 5, 5, 3, 2, 1, 4]                                             |
++-------------------------------------------------------------------+
+```
+
+#### Aliases
+
+- list_replace_n
+
+### `array_resize`
+
+Resizes the list to contain size elements. Initializes new elements with value or empty if value is not set.
+
+```
+array_resize(array, size, value)
+```
+
+#### Arguments
+
+- **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+- **size**: New size of given array.
+- **value**: Defines new elements' value or empty if value is not set.
+
+#### Example
+
+```sql
+> select array_resize([1, 2, 3], 5, 0);
++-------------------------------------+
+| array_resize(List([1,2,3],5,0))     |
++-------------------------------------+
+| [1, 2, 3, 0, 0]                     |
++-------------------------------------+
+```
+
+#### Aliases
+
+- list_resize
+
+### `array_reverse`
+
+Returns the array with the order of the elements reversed.
+
+```
+array_reverse(array)
+```
+
+#### Arguments
+
+- **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+
+#### Example
+
+```sql
+> select array_reverse([1, 2, 3, 4]);
++------------------------------------------------------------+
+| array_reverse(List([1, 2, 3, 4]))                          |
++------------------------------------------------------------+
+| [4, 3, 2, 1]                                               |
++------------------------------------------------------------+
+```
+
+#### Aliases
+
+- list_reverse
+
+### `array_slice`
+
+Extracts the element with the index n from the array.
+
+```
+array_element(array, index)
+```
+
+#### Arguments
+
+- **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+- **index**: Index to extract the element from the array.
+
+#### Example
+
+```sql
+> select array_element([1, 2, 3, 4], 3);
++-----------------------------------------+
+| array_element(List([1,2,3,4]),Int64(3)) |
++-----------------------------------------+
+| 3                                       |
++-----------------------------------------+
+```
+
+#### Aliases
+
+- list_slice
+
+### `array_sort`
+
+Sort array.
+
+```
+array_sort(array, desc, nulls_first)
+```
+
+#### Arguments
+
+- **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+- **desc**: Whether to sort in descending order(`ASC` or `DESC`).
+- **nulls_first**: Whether to sort nulls first(`NULLS FIRST` or `NULLS LAST`).
+
+#### Example
+
+```sql
+> select array_sort([3, 1, 2]);
++-----------------------------+
+| array_sort(List([3,1,2]))   |
++-----------------------------+
+| [1, 2, 3]                   |
++-----------------------------+
+```
+
+#### Aliases
+
+- list_sort
+
+### `array_to_string`
+
+Converts each element to its text representation.
+
+```
+array_to_string(array, delimiter)
+```
+
+#### Arguments
+
+- **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+- **delimiter**: Array element separator.
+
+#### Example
+
+```sql
+> select array_to_string([[1, 2, 3, 4], [5, 6, 7, 8]], ',');
++----------------------------------------------------+
+| array_to_string(List([1,2,3,4,5,6,7,8]),Utf8(",")) |
++----------------------------------------------------+
+| 1,2,3,4,5,6,7,8                                    |
++----------------------------------------------------+
+```
+
+#### Aliases
+
+- list_to_string
+- array_join
+- list_join
+
+### `array_union`
+
+Returns distinct values from the array after removing duplicates.
+
+```
+array_distinct(array)
+```
+
+#### Arguments
+
+- **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+
+#### Example
+
+```sql
+> select array_distinct([1, 3, 2, 3, 1, 2, 4]);
++---------------------------------+
+| array_distinct(List([1,2,3,4])) |
++---------------------------------+
+| [1, 2, 3, 4]                    |
++---------------------------------+
+```
+
+#### Aliases
+
+- list_union
+
+### `cardinality`
+
+Returns the total number of elements in the array.
+
+```
+cardinality(array)
+```
+
+#### Arguments
+
+- **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+
+#### Example
+
+```sql
+> select cardinality([[1, 2, 3, 4], [5, 6, 7, 8]]);
++--------------------------------------+
+| cardinality(List([1,2,3,4,5,6,7,8])) |
++--------------------------------------+
+| 8                                    |
++--------------------------------------+
+```
+
+### `empty`
+
+Returns 1 for an empty array or 0 for a non-empty array.
+
+```
+empty(array)
+```
+
+#### Arguments
+
+- **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+
+#### Example
+
+```sql
+> select empty([1]);
++------------------+
+| empty(List([1])) |
++------------------+
+| 0                |
++------------------+
+```
+
+#### Aliases
+
+- array_empty
+- list_empty
+
+### `flatten`
+
+Converts an array of arrays to a flat array.
+
+- Applies to any depth of nested arrays
+- Does not change arrays that are already flat
+
+The flattened array contains all the elements from all source arrays.
+
+```
+flatten(array)
+```
+
+#### Arguments
+
+- **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+
+#### Example
+
+```sql
+> select flatten([[1, 2], [3, 4]]);
++------------------------------+
+| flatten(List([1,2], [3,4]))  |
++------------------------------+
+| [1, 2, 3, 4]                 |
++------------------------------+
+```
+
+### `generate_series`
+
+Returns an Arrow array between start and stop with step. The range start..end contains all values with start <= x < end. It is empty if start >= end. Step cannot be 0.
+
+```
+range(start, stop, step)
+```
+
+#### Arguments
+
+- **start**: Start of the range. Ints, timestamps, dates or string types that can be coerced to Date32 are supported.
+- **end**: End of the range (not included). Type must be the same as start.
+- **step**: Increase by step (cannot be 0). Steps less than a day are supported only for timestamp ranges.
+
+#### Example
+
+```sql
+> select range(2, 10, 3);
++-----------------------------------+
+| range(Int64(2),Int64(10),Int64(3))|
++-----------------------------------+
+| [2, 5, 8]                         |
++-----------------------------------+
+
+> select range(DATE '1992-09-01', DATE '1993-03-01', INTERVAL '1' MONTH);
++--------------------------------------------------------------+
+| range(DATE '1992-09-01', DATE '1993-03-01', INTERVAL '1' MONTH) |
++--------------------------------------------------------------+
+| [1992-09-01, 1992-10-01, 1992-11-01, 1992-12-01, 1993-01-01, 1993-02-01] |
++--------------------------------------------------------------+
+```
+
+### `list_any_value`
+
+_Alias of [array_any_value](#array_any_value)._
+
+### `list_append`
+
+_Alias of [array_append](#array_append)._
+
+### `list_cat`
+
+_Alias of [array_concat](#array_concat)._
+
+### `list_concat`
+
+_Alias of [array_concat](#array_concat)._
+
+### `list_contains`
+
+_Alias of [array_has](#array_has)._
+
+### `list_dims`
+
+_Alias of [array_dims](#array_dims)._
+
+### `list_distance`
+
+_Alias of [array_distance](#array_distance)._
+
+### `list_distinct`
+
+_Alias of [array_distinct](#array_distinct)._
+
+### `list_element`
+
+_Alias of [array_element](#array_element)._
+
+### `list_empty`
+
+_Alias of [empty](#empty)._
+
+### `list_except`
+
+_Alias of [array_except](#array_except)._
+
+### `list_extract`
+
+_Alias of [array_element](#array_element)._
+
+### `list_has`
+
+_Alias of [array_has](#array_has)._
+
+### `list_has_all`
+
+_Alias of [array_has_all](#array_has_all)._
+
+### `list_has_any`
+
+_Alias of [array_has_any](#array_has_any)._
+
+### `list_indexof`
+
+_Alias of [array_position](#array_position)._
+
+### `list_intersect`
+
+_Alias of [array_intersect](#array_intersect)._
+
+### `list_join`
+
+_Alias of [array_to_string](#array_to_string)._
+
+### `list_length`
+
+_Alias of [array_length](#array_length)._
+
+### `list_ndims`
+
+_Alias of [array_ndims](#array_ndims)._
+
+### `list_pop_back`
+
+_Alias of [array_pop_back](#array_pop_back)._
+
+### `list_pop_front`
+
+_Alias of [array_pop_front](#array_pop_front)._
+
+### `list_position`
+
+_Alias of [array_position](#array_position)._
+
+### `list_positions`
+
+_Alias of [array_positions](#array_positions)._
+
+### `list_prepend`
+
+_Alias of [array_prepend](#array_prepend)._
+
+### `list_push_back`
+
+_Alias of [array_append](#array_append)._
+
+### `list_push_front`
+
+_Alias of [array_prepend](#array_prepend)._
+
+### `list_remove`
+
+_Alias of [array_remove](#array_remove)._
+
+### `list_remove_all`
+
+_Alias of [array_remove_all](#array_remove_all)._
+
+### `list_remove_n`
+
+_Alias of [array_remove_n](#array_remove_n)._
+
+### `list_repeat`
+
+_Alias of [array_repeat](#array_repeat)._
+
+### `list_replace`
+
+_Alias of [array_replace](#array_replace)._
+
+### `list_replace_all`
+
+_Alias of [array_replace_all](#array_replace_all)._
+
+### `list_replace_n`
+
+_Alias of [array_replace_n](#array_replace_n)._
+
+### `list_resize`
+
+_Alias of [array_resize](#array_resize)._
+
+### `list_reverse`
+
+_Alias of [array_reverse](#array_reverse)._
+
+### `list_slice`
+
+_Alias of [array_slice](#array_slice)._
+
+### `list_sort`
+
+_Alias of [array_sort](#array_sort)._
+
+### `list_to_string`
+
+_Alias of [array_to_string](#array_to_string)._
+
+### `list_union`
+
+_Alias of [array_union](#array_union)._
+
+### `make_array`
+
+Returns an array using the specified input expressions.
+
+```
+make_array(expression1[, ..., expression_n])
+```
+
+#### Arguments
+
+- **expression_n**: Expression to include in the output array. Can be a constant, column, or function, and any combination of arithmetic or string operators.
+
+#### Example
+
+```sql
+> select make_array(1, 2, 3, 4, 5);
++----------------------------------------------------------+
+| make_array(Int64(1),Int64(2),Int64(3),Int64(4),Int64(5)) |
++----------------------------------------------------------+
+| [1, 2, 3, 4, 5]                                          |
++----------------------------------------------------------+
+```
+
+#### Aliases
+
+- make_list
+
+### `make_list`
+
+_Alias of [make_array](#make_array)._
+
+### `range`
+
+Returns an Arrow array between start and stop with step. The range start..end contains all values with start <= x < end. It is empty if start >= end. Step cannot be 0.
+
+```
+range(start, stop, step)
+```
+
+#### Arguments
+
+- **start**: Start of the range. Ints, timestamps, dates or string types that can be coerced to Date32 are supported.
+- **end**: End of the range (not included). Type must be the same as start.
+- **step**: Increase by step (cannot be 0). Steps less than a day are supported only for timestamp ranges.
+
+#### Example
+
+```sql
+> select range(2, 10, 3);
++-----------------------------------+
+| range(Int64(2),Int64(10),Int64(3))|
++-----------------------------------+
+| [2, 5, 8]                         |
++-----------------------------------+
+
+> select range(DATE '1992-09-01', DATE '1993-03-01', INTERVAL '1' MONTH);
++--------------------------------------------------------------+
+| range(DATE '1992-09-01', DATE '1993-03-01', INTERVAL '1' MONTH) |
++--------------------------------------------------------------+
+| [1992-09-01, 1992-10-01, 1992-11-01, 1992-12-01, 1993-01-01, 1993-02-01] |
++--------------------------------------------------------------+
+```
+
+### `string_to_array`
+
+Converts each element to its text representation.
+
+```
+array_to_string(array, delimiter)
+```
+
+#### Arguments
+
+- **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+- **delimiter**: Array element separator.
+
+#### Example
+
+```sql
+> select array_to_string([[1, 2, 3, 4], [5, 6, 7, 8]], ',');
++----------------------------------------------------+
+| array_to_string(List([1,2,3,4,5,6,7,8]),Utf8(",")) |
++----------------------------------------------------+
+| 1,2,3,4,5,6,7,8                                    |
++----------------------------------------------------+
+```
+
+#### Aliases
+
+- string_to_list
+
+### `string_to_list`
+
+_Alias of [string_to_array](#string_to_array)._
 
 ## Struct Functions
 

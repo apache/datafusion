@@ -83,7 +83,7 @@ async fn test_basic_prim_aggr_no_group() {
         .table_name("fuzz_table")
         .build();
 
-    fuzzer.run().await;
+    fuzzer.run().await
 }
 
 /// Fuzz test for `basic prim aggr(sum/sum distinct/max/min/count/avg)` + `group by single int64`

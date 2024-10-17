@@ -139,6 +139,11 @@ required-features = ["datetime_expressions"]
 
 [[bench]]
 harness = false
+name = "isnan"
+required-features = ["math_expressions"]
+
+[[bench]]
+harness = false
 name = "signum"
 required-features = ["math_expressions"]
 
@@ -189,5 +194,15 @@ required-features = ["unicode_expressions"]
 
 [[bench]]
 harness = false
+name = "cot"
+required-features = ["math_expressions"]
+
+[[bench]]
+harness = false
 name = "strpos"
 required-features = ["unicode_expressions"]
+
+[[bench]]
+harness = false
+name = "trunc"
+required-features = ["math_expressions"]

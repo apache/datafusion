@@ -6603,7 +6603,7 @@ mod tests {
         let not_nulls = not_nulls.finish();
         let not_nulls = Some(NullBuffer::new(not_nulls));
 
-        let ar = unsafe { StructArray::new_unchecked(fields, arrays, not_nulls) };
+        let ar = StructArray::new(fields, arrays, not_nulls);
         let s = ScalarValue::Struct(Arc::new(ar));
 
         assert_eq!(s.to_string(), "{a:1,b:2}");

@@ -18,7 +18,7 @@
 use std::any::Any;
 use std::sync::{Arc, OnceLock};
 
-use crate::string::common::{make_and_append_view, StringArrayType};
+use crate::strings::{make_and_append_view, StringArrayType};
 use crate::utils::{make_scalar_function, utf8_to_str_type};
 use arrow::array::{
     Array, ArrayIter, ArrayRef, AsArray, GenericStringArray, Int64Array, OffsetSizeTrait,

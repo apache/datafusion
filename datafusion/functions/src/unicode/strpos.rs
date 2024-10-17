@@ -18,7 +18,7 @@
 use std::any::Any;
 use std::sync::{Arc, OnceLock};
 
-use crate::string::common::StringArrayType;
+use crate::strings::StringArrayType;
 use crate::utils::{make_scalar_function, utf8_to_int_type};
 use arrow::array::{ArrayRef, ArrowPrimitiveType, AsArray, PrimitiveArray};
 use arrow::datatypes::{ArrowNativeType, DataType, Int32Type, Int64Type};
