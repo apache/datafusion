@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! [`UnnestOptions`] for unnesting structured types
+
 use crate::Column;
 
 /// Options for unnesting a column that contains a list type,
