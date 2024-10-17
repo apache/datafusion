@@ -138,7 +138,7 @@ impl ListingTableUrl {
 
     /// Creates a new [`ListingTableUrl`] from a url, a valid prefix, and an optional glob
     /// expression
-    fn new(url: Url, prefix: Path, glob: Option<Pattern>) -> Self {
+    pub fn new(url: Url, prefix: Path, glob: Option<Pattern>) -> Self {
         Self { url, prefix, glob }
     }
 
