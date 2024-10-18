@@ -18,11 +18,11 @@
 use std::any::Any;
 use std::sync::{Arc, OnceLock};
 
-use arrow::array::{ArrayRef, Float32Array, Float64Array};
-use arrow::datatypes::DataType;
+use arrow::array::{ArrayRef, AsArray, Float32Array, Float64Array, PrimitiveArray};
 use arrow::datatypes::DataType::{Float32, Float64};
+use arrow::datatypes::{DataType, Float32Type, Float64Type};
 
-use datafusion_common::{exec_err, DataFusionError, Result};
+use datafusion_common::{exec_err, Result};
 use datafusion_expr::scalar_doc_sections::DOC_SECTION_MATH;
 use datafusion_expr::TypeSignature::Exact;
 use datafusion_expr::{
@@ -113,14 +113,11 @@ fn nanvl(args: &[ArrayRef]) -> Result<ArrayRef> {
                 }
             };
 
-            Ok(Arc::new(make_function_inputs2!(
-                &args[0],
-                &args[1],
-                "x",
-                "y",
-                Float64Array,
-                { compute_nanvl }
-            )) as ArrayRef)
+            let x = args[0].as_primitive() as &Float64Array;
+            let y = args[1].as_primitive() as &Float64Array;
+            let result: PrimitiveArray<Float64Type> =
+                arrow::compute::binary(x, y, compute_nanvl)?;
+            Ok(Arc::new(result) as ArrayRef)
         }
         Float32 => {
             let compute_nanvl = |x: f32, y: f32| {
@@ -131,14 +128,11 @@ fn nanvl(args: &[ArrayRef]) -> Result<ArrayRef> {
                 }
             };
 
-            Ok(Arc::new(make_function_inputs2!(
-                &args[0],
-                &args[1],
-                "x",
-                "y",
-                Float32Array,
-                { compute_nanvl }
-            )) as ArrayRef)
+            let x = args[0].as_primitive() as &Float32Array;
+            let y = args[1].as_primitive() as &Float32Array;
+            let result: PrimitiveArray<Float32Type> =
+                arrow::compute::binary(x, y, compute_nanvl)?;
+            Ok(Arc::new(result) as ArrayRef)
         }
         other => exec_err!("Unsupported data type {other:?} for function nanvl"),
     }

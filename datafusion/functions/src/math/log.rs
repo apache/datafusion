@@ -22,11 +22,10 @@ use std::sync::{Arc, OnceLock};
 
 use super::power::PowerFunc;
 
-use arrow::array::{ArrayRef, Float32Array, Float64Array};
-use arrow::datatypes::DataType;
+use arrow::array::{ArrayRef, AsArray, PrimitiveArray};
+use arrow::datatypes::{DataType, Float32Type, Float64Type};
 use datafusion_common::{
-    exec_err, internal_err, plan_datafusion_err, plan_err, DataFusionError, Result,
-    ScalarValue,
+    exec_err, internal_err, plan_datafusion_err, plan_err, Result, ScalarValue,
 };
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::scalar_doc_sections::DOC_SECTION_MATH;
@@ -139,38 +138,34 @@ impl ScalarUDFImpl for LogFunc {
         // note in f64::log params order is different than in sql. e.g in sql log(base, x) == f64::log(x, base)
         let arr: ArrayRef = match args[0].data_type() {
             DataType::Float64 => match base {
-                ColumnarValue::Scalar(ScalarValue::Float32(Some(base))) => {
-                    Arc::new(make_function_scalar_inputs!(x, "x", Float64Array, {
-                        |value: f64| f64::log(value, base as f64)
-                    }))
+                ColumnarValue::Scalar(ScalarValue::Float64(Some(base))) => Arc::new(
+                    x.as_primitive::<Float64Type>()
+                        .unary::<_, Float64Type>(|value: f64| f64::log(value, base)),
+                ),
+                ColumnarValue::Array(base) => {
+                    let x = x.as_primitive::<Float64Type>();
+                    let base = base.as_primitive::<Float64Type>();
+                    let result: PrimitiveArray<Float64Type> =
+                        arrow::compute::binary(x, base, f64::log)?;
+                    Arc::new(result) as ArrayRef
                 }
-                ColumnarValue::Array(base) => Arc::new(make_function_inputs2!(
-                    x,
-                    base,
-                    "x",
-                    "base",
-                    Float64Array,
-                    { f64::log }
-                )),
                 _ => {
                     return exec_err!("log function requires a scalar or array for base")
                 }
             },
 
             DataType::Float32 => match base {
-                ColumnarValue::Scalar(ScalarValue::Float32(Some(base))) => {
-                    Arc::new(make_function_scalar_inputs!(x, "x", Float32Array, {
-                        |value: f32| f32::log(value, base)
-                    }))
+                ColumnarValue::Scalar(ScalarValue::Float32(Some(base))) => Arc::new(
+                    x.as_primitive::<Float32Type>()
+                        .unary::<_, Float32Type>(|value: f32| f32::log(value, base)),
+                ),
+                ColumnarValue::Array(base) => {
+                    let x = x.as_primitive::<Float32Type>();
+                    let base = base.as_primitive::<Float32Type>();
+                    let result: PrimitiveArray<Float32Type> =
+                        arrow::compute::binary(x, base, f32::log)?;
+                    Arc::new(result) as ArrayRef
                 }
-                ColumnarValue::Array(base) => Arc::new(make_function_inputs2!(
-                    x,
-                    base,
-                    "x",
-                    "base",
-                    Float32Array,
-                    { f32::log }
-                )),
                 _ => {
                     return exec_err!("log function requires a scalar or array for base")
                 }
@@ -255,9 +250,9 @@ fn is_pow(func: &ScalarUDF) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
-
     use super::*;
+    use arrow::array::{Float32Array, Float64Array};
+    use std::collections::HashMap;
 
     use arrow::compute::SortOptions;
     use datafusion_common::cast::{as_float32_array, as_float64_array};
