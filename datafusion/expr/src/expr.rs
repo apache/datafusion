@@ -2561,30 +2561,6 @@ mod test {
     }
 
     #[test]
-    fn test_lead_return_type() -> Result<()> {
-        let fun = find_df_window_func("lead").unwrap();
-        let observed = fun.return_type(&[DataType::Utf8], &[true], "")?;
-        assert_eq!(DataType::Utf8, observed);
-
-        let observed = fun.return_type(&[DataType::Float64], &[true], "")?;
-        assert_eq!(DataType::Float64, observed);
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_lag_return_type() -> Result<()> {
-        let fun = find_df_window_func("lag").unwrap();
-        let observed = fun.return_type(&[DataType::Utf8], &[true], "")?;
-        assert_eq!(DataType::Utf8, observed);
-
-        let observed = fun.return_type(&[DataType::Float64], &[true], "")?;
-        assert_eq!(DataType::Float64, observed);
-
-        Ok(())
-    }
-
-    #[test]
     fn test_nth_value_return_type() -> Result<()> {
         let fun = find_df_window_func("nth_value").unwrap();
         let observed =
@@ -2621,8 +2597,6 @@ mod test {
         let names = vec![
             "cume_dist",
             "ntile",
-            "lag",
-            "lead",
             "first_value",
             "last_value",
             "nth_value",
@@ -2658,18 +2632,6 @@ mod test {
             find_df_window_func("LAST_value"),
             Some(WindowFunctionDefinition::BuiltInWindowFunction(
                 built_in_window_function::BuiltInWindowFunction::LastValue
-            ))
-        );
-        assert_eq!(
-            find_df_window_func("LAG"),
-            Some(WindowFunctionDefinition::BuiltInWindowFunction(
-                built_in_window_function::BuiltInWindowFunction::Lag
-            ))
-        );
-        assert_eq!(
-            find_df_window_func("LEAD"),
-            Some(WindowFunctionDefinition::BuiltInWindowFunction(
-                built_in_window_function::BuiltInWindowFunction::Lead
             ))
         );
         assert_eq!(find_df_window_func("not_exist"), None)

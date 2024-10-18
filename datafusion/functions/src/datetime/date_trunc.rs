@@ -18,7 +18,7 @@
 use std::any::Any;
 use std::ops::{Add, Sub};
 use std::str::FromStr;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use arrow::array::temporal_conversions::{
     as_datetime_with_timezone, timestamp_ns_to_datetime,
@@ -36,12 +36,13 @@ use datafusion_common::{exec_err, plan_err, DataFusionError, Result, ScalarValue
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::TypeSignature::Exact;
 use datafusion_expr::{
-    ColumnarValue, ScalarUDFImpl, Signature, Volatility, TIMEZONE_WILDCARD,
+    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility, TIMEZONE_WILDCARD,
 };
 
 use chrono::{
     DateTime, Datelike, Duration, LocalResult, NaiveDateTime, Offset, TimeDelta, Timelike,
 };
+use datafusion_expr::scalar_doc_sections::DOC_SECTION_DATETIME;
 
 #[derive(Debug)]
 pub struct DateTruncFunc {
@@ -241,6 +242,40 @@ impl ScalarUDFImpl for DateTruncFunc {
             Ok(SortProperties::Unordered)
         }
     }
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_date_trunc_doc())
+    }
+}
+
+static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+
+fn get_date_trunc_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_DATETIME)
+            .with_description("Truncates a timestamp value to a specified precision.")
+            .with_syntax_example("date_trunc(precision, expression)")
+            .with_argument(
+                "precision",
+                r#"Time precision to truncate to. The following precisions are supported:
+
+    - year / YEAR
+    - quarter / QUARTER
+    - month / MONTH
+    - week / WEEK
+    - day / DAY
+    - hour / HOUR
+    - minute / MINUTE
+    - second / SECOND
+"#,
+            )
+            .with_argument(
+                "expression",
+                "Time expression to operate on. Can be a constant, column, or function.",
+            )
+            .build()
+            .unwrap()
+    })
 }
 
 fn _date_trunc_coarse<T>(granularity: &str, value: Option<T>) -> Result<Option<T>>
