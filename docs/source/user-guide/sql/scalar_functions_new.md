@@ -1752,7 +1752,7 @@ Additional examples can be found [here](https://github.com/apache/datafusion/blo
 
 ### `regexp_match`
 
-Returns the first [regular expression](https://docs.rs/regex/latest/regex/#syntax) matche in a string.
+Returns the first [regular expression](https://docs.rs/regex/latest/regex/#syntax) matches in a string.
 
 ```
 regexp_match(str, regexp[, flags])
