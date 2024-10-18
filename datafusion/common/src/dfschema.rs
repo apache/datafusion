@@ -315,7 +315,6 @@ impl DFSchema {
                 None => self_unqualified_names.contains(field.name().as_str()),
             };
             if !duplicated_field {
-                // self.inner.fields.push(field.clone());
                 schema_builder.push(Arc::clone(field));
                 qualifiers.push(qualifier.cloned());
             }

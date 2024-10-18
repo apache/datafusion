@@ -7288,4 +7288,3 @@ drop table values_all_empty;
 
 statement ok
 drop table fixed_size_col_table;
-
