@@ -780,7 +780,17 @@ pub async fn from_substrait_rel(
                     )?
                     .build()
                 }
-                None => plan_err!("JoinRel without join condition is not allowed"),
+                None => {
+                    let on: Vec<String> = vec![];
+                    left.join_detailed(
+                        right.build()?,
+                        join_type,
+                        (on.clone(), on),
+                        None,
+                        false,
+                    )?
+                    .build()
+                }
             }
         }
         Some(RelType::Cross(cross)) => {
