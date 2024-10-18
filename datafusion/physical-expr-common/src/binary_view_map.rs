@@ -19,12 +19,12 @@
 //! `StringViewArray`/`BinaryViewArray`.
 //! Much of the code is from `binary_map.rs`, but with simpler implementation because we directly use the
 //! [`GenericByteViewBuilder`].
-use ahash::RandomState;
 use arrow::array::cast::AsArray;
 use arrow::array::{Array, ArrayBuilder, ArrayRef, GenericByteViewBuilder};
 use arrow::datatypes::{BinaryViewType, ByteViewType, DataType, StringViewType};
 use datafusion_common::hash_utils::create_hashes;
 use datafusion_common::utils::proxy::{RawTableAllocExt, VecAllocExt};
+use foldhash::fast::RandomState;
 use std::fmt::Debug;
 use std::sync::Arc;
 
@@ -151,7 +151,7 @@ where
             map: hashbrown::raw::RawTable::with_capacity(INITIAL_MAP_CAPACITY),
             map_size: 0,
             builder: GenericByteViewBuilder::new(),
-            random_state: RandomState::new(),
+            random_state: RandomState::default(),
             hashes_buffer: vec![],
             null: None,
         }
