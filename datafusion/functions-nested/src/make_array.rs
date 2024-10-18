@@ -32,8 +32,8 @@ use datafusion_common::{plan_err, utils::array_into_list_array_nullable, Result}
 use datafusion_expr::binary::{
     try_type_union_resolution_with_struct, type_union_resolution,
 };
-use datafusion_expr::TypeSignature;
 use datafusion_expr::scalar_doc_sections::DOC_SECTION_ARRAY;
+use datafusion_expr::TypeSignature;
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
