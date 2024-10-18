@@ -114,14 +114,17 @@ impl DataFilePaths for &String {
     }
 }
 
-impl<P> DataFilePaths for Vec<P>
-where
-    P: AsRef<str>,
-{
+impl DataFilePaths for Vec<&str> {
     fn to_urls(self) -> Result<Vec<ListingTableUrl>> {
         self.iter()
             .map(ListingTableUrl::parse)
             .collect::<Result<Vec<ListingTableUrl>>>()
+    }
+}
+
+impl DataFilePaths for Vec<ListingTableUrl> {
+    fn to_urls(self) -> Result<Vec<ListingTableUrl>> {
+        Ok(self)
     }
 }
 
