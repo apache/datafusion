@@ -70,18 +70,10 @@ pub struct RunOpt {
     #[structopt(parse(from_os_str), short = "o", long = "output")]
     output_path: Option<PathBuf>,
 
-    #[structopt(
-        short = "b",
-        long = "batch_size",
-        default_value = "8192"
-    )]
+    #[structopt(short = "b", long = "batch_size", default_value = "8192")]
     batch_size: usize,
 
-    #[structopt(
-        short = "p",
-        long = "partition",
-        default_value = "0"
-    )]
+    #[structopt(short = "p", long = "partition", default_value = "0")]
     partition: usize,
 }
 
