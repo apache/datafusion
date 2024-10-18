@@ -53,7 +53,7 @@ dirs = "5.0.1"
 env_logger = "0.11"
 futures = "0.3"
 mimalloc = { version = "0.1", default-features = false }
-object_store = { version = "0.11.0", features = ["aws", "gcp", "http"] }
+object_store = { version = "0.11.1", features = ["aws", "gcp", "http"] }
 parking_lot = { version = "0.12" }
 parquet = { version = "53.0.0", default-features = false }
 regex = "1.8"
@@ -66,3 +66,6 @@ assert_cmd = "2.0"
 ctor = "0.2.0"
 predicates = "3.0"
 rstest = "0.22"
+
+[patch.crates-io]
+object_store = { git = "https://github.com/alamb/arrow-rs.git", rev = "7fcf4fe5a0d1840af90512f53eb635600b014278" }
