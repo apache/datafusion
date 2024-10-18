@@ -54,7 +54,7 @@ math_expressions = []
 # enable regular expressions
 regex_expressions = ["regex"]
 # enable string functions
-string_expressions = ["regex_expressions", "uuid"]
+string_expressions = ["uuid"]
 # enable unicode functions
 unicode_expressions = ["hashbrown", "unicode-segmentation"]
 

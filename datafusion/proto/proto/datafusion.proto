@@ -515,8 +515,8 @@ enum BuiltInWindowFunction {
   //  PERCENT_RANK = 3;
   CUME_DIST = 4;
   NTILE = 5;
-  LAG = 6;
-  LEAD = 7;
+  // LAG = 6;
+  // LEAD = 7;
   FIRST_VALUE = 8;
   LAST_VALUE = 9;
   NTH_VALUE = 10;
@@ -528,7 +528,7 @@ message WindowExprNode {
     string udaf = 3;
     string udwf = 9;
   }
-  LogicalExprNode expr = 4;
+  repeated LogicalExprNode exprs = 4;
   repeated LogicalExprNode partition_by = 5;
   repeated SortExprNode order_by = 6;
   // repeated LogicalExprNode filter = 7;
