@@ -17,7 +17,7 @@
 
 //! Math function: `power()`.
 
-use arrow::datatypes::{ArrowNativeTypeOp, DataType};
+use arrow::datatypes::{ArrowNativeTypeOp, DataType, Float64Type};
 
 use datafusion_common::{
     arrow_datafusion_err, exec_datafusion_err, exec_err, plan_datafusion_err,
@@ -28,7 +28,7 @@ use datafusion_expr::scalar_doc_sections::DOC_SECTION_MATH;
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
 use datafusion_expr::{ColumnarValue, Documentation, Expr, ScalarUDF, TypeSignature};
 
-use arrow::array::{ArrayRef, Float64Array, Int64Array};
+use arrow::array::{ArrayRef, AsArray, Int64Array, PrimitiveArray};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use std::any::Any;
 use std::sync::{Arc, OnceLock};
@@ -90,15 +90,15 @@ impl ScalarUDFImpl for PowerFunc {
         let args = ColumnarValue::values_to_arrays(args)?;
 
         let arr: ArrayRef = match args[0].data_type() {
-            DataType::Float64 => Arc::new(make_function_inputs2!(
-                &args[0],
-                &args[1],
-                "base",
-                "exponent",
-                Float64Array,
-                { f64::powf }
-            )),
-
+            DataType::Float64 => {
+                let bases = args[0].as_primitive::<Float64Type>();
+                let exponents = args[1].as_primitive::<Float64Type>();
+                let result: PrimitiveArray<Float64Type> =
+                    arrow::compute::binary(bases, exponents, |base, exp| {
+                        f64::powf(base, exp)
+                    })?;
+                Arc::new(result) as ArrayRef
+            }
             DataType::Int64 => {
                 let bases = downcast_arg!(&args[0], "base", Int64Array);
                 let exponents = downcast_arg!(&args[1], "exponent", Int64Array);
@@ -195,6 +195,7 @@ fn is_log(func: &ScalarUDF) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use arrow::array::Float64Array;
     use datafusion_common::cast::{as_float64_array, as_int64_array};
 
     use super::*;
