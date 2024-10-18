@@ -1263,7 +1263,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         )))
     }
 
-    /// Convert each `TableConstraint` to corresponding `Constraint`
+    /// Convert each [TableConstraint] to corresponding [Constraint]
     fn new_constraint_from_table_constraints(
         constraints: &[TableConstraint],
         df_schema: &DFSchemaRef,
