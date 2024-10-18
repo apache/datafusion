@@ -34,6 +34,7 @@ use arrow::record_batch::{RecordBatch, RecordBatchOptions};
 use datafusion_common::{internal_err, plan_err, Result, ScalarValue};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::EquivalenceProperties;
+use itertools::Itertools;
 
 /// Execution plan for values list based relation (produces constant rows)
 #[derive(Debug)]
@@ -151,7 +152,13 @@ impl DisplayAs for ValuesExec {
     ) -> std::fmt::Result {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                write!(f, "ValuesExec")
+                let schema = self
+                    .schema
+                    .fields()
+                    .iter()
+                    .map(|f| format!("{}:{}", f.name(), f.data_type()))
+                    .join(", ");
+                write!(f, "ValuesExec [{}]", schema)
             }
         }
     }
