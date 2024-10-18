@@ -1727,7 +1727,7 @@ mod tests {
             .build()?;
 
         let expected = "Projection: test.a, test1.d\
-        \n  CrossJoin:\
+        \n  Cross Join: \
         \n    Projection: test.a, test.b, test.c\
         \n      TableScan: test, full_filters=[test.a = Int32(1)]\
         \n    Projection: test1.d, test1.e, test1.f\
@@ -1754,7 +1754,7 @@ mod tests {
             .build()?;
 
         let expected = "Projection: test.a, test1.a\
-        \n  CrossJoin:\
+        \n  Cross Join: \
         \n    Projection: test.a, test.b, test.c\
         \n      TableScan: test, full_filters=[test.a = Int32(1)]\
         \n    Projection: test1.a, test1.b, test1.c\

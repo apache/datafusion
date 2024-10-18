@@ -23,7 +23,7 @@ use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::JoinType::Inner;
 use datafusion_expr::{
     logical_plan::{EmptyRelation, LogicalPlan},
-    CrossJoin, Expr,
+    Expr,
 };
 
 /// Eliminates joins when join condition is false.
@@ -54,13 +54,6 @@ impl OptimizerRule for EliminateJoin {
         match plan {
             LogicalPlan::Join(join) if join.join_type == Inner && join.on.is_empty() => {
                 match join.filter {
-                    Some(Expr::Literal(ScalarValue::Boolean(Some(true)))) => {
-                        Ok(Transformed::yes(LogicalPlan::CrossJoin(CrossJoin {
-                            left: join.left,
-                            right: join.right,
-                            schema: join.schema,
-                        })))
-                    }
                     Some(Expr::Literal(ScalarValue::Boolean(Some(false)))) => Ok(
                         Transformed::yes(LogicalPlan::EmptyRelation(EmptyRelation {
                             produce_one_row: false,
@@ -103,23 +96,6 @@ mod tests {
             .build()?;
 
         let expected = "EmptyRelation";
-        assert_optimized_plan_equal(plan, expected)
-    }
-
-    #[test]
-    fn join_on_true() -> Result<()> {
-        let plan = LogicalPlanBuilder::empty(false)
-            .join_on(
-                LogicalPlanBuilder::empty(false).build()?,
-                Inner,
-                Some(lit(true)),
-            )?
-            .build()?;
-
-        let expected = "\
-        CrossJoin:\
-        \n  EmptyRelation\
-        \n  EmptyRelation";
         assert_optimized_plan_equal(plan, expected)
     }
 }
