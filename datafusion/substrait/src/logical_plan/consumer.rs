@@ -196,6 +196,65 @@ fn split_eq_and_noneq_join_predicate_with_nulls_equality(
     (accum_join_keys, nulls_equal_nulls, join_filter)
 }
 
+async fn union_rels(
+    rels: &[Rel],
+    ctx: &SessionContext,
+    extensions: &Extensions,
+    is_all: bool,
+) -> Result<LogicalPlan> {
+    let mut union_builder = Ok(LogicalPlanBuilder::from(
+        from_substrait_rel(ctx, &rels[0], extensions).await?,
+    ));
+    for input in &rels[1..] {
+        let rel_plan = from_substrait_rel(ctx, input, extensions).await?;
+
+        union_builder = if is_all {
+            union_builder?.union(rel_plan)
+        } else {
+            union_builder?.union_distinct(rel_plan)
+        };
+    }
+    union_builder?.build()
+}
+
+async fn intersect_rels(
+    rels: &[Rel],
+    ctx: &SessionContext,
+    extensions: &Extensions,
+    is_all: bool,
+) -> Result<LogicalPlan> {
+    let mut rel = from_substrait_rel(ctx, &rels[0], extensions).await?;
+
+    for input in &rels[1..] {
+        rel = LogicalPlanBuilder::intersect(
+            rel,
+            from_substrait_rel(ctx, input, extensions).await?,
+            is_all,
+        )?
+    }
+
+    Ok(rel)
+}
+
+async fn except_rels(
+    rels: &[Rel],
+    ctx: &SessionContext,
+    extensions: &Extensions,
+    is_all: bool,
+) -> Result<LogicalPlan> {
+    let mut rel = from_substrait_rel(ctx, &rels[0], extensions).await?;
+
+    for input in &rels[1..] {
+        rel = LogicalPlanBuilder::except(
+            rel,
+            from_substrait_rel(ctx, input, extensions).await?,
+            is_all,
+        )?
+    }
+
+    Ok(rel)
+}
+
 /// Convert Substrait Plan to DataFusion LogicalPlan
 pub async fn from_substrait_plan(
     ctx: &SessionContext,
@@ -494,6 +553,7 @@ fn make_renamed_schema(
 }
 
 /// Convert Substrait Rel to DataFusion DataFrame
+#[allow(deprecated)]
 #[async_recursion]
 pub async fn from_substrait_rel(
     ctx: &SessionContext,
@@ -877,27 +937,65 @@ pub async fn from_substrait_rel(
             Ok(set_op) => match set_op {
                 set_rel::SetOp::UnionAll => {
                     if !set.inputs.is_empty() {
-                        let mut union_builder = Ok(LogicalPlanBuilder::from(
-                            from_substrait_rel(ctx, &set.inputs[0], extensions).await?,
-                        ));
-                        for input in &set.inputs[1..] {
-                            union_builder = union_builder?
-                                .union(from_substrait_rel(ctx, input, extensions).await?);
-                        }
-                        union_builder?.build()
+                        union_rels(&set.inputs, ctx, extensions, true).await
+                    } else {
+                        not_impl_err!("Union relation requires at least one input")
+                    }
+                }
+                set_rel::SetOp::UnionDistinct => {
+                    if !set.inputs.is_empty() {
+                        union_rels(&set.inputs, ctx, extensions, false).await
                     } else {
                         not_impl_err!("Union relation requires at least one input")
                     }
                 }
                 set_rel::SetOp::IntersectionPrimary => {
-                    if set.inputs.len() == 2 {
+                    if set.inputs.len() >= 2 {
                         LogicalPlanBuilder::intersect(
                             from_substrait_rel(ctx, &set.inputs[0], extensions).await?,
-                            from_substrait_rel(ctx, &set.inputs[1], extensions).await?,
+                            union_rels(&set.inputs[1..], ctx, extensions, true).await?,
                             false,
                         )
                     } else {
-                        not_impl_err!("Primary Intersect relation with more than two inputs isn't supported")
+                        not_impl_err!(
+                            "Primary Intersect relation requires at least two inputs"
+                        )
+                    }
+                }
+                set_rel::SetOp::IntersectionMultiset => {
+                    if set.inputs.len() >= 2 {
+                        intersect_rels(&set.inputs, ctx, extensions, false).await
+                    } else {
+                        not_impl_err!(
+                            "Multiset Intersect relation requires at least two inputs"
+                        )
+                    }
+                }
+                set_rel::SetOp::IntersectionMultisetAll => {
+                    if set.inputs.len() >= 2 {
+                        intersect_rels(&set.inputs, ctx, extensions, true).await
+                    } else {
+                        not_impl_err!(
+                            "MultisetAll Intersect relation requires at least two inputs"
+                        )
+                    }
+                }
+                set_rel::SetOp::MinusPrimary => {
+                    if set.inputs.len() >= 2 {
+                        except_rels(&set.inputs, ctx, extensions, false).await
+                    } else {
+                        not_impl_err!(
+                            "Primary Minus relation requires at least two inputs"
+                        )
+                    }
+                }
+                set_rel::SetOp::MinusPrimaryAll => {
+                    if set.inputs.len() >= 2 {
+                        except_rels(&set.inputs, ctx, extensions, true).await
+                    } else {
+                        not_impl_err!(
+                            "PrimaryAll Minus relation requires at least two inputs"
+                        )
                     }
                 }
                 _ => not_impl_err!("Unsupported set operator: {set_op:?}"),
