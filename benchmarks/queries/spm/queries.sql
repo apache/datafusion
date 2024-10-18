@@ -1,1 +1,0 @@
-SELECT * FROM spm_table WHERE a=0 ORDER BY b, c;
