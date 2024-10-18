@@ -1673,6 +1673,10 @@ pub(crate) fn asymmetric_join_output_partitioning(
     }
 }
 
+/// Trait for incrementally generating Join output. 
+///
+/// This trait is used to limit some join outputs 
+/// so it does not produce single large batches 
 pub(crate) trait BatchTransformer: Debug + Clone {
     /// Sets the next `RecordBatch` to be processed.
     fn set_batch(&mut self, batch: RecordBatch);

@@ -341,8 +341,8 @@ config_namespace! {
 
         /// Should DataFusion enforce batch size in joins or not. By default,
         /// DataFusion will not enforce batch size in joins. Enforcing batch size
-        /// in joins can help to avoid out-of-memory errors when joining large
-        /// tables with a highly-selective join filter.
+        /// in joins can reduce memory usage when joining large
+        /// tables with a highly-selective join filter, but is also slightly slower.
         pub enforce_batch_size_in_joins: bool, default = false
     }
 }
