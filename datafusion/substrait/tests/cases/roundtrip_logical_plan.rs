@@ -474,16 +474,14 @@ async fn roundtrip_inlist_5() -> Result<()> {
     // using assert_expected_plan here as a workaround
     assert_expected_plan(
     "SELECT a, f FROM data WHERE (f IN ('a', 'b', 'c') OR a in (SELECT data2.a FROM data2 WHERE f IN ('b', 'c', 'd')))",
-    "Filter: data.f = Utf8(\"a\") OR data.f = Utf8(\"b\") OR data.f = Utf8(\"c\") OR data.a IN (<subquery>)\
-    \n  Subquery:\
-    \n    Projection: data2.a\
-    \n      Filter: data2.f IN ([Utf8(\"b\"), Utf8(\"c\"), Utf8(\"d\")])\
-    \n        TableScan: data2\
-    \n  TableScan: data projection=[a, f], partial_filters=[data.f = Utf8(\"a\") OR data.f = Utf8(\"b\") OR data.f = Utf8(\"c\") OR data.a IN (<subquery>)]\
-    \n    Subquery:\
-    \n      Projection: data2.a\
-    \n        Filter: data2.f IN ([Utf8(\"b\"), Utf8(\"c\"), Utf8(\"d\")])\
-    \n          TableScan: data2",
+    "Projection: data.a, data.f\
+     \n  Filter: data.f = Utf8(\"a\") OR data.f = Utf8(\"b\") OR data.f = Utf8(\"c\") OR Boolean(true) IS NOT NULL\
+     \n    Projection: data.a, data.f, Boolean(true)\
+     \n      Left Join: data.a = data2.a\
+     \n        TableScan: data projection=[a, f]\
+     \n        Projection: data2.a, Boolean(true)\
+     \n          Filter: data2.f = Utf8(\"b\") OR data2.f = Utf8(\"c\") OR data2.f = Utf8(\"d\")\
+     \n            TableScan: data2 projection=[a, f], partial_filters=[data2.f = Utf8(\"b\") OR data2.f = Utf8(\"c\") OR data2.f = Utf8(\"d\")]",
     true).await
 }
 
