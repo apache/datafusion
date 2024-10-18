@@ -44,7 +44,7 @@ use datafusion_common::{internal_err, DFSchema, Result, ScalarValue};
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::sort_properties::ExprProperties;
 use datafusion_expr::type_coercion::functions::data_types_with_scalar_udf;
-use datafusion_expr::{expr_vec_fmt, ColumnarValue, Expr, ScalarUDF};
+use datafusion_expr::{expr_vec_fmt, ColumnarValue, Expr, ScalarUDF, Volatility};
 
 /// Physical expression of a scalar function
 pub struct ScalarFunctionExpr {
@@ -143,7 +143,10 @@ impl PhysicalExpr for ScalarFunctionExpr {
         // evaluate the function
         let output = match self.args.is_empty() {
             true => self.fun.invoke_no_args(batch.num_rows()),
-            false => self.fun.invoke(&inputs),
+            false => match self.fun.signature().volatility {
+                Volatility::Immutable | Volatility::Stable => self.fun.invoke(&inputs),
+                Volatility::Volatile => self.fun.invoke_batch(&inputs, batch.num_rows()),
+            },
         }?;
 
         if let ColumnarValue::Array(array) = &output {
