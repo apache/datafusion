@@ -1050,7 +1050,6 @@ impl DefaultPhysicalPlanner {
                         Arc::new(CrossJoinExec::new(physical_left, physical_right))
                     } else {
                         // there is no equal join condition, use the nested loop join
-                        // TODO optimize the plan, and use the config of `target_partitions` and `repartition_joins`
                         Arc::new(NestedLoopJoinExec::try_new(
                             physical_left,
                             physical_right,
