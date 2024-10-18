@@ -101,7 +101,7 @@ pub(crate) struct SortPreservingMergeStream<C: CursorValues> {
     num_of_polled_with_same_value: Vec<usize>,
     /// TODO: Remove it for upstream merge, for demo only
     /// partition index, partition polls count
-    // records: (usize, usize),
+    records: (usize, usize),
     prev_cursors: Vec<Option<Cursor<C>>>,
 
     /// Optional number of rows to fetch
@@ -135,7 +135,7 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
             aborted: false,
             cursors: (0..stream_count).map(|_| None).collect(),
             prev_cursors: (0..stream_count).map(|_| None).collect(),
-            // records: (0, 0),
+            records: (0, 0),
             num_of_polled_with_same_value: vec![0; stream_count],
             loser_tree: vec![],
             loser_tree_adjusted: false,
@@ -233,12 +233,12 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
 
             let stream_idx = self.loser_tree[0];
             if self.advance(stream_idx) {
-                // if stream_idx == self.records.0 {
-                //     self.records.1 += 1
-                // } else {
-                //     self.records.1 = 0;
-                // }
-                // println!("records: {:?}", self.records);
+                if stream_idx == self.records.0 {
+                    self.records.1 += 1
+                } else {
+                    self.records.1 = 0;
+                }
+                println!("records: {:?}", self.records);
                 self.loser_tree_adjusted = false;
                 self.in_progress.push_row(stream_idx);
 

@@ -34,7 +34,6 @@ COMMAND=
 BENCHMARK=all
 DATAFUSION_DIR=${DATAFUSION_DIR:-$SCRIPT_DIR/..}
 DATA_DIR=${DATA_DIR:-$SCRIPT_DIR/data}
-DATA_SPM_DIR=${DATA_SPM_DIR:-$SCRIPT_DIR/spm_data}
 CARGO_COMMAND=${CARGO_COMMAND:-"cargo run --release"}
 PREFER_HASH_JOIN=${PREFER_HASH_JOIN:-true}
 VIRTUAL_ENV=${VIRTUAL_ENV:-$SCRIPT_DIR/venv}
@@ -232,9 +231,6 @@ main() {
                 sort)
                     run_sort
                     ;;
-                spm)
-                    run_spm
-                    ;;
                 clickbench_1)
                     run_clickbench_1
                     ;;
@@ -424,22 +420,6 @@ run_clickbench_1() {
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running clickbench (1 file) benchmark..."
     $CARGO_COMMAND --bin dfbench -- clickbench  --iterations 5 --path "${DATA_DIR}/hits.parquet"  --queries-path "${SCRIPT_DIR}/queries/clickbench/queries.sql" -o "${RESULTS_FILE}"
-}
-
-run_spm() {
-    RESULTS_FILE_1="${RESULTS_DIR}/spm_low_card_b4.json"
-    RESULTS_FILE_2="${RESULTS_DIR}/spm_low_card_b4_p2.json"
-    RESULTS_FILE_3="${RESULTS_DIR}/spm_low_card.json"
-    RESULTS_FILE_4="${RESULTS_DIR}/spm_low_card_p2.json"
-    RESULTS_FILE_5="${RESULTS_DIR}/spm_high_card.json"
-    echo "RESULTS_FILE: ${RESULTS_FILE}"
-    echo "Running spm benchmark..."
-    echo "Path: ${DATA_SPM_DIR}"
-    $CARGO_COMMAND --bin dfbench -- spm  --iterations 5 --batch_size 4 --path "${DATA_SPM_DIR}/low_card_spm_small_batch.csv"  --queries-path "${SCRIPT_DIR}/queries/spm/queries.sql" -o "${RESULTS_FILE_1}"
-    $CARGO_COMMAND --bin dfbench -- spm  --iterations 5 --batch_size 4 --partition 2 --path "${DATA_SPM_DIR}/low_card_spm_small_batch.csv"  --queries-path "${SCRIPT_DIR}/queries/spm/queries.sql" -o "${RESULTS_FILE_2}"
-    $CARGO_COMMAND --bin dfbench -- spm  --iterations 5 --path "${DATA_SPM_DIR}/low_card_spm.csv"  --queries-path "${SCRIPT_DIR}/queries/spm/queries.sql" -o "${RESULTS_FILE_3}"
-    $CARGO_COMMAND --bin dfbench -- spm  --iterations 5 --partition 2 --path "${DATA_SPM_DIR}/low_card_spm.csv"  --queries-path "${SCRIPT_DIR}/queries/spm/queries.sql" -o "${RESULTS_FILE_4}"
-    $CARGO_COMMAND --bin dfbench -- spm  --iterations 5 --path "${DATA_SPM_DIR}/high_card_spm.csv"  --queries-path "${SCRIPT_DIR}/queries/spm/queries.sql" -o "${RESULTS_FILE_5}"
 }
 
  # Runs the clickbench benchmark with the partitioned parquet files

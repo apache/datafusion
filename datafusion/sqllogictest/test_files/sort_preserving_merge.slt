@@ -1,0 +1,173 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+statement ok
+CREATE EXTERNAL TABLE ordered_table (
+  a0 INT,
+  a INT,
+  b INT,
+  c INT,
+  d INT
+)
+STORED AS CSV
+WITH ORDER (c ASC)
+LOCATION '../core/tests/data/low_card_spm.csv'
+OPTIONS ('format.has_header' 'true');
+
+# Test for low cardinality case
+
+query TT
+explain select * from (select b, c, a, a0 from ordered_table) t1
+union all
+select * from (select b, c, a, a0 from ordered_table) t2
+order by d, c, a, a0, b
+limit 4;
+----
+logical_plan
+01)Projection: t1.b, t1.c, t1.a, t1.a0
+02)--Sort: t1.d ASC NULLS LAST, t1.c ASC NULLS LAST, t1.a ASC NULLS LAST, t1.a0 ASC NULLS LAST, t1.b ASC NULLS LAST, fetch=4
+03)----Union
+04)------SubqueryAlias: t1
+05)--------Projection: ordered_table.b, ordered_table.c, ordered_table.a, ordered_table.a0, ordered_table.d
+06)----------TableScan: ordered_table projection=[a0, a, b, c, d]
+07)------SubqueryAlias: t2
+08)--------Projection: ordered_table.b, ordered_table.c, ordered_table.a, ordered_table.a0, ordered_table.d
+09)----------TableScan: ordered_table projection=[a0, a, b, c, d]
+physical_plan
+01)ProjectionExec: expr=[b@0 as b, c@1 as c, a@2 as a, a0@3 as a0]
+02)--SortPreservingMergeExec: [d@4 ASC NULLS LAST,c@1 ASC NULLS LAST,a@2 ASC NULLS LAST,a0@3 ASC NULLS LAST,b@0 ASC NULLS LAST], fetch=4
+03)----UnionExec
+04)------SortExec: TopK(fetch=4), expr=[d@4 ASC NULLS LAST,c@1 ASC NULLS LAST,a@2 ASC NULLS LAST,a0@3 ASC NULLS LAST,b@0 ASC NULLS LAST], preserve_partitioning=[false]
+05)--------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/low_card_spm.csv]]}, projection=[b, c, a, a0, d], output_ordering=[c@1 ASC NULLS LAST], has_header=true
+06)------SortExec: TopK(fetch=4), expr=[d@4 ASC NULLS LAST,c@1 ASC NULLS LAST,a@2 ASC NULLS LAST,a0@3 ASC NULLS LAST,b@0 ASC NULLS LAST], preserve_partitioning=[false]
+07)--------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/low_card_spm.csv]]}, projection=[b, c, a, a0, d], output_ordering=[c@1 ASC NULLS LAST], has_header=true
+
+query IIII
+select * from (select b, c, a, a0 from ordered_table) t1
+union all
+select * from (select b, c, a, a0 from ordered_table) t2
+order by d, c, a, a0, b
+limit 4;
+----
+0 0 0 0
+0 0 0 0
+0 0 0 0
+0 0 0 0
+
+statement ok
+drop table ordered_table;
+
+# Test smaller batches
+
+statement ok
+set datafusion.execution.target_partitions = 2;
+
+statement ok
+set datafusion.execution.batch_size = 4;
+
+statement ok
+CREATE EXTERNAL TABLE annotated_data_finite2 (
+  a0 INT,
+  a INT,
+  b INT,
+  c INT,
+  d INT
+)
+STORED AS CSV
+WITH ORDER (a ASC, b ASC, c ASC)
+LOCATION '../core/tests/data/low_card_spm_small_batch.csv'
+OPTIONS ('format.has_header' 'true');
+
+
+query TT
+EXPLAIN SELECT *
+FROM annotated_data_finite2
+WHERE a=0
+ORDER BY b, c
+limit 4;
+----
+logical_plan
+01)Sort: annotated_data_finite2.b ASC NULLS LAST, annotated_data_finite2.c ASC NULLS LAST, fetch=4
+02)--Filter: annotated_data_finite2.a = Int32(0)
+03)----TableScan: annotated_data_finite2 projection=[a0, a, b, c, d], partial_filters=[annotated_data_finite2.a = Int32(0)]
+physical_plan
+01)SortPreservingMergeExec: [b@2 ASC NULLS LAST,c@3 ASC NULLS LAST], fetch=4
+02)--CoalesceBatchesExec: target_batch_size=4, fetch=4
+03)----FilterExec: a@1 = 0
+04)------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+05)--------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/low_card_spm_small_batch.csv]]}, projection=[a0, a, b, c, d], output_ordering=[a@1 ASC NULLS LAST, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST], has_header=true
+
+query IIIII
+SELECT *
+FROM annotated_data_finite2
+WHERE a=0
+ORDER BY b, c
+limit 4;
+----
+0 0 0 0 1
+0 0 0 0 1
+0 0 0 0 1
+0 0 0 0 1
+
+statement ok
+drop table annotated_data_finite2;
+
+statement ok
+CREATE EXTERNAL TABLE annotated_data_finite2 (
+  a0 INT,
+  a INT,
+  b INT,
+  c INT,
+  d INT
+)
+STORED AS CSV
+WITH ORDER (a ASC, b ASC, c ASC)
+LOCATION '../core/tests/data/high_card_spm.csv'
+OPTIONS ('format.has_header' 'true');
+
+query TT
+EXPLAIN SELECT *
+FROM annotated_data_finite2
+WHERE a=0
+ORDER BY b, c
+limit 4;
+----
+logical_plan
+01)Sort: annotated_data_finite2.b ASC NULLS LAST, annotated_data_finite2.c ASC NULLS LAST, fetch=4
+02)--Filter: annotated_data_finite2.a = Int32(0)
+03)----TableScan: annotated_data_finite2 projection=[a0, a, b, c, d], partial_filters=[annotated_data_finite2.a = Int32(0)]
+physical_plan
+01)SortPreservingMergeExec: [b@2 ASC NULLS LAST,c@3 ASC NULLS LAST], fetch=4
+02)--CoalesceBatchesExec: target_batch_size=4, fetch=4
+03)----FilterExec: a@1 = 0
+04)------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+05)--------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/high_card_spm.csv]]}, projection=[a0, a, b, c, d], output_ordering=[a@1 ASC NULLS LAST, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST], has_header=true
+
+query IIIII
+SELECT *
+FROM annotated_data_finite2
+WHERE a=0
+ORDER BY b, c
+limit 4;
+----
+0 0 0 1 0
+0 0 0 2 0
+0 0 0 3 0
+0 0 0 4 0
+
+statement ok
+drop table annotated_data_finite2;
