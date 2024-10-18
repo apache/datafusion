@@ -183,7 +183,7 @@ pub fn swap_hash_join(
         partition_mode,
         hash_join.null_equals_null(),
     )?;
-    // if there is embeded projection in HashJoinExec, no need to add projection again.
+    // In case of anti / semi joins or if there is embedded projection in HashJoinExec, output column order is preserved, no need to add projection again
     if matches!(
         hash_join.join_type(),
         JoinType::LeftSemi
