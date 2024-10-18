@@ -69,6 +69,20 @@ pub struct RunOpt {
     /// If present, write results json here
     #[structopt(parse(from_os_str), short = "o", long = "output")]
     output_path: Option<PathBuf>,
+
+    #[structopt(
+        short = "b",
+        long = "batch_size",
+        default_value = "8192"
+    )]
+    batch_size: usize,
+
+    #[structopt(
+        short = "p",
+        long = "partition",
+        default_value = "0"
+    )]
+    partition: usize,
 }
 
 struct AllQueries {
@@ -117,6 +131,11 @@ impl RunOpt {
         };
 
         let mut config = self.common.config();
+        config = config.with_batch_size(self.batch_size);
+        if self.partition > 0 {
+            config = config.with_target_partitions(self.partition);
+        }
+
         config
             .options_mut()
             .execution

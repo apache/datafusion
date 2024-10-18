@@ -431,8 +431,11 @@ run_spm() {
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running spm benchmark..."
     echo "Path: ${DATA_SPM_DIR}"
-    $CARGO_COMMAND --bin dfbench -- spm  --iterations 5 --path "${DATA_SPM_DIR}/low_card_spm_small_batch.csv"  --queries-path "${SCRIPT_DIR}/queries/spm/queries.sql" -o "${RESULTS_FILE}"
+    $CARGO_COMMAND --bin dfbench -- spm  --iterations 5 --batch_size 4 --path "${DATA_SPM_DIR}/low_card_spm_small_batch.csv"  --queries-path "${SCRIPT_DIR}/queries/spm/queries.sql" -o "${RESULTS_FILE}"
+    $CARGO_COMMAND --bin dfbench -- spm  --iterations 5 --batch_size 4 --partition 2 --path "${DATA_SPM_DIR}/low_card_spm_small_batch.csv"  --queries-path "${SCRIPT_DIR}/queries/spm/queries.sql" -o "${RESULTS_FILE}"
     $CARGO_COMMAND --bin dfbench -- spm  --iterations 5 --path "${DATA_SPM_DIR}/low_card_spm.csv"  --queries-path "${SCRIPT_DIR}/queries/spm/queries.sql" -o "${RESULTS_FILE}"
+    $CARGO_COMMAND --bin dfbench -- spm  --iterations 5 --partition 2 --path "${DATA_SPM_DIR}/low_card_spm.csv"  --queries-path "${SCRIPT_DIR}/queries/spm/queries.sql" -o "${RESULTS_FILE}"
+    $CARGO_COMMAND --bin dfbench -- spm  --iterations 5 --path "${DATA_SPM_DIR}/high_card_spm.csv"  --queries-path "${SCRIPT_DIR}/queries/spm/queries.sql" -o "${RESULTS_FILE}"
 }
 
  # Runs the clickbench benchmark with the partitioned parquet files
