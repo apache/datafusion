@@ -250,13 +250,14 @@ impl Unparser<'_> {
         plan: &LogicalPlan,
         relation: &mut RelationBuilder,
     ) -> Result<()> {
-        match self.dialect.requires_derived_table_alias() {
-            false => self.derive(plan, relation, None),
-            true => self.derive(
+        if self.dialect.requires_derived_table_alias() {
+            self.derive(
                 plan,
                 relation,
                 Some(self.new_table_alias(alias.to_string(), vec![])),
-            ),
+            )
+        } else {
+            self.derive(plan, relation, None)
         }
     }
 

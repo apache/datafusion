@@ -280,6 +280,15 @@ fn roundtrip_statement_with_dialect() -> Result<()> {
             unparser_dialect: Box::new(UnparserDefaultDialect {}),
         },
         TestStatementWithDialect {
+            sql: "select min(ta.j1_id) as j1_min, max(tb.j1_max) from j1 ta, (select distinct max(ta.j1_id) as j1_max from j1 ta order by max(ta.j1_id)) tb order by min(ta.j1_id) limit 10;",
+            expected:
+                // top projection sort gets derived into a subquery
+                // for MySQL, this subquery needs an alias
+                "SELECT `j1_min`, `max(tb.j1_max)` FROM (SELECT min(`ta`.`j1_id`) AS `j1_min`, max(`tb`.`j1_max`), min(`ta`.`j1_id`) FROM `j1` AS `ta` JOIN (SELECT `j1_max` FROM (SELECT DISTINCT max(`ta`.`j1_id`) AS `j1_max` FROM `j1` AS `ta`) AS `derived_distinct`) AS `tb` ON true ORDER BY min(`ta`.`j1_id`) ASC) AS `derived_sort` LIMIT 10",
+            parser_dialect: Box::new(MySqlDialect {}),
+            unparser_dialect: Box::new(UnparserMySqlDialect {}),
+        },
+        TestStatementWithDialect {
             sql: "select ta.j1_id from j1 ta order by j1_id limit 10;",
             expected:
                 "SELECT `ta`.`j1_id` FROM `j1` AS `ta` ORDER BY `ta`.`j1_id` ASC LIMIT 10",
