@@ -558,7 +558,7 @@ EXPLAIN SELECT * FROM ((SELECT column1 FROM foo) "T1" CROSS JOIN (SELECT column2
 ----
 logical_plan
 01)SubqueryAlias: F
-02)--CrossJoin:
+02)--Cross Join:
 03)----SubqueryAlias: T1
 04)------TableScan: foo projection=[column1]
 05)----SubqueryAlias: T2
