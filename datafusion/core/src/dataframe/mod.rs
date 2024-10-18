@@ -1964,6 +1964,7 @@ mod tests {
     use crate::physical_plan::{ColumnarValue, Partitioning, PhysicalExpr};
     use crate::test_util::{register_aggregate_csv, test_table, test_table_with_name};
 
+    use crate::prelude::CsvReadOptions;
     use arrow::array::{self, Int32Array};
     use datafusion_common::{assert_batches_eq, Constraint, Constraints, ScalarValue};
     use datafusion_common_runtime::SpawnedTask;
@@ -4006,6 +4007,19 @@ mod tests {
             &df_results
         );
 
+        Ok(())
+    }
+    #[tokio::test]
+    async fn parse_sql_expr_handle_alias() -> Result<()> {
+        let ctx = SessionContext::new();
+        let df = ctx
+            .read_csv("tests/data/example.csv", CsvReadOptions::new())
+            .await?;
+        let sql = df.parse_sql_expr("SUM(a) as a_sum")?;
+        assert_eq!(
+            "sum(a) as a_sum".to_string(),
+            sql.to_string().to_lowercase()
+        );
         Ok(())
     }
 }
