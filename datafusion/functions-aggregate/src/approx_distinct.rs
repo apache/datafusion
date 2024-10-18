@@ -332,7 +332,7 @@ fn get_approx_distinct_doc() -> &'static Documentation {
 +-----------------------------------+
 ```"#, 
             )
-            .with_standard_argument("expression", "The")
+            .with_standard_argument("expression", None)
             .build()
             .unwrap()
     })

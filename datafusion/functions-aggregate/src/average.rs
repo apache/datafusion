@@ -263,7 +263,7 @@ fn get_avg_doc() -> &'static Documentation {
 +---------------------------+
 ```"#,
             )
-            .with_standard_argument("expression", "The")
+            .with_standard_argument("expression", None)
             .build()
             .unwrap()
     })

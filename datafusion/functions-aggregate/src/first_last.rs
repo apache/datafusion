@@ -191,7 +191,7 @@ fn get_first_value_doc() -> &'static Documentation {
 +-----------------------------------------------+
 ```"#,
             )
-            .with_standard_argument("expression", "The")
+            .with_standard_argument("expression", None)
             .build()
             .unwrap()
     })
@@ -519,7 +519,7 @@ fn get_last_value_doc() -> &'static Documentation {
 +-----------------------------------------------+
 ```"#,
             )
-            .with_standard_argument("expression", "The")
+            .with_standard_argument("expression", None)
             .build()
             .unwrap()
     })

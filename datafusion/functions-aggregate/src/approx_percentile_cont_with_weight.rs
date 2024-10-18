@@ -179,7 +179,7 @@ fn get_approx_percentile_cont_with_weight_doc() -> &'static Documentation {
 +----------------------------------------------------------------------+
 ```"#,
             )
-            .with_standard_argument("expression", "The")
+            .with_standard_argument("expression", None)
             .with_argument("weight", "Expression to use as weight. Can be a constant, column, or function, and any combination of arithmetic operators.")
             .with_argument("percentile", "Percentile to compute. Must be a float value between 0 and 1 (inclusive).")
             .build()

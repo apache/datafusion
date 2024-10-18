@@ -68,7 +68,7 @@ fn get_sha224_doc() -> &'static Documentation {
 +------------------------------------------+
 ```"#,
             )
-            .with_standard_argument("expression", "String")
+            .with_standard_argument("expression", Some("String"))
             .build()
             .unwrap()
     })

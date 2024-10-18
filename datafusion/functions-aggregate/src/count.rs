@@ -357,7 +357,7 @@ fn get_count_doc() -> &'static Documentation {
 | 120              |
 +------------------+
 ```"#)
-            .with_standard_argument("expression", "The")
+            .with_standard_argument("expression", None)
             .build()
             .unwrap()
     })

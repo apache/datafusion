@@ -90,7 +90,7 @@ fn get_iszero_doc() -> &'static Documentation {
                 "Returns true if a given number is +0.0 or -0.0 otherwise returns false.",
             )
             .with_syntax_example("iszero(numeric_expression)")
-            .with_standard_argument("numeric_expression", "Numeric")
+            .with_standard_argument("numeric_expression", Some("Numeric"))
             .build()
             .unwrap()
     })

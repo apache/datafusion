@@ -154,10 +154,10 @@ SELECT regexp_replace('aBc', '(b|d)', 'Ab\\1a', 'i');
 ```
 Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/regexp.rs)
 "#)
-        .with_standard_argument("str", "String")
+        .with_standard_argument("str", Some("String"))
         .with_argument("regexp","Regular expression to match against.
         Can be a constant, column, or function.")
-        .with_standard_argument("replacement", "Replacement string")
+        .with_standard_argument("replacement", Some("Replacement string"))
         .with_argument("flags",
                        r#"Optional regular expression flags that control the behavior of the regular expression. The following flags are supported:
 - **g**: (global) Search globally and don't return after the first match

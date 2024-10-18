@@ -98,7 +98,7 @@ fn get_digest_doc() -> &'static Documentation {
 ```"#,
             )
             .with_standard_argument(
-                "expression", "String")
+                "expression", Some("String"))
             .with_argument(
                 "algorithm",
                 "String expression specifying algorithm to use. Must be one of:
