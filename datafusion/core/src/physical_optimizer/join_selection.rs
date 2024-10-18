@@ -1307,6 +1307,10 @@ mod tests_statistical {
         )?);
         let swapped = swap_hash_join(&join.clone(), PartitionMode::Partitioned)
             .expect("swap_hash_join must support joins with projections");
+        let swapped_join = swapped.as_any().downcast_ref::<HashJoinExec>().expect(
+            "ProjectionExec won't be added above if HashJoinExec contains embedded projection",
+        );
+        assert_eq!(swapped_join.projection, Some(vec![0 as usize]));
         assert_eq!(swapped.schema().fields.len(), 1);
         assert_eq!(swapped.schema().fields[0].name(), "small_col");
         Ok(())
