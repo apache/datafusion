@@ -42,7 +42,7 @@ use crate::{
 use ahash::RandomState;
 use arrow::{
     array::{Array, ArrayRef, RecordBatchOptions, UInt32Builder},
-    compute::{concat, concat_batches, sort_to_indices},
+    compute::{concat, concat_batches, sort_to_indices, take_arrays},
     datatypes::SchemaRef,
     record_batch::RecordBatch,
 };
@@ -50,7 +50,7 @@ use datafusion_common::hash_utils::create_hashes;
 use datafusion_common::stats::Precision;
 use datafusion_common::utils::{
     evaluate_partition_ranges, get_at_indices, get_record_batch_at_indices,
-    get_row_at_idx, take_arrays,
+    get_row_at_idx,
 };
 use datafusion_common::{arrow_datafusion_err, exec_err, DataFusionError, Result};
 use datafusion_execution::TaskContext;
@@ -536,7 +536,9 @@ impl PartitionSearcher for LinearSearch {
         // We should emit columns according to row index ordering.
         let sorted_indices = sort_to_indices(&all_indices, None, None)?;
         // Construct new column according to row ordering. This fixes ordering
-        take_arrays(&new_columns, &sorted_indices).map(Some)
+        take_arrays(&new_columns, &sorted_indices, None)
+            .map(Some)
+            .map_err(|e| arrow_datafusion_err!(e))
     }
 
     fn evaluate_partition_batches(
