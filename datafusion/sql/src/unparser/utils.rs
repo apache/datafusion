@@ -20,10 +20,11 @@ use std::cmp::Ordering;
 use datafusion_common::{
     internal_err,
     tree_node::{Transformed, TreeNode},
-    Column, DataFusionError, Result, ScalarValue,
+    Column, Result, ScalarValue,
 };
 use datafusion_expr::{
-    utils::grouping_set_to_exprlist, Aggregate, Expr, LogicalPlan, Window,
+    utils::grouping_set_to_exprlist, Aggregate, Expr, LogicalPlan, Projection, SortExpr,
+    Window,
 };
 use sqlparser::ast;
 
@@ -118,21 +119,11 @@ pub(crate) fn unproject_agg_exprs(
             if let Expr::Column(c) = sub_expr {
                 if let Some(unprojected_expr) = find_agg_expr(agg, &c)? {
                     Ok(Transformed::yes(unprojected_expr.clone()))
-                } else if let Some(mut unprojected_expr) =
+                } else if let Some(unprojected_expr) =
                     windows.and_then(|w| find_window_expr(w, &c.name).cloned())
                 {
-                    if let Expr::WindowFunction(func) = &mut unprojected_expr {
-                        // Window function can contain an aggregation column, e.g., 'avg(sum(ss_sales_price)) over ...' that needs to be unprojected
-                        func.args.iter_mut().try_for_each(|arg| {
-                            if let Expr::Column(c) = arg {
-                                if let Some(expr) = find_agg_expr(agg, c)? {
-                                    *arg = expr.clone();
-                                }
-                            }
-                            Ok::<(), DataFusionError>(())
-                        })?;
-                    }
-                    Ok(Transformed::yes(unprojected_expr))
+                    // Window function can contain an aggregation columns, e.g., 'avg(sum(ss_sales_price)) over ...' that needs to be unprojected
+                    return Ok(Transformed::yes(unproject_agg_exprs(&unprojected_expr, agg, None)?));
                 } else {
                     internal_err!(
                         "Tried to unproject agg expr for column '{}' that was not found in the provided Aggregate!", &c.name
@@ -198,6 +189,54 @@ fn find_window_expr<'a>(
         .iter()
         .flat_map(|w| w.window_expr.iter())
         .find(|expr| expr.schema_name().to_string() == column_name)
+}
+
+/// Transforms a Column expression into the actual expression from aggregation or projection if found.
+/// This is required because if an ORDER BY expression is present in an Aggregate or Select, it is replaced
+/// with a Column expression (e.g., "sum(catalog_returns.cr_net_loss)"). We need to transform it back to
+/// the actual expression, such as sum("catalog_returns"."cr_net_loss").
+pub(crate) fn unproject_sort_expr(
+    sort_expr: &SortExpr,
+    agg: Option<&Aggregate>,
+    input: &LogicalPlan,
+) -> Result<SortExpr> {
+    let mut sort_expr = sort_expr.clone();
+
+    // Remove alias if present, because ORDER BY cannot use aliases
+    if let Expr::Alias(alias) = &sort_expr.expr {
+        sort_expr.expr = *alias.expr.clone();
+    }
+
+    let Expr::Column(ref col_ref) = sort_expr.expr else {
+        return Ok(sort_expr);
+    };
+
+    if col_ref.relation.is_some() {
+        return Ok(sort_expr);
+    };
+
+    // In case of aggregation there could be columns containing aggregation functions we need to unproject
+    if let Some(agg) = agg {
+        if agg.schema.is_column_from_schema(col_ref) {
+            let new_expr = unproject_agg_exprs(&sort_expr.expr, agg, None)?;
+            sort_expr.expr = new_expr;
+            return Ok(sort_expr);
+        }
+    }
+
+    // If SELECT and ORDER BY contain the same expression with a scalar function, the ORDER BY expression will
+    // be replaced by a Column expression (e.g., "substr(customer.c_last_name, Int64(0), Int64(5))"), and we need
+    // to transform it back to the actual expression.
+    if let LogicalPlan::Projection(Projection { expr, schema, .. }) = input {
+        if let Ok(idx) = schema.index_of_column(col_ref) {
+            if let Some(Expr::ScalarFunction(scalar_fn)) = expr.get(idx) {
+                sort_expr.expr = Expr::ScalarFunction(scalar_fn.clone());
+            }
+        }
+        return Ok(sort_expr);
+    }
+
+    Ok(sort_expr)
 }
 
 /// Converts a date_part function to SQL, tailoring it to the supported date field extraction style.

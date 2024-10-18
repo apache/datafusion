@@ -172,6 +172,7 @@ pub fn to_substrait_extended_expr(
 }
 
 /// Convert DataFusion LogicalPlan to Substrait Rel
+#[allow(deprecated)]
 pub fn to_substrait_rel(
     plan: &LogicalPlan,
     ctx: &SessionContext,
@@ -227,6 +228,7 @@ pub fn to_substrait_rel(
                     advanced_extension: None,
                     read_type: Some(ReadType::VirtualTable(VirtualTable {
                         values: vec![],
+                        expressions: vec![],
                     })),
                 }))),
             }))
@@ -263,7 +265,10 @@ pub fn to_substrait_rel(
                     best_effort_filter: None,
                     projection: None,
                     advanced_extension: None,
-                    read_type: Some(ReadType::VirtualTable(VirtualTable { values })),
+                    read_type: Some(ReadType::VirtualTable(VirtualTable {
+                        values,
+                        expressions: vec![],
+                    })),
                 }))),
             }))
         }
@@ -359,6 +364,7 @@ pub fn to_substrait_rel(
                 rel_type: Some(RelType::Aggregate(Box::new(AggregateRel {
                     common: None,
                     input: Some(input),
+                    grouping_expressions: vec![],
                     groupings,
                     measures,
                     advanced_extension: None,
@@ -377,8 +383,10 @@ pub fn to_substrait_rel(
                 rel_type: Some(RelType::Aggregate(Box::new(AggregateRel {
                     common: None,
                     input: Some(input),
+                    grouping_expressions: vec![],
                     groupings: vec![Grouping {
                         grouping_expressions: grouping,
+                        expression_references: vec![],
                     }],
                     measures: vec![],
                     advanced_extension: None,
@@ -764,6 +772,7 @@ pub fn operator_to_name(op: Operator) -> &'static str {
     }
 }
 
+#[allow(deprecated)]
 pub fn parse_flat_grouping_exprs(
     ctx: &SessionContext,
     exprs: &[Expr],
@@ -776,6 +785,7 @@ pub fn parse_flat_grouping_exprs(
         .collect::<Result<Vec<_>>>()?;
     Ok(Grouping {
         grouping_expressions,
+        expression_references: vec![],
     })
 }
 
