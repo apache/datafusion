@@ -1802,6 +1802,7 @@ Additional examples can be found [here](https://github.com/apache/datafusion/blo
 
 - [current_date](#current_date)
 - [current_time](#current_time)
+- [current_timestamp](#current_timestamp)
 - [date_bin](#date_bin)
 - [date_format](#date_format)
 - [date_part](#date_part)
@@ -1845,6 +1846,10 @@ The `current_time()` return value is determined at query time and will return th
 ```
 current_time()
 ```
+
+### `current_timestamp`
+
+_Alias of [now](#now)._
 
 ### `date_bin`
 
@@ -2002,6 +2007,10 @@ The `now()` return value is determined at query time and will return the same ti
 ```
 now()
 ```
+
+#### Aliases
+
+- current_timestamp
 
 ### `to_char`
 
