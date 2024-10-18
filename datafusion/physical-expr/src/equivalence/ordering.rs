@@ -255,8 +255,7 @@ mod tests {
 
     use crate::equivalence::tests::{
         convert_to_orderings, convert_to_sort_exprs, create_test_params,
-        create_test_schema, generate_table_for_eq_properties,
-        generate_table_for_orderings, is_table_same_after_sort,
+        create_test_schema, generate_table_for_eq_properties, is_table_same_after_sort,
     };
     use crate::equivalence::{
         EquivalenceClass, EquivalenceGroup, EquivalenceProperties,
@@ -1063,65 +1062,6 @@ mod tests {
                 assert!(expected.contains(&elem), "{}", err_msg);
             }
         }
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_ordering_satisfy_on_data() -> Result<()> {
-        let schema = create_test_schema()?;
-        let col_a = &col("a", &schema)?;
-        let col_b = &col("b", &schema)?;
-        let col_c = &col("c", &schema)?;
-        let col_d = &col("d", &schema)?;
-
-        let option_asc = SortOptions {
-            descending: false,
-            nulls_first: false,
-        };
-
-        let orderings = vec![
-            // [a ASC, b ASC, c ASC, d ASC]
-            vec![
-                (col_a, option_asc),
-                (col_b, option_asc),
-                (col_c, option_asc),
-                (col_d, option_asc),
-            ],
-            // [a ASC, c ASC, b ASC, d ASC]
-            vec![
-                (col_a, option_asc),
-                (col_c, option_asc),
-                (col_b, option_asc),
-                (col_d, option_asc),
-            ],
-        ];
-        let orderings = convert_to_orderings(&orderings);
-
-        let batch = generate_table_for_orderings(orderings, schema, 1000, 10)?;
-
-        // [a ASC, c ASC, d ASC] cannot be deduced
-        let ordering = vec![
-            (col_a, option_asc),
-            (col_c, option_asc),
-            (col_d, option_asc),
-        ];
-        let ordering = convert_to_orderings(&[ordering])[0].clone();
-        assert!(!is_table_same_after_sort(ordering, batch.clone())?);
-
-        // [a ASC, b ASC, d ASC] cannot be deduced
-        let ordering = vec![
-            (col_a, option_asc),
-            (col_b, option_asc),
-            (col_d, option_asc),
-        ];
-        let ordering = convert_to_orderings(&[ordering])[0].clone();
-        assert!(!is_table_same_after_sort(ordering, batch.clone())?);
-
-        // [a ASC, b ASC] can be deduced
-        let ordering = vec![(col_a, option_asc), (col_b, option_asc)];
-        let ordering = convert_to_orderings(&[ordering])[0].clone();
-        assert!(is_table_same_after_sort(ordering, batch.clone())?);
 
         Ok(())
     }

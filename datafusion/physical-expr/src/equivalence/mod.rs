@@ -72,7 +72,6 @@ pub fn add_offset_to_expr(
 
 #[cfg(test)]
 mod tests {
-    use std::cmp::Ordering;
 
     use super::*;
     use crate::expressions::col;
@@ -80,13 +79,9 @@ mod tests {
 
     use arrow::compute::{lexsort_to_indices, SortColumn};
     use arrow::datatypes::{DataType, Field, Schema};
-    use arrow_array::{ArrayRef, Float64Array, PrimitiveArray, RecordBatch, UInt32Array};
+    use arrow_array::{ArrayRef, Float64Array, RecordBatch, UInt32Array};
     use arrow_schema::{SchemaRef, SortOptions};
-    use datafusion_common::utils::{
-        compare_rows, get_record_batch_at_indices, get_row_at_idx,
-    };
     use datafusion_common::{plan_datafusion_err, Result};
-    use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexOrderingRef};
 
     use itertools::izip;
     use rand::rngs::StdRng;
@@ -456,17 +451,6 @@ mod tests {
         Ok(RecordBatch::try_from_iter(res)?)
     }
 
-    // Helper function to get sort columns from a batch
-    fn get_sort_columns(
-        batch: &RecordBatch,
-        ordering: LexOrderingRef,
-    ) -> Result<Vec<SortColumn>> {
-        ordering
-            .iter()
-            .map(|expr| expr.evaluate_to_sort_column(batch))
-            .collect::<Result<Vec<_>>>()
-    }
-
     // Utility function to generate random f64 array
     fn generate_random_f64_array(
         n_elems: usize,
@@ -477,68 +461,5 @@ mod tests {
             .map(|_| rng.gen_range(0..n_distinct) as f64 / 2.0)
             .collect();
         Arc::new(Float64Array::from_iter_values(values))
-    }
-
-    // Generate a table that satisfies the given orderings;
-    pub fn generate_table_for_orderings(
-        mut orderings: Vec<LexOrdering>,
-        schema: SchemaRef,
-        n_elem: usize,
-        n_distinct: usize,
-    ) -> Result<RecordBatch> {
-        let mut rng = StdRng::seed_from_u64(23);
-
-        assert!(!orderings.is_empty());
-        // Sort the inner vectors by their lengths (longest first)
-        orderings.sort_by_key(|v| std::cmp::Reverse(v.len()));
-
-        let arrays = schema
-            .fields
-            .iter()
-            .map(|field| {
-                (
-                    field.name(),
-                    generate_random_f64_array(n_elem, n_distinct, &mut rng),
-                )
-            })
-            .collect::<Vec<_>>();
-        let batch = RecordBatch::try_from_iter(arrays)?;
-
-        // Sort batch according to first ordering expression
-        let sort_columns = get_sort_columns(&batch, &orderings[0])?;
-        let sort_indices = lexsort_to_indices(&sort_columns, None)?;
-        let mut batch = get_record_batch_at_indices(&batch, &sort_indices)?;
-
-        // prune out rows that is invalid according to remaining orderings.
-        for ordering in orderings.iter().skip(1) {
-            let sort_columns = get_sort_columns(&batch, ordering)?;
-
-            // Collect sort options and values into separate vectors.
-            let (sort_options, sort_col_values): (Vec<_>, Vec<_>) = sort_columns
-                .into_iter()
-                .map(|sort_col| (sort_col.options.unwrap(), sort_col.values))
-                .unzip();
-
-            let mut cur_idx = 0;
-            let mut keep_indices = vec![cur_idx as u32];
-            for next_idx in 1..batch.num_rows() {
-                let cur_row = get_row_at_idx(&sort_col_values, cur_idx)?;
-                let next_row = get_row_at_idx(&sort_col_values, next_idx)?;
-
-                if compare_rows(&cur_row, &next_row, &sort_options)? != Ordering::Greater
-                {
-                    // next row satisfies ordering relation given, compared to the current row.
-                    keep_indices.push(next_idx as u32);
-                    cur_idx = next_idx;
-                }
-            }
-            // Only keep valid rows, that satisfies given ordering relation.
-            batch = get_record_batch_at_indices(
-                &batch,
-                &PrimitiveArray::from_iter_values(keep_indices),
-            )?;
-        }
-
-        Ok(batch)
     }
 }
