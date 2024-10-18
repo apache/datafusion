@@ -17,7 +17,6 @@
 
 use std::any::Any;
 use std::fmt::Display;
-use std::hash::Hasher;
 use std::ops::Deref;
 use std::sync::Arc;
 use std::vec;
@@ -742,23 +741,16 @@ fn roundtrip_parquet_exec_with_custom_predicate_expr() -> Result<()> {
         output_ordering: vec![],
     };
 
-    #[derive(Debug, Hash, Clone)]
-    struct CustomPredicateExpr {
-        inner: Arc<dyn PhysicalExpr>,
+    #[derive(Debug, Hash, Clone, PartialEq, Eq)]
+    struct CustomPredicateExpr<DynPhysicalExpr: ?Sized = dyn PhysicalExpr> {
+        inner: Arc<DynPhysicalExpr>,
     }
     impl Display for CustomPredicateExpr {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             write!(f, "CustomPredicateExpr")
         }
     }
-    impl PartialEq<dyn Any> for CustomPredicateExpr {
-        fn eq(&self, other: &dyn Any) -> bool {
-            other
-                .downcast_ref::<Self>()
-                .map(|x| self.inner.eq(&x.inner))
-                .unwrap_or(false)
-        }
-    }
+
     impl PhysicalExpr for CustomPredicateExpr {
         fn as_any(&self) -> &dyn Any {
             self
@@ -785,10 +777,6 @@ fn roundtrip_parquet_exec_with_custom_predicate_expr() -> Result<()> {
             _children: Vec<Arc<dyn PhysicalExpr>>,
         ) -> Result<Arc<dyn PhysicalExpr>> {
             todo!()
-        }
-
-        fn dyn_hash(&self, _state: &mut dyn Hasher) {
-            unreachable!()
         }
     }
 
@@ -844,7 +832,7 @@ fn roundtrip_parquet_exec_with_custom_predicate_expr() -> Result<()> {
         }
     }
 
-    let custom_predicate_expr = Arc::new(CustomPredicateExpr {
+    let custom_predicate_expr = Arc::new(CustomPredicateExpr::<dyn PhysicalExpr> {
         inner: Arc::new(Column::new("col", 1)),
     });
     let exec_plan = ParquetExec::builder(scan_config)
