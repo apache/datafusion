@@ -312,7 +312,7 @@ mod tests {
         let partial_agg = AggregateExec::try_new(
             AggregateMode::Partial,
             PhysicalGroupBy::default(),
-            vec![agg.count_expr(&schema)],
+            vec![Arc::new(agg.count_expr(&schema))],
             vec![None],
             source,
             Arc::clone(&schema),
@@ -321,7 +321,7 @@ mod tests {
         let final_agg = AggregateExec::try_new(
             AggregateMode::Final,
             PhysicalGroupBy::default(),
-            vec![agg.count_expr(&schema)],
+            vec![Arc::new(agg.count_expr(&schema))],
             vec![None],
             Arc::new(partial_agg),
             Arc::clone(&schema),
@@ -342,7 +342,7 @@ mod tests {
         let partial_agg = AggregateExec::try_new(
             AggregateMode::Partial,
             PhysicalGroupBy::default(),
-            vec![agg.count_expr(&schema)],
+            vec![Arc::new(agg.count_expr(&schema))],
             vec![None],
             source,
             Arc::clone(&schema),
@@ -351,7 +351,7 @@ mod tests {
         let final_agg = AggregateExec::try_new(
             AggregateMode::Final,
             PhysicalGroupBy::default(),
-            vec![agg.count_expr(&schema)],
+            vec![Arc::new(agg.count_expr(&schema))],
             vec![None],
             Arc::new(partial_agg),
             Arc::clone(&schema),
@@ -371,7 +371,7 @@ mod tests {
         let partial_agg = AggregateExec::try_new(
             AggregateMode::Partial,
             PhysicalGroupBy::default(),
-            vec![agg.count_expr(&schema)],
+            vec![Arc::new(agg.count_expr(&schema))],
             vec![None],
             source,
             Arc::clone(&schema),
@@ -383,7 +383,7 @@ mod tests {
         let final_agg = AggregateExec::try_new(
             AggregateMode::Final,
             PhysicalGroupBy::default(),
-            vec![agg.count_expr(&schema)],
+            vec![Arc::new(agg.count_expr(&schema))],
             vec![None],
             Arc::new(coalesce),
             Arc::clone(&schema),
@@ -403,7 +403,7 @@ mod tests {
         let partial_agg = AggregateExec::try_new(
             AggregateMode::Partial,
             PhysicalGroupBy::default(),
-            vec![agg.count_expr(&schema)],
+            vec![Arc::new(agg.count_expr(&schema))],
             vec![None],
             source,
             Arc::clone(&schema),
@@ -415,7 +415,7 @@ mod tests {
         let final_agg = AggregateExec::try_new(
             AggregateMode::Final,
             PhysicalGroupBy::default(),
-            vec![agg.count_expr(&schema)],
+            vec![Arc::new(agg.count_expr(&schema))],
             vec![None],
             Arc::new(coalesce),
             Arc::clone(&schema),
@@ -446,7 +446,7 @@ mod tests {
         let partial_agg = AggregateExec::try_new(
             AggregateMode::Partial,
             PhysicalGroupBy::default(),
-            vec![agg.count_expr(&schema)],
+            vec![Arc::new(agg.count_expr(&schema))],
             vec![None],
             filter,
             Arc::clone(&schema),
@@ -455,7 +455,7 @@ mod tests {
         let final_agg = AggregateExec::try_new(
             AggregateMode::Final,
             PhysicalGroupBy::default(),
-            vec![agg.count_expr(&schema)],
+            vec![Arc::new(agg.count_expr(&schema))],
             vec![None],
             Arc::new(partial_agg),
             Arc::clone(&schema),
@@ -491,7 +491,7 @@ mod tests {
         let partial_agg = AggregateExec::try_new(
             AggregateMode::Partial,
             PhysicalGroupBy::default(),
-            vec![agg.count_expr(&schema)],
+            vec![Arc::new(agg.count_expr(&schema))],
             vec![None],
             filter,
             Arc::clone(&schema),
@@ -500,7 +500,7 @@ mod tests {
         let final_agg = AggregateExec::try_new(
             AggregateMode::Final,
             PhysicalGroupBy::default(),
-            vec![agg.count_expr(&schema)],
+            vec![Arc::new(agg.count_expr(&schema))],
             vec![None],
             Arc::new(partial_agg),
             Arc::clone(&schema),
