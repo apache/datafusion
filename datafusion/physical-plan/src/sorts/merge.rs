@@ -306,7 +306,7 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
                     .then_with(|| a.cmp(&b))
                     .is_gt()
             } // TODO: remove. Switch to the old strategy to see the difference
-              // (Some(ac), Some(bc)) => ac.cmp(bc).then_with(|| a.cmp(&b)).is_gt(),
+              //   (Some(ac), Some(bc)) => ac.cmp(bc).then_with(|| a.cmp(&b)).is_gt(),
         }
     }
 
