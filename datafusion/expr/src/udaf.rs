@@ -225,10 +225,10 @@ impl AggregateUDF {
 
     /// See [`AggregateUDFImpl::with_beneficial_ordering`] for more details.
     pub fn with_beneficial_ordering(
-        self,
+        self: Arc<Self>,
         beneficial_ordering: bool,
     ) -> Result<Option<AggregateUDF>> {
-        self.inner
+        Arc::clone(&self.inner)
             .with_beneficial_ordering(beneficial_ordering)
             .map(|updated_udf| updated_udf.map(|udf| Self { inner: udf }))
     }
