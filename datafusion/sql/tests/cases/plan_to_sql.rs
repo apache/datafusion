@@ -726,7 +726,7 @@ fn test_table_scan_alias() -> Result<()> {
     let table_scan_with_two_filter = plan_to_sql(&table_scan_with_two_filter)?;
     assert_eq!(
         table_scan_with_two_filter.to_string(),
-        "SELECT * FROM (SELECT t1.id FROM t1 WHERE ((t1.id > 1) AND (t1.age < 2))) AS a"
+        "SELECT a.id FROM t1 AS a WHERE ((a.id > 1) AND (a.age < 2))"
     );
 
     let table_scan_with_fetch =
@@ -737,7 +737,7 @@ fn test_table_scan_alias() -> Result<()> {
     let table_scan_with_fetch = plan_to_sql(&table_scan_with_fetch)?;
     assert_eq!(
         table_scan_with_fetch.to_string(),
-        "SELECT * FROM (SELECT t1.id FROM (SELECT * FROM t1 LIMIT 10)) AS a"
+        "SELECT a.id FROM (SELECT * FROM t1 LIMIT 10) AS a"
     );
 
     let table_scan_with_pushdown_all = table_scan_with_filter_and_fetch(
@@ -753,7 +753,7 @@ fn test_table_scan_alias() -> Result<()> {
     let table_scan_with_pushdown_all = plan_to_sql(&table_scan_with_pushdown_all)?;
     assert_eq!(
         table_scan_with_pushdown_all.to_string(),
-        "SELECT * FROM (SELECT t1.id FROM (SELECT t1.id, t1.age FROM t1 WHERE (t1.id > 1) LIMIT 10)) AS a"
+        "SELECT a.id FROM (SELECT a.id, a.age FROM t1 AS a WHERE (a.id > 1) LIMIT 10) AS a"
     );
     Ok(())
 }
