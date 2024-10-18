@@ -5208,3 +5208,65 @@ NULL a 2
 
 statement ok
 drop table t;
+
+# test multi group by int + utf8view
+statement ok
+create table source as values
+-- use some strings that are larger than 12 characters as that goes through a different path
+(1, 'a'),
+(1, 'a'),
+(2, 'thisstringislongerthan12'),
+(2, 'thisstring'),
+(3, 'abc'),
+(3, 'cba'),
+(2, 'thisstring'),
+(null, null),
+(null, 'a'),
+(null, null),
+(null, 'a'),
+(2, 'thisstringisalsolongerthan12'),
+(2, 'thisstringislongerthan12'),
+(1, 'null')
+;
+
+statement ok
+create view t as select column1 as a, arrow_cast(column2, 'Utf8View') as b from source;
+
+query ITI
+select a, b, count(*) from t group by a, b order by a, b;
+----
+1 a 2
+1 null 1
+2 thisstring 2
+2 thisstringisalsolongerthan12 1
+2 thisstringislongerthan12 2
+3 abc 1
+3 cba 1
+NULL a 2
+NULL NULL 2
+
+statement ok
+drop view t
+
+# test with binary view
+statement ok
+create view t as select column1 as a, arrow_cast(column2, 'BinaryView') as b from source;
+
+query I?I
+select a, b, count(*) from t group by a, b order by a, b;
+----
+1 61 2
+1 6e756c6c 1
+2 74686973737472696e67 2
+2 74686973737472696e676973616c736f6c6f6e6765727468616e3132 1
+2 74686973737472696e6769736c6f6e6765727468616e3132 2
+3 616263 1
+3 636261 1
+NULL 61 2
+NULL NULL 2
+
+statement ok
+drop view t
+
+statement ok
+drop table source;

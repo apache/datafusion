@@ -125,5 +125,21 @@ NULL NULL l_bar
 
 
 
+query P rowsort
+SELECT ts
+FROM ((
+    SELECT now() AS ts
+    FROM table_with_metadata
+) UNION ALL (
+        SELECT ts
+    FROM table_with_metadata
+))
+GROUP BY ts
+ORDER BY ts
+LIMIT 1;
+----
+2020-09-08T13:42:29.190855123Z
+
+
 statement ok
 drop table table_with_metadata;

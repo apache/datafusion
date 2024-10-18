@@ -240,6 +240,8 @@ pub struct CreateExternalTableNode {
     pub table_partition_cols: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
     #[prost(bool, tag = "6")]
     pub if_not_exists: bool,
+    #[prost(bool, tag = "14")]
+    pub temporary: bool,
     #[prost(string, tag = "7")]
     pub definition: ::prost::alloc::string::String,
     #[prost(message, repeated, tag = "10")]
@@ -303,6 +305,8 @@ pub struct CreateViewNode {
     pub input: ::core::option::Option<::prost::alloc::boxed::Box<LogicalPlanNode>>,
     #[prost(bool, tag = "3")]
     pub or_replace: bool,
+    #[prost(bool, tag = "6")]
+    pub temporary: bool,
     #[prost(string, tag = "4")]
     pub definition: ::prost::alloc::string::String,
 }

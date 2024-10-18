@@ -83,7 +83,7 @@ async fn test_basic_prim_aggr_no_group() {
         .table_name("fuzz_table")
         .build();
 
-    fuzzer.run().await;
+    fuzzer.run().await
 }
 
 /// Fuzz test for `basic prim aggr(sum/sum distinct/max/min/count/avg)` + `group by single int64`
@@ -395,7 +395,8 @@ async fn run_aggregate_test(input1: Vec<RecordBatch>, group_by_columns: Vec<&str
     let running_source = Arc::new(
         MemoryExec::try_new(&[input1.clone()], schema.clone(), None)
             .unwrap()
-            .with_sort_information(vec![sort_keys]),
+            .try_with_sort_information(vec![sort_keys])
+            .unwrap(),
     );
 
     let aggregate_expr =

@@ -185,7 +185,7 @@ impl PartitionEvaluator for NthValueEvaluator {
                         // Negative index represents reverse direction.
                         (n_range >= reverse_index, true)
                     }
-                    Ordering::Equal => (true, false),
+                    Ordering::Equal => (false, false),
                 }
             }
         };

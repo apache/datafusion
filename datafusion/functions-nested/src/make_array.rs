@@ -17,8 +17,9 @@
 
 //! [`ScalarUDFImpl`] definitions for `make_array` function.
 
+use std::any::Any;
+use std::sync::{Arc, OnceLock};
 use std::vec;
-use std::{any::Any, sync::Arc};
 
 use arrow::array::{ArrayData, Capacities, MutableArrayData};
 use arrow_array::{
@@ -32,7 +33,11 @@ use datafusion_expr::binary::{
     try_type_union_resolution_with_struct, type_union_resolution,
 };
 use datafusion_expr::TypeSignature;
-use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::scalar_doc_sections::DOC_SECTION_ARRAY;
+use datafusion_expr::{
+    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+};
+use itertools::Itertools;
 
 use crate::utils::make_scalar_function;
 
@@ -133,6 +138,39 @@ impl ScalarUDFImpl for MakeArray {
             )
         }
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_make_array_doc())
+    }
+}
+
+static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+
+fn get_make_array_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_ARRAY)
+            .with_description(
+                "Returns an array using the specified input expressions.",
+            )
+            .with_syntax_example("make_array(expression1[, ..., expression_n])")
+            .with_sql_example(
+                r#"```sql
+> select make_array(1, 2, 3, 4, 5);
++----------------------------------------------------------+
+| make_array(Int64(1),Int64(2),Int64(3),Int64(4),Int64(5)) |
++----------------------------------------------------------+
+| [1, 2, 3, 4, 5]                                          |
++----------------------------------------------------------+
+```"#,
+            )
+            .with_argument(
+                "expression_n",
+                "Expression to include in the output array. Can be a constant, column, or function, and any combination of arithmetic or string operators.",
+            )
+            .build()
+            .unwrap()
+    })
 }
 
 // Empty array is a special case that is useful for many other array functions

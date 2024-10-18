@@ -137,16 +137,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             })
             .transpose()?;
 
-        // The outer expressions we will search through for
-        // aggregates. Aggregates may be sourced from the SELECT...
-        let mut aggr_expr_haystack = select_exprs.clone();
-        // ... or from the HAVING.
-        if let Some(having_expr) = &having_expr_opt {
-            aggr_expr_haystack.push(having_expr.clone());
-        }
-
+        // The outer expressions we will search through for aggregates.
+        // Aggregates may be sourced from the SELECT list or from the HAVING expression.
+        let aggr_expr_haystack = select_exprs.iter().chain(having_expr_opt.iter());
         // All of the aggregate expressions (deduplicated).
-        let aggr_exprs = find_aggregate_exprs(&aggr_expr_haystack);
+        let aggr_exprs = find_aggregate_exprs(aggr_expr_haystack);
 
         // All of the group by expressions
         let group_by_exprs = if let GroupByExpr::Expressions(exprs, _) = select.group_by {
@@ -477,6 +472,16 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
                 let filter_expr =
                     self.sql_to_expr(predicate_expr, plan.schema(), planner_context)?;
+
+                // Check for aggregation functions
+                let aggregate_exprs =
+                    find_aggregate_exprs(std::slice::from_ref(&filter_expr));
+                if !aggregate_exprs.is_empty() {
+                    return plan_err!(
+                        "Aggregate functions are not allowed in the WHERE clause. Consider using HAVING instead"
+                    );
+                }
+
                 let mut using_columns = HashSet::new();
                 expr_to_columns(&filter_expr, &mut using_columns)?;
                 let filter_expr = normalize_col_with_schemas_and_ambiguity_check(

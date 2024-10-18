@@ -2987,9 +2987,7 @@ mod tests {
             JoinType::Inner,
             Some(Expr::Literal(ScalarValue::Null)),
         )?;
-        let expected_plan = "CrossJoin:\
-        \n  TableScan: a projection=[c1], full_filters=[Boolean(NULL)]\
-        \n  TableScan: b projection=[c1]";
+        let expected_plan = "EmptyRelation";
         assert_eq!(expected_plan, format!("{}", join.into_optimized_plan()?));
 
         // JOIN ON expression must be boolean type

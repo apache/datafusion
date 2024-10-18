@@ -17,6 +17,8 @@
 
 //! "regex" DataFusion functions
 
+use std::sync::Arc;
+
 pub mod regexplike;
 pub mod regexpmatch;
 pub mod regexpreplace;
@@ -67,6 +69,6 @@ pub mod expr_fn {
 }
 
 /// Returns all DataFusion functions defined in this package
-pub fn functions() -> Vec<std::sync::Arc<datafusion_expr::ScalarUDF>> {
+pub fn functions() -> Vec<Arc<datafusion_expr::ScalarUDF>> {
     vec![regexp_match(), regexp_like(), regexp_replace()]
 }

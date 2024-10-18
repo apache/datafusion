@@ -4929,7 +4929,64 @@ SELECT v1, NTH_VALUE(v2, 0) OVER (PARTITION BY v1 ORDER BY v2) FROM t;
 2 NULL
 2 NULL
 
+query I
+SELECT NTH_VALUE(tt0.v1, NULL) OVER (PARTITION BY tt0.v2 ORDER BY tt0.v1) FROM t AS tt0;
+----
+NULL
+NULL
+NULL
+NULL
+NULL
+
 statement ok
 DROP TABLE t;
 
 ## end test handle NULL and 0 of NTH_VALUE
+
+## test handle NULL of lead
+
+statement ok
+create table t1(v1 int);
+
+statement ok
+insert into t1 values (1);
+
+query B
+SELECT LEAD(NULL, 0, false) OVER () FROM t1;
+----
+NULL
+
+query B
+SELECT LAG(NULL, 0, false) OVER () FROM t1;
+----
+NULL
+
+query B
+SELECT LEAD(NULL, 1, false) OVER () FROM t1;
+----
+false
+
+query B
+SELECT LAG(NULL, 1, false) OVER () FROM t1;
+----
+false
+
+statement ok
+insert into t1 values (2);
+
+query B
+SELECT LEAD(NULL, 1, false) OVER () FROM t1;
+----
+NULL
+false
+
+query B
+SELECT LAG(NULL, 1, false) OVER () FROM t1;
+----
+false
+NULL
+
+statement ok
+DROP TABLE t1;
+
+## end test handle NULL of lead
