@@ -1029,6 +1029,23 @@ true
 true
 
 # in_subquery_to_join_with_correlated_outer_filter_disjunction
+query TT
+explain select t1.t1_id,
+       t1.t1_name,
+       t1.t1_int
+from t1
+where t1.t1_id > 40 or t1.t1_id in (select t2.t2_id from t2 where t1.t1_int > 0)
+----
+logical_plan
+01)Projection: t1.t1_id, t1.t1_name, t1.t1_int
+02)--Filter: t1.t1_id > Int32(40) OR __correlated_sq_1.__exists IS NOT NULL
+03)----Projection: t1.t1_id, t1.t1_name, t1.t1_int, __correlated_sq_1.__exists
+04)------Left Join: t1.t1_id = __correlated_sq_1.t2_id Filter: t1.t1_int > Int32(0)
+05)--------TableScan: t1 projection=[t1_id, t1_name, t1_int]
+06)--------SubqueryAlias: __correlated_sq_1
+07)----------Projection: t2.t2_id, Boolean(true) AS __exists
+08)------------TableScan: t2 projection=[t2_id]
+
 query ITI rowsort
 select t1.t1_id,
        t1.t1_name,
@@ -1041,6 +1058,23 @@ where t1.t1_id > 40 or t1.t1_id in (select t2.t2_id from t2 where t1.t1_int > 0)
 44 d 4
 
 # not_in_subquery_to_join_with_correlated_outer_filter_disjunction
+query TT
+explain select t1.t1_id,
+       t1.t1_name,
+       t1.t1_int
+from t1
+where t1.t1_id = 11 or t1.t1_id + 12 not in (select t2.t2_id + 1 from t2 where t1.t1_int > 0)
+----
+logical_plan
+01)Projection: t1.t1_id, t1.t1_name, t1.t1_int
+02)--Filter: t1.t1_id = Int32(11) OR __correlated_sq_1.__exists IS NULL
+03)----Projection: t1.t1_id, t1.t1_name, t1.t1_int, __correlated_sq_1.__exists
+04)------Left Join: CAST(t1.t1_id AS Int64) + Int64(12) = __correlated_sq_1.t2.t2_id + Int64(1) Filter: t1.t1_int > Int32(0)
+05)--------TableScan: t1 projection=[t1_id, t1_name, t1_int]
+06)--------SubqueryAlias: __correlated_sq_1
+07)----------Projection: CAST(t2.t2_id AS Int64) + Int64(1), Boolean(true) AS __exists
+08)------------TableScan: t2 projection=[t2_id]
+
 query ITI rowsort
 select t1.t1_id,
        t1.t1_name,
@@ -1052,6 +1086,23 @@ where t1.t1_id = 11 or t1.t1_id + 12 not in (select t2.t2_id + 1 from t2 where t
 22 b 2
 
 # exists_subquery_to_join_with_correlated_outer_filter_disjunction
+query TT
+explain select t1.t1_id,
+       t1.t1_name,
+       t1.t1_int
+from t1
+where t1.t1_id > 40 or exists (select * from t2 where t1.t1_id = t2.t2_id)
+----
+logical_plan
+01)Projection: t1.t1_id, t1.t1_name, t1.t1_int
+02)--Filter: t1.t1_id > Int32(40) OR __correlated_sq_1.__exists IS NOT NULL
+03)----Projection: t1.t1_id, t1.t1_name, t1.t1_int, __correlated_sq_1.__exists
+04)------Left Join: t1.t1_id = __correlated_sq_1.t2_id
+05)--------TableScan: t1 projection=[t1_id, t1_name, t1_int]
+06)--------SubqueryAlias: __correlated_sq_1
+07)----------Projection: t2.t2_id, Boolean(true) AS __exists
+08)------------TableScan: t2 projection=[t2_id]
+
 query ITI rowsort
 select t1.t1_id,
        t1.t1_name,
@@ -1064,6 +1115,23 @@ where t1.t1_id > 40 or exists (select * from t2 where t1.t1_id = t2.t2_id)
 44 d 4
 
 # not_exists_subquery_to_join_with_correlated_outer_filter_disjunction
+query TT
+explain select t1.t1_id,
+       t1.t1_name,
+       t1.t1_int
+from t1
+where t1.t1_id > 40 or not exists (select * from t2 where t1.t1_id = t2.t2_id)
+----
+logical_plan
+01)Projection: t1.t1_id, t1.t1_name, t1.t1_int
+02)--Filter: t1.t1_id > Int32(40) OR __correlated_sq_1.__exists IS NULL
+03)----Projection: t1.t1_id, t1.t1_name, t1.t1_int, __correlated_sq_1.__exists
+04)------Left Join: t1.t1_id = __correlated_sq_1.t2_id
+05)--------TableScan: t1 projection=[t1_id, t1_name, t1_int]
+06)--------SubqueryAlias: __correlated_sq_1
+07)----------Projection: t2.t2_id, Boolean(true) AS __exists
+08)------------TableScan: t2 projection=[t2_id]
+
 query ITI rowsort
 select t1.t1_id,
        t1.t1_name,
@@ -1075,6 +1143,26 @@ where t1.t1_id > 40 or not exists (select * from t2 where t1.t1_id = t2.t2_id)
 44 d 4
 
 # in_subquery_to_join_with_correlated_outer_filter_and_or
+query TT
+explain select t1.t1_id,
+       t1.t1_name,
+       t1.t1_int
+from t1
+where t1.t1_id in (select t3.t3_id from t3) and (t1.t1_id > 40 or t1.t1_id in (select t2.t2_id from t2 where t1.t1_int > 0))
+----
+logical_plan
+01)Projection: t1.t1_id, t1.t1_name, t1.t1_int
+02)--Filter: t1.t1_id > Int32(40) OR __correlated_sq_2.__exists IS NOT NULL
+03)----Projection: t1.t1_id, t1.t1_name, t1.t1_int, __correlated_sq_2.__exists
+04)------Left Join: t1.t1_id = __correlated_sq_2.t2_id Filter: t1.t1_int > Int32(0)
+05)--------LeftSemi Join: t1.t1_id = __correlated_sq_1.t3_id
+06)----------TableScan: t1 projection=[t1_id, t1_name, t1_int]
+07)----------SubqueryAlias: __correlated_sq_1
+08)------------TableScan: t3 projection=[t3_id]
+09)--------SubqueryAlias: __correlated_sq_2
+10)----------Projection: t2.t2_id, Boolean(true) AS __exists
+11)------------TableScan: t2 projection=[t2_id]
+
 query ITI rowsort
 select t1.t1_id,
        t1.t1_name,
