@@ -61,6 +61,8 @@ pub trait GroupColumn: Send + Sync {
 
     fn append_non_nullable_val(&mut self, array: &ArrayRef, row: usize);
 
+    fn append_batch(&mut self, array: &ArrayRef, rows: &[usize]);
+
     /// Returns the number of rows stored in this builder
     fn len(&self) -> usize;
     /// Returns the number of bytes used by this [`GroupColumn`]
@@ -120,8 +122,11 @@ impl<T: ArrowPrimitiveType, const NULLABLE: bool> GroupColumn
         self.group_values[lhs_row] == array.as_primitive::<T>().value(rhs_row)
     }
 
+    fn append_batch(&mut self, array: &ArrayRef, rows: &[usize]) {
+        todo!()
+    }    
+
     fn append_val(&mut self, array: &ArrayRef, row: usize) {
-        self.nullable_call += 1;
         // Perf: skip null check if input can't have nulls
         if NULLABLE {
             if array.is_null(row) {
@@ -137,7 +142,6 @@ impl<T: ArrowPrimitiveType, const NULLABLE: bool> GroupColumn
     }
 
     fn append_non_nullable_val(&mut self, array: &ArrayRef, row: usize) {
-        self.non_nullable_call += 1;
         if NULLABLE {
             self.nulls.append(false);
             self.group_values.push(array.as_primitive::<T>().value(row));
