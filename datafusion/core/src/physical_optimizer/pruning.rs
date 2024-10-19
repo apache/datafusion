@@ -1671,7 +1671,7 @@ fn build_like_match(
             format!("{prefix}\u{10ffff}"),
         ))));
         let prefix_max_lit = Arc::new(phys_expr::Literal::new(ScalarValue::Utf8(Some(
-            format!("{prefix}"),
+            prefix.to_string(),
         ))));
         (prefix_min_lit, prefix_max_lit)
     } else {
