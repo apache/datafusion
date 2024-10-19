@@ -124,7 +124,7 @@ indexmap = "2.0.0"
 itertools = "0.13"
 log = "^0.4"
 num_cpus = "1.13.0"
-object_store = { version = "0.11.0", default-features = false }
+object_store = { version = "0.11.1", default-features = false }
 parking_lot = "0.12"
 parquet = { version = "53.1.0", default-features = false, features = [
     "arrow",
@@ -169,3 +169,6 @@ large_futures = "warn"
 
 [workspace.lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ["cfg(tarpaulin)"] }
+
+[patch.crates-io]
+object_store = { git = "https://github.com/alamb/arrow-rs.git", rev = "7fcf4fe5a0d1840af90512f53eb635600b014278" }
