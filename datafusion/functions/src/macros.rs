@@ -214,24 +214,12 @@ macro_rules! make_math_unary_udf {
                         DataType::Float64 => Arc::new(
                             args[0]
                                 .as_primitive::<Float64Type>()
-                                .unary::<_, Float64Type>(|x: f64| {
-                                    if x == 0_f64 {
-                                        0_f64
-                                    } else {
-                                        f64::$UNARY_FUNC(x)
-                                    }
-                                }),
+                                .unary::<_, Float64Type>(|x: f64| f64::$UNARY_FUNC(x)),
                         ) as ArrayRef,
                         DataType::Float32 => Arc::new(
                             args[0]
                                 .as_primitive::<Float32Type>()
-                                .unary::<_, Float32Type>(|x: f32| {
-                                    if x == 0_f32 {
-                                        0_f32
-                                    } else {
-                                        f32::$UNARY_FUNC(x)
-                                    }
-                                }),
+                                .unary::<_, Float32Type>(|x: f32| f32::$UNARY_FUNC(x)),
                         ) as ArrayRef,
                         other => {
                             return exec_err!(
