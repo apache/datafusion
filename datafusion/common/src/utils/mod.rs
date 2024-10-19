@@ -24,16 +24,14 @@ pub mod string_utils;
 
 use crate::error::{_internal_datafusion_err, _internal_err};
 use crate::{arrow_datafusion_err, DataFusionError, Result, ScalarValue};
-use arrow::array::{ArrayRef, PrimitiveArray};
+use arrow::array::ArrayRef;
 use arrow::buffer::OffsetBuffer;
 use arrow::compute;
 use arrow::compute::{partition, SortColumn, SortOptions};
-use arrow::datatypes::{Field, SchemaRef, UInt32Type};
-use arrow::record_batch::RecordBatch;
+use arrow::datatypes::{Field, SchemaRef};
 use arrow_array::cast::AsArray;
 use arrow_array::{
     Array, FixedSizeListArray, LargeListArray, ListArray, OffsetSizeTrait,
-    RecordBatchOptions,
 };
 use arrow_schema::DataType;
 use sqlparser::ast::Ident;
@@ -748,7 +746,8 @@ pub fn combine_limit(
 #[cfg(test)]
 mod tests {
     use crate::ScalarValue::Null;
-    use arrow::array::Float64Array;
+    use arrow::array::{Float64Array, PrimitiveArray};
+    use arrow::datatypes::UInt32Type;
 
     use super::*;
 
