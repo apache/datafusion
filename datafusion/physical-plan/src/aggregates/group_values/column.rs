@@ -29,11 +29,11 @@ use arrow::datatypes::{
 };
 use arrow::record_batch::RecordBatch;
 use arrow_array::{
-    Array, ArrayRef, BooleanArray, Date32Array, Date64Array, Decimal128Array,
-    Float32Array, Float64Array, Int16Array, Int32Array, Int64Array, Int8Array,
-    LargeStringArray, StringArray, TimestampMicrosecondArray, TimestampMillisecondArray,
-    TimestampNanosecondArray, TimestampSecondArray, UInt16Array, UInt32Array,
-    UInt64Array, UInt8Array,
+    Array, ArrayRef, BinaryArray, BinaryViewArray, BooleanArray, Date32Array,
+    Date64Array, Decimal128Array, Float32Array, Float64Array, Int16Array, Int32Array,
+    Int64Array, Int8Array, LargeStringArray, StringArray, StringViewArray,
+    TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
+    TimestampSecondArray, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
 };
 use arrow_schema::{DataType, Schema, SchemaRef, TimeUnit};
 use datafusion_common::hash_utils::create_hashes;
@@ -439,6 +439,9 @@ fn is_rows_eq(
             DataType::Float64 => compare_value!(Float64Array),
             DataType::Utf8 => compare_value!(StringArray),
             DataType::LargeUtf8 => compare_value!(LargeStringArray),
+            DataType::Binary => compare_value!(BinaryArray),
+            DataType::Utf8View => compare_value!(StringViewArray),
+            DataType::BinaryView => compare_value!(BinaryViewArray),
             DataType::Decimal128(..) => compare_value!(Decimal128Array),
             DataType::Timestamp(time_unit, None) => match time_unit {
                 TimeUnit::Second => compare_value!(TimestampSecondArray),
