@@ -26,6 +26,7 @@ use std::collections::HashSet;
 use std::convert::Infallible;
 use std::fmt;
 use std::str::FromStr;
+use std::sync::Arc;
 
 /// A named reference to a qualified field in a schema.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -299,6 +300,17 @@ impl FromStr for Column {
 impl fmt::Display for Column {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{}", self.flat_name())
+    }
+}
+
+pub struct ColumnReference {
+    pub relation: Option<TableReference>,
+    pub name: Arc<str>,
+}
+
+impl ColumnReference {
+    pub fn new(relation: Option<TableReference>, name: impl Into<Arc<str>>) -> Self {
+        Self { relation, name: name.into() }
     }
 }
 

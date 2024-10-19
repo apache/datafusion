@@ -48,6 +48,7 @@ pub mod utils;
 /// Reexport arrow crate
 pub use arrow;
 pub use column::Column;
+pub use column::ColumnReference;
 pub use dfschema::{
     qualified_name, DFSchema, DFSchemaRef, ExprSchema, SchemaExt, ToDFSchema,
 };

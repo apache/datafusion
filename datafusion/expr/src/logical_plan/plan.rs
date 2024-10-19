@@ -46,11 +46,7 @@ use crate::{
 
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
-use datafusion_common::{
-    aggregate_functional_dependencies, internal_err, plan_err, Column, Constraints,
-    DFSchema, DFSchemaRef, DataFusionError, Dependency, FunctionalDependence,
-    FunctionalDependencies, ParamValues, Result, TableReference, UnnestOptions,
-};
+use datafusion_common::{aggregate_functional_dependencies, internal_err, plan_err, Column, ColumnReference, Constraints, DFSchema, DFSchemaRef, DataFusionError, Dependency, FunctionalDependence, FunctionalDependencies, ParamValues, Result, TableReference, UnnestOptions};
 use indexmap::IndexSet;
 
 // backwards compatibility
@@ -1400,12 +1396,12 @@ impl LogicalPlan {
     /// referenced expressions into columns.
     ///
     /// See also: [`crate::utils::columnize_expr`]
-    pub fn columnized_output_exprs(&self) -> Result<Vec<(&Expr, Column)>> {
+    pub fn columnized_output_exprs(&self) -> Result<Vec<(&Expr, ColumnReference)>> {
         match self {
             LogicalPlan::Aggregate(aggregate) => Ok(aggregate
                 .output_expressions()?
                 .into_iter()
-                .zip(self.schema().columns())
+                .zip(self.schema().column_reference())
                 .collect()),
             LogicalPlan::Window(Window {
                 window_expr,
@@ -1424,7 +1420,7 @@ impl LogicalPlan {
                 output_exprs.extend(
                     window_expr
                         .iter()
-                        .zip(schema.columns().into_iter().skip(input_len)),
+                        .zip(schema.column_reference().into_iter().skip(input_len)),
                 );
                 Ok(output_exprs)
             }
