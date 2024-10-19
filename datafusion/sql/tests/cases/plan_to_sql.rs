@@ -243,7 +243,7 @@ fn roundtrip_crossjoin() -> Result<()> {
         .unwrap();
 
     let expected = "Projection: j1.j1_id, j2.j2_string\
-        \n  Inner Join:  Filter: Boolean(true)\
+        \n  Cross Join: \
         \n    TableScan: j1\
         \n    TableScan: j2";
 

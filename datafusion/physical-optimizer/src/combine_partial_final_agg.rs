@@ -125,7 +125,7 @@ impl PhysicalOptimizerRule for CombinePartialFinalAggregate {
 
 type GroupExprsRef<'a> = (
     &'a PhysicalGroupBy,
-    &'a [AggregateFunctionExpr],
+    &'a [Arc<AggregateFunctionExpr>],
     &'a [Option<Arc<dyn PhysicalExpr>>],
 );
 
