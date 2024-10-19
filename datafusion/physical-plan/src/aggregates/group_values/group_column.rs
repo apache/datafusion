@@ -22,6 +22,7 @@ use arrow::array::GenericBinaryArray;
 use arrow::array::GenericStringArray;
 use arrow::array::OffsetSizeTrait;
 use arrow::array::PrimitiveArray;
+use arrow::array::StringViewBuilder;
 use arrow::array::{Array, ArrayRef, ArrowPrimitiveType, AsArray};
 use arrow::buffer::OffsetBuffer;
 use arrow::buffer::ScalarBuffer;
@@ -29,9 +30,11 @@ use arrow::datatypes::ByteArrayType;
 use arrow::datatypes::ByteViewType;
 use arrow::datatypes::DataType;
 use arrow::datatypes::GenericBinaryType;
+use arrow_array::GenericByteArray;
 use arrow_array::GenericByteViewArray;
 use arrow_buffer::Buffer;
 use datafusion_common::utils::proxy::VecAllocExt;
+use datafusion_expr::sqlparser::keywords::NULLABLE;
 
 use crate::aggregates::group_values::null_builder::MaybeNullBufferBuilder;
 use arrow_array::types::GenericStringType;
@@ -59,9 +62,7 @@ pub trait GroupColumn: Send + Sync {
     /// Appends the row at `row` in `array` to this builder
     fn append_val(&mut self, array: &ArrayRef, row: usize);
 
-    fn append_non_nullable_val(&mut self, array: &ArrayRef, row: usize);
-
-    fn append_batch(&mut self, array: &ArrayRef, rows: &[usize]);
+    fn append_batch(&mut self, array: &ArrayRef, rows: &[usize], all_non_null: bool);
 
     /// Returns the number of rows stored in this builder
     fn len(&self) -> usize;
@@ -86,8 +87,6 @@ pub trait GroupColumn: Send + Sync {
 pub struct PrimitiveGroupValueBuilder<T: ArrowPrimitiveType, const NULLABLE: bool> {
     group_values: Vec<T::Native>,
     nulls: MaybeNullBufferBuilder,
-    nullable_call: usize,
-    non_nullable_call: usize,
 }
 
 impl<T, const NULLABLE: bool> PrimitiveGroupValueBuilder<T, NULLABLE>
@@ -99,8 +98,6 @@ where
         Self {
             group_values: vec![],
             nulls: MaybeNullBufferBuilder::new(),
-            nullable_call: 0,
-            non_nullable_call: 0,
         }
     }
 }
@@ -122,9 +119,35 @@ impl<T: ArrowPrimitiveType, const NULLABLE: bool> GroupColumn
         self.group_values[lhs_row] == array.as_primitive::<T>().value(rhs_row)
     }
 
-    fn append_batch(&mut self, array: &ArrayRef, rows: &[usize]) {
-        todo!()
-    }    
+    fn append_batch(&mut self, array: &ArrayRef, rows: &[usize], all_non_null: bool) {
+        let arr = array.as_primitive::<T>();
+        match (NULLABLE, all_non_null) {
+            (true, true) => {
+                self.nulls.append_n(rows.len(), false);
+                self.group_values.reserve(rows.len());
+                for &row in rows {
+                    self.group_values.push(arr.value(row));
+                }
+            }
+            (true, false) => {
+                for &row in rows {
+                    if array.is_null(row) {
+                        self.nulls.append(true);
+                        self.group_values.push(T::default_value());
+                    } else {
+                        self.nulls.append(false);
+                        self.group_values.push(arr.value(row));
+                    }
+                }
+            }
+            (false, _) => {
+                self.group_values.reserve(rows.len());
+                for &row in rows {
+                    self.group_values.push(arr.value(row));
+                }
+            }
+        }
+    }
 
     fn append_val(&mut self, array: &ArrayRef, row: usize) {
         // Perf: skip null check if input can't have nulls
@@ -136,15 +159,6 @@ impl<T: ArrowPrimitiveType, const NULLABLE: bool> GroupColumn
                 self.nulls.append(false);
                 self.group_values.push(array.as_primitive::<T>().value(row));
             }
-        } else {
-            self.group_values.push(array.as_primitive::<T>().value(row));
-        }
-    }
-
-    fn append_non_nullable_val(&mut self, array: &ArrayRef, row: usize) {
-        if NULLABLE {
-            self.nulls.append(false);
-            self.group_values.push(array.as_primitive::<T>().value(row));
         } else {
             self.group_values.push(array.as_primitive::<T>().value(row));
         }
@@ -162,13 +176,7 @@ impl<T: ArrowPrimitiveType, const NULLABLE: bool> GroupColumn
         let Self {
             group_values,
             nulls,
-            nullable_call,
-            non_nullable_call,
         } = *self;
-
-        println!(
-            "### nullable_call:{nullable_call}, non_nullable_call:{non_nullable_call}"
-        );
 
         let nulls = nulls.build();
         if !NULLABLE {
@@ -213,10 +221,6 @@ where
     offsets: Vec<O>,
     /// Nulls
     nulls: MaybeNullBufferBuilder,
-
-    nullable_call: usize,
-
-    non_nullable_call: usize,
 }
 
 impl<O> ByteGroupValueBuilder<O>
@@ -229,8 +233,36 @@ where
             buffer: BufferBuilder::new(INITIAL_BUFFER_CAPACITY),
             offsets: vec![O::default()],
             nulls: MaybeNullBufferBuilder::new(),
-            nullable_call: 0,
-            non_nullable_call: 0,
+        }
+    }
+
+    fn append_batch_inner<B>(
+        &mut self,
+        array: &ArrayRef,
+        rows: &[usize],
+        all_non_null: bool,
+    ) where
+        B: ByteArrayType,
+    {
+        let arr = array.as_bytes::<B>();
+
+        if all_non_null {
+            self.nulls.append_n(rows.len(), false);
+            for &row in rows {
+                self.append_value(arr, row);
+            }
+        } else {
+            for &row in rows {
+                if arr.is_null(row) {
+                    self.nulls.append(true);
+                    // nulls need a zero length in the offset buffer
+                    let offset = self.buffer.len();
+                    self.offsets.push(O::usize_as(offset));
+                } else {
+                    self.nulls.append(false);
+                    self.append_value(arr, row);
+                }
+            }
         }
     }
 
@@ -238,7 +270,6 @@ where
     where
         B: ByteArrayType,
     {
-        self.nullable_call += 1;
         let arr = array.as_bytes::<B>();
         if arr.is_null(row) {
             self.nulls.append(true);
@@ -247,20 +278,15 @@ where
             self.offsets.push(O::usize_as(offset));
         } else {
             self.nulls.append(false);
-            let value: &[u8] = arr.value(row).as_ref();
-            self.buffer.append_slice(value);
-            self.offsets.push(O::usize_as(self.buffer.len()));
+            self.append_value(arr, row);
         }
     }
 
-    fn append_non_nullable_val_inner<B>(&mut self, array: &ArrayRef, row: usize)
+    fn append_value<B>(&mut self, array: &GenericByteArray<B>, row: usize)
     where
         B: ByteArrayType,
     {
-        self.non_nullable_call += 1;
-        let arr = array.as_bytes::<B>();
-        self.nulls.append(false);
-        let value: &[u8] = arr.value(row).as_ref();
+        let value: &[u8] = array.value(row).as_ref();
         self.buffer.append_slice(value);
         self.offsets.push(O::usize_as(self.buffer.len()));
     }
@@ -313,6 +339,34 @@ where
         }
     }
 
+    fn append_batch(&mut self, column: &ArrayRef, rows: &[usize], all_non_null: bool) {
+        match self.output_type {
+            OutputType::Binary => {
+                debug_assert!(matches!(
+                    column.data_type(),
+                    DataType::Binary | DataType::LargeBinary
+                ));
+                self.append_batch_inner::<GenericBinaryType<O>>(
+                    column,
+                    rows,
+                    all_non_null,
+                )
+            }
+            OutputType::Utf8 => {
+                debug_assert!(matches!(
+                    column.data_type(),
+                    DataType::Utf8 | DataType::LargeUtf8
+                ));
+                self.append_batch_inner::<GenericStringType<O>>(
+                    column,
+                    rows,
+                    all_non_null,
+                )
+            }
+            _ => unreachable!("View types should use `ArrowBytesViewMap`"),
+        };
+    }
+
     fn append_val(&mut self, column: &ArrayRef, row: usize) {
         // Sanity array type
         match self.output_type {
@@ -334,27 +388,6 @@ where
         };
     }
 
-    fn append_non_nullable_val(&mut self, column: &ArrayRef, row: usize) {
-        // Sanity array type
-        match self.output_type {
-            OutputType::Binary => {
-                debug_assert!(matches!(
-                    column.data_type(),
-                    DataType::Binary | DataType::LargeBinary
-                ));
-                self.append_non_nullable_val_inner::<GenericBinaryType<O>>(column, row)
-            }
-            OutputType::Utf8 => {
-                debug_assert!(matches!(
-                    column.data_type(),
-                    DataType::Utf8 | DataType::LargeUtf8
-                ));
-                self.append_non_nullable_val_inner::<GenericStringType<O>>(column, row)
-            }
-            _ => unreachable!("View types should use `ArrowBytesViewMap`"),
-        };
-    }
-
     fn len(&self) -> usize {
         self.offsets.len() - 1
     }
@@ -371,13 +404,7 @@ where
             mut buffer,
             offsets,
             nulls,
-            nullable_call,
-            non_nullable_call,
         } = *self;
-
-        println!(
-            "### nullable_call:{nullable_call}, non_nullable_call:{non_nullable_call}"
-        );
 
         let null_buffer = nulls.build();
 
@@ -498,10 +525,6 @@ pub struct ByteViewGroupValueBuilder<B: ByteViewType> {
     /// Nulls
     nulls: MaybeNullBufferBuilder,
 
-    nullable_call: usize,
-
-    non_nullable_call: usize,
-
     /// phantom data so the type requires `<B>`
     _phantom: PhantomData<B>,
 }
@@ -515,8 +538,6 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
             max_block_size: BYTE_VIEW_MAX_BLOCK_SIZE,
             nulls: MaybeNullBufferBuilder::new(),
             _phantom: PhantomData {},
-            nullable_call: 0,
-            non_nullable_call: 0,
         }
     }
 
@@ -526,11 +547,34 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
         self
     }
 
-    fn append_val_inner(&mut self, array: &ArrayRef, row: usize)
-    where
-        B: ByteViewType,
-    {
-        self.nullable_call += 1;
+    fn append_batch_inner(
+        &mut self,
+        array: &ArrayRef,
+        rows: &[usize],
+        all_non_null: bool,
+    ) {
+        let arr = array.as_byte_view::<B>();
+        
+        if all_non_null {
+            self.nulls.append_n(rows.len(), false);
+            for &row in rows {
+                self.append_value(arr, row);
+            }
+        } else {
+            for &row in rows {
+                // Null row case, set and return
+                if arr.is_valid(row) {
+                    self.nulls.append(false);
+                    self.append_value(arr, row);
+                } else {
+                    self.nulls.append(true);
+                    self.views.push(0);
+                }
+            }
+        }
+    }
+
+    fn append_val_inner(&mut self, array: &ArrayRef, row: usize) {
         let arr = array.as_byte_view::<B>();
 
         // Null row case, set and return
@@ -542,37 +586,14 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
 
         // Not null row case
         self.nulls.append(false);
-        let value: &[u8] = arr.value(row).as_ref();
-
-        let value_len = value.len();
-        let view = if value_len <= 12 {
-            make_view(value, 0, 0)
-        } else {
-            // Ensure big enough block to hold the value firstly
-            self.ensure_in_progress_big_enough(value_len);
-
-            // Append value
-            let buffer_index = self.completed.len();
-            let offset = self.in_progress.len();
-            self.in_progress.extend_from_slice(value);
-
-            make_view(value, buffer_index as u32, offset as u32)
-        };
-
-        // Append view
-        self.views.push(view);
+        self.append_value(arr, row);
     }
 
-    fn append_val_non_nullable_inner(&mut self, array: &ArrayRef, row: usize)
+    fn append_value(&mut self, array: &GenericByteViewArray<B>, row: usize)
     where
         B: ByteViewType,
     {
-        self.non_nullable_call += 1;
-        let arr = array.as_byte_view::<B>();
-
-        // Not null row case
-        self.nulls.append(false);
-        let value: &[u8] = arr.value(row).as_ref();
+        let value: &[u8] = array.value(row).as_ref();
 
         let value_len = value.len();
         let view = if value_len <= 12 {
@@ -703,10 +724,6 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
 
         let views = ScalarBuffer::from(views);
 
-        println!(
-            "### nullable_call:{}, non_nullable_call:{}",
-            self.nullable_call, self.non_nullable_call
-        );
         // Safety:
         // * all views were correctly made
         // * (if utf8): Input was valid Utf8 so buffer contents are
@@ -892,8 +909,8 @@ impl<B: ByteViewType> GroupColumn for ByteViewGroupValueBuilder<B> {
         self.append_val_inner(array, row)
     }
 
-    fn append_non_nullable_val(&mut self, array: &ArrayRef, row: usize) {
-        self.append_val_non_nullable_inner(array, row);
+    fn append_batch(&mut self, array: &ArrayRef, rows: &[usize], all_non_null: bool) {
+        self.append_batch_inner(array, rows, all_non_null);
     }
 
     fn len(&self) -> usize {

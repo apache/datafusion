@@ -305,17 +305,13 @@ impl GroupValues for GroupValuesColumn {
 
         // 1.4 Vectorized append values
         for col_idx in 0..cols.len() {
-            let col_nullable = self.column_nullables_buffer[col_idx];
+            let all_non_null = !self.column_nullables_buffer[col_idx];
             let group_value = &mut self.group_values[col_idx];
-            if col_nullable {
-                for &row in self.append_rows_buffer.iter() {
-                    group_value.append_val(&cols[col_idx], row);
-                }
-            } else {
-                for &row in self.append_rows_buffer.iter() {
-                    group_value.append_non_nullable_val(&cols[col_idx], row);
-                }
-            }
+            group_value.append_batch(
+                &cols[col_idx],
+                &self.append_rows_buffer,
+                all_non_null,
+            );
         }
 
         Ok(())
