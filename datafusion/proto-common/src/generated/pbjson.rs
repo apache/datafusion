@@ -3761,6 +3761,7 @@ impl serde::Serialize for JoinSide {
         let variant = match self {
             Self::LeftSide => "LEFT_SIDE",
             Self::RightSide => "RIGHT_SIDE",
+            Self::None => "NONE",
         };
         serializer.serialize_str(variant)
     }
@@ -3774,6 +3775,7 @@ impl<'de> serde::Deserialize<'de> for JoinSide {
         const FIELDS: &[&str] = &[
             "LEFT_SIDE",
             "RIGHT_SIDE",
+            "NONE",
         ];
 
         struct GeneratedVisitor;
@@ -3816,6 +3818,7 @@ impl<'de> serde::Deserialize<'de> for JoinSide {
                 match value {
                     "LEFT_SIDE" => Ok(JoinSide::LeftSide),
                     "RIGHT_SIDE" => Ok(JoinSide::RightSide),
+                    "NONE" => Ok(JoinSide::None),
                     _ => Err(serde::de::Error::unknown_variant(value, FIELDS)),
                 }
             }
@@ -3838,6 +3841,7 @@ impl serde::Serialize for JoinType {
             Self::Leftanti => "LEFTANTI",
             Self::Rightsemi => "RIGHTSEMI",
             Self::Rightanti => "RIGHTANTI",
+            Self::Leftmark => "LEFTMARK",
         };
         serializer.serialize_str(variant)
     }
@@ -3857,6 +3861,7 @@ impl<'de> serde::Deserialize<'de> for JoinType {
             "LEFTANTI",
             "RIGHTSEMI",
             "RIGHTANTI",
+            "LEFTMARK",
         ];
 
         struct GeneratedVisitor;
@@ -3905,6 +3910,7 @@ impl<'de> serde::Deserialize<'de> for JoinType {
                     "LEFTANTI" => Ok(JoinType::Leftanti),
                     "RIGHTSEMI" => Ok(JoinType::Rightsemi),
                     "RIGHTANTI" => Ok(JoinType::Rightanti),
+                    "LEFTMARK" => Ok(JoinType::Leftmark),
                     _ => Err(serde::de::Error::unknown_variant(value, FIELDS)),
                 }
             }

@@ -248,7 +248,7 @@ fn push_down_join(mut join: Join, limit: usize) -> Transformed<Join> {
     let (left_limit, right_limit) = if is_no_join_condition(&join) {
         match join.join_type {
             Left | Right | Full | Inner => (Some(limit), Some(limit)),
-            LeftAnti | LeftSemi => (Some(limit), None),
+            LeftAnti | LeftSemi | LeftMark => (Some(limit), None),
             RightAnti | RightSemi => (None, Some(limit)),
         }
     } else {

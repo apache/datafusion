@@ -44,6 +44,8 @@ pub enum JoinType {
     LeftAnti,
     /// Right Anti Join
     RightAnti,
+    /// Left Mark join, used for correlated subqueries EXIST/IN
+    LeftMark,
 }
 
 impl JoinType {
@@ -63,6 +65,7 @@ impl Display for JoinType {
             JoinType::RightSemi => "RightSemi",
             JoinType::LeftAnti => "LeftAnti",
             JoinType::RightAnti => "RightAnti",
+            JoinType::LeftMark => "LeftMark",
         };
         write!(f, "{join_type}")
     }
@@ -82,6 +85,7 @@ impl FromStr for JoinType {
             "RIGHTSEMI" => Ok(JoinType::RightSemi),
             "LEFTANTI" => Ok(JoinType::LeftAnti),
             "RIGHTANTI" => Ok(JoinType::RightAnti),
+            "LEFTMARK" => Ok(JoinType::LeftMark),
             _ => _not_impl_err!("The join type {s} does not exist or is not implemented"),
         }
     }
@@ -101,6 +105,7 @@ impl Display for JoinSide {
         match self {
             JoinSide::Left => write!(f, "left"),
             JoinSide::Right => write!(f, "right"),
+            JoinSide::None => write!(f, "none"),
         }
     }
 }
@@ -113,6 +118,9 @@ pub enum JoinSide {
     Left,
     /// Right side of the join
     Right,
+    /// Neither side of the join, used for Mark joins where the mark column does not belong to
+    /// either side of the join
+    None,
 }
 
 impl JoinSide {
@@ -121,6 +129,7 @@ impl JoinSide {
         match self {
             JoinSide::Left => JoinSide::Right,
             JoinSide::Right => JoinSide::Left,
+            JoinSide::None => JoinSide::None,
         }
     }
 }

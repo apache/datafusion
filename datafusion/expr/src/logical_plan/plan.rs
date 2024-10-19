@@ -532,7 +532,9 @@ impl LogicalPlan {
                         left.head_output_expr()
                     }
                 }
-                JoinType::LeftSemi | JoinType::LeftAnti => left.head_output_expr(),
+                JoinType::LeftSemi | JoinType::LeftAnti | JoinType::LeftMark => {
+                    left.head_output_expr()
+                }
                 JoinType::RightSemi | JoinType::RightAnti => right.head_output_expr(),
             },
             LogicalPlan::RecursiveQuery(RecursiveQuery { static_term, .. }) => {
@@ -1290,7 +1292,9 @@ impl LogicalPlan {
                         _ => None,
                     }
                 }
-                JoinType::LeftSemi | JoinType::LeftAnti => left.max_rows(),
+                JoinType::LeftSemi | JoinType::LeftAnti | JoinType::LeftMark => {
+                    left.max_rows()
+                }
                 JoinType::RightSemi | JoinType::RightAnti => right.max_rows(),
             },
             LogicalPlan::Repartition(Repartition { input, .. }) => input.max_rows(),
