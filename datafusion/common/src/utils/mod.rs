@@ -93,20 +93,6 @@ pub fn get_row_at_idx(columns: &[ArrayRef], idx: usize) -> Result<Vec<ScalarValu
         .collect()
 }
 
-/// Construct a new RecordBatch from the rows of the `record_batch` at the `indices`.
-pub fn get_record_batch_at_indices(
-    record_batch: &RecordBatch,
-    indices: &PrimitiveArray<UInt32Type>,
-) -> Result<RecordBatch> {
-    let new_columns = take_arrays(record_batch.columns(), indices)?;
-    RecordBatch::try_new_with_options(
-        record_batch.schema(),
-        new_columns,
-        &RecordBatchOptions::new().with_row_count(Some(indices.len())),
-    )
-    .map_err(|e| arrow_datafusion_err!(e))
-}
-
 /// This function compares two tuples depending on the given sort options.
 pub fn compare_rows(
     x: &[ScalarValue],

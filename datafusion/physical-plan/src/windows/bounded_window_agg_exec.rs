@@ -40,6 +40,7 @@ use crate::{
     SendableRecordBatchStream, Statistics, WindowExpr,
 };
 use ahash::RandomState;
+use arrow::compute::take_record_batch;
 use arrow::{
     array::{Array, ArrayRef, RecordBatchOptions, UInt32Builder},
     compute::{concat, concat_batches, sort_to_indices},
@@ -49,8 +50,7 @@ use arrow::{
 use datafusion_common::hash_utils::create_hashes;
 use datafusion_common::stats::Precision;
 use datafusion_common::utils::{
-    evaluate_partition_ranges, get_at_indices, get_record_batch_at_indices,
-    get_row_at_idx, take_arrays,
+    evaluate_partition_ranges, get_at_indices, get_row_at_idx, take_arrays,
 };
 use datafusion_common::{arrow_datafusion_err, exec_err, DataFusionError, Result};
 use datafusion_execution::TaskContext;
@@ -556,7 +556,7 @@ impl PartitionSearcher for LinearSearch {
                 let mut new_indices = UInt32Builder::with_capacity(indices.len());
                 new_indices.append_slice(&indices);
                 let indices = new_indices.finish();
-                Ok((row, get_record_batch_at_indices(record_batch, &indices)?))
+                Ok((row, take_record_batch(record_batch, &indices)?))
             })
             .collect()
     }
