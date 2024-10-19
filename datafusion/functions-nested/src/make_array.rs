@@ -37,7 +37,6 @@ use datafusion_expr::TypeSignature;
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
-use itertools::Itertools;
 
 use crate::utils::make_scalar_function;
 
