@@ -1176,7 +1176,7 @@ mod tests {
     ) -> datafusion_common::Result<()> {
         let options = UnnestOptions {
             preserve_nulls,
-            recursions: None,
+            recursions: vec![],
         };
         let longest_length = find_longest_length(list_arrays, &options)?;
         let expected_array = Int64Array::from(expected);
