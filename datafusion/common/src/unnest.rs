@@ -77,7 +77,7 @@ pub struct UnnestOptions {
 }
 
 /// Instruction on how to unnest a column (mostly with a list type)
-/// such as how to name the output, and how many times it should be unnested
+/// such as how to name the output, and how many level it should be unnested
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd)]
 pub struct RecursionUnnestOption {
     pub input_column: Column,
