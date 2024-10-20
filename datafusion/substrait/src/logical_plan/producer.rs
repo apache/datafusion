@@ -15,6 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use datafusion::config::ConfigOptions;
+use datafusion::optimizer::analyzer::expand_wildcard_rule::ExpandWildcardRule;
+use datafusion::optimizer::AnalyzerRule;
 use std::sync::Arc;
 use substrait::proto::expression_reference::ExprType;
 
@@ -103,9 +106,14 @@ pub fn to_substrait_plan(plan: &LogicalPlan, ctx: &SessionContext) -> Result<Box
     // Parse relation nodes
     // Generate PlanRel(s)
     // Note: Only 1 relation tree is currently supported
+
+    // We have to expand wildcard expressions first as wildcards can't be represented in substrait
+    let plan = Arc::new(ExpandWildcardRule::new())
+        .analyze(plan.clone(), &ConfigOptions::default())?;
+
     let plan_rels = vec![PlanRel {
         rel_type: Some(plan_rel::RelType::Root(RelRoot {
-            input: Some(*to_substrait_rel(plan, ctx, &mut extensions)?),
+            input: Some(*to_substrait_rel(&plan, ctx, &mut extensions)?),
             names: to_substrait_named_struct(plan.schema(), &mut extensions)?.names,
         })),
     }];
@@ -172,6 +180,7 @@ pub fn to_substrait_extended_expr(
 }
 
 /// Convert DataFusion LogicalPlan to Substrait Rel
+#[allow(deprecated)]
 pub fn to_substrait_rel(
     plan: &LogicalPlan,
     ctx: &SessionContext,
@@ -227,6 +236,7 @@ pub fn to_substrait_rel(
                     advanced_extension: None,
                     read_type: Some(ReadType::VirtualTable(VirtualTable {
                         values: vec![],
+                        expressions: vec![],
                     })),
                 }))),
             }))
@@ -263,7 +273,10 @@ pub fn to_substrait_rel(
                     best_effort_filter: None,
                     projection: None,
                     advanced_extension: None,
-                    read_type: Some(ReadType::VirtualTable(VirtualTable { values })),
+                    read_type: Some(ReadType::VirtualTable(VirtualTable {
+                        values,
+                        expressions: vec![],
+                    })),
                 }))),
             }))
         }
@@ -359,6 +372,7 @@ pub fn to_substrait_rel(
                 rel_type: Some(RelType::Aggregate(Box::new(AggregateRel {
                     common: None,
                     input: Some(input),
+                    grouping_expressions: vec![],
                     groupings,
                     measures,
                     advanced_extension: None,
@@ -377,8 +391,10 @@ pub fn to_substrait_rel(
                 rel_type: Some(RelType::Aggregate(Box::new(AggregateRel {
                     common: None,
                     input: Some(input),
+                    grouping_expressions: vec![],
                     groupings: vec![Grouping {
                         grouping_expressions: grouping,
+                        expression_references: vec![],
                     }],
                     measures: vec![],
                     advanced_extension: None,
@@ -764,6 +780,7 @@ pub fn operator_to_name(op: Operator) -> &'static str {
     }
 }
 
+#[allow(deprecated)]
 pub fn parse_flat_grouping_exprs(
     ctx: &SessionContext,
     exprs: &[Expr],
@@ -776,6 +793,7 @@ pub fn parse_flat_grouping_exprs(
         .collect::<Result<Vec<_>>>()?;
     Ok(Grouping {
         grouping_expressions,
+        expression_references: vec![],
     })
 }
 

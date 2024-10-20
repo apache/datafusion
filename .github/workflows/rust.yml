@@ -574,9 +574,9 @@ jobs:
           #
           # To reproduce: 
           # 1. Install the version of Rust that is failing. Example: 
-          #    rustup install 1.78.0
+          #    rustup install 1.79.0
           # 2. Run the command that failed with that version. Example:
-          #    cargo +1.78.0 check -p datafusion
+          #    cargo +1.79.0 check -p datafusion
           # 
           # To resolve, either:
           # 1. Change your code to use older Rust features, 

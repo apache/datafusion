@@ -21,7 +21,7 @@ use std::borrow::Borrow;
 use std::sync::Arc;
 
 use crate::{
-    expressions::{cume_dist, lag, lead, Literal, NthValue, Ntile, PhysicalSortExpr},
+    expressions::{cume_dist, Literal, NthValue, Ntile, PhysicalSortExpr},
     ExecutionPlan, ExecutionPlanProperties, InputOrderMode, PhysicalExpr,
 };
 
@@ -48,6 +48,7 @@ mod utils;
 mod window_agg_exec;
 
 pub use bounded_window_agg_exec::BoundedWindowAggExec;
+use datafusion_functions_window_common::expr::ExpressionArgs;
 use datafusion_functions_window_common::field::WindowUDFFieldArgs;
 use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
 use datafusion_physical_expr::expressions::Column;
@@ -118,7 +119,8 @@ pub fn create_window_expr(
                 .schema(Arc::new(input_schema.clone()))
                 .alias(name)
                 .with_ignore_nulls(ignore_nulls)
-                .build()?;
+                .build()
+                .map(Arc::new)?;
             window_expr_from_aggregate_expr(
                 partition_by,
                 order_by,
@@ -141,7 +143,7 @@ fn window_expr_from_aggregate_expr(
     partition_by: &[Arc<dyn PhysicalExpr>],
     order_by: &[PhysicalSortExpr],
     window_frame: Arc<WindowFrame>,
-    aggregate: AggregateFunctionExpr,
+    aggregate: Arc<AggregateFunctionExpr>,
 ) -> Arc<dyn WindowExpr> {
     // Is there a potentially unlimited sized window frame?
     let unbounded_window = window_frame.start_bound.is_unbounded();
@@ -206,52 +208,6 @@ fn get_unsigned_integer(value: ScalarValue) -> Result<u64> {
     value.cast_to(&DataType::UInt64)?.try_into()
 }
 
-fn get_casted_value(
-    default_value: Option<ScalarValue>,
-    dtype: &DataType,
-) -> Result<ScalarValue> {
-    match default_value {
-        Some(v) if !v.data_type().is_null() => v.cast_to(dtype),
-        // If None or Null datatype
-        _ => ScalarValue::try_from(dtype),
-    }
-}
-
-/// Rewrites the NULL expression (1st argument) with an expression
-/// which is the same data type as the default value (3rd argument).
-/// Also rewrites the return type with the same data type as the
-/// default value.
-///
-/// If a default value is not provided, or it is NULL the original
-/// expression (1st argument) and return type is returned without
-/// any modifications.
-fn rewrite_null_expr_and_data_type(
-    args: &[Arc<dyn PhysicalExpr>],
-    expr_type: &DataType,
-) -> Result<(Arc<dyn PhysicalExpr>, DataType)> {
-    assert!(!args.is_empty());
-    let expr = Arc::clone(&args[0]);
-
-    // The input expression and the return is type is unchanged
-    // when the input expression is not NULL.
-    if !expr_type.is_null() {
-        return Ok((expr, expr_type.clone()));
-    }
-
-    get_scalar_value_from_args(args, 2)?
-        .and_then(|value| {
-            ScalarValue::try_from(value.data_type().clone())
-                .map(|sv| {
-                    Ok((
-                        Arc::new(Literal::new(sv)) as Arc<dyn PhysicalExpr>,
-                        value.data_type().clone(),
-                    ))
-                })
-                .ok()
-        })
-        .unwrap_or(Ok((expr, expr_type.clone())))
-}
-
 fn create_built_in_window_expr(
     fun: &BuiltInWindowFunction,
     args: &[Arc<dyn PhysicalExpr>],
@@ -285,42 +241,6 @@ fn create_built_in_window_expr(
                 }
                 Arc::new(Ntile::new(name, n as u64, out_data_type))
             }
-        }
-        BuiltInWindowFunction::Lag => {
-            // rewrite NULL expression and the return datatype
-            let (arg, out_data_type) =
-                rewrite_null_expr_and_data_type(args, out_data_type)?;
-            let shift_offset = get_scalar_value_from_args(args, 1)?
-                .map(get_signed_integer)
-                .map_or(Ok(None), |v| v.map(Some))?;
-            let default_value =
-                get_casted_value(get_scalar_value_from_args(args, 2)?, &out_data_type)?;
-            Arc::new(lag(
-                name,
-                default_value.data_type().clone(),
-                arg,
-                shift_offset,
-                default_value,
-                ignore_nulls,
-            ))
-        }
-        BuiltInWindowFunction::Lead => {
-            // rewrite NULL expression and the return datatype
-            let (arg, out_data_type) =
-                rewrite_null_expr_and_data_type(args, out_data_type)?;
-            let shift_offset = get_scalar_value_from_args(args, 1)?
-                .map(get_signed_integer)
-                .map_or(Ok(None), |v| v.map(Some))?;
-            let default_value =
-                get_casted_value(get_scalar_value_from_args(args, 2)?, &out_data_type)?;
-            Arc::new(lead(
-                name,
-                default_value.data_type().clone(),
-                arg,
-                shift_offset,
-                default_value,
-                ignore_nulls,
-            ))
         }
         BuiltInWindowFunction::NthValue => {
             let arg = Arc::clone(&args[0]);
@@ -415,7 +335,8 @@ impl BuiltInWindowFunctionExpr for WindowUDFExpr {
     }
 
     fn expressions(&self) -> Vec<Arc<dyn PhysicalExpr>> {
-        self.args.clone()
+        self.fun
+            .expressions(ExpressionArgs::new(&self.args, &self.input_types))
     }
 
     fn create_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>> {

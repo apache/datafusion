@@ -23,11 +23,8 @@ use std::fmt::{Display, Formatter};
 use std::ops::Deref;
 use std::vec::IntoIter;
 
-use crate::error::_plan_err;
 use crate::utils::{merge_and_order_indices, set_difference};
-use crate::{DFSchema, DFSchemaRef, DataFusionError, JoinType, Result};
-
-use sqlparser::ast::TableConstraint;
+use crate::{DFSchema, JoinType};
 
 /// This object defines a constraint on a table.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
@@ -58,74 +55,6 @@ impl Constraints {
     /// is responsible for supplying a valid vector of `Constraint` objects.
     pub fn new_unverified(constraints: Vec<Constraint>) -> Self {
         Self { inner: constraints }
-    }
-
-    /// Convert each `TableConstraint` to corresponding `Constraint`
-    pub fn new_from_table_constraints(
-        constraints: &[TableConstraint],
-        df_schema: &DFSchemaRef,
-    ) -> Result<Self> {
-        let constraints = constraints
-            .iter()
-            .map(|c: &TableConstraint| match c {
-                TableConstraint::Unique { name, columns, .. } => {
-                    let field_names = df_schema.field_names();
-                    // Get unique constraint indices in the schema:
-                    let indices = columns
-                        .iter()
-                        .map(|u| {
-                            let idx = field_names
-                                .iter()
-                                .position(|item| *item == u.value)
-                                .ok_or_else(|| {
-                                    let name = name
-                                        .as_ref()
-                                        .map(|name| format!("with name '{name}' "))
-                                        .unwrap_or("".to_string());
-                                    DataFusionError::Execution(
-                                        format!("Column for unique constraint {}not found in schema: {}", name,u.value)
-                                    )
-                                })?;
-                            Ok(idx)
-                        })
-                        .collect::<Result<Vec<_>>>()?;
-                    Ok(Constraint::Unique(indices))
-                }
-                TableConstraint::PrimaryKey { columns, .. } => {
-                    let field_names = df_schema.field_names();
-                    // Get primary key indices in the schema:
-                    let indices = columns
-                        .iter()
-                        .map(|pk| {
-                            let idx = field_names
-                                .iter()
-                                .position(|item| *item == pk.value)
-                                .ok_or_else(|| {
-                                    DataFusionError::Execution(format!(
-                                        "Column for primary key not found in schema: {}",
-                                        pk.value
-                                    ))
-                                })?;
-                            Ok(idx)
-                        })
-                        .collect::<Result<Vec<_>>>()?;
-                    Ok(Constraint::PrimaryKey(indices))
-                }
-                TableConstraint::ForeignKey { .. } => {
-                    _plan_err!("Foreign key constraints are not currently supported")
-                }
-                TableConstraint::Check { .. } => {
-                    _plan_err!("Check constraints are not currently supported")
-                }
-                TableConstraint::Index { .. } => {
-                    _plan_err!("Indexes are not currently supported")
-                }
-                TableConstraint::FulltextOrSpatial { .. } => {
-                    _plan_err!("Indexes are not currently supported")
-                }
-            })
-            .collect::<Result<Vec<_>>>()?;
-        Ok(Constraints::new_unverified(constraints))
     }
 
     /// Check whether constraints is empty

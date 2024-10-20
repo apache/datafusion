@@ -338,6 +338,12 @@ config_namespace! {
         /// if the source of statistics is accurate.
         /// We plan to make this the default in the future.
         pub use_row_number_estimates_to_optimize_partitioning: bool, default = false
+
+        /// Should DataFusion enforce batch size in joins or not. By default,
+        /// DataFusion will not enforce batch size in joins. Enforcing batch size
+        /// in joins can reduce memory usage when joining large
+        /// tables with a highly-selective join filter, but is also slightly slower.
+        pub enforce_batch_size_in_joins: bool, default = false
     }
 }
 
@@ -1222,16 +1228,18 @@ impl ConfigField for TableOptions {
     fn set(&mut self, key: &str, value: &str) -> Result<()> {
         // Extensions are handled in the public `ConfigOptions::set`
         let (key, rem) = key.split_once('.').unwrap_or((key, ""));
-        let Some(format) = &self.current_format else {
-            return _config_err!("Specify a format for TableOptions");
-        };
         match key {
-            "format" => match format {
-                #[cfg(feature = "parquet")]
-                ConfigFileType::PARQUET => self.parquet.set(rem, value),
-                ConfigFileType::CSV => self.csv.set(rem, value),
-                ConfigFileType::JSON => self.json.set(rem, value),
-            },
+            "format" => {
+                let Some(format) = &self.current_format else {
+                    return _config_err!("Specify a format for TableOptions");
+                };
+                match format {
+                    #[cfg(feature = "parquet")]
+                    ConfigFileType::PARQUET => self.parquet.set(rem, value),
+                    ConfigFileType::CSV => self.csv.set(rem, value),
+                    ConfigFileType::JSON => self.json.set(rem, value),
+                }
+            }
             _ => _config_err!("Config value \"{key}\" not found on TableOptions"),
         }
     }
