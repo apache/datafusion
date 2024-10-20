@@ -264,7 +264,7 @@ message CopyToNode {
 
 message UnnestNode {
   LogicalPlanNode input = 1;
-  repeated ColumnUnnestExec exec_columns = 2;
+  repeated datafusion_common.Column exec_columns = 2;
   repeated ColumnUnnestListItem list_type_columns = 3;
   repeated uint64 struct_type_columns = 4;
   repeated uint64 dependency_indices = 5;
@@ -285,17 +285,15 @@ message ColumnUnnestListRecursion {
   uint32 depth = 2;
 }
 
-message ColumnUnnestExec {
-  datafusion_common.Column column = 1;
-  oneof UnnestType {
-    ColumnUnnestListRecursions list = 2;
-    datafusion_common.EmptyMessage struct = 3;
-    datafusion_common.EmptyMessage inferred = 4;
-  }
-}
-
 message UnnestOptions {
   bool preserve_nulls = 1;
+  repeated RecursionUnnestOption recursions = 2;
+}
+
+message RecursionUnnestOption {
+  datafusion_common.Column output_column = 1;
+  datafusion_common.Column input_column = 2;
+  uint32 depth = 3;
 }
 
 message UnionNode {
