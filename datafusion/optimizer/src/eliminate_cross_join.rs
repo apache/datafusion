@@ -646,7 +646,7 @@ mod tests {
     }
 
     #[test]
-    fn eliminate_cross_not_possible_nested_inner_join_with_filter() -> Result<()> {
+    fn eliminate_cross_possible_nested_inner_join_with_filter() -> Result<()> {
         let t1 = test_table_scan_with_name("t1")?;
         let t2 = test_table_scan_with_name("t2")?;
         let t3 = test_table_scan_with_name("t3")?;
