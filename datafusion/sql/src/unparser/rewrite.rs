@@ -101,25 +101,25 @@ fn rewrite_sort_expr_for_union(exprs: Vec<SortExpr>) -> Result<Vec<SortExpr>> {
     Ok(sort_exprs)
 }
 
-// Rewrite logic plan for query that order by columns are not in projections
-// Plan before rewrite:
-//
-// Projection: j1.j1_string, j2.j2_string
-//   Sort: j1.j1_id DESC NULLS FIRST, j2.j2_id DESC NULLS FIRST
-//     Projection: j1.j1_string, j2.j2_string, j1.j1_id, j2.j2_id
-//       Inner Join:  Filter: j1.j1_id = j2.j2_id
-//         TableScan: j1
-//         TableScan: j2
-//
-// Plan after rewrite
-//
-// Sort: j1.j1_id DESC NULLS FIRST, j2.j2_id DESC NULLS FIRST
-//   Projection: j1.j1_string, j2.j2_string
-//     Inner Join:  Filter: j1.j1_id = j2.j2_id
-//       TableScan: j1
-//       TableScan: j2
-//
-// This prevents the original plan generate query with derived table but missing alias.
+/// Rewrite logic plan for query that order by columns are not in projections
+/// Plan before rewrite:
+///
+/// Projection: j1.j1_string, j2.j2_string
+///   Sort: j1.j1_id DESC NULLS FIRST, j2.j2_id DESC NULLS FIRST
+///     Projection: j1.j1_string, j2.j2_string, j1.j1_id, j2.j2_id
+///       Inner Join:  Filter: j1.j1_id = j2.j2_id
+///         TableScan: j1
+///         TableScan: j2
+///
+/// Plan after rewrite
+///
+/// Sort: j1.j1_id DESC NULLS FIRST, j2.j2_id DESC NULLS FIRST
+///   Projection: j1.j1_string, j2.j2_string
+///     Inner Join:  Filter: j1.j1_id = j2.j2_id
+///       TableScan: j1
+///       TableScan: j2
+///
+/// This prevents the original plan generate query with derived table but missing alias.
 pub(super) fn rewrite_plan_for_sort_on_non_projected_fields(
     p: &Projection,
 ) -> Option<LogicalPlan> {
@@ -191,33 +191,33 @@ pub(super) fn rewrite_plan_for_sort_on_non_projected_fields(
     }
 }
 
-// This logic is to work out the columns and inner query for SubqueryAlias plan for both types of
-// subquery
-// - `(SELECT column_a as a from table) AS A`
-// - `(SELECT column_a from table) AS A (a)`
-//
-// A roundtrip example for table alias with columns
-//
-// query: SELECT id FROM (SELECT j1_id from j1) AS c (id)
-//
-// LogicPlan:
-// Projection: c.id
-//   SubqueryAlias: c
-//     Projection: j1.j1_id AS id
-//       Projection: j1.j1_id
-//         TableScan: j1
-//
-// Before introducing this logic, the unparsed query would be `SELECT c.id FROM (SELECT j1.j1_id AS
-// id FROM (SELECT j1.j1_id FROM j1)) AS c`.
-// The query is invalid as `j1.j1_id` is not a valid identifier in the derived table
-// `(SELECT j1.j1_id FROM j1)`
-//
-// With this logic, the unparsed query will be:
-// `SELECT c.id FROM (SELECT j1.j1_id FROM j1) AS c (id)`
-//
-// Caveat: this won't handle the case like `select * from (select 1, 2) AS a (b, c)`
-// as the parser gives a wrong plan which has mismatch `Int(1)` types: Literal and
-// Column in the Projections. Once the parser side is fixed, this logic should work
+/// This logic is to work out the columns and inner query for SubqueryAlias plan for both types of
+/// subquery
+/// - `(SELECT column_a as a from table) AS A`
+/// - `(SELECT column_a from table) AS A (a)`
+///
+/// A roundtrip example for table alias with columns
+///
+/// query: SELECT id FROM (SELECT j1_id from j1) AS c (id)
+///
+/// LogicPlan:
+/// Projection: c.id
+///   SubqueryAlias: c
+///     Projection: j1.j1_id AS id
+///       Projection: j1.j1_id
+///         TableScan: j1
+///
+/// Before introducing this logic, the unparsed query would be `SELECT c.id FROM (SELECT j1.j1_id AS
+/// id FROM (SELECT j1.j1_id FROM j1)) AS c`.
+/// The query is invalid as `j1.j1_id` is not a valid identifier in the derived table
+/// `(SELECT j1.j1_id FROM j1)`
+///
+/// With this logic, the unparsed query will be:
+/// `SELECT c.id FROM (SELECT j1.j1_id FROM j1) AS c (id)`
+///
+/// Caveat: this won't handle the case like `select * from (select 1, 2) AS a (b, c)`
+/// as the parser gives a wrong plan which has mismatch `Int(1)` types: Literal and
+/// Column in the Projections. Once the parser side is fixed, this logic should work
 pub(super) fn subquery_alias_inner_query_and_columns(
     subquery_alias: &datafusion_expr::SubqueryAlias,
 ) -> (&LogicalPlan, Vec<Ident>) {
@@ -330,6 +330,7 @@ fn find_projection(logical_plan: &LogicalPlan) -> Option<&Projection> {
         _ => None,
     }
 }
+
 /// A `TreeNodeRewriter` implementation that rewrites `Expr::Column` expressions by
 /// replacing the column's name with an alias if the column exists in the provided schema.
 ///

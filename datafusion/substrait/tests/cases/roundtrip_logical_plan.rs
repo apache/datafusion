@@ -183,7 +183,13 @@ async fn simple_select() -> Result<()> {
 
 #[tokio::test]
 async fn wildcard_select() -> Result<()> {
-    roundtrip("SELECT * FROM data").await
+    assert_expected_plan_unoptimized(
+        "SELECT * FROM data",
+        "Projection: data.a, data.b, data.c, data.d, data.e, data.f\
+        \n  TableScan: data",
+        true,
+    )
+    .await
 }
 
 #[tokio::test]
@@ -468,16 +474,14 @@ async fn roundtrip_inlist_5() -> Result<()> {
     // using assert_expected_plan here as a workaround
     assert_expected_plan(
     "SELECT a, f FROM data WHERE (f IN ('a', 'b', 'c') OR a in (SELECT data2.a FROM data2 WHERE f IN ('b', 'c', 'd')))",
-    "Filter: data.f = Utf8(\"a\") OR data.f = Utf8(\"b\") OR data.f = Utf8(\"c\") OR data.a IN (<subquery>)\
-    \n  Subquery:\
-    \n    Projection: data2.a\
-    \n      Filter: data2.f IN ([Utf8(\"b\"), Utf8(\"c\"), Utf8(\"d\")])\
-    \n        TableScan: data2\
-    \n  TableScan: data projection=[a, f], partial_filters=[data.f = Utf8(\"a\") OR data.f = Utf8(\"b\") OR data.f = Utf8(\"c\") OR data.a IN (<subquery>)]\
-    \n    Subquery:\
-    \n      Projection: data2.a\
-    \n        Filter: data2.f IN ([Utf8(\"b\"), Utf8(\"c\"), Utf8(\"d\")])\
-    \n          TableScan: data2",
+    "Projection: data.a, data.f\
+     \n  Filter: data.f = Utf8(\"a\") OR data.f = Utf8(\"b\") OR data.f = Utf8(\"c\") OR Boolean(true) IS NOT NULL\
+     \n    Projection: data.a, data.f, Boolean(true)\
+     \n      Left Join: data.a = data2.a\
+     \n        TableScan: data projection=[a, f]\
+     \n        Projection: data2.a, Boolean(true)\
+     \n          Filter: data2.f = Utf8(\"b\") OR data2.f = Utf8(\"c\") OR data2.f = Utf8(\"d\")\
+     \n            TableScan: data2 projection=[a, f], partial_filters=[data2.f = Utf8(\"b\") OR data2.f = Utf8(\"c\") OR data2.f = Utf8(\"d\")]",
     true).await
 }
 
@@ -685,6 +689,72 @@ async fn simple_intersect_consume() -> Result<()> {
         "SELECT a FROM data INTERSECT SELECT a FROM data2",
     )
     .await
+}
+
+#[tokio::test]
+async fn primary_intersect_consume() -> Result<()> {
+    let proto_plan =
+        read_json("tests/testdata/test_plans/intersect_primary.substrait.json");
+
+    assert_substrait_sql(
+        proto_plan,
+        "SELECT a FROM data INTERSECT (SELECT a FROM data2 UNION ALL SELECT a FROM data2)",
+    )
+    .await
+}
+
+#[tokio::test]
+async fn multiset_intersect_consume() -> Result<()> {
+    let proto_plan =
+        read_json("tests/testdata/test_plans/intersect_multiset.substrait.json");
+
+    assert_substrait_sql(
+        proto_plan,
+        "SELECT a FROM data INTERSECT SELECT a FROM data2 INTERSECT SELECT a FROM data2",
+    )
+    .await
+}
+
+#[tokio::test]
+async fn multiset_intersect_all_consume() -> Result<()> {
+    let proto_plan =
+        read_json("tests/testdata/test_plans/intersect_multiset_all.substrait.json");
+
+    assert_substrait_sql(
+        proto_plan,
+        "SELECT a FROM data INTERSECT ALL SELECT a FROM data2 INTERSECT ALL SELECT a FROM data2",
+    )
+    .await
+}
+
+#[tokio::test]
+async fn primary_except_consume() -> Result<()> {
+    let proto_plan = read_json("tests/testdata/test_plans/minus_primary.substrait.json");
+
+    assert_substrait_sql(
+        proto_plan,
+        "SELECT a FROM data EXCEPT SELECT a FROM data2 EXCEPT SELECT a FROM data2",
+    )
+    .await
+}
+
+#[tokio::test]
+async fn primary_except_all_consume() -> Result<()> {
+    let proto_plan =
+        read_json("tests/testdata/test_plans/minus_primary_all.substrait.json");
+
+    assert_substrait_sql(
+        proto_plan,
+        "SELECT a FROM data EXCEPT ALL SELECT a FROM data2 EXCEPT ALL SELECT a FROM data2",
+    )
+    .await
+}
+
+#[tokio::test]
+async fn union_distinct_consume() -> Result<()> {
+    let proto_plan = read_json("tests/testdata/test_plans/union_distinct.substrait.json");
+
+    assert_substrait_sql(proto_plan, "SELECT a FROM data UNION SELECT a FROM data2").await
 }
 
 #[tokio::test]
@@ -1104,6 +1174,32 @@ async fn verify_post_join_filter_value(proto: Box<Plan>) -> Result<()> {
             None => return plan_err!("Cannot parse plan relation: None"),
         }
     }
+
+    Ok(())
+}
+
+async fn assert_expected_plan_unoptimized(
+    sql: &str,
+    expected_plan_str: &str,
+    assert_schema: bool,
+) -> Result<()> {
+    let ctx = create_context().await?;
+    let df = ctx.sql(sql).await?;
+    let plan = df.into_unoptimized_plan();
+    let proto = to_substrait_plan(&plan, &ctx)?;
+    let plan2 = from_substrait_plan(&ctx, &proto).await?;
+
+    println!("{plan}");
+    println!("{plan2}");
+
+    println!("{proto:?}");
+
+    if assert_schema {
+        assert_eq!(plan.schema(), plan2.schema());
+    }
+
+    let plan2str = format!("{plan2}");
+    assert_eq!(expected_plan_str, &plan2str);
 
     Ok(())
 }

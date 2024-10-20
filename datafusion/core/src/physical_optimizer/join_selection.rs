@@ -183,13 +183,15 @@ pub fn swap_hash_join(
         partition_mode,
         hash_join.null_equals_null(),
     )?;
+    // In case of anti / semi joins or if there is embedded projection in HashJoinExec, output column order is preserved, no need to add projection again
     if matches!(
         hash_join.join_type(),
         JoinType::LeftSemi
             | JoinType::RightSemi
             | JoinType::LeftAnti
             | JoinType::RightAnti
-    ) {
+    ) || hash_join.projection.is_some()
+    {
         Ok(Arc::new(new_join))
     } else {
         // TODO avoid adding ProjectionExec again and again, only adding Final Projection
@@ -1285,6 +1287,33 @@ mod tests_statistical {
             swapped_join.right().statistics().unwrap().total_byte_size,
             Precision::Inexact(2097152)
         );
+    }
+
+    #[tokio::test]
+    async fn test_hash_join_swap_on_joins_with_projections() -> Result<()> {
+        let (big, small) = create_big_and_small();
+        let join = Arc::new(HashJoinExec::try_new(
+            Arc::clone(&big),
+            Arc::clone(&small),
+            vec![(
+                Arc::new(Column::new_with_schema("big_col", &big.schema())?),
+                Arc::new(Column::new_with_schema("small_col", &small.schema())?),
+            )],
+            None,
+            &JoinType::Inner,
+            Some(vec![1]),
+            PartitionMode::Partitioned,
+            false,
+        )?);
+        let swapped = swap_hash_join(&join.clone(), PartitionMode::Partitioned)
+            .expect("swap_hash_join must support joins with projections");
+        let swapped_join = swapped.as_any().downcast_ref::<HashJoinExec>().expect(
+            "ProjectionExec won't be added above if HashJoinExec contains embedded projection",
+        );
+        assert_eq!(swapped_join.projection, Some(vec![0_usize]));
+        assert_eq!(swapped.schema().fields.len(), 1);
+        assert_eq!(swapped.schema().fields[0].name(), "small_col");
+        Ok(())
     }
 
     #[tokio::test]
