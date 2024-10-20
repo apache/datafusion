@@ -160,6 +160,10 @@ fn test_ordering_satisfy_with_equivalence_complex_random() -> Result<()> {
     Ok(())
 }
 
+// This test checks given a table is ordered with `[a ASC, b ASC, c ASC, d ASC]` and `[a ASC, c ASC, b ASC, d ASC]`
+// whether the table is also ordered with `[a ASC, b ASC, d ASC]` and `[a ASC, c ASC, d ASC]`
+// Since these orderings cannot be deduced, these orderings shouldn't be satisfied by the table generated.
+// For background see discussion: https://github.com/apache/datafusion/issues/12700#issuecomment-2411134296
 #[test]
 fn test_ordering_satisfy_on_data() -> Result<()> {
     let schema = create_test_schema_2()?;
