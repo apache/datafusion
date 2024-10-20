@@ -19,7 +19,6 @@
 
 use crate::aggregates::group_values::primitive::HashValue;
 use crate::aggregates::topk::heap::Comparable;
-use ahash::RandomState;
 use arrow::datatypes::i256;
 use arrow_array::builder::PrimitiveBuilder;
 use arrow_array::cast::AsArray;
@@ -30,6 +29,7 @@ use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano};
 use arrow_schema::DataType;
 use datafusion_common::DataFusionError;
 use datafusion_common::Result;
+use foldhash::fast::RandomState;
 use half::f16;
 use hashbrown::raw::RawTable;
 use std::fmt::Debug;
@@ -109,7 +109,7 @@ impl StringHashTable {
         Self {
             owned,
             map: TopKHashTable::new(limit, limit * 10),
-            rnd: ahash::RandomState::default(),
+            rnd: foldhash::fast::RandomState::default(),
         }
     }
 }
@@ -142,6 +142,8 @@ impl ArrowHashTable for StringHashTable {
         replace_idx: usize,
         mapper: &mut Vec<(usize, usize)>,
     ) -> (usize, bool) {
+        use std::hash::BuildHasher;
+
         let ids = self
             .owned
             .as_any()
@@ -181,7 +183,7 @@ where
         Self {
             owned,
             map: TopKHashTable::new(limit, limit * 10),
-            rnd: ahash::RandomState::default(),
+            rnd: foldhash::fast::RandomState::default(),
         }
     }
 }
@@ -338,6 +340,7 @@ impl<ID: KeyType> HashTableItem<ID> {
 
 impl HashValue for Option<String> {
     fn hash(&self, state: &RandomState) -> u64 {
+        use std::hash::BuildHasher;
         state.hash_one(self)
     }
 }

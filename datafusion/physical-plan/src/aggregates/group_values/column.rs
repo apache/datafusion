@@ -20,7 +20,6 @@ use crate::aggregates::group_values::group_column::{
     PrimitiveGroupValueBuilder,
 };
 use crate::aggregates::group_values::GroupValues;
-use ahash::RandomState;
 use arrow::compute::cast;
 use arrow::datatypes::{
     BinaryViewType, Date32Type, Date64Type, Float32Type, Float64Type, Int16Type,
@@ -35,6 +34,7 @@ use datafusion_common::{not_impl_err, DataFusionError, Result};
 use datafusion_execution::memory_pool::proxy::{RawTableAllocExt, VecAllocExt};
 use datafusion_expr::EmitTo;
 use datafusion_physical_expr::binary_map::OutputType;
+use foldhash::fast::RandomState;
 
 use hashbrown::raw::RawTable;
 

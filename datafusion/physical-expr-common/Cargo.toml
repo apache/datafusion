@@ -36,7 +36,7 @@ name = "datafusion_physical_expr_common"
 path = "src/lib.rs"
 
 [dependencies]
-ahash = { workspace = true }
+foldhash = { workspace = true }
 arrow = { workspace = true }
 datafusion-common = { workspace = true, default-features = true }
 datafusion-expr-common = { workspace = true }
