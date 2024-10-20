@@ -119,7 +119,7 @@ doc-comment = "0.3"
 env_logger = "0.11"
 futures = "0.3"
 half = { version = "2.2.1", default-features = false }
-hashbrown = { version = "0.14.5", features = ["raw"] }
+hashbrown = { version = "0.15.0", features = ["raw"] }
 indexmap = "2.0.0"
 itertools = "0.13"
 log = "^0.4"
