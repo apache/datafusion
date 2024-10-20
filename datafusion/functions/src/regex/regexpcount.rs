@@ -127,8 +127,8 @@ fn get_regexp_count_doc() -> &'static Documentation {
 | 1                                                             |
 +---------------------------------------------------------------+
 ```"#)
-            .with_standard_argument("str", "String")
-            .with_standard_argument("regexp","Regular")
+            .with_standard_argument("str", Some("String"))
+            .with_standard_argument("regexp",Some("Regular"))
             .with_argument("start", "- **start**: Optional start position (the first position is 1) to search for the regular expression. Can be a constant, column, or function.")
             .with_argument("flags",
                            r#"Optional regular expression flags that control the behavior of the regular expression. The following flags are supported:
