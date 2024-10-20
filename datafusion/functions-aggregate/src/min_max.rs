@@ -357,7 +357,7 @@ fn get_max_doc() -> &'static Documentation {
 +----------------------+
 ```"#,
             )
-            .with_standard_argument("expression", "The")
+            .with_standard_argument("expression", None)
             .build()
             .unwrap()
     })
@@ -1187,7 +1187,7 @@ fn get_min_doc() -> &'static Documentation {
 +----------------------+
 ```"#,
             )
-            .with_standard_argument("expression", "The")
+            .with_standard_argument("expression", None)
             .build()
             .unwrap()
     })
