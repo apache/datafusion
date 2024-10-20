@@ -908,7 +908,7 @@ concat_ws(separator, str[, ..., str_n])
 
 - **separator**: Separator to insert between concatenated strings.
 - **str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
-- **str_n**: Subsequent string expressions to concatenate. expression to operate on. Can be a constant, column, or function, and any combination of operators.
+- **str_n**: Subsequent string expressions to concatenate.
 
 #### Example
 
@@ -1250,7 +1250,7 @@ replace(str, substr, replacement)
 #### Arguments
 
 - **str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
-- **substr**: Substring expression to replace in the input string. Substring expression expression to operate on. Can be a constant, column, or function, and any combination of operators.
+- **substr**: Substring expression to replace in the input string. Substring expression to operate on. Can be a constant, column, or function, and any combination of operators.
 - **replacement**: Replacement substring expression to operate on. Can be a constant, column, or function, and any combination of operators.
 
 #### Example

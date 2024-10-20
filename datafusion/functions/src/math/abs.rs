@@ -201,7 +201,7 @@ fn get_abs_doc() -> &'static Documentation {
             .with_doc_section(DOC_SECTION_MATH)
             .with_description("Returns the absolute value of a number.")
             .with_syntax_example("abs(numeric_expression)")
-            .with_standard_argument("numeric_expression", "Numeric")
+            .with_standard_argument("numeric_expression", Some("Numeric"))
             .build()
             .unwrap()
     })

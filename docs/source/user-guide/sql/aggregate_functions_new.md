@@ -562,7 +562,7 @@ nth_value(expression, n ORDER BY expression)
 
 #### Arguments
 
-- **expression**: The column or expression to retrieve the nth value from. expression to operate on. Can be a constant, column, or function, and any combination of operators.
+- **expression**: The column or expression to retrieve the nth value from.
 - **n**: The position (nth) of the value to retrieve, based on the ordering.
 
 #### Example

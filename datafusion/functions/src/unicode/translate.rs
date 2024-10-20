@@ -101,7 +101,7 @@ fn get_translate_doc() -> &'static Documentation {
 | there                                            |
 +--------------------------------------------------+
 ```"#)
-            .with_standard_argument("str", "String")
+            .with_standard_argument("str", Some("String"))
             .with_argument("chars", "Characters to translate.")
             .with_argument("translation", "Translation characters. Translation characters replace only characters at the same position in the **chars** string.")
             .build()

@@ -293,7 +293,7 @@ fn get_approx_percentile_cont_doc() -> &'static Documentation {
 | 65.0                                            |
 +-------------------------------------------------+
 ```"#)
-            .with_standard_argument("expression", "The")
+            .with_standard_argument("expression", None)
             .with_argument("percentile", "Percentile to compute. Must be a float value between 0 and 1 (inclusive).")
             .with_argument("centroids", "Number of centroids to use in the t-digest algorithm. _Default is 100_. A higher number results in more accurate approximation but requires more memory.")
             .build()

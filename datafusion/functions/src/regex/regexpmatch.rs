@@ -137,7 +137,7 @@ fn get_regexp_match_doc() -> &'static Documentation {
 ```
 Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/regexp.rs)
 "#)
-            .with_standard_argument("str", "String")
+            .with_standard_argument("str", Some("String"))
             .with_argument("regexp","Regular expression to match against.
             Can be a constant, column, or function.")
             .with_argument("flags",
