@@ -406,9 +406,9 @@ dependencies = [
 
 [[package]]
 name = "async-compression"
-version = "0.4.16"
+version = "0.4.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "103db485efc3e41214fe4fda9f3dbeae2eb9082f48fd236e6095627a9422066e"
+checksum = "0cb8f1d480b0ea3783ab015936d2a55c87e219676f0c0b7dec61494043f21857"
 dependencies = [
  "bzip2",
  "flate2",
@@ -917,9 +917,9 @@ dependencies = [
 
 [[package]]
 name = "cc"
-version = "1.1.30"
+version = "1.1.31"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b16803a61b81d9eabb7eae2588776c4c1e584b738ede45fdbb4c972cec1e9945"
+checksum = "c2e7962b54006dcfcc61cb72735f4d89bb97061dd6a7ed882ec6b8ee53714c6f"
 dependencies = [
  "jobserver",
  "libc",
@@ -1162,9 +1162,9 @@ dependencies = [
 
 [[package]]
 name = "dary_heap"
-version = "0.3.6"
+version = "0.3.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7762d17f1241643615821a8455a0b2c3e803784b058693d990b11f2dce25a0ca"
+checksum = "04d2cd9c18b9f454ed67da600630b021a8a80bf33f8c95896ab33aaf1c26b728"
 
 [[package]]
 name = "dashmap"
@@ -1182,7 +1182,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion"
-version = "42.0.0"
+version = "42.1.0"
 dependencies = [
  "ahash",
  "apache-avro",
@@ -1239,7 +1239,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-catalog"
-version = "42.0.0"
+version = "42.1.0"
 dependencies = [
  "arrow-schema",
  "async-trait",
@@ -1252,7 +1252,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-cli"
-version = "42.0.0"
+version = "42.1.0"
 dependencies = [
  "arrow",
  "assert_cmd",
@@ -1282,7 +1282,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-common"
-version = "42.0.0"
+version = "42.1.0"
 dependencies = [
  "ahash",
  "apache-avro",
@@ -1306,7 +1306,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-common-runtime"
-version = "42.0.0"
+version = "42.1.0"
 dependencies = [
  "log",
  "tokio",
@@ -1314,7 +1314,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-execution"
-version = "42.0.0"
+version = "42.1.0"
 dependencies = [
  "arrow",
  "chrono",
@@ -1333,7 +1333,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-expr"
-version = "42.0.0"
+version = "42.1.0"
 dependencies = [
  "ahash",
  "arrow",
@@ -1355,7 +1355,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-expr-common"
-version = "42.0.0"
+version = "42.1.0"
 dependencies = [
  "arrow",
  "datafusion-common",
@@ -1364,7 +1364,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-functions"
-version = "42.0.0"
+version = "42.1.0"
 dependencies = [
  "arrow",
  "arrow-buffer",
@@ -1389,7 +1389,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-functions-aggregate"
-version = "42.0.0"
+version = "42.1.0"
 dependencies = [
  "ahash",
  "arrow",
@@ -1408,7 +1408,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-functions-aggregate-common"
-version = "42.0.0"
+version = "42.1.0"
 dependencies = [
  "ahash",
  "arrow",
@@ -1420,7 +1420,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-functions-nested"
-version = "42.0.0"
+version = "42.1.0"
 dependencies = [
  "arrow",
  "arrow-array",
@@ -1441,11 +1441,12 @@ dependencies = [
 
 [[package]]
 name = "datafusion-functions-window"
-version = "42.0.0"
+version = "42.1.0"
 dependencies = [
  "datafusion-common",
  "datafusion-expr",
  "datafusion-functions-window-common",
+ "datafusion-physical-expr",
  "datafusion-physical-expr-common",
  "log",
  "paste",
@@ -1453,7 +1454,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-functions-window-common"
-version = "42.0.0"
+version = "42.1.0"
 dependencies = [
  "datafusion-common",
  "datafusion-physical-expr-common",
@@ -1461,7 +1462,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-optimizer"
-version = "42.0.0"
+version = "42.1.0"
 dependencies = [
  "arrow",
  "async-trait",
@@ -1479,7 +1480,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-physical-expr"
-version = "42.0.0"
+version = "42.1.0"
 dependencies = [
  "ahash",
  "arrow",
@@ -1505,7 +1506,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-physical-expr-common"
-version = "42.0.0"
+version = "42.1.0"
 dependencies = [
  "ahash",
  "arrow",
@@ -1517,7 +1518,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-physical-optimizer"
-version = "42.0.0"
+version = "42.1.0"
 dependencies = [
  "arrow",
  "arrow-schema",
@@ -1531,7 +1532,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-physical-plan"
-version = "42.0.0"
+version = "42.1.0"
 dependencies = [
  "ahash",
  "arrow",
@@ -1564,13 +1565,14 @@ dependencies = [
 
 [[package]]
 name = "datafusion-sql"
-version = "42.0.0"
+version = "42.1.0"
 dependencies = [
  "arrow",
  "arrow-array",
  "arrow-schema",
  "datafusion-common",
  "datafusion-expr",
+ "indexmap",
  "log",
  "regex",
  "sqlparser",
@@ -2614,9 +2616,9 @@ dependencies = [
 
 [[package]]
 name = "object_store"
-version = "0.11.0"
+version = "0.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "25a0c4b3a0e31f8b66f71ad8064521efa773910196e2cde791436f13409f3b45"
+checksum = "6eb4c22c6154a1e759d7099f9ffad7cc5ef8245f9efbab4a41b92623079c82f3"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -3410,9 +3412,9 @@ dependencies = [
 
 [[package]]
 name = "serde_json"
-version = "1.0.129"
+version = "1.0.132"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6dbcf9b78a125ee667ae19388837dd12294b858d101fdd393cb9d5501ef09eb2"
+checksum = "d726bfaff4b320266d395898905d0eba0345aae23b54aee3a737e260fd46db03"
 dependencies = [
  "itoa",
  "memchr",
@@ -3604,9 +3606,9 @@ checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 
 [[package]]
 name = "syn"
-version = "2.0.79"
+version = "2.0.82"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "89132cd0bf050864e1d38dc3bbc07a0eb8e7530af26344d3d2bbbef83499f590"
+checksum = "83540f837a8afc019423a8edb95b52a8effe46957ee402287f4292fae35be021"
 dependencies = [
  "proc-macro2",
  "quote",
