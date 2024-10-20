@@ -85,7 +85,7 @@ fn get_factorial_doc() -> &'static Documentation {
             .with_doc_section(DOC_SECTION_MATH)
             .with_description("Factorial. Returns 1 if value is less than 2.")
             .with_syntax_example("factorial(numeric_expression)")
-            .with_standard_argument("numeric_expression", "Numeric")
+            .with_standard_argument("numeric_expression", Some("Numeric"))
             .build()
             .unwrap()
     })
