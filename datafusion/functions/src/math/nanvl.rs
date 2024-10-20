@@ -18,18 +18,17 @@
 use std::any::Any;
 use std::sync::{Arc, OnceLock};
 
+use crate::utils::make_scalar_function;
+
 use arrow::array::{ArrayRef, AsArray, Float32Array, Float64Array, PrimitiveArray};
 use arrow::datatypes::DataType::{Float32, Float64};
 use arrow::datatypes::{DataType, Float32Type, Float64Type};
-
 use datafusion_common::{exec_err, Result};
 use datafusion_expr::scalar_doc_sections::DOC_SECTION_MATH;
 use datafusion_expr::TypeSignature::Exact;
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
-
-use crate::utils::make_scalar_function;
 
 #[derive(Debug)]
 pub struct NanvlFunc {
@@ -140,10 +139,12 @@ fn nanvl(args: &[ArrayRef]) -> Result<ArrayRef> {
 
 #[cfg(test)]
 mod test {
+    use std::sync::Arc;
+
     use crate::math::nanvl::nanvl;
+
     use arrow::array::{ArrayRef, Float32Array, Float64Array};
     use datafusion_common::cast::{as_float32_array, as_float64_array};
-    use std::sync::Arc;
 
     #[test]
     fn test_nanvl_f64() {

@@ -16,9 +16,13 @@
 // under the License.
 
 //! Math function: `power()`.
+use std::any::Any;
+use std::sync::{Arc, OnceLock};
 
+use super::log::LogFunc;
+
+use arrow::array::{ArrayRef, AsArray, Int64Array, PrimitiveArray};
 use arrow::datatypes::{ArrowNativeTypeOp, DataType, Float64Type};
-
 use datafusion_common::{
     arrow_datafusion_err, exec_datafusion_err, exec_err, plan_datafusion_err,
     DataFusionError, Result, ScalarValue,
@@ -27,13 +31,7 @@ use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::scalar_doc_sections::DOC_SECTION_MATH;
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
 use datafusion_expr::{ColumnarValue, Documentation, Expr, ScalarUDF, TypeSignature};
-
-use arrow::array::{ArrayRef, AsArray, Int64Array, PrimitiveArray};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
-use std::any::Any;
-use std::sync::{Arc, OnceLock};
-
-use super::log::LogFunc;
 
 #[derive(Debug)]
 pub struct PowerFunc {
