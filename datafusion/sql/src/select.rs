@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
@@ -38,6 +38,7 @@ use datafusion_expr::{
     qualified_wildcard_with_options, wildcard_with_options, Aggregate, Expr, Filter,
     GroupingSet, LogicalPlan, LogicalPlanBuilder, Partitioning,
 };
+use indexmap::IndexMap;
 use sqlparser::ast::{
     Distinct, Expr as SQLExpr, GroupByExpr, NamedWindowExpr, OrderByExpr,
     WildcardAdditionalOptions, WindowType,
@@ -301,7 +302,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         // The transformation happen bottom up, one at a time for each iteration
         // Only exhaust the loop if no more unnest transformation is found
         for i in 0.. {
-            let mut unnest_columns = HashMap::new();
+            let mut unnest_columns = IndexMap::new();
             // from which column used for projection, before the unnest happen
             // including non unnest column and unnest column
             let mut inner_projection_exprs = vec![];
@@ -329,34 +330,27 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 break;
             } else {
                 // Set preserve_nulls to false to ensure compatibility with DuckDB and PostgreSQL
-                let unnest_options = UnnestOptions::new().with_preserve_nulls(false);
+                let mut unnest_options = UnnestOptions::new().with_preserve_nulls(false);
+                let mut unnest_col_vec = vec![];
 
-                let mut list_recursions = vec![];
-                let unnest_col_vec = unnest_columns
-                    .into_iter()
-                    .map(|(col, maybe_list_unnest)| {
-                        match maybe_list_unnest {
-                            None => {}
-                            Some(list_unnest) => {
-                                list_recursions.extend(list_unnest.into_iter().map(
-                                    |unnest_list| RecursionUnnestOption {
-                                        input_column: col.clone(),
-                                        output_column: unnest_list.output_column,
-                                        depth: unnest_list.depth,
-                                    },
-                                ));
-                            }
-                        }
-                        col
-                    })
-                    .collect::<Vec<_>>();
-
+                for (col, maybe_list_unnest) in unnest_columns.into_iter() {
+                    if let Some(list_unnest) = maybe_list_unnest {
+                        unnest_options = list_unnest.into_iter().fold(
+                            unnest_options,
+                            |options, unnest_list| {
+                                options.with_recursions(RecursionUnnestOption {
+                                    input_column: col.clone(),
+                                    output_column: unnest_list.output_column,
+                                    depth: unnest_list.depth,
+                                })
+                            },
+                        );
+                    }
+                    unnest_col_vec.push(col);
+                }
                 let plan = LogicalPlanBuilder::from(intermediate_plan)
                     .project(inner_projection_exprs)?
-                    .unnest_columns_with_options(
-                        unnest_col_vec,
-                        unnest_options.with_recursions(list_recursions),
-                    )?
+                    .unnest_columns_with_options(unnest_col_vec, unnest_options)?
                     .build()?;
                 intermediate_plan = plan;
                 intermediate_select_exprs = outer_projection_exprs;
@@ -425,7 +419,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let mut intermediate_select_exprs = group_expr;
 
         loop {
-            let mut unnest_columns = HashMap::new();
+            let mut unnest_columns = IndexMap::new();
             let mut inner_projection_exprs = vec![];
 
             let outer_projection_exprs = rewrite_recursive_unnests_bottom_up(
@@ -438,7 +432,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             if unnest_columns.is_empty() {
                 break;
             } else {
-                let unnest_options = UnnestOptions::new().with_preserve_nulls(false);
+                let mut unnest_options = UnnestOptions::new().with_preserve_nulls(false);
 
                 let mut projection_exprs = match &aggr_expr_using_columns {
                     Some(exprs) => (*exprs).clone(),
@@ -460,32 +454,27 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 };
                 projection_exprs.extend(inner_projection_exprs);
 
-                let mut list_recursions = vec![];
-                let unnest_col_vec = unnest_columns
-                    .into_iter()
-                    .map(|(col, maybe_list_unnest)| {
-                        match maybe_list_unnest {
-                            None => {}
-                            Some(list_unnest) => {
-                                list_recursions.extend(list_unnest.into_iter().map(
-                                    |unnest_list| RecursionUnnestOption {
-                                        input_column: col.clone(),
-                                        output_column: unnest_list.output_column,
-                                        depth: unnest_list.depth,
-                                    },
-                                ));
-                            }
-                        }
-                        col
-                    })
-                    .collect::<Vec<_>>();
+                let mut unnest_col_vec = vec![];
+
+                for (col, maybe_list_unnest) in unnest_columns.into_iter() {
+                    if let Some(list_unnest) = maybe_list_unnest {
+                        unnest_options = list_unnest.into_iter().fold(
+                            unnest_options,
+                            |options, unnest_list| {
+                                options.with_recursions(RecursionUnnestOption {
+                                    input_column: col.clone(),
+                                    output_column: unnest_list.output_column,
+                                    depth: unnest_list.depth,
+                                })
+                            },
+                        );
+                    }
+                    unnest_col_vec.push(col);
+                }
 
                 intermediate_plan = LogicalPlanBuilder::from(intermediate_plan)
                     .project(projection_exprs)?
-                    .unnest_columns_with_options(
-                        unnest_col_vec,
-                        unnest_options.with_recursions(list_recursions),
-                    )?
+                    .unnest_columns_with_options(unnest_col_vec, unnest_options)?
                     .build()?;
 
                 intermediate_select_exprs = outer_projection_exprs;

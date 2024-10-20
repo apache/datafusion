@@ -1714,72 +1714,56 @@ pub fn unnest_with_options(
         .map(|(index, (original_qualifier, original_field))| {
             match indices_to_unnest.get(&index) {
                 Some(column_to_unnest) => {
-                    let transformed_columns;
-                    let maybe_explicit_recursion = match options.recursions {
-                        None => None,
-                        Some(ref recursions) => {
-                            let list_recursions_on_column = recursions
-                                .iter()
-                                .filter(|p| -> bool {
-                                    &p.input_column == *column_to_unnest
-                                })
-                                .collect::<Vec<_>>();
-                            if list_recursions_on_column.is_empty() {
-                                None
-                            } else {
-                                Some(list_recursions_on_column)
-                            }
-                        }
-                    };
-                    match maybe_explicit_recursion {
-                        Some(explicit_recursion) => {
-                            transformed_columns = explicit_recursion
-                                .iter()
-                                .map(|r| {
-                                    list_columns.push((
-                                        index,
-                                        ColumnUnnestList {
-                                            output_column: r.output_column.clone(),
-                                            depth: r.depth,
-                                        },
-                                    ));
-                                    get_unnested_columns(
-                                        &r.output_column.name,
-                                        original_field.data_type(),
-                                        r.depth,
-                                    )
-                                })
-                                .collect::<Result<Vec<Vec<(Column, Arc<Field>)>>>>()?
-                                .into_iter()
-                                .flatten()
-                                .collect::<Vec<_>>();
-                        }
-                        None => {
-                            transformed_columns = get_unnested_columns(
-                                &column_to_unnest.name,
+                    let recursions_on_column = options
+                        .recursions
+                        .iter()
+                        .filter(|p| -> bool { &p.input_column == *column_to_unnest })
+                        .collect::<Vec<_>>();
+                    let mut transformed_columns = recursions_on_column
+                        .iter()
+                        .map(|r| {
+                            list_columns.push((
+                                index,
+                                ColumnUnnestList {
+                                    output_column: r.output_column.clone(),
+                                    depth: r.depth,
+                                },
+                            ));
+                            Ok(get_unnested_columns(
+                                &r.output_column.name,
                                 original_field.data_type(),
-                                1,
-                            )?;
-                            match original_field.data_type() {
-                                DataType::Struct(_) => {
-                                    struct_columns.push(index);
-                                }
-                                DataType::List(_)
-                                | DataType::FixedSizeList(_, _)
-                                | DataType::LargeList(_) => {
-                                    list_columns.push((
-                                        index,
-                                        ColumnUnnestList {
-                                            output_column: Column::from_name(
-                                                &column_to_unnest.name,
-                                            ),
-                                            depth: 1,
-                                        },
-                                    ));
-                                }
-                                _ => {}
-                            };
-                        }
+                                r.depth,
+                            )?
+                            .into_iter()
+                            .next()
+                            .unwrap()) // because unnesting a list column always result into one result
+                        })
+                        .collect::<Result<Vec<(Column, Arc<Field>)>>>()?;
+                    if transformed_columns.is_empty() {
+                        transformed_columns = get_unnested_columns(
+                            &column_to_unnest.name,
+                            original_field.data_type(),
+                            1,
+                        )?;
+                        match original_field.data_type() {
+                            DataType::Struct(_) => {
+                                struct_columns.push(index);
+                            }
+                            DataType::List(_)
+                            | DataType::FixedSizeList(_, _)
+                            | DataType::LargeList(_) => {
+                                list_columns.push((
+                                    index,
+                                    ColumnUnnestList {
+                                        output_column: Column::from_name(
+                                            &column_to_unnest.name,
+                                        ),
+                                        depth: 1,
+                                    },
+                                ));
+                            }
+                            _ => {}
+                        };
                     }
 
                     // new columns dependent on the same original index
@@ -2240,18 +2224,17 @@ mod tests {
         let plan = nested_table_scan("test_table")?
             .unnest_columns_with_options(
                 vec!["stringss".into(), "struct_singular".into()],
-                UnnestOptions::default().with_recursions(vec![
-                    RecursionUnnestOption {
+                UnnestOptions::default()
+                    .with_recursions(RecursionUnnestOption {
                         input_column: "stringss".into(),
                         output_column: "stringss_depth_1".into(),
                         depth: 1,
-                    },
-                    RecursionUnnestOption {
+                    })
+                    .with_recursions(RecursionUnnestOption {
                         input_column: "stringss".into(),
                         output_column: "stringss_depth_2".into(),
                         depth: 2,
-                    },
-                ]),
+                    }),
             )?
             .build()?;
 

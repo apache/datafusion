@@ -62,15 +62,22 @@ use crate::Column;
 ///      └─────────┘ └─────┘                └─────────┘ └─────┘
 ///        c1         c2                        c1        c2
 /// ```
+///
+/// `recursions` instruct how a column should be unnested (e.g unnesting a column multiple
+/// time, with depth = 1 and depth = 2). Any unnested column not being mentioned inside this
+/// options is inferred to be unnested with depth = 1
 #[derive(Debug, Clone, PartialEq, PartialOrd, Hash, Eq)]
 pub struct UnnestOptions {
     /// Should nulls in the input be preserved? Defaults to true
     pub preserve_nulls: bool,
-    /// Without explicit recursions, all
-    /// Datafusion will infer the unesting type with depth = 1
-    pub recursions: Option<Vec<RecursionUnnestOption>>,
+    /// If specific columns need to be unnested multiple times (e.g at different depth),
+    /// declare them here. Any unnested columns not being mentioned inside this option
+    /// will be unnested with depth = 1
+    pub recursions: Vec<RecursionUnnestOption>,
 }
 
+/// Instruction on how to unnest a column (mostly with a list type)
+/// such as how to name the output, and how many times it should be unnested
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd)]
 pub struct RecursionUnnestOption {
     pub input_column: Column,
@@ -83,7 +90,7 @@ impl Default for UnnestOptions {
         Self {
             // default to true to maintain backwards compatible behavior
             preserve_nulls: true,
-            recursions: None,
+            recursions: vec![],
         }
     }
 }
@@ -102,10 +109,8 @@ impl UnnestOptions {
     }
 
     /// Set the recursions for the unnest operation
-    pub fn with_recursions(mut self, recursions: Vec<RecursionUnnestOption>) -> Self {
-        if !recursions.is_empty() {
-            self.recursions = Some(recursions);
-        }
+    pub fn with_recursions(mut self, recursion: RecursionUnnestOption) -> Self {
+        self.recursions.push(recursion);
         self
     }
 }

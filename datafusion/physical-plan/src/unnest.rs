@@ -1090,7 +1090,7 @@ mod tests {
             &HashSet::default(),
             &UnnestOptions {
                 preserve_nulls: true,
-                recursions: None,
+                recursions: vec![],
             },
         )?;
 

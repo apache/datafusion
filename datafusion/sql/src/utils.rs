@@ -36,6 +36,7 @@ use datafusion_expr::utils::{expr_as_column_expr, find_column_exprs};
 use datafusion_expr::{
     col, expr_vec_fmt, ColumnUnnestList, Expr, ExprSchemable, LogicalPlan,
 };
+use indexmap::IndexMap;
 use sqlparser::ast::{Ident, Value};
 
 /// Make a best-effort attempt at resolving all columns in the expression tree
@@ -294,7 +295,7 @@ pub(crate) fn value_to_string(value: &Value) -> Option<String> {
 
 pub(crate) fn rewrite_recursive_unnests_bottom_up(
     input: &LogicalPlan,
-    unnest_placeholder_columns: &mut HashMap<Column, Option<Vec<ColumnUnnestList>>>,
+    unnest_placeholder_columns: &mut IndexMap<Column, Option<Vec<ColumnUnnestList>>>,
     inner_projection_exprs: &mut Vec<Expr>,
     original_exprs: &[Expr],
 ) -> Result<Vec<Expr>> {
@@ -325,7 +326,7 @@ struct RecursiveUnnestRewriter<'a> {
     top_most_unnest: Option<Unnest>,
     consecutive_unnest: Vec<Option<Unnest>>,
     inner_projection_exprs: &'a mut Vec<Expr>,
-    columns_unnestings: &'a mut HashMap<Column, Option<Vec<ColumnUnnestList>>>,
+    columns_unnestings: &'a mut IndexMap<Column, Option<Vec<ColumnUnnestList>>>,
     transformed_root_exprs: Option<Vec<Expr>>,
 }
 impl<'a> RecursiveUnnestRewriter<'a> {
@@ -562,7 +563,7 @@ fn push_projection_dedupl(projection: &mut Vec<Expr>, expr: Expr) {
 /// is done only for the bottom expression
 pub(crate) fn rewrite_recursive_unnest_bottom_up(
     input: &LogicalPlan,
-    unnest_placeholder_columns: &mut HashMap<Column, Option<Vec<ColumnUnnestList>>>,
+    unnest_placeholder_columns: &mut IndexMap<Column, Option<Vec<ColumnUnnestList>>>,
     inner_projection_exprs: &mut Vec<Expr>,
     original_expr: &Expr,
 ) -> Result<Vec<Expr>> {
@@ -614,7 +615,7 @@ pub(crate) fn rewrite_recursive_unnest_bottom_up(
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::HashMap, ops::Add, sync::Arc};
+    use std::{ops::Add, sync::Arc};
 
     use arrow::datatypes::{DataType as ArrowDataType, Field, Schema};
     use arrow_schema::Fields;
@@ -624,13 +625,15 @@ mod tests {
     };
     use datafusion_functions::core::expr_ext::FieldAccessor;
     use datafusion_functions_aggregate::expr_fn::count;
+    use indexmap::IndexMap;
 
     use crate::utils::{resolve_positions_to_exprs, rewrite_recursive_unnest_bottom_up};
+
     fn column_unnests_eq(
         l: Vec<&str>,
-        r: &HashMap<Column, Option<Vec<ColumnUnnestList>>>,
+        r: &IndexMap<Column, Option<Vec<ColumnUnnestList>>>,
     ) {
-        let mut r_formatted: Vec<String> = r
+        let r_formatted: Vec<String> = r
             .iter()
             .map(|i| match i.1 {
                 None => format!("{}", i.0),
@@ -644,9 +647,7 @@ mod tests {
                 ),
             })
             .collect();
-        let mut l_formatted: Vec<String> = l.iter().map(|i| i.to_string()).collect();
-        r_formatted.sort();
-        l_formatted.sort();
+        let l_formatted: Vec<String> = l.iter().map(|i| i.to_string()).collect();
         assert_eq!(l_formatted, r_formatted);
     }
 
@@ -676,7 +677,7 @@ mod tests {
             schema: Arc::new(dfschema),
         });
 
-        let mut unnest_placeholder_columns = HashMap::new();
+        let mut unnest_placeholder_columns = IndexMap::new();
         let mut inner_projection_exprs = vec![];
 
         // unnest(unnest(3d_col)) + unnest(unnest(3d_col))
@@ -780,7 +781,7 @@ mod tests {
             schema: Arc::new(dfschema),
         });
 
-        let mut unnest_placeholder_columns = HashMap::new();
+        let mut unnest_placeholder_columns = IndexMap::new();
         let mut inner_projection_exprs = vec![];
 
         // unnest(struct_col)
@@ -892,7 +893,7 @@ mod tests {
             schema: Arc::new(dfschema),
         });
 
-        let mut unnest_placeholder_columns = HashMap::new();
+        let mut unnest_placeholder_columns = IndexMap::new();
         let mut inner_projection_exprs = vec![];
 
         // An expr with multiple unnest

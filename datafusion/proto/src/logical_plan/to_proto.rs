@@ -50,17 +50,15 @@ impl From<&UnnestOptions> for protobuf::UnnestOptions {
     fn from(opts: &UnnestOptions) -> Self {
         Self {
             preserve_nulls: opts.preserve_nulls,
-            recursions: match opts.recursions.as_ref() {
-                None => vec![],
-                Some(recursions) => recursions
-                    .iter()
-                    .map(|r| RecursionUnnestOption {
-                        input_column: Some((&r.input_column).into()),
-                        output_column: Some((&r.output_column).into()),
-                        depth: r.depth as u32,
-                    })
-                    .collect(),
-            },
+            recursions: opts
+                .recursions
+                .iter()
+                .map(|r| RecursionUnnestOption {
+                    input_column: Some((&r.input_column).into()),
+                    output_column: Some((&r.output_column).into()),
+                    depth: r.depth as u32,
+                })
+                .collect(),
         }
     }
 }

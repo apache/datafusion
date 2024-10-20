@@ -56,19 +56,15 @@ impl From<&protobuf::UnnestOptions> for UnnestOptions {
     fn from(opts: &protobuf::UnnestOptions) -> Self {
         Self {
             preserve_nulls: opts.preserve_nulls,
-            recursions: match opts.recursions.len() {
-                0 => None,
-                _ => Some(
-                    opts.recursions
-                        .iter()
-                        .map(|r| RecursionUnnestOption {
-                            input_column: r.input_column.as_ref().unwrap().into(),
-                            output_column: r.output_column.as_ref().unwrap().into(),
-                            depth: r.depth as usize,
-                        })
-                        .collect::<Vec<_>>(),
-                ),
-            },
+            recursions: opts
+                .recursions
+                .iter()
+                .map(|r| RecursionUnnestOption {
+                    input_column: r.input_column.as_ref().unwrap().into(),
+                    output_column: r.output_column.as_ref().unwrap().into(),
+                    depth: r.depth as usize,
+                })
+                .collect::<Vec<_>>(),
         }
     }
 }
