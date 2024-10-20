@@ -30,6 +30,7 @@ use datafusion_expr::{
     WindowFrameUnits, WindowFunctionDefinition,
 };
 
+use crate::protobuf::RecursionUnnestOption;
 use crate::protobuf::{
     self,
     plan_type::PlanTypeEnum::{
@@ -49,6 +50,15 @@ impl From<&UnnestOptions> for protobuf::UnnestOptions {
     fn from(opts: &UnnestOptions) -> Self {
         Self {
             preserve_nulls: opts.preserve_nulls,
+            recursions: opts
+                .recursions
+                .iter()
+                .map(|r| RecursionUnnestOption {
+                    input_column: Some((&r.input_column).into()),
+                    output_column: Some((&r.output_column).into()),
+                    depth: r.depth as u32,
+                })
+                .collect(),
         }
     }
 }
