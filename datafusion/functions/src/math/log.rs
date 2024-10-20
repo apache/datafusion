@@ -138,10 +138,11 @@ impl ScalarUDFImpl for LogFunc {
         // note in f64::log params order is different than in sql. e.g in sql log(base, x) == f64::log(x, base)
         let arr: ArrayRef = match args[0].data_type() {
             DataType::Float64 => match base {
-                ColumnarValue::Scalar(ScalarValue::Float64(Some(base))) => Arc::new(
-                    x.as_primitive::<Float64Type>()
-                        .unary::<_, Float64Type>(|value: f64| f64::log(value, base)),
-                ),
+                ColumnarValue::Scalar(ScalarValue::Float32(Some(base))) => {
+                    Arc::new(x.as_primitive::<Float64Type>().unary::<_, Float64Type>(
+                        |value: f64| f64::log(value, base as f64),
+                    ))
+                }
                 ColumnarValue::Array(base) => {
                     let x = x.as_primitive::<Float64Type>();
                     let base = base.as_primitive::<Float64Type>();
