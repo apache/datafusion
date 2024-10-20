@@ -883,9 +883,13 @@ pub fn columnize_expr(e: Expr, input: &LogicalPlan) -> Result<Expr> {
     e.transform_down(|node: Expr| {
         if let Some(ColumnReference { relation, name }) = output_exprs
             .iter()
-            .filter(|(a, _)| (*a).eq(&node))
-            .map(|(_, b)| b)
-            .next()
+            .find_map(|(a, b)| {
+                if (*a).eq(&node) {
+                    Some(b)
+                } else {
+                    None
+                }
+            })
         {
             Ok(Transformed::new(
                 Expr::Column(Column {
