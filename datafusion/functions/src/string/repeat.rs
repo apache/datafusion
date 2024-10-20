@@ -107,7 +107,7 @@ fn get_repeat_doc() -> &'static Documentation {
 +-------------------------------+
 ```"#,
             )
-            .with_standard_argument("str", "String")
+            .with_standard_argument("str", Some("String"))
             .with_argument("n", "Number of times to repeat the input string.")
             .build()
             .unwrap()

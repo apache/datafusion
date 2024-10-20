@@ -59,7 +59,7 @@ license = "Apache-2.0"
 readme = "README.md"
 repository = "https://github.com/apache/datafusion"
 rust-version = "1.79"
-version = "42.0.0"
+version = "42.1.0"
 
 [workspace.dependencies]
 # We turn off default-features for some dependencies here so the workspaces which inherit them can
@@ -92,29 +92,29 @@ bytes = "1.4"
 chrono = { version = "0.4.38", default-features = false }
 ctor = "0.2.0"
 dashmap = "6.0.1"
-datafusion = { path = "datafusion/core", version = "42.0.0", default-features = false }
-datafusion-catalog = { path = "datafusion/catalog", version = "42.0.0" }
-datafusion-common = { path = "datafusion/common", version = "42.0.0", default-features = false }
-datafusion-common-runtime = { path = "datafusion/common-runtime", version = "42.0.0" }
-datafusion-execution = { path = "datafusion/execution", version = "42.0.0" }
-datafusion-expr = { path = "datafusion/expr", version = "42.0.0" }
-datafusion-expr-common = { path = "datafusion/expr-common", version = "42.0.0" }
-datafusion-functions = { path = "datafusion/functions", version = "42.0.0" }
-datafusion-functions-aggregate = { path = "datafusion/functions-aggregate", version = "42.0.0" }
-datafusion-functions-aggregate-common = { path = "datafusion/functions-aggregate-common", version = "42.0.0" }
-datafusion-functions-nested = { path = "datafusion/functions-nested", version = "42.0.0" }
-datafusion-functions-window = { path = "datafusion/functions-window", version = "42.0.0" }
-datafusion-functions-window-common = { path = "datafusion/functions-window-common", version = "42.0.0" }
-datafusion-optimizer = { path = "datafusion/optimizer", version = "42.0.0", default-features = false }
-datafusion-physical-expr = { path = "datafusion/physical-expr", version = "42.0.0", default-features = false }
-datafusion-physical-expr-common = { path = "datafusion/physical-expr-common", version = "42.0.0", default-features = false }
-datafusion-physical-optimizer = { path = "datafusion/physical-optimizer", version = "42.0.0" }
-datafusion-physical-plan = { path = "datafusion/physical-plan", version = "42.0.0" }
-datafusion-proto = { path = "datafusion/proto", version = "42.0.0" }
-datafusion-proto-common = { path = "datafusion/proto-common", version = "42.0.0" }
-datafusion-sql = { path = "datafusion/sql", version = "42.0.0" }
-datafusion-sqllogictest = { path = "datafusion/sqllogictest", version = "42.0.0" }
-datafusion-substrait = { path = "datafusion/substrait", version = "42.0.0" }
+datafusion = { path = "datafusion/core", version = "42.1.0", default-features = false }
+datafusion-catalog = { path = "datafusion/catalog", version = "42.1.0" }
+datafusion-common = { path = "datafusion/common", version = "42.1.0", default-features = false }
+datafusion-common-runtime = { path = "datafusion/common-runtime", version = "42.1.0" }
+datafusion-execution = { path = "datafusion/execution", version = "42.1.0" }
+datafusion-expr = { path = "datafusion/expr", version = "42.1.0" }
+datafusion-expr-common = { path = "datafusion/expr-common", version = "42.1.0" }
+datafusion-functions = { path = "datafusion/functions", version = "42.1.0" }
+datafusion-functions-aggregate = { path = "datafusion/functions-aggregate", version = "42.1.0" }
+datafusion-functions-aggregate-common = { path = "datafusion/functions-aggregate-common", version = "42.1.0" }
+datafusion-functions-nested = { path = "datafusion/functions-nested", version = "42.1.0" }
+datafusion-functions-window = { path = "datafusion/functions-window", version = "42.1.0" }
+datafusion-functions-window-common = { path = "datafusion/functions-window-common", version = "42.1.0" }
+datafusion-optimizer = { path = "datafusion/optimizer", version = "42.1.0", default-features = false }
+datafusion-physical-expr = { path = "datafusion/physical-expr", version = "42.1.0", default-features = false }
+datafusion-physical-expr-common = { path = "datafusion/physical-expr-common", version = "42.1.0", default-features = false }
+datafusion-physical-optimizer = { path = "datafusion/physical-optimizer", version = "42.1.0" }
+datafusion-physical-plan = { path = "datafusion/physical-plan", version = "42.1.0" }
+datafusion-proto = { path = "datafusion/proto", version = "42.1.0" }
+datafusion-proto-common = { path = "datafusion/proto-common", version = "42.1.0" }
+datafusion-sql = { path = "datafusion/sql", version = "42.1.0" }
+datafusion-sqllogictest = { path = "datafusion/sqllogictest", version = "42.1.0" }
+datafusion-substrait = { path = "datafusion/substrait", version = "42.1.0" }
 doc-comment = "0.3"
 env_logger = "0.11"
 futures = "0.3"
