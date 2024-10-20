@@ -310,7 +310,10 @@ pub struct ColumnReference {
 
 impl ColumnReference {
     pub fn new(relation: Option<TableReference>, name: impl Into<Arc<str>>) -> Self {
-        Self { relation, name: name.into() }
+        Self {
+            relation,
+            name: name.into(),
+        }
     }
 }
 

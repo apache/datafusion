@@ -46,7 +46,12 @@ use crate::{
 
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
-use datafusion_common::{aggregate_functional_dependencies, internal_err, plan_err, Column, ColumnReference, Constraints, DFSchema, DFSchemaRef, DataFusionError, Dependency, FunctionalDependence, FunctionalDependencies, ParamValues, Result, TableReference, UnnestOptions};
+use datafusion_common::{
+    aggregate_functional_dependencies, internal_err, plan_err, Column, ColumnReference,
+    Constraints, DFSchema, DFSchemaRef, DataFusionError, Dependency,
+    FunctionalDependence, FunctionalDependencies, ParamValues, Result, TableReference,
+    UnnestOptions,
+};
 use indexmap::IndexSet;
 
 // backwards compatibility
@@ -1420,7 +1425,7 @@ impl LogicalPlan {
                 output_exprs.extend(
                     window_expr
                         .iter()
-                        .zip(schema.column_reference().into_iter().skip(input_len)),
+                        .zip(schema.column_reference().skip(input_len)),
                 );
                 Ok(output_exprs)
             }

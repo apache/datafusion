@@ -29,10 +29,10 @@ use crate::{
     SchemaError, TableReference,
 };
 
+use crate::column::ColumnReference;
 use arrow::compute::can_cast_types;
 use arrow::datatypes::{DataType, Field, FieldRef, Fields, Schema, SchemaRef};
 use arrow_schema::SchemaBuilder;
-use crate::column::ColumnReference;
 
 /// A reference-counted reference to a [DFSchema].
 pub type DFSchemaRef = Arc<DFSchema>;
@@ -479,12 +479,10 @@ impl DFSchema {
             .collect()
     }
 
-    pub fn column_reference(&self) -> Vec<ColumnReference> {
-        self.iter()
-            .map(|(qualifier, field)| {
-                ColumnReference::new(qualifier.cloned(), field.name().as_str())
-            })
-            .collect()
+    pub fn column_reference(&self) -> impl Iterator<Item = ColumnReference> + '_ {
+        self.iter().map(|(qualifier, field)| {
+            ColumnReference::new(qualifier.cloned(), field.name().as_str())
+        })
     }
 
     /// Find the qualified field with the given unqualified name

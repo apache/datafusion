@@ -18,7 +18,7 @@
 //! Expression utilities
 
 use std::cmp::Ordering;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::ops::Deref;
 use std::sync::Arc;
 
@@ -34,7 +34,10 @@ use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
 };
 use datafusion_common::utils::get_at_indices;
-use datafusion_common::{internal_err, plan_datafusion_err, plan_err, Column, ColumnReference, DFSchema, DFSchemaRef, DataFusionError, Result, TableReference};
+use datafusion_common::{
+    internal_err, plan_datafusion_err, plan_err, Column, ColumnReference, DFSchema,
+    DFSchemaRef, DataFusionError, Result, TableReference,
+};
 
 use indexmap::IndexSet;
 use sqlparser::ast::{ExceptSelectItem, ExcludeSelectItem};
@@ -878,13 +881,25 @@ pub fn columnize_expr(e: Expr, input: &LogicalPlan) -> Result<Expr> {
         _ => return Ok(e),
     };
     e.transform_down(|node: Expr| {
-        if let Some(ColumnReference {relation, name  }) = output_exprs.iter().filter(|(a, _)| (*a).eq(&node)).map(|(_, b)| b).next() {
-            Ok(Transformed::new(Expr::Column(Column { relation: relation.clone(), name: name.to_string() }), true, TreeNodeRecursion::Jump))
-        }
-        else {
+        if let Some(ColumnReference { relation, name }) = output_exprs
+            .iter()
+            .filter(|(a, _)| (*a).eq(&node))
+            .map(|(_, b)| b)
+            .next()
+        {
+            Ok(Transformed::new(
+                Expr::Column(Column {
+                    relation: relation.clone(),
+                    name: name.to_string(),
+                }),
+                true,
+                TreeNodeRecursion::Jump,
+            ))
+        } else {
             Ok(Transformed::no(node))
         }
-    }).data()
+    })
+    .data()
 }
 
 /// Collect all deeply nested `Expr::Column`'s. They are returned in order of
