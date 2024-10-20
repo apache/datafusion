@@ -905,12 +905,10 @@ fn repeat_arrs_from_indices(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::{
-        datatypes::{Field, Int32Type},
-        util::pretty::pretty_format_batches,
-    };
+    use arrow::datatypes::{Field, Int32Type};
     use arrow_array::{GenericListArray, OffsetSizeTrait, StringArray};
     use arrow_buffer::{BooleanBufferBuilder, NullBuffer, OffsetBuffer};
+    use datafusion_common::assert_batches_eq;
 
     // Create a GenericListArray with the following list values:
     //  [A, B, C], [], NULL, [D], NULL, [NULL, F]
@@ -1092,38 +1090,37 @@ mod tests {
             &HashSet::default(),
             &UnnestOptions {
                 preserve_nulls: true,
+                recursions: vec![],
             },
         )?;
-        let actual =
-            format!("{}", pretty_format_batches(vec![ret].as_ref())?).to_lowercase();
-        let expected = r#"
-+---------------------------------+---------------------------------+---------------------------------+
-| col1_unnest_placeholder_depth_1 | col1_unnest_placeholder_depth_2 | col2_unnest_placeholder_depth_1 |
-+---------------------------------+---------------------------------+---------------------------------+
-| [1, 2, 3]                       | 1                               | a                               |
-|                                 | 2                               | b                               |
-| [4, 5]                          | 3                               |                                 |
-| [1, 2, 3]                       |                                 | a                               |
-|                                 |                                 | b                               |
-| [4, 5]                          |                                 |                                 |
-| [1, 2, 3]                       | 4                               | a                               |
-|                                 | 5                               | b                               |
-| [4, 5]                          |                                 |                                 |
-| [7, 8, 9, 10]                   | 7                               | c                               |
-|                                 | 8                               | d                               |
-| [11, 12, 13]                    | 9                               |                                 |
-|                                 | 10                              |                                 |
-| [7, 8, 9, 10]                   |                                 | c                               |
-|                                 |                                 | d                               |
-| [11, 12, 13]                    |                                 |                                 |
-| [7, 8, 9, 10]                   | 11                              | c                               |
-|                                 | 12                              | d                               |
-| [11, 12, 13]                    | 13                              |                                 |
-|                                 |                                 | e                               |
-+---------------------------------+---------------------------------+---------------------------------+
-        "#
-        .trim();
-        assert_eq!(actual, expected);
+
+        let expected = &[
+"+---------------------------------+---------------------------------+---------------------------------+",
+"| col1_unnest_placeholder_depth_1 | col1_unnest_placeholder_depth_2 | col2_unnest_placeholder_depth_1 |",
+"+---------------------------------+---------------------------------+---------------------------------+",
+"| [1, 2, 3]                       | 1                               | a                               |",
+"|                                 | 2                               | b                               |",
+"| [4, 5]                          | 3                               |                                 |",
+"| [1, 2, 3]                       |                                 | a                               |",
+"|                                 |                                 | b                               |",
+"| [4, 5]                          |                                 |                                 |",
+"| [1, 2, 3]                       | 4                               | a                               |",
+"|                                 | 5                               | b                               |",
+"| [4, 5]                          |                                 |                                 |",
+"| [7, 8, 9, 10]                   | 7                               | c                               |",
+"|                                 | 8                               | d                               |",
+"| [11, 12, 13]                    | 9                               |                                 |",
+"|                                 | 10                              |                                 |",
+"| [7, 8, 9, 10]                   |                                 | c                               |",
+"|                                 |                                 | d                               |",
+"| [11, 12, 13]                    |                                 |                                 |",
+"| [7, 8, 9, 10]                   | 11                              | c                               |",
+"|                                 | 12                              | d                               |",
+"| [11, 12, 13]                    | 13                              |                                 |",
+"|                                 |                                 | e                               |",
+"+---------------------------------+---------------------------------+---------------------------------+",
+        ];
+        assert_batches_eq!(expected, &[ret]);
         Ok(())
     }
 
@@ -1177,7 +1174,10 @@ mod tests {
         preserve_nulls: bool,
         expected: Vec<i64>,
     ) -> datafusion_common::Result<()> {
-        let options = UnnestOptions { preserve_nulls };
+        let options = UnnestOptions {
+            preserve_nulls,
+            recursions: vec![],
+        };
         let longest_length = find_longest_length(list_arrays, &options)?;
         let expected_array = Int64Array::from(expected);
         assert_eq!(
