@@ -36,7 +36,6 @@ pub mod display;
 pub mod error;
 pub mod file_options;
 pub mod format;
-pub mod hash_node;
 pub mod hash_utils;
 pub mod instant;
 pub mod parsers;

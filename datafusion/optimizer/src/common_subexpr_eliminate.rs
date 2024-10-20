@@ -27,9 +27,7 @@ use crate::optimizer::ApplyOrder;
 use crate::utils::NamePreserver;
 use datafusion_common::alias::AliasGenerator;
 
-use datafusion_common::cse::{
-    FoundCommonNodes, SubTreeNodeEliminator, SubTreeNodeEliminatorController,
-};
+use datafusion_common::cse::{CSEController, FoundCommonNodes, CSE};
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{qualified_name, Column, DFSchema, DFSchemaRef, Result};
 use datafusion_expr::expr::{Alias, ScalarFunction};
@@ -144,12 +142,12 @@ impl CommonSubexprEliminate {
 
         // Extract common sub-expressions from the list.
 
-        SubTreeNodeEliminator::new(SubExprEliminatorController::new(
+        match CSE::new(ExprCSEController::new(
             config.alias_generator().as_ref(),
             ExprMask::Normal,
         ))
         .extract_common_nodes(window_expr_list)?
-        .map_data(|common| match common {
+        {
             // If there are common sub-expressions, then the insert a projection node
             // with the common expressions between the new window nodes and the
             // original input.
@@ -157,12 +155,13 @@ impl CommonSubexprEliminate {
                 common_nodes: common_exprs,
                 new_nodes_list: new_exprs_list,
                 original_nodes_list: original_exprs_list,
-            } => build_common_expr_project_plan(input, common_exprs)
-                .map(|new_input| (new_exprs_list, new_input, Some(original_exprs_list))),
+            } => build_common_expr_project_plan(input, common_exprs).map(|new_input| {
+                Transformed::yes((new_exprs_list, new_input, Some(original_exprs_list)))
+            }),
             FoundCommonNodes::No {
                 original_nodes_list: original_exprs_list,
-            } => Ok((original_exprs_list, input, None)),
-        })?
+            } => Ok(Transformed::no((original_exprs_list, input, None))),
+        }?
         // Recurse into the new input.
         // (This is similar to what a `ApplyOrder::TopDown` optimizer rule would do.)
         .transform_data(|(new_window_expr_list, new_input, window_expr_list)| {
@@ -235,40 +234,48 @@ impl CommonSubexprEliminate {
         } = aggregate;
         let input = Arc::unwrap_or_clone(input);
         // Extract common sub-expressions from the aggregate and grouping expressions.
-        SubTreeNodeEliminator::new(SubExprEliminatorController::new(
+        match CSE::new(ExprCSEController::new(
             config.alias_generator().as_ref(),
             ExprMask::Normal,
         ))
         .extract_common_nodes(vec![group_expr, aggr_expr])?
-        .map_data(|common| {
-            match common {
-                // If there are common sub-expressions, then insert a projection node
-                // with the common expressions between the new aggregate node and the
-                // original input.
-                FoundCommonNodes::Yes {
-                    common_nodes: common_exprs,
-                    new_nodes_list: mut new_exprs_list,
-                    original_nodes_list: mut original_exprs_list,
-                } => {
-                    let new_aggr_expr = new_exprs_list.pop().unwrap();
-                    let new_group_expr = new_exprs_list.pop().unwrap();
+        {
+            // If there are common sub-expressions, then insert a projection node
+            // with the common expressions between the new aggregate node and the
+            // original input.
+            FoundCommonNodes::Yes {
+                common_nodes: common_exprs,
+                new_nodes_list: mut new_exprs_list,
+                original_nodes_list: mut original_exprs_list,
+            } => {
+                let new_aggr_expr = new_exprs_list.pop().unwrap();
+                let new_group_expr = new_exprs_list.pop().unwrap();
 
-                    build_common_expr_project_plan(input, common_exprs).map(|new_input| {
-                        let aggr_expr = original_exprs_list.pop().unwrap();
-                        (new_aggr_expr, new_group_expr, new_input, Some(aggr_expr))
-                    })
-                }
-
-                FoundCommonNodes::No {
-                    original_nodes_list: mut original_exprs_list,
-                } => {
-                    let new_aggr_expr = original_exprs_list.pop().unwrap();
-                    let new_group_expr = original_exprs_list.pop().unwrap();
-
-                    Ok((new_aggr_expr, new_group_expr, input, None))
-                }
+                build_common_expr_project_plan(input, common_exprs).map(|new_input| {
+                    let aggr_expr = original_exprs_list.pop().unwrap();
+                    Transformed::yes((
+                        new_aggr_expr,
+                        new_group_expr,
+                        new_input,
+                        Some(aggr_expr),
+                    ))
+                })
             }
-        })?
+
+            FoundCommonNodes::No {
+                original_nodes_list: mut original_exprs_list,
+            } => {
+                let new_aggr_expr = original_exprs_list.pop().unwrap();
+                let new_group_expr = original_exprs_list.pop().unwrap();
+
+                Ok(Transformed::no((
+                    new_aggr_expr,
+                    new_group_expr,
+                    input,
+                    None,
+                )))
+            }
+        }?
         // Recurse into the new input.
         // (This is similar to what a `ApplyOrder::TopDown` optimizer rule would do.)
         .transform_data(|(new_aggr_expr, new_group_expr, new_input, aggr_expr)| {
@@ -285,121 +292,115 @@ impl CommonSubexprEliminate {
         .transform_data(
             |(new_aggr_expr, new_group_expr, aggr_expr, new_input)| {
                 // Extract common aggregate sub-expressions from the aggregate expressions.
-                SubTreeNodeEliminator::new(SubExprEliminatorController::new(
+                match CSE::new(ExprCSEController::new(
                     config.alias_generator().as_ref(),
                     ExprMask::NormalAndAggregates,
                 ))
                 .extract_common_nodes(vec![new_aggr_expr])?
-                .map_data(|common| {
-                    match common {
-                        FoundCommonNodes::Yes {
-                            common_nodes: common_exprs,
-                            new_nodes_list: mut new_exprs_list,
-                            original_nodes_list: mut original_exprs_list,
-                        } => {
-                            let rewritten_aggr_expr = new_exprs_list.pop().unwrap();
-                            let new_aggr_expr = original_exprs_list.pop().unwrap();
+                {
+                    FoundCommonNodes::Yes {
+                        common_nodes: common_exprs,
+                        new_nodes_list: mut new_exprs_list,
+                        original_nodes_list: mut original_exprs_list,
+                    } => {
+                        let rewritten_aggr_expr = new_exprs_list.pop().unwrap();
+                        let new_aggr_expr = original_exprs_list.pop().unwrap();
 
-                            let mut agg_exprs = common_exprs
-                                .into_iter()
-                                .map(|(expr, expr_alias)| expr.alias(expr_alias))
-                                .collect::<Vec<_>>();
+                        let mut agg_exprs = common_exprs
+                            .into_iter()
+                            .map(|(expr, expr_alias)| expr.alias(expr_alias))
+                            .collect::<Vec<_>>();
 
-                            let mut proj_exprs = vec![];
-                            for expr in &new_group_expr {
-                                extract_expressions(expr, &mut proj_exprs)
-                            }
-                            for (expr_rewritten, expr_orig) in
-                                rewritten_aggr_expr.into_iter().zip(new_aggr_expr)
-                            {
-                                if expr_rewritten == expr_orig {
-                                    if let Expr::Alias(Alias { expr, name, .. }) =
-                                        expr_rewritten
-                                    {
-                                        agg_exprs.push(expr.alias(&name));
-                                        proj_exprs
-                                            .push(Expr::Column(Column::from_name(name)));
-                                    } else {
-                                        let expr_alias =
-                                            config.alias_generator().next(CSE_PREFIX);
-                                        let (qualifier, field_name) =
-                                            expr_rewritten.qualified_name();
-                                        let out_name = qualified_name(
-                                            qualifier.as_ref(),
-                                            &field_name,
-                                        );
-
-                                        agg_exprs.push(expr_rewritten.alias(&expr_alias));
-                                        proj_exprs.push(
-                                            Expr::Column(Column::from_name(expr_alias))
-                                                .alias(out_name),
-                                        );
-                                    }
+                        let mut proj_exprs = vec![];
+                        for expr in &new_group_expr {
+                            extract_expressions(expr, &mut proj_exprs)
+                        }
+                        for (expr_rewritten, expr_orig) in
+                            rewritten_aggr_expr.into_iter().zip(new_aggr_expr)
+                        {
+                            if expr_rewritten == expr_orig {
+                                if let Expr::Alias(Alias { expr, name, .. }) =
+                                    expr_rewritten
+                                {
+                                    agg_exprs.push(expr.alias(&name));
+                                    proj_exprs
+                                        .push(Expr::Column(Column::from_name(name)));
                                 } else {
-                                    proj_exprs.push(expr_rewritten);
-                                }
-                            }
+                                    let expr_alias =
+                                        config.alias_generator().next(CSE_PREFIX);
+                                    let (qualifier, field_name) =
+                                        expr_rewritten.qualified_name();
+                                    let out_name =
+                                        qualified_name(qualifier.as_ref(), &field_name);
 
-                            let agg = LogicalPlan::Aggregate(Aggregate::try_new(
+                                    agg_exprs.push(expr_rewritten.alias(&expr_alias));
+                                    proj_exprs.push(
+                                        Expr::Column(Column::from_name(expr_alias))
+                                            .alias(out_name),
+                                    );
+                                }
+                            } else {
+                                proj_exprs.push(expr_rewritten);
+                            }
+                        }
+
+                        let agg = LogicalPlan::Aggregate(Aggregate::try_new(
+                            new_input,
+                            new_group_expr,
+                            agg_exprs,
+                        )?);
+                        Projection::try_new(proj_exprs, Arc::new(agg))
+                            .map(|p| Transformed::yes(LogicalPlan::Projection(p)))
+                    }
+
+                    // If there aren't any common aggregate sub-expressions, then just
+                    // rebuild the aggregate node.
+                    FoundCommonNodes::No {
+                        original_nodes_list: mut original_exprs_list,
+                    } => {
+                        let rewritten_aggr_expr = original_exprs_list.pop().unwrap();
+
+                        // If there were common expressions extracted, then we need to
+                        // make sure we restore the original column names.
+                        // TODO: Although `find_common_exprs()` inserts aliases around
+                        //  extracted common expressions this doesn't mean that the
+                        //  original column names (schema) are preserved due to the
+                        //  inserted aliases are not always at the top of the
+                        //  expression.
+                        //  Let's consider improving `find_common_exprs()` to always
+                        //  keep column names and get rid of additional name
+                        //  preserving logic here.
+                        if let Some(aggr_expr) = aggr_expr {
+                            let name_perserver = NamePreserver::new_for_projection();
+                            let saved_names = aggr_expr
+                                .iter()
+                                .map(|expr| name_perserver.save(expr))
+                                .collect::<Vec<_>>();
+                            let new_aggr_expr = rewritten_aggr_expr
+                                .into_iter()
+                                .zip(saved_names)
+                                .map(|(new_expr, saved_name)| {
+                                    saved_name.restore(new_expr)
+                                })
+                                .collect::<Vec<Expr>>();
+
+                            // Since `group_expr` may have changed, schema may also.
+                            // Use `try_new()` method.
+                            Aggregate::try_new(new_input, new_group_expr, new_aggr_expr)
+                                .map(LogicalPlan::Aggregate)
+                                .map(Transformed::no)
+                        } else {
+                            Aggregate::try_new_with_schema(
                                 new_input,
                                 new_group_expr,
-                                agg_exprs,
-                            )?);
-                            Projection::try_new(proj_exprs, Arc::new(agg))
-                                .map(LogicalPlan::Projection)
-                        }
-
-                        // If there aren't any common aggregate sub-expressions, then just
-                        // rebuild the aggregate node.
-                        FoundCommonNodes::No {
-                            original_nodes_list: mut original_exprs_list,
-                        } => {
-                            let rewritten_aggr_expr = original_exprs_list.pop().unwrap();
-
-                            // If there were common expressions extracted, then we need to
-                            // make sure we restore the original column names.
-                            // TODO: Although `find_common_exprs()` inserts aliases around
-                            //  extracted common expressions this doesn't mean that the
-                            //  original column names (schema) are preserved due to the
-                            //  inserted aliases are not always at the top of the
-                            //  expression.
-                            //  Let's consider improving `find_common_exprs()` to always
-                            //  keep column names and get rid of additional name
-                            //  preserving logic here.
-                            if let Some(aggr_expr) = aggr_expr {
-                                let name_perserver = NamePreserver::new_for_projection();
-                                let saved_names = aggr_expr
-                                    .iter()
-                                    .map(|expr| name_perserver.save(expr))
-                                    .collect::<Vec<_>>();
-                                let new_aggr_expr = rewritten_aggr_expr
-                                    .into_iter()
-                                    .zip(saved_names)
-                                    .map(|(new_expr, saved_name)| {
-                                        saved_name.restore(new_expr)
-                                    })
-                                    .collect::<Vec<Expr>>();
-
-                                // Since `group_expr` may have changed, schema may also.
-                                // Use `try_new()` method.
-                                Aggregate::try_new(
-                                    new_input,
-                                    new_group_expr,
-                                    new_aggr_expr,
-                                )
-                                .map(LogicalPlan::Aggregate)
-                            } else {
-                                Aggregate::try_new_with_schema(
-                                    new_input,
-                                    new_group_expr,
-                                    rewritten_aggr_expr,
-                                    schema,
-                                )
-                                .map(LogicalPlan::Aggregate)
-                            }
+                                rewritten_aggr_expr,
+                                schema,
+                            )
+                            .map(LogicalPlan::Aggregate)
+                            .map(Transformed::no)
                         }
                     }
-                })
+                }
             },
         )
     }
@@ -425,12 +426,12 @@ impl CommonSubexprEliminate {
         config: &dyn OptimizerConfig,
     ) -> Result<Transformed<(Vec<Expr>, LogicalPlan)>> {
         // Extract common sub-expressions from the expressions.
-        SubTreeNodeEliminator::new(SubExprEliminatorController::new(
+        match CSE::new(ExprCSEController::new(
             config.alias_generator().as_ref(),
             ExprMask::Normal,
         ))
         .extract_common_nodes(vec![exprs])?
-        .map_data(|common| match common {
+        {
             FoundCommonNodes::Yes {
                 common_nodes: common_exprs,
                 new_nodes_list: mut new_exprs_list,
@@ -438,15 +439,15 @@ impl CommonSubexprEliminate {
             } => {
                 let new_exprs = new_exprs_list.pop().unwrap();
                 build_common_expr_project_plan(input, common_exprs)
-                    .map(|new_input| (new_exprs, new_input))
+                    .map(|new_input| Transformed::yes((new_exprs, new_input)))
             }
             FoundCommonNodes::No {
                 original_nodes_list: mut original_exprs_list,
             } => {
                 let new_exprs = original_exprs_list.pop().unwrap();
-                Ok((new_exprs, input))
+                Ok(Transformed::no((new_exprs, input)))
             }
-        })?
+        }?
         // Recurse into the new input.
         // (This is similar to what a `ApplyOrder::TopDown` optimizer rule would do.)
         .transform_data(|(new_exprs, new_input)| {
@@ -593,7 +594,7 @@ enum ExprMask {
     NormalAndAggregates,
 }
 
-struct SubExprEliminatorController<'a> {
+struct ExprCSEController<'a> {
     alias_generator: &'a AliasGenerator,
     mask: ExprMask,
 
@@ -601,7 +602,7 @@ struct SubExprEliminatorController<'a> {
     alias_counter: usize,
 }
 
-impl<'a> SubExprEliminatorController<'a> {
+impl<'a> ExprCSEController<'a> {
     fn new(alias_generator: &'a AliasGenerator, mask: ExprMask) -> Self {
         Self {
             alias_generator,
@@ -611,7 +612,7 @@ impl<'a> SubExprEliminatorController<'a> {
     }
 }
 
-impl SubTreeNodeEliminatorController for SubExprEliminatorController<'_> {
+impl CSEController for ExprCSEController<'_> {
     type Node = Expr;
 
     fn conditional_children(node: &Expr) -> Option<(Vec<&Expr>, Vec<&Expr>)> {
@@ -689,13 +690,12 @@ impl SubTreeNodeEliminatorController for SubExprEliminatorController<'_> {
     }
 
     fn rewrite(&mut self, node: &Self::Node, alias: &str) -> Self::Node {
-        let expr_name = node.schema_name().to_string();
         // alias the expressions without an `Alias` ancestor node
         if self.alias_counter > 0 {
             col(alias)
         } else {
             self.alias_counter += 1;
-            col(alias).alias(expr_name)
+            col(alias).alias(node.schema_name().to_string())
         }
     }
 

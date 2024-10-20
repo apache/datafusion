@@ -34,7 +34,7 @@ use crate::{
 };
 
 use arrow::datatypes::{DataType, FieldRef};
-use datafusion_common::hash_node::HashNode;
+use datafusion_common::cse::HashNode;
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
 };
@@ -1656,16 +1656,6 @@ impl Expr {
 }
 
 impl HashNode for Expr {
-    /// Hashes the direct content of an `Expr` without recursing into its children.
-    ///
-    /// This method is useful to incrementally compute hashes, such as  in
-    /// `CommonSubexprEliminate` which builds a deep hash of a node and its descendants
-    /// during the bottom-up phase of the first traversal and so avoid computing the hash
-    /// of the node and then the hash of its descendants separately.
-    ///
-    /// If a node doesn't have any children then this method is similar to `.hash()`, but
-    /// not necessarily returns the same value.
-    ///
     /// As it is pretty easy to forget changing this method when `Expr` changes the
     /// implementation doesn't use wildcard patterns (`..`, `_`) to catch changes
     /// compile time.
