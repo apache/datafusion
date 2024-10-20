@@ -166,6 +166,7 @@ impl OptimizerRule for EliminateCrossJoin {
         }
 
         if !all_filters.is_empty() {
+            // Add any filters on top - PushDownFilter can push filters down to applicable join
             let first = all_filters.swap_remove(0);
             let predicate = all_filters.into_iter().fold(first, and);
             left = LogicalPlan::Filter(Filter::try_new(predicate, Arc::new(left))?);
@@ -223,7 +224,6 @@ fn flatten_join_inputs(
 ) -> Result<()> {
     match plan {
         LogicalPlan::Join(join) if join.join_type == JoinType::Inner => {
-            // checked in can_flatten_join_inputs
             if let Some(filter) = join.filter {
                 all_filters.push(filter);
             }
