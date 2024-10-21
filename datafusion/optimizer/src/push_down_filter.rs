@@ -35,8 +35,8 @@ use datafusion_expr::utils::{
     conjunction, expr_to_columns, split_conjunction, split_conjunction_owned,
 };
 use datafusion_expr::{
-    and, build_join_schema, or, BinaryExpr, Expr, Filter, LogicalPlanBuilder, Operator,
-    Projection, TableProviderFilterPushDown,
+    and, build_join_schema, or, BinaryExpr, Distinct, Expr, Filter, LogicalPlanBuilder,
+    Operator, Projection, TableProviderFilterPushDown,
 };
 
 use crate::optimizer::ApplyOrder;
@@ -685,7 +685,8 @@ impl OptimizerRule for PushDownFilter {
                         .map(LogicalPlan::Filter)?;
                 insert_below(LogicalPlan::Repartition(repartition), new_filter)
             }
-            LogicalPlan::Distinct(distinct) => {
+            LogicalPlan::Distinct(distinct @ Distinct::All(_)) => {
+                // note that we check for distinct all as distinct on is not commutable
                 let new_filter =
                     Filter::try_new(filter.predicate, Arc::clone(distinct.input()))
                         .map(LogicalPlan::Filter)?;
@@ -1664,6 +1665,21 @@ mod tests {
             \n      Limit: skip=0, fetch=20\
             \n        Projection: test.a, test.b\
             \n          TableScan: test";
+        assert_optimized_plan_eq(plan, expected)
+    }
+
+    #[test]
+    fn distinct_on() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .distinct_on(vec![col("a")], vec![col("a")], None)?
+            .filter(col("a").eq(lit(1i64)))?
+            .build()?;
+        // filter appears below Union
+        let expected = "\
+        Filter: a = Int64(1)\
+        \n  DistinctOn: on_expr=[[test.a]], select_expr=[[a]], sort_expr=[[]]\
+        \n    TableScan: test";
         assert_optimized_plan_eq(plan, expected)
     }
 
