@@ -251,10 +251,11 @@ fn is_pow(func: &ScalarUDF) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use arrow::array::{Float32Array, Float64Array};
     use std::collections::HashMap;
 
+    use super::*;
+
+    use arrow::array::{Float32Array, Float64Array};
     use arrow::compute::SortOptions;
     use datafusion_common::cast::{as_float32_array, as_float64_array};
     use datafusion_common::DFSchema;
