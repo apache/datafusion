@@ -21,7 +21,7 @@ use std::borrow::Borrow;
 use std::sync::Arc;
 
 use crate::{
-    expressions::{cume_dist, Literal, NthValue, Ntile, PhysicalSortExpr},
+    expressions::{cume_dist, Literal, NthValue, PhysicalSortExpr},
     ExecutionPlan, ExecutionPlanProperties, InputOrderMode, PhysicalExpr,
 };
 
@@ -220,28 +220,6 @@ fn create_built_in_window_expr(
 
     Ok(match fun {
         BuiltInWindowFunction::CumeDist => Arc::new(cume_dist(name, out_data_type)),
-        BuiltInWindowFunction::Ntile => {
-            let n = get_scalar_value_from_args(args, 0)?.ok_or_else(|| {
-                DataFusionError::Execution(
-                    "NTILE requires a positive integer".to_string(),
-                )
-            })?;
-
-            if n.is_null() {
-                return exec_err!("NTILE requires a positive integer, but finds NULL");
-            }
-
-            if n.is_unsigned() {
-                let n = get_unsigned_integer(n)?;
-                Arc::new(Ntile::new(name, n, out_data_type))
-            } else {
-                let n: i64 = get_signed_integer(n)?;
-                if n <= 0 {
-                    return exec_err!("NTILE requires a positive integer");
-                }
-                Arc::new(Ntile::new(name, n as u64, out_data_type))
-            }
-        }
         BuiltInWindowFunction::NthValue => {
             let arg = Arc::clone(&args[0]);
             let n = get_signed_integer(

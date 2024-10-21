@@ -1819,7 +1819,7 @@ pub enum BuiltInWindowFunction {
     ///   DENSE_RANK = 2;
     ///   PERCENT_RANK = 3;
     CumeDist = 4,
-    Ntile = 5,
+    ///   NTILE = 5;
     /// LAG = 6;
     /// LEAD = 7;
     FirstValue = 8,
@@ -1835,7 +1835,6 @@ impl BuiltInWindowFunction {
         match self {
             Self::Unspecified => "UNSPECIFIED",
             Self::CumeDist => "CUME_DIST",
-            Self::Ntile => "NTILE",
             Self::FirstValue => "FIRST_VALUE",
             Self::LastValue => "LAST_VALUE",
             Self::NthValue => "NTH_VALUE",
@@ -1846,7 +1845,6 @@ impl BuiltInWindowFunction {
         match value {
             "UNSPECIFIED" => Some(Self::Unspecified),
             "CUME_DIST" => Some(Self::CumeDist),
-            "NTILE" => Some(Self::Ntile),
             "FIRST_VALUE" => Some(Self::FirstValue),
             "LAST_VALUE" => Some(Self::LastValue),
             "NTH_VALUE" => Some(Self::NthValue),
