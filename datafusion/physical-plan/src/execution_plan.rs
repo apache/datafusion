@@ -852,7 +852,7 @@ pub fn execute_input_stream(
         Ok(Box::pin(RecordBatchStreamAdapter::new(
             sink_schema,
             input_stream
-                .map(move |batch| check_not_null_contraits(batch?, &risky_columns)),
+                .map(move |batch| check_not_null_constraints(batch?, &risky_columns)),
         )))
     }
 }
@@ -872,7 +872,7 @@ pub fn execute_input_stream(
 /// This function iterates over the specified column indices and ensures that none
 /// of the columns contain null values. If any column contains null values, an error
 /// is returned.
-pub fn check_not_null_contraits(
+pub fn check_not_null_constraints(
     batch: RecordBatch,
     column_indices: &Vec<usize>,
 ) -> Result<RecordBatch> {
