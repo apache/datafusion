@@ -31,36 +31,3 @@ Note: this documentation is in the process of being migrated to be [automaticall
 
 [automatically created from the codebase]: https://github.com/apache/datafusion/issues/12740
 
-## Map Functions
-
-- [map](#map)
-
-### `map`
-
-Returns an Arrow map with the specified key-value pairs.
-
-```
-map(key, value)
-map(key: value)
-```
-
-#### Arguments
-
-- **key**: Expression to be used for key. Can be a constant, column, or function, any combination of arithmetic or string operators, or a named expression of the previously listed.
-- **value**: Expression to be used for value. Can be a constant, column, or function, any combination of arithmetic or string operators, or a named expression of the previously listed.
-
-#### Example
-
-```sql
-SELECT MAP(['POST', 'HEAD', 'PATCH'], [41, 33, null]);
-----
-{POST: 41, HEAD: 33, PATCH: }
-
-SELECT MAP([[1,2], [3,4]], ['a', 'b']);
-----
-{[1, 2]: a, [3, 4]: b}
-
-SELECT MAP { 'a': 1, 'b': 2 };
-----
-{a: 1, b: 2}
-```

@@ -27,7 +27,7 @@ use arrow_schema::{DataType, Field, SchemaBuilder};
 use datafusion_common::utils::{fixed_size_list_to_arrays, list_to_arrays};
 use datafusion_common::{exec_err, Result, ScalarValue};
 use datafusion_expr::expr::ScalarFunction;
-use datafusion_expr::special_doc_sections::DOC_SECTION_MAP;
+use datafusion_expr::scalar_doc_sections::DOC_SECTION_SPECIAL;
 use datafusion_expr::{
     ColumnarValue, Documentation, Expr, ScalarUDFImpl, Signature, Volatility,
 };
@@ -252,7 +252,7 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 fn get_map_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
     Documentation::builder()
-        .with_doc_section(DOC_SECTION_MAP)
+        .with_doc_section(DOC_SECTION_SPECIAL)
         .with_description(
             "Returns an Arrow map with the specified key-value pairs.",
         )

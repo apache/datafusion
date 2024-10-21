@@ -768,6 +768,7 @@ pub mod scalar_doc_sections {
             DOC_SECTION_ARRAY,
             DOC_SECTION_STRUCT,
             DOC_SECTION_HASHING,
+            DOC_SECTION_SPECIAL,
             DOC_SECTION_OTHER,
         ]
     }
@@ -828,6 +829,12 @@ The following regular expression functions are supported:"#,
     pub const DOC_SECTION_HASHING: DocSection = DocSection {
         include: true,
         label: "Hashing Functions",
+        description: None,
+    };
+
+    pub const DOC_SECTION_SPECIAL: DocSection = DocSection {
+        include: true,
+        label: "Special Functions",
         description: None,
     };
 

@@ -17,8 +17,8 @@
 
 use datafusion::execution::SessionStateDefaults;
 use datafusion_expr::{
-    aggregate_doc_sections, scalar_doc_sections, special_doc_sections,
-    window_doc_sections, AggregateUDF, DocSection, Documentation, ScalarUDF, WindowUDF,
+    aggregate_doc_sections, scalar_doc_sections, window_doc_sections, AggregateUDF,
+    DocSection, Documentation, ScalarUDF, WindowUDF,
 };
 use hashbrown::HashSet;
 use itertools::Itertools;
@@ -35,7 +35,7 @@ fn main() {
 
     if args.len() != 2 {
         panic!(
-            "Usage: {} type (one of 'aggregate', 'scalar', 'special', 'window')",
+            "Usage: {} type (one of 'aggregate', 'scalar', 'window')",
             args[0]
         );
     }
@@ -44,7 +44,6 @@ fn main() {
     let docs = match function_type.as_str() {
         "aggregate" => print_aggregate_docs(),
         "scalar" => print_scalar_docs(),
-        "special" => print_special_docs(),
         "window" => print_window_docs(),
         _ => {
             panic!("Unknown function type: {}", function_type)
@@ -72,17 +71,6 @@ fn print_scalar_docs() -> String {
     }
 
     print_docs(providers, scalar_doc_sections::doc_sections())
-}
-
-fn print_special_docs() -> String {
-    let mut providers: Vec<Box<dyn DocProvider>> = vec![];
-
-    // Iterates through the default_scalar_functions to retrieve the special functions
-    for f in SessionStateDefaults::default_scalar_functions() {
-        providers.push(Box::new(f.as_ref().clone()));
-    }
-
-    print_docs(providers, special_doc_sections::doc_sections())
 }
 
 fn print_window_docs() -> String {
