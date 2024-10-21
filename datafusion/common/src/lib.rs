@@ -31,6 +31,7 @@ mod unnest;
 pub mod alias;
 pub mod cast;
 pub mod config;
+pub mod cse;
 pub mod display;
 pub mod error;
 pub mod file_options;
