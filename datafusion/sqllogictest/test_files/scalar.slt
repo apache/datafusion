@@ -544,12 +544,27 @@ select log(arrow_cast(10, 'Float64')) a ,log(arrow_cast(100, 'Float32')) b;
 
 # log overloaded base 10 float64 and float32 casting with columns
 query RR rowsort
-select log(arrow_cast(a, 'Float64')) ,log(arrow_cast(b, 'Float32')) from signed_integers;
+select log(arrow_cast(a, 'Float64')), log(arrow_cast(b, 'Float32')) from signed_integers;
 ----
 0.301029995664 NaN
 0.602059991328 NULL
 NaN 2
 NaN 4
+
+# log float64 and float32 casting scalar
+query RR rowsort
+select log(2,arrow_cast(8, 'Float64')) a, log(2,arrow_cast(16, 'Float32')) b;
+----
+3 4
+
+# log float64 and float32 casting with columns
+query RR rowsort
+select log(2,arrow_cast(a, 'Float64')), log(4,arrow_cast(b, 'Float32')) from signed_integers;
+----
+1 NaN
+2 NULL
+NaN 3.321928
+NaN 6.643856
 
 
 ## log10
