@@ -103,6 +103,7 @@ pub(crate) struct SortPreservingMergeStream<C: CursorValues> {
     /// partition index, partition polls count
     // records: (usize, usize),
     prev_cursors: Vec<Option<Cursor<C>>>,
+    round_robin_tie_breaker_mode: bool,
 
     /// Optional number of rows to fetch
     fetch: Option<usize>,
@@ -135,6 +136,7 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
             aborted: false,
             cursors: (0..stream_count).map(|_| None).collect(),
             prev_cursors: (0..stream_count).map(|_| None).collect(),
+            round_robin_tie_breaker_mode: false,
             // records: (0, 0),
             num_of_polled_with_same_value: vec![0; stream_count],
             loser_tree: vec![],
@@ -225,9 +227,6 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
                     return Poll::Ready(Some(Err(e)));
                 }
 
-                // adjust poll count
-                self.adjuct_poll_count(winner);
-
                 self.update_loser_tree();
             }
 
@@ -256,7 +255,7 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
         }
     }
 
-    fn adjuct_poll_count(&mut self, stream_idx: usize) {
+    fn adjust_poll_count(&mut self, stream_idx: usize) {
         let slot = &mut self.cursors[stream_idx];
 
         if let Some(c) = slot.as_mut() {
@@ -307,6 +306,15 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
                     .is_gt()
             } // TODO: remove. Switch to the old strategy to see the difference
               //   (Some(ac), Some(bc)) => ac.cmp(bc).then_with(|| a.cmp(&b)).is_gt(),
+        }
+    }
+
+    #[inline]
+    fn is_eq(&self, a: usize, b: usize) -> bool {
+        match (&self.cursors[a], &self.cursors[b]) {
+            (None, _) => false,
+            (_, None) => false,
+            (Some(ac), Some(bc)) => ac.cmp(bc).is_eq(),
         }
     }
 
@@ -378,6 +386,25 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
         let mut cmp_node = self.lt_leaf_node_index(winner);
         while cmp_node != 0 {
             let challenger = self.loser_tree[cmp_node];
+            // final match
+            if cmp_node == 1 {
+                // Start round robin fasion tie breaker
+                if self.is_eq(winner, challenger) {
+                    if !self.round_robin_tie_breaker_mode {
+                        self.round_robin_tie_breaker_mode = true;
+                        // Use round_robin_tie_breaker_mode flag to know when to cleanup the polls count in previous tie breaker.
+                        self.num_of_polled_with_same_value.fill(0);
+                    }
+                    // Update poll count only if the winner survive at the final match, otherwise
+                    // it means it has new value and no longer need to compete in the tie breaker.
+                    if winner == self.loser_tree[0] {
+                        self.adjust_poll_count(winner);
+                    }
+                } else {
+                    self.round_robin_tie_breaker_mode = false;
+                }
+            }
+
             if self.is_gt(winner, challenger) {
                 self.loser_tree[cmp_node] = winner;
                 winner = challenger;
