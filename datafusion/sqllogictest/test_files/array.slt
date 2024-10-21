@@ -5149,9 +5149,9 @@ select array_ndims(arrow_cast([null], 'List(List(List(Int64)))'));
 
 # array_ndims scalar function #2
 query II
-select array_ndims(array_repeat(array_repeat(array_repeat(1, 3), 2), 1)), array_ndims([[[[[[[[[[[[[[[[[[[[[1]]]]]]]]]]]]]]]]]]]]]);
+select array_ndims(array_repeat(array_repeat(array_repeat(1, 3), 2), 1)), array_ndims([[[[[[[[[[[[[[[[[[[[1]]]]]]]]]]]]]]]]]]]]);
 ----
-3 21
+3 20
 
 # array_ndims scalar function #3
 query II

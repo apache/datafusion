@@ -308,7 +308,10 @@ impl NamePreserver {
         Self {
             // The schema of Filter and Join nodes comes from their inputs rather than their output expressions,
             // so there is no need to use aliases to preserve expression names.
-            use_alias: !matches!(plan, LogicalPlan::Filter(_) | LogicalPlan::Join(_)),
+            use_alias: !matches!(
+                plan,
+                LogicalPlan::Filter(_) | LogicalPlan::Join(_) | LogicalPlan::Limit(_)
+            ),
         }
     }
 

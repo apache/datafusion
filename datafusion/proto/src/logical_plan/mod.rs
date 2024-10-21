@@ -62,13 +62,13 @@ use datafusion_expr::{
     logical_plan::{
         builder::project, Aggregate, CreateCatalog, CreateCatalogSchema,
         CreateExternalTable, CreateView, CrossJoin, DdlStatement, Distinct,
-        EmptyRelation, Extension, Join, JoinConstraint, Limit, Prepare, Projection,
-        Repartition, Sort, SubqueryAlias, TableScan, Values, Window,
+        EmptyRelation, Extension, Join, JoinConstraint, Prepare, Projection, Repartition,
+        Sort, SubqueryAlias, TableScan, Values, Window,
     },
     DistinctOn, DropView, Expr, LogicalPlan, LogicalPlanBuilder, ScalarUDF, SortExpr,
     WindowUDF,
 };
-use datafusion_expr::{AggregateUDF, ColumnUnnestList, Unnest};
+use datafusion_expr::{AggregateUDF, ColumnUnnestList, FetchType, SkipType, Unnest};
 
 use self::to_proto::{serialize_expr, serialize_exprs};
 use crate::logical_plan::to_proto::serialize_sorts;
@@ -1264,17 +1264,28 @@ impl AsLogicalPlan for LogicalPlanNode {
                     ))),
                 })
             }
-            LogicalPlan::Limit(Limit { input, skip, fetch }) => {
+            LogicalPlan::Limit(limit) => {
                 let input: protobuf::LogicalPlanNode =
                     protobuf::LogicalPlanNode::try_from_logical_plan(
-                        input.as_ref(),
+                        limit.input.as_ref(),
                         extension_codec,
                     )?;
+                let SkipType::Literal(skip) = limit.get_skip_type()? else {
+                    return Err(proto_error(
+                        "LogicalPlan::Limit only supports literal skip values",
+                    ));
+                };
+                let FetchType::Literal(fetch) = limit.get_fetch_type()? else {
+                    return Err(proto_error(
+                        "LogicalPlan::Limit only supports literal fetch values",
+                    ));
+                };
+
                 Ok(protobuf::LogicalPlanNode {
                     logical_plan_type: Some(LogicalPlanType::Limit(Box::new(
                         protobuf::LimitNode {
                             input: Some(Box::new(input)),
-                            skip: *skip as i64,
+                            skip: skip as i64,
                             fetch: fetch.unwrap_or(i64::MAX as usize) as i64,
                         },
                     ))),
