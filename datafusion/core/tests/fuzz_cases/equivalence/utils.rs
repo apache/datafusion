@@ -299,29 +299,6 @@ fn get_representative_arr(
     None
 }
 
-// Convert each tuple to PhysicalSortExpr
-pub fn convert_to_sort_exprs(
-    in_data: &[(&Arc<dyn PhysicalExpr>, SortOptions)],
-) -> Vec<PhysicalSortExpr> {
-    in_data
-        .iter()
-        .map(|(expr, options)| PhysicalSortExpr {
-            expr: Arc::clone(*expr),
-            options: *options,
-        })
-        .collect()
-}
-
-// Convert each inner tuple to PhysicalSortExpr
-pub fn convert_to_orderings(
-    orderings: &[Vec<(&Arc<dyn PhysicalExpr>, SortOptions)>],
-) -> Vec<Vec<PhysicalSortExpr>> {
-    orderings
-        .iter()
-        .map(|sort_exprs| convert_to_sort_exprs(sort_exprs))
-        .collect()
-}
-
 // Generate a schema which consists of 8 columns (a, b, c, d, e, f, g, h)
 pub fn create_test_schema() -> Result<SchemaRef> {
     let a = Field::new("a", DataType::Int32, true);
@@ -520,6 +497,29 @@ pub fn generate_table_for_orderings(
     }
 
     Ok(batch)
+}
+
+// Convert each tuple to PhysicalSortExpr
+pub fn convert_to_sort_exprs(
+    in_data: &[(&Arc<dyn PhysicalExpr>, SortOptions)],
+) -> Vec<PhysicalSortExpr> {
+    in_data
+        .iter()
+        .map(|(expr, options)| PhysicalSortExpr {
+            expr: Arc::clone(*expr),
+            options: *options,
+        })
+        .collect()
+}
+
+// Convert each inner tuple to PhysicalSortExpr
+pub fn convert_to_orderings(
+    orderings: &[Vec<(&Arc<dyn PhysicalExpr>, SortOptions)>],
+) -> Vec<Vec<PhysicalSortExpr>> {
+    orderings
+        .iter()
+        .map(|sort_exprs| convert_to_sort_exprs(sort_exprs))
+        .collect()
 }
 
 // Utility function to generate random f64 array
