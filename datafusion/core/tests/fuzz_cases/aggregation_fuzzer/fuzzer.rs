@@ -285,7 +285,7 @@ impl AggregationFuzzTestTask {
         check_equality_of_batches(task_result, expected_result).map_err(|e| {
             // If we found inconsistent result, we print the test details for reproducing at first
             let message = format!(
-                "##### AggregationFuzzer error report #####
+                "##### AggregationFuzzer error report #####\n\
                  ### Sql:\n{}\n\
                  ### Schema:\n{}\n\
                  ### Session context params:\n{:?}\n\
