@@ -2617,12 +2617,6 @@ mod test {
     #[test]
     fn test_find_df_window_function() {
         assert_eq!(
-            find_df_window_func("cume_dist"),
-            Some(WindowFunctionDefinition::BuiltInWindowFunction(
-                built_in_window_function::BuiltInWindowFunction::CumeDist
-            ))
-        );
-        assert_eq!(
             find_df_window_func("first_value"),
             Some(WindowFunctionDefinition::BuiltInWindowFunction(
                 built_in_window_function::BuiltInWindowFunction::FirstValue

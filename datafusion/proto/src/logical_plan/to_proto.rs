@@ -118,7 +118,6 @@ impl From<&BuiltInWindowFunction> for protobuf::BuiltInWindowFunction {
             BuiltInWindowFunction::LastValue => Self::LastValue,
             BuiltInWindowFunction::NthValue => Self::NthValue,
             BuiltInWindowFunction::Ntile => Self::Ntile,
-            BuiltInWindowFunction::CumeDist => Self::CumeDist,
         }
     }
 }

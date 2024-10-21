@@ -48,7 +48,7 @@ use datafusion::functions_aggregate::expr_fn::{
 use datafusion::functions_aggregate::min_max::max_udaf;
 use datafusion::functions_nested::map::map;
 use datafusion::functions_window::expr_fn::{
-    dense_rank, lag, lead, percent_rank, rank, row_number,
+    cume_dist, dense_rank, lag, lead, percent_rank, rank, row_number,
 };
 use datafusion::functions_window::rank::rank_udwf;
 use datafusion::prelude::*;
