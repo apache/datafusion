@@ -30,7 +30,7 @@ rust-version = "1.79"
 readme = "README.md"
 
 [dependencies]
-arrow = { version = "53.0.0" }
+arrow = { version = "53.2.0" }
 async-trait = "0.1.73"
 aws-config = "1.5.5"
 aws-sdk-sso = "1.43.0"
@@ -55,7 +55,7 @@ futures = "0.3"
 mimalloc = { version = "0.1", default-features = false }
 object_store = { version = "0.11.0", features = ["aws", "gcp", "http"] }
 parking_lot = { version = "0.12" }
-parquet = { version = "53.0.0", default-features = false }
+parquet = { version = "53.2.0", default-features = false }
 regex = "1.8"
 rustyline = "14.0"
 tokio = { version = "1.24", features = ["macros", "rt", "rt-multi-thread", "sync", "parking_lot", "signal"] }
@@ -66,3 +66,19 @@ assert_cmd = "2.0"
 ctor = "0.2.0"
 predicates = "3.0"
 rstest = "0.22"
+
+
+
+[patch.crates-io]
+arrow = { git = "https://github.com/apache/arrow-rs.git", rev = "0d271514407f11b4ee6985f204632515f3d8806a" }
+arrow-array = { git = "https://github.com/apache/arrow-rs.git", rev = "0d271514407f11b4ee6985f204632515f3d8806a" }
+arrow-buffer = { git = "https://github.com/apache/arrow-rs.git", rev = "0d271514407f11b4ee6985f204632515f3d8806a" }
+arrow-cast = { git = "https://github.com/apache/arrow-rs.git", rev = "0d271514407f11b4ee6985f204632515f3d8806a" }
+arrow-data = { git = "https://github.com/apache/arrow-rs.git", rev = "0d271514407f11b4ee6985f204632515f3d8806a" }
+arrow-ipc = { git = "https://github.com/apache/arrow-rs.git", rev = "0d271514407f11b4ee6985f204632515f3d8806a" }
+arrow-schema = { git = "https://github.com/apache/arrow-rs.git", rev = "0d271514407f11b4ee6985f204632515f3d8806a" }
+arrow-select = { git = "https://github.com/apache/arrow-rs.git", rev = "0d271514407f11b4ee6985f204632515f3d8806a" }
+arrow-string = { git = "https://github.com/apache/arrow-rs.git", rev = "0d271514407f11b4ee6985f204632515f3d8806a" }
+arrow-ord = { git = "https://github.com/apache/arrow-rs.git", rev = "0d271514407f11b4ee6985f204632515f3d8806a" }
+arrow-flight = { git = "https://github.com/apache/arrow-rs.git", rev = "0d271514407f11b4ee6985f204632515f3d8806a" }
+parquet = { git = "https://github.com/apache/arrow-rs.git", rev = "0d271514407f11b4ee6985f204632515f3d8806a" }
