@@ -17,8 +17,9 @@
 
 [workspace]
 # datafusion-cli is excluded because of its Cargo.lock. See datafusion-cli/README.md.
-exclude = ["datafusion-cli", "dev/depcheck"]
+exclude = ["dev/depcheck"]
 members = [
+    "datafusion-cli", 
     "datafusion/common",
     "datafusion/common-runtime",
     "datafusion/catalog",

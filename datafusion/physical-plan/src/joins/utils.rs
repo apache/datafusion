@@ -30,24 +30,27 @@ use crate::{
 };
 
 use arrow::array::{
-    downcast_array, new_null_array, Array, BooleanBufferBuilder, UInt32Array,
+    downcast_array, new_null_array, Array, AsArray, BooleanBufferBuilder, UInt32Array,
     UInt32Builder, UInt64Array,
 };
-use arrow::compute;
+use arrow::compute::{self, filter_record_batch};
 use arrow::datatypes::{Field, Schema, SchemaBuilder, UInt32Type, UInt64Type};
 use arrow::record_batch::{RecordBatch, RecordBatchOptions};
 use arrow_array::builder::UInt64Builder;
-use arrow_array::{ArrowPrimitiveType, NativeAdapter, PrimitiveArray};
+use arrow_array::{ArrowPrimitiveType, BooleanArray, NativeAdapter, PrimitiveArray};
 use arrow_buffer::ArrowNativeType;
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::stats::Precision;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{
-    plan_err, DataFusionError, JoinSide, JoinType, Result, SharedResult,
+    exec_err, plan_err, DataFusionError, JoinSide, JoinType, Result, ScalarValue,
+    SharedResult,
 };
 use datafusion_expr::interval_arithmetic::Interval;
+use datafusion_expr::Operator;
 use datafusion_physical_expr::equivalence::add_offset_to_expr;
-use datafusion_physical_expr::expressions::Column;
+use datafusion_physical_expr::expressions::Literal;
+use datafusion_physical_expr::expressions::{BinaryExpr, Column};
 use datafusion_physical_expr::utils::{collect_columns, merge_vectors};
 use datafusion_physical_expr::{
     LexOrdering, LexOrderingRef, PhysicalExpr, PhysicalExprRef, PhysicalSortExpr,
@@ -56,6 +59,7 @@ use datafusion_physical_expr::{
 use futures::future::{BoxFuture, Shared};
 use futures::{ready, FutureExt};
 use hashbrown::raw::RawTable;
+use log::Record;
 use parking_lot::Mutex;
 
 /// Maps a `u64` hash value based on the build side ["on" values] to a list of indices with this key's value.
@@ -1670,6 +1674,99 @@ pub(crate) fn asymmetric_join_output_partitioning(
                 right.output_partitioning().partition_count(),
             )
         }
+    }
+}
+#[derive(Debug, Clone)]
+/// store physicalexpr about the dynamic filters
+pub struct PhysicalDynamicFiltersInfo {
+    pub probe_side_columns: Vec<Arc<dyn PhysicalExpr>>,
+    pub aggregates: Vec<Arc<dyn PhysicalExpr>>,
+    // final predicates we should execute
+    final_expr: Option<Arc<dyn PhysicalExpr>>,
+}
+
+impl PhysicalDynamicFiltersInfo {
+    pub fn new(
+        probe_side_columns: Vec<Arc<dyn PhysicalExpr>>,
+        aggregates: Vec<Arc<dyn PhysicalExpr>>,
+    ) -> Self {
+        Self {
+            probe_side_columns,
+            aggregates,
+            final_expr: None,
+        }
+    }
+
+    pub fn with_final_expr(mut self, expr: Arc<dyn PhysicalExpr>) -> Self {
+        self.final_expr = Some(expr);
+        self
+    }
+
+    pub fn filter_batch(
+        &mut self,
+        records: &RecordBatch,
+    ) -> Result<RecordBatch, DataFusionError> {
+        let filter_expr = if let Some(final_expr) = self.final_expr.as_ref() {
+            // If final_expr already exists, use it directly
+            final_expr.clone()
+        } else {
+            // Otherwise, compute the new filter expression
+            let mut new_filter_expr: Option<Arc<dyn PhysicalExpr>> = None;
+
+            for (i, col) in self.probe_side_columns.iter().enumerate() {
+                let min_value = self.aggregates[i].evaluate(records)?;
+                let max_value = self.aggregates[i + 1].evaluate(records)?;
+
+                let min_scalar =
+                    ScalarValue::try_from_array(&min_value.into_array(1)?, 0)?;
+                let max_scalar =
+                    ScalarValue::try_from_array(&max_value.into_array(1)?, 0)?;
+
+                let min_expr: Arc<dyn PhysicalExpr> = Arc::new(Literal::new(min_scalar));
+                let max_expr: Arc<dyn PhysicalExpr> = Arc::new(Literal::new(max_scalar));
+
+                let range_condition: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+                    Arc::new(BinaryExpr::new(min_expr, Operator::LtEq, col.clone())),
+                    Operator::And,
+                    Arc::new(BinaryExpr::new(col.clone(), Operator::LtEq, max_expr)),
+                ));
+
+                new_filter_expr = match new_filter_expr {
+                    Some(expr) => Some(Arc::new(BinaryExpr::new(
+                        expr,
+                        Operator::And,
+                        range_condition,
+                    ))),
+                    None => Some(range_condition),
+                };
+            }
+
+            // Set the final_expr if it was None
+            self.final_expr = new_filter_expr.clone();
+            new_filter_expr.expect("Filter expression should be built")
+        };
+
+        // Apply the filter expression to the batch
+        let boolean_array = filter_expr
+            .evaluate(records)?
+            .into_array(records.num_rows())?;
+        let filtered_batch =
+            self.filter_record_batch(records, boolean_array.as_boolean())?;
+
+        Ok(filtered_batch)
+    }
+
+    fn filter_record_batch(
+        &self,
+        batch: &RecordBatch,
+        filter: &BooleanArray,
+    ) -> Result<RecordBatch, DataFusionError> {
+        filter_record_batch(batch, filter).map_err(|e| {
+            DataFusionError::ArrowError(
+                e,
+                Some("failed to filter records in dynamic filter push down".to_string()),
+            )
+        })
     }
 }
 

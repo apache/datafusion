@@ -1128,6 +1128,7 @@ fn convert_cross_join_to_inner_join(cross_join: CrossJoin) -> Result<Join> {
         filter: None,
         schema: DFSchemaRef::new(join_schema),
         null_equals_null: false,
+        filter_pushdown_info: None,
     })
 }
 
