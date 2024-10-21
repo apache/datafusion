@@ -232,7 +232,7 @@ impl<'a> TypeCoercionRewriter<'a> {
         }))
     }
 
-    /// Coerce the limit and skip expression to Int64 type
+    /// Coerce the fetch and skip expression to Int64 type.
     fn coerce_limit(limit: Limit) -> Result<LogicalPlan> {
         let empty_schema = DFSchema::empty();
         let new_fetch = limit
