@@ -45,8 +45,41 @@ use datafusion_physical_expr::binary_map::OutputType;
 use datafusion_physical_expr_common::datum::compare_with_eq;
 use hashbrown::raw::RawTable;
 
+/// Group index context for performing `vectorized compare` and `vectorized append`
+struct GroupIndexContext {
+    /// It is possible that hash value collision exists,
+    /// and we will chain the `group indices` with same hash value
+    ///
+    /// The chained indices is like:
+    ///   `latest group index -> older group index -> even older group index -> ...`
+    prev_group_index: usize,
+
+    /// It is possible that rows with same hash values exist in `input cols`.
+    /// And if we `vectorized compare` and `vectorized append` them
+    /// in the same round, some fault cases will occur especially when
+    /// they are totally the repeated rows...
+    ///
+    /// For example:
+    ///   - Two repeated rows exist in `input cols`.
+    ///
+    ///   - We found their hash values equal to one exist group
+    ///
+    ///   - We then perform `vectorized compare` for them to the exist group,
+    ///     and found their values not equal to the exist one
+    ///
+    ///   - Finally when perform `vectorized append`, we decide to build two
+    ///     respective new groups for them, even we actually just need one
+    ///     new group...
+    ///
+    /// So for solving such cases simply, if some rows with same hash value
+    /// in `input cols`, just allow to process one of them in a round,
+    /// and this flag is used to represent that one of them is processing
+    /// in current round.
+    ///
+    checking: bool,
+}
+
 /// A [`GroupValues`] that stores multiple columns of group values.
-///
 ///
 pub struct GroupValuesColumn {
     /// The output schema
@@ -61,6 +94,11 @@ pub struct GroupValuesColumn {
     /// keys: u64 hashes of the GroupValue
     /// values: (hash, group_index)
     map: RawTable<(u64, usize)>,
+
+    group_index_ctxs: Vec<GroupIndexContext>,
+
+    /// Some
+    remaining_indices: Vec<usize>,
 
     /// The size of `map` in bytes
     map_size: usize,
@@ -94,6 +132,7 @@ impl GroupValuesColumn {
         Ok(Self {
             schema,
             map,
+            group_index_ctxs: Vec::new(),
             map_size: 0,
             group_values: vec![],
             hashes_buffer: Default::default(),
@@ -158,13 +197,6 @@ macro_rules! instantiate_primitive {
             $v.push(Box::new(b) as _)
         }
     };
-}
-
-fn append_col_value<C>(mut core: C, array: &ArrayRef, row: usize)
-where
-    C: FnMut(&ArrayRef, usize),
-{
-    core(array, row);
 }
 
 impl GroupValues for GroupValuesColumn {

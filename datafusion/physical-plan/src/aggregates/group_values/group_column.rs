@@ -554,7 +554,7 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
         all_non_null: bool,
     ) {
         let arr = array.as_byte_view::<B>();
-        
+
         if all_non_null {
             self.nulls.append_n(rows.len(), false);
             for &row in rows {
