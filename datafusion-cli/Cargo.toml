@@ -67,8 +67,6 @@ ctor = "0.2.0"
 predicates = "3.0"
 rstest = "0.22"
 
-
-
 [patch.crates-io]
 arrow = { git = "https://github.com/apache/arrow-rs.git", rev = "0d271514407f11b4ee6985f204632515f3d8806a" }
 arrow-array = { git = "https://github.com/apache/arrow-rs.git", rev = "0d271514407f11b4ee6985f204632515f3d8806a" }
