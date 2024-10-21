@@ -1663,7 +1663,6 @@ impl serde::Serialize for BuiltInWindowFunction {
         let variant = match self {
             Self::Unspecified => "UNSPECIFIED",
             Self::CumeDist => "CUME_DIST",
-            Self::Ntile => "NTILE",
             Self::FirstValue => "FIRST_VALUE",
             Self::LastValue => "LAST_VALUE",
             Self::NthValue => "NTH_VALUE",
@@ -1680,7 +1679,6 @@ impl<'de> serde::Deserialize<'de> for BuiltInWindowFunction {
         const FIELDS: &[&str] = &[
             "UNSPECIFIED",
             "CUME_DIST",
-            "NTILE",
             "FIRST_VALUE",
             "LAST_VALUE",
             "NTH_VALUE",
@@ -1726,7 +1724,6 @@ impl<'de> serde::Deserialize<'de> for BuiltInWindowFunction {
                 match value {
                     "UNSPECIFIED" => Ok(BuiltInWindowFunction::Unspecified),
                     "CUME_DIST" => Ok(BuiltInWindowFunction::CumeDist),
-                    "NTILE" => Ok(BuiltInWindowFunction::Ntile),
                     "FIRST_VALUE" => Ok(BuiltInWindowFunction::FirstValue),
                     "LAST_VALUE" => Ok(BuiltInWindowFunction::LastValue),
                     "NTH_VALUE" => Ok(BuiltInWindowFunction::NthValue),

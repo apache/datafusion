@@ -42,8 +42,6 @@ impl fmt::Display for BuiltInWindowFunction {
 pub enum BuiltInWindowFunction {
     /// Relative rank of the current row: (number of rows preceding or peer with current row) / (total rows)
     CumeDist,
-    /// Integer ranging from 1 to the argument value, dividing the partition as equally as possible
-    Ntile,
     /// returns value evaluated at the row that is the first row of the window frame
     FirstValue,
     /// Returns value evaluated at the row that is the last row of the window frame
@@ -57,7 +55,6 @@ impl BuiltInWindowFunction {
         use BuiltInWindowFunction::*;
         match self {
             CumeDist => "CUME_DIST",
-            Ntile => "NTILE",
             FirstValue => "first_value",
             LastValue => "last_value",
             NthValue => "NTH_VALUE",
@@ -70,7 +67,6 @@ impl FromStr for BuiltInWindowFunction {
     fn from_str(name: &str) -> Result<BuiltInWindowFunction> {
         Ok(match name.to_uppercase().as_str() {
             "CUME_DIST" => BuiltInWindowFunction::CumeDist,
-            "NTILE" => BuiltInWindowFunction::Ntile,
             "FIRST_VALUE" => BuiltInWindowFunction::FirstValue,
             "LAST_VALUE" => BuiltInWindowFunction::LastValue,
             "NTH_VALUE" => BuiltInWindowFunction::NthValue,
@@ -101,7 +97,6 @@ impl BuiltInWindowFunction {
             })?;
 
         match self {
-            BuiltInWindowFunction::Ntile => Ok(DataType::UInt64),
             BuiltInWindowFunction::CumeDist => Ok(DataType::Float64),
             BuiltInWindowFunction::FirstValue
             | BuiltInWindowFunction::LastValue
@@ -117,20 +112,6 @@ impl BuiltInWindowFunction {
             BuiltInWindowFunction::FirstValue | BuiltInWindowFunction::LastValue => {
                 Signature::any(1, Volatility::Immutable)
             }
-            BuiltInWindowFunction::Ntile => Signature::uniform(
-                1,
-                vec![
-                    DataType::UInt64,
-                    DataType::UInt32,
-                    DataType::UInt16,
-                    DataType::UInt8,
-                    DataType::Int64,
-                    DataType::Int32,
-                    DataType::Int16,
-                    DataType::Int8,
-                ],
-                Volatility::Immutable,
-            ),
             BuiltInWindowFunction::NthValue => Signature::any(2, Volatility::Immutable),
         }
     }

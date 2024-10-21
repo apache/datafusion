@@ -22,11 +22,6 @@ pub fn cume_dist() -> Expr {
     Expr::WindowFunction(WindowFunction::new(BuiltInWindowFunction::CumeDist, vec![]))
 }
 
-/// Create an expression to represent the `ntile` window function
-pub fn ntile(arg: Expr) -> Expr {
-    Expr::WindowFunction(WindowFunction::new(BuiltInWindowFunction::Ntile, vec![arg]))
-}
-
 /// Create an expression to represent the `nth_value` window function
 pub fn nth_value(arg: Expr, n: i64) -> Expr {
     Expr::WindowFunction(WindowFunction::new(

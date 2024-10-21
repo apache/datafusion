@@ -153,7 +153,6 @@ impl From<protobuf::BuiltInWindowFunction> for BuiltInWindowFunction {
             protobuf::BuiltInWindowFunction::Unspecified => todo!(),
             protobuf::BuiltInWindowFunction::FirstValue => Self::FirstValue,
             protobuf::BuiltInWindowFunction::CumeDist => Self::CumeDist,
-            protobuf::BuiltInWindowFunction::Ntile => Self::Ntile,
             protobuf::BuiltInWindowFunction::NthValue => Self::NthValue,
             protobuf::BuiltInWindowFunction::LastValue => Self::LastValue,
         }

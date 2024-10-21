@@ -146,40 +146,6 @@ RANGE and GROUPS modes require an ORDER BY clause (with RANGE the ORDER BY must 
 
 All [aggregate functions](aggregate_functions.md) can be used as window functions.
 
-## Ranking functions
-
-- [rank](#rank)
-- [dense_rank](#dense_rank)
-- [ntile](#ntile)
-
-### `rank`
-
-Rank of the current row with gaps; same as row_number of its first peer.
-
-```sql
-rank()
-```
-
-### `dense_rank`
-
-Rank of the current row without gaps; this function counts peer groups.
-
-```sql
-dense_rank()
-```
-
-### `ntile`
-
-Integer ranging from 1 to the argument value, dividing the partition as equally as possible.
-
-```sql
-ntile(expression)
-```
-
-#### Arguments
-
-- **expression**: An integer describing the number groups the partition should be split into
-
 ## Analytical functions
 
 - [cume_dist](#cume_dist)
