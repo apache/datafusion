@@ -21,10 +21,7 @@ use abi_stable::{
     std_types::{ROption, RResult, RString, RVec},
     StableAbi,
 };
-use arrow::{
-    datatypes::{Schema, SchemaRef},
-    ffi::FFI_ArrowSchema,
-};
+use arrow::datatypes::SchemaRef;
 use async_ffi::{FfiFuture, FutureExt};
 use async_trait::async_trait;
 use datafusion::{
@@ -96,12 +93,7 @@ unsafe extern "C" fn schema_fn_wrapper(provider: &FFI_TableProvider) -> WrappedS
     let private_data = provider.private_data as *const ProviderPrivateData;
     let provider = &(*private_data).provider;
 
-    // This does silently fail because TableProvider does not return a result.
-    // It expects schema to always pass.
-    let ffi_schema = FFI_ArrowSchema::try_from(provider.schema().as_ref())
-        .unwrap_or(FFI_ArrowSchema::empty());
-
-    WrappedSchema(ffi_schema)
+    provider.schema().into()
 }
 
 unsafe extern "C" fn table_type_fn_wrapper(
@@ -207,9 +199,7 @@ unsafe extern "C" fn scan_fn_wrapper(
             Err(e) => return RResult::RErr(e.to_string().into()),
         };
 
-        FFI_ExecutionPlan::new(plan, ctx.task_ctx())
-            .map_err(|e| e.to_string().into())
-            .into()
+        RResult::ROk(FFI_ExecutionPlan::new(plan, ctx.task_ctx()))
     }
     .into_ffi()
 }
@@ -295,11 +285,8 @@ impl TableProvider for ForeignTableProvider {
     }
 
     fn schema(&self) -> SchemaRef {
-        let schema = unsafe {
-            let wrapped_schema = (self.0.schema)(&self.0);
-            Schema::try_from(&wrapped_schema.0).unwrap_or(Schema::empty())
-        };
-        Arc::new(schema)
+        let wrapped_schema = unsafe { (self.0.schema)(&self.0) };
+        wrapped_schema.into()
     }
 
     fn table_type(&self) -> TableType {
@@ -383,6 +370,7 @@ impl TableProvider for ForeignTableProvider {
 
 #[cfg(test)]
 mod tests {
+    use arrow::datatypes::Schema;
     use datafusion::prelude::{col, lit};
 
     use super::*;
