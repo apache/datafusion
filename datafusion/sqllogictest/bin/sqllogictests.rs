@@ -62,6 +62,11 @@ async fn run_tests() -> Result<()> {
     env_logger::init();
 
     let options: Options = clap::Parser::parse();
+    // nextest parses stdout
+    if options.list {
+        eprintln!("NOTICE: --list option unsupported quitting");
+        return Ok(());
+    }
     options.warn_on_ignored();
 
     // Run all tests in parallel, reporting failures at the end
@@ -276,7 +281,7 @@ fn read_dir_recursive_impl(dst: &mut Vec<PathBuf>, path: &Path) -> Result<()> {
 
 /// Parsed command line options
 ///
-/// This structure attempts to mimic the command line options
+/// This structure attempts to mimic the command line options of the built in rust test runner
 /// accepted by IDEs such as CLion that pass arguments
 ///
 /// See <https://github.com/apache/datafusion/issues/8287> for more details
@@ -320,6 +325,18 @@ struct Options {
         help = "IGNORED (for compatibility with built in rust test runner)"
     )]
     show_output: bool,
+
+    #[clap(
+        long,
+        help = "Quits immediately, not listing anything (for compatibility with built in rust test runner)"
+    )]
+    list: bool,
+
+    #[clap(
+        long,
+        help = "IGNORED (for compatibility with built in rust test runner)"
+    )]
+    ignored: bool,
 }
 
 impl Options {
@@ -354,15 +371,15 @@ impl Options {
     /// Logs warning messages to stdout if any ignored options are passed
     fn warn_on_ignored(&self) {
         if self.format.is_some() {
-            println!("WARNING: Ignoring `--format` compatibility option");
+            eprintln!("WARNING: Ignoring `--format` compatibility option");
         }
 
         if self.z_options.is_some() {
-            println!("WARNING: Ignoring `-Z` compatibility option");
+            eprintln!("WARNING: Ignoring `-Z` compatibility option");
         }
 
         if self.show_output {
-            println!("WARNING: Ignoring `--show-output` compatibility option");
+            eprintln!("WARNING: Ignoring `--show-output` compatibility option");
         }
     }
 }
