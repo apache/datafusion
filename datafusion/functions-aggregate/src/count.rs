@@ -715,3 +715,17 @@ impl Accumulator for DistinctCountAccumulator {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::array::NullArray;
+
+    #[test]
+    fn count_accumulator_nulls() -> Result<()> {
+        let mut accumulator = CountAccumulator::new();
+        accumulator.update_batch(&[Arc::new(NullArray::new(10))])?;
+        assert_eq!(accumulator.evaluate()?, ScalarValue::Int64(Some(0)));
+        Ok(())
+    }
+}
