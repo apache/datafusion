@@ -21,7 +21,7 @@ use std::sync::{Arc, OnceLock};
 
 use super::log::LogFunc;
 
-use arrow::array::{ArrayRef, AsArray, Int64Array, PrimitiveArray};
+use arrow::array::{ArrayRef, AsArray, Int64Array};
 use arrow::datatypes::{ArrowNativeTypeOp, DataType, Float64Type};
 use datafusion_common::{
     arrow_datafusion_err, exec_datafusion_err, exec_err, plan_datafusion_err,
@@ -91,11 +91,12 @@ impl ScalarUDFImpl for PowerFunc {
             DataType::Float64 => {
                 let bases = args[0].as_primitive::<Float64Type>();
                 let exponents = args[1].as_primitive::<Float64Type>();
-                let result: PrimitiveArray<Float64Type> =
-                    arrow::compute::binary(bases, exponents, |base, exp| {
-                        f64::powf(base, exp)
-                    })?;
-                Arc::new(result) as ArrayRef
+                let result = arrow::compute::binary::<_, _, _, Float64Type>(
+                    bases,
+                    exponents,
+                    f64::powf,
+                )?;
+                Arc::new(result) as _
             }
             DataType::Int64 => {
                 let bases = downcast_arg!(&args[0], "base", Int64Array);
@@ -114,7 +115,7 @@ impl ScalarUDFImpl for PowerFunc {
                         _ => Ok(None),
                     })
                     .collect::<Result<Int64Array>>()
-                    .map(Arc::new)? as ArrayRef
+                    .map(Arc::new)? as _
             }
 
             other => {

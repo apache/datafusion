@@ -258,7 +258,7 @@ macro_rules! make_math_binary_udf {
             use std::any::Any;
             use std::sync::Arc;
 
-            use arrow::array::{ArrayRef, AsArray, PrimitiveArray};
+            use arrow::array::{ArrayRef, AsArray};
             use arrow::datatypes::{DataType, Float32Type, Float64Type};
             use datafusion_common::{exec_err, Result};
             use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
@@ -322,20 +322,22 @@ macro_rules! make_math_binary_udf {
                         DataType::Float64 => {
                             let y = args[0].as_primitive::<Float64Type>();
                             let x = args[1].as_primitive::<Float64Type>();
-                            let result: PrimitiveArray<Float64Type> =
-                                arrow::compute::binary(y, x, |y, x| {
-                                    f64::$BINARY_FUNC(y, x)
-                                })?;
-                            Arc::new(result) as ArrayRef
+                            let result = arrow::compute::binary::<_, _, _, Float64Type>(
+                                y,
+                                x,
+                                |y, x| f64::$BINARY_FUNC(y, x),
+                            )?;
+                            Arc::new(result) as _
                         }
                         DataType::Float32 => {
                             let y = args[0].as_primitive::<Float32Type>();
                             let x = args[1].as_primitive::<Float32Type>();
-                            let result: PrimitiveArray<Float32Type> =
-                                arrow::compute::binary(y, x, |y, x| {
-                                    f32::$BINARY_FUNC(y, x)
-                                })?;
-                            Arc::new(result) as ArrayRef
+                            let result = arrow::compute::binary::<_, _, _, Float32Type>(
+                                y,
+                                x,
+                                |y, x| f32::$BINARY_FUNC(y, x),
+                            )?;
+                            Arc::new(result) as _
                         }
                         other => {
                             return exec_err!(

@@ -22,7 +22,7 @@ use std::sync::{Arc, OnceLock};
 
 use super::power::PowerFunc;
 
-use arrow::array::{ArrayRef, AsArray, PrimitiveArray};
+use arrow::array::{ArrayRef, AsArray};
 use arrow::datatypes::{DataType, Float32Type, Float64Type};
 use datafusion_common::{
     exec_err, internal_err, plan_datafusion_err, plan_err, Result, ScalarValue,
@@ -146,9 +146,12 @@ impl ScalarUDFImpl for LogFunc {
                 ColumnarValue::Array(base) => {
                     let x = x.as_primitive::<Float64Type>();
                     let base = base.as_primitive::<Float64Type>();
-                    let result: PrimitiveArray<Float64Type> =
-                        arrow::compute::binary(x, base, f64::log)?;
-                    Arc::new(result) as ArrayRef
+                    let result = arrow::compute::binary::<_, _, _, Float64Type>(
+                        x,
+                        base,
+                        f64::log,
+                    )?;
+                    Arc::new(result) as _
                 }
                 _ => {
                     return exec_err!("log function requires a scalar or array for base")
@@ -163,9 +166,12 @@ impl ScalarUDFImpl for LogFunc {
                 ColumnarValue::Array(base) => {
                     let x = x.as_primitive::<Float32Type>();
                     let base = base.as_primitive::<Float32Type>();
-                    let result: PrimitiveArray<Float32Type> =
-                        arrow::compute::binary(x, base, f32::log)?;
-                    Arc::new(result) as ArrayRef
+                    let result = arrow::compute::binary::<_, _, _, Float32Type>(
+                        x,
+                        base,
+                        f32::log,
+                    )?;
+                    Arc::new(result) as _
                 }
                 _ => {
                     return exec_err!("log function requires a scalar or array for base")

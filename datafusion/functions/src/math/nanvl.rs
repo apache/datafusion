@@ -20,10 +20,10 @@ use std::sync::{Arc, OnceLock};
 
 use crate::utils::make_scalar_function;
 
-use arrow::array::{ArrayRef, AsArray, Float32Array, Float64Array, PrimitiveArray};
+use arrow::array::{ArrayRef, AsArray, Float32Array, Float64Array};
 use arrow::datatypes::DataType::{Float32, Float64};
 use arrow::datatypes::{DataType, Float32Type, Float64Type};
-use datafusion_common::{exec_err, Result};
+use datafusion_common::{exec_err, DataFusionError, Result};
 use datafusion_expr::scalar_doc_sections::DOC_SECTION_MATH;
 use datafusion_expr::TypeSignature::Exact;
 use datafusion_expr::{
@@ -114,9 +114,9 @@ fn nanvl(args: &[ArrayRef]) -> Result<ArrayRef> {
 
             let x = args[0].as_primitive() as &Float64Array;
             let y = args[1].as_primitive() as &Float64Array;
-            let result: PrimitiveArray<Float64Type> =
-                arrow::compute::binary(x, y, compute_nanvl)?;
-            Ok(Arc::new(result) as ArrayRef)
+            arrow::compute::binary::<_, _, _, Float64Type>(x, y, compute_nanvl)
+                .map(|res| Arc::new(res) as _)
+                .map_err(DataFusionError::from)
         }
         Float32 => {
             let compute_nanvl = |x: f32, y: f32| {
@@ -129,9 +129,9 @@ fn nanvl(args: &[ArrayRef]) -> Result<ArrayRef> {
 
             let x = args[0].as_primitive() as &Float32Array;
             let y = args[1].as_primitive() as &Float32Array;
-            let result: PrimitiveArray<Float32Type> =
-                arrow::compute::binary(x, y, compute_nanvl)?;
-            Ok(Arc::new(result) as ArrayRef)
+            arrow::compute::binary::<_, _, _, Float32Type>(x, y, compute_nanvl)
+                .map(|res| Arc::new(res) as _)
+                .map_err(DataFusionError::from)
         }
         other => exec_err!("Unsupported data type {other:?} for function nanvl"),
     }
