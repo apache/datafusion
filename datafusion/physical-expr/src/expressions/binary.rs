@@ -21,7 +21,6 @@ use std::hash::{Hash, Hasher};
 use std::{any::Any, sync::Arc};
 
 use crate::intervals::cp_solver::{propagate_arithmetic, propagate_comparison};
-use crate::physical_expr::down_cast_any_ref;
 use crate::PhysicalExpr;
 
 use arrow::array::*;
@@ -33,6 +32,7 @@ use arrow::compute::{cast, ilike, like, nilike, nlike};
 use arrow::datatypes::*;
 use arrow_schema::ArrowError;
 use datafusion_common::cast::as_boolean_array;
+use datafusion_common::cse::HashNode;
 use datafusion_common::{internal_err, Result, ScalarValue};
 use datafusion_expr::interval_arithmetic::{apply_operator, Interval};
 use datafusion_expr::sort_properties::ExprProperties;
@@ -48,11 +48,11 @@ use kernels::{
 };
 
 /// Binary expression
-#[derive(Debug, Hash, Clone)]
-pub struct BinaryExpr {
-    left: Arc<dyn PhysicalExpr>,
+#[derive(Debug, Hash, Clone, Eq, PartialEq)]
+pub struct BinaryExpr<DynPhysicalExpr: ?Sized = dyn PhysicalExpr> {
+    left: Arc<DynPhysicalExpr>,
     op: Operator,
-    right: Arc<dyn PhysicalExpr>,
+    right: Arc<DynPhysicalExpr>,
     /// Specifies whether an error is returned on overflow or not
     fail_on_overflow: bool,
 }
@@ -477,11 +477,6 @@ impl PhysicalExpr for BinaryExpr {
         }
     }
 
-    fn dyn_hash(&self, state: &mut dyn Hasher) {
-        let mut s = state;
-        self.hash(&mut s);
-    }
-
     /// For each operator, [`BinaryExpr`] has distinct rules.
     /// TODO: There may be rules specific to some data types and expression ranges.
     fn get_properties(&self, children: &[ExprProperties]) -> Result<ExprProperties> {
@@ -522,20 +517,6 @@ impl PhysicalExpr for BinaryExpr {
             }),
             _ => Ok(ExprProperties::new_unknown()),
         }
-    }
-}
-
-impl PartialEq<dyn Any> for BinaryExpr {
-    fn eq(&self, other: &dyn Any) -> bool {
-        down_cast_any_ref(other)
-            .downcast_ref::<Self>()
-            .map(|x| {
-                self.left.eq(&x.left)
-                    && self.op == x.op
-                    && self.right.eq(&x.right)
-                    && self.fail_on_overflow.eq(&x.fail_on_overflow)
-            })
-            .unwrap_or(false)
     }
 }
 
@@ -677,6 +658,13 @@ impl BinaryExpr {
                 unreachable!("ArrowAt and AtArrow should be rewritten to function")
             }
         }
+    }
+}
+
+impl HashNode for BinaryExpr {
+    fn hash_node<H: Hasher>(&self, state: &mut H) {
+        self.op.hash(state);
+        self.fail_on_overflow.hash(state);
     }
 }
 

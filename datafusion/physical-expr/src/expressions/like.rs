@@ -18,21 +18,21 @@
 use std::hash::{Hash, Hasher};
 use std::{any::Any, sync::Arc};
 
-use crate::{physical_expr::down_cast_any_ref, PhysicalExpr};
-
+use crate::PhysicalExpr;
 use arrow::record_batch::RecordBatch;
 use arrow_schema::{DataType, Schema};
+use datafusion_common::cse::HashNode;
 use datafusion_common::{internal_err, Result};
 use datafusion_expr::ColumnarValue;
 use datafusion_physical_expr_common::datum::apply_cmp;
 
 // Like expression
-#[derive(Debug, Hash)]
-pub struct LikeExpr {
+#[derive(Debug, Hash, Eq, PartialEq)]
+pub struct LikeExpr<DynPhysicalExpr: ?Sized = dyn PhysicalExpr> {
     negated: bool,
     case_insensitive: bool,
-    expr: Arc<dyn PhysicalExpr>,
-    pattern: Arc<dyn PhysicalExpr>,
+    expr: Arc<DynPhysicalExpr>,
+    pattern: Arc<DynPhysicalExpr>,
 }
 
 impl LikeExpr {
@@ -127,24 +127,12 @@ impl PhysicalExpr for LikeExpr {
             Arc::clone(&children[1]),
         )))
     }
-
-    fn dyn_hash(&self, state: &mut dyn Hasher) {
-        let mut s = state;
-        self.hash(&mut s);
-    }
 }
 
-impl PartialEq<dyn Any> for LikeExpr {
-    fn eq(&self, other: &dyn Any) -> bool {
-        down_cast_any_ref(other)
-            .downcast_ref::<Self>()
-            .map(|x| {
-                self.negated == x.negated
-                    && self.case_insensitive == x.case_insensitive
-                    && self.expr.eq(&x.expr)
-                    && self.pattern.eq(&x.pattern)
-            })
-            .unwrap_or(false)
+impl HashNode for LikeExpr {
+    fn hash_node<H: Hasher>(&self, state: &mut H) {
+        self.negated.hash(state);
+        self.case_insensitive.hash(state);
     }
 }
 

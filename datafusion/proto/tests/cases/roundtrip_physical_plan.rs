@@ -82,6 +82,7 @@ use datafusion::physical_plan::{ExecutionPlan, Partitioning, PhysicalExpr, Stati
 use datafusion::prelude::SessionContext;
 use datafusion::scalar::ScalarValue;
 use datafusion_common::config::TableParquetOptions;
+use datafusion_common::cse::HashNode;
 use datafusion_common::file_options::csv_writer::CsvWriterOptions;
 use datafusion_common::file_options::json_writer::JsonWriterOptions;
 use datafusion_common::parsers::CompressionTypeVariant;
@@ -747,23 +748,16 @@ fn roundtrip_parquet_exec_with_custom_predicate_expr() -> Result<()> {
         output_ordering: vec![],
     };
 
-    #[derive(Debug, Hash, Clone)]
-    struct CustomPredicateExpr {
-        inner: Arc<dyn PhysicalExpr>,
+    #[derive(Debug, Hash, Clone, PartialEq, Eq)]
+    struct CustomPredicateExpr<DynPhysicalExpr: ?Sized = dyn PhysicalExpr> {
+        inner: Arc<DynPhysicalExpr>,
     }
     impl Display for CustomPredicateExpr {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             write!(f, "CustomPredicateExpr")
         }
     }
-    impl PartialEq<dyn Any> for CustomPredicateExpr {
-        fn eq(&self, other: &dyn Any) -> bool {
-            other
-                .downcast_ref::<Self>()
-                .map(|x| self.inner.eq(&x.inner))
-                .unwrap_or(false)
-        }
-    }
+
     impl PhysicalExpr for CustomPredicateExpr {
         fn as_any(&self) -> &dyn Any {
             self
@@ -791,10 +785,10 @@ fn roundtrip_parquet_exec_with_custom_predicate_expr() -> Result<()> {
         ) -> Result<Arc<dyn PhysicalExpr>> {
             todo!()
         }
+    }
 
-        fn dyn_hash(&self, _state: &mut dyn Hasher) {
-            unreachable!()
-        }
+    impl HashNode for CustomPredicateExpr {
+        fn hash_node<H: Hasher>(&self, _state: &mut H) {}
     }
 
     #[derive(Debug)]
@@ -849,7 +843,7 @@ fn roundtrip_parquet_exec_with_custom_predicate_expr() -> Result<()> {
         }
     }
 
-    let custom_predicate_expr = Arc::new(CustomPredicateExpr {
+    let custom_predicate_expr = Arc::new(CustomPredicateExpr::<dyn PhysicalExpr> {
         inner: Arc::new(Column::new("col", 1)),
     });
     let exec_plan = ParquetExec::builder(scan_config)

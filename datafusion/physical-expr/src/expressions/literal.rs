@@ -21,12 +21,13 @@ use std::any::Any;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
-use crate::physical_expr::{down_cast_any_ref, PhysicalExpr};
+use crate::physical_expr::PhysicalExpr;
 
 use arrow::{
     datatypes::{DataType, Schema},
     record_batch::RecordBatch,
 };
+use datafusion_common::cse::HashNode;
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::Expr;
 use datafusion_expr_common::columnar_value::ColumnarValue;
@@ -86,11 +87,6 @@ impl PhysicalExpr for Literal {
         Ok(self)
     }
 
-    fn dyn_hash(&self, state: &mut dyn Hasher) {
-        let mut s = state;
-        self.hash(&mut s);
-    }
-
     fn get_properties(&self, _children: &[ExprProperties]) -> Result<ExprProperties> {
         Ok(ExprProperties {
             sort_properties: SortProperties::Singleton,
@@ -99,12 +95,9 @@ impl PhysicalExpr for Literal {
     }
 }
 
-impl PartialEq<dyn Any> for Literal {
-    fn eq(&self, other: &dyn Any) -> bool {
-        down_cast_any_ref(other)
-            .downcast_ref::<Self>()
-            .map(|x| self == x)
-            .unwrap_or(false)
+impl HashNode for Literal {
+    fn hash_node<H: Hasher>(&self, state: &mut H) {
+        self.value.hash(state);
     }
 }
 

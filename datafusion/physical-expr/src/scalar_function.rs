@@ -34,19 +34,21 @@ use std::fmt::{self, Debug, Formatter};
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
-use crate::physical_expr::{down_cast_any_ref, physical_exprs_equal};
 use crate::PhysicalExpr;
 
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
 use arrow_array::Array;
+use datafusion_common::cse::HashNode;
 use datafusion_common::{internal_err, DFSchema, Result, ScalarValue};
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::sort_properties::ExprProperties;
 use datafusion_expr::type_coercion::functions::data_types_with_scalar_udf;
 use datafusion_expr::{expr_vec_fmt, ColumnarValue, Expr, ScalarUDF};
+use datafusion_expr_common::signature::Volatility;
 
 /// Physical expression of a scalar function
+#[derive(Eq, PartialEq, Hash)]
 pub struct ScalarFunctionExpr {
     fun: Arc<ScalarUDF>,
     name: String,
@@ -197,14 +199,6 @@ impl PhysicalExpr for ScalarFunctionExpr {
         self.fun.propagate_constraints(interval, children)
     }
 
-    fn dyn_hash(&self, state: &mut dyn Hasher) {
-        let mut s = state;
-        self.name.hash(&mut s);
-        self.args.hash(&mut s);
-        self.return_type.hash(&mut s);
-        // Add `self.fun` when hash is available
-    }
-
     fn get_properties(&self, children: &[ExprProperties]) -> Result<ExprProperties> {
         let sort_properties = self.fun.output_ordering(children)?;
         let children_range = children
@@ -218,19 +212,18 @@ impl PhysicalExpr for ScalarFunctionExpr {
             range,
         })
     }
+
+    fn is_volatile(&self) -> bool {
+        self.fun.signature().volatility == Volatility::Volatile
+    }
 }
 
-impl PartialEq<dyn Any> for ScalarFunctionExpr {
-    /// Comparing name, args and return_type
-    fn eq(&self, other: &dyn Any) -> bool {
-        down_cast_any_ref(other)
-            .downcast_ref::<Self>()
-            .map(|x| {
-                self.name == x.name
-                    && physical_exprs_equal(&self.args, &x.args)
-                    && self.return_type == x.return_type
-            })
-            .unwrap_or(false)
+impl HashNode for ScalarFunctionExpr {
+    fn hash_node<H: Hasher>(&self, state: &mut H) {
+        self.name.hash(state);
+        self.return_type.hash(state);
+        self.nullable.hash(state);
+        // Add `self.fun` when hash is available
     }
 }
 

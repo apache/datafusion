@@ -20,7 +20,6 @@ use std::hash::{Hash, Hasher};
 use std::{any::Any, sync::Arc};
 
 use crate::expressions::try_cast;
-use crate::physical_expr::down_cast_any_ref;
 use crate::PhysicalExpr;
 
 use arrow::array::*;
@@ -32,12 +31,13 @@ use datafusion_common::{exec_err, internal_err, DataFusionError, Result, ScalarV
 use datafusion_expr::ColumnarValue;
 
 use super::{Column, Literal};
+use datafusion_common::cse::HashNode;
 use datafusion_physical_expr_common::datum::compare_with_eq;
 use itertools::Itertools;
 
 type WhenThen = (Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>);
 
-#[derive(Debug, Hash)]
+#[derive(Debug, Hash, PartialEq, Eq)]
 enum EvalMethod {
     /// CASE WHEN condition THEN result
     ///      [WHEN ...]
@@ -80,7 +80,7 @@ enum EvalMethod {
 ///     [WHEN ...]
 ///     [ELSE result]
 /// END
-#[derive(Debug, Hash)]
+#[derive(Debug, Hash, PartialEq, Eq)]
 pub struct CaseExpr {
     /// Optional base expression that can be compared to literal values in the "when" expressions
     expr: Option<Arc<dyn PhysicalExpr>>,
@@ -506,38 +506,11 @@ impl PhysicalExpr for CaseExpr {
             )?))
         }
     }
-
-    fn dyn_hash(&self, state: &mut dyn Hasher) {
-        let mut s = state;
-        self.hash(&mut s);
-    }
 }
 
-impl PartialEq<dyn Any> for CaseExpr {
-    fn eq(&self, other: &dyn Any) -> bool {
-        down_cast_any_ref(other)
-            .downcast_ref::<Self>()
-            .map(|x| {
-                let expr_eq = match (&self.expr, &x.expr) {
-                    (Some(expr1), Some(expr2)) => expr1.eq(expr2),
-                    (None, None) => true,
-                    _ => false,
-                };
-                let else_expr_eq = match (&self.else_expr, &x.else_expr) {
-                    (Some(expr1), Some(expr2)) => expr1.eq(expr2),
-                    (None, None) => true,
-                    _ => false,
-                };
-                expr_eq
-                    && else_expr_eq
-                    && self.when_then_expr.len() == x.when_then_expr.len()
-                    && self.when_then_expr.iter().zip(x.when_then_expr.iter()).all(
-                        |((when1, then1), (when2, then2))| {
-                            when1.eq(when2) && then1.eq(then2)
-                        },
-                    )
-            })
-            .unwrap_or(false)
+impl HashNode for CaseExpr {
+    fn hash_node<H: Hasher>(&self, state: &mut H) {
+        self.eval_method.hash(state);
     }
 }
 

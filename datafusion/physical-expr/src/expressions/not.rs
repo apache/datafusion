@@ -22,18 +22,18 @@ use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
-use crate::physical_expr::down_cast_any_ref;
 use crate::PhysicalExpr;
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
+use datafusion_common::cse::HashNode;
 use datafusion_common::{cast::as_boolean_array, Result, ScalarValue};
 use datafusion_expr::ColumnarValue;
 
 /// Not expression
-#[derive(Debug, Hash)]
-pub struct NotExpr {
+#[derive(Debug, Hash, Eq, PartialEq)]
+pub struct NotExpr<DynPhysicalExpr: ?Sized = dyn PhysicalExpr> {
     /// Input expression
-    arg: Arc<dyn PhysicalExpr>,
+    arg: Arc<DynPhysicalExpr>,
 }
 
 impl NotExpr {
@@ -99,20 +99,10 @@ impl PhysicalExpr for NotExpr {
     ) -> Result<Arc<dyn PhysicalExpr>> {
         Ok(Arc::new(NotExpr::new(Arc::clone(&children[0]))))
     }
-
-    fn dyn_hash(&self, state: &mut dyn Hasher) {
-        let mut s = state;
-        self.hash(&mut s);
-    }
 }
 
-impl PartialEq<dyn Any> for NotExpr {
-    fn eq(&self, other: &dyn Any) -> bool {
-        down_cast_any_ref(other)
-            .downcast_ref::<Self>()
-            .map(|x| self.arg.eq(&x.arg))
-            .unwrap_or(false)
-    }
+impl HashNode for NotExpr {
+    fn hash_node<H: Hasher>(&self, _state: &mut H) {}
 }
 
 /// Creates a unary expression NOT
