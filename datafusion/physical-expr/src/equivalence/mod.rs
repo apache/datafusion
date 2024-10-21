@@ -72,6 +72,7 @@ pub fn add_offset_to_expr(
 
 #[cfg(test)]
 mod tests {
+
     use super::*;
     use crate::expressions::col;
     use crate::PhysicalSortExpr;
@@ -385,14 +386,6 @@ mod tests {
         let schema = eq_properties.schema();
         let mut schema_vec = vec![None; schema.fields.len()];
 
-        // Utility closure to generate random array
-        let mut generate_random_array = |num_elems: usize, max_val: usize| -> ArrayRef {
-            let values: Vec<f64> = (0..num_elems)
-                .map(|_| rng.gen_range(0..max_val) as f64 / 2.0)
-                .collect();
-            Arc::new(Float64Array::from_iter_values(values))
-        };
-
         // Fill constant columns
         for constant in &eq_properties.constants {
             let col = constant.expr().as_any().downcast_ref::<Column>().unwrap();
@@ -409,7 +402,7 @@ mod tests {
                 .map(|PhysicalSortExpr { expr, options }| {
                     let col = expr.as_any().downcast_ref::<Column>().unwrap();
                     let (idx, _field) = schema.column_with_name(col.name()).unwrap();
-                    let arr = generate_random_array(n_elem, n_distinct);
+                    let arr = generate_random_f64_array(n_elem, n_distinct, &mut rng);
                     (
                         SortColumn {
                             values: arr,
@@ -430,7 +423,9 @@ mod tests {
         for eq_group in eq_properties.eq_group.iter() {
             let representative_array =
                 get_representative_arr(eq_group, &schema_vec, Arc::clone(schema))
-                    .unwrap_or_else(|| generate_random_array(n_elem, n_distinct));
+                    .unwrap_or_else(|| {
+                        generate_random_f64_array(n_elem, n_distinct, &mut rng)
+                    });
 
             for expr in eq_group.iter() {
                 let col = expr.as_any().downcast_ref::<Column>().unwrap();
@@ -446,11 +441,25 @@ mod tests {
                 (
                     field.name(),
                     // Generate random values for columns that do not occur in any of the groups (equivalence, ordering equivalence, constants)
-                    elem.unwrap_or_else(|| generate_random_array(n_elem, n_distinct)),
+                    elem.unwrap_or_else(|| {
+                        generate_random_f64_array(n_elem, n_distinct, &mut rng)
+                    }),
                 )
             })
             .collect();
 
         Ok(RecordBatch::try_from_iter(res)?)
+    }
+
+    // Utility function to generate random f64 array
+    fn generate_random_f64_array(
+        n_elems: usize,
+        n_distinct: usize,
+        rng: &mut StdRng,
+    ) -> ArrayRef {
+        let values: Vec<f64> = (0..n_elems)
+            .map(|_| rng.gen_range(0..n_distinct) as f64 / 2.0)
+            .collect();
+        Arc::new(Float64Array::from_iter_values(values))
     }
 }
