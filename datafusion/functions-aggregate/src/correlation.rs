@@ -134,8 +134,8 @@ fn get_corr_doc() -> &'static Documentation {
 +--------------------------------+
 ```"#,
             )
-            .with_standard_argument("expression1", "First")
-            .with_standard_argument("expression2", "Second")
+            .with_standard_argument("expression1", Some("First"))
+            .with_standard_argument("expression2", Some("Second"))
             .build()
             .unwrap()
     })
