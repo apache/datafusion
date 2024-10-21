@@ -21,25 +21,65 @@ use crate::aggregates::group_values::group_column::{
 };
 use crate::aggregates::group_values::GroupValues;
 use ahash::RandomState;
-use arrow::compute::cast;
+use arrow::compute::{self, cast};
 use arrow::datatypes::{
     BinaryViewType, Date32Type, Date64Type, Float32Type, Float64Type, Int16Type,
     Int32Type, Int64Type, Int8Type, StringViewType, UInt16Type, UInt32Type, UInt64Type,
     UInt8Type,
 };
 use arrow::record_batch::RecordBatch;
-use arrow_array::{Array, ArrayRef};
-use arrow_schema::{DataType, Schema, SchemaRef};
+use arrow_array::{
+    Array, ArrayRef, BinaryArray, BinaryViewArray, BooleanArray, Date32Array,
+    Date64Array, Decimal128Array, Float32Array, Float64Array, Int16Array, Int32Array,
+    Int64Array, Int8Array, LargeStringArray, StringArray, StringViewArray,
+    TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
+    TimestampSecondArray, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
+};
+use arrow_schema::{DataType, Schema, SchemaRef, TimeUnit};
 use datafusion_common::hash_utils::create_hashes;
 use datafusion_common::{not_impl_err, DataFusionError, Result};
 use datafusion_execution::memory_pool::proxy::{RawTableAllocExt, VecAllocExt};
 use datafusion_expr::EmitTo;
 use datafusion_physical_expr::binary_map::OutputType;
 
+use datafusion_physical_expr_common::datum::compare_with_eq;
 use hashbrown::raw::RawTable;
 
+/// Group index context for performing `vectorized compare` and `vectorized append`
+struct GroupIndexContext {
+    /// It is possible that hash value collision exists,
+    /// and we will chain the `group indices` with same hash value
+    ///
+    /// The chained indices is like:
+    ///   `latest group index -> older group index -> even older group index -> ...`
+    prev_group_index: usize,
+
+    /// It is possible that rows with same hash values exist in `input cols`.
+    /// And if we `vectorized compare` and `vectorized append` them
+    /// in the same round, some fault cases will occur especially when
+    /// they are totally the repeated rows...
+    ///
+    /// For example:
+    ///   - Two repeated rows exist in `input cols`.
+    ///
+    ///   - We found their hash values equal to one exist group
+    ///
+    ///   - We then perform `vectorized compare` for them to the exist group,
+    ///     and found their values not equal to the exist one
+    ///
+    ///   - Finally when perform `vectorized append`, we decide to build two
+    ///     respective new groups for them, even we actually just need one
+    ///     new group...
+    ///
+    /// So for solving such cases simply, if some rows with same hash value
+    /// in `input cols`, just allow to process one of them in a round,
+    /// and this flag is used to represent that one of them is processing
+    /// in current round.
+    ///
+    checking: bool,
+}
+
 /// A [`GroupValues`] that stores multiple columns of group values.
-///
 ///
 pub struct GroupValuesColumn {
     /// The output schema
@@ -58,6 +98,30 @@ pub struct GroupValuesColumn {
     /// The size of `map` in bytes
     map_size: usize,
 
+    /// Contexts useful for `vectorized compare` and `vectorized append`,
+    /// detail can see [`GroupIndexContext`]
+    group_index_ctxs: Vec<GroupIndexContext>,
+
+    /// We need multiple rounds to process the `input cols`,
+    /// and the rows processing in current round is stored here.
+    current_indices: Vec<usize>,
+
+    /// Similar as `current_indices`, but `remaining_indices`
+    /// is used to store the rows will be processed in next round.
+    remaining_indices: Vec<usize>,
+
+    /// The `vectorized compared` row indices buffer
+    vectorized_compare_row_indices: Vec<usize>,
+
+    /// The `vectorized compared` group indices buffer
+    vectorized_compare_group_indices: Vec<usize>,
+
+    /// The `vectorized compared` result buffer
+    vectorized_compare_results: Vec<bool>,
+
+    /// The `vectorized append` row indices buffer
+    vectorized_append_row_indices: Vec<usize>,
+
     /// The actual group by values, stored column-wise. Compare from
     /// the left to right, each column is stored as [`GroupColumn`].
     ///
@@ -73,19 +137,33 @@ pub struct GroupValuesColumn {
 
     /// Random state for creating hashes
     random_state: RandomState,
+
+    column_nullables_buffer: Vec<bool>,
+
+    append_rows_buffer: Vec<usize>,
 }
 
 impl GroupValuesColumn {
     /// Create a new instance of GroupValuesColumn if supported for the specified schema
     pub fn try_new(schema: SchemaRef) -> Result<Self> {
         let map = RawTable::with_capacity(0);
+        let num_cols = schema.fields.len();
         Ok(Self {
             schema,
             map,
+            group_index_ctxs: Vec::new(),
             map_size: 0,
             group_values: vec![],
             hashes_buffer: Default::default(),
             random_state: Default::default(),
+            column_nullables_buffer: vec![false; num_cols],
+            append_rows_buffer: Default::default(),
+            current_indices: Default::default(),
+            remaining_indices: Default::default(),
+            vectorized_compare_row_indices: Default::default(),
+            vectorized_compare_group_indices: Default::default(),
+            vectorized_compare_results: Default::default(),
+            vectorized_append_row_indices: Default::default(),
         })
     }
 
@@ -213,6 +291,15 @@ impl GroupValues for GroupValuesColumn {
         batch_hashes.resize(n_rows, 0);
         create_hashes(cols, &self.random_state, batch_hashes)?;
 
+        // 1.2 Check if columns nullable
+        for (col_idx, col) in cols.iter().enumerate() {
+            self.column_nullables_buffer[col_idx] = (col.null_count() != 0);
+        }
+
+        // 1.3 Check and record which rows of the input should be appended
+        self.append_rows_buffer.clear();
+        let group_values_len = self.group_values[0].len();
+        let mut next_group_idx = self.group_values[0].len();
         for (row, &target_hash) in batch_hashes.iter().enumerate() {
             let entry = self.map.get_mut(target_hash, |(exist_hash, group_idx)| {
                 // Somewhat surprisingly, this closure can be called even if the
@@ -232,10 +319,17 @@ impl GroupValues for GroupValuesColumn {
                     array_row.equal_to(lhs_row, array, rhs_row)
                 }
 
-                for (i, group_val) in self.group_values.iter().enumerate() {
-                    if !check_row_equal(group_val.as_ref(), *group_idx, &cols[i], row) {
-                        return false;
+                if *group_idx < group_values_len {
+                    for (i, group_val) in self.group_values.iter().enumerate() {
+                        if !check_row_equal(group_val.as_ref(), *group_idx, &cols[i], row)
+                        {
+                            return false;
+                        }
                     }
+                } else {
+                    let row_idx_offset = group_idx - group_values_len;
+                    let row_idx = self.append_rows_buffer[row_idx_offset];
+                    return is_rows_eq(cols, row, cols, row_idx).unwrap();
                 }
 
                 true
@@ -249,29 +343,32 @@ impl GroupValues for GroupValuesColumn {
                     // Add new entry to aggr_state and save newly created index
                     // let group_idx = group_values.num_rows();
                     // group_values.push(group_rows.row(row));
-
-                    let mut checklen = 0;
-                    let group_idx = self.group_values[0].len();
-                    for (i, group_value) in self.group_values.iter_mut().enumerate() {
-                        group_value.append_val(&cols[i], row);
-                        let len = group_value.len();
-                        if i == 0 {
-                            checklen = len;
-                        } else {
-                            debug_assert_eq!(checklen, len);
-                        }
-                    }
+                    let prev_group_idx = next_group_idx;
 
                     // for hasher function, use precomputed hash value
                     self.map.insert_accounted(
-                        (target_hash, group_idx),
+                        (target_hash, prev_group_idx),
                         |(hash, _group_index)| *hash,
                         &mut self.map_size,
                     );
-                    group_idx
+                    self.append_rows_buffer.push(row);
+                    next_group_idx += 1;
+
+                    prev_group_idx
                 }
             };
             groups.push(group_idx);
+        }
+
+        // 1.4 Vectorized append values
+        for col_idx in 0..cols.len() {
+            let all_non_null = !self.column_nullables_buffer[col_idx];
+            let group_value = &mut self.group_values[col_idx];
+            group_value.append_batch(
+                &cols[col_idx],
+                &self.append_rows_buffer,
+                all_non_null,
+            );
         }
 
         Ok(())
@@ -355,4 +452,72 @@ impl GroupValues for GroupValuesColumn {
         self.hashes_buffer.clear();
         self.hashes_buffer.shrink_to(count);
     }
+}
+
+fn is_rows_eq(
+    left_arrays: &[ArrayRef],
+    left: usize,
+    right_arrays: &[ArrayRef],
+    right: usize,
+) -> Result<bool> {
+    let mut is_equal = true;
+    for (left_array, right_array) in left_arrays.iter().zip(right_arrays) {
+        macro_rules! compare_value {
+            ($T:ty) => {{
+                match (left_array.is_null(left), right_array.is_null(right)) {
+                    (false, false) => {
+                        let left_array =
+                            left_array.as_any().downcast_ref::<$T>().unwrap();
+                        let right_array =
+                            right_array.as_any().downcast_ref::<$T>().unwrap();
+                        if left_array.value(left) != right_array.value(right) {
+                            is_equal = false;
+                        }
+                    }
+                    (true, false) => is_equal = false,
+                    (false, true) => is_equal = false,
+                    _ => {}
+                }
+            }};
+        }
+
+        match left_array.data_type() {
+            DataType::Null => {}
+            DataType::Boolean => compare_value!(BooleanArray),
+            DataType::Int8 => compare_value!(Int8Array),
+            DataType::Int16 => compare_value!(Int16Array),
+            DataType::Int32 => compare_value!(Int32Array),
+            DataType::Int64 => compare_value!(Int64Array),
+            DataType::UInt8 => compare_value!(UInt8Array),
+            DataType::UInt16 => compare_value!(UInt16Array),
+            DataType::UInt32 => compare_value!(UInt32Array),
+            DataType::UInt64 => compare_value!(UInt64Array),
+            DataType::Float32 => compare_value!(Float32Array),
+            DataType::Float64 => compare_value!(Float64Array),
+            DataType::Utf8 => compare_value!(StringArray),
+            DataType::LargeUtf8 => compare_value!(LargeStringArray),
+            DataType::Binary => compare_value!(BinaryArray),
+            DataType::Utf8View => compare_value!(StringViewArray),
+            DataType::BinaryView => compare_value!(BinaryViewArray),
+            DataType::Decimal128(..) => compare_value!(Decimal128Array),
+            DataType::Timestamp(time_unit, None) => match time_unit {
+                TimeUnit::Second => compare_value!(TimestampSecondArray),
+                TimeUnit::Millisecond => compare_value!(TimestampMillisecondArray),
+                TimeUnit::Microsecond => compare_value!(TimestampMicrosecondArray),
+                TimeUnit::Nanosecond => compare_value!(TimestampNanosecondArray),
+            },
+            DataType::Date32 => compare_value!(Date32Array),
+            DataType::Date64 => compare_value!(Date64Array),
+            dt => {
+                return not_impl_err!(
+                    "Unsupported data type in sort merge join comparator: {}",
+                    dt
+                );
+            }
+        }
+        if !is_equal {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }

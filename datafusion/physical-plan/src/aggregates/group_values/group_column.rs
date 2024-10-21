@@ -22,6 +22,7 @@ use arrow::array::GenericBinaryArray;
 use arrow::array::GenericStringArray;
 use arrow::array::OffsetSizeTrait;
 use arrow::array::PrimitiveArray;
+use arrow::array::StringViewBuilder;
 use arrow::array::{Array, ArrayRef, ArrowPrimitiveType, AsArray};
 use arrow::buffer::OffsetBuffer;
 use arrow::buffer::ScalarBuffer;
@@ -29,9 +30,11 @@ use arrow::datatypes::ByteArrayType;
 use arrow::datatypes::ByteViewType;
 use arrow::datatypes::DataType;
 use arrow::datatypes::GenericBinaryType;
+use arrow_array::GenericByteArray;
 use arrow_array::GenericByteViewArray;
 use arrow_buffer::Buffer;
 use datafusion_common::utils::proxy::VecAllocExt;
+use datafusion_expr::sqlparser::keywords::NULLABLE;
 
 use crate::aggregates::group_values::null_builder::MaybeNullBufferBuilder;
 use arrow_array::types::GenericStringType;
@@ -58,6 +61,9 @@ pub trait GroupColumn: Send + Sync {
     fn equal_to(&self, lhs_row: usize, array: &ArrayRef, rhs_row: usize) -> bool;
     /// Appends the row at `row` in `array` to this builder
     fn append_val(&mut self, array: &ArrayRef, row: usize);
+
+    fn append_batch(&mut self, array: &ArrayRef, rows: &[usize], all_non_null: bool);
+
     /// Returns the number of rows stored in this builder
     fn len(&self) -> usize;
     /// Returns the number of bytes used by this [`GroupColumn`]
@@ -111,6 +117,36 @@ impl<T: ArrowPrimitiveType, const NULLABLE: bool> GroupColumn
         }
 
         self.group_values[lhs_row] == array.as_primitive::<T>().value(rhs_row)
+    }
+
+    fn append_batch(&mut self, array: &ArrayRef, rows: &[usize], all_non_null: bool) {
+        let arr = array.as_primitive::<T>();
+        match (NULLABLE, all_non_null) {
+            (true, true) => {
+                self.nulls.append_n(rows.len(), false);
+                self.group_values.reserve(rows.len());
+                for &row in rows {
+                    self.group_values.push(arr.value(row));
+                }
+            }
+            (true, false) => {
+                for &row in rows {
+                    if array.is_null(row) {
+                        self.nulls.append(true);
+                        self.group_values.push(T::default_value());
+                    } else {
+                        self.nulls.append(false);
+                        self.group_values.push(arr.value(row));
+                    }
+                }
+            }
+            (false, _) => {
+                self.group_values.reserve(rows.len());
+                for &row in rows {
+                    self.group_values.push(arr.value(row));
+                }
+            }
+        }
     }
 
     fn append_val(&mut self, array: &ArrayRef, row: usize) {
@@ -200,6 +236,36 @@ where
         }
     }
 
+    fn append_batch_inner<B>(
+        &mut self,
+        array: &ArrayRef,
+        rows: &[usize],
+        all_non_null: bool,
+    ) where
+        B: ByteArrayType,
+    {
+        let arr = array.as_bytes::<B>();
+
+        if all_non_null {
+            self.nulls.append_n(rows.len(), false);
+            for &row in rows {
+                self.append_value(arr, row);
+            }
+        } else {
+            for &row in rows {
+                if arr.is_null(row) {
+                    self.nulls.append(true);
+                    // nulls need a zero length in the offset buffer
+                    let offset = self.buffer.len();
+                    self.offsets.push(O::usize_as(offset));
+                } else {
+                    self.nulls.append(false);
+                    self.append_value(arr, row);
+                }
+            }
+        }
+    }
+
     fn append_val_inner<B>(&mut self, array: &ArrayRef, row: usize)
     where
         B: ByteArrayType,
@@ -212,10 +278,17 @@ where
             self.offsets.push(O::usize_as(offset));
         } else {
             self.nulls.append(false);
-            let value: &[u8] = arr.value(row).as_ref();
-            self.buffer.append_slice(value);
-            self.offsets.push(O::usize_as(self.buffer.len()));
+            self.append_value(arr, row);
         }
+    }
+
+    fn append_value<B>(&mut self, array: &GenericByteArray<B>, row: usize)
+    where
+        B: ByteArrayType,
+    {
+        let value: &[u8] = array.value(row).as_ref();
+        self.buffer.append_slice(value);
+        self.offsets.push(O::usize_as(self.buffer.len()));
     }
 
     fn equal_to_inner<B>(&self, lhs_row: usize, array: &ArrayRef, rhs_row: usize) -> bool
@@ -264,6 +337,34 @@ where
             }
             _ => unreachable!("View types should use `ArrowBytesViewMap`"),
         }
+    }
+
+    fn append_batch(&mut self, column: &ArrayRef, rows: &[usize], all_non_null: bool) {
+        match self.output_type {
+            OutputType::Binary => {
+                debug_assert!(matches!(
+                    column.data_type(),
+                    DataType::Binary | DataType::LargeBinary
+                ));
+                self.append_batch_inner::<GenericBinaryType<O>>(
+                    column,
+                    rows,
+                    all_non_null,
+                )
+            }
+            OutputType::Utf8 => {
+                debug_assert!(matches!(
+                    column.data_type(),
+                    DataType::Utf8 | DataType::LargeUtf8
+                ));
+                self.append_batch_inner::<GenericStringType<O>>(
+                    column,
+                    rows,
+                    all_non_null,
+                )
+            }
+            _ => unreachable!("View types should use `ArrowBytesViewMap`"),
+        };
     }
 
     fn append_val(&mut self, column: &ArrayRef, row: usize) {
@@ -446,10 +547,34 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
         self
     }
 
-    fn append_val_inner(&mut self, array: &ArrayRef, row: usize)
-    where
-        B: ByteViewType,
-    {
+    fn append_batch_inner(
+        &mut self,
+        array: &ArrayRef,
+        rows: &[usize],
+        all_non_null: bool,
+    ) {
+        let arr = array.as_byte_view::<B>();
+
+        if all_non_null {
+            self.nulls.append_n(rows.len(), false);
+            for &row in rows {
+                self.append_value(arr, row);
+            }
+        } else {
+            for &row in rows {
+                // Null row case, set and return
+                if arr.is_valid(row) {
+                    self.nulls.append(false);
+                    self.append_value(arr, row);
+                } else {
+                    self.nulls.append(true);
+                    self.views.push(0);
+                }
+            }
+        }
+    }
+
+    fn append_val_inner(&mut self, array: &ArrayRef, row: usize) {
         let arr = array.as_byte_view::<B>();
 
         // Null row case, set and return
@@ -461,7 +586,14 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
 
         // Not null row case
         self.nulls.append(false);
-        let value: &[u8] = arr.value(row).as_ref();
+        self.append_value(arr, row);
+    }
+
+    fn append_value(&mut self, array: &GenericByteViewArray<B>, row: usize)
+    where
+        B: ByteViewType,
+    {
+        let value: &[u8] = array.value(row).as_ref();
 
         let value_len = value.len();
         let view = if value_len <= 12 {
@@ -775,6 +907,10 @@ impl<B: ByteViewType> GroupColumn for ByteViewGroupValueBuilder<B> {
 
     fn append_val(&mut self, array: &ArrayRef, row: usize) {
         self.append_val_inner(array, row)
+    }
+
+    fn append_batch(&mut self, array: &ArrayRef, rows: &[usize], all_non_null: bool) {
+        self.append_batch_inner(array, rows, all_non_null);
     }
 
     fn len(&self) -> usize {

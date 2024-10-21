@@ -70,6 +70,24 @@ impl MaybeNullBufferBuilder {
         }
     }
 
+    pub fn append_n(&mut self, n: usize, is_null: bool) {
+        match self {
+            Self::NoNulls { row_count } if is_null => {
+                // have seen no nulls so far, this is the  first null,
+                // need to create the nulls buffer for all currently valid values
+                // alloc 2x the need given we push a new but immediately
+                let mut nulls = BooleanBufferBuilder::new(*row_count * 2);
+                nulls.append_n(*row_count, true);
+                nulls.append_n(n, false);
+                *self = Self::Nulls(nulls);
+            }
+            Self::NoNulls { row_count } => {
+                *row_count += n;
+            }
+            Self::Nulls(builder) => builder.append_n(n, !is_null),
+        }
+    }
+
     /// return the number of heap allocated bytes used by this structure to store boolean values
     pub fn allocated_size(&self) -> usize {
         match self {
