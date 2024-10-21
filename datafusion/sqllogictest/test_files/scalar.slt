@@ -1526,6 +1526,9 @@ NULL NULL
 query error DataFusion error: Error during planning: Negation only supports numeric, interval and timestamp types
 SELECT -'100'
 
+query error DataFusion error: Error during planning: Unary operator '\+' only supports numeric, interval and timestamp types
+SELECT +true
+
 statement ok
 drop table test_boolean
 
