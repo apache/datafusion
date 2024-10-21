@@ -101,7 +101,7 @@ Negative numbers return `-1`.
 Zero and positive numbers return `1`."#,
             )
             .with_syntax_example("signum(numeric_expression)")
-            .with_standard_argument("numeric_expression", "Numeric")
+            .with_standard_argument("numeric_expression", Some("Numeric"))
             .build()
             .unwrap()
     })

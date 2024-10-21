@@ -908,7 +908,7 @@ concat_ws(separator, str[, ..., str_n])
 
 - **separator**: Separator to insert between concatenated strings.
 - **str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
-- **str_n**: Subsequent string expressions to concatenate. expression to operate on. Can be a constant, column, or function, and any combination of operators.
+- **str_n**: Subsequent string expressions to concatenate.
 
 #### Example
 
@@ -1250,7 +1250,7 @@ replace(str, substr, replacement)
 #### Arguments
 
 - **str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
-- **substr**: Substring expression to replace in the input string. Substring expression expression to operate on. Can be a constant, column, or function, and any combination of operators.
+- **substr**: Substring expression to replace in the input string. Substring expression to operate on. Can be a constant, column, or function, and any combination of operators.
 - **replacement**: Replacement substring expression to operate on. Can be a constant, column, or function, and any combination of operators.
 
 #### Example
@@ -1676,9 +1676,41 @@ regular expression [syntax](https://docs.rs/regex/latest/regex/#syntax)
 (minus support for several features including look-around and backreferences).
 The following regular expression functions are supported:
 
+- [regexp_count](#regexp_count)
 - [regexp_like](#regexp_like)
 - [regexp_match](#regexp_match)
 - [regexp_replace](#regexp_replace)
+
+### `regexp_count`
+
+Returns the number of matches that a [regular expression](https://docs.rs/regex/latest/regex/#syntax) has in a string.
+
+```
+regexp_count(str, regexp[, start, flags])
+```
+
+#### Arguments
+
+- **str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
+- **regexp**: Regular expression to operate on. Can be a constant, column, or function, and any combination of operators.
+- **start**: - **start**: Optional start position (the first position is 1) to search for the regular expression. Can be a constant, column, or function.
+- **flags**: Optional regular expression flags that control the behavior of the regular expression. The following flags are supported:
+  - **i**: case-insensitive: letters match both upper and lower case
+  - **m**: multi-line mode: ^ and $ match begin/end of line
+  - **s**: allow . to match \n
+  - **R**: enables CRLF mode: when multi-line mode is enabled, \r\n is used
+  - **U**: swap the meaning of x* and x*?
+
+#### Example
+
+```sql
+> select regexp_count('abcAbAbc', 'abc', 2, 'i');
++---------------------------------------------------------------+
+| regexp_count(Utf8("abcAbAbc"),Utf8("abc"),Int64(2),Utf8("i")) |
++---------------------------------------------------------------+
+| 1                                                             |
++---------------------------------------------------------------+
+```
 
 ### `regexp_like`
 
@@ -1720,7 +1752,7 @@ Additional examples can be found [here](https://github.com/apache/datafusion/blo
 
 ### `regexp_match`
 
-Returns a list of [regular expression](https://docs.rs/regex/latest/regex/#syntax) matches in a string.
+Returns the first [regular expression](https://docs.rs/regex/latest/regex/#syntax) matches in a string.
 
 ```
 regexp_match(str, regexp[, flags])

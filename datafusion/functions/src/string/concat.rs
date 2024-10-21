@@ -270,7 +270,7 @@ fn get_concat_doc() -> &'static Documentation {
 +-------------------------------------------------------+
 ```"#,
             )
-            .with_standard_argument("str", "String")
+            .with_standard_argument("str", Some("String"))
             .with_argument("str_n", "Subsequent string expressions to concatenate.")
             .with_related_udf("concat_ws")
             .build()
