@@ -156,7 +156,11 @@ pub fn compute_record_batch_statistics(
     for partition in batches.iter() {
         for batch in partition {
             for (stat_index, col_index) in projection.iter().enumerate() {
-                null_counts[stat_index] += batch.column(*col_index).null_count();
+                null_counts[stat_index] += batch
+                    .column(*col_index)
+                    .logical_nulls()
+                    .map(|nulls| nulls.null_count())
+                    .unwrap_or_default();
             }
         }
     }

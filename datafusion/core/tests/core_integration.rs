@@ -24,6 +24,9 @@ mod dataframe;
 /// Run all tests that are found in the `macro_hygiene` directory
 mod macro_hygiene;
 
+/// Run all tests that are found in the `execution` directory
+mod execution;
+
 /// Run all tests that are found in the `expr_api` directory
 mod expr_api;
 
