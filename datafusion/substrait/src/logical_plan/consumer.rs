@@ -938,7 +938,9 @@ pub async fn from_substrait_rel(
         }
         Some(RelType::Set(set)) => match set_rel::SetOp::try_from(set.op) {
             Ok(set_op) => {
-                if set.inputs.len() >= 2 {
+                if set.inputs.len() < 2 {
+                    substrait_err!("Set operation requires at least two inputs")
+                } else {
                     match set_op {
                         set_rel::SetOp::UnionAll => {
                             union_rels(&set.inputs, ctx, extensions, true).await
@@ -969,8 +971,6 @@ pub async fn from_substrait_rel(
                         }
                         _ => not_impl_err!("Unsupported set operator: {set_op:?}"),
                     }
-                } else {
-                    substrait_err!("Set operation requires at least two inputs")
                 }
             }
             Err(e) => not_impl_err!("Invalid set operation type {}: {e}", set.op),
