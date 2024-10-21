@@ -95,13 +95,32 @@ pub struct GroupValuesColumn {
     /// values: (hash, group_index)
     map: RawTable<(u64, usize)>,
 
-    group_index_ctxs: Vec<GroupIndexContext>,
-
-    /// Some
-    remaining_indices: Vec<usize>,
-
     /// The size of `map` in bytes
     map_size: usize,
+
+    /// Contexts useful for `vectorized compare` and `vectorized append`,
+    /// detail can see [`GroupIndexContext`]
+    group_index_ctxs: Vec<GroupIndexContext>,
+
+    /// We need multiple rounds to process the `input cols`,
+    /// and the rows processing in current round is stored here.
+    current_indices: Vec<usize>,
+
+    /// Similar as `current_indices`, but `remaining_indices`
+    /// is used to store the rows will be processed in next round.
+    remaining_indices: Vec<usize>,
+
+    /// The `vectorized compared` row indices buffer
+    vectorized_compare_row_indices: Vec<usize>,
+
+    /// The `vectorized compared` group indices buffer
+    vectorized_compare_group_indices: Vec<usize>,
+
+    /// The `vectorized compared` result buffer
+    vectorized_compare_results: Vec<bool>,
+
+    /// The `vectorized append` row indices buffer
+    vectorized_append_row_indices: Vec<usize>,
 
     /// The actual group by values, stored column-wise. Compare from
     /// the left to right, each column is stored as [`GroupColumn`].
@@ -138,7 +157,13 @@ impl GroupValuesColumn {
             hashes_buffer: Default::default(),
             random_state: Default::default(),
             column_nullables_buffer: vec![false; num_cols],
-            append_rows_buffer: Vec::new(),
+            append_rows_buffer: Default::default(),
+            current_indices: Default::default(),
+            remaining_indices: Default::default(),
+            vectorized_compare_row_indices: Default::default(),
+            vectorized_compare_group_indices: Default::default(),
+            vectorized_compare_results: Default::default(),
+            vectorized_append_row_indices: Default::default(),
         })
     }
 
