@@ -17,7 +17,7 @@
 
 use std::any::Any;
 use std::collections::{HashSet, VecDeque};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use arrow::array::ArrayData;
 use arrow_array::{Array, ArrayRef, MapArray, OffsetSizeTrait, StructArray};
@@ -27,7 +27,10 @@ use arrow_schema::{DataType, Field, SchemaBuilder};
 use datafusion_common::utils::{fixed_size_list_to_arrays, list_to_arrays};
 use datafusion_common::{exec_err, Result, ScalarValue};
 use datafusion_expr::expr::ScalarFunction;
-use datafusion_expr::{ColumnarValue, Expr, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::special_doc_sections::DOC_SECTION_MAP;
+use datafusion_expr::{
+    ColumnarValue, Documentation, Expr, ScalarUDFImpl, Signature, Volatility,
+};
 
 use crate::make_array::make_array;
 
@@ -238,7 +241,50 @@ impl ScalarUDFImpl for MapFunc {
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
         make_map_batch(args)
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_map_doc())
+    }
 }
+
+static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+
+fn get_map_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+    Documentation::builder()
+        .with_doc_section(DOC_SECTION_MAP)
+        .with_description(
+            "Returns an Arrow map with the specified key-value pairs.",
+        )
+        .with_syntax_example("map(key, value)\nmap(key: value)")
+        .with_sql_example(
+            r#"```sql
+SELECT MAP(['POST', 'HEAD', 'PATCH'], [41, 33, null]);
+----
+{POST: 41, HEAD: 33, PATCH: }
+
+SELECT MAP([[1,2], [3,4]], ['a', 'b']);
+----
+{[1, 2]: a, [3, 4]: b}
+
+SELECT MAP { 'a': 1, 'b': 2 };
+----
+{a: 1, b: 2}
+```"#,
+        )
+        .with_argument(
+            "key",
+            "Expression to be used for key. Can be a constant, column, or function, any combination of arithmetic or string operators, or a named expression of the previously listed.",
+        )
+        .with_argument(
+            "value",
+            "Expression to be used for value. Can be a constant, column, or function, any combination of arithmetic or string operators, or a named expression of the previously listed.",
+        )
+        .build()
+        .unwrap()
+})
+}
+
 fn get_element_type(data_type: &DataType) -> Result<&DataType> {
     match data_type {
         DataType::List(element) => Ok(element.data_type()),
