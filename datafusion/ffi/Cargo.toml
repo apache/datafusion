@@ -45,4 +45,6 @@ datafusion-proto = { workspace = true }
 doc-comment = { workspace = true }
 futures = { workspace = true }
 prost = { workspace = true }
+
+[dev-dependencies]
 tokio = { workspace = true }
