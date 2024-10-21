@@ -138,6 +138,8 @@ pub struct PlannerContext {
     /// The joined schemas of all FROM clauses planned so far. When planning LATERAL
     /// FROM clauses, this should become a suffix of the `outer_query_schema`.
     outer_from_schema: Option<DFSchemaRef>,
+    /// The query schema defined by the table
+    table_schema: Option<DFSchemaRef>,
 }
 
 impl Default for PlannerContext {
@@ -154,6 +156,7 @@ impl PlannerContext {
             ctes: HashMap::new(),
             outer_query_schema: None,
             outer_from_schema: None,
+            table_schema: None,
         }
     }
 
@@ -179,6 +182,18 @@ impl PlannerContext {
     ) -> Option<DFSchemaRef> {
         std::mem::swap(&mut self.outer_query_schema, &mut schema);
         schema
+    }
+
+    pub fn set_table_schema(
+        &mut self,
+        mut schema: Option<DFSchemaRef>,
+    ) -> Option<DFSchemaRef> {
+        std::mem::swap(&mut self.table_schema, &mut schema);
+        schema
+    }
+
+    pub fn table_schema(&self) -> Option<DFSchemaRef> {
+        self.table_schema.clone()
     }
 
     // Return a clone of the outer FROM schema
