@@ -101,6 +101,7 @@ pub(crate) struct SortPreservingMergeStream<C: CursorValues> {
     num_of_polled_with_same_value: Vec<usize>,
     /// Store previous batch for tracking the poll counts on the same value
     prev_cursors: Vec<Option<Cursor<C>>>,
+    round_robin_tie_breaker_mode: bool,
 
     /// Optional number of rows to fetch
     fetch: Option<usize>,
@@ -133,6 +134,8 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
             aborted: false,
             cursors: (0..stream_count).map(|_| None).collect(),
             prev_cursors: (0..stream_count).map(|_| None).collect(),
+            round_robin_tie_breaker_mode: false,
+            // records: (0, 0),
             num_of_polled_with_same_value: vec![0; stream_count],
             loser_tree: vec![],
             loser_tree_adjusted: false,
@@ -222,9 +225,7 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
                     return Poll::Ready(Some(Err(e)));
                 }
 
-                // adjust poll count
-                self.adjuct_poll_count(winner);
-
+                // self.adjust_poll_count(winner);
                 self.update_loser_tree();
             }
 
@@ -247,7 +248,7 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
         }
     }
 
-    fn adjuct_poll_count(&mut self, stream_idx: usize) {
+    fn adjust_poll_count(&mut self, stream_idx: usize) {
         let slot = &mut self.cursors[stream_idx];
 
         if let Some(c) = slot.as_mut() {
@@ -289,15 +290,29 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
         match (&self.cursors[a], &self.cursors[b]) {
             (None, _) => true,
             (_, None) => false,
-            (Some(ac), Some(bc)) => {
-                let number_of_polled_a = self.num_of_polled_with_same_value[a];
-                let number_of_polled_b = self.num_of_polled_with_same_value[b];
-                ac.cmp(bc)
-                    .then_with(|| number_of_polled_a.cmp(&number_of_polled_b))
-                    .then_with(|| a.cmp(&b))
-                    .is_gt()
-            }
+            (Some(ac), Some(bc)) => ac.cmp(bc).then_with(|| a.cmp(&b)).is_gt(),
         }
+    }
+
+    #[inline]
+    fn is_eq(&self, a: usize, b: usize) -> bool {
+        match (&self.cursors[a], &self.cursors[b]) {
+            (Some(ac), Some(bc)) => ac.cmp(bc).is_eq(),
+            _ => false,
+        }
+    }
+
+    #[inline]
+    fn is_poll_count_gt(&self, a: usize, b: usize) -> bool {
+        let poll_a = self.num_of_polled_with_same_value[a];
+        let poll_b = self.num_of_polled_with_same_value[b];
+        poll_a.cmp(&poll_b).then_with(|| a.cmp(&b)).is_gt()
+    }
+
+    #[inline]
+    fn update_winner(&mut self, cmp_node: usize, winner: &mut usize, challenger: usize) {
+        self.loser_tree[cmp_node] = *winner;
+        *winner = challenger;
     }
 
     /// Find the leaf node index in the loser tree for the given cursor index
@@ -368,10 +383,36 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
         let mut cmp_node = self.lt_leaf_node_index(winner);
         while cmp_node != 0 {
             let challenger = self.loser_tree[cmp_node];
-            if self.is_gt(winner, challenger) {
-                self.loser_tree[cmp_node] = winner;
-                winner = challenger;
+            // Handle final match (cmp_node == 1) and round-robin tie-breaker logic
+            if cmp_node == 1 {
+                if self.is_eq(winner, challenger) {
+                    if !self.round_robin_tie_breaker_mode {
+                        self.round_robin_tie_breaker_mode = true;
+                        // Use round_robin_tie_breaker_mode flag to know when to cleanup the poll count in previous tie breaker.
+                        self.num_of_polled_with_same_value.fill(0);
+                    }
+                    // Update poll count if the winner survives in the final match
+                    if winner == self.loser_tree[0] {
+                        self.adjust_poll_count(winner);
+                        if self.is_poll_count_gt(winner, challenger) {
+                            self.update_winner(cmp_node, &mut winner, challenger);
+                        }
+                    } else if challenger < winner {
+                        // If poll count is not updated, prefer the smaller index
+                        self.update_winner(cmp_node, &mut winner, challenger);
+                    }
+                } else {
+                    // Ends of tie breaker
+                    self.round_robin_tie_breaker_mode = false;
+
+                    if self.is_gt(winner, challenger) {
+                        self.update_winner(cmp_node, &mut winner, challenger);
+                    }
+                }
+            } else if self.is_gt(winner, challenger) {
+                self.update_winner(cmp_node, &mut winner, challenger);
             }
+
             cmp_node = self.lt_parent_node_index(cmp_node);
         }
         self.loser_tree[0] = winner;
