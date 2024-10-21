@@ -536,6 +536,22 @@ select log(a, 64) a, log(b), log(10, b) from signed_integers;
 NaN 2 2
 NaN 4 4
 
+# log overloaded base 10 float64 and float32 casting scalar
+query RR rowsort
+select log(arrow_cast(10, 'Float64')) a ,log(arrow_cast(100, 'Float32')) b;
+----
+1 2
+
+# log overloaded base 10 float64 and float32 casting with columns
+query RR rowsort
+select log(arrow_cast(a, 'Float64')) ,log(arrow_cast(b, 'Float32')) from signed_integers;
+----
+0.301029995664 NaN
+0.602059991328 NULL
+NaN 2
+NaN 4
+
+
 ## log10
 
 # log10 scalar function
