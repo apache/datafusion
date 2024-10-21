@@ -47,7 +47,6 @@ use bytes::Bytes;
 use chrono::{TimeZone, Utc};
 use datafusion_expr::{col, lit, Expr, Operator};
 use datafusion_physical_expr::expressions::{BinaryExpr, Column, Literal};
-use datafusion_physical_expr::PhysicalExpr;
 use futures::stream::{self, BoxStream};
 use object_store::{
     path::Path, GetOptions, GetResult, GetResultPayload, ListResult, ObjectMeta,
@@ -97,7 +96,7 @@ async fn parquet_partition_pruning_filter() -> Result<()> {
     assert!(pred.as_any().is::<BinaryExpr>());
     let pred = pred.as_any().downcast_ref::<BinaryExpr>().unwrap();
 
-    assert_eq!(pred, expected.as_any());
+    assert_eq!(pred, expected.as_ref());
 
     Ok(())
 }
