@@ -72,12 +72,13 @@ pub struct FFI_TableProvider {
 
     pub table_type: unsafe extern "C" fn(provider: &Self) -> FFI_TableType,
 
-    pub supports_filters_pushdown:
+    pub supports_filters_pushdown: Option<
         unsafe extern "C" fn(
-            provider: &Self,
+            provider: &FFI_TableProvider,
             filters_serialized: RVec<u8>,
         )
             -> RResult<RVec<FFI_TableProviderFilterPushDown>, RString>,
+    >,
 
     pub clone: unsafe extern "C" fn(provider: &Self) -> Self,
     pub release: unsafe extern "C" fn(arg: &mut Self),
@@ -229,7 +230,7 @@ unsafe extern "C" fn clone_fn_wrapper(provider: &FFI_TableProvider) -> FFI_Table
         schema: schema_fn_wrapper,
         scan: scan_fn_wrapper,
         table_type: table_type_fn_wrapper,
-        supports_filters_pushdown: supports_filters_pushdown_fn_wrapper,
+        supports_filters_pushdown: provider.supports_filters_pushdown,
         clone: clone_fn_wrapper,
         release: release_fn_wrapper,
         private_data,
@@ -244,14 +245,20 @@ impl Drop for FFI_TableProvider {
 
 impl FFI_TableProvider {
     /// Creates a new [`FFI_TableProvider`].
-    pub fn new(provider: Arc<dyn TableProvider + Send>) -> Self {
+    pub fn new(
+        provider: Arc<dyn TableProvider + Send>,
+        can_support_pushdown_filters: bool,
+    ) -> Self {
         let private_data = Box::new(ProviderPrivateData { provider });
 
         Self {
             schema: schema_fn_wrapper,
             scan: scan_fn_wrapper,
             table_type: table_type_fn_wrapper,
-            supports_filters_pushdown: supports_filters_pushdown_fn_wrapper,
+            supports_filters_pushdown: match can_support_pushdown_filters {
+                true => Some(supports_filters_pushdown_fn_wrapper),
+                false => None,
+            },
             clone: clone_fn_wrapper,
             release: release_fn_wrapper,
             private_data: Box::into_raw(private_data) as *mut c_void,
@@ -344,17 +351,25 @@ impl TableProvider for ForeignTableProvider {
     /// to optimise data retrieval.
     fn supports_filters_pushdown(
         &self,
-        filter: &[&Expr],
+        filters: &[&Expr],
     ) -> Result<Vec<TableProviderFilterPushDown>> {
         unsafe {
+            let pushdown_fn = match self.0.supports_filters_pushdown {
+                Some(func) => func,
+                None => {
+                    return Ok(vec![
+                        TableProviderFilterPushDown::Unsupported;
+                        filters.len()
+                    ])
+                }
+            };
+
             let codec = DefaultLogicalExtensionCodec {};
 
             let expr_list = LogicalExprList {
-                expr: serialize_exprs(filter.iter().map(|f| f.to_owned()), &codec)?,
+                expr: serialize_exprs(filters.iter().map(|f| f.to_owned()), &codec)?,
             };
             let serialized_filters = expr_list.encode_to_vec();
-
-            let pushdown_fn = self.0.supports_filters_pushdown;
 
             let pushdowns = pushdown_fn(&self.0, serialized_filters.into());
 
@@ -398,7 +413,7 @@ mod tests {
         let provider =
             Arc::new(MemTable::try_new(schema, vec![vec![batch1], vec![batch2]])?);
 
-        let ffi_provider = FFI_TableProvider::new(provider);
+        let ffi_provider = FFI_TableProvider::new(provider, true);
 
         let foreign_table_provider = ForeignTableProvider::new(&ffi_provider);
 
