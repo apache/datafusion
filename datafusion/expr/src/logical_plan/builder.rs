@@ -44,16 +44,17 @@ use crate::{
     TableProviderFilterPushDown, TableSource, WriteOp,
 };
 
-use arrow::compute::can_cast_types;
 use super::dml::InsertOp;
 use super::plan::ColumnUnnestList;
+use arrow::compute::can_cast_types;
 use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef};
 use datafusion_common::display::ToStringifiedPlan;
 use datafusion_common::file_options::file_type::FileType;
 use datafusion_common::{
     exec_err, get_target_functional_dependencies, internal_err, not_impl_err,
     plan_datafusion_err, plan_err, Column, DFSchema, DFSchemaRef, DataFusionError,
-    Result, ScalarValue, TableReference, ToDFSchema, UnnestOptions,
+    FunctionalDependencies, Result, ScalarValue, TableReference, ToDFSchema,
+    UnnestOptions,
 };
 use datafusion_expr_common::type_coercion::binary::type_union_resolution;
 
