@@ -20,7 +20,7 @@ use std::{
     sync::Arc,
 };
 
-use arrow_schema::SchemaRef;
+use arrow_schema::Schema;
 use datafusion_common::{
     tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRewriter},
     Column, Result, TableReference,
@@ -293,7 +293,7 @@ pub(super) fn inject_column_aliases_into_subquery(
 /// - `SELECT col1, col2 FROM table` with aliases `["alias_1", "some_alias_2"]` will be transformed to
 /// - `SELECT col1 AS alias_1, col2 AS some_alias_2 FROM table`
 pub(super) fn inject_column_aliases(
-    projection: &datafusion_expr::Projection,
+    projection: &Projection,
     aliases: impl IntoIterator<Item = Ident>,
 ) -> LogicalPlan {
     let mut updated_projection = projection.clone();
@@ -343,12 +343,12 @@ fn find_projection(logical_plan: &LogicalPlan) -> Option<&Projection> {
 ///   from which the columns are referenced. This is used to look up columns by their names.
 /// * `alias_name`: The alias (`TableReference`) that will replace the table name
 ///   in the column references when applicable.
-pub struct TableAliasRewriter {
-    pub table_schema: SchemaRef,
+pub struct TableAliasRewriter<'a> {
+    pub table_schema: &'a Schema,
     pub alias_name: TableReference,
 }
 
-impl TreeNodeRewriter for TableAliasRewriter {
+impl TreeNodeRewriter for TableAliasRewriter<'_> {
     type Node = Expr;
 
     fn f_down(&mut self, expr: Expr) -> Result<Transformed<Expr>> {
