@@ -16,7 +16,8 @@
 // under the License.
 
 use crate::fuzz_cases::equivalence::utils::{
-    create_random_schema, create_test_params, generate_table_for_eq_properties,
+    convert_to_orderings, create_random_schema, create_test_params, create_test_schema_2,
+    generate_table_for_eq_properties, generate_table_for_orderings,
     is_table_same_after_sort, TestScalarUDF,
 };
 use arrow_schema::SortOptions;
@@ -173,10 +174,12 @@ fn test_ordering_satisfy_with_equivalence() -> Result<()> {
     let col_e = &col("e", &test_schema)?;
     let col_f = &col("f", &test_schema)?;
     let col_g = &col("g", &test_schema)?;
+
     let option_asc = SortOptions {
         descending: false,
         nulls_first: false,
     };
+
     let option_desc = SortOptions {
         descending: true,
         nulls_first: true,
@@ -324,5 +327,69 @@ fn test_ordering_satisfy_with_equivalence() -> Result<()> {
             "{err_msg}"
         );
     }
+
+    Ok(())
+}
+
+// This test checks given a table is ordered with `[a ASC, b ASC, c ASC, d ASC]` and `[a ASC, c ASC, b ASC, d ASC]`
+// whether the table is also ordered with `[a ASC, b ASC, d ASC]` and `[a ASC, c ASC, d ASC]`
+// Since these orderings cannot be deduced, these orderings shouldn't be satisfied by the table generated.
+// For background see discussion: https://github.com/apache/datafusion/issues/12700#issuecomment-2411134296
+#[test]
+fn test_ordering_satisfy_on_data() -> Result<()> {
+    let schema = create_test_schema_2()?;
+    let col_a = &col("a", &schema)?;
+    let col_b = &col("b", &schema)?;
+    let col_c = &col("c", &schema)?;
+    let col_d = &col("d", &schema)?;
+
+    let option_asc = SortOptions {
+        descending: false,
+        nulls_first: false,
+    };
+
+    let orderings = vec![
+        // [a ASC, b ASC, c ASC, d ASC]
+        vec![
+            (col_a, option_asc),
+            (col_b, option_asc),
+            (col_c, option_asc),
+            (col_d, option_asc),
+        ],
+        // [a ASC, c ASC, b ASC, d ASC]
+        vec![
+            (col_a, option_asc),
+            (col_c, option_asc),
+            (col_b, option_asc),
+            (col_d, option_asc),
+        ],
+    ];
+    let orderings = convert_to_orderings(&orderings);
+
+    let batch = generate_table_for_orderings(orderings, schema, 1000, 10)?;
+
+    // [a ASC, c ASC, d ASC] cannot be deduced
+    let ordering = vec![
+        (col_a, option_asc),
+        (col_c, option_asc),
+        (col_d, option_asc),
+    ];
+    let ordering = convert_to_orderings(&[ordering])[0].clone();
+    assert!(!is_table_same_after_sort(ordering, batch.clone())?);
+
+    // [a ASC, b ASC, d ASC] cannot be deduced
+    let ordering = vec![
+        (col_a, option_asc),
+        (col_b, option_asc),
+        (col_d, option_asc),
+    ];
+    let ordering = convert_to_orderings(&[ordering])[0].clone();
+    assert!(!is_table_same_after_sort(ordering, batch.clone())?);
+
+    // [a ASC, b ASC] can be deduced
+    let ordering = vec![(col_a, option_asc), (col_b, option_asc)];
+    let ordering = convert_to_orderings(&[ordering])[0].clone();
+    assert!(is_table_same_after_sort(ordering, batch.clone())?);
+
     Ok(())
 }

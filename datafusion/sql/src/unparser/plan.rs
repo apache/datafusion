@@ -222,9 +222,14 @@ impl Unparser<'_> {
         Ok(())
     }
 
-    fn derive(&self, plan: &LogicalPlan, relation: &mut RelationBuilder) -> Result<()> {
+    fn derive(
+        &self,
+        plan: &LogicalPlan,
+        relation: &mut RelationBuilder,
+        alias: Option<ast::TableAlias>,
+    ) -> Result<()> {
         let mut derived_builder = DerivedRelationBuilder::default();
-        derived_builder.lateral(false).alias(None).subquery({
+        derived_builder.lateral(false).alias(alias).subquery({
             let inner_statement = self.plan_to_sql(plan)?;
             if let ast::Statement::Query(inner_query) = inner_statement {
                 inner_query
@@ -237,6 +242,23 @@ impl Unparser<'_> {
         relation.derived(derived_builder);
 
         Ok(())
+    }
+
+    fn derive_with_dialect_alias(
+        &self,
+        alias: &str,
+        plan: &LogicalPlan,
+        relation: &mut RelationBuilder,
+    ) -> Result<()> {
+        if self.dialect.requires_derived_table_alias() {
+            self.derive(
+                plan,
+                relation,
+                Some(self.new_table_alias(alias.to_string(), vec![])),
+            )
+        } else {
+            self.derive(plan, relation, None)
+        }
     }
 
     fn select_to_sql_recursively(
@@ -284,7 +306,11 @@ impl Unparser<'_> {
 
                 // Projection can be top-level plan for derived table
                 if select.already_projected() {
-                    return self.derive(plan, relation);
+                    return self.derive_with_dialect_alias(
+                        "derived_projection",
+                        plan,
+                        relation,
+                    );
                 }
                 self.reconstruct_select_statement(plan, p, select)?;
                 self.select_to_sql_recursively(p.input.as_ref(), query, select, relation)
@@ -311,8 +337,13 @@ impl Unparser<'_> {
             LogicalPlan::Limit(limit) => {
                 // Limit can be top-level plan for derived table
                 if select.already_projected() {
-                    return self.derive(plan, relation);
+                    return self.derive_with_dialect_alias(
+                        "derived_limit",
+                        plan,
+                        relation,
+                    );
                 }
+
                 if let Some(fetch) = limit.fetch {
                     let Some(query) = query.as_mut() else {
                         return internal_err!(
@@ -350,7 +381,11 @@ impl Unparser<'_> {
             LogicalPlan::Sort(sort) => {
                 // Sort can be top-level plan for derived table
                 if select.already_projected() {
-                    return self.derive(plan, relation);
+                    return self.derive_with_dialect_alias(
+                        "derived_sort",
+                        plan,
+                        relation,
+                    );
                 }
                 let Some(query_ref) = query else {
                     return internal_err!(
@@ -396,7 +431,11 @@ impl Unparser<'_> {
             LogicalPlan::Distinct(distinct) => {
                 // Distinct can be top-level plan for derived table
                 if select.already_projected() {
-                    return self.derive(plan, relation);
+                    return self.derive_with_dialect_alias(
+                        "derived_distinct",
+                        plan,
+                        relation,
+                    );
                 }
                 let (select_distinct, input) = match distinct {
                     Distinct::All(input) => (ast::Distinct::Distinct, input.as_ref()),
@@ -559,7 +598,11 @@ impl Unparser<'_> {
 
                 // Covers cases where the UNION is a subquery and the projection is at the top level
                 if select.already_projected() {
-                    return self.derive(plan, relation);
+                    return self.derive_with_dialect_alias(
+                        "derived_union",
+                        plan,
+                        relation,
+                    );
                 }
 
                 let input_exprs: Vec<SetExpr> = union
@@ -617,9 +660,10 @@ impl Unparser<'_> {
                 if !Self::is_scan_with_pushdown(table_scan) {
                     return Ok(None);
                 }
+                let table_schema = table_scan.source.schema();
                 let mut filter_alias_rewriter =
                     alias.as_ref().map(|alias_name| TableAliasRewriter {
-                        table_schema: table_scan.source.schema(),
+                        table_schema: &table_schema,
                         alias_name: alias_name.clone(),
                     });
 
@@ -628,6 +672,17 @@ impl Unparser<'_> {
                     Arc::clone(&table_scan.source),
                     None,
                 )?;
+                // We will rebase the column references to the new alias if it exists.
+                // If the projection or filters are empty, we will append alias to the table scan.
+                //
+                // Example:
+                //   select t1.c1 from t1 where t1.c1 > 1 -> select a.c1 from t1 as a where a.c1 > 1
+                if alias.is_some()
+                    && (table_scan.projection.is_some() || !table_scan.filters.is_empty())
+                {
+                    builder = builder.alias(alias.clone().unwrap())?;
+                }
+
                 if let Some(project_vec) = &table_scan.projection {
                     let project_columns = project_vec
                         .iter()
@@ -645,9 +700,6 @@ impl Unparser<'_> {
                             }
                         })
                         .collect::<Vec<_>>();
-                    if let Some(alias) = alias {
-                        builder = builder.alias(alias)?;
-                    }
                     builder = builder.project(project_columns)?;
                 }
 
@@ -677,6 +729,16 @@ impl Unparser<'_> {
                     builder = builder.limit(0, Some(fetch))?;
                 }
 
+                // If the table scan has an alias but no projection or filters, it means no column references are rebased.
+                // So we will append the alias to this subquery.
+                // Example:
+                //   select * from t1 limit 10 -> (select * from t1 limit 10) as a
+                if alias.is_some()
+                    && (table_scan.projection.is_none() && table_scan.filters.is_empty())
+                {
+                    builder = builder.alias(alias.clone().unwrap())?;
+                }
+
                 Ok(Some(builder.build()?))
             }
             LogicalPlan::SubqueryAlias(subquery_alias) => {
@@ -684,6 +746,40 @@ impl Unparser<'_> {
                     &subquery_alias.input,
                     Some(subquery_alias.alias.clone()),
                 )
+            }
+            // SubqueryAlias could be rewritten to a plan with a projection as the top node by [rewrite::subquery_alias_inner_query_and_columns].
+            // The inner table scan could be a scan with pushdown operations.
+            LogicalPlan::Projection(projection) => {
+                if let Some(plan) =
+                    Self::unparse_table_scan_pushdown(&projection.input, alias.clone())?
+                {
+                    let exprs = if alias.is_some() {
+                        let mut alias_rewriter =
+                            alias.as_ref().map(|alias_name| TableAliasRewriter {
+                                table_schema: plan.schema().as_arrow(),
+                                alias_name: alias_name.clone(),
+                            });
+                        projection
+                            .expr
+                            .iter()
+                            .cloned()
+                            .map(|expr| {
+                                if let Some(ref mut rewriter) = alias_rewriter {
+                                    expr.rewrite(rewriter).data()
+                                } else {
+                                    Ok(expr)
+                                }
+                            })
+                            .collect::<Result<Vec<_>>>()?
+                    } else {
+                        projection.expr.clone()
+                    };
+                    Ok(Some(
+                        LogicalPlanBuilder::from(plan).project(exprs)?.build()?,
+                    ))
+                } else {
+                    Ok(None)
+                }
             }
             _ => Ok(None),
         }
