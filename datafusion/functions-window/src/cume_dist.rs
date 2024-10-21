@@ -97,9 +97,9 @@ fn get_cume_dist_doc() -> &'static Documentation {
         Documentation::builder()
             .with_doc_section(DOC_SECTION_RANKING)
             .with_description(
-                "Number of the current row within its partition, counting from 1.",
+                "Relative rank of the current row: (number of rows preceding or peer with current row) / (total rows).",
             )
-            .with_syntax_example("row_number()")
+            .with_syntax_example("cume_dist()")
             .build()
             .unwrap()
     })
@@ -115,22 +115,20 @@ impl PartitionEvaluator for CumeDistEvaluator {
         num_rows: usize,
         ranks_in_partition: &[Range<usize>],
     ) -> Result<ArrayRef> {
-        if num_rows == 0 {
-            return Ok(Arc::new(Float64Array::from(Vec::<f64>::new())));
-        }
-
         let scalar = num_rows as f64;
-        let mut cumulative = 0_u64;
-        let mut values = Vec::with_capacity(num_rows);
-
-        for range in ranks_in_partition {
-            let len = range.end - range.start;
-            cumulative += len as u64;
-            let value = cumulative as f64 / scalar;
-            values.extend(iter::repeat(value).take(len));
-        }
-
-        Ok(Arc::new(Float64Array::from(values)))
+        let result = Float64Array::from_iter_values(
+            ranks_in_partition
+                .iter()
+                .scan(0_u64, |acc, range| {
+                    let len = range.end - range.start;
+                    *acc += len as u64;
+                    let value: f64 = (*acc as f64) / scalar;
+                    let result = iter::repeat(value).take(len);
+                    Some(result)
+                })
+                .flatten(),
+        );
+        Ok(Arc::new(result))
     }
 
     fn include_rank(&self) -> bool {
