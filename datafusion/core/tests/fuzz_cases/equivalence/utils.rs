@@ -522,29 +522,6 @@ pub fn generate_table_for_orderings(
     Ok(batch)
 }
 
-// Convert each tuple to PhysicalSortExpr
-pub fn convert_to_sort_exprs(
-    in_data: &[(&Arc<dyn PhysicalExpr>, SortOptions)],
-) -> Vec<PhysicalSortExpr> {
-    in_data
-        .iter()
-        .map(|(expr, options)| PhysicalSortExpr {
-            expr: Arc::clone(*expr),
-            options: *options,
-        })
-        .collect()
-}
-
-// Convert each inner tuple to PhysicalSortExpr
-pub fn convert_to_orderings(
-    orderings: &[Vec<(&Arc<dyn PhysicalExpr>, SortOptions)>],
-) -> Vec<Vec<PhysicalSortExpr>> {
-    orderings
-        .iter()
-        .map(|sort_exprs| convert_to_sort_exprs(sort_exprs))
-        .collect()
-}
-
 // Utility function to generate random f64 array
 fn generate_random_f64_array(
     n_elems: usize,
