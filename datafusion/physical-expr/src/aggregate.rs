@@ -133,11 +133,11 @@ impl AggregateExprBuilder {
         };
 
         Ok(AggregateFunctionExpr {
-            fun: Arc::unwrap_or_clone(fun),
+            fun,
             args,
             data_type,
             name,
-            schema: Arc::unwrap_or_clone(schema),
+            schema,
             ordering_req,
             ignore_nulls,
             ordering_fields,
@@ -197,12 +197,12 @@ impl AggregateExprBuilder {
 /// Physical aggregate expression of a UDAF.
 #[derive(Debug, Clone)]
 pub struct AggregateFunctionExpr {
-    fun: AggregateUDF,
+    fun: Arc<AggregateUDF>,
     args: Vec<Arc<dyn PhysicalExpr>>,
     /// Output / return type of this aggregate
     data_type: DataType,
     name: String,
-    schema: Schema,
+    schema: Arc<Schema>,
     // The physical order by expressions
     ordering_req: LexOrdering,
     // Whether to ignore null values
@@ -331,17 +331,15 @@ impl AggregateFunctionExpr {
         self: Arc<Self>,
         beneficial_ordering: bool,
     ) -> Result<Option<AggregateFunctionExpr>> {
-        let Some(updated_fn) = self
-            .fun
-            .clone()
-            .with_beneficial_ordering(beneficial_ordering)?
+        let Some(updated_fn) =
+            Arc::clone(&self.fun).with_beneficial_ordering(beneficial_ordering)?
         else {
             return Ok(None);
         };
 
         AggregateExprBuilder::new(Arc::new(updated_fn), self.args.to_vec())
             .order_by(self.ordering_req.to_vec())
-            .schema(Arc::new(self.schema.clone()))
+            .schema(Arc::clone(&self.schema))
             .alias(self.name().to_string())
             .with_ignore_nulls(self.ignore_nulls)
             .with_distinct(self.is_distinct)
@@ -474,7 +472,7 @@ impl AggregateFunctionExpr {
 
                 AggregateExprBuilder::new(reverse_udf, self.args.to_vec())
                     .order_by(reverse_ordering_req.to_vec())
-                    .schema(Arc::new(self.schema.clone()))
+                    .schema(Arc::clone(&self.schema))
                     .alias(name)
                     .with_ignore_nulls(self.ignore_nulls)
                     .with_distinct(self.is_distinct)
