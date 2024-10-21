@@ -143,8 +143,8 @@ fn get_regr_docs() -> &'static HashMap<RegrType, Documentation> {
                     Given input column Y and X: regr_slope(Y, X) returns the slope (k in Y = k*X + b) using minimal RSS fitting.",
                 )
                 .with_syntax_example("regr_slope(expression_y, expression_x)")
-                .with_standard_argument("expression_y", "Dependent variable")
-                .with_standard_argument("expression_x", "Independent variable")
+                .with_standard_argument("expression_y", Some("Dependent variable"))
+                .with_standard_argument("expression_x", Some("Independent variable"))
                 .build()
                 .unwrap()
         );
@@ -158,8 +158,8 @@ fn get_regr_docs() -> &'static HashMap<RegrType, Documentation> {
                     this function returns b.",
                 )
                 .with_syntax_example("regr_intercept(expression_y, expression_x)")
-                .with_standard_argument("expression_y", "Dependent variable")
-                .with_standard_argument("expression_x", "Independent variable")
+                .with_standard_argument("expression_y", Some("Dependent variable"))
+                .with_standard_argument("expression_x", Some("Independent variable"))
                 .build()
                 .unwrap()
         );
@@ -172,8 +172,8 @@ fn get_regr_docs() -> &'static HashMap<RegrType, Documentation> {
                     "Counts the number of non-null paired data points.",
                 )
                 .with_syntax_example("regr_count(expression_y, expression_x)")
-                .with_standard_argument("expression_y", "Dependent variable")
-                .with_standard_argument("expression_x", "Independent variable")
+                .with_standard_argument("expression_y", Some("Dependent variable"))
+                .with_standard_argument("expression_x", Some("Independent variable"))
                 .build()
                 .unwrap()
         );
@@ -186,8 +186,8 @@ fn get_regr_docs() -> &'static HashMap<RegrType, Documentation> {
                     "Computes the square of the correlation coefficient between the independent and dependent variables.",
                 )
                 .with_syntax_example("regr_r2(expression_y, expression_x)")
-                .with_standard_argument("expression_y", "Dependent variable")
-                .with_standard_argument("expression_x", "Independent variable")
+                .with_standard_argument("expression_y", Some("Dependent variable"))
+                .with_standard_argument("expression_x", Some("Independent variable"))
                 .build()
                 .unwrap()
         );
@@ -200,8 +200,8 @@ fn get_regr_docs() -> &'static HashMap<RegrType, Documentation> {
                     "Computes the average of the independent variable (input) expression_x for the non-null paired data points.",
                 )
                 .with_syntax_example("regr_avgx(expression_y, expression_x)")
-                .with_standard_argument("expression_y", "Dependent variable")
-                .with_standard_argument("expression_x", "Independent variable")
+                .with_standard_argument("expression_y", Some("Dependent variable"))
+                .with_standard_argument("expression_x", Some("Independent variable"))
                 .build()
                 .unwrap()
         );
@@ -214,8 +214,8 @@ fn get_regr_docs() -> &'static HashMap<RegrType, Documentation> {
                     "Computes the average of the dependent variable (output) expression_y for the non-null paired data points.",
                 )
                 .with_syntax_example("regr_avgy(expression_y, expression_x)")
-                .with_standard_argument("expression_y", "Dependent variable")
-                .with_standard_argument("expression_x", "Independent variable")
+                .with_standard_argument("expression_y", Some("Dependent variable"))
+                .with_standard_argument("expression_x", Some("Independent variable"))
                 .build()
                 .unwrap()
         );
@@ -228,8 +228,8 @@ fn get_regr_docs() -> &'static HashMap<RegrType, Documentation> {
                     "Computes the sum of squares of the independent variable.",
                 )
                 .with_syntax_example("regr_sxx(expression_y, expression_x)")
-                .with_standard_argument("expression_y", "Dependent variable")
-                .with_standard_argument("expression_x", "Independent variable")
+                .with_standard_argument("expression_y", Some("Dependent variable"))
+                .with_standard_argument("expression_x", Some("Independent variable"))
                 .build()
                 .unwrap()
         );
@@ -242,8 +242,8 @@ fn get_regr_docs() -> &'static HashMap<RegrType, Documentation> {
                     "Computes the sum of squares of the dependent variable.",
                 )
                 .with_syntax_example("regr_syy(expression_y, expression_x)")
-                .with_standard_argument("expression_y", "Dependent variable")
-                .with_standard_argument("expression_x", "Independent variable")
+                .with_standard_argument("expression_y", Some("Dependent variable"))
+                .with_standard_argument("expression_x", Some("Independent variable"))
                 .build()
                 .unwrap()
         );
@@ -256,8 +256,8 @@ fn get_regr_docs() -> &'static HashMap<RegrType, Documentation> {
                     "Computes the sum of products of paired data points.",
                 )
                 .with_syntax_example("regr_sxy(expression_y, expression_x)")
-                .with_standard_argument("expression_y", "Dependent variable")
-                .with_standard_argument("expression_x", "Independent variable")
+                .with_standard_argument("expression_y", Some("Dependent variable"))
+                .with_standard_argument("expression_x", Some("Independent variable"))
                 .build()
                 .unwrap()
         );
