@@ -18,7 +18,7 @@
 //! Expression utilities
 
 use std::cmp::Ordering;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::ops::Deref;
 use std::sync::Arc;
 
@@ -35,8 +35,8 @@ use datafusion_common::tree_node::{
 };
 use datafusion_common::utils::get_at_indices;
 use datafusion_common::{
-    internal_err, plan_datafusion_err, plan_err, Column, DFSchema, DFSchemaRef,
-    DataFusionError, Result, TableReference,
+    internal_err, plan_datafusion_err, plan_err, Column, ColumnReference, DFSchema,
+    DFSchemaRef, DataFusionError, Result, TableReference,
 };
 
 use indexmap::IndexSet;
@@ -880,14 +880,27 @@ pub fn columnize_expr(e: Expr, input: &LogicalPlan) -> Result<Expr> {
         Ok(exprs) if !exprs.is_empty() => exprs,
         _ => return Ok(e),
     };
-    let exprs_map: HashMap<&Expr, Column> = output_exprs.into_iter().collect();
-    e.transform_down(|node: Expr| match exprs_map.get(&node) {
-        Some(column) => Ok(Transformed::new(
-            Expr::Column(column.clone()),
-            true,
-            TreeNodeRecursion::Jump,
-        )),
-        None => Ok(Transformed::no(node)),
+    e.transform_down(|node: Expr| {
+        if let Some(ColumnReference { relation, name }) = output_exprs.iter().find_map(
+            |(a, b)| {
+                if (*a).eq(&node) {
+                    Some(b)
+                } else {
+                    None
+                }
+            },
+        ) {
+            Ok(Transformed::new(
+                Expr::Column(Column {
+                    relation: relation.clone(),
+                    name: name.to_string(),
+                }),
+                true,
+                TreeNodeRecursion::Jump,
+            ))
+        } else {
+            Ok(Transformed::no(node))
+        }
     })
     .data()
 }
