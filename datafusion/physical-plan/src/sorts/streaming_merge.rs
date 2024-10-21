@@ -64,9 +64,10 @@ pub struct StreamingMergeBuilder<'a> {
 
 impl<'a> StreamingMergeBuilder<'a> {
     pub fn new() -> Self {
-        let mut builder = Self::default();
-        builder.enable_round_robin_tie_breaker = true;
-        builder
+        Self {
+            enable_round_robin_tie_breaker: true,
+            ..Default::default()
+        }
     }
 
     pub fn with_streams(mut self, streams: Vec<SendableRecordBatchStream>) -> Self {
@@ -104,7 +105,10 @@ impl<'a> StreamingMergeBuilder<'a> {
         self
     }
 
-    pub fn with_round_robin_tie_breaker(mut self, enable_round_robin_tie_breaker: bool) -> Self {
+    pub fn with_round_robin_tie_breaker(
+        mut self,
+        enable_round_robin_tie_breaker: bool,
+    ) -> Self {
         self.enable_round_robin_tie_breaker = enable_round_robin_tie_breaker;
         self
     }
