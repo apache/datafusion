@@ -306,9 +306,12 @@ impl NamePreserver {
     /// Create a new NamePreserver for rewriting the `expr` that is part of the specified plan
     pub fn new(plan: &LogicalPlan) -> Self {
         Self {
-            // The schema of Filter and Join nodes comes from their inputs rather than their output expressions,
-            // so there is no need to use aliases to preserve expression names.
-            use_alias: !matches!(plan, LogicalPlan::Filter(_) | LogicalPlan::Join(_)),
+            // The schema of Filter, Join and TableScan nodes comes from their inputs rather than
+            // their expressions, so there is no need to use aliases to preserve expression names.
+            use_alias: !matches!(
+                plan,
+                LogicalPlan::Filter(_) | LogicalPlan::Join(_) | LogicalPlan::TableScan(_)
+            ),
         }
     }
 
