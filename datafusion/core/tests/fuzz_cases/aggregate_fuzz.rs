@@ -164,6 +164,8 @@ fn baseline_config() -> DatasetGeneratorConfig {
         ColumnDescr::new("u16", DataType::UInt16),
         ColumnDescr::new("u32", DataType::UInt32),
         ColumnDescr::new("u64", DataType::UInt64),
+        ColumnDescr::new("date32", DataType::Date32),
+        ColumnDescr::new("date64", DataType::Date64),
         // TODO: date/time columns
         // todo decimal columns
         // begin string columns

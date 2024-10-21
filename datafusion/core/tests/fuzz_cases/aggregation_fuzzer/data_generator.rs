@@ -17,7 +17,7 @@
 
 use std::sync::Arc;
 
-use arrow::datatypes::{Float32Type, Float64Type, Int16Type, Int32Type, Int64Type, Int8Type, UInt16Type, UInt32Type, UInt64Type, UInt8Type};
+use arrow::datatypes::{Date32Type, Date64Type, Float32Type, Float64Type, Int16Type, Int32Type, Int64Type, Int8Type, UInt16Type, UInt32Type, UInt64Type, UInt8Type};
 use arrow_array::{ArrayRef, RecordBatch};
 use arrow_schema::{DataType, Field, Schema};
 use datafusion_common::{arrow_datafusion_err, DataFusionError, Result};
@@ -390,6 +390,26 @@ impl RecordBatchGenerator {
                     array_gen_rng,
                     f64,
                     Float64Type
+                )
+            }
+            DataType::Date32 => {
+                generate_primitive_array!(
+                    self,
+                    num_rows,
+                    batch_gen_rng,
+                    array_gen_rng,
+                    i32,
+                    Date32Type
+                )
+            }
+            DataType::Date64 => {
+                generate_primitive_array!(
+                    self,
+                    num_rows,
+                    batch_gen_rng,
+                    array_gen_rng,
+                    i64,
+                    Date64Type
                 )
             }
             DataType::Utf8 => {
