@@ -80,8 +80,7 @@ impl OptimizerRule for EliminateLimit {
                 } else if matches!(limit.get_skip_type()?, SkipType::Literal(0)) {
                     // If fetch is `None` and skip is 0, then Limit takes no effect and
                     // we can remove it. Its input also can be Limit, so we should apply again.
-                    return Ok(self
-                        .rewrite(Arc::unwrap_or_clone(limit.input), _config)?);
+                    return self.rewrite(Arc::unwrap_or_clone(limit.input), _config);
                 }
                 Ok(Transformed::no(LogicalPlan::Limit(limit)))
             }
