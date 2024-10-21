@@ -36,7 +36,6 @@ mod unknown_column;
 /// Module with some convenient methods used in expression building
 pub use crate::aggregate::stats::StatsType;
 pub use crate::window::cume_dist::{cume_dist, CumeDist};
-pub use crate::window::lead_lag::{lag, lead, WindowShift};
 pub use crate::window::nth_value::NthValue;
 pub use crate::window::ntile::Ntile;
 pub use crate::PhysicalSortExpr;
