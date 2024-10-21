@@ -1213,7 +1213,7 @@ mod tests {
     };
 
     use crate::optimizer::Optimizer;
-    use crate::rewrite_disjunctive_predicate::RewriteDisjunctivePredicate;
+    use crate::simplify_expressions::SimplifyExpressions;
     use crate::test::*;
     use crate::OptimizerContext;
     use datafusion_expr::test::function_stub::sum;
@@ -1235,7 +1235,7 @@ mod tests {
         expected: &str,
     ) -> Result<()> {
         let optimizer = Optimizer::with_rules(vec![
-            Arc::new(RewriteDisjunctivePredicate::new()),
+            Arc::new(SimplifyExpressions::new()),
             Arc::new(PushDownFilter::new()),
         ]);
         let optimized_plan =
