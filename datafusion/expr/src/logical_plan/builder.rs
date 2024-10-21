@@ -40,7 +40,7 @@ use crate::utils::{
     find_valid_equijoin_key_pair, group_window_expr_by_sort_keys,
 };
 use crate::{
-    and, binary_expr, DmlStatement, Expr, ExprSchemable, Operator, RecursiveQuery,
+    and, binary_expr, lit, DmlStatement, Expr, ExprSchemable, Operator, RecursiveQuery,
     TableProviderFilterPushDown, TableSource, WriteOp,
 };
 
@@ -431,9 +431,22 @@ impl LogicalPlanBuilder {
     /// `fetch` - Maximum number of rows to fetch, after skipping `skip` rows,
     ///          if specified.
     pub fn limit(self, skip: usize, fetch: Option<usize>) -> Result<Self> {
+        let skip_expr = if skip == 0 {
+            None
+        } else {
+            Some(lit(skip as i64))
+        };
+        let fetch_expr = fetch.map(|f| lit(f as i64));
+        self.limit_by_expr(skip_expr, fetch_expr)
+    }
+
+    /// Limit the number of rows returned
+    ///
+    /// Similar to `limit` but uses expressions for `skip` and `fetch`
+    pub fn limit_by_expr(self, skip: Option<Expr>, fetch: Option<Expr>) -> Result<Self> {
         Ok(Self::new(LogicalPlan::Limit(Limit {
-            skip,
-            fetch,
+            skip: skip.map(Box::new),
+            fetch: fetch.map(Box::new),
             input: self.plan,
         })))
     }

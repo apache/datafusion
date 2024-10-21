@@ -31,7 +31,9 @@ use datafusion_common::{plan_err, Column, DFSchemaRef, Result, ScalarValue};
 use datafusion_expr::expr::Alias;
 use datafusion_expr::simplify::SimplifyContext;
 use datafusion_expr::utils::{conjunction, find_join_exprs, split_conjunction};
-use datafusion_expr::{expr, lit, EmptyRelation, Expr, LogicalPlan, LogicalPlanBuilder};
+use datafusion_expr::{
+    expr, lit, EmptyRelation, Expr, FetchType, LogicalPlan, LogicalPlanBuilder,
+};
 use datafusion_physical_expr::execution_props::ExecutionProps;
 
 /// This struct rewrite the sub query plan by pull up the correlated
@@ -327,16 +329,15 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                 let new_plan = match (self.exists_sub_query, self.join_filters.is_empty())
                 {
                     // Correlated exist subquery, remove the limit(so that correlated expressions can pull up)
-                    (true, false) => Transformed::yes(
-                        if limit.fetch.filter(|limit_row| *limit_row == 0).is_some() {
+                    (true, false) => Transformed::yes(match limit.get_fetch_type()? {
+                        FetchType::Literal(Some(0)) => {
                             LogicalPlan::EmptyRelation(EmptyRelation {
                                 produce_one_row: false,
                                 schema: Arc::clone(limit.input.schema()),
                             })
-                        } else {
-                            LogicalPlanBuilder::from((*limit.input).clone()).build()?
-                        },
-                    ),
+                        }
+                        _ => LogicalPlanBuilder::from((*limit.input).clone()).build()?,
+                    }),
                     _ => Transformed::no(plan),
                 };
                 if let Some(input_map) = input_expr_map {

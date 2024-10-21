@@ -623,8 +623,8 @@ pub async fn from_substrait_rel(
                     from_substrait_rel(ctx, input, extensions).await?,
                 );
                 let offset = fetch.offset as usize;
-                // Since protobuf can't directly distinguish `None` vs `0` `None` is encoded as `MAX`
-                let count = if fetch.count as usize == usize::MAX {
+                // -1 means that ALL records should be returned
+                let count = if fetch.count == -1 {
                     None
                 } else {
                     Some(fetch.count as usize)

@@ -19,15 +19,14 @@ use std::sync::Arc;
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 
-use datafusion_common::{not_impl_err, plan_err, Constraints, Result, ScalarValue};
+use datafusion_common::{not_impl_err, Constraints, DFSchema, Result};
 use datafusion_expr::expr::Sort;
 use datafusion_expr::{
-    CreateMemoryTable, DdlStatement, Distinct, Expr, LogicalPlan, LogicalPlanBuilder,
-    Operator,
+    CreateMemoryTable, DdlStatement, Distinct, LogicalPlan, LogicalPlanBuilder,
 };
 use sqlparser::ast::{
     Expr as SQLExpr, Offset as SQLOffset, OrderBy, OrderByExpr, Query, SelectInto,
-    SetExpr, Value,
+    SetExpr,
 };
 
 impl<'a, S: ContextProvider> SqlToRel<'a, S> {
@@ -85,35 +84,18 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             return Ok(input);
         }
 
-        let skip = match skip {
-            Some(skip_expr) => {
-                let expr = self.sql_to_expr(
-                    skip_expr.value,
-                    input.schema(),
-                    &mut PlannerContext::new(),
-                )?;
-                let n = get_constant_result(&expr, "OFFSET")?;
-                convert_usize_with_check(n, "OFFSET")
-            }
-            _ => Ok(0),
-        }?;
+        // skip and fetch expressions are not allowed to reference columns from the input plan
+        let empty_schema = DFSchema::empty();
 
-        let fetch = match fetch {
-            Some(limit_expr)
-                if limit_expr != sqlparser::ast::Expr::Value(Value::Null) =>
-            {
-                let expr = self.sql_to_expr(
-                    limit_expr,
-                    input.schema(),
-                    &mut PlannerContext::new(),
-                )?;
-                let n = get_constant_result(&expr, "LIMIT")?;
-                Some(convert_usize_with_check(n, "LIMIT")?)
-            }
-            _ => None,
-        };
-
-        LogicalPlanBuilder::from(input).limit(skip, fetch)?.build()
+        let skip = skip
+            .map(|o| self.sql_to_expr(o.value, &empty_schema, &mut PlannerContext::new()))
+            .transpose()?;
+        let fetch = fetch
+            .map(|e| self.sql_to_expr(e, &empty_schema, &mut PlannerContext::new()))
+            .transpose()?;
+        LogicalPlanBuilder::from(input)
+            .limit_by_expr(skip, fetch)?
+            .build()
     }
 
     /// Wrap the logical in a sort
@@ -156,50 +138,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             ))),
             _ => Ok(plan),
         }
-    }
-}
-
-/// Retrieves the constant result of an expression, evaluating it if possible.
-///
-/// This function takes an expression and an argument name as input and returns
-/// a `Result<i64>` indicating either the constant result of the expression or an
-/// error if the expression cannot be evaluated.
-///
-/// # Arguments
-///
-/// * `expr` - An `Expr` representing the expression to evaluate.
-/// * `arg_name` - The name of the argument for error messages.
-///
-/// # Returns
-///
-/// * `Result<i64>` - An `Ok` variant containing the constant result if evaluation is successful,
-///   or an `Err` variant containing an error message if evaluation fails.
-///
-/// <https://github.com/apache/datafusion/issues/9821> tracks a more general solution
-fn get_constant_result(expr: &Expr, arg_name: &str) -> Result<i64> {
-    match expr {
-        Expr::Literal(ScalarValue::Int64(Some(s))) => Ok(*s),
-        Expr::BinaryExpr(binary_expr) => {
-            let lhs = get_constant_result(&binary_expr.left, arg_name)?;
-            let rhs = get_constant_result(&binary_expr.right, arg_name)?;
-            let res = match binary_expr.op {
-                Operator::Plus => lhs + rhs,
-                Operator::Minus => lhs - rhs,
-                Operator::Multiply => lhs * rhs,
-                _ => return plan_err!("Unsupported operator for {arg_name} clause"),
-            };
-            Ok(res)
-        }
-        _ => plan_err!("Unexpected expression in {arg_name} clause"),
-    }
-}
-
-/// Converts an `i64` to `usize`, performing a boundary check.
-fn convert_usize_with_check(n: i64, arg_name: &str) -> Result<usize> {
-    if n < 0 {
-        plan_err!("{arg_name} must be >= 0, '{n}' was provided.")
-    } else {
-        Ok(n as usize)
     }
 }
 
