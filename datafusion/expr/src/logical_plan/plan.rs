@@ -28,7 +28,8 @@ use super::DdlStatement;
 use crate::builder::{change_redundant_column, unnest_with_options};
 use crate::expr::{Placeholder, Sort as SortExpr, WindowFunction};
 use crate::expr_rewriter::{
-    create_col_from_scalar_expr, normalize_cols, normalize_sorts, NamePreserver,
+    create_col_from_scalar_expr, normalize_col, normalize_cols, normalize_sorts,
+    NamePreserver,
 };
 use crate::logical_plan::display::{GraphvizVisitor, IndentVisitor};
 use crate::logical_plan::extension::UserDefinedLogicalNode;
@@ -2889,7 +2890,9 @@ impl DistinctOn {
         // Check that the left-most sort expressions are the same as the `ON` expressions.
         let mut matched = true;
         for (on, sort) in self.on_expr.iter().zip(sort_expr.iter()) {
-            if on != &sort.expr {
+            if normalize_col(on.clone(), &self.input)?
+                != normalize_col(sort.expr.clone(), &self.input)?
+            {
                 matched = false;
                 break;
             }
@@ -3868,6 +3871,39 @@ digraph {
                 "post_visit TableScan",
             ]
         );
+    }
+
+    #[test]
+    fn distinct_on_expr_order_by_mismatch() -> Result<()> {
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+        ]);
+
+        let table_scan = table_scan(TableReference::none(), &schema, None)?.build()?;
+        let p = DistinctOn::try_new(
+            vec![col("a")],
+            vec![],
+            Some(vec![SortExpr::new(col("b"), true, false)]),
+            Arc::new(table_scan),
+        );
+        assert_eq!(p.err().unwrap().strip_backtrace(), "Error during planning: SELECT DISTINCT ON expressions must match initial ORDER BY expressions");
+        Ok(())
+    }
+
+    #[test]
+    fn distinct_on_expr_order_by_match() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+
+        let table_scan =
+            table_scan(Some(TableReference::bare("t")), &schema, None)?.build()?;
+        let p = DistinctOn::try_new(
+            vec![col("a")],
+            vec![],
+            Some(vec![SortExpr::new(col("t.a"), true, false)]),
+            Arc::new(table_scan),
+        )?;
+        Ok(())
     }
 
     #[test]
