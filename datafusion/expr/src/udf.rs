@@ -767,7 +767,6 @@ pub mod scalar_doc_sections {
             DOC_SECTION_DATETIME,
             DOC_SECTION_ARRAY,
             DOC_SECTION_STRUCT,
-            DOC_SECTION_MAP,
             DOC_SECTION_HASHING,
             DOC_SECTION_OTHER,
         ]
@@ -823,12 +822,6 @@ The following regular expression functions are supported:"#,
     pub const DOC_SECTION_STRUCT: DocSection = DocSection {
         include: true,
         label: "Struct Functions",
-        description: None,
-    };
-
-    pub const DOC_SECTION_MAP: DocSection = DocSection {
-        include: true,
-        label: "Map Functions",
         description: None,
     };
 

@@ -35,6 +35,7 @@ mod table_source;
 mod udaf;
 mod udf;
 mod udf_docs;
+mod udsf;
 mod udwf;
 
 pub mod conditional_expressions;
@@ -96,6 +97,7 @@ pub use udaf::{
 };
 pub use udf::{scalar_doc_sections, ScalarUDF, ScalarUDFImpl};
 pub use udf_docs::{DocSection, Documentation, DocumentationBuilder};
+pub use udsf::special_doc_sections;
 pub use udwf::{window_doc_sections, ReversedUDWF, WindowUDF, WindowUDFImpl};
 pub use window_frame::{WindowFrame, WindowFrameBound, WindowFrameUnits};
 
