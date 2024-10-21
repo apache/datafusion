@@ -141,10 +141,7 @@ impl PhysicalExpr for ScalarFunctionExpr {
             .collect::<Result<Vec<_>>>()?;
 
         // evaluate the function
-        let output = match self.args.is_empty() {
-            true => self.fun.invoke_no_args(batch.num_rows()),
-            false => self.fun.invoke(&inputs),
-        }?;
+        let output = self.fun.invoke_batch(&inputs, batch.num_rows())?;
 
         if let ColumnarValue::Array(array) = &output {
             if array.len() != batch.num_rows() {
