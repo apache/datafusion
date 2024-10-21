@@ -485,7 +485,7 @@ impl QueryBuilder {
         self.arguments[idx].clone()
     }
 
-    /// Pick a random number of fields to group by (non repeating)
+    /// Pick a random number of fields to group by (non-repeating)
     ///
     /// Limited to 3 group by columns to ensure coverage for large groups. With
     /// larger numbers of columns, each group has many fewer values.
