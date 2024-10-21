@@ -18,7 +18,7 @@
 use std::{ffi::c_void, pin::Pin, sync::Arc};
 
 use abi_stable::{
-    std_types::{RResult, RStr, RString, RVec},
+    std_types::{RResult, RString, RVec},
     StableAbi,
 };
 use arrow::ffi_stream::FFI_ArrowArrayStream;
@@ -45,10 +45,7 @@ pub struct WrappedArrayStream(#[sabi(unsafe_opaque_field)] pub FFI_ArrowArrayStr
 pub struct FFI_ExecutionPlan {
     pub properties: unsafe extern "C" fn(plan: &Self) -> FFI_PlanProperties,
 
-    pub children: unsafe extern "C" fn(
-        plan: &Self,
-    )
-        -> RResult<RVec<FFI_ExecutionPlan>, RStr<'static>>,
+    pub children: unsafe extern "C" fn(plan: &Self) -> RVec<FFI_ExecutionPlan>,
 
     pub name: unsafe extern "C" fn(plan: &Self) -> RString,
 
@@ -81,23 +78,18 @@ unsafe extern "C" fn properties_fn_wrapper(
 
 unsafe extern "C" fn children_fn_wrapper(
     plan: &FFI_ExecutionPlan,
-) -> RResult<RVec<FFI_ExecutionPlan>, RStr<'static>> {
+) -> RVec<FFI_ExecutionPlan> {
     let private_data = plan.private_data as *const ExecutionPlanPrivateData;
     let plan = &(*private_data).plan;
     let ctx = &(*private_data).context;
 
-    let maybe_children: Result<Vec<_>> = plan
+    let children: Vec<_> = plan
         .children()
         .into_iter()
         .map(|child| FFI_ExecutionPlan::new(Arc::clone(child), Arc::clone(ctx)))
         .collect();
 
-    match maybe_children {
-        Ok(c) => RResult::ROk(c.into()),
-        Err(_) => RResult::RErr(
-            "Error occurred during collection of FFI_ExecutionPlan children".into(),
-        ),
-    }
+    children.into()
 }
 
 unsafe extern "C" fn execute_fn_wrapper(
@@ -132,7 +124,6 @@ unsafe extern "C" fn clone_fn_wrapper(plan: &FFI_ExecutionPlan) -> FFI_Execution
     let plan_data = &(*private_data);
 
     FFI_ExecutionPlan::new(Arc::clone(&plan_data.plan), Arc::clone(&plan_data.context))
-        .unwrap()
 }
 
 impl Clone for FFI_ExecutionPlan {
@@ -143,10 +134,10 @@ impl Clone for FFI_ExecutionPlan {
 
 impl FFI_ExecutionPlan {
     /// This function is called on the provider's side.
-    pub fn new(plan: Arc<dyn ExecutionPlan>, context: Arc<TaskContext>) -> Result<Self> {
+    pub fn new(plan: Arc<dyn ExecutionPlan>, context: Arc<TaskContext>) -> Self {
         let private_data = Box::new(ExecutionPlanPrivateData { plan, context });
 
-        Ok(Self {
+        Self {
             properties: properties_fn_wrapper,
             children: children_fn_wrapper,
             name: name_fn_wrapper,
@@ -154,7 +145,7 @@ impl FFI_ExecutionPlan {
             clone: clone_fn_wrapper,
             release: release_fn_wrapper,
             private_data: Box::into_raw(private_data) as *mut c_void,
-        })
+        }
     }
 }
 
@@ -204,28 +195,18 @@ impl ForeignExecutionPlan {
 
         let properties = ForeignPlanProperties::new((plan.properties)(&plan))?;
 
-        let children = match (plan.children)(&plan) {
-            RResult::ROk(children_rvec) => {
-                let maybe_children: Result<Vec<_>> = children_rvec
-                    .iter()
-                    .map(|child| ForeignExecutionPlan::new(child.clone()))
-                    .collect();
-
-                maybe_children?
-                    .into_iter()
-                    .map(|child| Arc::new(child) as Arc<dyn ExecutionPlan>)
-                    .collect()
-            }
-            RResult::RErr(e) => {
-                return Err(DataFusionError::Execution(e.to_string()));
-            }
-        };
+        let children_rvec = (plan.children)(&plan);
+        let children: Result<Vec<_>> = children_rvec
+            .iter()
+            .map(|child| ForeignExecutionPlan::new(child.clone()))
+            .map(|child| child.map(|c| Arc::new(c) as Arc<dyn ExecutionPlan>))
+            .collect();
 
         Ok(Self {
             name,
             plan,
             properties: properties.0,
-            children,
+            children: children?,
         })
     }
 }
@@ -362,7 +343,7 @@ mod tests {
         let original_plan = Arc::new(EmptyExec::new(schema));
         let original_name = original_plan.name().to_string();
 
-        let local_plan = FFI_ExecutionPlan::new(original_plan, ctx.task_ctx())?;
+        let local_plan = FFI_ExecutionPlan::new(original_plan, ctx.task_ctx());
 
         let foreign_plan = unsafe { ForeignExecutionPlan::new(local_plan)? };
 

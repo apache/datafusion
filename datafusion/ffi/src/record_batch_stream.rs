@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{ffi::c_void, sync::Arc, task::Poll};
+use std::{ffi::c_void, task::Poll};
 
 use abi_stable::{
     std_types::{ROption, RResult, RString},
@@ -24,8 +24,7 @@ use abi_stable::{
 use arrow::array::{Array, RecordBatch};
 use arrow::{
     array::{make_array, StructArray},
-    datatypes::{Schema, SchemaRef},
-    ffi::{from_ffi, to_ffi, FFI_ArrowArray, FFI_ArrowSchema},
+    ffi::{from_ffi, to_ffi, FFI_ArrowArray},
 };
 use async_ffi::{ContextExt, FfiContext, FfiPoll};
 use datafusion::error::Result;
@@ -35,6 +34,8 @@ use datafusion::{
 };
 use futures::{Stream, TryStreamExt};
 
+use crate::plan_properties::WrappedSchema;
+
 #[repr(C)]
 #[derive(Debug, StableAbi)]
 pub struct WrappedArray {
@@ -42,17 +43,6 @@ pub struct WrappedArray {
     array: FFI_ArrowArray,
 
     schema: WrappedSchema,
-}
-
-#[repr(C)]
-#[derive(Debug, StableAbi)]
-pub struct WrappedSchema(#[sabi(unsafe_opaque_field)] FFI_ArrowSchema);
-
-impl From<SchemaRef> for WrappedSchema {
-    fn from(value: SchemaRef) -> Self {
-        let schema = FFI_ArrowSchema::try_from(value.as_ref());
-        WrappedSchema(schema.unwrap_or(FFI_ArrowSchema::empty()))
-    }
 }
 
 #[repr(C)]
@@ -133,8 +123,7 @@ unsafe extern "C" fn poll_next_fn_wrapper(
 impl RecordBatchStream for FFI_RecordBatchStream {
     fn schema(&self) -> arrow::datatypes::SchemaRef {
         let wrapped_schema = unsafe { (self.schema)(self) };
-        let schema = Schema::try_from(&wrapped_schema.0);
-        Arc::new(schema.unwrap_or(Schema::empty()))
+        wrapped_schema.into()
     }
 }
 

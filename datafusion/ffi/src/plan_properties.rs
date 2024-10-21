@@ -24,7 +24,10 @@ use abi_stable::{
     },
     StableAbi,
 };
-use arrow::ffi::FFI_ArrowSchema;
+use arrow::{
+    datatypes::{Schema, SchemaRef},
+    ffi::FFI_ArrowSchema,
+};
 use datafusion::{
     error::{DataFusionError, Result},
     physical_expr::EquivalenceProperties,
@@ -39,6 +42,7 @@ use datafusion_proto::{
     },
     protobuf::{Partitioning, PhysicalSortExprNodeCollection},
 };
+use log::error;
 use prost::Message;
 
 // TODO: should we just make ExecutionMode repr(C)?
@@ -74,6 +78,33 @@ impl From<FFI_ExecutionMode> for ExecutionMode {
 #[repr(C)]
 #[derive(Debug, StableAbi)]
 pub struct WrappedSchema(#[sabi(unsafe_opaque_field)] pub FFI_ArrowSchema);
+
+impl From<SchemaRef> for WrappedSchema {
+    fn from(value: SchemaRef) -> Self {
+        let ffi_schema = match FFI_ArrowSchema::try_from(value.as_ref()) {
+            Ok(s) => s,
+            Err(e) => {
+                error!("Unable to convert DataFusion Schema to FFI_ArrowSchema in FFI_PlanProperties. {}", e);
+                FFI_ArrowSchema::empty()
+            }
+        };
+
+        WrappedSchema(ffi_schema)
+    }
+}
+
+impl From<WrappedSchema> for SchemaRef {
+    fn from(value: WrappedSchema) -> Self {
+        let schema = match Schema::try_from(&value.0) {
+            Ok(s) => s,
+            Err(e) => {
+                error!("Unable to convert from FFI_ArrowSchema to DataFusion Schema in FFI_PlanProperties. {}", e);
+                Schema::empty()
+            }
+        };
+        Arc::new(schema)
+    }
+}
 
 #[repr(C)]
 #[derive(Debug, StableAbi)]
@@ -165,10 +196,8 @@ unsafe extern "C" fn schema_fn_wrapper(properties: &FFI_PlanProperties) -> Wrapp
     let private_data = properties.private_data as *const PlanPropertiesPrivateData;
     let props = &(*private_data).props;
 
-    let schema = props.eq_properties.schema();
-    WrappedSchema(
-        FFI_ArrowSchema::try_from(schema.as_ref()).unwrap_or(FFI_ArrowSchema::empty()),
-    )
+    let schema: SchemaRef = Arc::clone(props.eq_properties.schema());
+    schema.into()
 }
 
 unsafe extern "C" fn release_fn_wrapper(props: &mut FFI_PlanProperties) {
@@ -245,10 +274,13 @@ impl ForeignPlanProperties {
                     &schema,
                     &codex,
                 )?
-                .unwrap()
+                .ok_or(DataFusionError::Plan(
+                    "Unable to deserialize partitioning protobuf in FFI_PlanProperties"
+                        .to_string(),
+                ))
             }
-            RErr(e) => return Err(DataFusionError::Plan(e.to_string())),
-        };
+            RErr(e) => Err(DataFusionError::Plan(e.to_string())),
+        }?;
 
         let execution_mode: ExecutionMode = (ffi_props.execution_mode)(&ffi_props).into();
 
