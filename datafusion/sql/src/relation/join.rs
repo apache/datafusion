@@ -151,7 +151,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         .build()
                 }
             }
-            JoinConstraint::None => not_impl_err!("NONE constraint is not supported"),
+            JoinConstraint::None => LogicalPlanBuilder::from(left)
+                .join_on(right, join_type, [])?
+                .build(),
         }
     }
 }

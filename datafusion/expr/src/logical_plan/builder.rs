@@ -30,8 +30,8 @@ use crate::expr_rewriter::{
     rewrite_sort_cols_by_aggs,
 };
 use crate::logical_plan::{
-    Aggregate, Analyze, CrossJoin, Distinct, DistinctOn, EmptyRelation, Explain, Filter,
-    Join, JoinConstraint, JoinType, Limit, LogicalPlan, Partitioning, PlanType, Prepare,
+    Aggregate, Analyze, Distinct, DistinctOn, EmptyRelation, Explain, Filter, Join,
+    JoinConstraint, JoinType, Limit, LogicalPlan, Partitioning, PlanType, Prepare,
     Projection, Repartition, Sort, SubqueryAlias, TableScan, Union, Unnest, Values,
     Window,
 };
@@ -44,18 +44,17 @@ use crate::{
     TableProviderFilterPushDown, TableSource, WriteOp,
 };
 
+use super::dml::InsertOp;
+use super::plan::ColumnUnnestList;
 use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef};
 use datafusion_common::display::ToStringifiedPlan;
 use datafusion_common::file_options::file_type::FileType;
 use datafusion_common::{
     get_target_functional_dependencies, internal_err, not_impl_err, plan_datafusion_err,
-    plan_err, Column, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
-    TableReference, ToDFSchema, UnnestOptions,
+    plan_err, Column, DFSchema, DFSchemaRef, DataFusionError, FunctionalDependencies,
+    Result, ScalarValue, TableReference, ToDFSchema, UnnestOptions,
 };
 use datafusion_expr_common::type_coercion::binary::type_union_resolution;
-
-use super::dml::InsertOp;
-use super::plan::{ColumnUnnestList, ColumnUnnestType};
 
 /// Default table name for unnamed table
 pub const UNNAMED_TABLE: &str = "?table?";
@@ -950,9 +949,14 @@ impl LogicalPlanBuilder {
     pub fn cross_join(self, right: LogicalPlan) -> Result<Self> {
         let join_schema =
             build_join_schema(self.plan.schema(), right.schema(), &JoinType::Inner)?;
-        Ok(Self::new(LogicalPlan::CrossJoin(CrossJoin {
+        Ok(Self::new(LogicalPlan::Join(Join {
             left: self.plan,
             right: Arc::new(right),
+            on: vec![],
+            filter: None,
+            join_type: JoinType::Inner,
+            join_constraint: JoinConstraint::On,
+            null_equals_null: false,
             schema: DFSchemaRef::new(join_schema),
         })))
     }
@@ -1181,7 +1185,7 @@ impl LogicalPlanBuilder {
     ) -> Result<Self> {
         unnest_with_options(
             Arc::unwrap_or_clone(self.plan),
-            vec![(column.into(), ColumnUnnestType::Inferred)],
+            vec![column.into()],
             options,
         )
         .map(Self::new)
@@ -1191,26 +1195,6 @@ impl LogicalPlanBuilder {
     pub fn unnest_columns_with_options(
         self,
         columns: Vec<Column>,
-        options: UnnestOptions,
-    ) -> Result<Self> {
-        unnest_with_options(
-            Arc::unwrap_or_clone(self.plan),
-            columns
-                .into_iter()
-                .map(|c| (c, ColumnUnnestType::Inferred))
-                .collect(),
-            options,
-        )
-        .map(Self::new)
-    }
-
-    /// Unnest the given columns with the given [`UnnestOptions`]
-    /// if one column is a list type, it can be recursively and simultaneously
-    /// unnested into the desired recursion levels
-    /// e.g select unnest(list_col,depth=1), unnest(list_col,depth=2)
-    pub fn unnest_columns_recursive_with_options(
-        self,
-        columns: Vec<(Column, ColumnUnnestType)>,
         options: UnnestOptions,
     ) -> Result<Self> {
         unnest_with_options(Arc::unwrap_or_clone(self.plan), columns, options)
@@ -1402,7 +1386,12 @@ pub fn validate_unique_names<'a>(
 pub fn union(left_plan: LogicalPlan, right_plan: LogicalPlan) -> Result<LogicalPlan> {
     // Temporarily use the schema from the left input and later rely on the analyzer to
     // coerce the two schemas into a common one.
-    let schema = Arc::clone(left_plan.schema());
+
+    // Functional Dependencies doesn't preserve after UNION operation
+    let schema = (**left_plan.schema()).clone();
+    let schema =
+        Arc::new(schema.with_functional_dependencies(FunctionalDependencies::empty())?);
+
     Ok(LogicalPlan::Union(Union {
         inputs: vec![Arc::new(left_plan), Arc::new(right_plan)],
         schema,
@@ -1589,14 +1578,12 @@ impl TableSource for LogicalTableSource {
 
 /// Create a [`LogicalPlan::Unnest`] plan
 pub fn unnest(input: LogicalPlan, columns: Vec<Column>) -> Result<LogicalPlan> {
-    let unnestings = columns
-        .into_iter()
-        .map(|c| (c, ColumnUnnestType::Inferred))
-        .collect();
-    unnest_with_options(input, unnestings, UnnestOptions::default())
+    unnest_with_options(input, columns, UnnestOptions::default())
 }
 
-pub fn get_unnested_list_datatype_recursive(
+// Get the data type of a multi-dimensional type after unnesting it
+// with a given depth
+fn get_unnested_list_datatype_recursive(
     data_type: &DataType,
     depth: usize,
 ) -> Result<DataType> {
@@ -1613,27 +1600,6 @@ pub fn get_unnested_list_datatype_recursive(
     };
 
     internal_err!("trying to unnest on invalid data type {:?}", data_type)
-}
-
-/// Infer the unnest type based on the data type:
-/// - list type: infer to unnest(list(col, depth=1))
-/// - struct type: infer to unnest(struct)
-fn infer_unnest_type(
-    col_name: &String,
-    data_type: &DataType,
-) -> Result<ColumnUnnestType> {
-    match data_type {
-        DataType::List(_) | DataType::FixedSizeList(_, _) | DataType::LargeList(_) => {
-            Ok(ColumnUnnestType::List(vec![ColumnUnnestList {
-                output_column: Column::from_name(col_name),
-                depth: 1,
-            }]))
-        }
-        DataType::Struct(_) => Ok(ColumnUnnestType::Struct),
-        _ => {
-            internal_err!("trying to unnest on invalid data type {:?}", data_type)
-        }
-    }
 }
 
 pub fn get_struct_unnested_columns(
@@ -1724,20 +1690,15 @@ pub fn get_unnested_columns(
 /// ```
 pub fn unnest_with_options(
     input: LogicalPlan,
-    columns_to_unnest: Vec<(Column, ColumnUnnestType)>,
+    columns_to_unnest: Vec<Column>,
     options: UnnestOptions,
 ) -> Result<LogicalPlan> {
     let mut list_columns: Vec<(usize, ColumnUnnestList)> = vec![];
     let mut struct_columns = vec![];
     let indices_to_unnest = columns_to_unnest
         .iter()
-        .map(|col_unnesting| {
-            Ok((
-                input.schema().index_of_column(&col_unnesting.0)?,
-                col_unnesting,
-            ))
-        })
-        .collect::<Result<HashMap<usize, &(Column, ColumnUnnestType)>>>()?;
+        .map(|c| Ok((input.schema().index_of_column(c)?, c)))
+        .collect::<Result<HashMap<usize, &Column>>>()?;
 
     let input_schema = input.schema();
 
@@ -1762,51 +1723,59 @@ pub fn unnest_with_options(
         .enumerate()
         .map(|(index, (original_qualifier, original_field))| {
             match indices_to_unnest.get(&index) {
-                Some((column_to_unnest, unnest_type)) => {
-                    let mut inferred_unnest_type = unnest_type.clone();
-                    if let ColumnUnnestType::Inferred = unnest_type {
-                        inferred_unnest_type = infer_unnest_type(
+                Some(column_to_unnest) => {
+                    let recursions_on_column = options
+                        .recursions
+                        .iter()
+                        .filter(|p| -> bool { &p.input_column == *column_to_unnest })
+                        .collect::<Vec<_>>();
+                    let mut transformed_columns = recursions_on_column
+                        .iter()
+                        .map(|r| {
+                            list_columns.push((
+                                index,
+                                ColumnUnnestList {
+                                    output_column: r.output_column.clone(),
+                                    depth: r.depth,
+                                },
+                            ));
+                            Ok(get_unnested_columns(
+                                &r.output_column.name,
+                                original_field.data_type(),
+                                r.depth,
+                            )?
+                            .into_iter()
+                            .next()
+                            .unwrap()) // because unnesting a list column always result into one result
+                        })
+                        .collect::<Result<Vec<(Column, Arc<Field>)>>>()?;
+                    if transformed_columns.is_empty() {
+                        transformed_columns = get_unnested_columns(
                             &column_to_unnest.name,
                             original_field.data_type(),
+                            1,
                         )?;
-                    }
-                    let transformed_columns: Vec<(Column, Arc<Field>)> =
-                        match inferred_unnest_type {
-                            ColumnUnnestType::Struct => {
+                        match original_field.data_type() {
+                            DataType::Struct(_) => {
                                 struct_columns.push(index);
-                                get_unnested_columns(
-                                    &column_to_unnest.name,
-                                    original_field.data_type(),
-                                    1,
-                                )?
                             }
-                            ColumnUnnestType::List(unnest_lists) => {
-                                list_columns.extend(
-                                    unnest_lists
-                                        .iter()
-                                        .map(|ul| (index, ul.to_owned().clone())),
-                                );
-                                unnest_lists
-                                    .iter()
-                                    .map(
-                                        |ColumnUnnestList {
-                                             output_column,
-                                             depth,
-                                         }| {
-                                            get_unnested_columns(
-                                                &output_column.name,
-                                                original_field.data_type(),
-                                                *depth,
-                                            )
-                                        },
-                                    )
-                                    .collect::<Result<Vec<Vec<(Column, Arc<Field>)>>>>()?
-                                    .into_iter()
-                                    .flatten()
-                                    .collect::<Vec<_>>()
+                            DataType::List(_)
+                            | DataType::FixedSizeList(_, _)
+                            | DataType::LargeList(_) => {
+                                list_columns.push((
+                                    index,
+                                    ColumnUnnestList {
+                                        output_column: Column::from_name(
+                                            &column_to_unnest.name,
+                                        ),
+                                        depth: 1,
+                                    },
+                                ));
                             }
-                            _ => return internal_err!("Invalid unnest type"),
+                            _ => {}
                         };
+                    }
+
                     // new columns dependent on the same original index
                     dependency_indices
                         .extend(std::iter::repeat(index).take(transformed_columns.len()));
@@ -1855,7 +1824,7 @@ mod tests {
     use crate::logical_plan::StringifiedPlan;
     use crate::{col, expr, expr_fn::exists, in_subquery, lit, scalar_subquery};
 
-    use datafusion_common::SchemaError;
+    use datafusion_common::{RecursionUnnestOption, SchemaError};
 
     #[test]
     fn plan_builder_simple() -> Result<()> {
@@ -2263,24 +2232,19 @@ mod tests {
 
         // Simultaneously unnesting a list (with different depth) and a struct column
         let plan = nested_table_scan("test_table")?
-            .unnest_columns_recursive_with_options(
-                vec![
-                    (
-                        "stringss".into(),
-                        ColumnUnnestType::List(vec![
-                            ColumnUnnestList {
-                                output_column: Column::from_name("stringss_depth_1"),
-                                depth: 1,
-                            },
-                            ColumnUnnestList {
-                                output_column: Column::from_name("stringss_depth_2"),
-                                depth: 2,
-                            },
-                        ]),
-                    ),
-                    ("struct_singular".into(), ColumnUnnestType::Inferred),
-                ],
-                UnnestOptions::default(),
+            .unnest_columns_with_options(
+                vec!["stringss".into(), "struct_singular".into()],
+                UnnestOptions::default()
+                    .with_recursions(RecursionUnnestOption {
+                        input_column: "stringss".into(),
+                        output_column: "stringss_depth_1".into(),
+                        depth: 1,
+                    })
+                    .with_recursions(RecursionUnnestOption {
+                        input_column: "stringss".into(),
+                        output_column: "stringss_depth_2".into(),
+                        depth: 2,
+                    }),
             )?
             .build()?;
 
