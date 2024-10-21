@@ -17,6 +17,7 @@
 
 use std::sync::Arc;
 
+use arrow::datatypes::{Float32Type, Float64Type, Int16Type, Int32Type, Int64Type, Int8Type, UInt16Type, UInt32Type, UInt64Type, UInt8Type};
 use arrow_array::{ArrayRef, RecordBatch};
 use arrow_schema::{DataType, Field, Schema};
 use datafusion_common::{arrow_datafusion_err, DataFusionError, Result};
@@ -222,7 +223,7 @@ macro_rules! generate_string_array {
 }
 
 macro_rules! generate_primitive_array {
-    ($SELF:ident, $NUM_ROWS:ident, $BATCH_GEN_RNG:ident, $ARRAY_GEN_RNG:ident, $DATA_TYPE:ident) => {
+    ($SELF:ident, $NUM_ROWS:ident, $BATCH_GEN_RNG:ident, $ARRAY_GEN_RNG:ident, $DATA_TYPE:ident, $ARROW_TYPE:ident) => {
         paste::paste! {{
             let null_pct_idx = $BATCH_GEN_RNG.gen_range(0..$SELF.candidate_null_pcts.len());
             let null_pct = $SELF.candidate_null_pcts[null_pct_idx];
@@ -239,7 +240,7 @@ macro_rules! generate_primitive_array {
                 rng: $ARRAY_GEN_RNG,
             };
 
-            generator.[< gen_data_ $DATA_TYPE >]()
+            generator.gen_data::<$DATA_TYPE, $ARROW_TYPE>()
     }}}
 }
 
@@ -297,7 +298,8 @@ impl RecordBatchGenerator {
                     num_rows,
                     batch_gen_rng,
                     array_gen_rng,
-                    i8
+                    i8,
+                    Int8Type
                 )
             }
             DataType::Int16 => {
@@ -306,7 +308,8 @@ impl RecordBatchGenerator {
                     num_rows,
                     batch_gen_rng,
                     array_gen_rng,
-                    i16
+                    i16,
+                    Int16Type
                 )
             }
             DataType::Int32 => {
@@ -315,7 +318,8 @@ impl RecordBatchGenerator {
                     num_rows,
                     batch_gen_rng,
                     array_gen_rng,
-                    i32
+                    i32,
+                    Int32Type
                 )
             }
             DataType::Int64 => {
@@ -324,7 +328,8 @@ impl RecordBatchGenerator {
                     num_rows,
                     batch_gen_rng,
                     array_gen_rng,
-                    i64
+                    i64,
+                    Int64Type
                 )
             }
             DataType::UInt8 => {
@@ -333,7 +338,8 @@ impl RecordBatchGenerator {
                     num_rows,
                     batch_gen_rng,
                     array_gen_rng,
-                    u8
+                    u8,
+                    UInt8Type
                 )
             }
             DataType::UInt16 => {
@@ -342,7 +348,8 @@ impl RecordBatchGenerator {
                     num_rows,
                     batch_gen_rng,
                     array_gen_rng,
-                    u16
+                    u16,
+                    UInt16Type
                 )
             }
             DataType::UInt32 => {
@@ -351,7 +358,8 @@ impl RecordBatchGenerator {
                     num_rows,
                     batch_gen_rng,
                     array_gen_rng,
-                    u32
+                    u32,
+                    UInt32Type
                 )
             }
             DataType::UInt64 => {
@@ -360,7 +368,8 @@ impl RecordBatchGenerator {
                     num_rows,
                     batch_gen_rng,
                     array_gen_rng,
-                    u64
+                    u64,
+                    UInt64Type
                 )
             }
             DataType::Float32 => {
@@ -369,7 +378,8 @@ impl RecordBatchGenerator {
                     num_rows,
                     batch_gen_rng,
                     array_gen_rng,
-                    f32
+                    f32,
+                    Float32Type
                 )
             }
             DataType::Float64 => {
@@ -378,7 +388,8 @@ impl RecordBatchGenerator {
                     num_rows,
                     batch_gen_rng,
                     array_gen_rng,
-                    f64
+                    f64,
+                    Float64Type
                 )
             }
             DataType::Utf8 => {
