@@ -29,7 +29,8 @@ use arrow::datatypes::{
     DECIMAL128_MAX_SCALE, DECIMAL256_MAX_PRECISION, DECIMAL256_MAX_SCALE,
 };
 use datafusion_common::{
-    exec_datafusion_err, exec_err, internal_err, plan_datafusion_err, plan_err, Result,
+    exec_datafusion_err, exec_err, internal_err, plan_datafusion_err, plan_err,
+    DataFusionError, Result,
 };
 use itertools::Itertools;
 
@@ -375,6 +376,8 @@ impl From<&DataType> for TypeCategory {
 /// decimal precision and scale when coercing decimal types.
 ///
 /// This function doesn't preserve correct field name and nullability for the struct type, we only care about data type.
+///
+/// Returns Option because we might want to continue on the code even if the data types are not coercible to the common type
 pub fn type_union_resolution(data_types: &[DataType]) -> Option<DataType> {
     if data_types.is_empty() {
         return None;
@@ -533,18 +536,16 @@ fn type_union_resolution_coercion(
 }
 
 pub fn try_type_union_resolution(data_types: &[DataType]) -> Result<Vec<DataType>> {
-    let mut errors = vec![];
+    let mut err = None;
     match try_type_union_resolution_with_struct(data_types) {
         Ok(struct_types) => return Ok(struct_types),
-        Err(e) => {
-            errors.push(e);
-        }
+        Err(e) => err = Some(e),
     }
 
     if let Some(new_type) = type_union_resolution(data_types) {
         Ok(vec![new_type; data_types.len()])
     } else {
-        exec_err!("Fail to find the coerced type, errors: {:?}", errors)
+        exec_err!("Fail to find the coerced type, errors: {:?}", err)
     }
 }
 
