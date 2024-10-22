@@ -1451,7 +1451,6 @@ impl SMJStream {
                 };
 
             let streamed_columns_length = streamed_columns.len();
-            let buffered_columns_length = buffered_columns.len();
 
             // Prepare the columns we apply join filter on later.
             // Only for joined rows between streamed and buffered.
