@@ -136,7 +136,21 @@ no_baz
 no_foo
 NULL
 
-
+# Regression test: missing schema metadata from union when schema with metadata isn't the first one
+# and also ensure it works fine with multiple unions
+query T
+select name from (
+  SELECT NULL::string as name
+  UNION ALL
+  SELECT nonnull_name as name FROM "table_with_metadata"
+  UNION ALL
+  SELECT NULL::string as name
+) group by name order by name;
+----
+no_bar
+no_baz
+no_foo
+NULL
 
 query P rowsort
 SELECT ts
