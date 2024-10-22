@@ -80,7 +80,7 @@ pub trait LogicalType: Sync + Send {
 }
 
 impl fmt::Debug for dyn LogicalType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_tuple("LogicalType")
             .field(&self.signature())
             .field(&self.native())

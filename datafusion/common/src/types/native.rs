@@ -15,61 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{ops::Deref, sync::Arc};
+use std::sync::Arc;
 
-use arrow_schema::{DataType, Field, Fields, IntervalUnit, TimeUnit, UnionFields};
+use arrow_schema::{DataType, IntervalUnit, TimeUnit};
 
-use super::{LogicalType, TypeSignature};
-
-/// A record of a native type, its name and its nullability.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct NativeField {
-    name: String,
-    native_type: NativeType,
-    nullable: bool,
-}
-
-impl NativeField {
-    pub fn name(&self) -> &str {
-        &self.name
-    }
-
-    pub fn native_type(&self) -> &NativeType {
-        &self.native_type
-    }
-
-    pub fn nullable(&self) -> bool {
-        self.nullable
-    }
-}
-
-/// A reference counted [`NativeField`].
-pub type NativeFieldRef = Arc<NativeField>;
-
-/// A cheaply cloneable, owned collection of [`NativeFieldRef`].
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct NativeFields(Arc<[NativeFieldRef]>);
-
-impl Deref for NativeFields {
-    type Target = [NativeFieldRef];
-
-    fn deref(&self) -> &Self::Target {
-        self.0.as_ref()
-    }
-}
-
-/// A cheaply cloneable, owned collection of [`NativeFieldRef`] and their
-/// corresponding type ids.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct NativeUnionFields(Arc<[(i8, NativeFieldRef)]>);
-
-impl Deref for NativeUnionFields {
-    type Target = [(i8, NativeFieldRef)];
-
-    fn deref(&self) -> &Self::Target {
-        self.0.as_ref()
-    }
-}
+use super::{
+    LogicalFieldRef, LogicalFields, LogicalType, LogicalUnionFields, TypeSignature,
+};
 
 /// Representation of a type that DataFusion can handle natively. It is a subset
 /// of the physical variants in Arrow's native [`DataType`].
@@ -196,13 +148,13 @@ pub enum NativeType {
     /// A variable-length string in Unicode with UTF-8 encoding.
     Utf8,
     /// A list of some logical data type with variable length.
-    List(NativeFieldRef),
+    List(LogicalFieldRef),
     /// A list of some logical data type with fixed length.
-    FixedSizeList(NativeFieldRef, i32),
+    FixedSizeList(LogicalFieldRef, i32),
     /// A nested type that contains a number of sub-fields.
-    Struct(NativeFields),
+    Struct(LogicalFields),
     /// A nested type that can represent slots of differing types.
-    Union(NativeUnionFields),
+    Union(LogicalUnionFields),
     /// Decimal value with precision and scale
     ///
     /// * precision is the total number of digits
@@ -222,11 +174,10 @@ pub enum NativeType {
     /// The key and value types are not constrained, but keys should be
     /// hashable and unique.
     ///
-    /// In a field with Map type, the field has a child Struct field, which then
-    /// has two children: key type and the second the value type. The names of the
+    /// In a field with Map type, key type and the second the value type. The names of the
     /// child fields may be respectively "entries", "key", and "value", but this is
     /// not enforced.
-    Map(NativeFieldRef),
+    Map(LogicalFieldRef),
 }
 
 impl LogicalType for NativeType {
@@ -275,54 +226,14 @@ impl From<DataType> for NativeType {
             DataType::FixedSizeList(field, size) => {
                 FixedSizeList(Arc::new(field.as_ref().into()), size)
             }
-            DataType::Struct(fields) => Struct(NativeFields::from(&fields)),
+            DataType::Struct(fields) => Struct(LogicalFields::from(&fields)),
             DataType::Union(union_fields, _) => {
-                Union(NativeUnionFields::from(&union_fields))
+                Union(LogicalUnionFields::from(&union_fields))
             }
             DataType::Dictionary(_, data_type) => data_type.as_ref().clone().into(),
             DataType::Decimal128(p, s) | DataType::Decimal256(p, s) => Decimal(p, s),
             DataType::Map(field, _) => Map(Arc::new(field.as_ref().into())),
             DataType::RunEndEncoded(_, field) => field.data_type().clone().into(),
         }
-    }
-}
-
-impl From<&Field> for NativeField {
-    fn from(value: &Field) -> Self {
-        Self {
-            name: value.name().clone(),
-            native_type: value.data_type().clone().into(),
-            nullable: value.is_nullable(),
-        }
-    }
-}
-
-impl From<&Fields> for NativeFields {
-    fn from(value: &Fields) -> Self {
-        value
-            .iter()
-            .map(|field| Arc::new(NativeField::from(field.as_ref())))
-            .collect()
-    }
-}
-
-impl FromIterator<NativeFieldRef> for NativeFields {
-    fn from_iter<T: IntoIterator<Item = NativeFieldRef>>(iter: T) -> Self {
-        Self(iter.into_iter().collect())
-    }
-}
-
-impl From<&UnionFields> for NativeUnionFields {
-    fn from(value: &UnionFields) -> Self {
-        value
-            .iter()
-            .map(|(i, field)| (i, Arc::new(NativeField::from(field.as_ref()))))
-            .collect()
-    }
-}
-
-impl FromIterator<(i8, NativeFieldRef)> for NativeUnionFields {
-    fn from_iter<T: IntoIterator<Item = (i8, NativeFieldRef)>>(iter: T) -> Self {
-        Self(iter.into_iter().collect())
     }
 }

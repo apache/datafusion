@@ -15,8 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
+mod field;
 mod logical;
 mod native;
 
+pub use field::*;
 pub use logical::*;
 pub use native::*;
