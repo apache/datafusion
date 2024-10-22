@@ -146,7 +146,7 @@ mod tests {
         ranks: Vec<Range<usize>>,
         expected: Vec<f64>,
     ) -> Result<()> {
-        let evaluator = CumeDistEvaluator::default();
+        let evaluator = CumeDistEvaluator;
         let result = evaluator.evaluate_all_with_rank(num_rows, &ranks)?;
         let result = as_float64_array(&result)?;
         let result = result.values().to_vec();
