@@ -32,11 +32,19 @@ use std::sync::Arc;
 ///
 /// This interface provides a way to implement custom schema adaptation logic
 /// for ParquetExec (for example, to fill missing columns with default value
-/// other than null)
+/// other than null).
+///
+/// Most users should use [`DefaultSchemaAdapterFactory`]. See that struct for
+/// more details and examples.
 pub trait SchemaAdapterFactory: Debug + Send + Sync + 'static {
-    /// Provides `SchemaAdapter`.
-    // The design of this function is mostly modeled for the needs of DefaultSchemaAdapterFactory,
-    // read its implementation docs for the reasoning
+    /// Create a [`SchemaAdapter`]
+    ///
+    /// Arguments:
+    ///
+    /// * `projected_table_schema`: The schema for the table, projected to
+    ///    include only the fields being output (projected) by the this mapping.
+    ///
+    /// * `table_schema`: The entire table schema for the table
     fn create(
         &self,
         projected_table_schema: SchemaRef,
@@ -49,27 +57,27 @@ pub trait SchemaAdapterFactory: Debug + Send + Sync + 'static {
 ///
 /// This is useful for enabling schema evolution in partitioned datasets.
 ///
-/// This has to be done in two stages.
-///
-/// 1. Before reading the file, we have to map projected column indexes from the
-///    table schema to the file schema.
-///
-/// 2. After reading a record batch map the read columns back to the expected
-///    columns indexes and insert null-valued columns wherever the file schema was
-///    missing a column present in the table schema.
+/// See [`DefaultSchemaAdapterFactory`] for more details and examples.
 pub trait SchemaAdapter: Send + Sync {
     /// Map a column index in the table schema to a column index in a particular
     /// file schema
     ///
+    /// This is used while reading a file to push down projections by mapping
+    /// projected column indexes from the table schema to the file schema
+    ///
     /// Panics if index is not in range for the table schema
     fn map_column_index(&self, index: usize, file_schema: &Schema) -> Option<usize>;
 
-    /// Creates a `SchemaMapping` that can be used to cast or map the columns
-    /// from the file schema to the table schema.
+    /// Creates a mapping for casting columns from the file schema to the table
+    /// schema.
     ///
-    /// If the provided `file_schema` contains columns of a different type to the expected
-    /// `table_schema`, the method will attempt to cast the array data from the file schema
-    /// to the table schema where possible.
+    /// This is used after reading a record batch, to map columns to the
+    /// expected columns indexes and insert null-valued columns wherever the
+    /// file schema was missing a column present in the table schema.
+    ///
+    /// If the provided `file_schema` contains columns of a different type to
+    /// the expected `table_schema`, the mapper will attempt to cast the array
+    /// data from the file schema to the table schema where possible.
     ///
     /// Returns a [`SchemaMapper`] that can be applied to the output batch
     /// along with an ordered list of columns to project from the file
@@ -79,11 +87,11 @@ pub trait SchemaAdapter: Send + Sync {
     ) -> datafusion_common::Result<(Arc<dyn SchemaMapper>, Vec<usize>)>;
 }
 
-/// Maps, by casting or reordering columns from the file schema to the table
-/// schema.
+/// Maps, columns from the file schema to the table schema.
+///
+/// See [`DefaultSchemaAdapterFactory`] for more details and examples.
 pub trait SchemaMapper: Debug + Send + Sync {
-    /// Adapts a `RecordBatch` to match the `table_schema` using the stored
-    /// mapping and conversions.
+    /// Adapts a `RecordBatch` to match the `table_schema`
     fn map_batch(&self, batch: RecordBatch) -> datafusion_common::Result<RecordBatch>;
 
     /// Adapts a [`RecordBatch`] that does not have all the columns from the
@@ -99,8 +107,86 @@ pub trait SchemaMapper: Debug + Send + Sync {
     ) -> datafusion_common::Result<RecordBatch>;
 }
 
-/// Implementation of [`SchemaAdapterFactory`] that maps columns by name
-/// and casts columns to the expected type.
+/// Default  [`SchemaAdapterFactory`] for mapping schemas.
+///
+/// This can be used to adapt file-level record batches to a table schema and
+/// implement schema evolution.
+///
+/// Given an input file schema and a table schema, this factor can make
+/// [`SchemaMapper`]s that:
+///
+/// 1. Reorder columns
+/// 2. Cast columns to the correct type
+/// 3. Fill missing columns with nulls
+///
+/// # Illustration of Schema Mapping
+///
+/// ```text
+/// ┌ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─                  ┌ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─
+///  ┌───────┐   ┌───────┐ │                  ┌───────┐   ┌───────┐   ┌───────┐ │
+/// ││  1.0  │   │ "foo" │                   ││ NULL  │   │ "foo" │   │ "1.0" │
+///  ├───────┤   ├───────┤ │ Schema mapping   ├───────┤   ├───────┤   ├───────┤ │
+/// ││  2.0  │   │ "bar" │                   ││  NULL │   │ "bar" │   │ "2.0" │
+///  └───────┘   └───────┘ │────────────────▶ └───────┘   └───────┘   └───────┘ │
+/// │                                        │
+///  column "c"  column "b"│                  column "a"  column "b"  column "c"│
+/// │ Float64       Utf8                     │  Int32        Utf8        Utf8
+///  ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┘                  ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┘
+///     Input Record Batch                         Output Record Batch
+///
+///     Schema {                                   Schema {
+///      "c": Float64,                              "a": Int32,
+///      "b": Utf8,                                 "b": Utf8,
+///     }                                           "c": Utf8,
+///                                                }
+/// ```
+/// # Example of using the `DefaultSchemaAdapterFactory` to map [`RecordBatch`]s
+/// ```
+/// # use std::sync::Arc;
+/// # use arrow::datatypes::{DataType, Field, Schema};
+/// # use datafusion::datasource::schema_adapter::{DefaultSchemaAdapterFactory, SchemaAdapterFactory};
+/// # use datafusion_common::record_batch;
+/// // Table has fields "a" and "b"
+/// let table_schema = Schema::new(vec![
+///     Field::new("a", DataType::Int32, true),
+///     Field::new("b", DataType::Utf8, true),
+///     Field::new("c", DataType::Utf8, true),
+/// ]);
+///
+/// // The file provides only fields "b" and "c" that oder
+/// let projected_table_schema = table_schema.project(&[2, 1]).unwrap();
+///
+/// // create an adapter for the table schema and file schema
+/// let adapter = DefaultSchemaAdapterFactory.create(
+///   Arc::new(table_schema),
+///   Arc::new(projected_table_schema)
+/// );
+///
+/// // The file schema has fields "c" and "b" but "b" is stored as an 'Float64'
+/// // instead of 'Utf8'
+/// let file_schema = Schema::new(vec![
+///    Field::new("c", DataType::Utf8, true),
+///    Field::new("b", DataType::Float64, true),
+/// ]);
+///
+/// // Get a mapping from the file schema to the table schema
+/// let (mapper, _indices) = adapter.map_schema(&file_schema).unwrap();
+///
+/// let file_batch = record_batch!(
+///     ("c", Utf8, vec!["foo", "bar"]),
+///     ("b", Float64, vec![1.0, 2.0])
+/// ).unwrap();
+///
+/// let mapped_batch = mapper.map_batch(file_batch).unwrap();
+///
+/// // the mapped batch has the correct schema and the "b" column has been cast to Utf8
+/// let expected_batch = record_batch!(
+///    ("a", Int32, vec![None, None]),  // missing column filled with nulls
+///    ("b", Utf8, vec!["1.0", "2.0"]), // b was cast to string and order was changed
+///    ("c", Utf8, vec!["foo", "bar"])
+/// ).unwrap();
+/// assert_eq!(mapped_batch, expected_batch);
+/// ```
 #[derive(Clone, Debug, Default)]
 pub struct DefaultSchemaAdapterFactory;
 
