@@ -28,7 +28,9 @@ use std::hash::Hash;
 
 use crate::{expr::Sort, lit};
 
-use datafusion_common::{plan_err, sql_err, DataFusionError, Result, ScalarValue};
+use datafusion_common::{
+    plan_err, sql_datafusion_err, sql_err, DataFusionError, Result, ScalarValue,
+};
 use sqlparser::ast;
 use sqlparser::parser::ParserError::ParserError;
 
@@ -353,9 +355,13 @@ impl TryFrom<ast::WindowFrameBound> for WindowFrameBound {
 }
 
 pub fn convert_frame_bound_to_scalar_value(v: ast::Expr) -> Result<ScalarValue> {
-    Ok(ScalarValue::Utf8(Some(match v {
-        ast::Expr::Value(ast::Value::Number(value, false))
-        | ast::Expr::Value(ast::Value::SingleQuotedString(value)) => value,
+    let scalar = match v {
+        ast::Expr::Value(ast::Value::Number(value, false)) => {
+            ScalarValue::UInt64(Some(parse_number_bound(value)?))
+        }
+        ast::Expr::Value(ast::Value::SingleQuotedString(value)) => {
+            ScalarValue::Utf8(Some(value))
+        }
         ast::Expr::Interval(ast::Interval {
             value,
             leading_field,
@@ -369,16 +375,23 @@ pub fn convert_frame_bound_to_scalar_value(v: ast::Expr) -> Result<ScalarValue> 
                     )));
                 }
             };
-            if let Some(leading_field) = leading_field {
+            ScalarValue::Utf8(Some(if let Some(leading_field) = leading_field {
                 format!("{result} {leading_field}")
             } else {
                 result
-            }
+            }))
         }
         _ => plan_err!(
             "Invalid window frame: frame offsets must be non negative integers"
         )?,
-    })))
+    };
+    Ok(scalar)
+}
+
+fn parse_number_bound(val: String) -> Result<u64> {
+    val.parse().map_err(|e| {
+        sql_datafusion_err!(ParserError(format!("Invalid window frame bound: {e}")))
+    })
 }
 
 impl fmt::Display for WindowFrameBound {
