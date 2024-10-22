@@ -141,7 +141,7 @@ pub struct GroupValuesColumn {
     /// The marked checking buckets in this round
     ///
     /// About the checking flag you can see [`BucketContext`]
-    checking_bucket: Vec<Bucket<(u64, BucketContext)>>,
+    checking_buckets: Vec<Bucket<(u64, BucketContext)>>,
 
     /// We need multiple rounds to process the `input cols`,
     /// and the rows processing in current round is stored here.
@@ -193,6 +193,7 @@ impl GroupValuesColumn {
             schema,
             map,
             group_index_lists: Vec::new(),
+            checking_buckets: Default::default(),
             map_size: 0,
             group_values: vec![],
             hashes_buffer: Default::default(),
@@ -326,92 +327,84 @@ impl GroupValues for GroupValuesColumn {
         // tracks to which group each of the input rows belongs
         groups.clear();
 
-        // 1.1 Calculate the group keys for the group values
+        // General steps for one round `vectorized compare & append`:
+        //   1. Calculate and check hash values of `cols` in `map`
+        //   2. Perform `vectorized compare`
+        //   3. Perform `vectorized append`
+        //   4. Reset the checking flag in `BucketContext`
+
+        // 1. Calculate and check hash values of `cols` in `map`
+        //
+        // 1.1 If bucket not found
+        //   - Insert the `new bucket` build from the `group index`
+        //     and its hash value to `map`
+        //   - Mark this `new bucket` checking, and add it to `checking_buckets`
+        //   - Add row index to `vectorized_append_row_indices`
+        //
+        // 1.2 bucket found
+        //   - Check if the `bucket` checking, if so add it to `remaining_indices`,
+        //     and just process it in next round, otherwise we continue the process
+        //   - Mark `bucket` checking, and add it to `checking_buckets`
+        //   - Add row index to `vectorized_compare_row_indices`
+        //   - Add group indices(from `group_index_lists`) to `vectorized_compare_group_indices`
+        //
         let batch_hashes = &mut self.hashes_buffer;
         batch_hashes.clear();
         batch_hashes.resize(n_rows, 0);
         create_hashes(cols, &self.random_state, batch_hashes)?;
 
-        // 1.2 Check if columns nullable
-        for (col_idx, col) in cols.iter().enumerate() {
-            self.column_nullables_buffer[col_idx] = (col.null_count() != 0);
-        }
+        let num_rows = cols[0].len();
+        self.current_indices.clear();
+        self.current_indices.extend(0..num_rows);
+        while self.current_indices.len() > 0 {
+            let mut next_group_idx = self.group_values[0].len() as u64;
+            for (row, &target_hash) in batch_hashes.iter().enumerate() {
+                let entry = self.map.get_mut(target_hash, |(exist_hash, _)| {
+                    // Somewhat surprisingly, this closure can be called even if the
+                    // hash doesn't match, so check the hash first with an integer
+                    // comparison first avoid the more expensive comparison with
+                    // group value. https://github.com/apache/datafusion/pull/11718
+                    target_hash == *exist_hash
+                });
 
-        // 1.3 Check and record which rows of the input should be appended
-        self.append_rows_buffer.clear();
-        let group_values_len = self.group_values[0].len();
-        let mut next_group_idx = self.group_values[0].len();
-        for (row, &target_hash) in batch_hashes.iter().enumerate() {
-            let entry = self.map.get_mut(target_hash, |(exist_hash, group_idx)| {
-                // Somewhat surprisingly, this closure can be called even if the
-                // hash doesn't match, so check the hash first with an integer
-                // comparison first avoid the more expensive comparison with
-                // group value. https://github.com/apache/datafusion/pull/11718
-                if target_hash != *exist_hash {
-                    return false;
-                }
-
-                fn check_row_equal(
-                    array_row: &dyn GroupColumn,
-                    lhs_row: usize,
-                    array: &ArrayRef,
-                    rhs_row: usize,
-                ) -> bool {
-                    array_row.equal_to(lhs_row, array, rhs_row)
-                }
-
-                if *group_idx < group_values_len {
-                    for (i, group_val) in self.group_values.iter().enumerate() {
-                        if !check_row_equal(group_val.as_ref(), *group_idx, &cols[i], row)
-                        {
-                            return false;
-                        }
-                    }
-                } else {
-                    let row_idx_offset = group_idx - group_values_len;
-                    let row_idx = self.append_rows_buffer[row_idx_offset];
-                    return is_rows_eq(cols, row, cols, row_idx).unwrap();
-                }
-
-                true
-            });
-
-            let group_idx = match entry {
-                // Existing group_index for this group value
-                Some((_hash, group_idx)) => *group_idx,
-                //  1.2 Need to create new entry for the group
-                None => {
-                    // Add new entry to aggr_state and save newly created index
-                    // let group_idx = group_values.num_rows();
-                    // group_values.push(group_rows.row(row));
-                    let prev_group_idx = next_group_idx;
+                let Some((_, bucket_ctx)) = entry else {
+                    // 1.1 Bucket not found case
+                    // Insert the `new bucket` build from the `group index`
+                    // Mark this `new bucket` checking, and add it to `checking_buckets`
+                    let current_group_idx = next_group_idx;
 
                     // for hasher function, use precomputed hash value
-                    self.map.insert_accounted(
-                        (target_hash, prev_group_idx),
-                        |(hash, _group_index)| *hash,
+                    let mut bucket_ctx = BucketContext(current_group_idx);
+                    bucket_ctx.set_checking();
+                    let bucket = self.map.insert_accounted(
+                        (target_hash, bucket_ctx),
+                        |(hash, _)| *hash,
                         &mut self.map_size,
                     );
-                    self.append_rows_buffer.push(row);
+                    self.checking_buckets.push(bucket);
+
+                    // Add row index to `vectorized_append_row_indices`
+                    self.vectorized_append_row_indices.push(row);
+
                     next_group_idx += 1;
+                    continue;
+                };
 
-                    prev_group_idx
+                // 1.2 bucket found
+                // Check if the `bucket` checking, if so add it to `remaining_indices`,
+                // and just process it in next round, otherwise we continue the process
+                if bucket_ctx.is_checking() {
+                    self.remaining_indices.push(row);
+                    continue;
                 }
-            };
-            groups.push(group_idx);
-        }
+                // Mark `bucket` checking, and add it to `checking_buckets`
+                bucket_ctx.set_checking();
 
-        // 1.4 Vectorized append values
-        for col_idx in 0..cols.len() {
-            let all_non_null = !self.column_nullables_buffer[col_idx];
-            let group_value = &mut self.group_values[col_idx];
-            group_value.append_batch(
-                &cols[col_idx],
-                &self.append_rows_buffer,
-                all_non_null,
-            );
+                // Add row index to `vectorized_compare_row_indices`
+                // Add group indices(from `group_index_lists`) to `vectorized_compare_group_indices`
+                self.vectorized_compare_row_indices.push(row);
+            }
         }
-
         Ok(())
     }
 
