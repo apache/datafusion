@@ -854,7 +854,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 op: Or,
                 right,
             }) if is_op_with(And, &left, &right) => Transformed::yes(*right),
-            // Elliminate common factors in conjunctions e.g
+            // Eliminate common factors in conjunctions e.g
             // (A AND B) OR (A AND C) -> A AND (B OR C)
             Expr::BinaryExpr(BinaryExpr {
                 left,
