@@ -86,7 +86,11 @@ fn optimize_impl(
             let final_exec = parquet_exec
                 .clone()
                 .with_dynamic_filter(Some(dynamic_filters.clone()));
-            return Ok(Transformed::yes(Arc::new(final_exec)));
+            if let Some(plan) = final_exec {
+                return Ok(Transformed::yes(plan));
+            } else {
+                return Ok(Transformed::no(plan));
+            }
         }
         Ok(Transformed::no(plan))
     } else {

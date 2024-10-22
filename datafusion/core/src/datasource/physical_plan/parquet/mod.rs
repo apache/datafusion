@@ -583,15 +583,6 @@ impl ParquetExec {
         self
     }
 
-    /// with  the dynamic filter
-    pub fn with_dynamic_filter(
-        mut self,
-        dynamic_filter: Option<Arc<DynamicFilterInfo>>,
-    ) -> Self {
-        self.dynamic_filters = dynamic_filter;
-        self
-    }
-
     /// If true, the predicate will be used during the parquet scan.
     /// Defaults to false
     ///
@@ -886,6 +877,30 @@ impl ExecutionPlan for ParquetExec {
             table_parquet_options: self.table_parquet_options.clone(),
             schema_adapter_factory: self.schema_adapter_factory.clone(),
             dynamic_filters: self.dynamic_filters.clone(),
+        }))
+    }
+
+    fn support_dynamic_filter(&self) -> bool {
+        true
+    }
+
+    fn with_dynamic_filter(
+        &self,
+        dynamic_filters: Option<Arc<DynamicFilterInfo>>,
+    ) -> Option<Arc<dyn ExecutionPlan>> {
+        Some(Arc::new(ParquetExec {
+            base_config: self.base_config.clone(),
+            projected_statistics: self.projected_statistics.clone(),
+            metrics: self.metrics.clone(),
+            predicate: self.predicate.clone(),
+            pruning_predicate: self.pruning_predicate.clone(),
+            page_pruning_predicate: self.page_pruning_predicate.clone(),
+            metadata_size_hint: self.metadata_size_hint.clone(),
+            parquet_file_reader_factory: self.parquet_file_reader_factory.clone(),
+            cache: self.cache.clone(),
+            table_parquet_options: self.table_parquet_options.clone(),
+            schema_adapter_factory: self.schema_adapter_factory.clone(),
+            dynamic_filters: dynamic_filters,
         }))
     }
 }
