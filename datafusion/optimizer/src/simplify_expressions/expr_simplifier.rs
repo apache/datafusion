@@ -1449,13 +1449,13 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 expr: ref like_expr,
                 ref pattern, // Changed to ref pattern to avoid moving
                 negated,
-                escape_char: _,
-                case_insensitive: _,
+                escape_char,
+                case_insensitive,
             }) => {
                 if let Expr::Literal(ScalarValue::Utf8(Some(pattern))) = pattern.as_ref()
                 {
                     // Special case: pattern is just "%"
-                    if pattern == "%" && !is_null(&like_expr) {
+                    if pattern == "%" && !is_null(like_expr) {
                         return Ok(Transformed::yes(lit(!negated)));
                     }
 
@@ -1479,7 +1479,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
 
                     // Handle single % at end case (prefix search)
                     if let Some(index) = pct_wildcard_index {
-                        if index == pattern.len() - 1 {
+                        if index == pattern.len() - 1 && !case_insensitive && escape_char.is_none() {
                             let prefix = pattern[..index].to_string();
                             let new_expr = Expr::ScalarFunction(ScalarFunction {
                                 func: datafusion_functions::string::starts_with(),
