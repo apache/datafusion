@@ -1343,6 +1343,25 @@ pub fn format_state_name(name: &str, state_name: &str) -> String {
     format!("{name}[{state_name}]")
 }
 
+/// contain the left column name(build side) and actual column side(probe side)
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct DynamicFilterColumn {
+    pub build_name: String,
+    pub column: Column,
+}
+
+impl DynamicFilterColumn {
+    pub fn new(build_name: String, column: Column) -> Self {
+        Self { build_name, column }
+    }
+    pub fn column(&self) -> &Column {
+        &self.column
+    }
+    pub fn build_name(&self) -> &str {
+        &self.build_name
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -17,10 +17,6 @@
 
 //! Planner for [`LogicalPlan`] to [`ExecutionPlan`]
 
-use std::borrow::Cow;
-use std::collections::HashMap;
-use std::sync::Arc;
-
 use crate::datasource::file_format::file_type_to_format;
 use crate::datasource::listing::ListingTableUrl;
 use crate::datasource::physical_plan::FileSinkConfig;
@@ -61,6 +57,11 @@ use crate::physical_plan::{
     displayable, windows, ExecutionPlan, ExecutionPlanProperties, InputOrderMode,
     Partitioning, PhysicalExpr, WindowExpr,
 };
+use arrow_schema::DataType;
+use datafusion_physical_plan::joins::DynamicFilterInfo;
+use std::borrow::Cow;
+use std::collections::HashMap;
+use std::sync::Arc;
 
 use arrow::compute::SortOptions;
 use arrow::datatypes::{Schema, SchemaRef};
@@ -82,7 +83,7 @@ use datafusion_expr::{
     StringifiedPlan, WindowFrame, WindowFrameBound, WriteOp,
 };
 use datafusion_physical_expr::aggregate::{AggregateExprBuilder, AggregateFunctionExpr};
-use datafusion_physical_expr::expressions::Literal;
+use datafusion_physical_expr::expressions::{Column, Literal};
 use datafusion_physical_expr::LexOrdering;
 use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion_physical_plan::unnest::ListUnnest;
@@ -343,6 +344,7 @@ impl DefaultPhysicalPlanner {
             );
         }
         let plan = outputs.pop().unwrap();
+
         Ok(plan)
     }
 
@@ -370,6 +372,7 @@ impl DefaultPhysicalPlanner {
                 ChildrenContainer::None,
             )
             .await?;
+
         let mut current_index = leaf_starter_index;
         // parent_index is None only for root
         while let Some(parent_index) = node.parent_index {
@@ -848,6 +851,7 @@ impl DefaultPhysicalPlanner {
                 join_type,
                 null_equals_null,
                 schema: join_schema,
+                dynamic_pushdown_columns,
                 ..
             }) => {
                 let null_equals_null = *null_equals_null;
@@ -1040,6 +1044,53 @@ impl DefaultPhysicalPlanner {
                     }
                     _ => None,
                 };
+                // build the dynamic filters if there's any
+                let physical_dynamic_filter_info: Option<Arc<DynamicFilterInfo>> =
+                    if let Some(dynamic_columns) = dynamic_pushdown_columns {
+                        let columns_and_types_and_names: Vec<(
+                            Arc<Column>,
+                            &DataType,
+                            String,
+                        )> = dynamic_columns
+                            .iter()
+                            .map(|dynamic_column| {
+                                let column = dynamic_column.column();
+                                let index = join_schema.index_of_column(column)?;
+                                let physical_column = Arc::new(
+                                    datafusion_physical_expr::expressions::Column::new(
+                                        &column.name,
+                                        index,
+                                    ),
+                                );
+                                let data_type =
+                                    join_schema.field_from_column(column)?.data_type();
+
+                                let build_side_name =
+                                    dynamic_column.build_name().to_owned();
+                                Ok((physical_column, data_type, build_side_name))
+                            })
+                            .collect::<Result<_, DataFusionError>>()?;
+
+                        let (physical_columns, data_types, build_side_names) =
+                            columns_and_types_and_names.into_iter().fold(
+                                (Vec::new(), Vec::new(), Vec::new()),
+                                |(mut cols, mut types, mut names), (col, ty, name)| {
+                                    cols.push(col);
+                                    types.push(ty);
+                                    names.push(name);
+                                    (cols, types, names)
+                                },
+                            );
+
+                        Some(Arc::new(DynamicFilterInfo::try_new(
+                            physical_columns,
+                            build_side_names,
+                            data_types,
+                            session_state.config_options().execution.target_partitions,
+                        )?))
+                    } else {
+                        None
+                    };
 
                 let prefer_hash_join =
                     session_state.config_options().optimizer.prefer_hash_join;
@@ -1085,27 +1136,33 @@ impl DefaultPhysicalPlanner {
                             PartitionMode::Partitioned
                         }
                     };
-                    Arc::new(HashJoinExec::try_new(
-                        physical_left,
-                        physical_right,
-                        join_on,
-                        join_filter,
-                        join_type,
-                        None,
-                        partition_mode,
-                        null_equals_null,
-                    )?)
+                    Arc::new(
+                        HashJoinExec::try_new(
+                            physical_left,
+                            physical_right,
+                            join_on,
+                            join_filter,
+                            join_type,
+                            None,
+                            partition_mode,
+                            null_equals_null,
+                        )?
+                        .with_dynamic_filter_info(physical_dynamic_filter_info),
+                    )
                 } else {
-                    Arc::new(HashJoinExec::try_new(
-                        physical_left,
-                        physical_right,
-                        join_on,
-                        join_filter,
-                        join_type,
-                        None,
-                        PartitionMode::CollectLeft,
-                        null_equals_null,
-                    )?)
+                    Arc::new(
+                        HashJoinExec::try_new(
+                            physical_left,
+                            physical_right,
+                            join_on,
+                            join_filter,
+                            join_type,
+                            None,
+                            PartitionMode::CollectLeft,
+                            null_equals_null,
+                        )?
+                        .with_dynamic_filter_info(physical_dynamic_filter_info),
+                    )
                 };
 
                 // If plan was mutated previously then need to create the ExecutionPlan

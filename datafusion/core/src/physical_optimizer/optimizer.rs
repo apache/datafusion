@@ -20,6 +20,7 @@
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use std::sync::Arc;
 
+use super::join_filter_pushdown::JoinFilterPushdown;
 use super::projection_pushdown::ProjectionPushdown;
 use super::update_aggr_exprs::OptimizeAggregateOrder;
 use crate::physical_optimizer::aggregate_statistics::AggregateStatistics;
@@ -112,6 +113,7 @@ impl PhysicalOptimizer {
             // given query plan; i.e. it only acts as a final
             // gatekeeping rule.
             Arc::new(SanityCheckPlan::new()),
+            Arc::new(JoinFilterPushdown::new()),
         ];
 
         Self::with_rules(rules)

@@ -160,7 +160,6 @@ impl FileOpener for ParquetOpener {
                     &file_metrics,
                     Arc::clone(&schema_mapping),
                 );
-
                 match row_filter {
                     Ok(Some(filter)) => {
                         builder = builder.with_row_filter(filter);

@@ -23,6 +23,7 @@ use std::sync::Arc;
 use std::task::Poll;
 use std::{any::Any, vec};
 
+use super::dynamic_filters::{DynamicFilterInfo, PartitionedDynamicFilterInfo};
 use super::utils::asymmetric_join_output_partitioning;
 use super::{
     utils::{OnceAsync, OnceFut},
@@ -326,6 +327,8 @@ pub struct HashJoinExec {
     pub null_equals_null: bool,
     /// Cache holding plan properties like equivalences, output partitioning etc.
     cache: PlanProperties,
+    /// The dynamic filter which should be pushed to probe side
+    pub dynamic_filters_pushdown: Option<Arc<DynamicFilterInfo>>,
 }
 
 impl HashJoinExec {
@@ -387,6 +390,7 @@ impl HashJoinExec {
             column_indices,
             null_equals_null,
             cache,
+            dynamic_filters_pushdown: None,
         })
     }
 
@@ -478,7 +482,14 @@ impl HashJoinExec {
             self.null_equals_null,
         )
     }
-
+    /// adding dynamic filter info
+    pub fn with_dynamic_filter_info(
+        mut self,
+        dynamic_filter_info: Option<Arc<DynamicFilterInfo>>,
+    ) -> Self {
+        self.dynamic_filters_pushdown = dynamic_filter_info;
+        self
+    }
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
     fn compute_properties(
         left: &Arc<dyn ExecutionPlan>,
@@ -656,16 +667,19 @@ impl ExecutionPlan for HashJoinExec {
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(HashJoinExec::try_new(
-            Arc::clone(&children[0]),
-            Arc::clone(&children[1]),
-            self.on.clone(),
-            self.filter.clone(),
-            &self.join_type,
-            self.projection.clone(),
-            self.mode,
-            self.null_equals_null,
-        )?))
+        Ok(Arc::new(
+            HashJoinExec::try_new(
+                Arc::clone(&children[0]),
+                Arc::clone(&children[1]),
+                self.on.clone(),
+                self.filter.clone(),
+                &self.join_type,
+                self.projection.clone(),
+                self.mode,
+                self.null_equals_null,
+            )?
+            .with_dynamic_filter_info(self.dynamic_filters_pushdown.clone()),
+        ))
     }
 
     fn execute(
@@ -751,6 +765,16 @@ impl ExecutionPlan for HashJoinExec {
             None => self.column_indices.clone(),
         };
 
+        let partitioned_dynamic_info =
+            self.dynamic_filters_pushdown
+                .as_ref()
+                .map(|dynamic_filters| {
+                    PartitionedDynamicFilterInfo::new(
+                        partition,
+                        Arc::<DynamicFilterInfo>::clone(dynamic_filters),
+                    )
+                });
+
         Ok(Box::pin(HashJoinStream {
             schema: self.schema(),
             on_left,
@@ -767,6 +791,8 @@ impl ExecutionPlan for HashJoinExec {
             batch_size,
             hashes_buffer: vec![],
             right_side_ordered: self.right.output_ordering().is_some(),
+            // todo: remove this clone
+            dynamic_filter_info: partitioned_dynamic_info,
         }))
     }
 
@@ -855,7 +881,6 @@ async fn collect_left_input(
 
     reservation.try_grow(estimated_hashtable_size)?;
     metrics.build_mem_used.add(estimated_hashtable_size);
-
     let mut hashmap = JoinHashMap::with_capacity(num_rows);
     let mut hashes_buffer = Vec::new();
     let mut offset = 0;
@@ -879,7 +904,6 @@ async fn collect_left_input(
     }
     // Merge all batches into a single batch, so we can directly index into the arrays
     let single_batch = concat_batches(&schema, batches_iter)?;
-
     // Reserve additional memory for visited indices bitmap and create shared builder
     let visited_indices_bitmap = if with_visited_indices_bitmap {
         let bitmap_size = bit_util::ceil(single_batch.num_rows(), 8);
@@ -1097,6 +1121,8 @@ struct HashJoinStream {
     hashes_buffer: Vec<u64>,
     /// Specifies whether the right side has an ordering to potentially preserve
     right_side_ordered: bool,
+    /// dynamic filters after calculating the build sides
+    dynamic_filter_info: Option<PartitionedDynamicFilterInfo>,
 }
 
 impl RecordBatchStream for HashJoinStream {
@@ -1294,7 +1320,6 @@ impl HashJoinStream {
     }
 
     /// Collects build-side data by polling `OnceFut` future from initialized build-side
-    ///
     /// Updates build-side to `Ready`, and state to `FetchProbeSide`
     fn collect_build_side(
         &mut self,
@@ -1308,10 +1333,20 @@ impl HashJoinStream {
             .left_fut
             .get_shared(cx))?;
         build_timer.done();
+        // Merge the information to dynamic filters (if there is any) and check if it's finalized
+        let filter_finalized = if let Some(filter_info) = &self.dynamic_filter_info {
+            filter_info.merge_batch_and_check_finalized(&left_data.batch)?
+        } else {
+            true // If there's no dynamic filter, we consider it as "finalized"
+        };
 
+        // If the filter is not finalized after this merge, we need to wait
+        if !filter_finalized {
+            cx.waker().wake_by_ref();
+            return Poll::Pending;
+        }
         self.state = HashJoinStreamState::FetchProbeBatch;
         self.build_side = BuildSide::Ready(BuildSideReadyState { left_data });
-
         Poll::Ready(Ok(StatefulStreamResult::Continue))
     }
 
