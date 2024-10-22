@@ -733,9 +733,9 @@ impl Unparser<'_> {
                 // So we will append the alias to this subquery.
                 // Example:
                 //   select * from t1 limit 10 -> (select * from t1 limit 10) as a
-                if let (alias) = alias {
+                if let Some(alias) = alias {
                     if table_scan.projection.is_none() && table_scan.filters.is_empty() {
-                        builder = builder.alias(alias.clone().unwrap())?;
+                        builder = builder.alias(alias.clone())?;
                     }
                 }
 
