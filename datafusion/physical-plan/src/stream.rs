@@ -103,7 +103,7 @@ impl<O: Send + 'static> ReceiverStreamBuilder<O> {
             mut join_set,
         } = self;
 
-        // Don't need tx
+        // Doesn't need tx
         drop(tx);
 
         // future that checks the result of the join set, and propagates panic if seen
