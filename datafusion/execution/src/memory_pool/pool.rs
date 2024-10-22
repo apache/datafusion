@@ -22,10 +22,7 @@ use log::debug;
 use parking_lot::Mutex;
 use std::{
     num::NonZeroUsize,
-    sync::{
-        atomic::{AtomicU64, AtomicUsize, Ordering},
-        RwLock,
-    },
+    sync::atomic::{AtomicU64, AtomicUsize, Ordering},
 };
 
 /// A [`MemoryPool`] that enforces no limit
@@ -61,9 +58,7 @@ impl MemoryPool for UnboundedMemoryPool {
 #[derive(Debug)]
 pub struct GreedyMemoryPool {
     pool_size: usize,
-    pool_size_per_consumer: HashMap<String, usize>,
     used: AtomicUsize,
-    used_per_consumer: RwLock<HashMap<String, AtomicUsize>>,
 }
 
 impl GreedyMemoryPool {
@@ -72,98 +67,24 @@ impl GreedyMemoryPool {
         debug!("Created new GreedyMemoryPool(pool_size={pool_size})");
         Self {
             pool_size,
-            pool_size_per_consumer: Default::default(),
             used: AtomicUsize::new(0),
-            used_per_consumer: RwLock::new(HashMap::new()),
         }
     }
-
-    pub fn with_pool_size_per_consumer(
-        mut self,
-        pool_size_per_consumer: HashMap<String, usize>,
-    ) -> Self {
-        self.pool_size_per_consumer = pool_size_per_consumer;
-        self
-    }
-}
-
-/// Consumer name is like RepartitionExec\[0\] or SortPreservingMergeExec\[0\],
-/// but we don't need partitioned index
-fn consumer_name_without_index(reservation: &MemoryReservation) -> &str {
-    let name = reservation.consumer().name();
-    name.split('[').next().unwrap_or(name)
 }
 
 impl MemoryPool for GreedyMemoryPool {
-    fn grow(&self, reservation: &MemoryReservation, additional: usize) {
+    fn grow(&self, _reservation: &MemoryReservation, additional: usize) {
         self.used.fetch_add(additional, Ordering::Relaxed);
-        let s = self.used.load(Ordering::Relaxed);
-        let name = consumer_name_without_index(reservation);
-        println!(
-            "name: {} grow to size: {} orin: {}",
-            name,
-            s,
-            reservation.consumer().name()
-        );
-
-        let mut used_per_consumer = self.used_per_consumer.write().unwrap();
-        let consumer_usage = used_per_consumer
-            .entry(name.to_string())
-            .or_insert_with(|| AtomicUsize::new(0));
-        consumer_usage.fetch_add(additional, Ordering::Relaxed);
     }
 
-    fn shrink(&self, reservation: &MemoryReservation, shrink: usize) {
+    fn shrink(&self, _reservation: &MemoryReservation, shrink: usize) {
         self.used.fetch_sub(shrink, Ordering::Relaxed);
-        let s = self.used.load(Ordering::Relaxed);
-        let name = consumer_name_without_index(reservation);
-        println!("name: {} shrink to size: {}", name, s);
-
-        let mut used_per_consumer = self.used_per_consumer.write().unwrap();
-        let consumer_usage = used_per_consumer
-            .entry(name.to_string())
-            .or_insert_with(|| AtomicUsize::new(0));
-        consumer_usage.fetch_sub(shrink, Ordering::Relaxed);
     }
 
     fn try_grow(&self, reservation: &MemoryReservation, additional: usize) -> Result<()> {
-        let name = consumer_name_without_index(reservation);
-        let mut used_per_consumer = self.used_per_consumer.write().unwrap();
-        let consumer_usage = used_per_consumer
-            .entry(name.to_string())
-            .or_insert_with(|| AtomicUsize::new(0));
-        consumer_usage
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |used| {
-                let new_used = used + additional;
-                let pool_size_per_consumer = self
-                    .pool_size_per_consumer
-                    .get(name)
-                    .cloned()
-                    .unwrap_or(self.pool_size);
-
-                (new_used <= pool_size_per_consumer).then_some(new_used)
-            })
-            .map_err(|used| {
-                insufficient_capacity_err(
-                    reservation,
-                    additional,
-                    self.pool_size_per_consumer
-                        .get(name)
-                        .cloned()
-                        .unwrap_or(self.pool_size)
-                        .saturating_sub(used),
-                )
-            })?;
-
         self.used
             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |used| {
                 let new_used = used + additional;
-                println!(
-                    "name: {} new_used: {} origin: {}",
-                    name,
-                    new_used,
-                    reservation.consumer().name()
-                );
                 (new_used <= self.pool_size).then_some(new_used)
             })
             .map_err(|used| {
