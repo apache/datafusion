@@ -68,7 +68,6 @@ rand = { workspace = true }
 tokio = { workspace = true }
 
 [dev-dependencies]
-assertor = { workspace = true }
 datafusion-functions-aggregate = { workspace = true }
 rstest = { workspace = true }
 rstest_reuse = "0.7.0"

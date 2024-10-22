@@ -929,8 +929,6 @@ mod tests {
     use super::*;
     use arrow_array::{DictionaryArray, Int32Array, NullArray, RunArray};
     use arrow_schema::{DataType, Field, Schema, SchemaRef};
-    use assertor::assert_that;
-    use assertor::StringAssertion;
     use std::any::Any;
     use std::sync::Arc;
 
@@ -1100,7 +1098,8 @@ mod tests {
             &vec![0],
         );
         assert!(result.is_err());
-        assert_that!(result.err().unwrap().message().as_ref()).starts_with(
+        assert_starts_with(
+            result.err().unwrap().message().as_ref(),
             "Invalid batch column at '0' has null but schema specifies non-nullable",
         );
         Ok(())
@@ -1124,7 +1123,8 @@ mod tests {
             &vec![0],
         );
         assert!(result.is_err());
-        assert_that!(result.err().unwrap().message().as_ref()).starts_with(
+        assert_starts_with(
+            result.err().unwrap().message().as_ref(),
             "Invalid batch column at '0' has null but schema specifies non-nullable",
         );
         Ok(())
@@ -1147,7 +1147,8 @@ mod tests {
             &vec![0],
         );
         assert!(result.is_err());
-        assert_that!(result.err().unwrap().message().as_ref()).starts_with(
+        assert_starts_with(
+            result.err().unwrap().message().as_ref(),
             "Invalid batch column at '0' has null but schema specifies non-nullable",
         );
         Ok(())
@@ -1189,9 +1190,21 @@ mod tests {
             &vec![0],
         );
         assert!(result.is_err());
-        assert_that!(result.err().unwrap().message().as_ref()).starts_with(
+        assert_starts_with(
+            result.err().unwrap().message().as_ref(),
             "Invalid batch column at '0' has null but schema specifies non-nullable",
         );
         Ok(())
+    }
+
+    fn assert_starts_with(actual: impl AsRef<str>, expected_prefix: impl AsRef<str>) {
+        let actual = actual.as_ref();
+        let expected_prefix = expected_prefix.as_ref();
+        assert!(
+            actual.starts_with(expected_prefix),
+            "Expected '{}' to start with '{}'",
+            actual,
+            expected_prefix
+        );
     }
 }
