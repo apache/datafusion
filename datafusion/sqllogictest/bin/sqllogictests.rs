@@ -62,9 +62,13 @@ async fn run_tests() -> Result<()> {
     env_logger::init();
 
     let options: Options = clap::Parser::parse();
-    // nextest parses stdout
     if options.list {
+        // nextest parses stdout, so print messages to stderr
         eprintln!("NOTICE: --list option unsupported, quitting");
+        // return Ok, not error so that tools like nextest which are listing all
+        // workspace tests (by running `cargo test ... --list --format terse`)
+        // do not fail when they encounter this binary. Instead, print nothing
+        // to stdout and return OK so they can continue listing other tests.
         return Ok(());
     }
     options.warn_on_ignored();
