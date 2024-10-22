@@ -3871,6 +3871,40 @@ digraph {
     }
 
     #[test]
+    fn distinct_on_expr_order_by_mismatch() -> Result<()> {
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+        ]);
+
+        let table_scan = table_scan(TableReference::none(), &schema, None)?.build()?;
+        let p = DistinctOn::try_new(
+            vec![col("a")],
+            vec![],
+            Some(vec![SortExpr::new(col("b"), true, false)]),
+            Arc::new(table_scan),
+        );
+        assert_eq!(p.err().unwrap().strip_backtrace(), "Error during planning: SELECT DISTINCT ON expressions must match initial ORDER BY expressions");
+        Ok(())
+    }
+
+    #[test]
+    fn distinct_on_expr_order_by_match() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+
+        let table_scan =
+            table_scan(Some(TableReference::partial("public", "t")), &schema, None)?
+                .build()?;
+        DistinctOn::try_new(
+            vec![col("t.a")],
+            vec![],
+            Some(vec![SortExpr::new(col("public.t.a"), true, false)]),
+            Arc::new(table_scan),
+        )?;
+        Ok(())
+    }
+
+    #[test]
     fn projection_expr_schema_mismatch() -> Result<()> {
         let empty_schema = Arc::new(DFSchema::empty());
         let p = Projection::try_new_with_schema(
