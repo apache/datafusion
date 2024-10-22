@@ -26,12 +26,10 @@ use datafusion_common::arrow::array::ArrayRef;
 use datafusion_common::arrow::array::UInt64Array;
 use datafusion_common::arrow::datatypes::DataType;
 use datafusion_common::arrow::datatypes::Field;
-use datafusion_common::{
-    arrow_datafusion_err, exec_err, DataFusionError, Result, ScalarValue,
-};
+use datafusion_common::{exec_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr::window_doc_sections::DOC_SECTION_RANKING;
 use datafusion_expr::{
-    Documentation, PartitionEvaluator, Signature, Volatility, WindowUDFImpl,
+    Documentation, Literal, PartitionEvaluator, Signature, Volatility, WindowUDFImpl,
 };
 use datafusion_functions_window_common::expr::ExpressionArgs;
 use datafusion_functions_window_common::field;
@@ -42,11 +40,12 @@ use field::WindowUDFFieldArgs;
 get_or_init_udwf!(
     Ntile,
     ntile,
-    "integer ranging from 1 to the argument value, dividing the partition as equally as possible"
+    "integer ranging from 1 to the argument value, dividing the partition as equally as possible",
+    Ntile::create
 );
 
-pub fn ntile(arg: datafusion_expr::Expr) -> datafusion_expr::Expr {
-    ntile_udwf().call(vec![arg])
+pub fn ntile(arg: i64) -> datafusion_expr::Expr {
+    ntile_udwf().call(vec![arg.lit()])
 }
 
 #[derive(Debug)]
@@ -74,11 +73,8 @@ impl Ntile {
             ),
         }
     }
-}
 
-impl Default for Ntile {
-    /// Create a new `ntile` function
-    fn default() -> Self {
+    pub fn create() -> Self {
         Self::new()
     }
 }
@@ -98,9 +94,6 @@ fn get_ntile_doc() -> &'static Documentation {
             .unwrap()
     })
 }
-// TODO JP look into data types
-// TODO JP delete the ntile file
-// TODO JP if n is not possitive send error
 
 impl WindowUDFImpl for Ntile {
     fn as_any(&self) -> &dyn Any {
@@ -121,7 +114,6 @@ impl WindowUDFImpl for Ntile {
             .collect::<Vec<_>>()
     }
 
-    // TODO JP  will look into this
     fn partition_evaluator(
         &self,
         partition_evaluator_args: PartitionEvaluatorArgs,
@@ -134,61 +126,19 @@ impl WindowUDFImpl for Ntile {
                     )
                 })?;
 
-        let data_type = partition_evaluator_args
-            .input_types()
-            .get(0)
-            .ok_or_else(|| {
-                DataFusionError::Execution(
-                    "NTILE requires a positive integer".to_string(),
-                )
-            })?
-            .to_owned();
-
         let n = get_unsigned_integer(scalar_n)?;
 
-        let data_type = partition_evaluator_args
-            .input_types()
-            .get(0)
-            .ok_or_else(|| {
-                DataFusionError::Execution(
-                    "NTILE requires a positive integer".to_string(),
-                )
-            })?
-            .to_owned();
-
-        Ok(Box::new(NtileEvaluator { n, data_type }))
+        Ok(Box::new(NtileEvaluator { n }))
     }
     fn field(&self, field_args: WindowUDFFieldArgs) -> Result<Field> {
         let nullable = false;
-        Ok(Field::new(self.name(), DataType::UInt64, nullable))
+        let return_type: &DataType = field_args.input_types().first().unwrap();
+
+        Ok(Field::new(self.name(), return_type.clone(), nullable))
     }
 
     fn documentation(&self) -> Option<&Documentation> {
         Some(get_ntile_doc())
-    }
-}
-
-#[derive(Debug)]
-struct NtileEvaluator {
-    n: u64,
-    /// Output data type
-    data_type: DataType,
-}
-
-impl PartitionEvaluator for NtileEvaluator {
-    fn evaluate_all(
-        &mut self,
-        _values: &[ArrayRef],
-        num_rows: usize,
-    ) -> Result<ArrayRef> {
-        let num_rows = num_rows as u64;
-        let mut vec: Vec<u64> = Vec::new();
-        let n = u64::min(self.n, num_rows);
-        for i in 0..num_rows {
-            let res = i * n / num_rows;
-            vec.push(res + 1)
-        }
-        Ok(Arc::new(UInt64Array::from(vec)))
     }
 }
 
@@ -222,8 +172,30 @@ fn parse_expr(
 
         Ok(
             Arc::new(datafusion_physical_expr::expressions::Literal::new(
-                n.into(),
+                (n as u64).into(),
             )) as Arc<dyn PhysicalExpr>,
         )
+    }
+}
+
+#[derive(Debug)]
+struct NtileEvaluator {
+    n: u64,
+}
+
+impl PartitionEvaluator for NtileEvaluator {
+    fn evaluate_all(
+        &mut self,
+        _values: &[ArrayRef],
+        num_rows: usize,
+    ) -> Result<ArrayRef> {
+        let num_rows = num_rows as u64;
+        let mut vec: Vec<u64> = Vec::new();
+        let n = u64::min(self.n, num_rows);
+        for i in 0..num_rows {
+            let res = i * n / num_rows;
+            vec.push(res + 1)
+        }
+        Ok(Arc::new(UInt64Array::from(vec)))
     }
 }
