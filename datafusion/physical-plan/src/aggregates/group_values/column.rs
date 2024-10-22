@@ -254,6 +254,21 @@ impl GroupValuesColumn {
         GroupIndicesIterator::new(start_group_index, &self.group_index_lists)
     }
 
+    /// Collect vectorized context by checking hash values of `cols` in `map`
+    ///
+    /// 1. If bucket not found
+    ///   - Insert the `new bucket` build from the `group index`
+    ///     and its hash value to `map`
+    ///   - Mark this `new bucket` checking, and add it to `checking_buckets`
+    ///   - Add row index to `vectorized_append_row_indices`
+    ///
+    /// 2. bucket found
+    ///   - Check if the `bucket` checking, if so add it to `remaining_indices`,
+    ///     and just process it in next round, otherwise we continue the process
+    ///   - Mark `bucket` checking, and add it to `checking_buckets`
+    ///   - Add row index to `vectorized_compare_row_indices`
+    ///   - Add group indices(from `group_index_lists`) to `vectorized_compare_group_indices`
+    ///
     fn collect_vectorized_process_context(&mut self, batch_hashes: &[u64]) {
         let mut next_group_idx = self.group_values[0].len() as u64;
         for &row in self.current_indices.iter() {
@@ -267,7 +282,7 @@ impl GroupValuesColumn {
             });
 
             let Some((_, bucket_ctx)) = entry else {
-                // 1.1 Bucket not found case
+                // 1. Bucket not found case
                 // Insert the `new bucket` build from the `group index`
                 // Mark this `new bucket` checking, and add it to `checking_buckets`
                 let current_group_idx = next_group_idx;
@@ -289,7 +304,7 @@ impl GroupValuesColumn {
                 continue;
             };
 
-            // 1.2 bucket found
+            // 2. bucket found
             // Check if the `bucket` checking, if so add it to `remaining_indices`,
             // and just process it in next round, otherwise we continue the process
             if bucket_ctx.is_checking() {
@@ -305,7 +320,8 @@ impl GroupValuesColumn {
             while next_group_index > 0 {
                 let current_group_index = next_group_index;
                 self.vectorized_compare_row_indices.push(row);
-                self.vectorized_compare_group_indices.push(current_group_index - 1);
+                self.vectorized_compare_group_indices
+                    .push(current_group_index - 1);
                 next_group_index = self.group_index_lists[current_group_index];
             }
         }
@@ -392,31 +408,16 @@ impl GroupValues for GroupValuesColumn {
         // tracks to which group each of the input rows belongs
         groups.clear();
 
-        // General steps for one round `vectorized compare & append`:
-        //   1. Calculate and check hash values of `cols` in `map`
-        //   2. Perform `vectorized compare`
-        //   3. Perform `vectorized append`
-        //   4. Reset the checking flag in `BucketContext`
-
-        // 1. Calculate and check hash values of `cols` in `map`
-        //
-        // 1.1 If bucket not found
-        //   - Insert the `new bucket` build from the `group index`
-        //     and its hash value to `map`
-        //   - Mark this `new bucket` checking, and add it to `checking_buckets`
-        //   - Add row index to `vectorized_append_row_indices`
-        //
-        // 1.2 bucket found
-        //   - Check if the `bucket` checking, if so add it to `remaining_indices`,
-        //     and just process it in next round, otherwise we continue the process
-        //   - Mark `bucket` checking, and add it to `checking_buckets`
-        //   - Add row index to `vectorized_compare_row_indices`
-        //   - Add group indices(from `group_index_lists`) to `vectorized_compare_group_indices`
-        //
         let batch_hashes = &mut self.hashes_buffer;
         batch_hashes.clear();
         batch_hashes.resize(n_rows, 0);
         create_hashes(cols, &self.random_state, batch_hashes)?;
+
+        // General steps for one round `vectorized compare & append`:
+        //   1. Collect vectorized context by checking hash values of `cols` in `map`
+        //   2. Perform `vectorized compare`
+        //   3. Perform `vectorized append`
+        //   4. Reset the checking flag in `BucketContext`
 
         let num_rows = cols[0].len();
         self.current_indices.clear();
@@ -426,6 +427,9 @@ impl GroupValues for GroupValuesColumn {
             self.vectorized_compare_row_indices.clear();
             self.vectorized_compare_group_indices.clear();
             self.vectorized_compare_results.clear();
+
+            // 1. Collect vectorized context by checking hash values of `cols` in `map`
+            self.collect_vectorized_process_context(batch_hashes);
 
             // 2. Perform `vectorized compare`
         }
