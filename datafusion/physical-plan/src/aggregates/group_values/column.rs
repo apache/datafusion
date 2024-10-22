@@ -326,6 +326,10 @@ impl GroupValuesColumn {
             }
         }
     }
+
+    fn vectorized_compare(&mut self) {
+        
+    }
 }
 
 /// instantiates a [`PrimitiveGroupValueBuilder`] and pushes it into $v

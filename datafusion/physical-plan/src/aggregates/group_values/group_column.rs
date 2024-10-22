@@ -62,7 +62,15 @@ pub trait GroupColumn: Send + Sync {
     /// Appends the row at `row` in `array` to this builder
     fn append_val(&mut self, array: &ArrayRef, row: usize);
 
-    fn append_batch(&mut self, array: &ArrayRef, rows: &[usize], all_non_null: bool);
+    fn vectorized_compare(
+        &mut self,
+        group_indices: &[usize],
+        array: &ArrayRef,
+        rows: &[usize],
+        compare_results: &mut [bool],
+    );
+
+    fn vectorized_append(&mut self, array: &ArrayRef, rows: &[usize], all_non_null: bool);
 
     /// Returns the number of rows stored in this builder
     fn len(&self) -> usize;
@@ -119,7 +127,58 @@ impl<T: ArrowPrimitiveType, const NULLABLE: bool> GroupColumn
         self.group_values[lhs_row] == array.as_primitive::<T>().value(rhs_row)
     }
 
-    fn append_batch(&mut self, array: &ArrayRef, rows: &[usize], all_non_null: bool) {
+    fn append_val(&mut self, array: &ArrayRef, row: usize) {
+        // Perf: skip null check if input can't have nulls
+        if NULLABLE {
+            if array.is_null(row) {
+                self.nulls.append(true);
+                self.group_values.push(T::default_value());
+            } else {
+                self.nulls.append(false);
+                self.group_values.push(array.as_primitive::<T>().value(row));
+            }
+        } else {
+            self.group_values.push(array.as_primitive::<T>().value(row));
+        }
+    }
+
+    fn vectorized_compare(
+        &mut self,
+        group_indices: &[usize],
+        array: &ArrayRef,
+        rows: &[usize],
+        compare_results: &mut [bool],
+    ) {
+        let array = array.as_primitive::<T>();
+
+        for (idx, &lhs_row) in group_indices.iter().enumerate() {
+            // Has found not equal to, don't need to check
+            if !compare_results[idx] {
+                continue;
+            }
+
+            let rhs_row = rows[idx];
+            // Perf: skip null check (by short circuit) if input is not nullable
+            if NULLABLE {
+                let exist_null = self.nulls.is_null(lhs_row);
+                let input_null = array.is_null(rhs_row);
+                if let Some(result) = nulls_equal_to(exist_null, input_null) {
+                    compare_results[idx] = result;
+                    continue;
+                }
+                // Otherwise, we need to check their values
+            }
+
+            compare_results[idx] = self.group_values[lhs_row] == array.value(rhs_row);
+        }
+    }
+
+    fn vectorized_append(
+        &mut self,
+        array: &ArrayRef,
+        rows: &[usize],
+        all_non_null: bool,
+    ) {
         let arr = array.as_primitive::<T>();
         match (NULLABLE, all_non_null) {
             (true, true) => {
@@ -146,21 +205,6 @@ impl<T: ArrowPrimitiveType, const NULLABLE: bool> GroupColumn
                     self.group_values.push(arr.value(row));
                 }
             }
-        }
-    }
-
-    fn append_val(&mut self, array: &ArrayRef, row: usize) {
-        // Perf: skip null check if input can't have nulls
-        if NULLABLE {
-            if array.is_null(row) {
-                self.nulls.append(true);
-                self.group_values.push(T::default_value());
-            } else {
-                self.nulls.append(false);
-                self.group_values.push(array.as_primitive::<T>().value(row));
-            }
-        } else {
-            self.group_values.push(array.as_primitive::<T>().value(row));
         }
     }
 
@@ -339,7 +383,43 @@ where
         }
     }
 
-    fn append_batch(&mut self, column: &ArrayRef, rows: &[usize], all_non_null: bool) {
+    fn append_val(&mut self, column: &ArrayRef, row: usize) {
+        // Sanity array type
+        match self.output_type {
+            OutputType::Binary => {
+                debug_assert!(matches!(
+                    column.data_type(),
+                    DataType::Binary | DataType::LargeBinary
+                ));
+                self.append_val_inner::<GenericBinaryType<O>>(column, row)
+            }
+            OutputType::Utf8 => {
+                debug_assert!(matches!(
+                    column.data_type(),
+                    DataType::Utf8 | DataType::LargeUtf8
+                ));
+                self.append_val_inner::<GenericStringType<O>>(column, row)
+            }
+            _ => unreachable!("View types should use `ArrowBytesViewMap`"),
+        };
+    }
+
+    fn vectorized_compare(
+        &mut self,
+        group_indices: &[usize],
+        array: &ArrayRef,
+        rows: &[usize],
+        compare_results: &mut [bool],
+    ) {
+        todo!()
+    }
+
+    fn vectorized_append(
+        &mut self,
+        column: &ArrayRef,
+        rows: &[usize],
+        all_non_null: bool,
+    ) {
         match self.output_type {
             OutputType::Binary => {
                 debug_assert!(matches!(
@@ -362,27 +442,6 @@ where
                     rows,
                     all_non_null,
                 )
-            }
-            _ => unreachable!("View types should use `ArrowBytesViewMap`"),
-        };
-    }
-
-    fn append_val(&mut self, column: &ArrayRef, row: usize) {
-        // Sanity array type
-        match self.output_type {
-            OutputType::Binary => {
-                debug_assert!(matches!(
-                    column.data_type(),
-                    DataType::Binary | DataType::LargeBinary
-                ));
-                self.append_val_inner::<GenericBinaryType<O>>(column, row)
-            }
-            OutputType::Utf8 => {
-                debug_assert!(matches!(
-                    column.data_type(),
-                    DataType::Utf8 | DataType::LargeUtf8
-                ));
-                self.append_val_inner::<GenericStringType<O>>(column, row)
             }
             _ => unreachable!("View types should use `ArrowBytesViewMap`"),
         };
@@ -909,7 +968,22 @@ impl<B: ByteViewType> GroupColumn for ByteViewGroupValueBuilder<B> {
         self.append_val_inner(array, row)
     }
 
-    fn append_batch(&mut self, array: &ArrayRef, rows: &[usize], all_non_null: bool) {
+    fn vectorized_compare(
+        &mut self,
+        group_indices: &[usize],
+        array: &ArrayRef,
+        rows: &[usize],
+        compare_results: &mut [bool],
+    ) {
+        todo!()
+    }
+
+    fn vectorized_append(
+        &mut self,
+        array: &ArrayRef,
+        rows: &[usize],
+        all_non_null: bool,
+    ) {
         self.append_batch_inner(array, rows, all_non_null);
     }
 
