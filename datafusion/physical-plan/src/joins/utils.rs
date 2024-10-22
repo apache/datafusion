@@ -701,7 +701,13 @@ pub fn build_join_schema(
             .unzip(),
     };
 
-    (fields.finish(), column_indices)
+    let metadata = left
+        .metadata()
+        .clone()
+        .into_iter()
+        .chain(right.metadata().clone())
+        .collect();
+    (fields.finish().with_metadata(metadata), column_indices)
 }
 
 /// A [`OnceAsync`] can be used to run an async closure once, with subsequent calls
