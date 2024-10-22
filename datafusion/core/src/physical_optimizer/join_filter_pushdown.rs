@@ -19,10 +19,10 @@
 
 use std::sync::Arc;
 
-use crate::{config::ConfigOptions, error::Result, physical_plan::joins::HashJoinExec};
-
+#[cfg(feature = "parquet")]
 use crate::datasource::physical_plan::ParquetExec;
 use crate::physical_plan::ExecutionPlan;
+use crate::{config::ConfigOptions, error::Result, physical_plan::joins::HashJoinExec};
 use datafusion_common::tree_node::{Transformed, TransformedResult};
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_plan::joins::DynamicFilterInfo;
