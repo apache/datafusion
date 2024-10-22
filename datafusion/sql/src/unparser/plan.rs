@@ -677,10 +677,10 @@ impl Unparser<'_> {
                 //
                 // Example:
                 //   select t1.c1 from t1 where t1.c1 > 1 -> select a.c1 from t1 as a where a.c1 > 1
-                if alias.is_some()
-                    && (table_scan.projection.is_some() || !table_scan.filters.is_empty())
-                {
-                    builder = builder.alias(alias.clone().unwrap())?;
+                if let Some(ref alias) = alias {
+                    if table_scan.projection.is_some() || !table_scan.filters.is_empty() {
+                        builder = builder.alias(alias.clone())?;
+                    }
                 }
 
                 if let Some(project_vec) = &table_scan.projection {
@@ -733,10 +733,10 @@ impl Unparser<'_> {
                 // So we will append the alias to this subquery.
                 // Example:
                 //   select * from t1 limit 10 -> (select * from t1 limit 10) as a
-                if alias.is_some()
-                    && (table_scan.projection.is_none() && table_scan.filters.is_empty())
-                {
-                    builder = builder.alias(alias.clone().unwrap())?;
+                if let (alias) = alias {
+                    if table_scan.projection.is_none() && table_scan.filters.is_empty() {
+                        builder = builder.alias(alias.clone().unwrap())?;
+                    }
                 }
 
                 Ok(Some(builder.build()?))
