@@ -136,7 +136,7 @@ pub struct GroupValuesColumn {
     ///
     /// The chained indices is like:
     ///   `latest group index -> older group index -> even older group index -> ...`
-    group_index_lists: Vec<u64>,
+    group_index_lists: Vec<usize>,
 
     /// The marked checking buckets in this round
     ///
@@ -244,6 +244,44 @@ impl GroupValuesColumn {
                 | DataType::Utf8View
                 | DataType::BinaryView
         )
+    }
+
+    #[inline]
+    fn get_group_indices_from_list(
+        &self,
+        start_group_index: usize,
+    ) -> GroupIndicesIterator {
+        GroupIndicesIterator::new(start_group_index, &self.group_index_lists)
+    }
+}
+
+struct GroupIndicesIterator<'a> {
+    next_group_index: usize,
+    group_index_lists: &'a [usize],
+}
+
+impl<'a> GroupIndicesIterator<'a> {
+    fn new(start_group_index: usize, group_index_lists: &'a [usize]) -> Self {
+        Self {
+            next_group_index: start_group_index + 1,
+            group_index_lists,
+        }
+    }
+}
+
+impl<'a> Iterator for GroupIndicesIterator<'a> {
+    type Item = usize;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.next_group_index == 0 {
+            return None;
+        }
+
+        let current_group_index = self.next_group_index;
+        let next_group_index = self.group_index_lists[current_group_index];
+        self.next_group_index = next_group_index;
+
+        Some(current_group_index - 1)
     }
 }
 
@@ -358,6 +396,10 @@ impl GroupValues for GroupValuesColumn {
         self.current_indices.extend(0..num_rows);
         while self.current_indices.len() > 0 {
             let mut next_group_idx = self.group_values[0].len() as u64;
+            self.vectorized_append_row_indices.clear();
+            self.vectorized_compare_row_indices.clear();
+            self.vectorized_compare_group_indices.clear();
+            self.vectorized_compare_results.clear();
             for (row, &target_hash) in batch_hashes.iter().enumerate() {
                 let entry = self.map.get_mut(target_hash, |(exist_hash, _)| {
                     // Somewhat surprisingly, this closure can be called even if the
@@ -402,7 +444,12 @@ impl GroupValues for GroupValuesColumn {
 
                 // Add row index to `vectorized_compare_row_indices`
                 // Add group indices(from `group_index_lists`) to `vectorized_compare_group_indices`
-                self.vectorized_compare_row_indices.push(row);
+                let group_indices =
+                    self.get_group_indices_from_list(bucket_ctx.group_index() as usize);
+                for group_index in group_indices {
+                    self.vectorized_compare_row_indices.push(row);
+                    self.vectorized_compare_group_indices.push(group_index);
+                }
             }
         }
         Ok(())
@@ -444,17 +491,17 @@ impl GroupValues for GroupValuesColumn {
                     .collect::<Vec<_>>();
 
                 // SAFETY: self.map outlives iterator and is not modified concurrently
-                unsafe {
-                    for bucket in self.map.iter() {
-                        // Decrement group index by n
-                        match bucket.as_ref().1.checked_sub(n) {
-                            // Group index was >= n, shift value down
-                            Some(sub) => bucket.as_mut().1 = sub,
-                            // Group index was < n, so remove from table
-                            None => self.map.erase(bucket),
-                        }
-                    }
-                }
+                // unsafe {
+                //     for bucket in self.map.iter() {
+                //         // Decrement group index by n
+                //         match bucket.as_ref().1.0.checked_sub(n) {
+                //             // Group index was >= n, shift value down
+                //             Some(sub) => bucket.as_mut().1 = sub,
+                //             // Group index was < n, so remove from table
+                //             None => self.map.erase(bucket),
+                //         }
+                //     }
+                // }
 
                 output
             }
