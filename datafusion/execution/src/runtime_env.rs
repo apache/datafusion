@@ -28,6 +28,7 @@ use crate::{
 
 use crate::cache::cache_manager::{CacheManager, CacheManagerConfig};
 use datafusion_common::{DataFusionError, Result};
+use hashbrown::HashMap;
 use object_store::ObjectStore;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -228,6 +229,23 @@ impl RuntimeEnvBuilder {
         let pool_size = (max_memory as f64 * memory_fraction) as usize;
         self.with_memory_pool(Arc::new(TrackConsumersPool::new(
             GreedyMemoryPool::new(pool_size),
+            NonZeroUsize::new(5).unwrap(),
+        )))
+    }
+
+    /// Set memory limit per consumer, if not set, by default is the same as the total pool size
+    /// For example, if pool size is 4000, repartition is 3000. Total pool size: 4000,
+    /// RepartitionExec pool size: 3000, SortPreservingMergeExec pool size: 4000
+    pub fn with_memory_limit_per_consumer(
+        self,
+        max_memory: usize,
+        memory_fraction: f64,
+        pool_size_per_consumer: HashMap<String, usize>,
+    ) -> Self {
+        let pool_size = (max_memory as f64 * memory_fraction) as usize;
+        self.with_memory_pool(Arc::new(TrackConsumersPool::new(
+            GreedyMemoryPool::new(pool_size)
+                .with_pool_size_per_consumer(pool_size_per_consumer),
             NonZeroUsize::new(5).unwrap(),
         )))
     }
