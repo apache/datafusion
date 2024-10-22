@@ -593,11 +593,19 @@ select * from (values(1),(2)) limit (select 1);
 statement error Unsupported OFFSET expression
 select * from (values(1),(2)) offset (select 1);
 
-statement error Unsupported LIMIT expression
-select * from (values(1),(2)) limit 'foo';
+# disallow non-integer limit/offset
+statement error Expected LIMIT to be an integer or null, but got Float64
+select * from (values(1),(2)) limit 0.5;
 
-statement error Unsupported OFFSET expression
-select * from (values(1),(2)) offset 'bar';
+statement error Expected OFFSET to be an integer or null, but got Utf8
+select * from (values(1),(2)) offset '1';
+
+# test with different integer types
+query I
+select * from (values (1), (2), (3), (4)) limit 2::int OFFSET 1::tinyint
+----
+2
+3
 
 # select limit with basic arithmetic
 query I
@@ -639,13 +647,6 @@ select * from (values (1), (2), (3), (4))
   LIMIT abs(-4) + -1 * 2
   -- OFFSET 1
   OFFSET case when 1 < 2 then 1 else 0 end;
-----
-2
-3
-
-# test LIMIT and OFFSET with non-integer values
-query I
-select * from (values (1), (2), (3), (4)) LIMIT 2.0 OFFSET '1';
 ----
 2
 3

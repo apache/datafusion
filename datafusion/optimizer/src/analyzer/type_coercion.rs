@@ -234,14 +234,27 @@ impl<'a> TypeCoercionRewriter<'a> {
 
     /// Coerce the fetch and skip expression to Int64 type.
     fn coerce_limit(limit: Limit) -> Result<LogicalPlan> {
+        fn coerce_limit_expr(
+            expr: Expr,
+            schema: &DFSchema,
+            expr_name: &str,
+        ) -> Result<Expr> {
+            let dt = expr.get_type(schema)?;
+            if dt.is_integer() || dt.is_null() {
+                expr.cast_to(&DataType::Int64, schema)
+            } else {
+                plan_err!("Expected {expr_name} to be an integer or null, but got {dt:?}")
+            }
+        }
+
         let empty_schema = DFSchema::empty();
         let new_fetch = limit
             .fetch
-            .map(|expr| (*expr).cast_to(&DataType::Int64, &empty_schema))
+            .map(|expr| coerce_limit_expr(*expr, &empty_schema, "LIMIT"))
             .transpose()?;
         let new_skip = limit
             .skip
-            .map(|expr| (*expr).cast_to(&DataType::Int64, &empty_schema))
+            .map(|expr| coerce_limit_expr(*expr, &empty_schema, "OFFSET"))
             .transpose()?;
         Ok(LogicalPlan::Limit(Limit {
             input: limit.input,
