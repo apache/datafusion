@@ -109,7 +109,7 @@ pub(crate) fn spawn_buffered(
             builder.spawn(async move {
                 while let Some(item) = input.next().await {
                     if sender.send(item).await.is_err() {
-                        // receiver dropped when query is shutdown early (e.g., limit) or error,
+                        // Receiver dropped when query is shutdown early (e.g., limit) or error,
                         // no need to return propagate the send error.
                         return Ok(());
                     }
@@ -182,15 +182,15 @@ pub fn compute_record_batch_statistics(
 
 /// Write in Arrow IPC format.
 pub struct IPCWriter {
-    /// path
+    /// Path
     pub path: PathBuf,
-    /// inner writer
+    /// Inner writer
     pub writer: FileWriter<File>,
-    /// batches written
+    /// Batches written
     pub num_batches: usize,
-    /// rows written
+    /// Rows written
     pub num_rows: usize,
-    /// bytes written
+    /// Bytes written
     pub num_bytes: usize,
 }
 
@@ -315,7 +315,7 @@ mod tests {
             ],
         )?;
 
-        // just select f32,f64
+        // Just select f32,f64
         let select_projection = Some(vec![0, 1]);
         let byte_size = batch
             .project(&select_projection.clone().unwrap())
