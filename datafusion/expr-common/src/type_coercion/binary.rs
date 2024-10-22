@@ -29,8 +29,7 @@ use arrow::datatypes::{
     DECIMAL128_MAX_SCALE, DECIMAL256_MAX_PRECISION, DECIMAL256_MAX_SCALE,
 };
 use datafusion_common::{
-    exec_datafusion_err, exec_err, internal_err, plan_datafusion_err, plan_err,
-    DataFusionError, Result,
+    exec_datafusion_err, exec_err, internal_err, plan_datafusion_err, plan_err, Result,
 };
 use itertools::Itertools;
 
@@ -536,11 +535,10 @@ fn type_union_resolution_coercion(
 }
 
 pub fn try_type_union_resolution(data_types: &[DataType]) -> Result<Vec<DataType>> {
-    let mut err = None;
-    match try_type_union_resolution_with_struct(data_types) {
+    let err = match try_type_union_resolution_with_struct(data_types) {
         Ok(struct_types) => return Ok(struct_types),
-        Err(e) => err = Some(e),
-    }
+        Err(e) => Some(e),
+    };
 
     if let Some(new_type) = type_union_resolution(data_types) {
         Ok(vec![new_type; data_types.len()])
