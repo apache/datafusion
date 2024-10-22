@@ -253,35 +253,62 @@ impl GroupValuesColumn {
     ) -> GroupIndicesIterator {
         GroupIndicesIterator::new(start_group_index, &self.group_index_lists)
     }
-}
 
-struct GroupIndicesIterator<'a> {
-    next_group_index: usize,
-    group_index_lists: &'a [usize],
-}
+    fn collect_vectorized_process_context(&mut self, batch_hashes: &[u64]) {
+        let mut next_group_idx = self.group_values[0].len() as u64;
+        for &row in self.current_indices.iter() {
+            let target_hash = batch_hashes[row];
+            let entry = self.map.get_mut(target_hash, |(exist_hash, _)| {
+                // Somewhat surprisingly, this closure can be called even if the
+                // hash doesn't match, so check the hash first with an integer
+                // comparison first avoid the more expensive comparison with
+                // group value. https://github.com/apache/datafusion/pull/11718
+                target_hash == *exist_hash
+            });
 
-impl<'a> GroupIndicesIterator<'a> {
-    fn new(start_group_index: usize, group_index_lists: &'a [usize]) -> Self {
-        Self {
-            next_group_index: start_group_index + 1,
-            group_index_lists,
+            let Some((_, bucket_ctx)) = entry else {
+                // 1.1 Bucket not found case
+                // Insert the `new bucket` build from the `group index`
+                // Mark this `new bucket` checking, and add it to `checking_buckets`
+                let current_group_idx = next_group_idx;
+
+                // for hasher function, use precomputed hash value
+                let mut bucket_ctx = BucketContext(current_group_idx);
+                bucket_ctx.set_checking();
+                let bucket = self.map.insert_accounted(
+                    (target_hash, bucket_ctx),
+                    |(hash, _)| *hash,
+                    &mut self.map_size,
+                );
+                self.checking_buckets.push(bucket);
+
+                // Add row index to `vectorized_append_row_indices`
+                self.vectorized_append_row_indices.push(row);
+
+                next_group_idx += 1;
+                continue;
+            };
+
+            // 1.2 bucket found
+            // Check if the `bucket` checking, if so add it to `remaining_indices`,
+            // and just process it in next round, otherwise we continue the process
+            if bucket_ctx.is_checking() {
+                self.remaining_indices.push(row);
+                continue;
+            }
+            // Mark `bucket` checking, and add it to `checking_buckets`
+            bucket_ctx.set_checking();
+
+            // Add row index to `vectorized_compare_row_indices`
+            // Add group indices(from `group_index_lists`) to `vectorized_compare_group_indices`
+            let mut next_group_index = bucket_ctx.group_index() as usize + 1;
+            while next_group_index > 0 {
+                let current_group_index = next_group_index;
+                self.vectorized_compare_row_indices.push(row);
+                self.vectorized_compare_group_indices.push(current_group_index - 1);
+                next_group_index = self.group_index_lists[current_group_index];
+            }
         }
-    }
-}
-
-impl<'a> Iterator for GroupIndicesIterator<'a> {
-    type Item = usize;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.next_group_index == 0 {
-            return None;
-        }
-
-        let current_group_index = self.next_group_index;
-        let next_group_index = self.group_index_lists[current_group_index];
-        self.next_group_index = next_group_index;
-
-        Some(current_group_index - 1)
     }
 }
 
@@ -395,62 +422,12 @@ impl GroupValues for GroupValuesColumn {
         self.current_indices.clear();
         self.current_indices.extend(0..num_rows);
         while self.current_indices.len() > 0 {
-            let mut next_group_idx = self.group_values[0].len() as u64;
             self.vectorized_append_row_indices.clear();
             self.vectorized_compare_row_indices.clear();
             self.vectorized_compare_group_indices.clear();
             self.vectorized_compare_results.clear();
-            for (row, &target_hash) in batch_hashes.iter().enumerate() {
-                let entry = self.map.get_mut(target_hash, |(exist_hash, _)| {
-                    // Somewhat surprisingly, this closure can be called even if the
-                    // hash doesn't match, so check the hash first with an integer
-                    // comparison first avoid the more expensive comparison with
-                    // group value. https://github.com/apache/datafusion/pull/11718
-                    target_hash == *exist_hash
-                });
 
-                let Some((_, bucket_ctx)) = entry else {
-                    // 1.1 Bucket not found case
-                    // Insert the `new bucket` build from the `group index`
-                    // Mark this `new bucket` checking, and add it to `checking_buckets`
-                    let current_group_idx = next_group_idx;
-
-                    // for hasher function, use precomputed hash value
-                    let mut bucket_ctx = BucketContext(current_group_idx);
-                    bucket_ctx.set_checking();
-                    let bucket = self.map.insert_accounted(
-                        (target_hash, bucket_ctx),
-                        |(hash, _)| *hash,
-                        &mut self.map_size,
-                    );
-                    self.checking_buckets.push(bucket);
-
-                    // Add row index to `vectorized_append_row_indices`
-                    self.vectorized_append_row_indices.push(row);
-
-                    next_group_idx += 1;
-                    continue;
-                };
-
-                // 1.2 bucket found
-                // Check if the `bucket` checking, if so add it to `remaining_indices`,
-                // and just process it in next round, otherwise we continue the process
-                if bucket_ctx.is_checking() {
-                    self.remaining_indices.push(row);
-                    continue;
-                }
-                // Mark `bucket` checking, and add it to `checking_buckets`
-                bucket_ctx.set_checking();
-
-                // Add row index to `vectorized_compare_row_indices`
-                // Add group indices(from `group_index_lists`) to `vectorized_compare_group_indices`
-                let group_indices =
-                    self.get_group_indices_from_list(bucket_ctx.group_index() as usize);
-                for group_index in group_indices {
-                    self.vectorized_compare_row_indices.push(row);
-                    self.vectorized_compare_group_indices.push(group_index);
-                }
-            }
+            // 2. Perform `vectorized compare`
         }
         Ok(())
     }
