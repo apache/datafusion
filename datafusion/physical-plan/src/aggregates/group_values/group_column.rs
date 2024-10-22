@@ -62,12 +62,12 @@ pub trait GroupColumn: Send + Sync {
     /// Appends the row at `row` in `array` to this builder
     fn append_val(&mut self, array: &ArrayRef, row: usize);
 
-    fn vectorized_compare(
-        &mut self,
+    fn vectorized_equal_to(
+        &self,
         group_indices: &[usize],
         array: &ArrayRef,
         rows: &[usize],
-        compare_results: &mut [bool],
+        equal_to_results: &mut [bool],
     );
 
     fn vectorized_append(&mut self, array: &ArrayRef, rows: &[usize], all_non_null: bool);
@@ -142,18 +142,18 @@ impl<T: ArrowPrimitiveType, const NULLABLE: bool> GroupColumn
         }
     }
 
-    fn vectorized_compare(
-        &mut self,
+    fn vectorized_equal_to(
+        &self,
         group_indices: &[usize],
         array: &ArrayRef,
         rows: &[usize],
-        compare_results: &mut [bool],
+        equal_to_results: &mut [bool],
     ) {
         let array = array.as_primitive::<T>();
 
         for (idx, &lhs_row) in group_indices.iter().enumerate() {
             // Has found not equal to, don't need to check
-            if !compare_results[idx] {
+            if !equal_to_results[idx] {
                 continue;
             }
 
@@ -163,13 +163,13 @@ impl<T: ArrowPrimitiveType, const NULLABLE: bool> GroupColumn
                 let exist_null = self.nulls.is_null(lhs_row);
                 let input_null = array.is_null(rhs_row);
                 if let Some(result) = nulls_equal_to(exist_null, input_null) {
-                    compare_results[idx] = result;
+                    equal_to_results[idx] = result;
                     continue;
                 }
                 // Otherwise, we need to check their values
             }
 
-            compare_results[idx] = self.group_values[lhs_row] == array.value(rhs_row);
+            equal_to_results[idx] = self.group_values[lhs_row] == array.value(rhs_row);
         }
     }
 
@@ -404,12 +404,12 @@ where
         };
     }
 
-    fn vectorized_compare(
-        &mut self,
+    fn vectorized_equal_to(
+        &self,
         group_indices: &[usize],
         array: &ArrayRef,
         rows: &[usize],
-        compare_results: &mut [bool],
+        equal_to_results: &mut [bool],
     ) {
         todo!()
     }
@@ -976,12 +976,12 @@ impl<B: ByteViewType> GroupColumn for ByteViewGroupValueBuilder<B> {
         self.append_val_inner(array, row)
     }
 
-    fn vectorized_compare(
-        &mut self,
+    fn vectorized_equal_to(
+        &self,
         group_indices: &[usize],
         array: &ArrayRef,
         rows: &[usize],
-        compare_results: &mut [bool],
+        equal_to_results: &mut [bool],
     ) {
         todo!()
     }
