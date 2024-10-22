@@ -208,7 +208,7 @@ mod tests {
         assert_eq!(1, table_scan.schema().fields().len());
         assert_fields_eq(&table_scan, vec!["a"]);
 
-        let expected = "TableScan: test projection=[a], full_filters=[Boolean(true) AS b IS NOT NULL]";
+        let expected = "TableScan: test projection=[a], full_filters=[Boolean(true)]";
 
         assert_optimized_plan_eq(table_scan, expected)
     }
