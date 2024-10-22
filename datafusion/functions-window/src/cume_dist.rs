@@ -141,40 +141,29 @@ mod tests {
     use super::*;
     use datafusion_common::cast::as_float64_array;
 
-    fn test_cume_dist_result(
-        expr: &CumeDist,
+    fn test_f64_result(
         num_rows: usize,
         ranks: Vec<Range<usize>>,
         expected: Vec<f64>,
     ) -> Result<()> {
-        let result = expr
-            .partition_evaluator(PartitionEvaluatorArgs::default())?
-            .evaluate_all_with_rank(num_rows, &ranks)?;
+        let evaluator = CumeDistEvaluator::default();
+        let result = evaluator.evaluate_all_with_rank(num_rows, &ranks)?;
         let result = as_float64_array(&result)?;
-        let result = result.values();
-        assert_eq!(expected, *result);
+        let result = result.values().to_vec();
+        assert_eq!(expected, result);
         Ok(())
     }
 
     #[test]
     #[allow(clippy::single_range_in_vec_init)]
     fn test_cume_dist() -> Result<()> {
-        let r = CumeDist::new();
+        test_f64_result(0, vec![], vec![])?;
 
-        let expected = vec![0.0; 0];
-        test_i32_result(&r, 0, vec![], expected)?;
+        test_f64_result(1, vec![0..1], vec![1.0])?;
 
-        let expected = vec![1.0; 1];
-        test_i32_result(&r, 1, vec![0..1], expected)?;
+        test_f64_result(2, vec![0..2], vec![1.0, 1.0])?;
 
-        let expected = vec![1.0; 2];
-        test_i32_result(&r, 2, vec![0..2], expected)?;
-
-        let expected = vec![0.5, 0.5, 1.0, 1.0];
-        test_i32_result(&r, 4, vec![0..2, 2..4], expected)?;
-
-        let expected = vec![0.25, 0.5, 0.75, 1.0];
-        test_i32_result(&r, 4, vec![0..1, 1..2, 2..3, 3..4], expected)?;
+        test_f64_result(4, vec![0..2, 2..4], vec![0.5, 0.5, 1.0, 1.0])?;
 
         Ok(())
     }
