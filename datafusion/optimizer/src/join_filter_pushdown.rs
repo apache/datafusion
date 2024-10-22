@@ -17,7 +17,7 @@
 
 //! [`JoinFilterPushdown`] pushdown join filter to scan dynamically
 
-use datafusion_common::{tree_node::Transformed, DataFusionError};
+use datafusion_common::{tree_node::Transformed, DataFusionError, ExprSchema};
 use datafusion_expr::{utils::DynamicFilterColumn, Expr, JoinType, LogicalPlan};
 
 use crate::{optimizer::ApplyOrder, OptimizerConfig, OptimizerRule};
@@ -62,8 +62,11 @@ impl OptimizerRule for JoinFilterPushdown {
                 for (left, right) in join.on.iter() {
                     // Only support left to be a column
                     if let (Expr::Column(l), Expr::Column(r)) = (left, right) {
-                        columns.push(r.clone());
-                        build_side_names.push(l.name().to_owned());
+                        // Todo: currently only support numeric data type
+                        if join.schema.data_type(l)?.is_numeric() {
+                            columns.push(r.clone());
+                            build_side_names.push(l.name().to_owned());
+                        }
                     }
                 }
 
