@@ -420,6 +420,52 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_round_robin_tie_breaker_v2() -> Result<()> {
+        let runtime = RuntimeEnvBuilder::new()
+            .with_memory_limit(135000000, 1.0)
+            .build_arc()?;
+        let config = SessionConfig::new();
+        let task_ctx = TaskContext::default()
+            .with_runtime(runtime)
+            .with_session_config(config);
+        let task_ctx = Arc::new(task_ctx);
+
+        let target_batch_size = 8192;
+        let row_size = 8192;
+        let a: ArrayRef = Arc::new(Int32Array::from(vec![1; row_size]));
+        let b: ArrayRef = Arc::new(StringArray::from_iter(vec![Some("a"); row_size]));
+        let c: ArrayRef = Arc::new(Int64Array::from_iter(vec![0; row_size]));
+        let rb = RecordBatch::try_from_iter(vec![("a", a), ("b", b), ("c", c)]).unwrap();
+
+        let rbs = (0..1024).map(|_| rb.clone()).collect::<Vec<_>>();
+
+        let schema = rb.schema();
+        let sort = vec![
+            PhysicalSortExpr {
+                expr: col("b", &schema).unwrap(),
+                options: Default::default(),
+            },
+            PhysicalSortExpr {
+                expr: col("c", &schema).unwrap(),
+                options: Default::default(),
+            },
+        ];
+
+        let exec = MemoryExec::try_new(&[rbs], schema, None).unwrap();
+        let repartition_exec =
+            RepartitionExec::try_new(Arc::new(exec), Partitioning::RoundRobinBatch(128))?;
+        let coalesce_batches_exec =
+            CoalesceBatchesExec::new(Arc::new(repartition_exec), target_batch_size);
+        let spm = SortPreservingMergeExec::new(sort, Arc::new(coalesce_batches_exec))
+            .with_round_robin_repartition(false);
+
+        let spm = Arc::new(spm);
+        let _collected = collect(spm, task_ctx).await.unwrap();
+
+        Ok(())
+    }
+
     #[tokio::test]
     async fn test_merge_interleave() {
         let task_ctx = Arc::new(TaskContext::default());

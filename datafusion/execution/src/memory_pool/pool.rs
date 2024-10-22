@@ -97,8 +97,15 @@ fn consumer_name_without_index(reservation: &MemoryReservation) -> &str {
 impl MemoryPool for GreedyMemoryPool {
     fn grow(&self, reservation: &MemoryReservation, additional: usize) {
         self.used.fetch_add(additional, Ordering::Relaxed);
-
+        let s = self.used.load(Ordering::Relaxed);
         let name = consumer_name_without_index(reservation);
+        println!(
+            "name: {} grow to size: {} orin: {}",
+            name,
+            s,
+            reservation.consumer().name()
+        );
+
         let mut used_per_consumer = self.used_per_consumer.write().unwrap();
         let consumer_usage = used_per_consumer
             .entry(name.to_string())
@@ -108,8 +115,10 @@ impl MemoryPool for GreedyMemoryPool {
 
     fn shrink(&self, reservation: &MemoryReservation, shrink: usize) {
         self.used.fetch_sub(shrink, Ordering::Relaxed);
-
+        let s = self.used.load(Ordering::Relaxed);
         let name = consumer_name_without_index(reservation);
+        println!("name: {} shrink to size: {}", name, s);
+
         let mut used_per_consumer = self.used_per_consumer.write().unwrap();
         let consumer_usage = used_per_consumer
             .entry(name.to_string())
@@ -149,6 +158,12 @@ impl MemoryPool for GreedyMemoryPool {
         self.used
             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |used| {
                 let new_used = used + additional;
+                println!(
+                    "name: {} new_used: {} origin: {}",
+                    name,
+                    new_used,
+                    reservation.consumer().name()
+                );
                 (new_used <= self.pool_size).then_some(new_used)
             })
             .map_err(|used| {
