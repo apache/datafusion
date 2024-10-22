@@ -139,7 +139,6 @@ impl PartitionEvaluator for CumeDistEvaluator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use datafusion_common::arrow::array::{Array, Float64Array};
     use datafusion_common::cast::as_float64_array;
 
     fn test_cume_dist_result(
