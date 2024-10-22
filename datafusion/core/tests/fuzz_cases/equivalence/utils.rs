@@ -299,6 +299,63 @@ fn get_representative_arr(
     None
 }
 
+// Generate a schema which consists of 8 columns (a, b, c, d, e, f, g, h)
+pub fn create_test_schema() -> Result<SchemaRef> {
+    let a = Field::new("a", DataType::Int32, true);
+    let b = Field::new("b", DataType::Int32, true);
+    let c = Field::new("c", DataType::Int32, true);
+    let d = Field::new("d", DataType::Int32, true);
+    let e = Field::new("e", DataType::Int32, true);
+    let f = Field::new("f", DataType::Int32, true);
+    let g = Field::new("g", DataType::Int32, true);
+    let h = Field::new("h", DataType::Int32, true);
+    let schema = Arc::new(Schema::new(vec![a, b, c, d, e, f, g, h]));
+
+    Ok(schema)
+}
+
+/// Construct a schema with following properties
+/// Schema satisfies following orderings:
+/// [a ASC], [d ASC, b ASC], [e DESC, f ASC, g ASC]
+/// and
+/// Column [a=c] (e.g they are aliases).
+pub fn create_test_params() -> Result<(SchemaRef, EquivalenceProperties)> {
+    let test_schema = create_test_schema()?;
+    let col_a = &col("a", &test_schema)?;
+    let col_b = &col("b", &test_schema)?;
+    let col_c = &col("c", &test_schema)?;
+    let col_d = &col("d", &test_schema)?;
+    let col_e = &col("e", &test_schema)?;
+    let col_f = &col("f", &test_schema)?;
+    let col_g = &col("g", &test_schema)?;
+    let mut eq_properties = EquivalenceProperties::new(Arc::clone(&test_schema));
+    eq_properties.add_equal_conditions(col_a, col_c)?;
+
+    let option_asc = SortOptions {
+        descending: false,
+        nulls_first: false,
+    };
+    let option_desc = SortOptions {
+        descending: true,
+        nulls_first: true,
+    };
+    let orderings = vec![
+        // [a ASC]
+        vec![(col_a, option_asc)],
+        // [d ASC, b ASC]
+        vec![(col_d, option_asc), (col_b, option_asc)],
+        // [e DESC, f ASC, g ASC]
+        vec![
+            (col_e, option_desc),
+            (col_f, option_asc),
+            (col_g, option_asc),
+        ],
+    ];
+    let orderings = convert_to_orderings(&orderings);
+    eq_properties.add_new_orderings(orderings);
+    Ok((test_schema, eq_properties))
+}
+
 // Generate a table that satisfies the given equivalence properties; i.e.
 // equivalences, ordering equivalences, and constants.
 pub fn generate_table_for_eq_properties(
