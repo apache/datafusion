@@ -92,6 +92,12 @@ pub trait SchemaAdapter: Send + Sync {
 /// See [`DefaultSchemaAdapterFactory`] for more details and examples.
 pub trait SchemaMapper: Debug + Send + Sync {
     /// Adapts a `RecordBatch` to match the `table_schema`
+    ///
+    /// # Errors:
+    ///
+    /// * If a column in the table schema is non-nullable but is not present
+    ///   in the file schema (i.e. it is missing), this method tries to fill it
+    ///   with nulls resulting in a schema error
     fn map_batch(&self, batch: RecordBatch) -> datafusion_common::Result<RecordBatch>;
 
     /// Adapts a [`RecordBatch`] that does not have all the columns from the
@@ -151,14 +157,14 @@ pub trait SchemaMapper: Debug + Send + Sync {
 /// # use arrow::datatypes::{DataType, Field, Schema};
 /// # use datafusion::datasource::schema_adapter::{DefaultSchemaAdapterFactory, SchemaAdapterFactory};
 /// # use datafusion_common::record_batch;
-/// // Table has fields "a" and "b"
+/// // Table has fields "a",  "b" and "c"
 /// let table_schema = Schema::new(vec![
 ///     Field::new("a", DataType::Int32, true),
 ///     Field::new("b", DataType::Utf8, true),
 ///     Field::new("c", DataType::Utf8, true),
 /// ]);
 ///
-/// // create an adapter to mape the table schema to the file schema
+/// // create an adapter to map the table schema to the file schema
 /// let adapter = DefaultSchemaAdapterFactory::from_schema(Arc::new(table_schema));
 ///
 /// // The file schema has fields "c" and "b" but "b" is stored as an 'Float64'
@@ -437,8 +443,9 @@ mod tests {
 
     use crate::datasource::listing::PartitionedFile;
     use crate::datasource::schema_adapter::{
-        SchemaAdapter, SchemaAdapterFactory, SchemaMapper,
+        DefaultSchemaAdapterFactory, SchemaAdapter, SchemaAdapterFactory, SchemaMapper,
     };
+    use datafusion_common::record_batch;
     #[cfg(feature = "parquet")]
     use parquet::arrow::ArrowWriter;
     use tempfile::TempDir;
@@ -509,6 +516,58 @@ mod tests {
         ];
 
         assert_batches_sorted_eq!(expected, &read);
+    }
+
+    #[test]
+    fn default_schema_adapter() {
+        let table_schema = Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Utf8, true),
+        ]);
+
+        // file has a subset of the table schema fields and different type
+        let file_schema = Schema::new(vec![
+            Field::new("c", DataType::Float64, true), // not in table schema
+            Field::new("b", DataType::Float64, true),
+        ]);
+
+        let adapter = DefaultSchemaAdapterFactory::from_schema(Arc::new(table_schema));
+        let (mapper, indices) = adapter.map_schema(&file_schema).unwrap();
+        assert_eq!(indices, vec![1]);
+
+        let file_batch = record_batch!(("b", Float64, vec![1.0, 2.0])).unwrap();
+
+        let mapped_batch = mapper.map_batch(file_batch).unwrap();
+
+        // the mapped batch has the correct schema and the "b" column has been cast to Utf8
+        let expected_batch = record_batch!(
+            ("a", Int32, vec![None, None]), // missing column filled with nulls
+            ("b", Utf8, vec!["1.0", "2.0"])  // b was cast to string and order was changed
+        )
+        .unwrap();
+        assert_eq!(mapped_batch, expected_batch);
+    }
+
+    #[test]
+    fn default_schema_adapter_non_nullable_columns() {
+        let table_schema = Schema::new(vec![
+            Field::new("a", DataType::Int32, false), // "a"" is declared non nullable
+            Field::new("b", DataType::Utf8, true),
+        ]);
+        let file_schema = Schema::new(vec![
+            // since file doesn't have "a" it will be filled with nulls
+            Field::new("b", DataType::Float64, true),
+        ]);
+
+        let adapter = DefaultSchemaAdapterFactory::from_schema(Arc::new(table_schema));
+        let (mapper, indices) = adapter.map_schema(&file_schema).unwrap();
+        assert_eq!(indices, vec![0]);
+
+        let file_batch = record_batch!(("b", Float64, vec![1.0, 2.0])).unwrap();
+
+        // Mapping fails because it tries to fill in a non-nullable column with nulls
+        let err = mapper.map_batch(file_batch).unwrap_err().to_string();
+        assert!(err.contains("Invalid argument error: Column 'a' is declared as non-nullable but contains null values"), "{err}");
     }
 
     #[derive(Debug)]
