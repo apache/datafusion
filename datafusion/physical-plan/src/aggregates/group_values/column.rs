@@ -43,40 +43,71 @@ use datafusion_expr::EmitTo;
 use datafusion_physical_expr::binary_map::OutputType;
 
 use datafusion_physical_expr_common::datum::compare_with_eq;
-use hashbrown::raw::RawTable;
+use hashbrown::raw::{Bucket, RawTable};
 
-/// Group index context for performing `vectorized compare` and `vectorized append`
-struct GroupIndexContext {
-    /// It is possible that hash value collision exists,
-    /// and we will chain the `group indices` with same hash value
-    ///
-    /// The chained indices is like:
-    ///   `latest group index -> older group index -> even older group index -> ...`
-    prev_group_index: usize,
+const CHECKING_FLAG_MASK: u64 = 0x8000000000000000;
+const SET_CHECKING_FLAG_MASK: u64 = 0x8000000000000000;
+const UNSET_CHECKING_FLAG_MASK: u64 = 0x7FFFFFFFFFFFFFFF;
 
-    /// It is possible that rows with same hash values exist in `input cols`.
-    /// And if we `vectorized compare` and `vectorized append` them
-    /// in the same round, some fault cases will occur especially when
-    /// they are totally the repeated rows...
-    ///
-    /// For example:
-    ///   - Two repeated rows exist in `input cols`.
-    ///
-    ///   - We found their hash values equal to one exist group
-    ///
-    ///   - We then perform `vectorized compare` for them to the exist group,
-    ///     and found their values not equal to the exist one
-    ///
-    ///   - Finally when perform `vectorized append`, we decide to build two
-    ///     respective new groups for them, even we actually just need one
-    ///     new group...
-    ///
-    /// So for solving such cases simply, if some rows with same hash value
-    /// in `input cols`, just allow to process one of them in a round,
-    /// and this flag is used to represent that one of them is processing
-    /// in current round.
-    ///
-    checking: bool,
+/// `BucketContext` is a packed struct
+///
+/// ### Format:
+///
+///   +---------------------+--------------------+
+///   | checking flag(1bit) | group index(63bit) |
+///   +---------------------+--------------------+
+///    
+/// ### Checking flag
+///
+///   It is possible that rows with same hash values exist in `input cols`.
+///   And if we `vectorized compare` and `vectorized append` them
+///   in the same round, some fault cases will occur especially when
+///   they are totally the repeated rows...
+///
+///   For example:
+///     - Two repeated rows exist in `input cols`.
+///
+///     - We found their hash values equal to one exist group
+///
+///     - We then perform `vectorized compare` for them to the exist group,
+///       and found their values not equal to the exist one
+///
+///     - Finally when perform `vectorized append`, we decide to build two
+///       respective new groups for them, even we actually just need one
+///       new group...
+///
+///   So for solving such cases simply, if some rows with same hash value
+///   in `input cols`, just allow to process one of them in a round,
+///   and this flag is used to represent that one of them is processing
+///   in current round.
+///
+/// ### Group index
+///
+///     The group's index in group values
+///
+#[derive(Debug, Clone, Copy)]
+struct BucketContext(u64);
+
+impl BucketContext {
+    #[inline]
+    pub fn is_checking(&self) -> bool {
+        (self.0 & CHECKING_FLAG_MASK) > 0
+    }
+
+    #[inline]
+    pub fn set_checking(&mut self) {
+        self.0 |= SET_CHECKING_FLAG_MASK
+    }
+
+    #[inline]
+    pub fn unset_checking(&mut self) {
+        self.0 &= UNSET_CHECKING_FLAG_MASK
+    }
+
+    #[inline]
+    pub fn group_index(&self) -> u64 {
+        self.0 & UNSET_CHECKING_FLAG_MASK
+    }
 }
 
 /// A [`GroupValues`] that stores multiple columns of group values.
@@ -93,14 +124,24 @@ pub struct GroupValuesColumn {
     ///
     /// keys: u64 hashes of the GroupValue
     /// values: (hash, group_index)
-    map: RawTable<(u64, usize)>,
+    map: RawTable<(u64, BucketContext)>,
 
     /// The size of `map` in bytes
     map_size: usize,
 
-    /// Contexts useful for `vectorized compare` and `vectorized append`,
-    /// detail can see [`GroupIndexContext`]
-    group_index_ctxs: Vec<GroupIndexContext>,
+    /// The lists for group indices with the same hash value
+    ///
+    /// It is possible that hash value collision exists,
+    /// and we will chain the `group indices` with same hash value
+    ///
+    /// The chained indices is like:
+    ///   `latest group index -> older group index -> even older group index -> ...`
+    group_index_lists: Vec<u64>,
+
+    /// The marked checking buckets in this round
+    ///
+    /// About the checking flag you can see [`BucketContext`]
+    checking_bucket: Vec<Bucket<(u64, BucketContext)>>,
 
     /// We need multiple rounds to process the `input cols`,
     /// and the rows processing in current round is stored here.
@@ -151,7 +192,7 @@ impl GroupValuesColumn {
         Ok(Self {
             schema,
             map,
-            group_index_ctxs: Vec::new(),
+            group_index_lists: Vec::new(),
             map_size: 0,
             group_values: vec![],
             hashes_buffer: Default::default(),
