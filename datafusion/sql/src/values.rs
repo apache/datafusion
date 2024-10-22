@@ -46,9 +46,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             .collect::<Result<Vec<_>>>()?;
 
         if schema.fields().is_empty() {
-            LogicalPlanBuilder::values(values, None)?.build()
+            LogicalPlanBuilder::values_with_schema(values, None)?.build()
         } else {
-            LogicalPlanBuilder::values(values, Some(&schema))?.build()
+            LogicalPlanBuilder::values_with_schema(values, Some(&schema))?.build()
         }
     }
 }

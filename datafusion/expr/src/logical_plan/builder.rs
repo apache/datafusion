@@ -170,6 +170,29 @@ impl LogicalPlanBuilder {
         })))
     }
 
+    pub fn values(values: Vec<Vec<Expr>>) -> Result<Self> {
+        if values.is_empty() {
+            return plan_err!("Values list cannot be empty");
+        }
+        let n_cols = values[0].len();
+        if n_cols == 0 {
+            return plan_err!("Values list cannot be zero length");
+        }
+        for (i, row) in values.iter().enumerate() {
+            if row.len() != n_cols {
+                return plan_err!(
+                    "Inconsistent data length across values list: got {} values in row {} but expected {}",
+                    row.len(),
+                    i,
+                    n_cols
+                );
+            }
+        }
+
+        // Infer from data itself
+        Self::infer_data(values)
+    }
+
     /// Create a values list based relation, and the schema is inferred from data itself or table schema if provided, consuming
     /// `value`. See the [Postgres VALUES](https://www.postgresql.org/docs/current/queries-values.html)
     /// documentation for more details.
@@ -179,7 +202,10 @@ impl LogicalPlanBuilder {
     /// so it's usually better to override the default names with a table alias list.
     ///
     /// If the values include params/binders such as $1, $2, $3, etc, then the `param_data_types` should be provided.
-    pub fn values(values: Vec<Vec<Expr>>, schema: Option<&DFSchemaRef>) -> Result<Self> {
+    pub fn values_with_schema(
+        values: Vec<Vec<Expr>>,
+        schema: Option<&DFSchemaRef>,
+    ) -> Result<Self> {
         if values.is_empty() {
             return plan_err!("Values list cannot be empty");
         }
@@ -200,14 +226,17 @@ impl LogicalPlanBuilder {
 
         // Check the type of value against the schema
         if let Some(schema) = schema {
-            Self::infer_from_schema(values, schema)
+            Self::infer_values_from_schema(values, schema)
         } else {
             // Infer from data itself
             Self::infer_data(values)
         }
     }
 
-    fn infer_from_schema(values: Vec<Vec<Expr>>, schema: &DFSchema) -> Result<Self> {
+    fn infer_values_from_schema(
+        values: Vec<Vec<Expr>>,
+        schema: &DFSchema,
+    ) -> Result<Self> {
         let n_cols = values[0].len();
         let mut field_types: Vec<DataType> = Vec::with_capacity(n_cols);
         for j in 0..n_cols {
@@ -2364,10 +2393,10 @@ mod tests {
     fn test_union_after_join() -> Result<()> {
         let values = vec![vec![lit(1)]];
 
-        let left = LogicalPlanBuilder::values(values.clone(), None)?
+        let left = LogicalPlanBuilder::values_with_schema(values.clone(), None)?
             .alias("left")?
             .build()?;
-        let right = LogicalPlanBuilder::values(values, None)?
+        let right = LogicalPlanBuilder::values_with_schema(values, None)?
             .alias("right")?
             .build()?;
 

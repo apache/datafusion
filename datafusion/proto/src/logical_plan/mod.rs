@@ -282,7 +282,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                         .map_err(|e| e.into())
                 }?;
 
-                LogicalPlanBuilder::values(values, None)?.build()
+                LogicalPlanBuilder::values_with_schema(values, None)?.build()
             }
             LogicalPlanType::Projection(projection) => {
                 let input: LogicalPlan =

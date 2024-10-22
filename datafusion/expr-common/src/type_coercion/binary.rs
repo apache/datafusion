@@ -534,6 +534,7 @@ fn type_union_resolution_coercion(
     }
 }
 
+/// Handle type union resolution including struct type and others.
 pub fn try_type_union_resolution(data_types: &[DataType]) -> Result<Vec<DataType>> {
     let err = match try_type_union_resolution_with_struct(data_types) {
         Ok(struct_types) => return Ok(struct_types),
