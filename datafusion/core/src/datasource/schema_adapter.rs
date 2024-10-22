@@ -140,7 +140,12 @@ pub trait SchemaMapper: Debug + Send + Sync {
 ///     }                                           "c": Utf8,
 ///                                                }
 /// ```
+///
 /// # Example of using the `DefaultSchemaAdapterFactory` to map [`RecordBatch`]s
+///
+/// Note `SchemaMapping` also supports mapping partial batches, which is used as
+/// part of predicate pushdown.
+///
 /// ```
 /// # use std::sync::Arc;
 /// # use arrow::datatypes::{DataType, Field, Schema};
@@ -153,14 +158,8 @@ pub trait SchemaMapper: Debug + Send + Sync {
 ///     Field::new("c", DataType::Utf8, true),
 /// ]);
 ///
-/// // The file provides only fields "b" and "c" that oder
-/// let projected_table_schema = table_schema.project(&[2, 1]).unwrap();
-///
-/// // create an adapter for the table schema and file schema
-/// let adapter = DefaultSchemaAdapterFactory.create(
-///   Arc::new(table_schema),
-///   Arc::new(projected_table_schema)
-/// );
+/// // create an adapter to mape the table schema to the file schema
+/// let adapter = DefaultSchemaAdapterFactory::from_schema(Arc::new(table_schema));
 ///
 /// // The file schema has fields "c" and "b" but "b" is stored as an 'Float64'
 /// // instead of 'Utf8'
@@ -190,6 +189,18 @@ pub trait SchemaMapper: Debug + Send + Sync {
 #[derive(Clone, Debug, Default)]
 pub struct DefaultSchemaAdapterFactory;
 
+impl DefaultSchemaAdapterFactory {
+    /// Create a new factory for mapping batches from a file schema to a table
+    /// schema.
+    ///
+    /// This is a convenience for [`DefaultSchemaAdapterFactory::create`] with
+    /// the same schema for both the projected table schema and the table
+    /// schema.
+    pub fn from_schema(table_schema: SchemaRef) -> Box<dyn SchemaAdapter> {
+        Self.create(Arc::clone(&table_schema), table_schema)
+    }
+}
+
 impl SchemaAdapterFactory for DefaultSchemaAdapterFactory {
     fn create(
         &self,
@@ -203,8 +214,8 @@ impl SchemaAdapterFactory for DefaultSchemaAdapterFactory {
     }
 }
 
-/// This SchemaAdapter requires both the table schema and the projected table schema because of the
-/// needs of the [`SchemaMapping`] it creates. Read its documentation for more details
+/// This SchemaAdapter requires both the table schema and the projected table
+/// schema. See  [`SchemaMapping`] for more details
 #[derive(Clone, Debug)]
 pub(crate) struct DefaultSchemaAdapter {
     /// The schema for the table, projected to include only the fields being output (projected) by the
@@ -228,11 +239,12 @@ impl SchemaAdapter for DefaultSchemaAdapter {
         Some(file_schema.fields.find(field.name())?.0)
     }
 
-    /// Creates a `SchemaMapping` that can be used to cast or map the columns from the file schema to the table schema.
+    /// Creates a `SchemaMapping` for casting or mapping the columns from the
+    /// file schema to the table schema.
     ///
-    /// If the provided `file_schema` contains columns of a different type to the expected
-    /// `table_schema`, the method will attempt to cast the array data from the file schema
-    /// to the table schema where possible.
+    /// If the provided `file_schema` contains columns of a different type to
+    /// the expected `table_schema`, the method will attempt to cast the array
+    /// data from the file schema to the table schema where possible.
     ///
     /// Returns a [`SchemaMapping`] that can be applied to the output batch
     /// along with an ordered list of columns to project from the file
@@ -275,36 +287,45 @@ impl SchemaAdapter for DefaultSchemaAdapter {
     }
 }
 
-/// The SchemaMapping struct holds a mapping from the file schema to the table schema
-/// and any necessary type conversions that need to be applied.
+/// The SchemaMapping struct holds a mapping from the file schema to the table
+/// schema and any necessary type conversions.
 ///
-/// This needs both the projected table schema and full table schema because its different
-/// functions have different needs. The [`map_batch`] function is only used by the ParquetOpener to
-/// produce a RecordBatch which has the projected schema, since that's the schema which is supposed
-/// to come out of the execution of this query. [`map_partial_batch`], however, is used to create a
-/// RecordBatch with a schema that can be used for Parquet pushdown, meaning that it may contain
-/// fields which are not in the projected schema (as the fields that parquet pushdown filters
-/// operate can be completely distinct from the fields that are projected (output) out of the
-/// ParquetExec).
+/// Note, because `map_batch` and `map_partial_batch` functions have different
+/// needs, this struct holds two schemas:
 ///
-/// [`map_partial_batch`] uses `table_schema` to create the resulting RecordBatch (as it could be
-/// operating on any fields in the schema), while [`map_batch`] uses `projected_table_schema` (as
-/// it can only operate on the projected fields).
+/// 1. The projected **table** schema
+/// 2. The full table schema
+///
+/// [`map_batch`] is used by the ParquetOpener to produce a RecordBatch which
+/// has the projected schema, since that's the schema which is supposed to come
+/// out of the execution of this query. Thus `map_batch` uses
+/// `projected_table_schema` as it can only operate on the projected fields.
+///
+/// [`map_partial_batch`]  is used to create a RecordBatch with a schema that
+/// can be used for Parquet predicate pushdown, meaning that it may contain
+/// fields which are not in the projected schema (as the fields that parquet
+/// pushdown filters operate can be completely distinct from the fields that are
+/// projected (output) out of the ParquetExec). `map_partial_batch` thus uses
+/// `table_schema` to create the resulting RecordBatch (as it could be operating
+/// on any fields in the schema).
 ///
 /// [`map_batch`]: Self::map_batch
 /// [`map_partial_batch`]: Self::map_partial_batch
 #[derive(Debug)]
 pub struct SchemaMapping {
-    /// The schema of the table. This is the expected schema after conversion and it should match
-    /// the schema of the query result.
+    /// The schema of the table. This is the expected schema after conversion
+    /// and it should match the schema of the query result.
     projected_table_schema: SchemaRef,
-    /// Mapping from field index in `projected_table_schema` to index in projected file_schema.
-    /// They are Options instead of just plain `usize`s because the table could have fields that
-    /// don't exist in the file.
+    /// Mapping from field index in `projected_table_schema` to index in
+    /// projected file_schema.
+    ///
+    /// They are Options instead of just plain `usize`s because the table could
+    /// have fields that don't exist in the file.
     field_mappings: Vec<Option<usize>>,
-    /// The entire table schema, as opposed to the projected_table_schema (which only contains the
-    /// columns that we are projecting out of this query). This contains all fields in the table,
-    /// regardless of if they will be projected out or not.
+    /// The entire table schema, as opposed to the projected_table_schema (which
+    /// only contains the columns that we are projecting out of this query).
+    /// This contains all fields in the table, regardless of if they will be
+    /// projected out or not.
     table_schema: SchemaRef,
 }
 
