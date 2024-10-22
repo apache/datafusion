@@ -20,17 +20,24 @@ use std::fmt::Debug;
 use std::sync::{Arc, OnceLock};
 
 use crate::define_udwf_and_expr;
+use crate::utils::{
+    get_scalar_value_from_args, get_signed_integer, get_unsigned_integer,
+};
 use datafusion_common::arrow::array::ArrayRef;
 use datafusion_common::arrow::array::UInt64Array;
 use datafusion_common::arrow::datatypes::DataType;
 use datafusion_common::arrow::datatypes::Field;
-use datafusion_common::Result;
+use datafusion_common::{
+    arrow_datafusion_err, exec_err, DataFusionError, Result, ScalarValue,
+};
 use datafusion_expr::window_doc_sections::DOC_SECTION_RANKING;
 use datafusion_expr::{
     Documentation, PartitionEvaluator, Signature, Volatility, WindowUDFImpl,
 };
+use datafusion_functions_window_common::expr::ExpressionArgs;
 use datafusion_functions_window_common::field;
 use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
+use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use field::WindowUDFFieldArgs;
 
 define_udwf_and_expr!(
@@ -48,7 +55,20 @@ impl Ntile {
     /// Create a new `ntile` function
     pub fn new() -> Self {
         Self {
-            signature: Signature::any(0, Volatility::Immutable),
+            signature: Signature::uniform(
+                1,
+                vec![
+                    DataType::UInt64,
+                    DataType::UInt32,
+                    DataType::UInt16,
+                    DataType::UInt8,
+                    DataType::Int64,
+                    DataType::Int32,
+                    DataType::Int16,
+                    DataType::Int8,
+                ],
+                Volatility::Immutable,
+            ),
         }
     }
 }
@@ -76,6 +96,8 @@ fn get_ntile_doc() -> &'static Documentation {
     })
 }
 // TODO JP look into data types
+// TODO JP delete the ntile file
+// TODO JP if n is not possitive send error
 
 impl WindowUDFImpl for Ntile {
     fn as_any(&self) -> &dyn Any {
@@ -90,15 +112,41 @@ impl WindowUDFImpl for Ntile {
         &self.signature
     }
 
+    fn expressions(&self, expr_args: ExpressionArgs) -> Vec<Arc<dyn PhysicalExpr>> {
+        parse_expr(expr_args.input_exprs(), expr_args.input_types())
+            .into_iter()
+            .collect::<Vec<_>>()
+    }
+
     // TODO JP  will look into this
     fn partition_evaluator(
         &self,
-        _partition_evaluator_args: PartitionEvaluatorArgs,
+        partition_evaluator_args: PartitionEvaluatorArgs,
     ) -> Result<Box<dyn PartitionEvaluator>> {
-        // let n = partition_evaluator_args.input_exprs().
+        let scalar_n =
+            get_scalar_value_from_args(partition_evaluator_args.input_exprs(), 0)?
+                .ok_or_else(|| {
+                    DataFusionError::Execution(
+                        "NTILE requires a positive integer".to_string(),
+                    )
+                })?;
+
+        // let data_type = partition_evaluator_args.input_types().get(0).ok;
+
+        let n = get_unsigned_integer(scalar_n)?;
+        let data_type = partition_evaluator_args
+            .input_types()
+            .get(0)
+            .ok_or_else(|| {
+                DataFusionError::Execution(
+                    "NTILE requires a positive integer".to_string(),
+                )
+            })?
+            .to_owned();
+
         Ok(Box::new(NtileEvaluator {
-            n: 0,
-            data_type: DataType::UInt64,
+            n: n as u64,
+            data_type,
         }))
     }
     fn field(&self, field_args: WindowUDFFieldArgs) -> Result<Field> {
@@ -113,7 +161,6 @@ impl WindowUDFImpl for Ntile {
 
 #[derive(Debug)]
 struct NtileEvaluator {
-    // might have to move them
     n: u64,
     /// Output data type
     data_type: DataType,
@@ -133,5 +180,41 @@ impl PartitionEvaluator for NtileEvaluator {
             vec.push(res + 1)
         }
         Ok(Arc::new(UInt64Array::from(vec)))
+    }
+}
+
+fn parse_expr(
+    input_exprs: &[Arc<dyn PhysicalExpr>],
+    input_types: &[DataType],
+) -> Result<Arc<dyn PhysicalExpr>> {
+    assert!(!input_exprs.is_empty());
+    assert!(!input_types.is_empty());
+
+    let n = get_scalar_value_from_args(input_exprs, 0)?.ok_or_else(|| {
+        DataFusionError::Execution("NTILE requires a positive integer".to_string())
+    })?;
+
+    if n.is_null() {
+        return exec_err!("NTILE requires a positive integer, but finds NULL");
+    }
+
+    if n.is_unsigned() {
+        let n = get_unsigned_integer(n)?;
+        Ok(
+            Arc::new(datafusion_physical_expr::expressions::Literal::new(
+                n.into(),
+            )) as Arc<dyn PhysicalExpr>,
+        )
+    } else {
+        let n: i64 = get_signed_integer(n)?;
+        if n <= 0 {
+            return exec_err!("NTILE requires a positive integer");
+        }
+
+        Ok(
+            Arc::new(datafusion_physical_expr::expressions::Literal::new(
+                n.into(),
+            )) as Arc<dyn PhysicalExpr>,
+        )
     }
 }
