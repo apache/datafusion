@@ -1826,7 +1826,7 @@ pub enum BuiltInWindowFunction {
     ///   RANK = 1;
     ///   DENSE_RANK = 2;
     ///   PERCENT_RANK = 3;
-    ///   CUME_DIST = 4,
+    ///   CUME_DIST = 4;
     Ntile = 5,
     /// LAG = 6;
     /// LEAD = 7;
