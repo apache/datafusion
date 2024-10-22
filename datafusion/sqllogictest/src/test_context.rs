@@ -334,13 +334,12 @@ pub async fn register_metadata_tables(ctx: &SessionContext) {
             ),
         ]));
 
-    let schema =
-        Schema::new(vec![id, name, l_name, ts, nonnull_name]).with_metadata(HashMap::from([
-            (
-                String::from("metadata_key"),
-                String::from("the entire schema"),
-            ),
-        ]));
+    let schema = Schema::new(vec![id, name, l_name, ts, nonnull_name]).with_metadata(
+        HashMap::from([(
+            String::from("metadata_key"),
+            String::from("the entire schema"),
+        )]),
+    );
 
     let batch = RecordBatch::try_new(
         Arc::new(schema),
