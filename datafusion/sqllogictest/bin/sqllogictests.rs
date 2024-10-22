@@ -64,7 +64,7 @@ async fn run_tests() -> Result<()> {
     let options: Options = clap::Parser::parse();
     // nextest parses stdout
     if options.list {
-        eprintln!("NOTICE: --list option unsupported quitting");
+        eprintln!("NOTICE: --list option unsupported, quitting");
         return Ok(());
     }
     options.warn_on_ignored();
