@@ -38,7 +38,7 @@ use arrow::{
 };
 
 use arrow::{
-    array::{Array, BooleanArray, Int64Array, PrimitiveArray},
+    array::{Array, BooleanArray, UInt64Array, PrimitiveArray},
     buffer::BooleanBuffer,
 };
 use datafusion_common::{
@@ -123,7 +123,7 @@ impl AggregateUDFImpl for Count {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(DataType::Int64)
+        Ok(DataType::UInt64)
     }
 
     fn is_nullable(&self) -> bool {
@@ -141,7 +141,7 @@ impl AggregateUDFImpl for Count {
         } else {
             Ok(vec![Field::new(
                 format_state_name(args.name, "count"),
-                DataType::Int64,
+                DataType::UInt64,
                 false,
             )])
         }
@@ -294,7 +294,7 @@ impl AggregateUDFImpl for Count {
     }
 
     fn default_value(&self, _data_type: &DataType) -> Result<ScalarValue> {
-        Ok(ScalarValue::Int64(Some(0)))
+        Ok(ScalarValue::UInt64(Some(0)))
     }
 
     fn value_from_stats(&self, statistics_args: &StatisticsArgs) -> Option<ScalarValue> {
@@ -312,14 +312,16 @@ impl AggregateUDFImpl for Count {
                         [col_expr.index()]
                     .null_count;
                     if let &Precision::Exact(val) = current_val {
-                        return Some(ScalarValue::Int64(Some((num_rows - val) as i64)));
+                        if val <= num_rows {
+                            return Some(ScalarValue::UInt64(Some((num_rows - val) as u64)));
+                        }
                     }
                 } else if let Some(lit_expr) = statistics_args.exprs[0]
                     .as_any()
                     .downcast_ref::<expressions::Literal>()
                 {
                     if lit_expr.value() == &COUNT_STAR_EXPANSION {
-                        return Some(ScalarValue::Int64(Some(num_rows as i64)));
+                        return Some(ScalarValue::UInt64(Some(num_rows as u64)));
                     }
                 }
             }
@@ -365,7 +367,7 @@ fn get_count_doc() -> &'static Documentation {
 
 #[derive(Debug)]
 struct CountAccumulator {
-    count: i64,
+    count: u64,
 }
 
 impl CountAccumulator {
@@ -377,23 +379,23 @@ impl CountAccumulator {
 
 impl Accumulator for CountAccumulator {
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
-        Ok(vec![ScalarValue::Int64(Some(self.count))])
+        Ok(vec![ScalarValue::UInt64(Some(self.count))])
     }
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         let array = &values[0];
-        self.count += (array.len() - null_count_for_multiple_cols(values)) as i64;
+        self.count += (array.len() - null_count_for_multiple_cols(values)) as u64;
         Ok(())
     }
 
     fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         let array = &values[0];
-        self.count -= (array.len() - null_count_for_multiple_cols(values)) as i64;
+        self.count -= (array.len() - null_count_for_multiple_cols(values)) as u64;
         Ok(())
     }
 
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
-        let counts = downcast_value!(states[0], Int64Array);
+        let counts = downcast_value!(states[0], UInt64Array);
         let delta = &arrow::compute::sum(counts);
         if let Some(d) = delta {
             self.count += *d;
@@ -402,7 +404,7 @@ impl Accumulator for CountAccumulator {
     }
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
-        Ok(ScalarValue::Int64(Some(self.count)))
+        Ok(ScalarValue::UInt64(Some(self.count)))
     }
 
     fn supports_retract_batch(&self) -> bool {
@@ -423,12 +425,7 @@ impl Accumulator for CountAccumulator {
 #[derive(Debug)]
 struct CountGroupsAccumulator {
     /// Count per group.
-    ///
-    /// Note this is an i64 and not a u64 (or usize) because the
-    /// output type of count is `DataType::Int64`. Thus by using `i64`
-    /// for the counts, the output [`Int64Array`] can be created
-    /// without copy.
-    counts: Vec<i64>,
+    counts: Vec<u64>,
 }
 
 impl CountGroupsAccumulator {
@@ -472,7 +469,7 @@ impl GroupsAccumulator for CountGroupsAccumulator {
     ) -> Result<()> {
         assert_eq!(values.len(), 1, "one argument to merge_batch");
         // first batch is counts, second is partial sums
-        let partial_counts = values[0].as_primitive::<Int64Type>();
+        let partial_counts = values[0].as_primitive::<UInt64Type>();
 
         // intermediate counts are always created as non null
         assert_eq!(partial_counts.null_count(), 0);
@@ -505,7 +502,7 @@ impl GroupsAccumulator for CountGroupsAccumulator {
 
         // Count is always non null (null inputs just don't contribute to the overall values)
         let nulls = None;
-        let array = PrimitiveArray::<Int64Type>::new(counts.into(), nulls);
+        let array = PrimitiveArray::<UInt64Type>::new(counts.into(), nulls);
 
         Ok(Arc::new(array))
     }
@@ -513,13 +510,13 @@ impl GroupsAccumulator for CountGroupsAccumulator {
     // return arrays for counts
     fn state(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
         let counts = emit_to.take_needed(&mut self.counts);
-        let counts: PrimitiveArray<Int64Type> = Int64Array::from(counts); // zero copy, no nulls
+        let counts: PrimitiveArray<UInt64Type> = UInt64Array::from(counts); // zero copy, no nulls
         Ok(vec![Arc::new(counts) as ArrayRef])
     }
 
     /// Converts an input batch directly to a state batch
     ///
-    /// The state of `COUNT` is always a single Int64Array:
+    /// The state of `COUNT` is always a single UInt64Array:
     /// * `1` (for non-null, non filtered values)
     /// * `0` (for null values)
     fn convert_to_state(
@@ -532,19 +529,19 @@ impl GroupsAccumulator for CountGroupsAccumulator {
         let state_array = match (values.logical_nulls(), opt_filter) {
             (None, None) => {
                 // In case there is no nulls in input and no filter, returning array of 1
-                Arc::new(Int64Array::from_value(1, values.len()))
+                Arc::new(UInt64Array::from_value(1, values.len()))
             }
             (Some(nulls), None) => {
                 // If there are any nulls in input values -- casting `nulls` (true for values, false for nulls)
-                // of input array to Int64
+                // of input array to UInt64
                 let nulls = BooleanArray::new(nulls.into_inner(), None);
-                compute::cast(&nulls, &DataType::Int64)?
+                compute::cast(&nulls, &DataType::UInt64)?
             }
             (None, Some(filter)) => {
                 // If there is only filter
                 // - applying filter null mask to filter values by bitand filter values and nulls buffers
                 //   (using buffers guarantees absence of nulls in result)
-                // - casting result of bitand to Int64 array
+                // - casting result of bitand to UInt64 array
                 let (filter_values, filter_nulls) = filter.clone().into_parts();
 
                 let state_buf = match filter_nulls {
@@ -553,7 +550,7 @@ impl GroupsAccumulator for CountGroupsAccumulator {
                 };
 
                 let boolean_state = BooleanArray::new(state_buf, None);
-                compute::cast(&boolean_state, &DataType::Int64)?
+                compute::cast(&boolean_state, &DataType::UInt64)?
             }
             (Some(nulls), Some(filter)) => {
                 // For both input nulls and filter
@@ -561,7 +558,7 @@ impl GroupsAccumulator for CountGroupsAccumulator {
                 //   (using buffers guarantees absence of nulls in result)
                 // - applying values null mask to filter buffer by another bitand on filter result and
                 //   nulls from input values
-                // - casting result to Int64 array
+                // - casting result to UInt64 array
                 let (filter_values, filter_nulls) = filter.clone().into_parts();
 
                 let filter_buf = match filter_nulls {
@@ -571,7 +568,7 @@ impl GroupsAccumulator for CountGroupsAccumulator {
                 let state_buf = &filter_buf & nulls.inner();
 
                 let boolean_state = BooleanArray::new(state_buf, None);
-                compute::cast(&boolean_state, &DataType::Int64)?
+                compute::cast(&boolean_state, &DataType::UInt64)?
             }
         };
 
@@ -704,7 +701,7 @@ impl Accumulator for DistinctCountAccumulator {
     }
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
-        Ok(ScalarValue::Int64(Some(self.values.len() as i64)))
+        Ok(ScalarValue::UInt64(Some(self.values.len() as u64)))
     }
 
     fn size(&self) -> usize {
@@ -725,7 +722,7 @@ mod tests {
     fn count_accumulator_nulls() -> Result<()> {
         let mut accumulator = CountAccumulator::new();
         accumulator.update_batch(&[Arc::new(NullArray::new(10))])?;
-        assert_eq!(accumulator.evaluate()?, ScalarValue::Int64(Some(0)));
+        assert_eq!(accumulator.evaluate()?, ScalarValue::UInt64(Some(0)));
         Ok(())
     }
 }

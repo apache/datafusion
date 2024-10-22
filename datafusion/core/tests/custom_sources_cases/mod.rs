@@ -20,7 +20,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use arrow::array::{Int32Array, Int64Array};
+use arrow::array::{Int32Array, UInt64Array};
 use arrow::compute::kernels::aggregate;
 use arrow::datatypes::{DataType, Field, Int32Type, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
@@ -285,12 +285,12 @@ async fn optimizers_catch_all_statistics() {
 
     let expected = RecordBatch::try_new(
         Arc::new(Schema::new(vec![
-            Field::new("count(*)", DataType::Int64, false),
+            Field::new("count(*)", DataType::UInt64, false),
             Field::new("min(test.c1)", DataType::Int32, false),
             Field::new("max(test.c1)", DataType::Int32, false),
         ])),
         vec![
-            Arc::new(Int64Array::from(vec![4])),
+            Arc::new(UInt64Array::from(vec![4])),
             Arc::new(Int32Array::from(vec![1])),
             Arc::new(Int32Array::from(vec![100])),
         ],

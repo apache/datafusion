@@ -82,7 +82,7 @@ impl<O: OffsetSizeTrait> Accumulator for BytesDistinctCountAccumulator<O> {
     }
 
     fn evaluate(&mut self) -> datafusion_common::Result<ScalarValue> {
-        Ok(ScalarValue::Int64(Some(self.0.non_null_len() as i64)))
+        Ok(ScalarValue::UInt64(Some(self.0.non_null_len() as u64)))
     }
 
     fn size(&self) -> usize {
@@ -142,7 +142,7 @@ impl Accumulator for BytesViewDistinctCountAccumulator {
     }
 
     fn evaluate(&mut self) -> datafusion_common::Result<ScalarValue> {
-        Ok(ScalarValue::Int64(Some(self.0.non_null_len() as i64)))
+        Ok(ScalarValue::UInt64(Some(self.0.non_null_len() as u64)))
     }
 
     fn size(&self) -> usize {
