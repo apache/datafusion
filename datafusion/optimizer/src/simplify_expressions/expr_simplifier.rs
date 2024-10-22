@@ -1451,13 +1451,55 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 negated,
                 escape_char: _,
                 case_insensitive: _,
-            }) if !is_null(&expr)
-                && matches!(
-                    pattern.as_ref(),
-                    Expr::Literal(ScalarValue::Utf8(Some(pattern_str))) if pattern_str == "%"
-                ) =>
-            {
-                Transformed::yes(lit(!negated))
+            }) => {
+                //     if !is_null(&expr)
+                //     && matches!(
+                //         pattern.as_ref(),
+                //         Expr::Literal(ScalarValue::Utf8(Some(pattern_str))) if pattern_str == "%"
+                //     ) =>
+                // {
+                //     Transformed::yes(lit(!negated))
+                // }
+                if let Expr::Literal(ScalarValue::Utf8(Some(pattern))) = *pattern {
+                    let pct_wildcard_index = pattern.find('%');
+                    let underscore_index = pattern.find('_');
+                    if pattern == "%" && !is_null(&expr) {
+                        Transformed::yes(lit(!negated))
+                    } else if underscore_index.is_none() && pct_wildcard_index.is_none() {
+                        // no % or _, so this is an equality check
+                        Transformed::yes(Expr::BinaryExpr(BinaryExpr {
+                            left: Box::new(*expr),
+                            op: if negated {
+                                Operator::NotEq
+                            } else {
+                                Operator::Eq
+                            },
+                            right: Box::new(Expr::Literal(ScalarValue::Utf8(Some(
+                                pattern,
+                            )))),
+                        }))
+                    } else if let Some(index) = pct_wildcard_index {
+                        if index == pattern.len() - 1 {
+                            // the pattern has only 1 `%` at the end, so it is a prefix search
+                            // replace this with a starts_with function which is simpler and can be further optimized down the line
+                            let prefix = pattern[..index].to_string();
+                            let expr = Expr::ScalarFunction(
+                                ScalarFunction {
+                                    func: datafusion_functions::string::starts_with(),
+                                    args: vec![*expr, lit(prefix)],
+                                }
+                                .into(),
+                            );
+                            Transformed::yes(if negated { expr.not() } else { expr })
+                        } else {
+                            Transformed::no(*expr)
+                        }
+                    } else {
+                        Transformed::no(*expr)
+                    }
+                } else {
+                    Transformed::no(*expr)
+                }
             }
 
             // a is not null/unknown --> true (if a is not nullable)
@@ -2970,6 +3012,13 @@ mod tests {
         })
     }
 
+    fn starts_with(expr: Expr, pattern: &str) -> Expr {
+        Expr::ScalarFunction(ScalarFunction {
+            func: datafusion_functions::string::starts_with(),
+            args: vec![expr, lit(pattern)],
+        })
+    }
+
     // ------------------------------
     // ----- Simplifier tests -------
     // ------------------------------
@@ -3588,6 +3637,18 @@ mod tests {
 
         let expr = not_ilike(col("c1"), "%");
         assert_eq!(simplify(expr), lit(false));
+
+        let expr = like(col("c1"), "a%");
+        assert_eq!(simplify(expr), starts_with(col("c1"), "a"));
+
+        let expr = not_like(col("c1"), "a%");
+        assert_eq!(simplify(expr), not(starts_with(col("c1"), "a")));
+
+        let expr = like(col("c1"), "abc");
+        assert_eq!(simplify(expr), col("c1").eq(lit("abc")));
+
+        let expr = not_like(col("c1"), "abc");
+        assert_eq!(simplify(expr), col("c1").not_eq(lit("abc")));
 
         // test null values
         let null = lit(ScalarValue::Utf8(None));
