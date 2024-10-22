@@ -158,7 +158,7 @@ async fn test_right_join_1k_filtered() {
         JoinType::Right,
         Some(Box::new(col_lt_col_filter)),
     )
-    .run_test(&[JoinTestType::NljHj], false)
+    .run_test(&[JoinTestType::HjSmj], false)
     .await
 }
 
