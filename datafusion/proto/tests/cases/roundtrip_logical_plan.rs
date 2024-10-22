@@ -944,7 +944,7 @@ async fn roundtrip_expr_api() -> Result<()> {
         rank(),
         dense_rank(),
         percent_rank(),
-        ntile(),
+        ntile(lit(10)),
         lead(col("b"), None, None),
         lead(col("b"), Some(2), None),
         lead(col("b"), Some(2), Some(ScalarValue::from(100))),

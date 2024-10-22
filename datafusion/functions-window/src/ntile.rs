@@ -19,7 +19,6 @@ use std::any::Any;
 use std::fmt::Debug;
 use std::sync::{Arc, OnceLock};
 
-use crate::define_udwf_and_expr;
 use crate::utils::{
     get_scalar_value_from_args, get_signed_integer, get_unsigned_integer,
 };
@@ -40,11 +39,15 @@ use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use field::WindowUDFFieldArgs;
 
-define_udwf_and_expr!(
+get_or_init_udwf!(
     Ntile,
     ntile,
     "integer ranging from 1 to the argument value, dividing the partition as equally as possible"
 );
+
+pub fn ntile(arg: datafusion_expr::Expr) -> datafusion_expr::Expr {
+    ntile_udwf().call(vec![arg])
+}
 
 #[derive(Debug)]
 pub struct Ntile {
@@ -131,9 +134,6 @@ impl WindowUDFImpl for Ntile {
                     )
                 })?;
 
-        // let data_type = partition_evaluator_args.input_types().get(0).ok;
-
-        let n = get_unsigned_integer(scalar_n)?;
         let data_type = partition_evaluator_args
             .input_types()
             .get(0)
@@ -144,10 +144,19 @@ impl WindowUDFImpl for Ntile {
             })?
             .to_owned();
 
-        Ok(Box::new(NtileEvaluator {
-            n: n as u64,
-            data_type,
-        }))
+        let n = get_unsigned_integer(scalar_n)?;
+
+        let data_type = partition_evaluator_args
+            .input_types()
+            .get(0)
+            .ok_or_else(|| {
+                DataFusionError::Execution(
+                    "NTILE requires a positive integer".to_string(),
+                )
+            })?
+            .to_owned();
+
+        Ok(Box::new(NtileEvaluator { n, data_type }))
     }
     fn field(&self, field_args: WindowUDFFieldArgs) -> Result<Field> {
         let nullable = false;
