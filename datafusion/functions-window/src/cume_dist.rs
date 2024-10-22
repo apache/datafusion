@@ -157,42 +157,25 @@ mod tests {
     }
 
     #[test]
-    fn test_cume_dist_empty() -> Result<()> {
-        let cume_dist = CumeDist::default();
-        let expected: Vec<f64> = vec![];
-        test_cume_dist_result(&cume_dist, 0, vec![], expected)?;
-        Ok(())
-    }
+    #[allow(clippy::single_range_in_vec_init)]
+    fn test_cume_dist() -> Result<()> {
+        let r = CumeDist::new();
 
-    #[test]
-    fn test_cume_dist_single() -> Result<()> {
-        let cume_dist = CumeDist::default();
-        let expected = vec![1.0];
-        test_cume_dist_result(&cume_dist, 1, vec![0..1], expected)?;
-        Ok(())
-    }
+        let expected = vec![0.0; 0];
+        test_i32_result(&r, 0, vec![], expected)?;
 
-    #[test]
-    fn test_cume_dist_two_rows() -> Result<()> {
-        let cume_dist = CumeDist::default();
-        let expected = vec![0.5, 1.0];
-        test_cume_dist_result(&cume_dist, 2, vec![0..1, 1..2], expected)?;
-        Ok(())
-    }
+        let expected = vec![1.0; 1];
+        test_i32_result(&r, 1, vec![0..1], expected)?;
 
-    #[test]
-    fn test_cume_dist_multiple_partitions() -> Result<()> {
-        let cume_dist = CumeDist::default();
-        let expected = vec![0.25, 0.5, 0.75, 1.0];
-        test_cume_dist_result(&cume_dist, 4, vec![0..1, 1..2, 2..3, 3..4], expected)?;
-        Ok(())
-    }
+        let expected = vec![1.0; 2];
+        test_i32_result(&r, 2, vec![0..2], expected)?;
 
-    #[test]
-    fn test_cume_dist_with_ties() -> Result<()> {
-        let cume_dist = CumeDist::default();
         let expected = vec![0.5, 0.5, 1.0, 1.0];
-        test_cume_dist_result(&cume_dist, 4, vec![0..2, 2..4], expected)?;
+        test_i32_result(&r, 4, vec![0..2, 2..4], expected)?;
+
+        let expected = vec![0.25, 0.5, 0.75, 1.0];
+        test_i32_result(&r, 4, vec![0..1, 1..2, 2..3, 3..4], expected)?;
+
         Ok(())
     }
 }
