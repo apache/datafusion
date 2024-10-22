@@ -735,7 +735,7 @@ impl Unparser<'_> {
                 //   select * from t1 limit 10 -> (select * from t1 limit 10) as a
                 if let Some(alias) = alias {
                     if table_scan.projection.is_none() && table_scan.filters.is_empty() {
-                        builder = builder.alias(alias.clone())?;
+                        builder = builder.alias(alias)?;
                     }
                 }
 
