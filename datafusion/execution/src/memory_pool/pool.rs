@@ -87,7 +87,10 @@ impl GreedyMemoryPool {
     }
 }
 
-fn get_prefix(name: &str) -> &str {
+/// Consumer name is like RepartitionExec[0] or SortPreservingMergeExec[0],
+/// but we don't need partitioned index
+fn consumer_name_without_index(reservation: &MemoryReservation) -> &str {
+    let name = reservation.consumer().name();
     name.split('[').next().unwrap_or(name)
 }
 
@@ -95,8 +98,7 @@ impl MemoryPool for GreedyMemoryPool {
     fn grow(&self, reservation: &MemoryReservation, additional: usize) {
         self.used.fetch_add(additional, Ordering::Relaxed);
 
-        let name = reservation.consumer().name();
-        let name = get_prefix(name);
+        let name = consumer_name_without_index(reservation);
         let mut used_per_consumer = self.used_per_consumer.write().unwrap();
         let consumer_usage = used_per_consumer
             .entry(name.to_string())
@@ -107,8 +109,7 @@ impl MemoryPool for GreedyMemoryPool {
     fn shrink(&self, reservation: &MemoryReservation, shrink: usize) {
         self.used.fetch_sub(shrink, Ordering::Relaxed);
 
-        let name = reservation.consumer().name();
-        let name = get_prefix(name);
+        let name = consumer_name_without_index(reservation);
         let mut used_per_consumer = self.used_per_consumer.write().unwrap();
         let consumer_usage = used_per_consumer
             .entry(name.to_string())
@@ -117,9 +118,7 @@ impl MemoryPool for GreedyMemoryPool {
     }
 
     fn try_grow(&self, reservation: &MemoryReservation, additional: usize) -> Result<()> {
-        let name = reservation.consumer().name();
-        let name = get_prefix(name);
-
+        let name = consumer_name_without_index(reservation);
         let mut used_per_consumer = self.used_per_consumer.write().unwrap();
         let consumer_usage = used_per_consumer
             .entry(name.to_string())
