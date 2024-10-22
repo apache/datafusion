@@ -87,7 +87,7 @@ impl GreedyMemoryPool {
     }
 }
 
-/// Consumer name is like RepartitionExec[0] or SortPreservingMergeExec[0],
+/// Consumer name is like RepartitionExec\[0\] or SortPreservingMergeExec\[0\],
 /// but we don't need partitioned index
 fn consumer_name_without_index(reservation: &MemoryReservation) -> &str {
     let name = reservation.consumer().name();
