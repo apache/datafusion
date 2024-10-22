@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::mem;
+
 use crate::aggregates::group_values::group_column::{
     ByteGroupValueBuilder, ByteViewGroupValueBuilder, GroupColumn,
     PrimitiveGroupValueBuilder,
@@ -246,14 +248,6 @@ impl GroupValuesColumn {
         )
     }
 
-    #[inline]
-    fn get_group_indices_from_list(
-        &self,
-        start_group_index: usize,
-    ) -> GroupIndicesIterator {
-        GroupIndicesIterator::new(start_group_index, &self.group_index_lists)
-    }
-
     /// Collect vectorized context by checking hash values of `cols` in `map`
     ///
     /// 1. If bucket not found
@@ -328,7 +322,7 @@ impl GroupValuesColumn {
     }
 
     fn vectorized_compare(&mut self) {
-        
+
     }
 }
 
@@ -412,10 +406,10 @@ impl GroupValues for GroupValuesColumn {
         // tracks to which group each of the input rows belongs
         groups.clear();
 
-        let batch_hashes = &mut self.hashes_buffer;
+        let mut batch_hashes = mem::take(&mut self.hashes_buffer);
         batch_hashes.clear();
         batch_hashes.resize(n_rows, 0);
-        create_hashes(cols, &self.random_state, batch_hashes)?;
+        create_hashes(cols, &self.random_state, &mut batch_hashes)?;
 
         // General steps for one round `vectorized compare & append`:
         //   1. Collect vectorized context by checking hash values of `cols` in `map`
@@ -433,10 +427,13 @@ impl GroupValues for GroupValuesColumn {
             self.vectorized_compare_results.clear();
 
             // 1. Collect vectorized context by checking hash values of `cols` in `map`
-            self.collect_vectorized_process_context(batch_hashes);
+            self.collect_vectorized_process_context(&batch_hashes);
 
             // 2. Perform `vectorized compare`
         }
+
+        self.hashes_buffer = batch_hashes;
+
         Ok(())
     }
 

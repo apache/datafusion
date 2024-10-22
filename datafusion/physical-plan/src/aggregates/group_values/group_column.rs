@@ -617,14 +617,14 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
         if all_non_null {
             self.nulls.append_n(rows.len(), false);
             for &row in rows {
-                self.append_value(arr, row);
+                self.do_append_val_inner(arr, row);
             }
         } else {
             for &row in rows {
                 // Null row case, set and return
                 if arr.is_valid(row) {
                     self.nulls.append(false);
-                    self.append_value(arr, row);
+                    self.do_append_val_inner(arr, row);
                 } else {
                     self.nulls.append(true);
                     self.views.push(0);
@@ -645,10 +645,10 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
 
         // Not null row case
         self.nulls.append(false);
-        self.append_value(arr, row);
+        self.do_append_val_inner(arr, row);
     }
 
-    fn append_value(&mut self, array: &GenericByteViewArray<B>, row: usize)
+    fn do_append_val_inner(&mut self, array: &GenericByteViewArray<B>, row: usize)
     where
         B: ByteViewType,
     {
@@ -690,7 +690,15 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
 
     fn equal_to_inner(&self, lhs_row: usize, array: &ArrayRef, rhs_row: usize) -> bool {
         let array = array.as_byte_view::<B>();
+        self.do_equal_to_inner(lhs_row, array, rhs_row)
+    }
 
+    fn do_equal_to_inner(
+        &self,
+        lhs_row: usize,
+        array: &GenericByteViewArray<B>,
+        rhs_row: usize,
+    ) -> bool {
         // Check if nulls equal firstly
         let exist_null = self.nulls.is_null(lhs_row);
         let input_null = array.is_null(rhs_row);
