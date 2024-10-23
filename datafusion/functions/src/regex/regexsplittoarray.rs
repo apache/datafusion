@@ -34,7 +34,7 @@ use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
 
-use itertools::izip;
+use itertools::{izip, Itertools};
 use regex::Regex;
 
 #[derive(Debug)]
@@ -213,28 +213,36 @@ where
 
     let mut regex_cache = HashMap::new();
 
-    match (is_regex_scalar, is_flags_scalar) {
+    let result = match (is_regex_scalar, is_flags_scalar) {
         (true, true) => {
             let regex = match regex_scalar {
                 None | Some("") => {
-                    return Ok(Arc::new(
-                        values
-                            .iter()
-                            .map(|value| get_splitted_array_no_regex(value))
-                            .collect(),
-                    ))
+                    let iter = values
+                        .iter()
+                        .map(|value| {
+                            Some(
+                                get_splitted_array_no_regex(value)
+                                    .into_iter()
+                                    .map(Some)
+                                    .collect_vec(),
+                            )
+                        })
+                        .collect_vec();
+                    return Ok(
+                        Arc::new(ListArray::from_iter_primitive(iter)) as Arc<dyn Array>
+                    );
                 }
                 Some(regex) => regex,
             };
 
             let pattern = compile_regex(regex, flags_scalar)?;
-
-            Ok(Arc::new(
-                values
-                    .iter()
-                    .map(|value| get_splitted_array(value, &pattern))
-                    .collect(),
-            ))
+            let iter = values
+                .iter()
+                .map(|value| {
+                    Some(get_splitted_array(value, &pattern).into_iter().map(Some))
+                })
+                .collect_vec();
+            Ok(Arc::new(ListArray::from_iter_primitive(iter)))
         }
         (true, false) => {
             let regex = match regex_scalar {
@@ -258,13 +266,16 @@ where
                 )));
             }
 
-            Ok(Arc::new(ListArray::from_iter_primitive(
-                values.iter().zip(flags_array.iter()).map(|(value, flags)| {
+            let iter = values
+                .iter()
+                .zip(flags_array.iter())
+                .map(|(value, flags)| {
                     let pattern =
-                        compile_and_cache_regex(regex, flags, &mut regex_cache)?;
-                    Ok(get_splitted_array(value, &pattern))
-                }),
-            )))
+                        compile_and_cache_regex(regex, flags, &mut regex_cache).ok();
+                    pattern.map(|p| Some(get_splitted_array(value, &p)))
+                })
+                .collect(); // TODO: there must be no need to collect
+            Ok(Arc::new(ListArray::from_iter_primitive(iter)))
         }
         (false, true) => {
             if values.len() != regex_array.len() {
@@ -275,29 +286,29 @@ where
                 )));
             }
 
-            Ok(Arc::new(
-                values
-                    .iter()
-                    .zip(regex_array.iter())
-                    .map(|(value, regex)| {
-                        let regex =
-                            match regex {
-                                None | Some("") => return Err(ArrowError::ComputeError(
-                                    "regex_array must not contain null or empty strings"
-                                        .to_string(),
-                                )),
-                                Some(regex) => regex,
-                            };
-
-                        let pattern = compile_and_cache_regex(
-                            regex,
-                            flags_scalar,
-                            &mut regex_cache,
-                        )?;
-                        Ok(get_splitted_array(value, &pattern))
-                    })
-                    .collect::<Result<Vec<ArrayRef>, ArrowError>>()?,
-            ) as ArrayRef)
+            let iter = values
+                .iter()
+                .zip(regex_array.iter())
+                .map(|(value, regex)| {
+                    let regex = match regex {
+                        None | Some("") => {
+                            return Err(ArrowError::ComputeError(
+                                "regex_array must not contain null or empty strings"
+                                    .to_string(),
+                            ))
+                        }
+                        Some(regex) => regex,
+                    };
+                    let pattern =
+                        compile_and_cache_regex(regex, flags_scalar, &mut regex_cache)
+                            .ok();
+                    Ok(pattern
+                        .map(|p| Some(get_splitted_array(value, &p)))
+                        .unwrap()
+                        .unwrap())
+                })
+                .collect();
+            Ok(Arc::new(ListArray::from_iter_primitive(iter)))
         }
         (false, false) => {
             if values.len() != regex_array.len() {
@@ -317,24 +328,27 @@ where
                 )));
             }
 
-            Ok(Arc::new(
-                izip!(values.iter(), regex_array.iter(), flags_array.iter())
-                    .map(|(value, regex, flags)| {
-                        let regex = match regex {
-                            None | Some("") => return Ok(vec![] as ArrayRef),
-                            Some(regex) => regex,
-                        };
+            let iter = izip!(values.iter(), regex_array.iter(), flags_array.iter())
+                .map(|(value, regex, flags)| {
+                    let regex = match regex {
+                        None | Some("") => return Some(vec![]),
+                        Some(regex) => regex,
+                    };
 
-                        let pattern =
-                            compile_and_cache_regex(regex, flags, &mut regex_cache)?;
-
-                        Ok(get_splitted_array(value, &pattern) as ArrayRef)
+                    let pattern =
+                        compile_and_cache_regex(regex, flags, &mut regex_cache).ok();
+                    pattern.map(|p| {
+                        get_splitted_array(value, &p)
+                            .into_iter()
+                            .map(Some)
+                            .collect()
                     })
-                    .collect::<Result<Vec<ArrayRef>, ArrowError>>()?
-                    as ArrayRef,
-            ))
+                })
+                .collect_vec();
+            Ok(Arc::new(ListArray::from_iter_primitive(iter)))
         }
-    }
+    };
+    result.map(|r| r as Arc<dyn Array>)
 }
 
 fn compile_and_cache_regex(
@@ -385,8 +399,7 @@ fn get_splitted_array(value: Option<&str>, pattern: &Regex) -> Vec<String> {
         None | Some("") => return vec![],
         Some(value) => value,
     };
-
-    pattern.split(value).collect()
+    pattern.split(value).map(|s| s.to_string()).collect_vec()
 }
 
 static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
