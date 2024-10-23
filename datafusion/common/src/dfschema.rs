@@ -29,6 +29,7 @@ use crate::{
     SchemaError, TableReference,
 };
 
+use crate::column::ColumnReference;
 use arrow::compute::can_cast_types;
 use arrow::datatypes::{DataType, Field, FieldRef, Fields, Schema, SchemaRef};
 use arrow_schema::SchemaBuilder;
@@ -476,6 +477,12 @@ impl DFSchema {
                 Column::new(qualifier.cloned(), field.name().clone())
             })
             .collect()
+    }
+
+    pub fn column_reference(&self) -> impl Iterator<Item = ColumnReference> + '_ {
+        self.iter().map(|(qualifier, field)| {
+            ColumnReference::new(qualifier.cloned(), field.name().as_str())
+        })
     }
 
     /// Find the qualified field with the given unqualified name
