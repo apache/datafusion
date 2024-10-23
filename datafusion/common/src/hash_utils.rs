@@ -102,8 +102,7 @@ fn hash_array_primitive<T>(
     hashes_buffer: &mut [u64],
     rehash: bool,
 ) where
-    T: ArrowPrimitiveType,
-    <T as arrow_array::ArrowPrimitiveType>::Native: HashValue,
+    T: ArrowPrimitiveType<Native: HashValue>,
 {
     assert_eq!(
         hashes_buffer.len(),
