@@ -125,6 +125,9 @@ pub fn log_plan(description: &str, plan: &LogicalPlan) {
     trace!("{description}::\n{}\n", plan.display_indent_schema());
 }
 
+/// Determine whether a predicate can restrict NULLs. e.g.
+/// `c0 > 8` return true;
+/// `c0 IS NULL` return false.
 pub fn is_restrict_null_predicate<'a>(
     predicate: Expr,
     join_cols_of_predicate: impl IntoIterator<Item = &'a Column>,
@@ -277,7 +280,7 @@ mod tests {
             let join_cols_of_predicate = std::iter::once(&column_a);
             let actual =
                 is_restrict_null_predicate(predicate.clone(), join_cols_of_predicate)?;
-            assert_eq!(actual, expected, "{}", format!("{}", predicate));
+            assert_eq!(actual, expected, "{}", predicate);
         }
 
         Ok(())
