@@ -391,7 +391,7 @@ logical_plan
 01)Filter: EXISTS (<subquery>)
 02)--Subquery:
 03)----Projection: t1.t1_int
-04)------Filter: t1.t1_id > t1.t1_int
+04)------Filter: t1.t1_int < t1.t1_id
 05)--------TableScan: t1
 06)--TableScan: t1 projection=[t1_id, t1_name, t1_int]
 
@@ -462,8 +462,8 @@ explain SELECT t1_id, (SELECT t2_int FROM t2 WHERE t2.t2_int = t1.t1_int limit 1
 logical_plan
 01)Projection: t1.t1_id, (<subquery>) AS t2_int
 02)--Subquery:
-03)----Limit: skip=0, fetch=1
-04)------Projection: t2.t2_int
+03)----Projection: t2.t2_int
+04)------Limit: skip=0, fetch=1
 05)--------Filter: t2.t2_int = outer_ref(t1.t1_int)
 06)----------TableScan: t2
 07)--TableScan: t1 projection=[t1_id, t1_int]
@@ -475,8 +475,8 @@ logical_plan
 01)Projection: t1.t1_id
 02)--Filter: t1.t1_int = (<subquery>)
 03)----Subquery:
-04)------Limit: skip=0, fetch=1
-05)--------Projection: t2.t2_int
+04)------Projection: t2.t2_int
+05)--------Limit: skip=0, fetch=1
 06)----------Filter: t2.t2_int = outer_ref(t1.t1_int)
 07)------------TableScan: t2
 08)----TableScan: t1 projection=[t1_id, t1_int]
@@ -542,13 +542,13 @@ query TT
 explain SELECT t0_id, t0_name FROM t0 WHERE EXISTS (SELECT 1 FROM t1 INNER JOIN t2 ON(t1.t1_id = t2.t2_id and t1.t1_name = t0.t0_name))
 ----
 logical_plan
-01)Filter: EXISTS (<subquery>)
-02)--Subquery:
-03)----Projection: Int64(1)
-04)------Inner Join:  Filter: t1.t1_id = t2.t2_id AND t1.t1_name = outer_ref(t0.t0_name)
-05)--------TableScan: t1
-06)--------TableScan: t2
-07)--TableScan: t0 projection=[t0_id, t0_name]
+01)LeftSemi Join: t0.t0_name = __correlated_sq_2.t1_name
+02)--TableScan: t0 projection=[t0_id, t0_name]
+03)--SubqueryAlias: __correlated_sq_2
+04)----Projection: t1.t1_name
+05)------Inner Join: t1.t1_id = t2.t2_id
+06)--------TableScan: t1 projection=[t1_id, t1_name]
+07)--------TableScan: t2 projection=[t2_id]
 
 #subquery_contains_join_contains_correlated_columns
 query TT
@@ -656,8 +656,8 @@ explain SELECT t1_id, t1_name FROM t1 WHERE t1_id in (SELECT t2_id FROM t2 where
 logical_plan
 01)Filter: t1.t1_id IN (<subquery>)
 02)--Subquery:
-03)----Limit: skip=0, fetch=10
-04)------Projection: t2.t2_id
+03)----Projection: t2.t2_id
+04)------Limit: skip=0, fetch=10
 05)--------Filter: outer_ref(t1.t1_name) = t2.t2_name
 06)----------TableScan: t2
 07)--TableScan: t1 projection=[t1_id, t1_name]
