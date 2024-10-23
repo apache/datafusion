@@ -45,9 +45,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         let schema = planner_context.table_schema().unwrap_or(empty_schema);
         if schema.fields().is_empty() {
-            LogicalPlanBuilder::values_with_schema(values, None)?.build()
+            LogicalPlanBuilder::values(values)?.build()
         } else {
-            LogicalPlanBuilder::values_with_schema(values, Some(&schema))?.build()
+            LogicalPlanBuilder::values_with_schema(values, &schema)?.build()
         }
     }
 }

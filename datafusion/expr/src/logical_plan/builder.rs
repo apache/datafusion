@@ -204,7 +204,7 @@ impl LogicalPlanBuilder {
     /// If the values include params/binders such as $1, $2, $3, etc, then the `param_data_types` should be provided.
     pub fn values_with_schema(
         values: Vec<Vec<Expr>>,
-        schema: Option<&DFSchemaRef>,
+        schema: &DFSchemaRef,
     ) -> Result<Self> {
         if values.is_empty() {
             return plan_err!("Values list cannot be empty");
@@ -225,12 +225,7 @@ impl LogicalPlanBuilder {
         }
 
         // Check the type of value against the schema
-        if let Some(schema) = schema {
-            Self::infer_values_from_schema(values, schema)
-        } else {
-            // Infer from data itself
-            Self::infer_data(values)
-        }
+        Self::infer_values_from_schema(values, schema)
     }
 
     fn infer_values_from_schema(
@@ -2393,10 +2388,10 @@ mod tests {
     fn test_union_after_join() -> Result<()> {
         let values = vec![vec![lit(1)]];
 
-        let left = LogicalPlanBuilder::values_with_schema(values.clone(), None)?
+        let left = LogicalPlanBuilder::values(values.clone())?
             .alias("left")?
             .build()?;
-        let right = LogicalPlanBuilder::values_with_schema(values, None)?
+        let right = LogicalPlanBuilder::values(values)?
             .alias("right")?
             .build()?;
 
