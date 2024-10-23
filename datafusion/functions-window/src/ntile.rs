@@ -40,8 +40,7 @@ use field::WindowUDFFieldArgs;
 get_or_init_udwf!(
     Ntile,
     ntile,
-    "integer ranging from 1 to the argument value, dividing the partition as equally as possible",
-    Ntile::create
+    "integer ranging from 1 to the argument value, dividing the partition as equally as possible"
 );
 
 pub fn ntile(arg: i64) -> datafusion_expr::Expr {
@@ -73,8 +72,10 @@ impl Ntile {
             ),
         }
     }
+}
 
-    pub fn create() -> Self {
+impl Default for Ntile {
+    fn default() -> Self {
         Self::new()
     }
 }
@@ -134,7 +135,7 @@ impl WindowUDFImpl for Ntile {
         let nullable = false;
         let return_type: &DataType = field_args.input_types().first().unwrap();
 
-        Ok(Field::new(self.name(), return_type.clone(), nullable))
+        Ok(Field::new(field_args.name(), return_type.clone(), nullable))
     }
 
     fn documentation(&self) -> Option<&Documentation> {
