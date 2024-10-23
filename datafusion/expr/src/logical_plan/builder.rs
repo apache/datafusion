@@ -170,6 +170,13 @@ impl LogicalPlanBuilder {
         })))
     }
 
+    /// Create a values list based relation, and the schema is inferred from data, consuming
+    /// `value`. See the [Postgres VALUES](https://www.postgresql.org/docs/current/queries-values.html)
+    /// documentation for more details.
+    ///
+    /// so it's usually better to override the default names with a table alias list.
+    ///
+    /// If the values include params/binders such as $1, $2, $3, etc, then the `param_data_types` should be provided.
     pub fn values(values: Vec<Vec<Expr>>) -> Result<Self> {
         if values.is_empty() {
             return plan_err!("Values list cannot be empty");
