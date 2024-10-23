@@ -85,7 +85,8 @@ pub(crate) fn start_demuxer_task(
 ) -> (SpawnedTask<Result<()>>, DemuxedStreamReceiver) {
     let (tx, rx) = mpsc::unbounded_channel();
     let context = context.clone();
-    let single_file_output = !base_output_path.is_collection() && base_output_path.file_extension().is_some();
+    let single_file_output =
+        !base_output_path.is_collection() && base_output_path.file_extension().is_some();
     let task = match partition_by {
         Some(parts) => {
             // There could be an arbitrarily large number of parallel hive style partitions being written to, so we cannot

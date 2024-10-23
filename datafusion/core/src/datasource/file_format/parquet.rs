@@ -2314,13 +2314,15 @@ mod tests {
             written.len()
         );
 
-        let (
-            path,
-            ..
-        ) = written.take(1).next().unwrap();
+        let (path, ..) = written.take(1).next().unwrap();
 
         let path_parts = path.parts().collect::<Vec<_>>();
-        assert_eq!(path_parts.len(), 3, "Expected 3 path parts, instead found {}", path_parts.len());
+        assert_eq!(
+            path_parts.len(),
+            3,
+            "Expected 3 path parts, instead found {}",
+            path_parts.len()
+        );
         assert_eq!(path_parts.last().unwrap().as_ref(), filename);
 
         Ok(())
@@ -2341,13 +2343,15 @@ mod tests {
             written.len()
         );
 
-        let (
-            path,
-            ..
-        ) = written.take(1).next().unwrap();
+        let (path, ..) = written.take(1).next().unwrap();
 
         let path_parts = path.parts().collect::<Vec<_>>();
-        assert_eq!(path_parts.len(), 3, "Expected 3 path parts, instead found {}", path_parts.len());
+        assert_eq!(
+            path_parts.len(),
+            3,
+            "Expected 3 path parts, instead found {}",
+            path_parts.len()
+        );
         assert!(path_parts.last().unwrap().as_ref().ends_with(".parquet"));
 
         Ok(())
@@ -2368,13 +2372,15 @@ mod tests {
             written.len()
         );
 
-        let (
-            path,
-            ..
-        ) = written.take(1).next().unwrap();
+        let (path, ..) = written.take(1).next().unwrap();
 
         let path_parts = path.parts().collect::<Vec<_>>();
-        assert_eq!(path_parts.len(), 3, "Expected 3 path parts, instead found {}", path_parts.len());
+        assert_eq!(
+            path_parts.len(),
+            3,
+            "Expected 3 path parts, instead found {}",
+            path_parts.len()
+        );
         assert!(path_parts.last().unwrap().as_ref().ends_with(".parquet"));
 
         Ok(())
