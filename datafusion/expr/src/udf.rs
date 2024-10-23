@@ -201,6 +201,17 @@ impl ScalarUDF {
         self.inner.is_nullable(args, schema)
     }
 
+    /// Invoke the function with `args` and number of rows, returning the appropriate result.
+    ///
+    /// See [`ScalarUDFImpl::invoke_batch`] for more details.
+    pub fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        number_rows: usize,
+    ) -> Result<ColumnarValue> {
+        self.inner.invoke_batch(args, number_rows)
+    }
+
     /// Invoke the function without `args` but number of rows, returning the appropriate result.
     ///
     /// See [`ScalarUDFImpl::invoke_no_args`] for more details.
@@ -467,7 +478,25 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     /// to arrays, which will likely be simpler code, but be slower.
     ///
     /// [invoke_no_args]: ScalarUDFImpl::invoke_no_args
-    fn invoke(&self, _args: &[ColumnarValue]) -> Result<ColumnarValue>;
+    fn invoke(&self, _args: &[ColumnarValue]) -> Result<ColumnarValue> {
+        not_impl_err!(
+            "Function {} does not implement invoke but called",
+            self.name()
+        )
+    }
+
+    /// Invoke the function with `args` and the number of rows,
+    /// returning the appropriate result.
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        number_rows: usize,
+    ) -> Result<ColumnarValue> {
+        match args.is_empty() {
+            true => self.invoke_no_args(number_rows),
+            false => self.invoke(args),
+        }
+    }
 
     /// Invoke the function without `args`, instead the number of rows are provided,
     /// returning the appropriate result.

@@ -119,7 +119,7 @@ impl ExecutionPlan for MemoryExec {
     }
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
-        // this is a leaf node and has no children
+        // This is a leaf node and has no children
         vec![]
     }
 
@@ -179,7 +179,7 @@ impl MemoryExec {
         })
     }
 
-    /// set `show_sizes` to determine whether to display partition sizes
+    /// Set `show_sizes` to determine whether to display partition sizes
     pub fn with_show_sizes(mut self, show_sizes: bool) -> Self {
         self.show_sizes = show_sizes;
         self

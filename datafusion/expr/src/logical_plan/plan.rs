@@ -424,27 +424,6 @@ impl LogicalPlan {
         exprs
     }
 
-    #[deprecated(since = "37.0.0", note = "Use `apply_expressions` instead")]
-    pub fn inspect_expressions<F, E>(self: &LogicalPlan, mut f: F) -> Result<(), E>
-    where
-        F: FnMut(&Expr) -> Result<(), E>,
-    {
-        let mut err = Ok(());
-        self.apply_expressions(|e| {
-            if let Err(e) = f(e) {
-                // save the error for later (it may not be a DataFusionError
-                err = Err(e);
-                Ok(TreeNodeRecursion::Stop)
-            } else {
-                Ok(TreeNodeRecursion::Continue)
-            }
-        })
-        // The closure always returns OK, so this will always too
-        .expect("no way to return error during recursion");
-
-        err
-    }
-
     /// Returns all inputs / children of this `LogicalPlan` node.
     ///
     /// Note does not include inputs to inputs, or subqueries.
