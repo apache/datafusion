@@ -18,12 +18,14 @@
 -->
 
 # API health policy
-To maintain API health, developers must track and properly deprecate outdated methods. 
+
+To maintain API health, developers must track and properly deprecate outdated methods.
 When deprecating a method:
-- clearly mark the API as deprecated and specify the exact DataFusion version in which it was deprecated. 
+
+- clearly mark the API as deprecated and specify the exact DataFusion version in which it was deprecated.
 - concisely describe the preferred API, if relevant
 
-API deprecation example:  
+API deprecation example:
 
 ```rust
     #[deprecated(since = "41.0.0", note = "Use SessionStateBuilder")]
@@ -33,4 +35,3 @@ API deprecation example:
 Deprecated methods will remain in the codebase for a period of 6 major versions or 6 months, whichever is longer, to provide users ample time to transition away from them.
 
 Please refer to [DataFusion releases](https://crates.io/crates/datafusion/versions) to plan ahead API migration
-
