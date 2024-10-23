@@ -157,10 +157,19 @@ All [aggregate functions](aggregate_functions.md) can be used as window function
 
 ## Ranking Functions
 
+- [cume_dist](#cume_dist)
 - [dense_rank](#dense_rank)
 - [percent_rank](#percent_rank)
 - [rank](#rank)
 - [row_number](#row_number)
+
+### `cume_dist`
+
+Relative rank of the current row: (number of rows preceding or peer with current row) / (total rows).
+
+```
+cume_dist()
+```
 
 ### `dense_rank`
 
