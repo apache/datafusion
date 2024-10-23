@@ -3898,6 +3898,150 @@ select struct(a as field_a, b) from t;
 
 - row
 
+## Map Functions
+
+- [element_at](#element_at)
+- [map](#map)
+- [map_extract](#map_extract)
+- [map_keys](#map_keys)
+- [map_values](#map_values)
+
+### `element_at`
+
+_Alias of [map_extract](#map_extract)._
+
+### `map`
+
+Returns an Arrow map with the specified key-value pairs.
+
+The `make_map` function creates a map from two lists: one for keys and one for values. Each key must be unique and non-null.
+
+```
+map(key, value)
+map(key: value)
+make_map(['key1', 'key2'], ['value1', 'value2'])
+```
+
+#### Arguments
+
+- **key**: For `map`: Expression to be used for key. Can be a constant, column, function, or any combination of arithmetic or string operators.
+  For `make_map`: The list of keys to be used in the map. Each key must be unique and non-null.
+- **value**: For `map`: Expression to be used for value. Can be a constant, column, function, or any combination of arithmetic or string operators.
+  For `make_map`: The list of values to be mapped to the corresponding keys.
+
+#### Example
+
+````sql
+        -- Using map function
+        SELECT MAP('type', 'test');
+        ----
+        {type: test}
+
+        SELECT MAP(['POST', 'HEAD', 'PATCH'], [41, 33, null]);
+        ----
+        {POST: 41, HEAD: 33, PATCH: }
+
+        SELECT MAP([[1,2], [3,4]], ['a', 'b']);
+        ----
+        {[1, 2]: a, [3, 4]: b}
+
+        SELECT MAP { 'a': 1, 'b': 2 };
+        ----
+        {a: 1, b: 2}
+
+        -- Using make_map function
+        SELECT MAKE_MAP(['POST', 'HEAD'], [41, 33]);
+        ----
+        {POST: 41, HEAD: 33}
+
+        SELECT MAKE_MAP(['key1', 'key2'], ['value1', null]);
+        ----
+        {key1: value1, key2: }
+        ```
+
+
+### `map_extract`
+
+Returns a list containing the value for the given key or an empty list if the key is not present in the map.
+
+````
+
+map_extract(map, key)
+
+````
+#### Arguments
+
+- **map**: Map expression. Can be a constant, column, or function, and any combination of map operators.
+- **key**: Key to extract from the map. Can be a constant, column, or function, any combination of arithmetic or string operators, or a named expression of the previously listed.
+
+#### Example
+
+```sql
+SELECT map_extract(MAP {'a': 1, 'b': NULL, 'c': 3}, 'a');
+----
+[1]
+
+SELECT map_extract(MAP {1: 'one', 2: 'two'}, 2);
+----
+['two']
+
+SELECT map_extract(MAP {'x': 10, 'y': NULL, 'z': 30}, 'y');
+----
+[]
+````
+
+#### Aliases
+
+- element_at
+
+### `map_keys`
+
+Returns a list of all keys in the map.
+
+```
+map_keys(map)
+```
+
+#### Arguments
+
+- **map**: Map expression. Can be a constant, column, or function, and any combination of map operators.
+
+#### Example
+
+```sql
+SELECT map_keys(MAP {'a': 1, 'b': NULL, 'c': 3});
+----
+[a, b, c]
+
+SELECT map_keys(map([100, 5], [42, 43]));
+----
+[100, 5]
+```
+
+### `map_values`
+
+Returns a list of all values in the map.
+
+```
+map_values(map)
+```
+
+#### Arguments
+
+- **map**: Map expression. Can be a constant, column, or function, and any combination of map operators.
+
+#### Example
+
+```sql
+SELECT map_values(MAP {'a': 1, 'b': NULL, 'c': 3});
+----
+[1, , 3]
+
+SELECT map_values(map([100, 5], [42, 43]));
+----
+[42, 43]
+```
+
 ## Hashing Functions
 
 - [digest](#digest)
@@ -4052,40 +4196,6 @@ sha512(expression)
 +-------------------------------------------+
 | <sha512_hash_result>                      |
 +-------------------------------------------+
-```
-
-## Special Functions
-
-- [map](#map)
-
-### `map`
-
-Returns an Arrow map with the specified key-value pairs.
-
-```
-map(key, value)
-map(key: value)
-```
-
-#### Arguments
-
-- **key**: Expression to be used for key. Can be a constant, column, or function, any combination of arithmetic or string operators, or a named expression of the previously listed.
-- **value**: Expression to be used for value. Can be a constant, column, or function, any combination of arithmetic or string operators, or a named expression of the previously listed.
-
-#### Example
-
-```sql
-SELECT MAP(['POST', 'HEAD', 'PATCH'], [41, 33, null]);
-----
-{POST: 41, HEAD: 33, PATCH: }
-
-SELECT MAP([[1,2], [3,4]], ['a', 'b']);
-----
-{[1, 2]: a, [3, 4]: b}
-
-SELECT MAP { 'a': 1, 'b': 2 };
-----
-{a: 1, b: 2}
 ```
 
 ## Other Functions
