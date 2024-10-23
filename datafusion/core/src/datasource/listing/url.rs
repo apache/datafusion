@@ -200,7 +200,7 @@ impl ListingTableUrl {
             }
         }
 
-        return None;
+        None
     }
 
     /// Strips the prefix of this [`ListingTableUrl`] from the provided path, returning
