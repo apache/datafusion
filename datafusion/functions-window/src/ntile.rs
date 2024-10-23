@@ -22,10 +22,8 @@ use std::sync::{Arc, OnceLock};
 use crate::utils::{
     get_scalar_value_from_args, get_signed_integer, get_unsigned_integer,
 };
-use datafusion_common::arrow::array::ArrayRef;
-use datafusion_common::arrow::array::UInt64Array;
-use datafusion_common::arrow::datatypes::DataType;
-use datafusion_common::arrow::datatypes::Field;
+use datafusion_common::arrow::array::{ArrayRef, UInt64Array};
+use datafusion_common::arrow::datatypes::{DataType, Field};
 use datafusion_common::{exec_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr::window_doc_sections::DOC_SECTION_RANKING;
 use datafusion_expr::{
@@ -133,9 +131,8 @@ impl WindowUDFImpl for Ntile {
     }
     fn field(&self, field_args: WindowUDFFieldArgs) -> Result<Field> {
         let nullable = false;
-        let return_type: &DataType = field_args.input_types().first().unwrap();
 
-        Ok(Field::new(field_args.name(), return_type.clone(), nullable))
+        Ok(Field::new(field_args.name(), DataType::UInt64, nullable))
     }
 
     fn documentation(&self) -> Option<&Documentation> {
