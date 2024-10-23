@@ -33,18 +33,17 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             rows,
         } = values;
 
-        let schema = planner_context
-            .table_schema()
-            .unwrap_or(Arc::new(DFSchema::empty()));
+        let empty_schema = Arc::new(DFSchema::empty());
         let values = rows
             .into_iter()
             .map(|row| {
                 row.into_iter()
-                    .map(|v| self.sql_to_expr(v, &schema, planner_context))
+                    .map(|v| self.sql_to_expr(v, &empty_schema, planner_context))
                     .collect::<Result<Vec<_>>>()
             })
             .collect::<Result<Vec<_>>>()?;
 
+        let schema = planner_context.table_schema().unwrap_or(empty_schema);
         if schema.fields().is_empty() {
             LogicalPlanBuilder::values_with_schema(values, None)?.build()
         } else {
