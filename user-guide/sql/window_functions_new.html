@@ -519,6 +519,15 @@
   </a>
   <ul class="nav section-nav flex-column">
    <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#cume-dist">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       cume_dist
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
     <a class="reference internal nav-link" href="#dense-rank">
      <code class="docutils literal notranslate">
       <span class="pre">
@@ -722,11 +731,19 @@ Instead, the rows retain their separate identities. Behind the scenes, the windo
 <section id="ranking-functions">
 <h2>Ranking Functions<a class="headerlink" href="#ranking-functions" title="Link to this heading">¶</a></h2>
 <ul class="simple">
+<li><p><a class="reference internal" href="#cume-dist">cume_dist</a></p></li>
 <li><p><a class="reference internal" href="#dense-rank">dense_rank</a></p></li>
 <li><p><a class="reference internal" href="#percent-rank">percent_rank</a></p></li>
 <li><p><a class="reference internal" href="#rank">rank</a></p></li>
 <li><p><a class="reference internal" href="#row-number">row_number</a></p></li>
 </ul>
+<section id="cume-dist">
+<h3><code class="docutils literal notranslate"><span class="pre">cume_dist</span></code><a class="headerlink" href="#cume-dist" title="Link to this heading">¶</a></h3>
+<p>Relative rank of the current row: (number of rows preceding or peer with current row) / (total rows).</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">cume_dist</span><span class="p">()</span>
+</pre></div>
+</div>
+</section>
 <section id="dense-rank">
 <h3><code class="docutils literal notranslate"><span class="pre">dense_rank</span></code><a class="headerlink" href="#dense-rank" title="Link to this heading">¶</a></h3>
 <p>Returns the rank of the current row without gaps. This function ranks rows in a dense manner, meaning consecutive ranks are assigned even for identical values.</p>
