@@ -230,8 +230,8 @@ async fn tpcds_logical_q40() -> Result<()> {
 
 #[tokio::test]
 #[ignore]
-// Optimizer rule 'scalar_subquery_to_join' failed: Optimizing disjunctions not supported!
-// issue: https://github.com/apache/datafusion/issues/5368
+// check_analyzed_plan: Correlated column is not allowed in predicate
+// issue: https://github.com/apache/datafusion/issues/13074
 async fn tpcds_logical_q41() -> Result<()> {
     create_logical_plan(41).await
 }
