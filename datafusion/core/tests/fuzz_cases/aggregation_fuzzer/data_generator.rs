@@ -226,7 +226,7 @@ macro_rules! generate_string_array {
 }
 
 macro_rules! generate_primitive_array {
-    ($SELF:ident, $NUM_ROWS:ident, $BATCH_GEN_RNG:ident, $ARRAY_GEN_RNG:ident, $DATA_TYPE:ident, $ARROW_TYPE:ident) => {
+    ($SELF:ident, $NUM_ROWS:ident, $BATCH_GEN_RNG:ident, $ARRAY_GEN_RNG:ident, $ARROW_TYPE:ident) => {
         paste::paste! {{
             let null_pct_idx = $BATCH_GEN_RNG.gen_range(0..$SELF.candidate_null_pcts.len());
             let null_pct = $SELF.candidate_null_pcts[null_pct_idx];
@@ -243,7 +243,7 @@ macro_rules! generate_primitive_array {
                 rng: $ARRAY_GEN_RNG,
             };
 
-            generator.gen_data::<$DATA_TYPE, $ARROW_TYPE>()
+            generator.gen_data::<$ARROW_TYPE>()
     }}}
 }
 
@@ -301,7 +301,6 @@ impl RecordBatchGenerator {
                     num_rows,
                     batch_gen_rng,
                     array_gen_rng,
-                    i8,
                     Int8Type
                 )
             }
@@ -311,7 +310,6 @@ impl RecordBatchGenerator {
                     num_rows,
                     batch_gen_rng,
                     array_gen_rng,
-                    i16,
                     Int16Type
                 )
             }
@@ -321,7 +319,6 @@ impl RecordBatchGenerator {
                     num_rows,
                     batch_gen_rng,
                     array_gen_rng,
-                    i32,
                     Int32Type
                 )
             }
@@ -331,7 +328,6 @@ impl RecordBatchGenerator {
                     num_rows,
                     batch_gen_rng,
                     array_gen_rng,
-                    i64,
                     Int64Type
                 )
             }
@@ -341,7 +337,6 @@ impl RecordBatchGenerator {
                     num_rows,
                     batch_gen_rng,
                     array_gen_rng,
-                    u8,
                     UInt8Type
                 )
             }
@@ -351,7 +346,6 @@ impl RecordBatchGenerator {
                     num_rows,
                     batch_gen_rng,
                     array_gen_rng,
-                    u16,
                     UInt16Type
                 )
             }
@@ -361,7 +355,6 @@ impl RecordBatchGenerator {
                     num_rows,
                     batch_gen_rng,
                     array_gen_rng,
-                    u32,
                     UInt32Type
                 )
             }
@@ -371,7 +364,6 @@ impl RecordBatchGenerator {
                     num_rows,
                     batch_gen_rng,
                     array_gen_rng,
-                    u64,
                     UInt64Type
                 )
             }
@@ -381,7 +373,6 @@ impl RecordBatchGenerator {
                     num_rows,
                     batch_gen_rng,
                     array_gen_rng,
-                    f32,
                     Float32Type
                 )
             }
@@ -391,7 +382,6 @@ impl RecordBatchGenerator {
                     num_rows,
                     batch_gen_rng,
                     array_gen_rng,
-                    f64,
                     Float64Type
                 )
             }
@@ -401,7 +391,6 @@ impl RecordBatchGenerator {
                     num_rows,
                     batch_gen_rng,
                     array_gen_rng,
-                    i32,
                     Date32Type
                 )
             }
@@ -411,7 +400,6 @@ impl RecordBatchGenerator {
                     num_rows,
                     batch_gen_rng,
                     array_gen_rng,
-                    i64,
                     Date64Type
                 )
             }
