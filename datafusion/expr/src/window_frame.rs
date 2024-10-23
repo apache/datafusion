@@ -354,7 +354,7 @@ impl WindowFrameBound {
     }
 }
 
-pub fn convert_frame_bound_to_scalar_value(
+fn convert_frame_bound_to_scalar_value(
     v: ast::Expr,
     units: &ast::WindowFrameUnits,
 ) -> Result<ScalarValue> {
@@ -363,6 +363,23 @@ pub fn convert_frame_bound_to_scalar_value(
         ast::WindowFrameUnits::Rows | ast::WindowFrameUnits::Groups => match v {
             ast::Expr::Value(ast::Value::Number(value, false))
             | ast::Expr::Value(ast::Value::SingleQuotedString(value)) => {
+                Ok(ScalarValue::try_from_string(value, &DataType::UInt64)?)
+            },
+            ast::Expr::Interval(ast::Interval {
+                value,
+                leading_field: None,
+                leading_precision: None,
+                last_field: None,
+                fractional_seconds_precision: None,
+            }) => {
+                let value = match *value {
+                    ast::Expr::Value(ast::Value::SingleQuotedString(item)) => item,
+                    e => {
+                        return sql_err!(ParserError(format!(
+                            "INTERVAL expression cannot be {e:?}"
+                        )));
+                    }
+                };
                 Ok(ScalarValue::try_from_string(value, &DataType::UInt64)?)
             }
             _ => plan_err!(
