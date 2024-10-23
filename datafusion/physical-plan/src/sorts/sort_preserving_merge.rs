@@ -352,11 +352,18 @@ mod tests {
     use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 
     use futures::{FutureExt, Stream, StreamExt};
+    use hashbrown::HashMap;
     use tokio::time::timeout;
 
     fn generate_task_ctx_for_round_robin_tie_breaker() -> Result<Arc<TaskContext>> {
+        let mut pool_per_consumer = HashMap::new();
+        // Number from 660000 to 30000000 (or even more) are all valid limit
+        pool_per_consumer.insert("RepartitionExec[0]".to_string(), 10000000);
+        pool_per_consumer.insert("RepartitionExec[1]".to_string(), 10000000);
+
         let runtime = RuntimeEnvBuilder::new()
-            .with_memory_limit(135000000, 1.0)
+            // random large number for total mem limit, we care about RepartitionExec only
+            .with_memory_limit_per_consumer(2000000000, 1.0, pool_per_consumer)
             .build_arc()?;
         let config = SessionConfig::new();
         let task_ctx = TaskContext::default()
@@ -367,8 +374,8 @@ mod tests {
     fn generate_spm_for_round_robin_tie_breaker(
         enable_round_robin_repartition: bool,
     ) -> Result<Arc<SortPreservingMergeExec>> {
-        let target_batch_size = 8192;
-        let row_size = 8192;
+        let target_batch_size = 12500;
+        let row_size = 12500;
         let a: ArrayRef = Arc::new(Int32Array::from(vec![1; row_size]));
         let b: ArrayRef = Arc::new(StringArray::from_iter(vec![Some("a"); row_size]));
         let c: ArrayRef = Arc::new(Int64Array::from_iter(vec![0; row_size]));
@@ -390,7 +397,7 @@ mod tests {
 
         let exec = MemoryExec::try_new(&[rbs], schema, None).unwrap();
         let repartition_exec =
-            RepartitionExec::try_new(Arc::new(exec), Partitioning::RoundRobinBatch(128))?;
+            RepartitionExec::try_new(Arc::new(exec), Partitioning::RoundRobinBatch(2))?;
         let coalesce_batches_exec =
             CoalesceBatchesExec::new(Arc::new(repartition_exec), target_batch_size);
         let spm = SortPreservingMergeExec::new(sort, Arc::new(coalesce_batches_exec))
