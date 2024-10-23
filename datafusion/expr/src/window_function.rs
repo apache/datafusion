@@ -17,11 +17,6 @@
 
 use crate::{expr::WindowFunction, BuiltInWindowFunction, Expr, Literal};
 
-/// Create an expression to represent the `cume_dist` window function
-pub fn cume_dist() -> Expr {
-    Expr::WindowFunction(WindowFunction::new(BuiltInWindowFunction::CumeDist, vec![]))
-}
-
 /// Create an expression to represent the `nth_value` window function
 pub fn nth_value(arg: Expr, n: i64) -> Expr {
     Expr::WindowFunction(WindowFunction::new(

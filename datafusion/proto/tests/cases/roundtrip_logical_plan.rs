@@ -48,7 +48,7 @@ use datafusion::functions_aggregate::expr_fn::{
 use datafusion::functions_aggregate::min_max::max_udaf;
 use datafusion::functions_nested::map::map;
 use datafusion::functions_window::expr_fn::{
-    dense_rank, lag, lead, ntile, percent_rank, rank, row_number,
+    dense_rank, lag, lead, percent_rank, rank, row_number,
 };
 use datafusion::functions_window::rank::rank_udwf;
 use datafusion::prelude::*;
@@ -944,7 +944,6 @@ async fn roundtrip_expr_api() -> Result<()> {
         rank(),
         dense_rank(),
         percent_rank(),
-        ntile(lit(10)),
         lead(col("b"), None, None),
         lead(col("b"), Some(2), None),
         lead(col("b"), Some(2), Some(ScalarValue::from(100))),

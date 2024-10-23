@@ -40,8 +40,6 @@ impl fmt::Display for BuiltInWindowFunction {
 /// [Window Function]: https://en.wikipedia.org/wiki/Window_function_(SQL)
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash, EnumIter)]
 pub enum BuiltInWindowFunction {
-    /// Relative rank of the current row: (number of rows preceding or peer with current row) / (total rows)
-    CumeDist,
     /// returns value evaluated at the row that is the first row of the window frame
     FirstValue,
     /// Returns value evaluated at the row that is the last row of the window frame
@@ -54,7 +52,6 @@ impl BuiltInWindowFunction {
     pub fn name(&self) -> &str {
         use BuiltInWindowFunction::*;
         match self {
-            CumeDist => "CUME_DIST",
             FirstValue => "first_value",
             LastValue => "last_value",
             NthValue => "NTH_VALUE",
@@ -66,7 +63,6 @@ impl FromStr for BuiltInWindowFunction {
     type Err = DataFusionError;
     fn from_str(name: &str) -> Result<BuiltInWindowFunction> {
         Ok(match name.to_uppercase().as_str() {
-            "CUME_DIST" => BuiltInWindowFunction::CumeDist,
             "FIRST_VALUE" => BuiltInWindowFunction::FirstValue,
             "LAST_VALUE" => BuiltInWindowFunction::LastValue,
             "NTH_VALUE" => BuiltInWindowFunction::NthValue,
@@ -97,7 +93,6 @@ impl BuiltInWindowFunction {
             })?;
 
         match self {
-            BuiltInWindowFunction::CumeDist => Ok(DataType::Float64),
             BuiltInWindowFunction::FirstValue
             | BuiltInWindowFunction::LastValue
             | BuiltInWindowFunction::NthValue => Ok(input_expr_types[0].clone()),
@@ -108,7 +103,6 @@ impl BuiltInWindowFunction {
     pub fn signature(&self) -> Signature {
         // Note: The physical expression must accept the type returned by this function or the execution panics.
         match self {
-            BuiltInWindowFunction::CumeDist => Signature::any(0, Volatility::Immutable),
             BuiltInWindowFunction::FirstValue | BuiltInWindowFunction::LastValue => {
                 Signature::any(1, Volatility::Immutable)
             }

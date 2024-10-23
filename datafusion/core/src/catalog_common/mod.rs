@@ -36,10 +36,6 @@ pub use datafusion_sql::{ResolvedTableReference, TableReference};
 use std::collections::BTreeSet;
 use std::ops::ControlFlow;
 
-/// See [`CatalogProviderList`]
-#[deprecated(since = "35.0.0", note = "use [`CatalogProviderList`] instead")]
-pub trait CatalogList: CatalogProviderList {}
-
 /// Collects all tables and views referenced in the SQL statement. CTEs are collected separately.
 /// This can be used to determine which tables need to be in the catalog for a query to be planned.
 ///

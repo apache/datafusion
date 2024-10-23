@@ -15,20 +15,4 @@
 // specific language governing permissions and limitations
 // under the License.
 
-mod aggregate;
-mod built_in;
-mod built_in_window_function_expr;
-pub(crate) mod nth_value;
-mod sliding_aggregate;
-mod window_expr;
-
-pub use aggregate::PlainAggregateWindowExpr;
-pub use built_in::BuiltInWindowExpr;
-pub use built_in_window_function_expr::BuiltInWindowFunctionExpr;
-pub use sliding_aggregate::SlidingAggregateWindowExpr;
-pub use window_expr::NthValueKind;
-pub use window_expr::PartitionBatches;
-pub use window_expr::PartitionKey;
-pub use window_expr::PartitionWindowAggStates;
-pub use window_expr::WindowExpr;
-pub use window_expr::WindowState;
+mod logical_plan;
