@@ -36,43 +36,45 @@ pub struct PrimitiveArrayGenerator {
 
 // TODO: support generating more primitive arrays
 impl PrimitiveArrayGenerator {
-    pub fn gen_data<N, A: ArrowPrimitiveType>(&mut self) -> ArrayRef 
+    pub fn gen_data<N, A>(&mut self) -> ArrayRef
     where
         A: ArrowPrimitiveType<Native = N>,
         N: std::marker::Sync + std::marker::Send,
-        Standard: Distribution<N>
+        Standard: Distribution<N>,
     {
         // table of primitives from which to draw
         let distinct_primitives: PrimitiveArray<A> = (0..self.num_distinct_primitives)
-            .map(|_| Some(match A::DATA_TYPE {
-                DataType::Int8
-                | DataType::Int16
-                | DataType::Int32
-                | DataType::Int64
-                | DataType::UInt8
-                | DataType::UInt16
-                | DataType::UInt32
-                | DataType::UInt64
-                | DataType::Float32
-                | DataType::Float64 
-                | DataType::Date32 => self.rng.gen::<N>(),
+            .map(|_| {
+                Some(match A::DATA_TYPE {
+                    DataType::Int8
+                    | DataType::Int16
+                    | DataType::Int32
+                    | DataType::Int64
+                    | DataType::UInt8
+                    | DataType::UInt16
+                    | DataType::UInt32
+                    | DataType::UInt64
+                    | DataType::Float32
+                    | DataType::Float64
+                    | DataType::Date32 => self.rng.gen::<N>(),
 
-                DataType::Date64 => {
-                    // TODO: constrain this range to valid dates if necessary
-                    let date_value = self.rng.gen_range(i64::MIN..=i64::MAX); 
-                    let millis_per_day: i64 = 86_400_000;
-                    let adjusted_value = date_value - (date_value % millis_per_day);
-                    // SAFETY: here we can convert i64 to N safely since we determine that the type N is i64
-                    unsafe {
-                        std::ptr::read(&adjusted_value as *const i64 as *const N)
+                    DataType::Date64 => {
+                        // TODO: constrain this range to valid dates if necessary
+                        let date_value = self.rng.gen_range(i64::MIN..=i64::MAX);
+                        let millis_per_day: i64 = 86_400_000;
+                        let adjusted_value = date_value - (date_value % millis_per_day);
+                        // SAFETY: here we can convert i64 to N safely since we determine that the type N is i64
+                        unsafe {
+                            std::ptr::read(&adjusted_value as *const i64 as *const N)
+                        }
                     }
-                }
 
-                _ => {
-                    let arrow_type = A::DATA_TYPE;
-                    panic!("Unsupported arrow data type: {arrow_type}")
-                }
-            }))
+                    _ => {
+                        let arrow_type = A::DATA_TYPE;
+                        panic!("Unsupported arrow data type: {arrow_type}")
+                    }
+                })
+            })
             .collect();
 
         // pick num_primitves randomly from the distinct string table
