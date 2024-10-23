@@ -96,7 +96,6 @@ impl Unparser<'_> {
             | LogicalPlan::Aggregate(_)
             | LogicalPlan::Sort(_)
             | LogicalPlan::Join(_)
-            | LogicalPlan::CrossJoin(_)
             | LogicalPlan::Repartition(_)
             | LogicalPlan::Union(_)
             | LogicalPlan::TableScan(_)
@@ -497,43 +496,6 @@ impl Unparser<'_> {
                     global: false,
                     join_operator: self
                         .join_operator_to_sql(join.join_type, join_constraint),
-                };
-                let mut from = select.pop_from().unwrap();
-                from.push_join(ast_join);
-                select.push_from(from);
-
-                Ok(())
-            }
-            LogicalPlan::CrossJoin(cross_join) => {
-                // Cross joins are the same as unconditional inner joins
-                let mut right_relation = RelationBuilder::default();
-
-                self.select_to_sql_recursively(
-                    cross_join.left.as_ref(),
-                    query,
-                    select,
-                    relation,
-                )?;
-                self.select_to_sql_recursively(
-                    cross_join.right.as_ref(),
-                    query,
-                    select,
-                    &mut right_relation,
-                )?;
-
-                let Ok(Some(relation)) = right_relation.build() else {
-                    return internal_err!("Failed to build right relation");
-                };
-
-                let ast_join = ast::Join {
-                    relation,
-                    global: false,
-                    join_operator: self.join_operator_to_sql(
-                        JoinType::Inner,
-                        ast::JoinConstraint::On(ast::Expr::Value(ast::Value::Boolean(
-                            true,
-                        ))),
-                    ),
                 };
                 let mut from = select.pop_from().unwrap();
                 from.push_join(ast_join);

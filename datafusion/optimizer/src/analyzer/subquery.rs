@@ -180,7 +180,6 @@ fn check_inner_plan(
         LogicalPlan::Projection(_)
         | LogicalPlan::Distinct(_)
         | LogicalPlan::Sort(_)
-        | LogicalPlan::CrossJoin(_)
         | LogicalPlan::Union(_)
         | LogicalPlan::TableScan(_)
         | LogicalPlan::EmptyRelation(_)

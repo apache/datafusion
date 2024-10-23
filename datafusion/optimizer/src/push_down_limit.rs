@@ -110,13 +110,6 @@ impl OptimizerRule for PushDownLimit {
                 transformed_limit(skip, fetch, LogicalPlan::Union(union))
             }
 
-            LogicalPlan::CrossJoin(mut cross_join) => {
-                // push limit to both inputs
-                cross_join.left = make_arc_limit(0, fetch + skip, cross_join.left);
-                cross_join.right = make_arc_limit(0, fetch + skip, cross_join.right);
-                transformed_limit(skip, fetch, LogicalPlan::CrossJoin(cross_join))
-            }
-
             LogicalPlan::Join(join) => Ok(push_down_join(join, fetch + skip)
                 .update_data(|join| {
                     make_limit(skip, fetch, Arc::new(LogicalPlan::Join(join)))

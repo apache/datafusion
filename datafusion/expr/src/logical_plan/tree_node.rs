@@ -37,11 +37,11 @@
 //! * [`LogicalPlan::with_new_exprs`]: Create a new plan with different expressions
 //! * [`LogicalPlan::expressions`]: Return a copy of the plan's expressions
 use crate::{
-    dml::CopyTo, Aggregate, Analyze, CreateMemoryTable, CreateView, CrossJoin,
-    DdlStatement, Distinct, DistinctOn, DmlStatement, Explain, Expr, Extension, Filter,
-    Join, Limit, LogicalPlan, Partitioning, Prepare, Projection, RecursiveQuery,
-    Repartition, Sort, Subquery, SubqueryAlias, TableScan, Union, Unnest,
-    UserDefinedLogicalNode, Values, Window,
+    dml::CopyTo, Aggregate, Analyze, CreateMemoryTable, CreateView, DdlStatement,
+    Distinct, DistinctOn, DmlStatement, Explain, Expr, Extension, Filter, Join, Limit,
+    LogicalPlan, Partitioning, Prepare, Projection, RecursiveQuery, Repartition, Sort,
+    Subquery, SubqueryAlias, TableScan, Union, Unnest, UserDefinedLogicalNode, Values,
+    Window,
 };
 use std::sync::Arc;
 
@@ -157,22 +157,6 @@ impl TreeNode for LogicalPlan {
                     join_constraint,
                     schema,
                     null_equals_null,
-                })
-            }),
-            LogicalPlan::CrossJoin(CrossJoin {
-                left,
-                right,
-                schema,
-            }) => map_until_stop_and_collect!(
-                rewrite_arc(left, &mut f),
-                right,
-                rewrite_arc(right, &mut f)
-            )?
-            .update_data(|(left, right)| {
-                LogicalPlan::CrossJoin(CrossJoin {
-                    left,
-                    right,
-                    schema,
                 })
             }),
             LogicalPlan::Limit(Limit { skip, fetch, input }) => rewrite_arc(input, f)?
@@ -522,7 +506,6 @@ impl LogicalPlan {
             | LogicalPlan::SubqueryAlias(_)
             | LogicalPlan::Limit(_)
             | LogicalPlan::Statement(_)
-            | LogicalPlan::CrossJoin(_)
             | LogicalPlan::Analyze(_)
             | LogicalPlan::Explain(_)
             | LogicalPlan::Union(_)
@@ -734,7 +717,6 @@ impl LogicalPlan {
             | LogicalPlan::SubqueryAlias(_)
             | LogicalPlan::Limit(_)
             | LogicalPlan::Statement(_)
-            | LogicalPlan::CrossJoin(_)
             | LogicalPlan::Analyze(_)
             | LogicalPlan::Explain(_)
             | LogicalPlan::Union(_)
