@@ -96,10 +96,14 @@ impl DynamicFilterInfo {
     ) -> Result<bool, DataFusionError> {
         let mut inner = self.inner.lock();
 
-        if inner.final_expr.is_some() {
+        // that indicates this partition of stream may contains no data, so we return
+        // or we have already have the final_expr
+        if inner.final_expr.is_some()
+            || (inner.processed_partitions.contains(&partition)
+                && records.num_rows() == 0)
+        {
             return Ok(true);
         }
-
         if !inner.processed_partitions.insert(partition) {
             return Ok(false);
         }

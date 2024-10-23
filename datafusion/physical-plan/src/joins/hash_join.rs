@@ -1335,7 +1335,7 @@ impl HashJoinStream {
         build_timer.done();
         // Merge the information to dynamic filters (if there is any) and check if it's finalized
         let filter_finalized = if let Some(filter_info) = &self.dynamic_filter_info {
-            filter_info.merge_batch_and_check_finalized(&left_data.batch)?
+            filter_info.merge_batch_and_check_finalized(left_data.batch())?
         } else {
             true // If there's no dynamic filter, we consider it as "finalized"
         };
