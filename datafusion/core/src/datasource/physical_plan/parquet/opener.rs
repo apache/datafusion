@@ -148,9 +148,10 @@ impl FileOpener for ParquetOpener {
                 builder.parquet_schema(),
                 adapted_projections.iter().cloned(),
             );
-
+            // println!("predicate is {:?}", predicate);
             // Filter pushdown: evaluate predicates during scan
             if let Some(predicate) = pushdown_filters.then_some(predicate).flatten() {
+                //println!("table schema is {:?}", table_schema);
                 let row_filter = row_filter::build_row_filter(
                     &predicate,
                     &file_schema,
@@ -162,6 +163,7 @@ impl FileOpener for ParquetOpener {
                 );
                 match row_filter {
                     Ok(Some(filter)) => {
+                        //println!("we have final row_filter!");
                         builder = builder.with_row_filter(filter);
                     }
                     Ok(None) => {}

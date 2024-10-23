@@ -1085,8 +1085,6 @@ impl DefaultPhysicalPlanner {
                         Some(Arc::new(DynamicFilterInfo::try_new(
                             physical_columns,
                             build_side_names,
-                            data_types,
-                            session_state.config_options().execution.target_partitions,
                         )?))
                     } else {
                         None

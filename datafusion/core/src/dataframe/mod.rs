@@ -1977,6 +1977,7 @@ mod tests {
     use datafusion_functions_window::expr_fn::row_number;
     use datafusion_physical_expr::expressions::Column;
     use datafusion_physical_plan::{get_plan_string, ExecutionPlanProperties};
+    use log::debug;
     use sqlparser::ast::NullTreatment;
 
     // Get string representation of the plan

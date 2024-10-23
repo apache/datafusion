@@ -17,12 +17,6 @@
 
 //! [`HashJoinExec`] Partitioned Hash Join Operator
 
-use std::fmt;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
-use std::task::Poll;
-use std::{any::Any, vec};
-
 use super::dynamic_filters::{DynamicFilterInfo, PartitionedDynamicFilterInfo};
 use super::utils::asymmetric_join_output_partitioning;
 use super::{
@@ -48,6 +42,12 @@ use crate::{
     Partitioning, PlanProperties, RecordBatchStream, SendableRecordBatchStream,
     Statistics,
 };
+use std::fmt;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
+use std::task::Poll;
+use std::{any::Any, vec};
+use tokio::time::Duration;
 
 use arrow::array::{
     Array, ArrayRef, BooleanArray, BooleanBufferBuilder, UInt32Array, UInt64Array,
@@ -76,6 +76,7 @@ use datafusion_expr::Operator;
 use datafusion_physical_expr_common::datum::compare_op_for_nested;
 use futures::{ready, Stream, StreamExt, TryStreamExt};
 use parking_lot::Mutex;
+use tokio::time::Instant;
 
 type SharedBitmapBuilder = Mutex<BooleanBufferBuilder>;
 
@@ -558,6 +559,11 @@ impl HashJoinExec {
             mode,
         ))
     }
+
+    /// if there's any dynamic filters, pushdown it to
+    pub fn pushdown_dynamic_filters(&self) -> Result<()> {
+        unimplemented!()
+    }
 }
 
 impl DisplayAs for HashJoinExec {
@@ -697,6 +703,10 @@ impl ExecutionPlan for HashJoinExec {
             .iter()
             .map(|on| Arc::clone(&on.1))
             .collect::<Vec<_>>();
+        // if there is dynamic filters, we add the counter
+        if let Some(dynamic_filters) = &self.dynamic_filters_pushdown {
+            dynamic_filters.add_count()?
+        }
         let left_partitions = self.left.output_partitioning().partition_count();
         let right_partitions = self.right.output_partitioning().partition_count();
 
@@ -1342,6 +1352,7 @@ impl HashJoinStream {
 
         // If the filter is not finalized after this merge, we need to wait
         if !filter_finalized {
+            let _ = tokio::time::sleep_until(Instant::now() + Duration::from_millis(5));
             cx.waker().wake_by_ref();
             return Poll::Pending;
         }

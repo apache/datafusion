@@ -59,14 +59,19 @@ impl fmt::Debug for DynamicFilterInfo {
             .finish()
     }
 }
+impl DynamicFilterInfoInner {
+    pub fn add_count(&mut self) -> Result<(), DataFusionError> {
+        self.batch_count = self.batch_count.saturating_add(1);
+        //println!("batch count is {}", self.batch_count);
+        Ok(())
+    }
+}
 
 impl DynamicFilterInfo {
     // Create a new DynamicFilterInfo instance
     pub fn try_new(
         columns: Vec<Arc<Column>>,
         build_side_names: Vec<String>,
-        data_types: Vec<&DataType>,
-        total_batches: usize,
     ) -> Result<Self, DataFusionError> {
         let batches = vec![Vec::new(); columns.len()];
 
@@ -76,8 +81,8 @@ impl DynamicFilterInfo {
             inner: Mutex::new(DynamicFilterInfoInner {
                 batches,
                 final_expr: None,
-                batch_count: total_batches,
-                processed_partitions: HashSet::with_capacity(total_batches),
+                batch_count: 0,
+                processed_partitions: HashSet::new(),
             }),
         })
     }
@@ -95,7 +100,13 @@ impl DynamicFilterInfo {
         partition: usize,
     ) -> Result<bool, DataFusionError> {
         let mut inner = self.inner.lock();
-
+        // println!(
+        //     "partition: {} is calling, hashset is {:?}, row number is {:?}, batch count is {:?}",
+        //     partition,
+        //     inner.processed_partitions,
+        //     records.num_rows(),
+        //     inner.batch_count
+        // );
         // that indicates this partition of stream may contains no data, so we return
         // or we have already have the final_expr
         if inner.final_expr.is_some()
@@ -109,9 +120,10 @@ impl DynamicFilterInfo {
         }
 
         inner.batch_count = inner.batch_count.saturating_sub(1);
-        if records.num_rows() == 0 {
-            return Ok(false);
-        }
+        //println!("-batch count is {}", inner.batch_count);
+        // if records.num_rows() == 0 {
+        //     return Ok(false);
+        // }
 
         let finalize = inner.batch_count == 0;
 
@@ -134,6 +146,7 @@ impl DynamicFilterInfo {
 
     // Finalize the filter by creating the final expression
     fn finalize_filter(&self) -> Result<(), DataFusionError> {
+        // println!("start finalizing");
         let mut inner = self.inner.lock();
         let filter_expr =
             self.columns.iter().enumerate().try_fold::<_, _, Result<
@@ -176,7 +189,7 @@ impl DynamicFilterInfo {
             })?;
 
         let filter_expr = filter_expr.expect("Filter expression should be built");
-        println!("final expr is {:?}", filter_expr);
+        // println!("final expr is {:?}", filter_expr);
         inner.final_expr = Some(filter_expr);
         Ok(())
     }
@@ -232,6 +245,12 @@ impl DynamicFilterInfo {
             (None, Some(input_expr)) => Some(input_expr),
             (None, None) => None,
         }
+    }
+
+    // used for adding partition numbers
+    pub fn add_count(&self) -> Result<(), DataFusionError> {
+        let mut inner = self.inner.lock();
+        inner.add_count()
     }
 }
 

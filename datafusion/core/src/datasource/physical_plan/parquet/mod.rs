@@ -715,15 +715,9 @@ impl DisplayAs for ParquetExec {
                         )
                     })
                     .unwrap_or_default();
-                let dynamic_filter =
-                    format!("dynamic_filter: {:?}", self.dynamic_filters);
                 write!(f, "ParquetExec: ")?;
                 self.base_config.fmt_as(t, f)?;
-                write!(
-                    f,
-                    "{}{}{}",
-                    predicate_string, pruning_predicate_string, dynamic_filter
-                )
+                write!(f, "{}{}", predicate_string, pruning_predicate_string)
             }
         }
     }
@@ -812,7 +806,7 @@ impl ExecutionPlan for ParquetExec {
         } else {
             self.predicate.clone()
         };
-
+        // println!("final predicate is {:?}", final_predicate);
         let opener = ParquetOpener {
             partition_index,
             projection: Arc::from(projection),
