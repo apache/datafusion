@@ -19,6 +19,7 @@ use std::any::Any;
 use std::sync::{Arc, OnceLock};
 
 use arrow::array::ArrayRef;
+use arrow::compute::kernels::comparison::ends_with as arrow_ends_with;
 use arrow::datatypes::DataType;
 
 use crate::utils::make_scalar_function;
@@ -113,7 +114,7 @@ fn get_ends_with_doc() -> &'static Documentation {
 /// Returns true if string ends with suffix.
 /// ends_with('alphabet', 'abet') = 't'
 pub fn ends_with(args: &[ArrayRef]) -> Result<ArrayRef> {
-    let result = arrow::compute::kernels::comparison::ends_with(&args[0], &args[1])?;
+    let result = arrow_ends_with(&args[0], &args[1])?;
 
     Ok(Arc::new(result) as ArrayRef)
 }

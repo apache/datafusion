@@ -30,7 +30,7 @@ use std::mem;
 use std::ops::Range;
 use std::pin::Pin;
 use std::sync::atomic::AtomicUsize;
-use std::sync::atomic::Ordering::Relaxed;
+use std::sync::atomic::Ordering::{Relaxed, SeqCst};
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
@@ -1031,8 +1031,7 @@ impl SMJStream {
                                 StreamedBatch::new(batch, &self.on_streamed);
                             // Every incoming streaming batch should have its unique id
                             // Check `JoinedRecordBatches.self.streamed_batch_counter` documentation
-                            self.streamed_batch_counter
-                                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                            self.streamed_batch_counter.fetch_add(1, SeqCst);
                             self.streamed_state = StreamedState::Ready;
                         }
                     }

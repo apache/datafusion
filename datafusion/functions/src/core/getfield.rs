@@ -18,6 +18,7 @@
 use arrow::array::{
     make_array, Array, Capacities, MutableArrayData, Scalar, StringArray,
 };
+use arrow::compute::kernels::cmp::eq;
 use arrow::datatypes::DataType;
 use datafusion_common::cast::{as_map_array, as_struct_array};
 use datafusion_common::{
@@ -188,7 +189,7 @@ impl ScalarUDFImpl for GetFieldFunc {
             (DataType::Map(_, _), ScalarValue::Utf8(Some(k))) => {
                 let map_array = as_map_array(array.as_ref())?;
                 let key_scalar: Scalar<arrow::array::GenericByteArray<arrow::datatypes::GenericStringType<i32>>> = Scalar::new(StringArray::from(vec![k.clone()]));
-                let keys = arrow::compute::kernels::cmp::eq(&key_scalar, map_array.keys())?;
+                let keys = eq(&key_scalar, map_array.keys())?;
 
                 // note that this array has more entries than the expected output/input size
                 // because map_array is flattened

@@ -41,7 +41,10 @@ use crate::hash_utils::create_hashes;
 use crate::utils::{
     array_into_fixed_size_list_array, array_into_large_list_array, array_into_list_array,
 };
-use arrow::compute::kernels::numeric::*;
+use arrow::compute::kernels::{
+    cmp::{eq, lt},
+    numeric::*,
+};
 use arrow::util::display::{array_value_to_string, ArrayFormatter, FormatOptions};
 use arrow::{
     array::*,
@@ -596,8 +599,8 @@ fn partial_cmp_list(arr1: &dyn Array, arr2: &dyn Array) -> Option<Ordering> {
     let arr1 = first_array_for_list(arr1);
     let arr2 = first_array_for_list(arr2);
 
-    let lt_res = arrow::compute::kernels::cmp::lt(&arr1, &arr2).ok()?;
-    let eq_res = arrow::compute::kernels::cmp::eq(&arr1, &arr2).ok()?;
+    let lt_res = lt(&arr1, &arr2).ok()?;
+    let eq_res = eq(&arr1, &arr2).ok()?;
 
     for j in 0..lt_res.len() {
         if lt_res.is_valid(j) && lt_res.value(j) {
@@ -624,8 +627,8 @@ fn partial_cmp_struct(s1: &Arc<StructArray>, s2: &Arc<StructArray>) -> Option<Or
         let arr1 = s1.column(col_index);
         let arr2 = s2.column(col_index);
 
-        let lt_res = arrow::compute::kernels::cmp::lt(arr1, arr2).ok()?;
-        let eq_res = arrow::compute::kernels::cmp::eq(arr1, arr2).ok()?;
+        let lt_res = lt(arr1, arr2).ok()?;
+        let eq_res = eq(arr1, arr2).ok()?;
 
         for j in 0..lt_res.len() {
             if lt_res.is_valid(j) && lt_res.value(j) {
@@ -652,8 +655,8 @@ fn partial_cmp_map(m1: &Arc<MapArray>, m2: &Arc<MapArray>) -> Option<Ordering> {
         let arr1 = m1.entries().column(col_index);
         let arr2 = m2.entries().column(col_index);
 
-        let lt_res = arrow::compute::kernels::cmp::lt(arr1, arr2).ok()?;
-        let eq_res = arrow::compute::kernels::cmp::eq(arr1, arr2).ok()?;
+        let lt_res = lt(arr1, arr2).ok()?;
+        let eq_res = eq(arr1, arr2).ok()?;
 
         for j in 0..lt_res.len() {
             if lt_res.is_valid(j) && lt_res.value(j) {

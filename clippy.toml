@@ -10,3 +10,5 @@ disallowed-types = [
 # Lowering the threshold to help prevent stack overflows (default is 16384)
 # See: https://rust-lang.github.io/rust-clippy/master/index.html#/large_futures
 future-size-threshold = 10000
+
+absolute-paths-max-segments = 4

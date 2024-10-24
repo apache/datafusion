@@ -19,7 +19,9 @@ use datafusion::config::ConfigOptions;
 use datafusion::optimizer::analyzer::expand_wildcard_rule::ExpandWildcardRule;
 use datafusion::optimizer::AnalyzerRule;
 use std::sync::Arc;
-use substrait::proto::expression_reference::ExprType;
+use substrait::proto::{
+    expression::subquery::SubqueryType, expression_reference::ExprType,
+};
 
 use arrow_buffer::ToByteSlice;
 use datafusion::arrow::datatypes::{Field, IntervalUnit};
@@ -491,7 +493,7 @@ pub fn to_substrait_rel(
                 .map(|ptr| *ptr)
                 .collect();
             Ok(Box::new(Rel {
-                rel_type: Some(substrait::proto::rel::RelType::Set(SetRel {
+                rel_type: Some(RelType::Set(SetRel {
                     common: None,
                     inputs: input_rels,
                     op: set_rel::SetOp::UnionAll as i32, // UNION DISTINCT gets translated to AGGREGATION + UNION ALL
@@ -1242,14 +1244,12 @@ pub fn to_substrait_rex(
 
             let substrait_subquery = Expression {
                 rex_type: Some(RexType::Subquery(Box::new(Subquery {
-                    subquery_type: Some(
-                        substrait::proto::expression::subquery::SubqueryType::InPredicate(
-                            Box::new(InPredicate {
-                                needles: (vec![substrait_expr]),
-                                haystack: Some(subquery_plan),
-                            }),
-                        ),
-                    ),
+                    subquery_type: Some(SubqueryType::InPredicate(Box::new(
+                        InPredicate {
+                            needles: (vec![substrait_expr]),
+                            haystack: Some(subquery_plan),
+                        },
+                    ))),
                 }))),
             };
             if *negated {

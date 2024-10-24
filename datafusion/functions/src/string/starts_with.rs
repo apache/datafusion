@@ -19,6 +19,7 @@ use std::any::Any;
 use std::sync::{Arc, OnceLock};
 
 use arrow::array::ArrayRef;
+use arrow::compute::kernels::comparison::starts_with as arrow_starts_with;
 use arrow::datatypes::DataType;
 
 use crate::utils::make_scalar_function;
@@ -30,7 +31,7 @@ use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 /// Returns true if string starts with prefix.
 /// starts_with('alphabet', 'alph') = 't'
 pub fn starts_with(args: &[ArrayRef]) -> Result<ArrayRef> {
-    let result = arrow::compute::kernels::comparison::starts_with(&args[0], &args[1])?;
+    let result = arrow_starts_with(&args[0], &args[1])?;
     Ok(Arc::new(result) as ArrayRef)
 }
 

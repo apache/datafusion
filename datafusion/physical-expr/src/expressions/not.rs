@@ -24,6 +24,7 @@ use std::sync::Arc;
 
 use crate::physical_expr::down_cast_any_ref;
 use crate::PhysicalExpr;
+use arrow::compute::kernels::boolean::not as arrow_not;
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{cast::as_boolean_array, Result, ScalarValue};
@@ -73,9 +74,7 @@ impl PhysicalExpr for NotExpr {
         match evaluate_arg {
             ColumnarValue::Array(array) => {
                 let array = as_boolean_array(&array)?;
-                Ok(ColumnarValue::Array(Arc::new(
-                    arrow::compute::kernels::boolean::not(array)?,
-                )))
+                Ok(ColumnarValue::Array(Arc::new(arrow_not(array)?)))
             }
             ColumnarValue::Scalar(scalar) => {
                 if scalar.is_null() {
