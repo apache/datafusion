@@ -504,11 +504,6 @@ impl<'a, 'b> PgJsonVisitor<'a, 'b> {
                     "Filter": format!("{}", filter_expr)
                 })
             }
-            LogicalPlan::CrossJoin(_) => {
-                json!({
-                    "Node Type": "Cross Join"
-                })
-            }
             LogicalPlan::Repartition(Repartition {
                 partitioning_scheme,
                 ..

@@ -1127,10 +1127,6 @@ impl DefaultPhysicalPlanner {
                     join
                 }
             }
-            LogicalPlan::CrossJoin(_) => {
-                let [left, right] = children.two()?;
-                Arc::new(CrossJoinExec::new(left, right))
-            }
             LogicalPlan::RecursiveQuery(RecursiveQuery {
                 name, is_distinct, ..
             }) => {
