@@ -128,7 +128,7 @@ impl WindowUDFImpl for Ntile {
         }
 
         let n = get_unsigned_integer(scalar_n)?;
-        if n <= 0 {
+        if n == 0 {
             return exec_err!("NTILE requires a positive integer");
         }
 
