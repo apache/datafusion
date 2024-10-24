@@ -24,7 +24,7 @@ use substrait::proto::expression_reference::ExprType;
 use arrow_buffer::ToByteSlice;
 use datafusion::arrow::datatypes::{Field, IntervalUnit};
 use datafusion::logical_expr::{
-    CrossJoin, Distinct, Like, Partitioning, WindowFrameUnits,
+    Distinct, FetchType, Like, Partitioning, SkipType, WindowFrameUnits,
 };
 use datafusion::{
     arrow::datatypes::{DataType, TimeUnit},
@@ -67,7 +67,7 @@ use substrait::proto::read_rel::VirtualTable;
 use substrait::proto::rel_common::EmitKind;
 use substrait::proto::rel_common::EmitKind::Emit;
 use substrait::proto::{
-    rel_common, CrossRel, ExchangeRel, ExpressionReference, ExtendedExpression, RelCommon,
+    rel_common, ExchangeRel, ExpressionReference, ExtendedExpression, RelCommon,
 };
 use substrait::{
     proto::{
@@ -326,14 +326,19 @@ pub fn to_substrait_rel(
         }
         LogicalPlan::Limit(limit) => {
             let input = to_substrait_rel(limit.input.as_ref(), ctx, extensions)?;
-            // Since protobuf can't directly distinguish `None` vs `0` encode `None` as `MAX`
-            let limit_fetch = limit.fetch.unwrap_or(usize::MAX);
+            let FetchType::Literal(fetch) = limit.get_fetch_type()? else {
+                return not_impl_err!("Non-literal limit fetch");
+            };
+            let SkipType::Literal(skip) = limit.get_skip_type()? else {
+                return not_impl_err!("Non-literal limit skip");
+            };
             Ok(Box::new(Rel {
                 rel_type: Some(RelType::Fetch(Box::new(FetchRel {
                     common: None,
                     input: Some(input),
-                    offset: limit.skip as i64,
-                    count: limit_fetch as i64,
+                    offset: skip as i64,
+                    // use -1 to signal that ALL records should be returned
+                    count: fetch.map(|f| f as i64).unwrap_or(-1),
                     advanced_extension: None,
                 }))),
             }))
@@ -467,23 +472,6 @@ pub fn to_substrait_rel(
                     r#type: join_type as i32,
                     expression: join_expr,
                     post_join_filter: None,
-                    advanced_extension: None,
-                }))),
-            }))
-        }
-        LogicalPlan::CrossJoin(cross_join) => {
-            let CrossJoin {
-                left,
-                right,
-                schema: _,
-            } = cross_join;
-            let left = to_substrait_rel(left.as_ref(), ctx, extensions)?;
-            let right = to_substrait_rel(right.as_ref(), ctx, extensions)?;
-            Ok(Box::new(Rel {
-                rel_type: Some(RelType::Cross(Box::new(CrossRel {
-                    common: None,
-                    left: Some(left),
-                    right: Some(right),
                     advanced_extension: None,
                 }))),
             }))

@@ -96,7 +96,6 @@ impl Unparser<'_> {
             | LogicalPlan::Aggregate(_)
             | LogicalPlan::Sort(_)
             | LogicalPlan::Join(_)
-            | LogicalPlan::CrossJoin(_)
             | LogicalPlan::Repartition(_)
             | LogicalPlan::Union(_)
             | LogicalPlan::TableScan(_)
@@ -343,20 +342,16 @@ impl Unparser<'_> {
                         relation,
                     );
                 }
-
-                if let Some(fetch) = limit.fetch {
+                if let Some(fetch) = &limit.fetch {
                     let Some(query) = query.as_mut() else {
                         return internal_err!(
                             "Limit operator only valid in a statement context."
                         );
                     };
-                    query.limit(Some(ast::Expr::Value(ast::Value::Number(
-                        fetch.to_string(),
-                        false,
-                    ))));
+                    query.limit(Some(self.expr_to_sql(fetch)?));
                 }
 
-                if limit.skip > 0 {
+                if let Some(skip) = &limit.skip {
                     let Some(query) = query.as_mut() else {
                         return internal_err!(
                             "Offset operator only valid in a statement context."
@@ -364,10 +359,7 @@ impl Unparser<'_> {
                     };
                     query.offset(Some(ast::Offset {
                         rows: ast::OffsetRows::None,
-                        value: ast::Expr::Value(ast::Value::Number(
-                            limit.skip.to_string(),
-                            false,
-                        )),
+                        value: self.expr_to_sql(skip)?,
                     }));
                 }
 
@@ -497,43 +489,6 @@ impl Unparser<'_> {
                     global: false,
                     join_operator: self
                         .join_operator_to_sql(join.join_type, join_constraint),
-                };
-                let mut from = select.pop_from().unwrap();
-                from.push_join(ast_join);
-                select.push_from(from);
-
-                Ok(())
-            }
-            LogicalPlan::CrossJoin(cross_join) => {
-                // Cross joins are the same as unconditional inner joins
-                let mut right_relation = RelationBuilder::default();
-
-                self.select_to_sql_recursively(
-                    cross_join.left.as_ref(),
-                    query,
-                    select,
-                    relation,
-                )?;
-                self.select_to_sql_recursively(
-                    cross_join.right.as_ref(),
-                    query,
-                    select,
-                    &mut right_relation,
-                )?;
-
-                let Ok(Some(relation)) = right_relation.build() else {
-                    return internal_err!("Failed to build right relation");
-                };
-
-                let ast_join = ast::Join {
-                    relation,
-                    global: false,
-                    join_operator: self.join_operator_to_sql(
-                        JoinType::Inner,
-                        ast::JoinConstraint::On(ast::Expr::Value(ast::Value::Boolean(
-                            true,
-                        ))),
-                    ),
                 };
                 let mut from = select.pop_from().unwrap();
                 from.push_join(ast_join);
@@ -677,10 +632,10 @@ impl Unparser<'_> {
                 //
                 // Example:
                 //   select t1.c1 from t1 where t1.c1 > 1 -> select a.c1 from t1 as a where a.c1 > 1
-                if alias.is_some()
-                    && (table_scan.projection.is_some() || !table_scan.filters.is_empty())
-                {
-                    builder = builder.alias(alias.clone().unwrap())?;
+                if let Some(ref alias) = alias {
+                    if table_scan.projection.is_some() || !table_scan.filters.is_empty() {
+                        builder = builder.alias(alias.clone())?;
+                    }
                 }
 
                 if let Some(project_vec) = &table_scan.projection {
@@ -733,10 +688,10 @@ impl Unparser<'_> {
                 // So we will append the alias to this subquery.
                 // Example:
                 //   select * from t1 limit 10 -> (select * from t1 limit 10) as a
-                if alias.is_some()
-                    && (table_scan.projection.is_none() && table_scan.filters.is_empty())
-                {
-                    builder = builder.alias(alias.clone().unwrap())?;
+                if let Some(alias) = alias {
+                    if table_scan.projection.is_none() && table_scan.filters.is_empty() {
+                        builder = builder.alias(alias)?;
+                    }
                 }
 
                 Ok(Some(builder.build()?))

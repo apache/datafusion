@@ -23,16 +23,14 @@ pub mod proxy;
 pub mod string_utils;
 
 use crate::error::{_internal_datafusion_err, _internal_err};
-use crate::{arrow_datafusion_err, DataFusionError, Result, ScalarValue};
-use arrow::array::{ArrayRef, PrimitiveArray};
+use crate::{DataFusionError, Result, ScalarValue};
+use arrow::array::ArrayRef;
 use arrow::buffer::OffsetBuffer;
-use arrow::compute::{partition, take_arrays, SortColumn, SortOptions};
-use arrow::datatypes::{Field, SchemaRef, UInt32Type};
-use arrow::record_batch::RecordBatch;
+use arrow::compute::{partition, SortColumn, SortOptions};
+use arrow::datatypes::{Field, SchemaRef};
 use arrow_array::cast::AsArray;
 use arrow_array::{
     Array, FixedSizeListArray, LargeListArray, ListArray, OffsetSizeTrait,
-    RecordBatchOptions,
 };
 use arrow_schema::DataType;
 use sqlparser::ast::Ident;
@@ -90,20 +88,6 @@ pub fn get_row_at_idx(columns: &[ArrayRef], idx: usize) -> Result<Vec<ScalarValu
         .iter()
         .map(|arr| ScalarValue::try_from_array(arr, idx))
         .collect()
-}
-
-/// Construct a new RecordBatch from the rows of the `record_batch` at the `indices`.
-pub fn get_record_batch_at_indices(
-    record_batch: &RecordBatch,
-    indices: &PrimitiveArray<UInt32Type>,
-) -> Result<RecordBatch> {
-    let new_columns = take_arrays(record_batch.columns(), indices, None)?;
-    RecordBatch::try_new_with_options(
-        record_batch.schema(),
-        new_columns,
-        &RecordBatchOptions::new().with_row_count(Some(indices.len())),
-    )
-    .map_err(|e| arrow_datafusion_err!(e))
 }
 
 /// This function compares two tuples depending on the given sort options.

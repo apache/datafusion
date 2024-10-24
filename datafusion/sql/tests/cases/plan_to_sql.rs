@@ -1016,7 +1016,7 @@ fn test_without_offset() {
 
 #[test]
 fn test_with_offset0() {
-    sql_round_trip(MySqlDialect {}, "select 1 offset 0", "SELECT 1");
+    sql_round_trip(MySqlDialect {}, "select 1 offset 0", "SELECT 1 OFFSET 0");
 }
 
 #[test]

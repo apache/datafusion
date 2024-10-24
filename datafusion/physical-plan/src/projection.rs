@@ -90,7 +90,7 @@ impl ProjectionExec {
             input_schema.metadata().clone(),
         ));
 
-        // construct a map from the input expressions to the output expression of the Projection
+        // Construct a map from the input expressions to the output expression of the Projection
         let projection_mapping = ProjectionMapping::try_new(&expr, &input_schema)?;
         let cache =
             Self::compute_properties(&input, &projection_mapping, Arc::clone(&schema))?;
@@ -183,7 +183,7 @@ impl ExecutionPlan for ProjectionExec {
     }
 
     fn maintains_input_order(&self) -> Vec<bool> {
-        // tell optimizer this operator doesn't reorder its input
+        // Tell optimizer this operator doesn't reorder its input
         vec![true]
     }
 
@@ -240,7 +240,7 @@ impl ExecutionPlan for ProjectionExec {
     }
 }
 
-/// If e is a direct column reference, returns the field level
+/// If 'e' is a direct column reference, returns the field level
 /// metadata for that field, if any. Otherwise returns None
 pub(crate) fn get_field_metadata(
     e: &Arc<dyn PhysicalExpr>,
@@ -294,7 +294,7 @@ fn stats_projection(
 
 impl ProjectionStream {
     fn batch_project(&self, batch: &RecordBatch) -> Result<RecordBatch> {
-        // records time on drop
+        // Records time on drop
         let _timer = self.baseline_metrics.elapsed_compute().timer();
         let arrays = self
             .expr
@@ -340,7 +340,7 @@ impl Stream for ProjectionStream {
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
-        // same number of record batches
+        // Same number of record batches
         self.input.size_hint()
     }
 }

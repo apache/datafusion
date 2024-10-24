@@ -51,8 +51,9 @@ use datafusion_expr::type_coercion::{is_datetime, is_utf8_or_large_utf8};
 use datafusion_expr::utils::merge_schema;
 use datafusion_expr::{
     is_false, is_not_false, is_not_true, is_not_unknown, is_true, is_unknown, not,
-    AggregateUDF, Expr, ExprFunctionExt, ExprSchemable, Join, LogicalPlan, Operator,
-    Projection, ScalarUDF, Union, WindowFrame, WindowFrameBound, WindowFrameUnits,
+    AggregateUDF, Expr, ExprFunctionExt, ExprSchemable, Join, Limit, LogicalPlan,
+    Operator, Projection, ScalarUDF, Union, WindowFrame, WindowFrameBound,
+    WindowFrameUnits,
 };
 
 /// Performs type coercion by determining the schema
@@ -169,6 +170,7 @@ impl<'a> TypeCoercionRewriter<'a> {
         match plan {
             LogicalPlan::Join(join) => self.coerce_join(join),
             LogicalPlan::Union(union) => Self::coerce_union(union),
+            LogicalPlan::Limit(limit) => Self::coerce_limit(limit),
             _ => Ok(plan),
         }
     }
@@ -227,6 +229,37 @@ impl<'a> TypeCoercionRewriter<'a> {
         Ok(LogicalPlan::Union(Union {
             inputs: new_inputs,
             schema: union_schema,
+        }))
+    }
+
+    /// Coerce the fetch and skip expression to Int64 type.
+    fn coerce_limit(limit: Limit) -> Result<LogicalPlan> {
+        fn coerce_limit_expr(
+            expr: Expr,
+            schema: &DFSchema,
+            expr_name: &str,
+        ) -> Result<Expr> {
+            let dt = expr.get_type(schema)?;
+            if dt.is_integer() || dt.is_null() {
+                expr.cast_to(&DataType::Int64, schema)
+            } else {
+                plan_err!("Expected {expr_name} to be an integer or null, but got {dt:?}")
+            }
+        }
+
+        let empty_schema = DFSchema::empty();
+        let new_fetch = limit
+            .fetch
+            .map(|expr| coerce_limit_expr(*expr, &empty_schema, "LIMIT"))
+            .transpose()?;
+        let new_skip = limit
+            .skip
+            .map(|expr| coerce_limit_expr(*expr, &empty_schema, "OFFSET"))
+            .transpose()?;
+        Ok(LogicalPlan::Limit(Limit {
+            input: limit.input,
+            fetch: new_fetch.map(Box::new),
+            skip: new_skip.map(Box::new),
         }))
     }
 

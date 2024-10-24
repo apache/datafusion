@@ -373,32 +373,9 @@ impl DataFrame {
         self.select(expr)
     }
 
-    /// Expand each list element of a column to multiple rows.
-    #[deprecated(since = "37.0.0", note = "use unnest_columns instead")]
-    pub fn unnest_column(self, column: &str) -> Result<DataFrame> {
-        self.unnest_columns(&[column])
-    }
-
-    /// Expand each list element of a column to multiple rows, with
-    /// behavior controlled by [`UnnestOptions`].
-    ///
-    /// Please see the documentation on [`UnnestOptions`] for more
-    /// details about the meaning of unnest.
-    #[deprecated(since = "37.0.0", note = "use unnest_columns_with_options instead")]
-    pub fn unnest_column_with_options(
-        self,
-        column: &str,
-        options: UnnestOptions,
-    ) -> Result<DataFrame> {
-        self.unnest_columns_with_options(&[column], options)
-    }
-
     /// Expand multiple list/struct columns into a set of rows and new columns.
     ///
-    /// See also:
-    ///
-    /// 1. [`UnnestOptions`] documentation for the behavior of `unnest`
-    /// 2. [`Self::unnest_column_with_options`]
+    /// See also: [`UnnestOptions`] documentation for the behavior of `unnest`
     ///
     /// # Example
     /// ```
