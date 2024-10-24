@@ -3530,34 +3530,27 @@ flatten(array)
 
 ### `generate_series`
 
-Returns an Arrow array between start and stop with step. The range start..end contains all values with start <= x < end. It is empty if start >= end. Step cannot be 0.
+Similar to the range function, but it includes the upper bound.
 
 ```
-range(start, stop, step)
+generate_series(start, stop, step)
 ```
 
 #### Arguments
 
-- **start**: Start of the range. Ints, timestamps, dates or string types that can be coerced to Date32 are supported.
-- **end**: End of the range (not included). Type must be the same as start.
-- **step**: Increase by step (cannot be 0). Steps less than a day are supported only for timestamp ranges.
+- **start**: start of the series. Ints, timestamps, dates or string types that can be coerced to Date32 are supported.
+- **end**: end of the series (included). Type must be the same as start.
+- **step**: increase by step (can not be 0). Steps less than a day are supported only for timestamp ranges.
 
 #### Example
 
 ```sql
-> select range(2, 10, 3);
-+-----------------------------------+
-| range(Int64(2),Int64(10),Int64(3))|
-+-----------------------------------+
-| [2, 5, 8]                         |
-+-----------------------------------+
-
-> select range(DATE '1992-09-01', DATE '1993-03-01', INTERVAL '1' MONTH);
-+--------------------------------------------------------------+
-| range(DATE '1992-09-01', DATE '1993-03-01', INTERVAL '1' MONTH) |
-+--------------------------------------------------------------+
-| [1992-09-01, 1992-10-01, 1992-11-01, 1992-12-01, 1993-01-01, 1993-02-01] |
-+--------------------------------------------------------------+
+> select generate_series(1,3);
++------------------------------------+
+| generate_series(Int64(1),Int64(3)) |
++------------------------------------+
+| [1, 2, 3]                          |
++------------------------------------+
 ```
 
 ### `list_any_value`
