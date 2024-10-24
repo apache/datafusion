@@ -47,13 +47,41 @@ use kernels::{
 };
 
 /// Binary expression
-#[derive(Debug, Hash, Clone, Eq, PartialEq)]
-pub struct BinaryExpr<DynPhysicalExpr: ?Sized = dyn PhysicalExpr> {
-    left: Arc<DynPhysicalExpr>,
+#[derive(Debug, Clone, Eq)]
+pub struct BinaryExpr {
+    left: Arc<dyn PhysicalExpr>,
     op: Operator,
-    right: Arc<DynPhysicalExpr>,
+    right: Arc<dyn PhysicalExpr>,
     /// Specifies whether an error is returned on overflow or not
     fail_on_overflow: bool,
+}
+
+// Manaully derive PartialEq and Hash  to work around https://github.com/rust-lang/rust/issues/78808
+//
+// Without this workaround the derive macro generates code with the following issue:
+//    error[E0507]: cannot move out of `other.left` which is behind a shared reference
+//   --> datafusion/physical-expr/src/expressions/binary.rs:53:5
+//    |
+// 51 | #[derive(Debug, Hash, Clone, Eq, PartialEq)]
+//    |                                  --------- in this derive macro expansion
+// 52 | pub struct BinaryExpr {
+// 53 |     left: Arc<dyn PhysicalExpr>,
+//    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^ move occurs because `other.left` has type `Arc<dyn PhysicalExpr>`, which does not implement the `Copy` trait
+impl PartialEq for BinaryExpr {
+    fn eq(&self, other: &Self) -> bool {
+        self.left.eq(&other.left)
+            && self.op.eq(&other.op)
+            && self.right.eq(&other.right)
+            && self.fail_on_overflow.eq(&other.fail_on_overflow)
+    }
+}
+impl Hash for BinaryExpr {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.left.hash(state);
+        self.op.hash(state);
+        self.right.hash(state);
+        self.fail_on_overflow.hash(state);
+    }
 }
 
 impl BinaryExpr {
