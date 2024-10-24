@@ -18,7 +18,10 @@
 use arrow::array::BooleanArray;
 use arrow::array::{make_comparator, ArrayRef, Datum};
 use arrow::buffer::NullBuffer;
-use arrow::compute::SortOptions;
+use arrow::compute::{
+    SortOptions,
+    kernels::cmp::eq,
+};
 use arrow::error::ArrowError;
 use datafusion_common::DataFusionError;
 use datafusion_common::{arrow_datafusion_err, internal_err};
@@ -97,7 +100,7 @@ pub fn compare_with_eq(
     if is_nested {
         compare_op_for_nested(Operator::Eq, lhs, rhs)
     } else {
-        arrow::compute::kernels::cmp::eq(lhs, rhs).map_err(|e| arrow_datafusion_err!(e))
+        eq(lhs, rhs).map_err(|e| arrow_datafusion_err!(e))
     }
 }
 
