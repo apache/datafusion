@@ -24,7 +24,7 @@ use substrait::proto::expression_reference::ExprType;
 use arrow_buffer::ToByteSlice;
 use datafusion::arrow::datatypes::{Field, IntervalUnit};
 use datafusion::logical_expr::{
-    CrossJoin, Distinct, FetchType, Like, Partitioning, SkipType, WindowFrameUnits,
+    Distinct, FetchType, Like, Partitioning, SkipType, WindowFrameUnits,
 };
 use datafusion::{
     arrow::datatypes::{DataType, TimeUnit},
@@ -67,7 +67,7 @@ use substrait::proto::read_rel::VirtualTable;
 use substrait::proto::rel_common::EmitKind;
 use substrait::proto::rel_common::EmitKind::Emit;
 use substrait::proto::{
-    rel_common, CrossRel, ExchangeRel, ExpressionReference, ExtendedExpression, RelCommon,
+    rel_common, ExchangeRel, ExpressionReference, ExtendedExpression, RelCommon,
 };
 use substrait::{
     proto::{
@@ -472,23 +472,6 @@ pub fn to_substrait_rel(
                     r#type: join_type as i32,
                     expression: join_expr,
                     post_join_filter: None,
-                    advanced_extension: None,
-                }))),
-            }))
-        }
-        LogicalPlan::CrossJoin(cross_join) => {
-            let CrossJoin {
-                left,
-                right,
-                schema: _,
-            } = cross_join;
-            let left = to_substrait_rel(left.as_ref(), ctx, extensions)?;
-            let right = to_substrait_rel(right.as_ref(), ctx, extensions)?;
-            Ok(Box::new(Rel {
-                rel_type: Some(RelType::Cross(Box::new(CrossRel {
-                    common: None,
-                    left: Some(left),
-                    right: Some(right),
                     advanced_extension: None,
                 }))),
             }))
