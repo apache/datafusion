@@ -111,33 +111,24 @@ impl MemoryPool for GreedyMemoryPool {
     fn try_grow(&self, reservation: &MemoryReservation, additional: usize) -> Result<()> {
         let consumer_name = reservation.consumer().name();
 
-        let mut used_per_consumer = self.used_per_consumer.write();
-        let consumer_usage = used_per_consumer
-            .entry(consumer_name.to_string())
-            .or_insert_with(|| AtomicUsize::new(0));
-        consumer_usage
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |used| {
-                let new_used = used + additional;
-
-                let pool_size_per_consumer = self
-                    .pool_size_per_consumer
-                    .get(consumer_name)
-                    .cloned()
-                    .unwrap_or(self.pool_size);
-
-                (new_used <= pool_size_per_consumer).then_some(new_used)
-            })
-            .map_err(|used| {
-                insufficient_capacity_err(
-                    reservation,
-                    additional,
-                    self.pool_size_per_consumer
-                        .get(consumer_name)
-                        .cloned()
-                        .unwrap_or(self.pool_size)
-                        .saturating_sub(used),
-                )
-            })?;
+        if let Some(pool_size) = self.pool_size_per_consumer.get(consumer_name) {
+            let mut used_per_consumer = self.used_per_consumer.write();
+            let consumer_usage = used_per_consumer
+                .entry(consumer_name.to_string())
+                .or_insert_with(|| AtomicUsize::new(0));
+            consumer_usage
+                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |used| {
+                    let new_used = used + additional;
+                    (new_used <= *pool_size).then_some(new_used)
+                })
+                .map_err(|used| {
+                    insufficient_capacity_err(
+                        reservation,
+                        additional,
+                        pool_size.saturating_sub(used),
+                    )
+                })?;
+        }
 
         self.used
             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |used| {
