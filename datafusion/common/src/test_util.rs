@@ -347,7 +347,7 @@ macro_rules! record_batch {
             let batch = arrow_array::RecordBatch::try_new(
                 schema,
                 vec![$(
-                    create_array!($type, $values),
+                    $crate::create_array!($type, $values),
                 )*]
             );
 
