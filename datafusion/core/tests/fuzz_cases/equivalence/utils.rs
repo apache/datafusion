@@ -22,15 +22,13 @@ use std::any::Any;
 use std::cmp::Ordering;
 use std::sync::Arc;
 
-use arrow::compute::{lexsort_to_indices, SortColumn};
+use arrow::compute::{lexsort_to_indices, take_record_batch, SortColumn};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow_array::{
     ArrayRef, Float32Array, Float64Array, PrimitiveArray, RecordBatch, UInt32Array,
 };
 use arrow_schema::{SchemaRef, SortOptions};
-use datafusion_common::utils::{
-    compare_rows, get_record_batch_at_indices, get_row_at_idx,
-};
+use datafusion_common::utils::{compare_rows, get_row_at_idx};
 use datafusion_common::{exec_err, plan_datafusion_err, DataFusionError, Result};
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
@@ -465,7 +463,7 @@ pub fn generate_table_for_orderings(
     // Sort batch according to first ordering expression
     let sort_columns = get_sort_columns(&batch, &orderings[0])?;
     let sort_indices = lexsort_to_indices(&sort_columns, None)?;
-    let mut batch = get_record_batch_at_indices(&batch, &sort_indices)?;
+    let mut batch = take_record_batch(&batch, &sort_indices)?;
 
     // prune out rows that is invalid according to remaining orderings.
     for ordering in orderings.iter().skip(1) {
@@ -490,9 +488,9 @@ pub fn generate_table_for_orderings(
             }
         }
         // Only keep valid rows, that satisfies given ordering relation.
-        batch = get_record_batch_at_indices(
+        batch = take_record_batch(
             &batch,
-            &PrimitiveArray::from_iter_values(keep_indices),
+            &PrimitiveArray::<UInt32Array>::from_iter_values(keep_indices),
         )?;
     }
 
