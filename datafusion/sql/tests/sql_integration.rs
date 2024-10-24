@@ -4213,10 +4213,10 @@ fn test_prepare_statement_to_plan_having() {
 fn test_prepare_statement_to_plan_limit() {
     let sql = "PREPARE my_plan(BIGINT, BIGINT) AS
         SELECT id FROM person \
-        LIMIT $1 OFFSET $2";
+        OFFSET $1 LIMIT $2";
 
     let expected_plan = "Prepare: \"my_plan\" [Int64, Int64] \
-        \n  Limit: skip=$2, fetch=$1\
+        \n  Limit: skip=$1, fetch=$2\
         \n    Projection: person.id\
         \n      TableScan: person";
 
@@ -4226,7 +4226,7 @@ fn test_prepare_statement_to_plan_limit() {
 
     // replace params with values
     let param_values = vec![ScalarValue::Int64(Some(10)), ScalarValue::Int64(Some(200))];
-    let expected_plan = "Limit: skip=200, fetch=10\
+    let expected_plan = "Limit: skip=10, fetch=200\
         \n  Projection: person.id\
         \n    TableScan: person";
     prepare_stmt_replace_params_quick_test(plan, param_values, expected_plan);
