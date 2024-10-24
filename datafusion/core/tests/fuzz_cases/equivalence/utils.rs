@@ -24,9 +24,7 @@ use std::sync::Arc;
 
 use arrow::compute::{lexsort_to_indices, take_record_batch, SortColumn};
 use arrow::datatypes::{DataType, Field, Schema};
-use arrow_array::{
-    ArrayRef, Float32Array, Float64Array, PrimitiveArray, RecordBatch, UInt32Array,
-};
+use arrow_array::{ArrayRef, Float32Array, Float64Array, RecordBatch, UInt32Array};
 use arrow_schema::{SchemaRef, SortOptions};
 use datafusion_common::utils::{compare_rows, get_row_at_idx};
 use datafusion_common::{exec_err, plan_datafusion_err, DataFusionError, Result};
@@ -488,10 +486,7 @@ pub fn generate_table_for_orderings(
             }
         }
         // Only keep valid rows, that satisfies given ordering relation.
-        batch = take_record_batch(
-            &batch,
-            &PrimitiveArray::<UInt32Array>::from_iter_values(keep_indices),
-        )?;
+        batch = take_record_batch(&batch, &UInt32Array::from_iter_values(keep_indices))?;
     }
 
     Ok(batch)
