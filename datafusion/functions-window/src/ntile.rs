@@ -19,9 +19,7 @@ use std::any::Any;
 use std::fmt::Debug;
 use std::sync::{Arc, OnceLock};
 
-use crate::utils::{
-    get_scalar_value_from_args, get_signed_integer, get_unsigned_integer,
-};
+use crate::utils::{get_scalar_value_from_args, get_unsigned_integer};
 use datafusion_common::arrow::array::{ArrayRef, UInt64Array};
 use datafusion_common::arrow::datatypes::{DataType, Field};
 use datafusion_common::{exec_err, DataFusionError, Result, ScalarValue};
