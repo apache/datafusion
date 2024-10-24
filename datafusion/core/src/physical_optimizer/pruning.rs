@@ -1195,6 +1195,8 @@ fn is_compare_op(op: Operator) -> bool {
             | Operator::LtEq
             | Operator::Gt
             | Operator::GtEq
+            | Operator::LikeMatch
+            | Operator::NotLikeMatch
     )
 }
 
@@ -1487,6 +1489,17 @@ fn build_predicate_expression(
                 *bin_expr.op(),
                 bin_expr.right().clone(),
             )
+        } else if let Some(like_expr) = expr_any.downcast_ref::<phys_expr::LikeExpr>() {
+            if like_expr.case_insensitive() {
+                return unhandled_hook.handle(expr);
+            }
+            let op = match (like_expr.negated(), like_expr.case_insensitive()) {
+                (false, false) => Operator::LikeMatch,
+                (true, false) => Operator::NotLikeMatch,
+                (false, true) => Operator::ILikeMatch,
+                (true, true) => Operator::NotILikeMatch,
+            };
+            (like_expr.expr().clone(), op, like_expr.pattern().clone())
         } else {
             return unhandled_hook.handle(expr);
         }
@@ -1567,6 +1580,7 @@ fn build_statistics_expr(
                 )),
             ))
         }
+        Operator::LikeMatch => build_like_match(expr_builder)?,
         Operator::Gt => {
             // column > literal => (min, max) > literal => max > literal
             Arc::new(phys_expr::BinaryExpr::new(
@@ -1608,6 +1622,79 @@ fn build_statistics_expr(
     };
     let statistics_expr = wrap_case_expr(statistics_expr, expr_builder)?;
     Ok(statistics_expr)
+}
+
+fn build_like_match(
+    expr_builder: &mut PruningExpressionBuilder,
+) -> Result<Arc<dyn PhysicalExpr>> {
+    // column LIKE literal => (min, max) LIKE literal split at % => min <= split literal && split literal <= max
+    // column LIKE 'foo%' => min <= 'foo' && 'foo' <= max
+    // column LIKE '%foo' => min <= '' && '' <= max => true
+    // column LIKE '%foo%' => min <= '' && '' <= max => true
+    // column LIKE 'foo' => min <= 'foo' && 'foo' <= max
+
+    fn unpack_string(s: &ScalarValue) -> Result<&String> {
+        match s {
+            ScalarValue::Utf8(Some(s)) => Ok(s),
+            ScalarValue::LargeUtf8(Some(s)) => Ok(s),
+            ScalarValue::Utf8View(Some(s)) => Ok(s),
+            ScalarValue::Dictionary(_, value) => unpack_string(value),
+            _ => plan_err!("LIKE expression must be a string literal"),
+        }
+    }
+
+    fn extract_string_literal(expr: &Arc<dyn PhysicalExpr>) -> Result<&String> {
+        if let Some(lit) = expr.as_any().downcast_ref::<phys_expr::Literal>() {
+            let s = unpack_string(lit.value())?;
+            return Ok(s);
+        }
+        plan_err!("LIKE expression must be a string literal")
+    }
+
+    // I *think* that ILIKE could be handled by making the min lowercase and max uppercase
+    // but that requires building the physical expressions that call lower() and upper()
+    let min_column_expr = expr_builder.min_column_expr()?;
+    let max_column_expr = expr_builder.max_column_expr()?;
+    let scalar_expr = expr_builder.scalar_expr();
+    // check that the scalar is a string literal
+    let s = extract_string_literal(scalar_expr)?;
+    // **IMPORTANT** we need to make sure that the min and max are in the range of the prefix
+    // If we truncate 'A%' to 'A', we need to make sure that 'A' is less than 'AB' so that
+    // when we make this a range query we get 'AB' <= 'A\u{10ffff}' AND 'A' <= 'AB'.
+    // Otherwise 'AB' <= 'A' AND 'A' <= 'AB' would be *wrong* because 'AB' LIKE 'A%' is should be true!
+    // Credit to https://stackoverflow.com/a/35881551 for inspiration on this approach.
+    // ANSI SQL specifies two wildcards: % and _. % matches zero or more characters, _ matches exactly one character.
+    let first_wildcard_index = s.find(['%', '_']);
+    let (min_lit, max_lit) = if let Some(wildcard_index) = first_wildcard_index {
+        let prefix = &s[..wildcard_index];
+        let prefix_min_lit = Arc::new(phys_expr::Literal::new(ScalarValue::Utf8(Some(
+            format!("{prefix}\u{10ffff}"),
+        ))));
+        let prefix_max_lit = Arc::new(phys_expr::Literal::new(ScalarValue::Utf8(Some(
+            prefix.to_string(),
+        ))));
+        (prefix_min_lit, prefix_max_lit)
+    } else {
+        let prefix_lit =
+            Arc::new(phys_expr::Literal::new(ScalarValue::Utf8(Some(s.clone()))));
+        (prefix_lit.clone(), prefix_lit)
+    };
+    let min_expr = Arc::new(phys_expr::BinaryExpr::new(
+        min_column_expr.clone(),
+        Operator::LtEq,
+        min_lit,
+    ));
+    let max_expr = Arc::new(phys_expr::BinaryExpr::new(
+        max_lit,
+        Operator::LtEq,
+        max_column_expr.clone(),
+    ));
+    let combined = Arc::new(phys_expr::BinaryExpr::new(
+        min_expr,
+        Operator::And,
+        max_expr,
+    ));
+    Ok(combined)
 }
 
 /// Wrap the statistics expression in a case expression.
@@ -3437,6 +3524,281 @@ mod tests {
             // `-cast(i as int64) < 0` convert to `cast(i as int64) > -0`
             Expr::Negative(Box::new(cast(col("i"), DataType::Int64)))
                 .lt(lit(ScalarValue::Int64(Some(0)))),
+            &schema,
+            &statistics,
+            expected_ret,
+        );
+    }
+
+    /// Creates a setup for chunk pruning, modeling a utf8 column "s1"
+    /// with 5 different containers (e.g. RowGroups). They have [min,
+    /// max]:
+    /// s1 ["A", "Z"]
+    /// s1 ["A", "L"]
+    /// s1 ["N", "Z"]
+    /// s1 [NULL, NULL]
+    /// s1 ["A", NULL]
+    fn utf8_setup() -> (SchemaRef, TestStatistics) {
+        let schema = Arc::new(Schema::new(vec![Field::new("s1", DataType::Utf8, true)]));
+
+        let statistics = TestStatistics::new().with(
+            "s1",
+            ContainerStats::new_utf8(
+                vec![
+                    Some("A"),
+                    Some("A"),
+                    Some("N"),
+                    Some("M"),
+                    None,
+                    Some("A"),
+                    Some(""),
+                    Some(""),
+                ], // min
+                vec![
+                    Some("Z"),
+                    Some("L"),
+                    Some("Z"),
+                    Some("M"),
+                    None,
+                    None,
+                    Some("A"),
+                    Some(""),
+                ], // max
+            ),
+        );
+        (schema, statistics)
+    }
+
+    #[test]
+    fn prune_utf8_eq() {
+        let (schema, statistics) = utf8_setup();
+
+        // Expression "s1 = 'A'"
+        // s1 ["A", "Z"] ==> some rows could pass (must keep)
+        // s1 ["A", "L"] ==> some rows could pass (must keep)
+        // s1 ["N", "Z"] ==> no rows can pass (not keep)
+        // s1 ["M", "M"] ==> no rows can pass (not keep)
+        // s1 [NULL, NULL]  ==> unknown (must keep)
+        // s1 ["A", NULL]  ==> unknown (must keep)
+        // s1 ["", "A"]  ==> some rows could pass (must keep)
+        // s1 ["", ""]  ==> no rows can pass (not keep)
+        let expected_ret = &[true, true, false, false, true, true, true, false];
+        prune_with_expr(
+            // s1 = 'A'
+            col("s1").eq(lit("A")),
+            &schema,
+            &statistics,
+            expected_ret,
+        );
+
+        // Expression "s1 = ''"
+        // s1 ["A", "Z"] ==> no rows can pass (not keep)
+        // s1 ["A", "L"] ==> no rows can pass (not keep)
+        // s1 ["N", "Z"] ==> no rows can pass (not keep)
+        // s1 ["M", "M"] ==> no rows can pass (not keep)
+        // s1 [NULL, NULL]  ==> unknown (must keep)
+        // s1 ["A", NULL]  ==> no rows can pass (not keep)
+        // s1 ["", "A"]  ==> some rows could pass (must keep)
+        // s1 ["", ""]  ==> all rows must pass (must keep)
+        let expected_ret = &[false, false, false, false, true, false, true, true];
+        prune_with_expr(
+            // s1 = ''
+            col("s1").eq(lit("")),
+            &schema,
+            &statistics,
+            expected_ret,
+        );
+    }
+
+    #[test]
+    fn prune_utf8_not_eq() {
+        let (schema, statistics) = utf8_setup();
+
+        // Expression "s1 != 'A'"
+        // s1 ["A", "Z"] ==> some rows could pass (must keep)
+        // s1 ["A", "L"] ==> some rows could pass (must keep)
+        // s1 ["N", "Z"] ==> all rows must pass (must keep)
+        // s1 ["M", "M"] ==> all rows must pass (must keep)
+        // s1 [NULL, NULL]  ==> unknown (must keep)
+        // s1 ["A", NULL]  ==> unknown (must keep)
+        // s1 ["", "A"]  ==> some rows could pass (must keep)
+        // s1 ["", ""]  ==> all rows must pass (must keep)
+        let expected_ret = &[true, true, true, true, true, true, true, true];
+        prune_with_expr(
+            // s1 != 'A'
+            col("s1").not_eq(lit("A")),
+            &schema,
+            &statistics,
+            expected_ret,
+        );
+
+        // Expression "s1 != ''"
+        // s1 ["A", "Z"] ==> all rows must pass (must keep)
+        // s1 ["A", "L"] ==> all rows must pass (must keep)
+        // s1 ["N", "Z"] ==> all rows must pass (must keep)
+        // s1 ["M", "M"] ==> all rows must pass (must keep)
+        // s1 [NULL, NULL]  ==> unknown (must keep)
+        // s1 ["A", NULL]  ==> unknown (must keep)
+        // s1 ["", "A"]  ==> some rows could pass (must keep)
+        // s1 ["", ""]  ==> no rows can pass (not keep)
+        let expected_ret = &[true, true, true, true, true, true, true, false];
+        prune_with_expr(
+            // s1 != ''
+            col("s1").not_eq(lit("")),
+            &schema,
+            &statistics,
+            expected_ret,
+        );
+    }
+
+    #[test]
+    fn prune_utf8_like_one() {
+        let (schema, statistics) = utf8_setup();
+
+        // Expression "s1 LIKE 'A_'"
+        // s1 ["A", "Z"] ==> some rows could pass (must keep)
+        // s1 ["A", "L"] ==> some rows could pass (must keep)
+        // s1 ["N", "Z"] ==> no rows can pass (not keep)
+        // s1 ["M", "M"] ==> no rows can pass (not keep)
+        // s1 [NULL, NULL]  ==> unknown (must keep)
+        // s1 ["A", NULL]  ==> unknown (must keep)
+        // s1 ["", "A"]  ==> some rows could pass (must keep)
+        // s1 ["", ""]  ==> no rows can pass (not keep)
+        let expected_ret = &[true, true, false, false, true, true, true, false];
+        prune_with_expr(
+            // s1 LIKE 'A_'
+            col("s1").like(lit("A_")),
+            &schema,
+            &statistics,
+            expected_ret,
+        );
+
+        // Expression "s1 LIKE '_A_'"
+        // s1 ["A", "Z"] ==> some rows could pass (must keep)
+        // s1 ["A", "L"] ==> some rows could pass (must keep)
+        // s1 ["N", "Z"] ==> some rows could pass (must keep)
+        // s1 ["M", "M"] ==> some rows could pass (must keep)
+        // s1 [NULL, NULL]  ==> unknown (must keep)
+        // s1 ["A", NULL]  ==> unknown (must keep)
+        // s1 ["", "A"]  ==> some rows could pass (must keep)
+        // s1 ["", ""]  ==> some rows could pass (must keep)
+        let expected_ret = &[true, true, true, true, true, true, true, true];
+        prune_with_expr(
+            // s1 LIKE '_A_'
+            col("s1").like(lit("_A_")),
+            &schema,
+            &statistics,
+            expected_ret,
+        );
+
+        // Expression "s1 LIKE '_'"
+        // s1 ["A", "Z"] ==> all rows must pass (must keep)
+        // s1 ["A", "L"] ==> all rows must pass (must keep)
+        // s1 ["N", "Z"] ==> all rows must pass (must keep)
+        // s1 ["M", "M"] ==> all rows must pass (must keep)
+        // s1 [NULL, NULL]  ==> unknown (must keep)
+        // s1 ["A", NULL]  ==> unknown (must keep)
+        // s1 ["", "A"]  ==> all rows must pass (must keep)
+        // s1 ["", ""]  ==> all rows must pass (must keep)
+        let expected_ret = &[true, true, true, true, true, true, true, true];
+        prune_with_expr(
+            // s1 LIKE '_'
+            col("s1").like(lit("_")),
+            &schema,
+            &statistics,
+            expected_ret,
+        );
+
+        // Expression "s1 LIKE ''"
+        // s1 ["A", "Z"] ==> no rows can pass (not keep)
+        // s1 ["A", "L"] ==> no rows can pass (not keep)
+        // s1 ["N", "Z"] ==> no rows can pass (not keep)
+        // s1 ["M", "M"] ==> no rows can pass (not keep)
+        // s1 [NULL, NULL]  ==> unknown (must keep)
+        // s1 ["A", NULL]  ==> no rows can pass (not keep)
+        // s1 ["", "A"]  ==> some rows could pass (must keep)
+        // s1 ["", ""]  ==> all rows must pass (must keep)
+        let expected_ret = &[false, false, false, false, true, false, true, true];
+        prune_with_expr(
+            // s1 LIKE ''
+            col("s1").like(lit("")),
+            &schema,
+            &statistics,
+            expected_ret,
+        );
+    }
+
+    #[test]
+    fn prune_utf8_like_many() {
+        let (schema, statistics) = utf8_setup();
+
+        // Expression "s1 LIKE 'A%'"
+        // s1 ["A", "Z"] ==> some rows could pass (must keep)
+        // s1 ["A", "L"] ==> some rows could pass (must keep)
+        // s1 ["N", "Z"] ==> no rows can pass (not keep)
+        // s1 ["M", "M"] ==> no rows can pass (not keep)
+        // s1 [NULL, NULL]  ==> unknown (must keep)
+        // s1 ["A", NULL]  ==> unknown (must keep)
+        // s1 ["", "A"]  ==> some rows could pass (must keep)
+        // s1 ["", ""]  ==> no rows can pass (not keep)
+        let expected_ret = &[true, true, false, false, true, true, true, false];
+        prune_with_expr(
+            // s1 LIKE 'A%'
+            col("s1").like(lit("A%")),
+            &schema,
+            &statistics,
+            expected_ret,
+        );
+
+        // Expression "s1 LIKE '%A%'"
+        // s1 ["A", "Z"] ==> some rows could pass (must keep)
+        // s1 ["A", "L"] ==> some rows could pass (must keep)
+        // s1 ["N", "Z"] ==> some rows could pass (must keep)
+        // s1 ["M", "M"] ==> some rows could pass (must keep)
+        // s1 [NULL, NULL]  ==> unknown (must keep)
+        // s1 ["A", NULL]  ==> unknown (must keep)
+        // s1 ["", "A"]  ==> some rows could pass (must keep)
+        // s1 ["", ""]  ==> some rows could pass (must keep)
+        let expected_ret = &[true, true, true, true, true, true, true, true];
+        prune_with_expr(
+            // s1 LIKE '%A%'
+            col("s1").like(lit("%A%")),
+            &schema,
+            &statistics,
+            expected_ret,
+        );
+
+        // Expression "s1 LIKE '%'"
+        // s1 ["A", "Z"] ==> all rows must pass (must keep)
+        // s1 ["A", "L"] ==> all rows must pass (must keep)
+        // s1 ["N", "Z"] ==> all rows must pass (must keep)
+        // s1 ["M", "M"] ==> all rows must pass (must keep)
+        // s1 [NULL, NULL]  ==> unknown (must keep)
+        // s1 ["A", NULL]  ==> unknown (must keep)
+        // s1 ["", "A"]  ==> all rows must pass (must keep)
+        // s1 ["", ""]  ==> all rows must pass (must keep)
+        let expected_ret = &[true, true, true, true, true, true, true, true];
+        prune_with_expr(
+            // s1 LIKE '%'
+            col("s1").like(lit("%")),
+            &schema,
+            &statistics,
+            expected_ret,
+        );
+
+        // Expression "s1 LIKE ''"
+        // s1 ["A", "Z"] ==> no rows can pass (not keep)
+        // s1 ["A", "L"] ==> no rows can pass (not keep)
+        // s1 ["N", "Z"] ==> no rows can pass (not keep)
+        // s1 ["M", "M"] ==> no rows can pass (not keep)
+        // s1 [NULL, NULL]  ==> unknown (must keep)
+        // s1 ["A", NULL]  ==> no rows can pass (not keep)
+        // s1 ["", "A"]  ==> some rows could pass (must keep)
+        // s1 ["", ""]  ==> all rows must pass (must keep)
+        let expected_ret = &[false, false, false, false, true, false, true, true];
+        prune_with_expr(
+            // s1 LIKE ''
+            col("s1").like(lit("")),
             &schema,
             &statistics,
             expected_ret,
