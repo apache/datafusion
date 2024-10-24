@@ -15,21 +15,25 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::sync::Arc;
+
 use arrow::record_batch::RecordBatch;
 use arrow_array::{ArrayRef, Int32Array, Int64Array, StringArray};
-use criterion::async_executor::FuturesExecutor;
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::expressions::col;
 use datafusion_physical_expr::PhysicalSortExpr;
 use datafusion_physical_plan::memory::MemoryExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion_physical_plan::{collect, ExecutionPlan};
-use std::sync::Arc;
+
+use criterion::async_executor::FuturesExecutor;
+use criterion::{black_box, criterion_group, criterion_main, Criterion};
 
 fn generate_spm_for_round_robin_tie_breaker(
     has_same_value: bool,
     enable_round_robin_repartition: bool,
+    batch_count: usize,
+    partition_count: usize,
 ) -> SortPreservingMergeExec {
     let row_size = 256;
     let rb = if has_same_value {
@@ -48,7 +52,6 @@ fn generate_spm_for_round_robin_tie_breaker(
                 .collect();
 
         let mut strings = Vec::new();
-        // Create 256 unique strings
         for i in 0..256 {
             let mut s = String::new();
             s.push(charset[i % charset.len()]);
@@ -63,9 +66,8 @@ fn generate_spm_for_round_robin_tie_breaker(
         RecordBatch::try_from_iter(vec![("a", a), ("b", b), ("c", c)]).unwrap()
     };
 
-    let rbs = (0..16).map(|_| rb.clone()).collect::<Vec<_>>();
-    // Ensure this to be larger than 2 so it goes to the SPM code path
-    let partitiones = vec![rbs.clone(); 2];
+    let rbs = (0..batch_count).map(|_| rb.clone()).collect::<Vec<_>>();
+    let partitiones = vec![rbs.clone(); partition_count];
 
     let schema = rb.schema();
     let sort = vec![
@@ -84,42 +86,59 @@ fn generate_spm_for_round_robin_tie_breaker(
         .with_round_robin_repartition(enable_round_robin_repartition)
 }
 
-fn criterion_benchmark(c: &mut Criterion) {
-    // create input data
+fn run_bench(
+    c: &mut Criterion,
+    has_same_value: bool,
+    enable_round_robin_repartition: bool,
+    batch_count: usize,
+    partition_count: usize,
+    description: &str,
+) {
     let task_ctx = TaskContext::default();
     let task_ctx = Arc::new(task_ctx);
 
-    let spm_wo_tb = Arc::new(generate_spm_for_round_robin_tie_breaker(true, false))
-        as Arc<dyn ExecutionPlan>;
-    c.bench_function("spm without tie breaker low card", |b| {
-        b.to_async(FuturesExecutor).iter(|| {
-            black_box(collect(Arc::clone(&spm_wo_tb), Arc::clone(&task_ctx)))
-        })
-    });
+    let spm = Arc::new(generate_spm_for_round_robin_tie_breaker(
+        has_same_value,
+        enable_round_robin_repartition,
+        batch_count,
+        partition_count,
+    )) as Arc<dyn ExecutionPlan>;
 
-    let spm_w_tb = Arc::new(generate_spm_for_round_robin_tie_breaker(true, true))
-        as Arc<dyn ExecutionPlan>;
-    c.bench_function("spm with tie breaker low card", |b| {
-        b.to_async(FuturesExecutor).iter(|| {
-            black_box(collect(Arc::clone(&spm_w_tb), Arc::clone(&task_ctx)))
-        })
+    c.bench_function(description, |b| {
+        b.to_async(FuturesExecutor)
+            .iter(|| black_box(collect(Arc::clone(&spm), Arc::clone(&task_ctx))))
     });
+}
 
-    let spm_wo_tb = Arc::new(generate_spm_for_round_robin_tie_breaker(false, false))
-        as Arc<dyn ExecutionPlan>;
-    c.bench_function("spm without tie breaker high card", |b| {
-        b.to_async(FuturesExecutor).iter(|| {
-            black_box(collect(Arc::clone(&spm_wo_tb), Arc::clone(&task_ctx)))
-        })
-    });
+fn criterion_benchmark(c: &mut Criterion) {
+    let params = [
+        (true, false, "low_card_without_tiebreaker"), // low cardinality, no tie breaker
+        (true, true, "low_card_with_tiebreaker"),     // low cardinality, with tie breaker
+        (false, false, "high_card_without_tiebreaker"), // high cardinality, no tie breaker
+        (false, true, "high_card_with_tiebreaker"), // high cardinality, with tie breaker
+    ];
 
-    let spm_w_tb = Arc::new(generate_spm_for_round_robin_tie_breaker(false, true))
-        as Arc<dyn ExecutionPlan>;
-    c.bench_function("spm with tie breaker high card", |b| {
-        b.to_async(FuturesExecutor).iter(|| {
-            black_box(collect(Arc::clone(&spm_w_tb), Arc::clone(&task_ctx)))
-        })
-    });
+    let batch_counts = [1, 25, 625];
+    let partition_counts = [2, 8, 32];
+
+    for &(has_same_value, enable_round_robin_repartition, cardinality_label) in &params {
+        for &batch_count in &batch_counts {
+            for &partition_count in &partition_counts {
+                let description = format!(
+                    "{}_batch_count_{}_partition_count_{}",
+                    cardinality_label, batch_count, partition_count
+                );
+                run_bench(
+                    c,
+                    has_same_value,
+                    enable_round_robin_repartition,
+                    batch_count,
+                    partition_count,
+                    &description,
+                );
+            }
+        }
+    }
 }
 
 criterion_group!(benches, criterion_benchmark);
