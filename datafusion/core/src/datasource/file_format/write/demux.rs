@@ -59,8 +59,9 @@ type DemuxedStreamReceiver = UnboundedReceiver<(Path, RecordBatchReceiver)>;
 /// which should be contained within the same output file. The outer channel
 /// is used to send a dynamic number of inner channels, representing a dynamic
 /// number of total output files. The caller is also responsible to monitor
-/// the demux task for errors and abort accordingly. The single_file_output parameter
-/// overrides all other settings to force only a single file to be written.
+/// the demux task for errors and abort accordingly. A path with an extension will
+/// force only a single file to be written with the extension from the path. Otherwise
+/// the default extension will be used and the output will be split into multiple files.
 /// partition_by parameter will additionally split the input based on the unique
 /// values of a specific column `<https://github.com/apache/datafusion/issues/7744>``
 ///                                                                              ┌───────────┐               ┌────────────┐    ┌─────────────┐
@@ -79,12 +80,13 @@ pub(crate) fn start_demuxer_task(
     context: &Arc<TaskContext>,
     partition_by: Option<Vec<(String, DataType)>>,
     base_output_path: ListingTableUrl,
-    file_extension: String,
+    default_extension: String,
     keep_partition_by_columns: bool,
 ) -> (SpawnedTask<Result<()>>, DemuxedStreamReceiver) {
     let (tx, rx) = mpsc::unbounded_channel();
     let context = context.clone();
-    let single_file_output = !base_output_path.is_collection();
+    let single_file_output =
+        !base_output_path.is_collection() && base_output_path.file_extension().is_some();
     let task = match partition_by {
         Some(parts) => {
             // There could be an arbitrarily large number of parallel hive style partitions being written to, so we cannot
@@ -96,7 +98,7 @@ pub(crate) fn start_demuxer_task(
                     context,
                     parts,
                     base_output_path,
-                    file_extension,
+                    default_extension,
                     keep_partition_by_columns,
                 )
                 .await
@@ -108,7 +110,7 @@ pub(crate) fn start_demuxer_task(
                 input,
                 context,
                 base_output_path,
-                file_extension,
+                default_extension,
                 single_file_output,
             )
             .await
