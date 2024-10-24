@@ -432,8 +432,8 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     fn with_dynamic_filter(
         &self,
         _dynamic_filters: Option<Arc<DynamicFilterInfo>>,
-    ) -> Option<Arc<dyn ExecutionPlan>> {
-        None
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        Ok(None)
     }
 }
 

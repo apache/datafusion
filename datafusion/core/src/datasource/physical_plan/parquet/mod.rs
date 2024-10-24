@@ -881,8 +881,8 @@ impl ExecutionPlan for ParquetExec {
     fn with_dynamic_filter(
         &self,
         dynamic_filters: Option<Arc<DynamicFilterInfo>>,
-    ) -> Option<Arc<dyn ExecutionPlan>> {
-        Some(Arc::new(ParquetExec {
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        Ok(Some(Arc::new(ParquetExec {
             base_config: self.base_config.clone(),
             projected_statistics: self.projected_statistics.clone(),
             metrics: self.metrics.clone(),
@@ -895,7 +895,7 @@ impl ExecutionPlan for ParquetExec {
             table_parquet_options: self.table_parquet_options.clone(),
             schema_adapter_factory: self.schema_adapter_factory.clone(),
             dynamic_filters: dynamic_filters,
-        }))
+        })))
     }
 }
 

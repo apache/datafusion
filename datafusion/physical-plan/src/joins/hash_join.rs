@@ -483,14 +483,7 @@ impl HashJoinExec {
             self.null_equals_null,
         )
     }
-    /// adding dynamic filter info
-    pub fn with_dynamic_filter_info(
-        mut self,
-        dynamic_filter_info: Option<Arc<DynamicFilterInfo>>,
-    ) -> Self {
-        self.dynamic_filters_pushdown = dynamic_filter_info;
-        self
-    }
+
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
     fn compute_properties(
         left: &Arc<dyn ExecutionPlan>,
@@ -617,6 +610,27 @@ impl ExecutionPlan for HashJoinExec {
         self
     }
 
+    fn support_dynamic_filter(&self) -> bool {
+        true
+    }
+
+    fn with_dynamic_filter(
+        &self,
+        dynamic_filter_info: Option<Arc<DynamicFilterInfo>>,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        let mut plan = HashJoinExec::try_new(
+            Arc::clone(&self.left),
+            Arc::clone(&self.right),
+            self.on.clone(),
+            self.filter.clone(),
+            &self.join_type,
+            self.projection.clone(),
+            self.mode,
+            self.null_equals_null,
+        )?;
+        plan.dynamic_filters_pushdown = dynamic_filter_info;
+        Ok(Some(Arc::new(plan)))
+    }
     fn properties(&self) -> &PlanProperties {
         &self.cache
     }
@@ -673,19 +687,18 @@ impl ExecutionPlan for HashJoinExec {
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(
-            HashJoinExec::try_new(
-                Arc::clone(&children[0]),
-                Arc::clone(&children[1]),
-                self.on.clone(),
-                self.filter.clone(),
-                &self.join_type,
-                self.projection.clone(),
-                self.mode,
-                self.null_equals_null,
-            )?
-            .with_dynamic_filter_info(self.dynamic_filters_pushdown.clone()),
-        ))
+        let mut plan = HashJoinExec::try_new(
+            Arc::clone(&children[0]),
+            Arc::clone(&children[1]),
+            self.on.clone(),
+            self.filter.clone(),
+            &self.join_type,
+            self.projection.clone(),
+            self.mode,
+            self.null_equals_null,
+        )?;
+        plan.dynamic_filters_pushdown = self.dynamic_filters_pushdown.clone();
+        Ok(Arc::new(plan))
     }
 
     fn execute(

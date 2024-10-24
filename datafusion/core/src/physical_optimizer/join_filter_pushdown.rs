@@ -77,15 +77,16 @@ fn optimize_impl(
                 *hashjoin_exec.partition_mode(),
                 hashjoin_exec.null_equals_null(),
             )?
-            .with_dynamic_filter_info(hashjoin_exec.dynamic_filters_pushdown.clone());
-            return Ok(Transformed::yes(Arc::new(new_hash_join)));
+            .with_dynamic_filter(hashjoin_exec.dynamic_filters_pushdown.clone())?
+            .map_or(plan, |f| f);
+            return Ok(Transformed::yes(new_hash_join));
         }
         Ok(Transformed::no(plan))
     } else if let Some(parquet_exec) = plan.as_any().downcast_ref::<ParquetExec>() {
         if let Some(dynamic_filters) = join_filters {
             let final_exec = parquet_exec
                 .clone()
-                .with_dynamic_filter(Some(dynamic_filters.clone()));
+                .with_dynamic_filter(Some(dynamic_filters.clone()))?;
             if let Some(plan) = final_exec {
                 return Ok(Transformed::yes(plan));
             } else {

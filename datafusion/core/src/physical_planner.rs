@@ -1043,50 +1043,11 @@ impl DefaultPhysicalPlanner {
                     }
                     _ => None,
                 };
-                // build the dynamic filters if there's any
-                let physical_dynamic_filter_info: Option<Arc<DynamicFilterInfo>> =
-                    if let Some(dynamic_columns) = dynamic_pushdown_columns {
-                        let columns_and_types_and_names: Vec<(Arc<Column>, String)> =
-                            dynamic_columns
-                                .iter()
-                                .map(|dynamic_column| {
-                                    let column = dynamic_column.column();
-                                    let index = join_schema.index_of_column(column)?;
-                                    let physical_column = Arc::new(
-                                    datafusion_physical_expr::expressions::Column::new(
-                                        &column.name,
-                                        index,
-                                    ),
-                                );
-
-                                    let build_side_name =
-                                        dynamic_column.build_name().to_owned();
-                                    Ok((physical_column, build_side_name))
-                                })
-                                .collect::<Result<_, DataFusionError>>()?;
-
-                        let (physical_columns, build_side_names) =
-                            columns_and_types_and_names.into_iter().fold(
-                                (Vec::new(), Vec::new()),
-                                |(mut cols, mut names), (col, name)| {
-                                    cols.push(col);
-                                    names.push(name);
-                                    (cols, names)
-                                },
-                            );
-
-                        Some(Arc::new(DynamicFilterInfo::try_new(
-                            physical_columns,
-                            build_side_names,
-                        )?))
-                    } else {
-                        None
-                    };
-
+            
                 let prefer_hash_join =
                     session_state.config_options().optimizer.prefer_hash_join;
 
-                let join: Arc<dyn ExecutionPlan> = if join_on.is_empty() {
+                let mut join: Arc<dyn ExecutionPlan> = if join_on.is_empty() {
                     if join_filter.is_none() && matches!(join_type, JoinType::Inner) {
                         // cross join if there is no join conditions and no join filter set
                         Arc::new(CrossJoinExec::new(physical_left, physical_right))
@@ -1127,35 +1088,72 @@ impl DefaultPhysicalPlanner {
                             PartitionMode::Partitioned
                         }
                     };
-                    Arc::new(
-                        HashJoinExec::try_new(
-                            physical_left,
-                            physical_right,
-                            join_on,
-                            join_filter,
-                            join_type,
-                            None,
-                            partition_mode,
-                            null_equals_null,
-                        )?
-                        .with_dynamic_filter_info(physical_dynamic_filter_info),
-                    )
+                    Arc::new(HashJoinExec::try_new(
+                        physical_left,
+                        physical_right,
+                        join_on,
+                        join_filter,
+                        join_type,
+                        None,
+                        partition_mode,
+                        null_equals_null,
+                    )?)
                 } else {
-                    Arc::new(
-                        HashJoinExec::try_new(
-                            physical_left,
-                            physical_right,
-                            join_on,
-                            join_filter,
-                            join_type,
-                            None,
-                            PartitionMode::CollectLeft,
-                            null_equals_null,
-                        )?
-                        .with_dynamic_filter_info(physical_dynamic_filter_info),
-                    )
+                    Arc::new(HashJoinExec::try_new(
+                        physical_left,
+                        physical_right,
+                        join_on,
+                        join_filter,
+                        join_type,
+                        None,
+                        PartitionMode::CollectLeft,
+                        null_equals_null,
+                    )?)
                 };
 
+                // build dynamic filter
+                if join.support_dynamic_filter() {
+                    let physical_dynamic_filter_info: Option<Arc<DynamicFilterInfo>> =
+                        if let Some(dynamic_columns) = dynamic_pushdown_columns {
+                            let columns_and_types_and_names: Vec<(Arc<Column>, String)> =
+                                dynamic_columns
+                                    .iter()
+                                    .map(|dynamic_column| {
+                                        let column = dynamic_column.column();
+                                        let index = join_schema.index_of_column(column)?;
+                                        let physical_column = Arc::new(
+                                            datafusion_physical_expr::expressions::Column::new(
+                                                &column.name,
+                                                index,
+                                            ),
+                                        );
+                
+                                        let build_side_name = dynamic_column.build_name().to_owned();
+                                        Ok((physical_column, build_side_name))
+                                    })
+                                    .collect::<Result<_, DataFusionError>>()?;
+                
+                            let (physical_columns, build_side_names) =
+                                columns_and_types_and_names.into_iter().fold(
+                                    (Vec::new(), Vec::new()),
+                                    |(mut cols, mut names), (col, name)| {
+                                        cols.push(col);
+                                        names.push(name);
+                                        (cols, names)
+                                    },
+                                );
+                
+                            Some(Arc::new(DynamicFilterInfo::try_new(
+                                physical_columns,
+                                build_side_names,
+                            )?))
+                        } else {
+                            None
+                        };
+                    join = join
+                        .with_dynamic_filter(physical_dynamic_filter_info)?
+                        .map_or(join, |plan| plan);
+                }
                 // If plan was mutated previously then need to create the ExecutionPlan
                 // for the new Projection that was applied on top.
                 if let Some((input, expr)) = new_project {
