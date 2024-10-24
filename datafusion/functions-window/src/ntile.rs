@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! `ntile` window function implementation
+
 use std::any::Any;
 use std::fmt::Debug;
 use std::sync::{Arc, OnceLock};
