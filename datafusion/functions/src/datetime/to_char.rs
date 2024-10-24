@@ -222,10 +222,7 @@ fn _to_char_scalar(
         if is_scalar_expression {
             return Ok(ColumnarValue::Scalar(ScalarValue::Utf8(None)));
         } else {
-            return Ok(ColumnarValue::Array(new_null_array(
-                &DataType::Utf8,
-                array.len(),
-            )));
+            return Ok(ColumnarValue::Array(new_null_array(&Utf8, array.len())));
         }
     }
 

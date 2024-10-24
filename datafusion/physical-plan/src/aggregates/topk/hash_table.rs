@@ -109,7 +109,7 @@ impl StringHashTable {
         Self {
             owned,
             map: TopKHashTable::new(limit, limit * 10),
-            rnd: ahash::RandomState::default(),
+            rnd: RandomState::default(),
         }
     }
 }
@@ -181,7 +181,7 @@ where
         Self {
             owned,
             map: TopKHashTable::new(limit, limit * 10),
-            rnd: ahash::RandomState::default(),
+            rnd: RandomState::default(),
         }
     }
 }

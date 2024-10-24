@@ -161,7 +161,7 @@ impl LogicalExtensionCodec for CsvLogicalExtensionCodec {
         &self,
         _buf: &[u8],
         _inputs: &[datafusion_expr::LogicalPlan],
-        _ctx: &datafusion::prelude::SessionContext,
+        _ctx: &SessionContext,
     ) -> datafusion_common::Result<datafusion_expr::Extension> {
         not_impl_err!("Method not implemented")
     }
@@ -179,7 +179,7 @@ impl LogicalExtensionCodec for CsvLogicalExtensionCodec {
         _buf: &[u8],
         _table_ref: &TableReference,
         _schema: arrow::datatypes::SchemaRef,
-        _ctx: &datafusion::prelude::SessionContext,
+        _ctx: &SessionContext,
     ) -> datafusion_common::Result<Arc<dyn datafusion::datasource::TableProvider>> {
         not_impl_err!("Method not implemented")
     }
@@ -271,7 +271,7 @@ impl LogicalExtensionCodec for JsonLogicalExtensionCodec {
         &self,
         _buf: &[u8],
         _inputs: &[datafusion_expr::LogicalPlan],
-        _ctx: &datafusion::prelude::SessionContext,
+        _ctx: &SessionContext,
     ) -> datafusion_common::Result<datafusion_expr::Extension> {
         not_impl_err!("Method not implemented")
     }
@@ -289,7 +289,7 @@ impl LogicalExtensionCodec for JsonLogicalExtensionCodec {
         _buf: &[u8],
         _table_ref: &TableReference,
         _schema: arrow::datatypes::SchemaRef,
-        _ctx: &datafusion::prelude::SessionContext,
+        _ctx: &SessionContext,
     ) -> datafusion_common::Result<Arc<dyn datafusion::datasource::TableProvider>> {
         not_impl_err!("Method not implemented")
     }
@@ -570,7 +570,7 @@ impl LogicalExtensionCodec for ParquetLogicalExtensionCodec {
         &self,
         _buf: &[u8],
         _inputs: &[datafusion_expr::LogicalPlan],
-        _ctx: &datafusion::prelude::SessionContext,
+        _ctx: &SessionContext,
     ) -> datafusion_common::Result<datafusion_expr::Extension> {
         not_impl_err!("Method not implemented")
     }
@@ -588,7 +588,7 @@ impl LogicalExtensionCodec for ParquetLogicalExtensionCodec {
         _buf: &[u8],
         _table_ref: &TableReference,
         _schema: arrow::datatypes::SchemaRef,
-        _ctx: &datafusion::prelude::SessionContext,
+        _ctx: &SessionContext,
     ) -> datafusion_common::Result<Arc<dyn datafusion::datasource::TableProvider>> {
         not_impl_err!("Method not implemented")
     }
@@ -658,7 +658,7 @@ impl LogicalExtensionCodec for ArrowLogicalExtensionCodec {
         &self,
         _buf: &[u8],
         _inputs: &[datafusion_expr::LogicalPlan],
-        _ctx: &datafusion::prelude::SessionContext,
+        _ctx: &SessionContext,
     ) -> datafusion_common::Result<datafusion_expr::Extension> {
         not_impl_err!("Method not implemented")
     }
@@ -676,7 +676,7 @@ impl LogicalExtensionCodec for ArrowLogicalExtensionCodec {
         _buf: &[u8],
         _table_ref: &TableReference,
         _schema: arrow::datatypes::SchemaRef,
-        _ctx: &datafusion::prelude::SessionContext,
+        _ctx: &SessionContext,
     ) -> datafusion_common::Result<Arc<dyn datafusion::datasource::TableProvider>> {
         not_impl_err!("Method not implemented")
     }
@@ -716,7 +716,7 @@ impl LogicalExtensionCodec for AvroLogicalExtensionCodec {
         &self,
         _buf: &[u8],
         _inputs: &[datafusion_expr::LogicalPlan],
-        _ctx: &datafusion::prelude::SessionContext,
+        _ctx: &SessionContext,
     ) -> datafusion_common::Result<datafusion_expr::Extension> {
         not_impl_err!("Method not implemented")
     }
@@ -734,7 +734,7 @@ impl LogicalExtensionCodec for AvroLogicalExtensionCodec {
         _buf: &[u8],
         _table_ref: &TableReference,
         _schema: arrow::datatypes::SchemaRef,
-        _cts: &datafusion::prelude::SessionContext,
+        _cts: &SessionContext,
     ) -> datafusion_common::Result<Arc<dyn datafusion::datasource::TableProvider>> {
         not_impl_err!("Method not implemented")
     }

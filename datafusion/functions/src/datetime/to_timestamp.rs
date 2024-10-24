@@ -374,7 +374,7 @@ impl ScalarUDFImpl for ToTimestampMillisFunc {
 static TO_TIMESTAMP_MILLIS_DOC: OnceLock<Documentation> = OnceLock::new();
 
 fn get_to_timestamp_millis_doc() -> &'static Documentation {
-    crate::datetime::to_timestamp::TO_TIMESTAMP_MILLIS_DOC.get_or_init(|| {
+    TO_TIMESTAMP_MILLIS_DOC.get_or_init(|| {
         Documentation::builder()
             .with_doc_section(DOC_SECTION_DATETIME)
             .with_description("Converts a value to a timestamp (`YYYY-MM-DDT00:00:00.000Z`). Supports strings, integer, and unsigned integer types as input. Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00') if no [Chrono formats](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) are provided. Integers and unsigned integers are interpreted as milliseconds since the unix epoch (`1970-01-01T00:00:00Z`). Returns the corresponding timestamp.")
@@ -1008,7 +1008,7 @@ mod tests {
         for udf in &udfs {
             for array in arrays {
                 let rt = udf.return_type(&[array.data_type()]).unwrap();
-                assert!(matches!(rt, DataType::Timestamp(_, Some(_))));
+                assert!(matches!(rt, Timestamp(_, Some(_))));
 
                 let res = udf
                     .invoke(&[array.clone()])
@@ -1018,7 +1018,7 @@ mod tests {
                     _ => panic!("Expected a columnar array"),
                 };
                 let ty = array.data_type();
-                assert!(matches!(ty, DataType::Timestamp(_, Some(_))));
+                assert!(matches!(ty, Timestamp(_, Some(_))));
             }
         }
 
@@ -1051,7 +1051,7 @@ mod tests {
         for udf in &udfs {
             for array in arrays {
                 let rt = udf.return_type(&[array.data_type()]).unwrap();
-                assert!(matches!(rt, DataType::Timestamp(_, None)));
+                assert!(matches!(rt, Timestamp(_, None)));
 
                 let res = udf
                     .invoke(&[array.clone()])
@@ -1061,7 +1061,7 @@ mod tests {
                     _ => panic!("Expected a columnar array"),
                 };
                 let ty = array.data_type();
-                assert!(matches!(ty, DataType::Timestamp(_, None)));
+                assert!(matches!(ty, Timestamp(_, None)));
             }
         }
     }
@@ -1137,10 +1137,7 @@ mod tests {
                 .expect("that to_timestamp with format args parsed values without error");
             if let ColumnarValue::Array(parsed_array) = parsed_timestamps {
                 assert_eq!(parsed_array.len(), 1);
-                assert!(matches!(
-                    parsed_array.data_type(),
-                    DataType::Timestamp(_, None)
-                ));
+                assert!(matches!(parsed_array.data_type(), Timestamp(_, None)));
 
                 match time_unit {
                     Nanosecond => {

@@ -247,7 +247,7 @@ impl Unparser<'_> {
                 }));
 
                 Ok(ast::Expr::Function(Function {
-                    name: ast::ObjectName(vec![Ident {
+                    name: ObjectName(vec![Ident {
                         value: func_name.to_string(),
                         quote_style: None,
                     }]),
@@ -291,7 +291,7 @@ impl Unparser<'_> {
                     None => None,
                 };
                 Ok(ast::Expr::Function(Function {
-                    name: ast::ObjectName(vec![Ident {
+                    name: ObjectName(vec![Ident {
                         value: func_name.to_string(),
                         quote_style: None,
                     }]),
@@ -477,7 +477,7 @@ impl Unparser<'_> {
     ) -> Result<ast::Expr> {
         let args = self.function_args_to_sql(args)?;
         Ok(ast::Expr::Function(Function {
-            name: ast::ObjectName(vec![Ident {
+            name: ObjectName(vec![Ident {
                 value: func_name.to_string(),
                 quote_style: None,
             }]),
@@ -518,7 +518,7 @@ impl Unparser<'_> {
 
     fn ast_type_for_date64_in_cast(&self) -> ast::DataType {
         if self.dialect.use_timestamp_for_date64() {
-            ast::DataType::Timestamp(None, ast::TimezoneInfo::None)
+            ast::DataType::Timestamp(None, TimezoneInfo::None)
         } else {
             ast::DataType::Datetime(None)
         }
@@ -593,16 +593,16 @@ impl Unparser<'_> {
     }
 
     /// This function can create an identifier with or without quotes based on the dialect rules
-    pub(super) fn new_ident_quoted_if_needs(&self, ident: String) -> ast::Ident {
+    pub(super) fn new_ident_quoted_if_needs(&self, ident: String) -> Ident {
         let quote_style = self.dialect.identifier_quote_style(&ident);
-        ast::Ident {
+        Ident {
             value: ident,
             quote_style,
         }
     }
 
-    pub(super) fn new_ident_without_quote_style(&self, str: String) -> ast::Ident {
-        ast::Ident {
+    pub(super) fn new_ident_without_quote_style(&self, str: String) -> Ident {
+        Ident {
             value: str,
             quote_style: None,
         }
@@ -612,7 +612,7 @@ impl Unparser<'_> {
         &self,
         lhs: ast::Expr,
         rhs: ast::Expr,
-        op: ast::BinaryOperator,
+        op: BinaryOperator,
     ) -> ast::Expr {
         ast::Expr::BinaryOp {
             left: Box::new(lhs),
@@ -697,7 +697,7 @@ impl Unparser<'_> {
             // Closest precedence we currently have to Between is PGLikeMatch
             // (https://www.postgresql.org/docs/7.2/sql-precedence.html)
             ast::Expr::Between { .. } => {
-                self.sql_op_precedence(&ast::BinaryOperator::PGLikeMatch)
+                self.sql_op_precedence(&BinaryOperator::PGLikeMatch)
             }
             _ => 0,
         }
@@ -727,70 +727,70 @@ impl Unparser<'_> {
 
     fn sql_to_op(&self, op: &BinaryOperator) -> Result<Operator> {
         match op {
-            ast::BinaryOperator::Eq => Ok(Operator::Eq),
-            ast::BinaryOperator::NotEq => Ok(Operator::NotEq),
-            ast::BinaryOperator::Lt => Ok(Operator::Lt),
-            ast::BinaryOperator::LtEq => Ok(Operator::LtEq),
-            ast::BinaryOperator::Gt => Ok(Operator::Gt),
-            ast::BinaryOperator::GtEq => Ok(Operator::GtEq),
-            ast::BinaryOperator::Plus => Ok(Operator::Plus),
-            ast::BinaryOperator::Minus => Ok(Operator::Minus),
-            ast::BinaryOperator::Multiply => Ok(Operator::Multiply),
-            ast::BinaryOperator::Divide => Ok(Operator::Divide),
-            ast::BinaryOperator::Modulo => Ok(Operator::Modulo),
-            ast::BinaryOperator::And => Ok(Operator::And),
-            ast::BinaryOperator::Or => Ok(Operator::Or),
-            ast::BinaryOperator::PGRegexMatch => Ok(Operator::RegexMatch),
-            ast::BinaryOperator::PGRegexIMatch => Ok(Operator::RegexIMatch),
-            ast::BinaryOperator::PGRegexNotMatch => Ok(Operator::RegexNotMatch),
-            ast::BinaryOperator::PGRegexNotIMatch => Ok(Operator::RegexNotIMatch),
-            ast::BinaryOperator::PGILikeMatch => Ok(Operator::ILikeMatch),
-            ast::BinaryOperator::PGNotLikeMatch => Ok(Operator::NotLikeMatch),
-            ast::BinaryOperator::PGLikeMatch => Ok(Operator::LikeMatch),
-            ast::BinaryOperator::PGNotILikeMatch => Ok(Operator::NotILikeMatch),
-            ast::BinaryOperator::BitwiseAnd => Ok(Operator::BitwiseAnd),
-            ast::BinaryOperator::BitwiseOr => Ok(Operator::BitwiseOr),
-            ast::BinaryOperator::BitwiseXor => Ok(Operator::BitwiseXor),
-            ast::BinaryOperator::PGBitwiseShiftRight => Ok(Operator::BitwiseShiftRight),
-            ast::BinaryOperator::PGBitwiseShiftLeft => Ok(Operator::BitwiseShiftLeft),
-            ast::BinaryOperator::StringConcat => Ok(Operator::StringConcat),
-            ast::BinaryOperator::AtArrow => Ok(Operator::AtArrow),
-            ast::BinaryOperator::ArrowAt => Ok(Operator::ArrowAt),
+            BinaryOperator::Eq => Ok(Operator::Eq),
+            BinaryOperator::NotEq => Ok(Operator::NotEq),
+            BinaryOperator::Lt => Ok(Operator::Lt),
+            BinaryOperator::LtEq => Ok(Operator::LtEq),
+            BinaryOperator::Gt => Ok(Operator::Gt),
+            BinaryOperator::GtEq => Ok(Operator::GtEq),
+            BinaryOperator::Plus => Ok(Operator::Plus),
+            BinaryOperator::Minus => Ok(Operator::Minus),
+            BinaryOperator::Multiply => Ok(Operator::Multiply),
+            BinaryOperator::Divide => Ok(Operator::Divide),
+            BinaryOperator::Modulo => Ok(Operator::Modulo),
+            BinaryOperator::And => Ok(Operator::And),
+            BinaryOperator::Or => Ok(Operator::Or),
+            BinaryOperator::PGRegexMatch => Ok(Operator::RegexMatch),
+            BinaryOperator::PGRegexIMatch => Ok(Operator::RegexIMatch),
+            BinaryOperator::PGRegexNotMatch => Ok(Operator::RegexNotMatch),
+            BinaryOperator::PGRegexNotIMatch => Ok(Operator::RegexNotIMatch),
+            BinaryOperator::PGILikeMatch => Ok(Operator::ILikeMatch),
+            BinaryOperator::PGNotLikeMatch => Ok(Operator::NotLikeMatch),
+            BinaryOperator::PGLikeMatch => Ok(Operator::LikeMatch),
+            BinaryOperator::PGNotILikeMatch => Ok(Operator::NotILikeMatch),
+            BinaryOperator::BitwiseAnd => Ok(Operator::BitwiseAnd),
+            BinaryOperator::BitwiseOr => Ok(Operator::BitwiseOr),
+            BinaryOperator::BitwiseXor => Ok(Operator::BitwiseXor),
+            BinaryOperator::PGBitwiseShiftRight => Ok(Operator::BitwiseShiftRight),
+            BinaryOperator::PGBitwiseShiftLeft => Ok(Operator::BitwiseShiftLeft),
+            BinaryOperator::StringConcat => Ok(Operator::StringConcat),
+            BinaryOperator::AtArrow => Ok(Operator::AtArrow),
+            BinaryOperator::ArrowAt => Ok(Operator::ArrowAt),
             _ => not_impl_err!("unsupported operation: {op:?}"),
         }
     }
 
-    fn op_to_sql(&self, op: &Operator) -> Result<ast::BinaryOperator> {
+    fn op_to_sql(&self, op: &Operator) -> Result<BinaryOperator> {
         match op {
-            Operator::Eq => Ok(ast::BinaryOperator::Eq),
-            Operator::NotEq => Ok(ast::BinaryOperator::NotEq),
-            Operator::Lt => Ok(ast::BinaryOperator::Lt),
-            Operator::LtEq => Ok(ast::BinaryOperator::LtEq),
-            Operator::Gt => Ok(ast::BinaryOperator::Gt),
-            Operator::GtEq => Ok(ast::BinaryOperator::GtEq),
-            Operator::Plus => Ok(ast::BinaryOperator::Plus),
-            Operator::Minus => Ok(ast::BinaryOperator::Minus),
-            Operator::Multiply => Ok(ast::BinaryOperator::Multiply),
-            Operator::Divide => Ok(ast::BinaryOperator::Divide),
-            Operator::Modulo => Ok(ast::BinaryOperator::Modulo),
-            Operator::And => Ok(ast::BinaryOperator::And),
-            Operator::Or => Ok(ast::BinaryOperator::Or),
+            Operator::Eq => Ok(BinaryOperator::Eq),
+            Operator::NotEq => Ok(BinaryOperator::NotEq),
+            Operator::Lt => Ok(BinaryOperator::Lt),
+            Operator::LtEq => Ok(BinaryOperator::LtEq),
+            Operator::Gt => Ok(BinaryOperator::Gt),
+            Operator::GtEq => Ok(BinaryOperator::GtEq),
+            Operator::Plus => Ok(BinaryOperator::Plus),
+            Operator::Minus => Ok(BinaryOperator::Minus),
+            Operator::Multiply => Ok(BinaryOperator::Multiply),
+            Operator::Divide => Ok(BinaryOperator::Divide),
+            Operator::Modulo => Ok(BinaryOperator::Modulo),
+            Operator::And => Ok(BinaryOperator::And),
+            Operator::Or => Ok(BinaryOperator::Or),
             Operator::IsDistinctFrom => not_impl_err!("unsupported operation: {op:?}"),
             Operator::IsNotDistinctFrom => not_impl_err!("unsupported operation: {op:?}"),
-            Operator::RegexMatch => Ok(ast::BinaryOperator::PGRegexMatch),
-            Operator::RegexIMatch => Ok(ast::BinaryOperator::PGRegexIMatch),
-            Operator::RegexNotMatch => Ok(ast::BinaryOperator::PGRegexNotMatch),
-            Operator::RegexNotIMatch => Ok(ast::BinaryOperator::PGRegexNotIMatch),
-            Operator::ILikeMatch => Ok(ast::BinaryOperator::PGILikeMatch),
-            Operator::NotLikeMatch => Ok(ast::BinaryOperator::PGNotLikeMatch),
-            Operator::LikeMatch => Ok(ast::BinaryOperator::PGLikeMatch),
-            Operator::NotILikeMatch => Ok(ast::BinaryOperator::PGNotILikeMatch),
-            Operator::BitwiseAnd => Ok(ast::BinaryOperator::BitwiseAnd),
-            Operator::BitwiseOr => Ok(ast::BinaryOperator::BitwiseOr),
-            Operator::BitwiseXor => Ok(ast::BinaryOperator::BitwiseXor),
-            Operator::BitwiseShiftRight => Ok(ast::BinaryOperator::PGBitwiseShiftRight),
-            Operator::BitwiseShiftLeft => Ok(ast::BinaryOperator::PGBitwiseShiftLeft),
-            Operator::StringConcat => Ok(ast::BinaryOperator::StringConcat),
+            Operator::RegexMatch => Ok(BinaryOperator::PGRegexMatch),
+            Operator::RegexIMatch => Ok(BinaryOperator::PGRegexIMatch),
+            Operator::RegexNotMatch => Ok(BinaryOperator::PGRegexNotMatch),
+            Operator::RegexNotIMatch => Ok(BinaryOperator::PGRegexNotIMatch),
+            Operator::ILikeMatch => Ok(BinaryOperator::PGILikeMatch),
+            Operator::NotLikeMatch => Ok(BinaryOperator::PGNotLikeMatch),
+            Operator::LikeMatch => Ok(BinaryOperator::PGLikeMatch),
+            Operator::NotILikeMatch => Ok(BinaryOperator::PGNotILikeMatch),
+            Operator::BitwiseAnd => Ok(BinaryOperator::BitwiseAnd),
+            Operator::BitwiseOr => Ok(BinaryOperator::BitwiseOr),
+            Operator::BitwiseXor => Ok(BinaryOperator::BitwiseXor),
+            Operator::BitwiseShiftRight => Ok(BinaryOperator::PGBitwiseShiftRight),
+            Operator::BitwiseShiftLeft => Ok(BinaryOperator::PGBitwiseShiftLeft),
+            Operator::StringConcat => Ok(BinaryOperator::StringConcat),
             Operator::AtArrow => not_impl_err!("unsupported operation: {op:?}"),
             Operator::ArrowAt => not_impl_err!("unsupported operation: {op:?}"),
         }
@@ -934,17 +934,17 @@ impl Unparser<'_> {
                 Ok(ast::Expr::Value(ast::Value::Number(ui.to_string(), false)))
             }
             ScalarValue::UInt64(None) => Ok(ast::Expr::Value(ast::Value::Null)),
-            ScalarValue::Utf8(Some(str)) => Ok(ast::Expr::Value(
-                ast::Value::SingleQuotedString(str.to_string()),
-            )),
+            ScalarValue::Utf8(Some(str)) => {
+                Ok(ast::Expr::Value(SingleQuotedString(str.to_string())))
+            }
             ScalarValue::Utf8(None) => Ok(ast::Expr::Value(ast::Value::Null)),
-            ScalarValue::Utf8View(Some(str)) => Ok(ast::Expr::Value(
-                ast::Value::SingleQuotedString(str.to_string()),
-            )),
+            ScalarValue::Utf8View(Some(str)) => {
+                Ok(ast::Expr::Value(SingleQuotedString(str.to_string())))
+            }
             ScalarValue::Utf8View(None) => Ok(ast::Expr::Value(ast::Value::Null)),
-            ScalarValue::LargeUtf8(Some(str)) => Ok(ast::Expr::Value(
-                ast::Value::SingleQuotedString(str.to_string()),
-            )),
+            ScalarValue::LargeUtf8(Some(str)) => {
+                Ok(ast::Expr::Value(SingleQuotedString(str.to_string())))
+            }
             ScalarValue::LargeUtf8(None) => Ok(ast::Expr::Value(ast::Value::Null)),
             ScalarValue::Binary(Some(_)) => not_impl_err!("Unsupported scalar: {v:?}"),
             ScalarValue::Binary(None) => Ok(ast::Expr::Value(ast::Value::Null)),
@@ -977,7 +977,7 @@ impl Unparser<'_> {
 
                 Ok(ast::Expr::Cast {
                     kind: ast::CastKind::Cast,
-                    expr: Box::new(ast::Expr::Value(ast::Value::SingleQuotedString(
+                    expr: Box::new(ast::Expr::Value(SingleQuotedString(
                         date.to_string(),
                     ))),
                     data_type: ast::DataType::Date,
@@ -1000,7 +1000,7 @@ impl Unparser<'_> {
 
                 Ok(ast::Expr::Cast {
                     kind: ast::CastKind::Cast,
-                    expr: Box::new(ast::Expr::Value(ast::Value::SingleQuotedString(
+                    expr: Box::new(ast::Expr::Value(SingleQuotedString(
                         datetime.to_string(),
                     ))),
                     data_type: self.ast_type_for_date64_in_cast(),
@@ -1242,9 +1242,9 @@ impl Unparser<'_> {
             IntervalStyle::SQLStandard => match v {
                 ScalarValue::IntervalYearMonth(Some(v)) => {
                     let interval = Interval {
-                        value: Box::new(ast::Expr::Value(
-                            ast::Value::SingleQuotedString(v.to_string()),
-                        )),
+                        value: Box::new(ast::Expr::Value(SingleQuotedString(
+                            v.to_string(),
+                        ))),
                         leading_field: Some(ast::DateTimeField::Month),
                         leading_precision: None,
                         last_field: None,
@@ -1263,11 +1263,9 @@ impl Unparser<'_> {
 
                     let millis = v.milliseconds % 1_000;
                     let interval = Interval {
-                        value: Box::new(ast::Expr::Value(
-                            ast::Value::SingleQuotedString(format!(
-                                "{days} {hours}:{mins}:{secs}.{millis:3}"
-                            )),
-                        )),
+                        value: Box::new(ast::Expr::Value(SingleQuotedString(format!(
+                            "{days} {hours}:{mins}:{secs}.{millis:3}"
+                        )))),
                         leading_field: Some(ast::DateTimeField::Day),
                         leading_precision: None,
                         last_field: Some(ast::DateTimeField::Second),
@@ -1278,9 +1276,9 @@ impl Unparser<'_> {
                 ScalarValue::IntervalMonthDayNano(Some(v)) => {
                     if v.months >= 0 && v.days == 0 && v.nanoseconds == 0 {
                         let interval = Interval {
-                            value: Box::new(ast::Expr::Value(
-                                ast::Value::SingleQuotedString(v.months.to_string()),
-                            )),
+                            value: Box::new(ast::Expr::Value(SingleQuotedString(
+                                v.months.to_string(),
+                            ))),
                             leading_field: Some(ast::DateTimeField::Month),
                             leading_precision: None,
                             last_field: None,
@@ -1299,11 +1297,9 @@ impl Unparser<'_> {
                         let millis = (v.nanoseconds % 1_000_000_000) / 1_000_000;
 
                         let interval = Interval {
-                            value: Box::new(ast::Expr::Value(
-                                ast::Value::SingleQuotedString(format!(
-                                    "{days} {hours}:{mins}:{secs}.{millis:03}"
-                                )),
-                            )),
+                            value: Box::new(ast::Expr::Value(SingleQuotedString(
+                                format!("{days} {hours}:{mins}:{secs}.{millis:03}"),
+                            ))),
                             leading_field: Some(ast::DateTimeField::Day),
                             leading_precision: None,
                             last_field: Some(ast::DateTimeField::Second),
@@ -1929,11 +1925,8 @@ mod tests {
     #[test]
     fn custom_dialect_float64_ast_dtype() -> Result<()> {
         for (float64_ast_dtype, identifier) in [
-            (sqlparser::ast::DataType::Double, "DOUBLE"),
-            (
-                sqlparser::ast::DataType::DoublePrecision,
-                "DOUBLE PRECISION",
-            ),
+            (ast::DataType::Double, "DOUBLE"),
+            (ast::DataType::DoublePrecision, "DOUBLE PRECISION"),
         ] {
             let dialect = CustomDialectBuilder::new()
                 .with_float64_ast_dtype(float64_ast_dtype)
@@ -2350,10 +2343,7 @@ mod tests {
                 expr: Box::new(Expr::Literal(ScalarValue::Utf8(Some(
                     "variation".to_string(),
                 )))),
-                data_type: DataType::Dictionary(
-                    Box::new(DataType::Int8),
-                    Box::new(DataType::Utf8),
-                ),
+                data_type: DataType::Dictionary(Box::new(Int8), Box::new(DataType::Utf8)),
             }),
             "'variation'",
         )];

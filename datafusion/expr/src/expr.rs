@@ -29,8 +29,8 @@ use crate::logical_plan::Subquery;
 use crate::utils::expr_to_columns;
 use crate::Volatility;
 use crate::{
-    built_in_window_function, udaf, BuiltInWindowFunction, ExprSchemable, Operator,
-    Signature, WindowFrame, WindowUDF,
+    udaf, BuiltInWindowFunction, ExprSchemable, Operator, Signature, WindowFrame,
+    WindowUDF,
 };
 
 use arrow::datatypes::{DataType, FieldRef};
@@ -695,11 +695,11 @@ impl AggregateFunction {
 pub enum WindowFunctionDefinition {
     /// A built in aggregate function that leverages an aggregate function
     /// A a built-in window function
-    BuiltInWindowFunction(built_in_window_function::BuiltInWindowFunction),
+    BuiltInWindowFunction(BuiltInWindowFunction),
     /// A user defined aggregate function
     AggregateUDF(Arc<crate::AggregateUDF>),
     /// A user defined aggregate function
-    WindowUDF(Arc<crate::WindowUDF>),
+    WindowUDF(Arc<WindowUDF>),
 }
 
 impl WindowFunctionDefinition {
@@ -742,14 +742,12 @@ impl WindowFunctionDefinition {
     }
 }
 
-impl fmt::Display for WindowFunctionDefinition {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+impl Display for WindowFunctionDefinition {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         match self {
-            WindowFunctionDefinition::BuiltInWindowFunction(fun) => {
-                std::fmt::Display::fmt(fun, f)
-            }
-            WindowFunctionDefinition::AggregateUDF(fun) => std::fmt::Display::fmt(fun, f),
-            WindowFunctionDefinition::WindowUDF(fun) => std::fmt::Display::fmt(fun, f),
+            WindowFunctionDefinition::BuiltInWindowFunction(fun) => Display::fmt(fun, f),
+            WindowFunctionDefinition::AggregateUDF(fun) => Display::fmt(fun, f),
+            WindowFunctionDefinition::WindowUDF(fun) => Display::fmt(fun, f),
         }
     }
 }
@@ -833,9 +831,7 @@ pub fn find_df_window_func(name: &str) -> Option<WindowFunctionDefinition> {
     // may have different implementations for these cases. If the sought
     // function is not found among built-in window functions, we search for
     // it among aggregate functions.
-    if let Ok(built_in_function) =
-        built_in_window_function::BuiltInWindowFunction::from_str(name.as_str())
-    {
+    if let Ok(built_in_function) = BuiltInWindowFunction::from_str(name.as_str()) {
         Some(WindowFunctionDefinition::BuiltInWindowFunction(
             built_in_function,
         ))
@@ -2141,8 +2137,8 @@ pub fn schema_name_from_sorts(sorts: &[Sort]) -> Result<String, fmt::Error> {
 
 /// Format expressions for display as part of a logical plan. In many cases, this will produce
 /// similar output to `Expr.name()` except that column names will be prefixed with '#'.
-impl fmt::Display for Expr {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+impl Display for Expr {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         match self {
             Expr::Alias(Alias { expr, name, .. }) => write!(f, "{expr} AS {name}"),
             Expr::Column(c) => write!(f, "{c}"),
@@ -2346,7 +2342,7 @@ impl fmt::Display for Expr {
 }
 
 fn fmt_function(
-    f: &mut fmt::Formatter,
+    f: &mut Formatter,
     fun: &str,
     distinct: bool,
     args: &[Expr],
@@ -2588,13 +2584,13 @@ mod test {
         assert_eq!(
             find_df_window_func("first_value"),
             Some(WindowFunctionDefinition::BuiltInWindowFunction(
-                built_in_window_function::BuiltInWindowFunction::FirstValue
+                BuiltInWindowFunction::FirstValue
             ))
         );
         assert_eq!(
             find_df_window_func("LAST_value"),
             Some(WindowFunctionDefinition::BuiltInWindowFunction(
-                built_in_window_function::BuiltInWindowFunction::LastValue
+                BuiltInWindowFunction::LastValue
             ))
         );
         assert_eq!(find_df_window_func("not_exist"), None)

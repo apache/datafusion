@@ -69,7 +69,7 @@ pub fn create_table_dual() -> Arc<dyn TableProvider> {
     let batch = RecordBatch::try_new(
         dual_schema.clone(),
         vec![
-            Arc::new(array::Int32Array::from(vec![1])),
+            Arc::new(Int32Array::from(vec![1])),
             Arc::new(array::StringArray::from(vec!["a"])),
         ],
     )

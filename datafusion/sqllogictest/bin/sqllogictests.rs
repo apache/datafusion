@@ -61,7 +61,7 @@ async fn run_tests() -> Result<()> {
     // Enable logging (e.g. set RUST_LOG=debug to see debug logs)
     env_logger::init();
 
-    let options: Options = clap::Parser::parse();
+    let options: Options = Parser::parse();
     if options.list {
         // nextest parses stdout, so print messages to stderr
         eprintln!("NOTICE: --list option unsupported, quitting");
@@ -264,7 +264,7 @@ fn read_dir_recursive<P: AsRef<Path>>(path: P) -> Result<Vec<PathBuf>> {
 
 /// Append all paths recursively to dst
 fn read_dir_recursive_impl(dst: &mut Vec<PathBuf>, path: &Path) -> Result<()> {
-    let entries = std::fs::read_dir(path)
+    let entries = fs::read_dir(path)
         .map_err(|e| exec_datafusion_err!("Error reading directory {path:?}: {e}"))?;
     for entry in entries {
         let path = entry
