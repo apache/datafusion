@@ -27,9 +27,7 @@ use crate::{
 
 use arrow::datatypes::Schema;
 use arrow_schema::{DataType, Field, SchemaRef};
-use datafusion_common::{
-    exec_datafusion_err, exec_err, DataFusionError, Result, ScalarValue,
-};
+use datafusion_common::{exec_datafusion_err, exec_err, Result, ScalarValue};
 use datafusion_expr::{
     BuiltInWindowFunction, PartitionEvaluator, ReversedUDWF, WindowFrame,
     WindowFunctionDefinition, WindowUDF,
@@ -165,25 +163,6 @@ fn window_expr_from_aggregate_expr(
     }
 }
 
-fn get_scalar_value_from_args(
-    args: &[Arc<dyn PhysicalExpr>],
-    index: usize,
-) -> Result<Option<ScalarValue>> {
-    Ok(if let Some(field) = args.get(index) {
-        let tmp = field
-            .as_any()
-            .downcast_ref::<Literal>()
-            .ok_or_else(|| DataFusionError::NotImplemented(
-                format!("There is only support Literal types for field at idx: {index} in Window Function"),
-            ))?
-            .value()
-            .clone();
-        Some(tmp)
-    } else {
-        None
-    })
-}
-
 fn get_signed_integer(value: ScalarValue) -> Result<i64> {
     if value.is_null() {
         return Ok(0);
@@ -194,18 +173,6 @@ fn get_signed_integer(value: ScalarValue) -> Result<i64> {
     }
 
     value.cast_to(&DataType::Int64)?.try_into()
-}
-
-fn get_unsigned_integer(value: ScalarValue) -> Result<u64> {
-    if value.is_null() {
-        return Ok(0);
-    }
-
-    if !value.data_type().is_integer() {
-        return exec_err!("Expected an integer value");
-    }
-
-    value.cast_to(&DataType::UInt64)?.try_into()
 }
 
 fn create_built_in_window_expr(
