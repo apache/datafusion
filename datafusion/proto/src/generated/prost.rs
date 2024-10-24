@@ -400,7 +400,7 @@ pub struct UnnestNode {
     #[prost(message, optional, boxed, tag = "1")]
     pub input: ::core::option::Option<::prost::alloc::boxed::Box<LogicalPlanNode>>,
     #[prost(message, repeated, tag = "2")]
-    pub exec_columns: ::prost::alloc::vec::Vec<ColumnUnnestExec>,
+    pub exec_columns: ::prost::alloc::vec::Vec<super::datafusion_common::Column>,
     #[prost(message, repeated, tag = "3")]
     pub list_type_columns: ::prost::alloc::vec::Vec<ColumnUnnestListItem>,
     #[prost(uint64, repeated, tag = "4")]
@@ -432,28 +432,20 @@ pub struct ColumnUnnestListRecursion {
     pub depth: u32,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
-pub struct ColumnUnnestExec {
-    #[prost(message, optional, tag = "1")]
-    pub column: ::core::option::Option<super::datafusion_common::Column>,
-    #[prost(oneof = "column_unnest_exec::UnnestType", tags = "2, 3, 4")]
-    pub unnest_type: ::core::option::Option<column_unnest_exec::UnnestType>,
-}
-/// Nested message and enum types in `ColumnUnnestExec`.
-pub mod column_unnest_exec {
-    #[derive(Clone, PartialEq, ::prost::Oneof)]
-    pub enum UnnestType {
-        #[prost(message, tag = "2")]
-        List(super::ColumnUnnestListRecursions),
-        #[prost(message, tag = "3")]
-        Struct(super::super::datafusion_common::EmptyMessage),
-        #[prost(message, tag = "4")]
-        Inferred(super::super::datafusion_common::EmptyMessage),
-    }
-}
-#[derive(Clone, Copy, PartialEq, ::prost::Message)]
 pub struct UnnestOptions {
     #[prost(bool, tag = "1")]
     pub preserve_nulls: bool,
+    #[prost(message, repeated, tag = "2")]
+    pub recursions: ::prost::alloc::vec::Vec<RecursionUnnestOption>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct RecursionUnnestOption {
+    #[prost(message, optional, tag = "1")]
+    pub output_column: ::core::option::Option<super::datafusion_common::Column>,
+    #[prost(message, optional, tag = "2")]
+    pub input_column: ::core::option::Option<super::datafusion_common::Column>,
+    #[prost(uint32, tag = "3")]
+    pub depth: u32,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct UnionNode {
@@ -1826,7 +1818,7 @@ pub enum BuiltInWindowFunction {
     ///   RANK = 1;
     ///   DENSE_RANK = 2;
     ///   PERCENT_RANK = 3;
-    CumeDist = 4,
+    ///   CUME_DIST = 4;
     Ntile = 5,
     /// LAG = 6;
     /// LEAD = 7;
@@ -1842,7 +1834,6 @@ impl BuiltInWindowFunction {
     pub fn as_str_name(&self) -> &'static str {
         match self {
             Self::Unspecified => "UNSPECIFIED",
-            Self::CumeDist => "CUME_DIST",
             Self::Ntile => "NTILE",
             Self::FirstValue => "FIRST_VALUE",
             Self::LastValue => "LAST_VALUE",
@@ -1853,7 +1844,6 @@ impl BuiltInWindowFunction {
     pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
         match value {
             "UNSPECIFIED" => Some(Self::Unspecified),
-            "CUME_DIST" => Some(Self::CumeDist),
             "NTILE" => Some(Self::Ntile),
             "FIRST_VALUE" => Some(Self::FirstValue),
             "LAST_VALUE" => Some(Self::LastValue),

@@ -19,8 +19,8 @@ use std::sync::Arc;
 
 use datafusion::execution::registry::FunctionRegistry;
 use datafusion_common::{
-    exec_datafusion_err, internal_err, plan_datafusion_err, Result, ScalarValue,
-    TableReference, UnnestOptions,
+    exec_datafusion_err, internal_err, plan_datafusion_err, RecursionUnnestOption,
+    Result, ScalarValue, TableReference, UnnestOptions,
 };
 use datafusion_expr::expr::{Alias, Placeholder, Sort};
 use datafusion_expr::expr::{Unnest, WildcardOptions};
@@ -56,6 +56,15 @@ impl From<&protobuf::UnnestOptions> for UnnestOptions {
     fn from(opts: &protobuf::UnnestOptions) -> Self {
         Self {
             preserve_nulls: opts.preserve_nulls,
+            recursions: opts
+                .recursions
+                .iter()
+                .map(|r| RecursionUnnestOption {
+                    input_column: r.input_column.as_ref().unwrap().into(),
+                    output_column: r.output_column.as_ref().unwrap().into(),
+                    depth: r.depth as usize,
+                })
+                .collect::<Vec<_>>(),
         }
     }
 }
@@ -143,7 +152,6 @@ impl From<protobuf::BuiltInWindowFunction> for BuiltInWindowFunction {
         match built_in_function {
             protobuf::BuiltInWindowFunction::Unspecified => todo!(),
             protobuf::BuiltInWindowFunction::FirstValue => Self::FirstValue,
-            protobuf::BuiltInWindowFunction::CumeDist => Self::CumeDist,
             protobuf::BuiltInWindowFunction::Ntile => Self::Ntile,
             protobuf::BuiltInWindowFunction::NthValue => Self::NthValue,
             protobuf::BuiltInWindowFunction::LastValue => Self::LastValue,

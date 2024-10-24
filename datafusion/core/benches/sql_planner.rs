@@ -203,10 +203,8 @@ fn criterion_benchmark(c: &mut Criterion) {
 
     let tpcds_ctx = register_defs(SessionContext::new(), tpcds_schemas());
 
-    // 10, 35: Physical plan does not support logical expression Exists(<subquery>)
-    // 45: Physical plan does not support logical expression (<subquery>)
-    // 41: Optimizing disjunctions not supported
-    let ignored = [10, 35, 41, 45];
+    // 41: check_analyzed_plan: Correlated column is not allowed in predicate
+    let ignored = [41];
 
     let raw_tpcds_sql_queries = (1..100)
         .filter(|q| !ignored.contains(q))

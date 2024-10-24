@@ -87,8 +87,8 @@ fn get_gcd_doc() -> &'static Documentation {
                 "Returns the greatest common divisor of `expression_x` and `expression_y`. Returns 0 if both inputs are zero.",
             )
             .with_syntax_example("gcd(expression_x, expression_y)")
-            .with_standard_argument("expression_x", "First numeric")
-            .with_standard_argument("expression_y", "Second numeric")
+            .with_standard_argument("expression_x", Some("First numeric"))
+            .with_standard_argument("expression_y", Some("Second numeric"))
             .build()
             .unwrap()
     })

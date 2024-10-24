@@ -373,32 +373,9 @@ impl DataFrame {
         self.select(expr)
     }
 
-    /// Expand each list element of a column to multiple rows.
-    #[deprecated(since = "37.0.0", note = "use unnest_columns instead")]
-    pub fn unnest_column(self, column: &str) -> Result<DataFrame> {
-        self.unnest_columns(&[column])
-    }
-
-    /// Expand each list element of a column to multiple rows, with
-    /// behavior controlled by [`UnnestOptions`].
-    ///
-    /// Please see the documentation on [`UnnestOptions`] for more
-    /// details about the meaning of unnest.
-    #[deprecated(since = "37.0.0", note = "use unnest_columns_with_options instead")]
-    pub fn unnest_column_with_options(
-        self,
-        column: &str,
-        options: UnnestOptions,
-    ) -> Result<DataFrame> {
-        self.unnest_columns_with_options(&[column], options)
-    }
-
     /// Expand multiple list/struct columns into a set of rows and new columns.
     ///
-    /// See also:
-    ///
-    /// 1. [`UnnestOptions`] documentation for the behavior of `unnest`
-    /// 2. [`Self::unnest_column_with_options`]
+    /// See also: [`UnnestOptions`] documentation for the behavior of `unnest`
     ///
     /// # Example
     /// ```
@@ -2616,6 +2593,54 @@ mod tests {
                 "| 5  |",
                 "| 6  |",
                 "+----+",
+            ],
+            &df_results
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_aggregate_with_union() -> Result<()> {
+        let df = test_table().await?;
+
+        let df1 = df
+            .clone()
+            // GROUP BY `c1`
+            .aggregate(vec![col("c1")], vec![min(col("c2"))])?
+            // SELECT `c1` , min(c2) as `result`
+            .select(vec![col("c1"), min(col("c2")).alias("result")])?;
+        let df2 = df
+            .clone()
+            // GROUP BY `c1`
+            .aggregate(vec![col("c1")], vec![max(col("c3"))])?
+            // SELECT `c1` , max(c3) as `result`
+            .select(vec![col("c1"), max(col("c3")).alias("result")])?;
+
+        let df_union = df1.union(df2)?;
+        let df = df_union
+            // GROUP BY `c1`
+            .aggregate(
+                vec![col("c1")],
+                vec![sum(col("result")).alias("sum_result")],
+            )?
+            // SELECT `c1`, sum(result) as `sum_result`
+            .select(vec![(col("c1")), col("sum_result")])?;
+
+        let df_results = df.collect().await?;
+
+        #[rustfmt::skip]
+        assert_batches_sorted_eq!(
+            [
+                "+----+------------+",
+                "| c1 | sum_result |",
+                "+----+------------+",
+                "| a  | 84         |",
+                "| b  | 69         |",
+                "| c  | 124        |",
+                "| d  | 126        |",
+                "| e  | 121        |",
+                "+----+------------+"
             ],
             &df_results
         );

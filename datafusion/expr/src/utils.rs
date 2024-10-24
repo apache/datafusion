@@ -1101,6 +1101,54 @@ fn split_conjunction_impl<'a>(expr: &'a Expr, mut exprs: Vec<&'a Expr>) -> Vec<&
     }
 }
 
+/// Iteratate parts in a conjunctive [`Expr`] such as `A AND B AND C` => `[A, B, C]`
+///
+/// See [`split_conjunction_owned`] for more details and an example.
+pub fn iter_conjunction(expr: &Expr) -> impl Iterator<Item = &Expr> {
+    let mut stack = vec![expr];
+    std::iter::from_fn(move || {
+        while let Some(expr) = stack.pop() {
+            match expr {
+                Expr::BinaryExpr(BinaryExpr {
+                    right,
+                    op: Operator::And,
+                    left,
+                }) => {
+                    stack.push(right);
+                    stack.push(left);
+                }
+                Expr::Alias(Alias { expr, .. }) => stack.push(expr),
+                other => return Some(other),
+            }
+        }
+        None
+    })
+}
+
+/// Iteratate parts in a conjunctive [`Expr`] such as `A AND B AND C` => `[A, B, C]`
+///
+/// See [`split_conjunction_owned`] for more details and an example.
+pub fn iter_conjunction_owned(expr: Expr) -> impl Iterator<Item = Expr> {
+    let mut stack = vec![expr];
+    std::iter::from_fn(move || {
+        while let Some(expr) = stack.pop() {
+            match expr {
+                Expr::BinaryExpr(BinaryExpr {
+                    right,
+                    op: Operator::And,
+                    left,
+                }) => {
+                    stack.push(*right);
+                    stack.push(*left);
+                }
+                Expr::Alias(Alias { expr, .. }) => stack.push(*expr),
+                other => return Some(other),
+            }
+        }
+        None
+    })
+}
+
 /// Splits an owned conjunctive [`Expr`] such as `A AND B AND C` => `[A, B, C]`
 ///
 /// This is often used to "split" filter expressions such as `col1 = 5
