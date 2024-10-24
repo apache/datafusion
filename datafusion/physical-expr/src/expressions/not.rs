@@ -74,9 +74,7 @@ impl PhysicalExpr for NotExpr {
         match evaluate_arg {
             ColumnarValue::Array(array) => {
                 let array = as_boolean_array(&array)?;
-                Ok(ColumnarValue::Array(Arc::new(
-                    arrow_not(array)?,
-                )))
+                Ok(ColumnarValue::Array(Arc::new(arrow_not(array)?)))
             }
             ColumnarValue::Scalar(scalar) => {
                 if scalar.is_null() {

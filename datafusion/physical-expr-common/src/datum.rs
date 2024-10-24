@@ -18,10 +18,7 @@
 use arrow::array::BooleanArray;
 use arrow::array::{make_comparator, ArrayRef, Datum};
 use arrow::buffer::NullBuffer;
-use arrow::compute::{
-    SortOptions,
-    kernels::cmp::eq,
-};
+use arrow::compute::{kernels::cmp::eq, SortOptions};
 use arrow::error::ArrowError;
 use datafusion_common::DataFusionError;
 use datafusion_common::{arrow_datafusion_err, internal_err};

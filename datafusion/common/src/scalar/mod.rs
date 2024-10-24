@@ -42,8 +42,8 @@ use crate::utils::{
     array_into_fixed_size_list_array, array_into_large_list_array, array_into_list_array,
 };
 use arrow::compute::kernels::{
+    cmp::{eq, lt},
     numeric::*,
-    cmp::{lt, eq},
 };
 use arrow::util::display::{array_value_to_string, ArrayFormatter, FormatOptions};
 use arrow::{

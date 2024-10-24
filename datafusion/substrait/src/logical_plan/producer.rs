@@ -20,8 +20,7 @@ use datafusion::optimizer::analyzer::expand_wildcard_rule::ExpandWildcardRule;
 use datafusion::optimizer::AnalyzerRule;
 use std::sync::Arc;
 use substrait::proto::{
-    expression_reference::ExprType,
-    expression::subquery::SubqueryType,
+    expression::subquery::SubqueryType, expression_reference::ExprType,
 };
 
 use arrow_buffer::ToByteSlice;
@@ -1262,14 +1261,12 @@ pub fn to_substrait_rex(
 
             let substrait_subquery = Expression {
                 rex_type: Some(RexType::Subquery(Box::new(Subquery {
-                    subquery_type: Some(
-                        SubqueryType::InPredicate(
-                            Box::new(InPredicate {
-                                needles: (vec![substrait_expr]),
-                                haystack: Some(subquery_plan),
-                            }),
-                        ),
-                    ),
+                    subquery_type: Some(SubqueryType::InPredicate(Box::new(
+                        InPredicate {
+                            needles: (vec![substrait_expr]),
+                            haystack: Some(subquery_plan),
+                        },
+                    ))),
                 }))),
             };
             if *negated {
