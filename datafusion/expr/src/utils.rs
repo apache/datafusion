@@ -437,7 +437,10 @@ pub fn expand_qualified_wildcard(
         return plan_err!("Invalid qualifier {qualifier}");
     }
 
-    let qualified_schema = Arc::new(Schema::new(fields_with_qualified));
+    let qualified_schema = Arc::new(Schema::new_with_metadata(
+        fields_with_qualified,
+        schema.metadata().clone(),
+    ));
     let qualified_dfschema =
         DFSchema::try_from_qualified_schema(qualifier.clone(), &qualified_schema)?
             .with_functional_dependencies(projected_func_dependencies)?;

@@ -711,13 +711,14 @@ impl ParquetSink {
                 .iter()
                 .map(|(s, _)| s)
                 .collect();
-            Arc::new(Schema::new(
+            Arc::new(Schema::new_with_metadata(
                 schema
                     .fields()
                     .iter()
                     .filter(|f| !partition_names.contains(&f.name()))
                     .map(|f| (**f).clone())
                     .collect::<Vec<_>>(),
+                schema.metadata().clone(),
             ))
         } else {
             self.config.output_schema().clone()

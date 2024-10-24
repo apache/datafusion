@@ -31,5 +31,7 @@ pub(crate) fn create_schema(
     for expr in window_expr {
         builder.push(expr.field()?);
     }
-    Ok(builder.finish())
+    Ok(builder
+        .finish()
+        .with_metadata(input_schema.metadata().clone()))
 }
