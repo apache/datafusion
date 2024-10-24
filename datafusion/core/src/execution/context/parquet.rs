@@ -106,11 +106,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn read_with_non_parsed_listing_table_url() -> Result<()> {
+    async fn read_with_pre_parsed_listing_table_url() -> Result<()> {
         let ctx = SessionContext::new();
-
         let urls: Vec<ListingTableUrl> =
             format!("{}/alltypes_plain*.parquet", parquet_test_data()).to_urls()?;
+        // Check that read parquet correctly works with ListingTableUrl. If ListingTableUrl is
+        // treated as an AsRef<str>, the formatting on ListingTableUrl's output string will cause
+        // this test to fail
         let df = ctx
             .read_parquet(urls, ParquetReadOptions::default())
             .await?;
