@@ -16,25 +16,23 @@
 // under the License.
 
 use arrow::array::AsArray;
-use arrow::array::PrimitiveArray;
 use arrow::array::{
-    Decimal128Array, Decimal256Array, Float16Array, Float32Array, Float64Array,
-    Int16Array, Int32Array, Int64Array, Int8Array, UInt16Array, UInt32Array, UInt64Array,
-    UInt8Array,
+    Float32Array, Float64Array, Int16Array, Int32Array, Int64Array, Int8Array,
+    UInt16Array, UInt32Array, UInt64Array, UInt8Array,
 };
 use arrow::compute::filter_record_batch;
-use arrow::compute::kernels::aggregate::{max, min};
+use arrow::compute::kernels::aggregate::{max, max_string, min, min_string};
 use arrow::datatypes::DataType;
 use arrow::record_batch::RecordBatch;
+use arrow_array::Array;
 use arrow_array::ArrowNativeTypeOp;
-use arrow_array::{make_array, Array};
+use arrow_array::StringArray;
 use datafusion_common::{exec_err, DataFusionError, ScalarValue};
 use datafusion_expr::Operator;
 use datafusion_physical_expr::expressions::{BinaryExpr, Column, Literal};
 use datafusion_physical_expr::PhysicalExpr;
 use hashbrown::HashSet;
 use parking_lot::Mutex;
-use std::cmp::Ordering;
 use std::fmt;
 use std::sync::Arc;
 
@@ -255,6 +253,35 @@ impl DynamicFilterInfo {
 }
 
 macro_rules! process_min_max {
+    ($ARRAYS:expr, StringArray, $SCALAR_TY:ident, String) => {{
+        let mut min_val: Option<String> = None;
+        let mut max_val: Option<String> = None;
+
+        for array in $ARRAYS {
+            if let Some(string_array) = array.as_any().downcast_ref::<StringArray>() {
+                let batch_min = min_string(string_array);
+                let batch_max = max_string(string_array);
+
+                min_val = match (min_val.as_deref(), batch_min) {
+                    (Some(a), Some(b)) => Some(if a < b { a } else { b }.to_string()),
+                    (None, Some(b)) => Some(b.to_string()),
+                    (Some(a), None) => Some(a.to_string()),
+                    (None, None) => None,
+                };
+
+                max_val = match (max_val.as_deref(), batch_max) {
+                    (Some(a), Some(b)) => Some(if a > b { a } else { b }.to_string()),
+                    (None, Some(b)) => Some(b.to_string()),
+                    (Some(a), None) => Some(a.to_string()),
+                    (None, None) => None,
+                };
+            }
+        }
+        Ok((
+            ScalarValue::$SCALAR_TY(min_val),
+            ScalarValue::$SCALAR_TY(max_val),
+        ))
+    }};
     ($ARRAYS:expr, $ARRAY_TYPE:ty, $SCALAR_TY:ident, $NATIVE_TYPE:ty) => {{
         let mut min_val: Option<$NATIVE_TYPE> = None;
         let mut max_val: Option<$NATIVE_TYPE> = None;
@@ -285,7 +312,6 @@ macro_rules! process_min_max {
         ))
     }};
 }
-
 /// Currently only support numeric data types so generate a range filter
 fn compute_min_max_from_batches(
     arrays: &[Arc<dyn Array>],
@@ -306,6 +332,7 @@ fn compute_min_max_from_batches(
         DataType::UInt64 => process_min_max!(arrays, UInt64Array, UInt64, u64),
         DataType::Float32 => process_min_max!(arrays, Float32Array, Float32, f32),
         DataType::Float64 => process_min_max!(arrays, Float64Array, Float64, f64),
+        DataType::Utf8 => process_min_max!(arrays, StringArray, Utf8, String),
         _ => Err(DataFusionError::NotImplemented(format!(
             "Min/Max not implemented for type {}",
             data_type
