@@ -51,3 +51,15 @@ pub(crate) fn get_scalar_value_from_args(
         None
     })
 }
+
+pub(crate) fn get_unsigned_integer(value: ScalarValue) -> Result<u64> {
+    if value.is_null() {
+        return Ok(0);
+    }
+
+    if !value.data_type().is_integer() {
+        return exec_err!("Expected an integer value");
+    }
+
+    value.cast_to(&DataType::UInt64)?.try_into()
+}
