@@ -195,7 +195,7 @@ pub fn assert_optimized_plan_eq(
     Ok(())
 }
 
-fn generate_optimized_plan_with_rules(
+pub fn generate_optimized_plan_with_rules(
     rules: Vec<Arc<dyn OptimizerRule + Send + Sync>>,
     plan: LogicalPlan,
 ) -> LogicalPlan {

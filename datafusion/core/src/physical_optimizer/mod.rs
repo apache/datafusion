@@ -24,6 +24,7 @@
 pub mod coalesce_batches;
 pub mod enforce_distribution;
 pub mod enforce_sorting;
+pub mod join_filter_pushdown;
 pub mod join_selection;
 pub mod optimizer;
 pub mod projection_pushdown;

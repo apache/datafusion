@@ -383,7 +383,7 @@ fn try_collect_left(
             {
                 Ok(Some(swap_hash_join(hash_join, PartitionMode::CollectLeft)?))
             } else {
-                Ok(Some(Arc::new(HashJoinExec::try_new(
+                Ok(HashJoinExec::try_new(
                     Arc::clone(left),
                     Arc::clone(right),
                     hash_join.on().to_vec(),
@@ -392,7 +392,8 @@ fn try_collect_left(
                     hash_join.projection.clone(),
                     PartitionMode::CollectLeft,
                     hash_join.null_equals_null(),
-                )?)))
+                )?
+                .with_dynamic_filter(hash_join.dynamic_filters_pushdown.clone())?)
             }
         }
         (true, false) => Ok(Some(Arc::new(HashJoinExec::try_new(

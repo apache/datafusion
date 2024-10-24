@@ -42,6 +42,7 @@ use crate::{
 use arrow::datatypes::SchemaRef;
 use datafusion_physical_expr::{EquivalenceProperties, LexOrdering, PhysicalExpr};
 
+use datafusion_physical_plan::joins::DynamicFilterInfo;
 use itertools::Itertools;
 use log::debug;
 
@@ -282,6 +283,8 @@ pub struct ParquetExec {
     table_parquet_options: TableParquetOptions,
     /// Optional user defined schema adapter
     schema_adapter_factory: Option<Arc<dyn SchemaAdapterFactory>>,
+    /// dynamic filters (like join filters)
+    dynamic_filters: Option<Arc<DynamicFilterInfo>>,
 }
 
 impl From<ParquetExec> for ParquetExecBuilder {
@@ -291,7 +294,6 @@ impl From<ParquetExec> for ParquetExecBuilder {
 }
 
 /// [`ParquetExecBuilder`], builder for [`ParquetExec`].
-///
 /// See example on [`ParquetExec`].
 pub struct ParquetExecBuilder {
     file_scan_config: FileScanConfig,
@@ -463,6 +465,7 @@ impl ParquetExecBuilder {
             cache,
             table_parquet_options,
             schema_adapter_factory,
+            dynamic_filters: None,
         }
     }
 }
@@ -515,6 +518,7 @@ impl ParquetExec {
             cache: _,
             table_parquet_options,
             schema_adapter_factory,
+            ..
         } = self;
         ParquetExecBuilder {
             file_scan_config: base_config,
@@ -711,10 +715,9 @@ impl DisplayAs for ParquetExec {
                         )
                     })
                     .unwrap_or_default();
-
                 write!(f, "ParquetExec: ")?;
                 self.base_config.fmt_as(t, f)?;
-                write!(f, "{}{}", predicate_string, pruning_predicate_string,)
+                write!(f, "{}{}", predicate_string, pruning_predicate_string)
             }
         }
     }
@@ -798,13 +801,18 @@ impl ExecutionPlan for ParquetExec {
             .schema_adapter_factory
             .clone()
             .unwrap_or_else(|| Arc::new(DefaultSchemaAdapterFactory));
-
+        let final_predicate = if let Some(dynamic_filter) = &self.dynamic_filters {
+            dynamic_filter.final_predicate(self.predicate.clone())
+        } else {
+            self.predicate.clone()
+        };
+        // println!("final predicate is {:?}", final_predicate);
         let opener = ParquetOpener {
             partition_index,
             projection: Arc::from(projection),
             batch_size: ctx.session_config().batch_size(),
             limit: self.base_config.limit,
-            predicate: self.predicate.clone(),
+            predicate: final_predicate,
             pruning_predicate: self.pruning_predicate.clone(),
             page_pruning_predicate: self.page_pruning_predicate.clone(),
             table_schema: self.base_config.file_schema.clone(),
@@ -862,7 +870,32 @@ impl ExecutionPlan for ParquetExec {
             cache: self.cache.clone(),
             table_parquet_options: self.table_parquet_options.clone(),
             schema_adapter_factory: self.schema_adapter_factory.clone(),
+            dynamic_filters: self.dynamic_filters.clone(),
         }))
+    }
+
+    fn support_dynamic_filter(&self) -> bool {
+        true
+    }
+
+    fn with_dynamic_filter(
+        &self,
+        dynamic_filters: Option<Arc<DynamicFilterInfo>>,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        Ok(Some(Arc::new(ParquetExec {
+            base_config: self.base_config.clone(),
+            projected_statistics: self.projected_statistics.clone(),
+            metrics: self.metrics.clone(),
+            predicate: self.predicate.clone(),
+            pruning_predicate: self.pruning_predicate.clone(),
+            page_pruning_predicate: self.page_pruning_predicate.clone(),
+            metadata_size_hint: self.metadata_size_hint.clone(),
+            parquet_file_reader_factory: self.parquet_file_reader_factory.clone(),
+            cache: self.cache.clone(),
+            table_parquet_options: self.table_parquet_options.clone(),
+            schema_adapter_factory: self.schema_adapter_factory.clone(),
+            dynamic_filters: dynamic_filters,
+        })))
     }
 }
 

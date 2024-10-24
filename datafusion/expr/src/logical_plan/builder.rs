@@ -971,6 +971,7 @@ impl LogicalPlanBuilder {
             join_constraint: JoinConstraint::On,
             schema: DFSchemaRef::new(join_schema),
             null_equals_null,
+            dynamic_pushdown_columns: None,
         })))
     }
 
@@ -1035,6 +1036,7 @@ impl LogicalPlanBuilder {
                 join_constraint: JoinConstraint::Using,
                 schema: DFSchemaRef::new(join_schema),
                 null_equals_null: false,
+                dynamic_pushdown_columns: None,
             })))
         }
     }
@@ -1052,6 +1054,7 @@ impl LogicalPlanBuilder {
             join_constraint: JoinConstraint::On,
             null_equals_null: false,
             schema: DFSchemaRef::new(join_schema),
+            dynamic_pushdown_columns: None,
         })))
     }
 
@@ -1263,6 +1266,7 @@ impl LogicalPlanBuilder {
             join_constraint: JoinConstraint::On,
             schema: DFSchemaRef::new(join_schema),
             null_equals_null: false,
+            dynamic_pushdown_columns: None,
         })))
     }
 
