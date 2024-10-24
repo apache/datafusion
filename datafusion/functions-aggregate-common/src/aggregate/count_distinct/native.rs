@@ -112,7 +112,7 @@ where
     }
 
     fn evaluate(&mut self) -> datafusion_common::Result<ScalarValue> {
-        Ok(ScalarValue::Int64(Some(self.values.len() as i64)))
+        Ok(ScalarValue::UInt64(Some(self.values.len() as u64)))
     }
 
     fn size(&self) -> usize {
@@ -201,7 +201,7 @@ where
     }
 
     fn evaluate(&mut self) -> datafusion_common::Result<ScalarValue> {
-        Ok(ScalarValue::Int64(Some(self.values.len() as i64)))
+        Ok(ScalarValue::UInt64(Some(self.values.len() as u64)))
     }
 
     fn size(&self) -> usize {

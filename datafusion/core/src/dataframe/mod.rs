@@ -44,7 +44,7 @@ use crate::physical_plan::{
 };
 use crate::prelude::SessionContext;
 
-use arrow::array::{Array, ArrayRef, Int64Array, StringArray};
+use arrow::array::{Array, ArrayRef, UInt64Array, StringArray};
 use arrow::compute::{cast, concat};
 use arrow::datatypes::{DataType, Field};
 use arrow_schema::{Schema, SchemaRef};
@@ -1171,7 +1171,7 @@ impl DataFrame {
         let len = *rows
             .first()
             .and_then(|r| r.columns().first())
-            .and_then(|c| c.as_any().downcast_ref::<Int64Array>())
+            .and_then(|c| c.as_any().downcast_ref::<UInt64Array>())
             .and_then(|a| a.values().first())
             .ok_or(DataFusionError::Internal(
                 "Unexpected output when collecting for count()".to_string(),
