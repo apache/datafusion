@@ -361,8 +361,7 @@ fn convert_frame_bound_to_scalar_value(
     match units {
         // For ROWS and GROUPS we are sure that the ScalarValue must be a non-negative integer ...
         ast::WindowFrameUnits::Rows | ast::WindowFrameUnits::Groups => match v {
-            ast::Expr::Value(ast::Value::Number(value, false))
-            | ast::Expr::Value(ast::Value::SingleQuotedString(value)) => {
+            ast::Expr::Value(ast::Value::Number(value, false)) => {
                 Ok(ScalarValue::try_from_string(value, &DataType::UInt64)?)
             },
             ast::Expr::Interval(ast::Interval {
@@ -389,8 +388,7 @@ fn convert_frame_bound_to_scalar_value(
         // ... instead for RANGE it could be anything depending on the type of the ORDER BY clause,
         // so we use a ScalarValue::Utf8.
         ast::WindowFrameUnits::Range => Ok(ScalarValue::Utf8(Some(match v {
-            ast::Expr::Value(ast::Value::Number(value, false))
-            | ast::Expr::Value(ast::Value::SingleQuotedString(value)) => value,
+            ast::Expr::Value(ast::Value::Number(value, false)) => value,
             ast::Expr::Interval(ast::Interval {
                 value,
                 leading_field,
@@ -569,7 +567,7 @@ mod tests {
         test_bound!(Groups, None, ScalarValue::Null);
         test_bound!(Range, None, ScalarValue::Null);
 
-        // Numeric (Number)
+        // Number
         let number = Some(Box::new(ast::Expr::Value(ast::Value::Number(
             "42".to_string(),
             false,
@@ -582,39 +580,7 @@ mod tests {
             ScalarValue::Utf8(Some("42".to_string()))
         );
 
-        // Numeric (SingleQuotedString)
-        let number = Some(Box::new(ast::Expr::Value(ast::Value::SingleQuotedString(
-            "42".to_string(),
-        ))));
-        test_bound!(Rows, number.clone(), ScalarValue::UInt64(Some(42)));
-        test_bound!(Groups, number.clone(), ScalarValue::UInt64(Some(42)));
-        test_bound!(
-            Range,
-            number.clone(),
-            ScalarValue::Utf8(Some("42".to_string()))
-        );
-
-        // Non-numeric (SingleQuotedString)
-        let non_numeric = Some(Box::new(ast::Expr::Value(
-            ast::Value::SingleQuotedString("false".to_string()),
-        )));
-        test_bound_err!(
-            Rows,
-            non_numeric.clone(),
-            "Arrow error: Cast error: Cannot cast string 'false' to value of UInt64 type"
-        );
-        test_bound_err!(
-            Groups,
-            non_numeric.clone(),
-            "Arrow error: Cast error: Cannot cast string 'false' to value of UInt64 type"
-        );
-        test_bound!(
-            Range,
-            non_numeric.clone(),
-            ScalarValue::Utf8(Some("false".to_string()))
-        );
-
-        // Non-numeric (SingleQuotedString)
+        // Interval
         let number = Some(Box::new(ast::Expr::Interval(ast::Interval {
             value: Box::new(ast::Expr::Value(ast::Value::SingleQuotedString(
                 "1".to_string(),
