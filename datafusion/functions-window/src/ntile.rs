@@ -125,6 +125,10 @@ impl WindowUDFImpl for Ntile {
                     )
                 })?;
 
+        if scalar_n.is_null() {
+            return exec_err!("NTILE requires a positive integer, but finds NULL");
+        }
+
         let n = get_unsigned_integer(scalar_n)?;
 
         Ok(Box::new(NtileEvaluator { n }))
