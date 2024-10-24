@@ -696,20 +696,20 @@ fn coerce_window_frame(
     expressions: &[Sort],
 ) -> Result<WindowFrame> {
     let mut window_frame = window_frame;
-    let current_types = expressions
-        .iter()
-        .map(|s| s.expr.get_type(schema))
-        .collect::<Result<Vec<_>>>()?;
     let target_type = match window_frame.units {
         WindowFrameUnits::Range => {
-            if let Some(col_type) = current_types.first() {
+            let current_types = expressions
+                .first()
+                .map(|s| s.expr.get_type(schema))
+                .transpose()?;
+            if let Some(col_type) = current_types {
                 if col_type.is_numeric()
-                    || is_utf8_or_large_utf8(col_type)
+                    || is_utf8_or_large_utf8(&col_type)
                     || matches!(col_type, DataType::Null)
                 {
                     col_type
-                } else if is_datetime(col_type) {
-                    &DataType::Interval(IntervalUnit::MonthDayNano)
+                } else if is_datetime(&col_type) {
+                    DataType::Interval(IntervalUnit::MonthDayNano)
                 } else {
                     return internal_err!(
                         "Cannot run range queries on datatype: {col_type:?}"
@@ -719,10 +719,11 @@ fn coerce_window_frame(
                 return internal_err!("ORDER BY column cannot be empty");
             }
         }
-        WindowFrameUnits::Rows | WindowFrameUnits::Groups => &DataType::UInt64,
+        WindowFrameUnits::Rows | WindowFrameUnits::Groups => DataType::UInt64,
     };
-    window_frame.start_bound = coerce_frame_bound(target_type, window_frame.start_bound)?;
-    window_frame.end_bound = coerce_frame_bound(target_type, window_frame.end_bound)?;
+    window_frame.start_bound =
+        coerce_frame_bound(&target_type, window_frame.start_bound)?;
+    window_frame.end_bound = coerce_frame_bound(&target_type, window_frame.end_bound)?;
     Ok(window_frame)
 }
 
