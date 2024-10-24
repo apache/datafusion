@@ -56,17 +56,7 @@ pub struct BinaryExpr {
     fail_on_overflow: bool,
 }
 
-// Manaully derive PartialEq and Hash  to work around https://github.com/rust-lang/rust/issues/78808
-//
-// Without this workaround the derive macro generates code with the following issue:
-//    error[E0507]: cannot move out of `other.left` which is behind a shared reference
-//   --> datafusion/physical-expr/src/expressions/binary.rs:53:5
-//    |
-// 51 | #[derive(Debug, Hash, Clone, Eq, PartialEq)]
-//    |                                  --------- in this derive macro expansion
-// 52 | pub struct BinaryExpr {
-// 53 |     left: Arc<dyn PhysicalExpr>,
-//    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^ move occurs because `other.left` has type `Arc<dyn PhysicalExpr>`, which does not implement the `Copy` trait
+// Manually derive PartialEq and Hash to work around https://github.com/rust-lang/rust/issues/78808
 impl PartialEq for BinaryExpr {
     fn eq(&self, other: &Self) -> bool {
         self.left.eq(&other.left)

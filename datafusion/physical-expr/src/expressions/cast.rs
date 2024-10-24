@@ -42,14 +42,31 @@ const DEFAULT_SAFE_CAST_OPTIONS: CastOptions<'static> = CastOptions {
 };
 
 /// CAST expression casts an expression to a specific data type and returns a runtime error on invalid cast
-#[derive(Debug, Clone, Eq, PartialEq, Hash)]
-pub struct CastExpr<DynPhysicalExpr: ?Sized = dyn PhysicalExpr> {
+#[derive(Debug, Clone, Eq)]
+pub struct CastExpr {
     /// The expression to cast
-    pub expr: Arc<DynPhysicalExpr>,
+    pub expr: Arc<dyn PhysicalExpr>,
     /// The data type to cast to
     cast_type: DataType,
     /// Cast options
     cast_options: CastOptions<'static>,
+}
+
+// Manually derive PartialEq and Hash to work around https://github.com/rust-lang/rust/issues/78808
+impl PartialEq for CastExpr {
+    fn eq(&self, other: &Self) -> bool {
+        self.expr.eq(&other.expr)
+            && self.cast_type.eq(&other.cast_type)
+            && self.cast_options.eq(&other.cast_options)
+    }
+}
+
+impl Hash for CastExpr {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.expr.hash(state);
+        self.cast_type.hash(state);
+        self.cast_options.hash(state);
+    }
 }
 
 impl CastExpr {
