@@ -52,10 +52,11 @@ pub trait SchemaAdapterFactory: Debug + Send + Sync + 'static {
     ) -> Box<dyn SchemaAdapter>;
 }
 
-/// Adapt file-level [`RecordBatch`]es to a table schema, which may have a schema
-/// obtained from merging multiple file-level schemas.
+/// Creates [`SchemaMapper`]s to map file-level [`RecordBatch`]es to a table
+/// schema, which may have a schema obtained from merging multiple file-level
+/// schemas.
 ///
-/// This is useful for enabling schema evolution in partitioned datasets.
+/// This is useful for implementing schema evolution in partitioned datasets.
 ///
 /// See [`DefaultSchemaAdapterFactory`] for more details and examples.
 pub trait SchemaAdapter: Send + Sync {
@@ -71,40 +72,37 @@ pub trait SchemaAdapter: Send + Sync {
     /// Creates a mapping for casting columns from the file schema to the table
     /// schema.
     ///
-    /// This is used after reading a record batch, to map columns to the
-    /// expected columns indexes and insert null-valued columns wherever the
-    /// file schema was missing a column present in the table schema.
+    /// This is used after reading a record batch. The returned [`SchemaMapper`]:
     ///
-    /// If the provided `file_schema` contains columns of a different type to
-    /// the expected `table_schema`, the mapper will attempt to cast the array
-    /// data from the file schema to the table schema where possible.
+    /// 1. Maps columns to the expected columns indexes
+    /// 2. Handles missing values (e.g. fills nulls or a default value) for
+    ///    columns in the in the table schema not in the file schema
+    /// 2. Handles different types: if the column in the file schema has a
+    ///    different type than `table_schema`, the mapper will resolve this
+    ///    difference (e.g. by casting to the appropriate type)
     ///
-    /// Returns a [`SchemaMapper`] that can be applied to the output batch
-    /// along with an ordered list of columns to project from the file
+    /// Returns:
+    /// * a [`SchemaMapper`]
+    /// * an ordered list of columns to project from the file
     fn map_schema(
         &self,
         file_schema: &Schema,
     ) -> datafusion_common::Result<(Arc<dyn SchemaMapper>, Vec<usize>)>;
 }
 
-/// Maps, columns from the file schema to the table schema.
+/// Maps, columns from a specific file schema to the table schema.
 ///
 /// See [`DefaultSchemaAdapterFactory`] for more details and examples.
 pub trait SchemaMapper: Debug + Send + Sync {
     /// Adapts a `RecordBatch` to match the `table_schema`
-    ///
-    /// # Errors:
-    ///
-    /// * If a column in the table schema is non-nullable but is not present
-    ///   in the file schema (i.e. it is missing), this method tries to fill it
-    ///   with nulls resulting in a schema error
     fn map_batch(&self, batch: RecordBatch) -> datafusion_common::Result<RecordBatch>;
 
     /// Adapts a [`RecordBatch`] that does not have all the columns from the
     /// file schema.
     ///
-    /// This method is used when applying a filter to a subset of the columns as
-    /// part of `DataFusionArrowPredicate` when `filter_pushdown` is enabled.
+    /// This method is used, for example,  when applying a filter to a subset of
+    /// the columns as part of `DataFusionArrowPredicate` when `filter_pushdown`
+    /// is enabled.
     ///
     /// This method is slower than `map_batch` as it looks up columns by name.
     fn map_partial_batch(
@@ -118,12 +116,18 @@ pub trait SchemaMapper: Debug + Send + Sync {
 /// This can be used to adapt file-level record batches to a table schema and
 /// implement schema evolution.
 ///
-/// Given an input file schema and a table schema, this factor can make
-/// [`SchemaMapper`]s that:
+/// Given an input file schema and a table schema, this factory returns
+/// [`SchemaAdapter`] that return [`SchemaMapper`]s that:
 ///
 /// 1. Reorder columns
 /// 2. Cast columns to the correct type
 /// 3. Fill missing columns with nulls
+///
+/// # Errors:
+///
+/// * If a column in the table schema is non-nullable but is not present in the
+/// file schema (i.e. it is missing), the returned mapper tries to fill it with
+/// nulls resulting in a schema error.
 ///
 /// # Illustration of Schema Mapping
 ///
