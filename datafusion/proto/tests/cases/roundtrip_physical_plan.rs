@@ -846,7 +846,7 @@ fn roundtrip_parquet_exec_with_custom_predicate_expr() -> Result<()> {
         }
     }
 
-    let custom_predicate_expr = Arc::new(CustomPredicateExpr::<dyn PhysicalExpr> {
+    let custom_predicate_expr = Arc::new(CustomPredicateExpr {
         inner: Arc::new(Column::new("col", 1)),
     });
     let exec_plan = ParquetExec::builder(scan_config)
