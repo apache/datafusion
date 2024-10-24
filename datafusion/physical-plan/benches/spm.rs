@@ -51,7 +51,7 @@ fn generate_spm_for_round_robin_tie_breaker(
         // Create 256 unique strings
         for i in 0..256 {
             let mut s = String::new();
-            s.push(charset[i % charset.len()]); // Use modulo to wrap around
+            s.push(charset[i % charset.len()]);
             s.push(charset[(i / charset.len()) % charset.len()]);
             strings.push(Some(s));
         }
@@ -93,7 +93,6 @@ fn criterion_benchmark(c: &mut Criterion) {
         as Arc<dyn ExecutionPlan>;
     c.bench_function("spm without tie breaker low card", |b| {
         b.to_async(FuturesExecutor).iter(|| {
-            // Ensure the data is deep cloned to avoid mixing them
             black_box(collect(Arc::clone(&spm_wo_tb), Arc::clone(&task_ctx)))
         })
     });
@@ -102,8 +101,6 @@ fn criterion_benchmark(c: &mut Criterion) {
         as Arc<dyn ExecutionPlan>;
     c.bench_function("spm with tie breaker low card", |b| {
         b.to_async(FuturesExecutor).iter(|| {
-            // Ensure the data is deep cloned to avoid mixing them
-            // let spm_w_tb = generate_spm_for_round_robin_tie_breaker(true);
             black_box(collect(Arc::clone(&spm_w_tb), Arc::clone(&task_ctx)))
         })
     });
@@ -112,7 +109,6 @@ fn criterion_benchmark(c: &mut Criterion) {
         as Arc<dyn ExecutionPlan>;
     c.bench_function("spm without tie breaker high card", |b| {
         b.to_async(FuturesExecutor).iter(|| {
-            // Ensure the data is deep cloned to avoid mixing them
             black_box(collect(Arc::clone(&spm_wo_tb), Arc::clone(&task_ctx)))
         })
     });
@@ -121,8 +117,6 @@ fn criterion_benchmark(c: &mut Criterion) {
         as Arc<dyn ExecutionPlan>;
     c.bench_function("spm with tie breaker high card", |b| {
         b.to_async(FuturesExecutor).iter(|| {
-            // Ensure the data is deep cloned to avoid mixing them
-            // let spm_w_tb = generate_spm_for_round_robin_tie_breaker(true);
             black_box(collect(Arc::clone(&spm_w_tb), Arc::clone(&task_ctx)))
         })
     });
