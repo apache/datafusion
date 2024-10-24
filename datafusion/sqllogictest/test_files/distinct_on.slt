@@ -192,3 +192,18 @@ logical_plan
 
 statement ok
 drop table t;
+
+statement ok
+create table t(a int, b int) as values (1, 2);
+
+query TT
+explain SELECT DISTINCT ON (t.a) t.a AS alert_id FROM public.t ORDER BY t.a
+----
+logical_plan
+01)Projection: first_value(alert_id) ORDER BY [public.t.a ASC NULLS LAST] AS alert_id
+02)--Sort: public.t.a ASC NULLS LAST
+03)----Aggregate: groupBy=[[public.t.a]], aggr=[[first_value(public.t.a AS alert_id) ORDER BY [public.t.a ASC NULLS LAST]]]
+04)------TableScan: public.t projection=[a]
+
+statement ok
+drop table t;
