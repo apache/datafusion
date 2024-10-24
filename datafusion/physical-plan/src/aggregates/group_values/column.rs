@@ -15,31 +15,104 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::mem;
+
 use crate::aggregates::group_values::group_column::{
     ByteGroupValueBuilder, ByteViewGroupValueBuilder, GroupColumn,
     PrimitiveGroupValueBuilder,
 };
 use crate::aggregates::group_values::GroupValues;
 use ahash::RandomState;
-use arrow::compute::cast;
+use arrow::compute::{self, cast};
 use arrow::datatypes::{
     BinaryViewType, Date32Type, Date64Type, Float32Type, Float64Type, Int16Type,
     Int32Type, Int64Type, Int8Type, StringViewType, UInt16Type, UInt32Type, UInt64Type,
     UInt8Type,
 };
 use arrow::record_batch::RecordBatch;
-use arrow_array::{Array, ArrayRef};
-use arrow_schema::{DataType, Schema, SchemaRef};
+use arrow_array::{
+    Array, ArrayRef, BinaryArray, BinaryViewArray, BooleanArray, Date32Array,
+    Date64Array, Decimal128Array, Float32Array, Float64Array, Int16Array, Int32Array,
+    Int64Array, Int8Array, LargeStringArray, StringArray, StringViewArray,
+    TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
+    TimestampSecondArray, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
+};
+use arrow_schema::{DataType, Schema, SchemaRef, TimeUnit};
 use datafusion_common::hash_utils::create_hashes;
 use datafusion_common::{not_impl_err, DataFusionError, Result};
 use datafusion_execution::memory_pool::proxy::{RawTableAllocExt, VecAllocExt};
 use datafusion_expr::EmitTo;
 use datafusion_physical_expr::binary_map::OutputType;
 
-use hashbrown::raw::RawTable;
+use datafusion_physical_expr_common::datum::compare_with_eq;
+use hashbrown::raw::{Bucket, RawTable};
+
+const CHECKING_FLAG_MASK: u64 = 0x8000000000000000;
+const SET_CHECKING_FLAG_MASK: u64 = 0x8000000000000000;
+const UNSET_CHECKING_FLAG_MASK: u64 = 0x7FFFFFFFFFFFFFFF;
+
+/// `BucketContext` is a packed struct
+///
+/// ### Format:
+///
+///   +---------------------+--------------------+
+///   | checking flag(1bit) | group index(63bit) |
+///   +---------------------+--------------------+
+///    
+/// ### Checking flag
+///
+///   It is possible that rows with same hash values exist in `input cols`.
+///   And if we `vectorized_equal_to` and `vectorized append` them
+///   in the same round, some fault cases will occur especially when
+///   they are totally the repeated rows...
+///
+///   For example:
+///     - Two repeated rows exist in `input cols`.
+///
+///     - We found their hash values equal to one exist group
+///
+///     - We then perform `vectorized_equal_to` for them to the exist group,
+///       and found their values not equal to the exist one
+///
+///     - Finally when perform `vectorized append`, we decide to build two
+///       respective new groups for them, even we actually just need one
+///       new group...
+///
+///   So for solving such cases simply, if some rows with same hash value
+///   in `input cols`, just allow to process one of them in a round,
+///   and this flag is used to represent that one of them is processing
+///   in current round.
+///
+/// ### Group index
+///
+///     The group's index in group values
+///
+#[derive(Debug, Clone, Copy)]
+struct BucketContext(u64);
+
+impl BucketContext {
+    #[inline]
+    pub fn is_checking(&self) -> bool {
+        (self.0 & CHECKING_FLAG_MASK) > 0
+    }
+
+    #[inline]
+    pub fn set_checking(&mut self) {
+        self.0 |= SET_CHECKING_FLAG_MASK
+    }
+
+    #[inline]
+    pub fn unset_checking(&mut self) {
+        self.0 &= UNSET_CHECKING_FLAG_MASK
+    }
+
+    #[inline]
+    pub fn group_index(&self) -> u64 {
+        self.0 & UNSET_CHECKING_FLAG_MASK
+    }
+}
 
 /// A [`GroupValues`] that stores multiple columns of group values.
-///
 ///
 pub struct GroupValuesColumn {
     /// The output schema
@@ -53,10 +126,44 @@ pub struct GroupValuesColumn {
     ///
     /// keys: u64 hashes of the GroupValue
     /// values: (hash, group_index)
-    map: RawTable<(u64, usize)>,
+    map: RawTable<(u64, BucketContext)>,
 
     /// The size of `map` in bytes
     map_size: usize,
+
+    /// The lists for group indices with the same hash value
+    ///
+    /// It is possible that hash value collision exists,
+    /// and we will chain the `group indices` with same hash value
+    ///
+    /// The chained indices is like:
+    ///   `latest group index -> older group index -> even older group index -> ...`
+    group_index_lists: Vec<usize>,
+
+    /// The marked checking buckets in this round
+    ///
+    /// About the checking flag you can see [`BucketContext`]
+    checking_buckets: Vec<Bucket<(u64, BucketContext)>>,
+
+    /// We need multiple rounds to process the `input cols`,
+    /// and the rows processing in current round is stored here.
+    current_indices: Vec<usize>,
+
+    /// Similar as `current_indices`, but `remaining_indices`
+    /// is used to store the rows will be processed in next round.
+    remaining_indices: Vec<usize>,
+
+    /// The `vectorized_equal_tod` row indices buffer
+    vectorized_equal_to_row_indices: Vec<usize>,
+
+    /// The `vectorized_equal_tod` group indices buffer
+    vectorized_equal_to_group_indices: Vec<usize>,
+
+    /// The `vectorized_equal_tod` result buffer
+    vectorized_equal_to_results: Vec<bool>,
+
+    /// The `vectorized append` row indices buffer
+    vectorized_append_row_indices: Vec<usize>,
 
     /// The actual group by values, stored column-wise. Compare from
     /// the left to right, each column is stored as [`GroupColumn`].
@@ -73,19 +180,34 @@ pub struct GroupValuesColumn {
 
     /// Random state for creating hashes
     random_state: RandomState,
+
+    column_nullables_buffer: Vec<bool>,
+
+    append_rows_buffer: Vec<usize>,
 }
 
 impl GroupValuesColumn {
     /// Create a new instance of GroupValuesColumn if supported for the specified schema
     pub fn try_new(schema: SchemaRef) -> Result<Self> {
         let map = RawTable::with_capacity(0);
+        let num_cols = schema.fields.len();
         Ok(Self {
             schema,
             map,
+            group_index_lists: Vec::new(),
+            checking_buckets: Default::default(),
             map_size: 0,
             group_values: vec![],
             hashes_buffer: Default::default(),
             random_state: Default::default(),
+            column_nullables_buffer: vec![false; num_cols],
+            append_rows_buffer: Default::default(),
+            current_indices: Default::default(),
+            remaining_indices: Default::default(),
+            vectorized_equal_to_row_indices: Default::default(),
+            vectorized_equal_to_group_indices: Default::default(),
+            vectorized_equal_to_results: Default::default(),
+            vectorized_append_row_indices: Default::default(),
         })
     }
 
@@ -124,6 +246,137 @@ impl GroupValuesColumn {
                 | DataType::Utf8View
                 | DataType::BinaryView
         )
+    }
+
+    /// Collect vectorized context by checking hash values of `cols` in `map`
+    ///
+    /// 1. If bucket not found
+    ///   - Insert the `new bucket` build from the `group index`
+    ///     and its hash value to `map`
+    ///   - Mark this `new bucket` checking, and add it to `checking_buckets`
+    ///   - Add row index to `vectorized_append_row_indices`
+    ///
+    /// 2. bucket found
+    ///   - Check if the `bucket` checking, if so add it to `remaining_indices`,
+    ///     and just process it in next round, otherwise we continue the process
+    ///   - Mark `bucket` checking, and add it to `checking_buckets`
+    ///   - Add row index to `vectorized_equal_to_row_indices`
+    ///   - Add group indices(from `group_index_lists`) to `vectorized_equal_to_group_indices`
+    ///
+    fn collect_vectorized_process_context(&mut self, batch_hashes: &[u64]) {
+        let mut next_group_idx = self.group_values[0].len() as u64;
+        for &row in self.current_indices.iter() {
+            let target_hash = batch_hashes[row];
+            let entry = self.map.get_mut(target_hash, |(exist_hash, _)| {
+                // Somewhat surprisingly, this closure can be called even if the
+                // hash doesn't match, so check the hash first with an integer
+                // comparison first avoid the more expensive comparison with
+                // group value. https://github.com/apache/datafusion/pull/11718
+                target_hash == *exist_hash
+            });
+
+            let Some((_, bucket_ctx)) = entry else {
+                // 1. Bucket not found case
+                // Insert the `new bucket` build from the `group index`
+                // Mark this `new bucket` checking, and add it to `checking_buckets`
+                let current_group_idx = next_group_idx;
+
+                // for hasher function, use precomputed hash value
+                let mut bucket_ctx = BucketContext(current_group_idx);
+                bucket_ctx.set_checking();
+                let bucket = self.map.insert_accounted(
+                    (target_hash, bucket_ctx),
+                    |(hash, _)| *hash,
+                    &mut self.map_size,
+                );
+                self.checking_buckets.push(bucket);
+
+                // Add row index to `vectorized_append_row_indices`
+                self.vectorized_append_row_indices.push(row);
+
+                next_group_idx += 1;
+                continue;
+            };
+
+            // 2. bucket found
+            // Check if the `bucket` checking, if so add it to `remaining_indices`,
+            // and just process it in next round, otherwise we continue the process
+            if bucket_ctx.is_checking() {
+                self.remaining_indices.push(row);
+                continue;
+            }
+            // Mark `bucket` checking, and add it to `checking_buckets`
+            bucket_ctx.set_checking();
+
+            // Add row index to `vectorized_equal_to_row_indices`
+            // Add group indices(from `group_index_lists`) to `vectorized_equal_to_group_indices`
+            let mut next_group_index = bucket_ctx.group_index() as usize + 1;
+            while next_group_index > 0 {
+                let current_group_index = next_group_index;
+                self.vectorized_equal_to_row_indices.push(row);
+                self.vectorized_equal_to_group_indices
+                    .push(current_group_index - 1);
+                next_group_index = self.group_index_lists[current_group_index];
+            }
+        }
+    }
+
+    /// Perform `vectorized_equal_to`
+    ///
+    fn vectorized_equal_to(&mut self, cols: &[ArrayRef]) {
+        debug_assert_eq!(
+            self.vectorized_equal_to_group_indices.len(),
+            self.vectorized_equal_to_row_indices.len()
+        );
+
+        if self.vectorized_equal_to_group_indices.is_empty() {
+            return;
+        }
+
+        // Vectorized equal to `cols` and `group columns`
+        let mut equal_to_results = mem::take(&mut self.vectorized_equal_to_results);
+        equal_to_results.resize(self.vectorized_equal_to_group_indices.len(), true);
+        for (col_idx, group_col) in self.group_values.iter().enumerate() {
+            group_col.vectorized_equal_to(
+                &self.vectorized_equal_to_group_indices,
+                &cols[col_idx],
+                &self.vectorized_equal_to_row_indices,
+                &mut equal_to_results,
+            );
+        }
+
+        let mut current_row_equal_to_result = false;
+        let mut current_row = *self.vectorized_equal_to_row_indices.first().unwrap();
+        for (idx, &row) in self.vectorized_equal_to_row_indices.iter().enumerate() {
+            // If found next row, according to the equal to result of `current_row`
+            if current_row != row {
+                if !current_row_equal_to_result {
+                    self.vectorized_append_row_indices.push(row);
+                }
+                current_row = row;
+                current_row_equal_to_result = equal_to_results[idx];
+                continue;
+            }
+            current_row_equal_to_result |= equal_to_results[idx];
+        }
+
+        if !current_row_equal_to_result {
+            self.vectorized_append_row_indices.push(current_row);
+        }
+
+        self.vectorized_equal_to_results = equal_to_results;
+    }
+
+    /// Perform `vectorized_append`
+    ///
+    /// 1. Vectorized append new values into `group_values`
+    /// 2. Update `map` and `group_index_lists`
+    fn vectorized_append(&mut self, cols: &[ArrayRef], batch_hashes: &[u64]) {
+        if self.vectorized_append_row_indices.is_empty() {
+            return;
+        }
+
+        // 1. Vectorized append new values into `group_values`
     }
 }
 
@@ -207,72 +460,33 @@ impl GroupValues for GroupValuesColumn {
         // tracks to which group each of the input rows belongs
         groups.clear();
 
-        // 1.1 Calculate the group keys for the group values
-        let batch_hashes = &mut self.hashes_buffer;
+        let mut batch_hashes = mem::take(&mut self.hashes_buffer);
         batch_hashes.clear();
         batch_hashes.resize(n_rows, 0);
-        create_hashes(cols, &self.random_state, batch_hashes)?;
+        create_hashes(cols, &self.random_state, &mut batch_hashes)?;
 
-        for (row, &target_hash) in batch_hashes.iter().enumerate() {
-            let entry = self.map.get_mut(target_hash, |(exist_hash, group_idx)| {
-                // Somewhat surprisingly, this closure can be called even if the
-                // hash doesn't match, so check the hash first with an integer
-                // comparison first avoid the more expensive comparison with
-                // group value. https://github.com/apache/datafusion/pull/11718
-                if target_hash != *exist_hash {
-                    return false;
-                }
+        // General steps for one round `vectorized equal_to & append`:
+        //   1. Collect vectorized context by checking hash values of `cols` in `map`
+        //   2. Perform `vectorized_equal_to`
+        //   3. Perform `vectorized_append`
+        //   4. Reset the checking flag in `BucketContext`
 
-                fn check_row_equal(
-                    array_row: &dyn GroupColumn,
-                    lhs_row: usize,
-                    array: &ArrayRef,
-                    rhs_row: usize,
-                ) -> bool {
-                    array_row.equal_to(lhs_row, array, rhs_row)
-                }
+        let num_rows = cols[0].len();
+        self.current_indices.clear();
+        self.current_indices.extend(0..num_rows);
+        while self.current_indices.len() > 0 {
+            self.vectorized_append_row_indices.clear();
+            self.vectorized_equal_to_row_indices.clear();
+            self.vectorized_equal_to_group_indices.clear();
+            self.vectorized_equal_to_results.clear();
 
-                for (i, group_val) in self.group_values.iter().enumerate() {
-                    if !check_row_equal(group_val.as_ref(), *group_idx, &cols[i], row) {
-                        return false;
-                    }
-                }
+            // 1. Collect vectorized context by checking hash values of `cols` in `map`
+            self.collect_vectorized_process_context(&batch_hashes);
 
-                true
-            });
-
-            let group_idx = match entry {
-                // Existing group_index for this group value
-                Some((_hash, group_idx)) => *group_idx,
-                //  1.2 Need to create new entry for the group
-                None => {
-                    // Add new entry to aggr_state and save newly created index
-                    // let group_idx = group_values.num_rows();
-                    // group_values.push(group_rows.row(row));
-
-                    let mut checklen = 0;
-                    let group_idx = self.group_values[0].len();
-                    for (i, group_value) in self.group_values.iter_mut().enumerate() {
-                        group_value.append_val(&cols[i], row);
-                        let len = group_value.len();
-                        if i == 0 {
-                            checklen = len;
-                        } else {
-                            debug_assert_eq!(checklen, len);
-                        }
-                    }
-
-                    // for hasher function, use precomputed hash value
-                    self.map.insert_accounted(
-                        (target_hash, group_idx),
-                        |(hash, _group_index)| *hash,
-                        &mut self.map_size,
-                    );
-                    group_idx
-                }
-            };
-            groups.push(group_idx);
+            // 2. Perform `vectorized_equal_to`
         }
+
+        self.hashes_buffer = batch_hashes;
 
         Ok(())
     }
@@ -313,17 +527,17 @@ impl GroupValues for GroupValuesColumn {
                     .collect::<Vec<_>>();
 
                 // SAFETY: self.map outlives iterator and is not modified concurrently
-                unsafe {
-                    for bucket in self.map.iter() {
-                        // Decrement group index by n
-                        match bucket.as_ref().1.checked_sub(n) {
-                            // Group index was >= n, shift value down
-                            Some(sub) => bucket.as_mut().1 = sub,
-                            // Group index was < n, so remove from table
-                            None => self.map.erase(bucket),
-                        }
-                    }
-                }
+                // unsafe {
+                //     for bucket in self.map.iter() {
+                //         // Decrement group index by n
+                //         match bucket.as_ref().1.0.checked_sub(n) {
+                //             // Group index was >= n, shift value down
+                //             Some(sub) => bucket.as_mut().1 = sub,
+                //             // Group index was < n, so remove from table
+                //             None => self.map.erase(bucket),
+                //         }
+                //     }
+                // }
 
                 output
             }
@@ -355,4 +569,72 @@ impl GroupValues for GroupValuesColumn {
         self.hashes_buffer.clear();
         self.hashes_buffer.shrink_to(count);
     }
+}
+
+fn is_rows_eq(
+    left_arrays: &[ArrayRef],
+    left: usize,
+    right_arrays: &[ArrayRef],
+    right: usize,
+) -> Result<bool> {
+    let mut is_equal = true;
+    for (left_array, right_array) in left_arrays.iter().zip(right_arrays) {
+        macro_rules! compare_value {
+            ($T:ty) => {{
+                match (left_array.is_null(left), right_array.is_null(right)) {
+                    (false, false) => {
+                        let left_array =
+                            left_array.as_any().downcast_ref::<$T>().unwrap();
+                        let right_array =
+                            right_array.as_any().downcast_ref::<$T>().unwrap();
+                        if left_array.value(left) != right_array.value(right) {
+                            is_equal = false;
+                        }
+                    }
+                    (true, false) => is_equal = false,
+                    (false, true) => is_equal = false,
+                    _ => {}
+                }
+            }};
+        }
+
+        match left_array.data_type() {
+            DataType::Null => {}
+            DataType::Boolean => compare_value!(BooleanArray),
+            DataType::Int8 => compare_value!(Int8Array),
+            DataType::Int16 => compare_value!(Int16Array),
+            DataType::Int32 => compare_value!(Int32Array),
+            DataType::Int64 => compare_value!(Int64Array),
+            DataType::UInt8 => compare_value!(UInt8Array),
+            DataType::UInt16 => compare_value!(UInt16Array),
+            DataType::UInt32 => compare_value!(UInt32Array),
+            DataType::UInt64 => compare_value!(UInt64Array),
+            DataType::Float32 => compare_value!(Float32Array),
+            DataType::Float64 => compare_value!(Float64Array),
+            DataType::Utf8 => compare_value!(StringArray),
+            DataType::LargeUtf8 => compare_value!(LargeStringArray),
+            DataType::Binary => compare_value!(BinaryArray),
+            DataType::Utf8View => compare_value!(StringViewArray),
+            DataType::BinaryView => compare_value!(BinaryViewArray),
+            DataType::Decimal128(..) => compare_value!(Decimal128Array),
+            DataType::Timestamp(time_unit, None) => match time_unit {
+                TimeUnit::Second => compare_value!(TimestampSecondArray),
+                TimeUnit::Millisecond => compare_value!(TimestampMillisecondArray),
+                TimeUnit::Microsecond => compare_value!(TimestampMicrosecondArray),
+                TimeUnit::Nanosecond => compare_value!(TimestampNanosecondArray),
+            },
+            DataType::Date32 => compare_value!(Date32Array),
+            DataType::Date64 => compare_value!(Date64Array),
+            dt => {
+                return not_impl_err!(
+                    "Unsupported data type in sort merge join comparator: {}",
+                    dt
+                );
+            }
+        }
+        if !is_equal {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }

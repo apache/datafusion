@@ -22,6 +22,7 @@ use arrow::array::GenericBinaryArray;
 use arrow::array::GenericStringArray;
 use arrow::array::OffsetSizeTrait;
 use arrow::array::PrimitiveArray;
+use arrow::array::StringViewBuilder;
 use arrow::array::{Array, ArrayRef, ArrowPrimitiveType, AsArray};
 use arrow::buffer::OffsetBuffer;
 use arrow::buffer::ScalarBuffer;
@@ -29,9 +30,11 @@ use arrow::datatypes::ByteArrayType;
 use arrow::datatypes::ByteViewType;
 use arrow::datatypes::DataType;
 use arrow::datatypes::GenericBinaryType;
+use arrow_array::GenericByteArray;
 use arrow_array::GenericByteViewArray;
 use arrow_buffer::Buffer;
 use datafusion_common::utils::proxy::VecAllocExt;
+use datafusion_expr::sqlparser::keywords::NULLABLE;
 
 use crate::aggregates::group_values::null_builder::MaybeNullBufferBuilder;
 use arrow_array::types::GenericStringType;
@@ -58,6 +61,17 @@ pub trait GroupColumn: Send + Sync {
     fn equal_to(&self, lhs_row: usize, array: &ArrayRef, rhs_row: usize) -> bool;
     /// Appends the row at `row` in `array` to this builder
     fn append_val(&mut self, array: &ArrayRef, row: usize);
+
+    fn vectorized_equal_to(
+        &self,
+        group_indices: &[usize],
+        array: &ArrayRef,
+        rows: &[usize],
+        equal_to_results: &mut [bool],
+    );
+
+    fn vectorized_append(&mut self, array: &ArrayRef, rows: &[usize]);
+
     /// Returns the number of rows stored in this builder
     fn len(&self) -> usize;
     /// Returns the number of bytes used by this [`GroupColumn`]
@@ -125,6 +139,84 @@ impl<T: ArrowPrimitiveType, const NULLABLE: bool> GroupColumn
             }
         } else {
             self.group_values.push(array.as_primitive::<T>().value(row));
+        }
+    }
+
+    fn vectorized_equal_to(
+        &self,
+        group_indices: &[usize],
+        array: &ArrayRef,
+        rows: &[usize],
+        equal_to_results: &mut [bool],
+    ) {
+        let array = array.as_primitive::<T>();
+
+        for (idx, &lhs_row) in group_indices.iter().enumerate() {
+            // Has found not equal to, don't need to check
+            if !equal_to_results[idx] {
+                continue;
+            }
+
+            let rhs_row = rows[idx];
+            // Perf: skip null check (by short circuit) if input is not nullable
+            if NULLABLE {
+                let exist_null = self.nulls.is_null(lhs_row);
+                let input_null = array.is_null(rhs_row);
+                if let Some(result) = nulls_equal_to(exist_null, input_null) {
+                    equal_to_results[idx] = result;
+                    continue;
+                }
+                // Otherwise, we need to check their values
+            }
+
+            equal_to_results[idx] = self.group_values[lhs_row] == array.value(rhs_row);
+        }
+    }
+
+    fn vectorized_append(&mut self, array: &ArrayRef, rows: &[usize]) {
+        let arr = array.as_primitive::<T>();
+
+        let null_count = array.null_count();
+        let num_rows = array.len();
+        let all_null_or_non_null = if null_count == 0 {
+            Some(true)
+        } else if null_count == num_rows {
+            Some(false)
+        } else {
+            None
+        };
+
+        match (NULLABLE, all_null_or_non_null) {
+            (true, None) => {
+                for &row in rows {
+                    if array.is_null(row) {
+                        self.nulls.append(true);
+                        self.group_values.push(T::default_value());
+                    } else {
+                        self.nulls.append(false);
+                        self.group_values.push(arr.value(row));
+                    }
+                }
+            }
+
+            (true, Some(true)) => {
+                self.nulls.append_n(rows.len(), false);
+                self.group_values.reserve(rows.len());
+                for &row in rows {
+                    self.group_values.push(arr.value(row));
+                }
+            }
+
+            (true, Some(false)) => {
+                self.nulls.append_n(rows.len(), true);
+            }
+
+            (false, _) => {
+                self.group_values.reserve(rows.len());
+                for &row in rows {
+                    self.group_values.push(arr.value(row));
+                }
+            }
         }
     }
 
@@ -200,6 +292,14 @@ where
         }
     }
 
+    fn equal_to_inner<B>(&self, lhs_row: usize, array: &ArrayRef, rhs_row: usize) -> bool
+    where
+        B: ByteArrayType,
+    {
+        let array = array.as_bytes::<B>();
+        self.do_equal_to_inner(lhs_row, array, rhs_row)
+    }
+
     fn append_val_inner<B>(&mut self, array: &ArrayRef, row: usize)
     where
         B: ByteArrayType,
@@ -212,17 +312,84 @@ where
             self.offsets.push(O::usize_as(offset));
         } else {
             self.nulls.append(false);
-            let value: &[u8] = arr.value(row).as_ref();
-            self.buffer.append_slice(value);
-            self.offsets.push(O::usize_as(self.buffer.len()));
+            self.do_append_val_inner(arr, row);
         }
     }
 
-    fn equal_to_inner<B>(&self, lhs_row: usize, array: &ArrayRef, rhs_row: usize) -> bool
-    where
+    fn vectorized_equal_to_inner<B>(
+        &self,
+        group_indices: &[usize],
+        array: &ArrayRef,
+        rows: &[usize],
+        equal_to_results: &mut [bool],
+    ) where
         B: ByteArrayType,
     {
         let array = array.as_bytes::<B>();
+
+        for (idx, &lhs_row) in group_indices.iter().enumerate() {
+            // Has found not equal to, don't need to check
+            if !equal_to_results[idx] {
+                continue;
+            }
+
+            let rhs_row = rows[idx];
+            equal_to_results[idx] = self.do_equal_to_inner(lhs_row, array, rhs_row);
+        }
+    }
+
+    fn vectorized_append_inner<B>(&mut self, array: &ArrayRef, rows: &[usize])
+    where
+        B: ByteArrayType,
+    {
+        let arr = array.as_bytes::<B>();
+        let null_count = array.null_count();
+        let num_rows = array.len();
+        let all_null_or_non_null = if null_count == 0 {
+            Some(true)
+        } else if null_count == num_rows {
+            Some(false)
+        } else {
+            None
+        };
+
+        match all_null_or_non_null {
+            None => {
+                for &row in rows {
+                    if arr.is_null(row) {
+                        self.nulls.append(true);
+                        // nulls need a zero length in the offset buffer
+                        let offset = self.buffer.len();
+                        self.offsets.push(O::usize_as(offset));
+                    } else {
+                        self.nulls.append(false);
+                        self.do_append_val_inner(arr, row);
+                    }
+                }
+            }
+
+            Some(true) => {
+                self.nulls.append_n(rows.len(), false);
+                for &row in rows {
+                    self.do_append_val_inner(arr, row);
+                }
+            }
+
+            Some(false) => {
+                self.nulls.append_n(rows.len(), true);
+            }
+        }
+    }
+
+    fn do_equal_to_inner<B>(
+        &self,
+        lhs_row: usize,
+        array: &GenericByteArray<B>,
+        rhs_row: usize,
+    ) -> bool
+    where
+        B: ByteArrayType,
+    {
         let exist_null = self.nulls.is_null(lhs_row);
         let input_null = array.is_null(rhs_row);
         if let Some(result) = nulls_equal_to(exist_null, input_null) {
@@ -230,6 +397,15 @@ where
         }
         // Otherwise, we need to check their values
         self.value(lhs_row) == (array.value(rhs_row).as_ref() as &[u8])
+    }
+
+    fn do_append_val_inner<B>(&mut self, array: &GenericByteArray<B>, row: usize)
+    where
+        B: ByteArrayType,
+    {
+        let value: &[u8] = array.value(row).as_ref();
+        self.buffer.append_slice(value);
+        self.offsets.push(O::usize_as(self.buffer.len()));
     }
 
     /// return the current value of the specified row irrespective of null
@@ -282,6 +458,63 @@ where
                     DataType::Utf8 | DataType::LargeUtf8
                 ));
                 self.append_val_inner::<GenericStringType<O>>(column, row)
+            }
+            _ => unreachable!("View types should use `ArrowBytesViewMap`"),
+        };
+    }
+
+    fn vectorized_equal_to(
+        &self,
+        group_indices: &[usize],
+        array: &ArrayRef,
+        rows: &[usize],
+        equal_to_results: &mut [bool],
+    ) {
+        // Sanity array type
+        match self.output_type {
+            OutputType::Binary => {
+                debug_assert!(matches!(
+                    array.data_type(),
+                    DataType::Binary | DataType::LargeBinary
+                ));
+                self.vectorized_equal_to_inner::<GenericBinaryType<O>>(
+                    group_indices,
+                    array,
+                    rows,
+                    equal_to_results,
+                );
+            }
+            OutputType::Utf8 => {
+                debug_assert!(matches!(
+                    array.data_type(),
+                    DataType::Utf8 | DataType::LargeUtf8
+                ));
+                self.vectorized_equal_to_inner::<GenericStringType<O>>(
+                    group_indices,
+                    array,
+                    rows,
+                    equal_to_results,
+                );
+            }
+            _ => unreachable!("View types should use `ArrowBytesViewMap`"),
+        }
+    }
+
+    fn vectorized_append(&mut self, column: &ArrayRef, rows: &[usize]) {
+        match self.output_type {
+            OutputType::Binary => {
+                debug_assert!(matches!(
+                    column.data_type(),
+                    DataType::Binary | DataType::LargeBinary
+                ));
+                self.vectorized_append_inner::<GenericBinaryType<O>>(column, rows)
+            }
+            OutputType::Utf8 => {
+                debug_assert!(matches!(
+                    column.data_type(),
+                    DataType::Utf8 | DataType::LargeUtf8
+                ));
+                self.vectorized_append_inner::<GenericStringType<O>>(column, rows)
             }
             _ => unreachable!("View types should use `ArrowBytesViewMap`"),
         };
@@ -446,10 +679,12 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
         self
     }
 
-    fn append_val_inner(&mut self, array: &ArrayRef, row: usize)
-    where
-        B: ByteViewType,
-    {
+    fn equal_to_inner(&self, lhs_row: usize, array: &ArrayRef, rhs_row: usize) -> bool {
+        let array = array.as_byte_view::<B>();
+        self.do_equal_to_inner(lhs_row, array, rhs_row)
+    }
+
+    fn append_val_inner(&mut self, array: &ArrayRef, row: usize) {
         let arr = array.as_byte_view::<B>();
 
         // Null row case, set and return
@@ -461,7 +696,73 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
 
         // Not null row case
         self.nulls.append(false);
-        let value: &[u8] = arr.value(row).as_ref();
+        self.do_append_val_inner(arr, row);
+    }
+
+    fn vectorized_equal_to_inner(
+        &self,
+        group_indices: &[usize],
+        array: &ArrayRef,
+        rows: &[usize],
+        equal_to_results: &mut [bool],
+    ) {
+        let array = array.as_byte_view::<B>();
+
+        for (idx, &lhs_row) in group_indices.iter().enumerate() {
+            // Has found not equal to, don't need to check
+            if !equal_to_results[idx] {
+                continue;
+            }
+
+            let rhs_row = rows[idx];
+            equal_to_results[idx] = self.do_equal_to_inner(lhs_row, array, rhs_row);
+        }
+    }
+
+    fn vectorized_append_inner(&mut self, array: &ArrayRef, rows: &[usize]) {
+        let arr = array.as_byte_view::<B>();
+        let null_count = array.null_count();
+        let num_rows = array.len();
+        let all_null_or_non_null = if null_count == 0 {
+            Some(true)
+        } else if null_count == num_rows {
+            Some(false)
+        } else {
+            None
+        };
+
+        match all_null_or_non_null {
+            None => {
+                for &row in rows {
+                    // Null row case, set and return
+                    if arr.is_valid(row) {
+                        self.nulls.append(false);
+                        self.do_append_val_inner(arr, row);
+                    } else {
+                        self.nulls.append(true);
+                        self.views.push(0);
+                    }
+                }
+            }
+
+            Some(true) => {
+                self.nulls.append_n(rows.len(), false);
+                for &row in rows {
+                    self.do_append_val_inner(arr, row);
+                }
+            }
+
+            Some(false) => {
+                self.nulls.append_n(rows.len(), true);
+            }
+        }
+    }
+
+    fn do_append_val_inner(&mut self, array: &GenericByteViewArray<B>, row: usize)
+    where
+        B: ByteViewType,
+    {
+        let value: &[u8] = array.value(row).as_ref();
 
         let value_len = value.len();
         let view = if value_len <= 12 {
@@ -497,9 +798,12 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
         }
     }
 
-    fn equal_to_inner(&self, lhs_row: usize, array: &ArrayRef, rhs_row: usize) -> bool {
-        let array = array.as_byte_view::<B>();
-
+    fn do_equal_to_inner(
+        &self,
+        lhs_row: usize,
+        array: &GenericByteViewArray<B>,
+        rhs_row: usize,
+    ) -> bool {
         // Check if nulls equal firstly
         let exist_null = self.nulls.is_null(lhs_row);
         let input_null = array.is_null(rhs_row);
@@ -775,6 +1079,20 @@ impl<B: ByteViewType> GroupColumn for ByteViewGroupValueBuilder<B> {
 
     fn append_val(&mut self, array: &ArrayRef, row: usize) {
         self.append_val_inner(array, row)
+    }
+
+    fn vectorized_equal_to(
+        &self,
+        group_indices: &[usize],
+        array: &ArrayRef,
+        rows: &[usize],
+        equal_to_results: &mut [bool],
+    ) {
+        self.vectorized_equal_to_inner(group_indices, array, rows, equal_to_results);
+    }
+
+    fn vectorized_append(&mut self, array: &ArrayRef, rows: &[usize]) {
+        self.vectorized_append_inner(array, rows);
     }
 
     fn len(&self) -> usize {
