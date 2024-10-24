@@ -1359,6 +1359,7 @@ version = "42.1.0"
 dependencies = [
  "arrow",
  "datafusion-common",
+ "itertools",
  "paste",
 ]
 

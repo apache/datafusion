@@ -46,13 +46,15 @@ use crate::{
 
 use super::dml::InsertOp;
 use super::plan::ColumnUnnestList;
+use arrow::compute::can_cast_types;
 use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef};
 use datafusion_common::display::ToStringifiedPlan;
 use datafusion_common::file_options::file_type::FileType;
 use datafusion_common::{
-    get_target_functional_dependencies, internal_err, not_impl_err, plan_datafusion_err,
-    plan_err, Column, DFSchema, DFSchemaRef, DataFusionError, FunctionalDependencies,
-    Result, ScalarValue, TableReference, ToDFSchema, UnnestOptions,
+    exec_err, get_target_functional_dependencies, internal_err, not_impl_err,
+    plan_datafusion_err, plan_err, Column, DFSchema, DFSchemaRef, DataFusionError,
+    FunctionalDependencies, Result, ScalarValue, TableReference, ToDFSchema,
+    UnnestOptions,
 };
 use datafusion_expr_common::type_coercion::binary::type_union_resolution;
 
@@ -172,12 +174,10 @@ impl LogicalPlanBuilder {
     /// `value`. See the [Postgres VALUES](https://www.postgresql.org/docs/current/queries-values.html)
     /// documentation for more details.
     ///
-    /// By default, it assigns the names column1, column2, etc. to the columns of a VALUES table.
-    /// The column names are not specified by the SQL standard and different database systems do it differently,
     /// so it's usually better to override the default names with a table alias list.
     ///
     /// If the values include params/binders such as $1, $2, $3, etc, then the `param_data_types` should be provided.
-    pub fn values(mut values: Vec<Vec<Expr>>) -> Result<Self> {
+    pub fn values(values: Vec<Vec<Expr>>) -> Result<Self> {
         if values.is_empty() {
             return plan_err!("Values list cannot be empty");
         }
@@ -196,16 +196,88 @@ impl LogicalPlanBuilder {
             }
         }
 
-        let empty_schema = DFSchema::empty();
+        // Infer from data itself
+        Self::infer_data(values)
+    }
+
+    /// Create a values list based relation, and the schema is inferred from data itself or table schema if provided, consuming
+    /// `value`. See the [Postgres VALUES](https://www.postgresql.org/docs/current/queries-values.html)
+    /// documentation for more details.
+    ///
+    /// By default, it assigns the names column1, column2, etc. to the columns of a VALUES table.
+    /// The column names are not specified by the SQL standard and different database systems do it differently,
+    /// so it's usually better to override the default names with a table alias list.
+    ///
+    /// If the values include params/binders such as $1, $2, $3, etc, then the `param_data_types` should be provided.
+    pub fn values_with_schema(
+        values: Vec<Vec<Expr>>,
+        schema: &DFSchemaRef,
+    ) -> Result<Self> {
+        if values.is_empty() {
+            return plan_err!("Values list cannot be empty");
+        }
+        let n_cols = values[0].len();
+        if n_cols == 0 {
+            return plan_err!("Values list cannot be zero length");
+        }
+        for (i, row) in values.iter().enumerate() {
+            if row.len() != n_cols {
+                return plan_err!(
+                    "Inconsistent data length across values list: got {} values in row {} but expected {}",
+                    row.len(),
+                    i,
+                    n_cols
+                );
+            }
+        }
+
+        // Check the type of value against the schema
+        Self::infer_values_from_schema(values, schema)
+    }
+
+    fn infer_values_from_schema(
+        values: Vec<Vec<Expr>>,
+        schema: &DFSchema,
+    ) -> Result<Self> {
+        let n_cols = values[0].len();
+        let mut field_types: Vec<DataType> = Vec::with_capacity(n_cols);
+        for j in 0..n_cols {
+            let field_type = schema.field(j).data_type();
+            for row in values.iter() {
+                let value = &row[j];
+                let data_type = value.get_type(schema)?;
+
+                if !data_type.equals_datatype(field_type) {
+                    if can_cast_types(&data_type, field_type) {
+                    } else {
+                        return exec_err!(
+                            "type mistmatch and can't cast to got {} and {}",
+                            data_type,
+                            field_type
+                        );
+                    }
+                }
+            }
+            field_types.push(field_type.to_owned());
+        }
+
+        Self::infer_inner(values, &field_types, schema)
+    }
+
+    fn infer_data(values: Vec<Vec<Expr>>) -> Result<Self> {
+        let n_cols = values[0].len();
+        let schema = DFSchema::empty();
+
         let mut field_types: Vec<DataType> = Vec::with_capacity(n_cols);
         for j in 0..n_cols {
             let mut common_type: Option<DataType> = None;
             for (i, row) in values.iter().enumerate() {
                 let value = &row[j];
-                let data_type = value.get_type(&empty_schema)?;
+                let data_type = value.get_type(&schema)?;
                 if data_type == DataType::Null {
                     continue;
                 }
+
                 if let Some(prev_type) = common_type {
                     // get common type of each column values.
                     let data_types = vec![prev_type.clone(), data_type.clone()];
@@ -221,14 +293,22 @@ impl LogicalPlanBuilder {
             // since the code loop skips NULL
             field_types.push(common_type.unwrap_or(DataType::Null));
         }
+
+        Self::infer_inner(values, &field_types, &schema)
+    }
+
+    fn infer_inner(
+        mut values: Vec<Vec<Expr>>,
+        field_types: &[DataType],
+        schema: &DFSchema,
+    ) -> Result<Self> {
         // wrap cast if data type is not same as common type.
         for row in &mut values {
             for (j, field_type) in field_types.iter().enumerate() {
                 if let Expr::Literal(ScalarValue::Null) = row[j] {
                     row[j] = Expr::Literal(ScalarValue::try_from(field_type)?);
                 } else {
-                    row[j] =
-                        std::mem::take(&mut row[j]).cast_to(field_type, &empty_schema)?;
+                    row[j] = std::mem::take(&mut row[j]).cast_to(field_type, schema)?;
                 }
             }
         }
@@ -243,6 +323,7 @@ impl LogicalPlanBuilder {
             .collect::<Vec<_>>();
         let dfschema = DFSchema::from_unqualified_fields(fields.into(), HashMap::new())?;
         let schema = DFSchemaRef::new(dfschema);
+
         Ok(Self::new(LogicalPlan::Values(Values { schema, values })))
     }
 
