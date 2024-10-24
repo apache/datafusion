@@ -17,11 +17,10 @@
 
 mod kernels;
 
-use std::hash::{Hash, Hasher};
+use std::hash::Hash;
 use std::{any::Any, sync::Arc};
 
 use crate::intervals::cp_solver::{propagate_arithmetic, propagate_comparison};
-use crate::physical_expr::down_cast_any_ref;
 use crate::PhysicalExpr;
 
 use arrow::array::*;
@@ -48,13 +47,31 @@ use kernels::{
 };
 
 /// Binary expression
-#[derive(Debug, Hash, Clone)]
+#[derive(Debug, Clone, Eq)]
 pub struct BinaryExpr {
     left: Arc<dyn PhysicalExpr>,
     op: Operator,
     right: Arc<dyn PhysicalExpr>,
     /// Specifies whether an error is returned on overflow or not
     fail_on_overflow: bool,
+}
+
+// Manually derive PartialEq and Hash to work around https://github.com/rust-lang/rust/issues/78808
+impl PartialEq for BinaryExpr {
+    fn eq(&self, other: &Self) -> bool {
+        self.left.eq(&other.left)
+            && self.op.eq(&other.op)
+            && self.right.eq(&other.right)
+            && self.fail_on_overflow.eq(&other.fail_on_overflow)
+    }
+}
+impl Hash for BinaryExpr {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.left.hash(state);
+        self.op.hash(state);
+        self.right.hash(state);
+        self.fail_on_overflow.hash(state);
+    }
 }
 
 impl BinaryExpr {
@@ -477,11 +494,6 @@ impl PhysicalExpr for BinaryExpr {
         }
     }
 
-    fn dyn_hash(&self, state: &mut dyn Hasher) {
-        let mut s = state;
-        self.hash(&mut s);
-    }
-
     /// For each operator, [`BinaryExpr`] has distinct rules.
     /// TODO: There may be rules specific to some data types and expression ranges.
     fn get_properties(&self, children: &[ExprProperties]) -> Result<ExprProperties> {
@@ -522,20 +534,6 @@ impl PhysicalExpr for BinaryExpr {
             }),
             _ => Ok(ExprProperties::new_unknown()),
         }
-    }
-}
-
-impl PartialEq<dyn Any> for BinaryExpr {
-    fn eq(&self, other: &dyn Any) -> bool {
-        down_cast_any_ref(other)
-            .downcast_ref::<Self>()
-            .map(|x| {
-                self.left.eq(&x.left)
-                    && self.op == x.op
-                    && self.right.eq(&x.right)
-                    && self.fail_on_overflow.eq(&x.fail_on_overflow)
-            })
-            .unwrap_or(false)
     }
 }
 

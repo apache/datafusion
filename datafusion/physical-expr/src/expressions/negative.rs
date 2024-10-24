@@ -18,10 +18,9 @@
 //! Negation (-) expression
 
 use std::any::Any;
-use std::hash::{Hash, Hasher};
+use std::hash::Hash;
 use std::sync::Arc;
 
-use crate::physical_expr::down_cast_any_ref;
 use crate::PhysicalExpr;
 
 use arrow::{
@@ -38,10 +37,23 @@ use datafusion_expr::{
 };
 
 /// Negative expression
-#[derive(Debug, Hash)]
+#[derive(Debug, Eq)]
 pub struct NegativeExpr {
     /// Input expression
     arg: Arc<dyn PhysicalExpr>,
+}
+
+// Manually derive PartialEq and Hash to work around https://github.com/rust-lang/rust/issues/78808
+impl PartialEq for NegativeExpr {
+    fn eq(&self, other: &Self) -> bool {
+        self.arg.eq(&other.arg)
+    }
+}
+
+impl Hash for NegativeExpr {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.arg.hash(state);
+    }
 }
 
 impl NegativeExpr {
@@ -100,11 +112,6 @@ impl PhysicalExpr for NegativeExpr {
         Ok(Arc::new(NegativeExpr::new(Arc::clone(&children[0]))))
     }
 
-    fn dyn_hash(&self, state: &mut dyn Hasher) {
-        let mut s = state;
-        self.hash(&mut s);
-    }
-
     /// Given the child interval of a NegativeExpr, it calculates the NegativeExpr's interval.
     /// It replaces the upper and lower bounds after multiplying them with -1.
     /// Ex: `(a, b]` => `[-b, -a)`
@@ -139,15 +146,6 @@ impl PhysicalExpr for NegativeExpr {
             sort_properties: -children[0].sort_properties,
             range: children[0].range.clone().arithmetic_negate()?,
         })
-    }
-}
-
-impl PartialEq<dyn Any> for NegativeExpr {
-    fn eq(&self, other: &dyn Any) -> bool {
-        down_cast_any_ref(other)
-            .downcast_ref::<Self>()
-            .map(|x| self.arg.eq(&x.arg))
-            .unwrap_or(false)
     }
 }
 
@@ -224,9 +222,7 @@ mod tests {
 
     #[test]
     fn test_evaluate_bounds() -> Result<()> {
-        let negative_expr = NegativeExpr {
-            arg: Arc::new(Column::new("a", 0)),
-        };
+        let negative_expr = NegativeExpr::new(Arc::new(Column::new("a", 0)));
         let child_interval = Interval::make(Some(-2), Some(1))?;
         let negative_expr_interval = Interval::make(Some(-1), Some(2))?;
         assert_eq!(
@@ -238,9 +234,7 @@ mod tests {
 
     #[test]
     fn test_propagate_constraints() -> Result<()> {
-        let negative_expr = NegativeExpr {
-            arg: Arc::new(Column::new("a", 0)),
-        };
+        let negative_expr = NegativeExpr::new(Arc::new(Column::new("a", 0)));
         let original_child_interval = Interval::make(Some(-2), Some(3))?;
         let negative_expr_interval = Interval::make(Some(0), Some(4))?;
         let after_propagation = Some(vec![Interval::make(Some(-2), Some(0))?]);
