@@ -27,6 +27,7 @@ use crate::PhysicalExpr;
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{cast::as_boolean_array, Result, ScalarValue};
+use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::ColumnarValue;
 
 /// Not expression
@@ -98,6 +99,10 @@ impl PhysicalExpr for NotExpr {
         children: Vec<Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn PhysicalExpr>> {
         Ok(Arc::new(NotExpr::new(Arc::clone(&children[0]))))
+    }
+
+    fn evaluate_bounds(&self, children: &[&Interval]) -> Result<Interval> {
+        children[0].not()
     }
 
     fn dyn_hash(&self, state: &mut dyn Hasher) {
