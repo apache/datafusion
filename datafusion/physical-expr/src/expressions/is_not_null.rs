@@ -20,21 +20,21 @@
 use std::hash::{Hash, Hasher};
 use std::{any::Any, sync::Arc};
 
-use crate::physical_expr::down_cast_any_ref;
 use crate::PhysicalExpr;
 use arrow::{
     datatypes::{DataType, Schema},
     record_batch::RecordBatch,
 };
+use datafusion_common::cse::HashNode;
 use datafusion_common::Result;
 use datafusion_common::ScalarValue;
 use datafusion_expr::ColumnarValue;
 
 /// IS NOT NULL expression
-#[derive(Debug, Hash)]
-pub struct IsNotNullExpr {
+#[derive(Debug, Hash, Eq, PartialEq)]
+pub struct IsNotNullExpr<DynPhysicalExpr: ?Sized = dyn PhysicalExpr> {
     /// The input expression
-    arg: Arc<dyn PhysicalExpr>,
+    arg: Arc<DynPhysicalExpr>,
 }
 
 impl IsNotNullExpr {
@@ -92,21 +92,12 @@ impl PhysicalExpr for IsNotNullExpr {
     ) -> Result<Arc<dyn PhysicalExpr>> {
         Ok(Arc::new(IsNotNullExpr::new(Arc::clone(&children[0]))))
     }
-
-    fn dyn_hash(&self, state: &mut dyn Hasher) {
-        let mut s = state;
-        self.hash(&mut s);
-    }
 }
 
-impl PartialEq<dyn Any> for IsNotNullExpr {
-    fn eq(&self, other: &dyn Any) -> bool {
-        down_cast_any_ref(other)
-            .downcast_ref::<Self>()
-            .map(|x| self.arg.eq(&x.arg))
-            .unwrap_or(false)
-    }
+impl HashNode for IsNotNullExpr {
+    fn hash_node<H: Hasher>(&self, _state: &mut H) {}
 }
+
 /// Create an IS NOT NULL expression
 pub fn is_not_null(arg: Arc<dyn PhysicalExpr>) -> Result<Arc<dyn PhysicalExpr>> {
     Ok(Arc::new(IsNotNullExpr::new(arg)))
