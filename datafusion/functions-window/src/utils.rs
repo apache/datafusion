@@ -61,8 +61,5 @@ pub(crate) fn get_unsigned_integer(value: ScalarValue) -> Result<u64> {
         return exec_err!("Expected an integer value");
     }
 
-    match value.cast_to(&DataType::UInt64) {
-        Ok(casted_value) => casted_value.try_into(),
-        Err(_e) => exec_err!("NTILE requires a positive integer"),
-    }
+    value.cast_to(&DataType::UInt64)?.try_into()
 }

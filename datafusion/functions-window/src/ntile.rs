@@ -21,13 +21,15 @@ use std::any::Any;
 use std::fmt::Debug;
 use std::sync::{Arc, OnceLock};
 
-use crate::utils::{get_scalar_value_from_args, get_unsigned_integer};
+use crate::utils::{
+    get_scalar_value_from_args, get_signed_integer, get_unsigned_integer,
+};
 use datafusion_common::arrow::array::{ArrayRef, UInt64Array};
 use datafusion_common::arrow::datatypes::{DataType, Field};
 use datafusion_common::{exec_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr::window_doc_sections::DOC_SECTION_RANKING;
 use datafusion_expr::{
-    Documentation, Literal, PartitionEvaluator, Signature, Volatility, WindowUDFImpl,
+    Documentation, Expr, PartitionEvaluator, Signature, Volatility, WindowUDFImpl,
 };
 use datafusion_functions_window_common::expr::ExpressionArgs;
 use datafusion_functions_window_common::field;
@@ -41,8 +43,8 @@ get_or_init_udwf!(
     "integer ranging from 1 to the argument value, dividing the partition as equally as possible"
 );
 
-pub fn ntile(arg: i64) -> datafusion_expr::Expr {
-    ntile_udwf().call(vec![arg.lit()])
+pub fn ntile(arg: Expr) -> Expr {
+    ntile_udwf().call(vec![arg])
 }
 
 #[derive(Debug)]
@@ -129,12 +131,16 @@ impl WindowUDFImpl for Ntile {
             return exec_err!("NTILE requires a positive integer, but finds NULL");
         }
 
-        let n = get_unsigned_integer(scalar_n)?;
-        if n == 0 {
-            return exec_err!("NTILE requires a positive integer");
+        if scalar_n.is_unsigned() {
+            let n = get_unsigned_integer(scalar_n)?;
+            Ok(Box::new(NtileEvaluator { n }))
+        } else {
+            let n: i64 = get_signed_integer(scalar_n)?;
+            if n <= 0 {
+                return exec_err!("NTILE requires a positive integer");
+            }
+            Ok(Box::new(NtileEvaluator { n: n as u64 }))
         }
-
-        Ok(Box::new(NtileEvaluator { n }))
     }
     fn field(&self, field_args: WindowUDFFieldArgs) -> Result<Field> {
         let nullable = false;
