@@ -47,6 +47,7 @@ the rest of the documentation.
 - [ceil](#ceil)
 - [cos](#cos)
 - [cosh](#cosh)
+- [cot](#cot)
 - [degrees](#degrees)
 - [exp](#exp)
 - [factorial](#factorial)
@@ -215,6 +216,18 @@ Returns the hyperbolic cosine of a number.
 
 ```
 cosh(numeric_expression)
+```
+
+#### Arguments
+
+- **numeric_expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
+
+### `cot`
+
+Returns the cotangent of a number.
+
+```
+cot(numeric_expression)
 ```
 
 #### Arguments
