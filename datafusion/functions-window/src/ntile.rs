@@ -26,15 +26,13 @@ use crate::utils::{
 };
 use datafusion_common::arrow::array::{ArrayRef, UInt64Array};
 use datafusion_common::arrow::datatypes::{DataType, Field};
-use datafusion_common::{exec_err, DataFusionError, Result, ScalarValue};
+use datafusion_common::{exec_err, DataFusionError, Result};
 use datafusion_expr::window_doc_sections::DOC_SECTION_RANKING;
 use datafusion_expr::{
     Documentation, Expr, PartitionEvaluator, Signature, Volatility, WindowUDFImpl,
 };
-use datafusion_functions_window_common::expr::ExpressionArgs;
 use datafusion_functions_window_common::field;
 use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
-use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use field::WindowUDFFieldArgs;
 
 get_or_init_udwf!(
@@ -109,12 +107,6 @@ impl WindowUDFImpl for Ntile {
         &self.signature
     }
 
-    fn expressions(&self, expr_args: ExpressionArgs) -> Vec<Arc<dyn PhysicalExpr>> {
-        parse_expr(expr_args.input_exprs(), expr_args.input_types())
-            .into_iter()
-            .collect::<Vec<_>>()
-    }
-
     fn partition_evaluator(
         &self,
         partition_evaluator_args: PartitionEvaluatorArgs,
@@ -151,30 +143,6 @@ impl WindowUDFImpl for Ntile {
     fn documentation(&self) -> Option<&Documentation> {
         Some(get_ntile_doc())
     }
-}
-
-fn parse_expr(
-    input_exprs: &[Arc<dyn PhysicalExpr>],
-    input_types: &[DataType],
-) -> Result<Arc<dyn PhysicalExpr>> {
-    assert!(!input_exprs.is_empty());
-    assert!(!input_types.is_empty());
-
-    let expr = Arc::clone(input_exprs.first().unwrap());
-    let expr_type = input_types.first().unwrap();
-
-    // Handles the most common case where NULL is unexpected
-    if !expr_type.is_null() {
-        return Ok(expr);
-    }
-
-    let default_value = get_scalar_value_from_args(input_exprs, 0)?;
-    default_value.map_or(Ok(expr), |value| {
-        ScalarValue::try_from(&value.data_type()).map(|v| {
-            Arc::new(datafusion_physical_expr::expressions::Literal::new(v))
-                as Arc<dyn PhysicalExpr>
-        })
-    })
 }
 
 #[derive(Debug)]
