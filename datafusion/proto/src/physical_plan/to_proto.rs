@@ -23,8 +23,8 @@ use datafusion::datasource::file_format::parquet::ParquetSink;
 use datafusion::physical_expr::window::{NthValueKind, SlidingAggregateWindowExpr};
 use datafusion::physical_expr::{PhysicalSortExpr, ScalarFunctionExpr};
 use datafusion::physical_plan::expressions::{
-    BinaryExpr, CaseExpr, CastExpr, Column, CumeDist, InListExpr, IsNotNullExpr,
-    IsNullExpr, Literal, NegativeExpr, NotExpr, NthValue, Ntile, TryCastExpr,
+    BinaryExpr, CaseExpr, CastExpr, Column, InListExpr, IsNotNullExpr, IsNullExpr,
+    Literal, NegativeExpr, NotExpr, NthValue, Ntile, TryCastExpr,
 };
 use datafusion::physical_plan::udaf::AggregateFunctionExpr;
 use datafusion::physical_plan::windows::{BuiltInWindowExpr, PlainAggregateWindowExpr};
@@ -108,9 +108,9 @@ pub fn serialize_physical_window_expr(
         let expr = built_in_window_expr.get_built_in_func_expr();
         let built_in_fn_expr = expr.as_any();
 
-        let builtin_fn = if built_in_fn_expr.downcast_ref::<CumeDist>().is_some() {
-            protobuf::BuiltInWindowFunction::CumeDist
-        } else if let Some(ntile_expr) = built_in_fn_expr.downcast_ref::<Ntile>() {
+        let builtin_fn = if let Some(ntile_expr) =
+            built_in_fn_expr.downcast_ref::<Ntile>()
+        {
             args.insert(
                 0,
                 Arc::new(Literal::new(datafusion_common::ScalarValue::Int64(Some(

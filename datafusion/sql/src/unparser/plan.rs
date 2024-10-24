@@ -342,20 +342,16 @@ impl Unparser<'_> {
                         relation,
                     );
                 }
-
-                if let Some(fetch) = limit.fetch {
+                if let Some(fetch) = &limit.fetch {
                     let Some(query) = query.as_mut() else {
                         return internal_err!(
                             "Limit operator only valid in a statement context."
                         );
                     };
-                    query.limit(Some(ast::Expr::Value(ast::Value::Number(
-                        fetch.to_string(),
-                        false,
-                    ))));
+                    query.limit(Some(self.expr_to_sql(fetch)?));
                 }
 
-                if limit.skip > 0 {
+                if let Some(skip) = &limit.skip {
                     let Some(query) = query.as_mut() else {
                         return internal_err!(
                             "Offset operator only valid in a statement context."
@@ -363,10 +359,7 @@ impl Unparser<'_> {
                     };
                     query.offset(Some(ast::Offset {
                         rows: ast::OffsetRows::None,
-                        value: ast::Expr::Value(ast::Value::Number(
-                            limit.skip.to_string(),
-                            false,
-                        )),
+                        value: self.expr_to_sql(skip)?,
                     }));
                 }
 

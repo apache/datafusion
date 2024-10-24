@@ -23,7 +23,9 @@ use substrait::proto::expression_reference::ExprType;
 
 use arrow_buffer::ToByteSlice;
 use datafusion::arrow::datatypes::{Field, IntervalUnit};
-use datafusion::logical_expr::{Distinct, Like, Partitioning, WindowFrameUnits};
+use datafusion::logical_expr::{
+    Distinct, FetchType, Like, Partitioning, SkipType, WindowFrameUnits,
+};
 use datafusion::{
     arrow::datatypes::{DataType, TimeUnit},
     error::{DataFusionError, Result},
@@ -324,14 +326,19 @@ pub fn to_substrait_rel(
         }
         LogicalPlan::Limit(limit) => {
             let input = to_substrait_rel(limit.input.as_ref(), ctx, extensions)?;
-            // Since protobuf can't directly distinguish `None` vs `0` encode `None` as `MAX`
-            let limit_fetch = limit.fetch.unwrap_or(usize::MAX);
+            let FetchType::Literal(fetch) = limit.get_fetch_type()? else {
+                return not_impl_err!("Non-literal limit fetch");
+            };
+            let SkipType::Literal(skip) = limit.get_skip_type()? else {
+                return not_impl_err!("Non-literal limit skip");
+            };
             Ok(Box::new(Rel {
                 rel_type: Some(RelType::Fetch(Box::new(FetchRel {
                     common: None,
                     input: Some(input),
-                    offset: limit.skip as i64,
-                    count: limit_fetch as i64,
+                    offset: skip as i64,
+                    // use -1 to signal that ALL records should be returned
+                    count: fetch.map(|f| f as i64).unwrap_or(-1),
                     advanced_extension: None,
                 }))),
             }))
