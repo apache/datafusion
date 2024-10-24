@@ -130,6 +130,9 @@ impl WindowUDFImpl for Ntile {
         }
 
         let n = get_unsigned_integer(scalar_n)?;
+        if n <= 0 {
+            return exec_err!("NTILE requires a positive integer");
+        }
 
         Ok(Box::new(NtileEvaluator { n }))
     }
@@ -151,33 +154,21 @@ fn parse_expr(
     assert!(!input_exprs.is_empty());
     assert!(!input_types.is_empty());
 
-    let n = get_scalar_value_from_args(input_exprs, 0)?.ok_or_else(|| {
-        DataFusionError::Execution("NTILE requires a positive integer".to_string())
-    })?;
+    let expr = Arc::clone(input_exprs.first().unwrap());
+    let expr_type = input_types.first().unwrap();
 
-    if n.is_null() {
-        return exec_err!("NTILE requires a positive integer, but finds NULL");
+    // Handles the most common case where NULL is unexpected
+    if !expr_type.is_null() {
+        return Ok(expr);
     }
 
-    if n.is_unsigned() {
-        let n = get_unsigned_integer(n)?;
-        Ok(
-            Arc::new(datafusion_physical_expr::expressions::Literal::new(
-                n.into(),
-            )) as Arc<dyn PhysicalExpr>,
-        )
-    } else {
-        let n: i64 = get_signed_integer(n)?;
-        if n <= 0 {
-            return exec_err!("NTILE requires a positive integer");
-        }
-
-        Ok(
-            Arc::new(datafusion_physical_expr::expressions::Literal::new(
-                (n as u64).into(),
-            )) as Arc<dyn PhysicalExpr>,
-        )
-    }
+    let default_value = get_scalar_value_from_args(input_exprs, 0)?;
+    default_value.map_or(Ok(expr), |value| {
+        ScalarValue::try_from(&value.data_type()).map(|v| {
+            Arc::new(datafusion_physical_expr::expressions::Literal::new(v))
+                as Arc<dyn PhysicalExpr>
+        })
+    })
 }
 
 #[derive(Debug)]
