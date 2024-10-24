@@ -1471,18 +1471,54 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
 
             // Rules for Like
             Expr::Like(Like {
-                expr,
-                pattern,
+                expr: ref like_expr,
+                ref pattern, // Changed to ref pattern to avoid moving
                 negated,
-                escape_char: _,
-                case_insensitive: _,
-            }) if !is_null(&expr)
-                && matches!(
-                    pattern.as_ref(),
-                    Expr::Literal(ScalarValue::Utf8(Some(pattern_str))) if pattern_str == "%"
-                ) =>
-            {
-                Transformed::yes(lit(!negated))
+                escape_char,
+                case_insensitive,
+            }) => {
+                if let Expr::Literal(ScalarValue::Utf8(Some(pattern))) = pattern.as_ref()
+                {
+                    // Special case: pattern is just "%"
+                    if pattern == "%" && !is_null(like_expr) {
+                        return Ok(Transformed::yes(lit(!negated)));
+                    }
+
+                    let pct_wildcard_index = pattern.find('%');
+                    let underscore_index = pattern.find('_');
+
+                    // If no wildcards, treat as equality check
+                    if underscore_index.is_none() && pct_wildcard_index.is_none() {
+                        return Ok(Transformed::yes(Expr::BinaryExpr(BinaryExpr {
+                            left: like_expr.clone(),
+                            op: if negated {
+                                Operator::NotEq
+                            } else {
+                                Operator::Eq
+                            },
+                            right: Box::new(Expr::Literal(ScalarValue::Utf8(Some(
+                                pattern.to_string(),
+                            )))),
+                        })));
+                    }
+
+                    // Handle single % at end case (prefix search)
+                    if let Some(index) = pct_wildcard_index {
+                        if index == pattern.len() - 1 && !case_insensitive && escape_char.is_none() {
+                            let prefix = pattern[..index].to_string();
+                            let new_expr = Expr::ScalarFunction(ScalarFunction {
+                                func: datafusion_functions::string::starts_with(),
+                                args: vec![*like_expr.clone(), lit(prefix)],
+                            });
+                            return Ok(Transformed::yes(if negated {
+                                new_expr.not()
+                            } else {
+                                new_expr
+                            }));
+                        }
+                    }
+                }
+                Transformed::no(expr)
             }
 
             // a is not null/unknown --> true (if a is not nullable)
@@ -2873,11 +2909,14 @@ mod tests {
         assert_no_change(regex_match(col("c1"), lit("$foo^")));
 
         // regular expressions that match a partial literal
-        assert_change(regex_match(col("c1"), lit("^foo")), like(col("c1"), "foo%"));
+        assert_change(
+            regex_match(col("c1"), lit("^foo")),
+            starts_with(col("c1"), "foo"),
+        );
         assert_change(regex_match(col("c1"), lit("foo$")), like(col("c1"), "%foo"));
         assert_change(
             regex_match(col("c1"), lit("^foo|bar$")),
-            like(col("c1"), "foo%").or(like(col("c1"), "%bar")),
+            starts_with(col("c1"), "foo").or(like(col("c1"), "%bar")),
         );
 
         // OR-chain
@@ -2997,6 +3036,13 @@ mod tests {
             pattern: Box::new(lit(pattern)),
             escape_char: None,
             case_insensitive: true,
+        })
+    }
+
+    fn starts_with(expr: Expr, pattern: &str) -> Expr {
+        Expr::ScalarFunction(ScalarFunction {
+            func: datafusion_functions::string::starts_with(),
+            args: vec![expr, lit(pattern)],
         })
     }
 
@@ -3618,6 +3664,18 @@ mod tests {
 
         let expr = not_ilike(col("c1"), "%");
         assert_eq!(simplify(expr), lit(false));
+
+        let expr = like(col("c1"), "a%");
+        assert_eq!(simplify(expr), starts_with(col("c1"), "a"));
+
+        let expr = not_like(col("c1"), "a%");
+        assert_eq!(simplify(expr), not(starts_with(col("c1"), "a")));
+
+        let expr = like(col("c1"), "abc");
+        assert_eq!(simplify(expr), col("c1").eq(lit("abc")));
+
+        let expr = not_like(col("c1"), "abc");
+        assert_eq!(simplify(expr), col("c1").not_eq(lit("abc")));
 
         // test null values
         let null = lit(ScalarValue::Utf8(None));
