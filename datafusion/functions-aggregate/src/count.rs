@@ -357,7 +357,7 @@ fn get_count_doc() -> &'static Documentation {
 | 120              |
 +------------------+
 ```"#)
-            .with_argument("expression", "Expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators.")
+            .with_standard_argument("expression", None)
             .build()
             .unwrap()
     })
@@ -713,5 +713,19 @@ impl Accumulator for DistinctCountAccumulator {
             d if d.is_primitive() => self.fixed_size(),
             _ => self.full_size(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::array::NullArray;
+
+    #[test]
+    fn count_accumulator_nulls() -> Result<()> {
+        let mut accumulator = CountAccumulator::new();
+        accumulator.update_batch(&[Arc::new(NullArray::new(10))])?;
+        assert_eq!(accumulator.evaluate()?, ScalarValue::Int64(Some(0)));
+        Ok(())
     }
 }

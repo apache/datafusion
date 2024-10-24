@@ -22,8 +22,12 @@ use arrow::datatypes::DataType::Date32;
 use chrono::{Datelike, NaiveDate};
 
 use datafusion_common::{internal_err, Result, ScalarValue};
+use datafusion_expr::scalar_doc_sections::DOC_SECTION_DATETIME;
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
-use datafusion_expr::{ColumnarValue, Expr, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{
+    ColumnarValue, Documentation, Expr, ScalarUDFImpl, Signature, Volatility,
+};
+use std::sync::OnceLock;
 
 #[derive(Debug)]
 pub struct CurrentDateFunc {
@@ -95,4 +99,25 @@ impl ScalarUDFImpl for CurrentDateFunc {
             ScalarValue::Date32(days),
         )))
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_current_date_doc())
+    }
+}
+
+static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+
+fn get_current_date_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_DATETIME)
+            .with_description(r#"
+Returns the current UTC date.
+
+The `current_date()` return value is determined at query time and will return the same date, no matter when in the query plan the function executes.
+"#)
+            .with_syntax_example("current_date()")
+            .build()
+            .unwrap()
+    })
 }

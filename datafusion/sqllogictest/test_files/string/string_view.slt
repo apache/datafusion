@@ -722,7 +722,7 @@ EXPLAIN SELECT
 FROM test;
 ----
 logical_plan
-01)Projection: regexp_like(CAST(test.column1_utf8view AS Utf8), Utf8("^https?://(?:www\.)?([^/]+)/.*$")) AS k
+01)Projection: regexp_like(test.column1_utf8view, Utf8("^https?://(?:www\.)?([^/]+)/.*$")) AS k
 02)--TableScan: test projection=[column1_utf8view]
 
 ## Ensure no casts for REGEXP_MATCH
@@ -899,6 +899,26 @@ FROM test;
 ----
 logical_plan
 01)Projection: find_in_set(test.column1_utf8view, Utf8View("a,b,c,d")) AS c
+02)--TableScan: test projection=[column1_utf8view]
+
+## Ensure no casts for to_date
+query TT
+EXPLAIN SELECT
+  to_date(column1_utf8view, 'a,b,c,d') as c
+FROM test;
+----
+logical_plan
+01)Projection: to_date(test.column1_utf8view, Utf8("a,b,c,d")) AS c
+02)--TableScan: test projection=[column1_utf8view]
+
+## Ensure no casts for to_timestamp
+query TT
+EXPLAIN SELECT
+  to_timestamp(column1_utf8view, 'a,b,c,d') as c
+FROM test;
+----
+logical_plan
+01)Projection: to_timestamp(test.column1_utf8view, Utf8("a,b,c,d")) AS c
 02)--TableScan: test projection=[column1_utf8view]
 
 ## Ensure no casts for binary operators

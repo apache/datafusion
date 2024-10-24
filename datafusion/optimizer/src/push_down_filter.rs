@@ -1213,7 +1213,7 @@ mod tests {
     };
 
     use crate::optimizer::Optimizer;
-    use crate::rewrite_disjunctive_predicate::RewriteDisjunctivePredicate;
+    use crate::simplify_expressions::SimplifyExpressions;
     use crate::test::*;
     use crate::OptimizerContext;
     use datafusion_expr::test::function_stub::sum;
@@ -1235,7 +1235,7 @@ mod tests {
         expected: &str,
     ) -> Result<()> {
         let optimizer = Optimizer::with_rules(vec![
-            Arc::new(RewriteDisjunctivePredicate::new()),
+            Arc::new(SimplifyExpressions::new()),
             Arc::new(PushDownFilter::new()),
         ]);
         let optimized_plan =
@@ -1727,7 +1727,7 @@ mod tests {
             .build()?;
 
         let expected = "Projection: test.a, test1.d\
-        \n  CrossJoin:\
+        \n  Cross Join: \
         \n    Projection: test.a, test.b, test.c\
         \n      TableScan: test, full_filters=[test.a = Int32(1)]\
         \n    Projection: test1.d, test1.e, test1.f\
@@ -1754,7 +1754,7 @@ mod tests {
             .build()?;
 
         let expected = "Projection: test.a, test1.a\
-        \n  CrossJoin:\
+        \n  Cross Join: \
         \n    Projection: test.a, test.b, test.c\
         \n      TableScan: test, full_filters=[test.a = Int32(1)]\
         \n    Projection: test1.a, test1.b, test1.c\

@@ -17,7 +17,7 @@
 
 use crate::datetime::common::*;
 use arrow::datatypes::DataType;
-use arrow::datatypes::DataType::Date32;
+use arrow::datatypes::DataType::*;
 use arrow::error::ArrowError::ParseError;
 use arrow::{array::types::Date32Type, compute::kernels::cast_utils::Parser};
 use datafusion_common::error::DataFusionError;
@@ -111,7 +111,7 @@ Note: `to_date` returns Date32, which represents its values as the number of day
 
 Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/to_date.rs)
 "#)
-            .with_standard_argument("expression", "String")
+            .with_standard_argument("expression", Some("String"))
             .with_argument(
                 "format_n",
                 "Optional [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) strings to use to parse the expression. Formats will be tried in the order
@@ -151,13 +151,10 @@ impl ScalarUDFImpl for ToDateFunc {
         }
 
         match args[0].data_type() {
-            DataType::Int32
-            | DataType::Int64
-            | DataType::Null
-            | DataType::Float64
-            | DataType::Date32
-            | DataType::Date64 => args[0].cast_to(&DataType::Date32, None),
-            DataType::Utf8 => self.to_date(args),
+            Int32 | Int64 | Null | Float64 | Date32 | Date64 => {
+                args[0].cast_to(&Date32, None)
+            }
+            Utf8View | LargeUtf8 | Utf8 => self.to_date(args),
             other => {
                 exec_err!("Unsupported data type {:?} for function to_date", other)
             }
@@ -171,9 +168,11 @@ impl ScalarUDFImpl for ToDateFunc {
 
 #[cfg(test)]
 mod tests {
+    use arrow::array::{Array, Date32Array, GenericStringArray, StringViewArray};
     use arrow::{compute::kernels::cast_utils::Parser, datatypes::Date32Type};
     use datafusion_common::ScalarValue;
     use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
+    use std::sync::Arc;
 
     use super::ToDateFunc;
 
@@ -204,15 +203,50 @@ mod tests {
         ];
 
         for tc in &test_cases {
-            let date_scalar = ScalarValue::Utf8(Some(tc.date_str.to_string()));
-            let to_date_result =
-                ToDateFunc::new().invoke(&[ColumnarValue::Scalar(date_scalar)]);
+            test_scalar(ScalarValue::Utf8(Some(tc.date_str.to_string())), tc);
+            test_scalar(ScalarValue::LargeUtf8(Some(tc.date_str.to_string())), tc);
+            test_scalar(ScalarValue::Utf8View(Some(tc.date_str.to_string())), tc);
+
+            test_array::<GenericStringArray<i32>>(tc);
+            test_array::<GenericStringArray<i64>>(tc);
+            test_array::<StringViewArray>(tc);
+        }
+
+        fn test_scalar(sv: ScalarValue, tc: &TestCase) {
+            let to_date_result = ToDateFunc::new().invoke(&[ColumnarValue::Scalar(sv)]);
 
             match to_date_result {
                 Ok(ColumnarValue::Scalar(ScalarValue::Date32(date_val))) => {
                     let expected = Date32Type::parse_formatted(tc.date_str, "%Y-%m-%d");
                     assert_eq!(
                         date_val, expected,
+                        "{}: to_date created wrong value",
+                        tc.name
+                    );
+                }
+                _ => panic!("Could not convert '{}' to Date", tc.date_str),
+            }
+        }
+
+        fn test_array<A>(tc: &TestCase)
+        where
+            A: From<Vec<&'static str>> + Array + 'static,
+        {
+            let date_array = A::from(vec![tc.date_str]);
+            let to_date_result =
+                ToDateFunc::new().invoke(&[ColumnarValue::Array(Arc::new(date_array))]);
+
+            match to_date_result {
+                Ok(ColumnarValue::Array(a)) => {
+                    assert_eq!(a.len(), 1);
+
+                    let expected = Date32Type::parse_formatted(tc.date_str, "%Y-%m-%d");
+                    let mut builder = Date32Array::builder(4);
+                    builder.append_value(expected.unwrap());
+
+                    assert_eq!(
+                        &builder.finish() as &dyn Array,
+                        a.as_ref(),
                         "{}: to_date created wrong value",
                         tc.name
                     );
@@ -271,12 +305,26 @@ mod tests {
         ];
 
         for tc in &test_cases {
-            let formatted_date_scalar =
-                ScalarValue::Utf8(Some(tc.formatted_date.to_string()));
+            test_scalar(ScalarValue::Utf8(Some(tc.formatted_date.to_string())), tc);
+            test_scalar(
+                ScalarValue::LargeUtf8(Some(tc.formatted_date.to_string())),
+                tc,
+            );
+            test_scalar(
+                ScalarValue::Utf8View(Some(tc.formatted_date.to_string())),
+                tc,
+            );
+
+            test_array::<GenericStringArray<i32>>(tc);
+            test_array::<GenericStringArray<i64>>(tc);
+            test_array::<StringViewArray>(tc);
+        }
+
+        fn test_scalar(sv: ScalarValue, tc: &TestCase) {
             let format_scalar = ScalarValue::Utf8(Some(tc.format_str.to_string()));
 
             let to_date_result = ToDateFunc::new().invoke(&[
-                ColumnarValue::Scalar(formatted_date_scalar),
+                ColumnarValue::Scalar(sv),
                 ColumnarValue::Scalar(format_scalar),
             ]);
 
@@ -288,6 +336,41 @@ mod tests {
                 _ => panic!(
                     "Could not convert '{}' with format string '{}'to Date",
                     tc.date_str, tc.format_str
+                ),
+            }
+        }
+
+        fn test_array<A>(tc: &TestCase)
+        where
+            A: From<Vec<&'static str>> + Array + 'static,
+        {
+            let date_array = A::from(vec![tc.formatted_date]);
+            let format_array = A::from(vec![tc.format_str]);
+
+            let to_date_result = ToDateFunc::new().invoke(&[
+                ColumnarValue::Array(Arc::new(date_array)),
+                ColumnarValue::Array(Arc::new(format_array)),
+            ]);
+
+            match to_date_result {
+                Ok(ColumnarValue::Array(a)) => {
+                    assert_eq!(a.len(), 1);
+
+                    let expected = Date32Type::parse_formatted(tc.date_str, "%Y-%m-%d");
+                    let mut builder = Date32Array::builder(4);
+                    builder.append_value(expected.unwrap());
+
+                    assert_eq!(
+                        &builder.finish() as &dyn Array, a.as_ref(),
+                        "{}: to_date created wrong value for date '{}' with format string '{}'",
+                        tc.name,
+                        tc.formatted_date,
+                        tc.format_str
+                    );
+                }
+                _ => panic!(
+                    "Could not convert '{}' with format string '{}'to Date: {:?}",
+                    tc.formatted_date, tc.format_str, to_date_result
                 ),
             }
         }

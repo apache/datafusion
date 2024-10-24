@@ -39,7 +39,8 @@ use crate::PhysicalExpr;
 
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
-use datafusion_common::{internal_err, DFSchema, Result};
+use arrow_array::Array;
+use datafusion_common::{internal_err, DFSchema, Result, ScalarValue};
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::sort_properties::ExprProperties;
 use datafusion_expr::type_coercion::functions::data_types_with_scalar_udf;
@@ -140,15 +141,23 @@ impl PhysicalExpr for ScalarFunctionExpr {
             .collect::<Result<Vec<_>>>()?;
 
         // evaluate the function
-        let output = match self.args.is_empty() {
-            true => self.fun.invoke_no_args(batch.num_rows()),
-            false => self.fun.invoke(&inputs),
-        }?;
+        let output = self.fun.invoke_batch(&inputs, batch.num_rows())?;
 
         if let ColumnarValue::Array(array) = &output {
             if array.len() != batch.num_rows() {
-                return internal_err!("UDF returned a different number of rows than expected. Expected: {}, Got: {}",
-                        batch.num_rows(), array.len());
+                // If the arguments are a non-empty slice of scalar values, we can assume that
+                // returning a one-element array is equivalent to returning a scalar.
+                let preserve_scalar = array.len() == 1
+                    && !inputs.is_empty()
+                    && inputs
+                        .iter()
+                        .all(|arg| matches!(arg, ColumnarValue::Scalar(_)));
+                return if preserve_scalar {
+                    ScalarValue::try_from_array(array, 0).map(ColumnarValue::Scalar)
+                } else {
+                    internal_err!("UDF returned a different number of rows than expected. Expected: {}, Got: {}",
+                            batch.num_rows(), array.len())
+                };
             }
         }
         Ok(output)

@@ -39,7 +39,7 @@ use std::fmt::Debug;
 ///   function])
 ///
 /// * convert its internal state to a vector of aggregate values via
-///   [`state`] and combine the state from multiple accumulators'
+///   [`state`] and combine the state from multiple accumulators
 ///   via [`merge_batch`], as part of efficient multi-phase grouping.
 ///
 /// [`GroupsAccumulator`]: crate::GroupsAccumulator
@@ -68,7 +68,7 @@ pub trait Accumulator: Send + Sync + Debug {
     /// result in potentially non-deterministic behavior.
     ///
     /// This function gets `&mut self` to allow for the accumulator to build
-    /// arrow compatible internal state that can be returned without copying
+    /// arrow-compatible internal state that can be returned without copying
     /// when possible (for example distinct strings)
     fn evaluate(&mut self) -> Result<ScalarValue>;
 
@@ -89,14 +89,14 @@ pub trait Accumulator: Send + Sync + Debug {
     /// result in potentially non-deterministic behavior.
     ///
     /// This function gets `&mut self` to allow for the accumulator to build
-    /// arrow compatible internal state that can be returned without copying
+    /// arrow-compatible internal state that can be returned without copying
     /// when possible (for example distinct strings).
     ///
     /// Intermediate state is used for "multi-phase" grouping in
     /// DataFusion, where an aggregate is computed in parallel with
     /// multiple `Accumulator` instances, as described below:
     ///
-    /// # MultiPhase Grouping
+    /// # Multi-Phase Grouping
     ///
     /// ```text
     ///                               ▲
@@ -140,9 +140,9 @@ pub trait Accumulator: Send + Sync + Debug {
     /// to be summed together)
     ///
     /// Some accumulators can return multiple values for their
-    /// intermediate states. For example average, tracks `sum` and
-    ///  `n`, and this function should return
-    /// a vector of two values, sum and n.
+    /// intermediate states. For example, the average accumulator
+    /// tracks `sum` and `n`, and this function should return a vector
+    /// of two values, sum and n.
     ///
     /// Note that [`ScalarValue::List`] can be used to pass multiple
     /// values if the number of intermediate values is not known at
@@ -204,7 +204,7 @@ pub trait Accumulator: Send + Sync + Debug {
     /// The final output is computed by repartitioning the result of
     /// [`Self::state`] from each Partial aggregate and `hash(group keys)` so
     /// that each distinct group key appears in exactly one of the
-    /// `AggregateMode::Final` GroupBy nodes. The output of the final nodes are
+    /// `AggregateMode::Final` GroupBy nodes. The outputs of the final nodes are
     /// then unioned together to produce the overall final output.
     ///
     /// Here is an example that shows the distribution of groups in the

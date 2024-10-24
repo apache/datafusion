@@ -671,7 +671,7 @@ query TT
 explain select * from t1 inner join t2 on true;
 ----
 logical_plan
-01)CrossJoin:
+01)Cross Join:
 02)--TableScan: t1 projection=[t1_id, t1_name, t1_int]
 03)--TableScan: t2 projection=[t2_id, t2_name, t2_int]
 physical_plan
@@ -905,7 +905,7 @@ JOIN department AS d
 ON (e.name = 'Alice' OR e.name = 'Bob');
 ----
 logical_plan
-01)CrossJoin:
+01)Cross Join:
 02)--SubqueryAlias: e
 03)----Filter: employees.name = Utf8("Alice") OR employees.name = Utf8("Bob")
 04)------TableScan: employees projection=[emp_id, name]
@@ -1152,7 +1152,7 @@ logical_plan
 01)Projection: t1.v0, t1.v1, t5.v2, t5.v3, t5.v4, t0.v0, t0.v1
 02)--Inner Join: CAST(t1.v0 AS Float64) = t0.v1 Filter: t0.v1 + CAST(t5.v0 AS Float64) > Float64(0)
 03)----Projection: t1.v0, t1.v1, t5.v0, t5.v2, t5.v3, t5.v4
-04)------Inner Join: Using t1.v0 = t5.v0, t1.v1 = t5.v1
+04)------Inner Join: t1.v0 = t5.v0, t1.v1 = t5.v1
 05)--------TableScan: t1 projection=[v0, v1]
 06)--------TableScan: t5 projection=[v0, v1, v2, v3, v4]
 07)----TableScan: t0 projection=[v0, v1]

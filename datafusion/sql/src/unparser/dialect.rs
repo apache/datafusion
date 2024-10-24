@@ -86,6 +86,12 @@ pub trait Dialect: Send + Sync {
         ast::DataType::BigInt(None)
     }
 
+    /// The SQL type to use for Arrow Int32 unparsing
+    /// Most dialects use Integer, but some, like MySQL, require SIGNED
+    fn int32_cast_dtype(&self) -> ast::DataType {
+        ast::DataType::Integer(None)
+    }
+
     /// The SQL type to use for Timestamp unparsing
     /// Most dialects use Timestamp, but some, like MySQL, require Datetime
     /// Some dialects like Dremio does not support WithTimeZone and requires always Timestamp
@@ -112,6 +118,12 @@ pub trait Dialect: Send + Sync {
     /// (SELECT col1, col2 from my_table) AS my_table_alias(col1_alias, col2_alias)
     fn supports_column_alias_in_table_alias(&self) -> bool {
         true
+    }
+
+    /// Whether the dialect requires a table alias for any subquery in the FROM clause
+    /// This affects behavior when deriving logical plans for Sort, Limit, etc.
+    fn requires_derived_table_alias(&self) -> bool {
+        false
     }
 
     /// Allows the dialect to override scalar function unparsing if the dialect has specific rules.
@@ -282,12 +294,20 @@ impl Dialect for MySqlDialect {
         ast::DataType::Custom(ObjectName(vec![Ident::new("SIGNED")]), vec![])
     }
 
+    fn int32_cast_dtype(&self) -> ast::DataType {
+        ast::DataType::Custom(ObjectName(vec![Ident::new("SIGNED")]), vec![])
+    }
+
     fn timestamp_cast_dtype(
         &self,
         _time_unit: &TimeUnit,
         _tz: &Option<Arc<str>>,
     ) -> ast::DataType {
         ast::DataType::Datetime(None)
+    }
+
+    fn requires_derived_table_alias(&self) -> bool {
+        true
     }
 
     fn scalar_function_to_sql_overrides(
@@ -347,10 +367,12 @@ pub struct CustomDialect {
     large_utf8_cast_dtype: ast::DataType,
     date_field_extract_style: DateFieldExtractStyle,
     int64_cast_dtype: ast::DataType,
+    int32_cast_dtype: ast::DataType,
     timestamp_cast_dtype: ast::DataType,
     timestamp_tz_cast_dtype: ast::DataType,
     date32_cast_dtype: sqlparser::ast::DataType,
     supports_column_alias_in_table_alias: bool,
+    requires_derived_table_alias: bool,
 }
 
 impl Default for CustomDialect {
@@ -365,6 +387,7 @@ impl Default for CustomDialect {
             large_utf8_cast_dtype: ast::DataType::Text,
             date_field_extract_style: DateFieldExtractStyle::DatePart,
             int64_cast_dtype: ast::DataType::BigInt(None),
+            int32_cast_dtype: ast::DataType::Integer(None),
             timestamp_cast_dtype: ast::DataType::Timestamp(None, TimezoneInfo::None),
             timestamp_tz_cast_dtype: ast::DataType::Timestamp(
                 None,
@@ -372,6 +395,7 @@ impl Default for CustomDialect {
             ),
             date32_cast_dtype: sqlparser::ast::DataType::Date,
             supports_column_alias_in_table_alias: true,
+            requires_derived_table_alias: false,
         }
     }
 }
@@ -424,6 +448,10 @@ impl Dialect for CustomDialect {
         self.int64_cast_dtype.clone()
     }
 
+    fn int32_cast_dtype(&self) -> ast::DataType {
+        self.int32_cast_dtype.clone()
+    }
+
     fn timestamp_cast_dtype(
         &self,
         _time_unit: &TimeUnit,
@@ -456,6 +484,10 @@ impl Dialect for CustomDialect {
 
         Ok(None)
     }
+
+    fn requires_derived_table_alias(&self) -> bool {
+        self.requires_derived_table_alias
+    }
 }
 
 /// `CustomDialectBuilder` to build `CustomDialect` using builder pattern
@@ -482,10 +514,12 @@ pub struct CustomDialectBuilder {
     large_utf8_cast_dtype: ast::DataType,
     date_field_extract_style: DateFieldExtractStyle,
     int64_cast_dtype: ast::DataType,
+    int32_cast_dtype: ast::DataType,
     timestamp_cast_dtype: ast::DataType,
     timestamp_tz_cast_dtype: ast::DataType,
     date32_cast_dtype: ast::DataType,
     supports_column_alias_in_table_alias: bool,
+    requires_derived_table_alias: bool,
 }
 
 impl Default for CustomDialectBuilder {
@@ -506,6 +540,7 @@ impl CustomDialectBuilder {
             large_utf8_cast_dtype: ast::DataType::Text,
             date_field_extract_style: DateFieldExtractStyle::DatePart,
             int64_cast_dtype: ast::DataType::BigInt(None),
+            int32_cast_dtype: ast::DataType::Integer(None),
             timestamp_cast_dtype: ast::DataType::Timestamp(None, TimezoneInfo::None),
             timestamp_tz_cast_dtype: ast::DataType::Timestamp(
                 None,
@@ -513,6 +548,7 @@ impl CustomDialectBuilder {
             ),
             date32_cast_dtype: sqlparser::ast::DataType::Date,
             supports_column_alias_in_table_alias: true,
+            requires_derived_table_alias: false,
         }
     }
 
@@ -527,11 +563,13 @@ impl CustomDialectBuilder {
             large_utf8_cast_dtype: self.large_utf8_cast_dtype,
             date_field_extract_style: self.date_field_extract_style,
             int64_cast_dtype: self.int64_cast_dtype,
+            int32_cast_dtype: self.int32_cast_dtype,
             timestamp_cast_dtype: self.timestamp_cast_dtype,
             timestamp_tz_cast_dtype: self.timestamp_tz_cast_dtype,
             date32_cast_dtype: self.date32_cast_dtype,
             supports_column_alias_in_table_alias: self
                 .supports_column_alias_in_table_alias,
+            requires_derived_table_alias: self.requires_derived_table_alias,
         }
     }
 
@@ -604,6 +642,12 @@ impl CustomDialectBuilder {
         self
     }
 
+    /// Customize the dialect with a specific SQL type for Int32 casting: Integer, SIGNED, etc.
+    pub fn with_int32_cast_dtype(mut self, int32_cast_dtype: ast::DataType) -> Self {
+        self.int32_cast_dtype = int32_cast_dtype;
+        self
+    }
+
     /// Customize the dialect with a specific SQL type for Timestamp casting: Timestamp, Datetime, etc.
     pub fn with_timestamp_cast_dtype(
         mut self,
@@ -626,6 +670,14 @@ impl CustomDialectBuilder {
         supports_column_alias_in_table_alias: bool,
     ) -> Self {
         self.supports_column_alias_in_table_alias = supports_column_alias_in_table_alias;
+        self
+    }
+
+    pub fn with_requires_derived_table_alias(
+        mut self,
+        requires_derived_table_alias: bool,
+    ) -> Self {
+        self.requires_derived_table_alias = requires_derived_table_alias;
         self
     }
 }

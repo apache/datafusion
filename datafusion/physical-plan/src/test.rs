@@ -65,7 +65,7 @@ pub fn aggr_test_schema() -> SchemaRef {
     Arc::new(schema)
 }
 
-/// returns record batch with 3 columns of i32 in memory
+/// Returns record batch with 3 columns of i32 in memory
 pub fn build_table_i32(
     a: (&str, &Vec<i32>),
     b: (&str, &Vec<i32>),
@@ -88,7 +88,7 @@ pub fn build_table_i32(
     .unwrap()
 }
 
-/// returns memory table scan wrapped around record batch with 3 columns of i32
+/// Returns memory table scan wrapped around record batch with 3 columns of i32
 pub fn build_table_scan_i32(
     a: (&str, &Vec<i32>),
     b: (&str, &Vec<i32>),
@@ -125,7 +125,7 @@ pub fn mem_exec(partitions: usize) -> MemoryExec {
     MemoryExec::try_new(&data, schema, projection).unwrap()
 }
 
-// construct a stream partition for test purposes
+// Construct a stream partition for test purposes
 #[derive(Debug)]
 pub struct TestPartitionStream {
     pub schema: SchemaRef,

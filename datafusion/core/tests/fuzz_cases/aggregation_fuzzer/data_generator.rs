@@ -48,14 +48,39 @@ use test_utils::{
 ///
 #[derive(Debug, Clone)]
 pub struct DatasetGeneratorConfig {
-    // Descriptions of columns in datasets, it's `required`
+    /// Descriptions of columns in datasets, it's `required`
     pub columns: Vec<ColumnDescr>,
 
-    // Rows num range of the generated datasets, it's `required`
+    /// Rows num range of the generated datasets, it's `required`
     pub rows_num_range: (usize, usize),
 
-    // Sort keys used to generate the sorted data set, it's optional
+    /// Additional optional sort keys
+    ///
+    /// The generated datasets always include a non-sorted copy. For each
+    /// element in `sort_keys_set`, an additional datasets is created that
+    /// is sorted by these values as well.
     pub sort_keys_set: Vec<Vec<String>>,
+}
+
+impl DatasetGeneratorConfig {
+    /// return a list of all column names
+    pub fn all_columns(&self) -> Vec<&str> {
+        self.columns.iter().map(|d| d.name.as_str()).collect()
+    }
+
+    /// return a list of column names that are "numeric"
+    pub fn numeric_columns(&self) -> Vec<&str> {
+        self.columns
+            .iter()
+            .filter_map(|d| {
+                if d.column_type.is_numeric() {
+                    Some(d.name.as_str())
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
 }
 
 /// Dataset generator
@@ -96,7 +121,7 @@ impl DatasetGenerator {
     pub fn generate(&self) -> Result<Vec<Dataset>> {
         let mut datasets = Vec::with_capacity(self.sort_keys_set.len() + 1);
 
-        // Generate the base batch
+        // Generate the base batch (unsorted)
         let base_batch = self.batch_generator.generate()?;
         let batches = stagger_batch(base_batch.clone());
         let dataset = Dataset::new(batches, Vec::new());
@@ -362,7 +387,9 @@ impl RecordBatchGenerator {
             DataType::LargeUtf8 => {
                 generate_string_array!(self, num_rows, batch_gen_rng, array_gen_rng, i64)
             }
-            _ => unreachable!(),
+            _ => {
+                panic!("Unsupported data generator type: {data_type}")
+            }
         }
     }
 }

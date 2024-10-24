@@ -144,6 +144,20 @@ fn criterion_benchmark(c: &mut Criterion) {
         })
     });
 
+    c.bench_function("physical_select_aggregates_from_200", |b| {
+        let mut aggregates = String::new();
+        for i in 0..200 {
+            if i > 0 {
+                aggregates.push_str(", ");
+            }
+            aggregates.push_str(format!("MAX(a{})", i).as_str());
+        }
+        let query = format!("SELECT {} FROM t1", aggregates);
+        b.iter(|| {
+            physical_plan(&ctx, &query);
+        });
+    });
+
     // --- TPC-H ---
 
     let tpch_ctx = register_defs(SessionContext::new(), tpch_schemas());
@@ -189,10 +203,8 @@ fn criterion_benchmark(c: &mut Criterion) {
 
     let tpcds_ctx = register_defs(SessionContext::new(), tpcds_schemas());
 
-    // 10, 35: Physical plan does not support logical expression Exists(<subquery>)
-    // 45: Physical plan does not support logical expression (<subquery>)
-    // 41: Optimizing disjunctions not supported
-    let ignored = [10, 35, 41, 45];
+    // 41: check_analyzed_plan: Correlated column is not allowed in predicate
+    let ignored = [41];
 
     let raw_tpcds_sql_queries = (1..100)
         .filter(|q| !ignored.contains(q))

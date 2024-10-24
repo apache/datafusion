@@ -27,9 +27,12 @@ use arrow_buffer::OffsetBuffer;
 use arrow_schema::{DataType, Field};
 use datafusion_common::cast::as_int64_array;
 use datafusion_common::{exec_err, Result};
-use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::scalar_doc_sections::DOC_SECTION_ARRAY;
+use datafusion_expr::{
+    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+};
 use std::any::Any;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 make_udf_expr_and_func!(
     ArrayRemove,
@@ -78,6 +81,43 @@ impl ScalarUDFImpl for ArrayRemove {
     fn aliases(&self) -> &[String] {
         &self.aliases
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_array_remove_doc())
+    }
+}
+
+static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+
+fn get_array_remove_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_ARRAY)
+            .with_description(
+                "Removes the first element from the array equal to the given value.",
+            )
+            .with_syntax_example("array_remove(array, element)")
+            .with_sql_example(
+                r#"```sql
+> select array_remove([1, 2, 2, 3, 2, 1, 4], 2);
++----------------------------------------------+
+| array_remove(List([1,2,2,3,2,1,4]),Int64(2)) |
++----------------------------------------------+
+| [1, 2, 3, 2, 1, 4]                           |
++----------------------------------------------+
+```"#,
+            )
+            .with_argument(
+                "array",
+                "Array expression. Can be a constant, column, or function, and any combination of array operators.",
+            )
+            .with_argument(
+                "element",
+                "Element to be removed from the array.",
+            )
+            .build()
+            .unwrap()
+    })
 }
 
 make_udf_expr_and_func!(
@@ -127,6 +167,45 @@ impl ScalarUDFImpl for ArrayRemoveN {
     fn aliases(&self) -> &[String] {
         &self.aliases
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_array_remove_n_doc())
+    }
+}
+
+fn get_array_remove_n_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_ARRAY)
+            .with_description(
+                "Removes the first `max` elements from the array equal to the given value.",
+            )
+            .with_syntax_example("array_remove_n(array, element, max)")
+            .with_sql_example(
+                r#"```sql
+> select array_remove_n([1, 2, 2, 3, 2, 1, 4], 2, 2);
++---------------------------------------------------------+
+| array_remove_n(List([1,2,2,3,2,1,4]),Int64(2),Int64(2)) |
++---------------------------------------------------------+
+| [1, 3, 2, 1, 4]                                         |
++---------------------------------------------------------+
+```"#,
+            )
+            .with_argument(
+                "array",
+                "Array expression. Can be a constant, column, or function, and any combination of array operators.",
+            )
+            .with_argument(
+                "element",
+                "Element to be removed from the array.",
+            )
+            .with_argument(
+                "max",
+                "Number of first occurrences to remove.",
+            )
+            .build()
+            .unwrap()
+    })
 }
 
 make_udf_expr_and_func!(
@@ -176,6 +255,41 @@ impl ScalarUDFImpl for ArrayRemoveAll {
     fn aliases(&self) -> &[String] {
         &self.aliases
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_array_remove_all_doc())
+    }
+}
+
+fn get_array_remove_all_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_ARRAY)
+            .with_description(
+                "Removes all elements from the array equal to the given value.",
+            )
+            .with_syntax_example("array_remove_all(array, element)")
+            .with_sql_example(
+                r#"```sql
+> select array_remove_all([1, 2, 2, 3, 2, 1, 4], 2);
++--------------------------------------------------+
+| array_remove_all(List([1,2,2,3,2,1,4]),Int64(2)) |
++--------------------------------------------------+
+| [1, 3, 1, 4]                                     |
++--------------------------------------------------+
+```"#,
+            )
+            .with_argument(
+                "array",
+                "Array expression. Can be a constant, column, or function, and any combination of array operators.",
+            )
+            .with_argument(
+                "element",
+                "Element to be removed from the array.",
+            )
+            .build()
+            .unwrap()
+    })
 }
 
 /// Array_remove SQL function

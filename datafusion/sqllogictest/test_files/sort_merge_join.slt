@@ -126,22 +126,24 @@ Alice 50 Alice 1
 Alice 50 Alice 2
 Bob 1 NULL NULL
 
+# Uncomment when filtered FULL moved
 # full join with join filter
-query TITI rowsort
-SELECT * FROM t1 FULL JOIN t2 ON t1.a = t2.a AND t2.b * 50 > t1.b
-----
-Alice 100 NULL NULL
-Alice 50 Alice 2
-Bob 1 NULL NULL
-NULL NULL Alice 1
+#query TITI rowsort
+#SELECT * FROM t1 FULL JOIN t2 ON t1.a = t2.a AND t2.b * 50 > t1.b
+#----
+#Alice 100 NULL NULL
+#Alice 50 Alice 2
+#Bob 1 NULL NULL
+#NULL NULL Alice 1
 
-query TITI rowsort
-SELECT * FROM t1 FULL JOIN t2 ON t1.a = t2.a AND t1.b > t2.b + 50
-----
-Alice 100 Alice 1
-Alice 100 Alice 2
-Alice 50 NULL NULL
-Bob 1 NULL NULL
+# Uncomment when filtered FULL moved
+#query TITI rowsort
+#SELECT * FROM t1 FULL JOIN t2 ON t1.a = t2.a AND t1.b > t2.b + 50
+#----
+#Alice 100 Alice 1
+#Alice 100 Alice 2
+#Alice 50 NULL NULL
+#Bob 1 NULL NULL
 
 statement ok
 DROP TABLE t1;
@@ -405,200 +407,214 @@ select t1.* from t1 where exists (select 1 from t2 where t2.a = t1.a and t2.b !=
 statement ok
 set datafusion.execution.batch_size = 10;
 
-query II
-select * from (
-with
-t1 as (
-    select 11 a, 12 b),
-t2 as (
-    select 11 a, 13 c union all
-    select 11 a, 14 c
-    )
-select t1.* from t1 where not exists (select 1 from t2 where t2.a = t1.a and t1.b > t2.c)
-) order by 1, 2
-----
-11 12
+# Uncomment when filtered LEFTANTI moved
+#query II
+#select * from (
+#with
+#t1 as (
+#    select 11 a, 12 b),
+#t2 as (
+#    select 11 a, 13 c union all
+#    select 11 a, 14 c
+#    )
+#select t1.* from t1 where not exists (select 1 from t2 where t2.a = t1.a and t1.b > t2.c)
+#) order by 1, 2
+#----
+#11 12
 
-query III
-select * from (
-with
-t1 as (
-    select 11 a, 12 b, 1 c union all
-    select 11 a, 13 b, 2 c),
-t2 as (
-    select 11 a, 12 b, 3 c union all
-    select 11 a, 14 b, 4 c
-    )
-select t1.* from t1 where not exists (select 1 from t2 where t2.a = t1.a and t2.b != t1.b and t1.c > t2.c)
-) order by 1, 2;
-----
-11 12 1
-11 13 2
+# Uncomment when filtered LEFTANTI moved
+#query III
+#select * from (
+#with
+#t1 as (
+#    select 11 a, 12 b, 1 c union all
+#    select 11 a, 13 b, 2 c),
+#t2 as (
+#    select 11 a, 12 b, 3 c union all
+#    select 11 a, 14 b, 4 c
+#    )
+#select t1.* from t1 where not exists (select 1 from t2 where t2.a = t1.a and t2.b != t1.b and t1.c > t2.c)
+#) order by 1, 2;
+#----
+#11 12 1
+#11 13 2
 
-query III
-select * from (
-with
-t1 as (
-    select 11 a, 12 b, 1 c union all
-    select 11 a, 13 b, 2 c),
-t2 as (
-    select 11 a, 12 b, 3 c where false
-    )
-select t1.* from t1 where not exists (select 1 from t2 where t2.a = t1.a and t2.b != t1.b and t1.c > t2.c)
-) order by 1, 2;
-----
-11 12 1
-11 13 2
+# Uncomment when filtered LEFTANTI moved
+#query III
+#select * from (
+#with
+#t1 as (
+#    select 11 a, 12 b, 1 c union all
+#    select 11 a, 13 b, 2 c),
+#t2 as (
+#    select 11 a, 12 b, 3 c where false
+#    )
+#select t1.* from t1 where not exists (select 1 from t2 where t2.a = t1.a and t2.b != t1.b and t1.c > t2.c)
+#) order by 1, 2;
+#----
+#11 12 1
+#11 13 2
 
-query II
-select * from (
-with
-t1 as (
-    select 11 a, 12 b),
-t2 as (
-    select 11 a, 13 c union all
-    select 11 a, 14 c union all
-    select 11 a, 15 c
-    )
-select t1.* from t1 where not exists (select 1 from t2 where t2.a = t1.a and t1.b > t2.c)
-) order by 1, 2
-----
-11 12
+# Uncomment when filtered LEFTANTI moved
+#query II
+#select * from (
+#with
+#t1 as (
+#    select 11 a, 12 b),
+#t2 as (
+#    select 11 a, 13 c union all
+#    select 11 a, 14 c union all
+#    select 11 a, 15 c
+#    )
+#select t1.* from t1 where not exists (select 1 from t2 where t2.a = t1.a and t1.b > t2.c)
+#) order by 1, 2
+#----
+#11 12
 
-query II
-select * from (
-with
-t1 as (
-    select 11 a, 12 b),
-t2 as (
-    select 11 a, 11 c union all
-    select 11 a, 14 c union all
-    select 11 a, 15 c
-    )
-select t1.* from t1 where not exists (select 1 from t2 where t2.a = t1.a and t1.b > t2.c)
-) order by 1, 2
-----
+# Uncomment when filtered LEFTANTI moved
+#query II
+#select * from (
+#with
+#t1 as (
+#    select 11 a, 12 b),
+#t2 as (
+#    select 11 a, 11 c union all
+#    select 11 a, 14 c union all
+#    select 11 a, 15 c
+#    )
+#select t1.* from t1 where not exists (select 1 from t2 where t2.a = t1.a and t1.b > t2.c)
+#) order by 1, 2
+#----
 
-query II
-select * from (
-with
-t1 as (
-    select 11 a, 12 b),
-t2 as (
-    select 11 a, 12 c union all
-    select 11 a, 11 c union all
-    select 11 a, 15 c
-    )
-select t1.* from t1 where not exists (select 1 from t2 where t2.a = t1.a and t1.b > t2.c)
-) order by 1, 2
-----
+# Uncomment when filtered LEFTANTI moved
+#query II
+#select * from (
+#with
+#t1 as (
+#    select 11 a, 12 b),
+#t2 as (
+#    select 11 a, 12 c union all
+#    select 11 a, 11 c union all
+#    select 11 a, 15 c
+#    )
+#select t1.* from t1 where not exists (select 1 from t2 where t2.a = t1.a and t1.b > t2.c)
+#) order by 1, 2
+#----
 
-query II
-select * from (
-with
-t1 as (
-    select 11 a, 12 b),
-t2 as (
-    select 11 a, 12 c union all
-    select 11 a, 14 c union all
-    select 11 a, 11 c
-    )
-select t1.* from t1 where not exists (select 1 from t2 where t2.a = t1.a and t1.b > t2.c)
-) order by 1, 2
-----
+
+# Uncomment when filtered LEFTANTI moved
+#query II
+#select * from (
+#with
+#t1 as (
+#    select 11 a, 12 b),
+#t2 as (
+#    select 11 a, 12 c union all
+#    select 11 a, 14 c union all
+#    select 11 a, 11 c
+#    )
+#select t1.* from t1 where not exists (select 1 from t2 where t2.a = t1.a and t1.b > t2.c)
+#) order by 1, 2
+#----
 
 
 # Test LEFT ANTI with cross batch data distribution
 statement ok
 set datafusion.execution.batch_size = 1;
 
-query II
-select * from (
-with
-t1 as (
-    select 11 a, 12 b),
-t2 as (
-    select 11 a, 13 c union all
-    select 11 a, 14 c
-    )
-select t1.* from t1 where not exists (select 1 from t2 where t2.a = t1.a and t1.b > t2.c)
-) order by 1, 2
-----
-11 12
+# Uncomment when filtered LEFTANTI moved
+#query II
+#select * from (
+#with
+#t1 as (
+#    select 11 a, 12 b),
+#t2 as (
+#    select 11 a, 13 c union all
+#    select 11 a, 14 c
+#    )
+#select t1.* from t1 where not exists (select 1 from t2 where t2.a = t1.a and t1.b > t2.c)
+#) order by 1, 2
+#----
+#11 12
 
-query III
-select * from (
-with
-t1 as (
-    select 11 a, 12 b, 1 c union all
-    select 11 a, 13 b, 2 c),
-t2 as (
-    select 11 a, 12 b, 3 c union all
-    select 11 a, 14 b, 4 c
-    )
-select t1.* from t1 where not exists (select 1 from t2 where t2.a = t1.a and t2.b != t1.b and t1.c > t2.c)
-) order by 1, 2;
-----
-11 12 1
-11 13 2
+# Uncomment when filtered LEFTANTI moved
+#query III
+#select * from (
+#with
+#t1 as (
+#    select 11 a, 12 b, 1 c union all
+#    select 11 a, 13 b, 2 c),
+#t2 as (
+#    select 11 a, 12 b, 3 c union all
+#    select 11 a, 14 b, 4 c
+#    )
+#select t1.* from t1 where not exists (select 1 from t2 where t2.a = t1.a and t2.b != t1.b and t1.c > t2.c)
+#) order by 1, 2;
+#----
+#11 12 1
+#11 13 2
 
-query III
-select * from (
-with
-t1 as (
-    select 11 a, 12 b, 1 c union all
-    select 11 a, 13 b, 2 c),
-t2 as (
-    select 11 a, 12 b, 3 c where false
-    )
-select t1.* from t1 where not exists (select 1 from t2 where t2.a = t1.a and t2.b != t1.b and t1.c > t2.c)
-) order by 1, 2;
-----
-11 12 1
-11 13 2
+# Uncomment when filtered LEFTANTI moved
+#query III
+#select * from (
+#with
+#t1 as (
+#    select 11 a, 12 b, 1 c union all
+#    select 11 a, 13 b, 2 c),
+#t2 as (
+#    select 11 a, 12 b, 3 c where false
+#    )
+#select t1.* from t1 where not exists (select 1 from t2 where t2.a = t1.a and t2.b != t1.b and t1.c > t2.c)
+#) order by 1, 2;
+#----
+#11 12 1
+#11 13 2
 
-query II
-select * from (
-with
-t1 as (
-    select 11 a, 12 b),
-t2 as (
-    select 11 a, 13 c union all
-    select 11 a, 14 c union all
-    select 11 a, 15 c
-    )
-select t1.* from t1 where not exists (select 1 from t2 where t2.a = t1.a and t1.b > t2.c)
-) order by 1, 2
-----
-11 12
+# Uncomment when filtered LEFTANTI moved
+#query II
+#select * from (
+#with
+#t1 as (
+#    select 11 a, 12 b),
+#t2 as (
+#    select 11 a, 13 c union all
+#    select 11 a, 14 c union all
+#    select 11 a, 15 c
+#    )
+#select t1.* from t1 where not exists (select 1 from t2 where t2.a = t1.a and t1.b > t2.c)
+#) order by 1, 2
+#----
+#11 12
 
-query II
-select * from (
-with
-t1 as (
-    select 11 a, 12 b),
-t2 as (
-    select 11 a, 12 c union all
-    select 11 a, 11 c union all
-    select 11 a, 15 c
-    )
-select t1.* from t1 where not exists (select 1 from t2 where t2.a = t1.a and t1.b > t2.c)
-) order by 1, 2
-----
+# Uncomment when filtered LEFTANTI moved
+#query II
+#select * from (
+#with
+#t1 as (
+#   select 11 a, 12 b),
+#t2 as (
+#    select 11 a, 12 c union all
+#    select 11 a, 11 c union all
+#    select 11 a, 15 c
+#    )
+#select t1.* from t1 where not exists (select 1 from t2 where t2.a = t1.a and t1.b > t2.c)
+#) order by 1, 2
+#----
 
-query II
-select * from (
-with
-t1 as (
-    select 11 a, 12 b),
-t2 as (
-    select 11 a, 12 c union all
-    select 11 a, 14 c union all
-    select 11 a, 11 c
-    )
-select t1.* from t1 where not exists (select 1 from t2 where t2.a = t1.a and t1.b > t2.c)
-) order by 1, 2
-----
+# Uncomment when filtered LEFTANTI moved
+#query II
+#select * from (
+#with
+#t1 as (
+#    select 11 a, 12 b),
+#t2 as (
+#    select 11 a, 12 c union all
+#    select 11 a, 14 c union all
+#    select 11 a, 11 c
+#    )
+#select t1.* from t1 where not exists (select 1 from t2 where t2.a = t1.a and t1.b > t2.c)
+#) order by 1, 2
+#----
 
 query IIII
 select * from (

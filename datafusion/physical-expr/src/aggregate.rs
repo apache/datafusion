@@ -328,7 +328,7 @@ impl AggregateFunctionExpr {
     /// not implement the method, returns an error. Order insensitive and hard
     /// requirement aggregators return `Ok(None)`.
     pub fn with_beneficial_ordering(
-        self,
+        self: Arc<Self>,
         beneficial_ordering: bool,
     ) -> Result<Option<AggregateFunctionExpr>> {
         let Some(updated_fn) = self
