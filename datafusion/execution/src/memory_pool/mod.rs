@@ -334,13 +334,17 @@ impl Drop for MemoryReservation {
     }
 }
 
-const TB: u64 = 1 << 40;
-const GB: u64 = 1 << 30;
-const MB: u64 = 1 << 20;
-const KB: u64 = 1 << 10;
+pub mod units {
+    pub const TB: u64 = 1 << 40;
+    pub const GB: u64 = 1 << 30;
+    pub const MB: u64 = 1 << 20;
+    pub const KB: u64 = 1 << 10;
+}
 
 /// Present size in human readable form
 pub fn human_readable_size(size: usize) -> String {
+    use units::*;
+
     let size = size as u64;
     let (value, unit) = {
         if size >= 2 * TB {
