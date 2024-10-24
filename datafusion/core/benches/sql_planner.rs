@@ -60,7 +60,9 @@ fn create_schema(column_prefix: &str, num_columns: usize) -> Schema {
 
 fn create_table_provider(column_prefix: &str, num_columns: usize) -> Arc<MemTable> {
     let schema = Arc::new(create_schema(column_prefix, num_columns));
-    MemTable::try_new(schema, vec![vec![]]).map(Arc::new).unwrap()
+    MemTable::try_new(schema, vec![vec![]])
+        .map(Arc::new)
+        .unwrap()
 }
 
 fn create_context() -> SessionContext {
@@ -84,7 +86,7 @@ fn register_defs(ctx: SessionContext, defs: Vec<TableDef>) -> SessionContext {
             name,
             Arc::new(MemTable::try_new(Arc::new(schema.clone()), vec![vec![]]).unwrap()),
         )
-            .unwrap();
+        .unwrap();
     });
     ctx
 }
@@ -188,7 +190,8 @@ fn criterion_benchmark(c: &mut Criterion) {
                 "SELECT ta.a9, tb.a10, tc.a11, td.a12, te.a13, tf.a14 \
                  FROM t1 AS ta, t1 AS tb, t1 AS tc, t1 AS td, t1 AS te, t1 AS tf \
                  WHERE ta.a9 = tb.a10 AND tb.a10 = tc.a11 AND tc.a11 = td.a12 AND \
-                 td.a12 = te.a13 AND te.a13 = tf.a14");
+                 td.a12 = te.a13 AND te.a13 = tf.a14",
+            );
         });
     });
 
@@ -202,7 +205,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         });
     });
 
-    c.bench_function("physical_intersection", |b|{
+    c.bench_function("physical_intersection", |b| {
         b.iter(|| {
             physical_plan(
                 &ctx,
