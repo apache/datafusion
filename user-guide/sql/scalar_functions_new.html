@@ -8085,33 +8085,26 @@ an error will be returned.</p></li>
 </section>
 <section id="generate-series">
 <h3><code class="docutils literal notranslate"><span class="pre">generate_series</span></code><a class="headerlink" href="#generate-series" title="Link to this heading">¶</a></h3>
-<p>Returns an Arrow array between start and stop with step. The range start..end contains all values with start &lt;= x &lt; end. It is empty if start &gt;= end. Step cannot be 0.</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="nb">range</span><span class="p">(</span><span class="n">start</span><span class="p">,</span> <span class="n">stop</span><span class="p">,</span> <span class="n">step</span><span class="p">)</span>
+<p>Similar to the range function, but it includes the upper bound.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">generate_series</span><span class="p">(</span><span class="n">start</span><span class="p">,</span> <span class="n">stop</span><span class="p">,</span> <span class="n">step</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id254">
 <h4>Arguments<a class="headerlink" href="#id254" title="Link to this heading">¶</a></h4>
 <ul class="simple">
-<li><p><strong>start</strong>: Start of the range. Ints, timestamps, dates or string types that can be coerced to Date32 are supported.</p></li>
-<li><p><strong>end</strong>: End of the range (not included). Type must be the same as start.</p></li>
-<li><p><strong>step</strong>: Increase by step (cannot be 0). Steps less than a day are supported only for timestamp ranges.</p></li>
+<li><p><strong>start</strong>: start of the series. Ints, timestamps, dates or string types that can be coerced to Date32 are supported.</p></li>
+<li><p><strong>end</strong>: end of the series (included). Type must be the same as start.</p></li>
+<li><p><strong>step</strong>: increase by step (can not be 0). Steps less than a day are supported only for timestamp ranges.</p></li>
 </ul>
 </section>
 <section id="id255">
 <h4>Example<a class="headerlink" href="#id255" title="Link to this heading">¶</a></h4>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="n">range</span><span class="p">(</span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">10</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">);</span>
-<span class="o">+</span><span class="c1">-----------------------------------+</span>
-<span class="o">|</span><span class="w"> </span><span class="n">range</span><span class="p">(</span><span class="n">Int64</span><span class="p">(</span><span class="mi">2</span><span class="p">),</span><span class="n">Int64</span><span class="p">(</span><span class="mi">10</span><span class="p">),</span><span class="n">Int64</span><span class="p">(</span><span class="mi">3</span><span class="p">))</span><span class="o">|</span>
-<span class="o">+</span><span class="c1">-----------------------------------+</span>
-<span class="o">|</span><span class="w"> </span><span class="p">[</span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">5</span><span class="p">,</span><span class="w"> </span><span class="mi">8</span><span class="p">]</span><span class="w">                         </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">-----------------------------------+</span>
-
-<span class="o">&gt;</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="n">range</span><span class="p">(</span><span class="nb">DATE</span><span class="w"> </span><span class="s1">&#39;1992-09-01&#39;</span><span class="p">,</span><span class="w"> </span><span class="nb">DATE</span><span class="w"> </span><span class="s1">&#39;1993-03-01&#39;</span><span class="p">,</span><span class="w"> </span><span class="nb">INTERVAL</span><span class="w"> </span><span class="s1">&#39;1&#39;</span><span class="w"> </span><span class="k">MONTH</span><span class="p">);</span>
-<span class="o">+</span><span class="c1">--------------------------------------------------------------+</span>
-<span class="o">|</span><span class="w"> </span><span class="n">range</span><span class="p">(</span><span class="nb">DATE</span><span class="w"> </span><span class="s1">&#39;1992-09-01&#39;</span><span class="p">,</span><span class="w"> </span><span class="nb">DATE</span><span class="w"> </span><span class="s1">&#39;1993-03-01&#39;</span><span class="p">,</span><span class="w"> </span><span class="nb">INTERVAL</span><span class="w"> </span><span class="s1">&#39;1&#39;</span><span class="w"> </span><span class="k">MONTH</span><span class="p">)</span><span class="w"> </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">--------------------------------------------------------------+</span>
-<span class="o">|</span><span class="w"> </span><span class="p">[</span><span class="mi">1992</span><span class="o">-</span><span class="mi">09</span><span class="o">-</span><span class="mi">01</span><span class="p">,</span><span class="w"> </span><span class="mi">1992</span><span class="o">-</span><span class="mi">10</span><span class="o">-</span><span class="mi">01</span><span class="p">,</span><span class="w"> </span><span class="mi">1992</span><span class="o">-</span><span class="mi">11</span><span class="o">-</span><span class="mi">01</span><span class="p">,</span><span class="w"> </span><span class="mi">1992</span><span class="o">-</span><span class="mi">12</span><span class="o">-</span><span class="mi">01</span><span class="p">,</span><span class="w"> </span><span class="mi">1993</span><span class="o">-</span><span class="mi">01</span><span class="o">-</span><span class="mi">01</span><span class="p">,</span><span class="w"> </span><span class="mi">1993</span><span class="o">-</span><span class="mi">02</span><span class="o">-</span><span class="mi">01</span><span class="p">]</span><span class="w"> </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">--------------------------------------------------------------+</span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="n">generate_series</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span><span class="mi">3</span><span class="p">);</span>
+<span class="o">+</span><span class="c1">------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">generate_series</span><span class="p">(</span><span class="n">Int64</span><span class="p">(</span><span class="mi">1</span><span class="p">),</span><span class="n">Int64</span><span class="p">(</span><span class="mi">3</span><span class="p">))</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="p">[</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">]</span><span class="w">                          </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">------------------------------------+</span>
 </pre></div>
 </div>
 </section>
