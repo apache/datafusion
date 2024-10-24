@@ -578,38 +578,6 @@
     </a>
    </li>
    <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#lag">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       lag
-      </span>
-     </code>
-    </a>
-    <ul class="nav section-nav flex-column">
-     <li class="toc-h4 nav-item toc-entry">
-      <a class="reference internal nav-link" href="#id1">
-       Arguments
-      </a>
-     </li>
-    </ul>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#lead">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       lead
-      </span>
-     </code>
-    </a>
-    <ul class="nav section-nav flex-column">
-     <li class="toc-h4 nav-item toc-entry">
-      <a class="reference internal nav-link" href="#id2">
-       Arguments
-      </a>
-     </li>
-    </ul>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
     <a class="reference internal nav-link" href="#first-value">
      <code class="docutils literal notranslate">
       <span class="pre">
@@ -619,7 +587,7 @@
     </a>
     <ul class="nav section-nav flex-column">
      <li class="toc-h4 nav-item toc-entry">
-      <a class="reference internal nav-link" href="#id3">
+      <a class="reference internal nav-link" href="#id1">
        Arguments
       </a>
      </li>
@@ -635,7 +603,7 @@
     </a>
     <ul class="nav section-nav flex-column">
      <li class="toc-h4 nav-item toc-entry">
-      <a class="reference internal nav-link" href="#id4">
+      <a class="reference internal nav-link" href="#id2">
        Arguments
       </a>
      </li>
@@ -651,7 +619,7 @@
     </a>
     <ul class="nav section-nav flex-column">
      <li class="toc-h4 nav-item toc-entry">
-      <a class="reference internal nav-link" href="#id5">
+      <a class="reference internal nav-link" href="#id3">
        Arguments
       </a>
      </li>
@@ -853,8 +821,6 @@ the rest of the documentation.</p>
 <ul class="simple">
 <li><p><a class="reference internal" href="#cume-dist">cume_dist</a></p></li>
 <li><p><a class="reference internal" href="#percent-rank">percent_rank</a></p></li>
-<li><p><a class="reference internal" href="#lag">lag</a></p></li>
-<li><p><a class="reference internal" href="#lead">lead</a></p></li>
 <li><p><a class="reference internal" href="#first-value">first_value</a></p></li>
 <li><p><a class="reference internal" href="#last-value">last_value</a></p></li>
 <li><p><a class="reference internal" href="#nth-value">nth_value</a></p></li>
@@ -873,44 +839,14 @@ the rest of the documentation.</p>
 </pre></div>
 </div>
 </section>
-<section id="lag">
-<h3><code class="docutils literal notranslate"><span class="pre">lag</span></code><a class="headerlink" href="#lag" title="Link to this heading">¶</a></h3>
-<p>Returns value evaluated at the row that is offset rows before the current row within the partition; if there is no such row, instead return default (which must be of the same type as value). Both offset and default are evaluated with respect to the current row. If omitted, offset defaults to 1 and default to null.</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">lag</span><span class="p">(</span><span class="n">expression</span><span class="p">,</span><span class="w"> </span><span class="k">offset</span><span class="p">,</span><span class="w"> </span><span class="k">default</span><span class="p">)</span>
-</pre></div>
-</div>
-<section id="id1">
-<h4>Arguments<a class="headerlink" href="#id1" title="Link to this heading">¶</a></h4>
-<ul class="simple">
-<li><p><strong>expression</strong>: Expression to operate on</p></li>
-<li><p><strong>offset</strong>: Integer. Specifies how many rows back the value of <em>expression</em> should be retrieved. Defaults to 1.</p></li>
-<li><p><strong>default</strong>: The default value if the offset is not within the partition. Must be of the same type as <em>expression</em>.</p></li>
-</ul>
-</section>
-</section>
-<section id="lead">
-<h3><code class="docutils literal notranslate"><span class="pre">lead</span></code><a class="headerlink" href="#lead" title="Link to this heading">¶</a></h3>
-<p>Returns value evaluated at the row that is offset rows after the current row within the partition; if there is no such row, instead return default (which must be of the same type as value). Both offset and default are evaluated with respect to the current row. If omitted, offset defaults to 1 and default to null.</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">lead</span><span class="p">(</span><span class="n">expression</span><span class="p">,</span><span class="w"> </span><span class="k">offset</span><span class="p">,</span><span class="w"> </span><span class="k">default</span><span class="p">)</span>
-</pre></div>
-</div>
-<section id="id2">
-<h4>Arguments<a class="headerlink" href="#id2" title="Link to this heading">¶</a></h4>
-<ul class="simple">
-<li><p><strong>expression</strong>: Expression to operate on</p></li>
-<li><p><strong>offset</strong>: Integer. Specifies how many rows forward the value of <em>expression</em> should be retrieved. Defaults to 1.</p></li>
-<li><p><strong>default</strong>: The default value if the offset is not within the partition. Must be of the same type as <em>expression</em>.</p></li>
-</ul>
-</section>
-</section>
 <section id="first-value">
 <h3><code class="docutils literal notranslate"><span class="pre">first_value</span></code><a class="headerlink" href="#first-value" title="Link to this heading">¶</a></h3>
 <p>Returns value evaluated at the row that is the first row of the window frame.</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">first_value</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
 </pre></div>
 </div>
-<section id="id3">
-<h4>Arguments<a class="headerlink" href="#id3" title="Link to this heading">¶</a></h4>
+<section id="id1">
+<h4>Arguments<a class="headerlink" href="#id1" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>expression</strong>: Expression to operate on</p></li>
 </ul>
@@ -922,8 +858,8 @@ the rest of the documentation.</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">last_value</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
 </pre></div>
 </div>
-<section id="id4">
-<h4>Arguments<a class="headerlink" href="#id4" title="Link to this heading">¶</a></h4>
+<section id="id2">
+<h4>Arguments<a class="headerlink" href="#id2" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>expression</strong>: Expression to operate on</p></li>
 </ul>
@@ -935,8 +871,8 @@ the rest of the documentation.</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">nth_value</span><span class="p">(</span><span class="n">expression</span><span class="p">,</span><span class="w"> </span><span class="n">n</span><span class="p">)</span>
 </pre></div>
 </div>
-<section id="id5">
-<h4>Arguments<a class="headerlink" href="#id5" title="Link to this heading">¶</a></h4>
+<section id="id3">
+<h4>Arguments<a class="headerlink" href="#id3" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>expression</strong>: The name the column of which nth value to retrieve</p></li>
 <li><p><strong>n</strong>: Integer. Specifies the <em>n</em> in nth</p></li>

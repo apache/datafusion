@@ -565,6 +565,45 @@
    </li>
   </ul>
  </li>
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#analytical-functions">
+   Analytical Functions
+  </a>
+  <ul class="nav section-nav flex-column">
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#lag">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       lag
+      </span>
+     </code>
+    </a>
+    <ul class="nav section-nav flex-column">
+     <li class="toc-h4 nav-item toc-entry">
+      <a class="reference internal nav-link" href="#arguments">
+       Arguments
+      </a>
+     </li>
+    </ul>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#lead">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       lead
+      </span>
+     </code>
+    </a>
+    <ul class="nav section-nav flex-column">
+     <li class="toc-h4 nav-item toc-entry">
+      <a class="reference internal nav-link" href="#id1">
+       Arguments
+      </a>
+     </li>
+    </ul>
+   </li>
+  </ul>
+ </li>
 </ul>
 
 </nav>
@@ -771,6 +810,43 @@ Instead, the rows retain their separate identities. Behind the scenes, the windo
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">row_number</span><span class="p">()</span>
 </pre></div>
 </div>
+</section>
+</section>
+<section id="analytical-functions">
+<h2>Analytical Functions<a class="headerlink" href="#analytical-functions" title="Link to this heading">¶</a></h2>
+<ul class="simple">
+<li><p><a class="reference internal" href="#lag">lag</a></p></li>
+<li><p><a class="reference internal" href="#lead">lead</a></p></li>
+</ul>
+<section id="lag">
+<h3><code class="docutils literal notranslate"><span class="pre">lag</span></code><a class="headerlink" href="#lag" title="Link to this heading">¶</a></h3>
+<p>Returns value evaluated at the row that is offset rows before the current row within the partition; if there is no such row, instead return default (which must be of the same type as value).</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">lag</span><span class="p">(</span><span class="n">expression</span><span class="p">,</span> <span class="n">offset</span><span class="p">,</span> <span class="n">default</span><span class="p">)</span>
+</pre></div>
+</div>
+<section id="arguments">
+<h4>Arguments<a class="headerlink" href="#arguments" title="Link to this heading">¶</a></h4>
+<ul class="simple">
+<li><p><strong>expression</strong>: Expression to operate on</p></li>
+<li><p><strong>offset</strong>: Integer. Specifies how many rows back the value of expression should be retrieved. Defaults to 1.</p></li>
+<li><p><strong>default</strong>: The default value if the offset is not within the partition. Must be of the same type as expression.</p></li>
+</ul>
+</section>
+</section>
+<section id="lead">
+<h3><code class="docutils literal notranslate"><span class="pre">lead</span></code><a class="headerlink" href="#lead" title="Link to this heading">¶</a></h3>
+<p>Returns value evaluated at the row that is offset rows after the current row within the partition; if there is no such row, instead return default (which must be of the same type as value).</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">lead</span><span class="p">(</span><span class="n">expression</span><span class="p">,</span> <span class="n">offset</span><span class="p">,</span> <span class="n">default</span><span class="p">)</span>
+</pre></div>
+</div>
+<section id="id1">
+<h4>Arguments<a class="headerlink" href="#id1" title="Link to this heading">¶</a></h4>
+<ul class="simple">
+<li><p><strong>expression</strong>: Expression to operate on</p></li>
+<li><p><strong>offset</strong>: Integer. Specifies how many rows forward the value of expression should be retrieved. Defaults to 1.</p></li>
+<li><p><strong>default</strong>: The default value if the offset is not within the partition. Must be of the same type as expression.</p></li>
+</ul>
+</section>
 </section>
 </section>
 </section>
