@@ -31,12 +31,26 @@ use datafusion_common::{not_impl_err, Result, ScalarValue};
 use datafusion_expr::ColumnarValue;
 
 /// TRY_CAST expression casts an expression to a specific data type and returns NULL on invalid cast
-#[derive(Debug, Hash, Eq, PartialEq)]
-pub struct TryCastExpr<DynPhysicalExpr: ?Sized = dyn PhysicalExpr> {
+#[derive(Debug, Eq)]
+pub struct TryCastExpr {
     /// The expression to cast
-    expr: Arc<DynPhysicalExpr>,
+    expr: Arc<dyn PhysicalExpr>,
     /// The data type to cast to
     cast_type: DataType,
+}
+
+// Manually derive PartialEq and Hash to work around https://github.com/rust-lang/rust/issues/78808
+impl PartialEq for TryCastExpr {
+    fn eq(&self, other: &Self) -> bool {
+        self.expr.eq(&other.expr) && self.cast_type == other.cast_type
+    }
+}
+
+impl Hash for TryCastExpr {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.expr.hash(state);
+        self.cast_type.hash(state);
+    }
 }
 
 impl TryCastExpr {

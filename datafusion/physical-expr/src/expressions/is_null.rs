@@ -30,10 +30,23 @@ use datafusion_common::ScalarValue;
 use datafusion_expr::ColumnarValue;
 
 /// IS NULL expression
-#[derive(Debug, Hash, Eq, PartialEq)]
-pub struct IsNullExpr<DynPhysicalExpr: ?Sized = dyn PhysicalExpr> {
+#[derive(Debug, Eq)]
+pub struct IsNullExpr {
     /// Input expression
-    arg: Arc<DynPhysicalExpr>,
+    arg: Arc<dyn PhysicalExpr>,
+}
+
+// Manually derive PartialEq and Hash to work around https://github.com/rust-lang/rust/issues/78808
+impl PartialEq for IsNullExpr {
+    fn eq(&self, other: &Self) -> bool {
+        self.arg.eq(&other.arg)
+    }
+}
+
+impl Hash for IsNullExpr {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.arg.hash(state);
+    }
 }
 
 impl IsNullExpr {

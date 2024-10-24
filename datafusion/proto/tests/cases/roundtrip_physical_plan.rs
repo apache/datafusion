@@ -741,10 +741,24 @@ fn roundtrip_parquet_exec_with_custom_predicate_expr() -> Result<()> {
         output_ordering: vec![],
     };
 
-    #[derive(Debug, Hash, Clone, PartialEq, Eq)]
-    struct CustomPredicateExpr<DynPhysicalExpr: ?Sized = dyn PhysicalExpr> {
-        inner: Arc<DynPhysicalExpr>,
+    #[derive(Debug, Clone, Eq)]
+    struct CustomPredicateExpr {
+        inner: Arc<dyn PhysicalExpr>,
     }
+
+    // Manually derive PartialEq and Hash to work around https://github.com/rust-lang/rust/issues/78808
+    impl PartialEq for CustomPredicateExpr {
+        fn eq(&self, other: &Self) -> bool {
+            self.inner.eq(&other.inner)
+        }
+    }
+
+    impl std::hash::Hash for CustomPredicateExpr {
+        fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+            self.inner.hash(state);
+        }
+    }
+
     impl Display for CustomPredicateExpr {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             write!(f, "CustomPredicateExpr")

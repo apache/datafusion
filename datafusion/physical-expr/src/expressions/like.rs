@@ -26,12 +26,31 @@ use datafusion_expr::ColumnarValue;
 use datafusion_physical_expr_common::datum::apply_cmp;
 
 // Like expression
-#[derive(Debug, Hash, Eq, PartialEq)]
-pub struct LikeExpr<DynPhysicalExpr: ?Sized = dyn PhysicalExpr> {
+#[derive(Debug, Eq)]
+pub struct LikeExpr {
     negated: bool,
     case_insensitive: bool,
-    expr: Arc<DynPhysicalExpr>,
-    pattern: Arc<DynPhysicalExpr>,
+    expr: Arc<dyn PhysicalExpr>,
+    pattern: Arc<dyn PhysicalExpr>,
+}
+
+// Manually derive PartialEq and Hash to work around https://github.com/rust-lang/rust/issues/78808
+impl PartialEq for LikeExpr {
+    fn eq(&self, other: &Self) -> bool {
+        self.negated == other.negated
+            && self.case_insensitive == other.case_insensitive
+            && self.expr.eq(&other.expr)
+            && self.pattern.eq(&other.pattern)
+    }
+}
+
+impl Hash for LikeExpr {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.negated.hash(state);
+        self.case_insensitive.hash(state);
+        self.expr.hash(state);
+        self.pattern.hash(state);
+    }
 }
 
 impl LikeExpr {

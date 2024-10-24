@@ -37,10 +37,23 @@ use datafusion_expr::{
 };
 
 /// Negative expression
-#[derive(Debug, Hash, Eq, PartialEq)]
-pub struct NegativeExpr<DynPhysicalExpr: ?Sized = dyn PhysicalExpr> {
+#[derive(Debug, Eq)]
+pub struct NegativeExpr {
     /// Input expression
-    arg: Arc<DynPhysicalExpr>,
+    arg: Arc<dyn PhysicalExpr>,
+}
+
+// Manually derive PartialEq and Hash to work around https://github.com/rust-lang/rust/issues/78808
+impl PartialEq for NegativeExpr {
+    fn eq(&self, other: &Self) -> bool {
+        self.arg.eq(&other.arg)
+    }
+}
+
+impl Hash for NegativeExpr {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.arg.hash(state);
+    }
 }
 
 impl NegativeExpr {
@@ -209,9 +222,7 @@ mod tests {
 
     #[test]
     fn test_evaluate_bounds() -> Result<()> {
-        let negative_expr = NegativeExpr::<dyn PhysicalExpr> {
-            arg: Arc::new(Column::new("a", 0)),
-        };
+        let negative_expr = NegativeExpr::new(Arc::new(Column::new("a", 0)));
         let child_interval = Interval::make(Some(-2), Some(1))?;
         let negative_expr_interval = Interval::make(Some(-1), Some(2))?;
         assert_eq!(
@@ -223,9 +234,7 @@ mod tests {
 
     #[test]
     fn test_propagate_constraints() -> Result<()> {
-        let negative_expr = NegativeExpr::<dyn PhysicalExpr> {
-            arg: Arc::new(Column::new("a", 0)),
-        };
+        let negative_expr = NegativeExpr::new(Arc::new(Column::new("a", 0)));
         let original_child_interval = Interval::make(Some(-2), Some(3))?;
         let negative_expr_interval = Interval::make(Some(0), Some(4))?;
         let after_propagation = Some(vec![Interval::make(Some(-2), Some(0))?]);
