@@ -22,6 +22,38 @@ use rand::prelude::Distribution;
 use rand::rngs::StdRng;
 use rand::Rng;
 
+/// Trait for converting type safely from a native type T impl this trait.
+pub trait FromNative: std::fmt::Debug + Send + Sync + Copy + Default {
+    /// Convert native type from i64.
+    fn from_i64(_: i64) -> Option<Self> {
+        None
+    }
+}
+
+macro_rules! native_type {
+    ($t: ty $(, $from:ident)*) => {
+        impl FromNative for $t {
+            $(
+                #[inline]
+                fn $from(v: $t) -> Option<Self> {
+                    Some(v)
+                }
+            )*
+        }
+    };
+}
+
+native_type!(i8);
+native_type!(i16);
+native_type!(i32);
+native_type!(i64, from_i64);
+native_type!(u8);
+native_type!(u16);
+native_type!(u32);
+native_type!(u64);
+native_type!(f32);
+native_type!(f64);
+
 /// Randomly generate primitive array
 pub struct PrimitiveArrayGenerator {
     /// the total number of strings in the output
@@ -39,6 +71,7 @@ impl PrimitiveArrayGenerator {
     pub fn gen_data<A>(&mut self) -> ArrayRef
     where
         A: ArrowPrimitiveType,
+        A::Native: FromNative,
         Standard: Distribution<<A as ArrowPrimitiveType>::Native>,
     {
         // table of primitives from which to draw
@@ -60,15 +93,9 @@ impl PrimitiveArrayGenerator {
                     DataType::Date64 => {
                         // TODO: constrain this range to valid dates if necessary
                         let date_value = self.rng.gen_range(i64::MIN..=i64::MAX);
-                        let millis_per_day: i64 = 86_400_000;
+                        let millis_per_day = 86_400_000;
                         let adjusted_value = date_value - (date_value % millis_per_day);
-                        // SAFETY: here we can convert i64 to A::Native safely since we determine that
-                        // the type A::Native is i64
-                        unsafe {
-                            std::ptr::read(
-                                &adjusted_value as *const i64 as *const A::Native,
-                            )
-                        }
+                        A::Native::from_i64(adjusted_value).unwrap()
                     }
 
                     _ => {
