@@ -35,40 +35,40 @@ Expands an array or map into rows.
 
 #### Examples
 
-```
-> select unnest(make_array(1, 2, 3, 4, 5));
-+------------------------------------------------------------------+
-| unnest(make_array(Int64(1),Int64(2),Int64(3),Int64(4),Int64(5))) |
-+------------------------------------------------------------------+
-| 1                                                                |
-| 2                                                                |
-| 3                                                                |
-| 4                                                                |
-| 5                                                                |
-+------------------------------------------------------------------+
+```sql
+> select unnest(make_array(1, 2, 3, 4, 5)) as unnested;
++----------+
+| unnested |
++----------+
+| 1        |
+| 2        |
+| 3        |
+| 4        |
+| 5        |
++----------+
 ```
 
-```
-> select unnest(range(0, 10));
-+-----------------------------------+
-| unnest(range(Int64(0),Int64(10))) |
-+-----------------------------------+
-| 0                                 |
-| 1                                 |
-| 2                                 |
-| 3                                 |
-| 4                                 |
-| 5                                 |
-| 6                                 |
-| 7                                 |
-| 8                                 |
-| 9                                 |
-+-----------------------------------+
+```sql
+> select unnest(range(0, 10)) as unnested_range;
++----------------+
+| unnested_range |
++----------------+
+| 0              |
+| 1              |
+| 2              |
+| 3              |
+| 4              |
+| 5              |
+| 6              |
+| 7              |
+| 8              |
+| 9              |
++----------------+
 ```
 
 ### `unnest (struct)`
 
-Unwraps struct fields into columns.
+Expand a struct fields into individual columns.
 
 #### Arguments
 
@@ -77,18 +77,24 @@ Unwraps struct fields into columns.
 
 #### Examples
 
-```
-> select * from foo;
-+---------------------+
-| column1             |
-+---------------------+
-| {a: 5, b: a string} |
-+---------------------+
+```sql
+> create table foo as values ({a: 5, b: 'a string'}), ({a:6, b: 'another string'});
 
-> select unnest(column1) from foo;
-+-----------------------+-----------------------+
-| unnest(foo.column1).a | unnest(foo.column1).b |
-+-----------------------+-----------------------+
-| 5                     | a string              |
-+-----------------------+-----------------------+
+> create view foov as select column1 as struct_column from foo;
+
+> select * from foov;
++---------------------------+
+| struct_column             |
++---------------------------+
+| {a: 5, b: a string}       |
+| {a: 6, b: another string} |
++---------------------------+
+
+> select unnest(struct_column) from foov;
++------------------------------------------+------------------------------------------+
+| unnest_placeholder(foov.struct_column).a | unnest_placeholder(foov.struct_column).b |
++------------------------------------------+------------------------------------------+
+| 5                                        | a string                                 |
+| 6                                        | another string                           |
++------------------------------------------+------------------------------------------+
 ```
