@@ -15,7 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::regex::utils::{compile_and_cache_regex, compile_regex};
 use crate::strings::StringArrayType;
+
+use std::collections::HashMap;
+use std::sync::{Arc, OnceLock};
+
 use arrow::array::{Array, ArrayRef, AsArray, Datum, Int64Array};
 use arrow::datatypes::{DataType, Int64Type};
 use arrow::datatypes::{
@@ -28,11 +33,9 @@ use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, TypeSignature::Exact,
     TypeSignature::Uniform, Volatility,
 };
+
 use itertools::izip;
 use regex::Regex;
-use std::collections::hash_map::Entry;
-use std::collections::HashMap;
-use std::sync::{Arc, OnceLock};
 
 #[derive(Debug)]
 pub struct RegexpCountFunc {
@@ -547,42 +550,6 @@ where
             )))
         }
     }
-}
-
-fn compile_and_cache_regex(
-    regex: &str,
-    flags: Option<&str>,
-    regex_cache: &mut HashMap<String, Regex>,
-) -> Result<Regex, ArrowError> {
-    match regex_cache.entry(regex.to_string()) {
-        Entry::Vacant(entry) => {
-            let compiled = compile_regex(regex, flags)?;
-            entry.insert(compiled.clone());
-            Ok(compiled)
-        }
-        Entry::Occupied(entry) => Ok(entry.get().to_owned()),
-    }
-}
-
-fn compile_regex(regex: &str, flags: Option<&str>) -> Result<Regex, ArrowError> {
-    let pattern = match flags {
-        None | Some("") => regex.to_string(),
-        Some(flags) => {
-            if flags.contains("g") {
-                return Err(ArrowError::ComputeError(
-                    "regexp_count() does not support global flag".to_string(),
-                ));
-            }
-            format!("(?{}){}", flags, regex)
-        }
-    };
-
-    Regex::new(&pattern).map_err(|_| {
-        ArrowError::ComputeError(format!(
-            "Regular expression did not compile: {}",
-            pattern
-        ))
-    })
 }
 
 fn count_matches(

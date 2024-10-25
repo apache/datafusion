@@ -23,7 +23,8 @@ pub mod regexpcount;
 pub mod regexplike;
 pub mod regexpmatch;
 pub mod regexpreplace;
-mod regexsplittoarray;
+pub mod regexpsplittoarray;
+mod utils;
 
 // create UDFs
 make_udf_function!(regexpcount::RegexpCountFunc, REGEXP_COUNT, regexp_count);

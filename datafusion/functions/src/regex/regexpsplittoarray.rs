@@ -15,18 +15,18 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::collections::hash_map::Entry;
+use crate::regex::utils::{compile_and_cache_regex, compile_regex};
+use crate::strings::StringArrayType;
+
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
 
-use crate::strings::StringArrayType;
-
 use arrow::array::{
-    Array, ArrayBuilder, ArrayRef, AsArray, Datum, ListArray, ListBuilder, StringArray,
-    StringBuilder,
+    Array, ArrayRef, AsArray, Datum, GenericStringBuilder, LargeStringBuilder,
+    ListBuilder, OffsetSizeTrait, StringBuilder,
 };
 use arrow::datatypes::DataType::{LargeUtf8, Utf8};
-use arrow::datatypes::{DataType, Field, GenericStringType};
+use arrow::datatypes::{DataType, Field};
 use arrow::error::ArrowError;
 use datafusion_common::{exec_err, DataFusionError, ScalarValue};
 use datafusion_expr::TypeSignature::{Exact, Uniform};
@@ -34,8 +34,39 @@ use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
 
-use itertools::{izip, Itertools};
+use datafusion_expr::scalar_doc_sections::DOC_SECTION_REGEX;
+use itertools::izip;
 use regex::Regex;
+
+static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+
+fn get_regexp_split_to_array_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_REGEX)
+            .with_description("Returns the number of matches that a [regular expression](https://docs.rs/regex/latest/regex/#syntax) has in a string.")
+            .with_syntax_example("regexp_split_to_array(str, regexp[, flags])")
+            .with_sql_example(r#"```sql
+> select regexp_split_to_array('abcAbAbc', 'abc', 'i');
++---------------------------------------------------------------+
+| regexp_split_to_array(Utf8("abcAbAbc"),Utf8("abc"),Utf8("i")) |
++---------------------------------------------------------------+
+| ,Ab,
++---------------------------------------------------------------+
+```"#)
+            .with_standard_argument("str", Some("String"))
+            .with_standard_argument("regexp",Some("Regular"))
+            .with_argument("flags",
+                           r#"Optional regular expression flags that control the behavior of the regular expression. The following flags are supported:
+  - **i**: case-insensitive: letters match both upper and lower case
+  - **m**: multi-line mode: ^ and $ match begin/end of line
+  - **s**: allow . to match \n
+  - **R**: enables CRLF mode: when multi-line mode is enabled, \r\n is used
+  - **U**: swap the meaning of x* and x*?"#)
+            .build()
+            .unwrap()
+    })
+}
 
 #[derive(Debug)]
 pub struct RegexpSplitToArrayFunc {
@@ -130,7 +161,7 @@ pub fn regexp_split_to_array_func(
 
     let values = &args[0];
 
-    regex_split_to_array(
+    regexp_split_to_array(
         values,
         &args[1],
         if args_len > 2 { Some(&args[2]) } else { None },
@@ -138,7 +169,7 @@ pub fn regexp_split_to_array_func(
     .map_err(|e| e.into())
 }
 
-pub fn regex_split_to_array(
+pub fn regexp_split_to_array(
     values: &dyn Array,
     regex_array: &dyn Datum,
     flags_array: Option<&dyn Datum>,
@@ -156,6 +187,7 @@ pub fn regex_split_to_array(
             is_regex_scalar,
             None,
             is_flags_scalar,
+            ListBuilder::new(StringBuilder::new()),
         ),
         (Utf8, Utf8, Some(flags_array)) if *flags_array.data_type() == Utf8 => regexp_split_to_array_inner(
             values.as_string::<i32>(),
@@ -163,6 +195,7 @@ pub fn regex_split_to_array(
             is_regex_scalar,
             Some(flags_array.as_string::<i32>()),
             is_flags_scalar,
+            ListBuilder::new(StringBuilder::new()),
         ),
         (LargeUtf8, LargeUtf8, None) => regexp_split_to_array_inner(
             values.as_string::<i64>(),
@@ -170,6 +203,7 @@ pub fn regex_split_to_array(
             is_regex_scalar,
             None,
             is_flags_scalar,
+            ListBuilder::new(LargeStringBuilder::new()),
         ),
         (LargeUtf8, LargeUtf8, Some(flags_array)) if *flags_array.data_type() == LargeUtf8 => regexp_split_to_array_inner(
             values.as_string::<i64>(),
@@ -177,22 +211,25 @@ pub fn regex_split_to_array(
             is_regex_scalar,
             Some(flags_array.as_string::<i64>()),
             is_flags_scalar,
+            ListBuilder::new(LargeStringBuilder::new()),
         ),
         _ => Err(ArrowError::ComputeError(
-            "regexp_count() expected the input arrays to be of type Utf8, LargeUtf8, or Utf8View and the data types of the values, regex_array, and flags_array to match".to_string(),
+            "regexp_split_to_array() expected the input arrays to be of type Utf8, LargeUtf8, or Utf8View and the data types of the values, regex_array, and flags_array to match".to_string(),
         )),
     }
 }
 
-pub fn regexp_split_to_array_inner<'a, S>(
+pub fn regexp_split_to_array_inner<'a, S, T>(
     values: S,
     regex_array: S,
     is_regex_scalar: bool,
     flags_array: Option<S>,
     is_flags_scalar: bool,
+    mut list_array: ListBuilder<GenericStringBuilder<T>>,
 ) -> Result<ArrayRef, ArrowError>
 where
     S: StringArrayType<'a>,
+    T: OffsetSizeTrait,
 {
     let (regex_scalar, is_regex_scalar) = if is_regex_scalar || regex_array.len() == 1 {
         (Some(regex_array.value(0)), true)
@@ -217,42 +254,27 @@ where
         (true, true) => {
             let regex = match regex_scalar {
                 None | Some("") => {
-                    let iter = values
-                        .iter()
-                        .map(|value| {
-                            Some(
-                                get_splitted_array_no_regex(value)
-                                    .into_iter()
-                                    .map(Some)
-                                    .collect_vec(),
-                            )
-                        })
-                        .collect_vec();
-                    return Ok(
-                        Arc::new(ListArray::from_iter_primitive(iter)) as Arc<dyn Array>
-                    );
+                    values.iter().for_each(|value| {
+                        get_splitted_array_no_regex(&mut list_array, value)
+                    });
+                    return Ok(Arc::new(list_array.finish()));
                 }
                 Some(regex) => regex,
             };
 
             let pattern = compile_regex(regex, flags_scalar)?;
-            let iter = values
+            values
                 .iter()
-                .map(|value| {
-                    Some(get_splitted_array(value, &pattern).into_iter().map(Some))
-                })
-                .collect_vec();
-            Ok(Arc::new(ListArray::from_iter_primitive(iter)))
+                .for_each(|value| get_splitted_array(&mut list_array, value, &pattern));
+            Ok(Arc::new(list_array.finish()))
         }
         (true, false) => {
             let regex = match regex_scalar {
-                None | Some("") => {
-                    return Ok(Arc::new(
-                        values
-                            .iter()
-                            .map(|value| get_splitted_array_no_regex(value))
-                            .collect(),
-                    ))
+                None => {
+                    values.iter().for_each(|value| {
+                        get_splitted_array_no_regex(&mut list_array, value)
+                    });
+                    return Ok(Arc::new(list_array.finish()));
                 }
                 Some(regex) => regex,
             };
@@ -266,16 +288,16 @@ where
                 )));
             }
 
-            let iter = values
+            values
                 .iter()
                 .zip(flags_array.iter())
-                .map(|(value, flags)| {
+                .for_each(|(value, flags)| {
                     let pattern =
                         compile_and_cache_regex(regex, flags, &mut regex_cache).ok();
-                    pattern.map(|p| Some(get_splitted_array(value, &p)))
-                })
-                .collect(); // TODO: there must be no need to collect
-            Ok(Arc::new(ListArray::from_iter_primitive(iter)))
+                    get_splitted_array(&mut list_array, value, &pattern.unwrap())
+                });
+
+            Ok(Arc::new(list_array.finish()))
         }
         (false, true) => {
             if values.len() != regex_array.len() {
@@ -286,29 +308,17 @@ where
                 )));
             }
 
-            let iter = values
+            values
                 .iter()
                 .zip(regex_array.iter())
-                .map(|(value, regex)| {
-                    let regex = match regex {
-                        None | Some("") => {
-                            return Err(ArrowError::ComputeError(
-                                "regex_array must not contain null or empty strings"
-                                    .to_string(),
-                            ))
-                        }
-                        Some(regex) => regex,
-                    };
+                .for_each(|(value, regex)| {
+                    let regex = regex.unwrap_or("");
                     let pattern =
                         compile_and_cache_regex(regex, flags_scalar, &mut regex_cache)
                             .ok();
-                    Ok(pattern
-                        .map(|p| Some(get_splitted_array(value, &p)))
-                        .unwrap()
-                        .unwrap())
-                })
-                .collect();
-            Ok(Arc::new(ListArray::from_iter_primitive(iter)))
+                    get_splitted_array(&mut list_array, value, &pattern.unwrap());
+                });
+            Ok(Arc::new(list_array.finish()))
         }
         (false, false) => {
             if values.len() != regex_array.len() {
@@ -328,82 +338,124 @@ where
                 )));
             }
 
-            let iter = izip!(values.iter(), regex_array.iter(), flags_array.iter())
-                .map(|(value, regex, flags)| {
-                    let regex = match regex {
-                        None | Some("") => return Some(vec![]),
-                        Some(regex) => regex,
-                    };
-
+            izip!(values.iter(), regex_array.iter(), flags_array.iter()).for_each(
+                |(value, regex, flags)| {
+                    let regex = regex.unwrap_or("");
                     let pattern =
                         compile_and_cache_regex(regex, flags, &mut regex_cache).ok();
-                    pattern.map(|p| {
-                        get_splitted_array(value, &p)
-                            .into_iter()
-                            .map(Some)
-                            .collect()
-                    })
-                })
-                .collect_vec();
-            Ok(Arc::new(ListArray::from_iter_primitive(iter)))
+                    get_splitted_array(&mut list_array, value, &pattern.unwrap());
+                },
+            );
+            Ok(Arc::new(list_array.finish()))
         }
     };
     result.map(|r| r as Arc<dyn Array>)
 }
 
-fn compile_and_cache_regex(
-    regex: &str,
-    flags: Option<&str>,
-    regex_cache: &mut HashMap<String, Regex>,
-) -> Result<Regex, ArrowError> {
-    match regex_cache.entry(regex.to_string()) {
-        Entry::Vacant(entry) => {
-            let compiled = compile_regex(regex, flags)?;
-            entry.insert(compiled.clone());
-            Ok(compiled)
-        }
-        Entry::Occupied(entry) => Ok(entry.get().to_owned()),
-    }
-}
-
-fn compile_regex(regex: &str, flags: Option<&str>) -> Result<Regex, ArrowError> {
-    let pattern = match flags {
-        None | Some("") => regex.to_string(),
-        Some(flags) => {
-            if flags.contains("g") {
-                return Err(ArrowError::ComputeError(
-                    "regexp_count() does not support global flag".to_string(),
-                ));
-            }
-            format!("(?{}){}", flags, regex)
-        }
-    };
-
-    Regex::new(&pattern).map_err(|_| {
-        ArrowError::ComputeError(format!(
-            "Regular expression did not compile: {}",
-            pattern
-        ))
-    })
-}
-
-fn get_splitted_array_no_regex(value: Option<&str>) -> Vec<String> {
+fn get_splitted_array_no_regex<T: OffsetSizeTrait>(
+    list_array: &mut ListBuilder<GenericStringBuilder<T>>,
+    value: Option<&str>,
+) {
     match value {
-        None | Some("") => vec![],
-        Some(value) => vec![value.split("").collect()],
-    }
-}
-
-fn get_splitted_array(value: Option<&str>, pattern: &Regex) -> Vec<String> {
-    let value = match value {
-        None | Some("") => return vec![],
-        Some(value) => value,
+        None => list_array.values().append_null(),
+        Some(value) => value.chars().map(|c| c.to_string()).for_each(|v| {
+            list_array.values().append_value(v);
+        }),
     };
-    pattern.split(value).map(|s| s.to_string()).collect_vec()
+    list_array.append(true);
 }
 
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+fn get_splitted_array<T: OffsetSizeTrait>(
+    list_array: &mut ListBuilder<GenericStringBuilder<T>>,
+    value: Option<&str>,
+    pattern: &Regex,
+) {
+    match value {
+        None => list_array.values().append_null(),
+        Some(value) => pattern.split(value).map(|s| s.to_string()).for_each(|v| {
+            list_array.values().append_value(v);
+        }),
+    };
+    list_array.append(true);
+}
 
-fn get_regexp_split_to_array_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| Documentation::builder().build().unwrap())
+#[cfg(test)]
+mod tests {
+    use crate::regex::regexpsplittoarray::RegexpSplitToArrayFunc;
+    use arrow::array::{Array, ListBuilder, StringArray, StringBuilder};
+    use datafusion_common::ScalarValue;
+    use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
+
+    #[test]
+    fn test_case_sensitive_regexp_split_to_array_scalar() {
+        let values = ["", "aabca", "abcabc", "abcAbcab", "abcabcabc"];
+        let regex = "abc";
+        let expected = [
+            vec![""],
+            vec!["a", "a"],
+            vec!["", "", ""],
+            vec!["", "Abcab"],
+            vec!["", "", "", ""],
+        ];
+
+        values.iter().enumerate().for_each(|(pos, &v)| {
+            // utf8
+            let v_sv = ScalarValue::Utf8(Some(v.to_string()));
+            let regex_sv = ScalarValue::Utf8(Some(regex.to_string()));
+            let expected: StringArray = expected.get(pos).cloned().unwrap().into();
+
+            let re = RegexpSplitToArrayFunc::new()
+                .invoke(&[ColumnarValue::Scalar(v_sv), ColumnarValue::Scalar(regex_sv)]);
+            match re {
+                Ok(ColumnarValue::Scalar(ScalarValue::List(v))) => {
+                    assert_eq!(v.len(), 1, "regexp_split_to_array scalar test failed");
+
+                    assert_eq!(
+                        v.value(0).as_any().downcast_ref::<StringArray>().unwrap(),
+                        &expected,
+                        "regexp_split_to_array scalar test failed"
+                    );
+                }
+                _ => panic!("Unexpected result"),
+            }
+        });
+    }
+
+    #[test]
+    fn test_get_splitted_array_no_regex() {
+        let mut builder = ListBuilder::new(StringBuilder::new());
+        let value = Some("hello");
+        super::get_splitted_array_no_regex(&mut builder, value);
+        let list_array = builder.finish();
+
+        let binding = list_array.value(0);
+        let string_array = binding
+            .as_any()
+            .downcast_ref::<arrow::array::StringArray>()
+            .unwrap();
+
+        assert_eq!(string_array.len(), 5);
+        assert_eq!(string_array.value(0), "h");
+        assert_eq!(string_array.value(1), "e");
+        assert_eq!(string_array.value(2), "l");
+        assert_eq!(string_array.value(3), "l");
+        assert_eq!(string_array.value(4), "o");
+    }
+
+    #[test]
+    fn test_get_splitted_array() {
+        let mut builder = ListBuilder::new(StringBuilder::new());
+        let value = Some("hello");
+
+        let pattern = regex::Regex::new(r"l").unwrap();
+        super::get_splitted_array(&mut builder, value, &pattern);
+        let list_array = builder.finish();
+
+        let binding = list_array.value(0);
+        let string_array = binding.as_any().downcast_ref::<StringArray>().unwrap();
+        assert_eq!(string_array.len(), 3);
+        assert_eq!(string_array.value(0), "he");
+        assert_eq!(string_array.value(1), "");
+        assert_eq!(string_array.value(2), "o");
+    }
 }
