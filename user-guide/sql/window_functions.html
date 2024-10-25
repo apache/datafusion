@@ -519,47 +519,6 @@
   </a>
  </li>
  <li class="toc-h2 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#ranking-functions">
-   Ranking functions
-  </a>
-  <ul class="nav section-nav flex-column">
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#rank">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       rank
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#dense-rank">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       dense_rank
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#ntile">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       ntile
-      </span>
-     </code>
-    </a>
-    <ul class="nav section-nav flex-column">
-     <li class="toc-h4 nav-item toc-entry">
-      <a class="reference internal nav-link" href="#arguments">
-       Arguments
-      </a>
-     </li>
-    </ul>
-   </li>
-  </ul>
- </li>
- <li class="toc-h2 nav-item toc-entry">
   <a class="reference internal nav-link" href="#analytical-functions">
    Analytical functions
   </a>
@@ -592,7 +551,7 @@
     </a>
     <ul class="nav section-nav flex-column">
      <li class="toc-h4 nav-item toc-entry">
-      <a class="reference internal nav-link" href="#id1">
+      <a class="reference internal nav-link" href="#arguments">
        Arguments
       </a>
      </li>
@@ -608,7 +567,7 @@
     </a>
     <ul class="nav section-nav flex-column">
      <li class="toc-h4 nav-item toc-entry">
-      <a class="reference internal nav-link" href="#id2">
+      <a class="reference internal nav-link" href="#id1">
        Arguments
       </a>
      </li>
@@ -624,7 +583,7 @@
     </a>
     <ul class="nav section-nav flex-column">
      <li class="toc-h4 nav-item toc-entry">
-      <a class="reference internal nav-link" href="#id3">
+      <a class="reference internal nav-link" href="#id2">
        Arguments
       </a>
      </li>
@@ -786,41 +745,6 @@ the rest of the documentation.</p>
 <h2>Aggregate functions<a class="headerlink" href="#aggregate-functions" title="Link to this heading">¶</a></h2>
 <p>All <a class="reference internal" href="aggregate_functions.html"><span class="std std-doc">aggregate functions</span></a> can be used as window functions.</p>
 </section>
-<section id="ranking-functions">
-<h2>Ranking functions<a class="headerlink" href="#ranking-functions" title="Link to this heading">¶</a></h2>
-<ul class="simple">
-<li><p><a class="reference internal" href="#rank">rank</a></p></li>
-<li><p><a class="reference internal" href="#dense-rank">dense_rank</a></p></li>
-<li><p><a class="reference internal" href="#ntile">ntile</a></p></li>
-</ul>
-<section id="rank">
-<h3><code class="docutils literal notranslate"><span class="pre">rank</span></code><a class="headerlink" href="#rank" title="Link to this heading">¶</a></h3>
-<p>Rank of the current row with gaps; same as row_number of its first peer.</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">rank</span><span class="p">()</span>
-</pre></div>
-</div>
-</section>
-<section id="dense-rank">
-<h3><code class="docutils literal notranslate"><span class="pre">dense_rank</span></code><a class="headerlink" href="#dense-rank" title="Link to this heading">¶</a></h3>
-<p>Rank of the current row without gaps; this function counts peer groups.</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">dense_rank</span><span class="p">()</span>
-</pre></div>
-</div>
-</section>
-<section id="ntile">
-<h3><code class="docutils literal notranslate"><span class="pre">ntile</span></code><a class="headerlink" href="#ntile" title="Link to this heading">¶</a></h3>
-<p>Integer ranging from 1 to the argument value, dividing the partition as equally as possible.</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">ntile</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
-</pre></div>
-</div>
-<section id="arguments">
-<h4>Arguments<a class="headerlink" href="#arguments" title="Link to this heading">¶</a></h4>
-<ul class="simple">
-<li><p><strong>expression</strong>: An integer describing the number groups the partition should be split into</p></li>
-</ul>
-</section>
-</section>
-</section>
 <section id="analytical-functions">
 <h2>Analytical functions<a class="headerlink" href="#analytical-functions" title="Link to this heading">¶</a></h2>
 <ul class="simple">
@@ -850,8 +774,8 @@ the rest of the documentation.</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">first_value</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
 </pre></div>
 </div>
-<section id="id1">
-<h4>Arguments<a class="headerlink" href="#id1" title="Link to this heading">¶</a></h4>
+<section id="arguments">
+<h4>Arguments<a class="headerlink" href="#arguments" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>expression</strong>: Expression to operate on</p></li>
 </ul>
@@ -863,8 +787,8 @@ the rest of the documentation.</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">last_value</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
 </pre></div>
 </div>
-<section id="id2">
-<h4>Arguments<a class="headerlink" href="#id2" title="Link to this heading">¶</a></h4>
+<section id="id1">
+<h4>Arguments<a class="headerlink" href="#id1" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>expression</strong>: Expression to operate on</p></li>
 </ul>
@@ -876,8 +800,8 @@ the rest of the documentation.</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">nth_value</span><span class="p">(</span><span class="n">expression</span><span class="p">,</span><span class="w"> </span><span class="n">n</span><span class="p">)</span>
 </pre></div>
 </div>
-<section id="id3">
-<h4>Arguments<a class="headerlink" href="#id3" title="Link to this heading">¶</a></h4>
+<section id="id2">
+<h4>Arguments<a class="headerlink" href="#id2" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>expression</strong>: The name the column of which nth value to retrieve</p></li>
 <li><p><strong>n</strong>: Integer. Specifies the <em>n</em> in nth</p></li>

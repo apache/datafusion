@@ -542,6 +542,22 @@
     </a>
    </li>
    <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#ntile">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       ntile
+      </span>
+     </code>
+    </a>
+    <ul class="nav section-nav flex-column">
+     <li class="toc-h4 nav-item toc-entry">
+      <a class="reference internal nav-link" href="#arguments">
+       Arguments
+      </a>
+     </li>
+    </ul>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
     <a class="reference internal nav-link" href="#percent-rank">
      <code class="docutils literal notranslate">
       <span class="pre">
@@ -585,7 +601,7 @@
     </a>
     <ul class="nav section-nav flex-column">
      <li class="toc-h4 nav-item toc-entry">
-      <a class="reference internal nav-link" href="#arguments">
+      <a class="reference internal nav-link" href="#id1">
        Arguments
       </a>
      </li>
@@ -601,7 +617,7 @@
     </a>
     <ul class="nav section-nav flex-column">
      <li class="toc-h4 nav-item toc-entry">
-      <a class="reference internal nav-link" href="#id1">
+      <a class="reference internal nav-link" href="#id2">
        Arguments
       </a>
      </li>
@@ -777,6 +793,7 @@ Instead, the rows retain their separate identities. Behind the scenes, the windo
 <ul class="simple">
 <li><p><a class="reference internal" href="#cume-dist">cume_dist</a></p></li>
 <li><p><a class="reference internal" href="#dense-rank">dense_rank</a></p></li>
+<li><p><a class="reference internal" href="#ntile">ntile</a></p></li>
 <li><p><a class="reference internal" href="#percent-rank">percent_rank</a></p></li>
 <li><p><a class="reference internal" href="#rank">rank</a></p></li>
 <li><p><a class="reference internal" href="#row-number">row_number</a></p></li>
@@ -794,6 +811,19 @@ Instead, the rows retain their separate identities. Behind the scenes, the windo
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">dense_rank</span><span class="p">()</span>
 </pre></div>
 </div>
+</section>
+<section id="ntile">
+<h3><code class="docutils literal notranslate"><span class="pre">ntile</span></code><a class="headerlink" href="#ntile" title="Link to this heading">¶</a></h3>
+<p>Integer ranging from 1 to the argument value, dividing the partition as equally as possible</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">ntile</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
+</pre></div>
+</div>
+<section id="arguments">
+<h4>Arguments<a class="headerlink" href="#arguments" title="Link to this heading">¶</a></h4>
+<ul class="simple">
+<li><p><strong>expression</strong>: An integer describing the number groups the partition should be split into</p></li>
+</ul>
+</section>
 </section>
 <section id="percent-rank">
 <h3><code class="docutils literal notranslate"><span class="pre">percent_rank</span></code><a class="headerlink" href="#percent-rank" title="Link to this heading">¶</a></h3>
@@ -829,8 +859,8 @@ Instead, the rows retain their separate identities. Behind the scenes, the windo
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">lag</span><span class="p">(</span><span class="n">expression</span><span class="p">,</span> <span class="n">offset</span><span class="p">,</span> <span class="n">default</span><span class="p">)</span>
 </pre></div>
 </div>
-<section id="arguments">
-<h4>Arguments<a class="headerlink" href="#arguments" title="Link to this heading">¶</a></h4>
+<section id="id1">
+<h4>Arguments<a class="headerlink" href="#id1" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>expression</strong>: Expression to operate on</p></li>
 <li><p><strong>offset</strong>: Integer. Specifies how many rows back the value of expression should be retrieved. Defaults to 1.</p></li>
@@ -844,8 +874,8 @@ Instead, the rows retain their separate identities. Behind the scenes, the windo
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">lead</span><span class="p">(</span><span class="n">expression</span><span class="p">,</span> <span class="n">offset</span><span class="p">,</span> <span class="n">default</span><span class="p">)</span>
 </pre></div>
 </div>
-<section id="id1">
-<h4>Arguments<a class="headerlink" href="#id1" title="Link to this heading">¶</a></h4>
+<section id="id2">
+<h4>Arguments<a class="headerlink" href="#id2" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>expression</strong>: Expression to operate on</p></li>
 <li><p><strong>offset</strong>: Integer. Specifies how many rows forward the value of expression should be retrieved. Defaults to 1.</p></li>
