@@ -153,6 +153,7 @@ fn calc_inline_constraints_from_columns(columns: &[ColumnDef]) -> Vec<TableConst
                 | ast::ColumnOption::Materialized(_)
                 | ast::ColumnOption::Ephemeral(_)
                 | ast::ColumnOption::Alias(_) => {}
+                _ => unreachable!("Unexpected column option: {:?}", option),
             }
         }
     }
