@@ -332,13 +332,13 @@ struct Options {
 
     #[clap(
         long,
-        help = "Quits immediately, not listing anything (for compatibility with built in rust test runner)"
+        help = "Quits immediately, not listing anything (for compatibility with built-in rust test runner)"
     )]
     list: bool,
 
     #[clap(
         long,
-        help = "IGNORED (for compatibility with built in rust test runner)"
+        help = "IGNORED (for compatibility with built-in rust test runner)"
     )]
     ignored: bool,
 }
