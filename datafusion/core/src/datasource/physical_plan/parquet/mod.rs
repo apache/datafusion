@@ -2313,6 +2313,33 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_predicate_no_pushdown_parquet() -> Result<()> {
+        let tmp_dir = TempDir::new()?;
+        let path = tmp_dir.path().to_str().unwrap().to_string() + "/test.parquet";
+        write_file(&path);
+        let ctx = SessionContext::new();
+        let opt = ListingOptions::new(Arc::new(ParquetFormat::default()));
+        ctx.register_listing_table("base_table", path, opt, None, None)
+            .await
+            .unwrap();
+        let sql = "
+        with tmp as (
+ select *, 's' flag from base_table)
+ select * from tmp where flag = 'w';
+ ";
+        let batch = ctx.sql(sql).await.unwrap().collect().await.unwrap();
+        assert_eq!(batch.len(), 1);
+        let expected = [
+            "+--------+----+------+------+",
+            "| struct | id | name | flag |",
+            "+--------+----+------+------+",
+            "+--------+----+------+------+",
+        ];
+        crate::assert_batches_eq!(expected, &batch);
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_struct_filter_parquet_with_view_types() -> Result<()> {
         let tmp_dir = TempDir::new().unwrap();
         let path = tmp_dir.path().to_str().unwrap().to_string() + "/test.parquet";
