@@ -149,12 +149,8 @@ pub fn is_restrict_null_predicate<'a>(
         .map(|column| (column, &null_column))
         .collect::<HashMap<_, _>>();
 
-    debug!("predicate: {}", &predicate);
     let replaced_predicate = replace_col(predicate, &join_cols_to_replace)?;
-    debug!("replaced_predicate: {}", &replaced_predicate);
     let coerced_predicate = coerce(replaced_predicate, &input_schema)?;
-    debug!("coerced_predicate: {}", &coerced_predicate);
-
     let phys_expr =
         create_physical_expr(&coerced_predicate, &input_schema, &execution_props)?;
 
