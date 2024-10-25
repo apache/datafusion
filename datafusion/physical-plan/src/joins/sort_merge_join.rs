@@ -869,8 +869,11 @@ impl Stream for SMJStream {
                                         if !self.output_record_batches.batches.is_empty()
                                             && self.buffered_data.scanning_finished()
                                         {
-                                            let out_filtered_batch = self.filter_joined_batch()?;
-                                            return Poll::Ready(Some(Ok(out_filtered_batch)));
+                                            let out_filtered_batch =
+                                                self.filter_joined_batch()?;
+                                            return Poll::Ready(Some(Ok(
+                                                out_filtered_batch,
+                                            )));
                                         }
                                     }
 
