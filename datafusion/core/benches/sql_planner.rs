@@ -15,21 +15,27 @@
 // specific language governing permissions and limitations
 // under the License.
 
+extern crate arrow;
 #[macro_use]
 extern crate criterion;
-extern crate arrow;
 extern crate datafusion;
 
 mod data_utils;
+
 use crate::criterion::Criterion;
 use arrow::datatypes::{DataType, Field, Fields, Schema};
 use datafusion::datasource::MemTable;
 use datafusion::execution::context::SessionContext;
+use itertools::Itertools;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
 use std::sync::Arc;
 use test_utils::tpcds::tpcds_schemas;
 use test_utils::tpch::tpch_schemas;
 use test_utils::TableDef;
 use tokio::runtime::Runtime;
+
+const CLICKBENCH_DATA_PATH: &str = "../../benchmarks/data/hits_partitioned/";
 
 /// Create a logical plan from the specified sql
 fn logical_plan(ctx: &SessionContext, sql: &str) {
@@ -91,7 +97,29 @@ fn register_defs(ctx: SessionContext, defs: Vec<TableDef>) -> SessionContext {
     ctx
 }
 
+fn register_clickbench_hits_table() -> SessionContext {
+    let ctx = SessionContext::new();
+    let rt = Runtime::new().unwrap();
+
+    // use an external table for clickbench benchmarks
+    // let data_path = "./tests/data/clickbench_hits_10.parquet";
+
+    let sql =
+        format!("CREATE EXTERNAL TABLE hits STORED AS PARQUET LOCATION '{CLICKBENCH_DATA_PATH}'");
+
+    rt.block_on(ctx.sql(&sql)).unwrap();
+
+    let count = rt.block_on(async { ctx.table("hits").await.unwrap().count().await.unwrap() });
+    assert!(count > 0);
+    ctx
+}
+
 fn criterion_benchmark(c: &mut Criterion) {
+    // verify that we can load the clickbench data prior to running the benchmark
+    File::open(CLICKBENCH_DATA_PATH).expect("benchmarks/data/hits_partitioned/ could not be \
+    loaded. Please run 'benchmarks/bench.sh data clickbench_partitioned' prior to running \
+    this benchmark");
+
     let ctx = create_context();
 
     // Test simplest
@@ -296,6 +324,49 @@ fn criterion_benchmark(c: &mut Criterion) {
         b.iter(|| {
             for sql in &all_tpcds_sql_queries {
                 logical_plan(&tpcds_ctx, sql)
+            }
+        })
+    });
+
+    // -- clickbench --
+
+    let queries_file =
+        File::open("../../benchmarks/queries/clickbench/queries.sql").unwrap();
+    let extended_file =
+        File::open("../../benchmarks/queries/clickbench/extended.sql").unwrap();
+
+    let clickbench_queries: Vec<String> = BufReader::new(queries_file)
+        .lines()
+        .chain(BufReader::new(extended_file).lines())
+        .map(|l| l.expect("Could not parse line"))
+        .collect_vec();
+
+    let clickbench_ctx = register_clickbench_hits_table();
+
+    for (i, sql) in clickbench_queries.iter().enumerate() {
+        c.bench_function(&format!("logical_plan_clickbench_q{}", i + 1), |b| {
+            b.iter(|| logical_plan(&clickbench_ctx, sql))
+        });
+    }
+
+    for (i, sql) in clickbench_queries.iter().enumerate() {
+        c.bench_function(&format!("physical_plan_clickbench_q{}", i + 1), |b| {
+            b.iter(|| physical_plan(&clickbench_ctx, sql))
+        });
+    }
+
+    c.bench_function("logical_plan_clickbench_all", |b| {
+        b.iter(|| {
+            for sql in &clickbench_queries {
+                logical_plan(&clickbench_ctx, sql)
+            }
+        })
+    });
+
+    c.bench_function("physical_plan_clickbench_all", |b| {
+        b.iter(|| {
+            for sql in &clickbench_queries {
+                physical_plan(&clickbench_ctx, sql)
             }
         })
     });
