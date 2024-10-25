@@ -4102,7 +4102,7 @@ digraph {
     }
 
     #[test]
-    fn test_with_new_children() {
+    fn test_limit_with_new_children() {
         let limit = LogicalPlan::Limit(Limit {
             skip: None,
             fetch: Some(Box::new(Expr::Literal(
