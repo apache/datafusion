@@ -261,12 +261,191 @@ mod tests {
 
     use super::*;
 
-    use arrow::array::{Float32Array, Float64Array};
+    use arrow::array::{Float32Array, Float64Array, Int64Array};
     use arrow::compute::SortOptions;
     use datafusion_common::cast::{as_float32_array, as_float64_array};
     use datafusion_common::DFSchema;
     use datafusion_expr::execution_props::ExecutionProps;
     use datafusion_expr::simplify::SimplifyContext;
+
+    #[test]
+    #[should_panic]
+    fn test_log_invalid_base_type() {
+        let args = [
+            ColumnarValue::Array(Arc::new(Float64Array::from(vec![
+                10.0, 100.0, 1000.0, 10000.0,
+            ]))), // num
+            ColumnarValue::Array(Arc::new(Int64Array::from(vec![5, 10, 15, 20]))),
+        ];
+
+        let _ = LogFunc::new().invoke(&args);
+    }
+
+    #[test]
+    fn test_log_invalid_value() {
+        let args = [
+            ColumnarValue::Array(Arc::new(Int64Array::from(vec![10]))), // num
+        ];
+
+        let result = LogFunc::new().invoke(&args);
+        result.expect_err("expected error");
+    }
+
+    #[test]
+    fn test_log_scalar_f32_unary() {
+        let args = [
+            ColumnarValue::Scalar(ScalarValue::Float32(Some(10.0))), // num
+        ];
+
+        let result = LogFunc::new()
+            .invoke(&args)
+            .expect("failed to initialize function log");
+
+        match result {
+            ColumnarValue::Array(arr) => {
+                let floats = as_float32_array(&arr)
+                    .expect("failed to convert result to a Float32Array");
+
+                assert_eq!(floats.len(), 1);
+                assert!((floats.value(0) - 1.0).abs() < 1e-10);
+            }
+            ColumnarValue::Scalar(_) => {
+                panic!("Expected an array value")
+            }
+        }
+    }
+
+    #[test]
+    fn test_log_scalar_f64_unary() {
+        let args = [
+            ColumnarValue::Scalar(ScalarValue::Float64(Some(10.0))), // num
+        ];
+
+        let result = LogFunc::new()
+            .invoke(&args)
+            .expect("failed to initialize function log");
+
+        match result {
+            ColumnarValue::Array(arr) => {
+                let floats = as_float64_array(&arr)
+                    .expect("failed to convert result to a Float64Array");
+
+                assert_eq!(floats.len(), 1);
+                assert!((floats.value(0) - 1.0).abs() < 1e-10);
+            }
+            ColumnarValue::Scalar(_) => {
+                panic!("Expected an array value")
+            }
+        }
+    }
+
+    #[test]
+    fn test_log_scalar_f32() {
+        let args = [
+            ColumnarValue::Scalar(ScalarValue::Float32(Some(2.0))), // num
+            ColumnarValue::Scalar(ScalarValue::Float32(Some(32.0))), // num
+        ];
+
+        let result = LogFunc::new()
+            .invoke(&args)
+            .expect("failed to initialize function log");
+
+        match result {
+            ColumnarValue::Array(arr) => {
+                let floats = as_float32_array(&arr)
+                    .expect("failed to convert result to a Float32Array");
+
+                assert_eq!(floats.len(), 1);
+                assert!((floats.value(0) - 5.0).abs() < 1e-10);
+            }
+            ColumnarValue::Scalar(_) => {
+                panic!("Expected an array value")
+            }
+        }
+    }
+
+    #[test]
+    fn test_log_scalar_f64() {
+        let args = [
+            ColumnarValue::Scalar(ScalarValue::Float64(Some(2.0))), // num
+            ColumnarValue::Scalar(ScalarValue::Float64(Some(64.0))), // num
+        ];
+
+        let result = LogFunc::new()
+            .invoke(&args)
+            .expect("failed to initialize function log");
+
+        match result {
+            ColumnarValue::Array(arr) => {
+                let floats = as_float64_array(&arr)
+                    .expect("failed to convert result to a Float64Array");
+
+                assert_eq!(floats.len(), 1);
+                assert!((floats.value(0) - 6.0).abs() < 1e-10);
+            }
+            ColumnarValue::Scalar(_) => {
+                panic!("Expected an array value")
+            }
+        }
+    }
+
+    #[test]
+    fn test_log_f64_unary() {
+        let args = [
+            ColumnarValue::Array(Arc::new(Float64Array::from(vec![
+                10.0, 100.0, 1000.0, 10000.0,
+            ]))), // num
+        ];
+
+        let result = LogFunc::new()
+            .invoke(&args)
+            .expect("failed to initialize function log");
+
+        match result {
+            ColumnarValue::Array(arr) => {
+                let floats = as_float64_array(&arr)
+                    .expect("failed to convert result to a Float64Array");
+
+                assert_eq!(floats.len(), 4);
+                assert!((floats.value(0) - 1.0).abs() < 1e-10);
+                assert!((floats.value(1) - 2.0).abs() < 1e-10);
+                assert!((floats.value(2) - 3.0).abs() < 1e-10);
+                assert!((floats.value(3) - 4.0).abs() < 1e-10);
+            }
+            ColumnarValue::Scalar(_) => {
+                panic!("Expected an array value")
+            }
+        }
+    }
+
+    #[test]
+    fn test_log_f32_unary() {
+        let args = [
+            ColumnarValue::Array(Arc::new(Float32Array::from(vec![
+                10.0, 100.0, 1000.0, 10000.0,
+            ]))), // num
+        ];
+
+        let result = LogFunc::new()
+            .invoke(&args)
+            .expect("failed to initialize function log");
+
+        match result {
+            ColumnarValue::Array(arr) => {
+                let floats = as_float32_array(&arr)
+                    .expect("failed to convert result to a Float64Array");
+
+                assert_eq!(floats.len(), 4);
+                assert!((floats.value(0) - 1.0).abs() < 1e-10);
+                assert!((floats.value(1) - 2.0).abs() < 1e-10);
+                assert!((floats.value(2) - 3.0).abs() < 1e-10);
+                assert!((floats.value(3) - 4.0).abs() < 1e-10);
+            }
+            ColumnarValue::Scalar(_) => {
+                panic!("Expected an array value")
+            }
+        }
+    }
 
     #[test]
     fn test_log_f64() {

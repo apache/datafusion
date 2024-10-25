@@ -2568,32 +2568,8 @@ mod test {
     }
 
     #[test]
-    fn test_cume_dist_return_type() -> Result<()> {
-        let fun = find_df_window_func("cume_dist").unwrap();
-        let observed = fun.return_type(&[], &[], "")?;
-        assert_eq!(DataType::Float64, observed);
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_ntile_return_type() -> Result<()> {
-        let fun = find_df_window_func("ntile").unwrap();
-        let observed = fun.return_type(&[DataType::Int16], &[true], "")?;
-        assert_eq!(DataType::UInt64, observed);
-
-        Ok(())
-    }
-
-    #[test]
     fn test_window_function_case_insensitive() -> Result<()> {
-        let names = vec![
-            "cume_dist",
-            "ntile",
-            "first_value",
-            "last_value",
-            "nth_value",
-        ];
+        let names = vec!["first_value", "last_value", "nth_value"];
         for name in names {
             let fun = find_df_window_func(name).unwrap();
             let fun2 = find_df_window_func(name.to_uppercase().as_str()).unwrap();
@@ -2609,12 +2585,6 @@ mod test {
 
     #[test]
     fn test_find_df_window_function() {
-        assert_eq!(
-            find_df_window_func("cume_dist"),
-            Some(WindowFunctionDefinition::BuiltInWindowFunction(
-                built_in_window_function::BuiltInWindowFunction::CumeDist
-            ))
-        );
         assert_eq!(
             find_df_window_func("first_value"),
             Some(WindowFunctionDefinition::BuiltInWindowFunction(

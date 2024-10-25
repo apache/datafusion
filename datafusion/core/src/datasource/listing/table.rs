@@ -719,10 +719,16 @@ impl ListingTable {
             builder.push(Field::new(part_col_name, part_col_type.clone(), false));
         }
 
+        let table_schema = Arc::new(
+            builder
+                .finish()
+                .with_metadata(file_schema.metadata().clone()),
+        );
+
         let table = Self {
             table_paths: config.table_paths,
             file_schema,
-            table_schema: Arc::new(builder.finish()),
+            table_schema,
             options,
             definition: None,
             collected_statistics: Arc::new(DefaultFileStatisticsCache::default()),

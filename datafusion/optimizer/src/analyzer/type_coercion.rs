@@ -51,8 +51,9 @@ use datafusion_expr::type_coercion::{is_datetime, is_utf8_or_large_utf8};
 use datafusion_expr::utils::merge_schema;
 use datafusion_expr::{
     is_false, is_not_false, is_not_true, is_not_unknown, is_true, is_unknown, not,
-    AggregateUDF, Expr, ExprFunctionExt, ExprSchemable, Join, LogicalPlan, Operator,
-    Projection, ScalarUDF, Union, WindowFrame, WindowFrameBound, WindowFrameUnits,
+    AggregateUDF, Expr, ExprFunctionExt, ExprSchemable, Join, Limit, LogicalPlan,
+    Operator, Projection, ScalarUDF, Union, WindowFrame, WindowFrameBound,
+    WindowFrameUnits,
 };
 
 /// Performs type coercion by determining the schema
@@ -169,6 +170,7 @@ impl<'a> TypeCoercionRewriter<'a> {
         match plan {
             LogicalPlan::Join(join) => self.coerce_join(join),
             LogicalPlan::Union(union) => Self::coerce_union(union),
+            LogicalPlan::Limit(limit) => Self::coerce_limit(limit),
             _ => Ok(plan),
         }
     }
@@ -227,6 +229,37 @@ impl<'a> TypeCoercionRewriter<'a> {
         Ok(LogicalPlan::Union(Union {
             inputs: new_inputs,
             schema: union_schema,
+        }))
+    }
+
+    /// Coerce the fetch and skip expression to Int64 type.
+    fn coerce_limit(limit: Limit) -> Result<LogicalPlan> {
+        fn coerce_limit_expr(
+            expr: Expr,
+            schema: &DFSchema,
+            expr_name: &str,
+        ) -> Result<Expr> {
+            let dt = expr.get_type(schema)?;
+            if dt.is_integer() || dt.is_null() {
+                expr.cast_to(&DataType::Int64, schema)
+            } else {
+                plan_err!("Expected {expr_name} to be an integer or null, but got {dt:?}")
+            }
+        }
+
+        let empty_schema = DFSchema::empty();
+        let new_fetch = limit
+            .fetch
+            .map(|expr| coerce_limit_expr(*expr, &empty_schema, "LIMIT"))
+            .transpose()?;
+        let new_skip = limit
+            .skip
+            .map(|expr| coerce_limit_expr(*expr, &empty_schema, "OFFSET"))
+            .transpose()?;
+        Ok(LogicalPlan::Limit(Limit {
+            input: limit.input,
+            fetch: new_fetch.map(Box::new),
+            skip: new_skip.map(Box::new),
         }))
     }
 
@@ -663,20 +696,20 @@ fn coerce_window_frame(
     expressions: &[Sort],
 ) -> Result<WindowFrame> {
     let mut window_frame = window_frame;
-    let current_types = expressions
-        .iter()
-        .map(|s| s.expr.get_type(schema))
-        .collect::<Result<Vec<_>>>()?;
     let target_type = match window_frame.units {
         WindowFrameUnits::Range => {
-            if let Some(col_type) = current_types.first() {
+            let current_types = expressions
+                .first()
+                .map(|s| s.expr.get_type(schema))
+                .transpose()?;
+            if let Some(col_type) = current_types {
                 if col_type.is_numeric()
-                    || is_utf8_or_large_utf8(col_type)
+                    || is_utf8_or_large_utf8(&col_type)
                     || matches!(col_type, DataType::Null)
                 {
                     col_type
-                } else if is_datetime(col_type) {
-                    &DataType::Interval(IntervalUnit::MonthDayNano)
+                } else if is_datetime(&col_type) {
+                    DataType::Interval(IntervalUnit::MonthDayNano)
                 } else {
                     return internal_err!(
                         "Cannot run range queries on datatype: {col_type:?}"
@@ -686,10 +719,11 @@ fn coerce_window_frame(
                 return internal_err!("ORDER BY column cannot be empty");
             }
         }
-        WindowFrameUnits::Rows | WindowFrameUnits::Groups => &DataType::UInt64,
+        WindowFrameUnits::Rows | WindowFrameUnits::Groups => DataType::UInt64,
     };
-    window_frame.start_bound = coerce_frame_bound(target_type, window_frame.start_bound)?;
-    window_frame.end_bound = coerce_frame_bound(target_type, window_frame.end_bound)?;
+    window_frame.start_bound =
+        coerce_frame_bound(&target_type, window_frame.start_bound)?;
+    window_frame.end_bound = coerce_frame_bound(&target_type, window_frame.end_bound)?;
     Ok(window_frame)
 }
 

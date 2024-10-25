@@ -47,7 +47,7 @@ pub struct ValuesExec {
 }
 
 impl ValuesExec {
-    /// create a new values exec from data as expr
+    /// Create a new values exec from data as expr
     pub fn try_new(
         schema: SchemaRef,
         data: Vec<Vec<Arc<dyn PhysicalExpr>>>,
@@ -57,7 +57,7 @@ impl ValuesExec {
         }
         let n_row = data.len();
         let n_col = schema.fields().len();
-        // we have this single row batch as a placeholder to satisfy evaluation argument
+        // We have this single row batch as a placeholder to satisfy evaluation argument
         // and generate a single output row
         let batch = RecordBatch::try_new_with_options(
             Arc::new(Schema::empty()),
@@ -126,7 +126,7 @@ impl ValuesExec {
         })
     }
 
-    /// provides the data
+    /// Provides the data
     pub fn data(&self) -> Vec<RecordBatch> {
         self.data.clone()
     }
