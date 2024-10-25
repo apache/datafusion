@@ -19,12 +19,14 @@
 
 # Special Functions
 
+## Expansion Functiions
+
 - [unnest](#unnest)
 - [unnest(struct)](#unnest-struct)
 
 ### `unnest`
 
-Transforms an array into rows.
+Expands an array or map into rows.
 
 #### Arguments
 
