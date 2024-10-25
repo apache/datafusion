@@ -1093,6 +1093,19 @@ async fn roundtrip_repartition_hash() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn roundtrip_insert() -> Result<()> {
+    assert_expected_plan_unoptimized(
+        "INSERT INTO data SELECT * FROM data",
+        "Dml: op=[Insert Into] table=[data]\
+        \n  Projection: data.a, data.b, data.c, data.d, data.e, data.f\
+        \n    Projection: data.a, data.b, data.c, data.d, data.e, data.f\
+        \n      TableScan: data",
+        true,
+    )
+    .await
+}
+
 fn check_post_join_filters(rel: &Rel) -> Result<()> {
     // search for target_rel and field value in proto
     match &rel.rel_type {

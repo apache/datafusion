@@ -35,6 +35,7 @@ use datafusion::logical_expr::{
 };
 use substrait::proto::expression::subquery::set_predicate::PredicateOp;
 use substrait::proto::expression_reference::ExprType;
+use substrait::proto::write_rel::{self, WriteType};
 use url::Url;
 
 use crate::extensions::Extensions;
@@ -57,8 +58,9 @@ use datafusion::common::scalar::ScalarStructBuilder;
 use datafusion::dataframe::DataFrame;
 use datafusion::logical_expr::expr::InList;
 use datafusion::logical_expr::{
-    col, expr, Cast, Extension, GroupingSet, Like, LogicalPlanBuilder, Partitioning,
-    Repartition, Subquery, WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition,
+    col, dml, expr, Cast, DmlStatement, Extension, GroupingSet, Like, LogicalPlanBuilder,
+    Partitioning, Repartition, Subquery, WindowFrameBound, WindowFrameUnits,
+    WindowFunctionDefinition,
 };
 use datafusion::prelude::JoinType;
 use datafusion::sql::TableReference;
@@ -253,6 +255,27 @@ async fn except_rels(
     }
 
     Ok(rel)
+}
+
+fn from_substrait_names(names: &[String]) -> Result<TableReference> {
+    let table_reference = match names.len() {
+        0 => {
+            return plan_err!("No table name found in NamedTable");
+        }
+        1 => TableReference::Bare {
+            table: names[0].clone().into(),
+        },
+        2 => TableReference::Partial {
+            schema: names[0].clone().into(),
+            table: names[1].clone().into(),
+        },
+        _ => TableReference::Full {
+            catalog: names[0].clone().into(),
+            schema: names[1].clone().into(),
+            table: names[2].clone().into(),
+        },
+    };
+    Ok(table_reference)
 }
 
 /// Convert Substrait Plan to DataFusion LogicalPlan
@@ -825,23 +848,7 @@ pub async fn from_substrait_rel(
 
             match &read.as_ref().read_type {
                 Some(ReadType::NamedTable(nt)) => {
-                    let table_reference = match nt.names.len() {
-                        0 => {
-                            return plan_err!("No table name found in NamedTable");
-                        }
-                        1 => TableReference::Bare {
-                            table: nt.names[0].clone().into(),
-                        },
-                        2 => TableReference::Partial {
-                            schema: nt.names[0].clone().into(),
-                            table: nt.names[1].clone().into(),
-                        },
-                        _ => TableReference::Full {
-                            catalog: nt.names[0].clone().into(),
-                            schema: nt.names[1].clone().into(),
-                            table: nt.names[2].clone().into(),
-                        },
-                    };
+                    let table_reference = from_substrait_names(&nt.names)?;
 
                     let t = ctx.table(table_reference.clone()).await?;
 
@@ -1056,6 +1063,65 @@ pub async fn from_substrait_rel(
             Ok(LogicalPlan::Repartition(Repartition {
                 input,
                 partitioning_scheme,
+            }))
+        }
+        Some(RelType::Write(write)) => {
+            let table_name = match &write.write_type {
+                Some(WriteType::NamedTable(now)) => from_substrait_names(&now.names)?,
+                Some(WriteType::ExtensionTable(_)) => {
+                    return not_impl_err!("Unsupported WriteType: ExtensionTable");
+                }
+                _ => {
+                    return plan_err!("No WriteType specified in WriteRel");
+                }
+            };
+
+            let table_schema = from_substrait_named_struct(
+                &write.table_schema.clone().unwrap(),
+                extensions,
+            )?;
+
+            let op = match write.op() {
+                write_rel::WriteOp::Insert => dml::WriteOp::Insert(dml::InsertOp::Append),
+                _ => {
+                    return not_impl_err!("Unsupported WriteOp: {:?}", write.op());
+                }
+            };
+
+            let output_schema = match write.output() {
+                write_rel::OutputMode::Unspecified => match write.op() {
+                    write_rel::WriteOp::Insert => {
+                        let fields: Fields = vec![Field::new(
+                            "count".to_string(),
+                            DataType::UInt64,
+                            false,
+                        )]
+                        .into();
+
+                        DFSchema::try_from(Schema::new(fields))?
+                    }
+                    _ => {
+                        return not_impl_err!("Unsupported WriteOp: {:?}", write.op());
+                    }
+                },
+                write_rel::OutputMode::NoOutput => {
+                    return not_impl_err!("Unsupported OutputMode: NoOutput");
+                }
+                write_rel::OutputMode::ModifiedRecords => {
+                    return not_impl_err!("Unsupported OutputMode: ModifiedRecords");
+                }
+            };
+
+            let input =
+                from_substrait_rel(ctx, &write.input.clone().unwrap(), extensions)
+                    .await?;
+
+            Ok(LogicalPlan::Dml(DmlStatement {
+                table_name,
+                table_schema: table_schema.into(),
+                op,
+                input: input.into(),
+                output_schema: output_schema.into(),
             }))
         }
         _ => not_impl_err!("Unsupported RelType: {:?}", rel.rel_type),

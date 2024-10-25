@@ -16,15 +16,17 @@
 // under the License.
 
 use datafusion::config::ConfigOptions;
+use datafusion::logical_expr::dml::InsertOp;
 use datafusion::optimizer::analyzer::expand_wildcard_rule::ExpandWildcardRule;
 use datafusion::optimizer::AnalyzerRule;
 use std::sync::Arc;
 use substrait::proto::expression_reference::ExprType;
+use substrait::proto::write_rel::{OutputMode, WriteOp, WriteType};
 
 use arrow_buffer::ToByteSlice;
 use datafusion::arrow::datatypes::{Field, IntervalUnit};
 use datafusion::logical_expr::{
-    Distinct, FetchType, Like, Partitioning, SkipType, WindowFrameUnits,
+    dml, Distinct, FetchType, Like, Partitioning, SkipType, WindowFrameUnits,
 };
 use datafusion::{
     arrow::datatypes::{DataType, TimeUnit},
@@ -67,7 +69,8 @@ use substrait::proto::read_rel::VirtualTable;
 use substrait::proto::rel_common::EmitKind;
 use substrait::proto::rel_common::EmitKind::Emit;
 use substrait::proto::{
-    rel_common, ExchangeRel, ExpressionReference, ExtendedExpression, RelCommon,
+    rel_common, ExchangeRel, ExpressionReference, ExtendedExpression, NamedObjectWrite,
+    RelCommon, WriteRel,
 };
 use substrait::{
     proto::{
@@ -582,6 +585,40 @@ pub fn to_substrait_rel(
             };
             Ok(Box::new(Rel {
                 rel_type: Some(RelType::Exchange(Box::new(exchange_rel))),
+            }))
+        }
+        LogicalPlan::Dml(dml) => {
+            let input = to_substrait_rel(dml.input.as_ref(), ctx, extensions)?;
+
+            let op = match dml.op {
+                dml::WriteOp::Insert(InsertOp::Append) => WriteOp::Insert,
+                dml::WriteOp::Delete => WriteOp::Delete,
+                dml::WriteOp::Update => WriteOp::Update,
+                dml::WriteOp::Ctas => WriteOp::Ctas,
+                dml::WriteOp::Insert(InsertOp::Overwrite) | dml::WriteOp::Insert(InsertOp::Replace) => {
+                    return not_impl_err!(
+                        "Substrait does not support InsertOp::Overwrite and InsertOp::Replace"
+                    )
+                }
+            }.into();
+
+            let table_schema =
+                Some(to_substrait_named_struct(&dml.table_schema, extensions)?);
+
+            let write_rel = WriteRel {
+                common: None,
+                input: Some(input),
+                write_type: Some(WriteType::NamedTable(NamedObjectWrite {
+                    names: dml.table_name.to_vec(),
+                    advanced_extension: None,
+                })),
+                op,
+                table_schema,
+                output: OutputMode::Unspecified.into(),
+            };
+
+            Ok(Box::new(Rel {
+                rel_type: Some(RelType::Write(Box::new(write_rel))),
             }))
         }
         LogicalPlan::Extension(extension_plan) => {
