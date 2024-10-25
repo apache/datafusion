@@ -314,10 +314,6 @@ fn criterion_benchmark(c: &mut Criterion) {
     // --- TPC-DS ---
 
     let tpcds_ctx = register_defs(SessionContext::new(), tpcds_schemas());
-
-    // 41: check_analyzed_plan: Correlated column is not allowed in predicate
-    let ignored = [41];
-
     let tests_path = if PathBuf::from("./tests/").exists() {
         "./tests/"
     } else {
@@ -325,7 +321,6 @@ fn criterion_benchmark(c: &mut Criterion) {
     };
 
     let raw_tpcds_sql_queries = (1..100)
-        .filter(|q| !ignored.contains(q))
         .map(|q| std::fs::read_to_string(format!("{tests_path}tpc-ds/{q}.sql")).unwrap())
         .collect::<Vec<_>>();
 
