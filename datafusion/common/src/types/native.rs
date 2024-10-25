@@ -20,6 +20,7 @@ use super::{
     TypeSignature,
 };
 use crate::error::{Result, _internal_err};
+use arrow::compute::can_cast_types;
 use arrow_schema::{
     DataType, Field, FieldRef, Fields, IntervalUnit, TimeUnit, UnionFields,
 };
@@ -228,11 +229,19 @@ impl LogicalType for NativeType {
             (Self::Interval(iu), _) => Interval(*iu),
             (Self::Binary, LargeUtf8) => LargeBinary,
             (Self::Binary, Utf8View) => BinaryView,
-            (Self::Binary, _) => Binary,
+            (Self::Binary, data_type) if can_cast_types(data_type, &BinaryView) => {
+                BinaryView
+            }
+            (Self::Binary, data_type) if can_cast_types(data_type, &LargeBinary) => {
+                LargeBinary
+            }
+            (Self::Binary, data_type) if can_cast_types(data_type, &Binary) => Binary,
             (Self::FixedSizeBinary(size), _) => FixedSizeBinary(*size),
             (Self::Utf8, LargeBinary) => LargeUtf8,
             (Self::Utf8, BinaryView) => Utf8View,
-            (Self::Utf8, _) => Utf8,
+            (Self::Utf8, data_type) if can_cast_types(data_type, &Utf8View) => Utf8View,
+            (Self::Utf8, data_type) if can_cast_types(data_type, &LargeUtf8) => LargeUtf8,
+            (Self::Utf8, data_type) if can_cast_types(data_type, &Utf8) => Utf8,
             (Self::List(to_field), List(from_field) | FixedSizeList(from_field, _)) => {
                 List(default_field_cast(to_field, from_field)?)
             }
