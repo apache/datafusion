@@ -330,6 +330,16 @@ steps.
 The tests sort the entire dataset using several different sort
 orders.
 
+## IMDB
+
+Run Join Order Benchmark (JOB) on IMDB dataset.
+
+The Internet Movie Database (IMDB) dataset contains real-world movie data. Unlike synthetic datasets like TPCH, which assume uniform data distribution and uncorrelated columns, the IMDB dataset includes skewed data and correlated columns (which are common for real dataset), making it more suitable for testing query optimizers, particularly for cardinality estimation.
+
+This benchmark is derived from [Join Order Benchmark](https://github.com/gregrahn/join-order-benchmark).
+
+See paper [How Good Are Query Optimizers, Really](http://www.vldb.org/pvldb/vol9/p204-leis.pdf) for more details.
+
 ## TPCH
 
 Run the tpch benchmark.
