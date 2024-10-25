@@ -298,10 +298,18 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
     }
 
     #[inline]
-    fn is_eq(&self, a: usize, b: usize) -> bool {
+    fn is_eq_and_gt(&self, a: usize, b: usize) -> (bool, bool) {
         match (&self.cursors[a], &self.cursors[b]) {
-            (Some(ac), Some(bc)) => ac.cmp(bc).is_eq(),
-            _ => false,
+            (Some(ac), Some(bc)) => {
+                let ord = ac.cmp(bc);
+                if ord.is_eq() {
+                    (true, true)
+                } else {
+                    (false, ord.then_with(|| a.cmp(&b)).is_gt())
+                }
+            }
+            (None, _) => (false, true),
+            (_, None) => (false, false),
         }
     }
 
@@ -413,12 +421,13 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
 
             // If round-robin tie breaker is enabled and we're at the final match (cmp_node == 1)
             if self.enable_round_robin_tie_breaker && cmp_node == 1 {
-                if self.is_eq(winner, challenger) {
+                let (is_eq, is_gt) = self.is_eq_and_gt(winner, challenger);
+                if is_eq {
                     self.handle_tie_breaker(cmp_node, &mut winner, challenger);
                 } else {
                     // End of tie breaker
                     self.round_robin_tie_breaker_mode = false;
-                    if self.is_gt(winner, challenger) {
+                    if is_gt {
                         self.update_winner(cmp_node, &mut winner, challenger);
                     }
                 }
