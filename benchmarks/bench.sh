@@ -171,6 +171,10 @@ main() {
                 imdb)
                     data_imdb
                     ;;
+                external_aggr)
+                    # same data as for tpch
+                    data_tpch "1"
+                    ;;
                 *)
                     echo "Error: unknown benchmark '$BENCHMARK' for data generation"
                     usage
@@ -537,10 +541,12 @@ run_external_aggr() {
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running external aggregation benchmark..."
 
-    # Only parquet is supported
-    # External aggregation is not stable yet, set partitions to 4 to make sure
-    # this benchmark can always run.
-    $CARGO_COMMAND --bin external_aggr -- benchmark -n 4 --iterations 5 --path "${TPCH_DIR}" -o "${RESULTS_FILE}"
+    # Only parquet is supported.
+    # Since per-operator memory limit is calculated as (total-memory-limit / 
+    # number-of-partitions), and by default `--partitions` is set to number of
+    # CPU cores, we set a constant number of partitions to prevent this 
+    # benchmark to fail on some machines.
+    $CARGO_COMMAND --bin external_aggr -- benchmark --partitions 4 --iterations 5 --path "${TPCH_DIR}" -o "${RESULTS_FILE}"
 }
 
 
