@@ -156,7 +156,7 @@ pub fn regexp_split_to_array_func(
 ) -> Result<ArrayRef, DataFusionError> {
     let args_len = args.len();
     if !(2..=3).contains(&args_len) {
-        return exec_err!("regexp_count was called with {args_len} arguments. It requires 2 or 3 arguments.");
+        return exec_err!("regexp_split_to_array was called with {args_len} arguments. It requires 2 or 3 arguments.");
     }
 
     let values = &args[0];
@@ -262,7 +262,7 @@ where
                 Some(regex) => regex,
             };
 
-            let pattern = compile_regex(regex, flags_scalar)?;
+            let pattern = compile_regex(regex, flags_scalar, false)?;
             values
                 .iter()
                 .for_each(|value| get_splitted_array(&mut list_array, value, &pattern));
@@ -293,7 +293,8 @@ where
                 .zip(flags_array.iter())
                 .for_each(|(value, flags)| {
                     let pattern =
-                        compile_and_cache_regex(regex, flags, &mut regex_cache).ok();
+                        compile_and_cache_regex(regex, flags, false, &mut regex_cache)
+                            .ok();
                     get_splitted_array(&mut list_array, value, &pattern.unwrap())
                 });
 
@@ -313,9 +314,13 @@ where
                 .zip(regex_array.iter())
                 .for_each(|(value, regex)| {
                     let regex = regex.unwrap_or("");
-                    let pattern =
-                        compile_and_cache_regex(regex, flags_scalar, &mut regex_cache)
-                            .ok();
+                    let pattern = compile_and_cache_regex(
+                        regex,
+                        flags_scalar,
+                        false,
+                        &mut regex_cache,
+                    )
+                    .ok();
                     get_splitted_array(&mut list_array, value, &pattern.unwrap());
                 });
             Ok(Arc::new(list_array.finish()))
@@ -342,7 +347,8 @@ where
                 |(value, regex, flags)| {
                     let regex = regex.unwrap_or("");
                     let pattern =
-                        compile_and_cache_regex(regex, flags, &mut regex_cache).ok();
+                        compile_and_cache_regex(regex, flags, false, &mut regex_cache)
+                            .ok();
                     get_splitted_array(&mut list_array, value, &pattern.unwrap());
                 },
             );
