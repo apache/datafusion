@@ -96,7 +96,6 @@ impl Unparser<'_> {
             | LogicalPlan::Aggregate(_)
             | LogicalPlan::Sort(_)
             | LogicalPlan::Join(_)
-            | LogicalPlan::CrossJoin(_)
             | LogicalPlan::Repartition(_)
             | LogicalPlan::Union(_)
             | LogicalPlan::TableScan(_)
@@ -343,20 +342,16 @@ impl Unparser<'_> {
                         relation,
                     );
                 }
-
-                if let Some(fetch) = limit.fetch {
+                if let Some(fetch) = &limit.fetch {
                     let Some(query) = query.as_mut() else {
                         return internal_err!(
                             "Limit operator only valid in a statement context."
                         );
                     };
-                    query.limit(Some(ast::Expr::Value(ast::Value::Number(
-                        fetch.to_string(),
-                        false,
-                    ))));
+                    query.limit(Some(self.expr_to_sql(fetch)?));
                 }
 
-                if limit.skip > 0 {
+                if let Some(skip) = &limit.skip {
                     let Some(query) = query.as_mut() else {
                         return internal_err!(
                             "Offset operator only valid in a statement context."
@@ -364,10 +359,7 @@ impl Unparser<'_> {
                     };
                     query.offset(Some(ast::Offset {
                         rows: ast::OffsetRows::None,
-                        value: ast::Expr::Value(ast::Value::Number(
-                            limit.skip.to_string(),
-                            false,
-                        )),
+                        value: self.expr_to_sql(skip)?,
                     }));
                 }
 
@@ -504,43 +496,6 @@ impl Unparser<'_> {
 
                 Ok(())
             }
-            LogicalPlan::CrossJoin(cross_join) => {
-                // Cross joins are the same as unconditional inner joins
-                let mut right_relation = RelationBuilder::default();
-
-                self.select_to_sql_recursively(
-                    cross_join.left.as_ref(),
-                    query,
-                    select,
-                    relation,
-                )?;
-                self.select_to_sql_recursively(
-                    cross_join.right.as_ref(),
-                    query,
-                    select,
-                    &mut right_relation,
-                )?;
-
-                let Ok(Some(relation)) = right_relation.build() else {
-                    return internal_err!("Failed to build right relation");
-                };
-
-                let ast_join = ast::Join {
-                    relation,
-                    global: false,
-                    join_operator: self.join_operator_to_sql(
-                        JoinType::Inner,
-                        ast::JoinConstraint::On(ast::Expr::Value(ast::Value::Boolean(
-                            true,
-                        ))),
-                    ),
-                };
-                let mut from = select.pop_from().unwrap();
-                from.push_join(ast_join);
-                select.push_from(from);
-
-                Ok(())
-            }
             LogicalPlan::SubqueryAlias(plan_alias) => {
                 let (plan, mut columns) =
                     subquery_alias_inner_query_and_columns(plan_alias);
@@ -660,9 +615,10 @@ impl Unparser<'_> {
                 if !Self::is_scan_with_pushdown(table_scan) {
                     return Ok(None);
                 }
+                let table_schema = table_scan.source.schema();
                 let mut filter_alias_rewriter =
                     alias.as_ref().map(|alias_name| TableAliasRewriter {
-                        table_schema: table_scan.source.schema(),
+                        table_schema: &table_schema,
                         alias_name: alias_name.clone(),
                     });
 
@@ -671,6 +627,17 @@ impl Unparser<'_> {
                     Arc::clone(&table_scan.source),
                     None,
                 )?;
+                // We will rebase the column references to the new alias if it exists.
+                // If the projection or filters are empty, we will append alias to the table scan.
+                //
+                // Example:
+                //   select t1.c1 from t1 where t1.c1 > 1 -> select a.c1 from t1 as a where a.c1 > 1
+                if let Some(ref alias) = alias {
+                    if table_scan.projection.is_some() || !table_scan.filters.is_empty() {
+                        builder = builder.alias(alias.clone())?;
+                    }
+                }
+
                 if let Some(project_vec) = &table_scan.projection {
                     let project_columns = project_vec
                         .iter()
@@ -688,9 +655,6 @@ impl Unparser<'_> {
                             }
                         })
                         .collect::<Vec<_>>();
-                    if let Some(alias) = alias {
-                        builder = builder.alias(alias)?;
-                    }
                     builder = builder.project(project_columns)?;
                 }
 
@@ -720,6 +684,16 @@ impl Unparser<'_> {
                     builder = builder.limit(0, Some(fetch))?;
                 }
 
+                // If the table scan has an alias but no projection or filters, it means no column references are rebased.
+                // So we will append the alias to this subquery.
+                // Example:
+                //   select * from t1 limit 10 -> (select * from t1 limit 10) as a
+                if let Some(alias) = alias {
+                    if table_scan.projection.is_none() && table_scan.filters.is_empty() {
+                        builder = builder.alias(alias)?;
+                    }
+                }
+
                 Ok(Some(builder.build()?))
             }
             LogicalPlan::SubqueryAlias(subquery_alias) => {
@@ -727,6 +701,40 @@ impl Unparser<'_> {
                     &subquery_alias.input,
                     Some(subquery_alias.alias.clone()),
                 )
+            }
+            // SubqueryAlias could be rewritten to a plan with a projection as the top node by [rewrite::subquery_alias_inner_query_and_columns].
+            // The inner table scan could be a scan with pushdown operations.
+            LogicalPlan::Projection(projection) => {
+                if let Some(plan) =
+                    Self::unparse_table_scan_pushdown(&projection.input, alias.clone())?
+                {
+                    let exprs = if alias.is_some() {
+                        let mut alias_rewriter =
+                            alias.as_ref().map(|alias_name| TableAliasRewriter {
+                                table_schema: plan.schema().as_arrow(),
+                                alias_name: alias_name.clone(),
+                            });
+                        projection
+                            .expr
+                            .iter()
+                            .cloned()
+                            .map(|expr| {
+                                if let Some(ref mut rewriter) = alias_rewriter {
+                                    expr.rewrite(rewriter).data()
+                                } else {
+                                    Ok(expr)
+                                }
+                            })
+                            .collect::<Result<Vec<_>>>()?
+                    } else {
+                        projection.expr.clone()
+                    };
+                    Ok(Some(
+                        LogicalPlanBuilder::from(plan).project(exprs)?.build()?,
+                    ))
+                } else {
+                    Ok(None)
+                }
             }
             _ => Ok(None),
         }

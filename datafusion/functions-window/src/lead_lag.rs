@@ -22,9 +22,10 @@ use datafusion_common::arrow::array::ArrayRef;
 use datafusion_common::arrow::datatypes::DataType;
 use datafusion_common::arrow::datatypes::Field;
 use datafusion_common::{arrow_datafusion_err, DataFusionError, Result, ScalarValue};
+use datafusion_expr::window_doc_sections::DOC_SECTION_ANALYTICAL;
 use datafusion_expr::{
-    Literal, PartitionEvaluator, ReversedUDWF, Signature, TypeSignature, Volatility,
-    WindowUDFImpl,
+    Documentation, Literal, PartitionEvaluator, ReversedUDWF, Signature, TypeSignature,
+    Volatility, WindowUDFImpl,
 };
 use datafusion_functions_window_common::expr::ExpressionArgs;
 use datafusion_functions_window_common::field::WindowUDFFieldArgs;
@@ -34,7 +35,7 @@ use std::any::Any;
 use std::cmp::min;
 use std::collections::VecDeque;
 use std::ops::{Neg, Range};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 get_or_init_udwf!(
     Lag,
@@ -147,6 +148,50 @@ impl WindowShift {
     }
 }
 
+static LAG_DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+
+fn get_lag_doc() -> &'static Documentation {
+    LAG_DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_ANALYTICAL)
+            .with_description(
+                "Returns value evaluated at the row that is offset rows before the \
+                current row within the partition; if there is no such row, instead return default \
+                (which must be of the same type as value).",
+            )
+            .with_syntax_example("lag(expression, offset, default)")
+            .with_argument("expression", "Expression to operate on")
+            .with_argument("offset", "Integer. Specifies how many rows back \
+            the value of expression should be retrieved. Defaults to 1.")
+            .with_argument("default", "The default value if the offset is \
+            not within the partition. Must be of the same type as expression.")
+            .build()
+            .unwrap()
+    })
+}
+
+static LEAD_DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+
+fn get_lead_doc() -> &'static Documentation {
+    LEAD_DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_ANALYTICAL)
+            .with_description(
+                "Returns value evaluated at the row that is offset rows after the \
+                current row within the partition; if there is no such row, instead return default \
+                (which must be of the same type as value).",
+            )
+            .with_syntax_example("lead(expression, offset, default)")
+            .with_argument("expression", "Expression to operate on")
+            .with_argument("offset", "Integer. Specifies how many rows \
+            forward the value of expression should be retrieved. Defaults to 1.")
+            .with_argument("default", "The default value if the offset is \
+            not within the partition. Must be of the same type as expression.")
+            .build()
+            .unwrap()
+    })
+}
+
 impl WindowUDFImpl for WindowShift {
     fn as_any(&self) -> &dyn Any {
         self
@@ -210,6 +255,13 @@ impl WindowUDFImpl for WindowShift {
         match self.kind {
             WindowShiftKind::Lag => ReversedUDWF::Reversed(lag_udwf()),
             WindowShiftKind::Lead => ReversedUDWF::Reversed(lead_udwf()),
+        }
+    }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        match self.kind {
+            WindowShiftKind::Lag => Some(get_lag_doc()),
+            WindowShiftKind::Lead => Some(get_lead_doc()),
         }
     }
 }

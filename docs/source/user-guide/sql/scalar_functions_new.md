@@ -47,6 +47,7 @@ the rest of the documentation.
 - [ceil](#ceil)
 - [cos](#cos)
 - [cosh](#cosh)
+- [cot](#cot)
 - [degrees](#degrees)
 - [exp](#exp)
 - [factorial](#factorial)
@@ -215,6 +216,18 @@ Returns the hyperbolic cosine of a number.
 
 ```
 cosh(numeric_expression)
+```
+
+#### Arguments
+
+- **numeric_expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
+
+### `cot`
+
+Returns the cotangent of a number.
+
+```
+cot(numeric_expression)
 ```
 
 #### Arguments
@@ -3517,34 +3530,27 @@ flatten(array)
 
 ### `generate_series`
 
-Returns an Arrow array between start and stop with step. The range start..end contains all values with start <= x < end. It is empty if start >= end. Step cannot be 0.
+Similar to the range function, but it includes the upper bound.
 
 ```
-range(start, stop, step)
+generate_series(start, stop, step)
 ```
 
 #### Arguments
 
-- **start**: Start of the range. Ints, timestamps, dates or string types that can be coerced to Date32 are supported.
-- **end**: End of the range (not included). Type must be the same as start.
-- **step**: Increase by step (cannot be 0). Steps less than a day are supported only for timestamp ranges.
+- **start**: start of the series. Ints, timestamps, dates or string types that can be coerced to Date32 are supported.
+- **end**: end of the series (included). Type must be the same as start.
+- **step**: increase by step (can not be 0). Steps less than a day are supported only for timestamp ranges.
 
 #### Example
 
 ```sql
-> select range(2, 10, 3);
-+-----------------------------------+
-| range(Int64(2),Int64(10),Int64(3))|
-+-----------------------------------+
-| [2, 5, 8]                         |
-+-----------------------------------+
-
-> select range(DATE '1992-09-01', DATE '1993-03-01', INTERVAL '1' MONTH);
-+--------------------------------------------------------------+
-| range(DATE '1992-09-01', DATE '1993-03-01', INTERVAL '1' MONTH) |
-+--------------------------------------------------------------+
-| [1992-09-01, 1992-10-01, 1992-11-01, 1992-12-01, 1993-01-01, 1993-02-01] |
-+--------------------------------------------------------------+
+> select generate_series(1,3);
++------------------------------------+
+| generate_series(Int64(1),Int64(3)) |
++------------------------------------+
+| [1, 2, 3]                          |
++------------------------------------+
 ```
 
 ### `list_any_value`
@@ -3897,6 +3903,150 @@ select struct(a as field_a, b) from t;
 #### Aliases
 
 - row
+
+## Map Functions
+
+- [element_at](#element_at)
+- [map](#map)
+- [map_extract](#map_extract)
+- [map_keys](#map_keys)
+- [map_values](#map_values)
+
+### `element_at`
+
+_Alias of [map_extract](#map_extract)._
+
+### `map`
+
+Returns an Arrow map with the specified key-value pairs.
+
+The `make_map` function creates a map from two lists: one for keys and one for values. Each key must be unique and non-null.
+
+```
+map(key, value)
+map(key: value)
+make_map(['key1', 'key2'], ['value1', 'value2'])
+```
+
+#### Arguments
+
+- **key**: For `map`: Expression to be used for key. Can be a constant, column, function, or any combination of arithmetic or string operators.
+  For `make_map`: The list of keys to be used in the map. Each key must be unique and non-null.
+- **value**: For `map`: Expression to be used for value. Can be a constant, column, function, or any combination of arithmetic or string operators.
+  For `make_map`: The list of values to be mapped to the corresponding keys.
+
+#### Example
+
+````sql
+        -- Using map function
+        SELECT MAP('type', 'test');
+        ----
+        {type: test}
+
+        SELECT MAP(['POST', 'HEAD', 'PATCH'], [41, 33, null]);
+        ----
+        {POST: 41, HEAD: 33, PATCH: }
+
+        SELECT MAP([[1,2], [3,4]], ['a', 'b']);
+        ----
+        {[1, 2]: a, [3, 4]: b}
+
+        SELECT MAP { 'a': 1, 'b': 2 };
+        ----
+        {a: 1, b: 2}
+
+        -- Using make_map function
+        SELECT MAKE_MAP(['POST', 'HEAD'], [41, 33]);
+        ----
+        {POST: 41, HEAD: 33}
+
+        SELECT MAKE_MAP(['key1', 'key2'], ['value1', null]);
+        ----
+        {key1: value1, key2: }
+        ```
+
+
+### `map_extract`
+
+Returns a list containing the value for the given key or an empty list if the key is not present in the map.
+
+````
+
+map_extract(map, key)
+
+````
+#### Arguments
+
+- **map**: Map expression. Can be a constant, column, or function, and any combination of map operators.
+- **key**: Key to extract from the map. Can be a constant, column, or function, any combination of arithmetic or string operators, or a named expression of the previously listed.
+
+#### Example
+
+```sql
+SELECT map_extract(MAP {'a': 1, 'b': NULL, 'c': 3}, 'a');
+----
+[1]
+
+SELECT map_extract(MAP {1: 'one', 2: 'two'}, 2);
+----
+['two']
+
+SELECT map_extract(MAP {'x': 10, 'y': NULL, 'z': 30}, 'y');
+----
+[]
+````
+
+#### Aliases
+
+- element_at
+
+### `map_keys`
+
+Returns a list of all keys in the map.
+
+```
+map_keys(map)
+```
+
+#### Arguments
+
+- **map**: Map expression. Can be a constant, column, or function, and any combination of map operators.
+
+#### Example
+
+```sql
+SELECT map_keys(MAP {'a': 1, 'b': NULL, 'c': 3});
+----
+[a, b, c]
+
+SELECT map_keys(map([100, 5], [42, 43]));
+----
+[100, 5]
+```
+
+### `map_values`
+
+Returns a list of all values in the map.
+
+```
+map_values(map)
+```
+
+#### Arguments
+
+- **map**: Map expression. Can be a constant, column, or function, and any combination of map operators.
+
+#### Example
+
+```sql
+SELECT map_values(MAP {'a': 1, 'b': NULL, 'c': 3});
+----
+[1, , 3]
+
+SELECT map_values(map([100, 5], [42, 43]));
+----
+[42, 43]
+```
 
 ## Hashing Functions
 

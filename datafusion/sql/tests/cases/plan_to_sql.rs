@@ -765,7 +765,7 @@ fn test_table_scan_alias() -> Result<()> {
     let table_scan_with_two_filter = plan_to_sql(&table_scan_with_two_filter)?;
     assert_eq!(
         table_scan_with_two_filter.to_string(),
-        "SELECT * FROM (SELECT t1.id FROM t1 WHERE ((t1.id > 1) AND (t1.age < 2))) AS a"
+        "SELECT a.id FROM t1 AS a WHERE ((a.id > 1) AND (a.age < 2))"
     );
 
     let table_scan_with_fetch =
@@ -776,7 +776,7 @@ fn test_table_scan_alias() -> Result<()> {
     let table_scan_with_fetch = plan_to_sql(&table_scan_with_fetch)?;
     assert_eq!(
         table_scan_with_fetch.to_string(),
-        "SELECT * FROM (SELECT t1.id FROM (SELECT * FROM t1 LIMIT 10)) AS a"
+        "SELECT a.id FROM (SELECT * FROM t1 LIMIT 10) AS a"
     );
 
     let table_scan_with_pushdown_all = table_scan_with_filter_and_fetch(
@@ -792,7 +792,7 @@ fn test_table_scan_alias() -> Result<()> {
     let table_scan_with_pushdown_all = plan_to_sql(&table_scan_with_pushdown_all)?;
     assert_eq!(
         table_scan_with_pushdown_all.to_string(),
-        "SELECT * FROM (SELECT t1.id FROM (SELECT t1.id, t1.age FROM t1 WHERE (t1.id > 1) LIMIT 10)) AS a"
+        "SELECT a.id FROM (SELECT a.id, a.age FROM t1 AS a WHERE (a.id > 1) LIMIT 10) AS a"
     );
     Ok(())
 }
@@ -1016,7 +1016,7 @@ fn test_without_offset() {
 
 #[test]
 fn test_with_offset0() {
-    sql_round_trip(MySqlDialect {}, "select 1 offset 0", "SELECT 1");
+    sql_round_trip(MySqlDialect {}, "select 1 offset 0", "SELECT 1 OFFSET 0");
 }
 
 #[test]
@@ -1061,7 +1061,7 @@ fn test_aggregation_to_sql() {
         FROM person
         GROUP BY id, first_name;"#,
         r#"SELECT person.id, person.first_name,
-sum(person.id) AS total_sum, sum(person.id) OVER (PARTITION BY person.first_name ROWS BETWEEN '5' PRECEDING AND '2' FOLLOWING) AS moving_sum,
+sum(person.id) AS total_sum, sum(person.id) OVER (PARTITION BY person.first_name ROWS BETWEEN 5 PRECEDING AND 2 FOLLOWING) AS moving_sum,
 max(sum(person.id)) OVER (PARTITION BY person.first_name ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS max_total,
 rank() OVER (PARTITION BY (grouping(person.id) + grouping(person.age)), CASE WHEN (grouping(person.age) = 0) THEN person.id END ORDER BY sum(person.id) DESC NULLS FIRST RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS rank_within_parent_1,
 rank() OVER (PARTITION BY (grouping(person.age) + grouping(person.id)), CASE WHEN (CAST(grouping(person.age) AS BIGINT) = 0) THEN person.id END ORDER BY sum(person.id) DESC NULLS FIRST RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS rank_within_parent_2

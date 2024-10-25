@@ -60,7 +60,9 @@ fn create_schema(column_prefix: &str, num_columns: usize) -> Schema {
 
 fn create_table_provider(column_prefix: &str, num_columns: usize) -> Arc<MemTable> {
     let schema = Arc::new(create_schema(column_prefix, num_columns));
-    MemTable::try_new(schema, vec![]).map(Arc::new).unwrap()
+    MemTable::try_new(schema, vec![vec![]])
+        .map(Arc::new)
+        .unwrap()
 }
 
 fn create_context() -> SessionContext {
@@ -158,6 +160,71 @@ fn criterion_benchmark(c: &mut Criterion) {
         });
     });
 
+    // Benchmark for Physical Planning Joins
+    c.bench_function("physical_join_consider_sort", |b| {
+        b.iter(|| {
+            physical_plan(
+                &ctx,
+                "SELECT t1.a7, t2.b8  \
+                 FROM t1, t2 WHERE a7 = b7 \
+                 ORDER BY a7",
+            );
+        });
+    });
+
+    c.bench_function("physical_theta_join_consider_sort", |b| {
+        b.iter(|| {
+            physical_plan(
+                &ctx,
+                "SELECT t1.a7, t2.b8  \
+                 FROM t1, t2 WHERE a7 < b7 \
+                 ORDER BY a7",
+            );
+        });
+    });
+
+    c.bench_function("physical_many_self_joins", |b| {
+        b.iter(|| {
+            physical_plan(
+                &ctx,
+                "SELECT ta.a9, tb.a10, tc.a11, td.a12, te.a13, tf.a14 \
+                 FROM t1 AS ta, t1 AS tb, t1 AS tc, t1 AS td, t1 AS te, t1 AS tf \
+                 WHERE ta.a9 = tb.a10 AND tb.a10 = tc.a11 AND tc.a11 = td.a12 AND \
+                 td.a12 = te.a13 AND te.a13 = tf.a14",
+            );
+        });
+    });
+
+    c.bench_function("physical_unnest_to_join", |b| {
+        b.iter(|| {
+            physical_plan(
+                &ctx,
+                "SELECT t1.a7  \
+                 FROM t1 WHERE a7 = (SELECT b8 FROM t2)",
+            );
+        });
+    });
+
+    c.bench_function("physical_intersection", |b| {
+        b.iter(|| {
+            physical_plan(
+                &ctx,
+                "SELECT t1.a7 FROM t1  \
+                 INTERSECT SELECT t2.b8 FROM t2",
+            );
+        });
+    });
+    // these two queries should be equivalent
+    c.bench_function("physical_join_distinct", |b| {
+        b.iter(|| {
+            logical_plan(
+                &ctx,
+                "SELECT DISTINCT t1.a7  \
+                 FROM t1, t2 WHERE t1.a7 = t2.b8",
+            );
+        });
+    });
+
     // --- TPC-H ---
 
     let tpch_ctx = register_defs(SessionContext::new(), tpch_schemas());
@@ -203,10 +270,8 @@ fn criterion_benchmark(c: &mut Criterion) {
 
     let tpcds_ctx = register_defs(SessionContext::new(), tpcds_schemas());
 
-    // 10, 35: Physical plan does not support logical expression Exists(<subquery>)
-    // 45: Physical plan does not support logical expression (<subquery>)
-    // 41: Optimizing disjunctions not supported
-    let ignored = [10, 35, 41, 45];
+    // 41: check_analyzed_plan: Correlated column is not allowed in predicate
+    let ignored = [41];
 
     let raw_tpcds_sql_queries = (1..100)
         .filter(|q| !ignored.contains(q))

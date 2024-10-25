@@ -40,8 +40,6 @@ impl fmt::Display for BuiltInWindowFunction {
 /// [Window Function]: https://en.wikipedia.org/wiki/Window_function_(SQL)
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash, EnumIter)]
 pub enum BuiltInWindowFunction {
-    /// Relative rank of the current row: (number of rows preceding or peer with current row) / (total rows)
-    CumeDist,
     /// Integer ranging from 1 to the argument value, dividing the partition as equally as possible
     Ntile,
     /// returns value evaluated at the row that is the first row of the window frame
@@ -56,7 +54,6 @@ impl BuiltInWindowFunction {
     pub fn name(&self) -> &str {
         use BuiltInWindowFunction::*;
         match self {
-            CumeDist => "CUME_DIST",
             Ntile => "NTILE",
             FirstValue => "first_value",
             LastValue => "last_value",
@@ -69,7 +66,6 @@ impl FromStr for BuiltInWindowFunction {
     type Err = DataFusionError;
     fn from_str(name: &str) -> Result<BuiltInWindowFunction> {
         Ok(match name.to_uppercase().as_str() {
-            "CUME_DIST" => BuiltInWindowFunction::CumeDist,
             "NTILE" => BuiltInWindowFunction::Ntile,
             "FIRST_VALUE" => BuiltInWindowFunction::FirstValue,
             "LAST_VALUE" => BuiltInWindowFunction::LastValue,
@@ -102,7 +98,6 @@ impl BuiltInWindowFunction {
 
         match self {
             BuiltInWindowFunction::Ntile => Ok(DataType::UInt64),
-            BuiltInWindowFunction::CumeDist => Ok(DataType::Float64),
             BuiltInWindowFunction::FirstValue
             | BuiltInWindowFunction::LastValue
             | BuiltInWindowFunction::NthValue => Ok(input_expr_types[0].clone()),
@@ -113,7 +108,6 @@ impl BuiltInWindowFunction {
     pub fn signature(&self) -> Signature {
         // Note: The physical expression must accept the type returned by this function or the execution panics.
         match self {
-            BuiltInWindowFunction::CumeDist => Signature::any(0, Volatility::Immutable),
             BuiltInWindowFunction::FirstValue | BuiltInWindowFunction::LastValue => {
                 Signature::any(1, Volatility::Immutable)
             }

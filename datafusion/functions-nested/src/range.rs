@@ -283,8 +283,10 @@ impl ScalarUDFImpl for GenSeries {
     }
 }
 
+static GENERATE_SERIES_DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+
 fn get_generate_series_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
+    GENERATE_SERIES_DOCUMENTATION.get_or_init(|| {
         Documentation::builder()
             .with_doc_section(DOC_SECTION_ARRAY)
             .with_description(

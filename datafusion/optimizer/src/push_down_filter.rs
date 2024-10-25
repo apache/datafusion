@@ -24,19 +24,15 @@ use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
 };
 use datafusion_common::{
-    internal_err, plan_err, qualified_name, Column, DFSchema, DFSchemaRef,
-    JoinConstraint, Result,
+    internal_err, plan_err, qualified_name, Column, DFSchema, Result,
 };
 use datafusion_expr::expr_rewriter::replace_col;
-use datafusion_expr::logical_plan::{
-    CrossJoin, Join, JoinType, LogicalPlan, TableScan, Union,
-};
+use datafusion_expr::logical_plan::{Join, JoinType, LogicalPlan, TableScan, Union};
 use datafusion_expr::utils::{
     conjunction, expr_to_columns, split_conjunction, split_conjunction_owned,
 };
 use datafusion_expr::{
-    and, build_join_schema, or, BinaryExpr, Expr, Filter, LogicalPlanBuilder, Operator,
-    Projection, TableProviderFilterPushDown,
+    and, or, BinaryExpr, Expr, Filter, Operator, Projection, TableProviderFilterPushDown,
 };
 
 use crate::optimizer::ApplyOrder;
@@ -867,12 +863,6 @@ impl OptimizerRule for PushDownFilter {
                     })
             }
             LogicalPlan::Join(join) => push_down_join(join, Some(&filter.predicate)),
-            LogicalPlan::CrossJoin(cross_join) => {
-                let predicates = split_conjunction_owned(filter.predicate);
-                let join = convert_cross_join_to_inner_join(cross_join)?;
-                let plan = push_down_all_join(predicates, vec![], join, vec![])?;
-                convert_to_cross_join_if_beneficial(plan.data)
-            }
             LogicalPlan::TableScan(scan) => {
                 let filter_predicates = split_conjunction(&filter.predicate);
                 let results = scan
@@ -1114,48 +1104,6 @@ impl PushDownFilter {
     }
 }
 
-/// Converts the given cross join to an inner join with an empty equality
-/// predicate and an empty filter condition.
-fn convert_cross_join_to_inner_join(cross_join: CrossJoin) -> Result<Join> {
-    let CrossJoin { left, right, .. } = cross_join;
-    let join_schema = build_join_schema(left.schema(), right.schema(), &JoinType::Inner)?;
-    Ok(Join {
-        left,
-        right,
-        join_type: JoinType::Inner,
-        join_constraint: JoinConstraint::On,
-        on: vec![],
-        filter: None,
-        schema: DFSchemaRef::new(join_schema),
-        null_equals_null: false,
-    })
-}
-
-/// Converts the given inner join with an empty equality predicate and an
-/// empty filter condition to a cross join.
-fn convert_to_cross_join_if_beneficial(
-    plan: LogicalPlan,
-) -> Result<Transformed<LogicalPlan>> {
-    match plan {
-        // Can be converted back to cross join
-        LogicalPlan::Join(join) if join.on.is_empty() && join.filter.is_none() => {
-            LogicalPlanBuilder::from(Arc::unwrap_or_clone(join.left))
-                .cross_join(Arc::unwrap_or_clone(join.right))?
-                .build()
-                .map(Transformed::yes)
-        }
-        LogicalPlan::Filter(filter) => {
-            convert_to_cross_join_if_beneficial(Arc::unwrap_or_clone(filter.input))?
-                .transform_data(|child_plan| {
-                    Filter::try_new(filter.predicate, Arc::new(child_plan))
-                        .map(LogicalPlan::Filter)
-                        .map(Transformed::yes)
-                })
-        }
-        plan => Ok(Transformed::no(plan)),
-    }
-}
-
 /// replaces columns by its name on the projection.
 pub fn replace_cols_by_name(
     e: Expr,
@@ -1203,17 +1151,17 @@ mod tests {
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use async_trait::async_trait;
 
-    use datafusion_common::ScalarValue;
+    use datafusion_common::{DFSchemaRef, ScalarValue};
     use datafusion_expr::expr::ScalarFunction;
     use datafusion_expr::logical_plan::table_scan;
     use datafusion_expr::{
-        col, in_list, in_subquery, lit, ColumnarValue, Extension, ScalarUDF,
-        ScalarUDFImpl, Signature, TableSource, TableType, UserDefinedLogicalNodeCore,
-        Volatility,
+        col, in_list, in_subquery, lit, ColumnarValue, Extension, LogicalPlanBuilder,
+        ScalarUDF, ScalarUDFImpl, Signature, TableSource, TableType,
+        UserDefinedLogicalNodeCore, Volatility,
     };
 
     use crate::optimizer::Optimizer;
-    use crate::rewrite_disjunctive_predicate::RewriteDisjunctivePredicate;
+    use crate::simplify_expressions::SimplifyExpressions;
     use crate::test::*;
     use crate::OptimizerContext;
     use datafusion_expr::test::function_stub::sum;
@@ -1235,7 +1183,7 @@ mod tests {
         expected: &str,
     ) -> Result<()> {
         let optimizer = Optimizer::with_rules(vec![
-            Arc::new(RewriteDisjunctivePredicate::new()),
+            Arc::new(SimplifyExpressions::new()),
             Arc::new(PushDownFilter::new()),
         ]);
         let optimized_plan =
