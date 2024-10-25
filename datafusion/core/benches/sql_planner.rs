@@ -104,12 +104,14 @@ fn register_clickbench_hits_table() -> SessionContext {
     // use an external table for clickbench benchmarks
     // let data_path = "./tests/data/clickbench_hits_10.parquet";
 
-    let sql =
-        format!("CREATE EXTERNAL TABLE hits STORED AS PARQUET LOCATION '{CLICKBENCH_DATA_PATH}'");
+    let sql = format!(
+        "CREATE EXTERNAL TABLE hits STORED AS PARQUET LOCATION '{CLICKBENCH_DATA_PATH}'"
+    );
 
     rt.block_on(ctx.sql(&sql)).unwrap();
 
-    let count = rt.block_on(async { ctx.table("hits").await.unwrap().count().await.unwrap() });
+    let count =
+        rt.block_on(async { ctx.table("hits").await.unwrap().count().await.unwrap() });
     assert!(count > 0);
     ctx
 }
