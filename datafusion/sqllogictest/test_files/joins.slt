@@ -3901,8 +3901,8 @@ SELECT * FROM (
 ) AS rhs ON lhs.b=rhs.b
 ----
 11 1 21 1
-14 2 22 2
 12 3 23 3
+14 2 22 2
 15 4 24 4
 
 query TT
@@ -3922,11 +3922,12 @@ logical_plan
 05)----Sort: right_table_no_nulls.b ASC NULLS LAST, fetch=10
 06)------TableScan: right_table_no_nulls projection=[a, b]
 physical_plan
-01)CoalesceBatchesExec: target_batch_size=3
-02)--HashJoinExec: mode=CollectLeft, join_type=Right, on=[(b@1, b@1)]
-03)----MemoryExec: partitions=1, partition_sizes=[1]
-04)----SortExec: TopK(fetch=10), expr=[b@1 ASC NULLS LAST], preserve_partitioning=[false]
-05)------MemoryExec: partitions=1, partition_sizes=[1]
+01)ProjectionExec: expr=[a@2 as a, b@3 as b, a@0 as a, b@1 as b]
+02)--CoalesceBatchesExec: target_batch_size=3
+03)----HashJoinExec: mode=CollectLeft, join_type=Left, on=[(b@1, b@1)]
+04)------SortExec: TopK(fetch=10), expr=[b@1 ASC NULLS LAST], preserve_partitioning=[false]
+05)--------MemoryExec: partitions=1, partition_sizes=[1]
+06)------MemoryExec: partitions=1, partition_sizes=[1]
 
 
 
@@ -3979,10 +3980,11 @@ logical_plan
 04)--SubqueryAlias: rhs
 05)----TableScan: right_table_no_nulls projection=[a, b]
 physical_plan
-01)CoalesceBatchesExec: target_batch_size=3
-02)--HashJoinExec: mode=CollectLeft, join_type=Right, on=[(b@1, b@1)]
-03)----MemoryExec: partitions=1, partition_sizes=[1]
-04)----MemoryExec: partitions=1, partition_sizes=[1]
+01)ProjectionExec: expr=[a@2 as a, b@3 as b, a@0 as a, b@1 as b]
+02)--CoalesceBatchesExec: target_batch_size=3
+03)----HashJoinExec: mode=CollectLeft, join_type=Left, on=[(b@1, b@1)]
+04)------MemoryExec: partitions=1, partition_sizes=[1]
+05)------MemoryExec: partitions=1, partition_sizes=[1]
 
 
 # Null build indices:
@@ -4038,11 +4040,12 @@ logical_plan
 05)----Sort: right_table_no_nulls.b ASC NULLS LAST, fetch=10
 06)------TableScan: right_table_no_nulls projection=[a, b]
 physical_plan
-01)CoalesceBatchesExec: target_batch_size=3
-02)--HashJoinExec: mode=CollectLeft, join_type=Right, on=[(b@1, b@1)]
-03)----MemoryExec: partitions=1, partition_sizes=[1]
-04)----SortExec: TopK(fetch=10), expr=[b@1 ASC NULLS LAST], preserve_partitioning=[false]
-05)------MemoryExec: partitions=1, partition_sizes=[1]
+01)ProjectionExec: expr=[a@2 as a, b@3 as b, a@0 as a, b@1 as b]
+02)--CoalesceBatchesExec: target_batch_size=3
+03)----HashJoinExec: mode=CollectLeft, join_type=Left, on=[(b@1, b@1)]
+04)------SortExec: TopK(fetch=10), expr=[b@1 ASC NULLS LAST], preserve_partitioning=[false]
+05)--------MemoryExec: partitions=1, partition_sizes=[1]
+06)------MemoryExec: partitions=1, partition_sizes=[1]
 
 
 # Test CROSS JOIN LATERAL syntax (planning)
@@ -4050,7 +4053,7 @@ query TT
 explain select t1_id, t1_name, i from join_t1 t1 cross join lateral (select * from unnest(generate_series(1, t1_int))) as series(i);
 ----
 logical_plan
-01)CrossJoin:
+01)Cross Join:
 02)--SubqueryAlias: t1
 03)----TableScan: join_t1 projection=[t1_id, t1_name]
 04)--SubqueryAlias: series
@@ -4188,3 +4191,89 @@ physical_plan
 03)----MemoryExec: partitions=1, partition_sizes=[0]
 04)----SortExec: expr=[x@0 ASC NULLS LAST], preserve_partitioning=[false]
 05)------MemoryExec: partitions=1, partition_sizes=[0]
+
+# Test full join with limit
+statement ok
+CREATE TABLE t0(c1 INT UNSIGNED, c2 INT UNSIGNED)
+AS VALUES
+(1, 1),
+(2, 2),
+(3, 3),
+(4, 4);
+
+statement ok
+CREATE TABLE t1(c1 INT UNSIGNED, c2 INT UNSIGNED, c3 BOOLEAN)
+AS VALUES
+(2, 2, true),
+(2, 2, false),
+(3, 3, true),
+(3, 3, false);
+
+query IIIIB
+SELECT * FROM t0 FULL JOIN t1 ON t0.c1 = t1.c1 LIMIT 2;
+----
+2 2 2 2 true
+2 2 2 2 false
+
+query IIIIB
+SELECT * FROM t0 FULL JOIN t1 ON t0.c2 >= t1.c2 LIMIT 2;
+----
+2 2 2 2 true
+3 3 2 2 true
+
+query IIIIB
+SELECT * FROM t0 FULL JOIN t1 ON t0.c1 = t1.c1 AND t0.c2 >= t1.c2 LIMIT 2;
+----
+2 2 2 2 true
+2 2 2 2 false
+
+## Test !join.on.is_empty() && join.filter.is_none()
+query TT
+EXPLAIN SELECT * FROM t0 FULL JOIN t1 ON t0.c1 = t1.c1 LIMIT 2;
+----
+logical_plan
+01)Limit: skip=0, fetch=2
+02)--Full Join: t0.c1 = t1.c1
+03)----Limit: skip=0, fetch=2
+04)------TableScan: t0 projection=[c1, c2], fetch=2
+05)----Limit: skip=0, fetch=2
+06)------TableScan: t1 projection=[c1, c2, c3], fetch=2
+physical_plan
+01)CoalesceBatchesExec: target_batch_size=3, fetch=2
+02)--HashJoinExec: mode=CollectLeft, join_type=Full, on=[(c1@0, c1@0)]
+03)----MemoryExec: partitions=1, partition_sizes=[1]
+04)----MemoryExec: partitions=1, partition_sizes=[1]
+
+## Test join.on.is_empty() && join.filter.is_some()
+query TT
+EXPLAIN SELECT * FROM t0 FULL JOIN t1 ON t0.c2 >= t1.c2 LIMIT 2;
+----
+logical_plan
+01)Limit: skip=0, fetch=2
+02)--Full Join:  Filter: t0.c2 >= t1.c2
+03)----Limit: skip=0, fetch=2
+04)------TableScan: t0 projection=[c1, c2], fetch=2
+05)----Limit: skip=0, fetch=2
+06)------TableScan: t1 projection=[c1, c2, c3], fetch=2
+physical_plan
+01)GlobalLimitExec: skip=0, fetch=2
+02)--NestedLoopJoinExec: join_type=Full, filter=c2@0 >= c2@1
+03)----MemoryExec: partitions=1, partition_sizes=[1]
+04)----MemoryExec: partitions=1, partition_sizes=[1]
+
+## Test !join.on.is_empty() && join.filter.is_some()
+query TT
+EXPLAIN SELECT * FROM t0 FULL JOIN t1 ON t0.c1 = t1.c1 AND t0.c2 >= t1.c2 LIMIT 2;
+----
+logical_plan
+01)Limit: skip=0, fetch=2
+02)--Full Join: t0.c1 = t1.c1 Filter: t0.c2 >= t1.c2
+03)----Limit: skip=0, fetch=2
+04)------TableScan: t0 projection=[c1, c2], fetch=2
+05)----Limit: skip=0, fetch=2
+06)------TableScan: t1 projection=[c1, c2, c3], fetch=2
+physical_plan
+01)CoalesceBatchesExec: target_batch_size=3, fetch=2
+02)--HashJoinExec: mode=CollectLeft, join_type=Full, on=[(c1@0, c1@0)], filter=c2@0 >= c2@1
+03)----MemoryExec: partitions=1, partition_sizes=[1]
+04)----MemoryExec: partitions=1, partition_sizes=[1]

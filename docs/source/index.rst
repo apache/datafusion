@@ -36,9 +36,11 @@ Apache DataFusion
 DataFusion is an extensible query engine written in `Rust <http://rustlang.org>`_ that
 uses `Apache Arrow <https://arrow.apache.org>`_ as its in-memory format.
 
-This documentation is for the `core DataFusion project <https://github.com/apache/datafusion>`_, which contains
-libraries that are used to build data-centric system software. DataFusion also offers the following subprojects, which
-provide packaged versions of DataFusion intended for end users, and these have separate documentation.
+The documentation on this site is for the `core DataFusion project <https://github.com/apache/datafusion>`_, which contains
+libraries and binaries for developers building fast and feature rich database and analytic systems,
+customized to particular workloads. See `use cases <https://datafusion.apache.org/user-guide/introduction.html#use-cases>`_ for examples.
+
+The following related subprojects target end users and have separate documentation.
 
 - `DataFusion Python <https://datafusion.apache.org/python/>`_ offers a Python interface for SQL and DataFrame
   queries.
@@ -46,10 +48,6 @@ provide packaged versions of DataFusion intended for end users, and these have s
   that scales out on `Ray <https://www.ray.io>`_ clusters.
 - `DataFusion Comet <https://datafusion.apache.org/comet/>`_ is an accelerator for Apache Spark based on
   DataFusion.
-
-DataFusion's target users are
-developers building fast and feature rich database and analytic systems,
-customized to particular workloads. See `use cases <https://datafusion.apache.org/user-guide/introduction.html#use-cases>`_ for examples.
 
 "Out of the box," DataFusion offers `SQL <https://datafusion.apache.org/user-guide/sql/index.html>`_
 and `Dataframe <https://docs.rs/datafusion/latest/datafusion/dataframe/struct.DataFrame.html>`_ APIs,
@@ -132,6 +130,7 @@ To get started, see
    library-user-guide/extending-operators
    library-user-guide/profiling
    library-user-guide/query-optimizer
+   library-user-guide/api-health
 .. _toc.contributor-guide:
 
 .. toctree::

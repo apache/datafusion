@@ -511,10 +511,19 @@ x y [30, 40, 50]
 query error DataFusion error: type_coercion\ncaused by\nThis feature is not implemented: Unnest should be rewritten to LogicalPlan::Unnest before type coercion
 select sum(unnest(generate_series(1,10)));
 
-## TODO: support unnest as a child expr
 query error DataFusion error: Internal error: unnest on struct can only be applied at the root level of select expression
 select arrow_typeof(unnest(column5)) from unnest_table;
 
+query T
+select arrow_typeof(unnest(column1)) from unnest_table;
+----
+Int64
+Int64
+Int64
+Int64
+Int64
+Int64
+Int64
 
 ## unnest from a result of a logical plan with limit and offset
 query I
@@ -524,10 +533,19 @@ select unnest(column1) from (select * from (values([1,2,3]), ([4,5,6])) limit 1 
 5
 6
 
-## FIXME: https://github.com/apache/datafusion/issues/11198
 query error DataFusion error: Error during planning: Projections require unique expression names but the expression "UNNEST\(unnest_table.column1\)" at position 0 and "UNNEST\(unnest_table.column1\)" at position 1 have the same name. Consider aliasing \("AS"\) one of them.
 select unnest(column1), unnest(column1) from unnest_table;
 
+query II
+select unnest(column1), unnest(column1) u1 from unnest_table;
+----
+1 1
+2 2
+3 3
+4 4
+5 5
+6 6
+12 12
 
 ## the same unnest expr is referened multiple times (unnest is the bottom-most expr)
 query ??II
@@ -625,7 +643,7 @@ NULL [4] [{c0: [2], c1: [[3], [4]]}]
 4 [3] [{c0: [2], c1: [[3], [4]]}]
 NULL [4] [{c0: [2], c1: [[3], [4]]}]
 
-## demonstrate where recursive unnest is impossible 
+## demonstrate where recursive unnest is impossible
 ## and need multiple unnesting logical plans
 ## e.g unnest -> field_access -> unnest
 query TT
@@ -777,9 +795,12 @@ select unnest(unnest(column2)) c2, count(column3) from recursive_unnest_table gr
 [, 6] 1
 NULL 1
 
-### TODO: group by unnest struct
 query error DataFusion error: Error during planning: Projection references non\-aggregate values
 select unnest(column1) c1 from nested_unnest_table group by c1.c0;
+
+# TODO: this query should work. see issue: https://github.com/apache/datafusion/issues/12794
+query error DataFusion error: Internal error: unnest on struct can only be applied at the root level of select expression
+select unnest(column1) c1 from nested_unnest_table
 
 query II??I??
 select unnest(column5), * from unnest_table;

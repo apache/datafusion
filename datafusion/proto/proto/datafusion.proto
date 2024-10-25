@@ -163,6 +163,7 @@ message CreateExternalTableNode {
   datafusion_common.DfSchema schema = 4;
   repeated string table_partition_cols = 5;
   bool if_not_exists = 6;
+  bool temporary = 14;
   string definition = 7;
   repeated SortExprNodeCollection order_exprs = 10;
   bool unbounded = 11;
@@ -200,6 +201,7 @@ message CreateViewNode {
   TableReference name = 5;
   LogicalPlanNode input = 2;
   bool or_replace = 3;
+  bool temporary = 6;
   string definition = 4;
 }
 
@@ -262,7 +264,7 @@ message CopyToNode {
 
 message UnnestNode {
   LogicalPlanNode input = 1;
-  repeated ColumnUnnestExec exec_columns = 2;
+  repeated datafusion_common.Column exec_columns = 2;
   repeated ColumnUnnestListItem list_type_columns = 3;
   repeated uint64 struct_type_columns = 4;
   repeated uint64 dependency_indices = 5;
@@ -283,17 +285,15 @@ message ColumnUnnestListRecursion {
   uint32 depth = 2;
 }
 
-message ColumnUnnestExec {
-  datafusion_common.Column column = 1;
-  oneof UnnestType {
-    ColumnUnnestListRecursions list = 2;
-    datafusion_common.EmptyMessage struct = 3;
-    datafusion_common.EmptyMessage inferred = 4;
-  }
-}
-
 message UnnestOptions {
   bool preserve_nulls = 1;
+  repeated RecursionUnnestOption recursions = 2;
+}
+
+message RecursionUnnestOption {
+  datafusion_common.Column output_column = 1;
+  datafusion_common.Column input_column = 2;
+  uint32 depth = 3;
 }
 
 message UnionNode {
@@ -508,13 +508,13 @@ message ScalarUDFExprNode {
 enum BuiltInWindowFunction {
   UNSPECIFIED = 0; // https://protobuf.dev/programming-guides/dos-donts/#unspecified-enum
   // ROW_NUMBER = 0;
-  RANK = 1;
-  DENSE_RANK = 2;
-  PERCENT_RANK = 3;
-  CUME_DIST = 4;
+  //  RANK = 1;
+  //  DENSE_RANK = 2;
+  //  PERCENT_RANK = 3;
+  //  CUME_DIST = 4;
   NTILE = 5;
-  LAG = 6;
-  LEAD = 7;
+  // LAG = 6;
+  // LEAD = 7;
   FIRST_VALUE = 8;
   LAST_VALUE = 9;
   NTH_VALUE = 10;
@@ -526,7 +526,7 @@ message WindowExprNode {
     string udaf = 3;
     string udwf = 9;
   }
-  LogicalExprNode expr = 4;
+  repeated LogicalExprNode exprs = 4;
   repeated LogicalExprNode partition_by = 5;
   repeated SortExprNode order_by = 6;
   // repeated LogicalExprNode filter = 7;
@@ -739,7 +739,7 @@ message FileSinkConfig {
   datafusion_common.Schema output_schema = 4;
   repeated PartitionColumn table_partition_cols = 5;
   bool keep_partition_by_columns = 9;
-  InsertOp insert_op = 10; 
+  InsertOp insert_op = 10;
 }
 
 enum InsertOp {

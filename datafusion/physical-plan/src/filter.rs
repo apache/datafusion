@@ -48,6 +48,7 @@ use datafusion_physical_expr::{
     analyze, split_conjunction, AnalysisContext, ConstExpr, ExprBoundaries, PhysicalExpr,
 };
 
+use crate::execution_plan::CardinalityEffect;
 use futures::stream::{Stream, StreamExt};
 use log::trace;
 
@@ -114,7 +115,7 @@ impl FilterExec {
 
     /// Return new instance of [FilterExec] with the given projection.
     pub fn with_projection(&self, projection: Option<Vec<usize>>) -> Result<Self> {
-        //  check if the projection is valid
+        //  Check if the projection is valid
         can_project(&self.schema(), projection.as_ref())?;
 
         let projection = match projection {
@@ -156,7 +157,7 @@ impl FilterExec {
         self.default_selectivity
     }
 
-    /// projection
+    /// Projection
     pub fn projection(&self) -> Option<&Vec<usize>> {
         self.projection.as_ref()
     }
@@ -254,9 +255,9 @@ impl FilterExec {
                 let expr = Arc::new(column) as _;
                 ConstExpr::new(expr).with_across_partitions(true)
             });
-        // this is for statistics
+        // This is for statistics
         eq_properties = eq_properties.with_constants(constants);
-        // this is for logical constant (for example: a = '1', then a could be marked as a constant)
+        // This is for logical constant (for example: a = '1', then a could be marked as a constant)
         // to do: how to deal with multiple situation to represent = (for example c1 between 0 and 0)
         eq_properties =
             eq_properties.with_constants(Self::extend_constants(input, predicate));
@@ -330,7 +331,7 @@ impl ExecutionPlan for FilterExec {
     }
 
     fn maintains_input_order(&self) -> Vec<bool> {
-        // tell optimizer this operator doesn't reorder its input
+        // Tell optimizer this operator doesn't reorder its input
         vec![true]
     }
 
@@ -371,6 +372,10 @@ impl ExecutionPlan for FilterExec {
     /// predicate's selectivity value can be determined for the incoming data.
     fn statistics(&self) -> Result<Statistics> {
         Self::statistics_helper(&self.input, self.predicate(), self.default_selectivity)
+    }
+
+    fn cardinality_effect(&self) -> CardinalityEffect {
+        CardinalityEffect::LowerEqual
     }
 }
 
@@ -420,7 +425,7 @@ struct FilterExecStream {
     predicate: Arc<dyn PhysicalExpr>,
     /// The input partition to filter.
     input: SendableRecordBatchStream,
-    /// runtime metrics recording
+    /// Runtime metrics recording
     baseline_metrics: BaselineMetrics,
     /// The projection indices of the columns in the input schema
     projection: Option<Vec<usize>>,
@@ -444,7 +449,7 @@ fn filter_and_project(
         .and_then(|v| v.into_array(batch.num_rows()))
         .and_then(|array| {
             Ok(match (as_boolean_array(&array), projection) {
-                // apply filter array to record batch
+                // Apply filter array to record batch
                 (Ok(filter_array), None) => filter_record_batch(batch, filter_array)?,
                 (Ok(filter_array), Some(projection)) => {
                     let projected_columns = projection
@@ -485,7 +490,7 @@ impl Stream for FilterExecStream {
                         &self.schema,
                     )?;
                     timer.done();
-                    // skip entirely filtered batches
+                    // Skip entirely filtered batches
                     if filtered_batch.num_rows() == 0 {
                         continue;
                     }
@@ -502,7 +507,7 @@ impl Stream for FilterExecStream {
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
-        // same number of record batches
+        // Same number of record batches
         self.input.size_hint()
     }
 }

@@ -154,7 +154,7 @@ fn get_variance_sample_doc() -> &'static Documentation {
                 "Returns the statistical sample variance of a set of numbers.",
             )
             .with_syntax_example("var(expression)")
-            .with_standard_argument("expression", "Numeric")
+            .with_standard_argument("expression", Some("Numeric"))
             .build()
             .unwrap()
     })
@@ -260,7 +260,7 @@ fn get_variance_population_doc() -> &'static Documentation {
                 "Returns the statistical population variance of a set of numbers.",
             )
             .with_syntax_example("var_pop(expression)")
-            .with_standard_argument("expression", "Numeric")
+            .with_standard_argument("expression", Some("Numeric"))
             .build()
             .unwrap()
     })

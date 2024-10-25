@@ -29,13 +29,12 @@ use crate::error::{DataFusionError, Result};
 use crate::execution::context::{ExecutionProps, SessionState};
 use crate::logical_expr::utils::generate_sort_key;
 use crate::logical_expr::{
-    Aggregate, EmptyRelation, Join, Projection, Sort, TableScan, Unnest, Window,
+    Aggregate, EmptyRelation, Join, Projection, Sort, TableScan, Unnest, Values, Window,
 };
 use crate::logical_expr::{
     Expr, LogicalPlan, Partitioning as LogicalPartitioning, PlanType, Repartition,
     UserDefinedLogicalNode,
 };
-use crate::logical_expr::{Limit, Values};
 use crate::physical_expr::{create_physical_expr, create_physical_exprs};
 use crate::physical_plan::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
 use crate::physical_plan::analyze::AnalyzeExec;
@@ -78,8 +77,8 @@ use datafusion_expr::expr::{
 use datafusion_expr::expr_rewriter::unnormalize_cols;
 use datafusion_expr::logical_plan::builder::wrap_projection_for_join_if_necessary;
 use datafusion_expr::{
-    DescribeTable, DmlStatement, Extension, Filter, RecursiveQuery, SortExpr,
-    StringifiedPlan, WindowFrame, WindowFrameBound, WriteOp,
+    DescribeTable, DmlStatement, Extension, FetchType, Filter, JoinType, RecursiveQuery,
+    SkipType, SortExpr, StringifiedPlan, WindowFrame, WindowFrameBound, WriteOp,
 };
 use datafusion_physical_expr::aggregate::{AggregateExprBuilder, AggregateFunctionExpr};
 use datafusion_physical_expr::expressions::Literal;
@@ -796,8 +795,20 @@ impl DefaultPhysicalPlanner {
             }
             LogicalPlan::Subquery(_) => todo!(),
             LogicalPlan::SubqueryAlias(_) => children.one()?,
-            LogicalPlan::Limit(Limit { skip, fetch, .. }) => {
+            LogicalPlan::Limit(limit) => {
                 let input = children.one()?;
+                let SkipType::Literal(skip) = limit.get_skip_type()? else {
+                    return not_impl_err!(
+                        "Unsupported OFFSET expression: {:?}",
+                        limit.skip
+                    );
+                };
+                let FetchType::Literal(fetch) = limit.get_fetch_type()? else {
+                    return not_impl_err!(
+                        "Unsupported LIMIT expression: {:?}",
+                        limit.fetch
+                    );
+                };
 
                 // GlobalLimitExec requires a single partition for input
                 let input = if input.output_partitioning().partition_count() == 1 {
@@ -806,13 +817,13 @@ impl DefaultPhysicalPlanner {
                     // Apply a LocalLimitExec to each partition. The optimizer will also insert
                     // a CoalescePartitionsExec between the GlobalLimitExec and LocalLimitExec
                     if let Some(fetch) = fetch {
-                        Arc::new(LocalLimitExec::new(input, *fetch + skip))
+                        Arc::new(LocalLimitExec::new(input, fetch + skip))
                     } else {
                         input
                     }
                 };
 
-                Arc::new(GlobalLimitExec::new(input, *skip, *fetch))
+                Arc::new(GlobalLimitExec::new(input, skip, fetch))
             }
             LogicalPlan::Unnest(Unnest {
                 list_type_columns,
@@ -1045,14 +1056,18 @@ impl DefaultPhysicalPlanner {
                     session_state.config_options().optimizer.prefer_hash_join;
 
                 let join: Arc<dyn ExecutionPlan> = if join_on.is_empty() {
-                    // there is no equal join condition, use the nested loop join
-                    // TODO optimize the plan, and use the config of `target_partitions` and `repartition_joins`
-                    Arc::new(NestedLoopJoinExec::try_new(
-                        physical_left,
-                        physical_right,
-                        join_filter,
-                        join_type,
-                    )?)
+                    if join_filter.is_none() && matches!(join_type, JoinType::Inner) {
+                        // cross join if there is no join conditions and no join filter set
+                        Arc::new(CrossJoinExec::new(physical_left, physical_right))
+                    } else {
+                        // there is no equal join condition, use the nested loop join
+                        Arc::new(NestedLoopJoinExec::try_new(
+                            physical_left,
+                            physical_right,
+                            join_filter,
+                            join_type,
+                        )?)
+                    }
                 } else if session_state.config().target_partitions() > 1
                     && session_state.config().repartition_joins()
                     && !prefer_hash_join
@@ -1111,10 +1126,6 @@ impl DefaultPhysicalPlanner {
                 } else {
                     join
                 }
-            }
-            LogicalPlan::CrossJoin(_) => {
-                let [left, right] = children.two()?;
-                Arc::new(CrossJoinExec::new(left, right))
             }
             LogicalPlan::RecursiveQuery(RecursiveQuery {
                 name, is_distinct, ..
@@ -1523,7 +1534,7 @@ pub fn create_window_expr(
 }
 
 type AggregateExprWithOptionalArgs = (
-    AggregateFunctionExpr,
+    Arc<AggregateFunctionExpr>,
     // The filter clause, if any
     Option<Arc<dyn PhysicalExpr>>,
     // Ordering requirements, if any
@@ -1587,7 +1598,8 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
                         .alias(name)
                         .with_ignore_nulls(ignore_nulls)
                         .with_distinct(*distinct)
-                        .build()?;
+                        .build()
+                        .map(Arc::new)?;
 
                 (agg_expr, filter, physical_sort_exprs)
             };

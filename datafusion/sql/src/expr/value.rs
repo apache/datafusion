@@ -235,7 +235,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let value = interval_literal(*interval.value, negative)?;
 
         // leading_field really means the unit if specified
-        // for example, "month" in  `INTERVAL '5' month`
+        // For example, "month" in  `INTERVAL '5' month`
         let value = match interval.leading_field.as_ref() {
             Some(leading_field) => format!("{value} {leading_field}"),
             None => value,
@@ -323,9 +323,9 @@ const fn try_decode_hex_char(c: u8) -> Option<u8> {
 fn parse_decimal_128(unsigned_number: &str, negative: bool) -> Result<Expr> {
     // remove leading zeroes
     let trimmed = unsigned_number.trim_start_matches('0');
-    // parse precision and scale, remove decimal point if exists
+    // Parse precision and scale, remove decimal point if exists
     let (precision, scale, replaced_str) = if trimmed == "." {
-        // special cases for numbers such as “0.”, “000.”, and so on.
+        // Special cases for numbers such as “0.”, “000.”, and so on.
         (1, 0, Cow::Borrowed("0"))
     } else if let Some(i) = trimmed.find('.') {
         (
@@ -334,7 +334,7 @@ fn parse_decimal_128(unsigned_number: &str, negative: bool) -> Result<Expr> {
             Cow::Owned(trimmed.replace('.', "")),
         )
     } else {
-        // no decimal point, keep as is
+        // No decimal point, keep as is
         (trimmed.len(), 0, Cow::Borrowed(trimmed))
     };
 
@@ -344,7 +344,7 @@ fn parse_decimal_128(unsigned_number: &str, negative: bool) -> Result<Expr> {
         )))
     })?;
 
-    // check precision overflow
+    // Check precision overflow
     if precision as u8 > DECIMAL128_MAX_PRECISION {
         return Err(DataFusionError::from(ParserError(format!(
             "Cannot parse {replaced_str} as i128 when building decimal: precision overflow"

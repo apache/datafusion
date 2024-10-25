@@ -30,6 +30,7 @@ use super::{
 
 use crate::{DisplayFormatType, ExecutionPlan, Partitioning};
 
+use crate::execution_plan::CardinalityEffect;
 use datafusion_common::{internal_err, Result};
 use datafusion_execution::TaskContext;
 
@@ -178,6 +179,10 @@ impl ExecutionPlan for CoalescePartitionsExec {
     fn supports_limit_pushdown(&self) -> bool {
         true
     }
+
+    fn cardinality_effect(&self) -> CardinalityEffect {
+        CardinalityEffect::Equal
+    }
 }
 
 #[cfg(test)]
@@ -231,10 +236,10 @@ mod tests {
 
         let blocking_exec = Arc::new(BlockingExec::new(Arc::clone(&schema), 2));
         let refs = blocking_exec.refs();
-        let coaelesce_partitions_exec =
+        let coalesce_partitions_exec =
             Arc::new(CoalescePartitionsExec::new(blocking_exec));
 
-        let fut = collect(coaelesce_partitions_exec, task_ctx);
+        let fut = collect(coalesce_partitions_exec, task_ctx);
         let mut fut = fut.boxed();
 
         assert_is_pending(&mut fut);

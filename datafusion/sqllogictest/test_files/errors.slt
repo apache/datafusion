@@ -130,3 +130,10 @@ order by c9
 
 query error DataFusion error: Arrow error: Cast error: Cannot cast string 'foo' to value of Int64 type
 create table foo as values (1), ('foo');
+
+query error No function matches
+select 1 group by substr('');
+
+# Error in filter should be reported
+query error Divide by zero
+SELECT c2 from aggregate_test_100 where CASE WHEN true THEN 1 / 0 ELSE 0 END = 1;

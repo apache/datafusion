@@ -30,7 +30,7 @@ authors = { workspace = true }
 # Specify MSRV here as `cargo msrv` doesn't support workspace version and fails with
 # "Unable to find key 'package.rust-version' (or 'package.metadata.msrv') in 'arrow-datafusion/Cargo.toml'"
 # https://github.com/foresterre/cargo-msrv/issues/590
-rust-version = "1.78"
+rust-version = "1.79"
 
 [lints]
 workspace = true
@@ -67,8 +67,6 @@ math_expressions = ["datafusion-functions/math_expressions"]
 parquet = ["datafusion-common/parquet", "dep:parquet"]
 pyarrow = ["datafusion-common/pyarrow", "parquet"]
 regex_expressions = [
-    "datafusion-physical-expr/regex_expressions",
-    "datafusion-optimizer/regex_expressions",
     "datafusion-functions/regex_expressions",
 ]
 serde = ["arrow-schema/serde"]

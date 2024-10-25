@@ -54,7 +54,7 @@ math_expressions = []
 # enable regular expressions
 regex_expressions = ["regex"]
 # enable string functions
-string_expressions = ["regex_expressions", "uuid"]
+string_expressions = ["uuid"]
 # enable unicode functions
 unicode_expressions = ["hashbrown", "unicode-segmentation"]
 
@@ -120,6 +120,11 @@ required-features = ["datetime_expressions"]
 
 [[bench]]
 harness = false
+name = "iszero"
+required-features = ["math_expressions"]
+
+[[bench]]
+harness = false
 name = "nullif"
 required-features = ["core_expressions"]
 
@@ -132,6 +137,16 @@ required-features = ["datetime_expressions"]
 harness = false
 name = "to_char"
 required-features = ["datetime_expressions"]
+
+[[bench]]
+harness = false
+name = "isnan"
+required-features = ["math_expressions"]
+
+[[bench]]
+harness = false
+name = "signum"
+required-features = ["math_expressions"]
 
 [[bench]]
 harness = false
@@ -180,5 +195,15 @@ required-features = ["unicode_expressions"]
 
 [[bench]]
 harness = false
+name = "cot"
+required-features = ["math_expressions"]
+
+[[bench]]
+harness = false
 name = "strpos"
 required-features = ["unicode_expressions"]
+
+[[bench]]
+harness = false
+name = "trunc"
+required-features = ["math_expressions"]

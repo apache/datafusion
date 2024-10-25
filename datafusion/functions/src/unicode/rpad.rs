@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::string::common::StringArrayType;
+use crate::strings::StringArrayType;
 use crate::utils::{make_scalar_function, utf8_to_str_type};
 use arrow::array::{
     ArrayRef, AsArray, GenericStringArray, GenericStringBuilder, Int64Array,
@@ -140,7 +140,7 @@ fn get_rpad_doc() -> &'static Documentation {
 ```"#)
             .with_standard_argument(
                 "str",
-                "String",
+                Some("String"),
             )
             .with_argument("n", "String length to pad to.")
             .with_argument("padding_str",

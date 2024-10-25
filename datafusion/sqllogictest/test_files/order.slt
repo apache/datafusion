@@ -958,6 +958,24 @@ drop table foo;
 statement ok
 drop table ambiguity_test;
 
+## reproducer for https://github.com/apache/datafusion/issues/12446
+# Ensure union ordering calculations with constants can be optimized
+
+statement ok
+create table t(a0 int, a int, b int, c int) as values (1, 2, 3, 4), (5, 6, 7, 8);
+
+# expect this query to run successfully, not error
+query III
+select * from (select c, a, NULL::int as a0 from t order by a, c) t1
+union all
+select * from (select c, NULL::int as a, a0 from t order by a0, c) t2
+order by c, a, a0, b
+limit 2;
+----
+4 2 NULL
+4 NULL 1
+
+
 # Casting from numeric to string types breaks the ordering
 statement ok
 CREATE EXTERNAL TABLE ordered_table (
@@ -1189,3 +1207,48 @@ physical_plan
 02)--RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
 03)----SortExec: TopK(fetch=1), expr=[a@0 ASC NULLS LAST], preserve_partitioning=[false]
 04)------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b], has_header=true
+
+
+# Test: inputs into union with different orderings
+query TT
+explain select * from (select b, c, a, NULL::int as a0 from ordered_table order by a, c) t1
+union all
+select * from (select b, c, NULL::int as a, a0 from ordered_table order by a0, c) t2
+order by d, c, a, a0, b
+limit 2;
+----
+logical_plan
+01)Projection: t1.b, t1.c, t1.a, t1.a0
+02)--Sort: t1.d ASC NULLS LAST, t1.c ASC NULLS LAST, t1.a ASC NULLS LAST, t1.a0 ASC NULLS LAST, t1.b ASC NULLS LAST, fetch=2
+03)----Union
+04)------SubqueryAlias: t1
+05)--------Projection: ordered_table.b, ordered_table.c, ordered_table.a, Int32(NULL) AS a0, ordered_table.d
+06)----------TableScan: ordered_table projection=[a, b, c, d]
+07)------SubqueryAlias: t2
+08)--------Projection: ordered_table.b, ordered_table.c, Int32(NULL) AS a, ordered_table.a0, ordered_table.d
+09)----------TableScan: ordered_table projection=[a0, b, c, d]
+physical_plan
+01)ProjectionExec: expr=[b@0 as b, c@1 as c, a@2 as a, a0@3 as a0]
+02)--SortPreservingMergeExec: [d@4 ASC NULLS LAST,c@1 ASC NULLS LAST,a@2 ASC NULLS LAST,a0@3 ASC NULLS LAST,b@0 ASC NULLS LAST], fetch=2
+03)----UnionExec
+04)------SortExec: TopK(fetch=2), expr=[d@4 ASC NULLS LAST,c@1 ASC NULLS LAST,a@2 ASC NULLS LAST,b@0 ASC NULLS LAST], preserve_partitioning=[false]
+05)--------ProjectionExec: expr=[b@1 as b, c@2 as c, a@0 as a, NULL as a0, d@3 as d]
+06)----------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b, c, d], output_ordering=[c@2 ASC NULLS LAST], has_header=true
+07)------SortExec: TopK(fetch=2), expr=[d@4 ASC NULLS LAST,c@1 ASC NULLS LAST,a0@3 ASC NULLS LAST,b@0 ASC NULLS LAST], preserve_partitioning=[false]
+08)--------ProjectionExec: expr=[b@1 as b, c@2 as c, NULL as a, a0@0 as a0, d@3 as d]
+09)----------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a0, b, c, d], output_ordering=[c@2 ASC NULLS LAST], has_header=true
+
+# Test: run the query from above
+query IIII
+select * from (select b, c, a, NULL::int as a0 from ordered_table order by a, c) t1
+union all
+select * from (select b, c, NULL::int as a, a0 from ordered_table order by a0, c) t2
+order by d, c, a, a0, b
+limit 2;
+----
+0 0 0 NULL
+0 0 NULL 1
+
+
+statement ok
+drop table ordered_table;

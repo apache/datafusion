@@ -21,10 +21,7 @@ use std::borrow::Borrow;
 use std::sync::Arc;
 
 use crate::{
-    expressions::{
-        cume_dist, dense_rank, lag, lead, percent_rank, rank, Literal, NthValue, Ntile,
-        PhysicalSortExpr,
-    },
+    expressions::{Literal, NthValue, Ntile, PhysicalSortExpr},
     ExecutionPlan, ExecutionPlanProperties, InputOrderMode, PhysicalExpr,
 };
 
@@ -51,7 +48,9 @@ mod utils;
 mod window_agg_exec;
 
 pub use bounded_window_agg_exec::BoundedWindowAggExec;
+use datafusion_functions_window_common::expr::ExpressionArgs;
 use datafusion_functions_window_common::field::WindowUDFFieldArgs;
+use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
 use datafusion_physical_expr::expressions::Column;
 pub use datafusion_physical_expr::window::{
     BuiltInWindowExpr, PlainAggregateWindowExpr, WindowExpr,
@@ -120,7 +119,8 @@ pub fn create_window_expr(
                 .schema(Arc::new(input_schema.clone()))
                 .alias(name)
                 .with_ignore_nulls(ignore_nulls)
-                .build()?;
+                .build()
+                .map(Arc::new)?;
             window_expr_from_aggregate_expr(
                 partition_by,
                 order_by,
@@ -143,7 +143,7 @@ fn window_expr_from_aggregate_expr(
     partition_by: &[Arc<dyn PhysicalExpr>],
     order_by: &[PhysicalSortExpr],
     window_frame: Arc<WindowFrame>,
-    aggregate: AggregateFunctionExpr,
+    aggregate: Arc<AggregateFunctionExpr>,
 ) -> Arc<dyn WindowExpr> {
     // Is there a potentially unlimited sized window frame?
     let unbounded_window = window_frame.start_bound.is_unbounded();
@@ -208,17 +208,6 @@ fn get_unsigned_integer(value: ScalarValue) -> Result<u64> {
     value.cast_to(&DataType::UInt64)?.try_into()
 }
 
-fn get_casted_value(
-    default_value: Option<ScalarValue>,
-    dtype: &DataType,
-) -> Result<ScalarValue> {
-    match default_value {
-        Some(v) if !v.data_type().is_null() => v.cast_to(dtype),
-        // If None or Null datatype
-        _ => ScalarValue::try_from(dtype),
-    }
-}
-
 fn create_built_in_window_expr(
     fun: &BuiltInWindowFunction,
     args: &[Arc<dyn PhysicalExpr>],
@@ -230,10 +219,6 @@ fn create_built_in_window_expr(
     let out_data_type: &DataType = input_schema.field_with_name(&name)?.data_type();
 
     Ok(match fun {
-        BuiltInWindowFunction::Rank => Arc::new(rank(name, out_data_type)),
-        BuiltInWindowFunction::DenseRank => Arc::new(dense_rank(name, out_data_type)),
-        BuiltInWindowFunction::PercentRank => Arc::new(percent_rank(name, out_data_type)),
-        BuiltInWindowFunction::CumeDist => Arc::new(cume_dist(name, out_data_type)),
         BuiltInWindowFunction::Ntile => {
             let n = get_scalar_value_from_args(args, 0)?.ok_or_else(|| {
                 DataFusionError::Execution(
@@ -255,38 +240,6 @@ fn create_built_in_window_expr(
                 }
                 Arc::new(Ntile::new(name, n as u64, out_data_type))
             }
-        }
-        BuiltInWindowFunction::Lag => {
-            let arg = Arc::clone(&args[0]);
-            let shift_offset = get_scalar_value_from_args(args, 1)?
-                .map(get_signed_integer)
-                .map_or(Ok(None), |v| v.map(Some))?;
-            let default_value =
-                get_casted_value(get_scalar_value_from_args(args, 2)?, out_data_type)?;
-            Arc::new(lag(
-                name,
-                out_data_type.clone(),
-                arg,
-                shift_offset,
-                default_value,
-                ignore_nulls,
-            ))
-        }
-        BuiltInWindowFunction::Lead => {
-            let arg = Arc::clone(&args[0]);
-            let shift_offset = get_scalar_value_from_args(args, 1)?
-                .map(get_signed_integer)
-                .map_or(Ok(None), |v| v.map(Some))?;
-            let default_value =
-                get_casted_value(get_scalar_value_from_args(args, 2)?, out_data_type)?;
-            Arc::new(lead(
-                name,
-                out_data_type.clone(),
-                arg,
-                shift_offset,
-                default_value,
-                ignore_nulls,
-            ))
         }
         BuiltInWindowFunction::NthValue => {
             let arg = Arc::clone(&args[0]);
@@ -381,11 +334,18 @@ impl BuiltInWindowFunctionExpr for WindowUDFExpr {
     }
 
     fn expressions(&self) -> Vec<Arc<dyn PhysicalExpr>> {
-        self.args.clone()
+        self.fun
+            .expressions(ExpressionArgs::new(&self.args, &self.input_types))
     }
 
     fn create_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>> {
-        self.fun.partition_evaluator_factory()
+        self.fun
+            .partition_evaluator_factory(PartitionEvaluatorArgs::new(
+                &self.args,
+                &self.input_types,
+                self.is_reversed,
+                self.ignore_nulls,
+            ))
     }
 
     fn name(&self) -> &str {

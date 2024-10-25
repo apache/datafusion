@@ -58,7 +58,11 @@ dev/update_function_docs.sh file for updating surrounding text.
 
 # Aggregate Functions (NEW)
 
-This page is a WIP and will replace the Aggregate Functions page once completed.
+Note: this documentation is in the process of being migrated to be  [automatically created from the codebase].
+Please see the [Aggregate Functions (old)](aggregate_functions.md) page for
+the rest of the documentation.
+
+[automatically created from the codebase]: https://github.com/apache/datafusion/issues/12740
 
 Aggregate functions operate on a set of values to compute a single result.
 EOF
@@ -105,7 +109,12 @@ dev/update_function_docs.sh file for updating surrounding text.
 
 # Scalar Functions (NEW)
 
-This page is a WIP and will replace the Scalar Functions page once completed.
+Note: this documentation is in the process of being migrated to be [automatically created from the codebase].
+Please see the [Scalar Functions (old)](aggregate_functions.md) page for
+the rest of the documentation.
+
+[automatically created from the codebase]: https://github.com/apache/datafusion/issues/12740
+
 EOF
 
 echo "Running CLI and inserting scalar function docs table"
@@ -151,9 +160,16 @@ dev/update_function_docs.sh file for updating surrounding text.
 
 # Window Functions (NEW)
 
-This page is a WIP and will replace the Window Functions page once completed.
+Note: this documentation is in the process of being migrated to be  [automatically created from the codebase].
+Please see the [Window Functions (Old)](window_functions.md) page for
+the rest of the documentation.
 
-A _window function_ performs a calculation across a set of table rows that are somehow related to the current row. This is comparable to the type of calculation that can be done with an aggregate function. However, window functions do not cause rows to become grouped into a single output row like non-window aggregate calls would. Instead, the rows retain their separate identities. Behind the scenes, the window function is able to access more than just the current row of the query result
+[automatically created from the codebase]: https://github.com/apache/datafusion/issues/12740
+
+A _window function_ performs a calculation across a set of table rows that are somehow related to the current row.
+This is comparable to the type of calculation that can be done with an aggregate function.
+However, window functions do not cause rows to become grouped into a single output row like non-window aggregate calls would.
+Instead, the rows retain their separate identities. Behind the scenes, the window function is able to access more than just the current row of the query result
 
 Here is an example that shows how to compare each employee's salary with the average salary in his or her department:
 
@@ -281,4 +297,3 @@ echo "Running prettier"
 npx prettier@2.3.2 --write "$TARGET_FILE"
 
 echo "'$TARGET_FILE' successfully updated!"
-

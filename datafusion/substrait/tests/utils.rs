@@ -147,6 +147,7 @@ pub mod test {
             Ok(())
         }
 
+        #[allow(deprecated)]
         fn collect_schemas_from_rel(&mut self, rel: &Rel) -> Result<()> {
             let rel_type = rel
                 .rel_type

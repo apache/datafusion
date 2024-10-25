@@ -102,9 +102,6 @@ CREATE TEMPORARY TABLE my_temp_table (
     name TEXT NOT NULL
 );
 
-statement error DataFusion error: This feature is not implemented: Temporary views not supported
-CREATE TEMPORARY VIEW my_temp_view AS SELECT id, name FROM my_table;
-
 # Partitioned table on a single file
 query error DataFusion error: Error during planning: Can't create a partitioned table backed by a single file, perhaps the URL is missing a trailing slash\?
 CREATE EXTERNAL TABLE single_file_partition(c1 int)
@@ -286,4 +283,3 @@ CREATE EXTERNAL TABLE staging.foo STORED AS parquet LOCATION '../../parquet-test
 # Create external table with qualified name, but no schema should error
 statement error DataFusion error: Error during planning: failed to resolve schema: release
 CREATE EXTERNAL TABLE release.bar STORED AS parquet LOCATION '../../parquet-testing/data/alltypes_plain.parquet';
-

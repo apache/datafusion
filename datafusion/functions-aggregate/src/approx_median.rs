@@ -19,15 +19,19 @@
 
 use std::any::Any;
 use std::fmt::Debug;
+use std::sync::OnceLock;
 
 use arrow::{datatypes::DataType, datatypes::Field};
 use arrow_schema::DataType::{Float64, UInt64};
 
 use datafusion_common::{not_impl_err, plan_err, Result};
+use datafusion_expr::aggregate_doc_sections::DOC_SECTION_APPROXIMATE;
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::type_coercion::aggregates::NUMERICS;
 use datafusion_expr::utils::format_state_name;
-use datafusion_expr::{Accumulator, AggregateUDFImpl, Signature, Volatility};
+use datafusion_expr::{
+    Accumulator, AggregateUDFImpl, Documentation, Signature, Volatility,
+};
 
 use crate::approx_percentile_cont::ApproxPercentileAccumulator;
 
@@ -116,4 +120,33 @@ impl AggregateUDFImpl for ApproxMedian {
             acc_args.exprs[0].data_type(acc_args.schema)?,
         )))
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_approx_median_doc())
+    }
+}
+
+static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+
+fn get_approx_median_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_APPROXIMATE)
+            .with_description(
+                "Returns the approximate median (50th percentile) of input values. It is an alias of `approx_percentile_cont(x, 0.5)`.",
+            )
+            .with_syntax_example("approx_median(expression)")
+            .with_sql_example(r#"```sql
+> SELECT approx_median(column_name) FROM table_name;
++-----------------------------------+
+| approx_median(column_name)        |
++-----------------------------------+
+| 23.5                              |
++-----------------------------------+
+```"#,
+            )
+            .with_standard_argument("expression", None)
+            .build()
+            .unwrap()
+    })
 }

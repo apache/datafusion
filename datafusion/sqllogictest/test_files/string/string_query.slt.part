@@ -642,18 +642,16 @@ true false
 false true
 NULL NULL
 
-# TODO: DictionaryString does not support ~* operator. Enable this after fixing the issue
-# see issue: https://github.com/apache/datafusion/issues/12618
-#query BB
-#SELECT
-#  ascii_1 ~* '^a.{3}e',
-#  unicode_1 ~* '^d.*Фу'
-#FROM test_basic_operator;
-#----
-#true false
-#false false
-#false true
-#NULL NULL
+query BB
+SELECT
+  ascii_1 ~* '^a.{3}e',
+  unicode_1 ~* '^d.*Фу'
+FROM test_basic_operator;
+----
+true false
+false false
+false true
+NULL NULL
 
 query BB
 SELECT

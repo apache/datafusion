@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::strings::StringArrayType;
 use crate::utils::utf8_to_str_type;
 use arrow::array::{
     ArrayRef, GenericStringArray, Int64Array, OffsetSizeTrait, StringViewArray,
@@ -29,8 +30,6 @@ use datafusion_expr::{ColumnarValue, Documentation, TypeSignature, Volatility};
 use datafusion_expr::{ScalarUDFImpl, Signature};
 use std::any::Any;
 use std::sync::{Arc, OnceLock};
-
-use super::common::StringArrayType;
 
 #[derive(Debug)]
 pub struct SplitPartFunc {
@@ -199,7 +198,7 @@ fn get_split_part_doc() -> &'static Documentation {
 | 3                                                |
 +--------------------------------------------------+
 ```"#)
-            .with_standard_argument("str", "String")
+            .with_standard_argument("str", Some("String"))
             .with_argument("delimiter", "String or character to split on.")
             .with_argument("pos", "Position of the part to return.")
             .build()

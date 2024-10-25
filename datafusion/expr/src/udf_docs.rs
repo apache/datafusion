@@ -33,21 +33,21 @@ use datafusion_common::Result;
 /// thus all text should be in English.
 #[derive(Debug, Clone)]
 pub struct Documentation {
-    /// the section in the documentation where the UDF will be documented
+    /// The section in the documentation where the UDF will be documented
     pub doc_section: DocSection,
-    /// the description for the UDF
+    /// The description for the UDF
     pub description: String,
-    /// a brief example of the syntax. For example "ascii(str)"
+    /// A brief example of the syntax. For example "ascii(str)"
     pub syntax_example: String,
-    /// a sql example for the UDF, usually in the form of a sql prompt
+    /// A sql example for the UDF, usually in the form of a sql prompt
     /// query and output. It is strongly recommended to provide an
     /// example for anything but the most basic UDF's
     pub sql_example: Option<String>,
-    /// arguments for the UDF which will be displayed in array order.
+    /// Arguments for the UDF which will be displayed in array order.
     /// Left member of a pair is the argument name, right is a
     /// description for the argument
     pub arguments: Option<Vec<(String, String)>>,
-    /// related functions if any. Values should match the related
+    /// Related functions if any. Values should match the related
     /// udf's name exactly. Related udf's must be of the same
     /// UDF type (scalar, aggregate or window) for proper linking to
     /// occur
@@ -63,12 +63,12 @@ impl Documentation {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct DocSection {
-    /// true to include this doc section in the public
+    /// True to include this doc section in the public
     /// documentation, false otherwise
     pub include: bool,
-    /// a display label for the doc section. For example: "Math Expressions"
+    /// A display label for the doc section. For example: "Math Expressions"
     pub label: &'static str,
-    /// an optional description for the doc section
+    /// An optional description for the doc section
     pub description: Option<&'static str>,
 }
 
@@ -147,23 +147,29 @@ impl DocumentationBuilder {
 
     /// Add a standard "expression" argument to the documentation
     ///
-    /// This is similar to  [`Self::with_argument`] except that  a standard
-    /// description is appended to the end: `"Can be a constant, column, or
-    /// function, and any combination of arithmetic operators."`
-    ///
-    /// The argument is rendered like
+    /// The argument is rendered like below if Some() is passed through:
     ///
     /// ```text
     /// <arg_name>:
-    ///   <expression_type> expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators.
+    ///   <expression_type> expression to operate on. Can be a constant, column, or function, and any combination of operators.
+    /// ```
+    ///
+    /// The argument is rendered like below if None is passed through:
+    ///
+    ///  ```text
+    /// <arg_name>:
+    ///   The expression to operate on. Can be a constant, column, or function, and any combination of operators.
     /// ```
     pub fn with_standard_argument(
         self,
         arg_name: impl Into<String>,
-        expression_type: impl AsRef<str>,
+        expression_type: Option<&str>,
     ) -> Self {
-        let expression_type = expression_type.as_ref();
-        self.with_argument(arg_name, format!("{expression_type} expression to operate on. Can be a constant, column, or function, and any combination of operators."))
+        let description = format!(
+            "{} expression to operate on. Can be a constant, column, or function, and any combination of operators.",
+            expression_type.unwrap_or("The")
+        );
+        self.with_argument(arg_name, description)
     }
 
     pub fn with_related_udf(mut self, related_udf: impl Into<String>) -> Self {

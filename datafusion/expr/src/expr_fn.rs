@@ -27,8 +27,8 @@ use crate::function::{
 };
 use crate::{
     conditional_expressions::CaseBuilder, expr::Sort, logical_plan::Subquery,
-    AggregateUDF, Expr, LogicalPlan, Operator, ScalarFunctionImplementation, ScalarUDF,
-    Signature, Volatility,
+    AggregateUDF, Expr, LogicalPlan, Operator, PartitionEvaluator,
+    ScalarFunctionImplementation, ScalarUDF, Signature, Volatility,
 };
 use crate::{
     AggregateUDFImpl, ColumnarValue, ScalarUDFImpl, WindowFrame, WindowUDF, WindowUDFImpl,
@@ -39,6 +39,7 @@ use arrow::compute::kernels::cast_utils::{
 use arrow::datatypes::{DataType, Field};
 use datafusion_common::{plan_err, Column, Result, ScalarValue, TableReference};
 use datafusion_functions_window_common::field::WindowUDFFieldArgs;
+use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
 use sqlparser::ast::NullTreatment;
 use std::any::Any;
 use std::fmt::Debug;
@@ -658,7 +659,10 @@ impl WindowUDFImpl for SimpleWindowUDF {
         &self.signature
     }
 
-    fn partition_evaluator(&self) -> Result<Box<dyn crate::PartitionEvaluator>> {
+    fn partition_evaluator(
+        &self,
+        _partition_evaluator_args: PartitionEvaluatorArgs,
+    ) -> Result<Box<dyn PartitionEvaluator>> {
         (self.partition_evaluator_factory)()
     }
 
@@ -697,7 +701,6 @@ pub fn interval_month_day_nano_lit(value: &str) -> Expr {
 /// # use datafusion_expr::test::function_stub::count;
 /// # use sqlparser::ast::NullTreatment;
 /// # use datafusion_expr::{ExprFunctionExt, lit, Expr, col};
-/// # use datafusion_expr::window_function::percent_rank;
 /// # // first_value is an aggregate function in another crate
 /// # fn first_value(_arg: Expr) -> Expr {
 /// unimplemented!() }
@@ -717,6 +720,9 @@ pub fn interval_month_day_nano_lit(value: &str) -> Expr {
 /// // Create a window expression for percent rank partitioned on column a
 /// // equivalent to:
 /// // `PERCENT_RANK() OVER (PARTITION BY a ORDER BY b ASC NULLS LAST IGNORE NULLS)`
+/// // percent_rank is an udwf function in another crate
+/// # fn percent_rank() -> Expr {
+/// unimplemented!() }
 /// let window = percent_rank()
 ///     .partition_by(vec![col("a")])
 ///     .order_by(vec![col("b").sort(true, true)])

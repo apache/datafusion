@@ -315,7 +315,6 @@ impl DFSchema {
                 None => self_unqualified_names.contains(field.name().as_str()),
             };
             if !duplicated_field {
-                // self.inner.fields.push(field.clone());
                 schema_builder.push(Arc::clone(field));
                 qualifiers.push(qualifier.cloned());
             }
@@ -403,33 +402,6 @@ impl DFSchema {
             self.field_with_qualified_name(qualifier, name)
         } else {
             self.field_with_unqualified_name(name)
-        }
-    }
-
-    /// Check whether the column reference is ambiguous
-    pub fn check_ambiguous_name(
-        &self,
-        qualifier: Option<&TableReference>,
-        name: &str,
-    ) -> Result<()> {
-        let count = self
-            .iter()
-            .filter(|(field_q, f)| match (field_q, qualifier) {
-                (Some(q1), Some(q2)) => q1.resolved_eq(q2) && f.name() == name,
-                (None, None) => f.name() == name,
-                _ => false,
-            })
-            .take(2)
-            .count();
-        if count > 1 {
-            _schema_err!(SchemaError::AmbiguousReference {
-                field: Column {
-                    relation: None,
-                    name: name.to_string(),
-                },
-            })
-        } else {
-            Ok(())
         }
     }
 

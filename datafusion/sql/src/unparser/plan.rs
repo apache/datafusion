@@ -15,19 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::unparser::utils::unproject_agg_exprs;
-use datafusion_common::{
-    internal_err, not_impl_err,
-    tree_node::{TransformedResult, TreeNode},
-    Column, DataFusionError, Result, TableReference,
-};
-use datafusion_expr::{
-    expr::Alias, Distinct, Expr, JoinConstraint, JoinType, LogicalPlan,
-    LogicalPlanBuilder, Projection, SortExpr,
-};
-use sqlparser::ast::{self, Ident, SetExpr};
-use std::sync::Arc;
-
 use super::{
     ast::{
         BuilderError, DerivedRelationBuilder, QueryBuilder, RelationBuilder,
@@ -40,10 +27,22 @@ use super::{
     },
     utils::{
         find_agg_node_within_select, find_window_nodes_within_select,
-        unproject_window_exprs,
+        unproject_sort_expr, unproject_window_exprs,
     },
     Unparser,
 };
+use crate::unparser::utils::unproject_agg_exprs;
+use datafusion_common::{
+    internal_err, not_impl_err,
+    tree_node::{TransformedResult, TreeNode},
+    Column, DataFusionError, Result, TableReference,
+};
+use datafusion_expr::{
+    expr::Alias, Distinct, Expr, JoinConstraint, JoinType, LogicalPlan,
+    LogicalPlanBuilder, Projection, SortExpr, TableScan,
+};
+use sqlparser::ast::{self, Ident, SetExpr};
+use std::sync::Arc;
 
 /// Convert a DataFusion [`LogicalPlan`] to [`ast::Statement`]
 ///
@@ -97,7 +96,6 @@ impl Unparser<'_> {
             | LogicalPlan::Aggregate(_)
             | LogicalPlan::Sort(_)
             | LogicalPlan::Join(_)
-            | LogicalPlan::CrossJoin(_)
             | LogicalPlan::Repartition(_)
             | LogicalPlan::Union(_)
             | LogicalPlan::TableScan(_)
@@ -223,9 +221,14 @@ impl Unparser<'_> {
         Ok(())
     }
 
-    fn derive(&self, plan: &LogicalPlan, relation: &mut RelationBuilder) -> Result<()> {
+    fn derive(
+        &self,
+        plan: &LogicalPlan,
+        relation: &mut RelationBuilder,
+        alias: Option<ast::TableAlias>,
+    ) -> Result<()> {
         let mut derived_builder = DerivedRelationBuilder::default();
-        derived_builder.lateral(false).alias(None).subquery({
+        derived_builder.lateral(false).alias(alias).subquery({
             let inner_statement = self.plan_to_sql(plan)?;
             if let ast::Statement::Query(inner_query) = inner_statement {
                 inner_query
@@ -240,6 +243,23 @@ impl Unparser<'_> {
         Ok(())
     }
 
+    fn derive_with_dialect_alias(
+        &self,
+        alias: &str,
+        plan: &LogicalPlan,
+        relation: &mut RelationBuilder,
+    ) -> Result<()> {
+        if self.dialect.requires_derived_table_alias() {
+            self.derive(
+                plan,
+                relation,
+                Some(self.new_table_alias(alias.to_string(), vec![])),
+            )
+        } else {
+            self.derive(plan, relation, None)
+        }
+    }
+
     fn select_to_sql_recursively(
         &self,
         plan: &LogicalPlan,
@@ -249,12 +269,9 @@ impl Unparser<'_> {
     ) -> Result<()> {
         match plan {
             LogicalPlan::TableScan(scan) => {
-                if scan.projection.is_some()
-                    || !scan.filters.is_empty()
-                    || scan.fetch.is_some()
+                if let Some(unparsed_table_scan) =
+                    Self::unparse_table_scan_pushdown(plan, None)?
                 {
-                    let unparsed_table_scan =
-                        Self::unparse_table_scan_pushdown(plan, None)?;
                     return self.select_to_sql_recursively(
                         &unparsed_table_scan,
                         query,
@@ -288,7 +305,11 @@ impl Unparser<'_> {
 
                 // Projection can be top-level plan for derived table
                 if select.already_projected() {
-                    return self.derive(plan, relation);
+                    return self.derive_with_dialect_alias(
+                        "derived_projection",
+                        plan,
+                        relation,
+                    );
                 }
                 self.reconstruct_select_statement(plan, p, select)?;
                 self.select_to_sql_recursively(p.input.as_ref(), query, select, relation)
@@ -315,21 +336,22 @@ impl Unparser<'_> {
             LogicalPlan::Limit(limit) => {
                 // Limit can be top-level plan for derived table
                 if select.already_projected() {
-                    return self.derive(plan, relation);
+                    return self.derive_with_dialect_alias(
+                        "derived_limit",
+                        plan,
+                        relation,
+                    );
                 }
-                if let Some(fetch) = limit.fetch {
+                if let Some(fetch) = &limit.fetch {
                     let Some(query) = query.as_mut() else {
                         return internal_err!(
                             "Limit operator only valid in a statement context."
                         );
                     };
-                    query.limit(Some(ast::Expr::Value(ast::Value::Number(
-                        fetch.to_string(),
-                        false,
-                    ))));
+                    query.limit(Some(self.expr_to_sql(fetch)?));
                 }
 
-                if limit.skip > 0 {
+                if let Some(skip) = &limit.skip {
                     let Some(query) = query.as_mut() else {
                         return internal_err!(
                             "Offset operator only valid in a statement context."
@@ -337,10 +359,7 @@ impl Unparser<'_> {
                     };
                     query.offset(Some(ast::Offset {
                         rows: ast::OffsetRows::None,
-                        value: ast::Expr::Value(ast::Value::Number(
-                            limit.skip.to_string(),
-                            false,
-                        )),
+                        value: self.expr_to_sql(skip)?,
                     }));
                 }
 
@@ -354,15 +373,36 @@ impl Unparser<'_> {
             LogicalPlan::Sort(sort) => {
                 // Sort can be top-level plan for derived table
                 if select.already_projected() {
-                    return self.derive(plan, relation);
+                    return self.derive_with_dialect_alias(
+                        "derived_sort",
+                        plan,
+                        relation,
+                    );
                 }
-                if let Some(query_ref) = query {
-                    query_ref.order_by(self.sorts_to_sql(sort.expr.clone())?);
-                } else {
+                let Some(query_ref) = query else {
                     return internal_err!(
                         "Sort operator only valid in a statement context."
                     );
-                }
+                };
+
+                if let Some(fetch) = sort.fetch {
+                    query_ref.limit(Some(ast::Expr::Value(ast::Value::Number(
+                        fetch.to_string(),
+                        false,
+                    ))));
+                };
+
+                let agg = find_agg_node_within_select(plan, select.already_projected());
+                // unproject sort expressions
+                let sort_exprs: Vec<SortExpr> = sort
+                    .expr
+                    .iter()
+                    .map(|sort_expr| {
+                        unproject_sort_expr(sort_expr, agg, sort.input.as_ref())
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+
+                query_ref.order_by(self.sorts_to_sql(&sort_exprs)?);
 
                 self.select_to_sql_recursively(
                     sort.input.as_ref(),
@@ -383,7 +423,11 @@ impl Unparser<'_> {
             LogicalPlan::Distinct(distinct) => {
                 // Distinct can be top-level plan for derived table
                 if select.already_projected() {
-                    return self.derive(plan, relation);
+                    return self.derive_with_dialect_alias(
+                        "derived_distinct",
+                        plan,
+                        relation,
+                    );
                 }
                 let (select_distinct, input) = match distinct {
                     Distinct::All(input) => (ast::Distinct::Distinct, input.as_ref()),
@@ -400,7 +444,7 @@ impl Unparser<'_> {
                             .collect::<Result<Vec<_>>>()?;
                         if let Some(sort_expr) = &on.sort_expr {
                             if let Some(query_ref) = query {
-                                query_ref.order_by(self.sorts_to_sql(sort_expr.clone())?);
+                                query_ref.order_by(self.sorts_to_sql(sort_expr)?);
                             } else {
                                 return internal_err!(
                                     "Sort operator only valid in a statement context."
@@ -452,50 +496,21 @@ impl Unparser<'_> {
 
                 Ok(())
             }
-            LogicalPlan::CrossJoin(cross_join) => {
-                // Cross joins are the same as unconditional inner joins
-                let mut right_relation = RelationBuilder::default();
-
-                self.select_to_sql_recursively(
-                    cross_join.left.as_ref(),
-                    query,
-                    select,
-                    relation,
-                )?;
-                self.select_to_sql_recursively(
-                    cross_join.right.as_ref(),
-                    query,
-                    select,
-                    &mut right_relation,
-                )?;
-
-                let Ok(Some(relation)) = right_relation.build() else {
-                    return internal_err!("Failed to build right relation");
-                };
-
-                let ast_join = ast::Join {
-                    relation,
-                    global: false,
-                    join_operator: self.join_operator_to_sql(
-                        JoinType::Inner,
-                        ast::JoinConstraint::On(ast::Expr::Value(ast::Value::Boolean(
-                            true,
-                        ))),
-                    ),
-                };
-                let mut from = select.pop_from().unwrap();
-                from.push_join(ast_join);
-                select.push_from(from);
-
-                Ok(())
-            }
             LogicalPlan::SubqueryAlias(plan_alias) => {
                 let (plan, mut columns) =
                     subquery_alias_inner_query_and_columns(plan_alias);
-                let plan = Self::unparse_table_scan_pushdown(
+                let unparsed_table_scan = Self::unparse_table_scan_pushdown(
                     plan,
                     Some(plan_alias.alias.clone()),
                 )?;
+                // if the child plan is a TableScan with pushdown operations, we don't need to
+                // create an additional subquery for it
+                if !select.already_projected() && unparsed_table_scan.is_none() {
+                    select.projection(vec![ast::SelectItem::Wildcard(
+                        ast::WildcardAdditionalOptions::default(),
+                    )]);
+                }
+                let plan = unparsed_table_scan.unwrap_or_else(|| plan.clone());
                 if !columns.is_empty()
                     && !self.dialect.supports_column_alias_in_table_alias()
                 {
@@ -533,6 +548,15 @@ impl Unparser<'_> {
                     return not_impl_err!(
                         "UNION ALL expected 2 inputs, but found {}",
                         union.inputs.len()
+                    );
+                }
+
+                // Covers cases where the UNION is a subquery and the projection is at the top level
+                if select.already_projected() {
+                    return self.derive_with_dialect_alias(
+                        "derived_union",
+                        plan,
+                        relation,
                     );
                 }
 
@@ -576,15 +600,25 @@ impl Unparser<'_> {
         }
     }
 
+    fn is_scan_with_pushdown(scan: &TableScan) -> bool {
+        scan.projection.is_some() || !scan.filters.is_empty() || scan.fetch.is_some()
+    }
+
+    /// Try to unparse a table scan with pushdown operations into a new subquery plan.
+    /// If the table scan is without any pushdown operations, return None.
     fn unparse_table_scan_pushdown(
         plan: &LogicalPlan,
         alias: Option<TableReference>,
-    ) -> Result<LogicalPlan> {
+    ) -> Result<Option<LogicalPlan>> {
         match plan {
             LogicalPlan::TableScan(table_scan) => {
+                if !Self::is_scan_with_pushdown(table_scan) {
+                    return Ok(None);
+                }
+                let table_schema = table_scan.source.schema();
                 let mut filter_alias_rewriter =
                     alias.as_ref().map(|alias_name| TableAliasRewriter {
-                        table_schema: table_scan.source.schema(),
+                        table_schema: &table_schema,
                         alias_name: alias_name.clone(),
                     });
 
@@ -593,6 +627,17 @@ impl Unparser<'_> {
                     Arc::clone(&table_scan.source),
                     None,
                 )?;
+                // We will rebase the column references to the new alias if it exists.
+                // If the projection or filters are empty, we will append alias to the table scan.
+                //
+                // Example:
+                //   select t1.c1 from t1 where t1.c1 > 1 -> select a.c1 from t1 as a where a.c1 > 1
+                if let Some(ref alias) = alias {
+                    if table_scan.projection.is_some() || !table_scan.filters.is_empty() {
+                        builder = builder.alias(alias.clone())?;
+                    }
+                }
+
                 if let Some(project_vec) = &table_scan.projection {
                     let project_columns = project_vec
                         .iter()
@@ -610,9 +655,6 @@ impl Unparser<'_> {
                             }
                         })
                         .collect::<Vec<_>>();
-                    if let Some(alias) = alias {
-                        builder = builder.alias(alias)?;
-                    }
                     builder = builder.project(project_columns)?;
                 }
 
@@ -642,18 +684,59 @@ impl Unparser<'_> {
                     builder = builder.limit(0, Some(fetch))?;
                 }
 
-                builder.build()
+                // If the table scan has an alias but no projection or filters, it means no column references are rebased.
+                // So we will append the alias to this subquery.
+                // Example:
+                //   select * from t1 limit 10 -> (select * from t1 limit 10) as a
+                if let Some(alias) = alias {
+                    if table_scan.projection.is_none() && table_scan.filters.is_empty() {
+                        builder = builder.alias(alias)?;
+                    }
+                }
+
+                Ok(Some(builder.build()?))
             }
             LogicalPlan::SubqueryAlias(subquery_alias) => {
-                let new_plan = Self::unparse_table_scan_pushdown(
+                Self::unparse_table_scan_pushdown(
                     &subquery_alias.input,
                     Some(subquery_alias.alias.clone()),
-                )?;
-                LogicalPlanBuilder::from(new_plan)
-                    .alias(subquery_alias.alias.clone())?
-                    .build()
+                )
             }
-            _ => Ok(plan.clone()),
+            // SubqueryAlias could be rewritten to a plan with a projection as the top node by [rewrite::subquery_alias_inner_query_and_columns].
+            // The inner table scan could be a scan with pushdown operations.
+            LogicalPlan::Projection(projection) => {
+                if let Some(plan) =
+                    Self::unparse_table_scan_pushdown(&projection.input, alias.clone())?
+                {
+                    let exprs = if alias.is_some() {
+                        let mut alias_rewriter =
+                            alias.as_ref().map(|alias_name| TableAliasRewriter {
+                                table_schema: plan.schema().as_arrow(),
+                                alias_name: alias_name.clone(),
+                            });
+                        projection
+                            .expr
+                            .iter()
+                            .cloned()
+                            .map(|expr| {
+                                if let Some(ref mut rewriter) = alias_rewriter {
+                                    expr.rewrite(rewriter).data()
+                                } else {
+                                    Ok(expr)
+                                }
+                            })
+                            .collect::<Result<Vec<_>>>()?
+                    } else {
+                        projection.expr.clone()
+                    };
+                    Ok(Some(
+                        LogicalPlanBuilder::from(plan).project(exprs)?.build()?,
+                    ))
+                } else {
+                    Ok(None)
+                }
+            }
+            _ => Ok(None),
         }
     }
 
@@ -675,7 +758,7 @@ impl Unparser<'_> {
         }
     }
 
-    fn sorts_to_sql(&self, sort_exprs: Vec<SortExpr>) -> Result<Vec<ast::OrderByExpr>> {
+    fn sorts_to_sql(&self, sort_exprs: &[SortExpr]) -> Result<Vec<ast::OrderByExpr>> {
         sort_exprs
             .iter()
             .map(|sort_expr| self.sort_to_sql(sort_expr))

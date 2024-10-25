@@ -7097,6 +7097,19 @@ select array_has(a, 1) from values_all_empty;
 false
 false
 
+# Test create table with fixed sized array
+statement ok
+create table fixed_size_col_table (a int[3]) as values ([1,2,3]), ([4,5,6]);
+
+query T
+select arrow_typeof(a) from fixed_size_col_table;
+----
+FixedSizeList(Field { name: "item", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, 3)
+FixedSizeList(Field { name: "item", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, 3)
+
+statement error
+create table varying_fixed_size_col_table (a int[3]) as values ([1,2,3]), ([4,5]);
+
 ### Delete tables
 
 statement ok
@@ -7272,3 +7285,6 @@ drop table test_create_array_table;
 
 statement ok
 drop table values_all_empty;
+
+statement ok
+drop table fixed_size_col_table;

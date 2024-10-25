@@ -21,9 +21,9 @@ use std::sync::{Arc, OnceLock};
 
 use arrow::datatypes::DataType;
 
-use crate::string::common::*;
 use crate::string::concat::simplify_concat;
 use crate::string::concat_ws;
+use crate::strings::{ColumnarValueRef, StringArrayBuilder};
 use datafusion_common::cast::{as_string_array, as_string_view_array};
 use datafusion_common::{exec_err, internal_err, plan_err, Result, ScalarValue};
 use datafusion_expr::expr::ScalarFunction;
@@ -295,11 +295,8 @@ fn get_concat_ws_doc() -> &'static Documentation {
                 "separator",
                 "Separator to insert between concatenated strings.",
             )
-            .with_standard_argument("str", "String")
-            .with_standard_argument(
-                "str_n",
-                "Subsequent string expressions to concatenate.",
-            )
+            .with_standard_argument("str", Some("String"))
+            .with_argument("str_n", "Subsequent string expressions to concatenate.")
             .with_related_udf("concat")
             .build()
             .unwrap()

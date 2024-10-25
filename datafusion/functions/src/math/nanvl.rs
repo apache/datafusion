@@ -16,18 +16,19 @@
 // under the License.
 
 use std::any::Any;
-use std::sync::Arc;
-
-use arrow::array::{ArrayRef, Float32Array, Float64Array};
-use arrow::datatypes::DataType;
-use arrow::datatypes::DataType::{Float32, Float64};
-
-use datafusion_common::{exec_err, DataFusionError, Result};
-use datafusion_expr::ColumnarValue;
-use datafusion_expr::TypeSignature::Exact;
-use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
+use std::sync::{Arc, OnceLock};
 
 use crate::utils::make_scalar_function;
+
+use arrow::array::{ArrayRef, AsArray, Float32Array, Float64Array};
+use arrow::datatypes::DataType::{Float32, Float64};
+use arrow::datatypes::{DataType, Float32Type, Float64Type};
+use datafusion_common::{exec_err, DataFusionError, Result};
+use datafusion_expr::scalar_doc_sections::DOC_SECTION_MATH;
+use datafusion_expr::TypeSignature::Exact;
+use datafusion_expr::{
+    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+};
 
 #[derive(Debug)]
 pub struct NanvlFunc {
@@ -75,6 +76,28 @@ impl ScalarUDFImpl for NanvlFunc {
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
         make_scalar_function(nanvl, vec![])(args)
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_nanvl_doc())
+    }
+}
+
+static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+
+fn get_nanvl_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_MATH)
+            .with_description(
+                r#"Returns the first argument if it's not _NaN_.
+Returns the second argument otherwise."#,
+            )
+            .with_syntax_example("nanvl(expression_x, expression_y)")
+            .with_argument("expression_x", "Numeric expression to return if it's not _NaN_. Can be a constant, column, or function, and any combination of arithmetic operators.")
+            .with_argument("expression_y", "Numeric expression to return if the first expression is _NaN_. Can be a constant, column, or function, and any combination of arithmetic operators.")
+            .build()
+            .unwrap()
+    })
 }
 
 /// Nanvl SQL function
@@ -89,14 +112,11 @@ fn nanvl(args: &[ArrayRef]) -> Result<ArrayRef> {
                 }
             };
 
-            Ok(Arc::new(make_function_inputs2!(
-                &args[0],
-                &args[1],
-                "x",
-                "y",
-                Float64Array,
-                { compute_nanvl }
-            )) as ArrayRef)
+            let x = args[0].as_primitive() as &Float64Array;
+            let y = args[1].as_primitive() as &Float64Array;
+            arrow::compute::binary::<_, _, _, Float64Type>(x, y, compute_nanvl)
+                .map(|res| Arc::new(res) as _)
+                .map_err(DataFusionError::from)
         }
         Float32 => {
             let compute_nanvl = |x: f32, y: f32| {
@@ -107,14 +127,11 @@ fn nanvl(args: &[ArrayRef]) -> Result<ArrayRef> {
                 }
             };
 
-            Ok(Arc::new(make_function_inputs2!(
-                &args[0],
-                &args[1],
-                "x",
-                "y",
-                Float32Array,
-                { compute_nanvl }
-            )) as ArrayRef)
+            let x = args[0].as_primitive() as &Float32Array;
+            let y = args[1].as_primitive() as &Float32Array;
+            arrow::compute::binary::<_, _, _, Float32Type>(x, y, compute_nanvl)
+                .map(|res| Arc::new(res) as _)
+                .map_err(DataFusionError::from)
         }
         other => exec_err!("Unsupported data type {other:?} for function nanvl"),
     }
@@ -122,10 +139,12 @@ fn nanvl(args: &[ArrayRef]) -> Result<ArrayRef> {
 
 #[cfg(test)]
 mod test {
+    use std::sync::Arc;
+
     use crate::math::nanvl::nanvl;
+
     use arrow::array::{ArrayRef, Float32Array, Float64Array};
     use datafusion_common::cast::{as_float32_array, as_float64_array};
-    use std::sync::Arc;
 
     #[test]
     fn test_nanvl_f64() {

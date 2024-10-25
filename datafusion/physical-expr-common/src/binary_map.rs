@@ -104,8 +104,9 @@ impl<O: OffsetSizeTrait> ArrowBytesSet<O> {
 /// `Binary`, and `LargeBinary`) values that can produce the set of keys on
 /// output as `GenericBinaryArray` without copies.
 ///
-/// Equivalent to `HashSet<String, V>` but with better performance for arrow
-/// data.
+/// Equivalent to `HashSet<String, V>` but with better performance if you need
+/// to emit the keys as an Arrow `StringArray` / `BinaryArray`. For other
+/// purposes it is the same as a `HashMap<String, V>`
 ///
 /// # Generic Arguments
 ///

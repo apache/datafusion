@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Tree node implementation for logical expr
+//! Tree node implementation for Logical Expressions
 
 use crate::expr::{
     AggregateFunction, Alias, Between, BinaryExpr, Case, Cast, GroupingSet, InList,
@@ -28,7 +28,16 @@ use datafusion_common::tree_node::{
 };
 use datafusion_common::{map_until_stop_and_collect, Result};
 
+/// Implementation of the [`TreeNode`] trait
+///
+/// This allows logical expressions (`Expr`) to be traversed and transformed
+/// Facilitates tasks such as optimization and rewriting during query
+/// planning.
 impl TreeNode for Expr {
+    /// Applies a function `f` to each child expression of `self`.
+    ///
+    /// The function `f` determines whether to continue traversing the tree or to stop.
+    /// This method collects all child expressions and applies `f` to each.
     fn apply_children<'n, F: FnMut(&'n Self) -> Result<TreeNodeRecursion>>(
         &'n self,
         f: F,
@@ -122,6 +131,10 @@ impl TreeNode for Expr {
         children.into_iter().apply_until_stop(f)
     }
 
+    /// Maps each child of `self` using the provided closure `f`.
+    ///
+    /// The closure `f` takes ownership of an expression and returns a `Transformed` result,
+    /// indicating whether the expression was transformed or left unchanged.
     fn map_children<F: FnMut(Self) -> Result<Transformed<Self>>>(
         self,
         mut f: F,
@@ -346,6 +359,7 @@ impl TreeNode for Expr {
     }
 }
 
+/// Transforms a boxed expression by applying the provided closure `f`.
 fn transform_box<F: FnMut(Expr) -> Result<Transformed<Expr>>>(
     be: Box<Expr>,
     f: &mut F,
@@ -353,6 +367,7 @@ fn transform_box<F: FnMut(Expr) -> Result<Transformed<Expr>>>(
     Ok(f(*be)?.update_data(Box::new))
 }
 
+/// Transforms an optional boxed expression by applying the provided closure `f`.
 fn transform_option_box<F: FnMut(Expr) -> Result<Transformed<Expr>>>(
     obe: Option<Box<Expr>>,
     f: &mut F,
@@ -380,6 +395,7 @@ fn transform_vec<F: FnMut(Expr) -> Result<Transformed<Expr>>>(
     ve.into_iter().map_until_stop_and_collect(f)
 }
 
+/// Transforms an optional vector of sort expressions by applying the provided closure `f`.
 pub fn transform_sort_option_vec<F: FnMut(Expr) -> Result<Transformed<Expr>>>(
     sorts_option: Option<Vec<Sort>>,
     f: &mut F,
@@ -389,6 +405,7 @@ pub fn transform_sort_option_vec<F: FnMut(Expr) -> Result<Transformed<Expr>>>(
     })
 }
 
+/// Transforms an vector of sort expressions by applying the provided closure `f`.
 pub fn transform_sort_vec<F: FnMut(Expr) -> Result<Transformed<Expr>>>(
     sorts: Vec<Sort>,
     mut f: &mut F,

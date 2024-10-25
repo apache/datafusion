@@ -56,6 +56,7 @@ arrow-schema = { workspace = true }
 chrono = { workspace = true }
 half = { workspace = true }
 hashbrown = { workspace = true }
+indexmap = { workspace = true }
 libc = "0.2.140"
 num_cpus = { workspace = true }
 object_store = { workspace = true, optional = true }

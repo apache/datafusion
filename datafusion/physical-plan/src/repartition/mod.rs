@@ -38,16 +38,18 @@ use crate::sorts::streaming_merge::StreamingMergeBuilder;
 use crate::stream::RecordBatchStreamAdapter;
 use crate::{DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties, Statistics};
 
+use arrow::compute::take_arrays;
 use arrow::datatypes::{SchemaRef, UInt32Type};
 use arrow::record_batch::RecordBatch;
 use arrow_array::{PrimitiveArray, RecordBatchOptions};
-use datafusion_common::utils::{take_arrays, transpose};
+use datafusion_common::utils::transpose;
 use datafusion_common::{not_impl_err, DataFusionError, Result};
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::memory_pool::MemoryConsumer;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{EquivalenceProperties, PhysicalExpr, PhysicalSortExpr};
 
+use crate::execution_plan::CardinalityEffect;
 use futures::stream::Stream;
 use futures::{FutureExt, StreamExt, TryStreamExt};
 use hashbrown::HashMap;
@@ -299,7 +301,7 @@ impl BatchPartitioner {
                             let _timer = partitioner_timer.timer();
 
                             // Produce batches based on indices
-                            let columns = take_arrays(batch.columns(), &indices)?;
+                            let columns = take_arrays(batch.columns(), &indices, None)?;
 
                             let mut options = RecordBatchOptions::new();
                             options = options.with_row_count(Some(indices.len()));
@@ -668,6 +670,10 @@ impl ExecutionPlan for RepartitionExec {
 
     fn statistics(&self) -> Result<Statistics> {
         self.input.statistics()
+    }
+
+    fn cardinality_effect(&self) -> CardinalityEffect {
+        CardinalityEffect::Equal
     }
 }
 
@@ -1672,7 +1678,8 @@ mod test {
         Arc::new(
             MemoryExec::try_new(&[vec![]], Arc::clone(schema), None)
                 .unwrap()
-                .with_sort_information(vec![sort_exprs]),
+                .try_with_sort_information(vec![sort_exprs])
+                .unwrap(),
         )
     }
 }

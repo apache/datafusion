@@ -333,8 +333,8 @@ fn simplify_scan_predicate() -> Result<()> {
     .build()?;
 
     // before simplify: t.g = power(t.f, 1.0)
-    // after simplify:  (t.g = t.f) as "t.g = power(t.f, 1.0)"
-    let expected = "TableScan: test, full_filters=[g = f AS g = power(f,Float64(1))]";
+    // after simplify:  t.g = t.f"
+    let expected = "TableScan: test, full_filters=[g = f]";
     let actual = get_optimized_plan_formatted(plan, &Utc::now());
     assert_eq!(expected, actual);
     Ok(())

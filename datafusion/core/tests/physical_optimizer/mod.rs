@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-mod aggregate_statistics;
 mod combine_partial_final_agg;
 mod limit_pushdown;
 mod limited_distinct_aggregation;

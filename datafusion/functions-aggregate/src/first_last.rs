@@ -19,20 +19,21 @@
 
 use std::any::Any;
 use std::fmt::Debug;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use arrow::array::{ArrayRef, AsArray, BooleanArray};
-use arrow::compute::{self, lexsort_to_indices, SortColumn};
+use arrow::compute::{self, lexsort_to_indices, take_arrays, SortColumn};
 use arrow::datatypes::{DataType, Field};
-use datafusion_common::utils::{compare_rows, get_row_at_idx, take_arrays};
+use datafusion_common::utils::{compare_rows, get_row_at_idx};
 use datafusion_common::{
     arrow_datafusion_err, internal_err, DataFusionError, Result, ScalarValue,
 };
+use datafusion_expr::aggregate_doc_sections::DOC_SECTION_GENERAL;
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::{format_state_name, AggregateOrderSensitivity};
 use datafusion_expr::{
-    Accumulator, AggregateUDFImpl, ArrayFunctionSignature, Expr, ExprFunctionExt,
-    Signature, SortExpr, TypeSignature, Volatility,
+    Accumulator, AggregateUDFImpl, ArrayFunctionSignature, Documentation, Expr,
+    ExprFunctionExt, Signature, SortExpr, TypeSignature, Volatility,
 };
 use datafusion_functions_aggregate_common::utils::get_sort_options;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
@@ -165,6 +166,35 @@ impl AggregateUDFImpl for FirstValue {
     fn reverse_expr(&self) -> datafusion_expr::ReversedUDAF {
         datafusion_expr::ReversedUDAF::Reversed(last_value_udaf())
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_first_value_doc())
+    }
+}
+
+static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+
+fn get_first_value_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_GENERAL)
+            .with_description(
+                "Returns the first element in an aggregation group according to the requested ordering. If no ordering is given, returns an arbitrary element from the group.",
+            )
+            .with_syntax_example("first_value(expression [ORDER BY expression])")
+            .with_sql_example(r#"```sql
+> SELECT first_value(column_name ORDER BY other_column) FROM table_name;
++-----------------------------------------------+
+| first_value(column_name ORDER BY other_column)|
++-----------------------------------------------+
+| first_element                                 |
++-----------------------------------------------+
+```"#,
+            )
+            .with_standard_argument("expression", None)
+            .build()
+            .unwrap()
+    })
 }
 
 #[derive(Debug)]
@@ -310,7 +340,7 @@ impl Accumulator for FirstValueAccumulator {
             filtered_states
         } else {
             let indices = lexsort_to_indices(&sort_cols, None)?;
-            take_arrays(&filtered_states, &indices)?
+            take_arrays(&filtered_states, &indices, None)?
         };
         if !ordered_states[0].is_empty() {
             let first_row = get_row_at_idx(&ordered_states, 0)?;
@@ -466,6 +496,33 @@ impl AggregateUDFImpl for LastValue {
     fn reverse_expr(&self) -> datafusion_expr::ReversedUDAF {
         datafusion_expr::ReversedUDAF::Reversed(first_value_udaf())
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_last_value_doc())
+    }
+}
+
+fn get_last_value_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_GENERAL)
+            .with_description(
+                "Returns the last element in an aggregation group according to the requested ordering. If no ordering is given, returns an arbitrary element from the group.",
+            )
+            .with_syntax_example("last_value(expression [ORDER BY expression])")
+            .with_sql_example(r#"```sql
+> SELECT last_value(column_name ORDER BY other_column) FROM table_name;
++-----------------------------------------------+
+| last_value(column_name ORDER BY other_column) |
++-----------------------------------------------+
+| last_element                                  |
++-----------------------------------------------+
+```"#,
+            )
+            .with_standard_argument("expression", None)
+            .build()
+            .unwrap()
+    })
 }
 
 #[derive(Debug)]
@@ -613,7 +670,7 @@ impl Accumulator for LastValueAccumulator {
             filtered_states
         } else {
             let indices = lexsort_to_indices(&sort_cols, None)?;
-            take_arrays(&filtered_states, &indices)?
+            take_arrays(&filtered_states, &indices, None)?
         };
 
         if !ordered_states[0].is_empty() {

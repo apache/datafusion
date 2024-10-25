@@ -468,35 +468,41 @@ pub fn can_interleave<T: Borrow<Arc<dyn ExecutionPlan>>>(
 }
 
 fn union_schema(inputs: &[Arc<dyn ExecutionPlan>]) -> SchemaRef {
-    let fields: Vec<Field> = (0..inputs[0].schema().fields().len())
+    let first_schema = inputs[0].schema();
+
+    let fields = (0..first_schema.fields().len())
         .map(|i| {
             inputs
                 .iter()
-                .filter_map(|input| {
-                    if input.schema().fields().len() > i {
-                        let field = input.schema().field(i).clone();
-                        let right_hand_metdata = inputs
-                            .get(1)
-                            .map(|right_input| {
-                                right_input.schema().field(i).metadata().clone()
-                            })
-                            .unwrap_or_default();
-                        let mut metadata = field.metadata().clone();
-                        metadata.extend(right_hand_metdata);
-                        Some(field.with_metadata(metadata))
-                    } else {
-                        None
-                    }
+                .enumerate()
+                .map(|(input_idx, input)| {
+                    let field = input.schema().field(i).clone();
+                    let mut metadata = field.metadata().clone();
+
+                    let other_metadatas = inputs
+                        .iter()
+                        .enumerate()
+                        .filter(|(other_idx, _)| *other_idx != input_idx)
+                        .flat_map(|(_, other_input)| {
+                            other_input.schema().field(i).metadata().clone().into_iter()
+                        });
+
+                    metadata.extend(other_metadatas);
+                    field.with_metadata(metadata)
                 })
-                .find_or_first(|f| f.is_nullable())
+                .find_or_first(Field::is_nullable)
+                // We can unwrap this because if inputs was empty, this would've already panic'ed when we
+                // indexed into inputs[0].
                 .unwrap()
         })
+        .collect::<Vec<_>>();
+
+    let all_metadata_merged = inputs
+        .iter()
+        .flat_map(|i| i.schema().metadata().clone().into_iter())
         .collect();
 
-    Arc::new(Schema::new_with_metadata(
-        fields,
-        inputs[0].schema().metadata().clone(),
-    ))
+    Arc::new(Schema::new_with_metadata(fields, all_metadata_merged))
 }
 
 /// CombinedRecordBatchStream can be used to combine a Vec of SendableRecordBatchStreams into one
@@ -809,11 +815,11 @@ mod tests {
                 .collect::<Vec<_>>();
             let child1 = Arc::new(
                 MemoryExec::try_new(&[], Arc::clone(&schema), None)?
-                    .with_sort_information(first_orderings),
+                    .try_with_sort_information(first_orderings)?,
             );
             let child2 = Arc::new(
                 MemoryExec::try_new(&[], Arc::clone(&schema), None)?
-                    .with_sort_information(second_orderings),
+                    .try_with_sort_information(second_orderings)?,
             );
 
             let mut union_expected_eq = EquivalenceProperties::new(Arc::clone(&schema));

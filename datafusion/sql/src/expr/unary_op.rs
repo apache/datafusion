@@ -16,8 +16,11 @@
 // under the License.
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
-use datafusion_common::{not_impl_err, DFSchema, Result};
-use datafusion_expr::Expr;
+use datafusion_common::{not_impl_err, plan_err, DFSchema, Result};
+use datafusion_expr::{
+    type_coercion::{is_interval, is_timestamp},
+    Expr, ExprSchemable,
+};
 use sqlparser::ast::{Expr as SQLExpr, UnaryOperator, Value};
 
 impl<'a, S: ContextProvider> SqlToRel<'a, S> {
@@ -33,11 +36,21 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 self.sql_expr_to_logical_expr(expr, schema, planner_context)?,
             ))),
             UnaryOperator::Plus => {
-                Ok(self.sql_expr_to_logical_expr(expr, schema, planner_context)?)
+                let operand =
+                    self.sql_expr_to_logical_expr(expr, schema, planner_context)?;
+                let (data_type, _) = operand.data_type_and_nullable(schema)?;
+                if data_type.is_numeric()
+                    || is_interval(&data_type)
+                    || is_timestamp(&data_type)
+                {
+                    Ok(operand)
+                } else {
+                    plan_err!("Unary operator '+' only supports numeric, interval and timestamp types")
+                }
             }
             UnaryOperator::Minus => {
                 match expr {
-                    // optimization: if it's a number literal, we apply the negative operator
+                    // Optimization: if it's a number literal, we apply the negative operator
                     // here directly to calculate the new literal.
                     SQLExpr::Value(Value::Number(n, _)) => {
                         self.parse_sql_number(&n, true)
@@ -45,7 +58,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     SQLExpr::Interval(interval) => {
                         self.sql_interval_to_expr(true, interval)
                     }
-                    // not a literal, apply negative operator on expression
+                    // Not a literal, apply negative operator on expression
                     _ => Ok(Expr::Negative(Box::new(self.sql_expr_to_logical_expr(
                         expr,
                         schema,

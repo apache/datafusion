@@ -140,7 +140,7 @@ impl AggregateUDF {
         ))
     }
 
-    /// creates an [`Expr`] that calls the aggregate function.
+    /// Creates an [`Expr`] that calls the aggregate function.
     ///
     /// This utility allows using the UDAF without requiring access to
     /// the registry, such as with the DataFrame API.
@@ -603,8 +603,8 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
     }
 
     /// If this function is max, return true
-    /// if the function is min, return false
-    /// otherwise return None (the default)
+    /// If the function is min, return false
+    /// Otherwise return None (the default)
     ///
     ///
     /// Note: this is used to use special aggregate implementations in certain conditions
@@ -647,7 +647,7 @@ impl PartialEq for dyn AggregateUDFImpl {
     }
 }
 
-// manual implementation of `PartialOrd`
+// Manual implementation of `PartialOrd`
 // There might be some wackiness with it, but this is based on the impl of eq for AggregateUDFImpl
 // https://users.rust-lang.org/t/how-to-compare-two-trait-objects-for-equality/88063/5
 impl PartialOrd for dyn AggregateUDFImpl {

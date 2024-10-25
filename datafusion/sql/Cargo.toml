@@ -46,6 +46,7 @@ arrow-array = { workspace = true }
 arrow-schema = { workspace = true }
 datafusion-common = { workspace = true, default-features = true }
 datafusion-expr = { workspace = true }
+indexmap = { workspace = true }
 log = { workspace = true }
 regex = { workspace = true }
 sqlparser = { workspace = true }

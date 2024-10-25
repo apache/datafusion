@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::string::common::StringArrayType;
+use crate::strings::StringArrayType;
 use crate::utils::{make_scalar_function, utf8_to_int_type};
 use arrow::array::{
     Array, ArrayRef, ArrowPrimitiveType, AsArray, OffsetSizeTrait, PrimitiveArray,
@@ -103,7 +103,7 @@ fn get_character_length_doc() -> &'static Documentation {
 +------------------------------------+
 ```"#,
             )
-            .with_standard_argument("str", "String")
+            .with_standard_argument("str", Some("String"))
             .with_related_udf("bit_length")
             .with_related_udf("octet_length")
             .build()

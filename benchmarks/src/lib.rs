@@ -21,5 +21,4 @@ pub mod imdb;
 pub mod parquet_filter;
 pub mod sort;
 pub mod tpch;
-mod util;
-pub use util::*;
+pub mod util;
