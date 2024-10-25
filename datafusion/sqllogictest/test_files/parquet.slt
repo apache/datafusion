@@ -348,3 +348,204 @@ DROP TABLE list_columns;
 # Clean up
 statement ok
 DROP TABLE listing_table;
+
+### Tests for binary_ar_string
+
+# This scenario models the case where a column has been stored in parquet
+# "binary" column (without a String logical type annotation)
+# this is the case with the `hits_partitioned` ClickBench datasets
+# see https://github.com/apache/datafusion/issues/12788
+
+## Create a table with a binary column
+
+query I
+COPY (
+  SELECT
+    arrow_cast(string_col, 'Binary')      as binary_col,
+    arrow_cast(string_col, 'LargeBinary') as largebinary_col,
+    arrow_cast(string_col, 'BinaryView')  as binaryview_col
+  FROM src_table
+  )
+TO 'test_files/scratch/parquet/binary_as_string.parquet'
+STORED AS PARQUET;
+----
+9
+
+# Test 1: Read table with default options
+statement ok
+CREATE EXTERNAL TABLE binary_as_string_default
+STORED AS PARQUET LOCATION 'test_files/scratch/parquet/binary_as_string.parquet'
+
+# NB the data is read and displayed as binary
+query T?T?T?
+select
+  arrow_typeof(binary_col),      binary_col,
+  arrow_typeof(largebinary_col), largebinary_col,
+  arrow_typeof(binaryview_col),  binaryview_col
+ FROM binary_as_string_default;
+----
+Binary 616161 Binary 616161 Binary 616161
+Binary 626262 Binary 626262 Binary 626262
+Binary 636363 Binary 636363 Binary 636363
+Binary 646464 Binary 646464 Binary 646464
+Binary 656565 Binary 656565 Binary 656565
+Binary 666666 Binary 666666 Binary 666666
+Binary 676767 Binary 676767 Binary 676767
+Binary 686868 Binary 686868 Binary 686868
+Binary 696969 Binary 696969 Binary 696969
+
+# Run an explain plan to show the cast happens in the plan (a CAST is needed for the predicates)
+query TT
+EXPLAIN
+  SELECT binary_col, largebinary_col, binaryview_col
+  FROM binary_as_string_default
+ WHERE
+   binary_col LIKE '%a%' AND
+   largebinary_col LIKE '%a%' AND
+   binaryview_col LIKE '%a%';
+----
+logical_plan
+01)Filter: CAST(binary_as_string_default.binary_col AS Utf8) LIKE Utf8("%a%") AND CAST(binary_as_string_default.largebinary_col AS Utf8) LIKE Utf8("%a%") AND CAST(binary_as_string_default.binaryview_col AS Utf8) LIKE Utf8("%a%")
+02)--TableScan: binary_as_string_default projection=[binary_col, largebinary_col, binaryview_col], partial_filters=[CAST(binary_as_string_default.binary_col AS Utf8) LIKE Utf8("%a%"), CAST(binary_as_string_default.largebinary_col AS Utf8) LIKE Utf8("%a%"), CAST(binary_as_string_default.binaryview_col AS Utf8) LIKE Utf8("%a%")]
+physical_plan
+01)CoalesceBatchesExec: target_batch_size=8192
+02)--FilterExec: CAST(binary_col@0 AS Utf8) LIKE %a% AND CAST(largebinary_col@1 AS Utf8) LIKE %a% AND CAST(binaryview_col@2 AS Utf8) LIKE %a%
+03)----RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+04)------ParquetExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet/binary_as_string.parquet]]}, projection=[binary_col, largebinary_col, binaryview_col], predicate=CAST(binary_col@0 AS Utf8) LIKE %a% AND CAST(largebinary_col@1 AS Utf8) LIKE %a% AND CAST(binaryview_col@2 AS Utf8) LIKE %a%
+
+
+statement ok
+DROP TABLE binary_as_string_default;
+
+## Test 2: Read table using the binary_as_string option
+
+statement ok
+CREATE EXTERNAL TABLE binary_as_string_option
+STORED AS PARQUET LOCATION 'test_files/scratch/parquet/binary_as_string.parquet'
+OPTIONS ('binary_as_string' 'true');
+
+# NB the data is read and displayed as string
+query TTTTTT
+select
+  arrow_typeof(binary_col),      binary_col,
+  arrow_typeof(largebinary_col), largebinary_col,
+  arrow_typeof(binaryview_col),  binaryview_col
+ FROM binary_as_string_option;
+----
+Utf8 aaa Utf8 aaa Utf8 aaa
+Utf8 bbb Utf8 bbb Utf8 bbb
+Utf8 ccc Utf8 ccc Utf8 ccc
+Utf8 ddd Utf8 ddd Utf8 ddd
+Utf8 eee Utf8 eee Utf8 eee
+Utf8 fff Utf8 fff Utf8 fff
+Utf8 ggg Utf8 ggg Utf8 ggg
+Utf8 hhh Utf8 hhh Utf8 hhh
+Utf8 iii Utf8 iii Utf8 iii
+
+# Run an explain plan to show the cast happens in the plan (there should be no casts)
+query TT
+EXPLAIN
+  SELECT binary_col, largebinary_col, binaryview_col
+  FROM binary_as_string_option
+ WHERE
+   binary_col LIKE '%a%' AND
+   largebinary_col LIKE '%a%' AND
+   binaryview_col LIKE '%a%';
+----
+logical_plan
+01)Filter: binary_as_string_option.binary_col LIKE Utf8("%a%") AND binary_as_string_option.largebinary_col LIKE Utf8("%a%") AND binary_as_string_option.binaryview_col LIKE Utf8("%a%")
+02)--TableScan: binary_as_string_option projection=[binary_col, largebinary_col, binaryview_col], partial_filters=[binary_as_string_option.binary_col LIKE Utf8("%a%"), binary_as_string_option.largebinary_col LIKE Utf8("%a%"), binary_as_string_option.binaryview_col LIKE Utf8("%a%")]
+physical_plan
+01)CoalesceBatchesExec: target_batch_size=8192
+02)--FilterExec: binary_col@0 LIKE %a% AND largebinary_col@1 LIKE %a% AND binaryview_col@2 LIKE %a%
+03)----RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+04)------ParquetExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet/binary_as_string.parquet]]}, projection=[binary_col, largebinary_col, binaryview_col], predicate=binary_col@0 LIKE %a% AND largebinary_col@1 LIKE %a% AND binaryview_col@2 LIKE %a%
+
+
+statement ok
+DROP TABLE binary_as_string_option;
+
+## Test 3: Read table with binary_as_string option AND schema_force_view_types
+
+statement ok
+CREATE EXTERNAL TABLE binary_as_string_both
+STORED AS PARQUET LOCATION 'test_files/scratch/parquet/binary_as_string.parquet'
+OPTIONS (
+  'binary_as_string' 'true',
+  'schema_force_view_types' 'true'
+);
+
+# NB the data is read and displayed a StringView
+query TTTTTT
+select
+  arrow_typeof(binary_col),      binary_col,
+  arrow_typeof(largebinary_col), largebinary_col,
+  arrow_typeof(binaryview_col),  binaryview_col
+ FROM binary_as_string_both;
+----
+Utf8View aaa Utf8View aaa Utf8View aaa
+Utf8View bbb Utf8View bbb Utf8View bbb
+Utf8View ccc Utf8View ccc Utf8View ccc
+Utf8View ddd Utf8View ddd Utf8View ddd
+Utf8View eee Utf8View eee Utf8View eee
+Utf8View fff Utf8View fff Utf8View fff
+Utf8View ggg Utf8View ggg Utf8View ggg
+Utf8View hhh Utf8View hhh Utf8View hhh
+Utf8View iii Utf8View iii Utf8View iii
+
+# Run an explain plan to show the cast happens in the plan (there should be no casts)
+query TT
+EXPLAIN
+  SELECT binary_col, largebinary_col, binaryview_col
+  FROM binary_as_string_both
+ WHERE
+   binary_col LIKE '%a%' AND
+   largebinary_col LIKE '%a%' AND
+   binaryview_col LIKE '%a%';
+----
+logical_plan
+01)Filter: binary_as_string_both.binary_col LIKE Utf8View("%a%") AND binary_as_string_both.largebinary_col LIKE Utf8View("%a%") AND binary_as_string_both.binaryview_col LIKE Utf8View("%a%")
+02)--TableScan: binary_as_string_both projection=[binary_col, largebinary_col, binaryview_col], partial_filters=[binary_as_string_both.binary_col LIKE Utf8View("%a%"), binary_as_string_both.largebinary_col LIKE Utf8View("%a%"), binary_as_string_both.binaryview_col LIKE Utf8View("%a%")]
+physical_plan
+01)CoalesceBatchesExec: target_batch_size=8192
+02)--FilterExec: binary_col@0 LIKE %a% AND largebinary_col@1 LIKE %a% AND binaryview_col@2 LIKE %a%
+03)----RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+04)------ParquetExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet/binary_as_string.parquet]]}, projection=[binary_col, largebinary_col, binaryview_col], predicate=binary_col@0 LIKE %a% AND largebinary_col@1 LIKE %a% AND binaryview_col@2 LIKE %a%
+
+
+statement ok
+drop table binary_as_string_both;
+
+# Read a parquet file with binary data in a FixedSizeBinary column
+
+# by default, the data is read as binary
+statement ok
+CREATE EXTERNAL TABLE test_non_utf8_binary
+STORED AS PARQUET LOCATION '../core/tests/data/test_binary.parquet';
+
+query T?
+SELECT arrow_typeof(ids), ids FROM test_non_utf8_binary LIMIT 3;
+----
+FixedSizeBinary(16) 008c7196f68089ab692e4739c5fd16b5
+FixedSizeBinary(16) 00a51a7bc5ff8eb1627f8f3dc959dce8
+FixedSizeBinary(16) 0166ce1d46129ad104fa4990c6057c91
+
+statement ok
+DROP TABLE test_non_utf8_binary;
+
+
+# even with the binary_as_string option set, the data is read as binary
+statement ok
+CREATE EXTERNAL TABLE test_non_utf8_binary
+STORED AS PARQUET LOCATION '../core/tests/data/test_binary.parquet'
+OPTIONS ('binary_as_string' 'true');
+
+query T?
+SELECT arrow_typeof(ids), ids FROM test_non_utf8_binary LIMIT 3
+----
+FixedSizeBinary(16) 008c7196f68089ab692e4739c5fd16b5
+FixedSizeBinary(16) 00a51a7bc5ff8eb1627f8f3dc959dce8
+FixedSizeBinary(16) 0166ce1d46129ad104fa4990c6057c91
+
+statement ok
+DROP TABLE test_non_utf8_binary;
