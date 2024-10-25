@@ -1025,14 +1025,21 @@ impl DefaultPhysicalPlanner {
                             })
                             .collect();
 
+                        let metadata: HashMap<_, _> = left_df_schema
+                            .metadata()
+                            .clone()
+                            .into_iter()
+                            .chain(right_df_schema.metadata().clone())
+                            .collect();
+
                         // Construct intermediate schemas used for filtering data and
                         // convert logical expression to physical according to filter schema
                         let filter_df_schema = DFSchema::new_with_metadata(
                             filter_df_fields,
-                            HashMap::new(),
+                            metadata.clone(),
                         )?;
                         let filter_schema =
-                            Schema::new_with_metadata(filter_fields, HashMap::new());
+                            Schema::new_with_metadata(filter_fields, metadata);
                         let filter_expr = create_physical_expr(
                             expr,
                             &filter_df_schema,
