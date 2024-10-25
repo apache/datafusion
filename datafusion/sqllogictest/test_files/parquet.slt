@@ -476,22 +476,22 @@ OPTIONS (
 );
 
 # NB the data is read and displayed a StringView
-query error DataFusion error: SQL error: ParserError\("Expected: an SQL statement, found: Utf8View"\)
+query TTTTTT
 select
   arrow_typeof(binary_col),      binary_col,
   arrow_typeof(largebinary_col), largebinary_col,
   arrow_typeof(binaryview_col),  binaryview_col
  FROM binary_as_string_both;
- ----
-Utf8View aaa
-Utf8View bbb
-Utf8View ccc
-Utf8View ddd
-Utf8View eee
-Utf8View fff
-Utf8View ggg
-Utf8View hhh
-Utf8View iii
+----
+Utf8View aaa Utf8View aaa Utf8View aaa
+Utf8View bbb Utf8View bbb Utf8View bbb
+Utf8View ccc Utf8View ccc Utf8View ccc
+Utf8View ddd Utf8View ddd Utf8View ddd
+Utf8View eee Utf8View eee Utf8View eee
+Utf8View fff Utf8View fff Utf8View fff
+Utf8View ggg Utf8View ggg Utf8View ggg
+Utf8View hhh Utf8View hhh Utf8View hhh
+Utf8View iii Utf8View iii Utf8View iii
 
 # Run an explain plan to show the cast happens in the plan (there should be no casts)
 query TT
