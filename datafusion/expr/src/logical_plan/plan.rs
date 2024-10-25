@@ -936,7 +936,6 @@ impl LogicalPlan {
                         expr.len()
                     );
                 }
-                // Pop order is same as the order returned by `LogicalPlan::expressions()`
                 let new_skip = skip.as_ref().and_then(|_| expr.pop());
                 let new_fetch = fetch.as_ref().and_then(|_| expr.pop());
                 let input = self.only_input(inputs)?;
