@@ -681,6 +681,19 @@ async fn aggregate_wo_projection_consume() -> Result<()> {
 }
 
 #[tokio::test]
+async fn aggregate_wo_projection_sorted_consume() -> Result<()> {
+    let proto_plan =
+        read_json("tests/testdata/test_plans/aggregate_sorted_no_project.substrait.json");
+
+    assert_expected_plan_substrait(
+        proto_plan,
+        "Aggregate: groupBy=[[data.a]], aggr=[[count(data.a) ORDER BY [data.a DESC NULLS FIRST] AS countA]]\
+        \n  TableScan: data projection=[a]",
+    )
+    .await
+}
+
+#[tokio::test]
 async fn simple_intersect_consume() -> Result<()> {
     let proto_plan = read_json("tests/testdata/test_plans/intersect.substrait.json");
 
@@ -1020,8 +1033,9 @@ async fn roundtrip_aggregate_udf() -> Result<()> {
 
     let ctx = create_context().await?;
     ctx.register_udaf(dummy_agg);
+    roundtrip_with_ctx("select dummy_agg(a) from data", ctx.clone()).await?;
+    roundtrip_with_ctx("select dummy_agg(a order by a) from data", ctx.clone()).await?;
 
-    roundtrip_with_ctx("select dummy_agg(a) from data", ctx).await?;
     Ok(())
 }
 
