@@ -126,8 +126,8 @@ pub trait SchemaMapper: Debug + Send + Sync {
 /// # Errors:
 ///
 /// * If a column in the table schema is non-nullable but is not present in the
-/// file schema (i.e. it is missing), the returned mapper tries to fill it with
-/// nulls resulting in a schema error.
+///   file schema (i.e. it is missing), the returned mapper tries to fill it with
+///   nulls resulting in a schema error.
 ///
 /// # Illustration of Schema Mapping
 ///
