@@ -151,6 +151,8 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug + DynEq + DynHash {
     }
 }
 
+/// [`PhysicalExpr`] can't be constrained by [`Eq`] directly because it must remain object
+/// safe. To ease implementation blanket implementation is provided for [`Eq`] types.
 pub trait DynEq {
     fn dyn_eq(&self, other: &dyn Any) -> bool;
 }
@@ -171,8 +173,9 @@ impl PartialEq for dyn PhysicalExpr {
 
 impl Eq for dyn PhysicalExpr {}
 
-/// Note: [`PhysicalExpr`] is not constrained by [`Hash`] directly because it must remain
-/// object safe.
+/// [`PhysicalExpr`] can't be constrained by [`Hash`] directly because it must remain
+/// object safe. To ease implementation blanket implementation is provided for [`Hash`]
+/// types.
 pub trait DynHash {
     fn dyn_hash(&self, _state: &mut dyn Hasher);
 }
