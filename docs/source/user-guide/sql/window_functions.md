@@ -184,8 +184,6 @@ ntile(expression)
 
 - [cume_dist](#cume_dist)
 - [percent_rank](#percent_rank)
-- [lag](#lag)
-- [lead](#lead)
 - [first_value](#first_value)
 - [last_value](#last_value)
 - [nth_value](#nth_value)
@@ -205,34 +203,6 @@ Relative rank of the current row: (rank - 1) / (total rows - 1).
 ```sql
 percent_rank()
 ```
-
-### `lag`
-
-Returns value evaluated at the row that is offset rows before the current row within the partition; if there is no such row, instead return default (which must be of the same type as value). Both offset and default are evaluated with respect to the current row. If omitted, offset defaults to 1 and default to null.
-
-```sql
-lag(expression, offset, default)
-```
-
-#### Arguments
-
-- **expression**: Expression to operate on
-- **offset**: Integer. Specifies how many rows back the value of _expression_ should be retrieved. Defaults to 1.
-- **default**: The default value if the offset is not within the partition. Must be of the same type as _expression_.
-
-### `lead`
-
-Returns value evaluated at the row that is offset rows after the current row within the partition; if there is no such row, instead return default (which must be of the same type as value). Both offset and default are evaluated with respect to the current row. If omitted, offset defaults to 1 and default to null.
-
-```sql
-lead(expression, offset, default)
-```
-
-#### Arguments
-
-- **expression**: Expression to operate on
-- **offset**: Integer. Specifies how many rows forward the value of _expression_ should be retrieved. Defaults to 1.
-- **default**: The default value if the offset is not within the partition. Must be of the same type as _expression_.
 
 ### `first_value`
 

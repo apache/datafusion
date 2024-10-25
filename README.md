@@ -138,4 +138,4 @@ We enforce this policy using a [MSRV CI Check](https://github.com/search?q=repo%
 ## DataFusion API evolution policy
 
 Public methods in Apache DataFusion are subject to evolve as part of the API lifecycle.
-Deprecated methods will be phased out in accordance with the [policy](docs/source/library-user-guide/api-health.md), ensuring the API is stable and healthy.
+Deprecated methods will be phased out in accordance with the [policy](https://datafusion.apache.org/library-user-guide/api-health.html), ensuring the API is stable and healthy.

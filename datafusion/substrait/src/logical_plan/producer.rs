@@ -1718,98 +1718,38 @@ fn make_substrait_like_expr(
     }
 }
 
+fn to_substrait_bound_offset(value: &ScalarValue) -> Option<i64> {
+    match value {
+        ScalarValue::UInt8(Some(v)) => Some(*v as i64),
+        ScalarValue::UInt16(Some(v)) => Some(*v as i64),
+        ScalarValue::UInt32(Some(v)) => Some(*v as i64),
+        ScalarValue::UInt64(Some(v)) => Some(*v as i64),
+        ScalarValue::Int8(Some(v)) => Some(*v as i64),
+        ScalarValue::Int16(Some(v)) => Some(*v as i64),
+        ScalarValue::Int32(Some(v)) => Some(*v as i64),
+        ScalarValue::Int64(Some(v)) => Some(*v),
+        _ => None,
+    }
+}
+
 fn to_substrait_bound(bound: &WindowFrameBound) -> Bound {
     match bound {
         WindowFrameBound::CurrentRow => Bound {
             kind: Some(BoundKind::CurrentRow(SubstraitBound::CurrentRow {})),
         },
-        WindowFrameBound::Preceding(s) => match s {
-            ScalarValue::UInt8(Some(v)) => Bound {
-                kind: Some(BoundKind::Preceding(SubstraitBound::Preceding {
-                    offset: *v as i64,
-                })),
+        WindowFrameBound::Preceding(s) => match to_substrait_bound_offset(s) {
+            Some(offset) => Bound {
+                kind: Some(BoundKind::Preceding(SubstraitBound::Preceding { offset })),
             },
-            ScalarValue::UInt16(Some(v)) => Bound {
-                kind: Some(BoundKind::Preceding(SubstraitBound::Preceding {
-                    offset: *v as i64,
-                })),
-            },
-            ScalarValue::UInt32(Some(v)) => Bound {
-                kind: Some(BoundKind::Preceding(SubstraitBound::Preceding {
-                    offset: *v as i64,
-                })),
-            },
-            ScalarValue::UInt64(Some(v)) => Bound {
-                kind: Some(BoundKind::Preceding(SubstraitBound::Preceding {
-                    offset: *v as i64,
-                })),
-            },
-            ScalarValue::Int8(Some(v)) => Bound {
-                kind: Some(BoundKind::Preceding(SubstraitBound::Preceding {
-                    offset: *v as i64,
-                })),
-            },
-            ScalarValue::Int16(Some(v)) => Bound {
-                kind: Some(BoundKind::Preceding(SubstraitBound::Preceding {
-                    offset: *v as i64,
-                })),
-            },
-            ScalarValue::Int32(Some(v)) => Bound {
-                kind: Some(BoundKind::Preceding(SubstraitBound::Preceding {
-                    offset: *v as i64,
-                })),
-            },
-            ScalarValue::Int64(Some(v)) => Bound {
-                kind: Some(BoundKind::Preceding(SubstraitBound::Preceding {
-                    offset: *v,
-                })),
-            },
-            _ => Bound {
+            None => Bound {
                 kind: Some(BoundKind::Unbounded(SubstraitBound::Unbounded {})),
             },
         },
-        WindowFrameBound::Following(s) => match s {
-            ScalarValue::UInt8(Some(v)) => Bound {
-                kind: Some(BoundKind::Following(SubstraitBound::Following {
-                    offset: *v as i64,
-                })),
+        WindowFrameBound::Following(s) => match to_substrait_bound_offset(s) {
+            Some(offset) => Bound {
+                kind: Some(BoundKind::Following(SubstraitBound::Following { offset })),
             },
-            ScalarValue::UInt16(Some(v)) => Bound {
-                kind: Some(BoundKind::Following(SubstraitBound::Following {
-                    offset: *v as i64,
-                })),
-            },
-            ScalarValue::UInt32(Some(v)) => Bound {
-                kind: Some(BoundKind::Following(SubstraitBound::Following {
-                    offset: *v as i64,
-                })),
-            },
-            ScalarValue::UInt64(Some(v)) => Bound {
-                kind: Some(BoundKind::Following(SubstraitBound::Following {
-                    offset: *v as i64,
-                })),
-            },
-            ScalarValue::Int8(Some(v)) => Bound {
-                kind: Some(BoundKind::Following(SubstraitBound::Following {
-                    offset: *v as i64,
-                })),
-            },
-            ScalarValue::Int16(Some(v)) => Bound {
-                kind: Some(BoundKind::Following(SubstraitBound::Following {
-                    offset: *v as i64,
-                })),
-            },
-            ScalarValue::Int32(Some(v)) => Bound {
-                kind: Some(BoundKind::Following(SubstraitBound::Following {
-                    offset: *v as i64,
-                })),
-            },
-            ScalarValue::Int64(Some(v)) => Bound {
-                kind: Some(BoundKind::Following(SubstraitBound::Following {
-                    offset: *v,
-                })),
-            },
-            _ => Bound {
+            None => Bound {
                 kind: Some(BoundKind::Unbounded(SubstraitBound::Unbounded {})),
             },
         },
