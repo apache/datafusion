@@ -19,7 +19,7 @@
 
 # Special Functions
 
-## Expansion Functiions
+## Expansion Functions
 
 - [unnest](#unnest)
 - [unnest(struct)](#unnest-struct)
