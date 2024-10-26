@@ -279,6 +279,11 @@
     </a>
    </li>
    <li class="toctree-l2">
+    <a class="reference internal" href="special_functions.html">
+     Special Functions
+    </a>
+   </li>
+   <li class="toctree-l2">
     <a class="reference internal" href="sql_status.html">
      Status
     </a>
@@ -558,10 +563,10 @@
   </a>
   <ul class="nav section-nav flex-column">
    <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#unnest">
+    <a class="reference internal nav-link" href="#range">
      <code class="docutils literal notranslate">
       <span class="pre">
-       unnest
+       range
       </span>
      </code>
     </a>
@@ -572,60 +577,8 @@
       </a>
      </li>
      <li class="toc-h4 nav-item toc-entry">
-      <a class="reference internal nav-link" href="#examples">
-       Examples
-      </a>
-     </li>
-    </ul>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#range">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       range
-      </span>
-     </code>
-    </a>
-    <ul class="nav section-nav flex-column">
-     <li class="toc-h4 nav-item toc-entry">
-      <a class="reference internal nav-link" href="#id2">
-       Arguments
-      </a>
-     </li>
-     <li class="toc-h4 nav-item toc-entry">
       <a class="reference internal nav-link" href="#aliases">
        Aliases
-      </a>
-     </li>
-    </ul>
-   </li>
-  </ul>
- </li>
- <li class="toc-h2 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#struct-functions">
-   Struct Functions
-  </a>
-  <ul class="nav section-nav flex-column">
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#unnest-struct">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       unnest
-      </span>
-      <span class="pre">
-       (struct)
-      </span>
-     </code>
-    </a>
-    <ul class="nav section-nav flex-column">
-     <li class="toc-h4 nav-item toc-entry">
-      <a class="reference internal nav-link" href="#id3">
-       Arguments
-      </a>
-     </li>
-     <li class="toc-h4 nav-item toc-entry">
-      <a class="reference internal nav-link" href="#id4">
-       Examples
       </a>
      </li>
     </ul>
@@ -734,52 +687,8 @@ not appear in <code class="docutils literal notranslate"><span class="pre">origs
 <section id="array-functions">
 <h2>Array Functions<a class="headerlink" href="#array-functions" title="Link to this heading">¶</a></h2>
 <ul class="simple">
-<li><p><a class="reference internal" href="#unnest">unnest</a></p></li>
 <li><p><a class="reference internal" href="#range">range</a></p></li>
 </ul>
-<section id="unnest">
-<h3><code class="docutils literal notranslate"><span class="pre">unnest</span></code><a class="headerlink" href="#unnest" title="Link to this heading">¶</a></h3>
-<p>Transforms an array into rows.</p>
-<section id="id1">
-<h4>Arguments<a class="headerlink" href="#id1" title="Link to this heading">¶</a></h4>
-<ul class="simple">
-<li><p><strong>array</strong>: Array expression to unnest.
-Can be a constant, column, or function, and any combination of array operators.</p></li>
-</ul>
-</section>
-<section id="examples">
-<h4>Examples<a class="headerlink" href="#examples" title="Link to this heading">¶</a></h4>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span> <span class="n">select</span> <span class="n">unnest</span><span class="p">(</span><span class="n">make_array</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">5</span><span class="p">));</span>
-<span class="o">+------------------------------------------------------------------+</span>
-<span class="o">|</span> <span class="n">unnest</span><span class="p">(</span><span class="n">make_array</span><span class="p">(</span><span class="n">Int64</span><span class="p">(</span><span class="mi">1</span><span class="p">),</span><span class="n">Int64</span><span class="p">(</span><span class="mi">2</span><span class="p">),</span><span class="n">Int64</span><span class="p">(</span><span class="mi">3</span><span class="p">),</span><span class="n">Int64</span><span class="p">(</span><span class="mi">4</span><span class="p">),</span><span class="n">Int64</span><span class="p">(</span><span class="mi">5</span><span class="p">)))</span> <span class="o">|</span>
-<span class="o">+------------------------------------------------------------------+</span>
-<span class="o">|</span> <span class="mi">1</span>                                                                <span class="o">|</span>
-<span class="o">|</span> <span class="mi">2</span>                                                                <span class="o">|</span>
-<span class="o">|</span> <span class="mi">3</span>                                                                <span class="o">|</span>
-<span class="o">|</span> <span class="mi">4</span>                                                                <span class="o">|</span>
-<span class="o">|</span> <span class="mi">5</span>                                                                <span class="o">|</span>
-<span class="o">+------------------------------------------------------------------+</span>
-</pre></div>
-</div>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span> <span class="n">select</span> <span class="n">unnest</span><span class="p">(</span><span class="nb">range</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">10</span><span class="p">));</span>
-<span class="o">+-----------------------------------+</span>
-<span class="o">|</span> <span class="n">unnest</span><span class="p">(</span><span class="nb">range</span><span class="p">(</span><span class="n">Int64</span><span class="p">(</span><span class="mi">0</span><span class="p">),</span><span class="n">Int64</span><span class="p">(</span><span class="mi">10</span><span class="p">)))</span> <span class="o">|</span>
-<span class="o">+-----------------------------------+</span>
-<span class="o">|</span> <span class="mi">0</span>                                 <span class="o">|</span>
-<span class="o">|</span> <span class="mi">1</span>                                 <span class="o">|</span>
-<span class="o">|</span> <span class="mi">2</span>                                 <span class="o">|</span>
-<span class="o">|</span> <span class="mi">3</span>                                 <span class="o">|</span>
-<span class="o">|</span> <span class="mi">4</span>                                 <span class="o">|</span>
-<span class="o">|</span> <span class="mi">5</span>                                 <span class="o">|</span>
-<span class="o">|</span> <span class="mi">6</span>                                 <span class="o">|</span>
-<span class="o">|</span> <span class="mi">7</span>                                 <span class="o">|</span>
-<span class="o">|</span> <span class="mi">8</span>                                 <span class="o">|</span>
-<span class="o">|</span> <span class="mi">9</span>                                 <span class="o">|</span>
-<span class="o">+-----------------------------------+</span>
-</pre></div>
-</div>
-</section>
-</section>
 <section id="range">
 <h3><code class="docutils literal notranslate"><span class="pre">range</span></code><a class="headerlink" href="#range" title="Link to this heading">¶</a></h3>
 <p>Returns an Arrow array between start and stop with step. <code class="docutils literal notranslate"><span class="pre">SELECT</span> <span class="pre">range(2,</span> <span class="pre">10,</span> <span class="pre">3)</span> <span class="pre">-&gt;</span> <span class="pre">[2,</span> <span class="pre">5,</span> <span class="pre">8]</span></code> or
@@ -807,8 +716,8 @@ For example,</p>
 </pre></div>
 </div>
 <p>are not allowed</p>
-<section id="id2">
-<h4>Arguments<a class="headerlink" href="#id2" title="Link to this heading">¶</a></h4>
+<section id="id1">
+<h4>Arguments<a class="headerlink" href="#id1" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>start</strong>: start of the range. Ints, timestamps, dates or string types that can be coerced to Date32 are supported.</p></li>
 <li><p><strong>end</strong>: end of the range (not included). Type must be the same as start.</p></li>
@@ -820,43 +729,6 @@ For example,</p>
 <ul class="simple">
 <li><p>generate_series</p></li>
 </ul>
-</section>
-</section>
-</section>
-<section id="struct-functions">
-<h2>Struct Functions<a class="headerlink" href="#struct-functions" title="Link to this heading">¶</a></h2>
-<ul class="simple">
-<li><p><a class="reference internal" href="#unnest-struct">unnest</a></p></li>
-</ul>
-<p>For more struct functions see the new documentation <a class="reference external" href="https://datafusion.apache.org/user-guide/sql/scalar_functions_new.html">
-<code class="docutils literal notranslate"><span class="pre">here</span></code></a></p>
-<section id="unnest-struct">
-<h3><code class="docutils literal notranslate"><span class="pre">unnest</span> <span class="pre">(struct)</span></code><a class="headerlink" href="#unnest-struct" title="Link to this heading">¶</a></h3>
-<p>Unwraps struct fields into columns.</p>
-<section id="id3">
-<h4>Arguments<a class="headerlink" href="#id3" title="Link to this heading">¶</a></h4>
-<ul class="simple">
-<li><p><strong>struct</strong>: Object expression to unnest.
-Can be a constant, column, or function, and any combination of object operators.</p></li>
-</ul>
-</section>
-<section id="id4">
-<h4>Examples<a class="headerlink" href="#id4" title="Link to this heading">¶</a></h4>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span> <span class="n">select</span> <span class="o">*</span> <span class="kn">from</span> <span class="nn">foo</span><span class="p">;</span>
-<span class="o">+---------------------+</span>
-<span class="o">|</span> <span class="n">column1</span>             <span class="o">|</span>
-<span class="o">+---------------------+</span>
-<span class="o">|</span> <span class="p">{</span><span class="n">a</span><span class="p">:</span> <span class="mi">5</span><span class="p">,</span> <span class="n">b</span><span class="p">:</span> <span class="n">a</span> <span class="n">string</span><span class="p">}</span> <span class="o">|</span>
-<span class="o">+---------------------+</span>
-
-<span class="o">&gt;</span> <span class="n">select</span> <span class="n">unnest</span><span class="p">(</span><span class="n">column1</span><span class="p">)</span> <span class="kn">from</span> <span class="nn">foo</span><span class="p">;</span>
-<span class="o">+-----------------------+-----------------------+</span>
-<span class="o">|</span> <span class="n">unnest</span><span class="p">(</span><span class="n">foo</span><span class="o">.</span><span class="n">column1</span><span class="p">)</span><span class="o">.</span><span class="n">a</span> <span class="o">|</span> <span class="n">unnest</span><span class="p">(</span><span class="n">foo</span><span class="o">.</span><span class="n">column1</span><span class="p">)</span><span class="o">.</span><span class="n">b</span> <span class="o">|</span>
-<span class="o">+-----------------------+-----------------------+</span>
-<span class="o">|</span> <span class="mi">5</span>                     <span class="o">|</span> <span class="n">a</span> <span class="n">string</span>              <span class="o">|</span>
-<span class="o">+-----------------------+-----------------------+</span>
-</pre></div>
-</div>
 </section>
 </section>
 </section>

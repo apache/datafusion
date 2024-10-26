@@ -5,7 +5,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
-    <title>Aggregate Functions &#8212; Apache DataFusion  documentation</title>
+    <title>Special Functions &#8212; Apache DataFusion  documentation</title>
     
     <link href="../../_static/styles/theme.css?digest=1999514e3f237ded88cf" rel="stylesheet">
 <link href="../../_static/styles/pydata-sphinx-theme.css?digest=1999514e3f237ded88cf" rel="stylesheet">
@@ -34,8 +34,8 @@
     <script async="true" defer="true" src="https://buttons.github.io/buttons.js"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
-    <link rel="next" title="Aggregate Functions (NEW)" href="aggregate_functions_new.html" />
-    <link rel="prev" title="Operators" href="operators.html" />
+    <link rel="next" title="Status" href="sql_status.html" />
+    <link rel="prev" title="Scalar Functions (NEW)" href="scalar_functions_new.html" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="docsearch:language" content="en">
     
@@ -248,8 +248,8 @@
      Operators
     </a>
    </li>
-   <li class="toctree-l2 current active">
-    <a class="current reference internal" href="#">
+   <li class="toctree-l2">
+    <a class="reference internal" href="aggregate_functions.html">
      Aggregate Functions
     </a>
    </li>
@@ -278,8 +278,8 @@
      Scalar Functions (NEW)
     </a>
    </li>
-   <li class="toctree-l2">
-    <a class="reference internal" href="special_functions.html">
+   <li class="toctree-l2 current active">
+    <a class="current reference internal" href="#">
      Special Functions
     </a>
    </li>
@@ -507,9 +507,66 @@
               
               <div class="toc-item">
                 
+<div class="tocsection onthispage pt-5 pb-3">
+    <i class="fas fa-list"></i> On this page
+</div>
 
 <nav id="bd-toc-nav">
-    
+    <ul class="visible nav section-nav flex-column">
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#expansion-functions">
+   Expansion Functions
+  </a>
+  <ul class="nav section-nav flex-column">
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#unnest">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       unnest
+      </span>
+     </code>
+    </a>
+    <ul class="nav section-nav flex-column">
+     <li class="toc-h4 nav-item toc-entry">
+      <a class="reference internal nav-link" href="#arguments">
+       Arguments
+      </a>
+     </li>
+     <li class="toc-h4 nav-item toc-entry">
+      <a class="reference internal nav-link" href="#examples">
+       Examples
+      </a>
+     </li>
+    </ul>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#unnest-struct">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       unnest
+      </span>
+      <span class="pre">
+       (struct)
+      </span>
+     </code>
+    </a>
+    <ul class="nav section-nav flex-column">
+     <li class="toc-h4 nav-item toc-entry">
+      <a class="reference internal nav-link" href="#id1">
+       Arguments
+      </a>
+     </li>
+     <li class="toc-h4 nav-item toc-entry">
+      <a class="reference internal nav-link" href="#id2">
+       Examples
+      </a>
+     </li>
+    </ul>
+   </li>
+  </ul>
+ </li>
+</ul>
+
 </nav>
               </div>
               
@@ -517,7 +574,7 @@
                 
 
 <div class="tocsection editthispage">
-    <a href="https://github.com/apache/arrow-datafusion/edit/main/docs/source/user-guide/sql/aggregate_functions.md">
+    <a href="https://github.com/apache/arrow-datafusion/edit/main/docs/source/user-guide/sql/special_functions.md">
         <i class="fas fa-pencil-alt"></i> Edit this page
     </a>
 </div>
@@ -554,9 +611,93 @@
   specific language governing permissions and limitations
   under the License.
 -->
-<section id="aggregate-functions">
-<h1>Aggregate Functions<a class="headerlink" href="#aggregate-functions" title="Link to this heading">¶</a></h1>
-<p>Note: this documentation has been migrated to <a class="reference internal" href="aggregate_functions_new.html"><span class="std std-doc">Aggregate Functions (new)</span></a></p>
+<section id="special-functions">
+<h1>Special Functions<a class="headerlink" href="#special-functions" title="Link to this heading">¶</a></h1>
+<section id="expansion-functions">
+<h2>Expansion Functions<a class="headerlink" href="#expansion-functions" title="Link to this heading">¶</a></h2>
+<ul class="simple">
+<li><p><a class="reference internal" href="#unnest">unnest</a></p></li>
+<li><p><a class="reference internal" href="#unnest-struct">unnest(struct)</a></p></li>
+</ul>
+<section id="unnest">
+<h3><code class="docutils literal notranslate"><span class="pre">unnest</span></code><a class="headerlink" href="#unnest" title="Link to this heading">¶</a></h3>
+<p>Expands an array or map into rows.</p>
+<section id="arguments">
+<h4>Arguments<a class="headerlink" href="#arguments" title="Link to this heading">¶</a></h4>
+<ul class="simple">
+<li><p><strong>array</strong>: Array expression to unnest.
+Can be a constant, column, or function, and any combination of array operators.</p></li>
+</ul>
+</section>
+<section id="examples">
+<h4>Examples<a class="headerlink" href="#examples" title="Link to this heading">¶</a></h4>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="k">unnest</span><span class="p">(</span><span class="n">make_array</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">,</span><span class="w"> </span><span class="mi">5</span><span class="p">))</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="n">unnested</span><span class="p">;</span>
+<span class="o">+</span><span class="c1">----------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">unnested</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">----------+</span>
+<span class="o">|</span><span class="w"> </span><span class="mi">1</span><span class="w">        </span><span class="o">|</span>
+<span class="o">|</span><span class="w"> </span><span class="mi">2</span><span class="w">        </span><span class="o">|</span>
+<span class="o">|</span><span class="w"> </span><span class="mi">3</span><span class="w">        </span><span class="o">|</span>
+<span class="o">|</span><span class="w"> </span><span class="mi">4</span><span class="w">        </span><span class="o">|</span>
+<span class="o">|</span><span class="w"> </span><span class="mi">5</span><span class="w">        </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">----------+</span>
+</pre></div>
+</div>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="k">unnest</span><span class="p">(</span><span class="n">range</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="mi">10</span><span class="p">))</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="n">unnested_range</span><span class="p">;</span>
+<span class="o">+</span><span class="c1">----------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">unnested_range</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">----------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="mi">0</span><span class="w">              </span><span class="o">|</span>
+<span class="o">|</span><span class="w"> </span><span class="mi">1</span><span class="w">              </span><span class="o">|</span>
+<span class="o">|</span><span class="w"> </span><span class="mi">2</span><span class="w">              </span><span class="o">|</span>
+<span class="o">|</span><span class="w"> </span><span class="mi">3</span><span class="w">              </span><span class="o">|</span>
+<span class="o">|</span><span class="w"> </span><span class="mi">4</span><span class="w">              </span><span class="o">|</span>
+<span class="o">|</span><span class="w"> </span><span class="mi">5</span><span class="w">              </span><span class="o">|</span>
+<span class="o">|</span><span class="w"> </span><span class="mi">6</span><span class="w">              </span><span class="o">|</span>
+<span class="o">|</span><span class="w"> </span><span class="mi">7</span><span class="w">              </span><span class="o">|</span>
+<span class="o">|</span><span class="w"> </span><span class="mi">8</span><span class="w">              </span><span class="o">|</span>
+<span class="o">|</span><span class="w"> </span><span class="mi">9</span><span class="w">              </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">----------------+</span>
+</pre></div>
+</div>
+</section>
+</section>
+<section id="unnest-struct">
+<h3><code class="docutils literal notranslate"><span class="pre">unnest</span> <span class="pre">(struct)</span></code><a class="headerlink" href="#unnest-struct" title="Link to this heading">¶</a></h3>
+<p>Expand a struct fields into individual columns.</p>
+<section id="id1">
+<h4>Arguments<a class="headerlink" href="#id1" title="Link to this heading">¶</a></h4>
+<ul class="simple">
+<li><p><strong>struct</strong>: Object expression to unnest.
+Can be a constant, column, or function, and any combination of object operators.</p></li>
+</ul>
+</section>
+<section id="id2">
+<h4>Examples<a class="headerlink" href="#id2" title="Link to this heading">¶</a></h4>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">create</span><span class="w"> </span><span class="k">table</span><span class="w"> </span><span class="n">foo</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="k">values</span><span class="w"> </span><span class="p">(</span><span class="err">{</span><span class="n">a</span><span class="p">:</span><span class="w"> </span><span class="mi">5</span><span class="p">,</span><span class="w"> </span><span class="n">b</span><span class="p">:</span><span class="w"> </span><span class="s1">&#39;a string&#39;</span><span class="err">}</span><span class="p">),</span><span class="w"> </span><span class="p">(</span><span class="err">{</span><span class="n">a</span><span class="p">:</span><span class="mi">6</span><span class="p">,</span><span class="w"> </span><span class="n">b</span><span class="p">:</span><span class="w"> </span><span class="s1">&#39;another string&#39;</span><span class="err">}</span><span class="p">);</span>
+
+<span class="o">&gt;</span><span class="w"> </span><span class="k">create</span><span class="w"> </span><span class="k">view</span><span class="w"> </span><span class="n">foov</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="n">column1</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="n">struct_column</span><span class="w"> </span><span class="k">from</span><span class="w"> </span><span class="n">foo</span><span class="p">;</span>
+
+<span class="o">&gt;</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">from</span><span class="w"> </span><span class="n">foov</span><span class="p">;</span>
+<span class="o">+</span><span class="c1">---------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">struct_column</span><span class="w">             </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">---------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="err">{</span><span class="n">a</span><span class="p">:</span><span class="w"> </span><span class="mi">5</span><span class="p">,</span><span class="w"> </span><span class="n">b</span><span class="p">:</span><span class="w"> </span><span class="n">a</span><span class="w"> </span><span class="n">string</span><span class="err">}</span><span class="w">       </span><span class="o">|</span>
+<span class="o">|</span><span class="w"> </span><span class="err">{</span><span class="n">a</span><span class="p">:</span><span class="w"> </span><span class="mi">6</span><span class="p">,</span><span class="w"> </span><span class="n">b</span><span class="p">:</span><span class="w"> </span><span class="n">another</span><span class="w"> </span><span class="n">string</span><span class="err">}</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">---------------------------+</span>
+
+<span class="o">&gt;</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="k">unnest</span><span class="p">(</span><span class="n">struct_column</span><span class="p">)</span><span class="w"> </span><span class="k">from</span><span class="w"> </span><span class="n">foov</span><span class="p">;</span>
+<span class="o">+</span><span class="c1">------------------------------------------+------------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">unnest_placeholder</span><span class="p">(</span><span class="n">foov</span><span class="p">.</span><span class="n">struct_column</span><span class="p">).</span><span class="n">a</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">unnest_placeholder</span><span class="p">(</span><span class="n">foov</span><span class="p">.</span><span class="n">struct_column</span><span class="p">).</span><span class="n">b</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">------------------------------------------+------------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="mi">5</span><span class="w">                                        </span><span class="o">|</span><span class="w"> </span><span class="n">a</span><span class="w"> </span><span class="n">string</span><span class="w">                                 </span><span class="o">|</span>
+<span class="o">|</span><span class="w"> </span><span class="mi">6</span><span class="w">                                        </span><span class="o">|</span><span class="w"> </span><span class="n">another</span><span class="w"> </span><span class="n">string</span><span class="w">                           </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">------------------------------------------+------------------------------------------+</span>
+</pre></div>
+</div>
+</section>
+</section>
+</section>
 </section>
 
 
@@ -565,17 +706,17 @@
               
               <!-- Previous / next buttons -->
 <div class='prev-next-area'>
-    <a class='left-prev' id="prev-link" href="operators.html" title="previous page">
+    <a class='left-prev' id="prev-link" href="scalar_functions_new.html" title="previous page">
         <i class="fas fa-angle-left"></i>
         <div class="prev-next-info">
             <p class="prev-next-subtitle">previous</p>
-            <p class="prev-next-title">Operators</p>
+            <p class="prev-next-title">Scalar Functions (NEW)</p>
         </div>
     </a>
-    <a class='right-next' id="next-link" href="aggregate_functions_new.html" title="next page">
+    <a class='right-next' id="next-link" href="sql_status.html" title="next page">
     <div class="prev-next-info">
         <p class="prev-next-subtitle">next</p>
-        <p class="prev-next-title">Aggregate Functions (NEW)</p>
+        <p class="prev-next-title">Status</p>
     </div>
     <i class="fas fa-angle-right"></i>
     </a>
