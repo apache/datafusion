@@ -997,24 +997,34 @@ fn test_join_with_table_scan_filters() -> Result<()> {
         Field::new("id", DataType::Utf8, false),
         Field::new("name", DataType::Utf8, false),
     ]);
-    
+
     let schema_right = Schema::new(vec![
         Field::new("id", DataType::Utf8, false),
         Field::new("age", DataType::Utf8, false),
     ]);
 
-    let left_plan = table_scan_with_filters(Some("left_table"), &schema_left, None, vec![col("name").like(lit("some_name"))])?
-        .alias("left")?
-        .build()?;
+    let left_plan = table_scan_with_filters(
+        Some("left_table"),
+        &schema_left,
+        None,
+        vec![col("name").like(lit("some_name"))],
+    )?
+    .alias("left")?
+    .build()?;
 
-    let right_plan = table_scan_with_filters(Some("right_table"), &schema_right, None, vec![col("age").gt(lit(10))])?
-        .build()?;
+    let right_plan = table_scan_with_filters(
+        Some("right_table"),
+        &schema_right,
+        None,
+        vec![col("age").gt(lit(10))],
+    )?
+    .build()?;
 
     let join_plan_with_filter = LogicalPlanBuilder::from(left_plan.clone())
         .join(
-            right_plan.clone(), 
-            datafusion_expr::JoinType::Inner, 
-            (vec!["left.id"], vec!["right_table.id"]), 
+            right_plan.clone(),
+            datafusion_expr::JoinType::Inner,
+            (vec!["left.id"], vec!["right_table.id"]),
             Some(col("left.id").gt(lit(5))),
         )?
         .build()?;
@@ -1022,22 +1032,22 @@ fn test_join_with_table_scan_filters() -> Result<()> {
     let sql = plan_to_sql(&join_plan_with_filter)?;
 
     let expected_sql = r#"SELECT * FROM left_table AS "left" JOIN right_table ON "left".id = right_table.id AND (("left".id > 5) AND ("left"."name" LIKE 'some_name' AND (age > 10)))"#;
-    
+
     assert_eq!(sql.to_string(), expected_sql);
 
     let join_plan_no_filter = LogicalPlanBuilder::from(left_plan)
         .join(
-            right_plan, 
-            datafusion_expr::JoinType::Inner, 
-            (vec!["left.id"], vec!["right_table.id"]), 
-            None
+            right_plan,
+            datafusion_expr::JoinType::Inner,
+            (vec!["left.id"], vec!["right_table.id"]),
+            None,
         )?
         .build()?;
 
     let sql = plan_to_sql(&join_plan_no_filter)?;
 
     let expected_sql = r#"SELECT * FROM left_table AS "left" JOIN right_table ON "left".id = right_table.id AND ("left"."name" LIKE 'some_name' AND (age > 10))"#;
-    
+
     assert_eq!(sql.to_string(), expected_sql);
 
     Ok(())
