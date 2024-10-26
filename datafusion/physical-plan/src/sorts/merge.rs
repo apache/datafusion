@@ -108,6 +108,12 @@ pub(crate) struct SortPreservingMergeStream<C: CursorValues> {
     /// We select the one that has less poll counts for tie-breaker in loser tree.
     num_of_polled_with_same_value: Vec<usize>,
 
+    /// To keep track of reset counts
+    poll_reset_epochs: Vec<usize>,
+
+    /// Current reset count
+    current_reset_epoch: usize,
+
     /// Stores the previous value of each partitions for tracking the poll counts on the same value.
     prev_cursors: Vec<Option<Cursor<C>>>,
 
@@ -145,6 +151,8 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
             prev_cursors: (0..stream_count).map(|_| None).collect(),
             round_robin_tie_breaker_mode: false,
             num_of_polled_with_same_value: vec![0; stream_count],
+            current_reset_epoch: 0,
+            poll_reset_epochs: vec![0; stream_count],
             loser_tree: vec![],
             loser_tree_adjusted: false,
             batch_size,
@@ -259,6 +267,12 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
     /// of the previous value, it increases the count by 1; otherwise, it is reset as 0.
     fn update_poll_count_on_the_same_value(&mut self, partition_idx: usize) {
         let cursor = &mut self.cursors[partition_idx];
+
+        // Check if the current partition's poll count is logically "reset"
+        if self.poll_reset_epochs[partition_idx] != self.current_reset_epoch {
+            self.poll_reset_epochs[partition_idx] = self.current_reset_epoch;
+            self.num_of_polled_with_same_value[partition_idx] = 0;
+        }
 
         if let Some(c) = cursor.as_mut() {
             // Compare with the last row in the previous batch
@@ -395,6 +409,11 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
         self.loser_tree_adjusted = true;
     }
 
+    /// Resets the poll count by incrementing the reset epoch.
+    fn reset_poll_counts(&mut self) {
+        self.current_reset_epoch += 1;
+    }
+
     /// Handles tie-breaking logic during the adjustment of the loser tree.
     ///
     /// When comparing elements from multiple partitions in the `update_loser_tree` process, a tie can occur
@@ -419,7 +438,7 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
         if !self.round_robin_tie_breaker_mode {
             self.round_robin_tie_breaker_mode = true;
             // Reset poll count for tie-breaker
-            self.num_of_polled_with_same_value.fill(0);
+            self.reset_poll_counts();
         }
         // Update poll count if the winner survives in the final match
         if *winner == self.loser_tree[0] {
