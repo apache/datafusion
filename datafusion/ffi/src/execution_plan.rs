@@ -21,7 +21,6 @@ use abi_stable::{
     std_types::{RResult, RString, RVec},
     StableAbi,
 };
-use arrow::ffi_stream::FFI_ArrowArrayStream;
 use datafusion::error::Result;
 use datafusion::{
     error::DataFusionError,
@@ -33,28 +32,36 @@ use crate::{
     plan_properties::FFI_PlanProperties, record_batch_stream::FFI_RecordBatchStream,
 };
 
+/// A stable struct for sharing a [`ExecutionPlan`] across FFI boundaries.
 #[repr(C)]
 #[derive(Debug, StableAbi)]
-pub struct WrappedArrayStream(#[sabi(unsafe_opaque_field)] pub FFI_ArrowArrayStream);
-
-#[repr(C)]
-#[derive(Debug, StableAbi)]
-#[allow(missing_docs)]
 #[allow(non_camel_case_types)]
 pub struct FFI_ExecutionPlan {
+    /// Return the plan properties
     pub properties: unsafe extern "C" fn(plan: &Self) -> FFI_PlanProperties,
 
+    /// Return a vector of children plans
     pub children: unsafe extern "C" fn(plan: &Self) -> RVec<FFI_ExecutionPlan>,
 
+    /// Return the plan name.
     pub name: unsafe extern "C" fn(plan: &Self) -> RString,
 
+    /// Execute the plan and return a record batch stream. Errors
+    /// will be returned as a string.
     pub execute: unsafe extern "C" fn(
         plan: &Self,
         partition: usize,
     ) -> RResult<FFI_RecordBatchStream, RString>,
 
+    /// Used to create a clone on the provider of the execution plan. This should
+    /// only need to be called by the receiver of the plan.
     pub clone: unsafe extern "C" fn(plan: &Self) -> Self,
+
+    /// Release the memory of the private data when it is no longer being used.
     pub release: unsafe extern "C" fn(arg: &mut Self),
+
+    /// Internal data. This is only to be accessed by the provider of the plan.
+    /// A [`ForeignExecutionPlan`] should never attempt to access this data.
     pub private_data: *mut c_void,
 }
 
@@ -154,6 +161,9 @@ impl Drop for FFI_ExecutionPlan {
     }
 }
 
+/// This struct is used to access an execution plan provided by a foreign
+/// library across a FFI boundary.
+///
 /// The ForeignExecutionPlan is to be used by the caller of the plan, so it has
 /// no knowledge or access to the private data. All interaction with the plan
 /// must occur through the functions defined in FFI_ExecutionPlan.

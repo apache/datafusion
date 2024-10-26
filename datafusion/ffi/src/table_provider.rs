@@ -42,7 +42,7 @@ use datafusion_proto::{
 use prost::Message;
 
 use crate::{
-    plan_properties::WrappedSchema,
+    arrow_wrappers::WrappedSchema,
     session_config::ForeignSessionConfig,
     table_source::{FFI_TableProviderFilterPushDown, FFI_TableType},
 };

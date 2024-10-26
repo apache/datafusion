@@ -24,7 +24,7 @@ use abi_stable::{
 use arrow::array::{Array, RecordBatch};
 use arrow::{
     array::{make_array, StructArray},
-    ffi::{from_ffi, to_ffi, FFI_ArrowArray},
+    ffi::{from_ffi, to_ffi},
 };
 use async_ffi::{ContextExt, FfiContext, FfiPoll};
 use datafusion::error::Result;
@@ -34,16 +34,7 @@ use datafusion::{
 };
 use futures::{Stream, TryStreamExt};
 
-use crate::plan_properties::WrappedSchema;
-
-#[repr(C)]
-#[derive(Debug, StableAbi)]
-pub struct WrappedArray {
-    #[sabi(unsafe_opaque_field)]
-    array: FFI_ArrowArray,
-
-    schema: WrappedSchema,
-}
+use crate::arrow_wrappers::{WrappedArray, WrappedSchema};
 
 #[repr(C)]
 #[derive(Debug, StableAbi)]

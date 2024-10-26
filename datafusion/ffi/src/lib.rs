@@ -17,6 +17,7 @@
 // Make cheap clones clear: https://github.com/apache/datafusion/issues/11143
 #![deny(clippy::clone_on_ref_ptr)]
 
+pub mod arrow_wrappers;
 pub mod execution_plan;
 pub mod plan_properties;
 pub mod record_batch_stream;

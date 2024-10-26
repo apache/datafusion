@@ -24,10 +24,7 @@ use abi_stable::{
     },
     StableAbi,
 };
-use arrow::{
-    datatypes::{Schema, SchemaRef},
-    ffi::FFI_ArrowSchema,
-};
+use arrow::datatypes::SchemaRef;
 use datafusion::{
     error::{DataFusionError, Result},
     physical_expr::EquivalenceProperties,
@@ -42,8 +39,9 @@ use datafusion_proto::{
     },
     protobuf::{Partitioning, PhysicalSortExprNodeCollection},
 };
-use log::error;
 use prost::Message;
+
+use crate::arrow_wrappers::WrappedSchema;
 
 // TODO: should we just make ExecutionMode repr(C)?
 #[repr(C)]
@@ -72,37 +70,6 @@ impl From<FFI_ExecutionMode> for ExecutionMode {
             FFI_ExecutionMode::Unbounded => ExecutionMode::Unbounded,
             FFI_ExecutionMode::PipelineBreaking => ExecutionMode::PipelineBreaking,
         }
-    }
-}
-
-#[repr(C)]
-#[derive(Debug, StableAbi)]
-pub struct WrappedSchema(#[sabi(unsafe_opaque_field)] pub FFI_ArrowSchema);
-
-impl From<SchemaRef> for WrappedSchema {
-    fn from(value: SchemaRef) -> Self {
-        let ffi_schema = match FFI_ArrowSchema::try_from(value.as_ref()) {
-            Ok(s) => s,
-            Err(e) => {
-                error!("Unable to convert DataFusion Schema to FFI_ArrowSchema in FFI_PlanProperties. {}", e);
-                FFI_ArrowSchema::empty()
-            }
-        };
-
-        WrappedSchema(ffi_schema)
-    }
-}
-
-impl From<WrappedSchema> for SchemaRef {
-    fn from(value: WrappedSchema) -> Self {
-        let schema = match Schema::try_from(&value.0) {
-            Ok(s) => s,
-            Err(e) => {
-                error!("Unable to convert from FFI_ArrowSchema to DataFusion Schema in FFI_PlanProperties. {}", e);
-                Schema::empty()
-            }
-        };
-        Arc::new(schema)
     }
 }
 
