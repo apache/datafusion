@@ -16,29 +16,34 @@
 // under the License.
 
 use crate::types::{LogicalTypeRef, NativeType};
-use std::sync::{Arc, LazyLock};
+use std::sync::{Arc, OnceLock};
 
 macro_rules! singleton {
-    ($name:ident, $ty:ident) => {
-        #[doc = concat!("Singleton instance of a logical type representing [`NativeType::", stringify!($ty), "`].")]
-        pub static $name: LazyLock<LogicalTypeRef> =
-            LazyLock::new(|| Arc::new(NativeType::$ty));
+    ($name:ident, $getter:ident, $ty:ident) => {
+        // TODO: Use LazyLock instead of getter function when MSRV gets bumped
+        static $name: OnceLock<LogicalTypeRef> = OnceLock::new();
+
+        #[doc = "Getter for singleton instance of a logical type representing"]
+        #[doc = concat!("[`NativeType::", stringify!($ty), "`].")]
+        pub fn $getter() -> LogicalTypeRef {
+            Arc::clone($name.get_or_init(|| Arc::new(NativeType::$ty)))
+        }
     };
 }
 
-singleton!(LOGICAL_NULL, Null);
-singleton!(LOGICAL_BOOLEAN, Boolean);
-singleton!(LOGICAL_INT8, Int8);
-singleton!(LOGICAL_INT16, Int16);
-singleton!(LOGICAL_INT32, Int32);
-singleton!(LOGICAL_INT64, Int64);
-singleton!(LOGICAL_UINT8, UInt8);
-singleton!(LOGICAL_UINT16, UInt16);
-singleton!(LOGICAL_UINT32, UInt32);
-singleton!(LOGICAL_UINT64, UInt64);
-singleton!(LOGICAL_FLOAT16, Float16);
-singleton!(LOGICAL_FLOAT32, Float32);
-singleton!(LOGICAL_FLOAT64, Float64);
-singleton!(LOGICAL_DATE, Date);
-singleton!(LOGICAL_BINARY, Binary);
-singleton!(LOGICAL_STRING, String);
+singleton!(LOGICAL_NULL, logical_null, Null);
+singleton!(LOGICAL_BOOLEAN, logical_boolean, Boolean);
+singleton!(LOGICAL_INT8, logical_int8, Int8);
+singleton!(LOGICAL_INT16, logical_int16, Int16);
+singleton!(LOGICAL_INT32, logical_int32, Int32);
+singleton!(LOGICAL_INT64, logical_int64, Int64);
+singleton!(LOGICAL_UINT8, logical_uint8, UInt8);
+singleton!(LOGICAL_UINT16, logical_uint16, UInt16);
+singleton!(LOGICAL_UINT32, logical_uint32, UInt32);
+singleton!(LOGICAL_UINT64, logical_uint64, UInt64);
+singleton!(LOGICAL_FLOAT16, logical_float16, Float16);
+singleton!(LOGICAL_FLOAT32, logical_float32, Float32);
+singleton!(LOGICAL_FLOAT64, logical_float64, Float64);
+singleton!(LOGICAL_DATE, logical_date, Date);
+singleton!(LOGICAL_BINARY, logical_binary, Binary);
+singleton!(LOGICAL_STRING, logical_string, String);
