@@ -263,14 +263,17 @@ impl FileOpener for ParquetOpener {
                     maybe_batch.and_then(|b| {
                         if !pushdown_filters {
                             if let Some(predicate) = predicate.clone() {
-                                let updated_predicate = update_predicate_index(
+                                if let Some(updated_predicate) = update_predicate_index(
                                     Arc::clone(&predicate),
                                     b.schema_ref(),
-                                )?;
+                                )? {
+                                    let filtered_batch =
+                                        batch_filter(&b, &updated_predicate)?;
 
-                                let b = batch_filter(&b, &updated_predicate)?;
-
-                                return schema_mapping.map_batch(b).map_err(Into::into);
+                                    return schema_mapping
+                                        .map_batch(filtered_batch)
+                                        .map_err(Into::into);
+                                }
                             }
                         }
                         schema_mapping.map_batch(b).map_err(Into::into)
@@ -328,26 +331,34 @@ fn create_initial_plan(
 fn update_predicate_index(
     predicate: Arc<dyn PhysicalExpr>,
     schema: &Arc<Schema>,
-) -> std::result::Result<Arc<dyn PhysicalExpr>, ArrowError> {
+) -> Result<Option<Arc<dyn PhysicalExpr>>, ArrowError> {
     let children = predicate.children();
 
     if children.len() == 0 {
         if let Some(column) = predicate.as_any().downcast_ref::<Column>() {
             let name = column.name();
-            let new_index = schema.index_of(name)?;
+            let new_index = match schema.index_of(name) {
+                Ok(new_index) => new_index,
+                Err(_) => return Ok(None),
+            };
             let new_column = Column::new(name, new_index);
-            return Ok(Arc::new(new_column));
+            return Ok(Some(Arc::new(new_column)));
         }
-        return Ok(Arc::clone(&predicate));
+        return Ok(Some(Arc::clone(&predicate)));
     }
 
     let mut new_children: Vec<Arc<dyn PhysicalExpr>> = Vec::new();
     for child in children {
-        let updated_child = update_predicate_index(Arc::clone(child), schema)?;
+        let updated_child = match update_predicate_index(Arc::clone(child), schema)? {
+            Some(child) => child,
+            None => return Ok(None),
+        };
         new_children.push(updated_child);
     }
 
-    predicate
+    let updated_predicate = predicate
         .with_new_children(new_children)
-        .map_err(Into::into)
+        .map_err(Into::<ArrowError>::into)?;
+
+    Ok(Some(updated_predicate))
 }
