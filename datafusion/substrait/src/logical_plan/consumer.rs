@@ -1121,8 +1121,9 @@ fn apply_emit_kind(
 
             let mut exprs: Vec<Expr> = vec![];
             for index in emit.output_mapping.into_iter() {
-                let column =
-                    Expr::Column(Column::from(input_schema.qualified_field(index as usize)));
+                let column = Expr::Column(Column::from(
+                    input_schema.qualified_field(index as usize),
+                ));
                 let expr = name_tracker.get_uniquely_named_expr(column)?;
                 exprs.push(expr);
             }
