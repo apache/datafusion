@@ -64,7 +64,7 @@ pub type LogicalTypeRef = Arc<dyn LogicalType>;
 ///
 /// impl LogicalType for JSON {
 ///     fn native(&self) -> &NativeType {
-///         &NativeType::Utf8
+///         &NativeType::String
 ///     }
 ///
 ///    fn signature(&self) -> TypeSignature<'_> {

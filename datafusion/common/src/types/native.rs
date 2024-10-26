@@ -149,7 +149,7 @@ pub enum NativeType {
     /// Enum parameter specifies the number of bytes per value.
     FixedSizeBinary(i32),
     /// A variable-length string in Unicode with UTF-8 encoding.
-    Utf8,
+    String,
     /// A list of some logical data type with variable length.
     List(LogicalFieldRef),
     /// A list of some logical data type with fixed length.
@@ -237,11 +237,13 @@ impl LogicalType for NativeType {
             }
             (Self::Binary, data_type) if can_cast_types(data_type, &Binary) => Binary,
             (Self::FixedSizeBinary(size), _) => FixedSizeBinary(*size),
-            (Self::Utf8, LargeBinary) => LargeUtf8,
-            (Self::Utf8, BinaryView) => Utf8View,
-            (Self::Utf8, data_type) if can_cast_types(data_type, &Utf8View) => Utf8View,
-            (Self::Utf8, data_type) if can_cast_types(data_type, &LargeUtf8) => LargeUtf8,
-            (Self::Utf8, data_type) if can_cast_types(data_type, &Utf8) => Utf8,
+            (Self::String, LargeBinary) => LargeUtf8,
+            (Self::String, BinaryView) => Utf8View,
+            (Self::String, data_type) if can_cast_types(data_type, &Utf8View) => Utf8View,
+            (Self::String, data_type) if can_cast_types(data_type, &LargeUtf8) => {
+                LargeUtf8
+            }
+            (Self::String, data_type) if can_cast_types(data_type, &Utf8) => Utf8,
             (Self::List(to_field), List(from_field) | FixedSizeList(from_field, _)) => {
                 List(default_field_cast(to_field, from_field)?)
             }
@@ -370,7 +372,7 @@ impl From<DataType> for NativeType {
             DataType::Interval(iu) => Interval(iu),
             DataType::Binary | DataType::LargeBinary | DataType::BinaryView => Binary,
             DataType::FixedSizeBinary(size) => FixedSizeBinary(size),
-            DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => Utf8,
+            DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => String,
             DataType::List(field)
             | DataType::ListView(field)
             | DataType::LargeList(field)
