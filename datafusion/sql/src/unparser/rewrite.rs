@@ -21,7 +21,7 @@ use std::{
 };
 
 use datafusion_common::{
-    tree_node::{Transformed, TransformedResult, TreeNode},
+    tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRecursion},
     Result,
 };
 use datafusion_expr::{expr::Alias, tree_node::transform_sort_vec};
@@ -282,6 +282,27 @@ pub(super) fn inject_column_aliases_into_subquery(
             })
             .map(|plan| plan.data)
         }
+    }
+}
+
+pub(super) fn eliminate_duplicate_filter_in_tablescan(
+    filter: datafusion_expr::Filter,
+) -> Result<datafusion_expr::Filter> {
+    match filter.input.as_ref() {
+        LogicalPlan::TableScan(table_scan) => {
+            let mut updated_filter = filter.clone();
+            let expr = updated_filter.predicate.clone();
+            let mut inner_filters = table_scan.filters.clone();
+            expr.apply(|e| {
+                inner_filters.retain(|inner_filter| inner_filter != e);
+                Ok(TreeNodeRecursion::Continue)
+            })?;
+            let mut updated_table_scan = table_scan.clone();
+            updated_table_scan.filters = inner_filters;
+            updated_filter.input = Arc::new(LogicalPlan::TableScan(updated_table_scan));
+            Ok(updated_filter)
+        }
+        _ => Ok(filter),
     }
 }
 

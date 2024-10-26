@@ -34,8 +34,8 @@ use super::{
         SelectBuilder, TableRelationBuilder, TableWithJoinsBuilder,
     },
     rewrite::{
-        inject_column_aliases_into_subquery, normalize_union_schema,
-        rewrite_plan_for_sort_on_non_projected_fields,
+        eliminate_duplicate_filter_in_tablescan, inject_column_aliases_into_subquery,
+        normalize_union_schema, rewrite_plan_for_sort_on_non_projected_fields,
         subquery_alias_inner_query_and_columns,
     },
     utils::{
@@ -326,10 +326,13 @@ impl Unparser<'_> {
                 self.select_to_sql_recursively(p.input.as_ref(), query, select, relation)
             }
             LogicalPlan::Filter(filter) => {
+                let filter = eliminate_duplicate_filter_in_tablescan(filter.clone())?;
+                // Instead of specifying column aliases as part of the outer table, inject them directly into the inner projection
                 if let Some(agg) =
                     find_agg_node_within_select(plan, select.already_projected())
                 {
-                    let unprojected = unproject_agg_exprs(filter.predicate.clone(), agg, None)?;
+                    let unprojected =
+                        unproject_agg_exprs(filter.predicate.clone(), agg, None)?;
                     let filter_expr = self.expr_to_sql(&unprojected)?;
                     select.having(Some(filter_expr));
                 } else {
@@ -622,9 +625,11 @@ impl Unparser<'_> {
             }
             LogicalPlan::Extension(_) => not_impl_err!("Unsupported operator: {plan:?}"),
             LogicalPlan::Unnest(unnest) => {
-
                 if !unnest.struct_type_columns.is_empty() {
-                    return internal_err!("Struct type columns are not currently supported in UNNEST: {:?}", unnest.struct_type_columns);
+                    return internal_err!(
+                        "Struct type columns are not currently supported in UNNEST: {:?}",
+                        unnest.struct_type_columns
+                    );
                 }
 
                 // In the case of UNNEST, the Unnest node is followed by a duplicate Projection node that we need to skip
