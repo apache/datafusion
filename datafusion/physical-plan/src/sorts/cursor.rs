@@ -39,7 +39,7 @@ pub trait CursorValues {
     fn eq(l: &Self, l_idx: usize, r: &Self, r_idx: usize) -> bool;
 
     /// Returns true if `row[idx] == row[idx - 1]`
-    /// idx should be greater than 0
+    /// Given `idx` should be greater than 0
     fn eq_to_previous(cursor: &Self, idx: usize) -> bool;
 
     /// Returns comparison of `l[l_idx]` and `r[r_idx]`

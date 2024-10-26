@@ -82,6 +82,7 @@ pub struct SortPreservingMergeExec {
     fetch: Option<usize>,
     /// Cache holding plan properties like equivalences, output partitioning etc.
     cache: PlanProperties,
+    /// Configuration parameter to enable round-robin selection of tied winners of loser tree.
     enable_round_robin_repartition: bool,
 }
 
@@ -98,12 +99,14 @@ impl SortPreservingMergeExec {
             enable_round_robin_repartition: true,
         }
     }
+
     /// Sets the number of rows to fetch
     pub fn with_fetch(mut self, fetch: Option<usize>) -> Self {
         self.fetch = fetch;
         self
     }
 
+    /// Sets the selection strategy of tied winners of the loser tree algorithm
     pub fn with_round_robin_repartition(
         mut self,
         enable_round_robin_repartition: bool,
@@ -357,13 +360,13 @@ mod tests {
 
     fn generate_task_ctx_for_round_robin_tie_breaker() -> Result<Arc<TaskContext>> {
         let mut pool_per_consumer = HashMap::new();
-        // Number from 660000 to 30000000 (or even more) are all valid limit
-        pool_per_consumer.insert("RepartitionExec[0]".to_string(), 10000000);
-        pool_per_consumer.insert("RepartitionExec[1]".to_string(), 10000000);
+        // Bytes from 660_000 to 30_000_000 (or even more) are all valid limits
+        pool_per_consumer.insert("RepartitionExec[0]".to_string(), 10_000_000);
+        pool_per_consumer.insert("RepartitionExec[1]".to_string(), 10_000_000);
 
         let runtime = RuntimeEnvBuilder::new()
-            // random large number for total mem limit, we care about RepartitionExec only
-            .with_memory_limit_per_consumer(2000000000, 1.0, pool_per_consumer)
+            // Random large number for total mem limit, we only care about RepartitionExec only
+            .with_memory_limit_per_consumer(2_000_000_000, 1.0, pool_per_consumer)
             .build_arc()?;
         let config = SessionConfig::new();
         let task_ctx = TaskContext::default()
@@ -410,7 +413,6 @@ mod tests {
         let task_ctx = generate_task_ctx_for_round_robin_tie_breaker()?;
         let spm = generate_spm_for_round_robin_tie_breaker(true)?;
         let _collected = collect(spm, task_ctx).await.unwrap();
-
         Ok(())
     }
 
@@ -419,7 +421,6 @@ mod tests {
         let task_ctx = generate_task_ctx_for_round_robin_tie_breaker()?;
         let spm = generate_spm_for_round_robin_tie_breaker(false)?;
         let _err = collect(spm, task_ctx).await.unwrap_err();
-
         Ok(())
     }
 
