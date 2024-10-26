@@ -391,3 +391,9 @@ impl From<DataType> for NativeType {
         }
     }
 }
+
+impl From<&DataType> for NativeType {
+    fn from(value: &DataType) -> Self {
+        value.clone().into()
+    }
+}
