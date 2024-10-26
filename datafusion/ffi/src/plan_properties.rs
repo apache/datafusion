@@ -212,8 +212,8 @@ impl Drop for FFI_PlanProperties {
     }
 }
 
-impl FFI_PlanProperties {
-    pub fn new(props: &PlanProperties) -> Self {
+impl From<&PlanProperties> for FFI_PlanProperties {
+    fn from(props: &PlanProperties) -> Self {
         let private_data = Box::new(PlanPropertiesPrivateData {
             props: props.clone(),
         });
@@ -229,26 +229,19 @@ impl FFI_PlanProperties {
     }
 }
 
-#[derive(Debug)]
-pub struct ForeignPlanProperties(pub PlanProperties);
+impl TryFrom<FFI_PlanProperties> for PlanProperties {
+    type Error = DataFusionError;
 
-impl ForeignPlanProperties {
-    /// Construct a ForeignPlanProperties object from a FFI Plan Properties.
-    ///
-    /// # Safety
-    ///
-    /// This function will call the unsafe interfaces on FFI_PlanProperties
-    /// provided, so the user must ensure it remains valid for the lifetime
-    /// of the returned struct.
-    pub unsafe fn new(ffi_props: FFI_PlanProperties) -> Result<Self> {
-        let ffi_schema = (ffi_props.schema)(&ffi_props);
+    fn try_from(ffi_props: FFI_PlanProperties) -> Result<Self, Self::Error> {
+        let ffi_schema = unsafe { (ffi_props.schema)(&ffi_props) };
         let schema = (&ffi_schema.0).try_into()?;
 
         // TODO Extend FFI to get the registry and codex
         let default_ctx = SessionContext::new();
         let codex = DefaultPhysicalExtensionCodec {};
 
-        let orderings = match (ffi_props.output_ordering)(&ffi_props) {
+        let ffi_orderings = unsafe { (ffi_props.output_ordering)(&ffi_props) };
+        let orderings = match ffi_orderings {
             ROk(ordering_vec) => {
                 let proto_output_ordering =
                     PhysicalSortExprNodeCollection::decode(ordering_vec.as_ref())
@@ -263,7 +256,8 @@ impl ForeignPlanProperties {
             RErr(e) => return Err(DataFusionError::Plan(e.to_string())),
         };
 
-        let partitioning = match (ffi_props.output_partitioning)(&ffi_props) {
+        let ffi_partitioning = unsafe { (ffi_props.output_partitioning)(&ffi_props) };
+        let partitioning = match ffi_partitioning {
             ROk(partitioning_vec) => {
                 let proto_output_partitioning =
                     Partitioning::decode(partitioning_vec.as_ref())
@@ -282,7 +276,8 @@ impl ForeignPlanProperties {
             RErr(e) => Err(DataFusionError::Plan(e.to_string())),
         }?;
 
-        let execution_mode: ExecutionMode = (ffi_props.execution_mode)(&ffi_props).into();
+        let execution_mode: ExecutionMode =
+            unsafe { (ffi_props.execution_mode)(&ffi_props).into() };
 
         let eq_properties = match orderings {
             Some(ordering) => {
@@ -291,11 +286,11 @@ impl ForeignPlanProperties {
             None => EquivalenceProperties::new(Arc::new(schema)),
         };
 
-        Ok(Self(PlanProperties::new(
+        Ok(PlanProperties::new(
             eq_properties,
             partitioning,
             execution_mode,
-        )))
+        ))
     }
 }
 
@@ -317,13 +312,11 @@ mod tests {
             ExecutionMode::Unbounded,
         );
 
-        let local_props_ptr = FFI_PlanProperties::new(&original_props);
+        let local_props_ptr = FFI_PlanProperties::from(&original_props);
 
-        let foreign_props = unsafe { ForeignPlanProperties::new(local_props_ptr)? };
+        let foreign_props: PlanProperties = local_props_ptr.try_into()?;
 
-        let returned_props: PlanProperties = foreign_props.0;
-
-        assert!(format!("{:?}", returned_props) == format!("{:?}", original_props));
+        assert!(format!("{:?}", foreign_props) == format!("{:?}", original_props));
 
         Ok(())
     }

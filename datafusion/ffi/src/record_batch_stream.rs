@@ -61,8 +61,8 @@ pub struct FFI_RecordBatchStream {
     pub private_data: *mut c_void,
 }
 
-impl FFI_RecordBatchStream {
-    pub fn new(stream: SendableRecordBatchStream) -> Self {
+impl From<SendableRecordBatchStream> for FFI_RecordBatchStream {
+    fn from(stream: SendableRecordBatchStream) -> Self {
         FFI_RecordBatchStream {
             poll_next: poll_next_fn_wrapper,
             schema: schema_fn_wrapper,

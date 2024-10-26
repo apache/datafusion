@@ -24,8 +24,8 @@ use abi_stable::{
     std_types::{RHashMap, RString},
     StableAbi,
 };
-use datafusion::prelude::SessionConfig;
 use datafusion::{config::ConfigOptions, error::Result};
+use datafusion::{error::DataFusionError, prelude::SessionConfig};
 
 #[repr(C)]
 #[derive(Debug, StableAbi)]
@@ -84,9 +84,8 @@ struct SessionConfigPrivateData {
     pub config: ConfigOptions,
 }
 
-impl FFI_SessionConfig {
-    /// Creates a new [`FFI_SessionConfig`].
-    pub fn new(session: &SessionConfig) -> Self {
+impl From<&SessionConfig> for FFI_SessionConfig {
+    fn from(session: &SessionConfig) -> Self {
         let mut config_keys = Vec::new();
         let mut config_values = Vec::new();
         for config_entry in session.options().entries() {
@@ -128,17 +127,11 @@ impl Drop for FFI_SessionConfig {
 
 pub struct ForeignSessionConfig(pub SessionConfig);
 
-impl ForeignSessionConfig {
-    /// Create a session config object from a foreign provider.
-    ///
-    /// # Safety
-    ///
-    /// This function will dereference the provided config pointer and will
-    /// access it's unsafe methods. It is the provider's responsibility that
-    /// this pointer and it's internal functions remain valid for the lifetime
-    /// of the returned struct.
-    pub unsafe fn new(config: &FFI_SessionConfig) -> Result<Self> {
-        let config_options = (config.config_options)(config);
+impl TryFrom<&FFI_SessionConfig> for ForeignSessionConfig {
+    type Error = DataFusionError;
+
+    fn try_from(config: &FFI_SessionConfig) -> Result<Self, Self::Error> {
+        let config_options = unsafe { (config.config_options)(config) };
 
         let mut options_map = HashMap::new();
         config_options.iter().for_each(|kv_pair| {
@@ -158,9 +151,9 @@ mod tests {
         let session_config = SessionConfig::new();
         let original_options = session_config.options().entries();
 
-        let ffi_config = FFI_SessionConfig::new(&session_config);
+        let ffi_config: FFI_SessionConfig = (&session_config).into();
 
-        let foreign_config = unsafe { ForeignSessionConfig::new(&ffi_config)? };
+        let foreign_config: ForeignSessionConfig = (&ffi_config).try_into()?;
 
         let returned_options = foreign_config.0.options().entries();
 

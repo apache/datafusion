@@ -30,8 +30,7 @@ use datafusion::{
 };
 
 use crate::{
-    plan_properties::{FFI_PlanProperties, ForeignPlanProperties},
-    record_batch_stream::FFI_RecordBatchStream,
+    plan_properties::FFI_PlanProperties, record_batch_stream::FFI_RecordBatchStream,
 };
 
 #[repr(C)]
@@ -73,7 +72,7 @@ unsafe extern "C" fn properties_fn_wrapper(
     let private_data = plan.private_data as *const ExecutionPlanPrivateData;
     let plan = &(*private_data).plan;
 
-    FFI_PlanProperties::new(plan.properties())
+    plan.properties().into()
 }
 
 unsafe extern "C" fn children_fn_wrapper(
@@ -101,7 +100,7 @@ unsafe extern "C" fn execute_fn_wrapper(
     let ctx = &(*private_data).context;
 
     match plan.execute(partition, Arc::clone(ctx)) {
-        Ok(rbs) => RResult::ROk(FFI_RecordBatchStream::new(rbs)),
+        Ok(rbs) => RResult::ROk(rbs.into()),
         Err(e) => RResult::RErr(
             format!("Error occurred during FFI_ExecutionPlan execute: {}", e).into(),
         ),
@@ -183,31 +182,29 @@ impl DisplayAs for ForeignExecutionPlan {
     }
 }
 
-impl ForeignExecutionPlan {
-    /// Takes ownership of a FFI_ExecutionPlan
-    ///
-    /// # Safety
-    ///
-    /// The caller must ensure the pointer provided points to a valid implementation
-    /// of FFI_ExecutionPlan
-    pub unsafe fn new(plan: FFI_ExecutionPlan) -> Result<Self> {
-        let name = (plan.name)(&plan).into();
+impl TryFrom<&FFI_ExecutionPlan> for ForeignExecutionPlan {
+    type Error = DataFusionError;
 
-        let properties = ForeignPlanProperties::new((plan.properties)(&plan))?;
+    fn try_from(plan: &FFI_ExecutionPlan) -> Result<Self, Self::Error> {
+        unsafe {
+            let name = (plan.name)(plan).into();
 
-        let children_rvec = (plan.children)(&plan);
-        let children: Result<Vec<_>> = children_rvec
-            .iter()
-            .map(|child| ForeignExecutionPlan::new(child.clone()))
-            .map(|child| child.map(|c| Arc::new(c) as Arc<dyn ExecutionPlan>))
-            .collect();
+            let properties: PlanProperties = (plan.properties)(plan).try_into()?;
 
-        Ok(Self {
-            name,
-            plan,
-            properties: properties.0,
-            children: children?,
-        })
+            let children_rvec = (plan.children)(plan);
+            let children: Result<Vec<_>> = children_rvec
+                .iter()
+                .map(ForeignExecutionPlan::try_from)
+                .map(|child| child.map(|c| Arc::new(c) as Arc<dyn ExecutionPlan>))
+                .collect();
+
+            Ok(Self {
+                name,
+                plan: plan.clone(),
+                properties,
+                children: children?,
+            })
+        }
     }
 }
 
@@ -345,7 +342,7 @@ mod tests {
 
         let local_plan = FFI_ExecutionPlan::new(original_plan, ctx.task_ctx());
 
-        let foreign_plan = unsafe { ForeignExecutionPlan::new(local_plan)? };
+        let foreign_plan: ForeignExecutionPlan = (&local_plan).try_into()?;
 
         assert!(original_name == foreign_plan.name());
 

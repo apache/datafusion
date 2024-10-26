@@ -156,7 +156,7 @@ unsafe extern "C" fn scan_fn_wrapper(
     let session_config = session_config.clone();
 
     async move {
-        let config = match ForeignSessionConfig::new(&session_config) {
+        let config = match ForeignSessionConfig::try_from(&session_config) {
             Ok(c) => c,
             Err(e) => return RResult::RErr(e.to_string().into()),
         };
@@ -266,8 +266,8 @@ pub struct ForeignTableProvider(FFI_TableProvider);
 unsafe impl Send for ForeignTableProvider {}
 unsafe impl Sync for ForeignTableProvider {}
 
-impl ForeignTableProvider {
-    pub fn new(provider: &FFI_TableProvider) -> Self {
+impl From<&FFI_TableProvider> for ForeignTableProvider {
+    fn from(provider: &FFI_TableProvider) -> Self {
         Self(provider.clone())
     }
 }
@@ -300,7 +300,7 @@ impl TableProvider for ForeignTableProvider {
         filters: &[Expr],
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let session_config = FFI_SessionConfig::new(session.config());
+        let session_config: FFI_SessionConfig = session.config().into();
 
         let projections: Option<RVec<usize>> =
             projection.map(|p| p.iter().map(|v| v.to_owned()).collect());
@@ -322,7 +322,7 @@ impl TableProvider for ForeignTableProvider {
             .await;
 
             match maybe_plan {
-                RResult::ROk(p) => ForeignExecutionPlan::new(p)?,
+                RResult::ROk(p) => ForeignExecutionPlan::try_from(&p)?,
                 RResult::RErr(_) => {
                     return Err(datafusion::error::DataFusionError::Internal(
                         "Unable to perform scan via FFI".to_string(),
@@ -403,7 +403,7 @@ mod tests {
 
         let ffi_provider = FFI_TableProvider::new(provider, true);
 
-        let foreign_table_provider = ForeignTableProvider::new(&ffi_provider);
+        let foreign_table_provider: ForeignTableProvider = (&ffi_provider).into();
 
         ctx.register_table("t", Arc::new(foreign_table_provider))?;
 
