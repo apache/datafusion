@@ -55,6 +55,7 @@ use crate::variation_const::{
 use datafusion::arrow::array::{new_empty_array, AsArray};
 use datafusion::common::scalar::ScalarStructBuilder;
 use datafusion::dataframe::DataFrame;
+use datafusion::logical_expr::builder::project;
 use datafusion::logical_expr::expr::InList;
 use datafusion::logical_expr::{
     col, expr, Cast, Extension, GroupingSet, Like, LogicalPlanBuilder, Partitioning,
@@ -79,6 +80,7 @@ use substrait::proto::expression::literal::{
 use substrait::proto::expression::subquery::SubqueryType;
 use substrait::proto::expression::{self, FieldReference, Literal, ScalarFunction};
 use substrait::proto::read_rel::local_files::file_or_files::PathType::UriFile;
+use substrait::proto::rel_common::{Emit, EmitKind};
 use substrait::proto::{
     aggregate_function::AggregationInvocation,
     expression::{
@@ -92,9 +94,9 @@ use substrait::proto::{
     join_rel, plan_rel, r#type,
     read_rel::ReadType,
     rel::RelType,
-    set_rel,
+    rel_common, set_rel,
     sort_field::{SortDirection, SortKind::*},
-    AggregateFunction, Expression, NamedStruct, Plan, Rel, Type,
+    AggregateFunction, Expression, NamedStruct, Plan, Rel, RelCommon, Type,
 };
 use substrait::proto::{ExtendedExpression, FunctionArgument, SortField};
 
@@ -566,36 +568,57 @@ pub async fn from_substrait_rel(
                 let mut input = LogicalPlanBuilder::from(
                     from_substrait_rel(ctx, input, extensions).await?,
                 );
-                let mut names: HashSet<String> = HashSet::new();
-                let mut exprs: Vec<Expr> = vec![];
-                for e in &p.expressions {
-                    let x =
-                        from_substrait_rex(ctx, e, input.clone().schema(), extensions)
+
+                let mut default_exprs: Vec<Expr> = vec![];
+
+                // By default, a Substrait Project emits all inputs fields
+                let input_schema = input.schema();
+                for index in 0..(input_schema.fields().len()) {
+                    let e =
+                        Expr::Column(Column::from(input_schema.qualified_field(index)));
+                    default_exprs.push(e);
+                }
+                // followed by all expressions
+                for expr in &p.expressions {
+                    let e =
+                        from_substrait_rex(ctx, expr, input.clone().schema(), extensions)
                             .await?;
                     // if the expression is WindowFunction, wrap in a Window relation
-                    if let Expr::WindowFunction(_) = &x {
+                    if let Expr::WindowFunction(_) = &e {
                         // Adding the same expression here and in the project below
                         // works because the project's builder uses columnize_expr(..)
                         // to transform it into a column reference
-                        input = input.window(vec![x.clone()])?
+                        input = input.window(vec![e.clone()])?
                     }
-                    // Ensure the expression has a unique display name, so that project's
-                    // validate_unique_names doesn't fail
-                    let name = x.schema_name().to_string();
-                    let mut new_name = name.clone();
-                    let mut i = 0;
-                    while names.contains(&new_name) {
-                        new_name = format!("{}__temp__{}", name, i);
-                        i += 1;
-                    }
-                    if new_name != name {
-                        exprs.push(x.alias(new_name.clone()));
-                    } else {
-                        exprs.push(x);
-                    }
-                    names.insert(new_name);
+                    default_exprs.push(e);
                 }
-                input.project(exprs)?.build()
+
+                // Ensure that all expressions have a unique display name, so that
+                // validate_unique_names does not fail when constructing the project.
+                let mut name_tracker = NameTracker::new();
+
+                let mut final_exprs: Vec<Expr> = vec![];
+                match retrieve_emit_kind(p.common.as_ref()) {
+                    EmitKind::Direct(_) => {
+                        for expr in default_exprs.into_iter() {
+                            final_exprs.push(name_tracker.get_uniquely_named_expr(expr)?)
+                        }
+                    }
+                    EmitKind::Emit(Emit { output_mapping }) => {
+                        for field in output_mapping {
+                            let expr = default_exprs
+                                .get(field as usize)
+                                .ok_or_else(|| substrait_datafusion_err!(
+                                  "Emit output field {} cannot be resolved in input schema {}",
+                                  field, input.schema().clone()
+                                ))?;
+                            final_exprs.push(
+                                name_tracker.get_uniquely_named_expr(expr.clone())?,
+                            );
+                        }
+                    }
+                }
+                input.project(final_exprs)?.build()
             } else {
                 not_impl_err!("Projection without an input is not supported")
             }
@@ -609,7 +632,8 @@ pub async fn from_substrait_rel(
                     let expr =
                         from_substrait_rex(ctx, condition, input.schema(), extensions)
                             .await?;
-                    input.filter(expr)?.build()
+                    let plan = input.filter(expr)?.build()?;
+                    apply_emit_kind(filter.common.as_ref(), plan)
                 } else {
                     not_impl_err!("Filter without an condition is not valid")
                 }
@@ -629,7 +653,8 @@ pub async fn from_substrait_rel(
                 } else {
                     Some(fetch.count as usize)
                 };
-                input.limit(offset, count)?.build()
+                let plan = input.limit(offset, count)?.build()?;
+                apply_emit_kind(fetch.common.as_ref(), plan)
             } else {
                 not_impl_err!("Fetch without an input is not valid")
             }
@@ -642,7 +667,8 @@ pub async fn from_substrait_rel(
                 let sorts =
                     from_substrait_sorts(ctx, &sort.sorts, input.schema(), extensions)
                         .await?;
-                input.sort(sorts)?.build()
+                let plan = input.sort(sorts)?.build()?;
+                apply_emit_kind(sort.common.as_ref(), plan)
             } else {
                 not_impl_err!("Sort without an input is not valid")
             }
@@ -731,7 +757,8 @@ pub async fn from_substrait_rel(
                     };
                     aggr_expr.push(agg_func?.as_ref().clone());
                 }
-                input.aggregate(group_expr, aggr_expr)?.build()
+                let plan = input.aggregate(group_expr, aggr_expr)?.build()?;
+                apply_emit_kind(agg.common.as_ref(), plan)
             } else {
                 not_impl_err!("Aggregate without an input is not valid")
             }
@@ -758,7 +785,7 @@ pub async fn from_substrait_rel(
 
             // If join expression exists, parse the `on` condition expression, build join and return
             // Otherwise, build join with only the filter, without join keys
-            match &join.expression.as_ref() {
+            let plan = match &join.expression.as_ref() {
                 Some(expr) => {
                     let on = from_substrait_rex(ctx, expr, &in_join_schema, extensions)
                         .await?;
@@ -791,7 +818,8 @@ pub async fn from_substrait_rel(
                     )?
                     .build()
                 }
-            }
+            }?;
+            apply_emit_kind(join.common.as_ref(), plan)
         }
         Some(RelType::Cross(cross)) => {
             let left = LogicalPlanBuilder::from(
@@ -802,7 +830,8 @@ pub async fn from_substrait_rel(
                     .await?,
             );
             let (left, right) = requalify_sides_if_needed(left, right)?;
-            left.cross_join(right.build()?)?.build()
+            let plan = left.cross_join(right.build()?)?.build()?;
+            apply_emit_kind(cross.common.as_ref(), plan)
         }
         Some(RelType::Read(read)) => {
             fn read_with_schema(
@@ -823,7 +852,7 @@ pub async fn from_substrait_rel(
 
             let substrait_schema = from_substrait_named_struct(named_struct, extensions)?;
 
-            match &read.as_ref().read_type {
+            let plan = match &read.as_ref().read_type {
                 Some(ReadType::NamedTable(nt)) => {
                     let table_reference = match nt.names.len() {
                         0 => {
@@ -934,14 +963,15 @@ pub async fn from_substrait_rel(
                 _ => {
                     not_impl_err!("Unsupported ReadType: {:?}", &read.as_ref().read_type)
                 }
-            }
+            }?;
+            apply_emit_kind(read.common.as_ref(), plan)
         }
         Some(RelType::Set(set)) => match set_rel::SetOp::try_from(set.op) {
             Ok(set_op) => {
                 if set.inputs.len() < 2 {
                     substrait_err!("Set operation requires at least two inputs")
                 } else {
-                    match set_op {
+                    let plan = match set_op {
                         set_rel::SetOp::UnionAll => {
                             union_rels(&set.inputs, ctx, extensions, true).await
                         }
@@ -970,7 +1000,8 @@ pub async fn from_substrait_rel(
                             except_rels(&set.inputs, ctx, extensions, true).await
                         }
                         _ => not_impl_err!("Unsupported set operator: {set_op:?}"),
-                    }
+                    }?;
+                    apply_emit_kind(set.common.as_ref(), plan)
                 }
             }
             Err(e) => not_impl_err!("Invalid set operation type {}: {e}", set.op),
@@ -979,17 +1010,18 @@ pub async fn from_substrait_rel(
             let Some(ext_detail) = &extension.detail else {
                 return substrait_err!("Unexpected empty detail in ExtensionLeafRel");
             };
-            let plan = ctx
+            let node = ctx
                 .state()
                 .serializer_registry()
                 .deserialize_logical_plan(&ext_detail.type_url, &ext_detail.value)?;
-            Ok(LogicalPlan::Extension(Extension { node: plan }))
+            let plan = LogicalPlan::Extension(Extension { node });
+            apply_emit_kind(extension.common.as_ref(), plan)
         }
         Some(RelType::ExtensionSingle(extension)) => {
             let Some(ext_detail) = &extension.detail else {
                 return substrait_err!("Unexpected empty detail in ExtensionSingleRel");
             };
-            let plan = ctx
+            let node = ctx
                 .state()
                 .serializer_registry()
                 .deserialize_logical_plan(&ext_detail.type_url, &ext_detail.value)?;
@@ -999,9 +1031,10 @@ pub async fn from_substrait_rel(
                 );
             };
             let input_plan = from_substrait_rel(ctx, input_rel, extensions).await?;
-            let plan =
-                plan.with_exprs_and_inputs(plan.expressions(), vec![input_plan])?;
-            Ok(LogicalPlan::Extension(Extension { node: plan }))
+            let plan = LogicalPlan::Extension(Extension {
+                node: node.with_exprs_and_inputs(node.expressions(), vec![input_plan])?,
+            });
+            apply_emit_kind(extension.common.as_ref(), plan)
         }
         Some(RelType::ExtensionMulti(extension)) => {
             let Some(ext_detail) = &extension.detail else {
@@ -1016,8 +1049,10 @@ pub async fn from_substrait_rel(
                 let input_plan = from_substrait_rel(ctx, input, extensions).await?;
                 inputs.push(input_plan);
             }
-            let plan = plan.with_exprs_and_inputs(plan.expressions(), inputs)?;
-            Ok(LogicalPlan::Extension(Extension { node: plan }))
+            let plan = LogicalPlan::Extension(Extension {
+                node: plan.with_exprs_and_inputs(plan.expressions(), inputs)?,
+            });
+            apply_emit_kind(extension.common.as_ref(), plan)
         }
         Some(RelType::Exchange(exchange)) => {
             let Some(input) = exchange.input.as_ref() else {
@@ -1053,12 +1088,85 @@ pub async fn from_substrait_rel(
                     return not_impl_err!("Unsupported exchange kind: {exchange_kind:?}");
                 }
             };
-            Ok(LogicalPlan::Repartition(Repartition {
+            let plan = LogicalPlan::Repartition(Repartition {
                 input,
                 partitioning_scheme,
-            }))
+            });
+            apply_emit_kind(exchange.common.as_ref(), plan)
         }
         _ => not_impl_err!("Unsupported RelType: {:?}", rel.rel_type),
+    }
+}
+
+fn retrieve_emit_kind(rel_common: Option<&RelCommon>) -> EmitKind {
+    // the default EmitKind is Direct if it is not set explicitly
+    let default = EmitKind::Direct(rel_common::Direct {});
+    rel_common
+        .and_then(|rc| rc.emit_kind.as_ref())
+        .map_or(default, |ek| ek.clone())
+}
+
+fn apply_emit_kind(
+    rel_common: Option<&RelCommon>,
+    plan: LogicalPlan,
+) -> Result<LogicalPlan> {
+    match retrieve_emit_kind(rel_common) {
+        EmitKind::Direct(_) => Ok(plan),
+        EmitKind::Emit(emit) => {
+            let input_schema = plan.schema();
+
+            // It is valid to reference the same field multiple times in the Emit
+            // In this case, we need to provide unique names to avoid collisions
+            let mut name_tracker = NameTracker::new();
+
+            let mut exprs: Vec<Expr> = vec![];
+            for index in emit.output_mapping.into_iter() {
+                let column =
+                    Expr::Column(Column::from(input_schema.qualified_field(index as usize)));
+                let expr = name_tracker.get_uniquely_named_expr(column)?;
+                exprs.push(expr);
+            }
+            project(plan, exprs)
+        }
+    }
+}
+
+struct NameTracker {
+    seen_names: HashSet<String>,
+}
+
+enum NameTrackerStatus {
+    NeverSeen,
+    SeenBefore,
+}
+
+impl NameTracker {
+    fn new() -> Self {
+        NameTracker {
+            seen_names: HashSet::default(),
+        }
+    }
+    fn get_unique_name(&mut self, name: String) -> (String, NameTrackerStatus) {
+        match self.seen_names.insert(name.clone()) {
+            true => (name, NameTrackerStatus::NeverSeen),
+            false => {
+                let mut counter = 0;
+                loop {
+                    let candidate_name = format!("{}__temp__{}", name, counter);
+                    if self.seen_names.insert(candidate_name.clone()) {
+                        return (candidate_name, NameTrackerStatus::SeenBefore);
+                    }
+                    counter += 1;
+                }
+            }
+        }
+    }
+
+    fn get_uniquely_named_expr(&mut self, expr: Expr) -> Result<Expr> {
+        match self.get_unique_name(expr.name_for_alias()?) {
+            (_, NameTrackerStatus::NeverSeen) => Ok(expr),
+            (name, NameTrackerStatus::SeenBefore) => Ok(expr.alias(name)),
+        }
     }
 }
 
