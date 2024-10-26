@@ -835,40 +835,38 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 left,
                 op: Or,
                 right,
-            }) if expr_contains(&left, &right, Or) => Transformed::yes(*left),
+            }) if expr_contains(&left, &right, Or)? => Transformed::yes(*left),
             // A OR (..A..) --> (..A..)
             Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: Or,
                 right,
-            }) if expr_contains(&right, &left, Or) => Transformed::yes(*right),
+            }) if expr_contains(&right, &left, Or)? => Transformed::yes(*right),
             // A OR (A AND B) --> A
             Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: Or,
                 right,
-            }) if is_op_with(And, &right, &left) => Transformed::yes(*left),
+            }) if is_op_with(And, &right, &left)? => Transformed::yes(*left),
             // (A AND B) OR A --> A
             Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: Or,
                 right,
-            }) if is_op_with(And, &left, &right) => Transformed::yes(*right),
+            }) if is_op_with(And, &left, &right)? => Transformed::yes(*right),
             // Eliminate common factors in conjunctions e.g
             // (A AND B) OR (A AND C) -> A AND (B OR C)
             Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: Or,
                 right,
-            }) if has_common_conjunction(&left, &right) => {
+            }) if has_common_conjunction(&left, &right)? => {
                 let lhs: IndexSet<Expr> = iter_conjunction_owned(*left).collect();
                 let (common, rhs): (Vec<_>, Vec<_>) =
                     iter_conjunction_owned(*right).partition(|e| lhs.contains(e));
-
                 let new_rhs = rhs.into_iter().reduce(and);
                 let new_lhs = lhs.into_iter().filter(|e| !common.contains(e)).reduce(and);
                 let common_conjunction = common.into_iter().reduce(and).unwrap();
-
                 let new_expr = match (new_lhs, new_rhs) {
                     (Some(lhs), Some(rhs)) => and(common_conjunction, or(lhs, rhs)),
                     (_, _) => common_conjunction,
@@ -925,25 +923,25 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 left,
                 op: And,
                 right,
-            }) if expr_contains(&left, &right, And) => Transformed::yes(*left),
+            }) if expr_contains(&left, &right, And)? => Transformed::yes(*left),
             // A AND (..A..) --> (..A..)
             Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: And,
                 right,
-            }) if expr_contains(&right, &left, And) => Transformed::yes(*right),
+            }) if expr_contains(&right, &left, And)? => Transformed::yes(*right),
             // A AND (A OR B) --> A
             Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: And,
                 right,
-            }) if is_op_with(Or, &right, &left) => Transformed::yes(*left),
+            }) if is_op_with(Or, &right, &left)? => Transformed::yes(*left),
             // (A OR B) AND A --> A
             Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: And,
                 right,
-            }) if is_op_with(Or, &left, &right) => Transformed::yes(*right),
+            }) if is_op_with(Or, &left, &right)? => Transformed::yes(*right),
 
             //
             // Rules for Multiply
@@ -1109,21 +1107,21 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 left,
                 op: BitwiseAnd,
                 right,
-            }) if expr_contains(&left, &right, BitwiseAnd) => Transformed::yes(*left),
+            }) if expr_contains(&left, &right, BitwiseAnd)? => Transformed::yes(*left),
 
             // A & (..A..) --> (..A..)
             Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: BitwiseAnd,
                 right,
-            }) if expr_contains(&right, &left, BitwiseAnd) => Transformed::yes(*right),
+            }) if expr_contains(&right, &left, BitwiseAnd)? => Transformed::yes(*right),
 
             // A & (A | B) --> A (if B not null)
             Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: BitwiseAnd,
                 right,
-            }) if !info.nullable(&right)? && is_op_with(BitwiseOr, &right, &left) => {
+            }) if !info.nullable(&right)? && is_op_with(BitwiseOr, &right, &left)? => {
                 Transformed::yes(*left)
             }
 
@@ -1132,7 +1130,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 left,
                 op: BitwiseAnd,
                 right,
-            }) if !info.nullable(&left)? && is_op_with(BitwiseOr, &left, &right) => {
+            }) if !info.nullable(&left)? && is_op_with(BitwiseOr, &left, &right)? => {
                 Transformed::yes(*right)
             }
 
@@ -1195,21 +1193,21 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 left,
                 op: BitwiseOr,
                 right,
-            }) if expr_contains(&left, &right, BitwiseOr) => Transformed::yes(*left),
+            }) if expr_contains(&left, &right, BitwiseOr)? => Transformed::yes(*left),
 
             // A | (..A..) --> (..A..)
             Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: BitwiseOr,
                 right,
-            }) if expr_contains(&right, &left, BitwiseOr) => Transformed::yes(*right),
+            }) if expr_contains(&right, &left, BitwiseOr)? => Transformed::yes(*right),
 
             // A | (A & B) --> A (if B not null)
             Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: BitwiseOr,
                 right,
-            }) if !info.nullable(&right)? && is_op_with(BitwiseAnd, &right, &left) => {
+            }) if !info.nullable(&right)? && is_op_with(BitwiseAnd, &right, &left)? => {
                 Transformed::yes(*left)
             }
 
@@ -1218,7 +1216,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 left,
                 op: BitwiseOr,
                 right,
-            }) if !info.nullable(&left)? && is_op_with(BitwiseAnd, &left, &right) => {
+            }) if !info.nullable(&left)? && is_op_with(BitwiseAnd, &left, &right)? => {
                 Transformed::yes(*right)
             }
 
@@ -1281,7 +1279,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 left,
                 op: BitwiseXor,
                 right,
-            }) if expr_contains(&left, &right, BitwiseXor) => {
+            }) if expr_contains(&left, &right, BitwiseXor)? => {
                 let expr = delete_xor_in_complex_expr(&left, &right, false);
                 Transformed::yes(if expr == *right {
                     Expr::Literal(ScalarValue::new_zero(&info.get_data_type(&right)?)?)
@@ -1295,7 +1293,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 left,
                 op: BitwiseXor,
                 right,
-            }) if expr_contains(&right, &left, BitwiseXor) => {
+            }) if expr_contains(&right, &left, BitwiseXor)? => {
                 let expr = delete_xor_in_complex_expr(&right, &left, true);
                 Transformed::yes(if expr == *left {
                     Expr::Literal(ScalarValue::new_zero(&info.get_data_type(&left)?)?)
@@ -1681,9 +1679,16 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
     }
 }
 
-fn has_common_conjunction(lhs: &Expr, rhs: &Expr) -> bool {
+fn has_common_conjunction(lhs: &Expr, rhs: &Expr) -> Result<bool, DataFusionError> {
     let lhs: HashSet<&Expr> = iter_conjunction(lhs).collect();
-    iter_conjunction(rhs).any(|e| lhs.contains(&e))
+    iter_conjunction(rhs).try_fold(false, |acc, e| {
+        if lhs.contains(&e) {
+            let count = count_volatile_calls(e)?;
+            Ok::<bool, DataFusionError>(acc || count == 0)
+        } else {
+            Ok(acc)
+        }
+    })
 }
 
 // TODO: We might not need this after defer pattern for Box is stabilized. https://github.com/rust-lang/rust/issues/87121
