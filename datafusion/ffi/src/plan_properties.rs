@@ -43,55 +43,32 @@ use prost::Message;
 
 use crate::arrow_wrappers::WrappedSchema;
 
-// TODO: should we just make ExecutionMode repr(C)?
-#[repr(C)]
-#[allow(non_camel_case_types)]
-#[derive(Clone, StableAbi)]
-pub enum FFI_ExecutionMode {
-    Bounded,
-    Unbounded,
-    PipelineBreaking,
-}
-
-impl From<ExecutionMode> for FFI_ExecutionMode {
-    fn from(value: ExecutionMode) -> Self {
-        match value {
-            ExecutionMode::Bounded => FFI_ExecutionMode::Bounded,
-            ExecutionMode::Unbounded => FFI_ExecutionMode::Unbounded,
-            ExecutionMode::PipelineBreaking => FFI_ExecutionMode::PipelineBreaking,
-        }
-    }
-}
-
-impl From<FFI_ExecutionMode> for ExecutionMode {
-    fn from(value: FFI_ExecutionMode) -> Self {
-        match value {
-            FFI_ExecutionMode::Bounded => ExecutionMode::Bounded,
-            FFI_ExecutionMode::Unbounded => ExecutionMode::Unbounded,
-            FFI_ExecutionMode::PipelineBreaking => ExecutionMode::PipelineBreaking,
-        }
-    }
-}
-
+/// A stable struct for sharing [`PlanProperties`] across FFI boundaries.
 #[repr(C)]
 #[derive(Debug, StableAbi)]
-#[allow(missing_docs)]
 #[allow(non_camel_case_types)]
 pub struct FFI_PlanProperties {
-    // Returns protobuf serialized bytes of the partitioning
+    /// The output partitioning is a [`Partitioning`] protobuf message serialized
+    /// into bytes to pass across the FFI boundary.
     pub output_partitioning:
         unsafe extern "C" fn(plan: &Self) -> RResult<RVec<u8>, RStr<'static>>,
 
+    /// Return the execution mode of the plan.
     pub execution_mode: unsafe extern "C" fn(plan: &Self) -> FFI_ExecutionMode,
 
-    // PhysicalSortExprNodeCollection proto
+    /// The output ordering is a [`PhysicalSortExprNodeCollection`] protobuf message
+    /// serialized into bytes to pass across the FFI boundary.
     pub output_ordering:
         unsafe extern "C" fn(plan: &Self) -> RResult<RVec<u8>, RStr<'static>>,
 
+    /// Return the schema of the plan.
     pub schema: unsafe extern "C" fn(plan: &Self) -> WrappedSchema,
 
+    /// Release the memory of the private data when it is no longer being used.
     pub release: unsafe extern "C" fn(arg: &mut Self),
 
+    /// Internal data. This is only to be accessed by the provider of the plan.
+    /// The foreign library should never attempt to access this data.
     pub private_data: *mut c_void,
 }
 
@@ -258,6 +235,36 @@ impl TryFrom<FFI_PlanProperties> for PlanProperties {
             partitioning,
             execution_mode,
         ))
+    }
+}
+
+/// FFI safe version of [`ExecutionMode`].
+#[repr(C)]
+#[allow(non_camel_case_types)]
+#[derive(Clone, StableAbi)]
+pub enum FFI_ExecutionMode {
+    Bounded,
+    Unbounded,
+    PipelineBreaking,
+}
+
+impl From<ExecutionMode> for FFI_ExecutionMode {
+    fn from(value: ExecutionMode) -> Self {
+        match value {
+            ExecutionMode::Bounded => FFI_ExecutionMode::Bounded,
+            ExecutionMode::Unbounded => FFI_ExecutionMode::Unbounded,
+            ExecutionMode::PipelineBreaking => FFI_ExecutionMode::PipelineBreaking,
+        }
+    }
+}
+
+impl From<FFI_ExecutionMode> for ExecutionMode {
+    fn from(value: FFI_ExecutionMode) -> Self {
+        match value {
+            FFI_ExecutionMode::Bounded => ExecutionMode::Bounded,
+            FFI_ExecutionMode::Unbounded => ExecutionMode::Unbounded,
+            FFI_ExecutionMode::PipelineBreaking => ExecutionMode::PipelineBreaking,
+        }
     }
 }
 

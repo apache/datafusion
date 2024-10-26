@@ -36,19 +36,25 @@ use futures::{Stream, TryStreamExt};
 
 use crate::arrow_wrappers::{WrappedArray, WrappedSchema};
 
+/// A stable struct for sharing [`RecordBatchStream`] across FFI boundaries.
+/// We use the async-ffi crate for handling async calls across libraries.
 #[repr(C)]
 #[derive(Debug, StableAbi)]
-#[allow(missing_docs)]
 #[allow(non_camel_case_types)]
 pub struct FFI_RecordBatchStream {
+    /// This mirrors the `poll_next` of [`RecordBatchStream`] but does so
+    /// in a FFI safe manner.
     pub poll_next:
         unsafe extern "C" fn(
             stream: &Self,
             cx: &mut FfiContext,
         ) -> FfiPoll<ROption<RResult<WrappedArray, RString>>>,
 
+    /// Return the schema of the record batch
     pub schema: unsafe extern "C" fn(stream: &Self) -> WrappedSchema,
 
+    /// Internal data. This is only to be accessed by the provider of the plan.
+    /// The foreign library should never attempt to access this data.
     pub private_data: *mut c_void,
 }
 

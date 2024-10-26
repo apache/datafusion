@@ -53,12 +53,25 @@ use super::{
 };
 use datafusion::error::Result;
 
-/// A stable interface for creating a DataFusion TableProvider.
+/// A stable struct for sharing [`TableProvider`] across FFI boundaries.
 #[repr(C)]
 #[derive(Debug, StableAbi)]
 #[allow(non_camel_case_types)]
 pub struct FFI_TableProvider {
+    /// Return the table schema
     pub schema: unsafe extern "C" fn(provider: &Self) -> WrappedSchema,
+
+    /// Perform a scan on the table. See [`TableProvider`] for detailed usage information.
+    ///
+    /// # Arguments
+    ///
+    /// * `provider` - the table provider
+    /// * `session_config` - session configuration
+    /// * `projections` - if specified, only a subset of the columns are returned
+    /// * `filters_serialized` - filters to apply to the scan, which are a
+    ///    [`LogicalExprList`] protobuf message serialized into bytes to pass
+    ///    across the FFI boundary.
+    /// * `limit` - if specified, limit the number of rows returned
     pub scan: unsafe extern "C" fn(
         provider: &Self,
         session_config: &FFI_SessionConfig,
@@ -67,8 +80,12 @@ pub struct FFI_TableProvider {
         limit: ROption<usize>,
     ) -> FfiFuture<RResult<FFI_ExecutionPlan, RString>>,
 
+    /// Return the type of table. See [`TableType`] for options.
     pub table_type: unsafe extern "C" fn(provider: &Self) -> FFI_TableType,
 
+    /// Based upon the input filters, identify which are supported. The filters
+    /// are a [`LogicalExprList`] protobuf message serialized into bytes to pass
+    /// across the FFI boundary.
     pub supports_filters_pushdown: Option<
         unsafe extern "C" fn(
             provider: &FFI_TableProvider,
@@ -77,8 +94,15 @@ pub struct FFI_TableProvider {
             -> RResult<RVec<FFI_TableProviderFilterPushDown>, RString>,
     >,
 
-    pub clone: unsafe extern "C" fn(provider: &Self) -> Self,
+    /// Used to create a clone on the provider of the execution plan. This should
+    /// only need to be called by the receiver of the plan.
+    pub clone: unsafe extern "C" fn(plan: &Self) -> Self,
+
+    /// Release the memory of the private data when it is no longer being used.
     pub release: unsafe extern "C" fn(arg: &mut Self),
+
+    /// Internal data. This is only to be accessed by the provider of the plan.
+    /// A [`ForeignExecutionPlan`] should never attempt to access this data.
     pub private_data: *mut c_void,
 }
 

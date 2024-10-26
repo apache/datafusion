@@ -27,16 +27,35 @@ use abi_stable::{
 use datafusion::{config::ConfigOptions, error::Result};
 use datafusion::{error::DataFusionError, prelude::SessionConfig};
 
+/// A stable struct for sharing [`SessionConfig`] across FFI boundaries.
+/// Instead of attempting to expose the entire SessionConfig interface, we
+/// convert the config options into a map from a string to string and pass
+/// those values across the FFI boundary. On the receiver side, we
+/// reconstruct a SessionConfig from those values.
+///
+/// It is possible that using different versions of DataFusion across the
+/// FFI boundary could have differing expectations of the config options.
+/// This is a limitation of this approach, but exposing the entire
+/// SessionConfig via a FFI interface would be extensive and provide limited
+/// value over this version.
 #[repr(C)]
 #[derive(Debug, StableAbi)]
-#[allow(missing_docs)]
 #[allow(non_camel_case_types)]
 pub struct FFI_SessionConfig {
+    /// Return a hash map from key to value of the config options represented
+    /// by string values.
     pub config_options: unsafe extern "C" fn(config: &Self) -> RHashMap<RString, RString>,
 
+    /// Used to create a clone on the provider of the execution plan. This should
+    /// only need to be called by the receiver of the plan.
+    pub clone: unsafe extern "C" fn(plan: &Self) -> Self,
+
+    /// Release the memory of the private data when it is no longer being used.
+    pub release: unsafe extern "C" fn(arg: &mut Self),
+
+    /// Internal data. This is only to be accessed by the provider of the plan.
+    /// A [`ForeignSessionConfig`] should never attempt to access this data.
     pub private_data: *mut c_void,
-    pub clone: unsafe extern "C" fn(&Self) -> Self,
-    pub release: unsafe extern "C" fn(config: &mut Self),
 }
 
 unsafe impl Send for FFI_SessionConfig {}
@@ -125,6 +144,7 @@ impl Drop for FFI_SessionConfig {
     }
 }
 
+/// A wrapper struct for accessing [`SessionConfig`] across a FFI boundary
 pub struct ForeignSessionConfig(pub SessionConfig);
 
 impl TryFrom<&FFI_SessionConfig> for ForeignSessionConfig {

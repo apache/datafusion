@@ -18,7 +18,7 @@
 use abi_stable::StableAbi;
 use datafusion::{datasource::TableType, logical_expr::TableProviderFilterPushDown};
 
-// TODO Should we just define TableProviderFilterPushDown as repr(C)?
+/// FFI safe version of [`TableProviderFilterPushDown`].
 #[repr(C)]
 #[derive(StableAbi)]
 #[allow(non_camel_case_types)]
@@ -56,7 +56,7 @@ impl From<&TableProviderFilterPushDown> for FFI_TableProviderFilterPushDown {
     }
 }
 
-// TODO Should we just define FFI_TableType as repr(C)?
+/// FFI safe version of [`TableType`].
 #[repr(C)]
 #[allow(non_camel_case_types)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, StableAbi)]
