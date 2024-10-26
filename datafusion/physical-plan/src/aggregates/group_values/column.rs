@@ -15,7 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{iter, mem};
+use std::ops::Sub;
+use std::{iter, mem, usize};
 
 use crate::aggregates::group_values::group_column::{
     ByteGroupValueBuilder, ByteViewGroupValueBuilder, GroupColumn,
@@ -388,15 +389,24 @@ impl GroupValuesColumn {
     ///
     /// 3. Perform `vectorized_append`
     ///
-    fn vectorized_append(&mut self, cols: &[ArrayRef]) {
+    fn vectorized_append(&mut self, cols: &[ArrayRef], groups: &mut Vec<usize>) {
         let mut index_lists_updates = mem::take(&mut self.index_lists_updates);
         index_lists_updates.clear();
+        // Set the default value to usize::MAX, so when we made a mistake,
+        // panic will happen rather than
+        groups.resize(cols[0].len(), usize::MAX);
 
         // 1. Check equal to results, if found a equal row, nothing to do;
         //    otherwise, we should create a new group for the row.
         let mut current_row_equal_to_result = false;
+        let mut current_match_group_index = None;
         for (idx, &row) in self.vectorized_equal_to_row_indices.iter().enumerate() {
-            current_row_equal_to_result |= self.vectorized_equal_to_results[idx];
+            let equal_to_result = self.vectorized_equal_to_results[idx];
+            if equal_to_result {
+                current_match_group_index =
+                    Some(self.vectorized_equal_to_group_indices[idx]);
+            }
+            current_row_equal_to_result |= equal_to_result;
 
             // Look forward next one row and check
             let next_row = self
@@ -427,8 +437,10 @@ impl GroupValuesColumn {
                         let (_, bucket_ctx) = self.occupied_buckets[idx].as_mut();
                         bucket_ctx.unset_checking();
                     }
+                    groups[row] = current_match_group_index.unwrap();
                 }
 
+                current_match_group_index = None;
                 current_row_equal_to_result = false;
             }
         }
@@ -545,7 +557,7 @@ impl GroupValues for GroupValuesColumn {
         //   1. Collect vectorized context by checking hash values of `cols` in `map`
         //   2. Perform `vectorized_equal_to`
         //   3. Perform `vectorized_append`
-        //   4. Update `current_indices`  
+        //   4. Update `current_indices`
         let num_rows = cols[0].len();
         self.current_indices.clear();
         self.current_indices.extend(0..num_rows);
@@ -557,7 +569,7 @@ impl GroupValues for GroupValuesColumn {
             self.vectorized_equal_to(cols);
 
             // 3. Perform `vectorized_append`
-            self.vectorized_append(cols);
+            self.vectorized_append(cols, groups);
 
             // 4. Update `current_indices`
             mem::swap(&mut self.current_indices, &mut self.remaining_indices);
@@ -603,18 +615,39 @@ impl GroupValues for GroupValuesColumn {
                     .map(|v| v.take_n(n))
                     .collect::<Vec<_>>();
 
+                // Update `map`
                 // SAFETY: self.map outlives iterator and is not modified concurrently
-                // unsafe {
-                //     for bucket in self.map.iter() {
-                //         // Decrement group index by n
-                //         match bucket.as_ref().1.0.checked_sub(n) {
-                //             // Group index was >= n, shift value down
-                //             Some(sub) => bucket.as_mut().1 = sub,
-                //             // Group index was < n, so remove from table
-                //             None => self.map.erase(bucket),
-                //         }
-                //     }
-                // }
+                unsafe {
+                    for bucket in self.map.iter() {
+                        let group_index = {
+                            let (_, bucket_ctx) = bucket.as_ref();
+                            debug_assert!(!bucket_ctx.is_checking());
+                            bucket_ctx.group_index()
+                        };
+
+                        // Decrement group index in map by n
+                        match group_index.checked_sub(n as u64) {
+                            // Group index was >= n, shift value down
+                            Some(sub) => bucket.as_mut().1 = BucketContext(sub),
+                            // Group index was < n, so remove from table
+                            None => self.map.erase(bucket),
+                        }
+                    }
+                }
+
+                // Update `group_index_lists`
+                // Loop and decrement the [n+1..] list nodes
+                let start_idx = n + 1;
+                let list_len = self.group_index_lists.len();
+                for idx in start_idx..list_len {
+                    let new_idx = idx - n;
+
+                    let next_idx = self.group_index_lists[idx];
+                    let new_next_idx = next_idx.checked_sub(n).unwrap_or(0);
+
+                    self.group_index_lists[new_idx] = new_next_idx;
+                }
+                self.group_index_lists.resize(self.group_values[0].len() + 1, 0);
 
                 output
             }
@@ -645,5 +678,15 @@ impl GroupValues for GroupValuesColumn {
         self.map_size = self.map.capacity() * std::mem::size_of::<(u64, usize)>();
         self.hashes_buffer.clear();
         self.hashes_buffer.shrink_to(count);
+        self.group_index_lists.clear();
+        self.index_lists_updates.clear();
+        self.current_indices.clear();
+        self.remaining_indices.clear();
+        self.empty_buckets.clear();
+        self.occupied_buckets.clear();
+        self.vectorized_append_row_indices.clear();
+        self.vectorized_equal_to_row_indices.clear();
+        self.vectorized_equal_to_group_indices.clear();
+        self.vectorized_equal_to_results.clear();
     }
 }
