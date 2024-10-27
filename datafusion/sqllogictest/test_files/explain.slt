@@ -436,3 +436,18 @@ physical_plan
 01)CoalesceBatchesExec: target_batch_size=8192
 02)--FilterExec: column1@0 = 2
 03)----ValuesExec
+
+
+query TT
+explain select * from VALUES (1), (2) where column1 = 2 AND random() = 0 OR column1 = 2 AND random() = 0;
+----
+logical_plan
+01)Projection: column1
+02)--Filter: __common_expr_4 AND random() = Float64(0) OR __common_expr_4 AND random() = Float64(0)
+03)----Projection: column1 = Int64(2) AS __common_expr_4, column1
+04)------Values: (Int64(1)), (Int64(2))
+physical_plan
+01)CoalesceBatchesExec: target_batch_size=8192
+02)--FilterExec: __common_expr_4@0 AND random() = 0 OR __common_expr_4@0 AND random() = 0, projection=[column1@1]
+03)----ProjectionExec: expr=[column1@0 = 2 as __common_expr_4, column1@0 as column1]
+04)------ValuesExec

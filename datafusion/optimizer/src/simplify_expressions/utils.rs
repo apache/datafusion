@@ -83,10 +83,7 @@ fn expr_contains_inner(expr: &Expr, needle: &Expr, search_op: Operator) -> bool 
 
 /// check volatile calls and return if expr contains needle
 pub fn expr_contains(expr: &Expr, needle: &Expr, search_op: Operator) -> Result<bool> {
-    Ok(
-        expr_contains_inner(expr, needle, search_op)
-            && count_volatile_calls(needle)? == 0,
-    )
+    Ok(expr_contains_inner(expr, needle, search_op) && !needle.is_volatile()?)
 }
 
 /// Deletes all 'needles' or remains one 'needle' that are found in a chain of xor
@@ -219,7 +216,7 @@ pub fn is_false(expr: &Expr) -> bool {
 /// returns true if `haystack` looks like (needle OP X) or (X OP needle)
 pub fn is_op_with(target_op: Operator, haystack: &Expr, needle: &Expr) -> Result<bool> {
     Ok(
-        matches!(haystack, Expr::BinaryExpr(BinaryExpr { left, op, right }) if op == &target_op && (needle == left.as_ref() || needle == right.as_ref()) && count_volatile_calls(needle)? == 0),
+        matches!(haystack, Expr::BinaryExpr(BinaryExpr { left, op, right }) if op == &target_op && (needle == left.as_ref() || needle == right.as_ref()) && !needle.is_volatile()?),
     )
 }
 
@@ -354,50 +351,4 @@ pub fn distribute_negation(expr: Expr) -> Expr {
         // use negative clause
         _ => Expr::Negative(Box::new(expr)),
     }
-}
-
-struct VolatileFunctionCounter {
-    counter: usize,
-}
-
-impl VolatileFunctionCounter {
-    pub fn get_count(&self) -> usize {
-        self.counter
-    }
-
-    pub fn new() -> Self {
-        Self { counter: 0 }
-    }
-}
-
-impl<'n> TreeNodeVisitor<'n> for VolatileFunctionCounter {
-    type Node = Expr;
-    fn f_up(
-        &mut self,
-        expr: &'n Self::Node,
-    ) -> Result<datafusion_common::tree_node::TreeNodeRecursion> {
-        match expr {
-            Expr::ScalarFunction(func)
-                if matches!(func.func.signature().volatility, Volatility::Volatile) =>
-            {
-                self.counter += 1;
-            }
-            _ => {}
-        }
-        Ok(datafusion_common::tree_node::TreeNodeRecursion::Continue)
-    }
-
-    fn f_down(
-        &mut self,
-        _node: &'n Self::Node,
-    ) -> Result<datafusion_common::tree_node::TreeNodeRecursion> {
-        Ok(datafusion_common::tree_node::TreeNodeRecursion::Continue)
-    }
-}
-
-// get the number of volatile call in a expression
-pub fn count_volatile_calls(expr: &Expr) -> Result<usize> {
-    let mut volatile_visitor = VolatileFunctionCounter::new();
-    expr.visit(&mut volatile_visitor)?;
-    Ok(volatile_visitor.get_count())
 }

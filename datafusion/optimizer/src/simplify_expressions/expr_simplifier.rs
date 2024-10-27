@@ -1682,11 +1682,10 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
 fn has_common_conjunction(lhs: &Expr, rhs: &Expr) -> Result<bool, DataFusionError> {
     let lhs: HashSet<&Expr> = iter_conjunction(lhs).collect();
     iter_conjunction(rhs).try_fold(false, |acc, e| {
-        if lhs.contains(&e) {
-            let count = count_volatile_calls(e)?;
-            Ok::<bool, DataFusionError>(acc || count == 0)
+        if lhs.contains(&e) && e.is_volatile()? {
+            Ok(false)
         } else {
-            Ok(acc)
+            Ok(acc || lhs.contains(&e))
         }
     })
 }
