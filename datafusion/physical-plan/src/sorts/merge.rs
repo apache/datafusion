@@ -423,7 +423,7 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
     /// If round-robin tie-breaking is not active, it is enabled, and the poll counts for all elements are reset.
     /// The function then compares the poll counts of the current winner and the challenger:
     /// - If the winner remains at the top after the final comparison, it increments the winner's poll count.
-    /// - If the challenger has a higher poll count than the winner, the challenger is declared the new winner.
+    /// - If the challenger has a lower poll count than the current winner, the challenger becomes the new winner.
     /// - If the poll counts are equal but the challenger's index is smaller, the challenger is preferred.
     ///
     /// # Parameters
