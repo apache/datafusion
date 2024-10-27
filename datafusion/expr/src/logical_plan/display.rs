@@ -504,11 +504,6 @@ impl<'a, 'b> PgJsonVisitor<'a, 'b> {
                     "Filter": format!("{}", filter_expr)
                 })
             }
-            LogicalPlan::CrossJoin(_) => {
-                json!({
-                    "Node Type": "Cross Join"
-                })
-            }
             LogicalPlan::Repartition(Repartition {
                 partitioning_scheme,
                 ..
@@ -549,11 +544,13 @@ impl<'a, 'b> PgJsonVisitor<'a, 'b> {
                 let mut object = serde_json::json!(
                     {
                         "Node Type": "Limit",
-                        "Skip": skip,
                     }
                 );
+                if let Some(s) = skip {
+                    object["Skip"] = s.to_string().into()
+                };
                 if let Some(f) = fetch {
-                    object["Fetch"] = serde_json::Value::Number((*f).into());
+                    object["Fetch"] = f.to_string().into()
                 };
                 object
             }

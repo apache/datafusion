@@ -16,6 +16,7 @@
 // under the License.
 
 use datafusion::execution::SessionStateDefaults;
+use datafusion_common::{not_impl_err, Result};
 use datafusion_expr::{
     aggregate_doc_sections, scalar_doc_sections, window_doc_sections, AggregateUDF,
     DocSection, Documentation, ScalarUDF, WindowUDF,
@@ -30,7 +31,7 @@ use std::fmt::Write as _;
 /// Usage: `cargo run --bin print_functions_docs -- <type>`
 ///
 /// Called from `dev/update_function_docs.sh`
-fn main() {
+fn main() -> Result<()> {
     let args: Vec<String> = args().collect();
 
     if args.len() != 2 {
@@ -48,12 +49,13 @@ fn main() {
         _ => {
             panic!("Unknown function type: {}", function_type)
         }
-    };
+    }?;
 
     println!("{docs}");
+    Ok(())
 }
 
-fn print_aggregate_docs() -> String {
+fn print_aggregate_docs() -> Result<String> {
     let mut providers: Vec<Box<dyn DocProvider>> = vec![];
 
     for f in SessionStateDefaults::default_aggregate_functions() {
@@ -63,7 +65,7 @@ fn print_aggregate_docs() -> String {
     print_docs(providers, aggregate_doc_sections::doc_sections())
 }
 
-fn print_scalar_docs() -> String {
+fn print_scalar_docs() -> Result<String> {
     let mut providers: Vec<Box<dyn DocProvider>> = vec![];
 
     for f in SessionStateDefaults::default_scalar_functions() {
@@ -73,7 +75,7 @@ fn print_scalar_docs() -> String {
     print_docs(providers, scalar_doc_sections::doc_sections())
 }
 
-fn print_window_docs() -> String {
+fn print_window_docs() -> Result<String> {
     let mut providers: Vec<Box<dyn DocProvider>> = vec![];
 
     for f in SessionStateDefaults::default_window_functions() {
@@ -86,7 +88,7 @@ fn print_window_docs() -> String {
 fn print_docs(
     providers: Vec<Box<dyn DocProvider>>,
     doc_sections: Vec<DocSection>,
-) -> String {
+) -> Result<String> {
     let mut docs = "".to_string();
 
     // Ensure that all providers have documentation
@@ -217,12 +219,13 @@ fn print_docs(
     // eventually make this an error: https://github.com/apache/datafusion/issues/12872
     if !providers_with_no_docs.is_empty() {
         eprintln!("INFO: The following functions do not have documentation:");
-        for f in providers_with_no_docs {
+        for f in &providers_with_no_docs {
             eprintln!("  - {f}");
         }
+        not_impl_err!("Some functions do not have documentation. Please implement `documentation` for: {providers_with_no_docs:?}")
+    } else {
+        Ok(docs)
     }
-
-    docs
 }
 
 /// Trait for accessing name / aliases / documentation for differnet functions
