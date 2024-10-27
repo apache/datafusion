@@ -48,9 +48,8 @@ use datafusion_physical_expr::binary_map::OutputType;
 use datafusion_physical_expr_common::datum::compare_with_eq;
 use hashbrown::raw::{Bucket, RawTable};
 
-const CHECKING_FLAG_MASK: u64 = 0x8000000000000000;
-const SET_CHECKING_FLAG_MASK: u64 = 0x8000000000000000;
-const UNSET_CHECKING_FLAG_MASK: u64 = 0x7FFFFFFFFFFFFFFF;
+const NON_INLINED_FLAG: u64 = 0x8000000000000000;
+const VALUE_MASK: u64 = 0x7FFFFFFFFFFFFFFF;
 
 /// `BucketContext` is a packed struct
 ///
@@ -89,27 +88,28 @@ const UNSET_CHECKING_FLAG_MASK: u64 = 0x7FFFFFFFFFFFFFFF;
 ///     The group's index in group values
 ///
 #[derive(Debug, Clone, Copy)]
-struct BucketContext(u64);
+struct GroupIndexView(u64);
 
-impl BucketContext {
+impl GroupIndexView {
     #[inline]
-    pub fn is_checking(&self) -> bool {
-        (self.0 & CHECKING_FLAG_MASK) > 0
+    pub fn is_non_inlinded(&self) -> bool {
+        (self.0 & NON_INLINED_FLAG) > 0
     }
 
     #[inline]
-    pub fn set_checking(&mut self) {
-        self.0 |= SET_CHECKING_FLAG_MASK
+    pub fn new_inlined(group_index: u64) -> Self {
+        Self(group_index)
     }
 
     #[inline]
-    pub fn unset_checking(&mut self) {
-        self.0 &= UNSET_CHECKING_FLAG_MASK
+    pub fn new_non_inlined(list_offset: u64) -> Self {
+        let non_inlined_value = list_offset | NON_INLINED_FLAG;
+        Self(non_inlined_value)
     }
 
     #[inline]
-    pub fn group_index(&self) -> u64 {
-        self.0 & UNSET_CHECKING_FLAG_MASK
+    pub fn value(&self) -> u64 {
+        self.0 & VALUE_MASK
     }
 }
 
@@ -127,7 +127,7 @@ pub struct GroupValuesColumn {
     ///
     /// keys: u64 hashes of the GroupValue
     /// values: (hash, group_index)
-    map: RawTable<(u64, BucketContext)>,
+    map: RawTable<(u64, GroupIndexView)>,
 
     /// The size of `map` in bytes
     map_size: usize,
@@ -139,27 +139,13 @@ pub struct GroupValuesColumn {
     ///
     /// The chained indices is like:
     ///   `latest group index -> older group index -> even older group index -> ...`
-    group_index_lists: Vec<usize>,
+    group_index_lists: Vec<Vec<usize>>,
 
     index_lists_updates: Vec<(usize, usize)>,
 
-    /// We need multiple rounds to process the `input cols`,
-    /// and the rows processing in current round is stored here.
-    current_indices: Vec<usize>,
-
     /// Similar as `current_indices`, but `remaining_indices`
     /// is used to store the rows will be processed in next round.
-    remaining_indices: Vec<usize>,
-
-    /// The marked checking buckets in this round
-    ///
-    /// About the checking flag you can see [`BucketContext`]
-    empty_buckets: Vec<Bucket<(u64, BucketContext)>>,
-
-    /// The marked checking buckets in this round
-    ///
-    /// About the checking flag you can see [`BucketContext`]
-    occupied_buckets: Vec<Bucket<(u64, BucketContext)>>,
+    scalarized_indices: Vec<usize>,
 
     /// The `vectorized_equal_tod` row indices buffer
     vectorized_equal_to_row_indices: Vec<usize>,
@@ -183,8 +169,6 @@ pub struct GroupValuesColumn {
     /// [`GroupValuesRows`]: crate::aggregates::group_values::row::GroupValuesRows
     group_values: Vec<Box<dyn GroupColumn>>,
 
-    group_values_len: usize,
-
     /// reused buffer to store hashes
     hashes_buffer: Vec<u64>,
 
@@ -196,7 +180,6 @@ impl GroupValuesColumn {
     /// Create a new instance of GroupValuesColumn if supported for the specified schema
     pub fn try_new(schema: SchemaRef) -> Result<Self> {
         let map = RawTable::with_capacity(0);
-        let num_cols = schema.fields.len();
         Ok(Self {
             schema,
             map,
@@ -206,11 +189,7 @@ impl GroupValuesColumn {
             group_values: vec![],
             hashes_buffer: Default::default(),
             random_state: Default::default(),
-            current_indices: Default::default(),
-            remaining_indices: Default::default(),
-            group_values_len: 0,
-            empty_buckets: Default::default(),
-            occupied_buckets: Default::default(),
+            scalarized_indices: Default::default(),
             vectorized_equal_to_row_indices: Default::default(),
             vectorized_equal_to_group_indices: Default::default(),
             vectorized_equal_to_results: Default::default(),
@@ -258,30 +237,29 @@ impl GroupValuesColumn {
     /// Collect vectorized context by checking hash values of `cols` in `map`
     ///
     /// 1. If bucket not found
-    ///   - Insert the `new bucket` build from the `group index`
+    ///   - Build and insert the `new inlined group index view`
     ///     and its hash value to `map`
-    ///   - Mark this `new bucket` checking, and add it to `checking_buckets`
     ///   - Add row index to `vectorized_append_row_indices`
+    ///   - Set group index to row in `groups`
     ///
     /// 2. bucket found
-    ///   - Check if the `bucket` checking, if so add it to `remaining_indices`,
-    ///     and just process it in next round, otherwise we continue the process
-    ///   - Mark `bucket` checking, and add it to `checking_buckets`
     ///   - Add row index to `vectorized_equal_to_row_indices`
-    ///   - Add group indices(from `group_index_lists`) to `vectorized_equal_to_group_indices`
+    ///   - Check if the `group index view` is `inlined` or `non_inlined`:
+    ///     If it is inlined, add to `vectorized_equal_to_group_indices` directly.
+    ///     Otherwise get all group indices from `group_index_lists`, and add them.
     ///
-    fn collect_vectorized_process_context(&mut self, batch_hashes: &[u64]) {
+    fn collect_vectorized_process_context(
+        &mut self,
+        batch_hashes: &[u64],
+        groups: &mut Vec<usize>,
+    ) {
         self.vectorized_append_row_indices.clear();
         self.vectorized_equal_to_row_indices.clear();
         self.vectorized_equal_to_group_indices.clear();
-        self.empty_buckets.clear();
-        self.occupied_buckets.clear();
-        self.remaining_indices.clear();
 
-        self.group_values_len = self.group_values[0].len();
-        for &row in self.current_indices.iter() {
-            let target_hash = batch_hashes[row];
-            let entry = self.map.find(target_hash, |(exist_hash, _)| {
+        let mut group_values_len = self.group_values[0].len();
+        for (row, &target_hash) in batch_hashes.iter().enumerate() {
+            let entry = self.map.get(target_hash, |(exist_hash, _)| {
                 // Somewhat surprisingly, this closure can be called even if the
                 // hash doesn't match, so check the hash first with an integer
                 // comparison first avoid the more expensive comparison with
@@ -289,68 +267,77 @@ impl GroupValuesColumn {
                 target_hash == *exist_hash
             });
 
-            let Some(bucket) = entry else {
+            let Some((_, group_index_view)) = entry else {
                 // 1. Bucket not found case
-                // Insert the `new bucket` build from the `group index`
-                // Mark this `new bucket` checking
-                let current_group_idx = self.group_values_len as u64;
+                // Build `new inlined group index view`
+                let current_group_idx = group_values_len;
+                let group_index_view =
+                    GroupIndexView::new_inlined(current_group_idx as u64);
 
+                // Insert the `group index view` and its hash into `map`
                 // for hasher function, use precomputed hash value
-                let mut bucket_ctx = BucketContext(current_group_idx);
-                bucket_ctx.set_checking();
-                let bucket = self.map.insert_accounted(
-                    (target_hash, bucket_ctx),
+                self.map.insert_accounted(
+                    (target_hash, group_index_view),
                     |(hash, _)| *hash,
                     &mut self.map_size,
                 );
-                self.empty_buckets.push(bucket);
 
                 // Add row index to `vectorized_append_row_indices`
                 self.vectorized_append_row_indices.push(row);
 
-                self.group_values_len += 1;
+                // Set group index to row in `groups`
+                groups[row] = current_group_idx;
+
+                group_values_len += 1;
                 continue;
             };
 
             // 2. bucket found
-            // Check if the `bucket` checking, if so add it to `remaining_indices`,
-            // and just process it in next round, otherwise we continue the process
-            let mut list_next_group_idx = unsafe {
-                let (_, bucket_ctx) = bucket.as_mut();
-
-                if bucket_ctx.is_checking() {
-                    self.remaining_indices.push(row);
-                    continue;
+            // Check if the `group index view` is `inlined` or `non_inlined`
+            if group_index_view.is_non_inlinded() {
+                // Non-inlined case, the value of view is offset in `group_index_lists`.
+                // We use it to get `group_index_list`, and add related `rows` and `group_indices`
+                // into `vectorized_equal_to_row_indices` and `vectorized_equal_to_group_indices`.
+                let list_offset = group_index_view.value() as usize;
+                let group_index_list = &self.group_index_lists[list_offset];
+                for &group_index in group_index_list {
+                    self.vectorized_equal_to_row_indices.push(row);
+                    self.vectorized_equal_to_group_indices.push(group_index);
                 }
-
-                // Mark `bucket` checking
-                bucket_ctx.set_checking();
-                bucket_ctx.group_index() as usize + 1
-            };
-
-            // Add it to `checking_buckets`
-            // Add row index to `vectorized_equal_to_row_indices`
-            // Add group indices(from `group_index_lists`) to `vectorized_equal_to_group_indices`
-            while list_next_group_idx > 0 {
-                self.occupied_buckets.push(bucket.clone());
-
-                let list_group_idx = list_next_group_idx;
+            } else {
+                let group_index = group_index_view.value() as usize;
                 self.vectorized_equal_to_row_indices.push(row);
-                self.vectorized_equal_to_group_indices
-                    .push(list_group_idx - 1);
-                list_next_group_idx = self.group_index_lists[list_group_idx];
+                self.vectorized_equal_to_group_indices.push(group_index);
             }
         }
+    }
 
-        // Reset empty bucket's checking flag
-        self.empty_buckets.iter().for_each(|bucket| unsafe {
-            let (_, bucket_ctx) = bucket.as_mut();
-            bucket_ctx.unset_checking();
-        });
+    /// Perform `vectorized_append`` for `rows` in `vectorized_append_row_indices`
+    fn vectorized_append(&mut self, cols: &[ArrayRef]) {
+        if self.vectorized_append_row_indices.is_empty() {
+            return;
+        }
+
+        let iter = self.group_values.iter_mut().zip(cols.iter());
+        for (group_column, col) in iter {
+            group_column.vectorized_append(col, &self.vectorized_append_row_indices);
+        }
     }
 
     /// Perform `vectorized_equal_to`
-    fn vectorized_equal_to(&mut self, cols: &[ArrayRef]) {
+    ///
+    /// 1. Perform `vectorized_equal_to` for `rows` in `vectorized_equal_to_group_indices`
+    ///    and `group_indices` in `vectorized_equal_to_group_indices`.
+    ///
+    /// 2. Check `equal_to_results`:
+    ///
+    ///    If found equal to `rows`, set the `group_indices` to `rows` in `groups`.
+    ///
+    ///    If found not equal to `row`s, just add them to `scalarized_indices`,
+    ///    and perform `scalarized_intern` for them after.
+    ///    Usually, such `rows` having same hash but different value with `exists rows`
+    ///    are very few.
+    fn vectorized_equal_to(&mut self, cols: &[ArrayRef], groups: &mut Vec<usize>) {
         assert_eq!(
             self.vectorized_equal_to_group_indices.len(),
             self.vectorized_equal_to_row_indices.len()
@@ -360,10 +347,12 @@ impl GroupValuesColumn {
             return;
         }
 
-        // Vectorized equal to `cols` and `group columns`
+        // 1. Perform `vectorized_equal_to` for `rows` in `vectorized_equal_to_group_indices`
+        //    and `group_indices` in `vectorized_equal_to_group_indices`
         let mut equal_to_results = mem::take(&mut self.vectorized_equal_to_results);
         equal_to_results.clear();
         equal_to_results.resize(self.vectorized_equal_to_group_indices.len(), true);
+        self.scalarized_indices.clear();
 
         for (col_idx, group_col) in self.group_values.iter().enumerate() {
             group_col.vectorized_equal_to(
@@ -375,113 +364,157 @@ impl GroupValuesColumn {
         }
 
         self.vectorized_equal_to_results = equal_to_results;
-    }
 
-    /// Perform `vectorized_append`
-    ///
-    /// 1. Check equal to results, if found a equal row, nothing to do;
-    ///   otherwise, we should create a new group for the row:
-    ///
-    ///     - Modify the related bucket stored in `checking_buckets`,
-    ///     - Store updates for `group_index_lists` in `pending_index_lists_updates`
-    ///     - Increase the `group_values_len`
-    ///
-    /// 2. Resize the `group_index_lists`, apply `pending_index_lists_updates` to it
-    ///
-    /// 3. Perform `vectorized_append`
-    ///
-    fn vectorized_append(&mut self, cols: &[ArrayRef], groups: &mut Vec<usize>) {
-        let mut index_lists_updates = mem::take(&mut self.index_lists_updates);
-        index_lists_updates.clear();
-        // Set the default value to usize::MAX, so when we made a mistake,
-        // panic will happen rather than
-        groups.resize(cols[0].len(), usize::MAX);
-
-        // 1. Check equal to results, if found a equal row, nothing to do;
-        //    otherwise, we should create a new group for the row.
+        // 2. Check `equal_to_results`, if found not equal to `row`s, just add them
+        //    to `scalarized_indices`, and perform `scalarized_intern` for them after.
         let mut current_row_equal_to_result = false;
-        let mut current_match_group_index = None;
         for (idx, &row) in self.vectorized_equal_to_row_indices.iter().enumerate() {
             let equal_to_result = self.vectorized_equal_to_results[idx];
+
+            // Equal to case, set the `group_indices` to `rows` in `groups`
             if equal_to_result {
-                current_match_group_index =
-                    Some(self.vectorized_equal_to_group_indices[idx]);
+                groups[row] = self.vectorized_equal_to_group_indices[idx];
             }
             current_row_equal_to_result |= equal_to_result;
 
-            // Look forward next one row and check
+            // Look forward next one row to check if have checked all results
+            // of current row
             let next_row = self
                 .vectorized_equal_to_row_indices
                 .get(idx + 1)
                 .unwrap_or(&usize::MAX);
+
+            // Have checked all results of current row, check the total result
             if row != *next_row {
-                // If we should create a new group for the row
-                // Store update for `group_index_lists`
-                // Update related `BucketContext`(set the group index to latest)
-                // Increase the `group_values_len`
+                // Not equal to case, add `row` to `scalarized_indices`
                 if !current_row_equal_to_result {
-                    self.vectorized_append_row_indices.push(row);
-                    unsafe {
-                        let (_, bucket_ctx) = self.occupied_buckets[idx].as_mut();
-
-                        index_lists_updates.push((
-                            self.group_values_len + 1,
-                            (bucket_ctx.group_index() + 1) as usize,
-                        ));
-
-                        *bucket_ctx = BucketContext(self.group_values_len as u64);
-                    }
-
-                    self.group_values_len += 1;
-                } else {
-                    unsafe {
-                        let (_, bucket_ctx) = self.occupied_buckets[idx].as_mut();
-                        bucket_ctx.unset_checking();
-                    }
-                    groups[row] = current_match_group_index.unwrap();
+                    self.scalarized_indices.push(row);
                 }
 
-                current_match_group_index = None;
+                // Init the total result for checking next row
                 current_row_equal_to_result = false;
             }
         }
+    }
 
-        // 2. Resize the `group_index_lists`, apply `pending_index_lists_updates` to it
-        let addition = (self.group_values_len + 1) - self.group_index_lists.len();
-        self.group_index_lists
-            .extend(iter::repeat(0).take(addition));
-        for &(latest_index, prev_index) in index_lists_updates.iter() {
-            self.group_index_lists[latest_index] = prev_index;
-        }
+    fn scalarized_intern(
+        &mut self,
+        cols: &[ArrayRef],
+        batch_hashes: &[u64],
+        groups: &mut Vec<usize>,
+    ) {
+        for &row in &self.scalarized_indices {
+            let target_hash = batch_hashes[row];
+            let entry =
+                self.map
+                    .get_mut(target_hash, |(exist_hash, group_index_view)| {
+                        // Somewhat surprisingly, this closure can be called even if the
+                        // hash doesn't match, so check the hash first with an integer
+                        // comparison first avoid the more expensive comparison with
+                        // group value. https://github.com/apache/datafusion/pull/11718
+                        if target_hash != *exist_hash {
+                            return false;
+                        }
 
-        // 3. Perform `vectorized_append`
-        if self.vectorized_append_row_indices.is_empty() {
-            return;
-        }
+                        fn check_row_equal(
+                            array_row: &dyn GroupColumn,
+                            lhs_row: usize,
+                            array: &ArrayRef,
+                            rhs_row: usize,
+                        ) -> bool {
+                            array_row.equal_to(lhs_row, array, rhs_row)
+                        }
 
-        let group_len_before_appending = self.group_values[0].len();
-        let iter = self.group_values.iter_mut().zip(cols.iter());
-        for (group_column, col) in iter {
-            group_column.vectorized_append(col, &self.vectorized_append_row_indices);
-        }
-        assert_eq!(
-            self.group_values[0].len(),
-            self.group_values_len,
-            "group_len_before_appending:{}, vectorized_append_row_indices:{}",
-            group_len_before_appending,
-            self.vectorized_append_row_indices.len(),
-        );
+                        if group_index_view.is_non_inlinded() {
+                            let mut check_result = false;
+                            let list_offset = group_index_view.value() as usize;
+                            let group_index_list = &self.group_index_lists[list_offset];
 
-        let iter = self
-            .vectorized_append_row_indices
-            .iter()
-            .zip(group_len_before_appending..self.group_values_len);
-        for (&row, group_idx) in iter {
+                            for &group_idx in group_index_list {
+                                // If found one matched group, return true result
+                                if check_result {
+                                    return true;
+                                }
+
+                                for (i, group_val) in self.group_values.iter().enumerate()
+                                {
+                                    if !check_row_equal(
+                                        group_val.as_ref(),
+                                        group_idx,
+                                        &cols[i],
+                                        row,
+                                    ) {
+                                        break;
+                                    }
+                                    check_result = true;
+                                }
+                            }
+
+                            // All groups unmatched, return false result
+                            false
+                        } else {
+                            let group_idx = group_index_view.value() as usize;
+                            for (i, group_val) in self.group_values.iter().enumerate() {
+                                if !check_row_equal(
+                                    group_val.as_ref(),
+                                    group_idx,
+                                    &cols[i],
+                                    row,
+                                ) {
+                                    return false;
+                                }
+                            }
+                            true
+                        }
+                    });
+
+            // Only `rows` having the same hash value with `exist rows` but different value
+            // will be process in `scalarized_intern`.
+            // So related `buckets` in `map` is ensured to be `Some`.
+            let Some((_, group_index_view)) = entry else {
+                unreachable!()
+            };
+
+            // Insert the `row` to `group_values` before checking `next row`
+            let group_idx = self.group_values[0].len();
+
+            let mut checklen = 0;
+            for (i, group_value) in self.group_values.iter_mut().enumerate() {
+                group_value.append_val(&cols[i], row);
+                let len = group_value.len();
+                if i == 0 {
+                    checklen = len;
+                } else {
+                    debug_assert_eq!(checklen, len);
+                }
+            }
+
+            // Check if the `view` is `inlined` or `non-inlined`
+            if group_index_view.is_non_inlinded() {
+                // Non-inlined case, get `group_index_list` from `group_index_lists`,
+                // then add the new `group` with the same hash values into it.
+                let list_offset = group_index_view.value() as usize;
+                let group_index_list = &mut self.group_index_lists[list_offset];
+                group_index_list.push(group_idx);
+            } else {
+                // Inlined case
+                let list_offset = self.group_index_lists.len();
+
+                // Create new `group_index_list` including
+                // `exist group index` + `new group index`.
+                // Add new `group_index_list` into ``group_index_lists`.
+                let exist_group_index = group_index_view.value() as usize;
+                let new_group_index_list = vec![exist_group_index, group_idx];
+                self.group_index_lists.push(new_group_index_list);
+
+                // Update the `group_index_view` to non-inlined
+                let new_group_index_view =
+                    GroupIndexView::new_non_inlined(list_offset as u64);
+                *group_index_view = new_group_index_view;
+            }
+
             groups[row] = group_idx;
         }
-
-        // Set back `index_lists_updates`.
-        self.index_lists_updates = index_lists_updates;
     }
 }
 
@@ -570,31 +603,24 @@ impl GroupValues for GroupValuesColumn {
         batch_hashes.resize(n_rows, 0);
         create_hashes(cols, &self.random_state, &mut batch_hashes)?;
 
-        self.map.reserve(n_rows, |(hash, _)| *hash);
-
         // General steps for one round `vectorized equal_to & append`:
         //   1. Collect vectorized context by checking hash values of `cols` in `map`
         //   2. Perform `vectorized_equal_to`
         //   3. Perform `vectorized_append`
         //   4. Update `current_indices`
-        let num_rows = cols[0].len();
-        self.current_indices.clear();
-        self.current_indices.extend(0..num_rows);
-        let mut count = 0;
-        while self.current_indices.len() > 0 {
-            // 1. Collect vectorized context by checking hash values of `cols` in `map`
-            self.collect_vectorized_process_context(&batch_hashes);
+        groups.resize(n_rows, usize::MAX);
 
-            // 2. Perform `vectorized_equal_to`
-            self.vectorized_equal_to(cols);
+        // 1. Collect vectorized context by checking hash values of `cols` in `map`
+        self.collect_vectorized_process_context(&batch_hashes, groups);
 
-            // 3. Perform `vectorized_append`
-            self.vectorized_append(cols, groups);
+        // 2. Perform `vectorized_append`
+        self.vectorized_append(cols);
 
-            // 4. Update `current_indices`
-            mem::swap(&mut self.current_indices, &mut self.remaining_indices);
-            count += 1;
-        }
+        // 3. Perform `vectorized_equal_to`
+        self.vectorized_equal_to(cols, groups);
+
+        // 4. Update `current_indices`
+        self.scalarized_intern(cols, &batch_hashes, groups);
 
         self.hashes_buffer = batch_hashes;
 
@@ -635,41 +661,59 @@ impl GroupValues for GroupValuesColumn {
                     .iter_mut()
                     .map(|v| v.take_n(n))
                     .collect::<Vec<_>>();
+                let new_group_index_lists =
+                    Vec::with_capacity(self.group_index_lists.len());
+                let old_group_index_lists =
+                    std::mem::replace(&mut self.group_index_lists, new_group_index_lists);
 
-                // Update `map`
                 // SAFETY: self.map outlives iterator and is not modified concurrently
                 unsafe {
                     for bucket in self.map.iter() {
-                        let group_index = {
-                            let (_, bucket_ctx) = bucket.as_ref();
-                            debug_assert!(!bucket_ctx.is_checking());
-                            bucket_ctx.group_index()
-                        };
+                        // Check if it is `inlined` or `non-inlined`
+                        if bucket.as_ref().1.is_non_inlinded() {
+                            // Non-inlined case
+                            // We take `group_index_list` from `old_group_index_lists`
+                            let list_offset = bucket.as_ref().1.value() as usize;
+                            let old_group_index_list =
+                                &old_group_index_lists[list_offset];
 
-                        // Decrement group index in map by n
-                        match group_index.checked_sub(n as u64) {
-                            // Group index was >= n, shift value down
-                            Some(sub) => bucket.as_mut().1 = BucketContext(sub),
-                            // Group index was < n, so remove from table
-                            None => self.map.erase(bucket),
+                            let mut new_group_index_list = Vec::new();
+                            for &group_index in old_group_index_list {
+                                if let Some(remaining) = group_index.checked_sub(n) {
+                                    new_group_index_list.push(remaining);
+                                }
+                            }
+
+                            // The possible results:
+                            //   - `new_group_index_list` is empty, we should erase this bucket
+                            //   - only one value in `new_group_index_list`, switch the `view` to `inlined`
+                            //   - still multiple values in `new_group_index_list`, build and set the new `unlined view`
+                            if new_group_index_list.is_empty() {
+                                self.map.erase(bucket);
+                            } else if new_group_index_list.len() == 1 {
+                                let group_index = new_group_index_list.first().unwrap();
+                                bucket.as_mut().1 =
+                                    GroupIndexView::new_inlined(*group_index as u64);
+                            } else {
+                                let new_list_offset = self.group_index_lists.len();
+                                self.group_index_lists.push(new_group_index_list);
+                                bucket.as_mut().1 =
+                                    GroupIndexView::new_inlined(new_list_offset as u64);
+                            }
+                        } else {
+                            // Inlined case, we just decrement group index by n
+                            let group_index = bucket.as_ref().1.value() as usize;
+                            match group_index.checked_sub(n) {
+                                // Group index was >= n, shift value down
+                                Some(sub) => {
+                                    bucket.as_mut().1 = GroupIndexView::new_inlined(sub as u64)
+                                }
+                                // Group index was < n, so remove from table
+                                None => self.map.erase(bucket),
+                            }
                         }
                     }
                 }
-
-                // Update `group_index_lists`
-                // Loop and decrement the [n+1..] list nodes
-                let start_idx = n + 1;
-                let list_len = self.group_index_lists.len();
-                for idx in start_idx..list_len {
-                    let new_idx = idx - n;
-
-                    let next_idx = self.group_index_lists[idx];
-                    let new_next_idx = next_idx.checked_sub(n).unwrap_or(0);
-
-                    self.group_index_lists[new_idx] = new_next_idx;
-                }
-                self.group_index_lists
-                    .resize(self.group_values[0].len() + 1, 0);
 
                 output
             }
@@ -702,10 +746,7 @@ impl GroupValues for GroupValuesColumn {
         self.hashes_buffer.shrink_to(count);
         self.group_index_lists.clear();
         self.index_lists_updates.clear();
-        self.current_indices.clear();
-        self.remaining_indices.clear();
-        self.empty_buckets.clear();
-        self.occupied_buckets.clear();
+        self.scalarized_indices.clear();
         self.vectorized_append_row_indices.clear();
         self.vectorized_equal_to_row_indices.clear();
         self.vectorized_equal_to_group_indices.clear();
