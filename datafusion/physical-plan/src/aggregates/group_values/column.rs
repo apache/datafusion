@@ -562,6 +562,8 @@ impl GroupValues for GroupValuesColumn {
         batch_hashes.resize(n_rows, 0);
         create_hashes(cols, &self.random_state, &mut batch_hashes)?;
 
+        self.map.reserve(n_rows, |(hash, _)| *hash);
+
         // General steps for one round `vectorized equal_to & append`:
         //   1. Collect vectorized context by checking hash values of `cols` in `map`
         //   2. Perform `vectorized_equal_to`
