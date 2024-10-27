@@ -20,15 +20,20 @@ use std::sync::Arc;
 
 #[cfg(feature = "parquet")]
 use datafusion::datasource::file_format::parquet::ParquetSink;
+use datafusion::physical_expr::equivalence::{EquivalenceClass, EquivalenceGroup};
 use datafusion::physical_expr::window::{NthValueKind, SlidingAggregateWindowExpr};
-use datafusion::physical_expr::{PhysicalSortExpr, ScalarFunctionExpr};
+use datafusion::physical_expr::{
+    ConstExpr, EquivalenceProperties, PhysicalSortExpr, ScalarFunctionExpr,
+};
 use datafusion::physical_plan::expressions::{
     BinaryExpr, CaseExpr, CastExpr, Column, InListExpr, IsNotNullExpr, IsNullExpr,
     Literal, NegativeExpr, NotExpr, NthValue, TryCastExpr,
 };
 use datafusion::physical_plan::udaf::AggregateFunctionExpr;
 use datafusion::physical_plan::windows::{BuiltInWindowExpr, PlainAggregateWindowExpr};
-use datafusion::physical_plan::{Partitioning, PhysicalExpr, WindowExpr};
+use datafusion::physical_plan::{
+    ExecutionMode, Partitioning, PhysicalExpr, PlanProperties, WindowExpr,
+};
 use datafusion::{
     datasource::{
         file_format::{csv::CsvSink, json::JsonSink},
@@ -609,5 +614,102 @@ impl TryFrom<&FileSinkConfig> for protobuf::FileSinkConfig {
             keep_partition_by_columns: conf.keep_partition_by_columns,
             insert_op: conf.insert_op as i32,
         })
+    }
+}
+
+pub fn serialize_plan_properties(
+    props: &PlanProperties,
+    codec: &dyn PhysicalExtensionCodec,
+) -> Result<protobuf::PhysicalPlanProperties> {
+    let eq_properties = Some(serialize_equivalence_properties(
+        &props.eq_properties,
+        codec,
+    )?);
+
+    let partitioning = Some(serialize_partitioning(&props.partitioning, codec)?);
+
+    let mode: protobuf::ExecutionMode = (&props.execution_mode).into();
+
+    Ok(protobuf::PhysicalPlanProperties {
+        eq_properties,
+        partitioning,
+        mode: mode.into(),
+    })
+}
+
+pub fn serialize_equivalence_properties(
+    props: &EquivalenceProperties,
+    codec: &dyn PhysicalExtensionCodec,
+) -> Result<protobuf::EquivalenceProperties> {
+    let group = Some(serialize_equivalence_group(&props.eq_group, codec)?);
+
+    let oeq_class = props
+        .oeq_class()
+        .orderings
+        .iter()
+        .map(|ordering| serialize_physical_sort_exprs(ordering.iter().cloned(), codec))
+        .collect::<Result<Vec<_>>>()?
+        .into_iter()
+        .map(|ordering| PhysicalSortExprNodeCollection {
+            physical_sort_expr_nodes: ordering,
+        })
+        .collect();
+
+    let constants = serialize_const_exprs(&props.constants, codec)?;
+
+    let schema = Some(props.schema().as_ref().try_into()?);
+
+    Ok(protobuf::EquivalenceProperties {
+        group,
+        output_ordering_equivalence: oeq_class,
+        constants,
+        schema,
+    })
+}
+
+pub fn serialize_equivalence_group(
+    equiv_group: &EquivalenceGroup,
+    codec: &dyn PhysicalExtensionCodec,
+) -> Result<protobuf::EquivalenceGroup> {
+    let classes: Result<Vec<_>> = equiv_group
+        .classes
+        .iter()
+        .map(|equiv_class| serialize_equivalence_class(equiv_class, codec))
+        .collect();
+
+    Ok(protobuf::EquivalenceGroup { classes: classes? })
+}
+
+pub fn serialize_equivalence_class(
+    equiv_class: &EquivalenceClass,
+    codec: &dyn PhysicalExtensionCodec,
+) -> Result<protobuf::PhysicalExprNodeCollection> {
+    let exprs = serialize_physical_exprs(equiv_class.iter(), codec)?;
+
+    Ok(protobuf::PhysicalExprNodeCollection { exprs })
+}
+
+pub fn serialize_const_exprs(
+    const_exprs: &[ConstExpr],
+    codec: &dyn PhysicalExtensionCodec,
+) -> Result<Vec<protobuf::ConstExpr>> {
+    const_exprs
+        .iter()
+        .map(|const_expr| {
+            Ok(protobuf::ConstExpr {
+                expr: Some(serialize_physical_expr(const_expr.expr(), codec)?),
+                across_partitions: const_expr.across_partitions(),
+            })
+        })
+        .collect()
+}
+
+impl From<&ExecutionMode> for protobuf::ExecutionMode {
+    fn from(mode: &ExecutionMode) -> Self {
+        match mode {
+            ExecutionMode::Bounded => protobuf::ExecutionMode::Bounded,
+            ExecutionMode::Unbounded => protobuf::ExecutionMode::Unbounded,
+            ExecutionMode::PipelineBreaking => protobuf::ExecutionMode::PipelineBreaking,
+        }
     }
 }

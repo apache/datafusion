@@ -843,6 +843,10 @@ message PhysicalExprNode {
   }
 }
 
+message PhysicalExprNodeCollection {
+  repeated PhysicalExprNode exprs = 1;
+}
+
 message PhysicalScalarUdfNode {
   string name = 1;
   repeated PhysicalExprNode args = 2;
@@ -1247,4 +1251,32 @@ message PartitionStats {
   int64 num_batches = 2;
   int64 num_bytes = 3;
   repeated datafusion_common.ColumnStats column_stats = 4;
+}
+
+message PhysicalPlanProperties {
+  EquivalenceProperties eq_properties = 1;
+  Partitioning partitioning = 2;
+  ExecutionMode mode = 3;
+}
+
+message EquivalenceProperties {
+  EquivalenceGroup group = 1;
+  repeated PhysicalSortExprNodeCollection output_ordering_equivalence = 2;
+  repeated ConstExpr constants = 3;
+  datafusion_common.Schema schema = 4;
+}
+
+message ConstExpr {
+  PhysicalExprNode expr = 1;
+  bool across_partitions = 2;
+}
+
+enum ExecutionMode {
+  Bounded = 0;
+  Unbounded = 1;
+  PipelineBreaking = 2;
+}
+
+message EquivalenceGroup {
+  repeated PhysicalExprNodeCollection classes = 1;
 }

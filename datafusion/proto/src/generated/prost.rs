@@ -1212,6 +1212,11 @@ pub mod physical_expr_node {
     }
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PhysicalExprNodeCollection {
+    #[prost(message, repeated, tag = "1")]
+    pub exprs: ::prost::alloc::vec::Vec<PhysicalExprNode>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PhysicalScalarUdfNode {
     #[prost(string, tag = "1")]
     pub name: ::prost::alloc::string::String,
@@ -1809,6 +1814,40 @@ pub struct PartitionStats {
     #[prost(message, repeated, tag = "4")]
     pub column_stats: ::prost::alloc::vec::Vec<super::datafusion_common::ColumnStats>,
 }
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PhysicalPlanProperties {
+    #[prost(message, optional, tag = "1")]
+    pub eq_properties: ::core::option::Option<EquivalenceProperties>,
+    #[prost(message, optional, tag = "2")]
+    pub partitioning: ::core::option::Option<Partitioning>,
+    #[prost(enumeration = "ExecutionMode", tag = "3")]
+    pub mode: i32,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct EquivalenceProperties {
+    #[prost(message, optional, tag = "1")]
+    pub group: ::core::option::Option<EquivalenceGroup>,
+    #[prost(message, repeated, tag = "2")]
+    pub output_ordering_equivalence: ::prost::alloc::vec::Vec<
+        PhysicalSortExprNodeCollection,
+    >,
+    #[prost(message, repeated, tag = "3")]
+    pub constants: ::prost::alloc::vec::Vec<ConstExpr>,
+    #[prost(message, optional, tag = "4")]
+    pub schema: ::core::option::Option<super::datafusion_common::Schema>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ConstExpr {
+    #[prost(message, optional, tag = "1")]
+    pub expr: ::core::option::Option<PhysicalExprNode>,
+    #[prost(bool, tag = "2")]
+    pub across_partitions: bool,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct EquivalenceGroup {
+    #[prost(message, repeated, tag = "1")]
+    pub classes: ::prost::alloc::vec::Vec<PhysicalExprNodeCollection>,
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
 pub enum BuiltInWindowFunction {
@@ -2049,6 +2088,35 @@ impl AggregateMode {
             "FINAL_PARTITIONED" => Some(Self::FinalPartitioned),
             "SINGLE" => Some(Self::Single),
             "SINGLE_PARTITIONED" => Some(Self::SinglePartitioned),
+            _ => None,
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum ExecutionMode {
+    Bounded = 0,
+    Unbounded = 1,
+    PipelineBreaking = 2,
+}
+impl ExecutionMode {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Bounded => "Bounded",
+            Self::Unbounded => "Unbounded",
+            Self::PipelineBreaking => "PipelineBreaking",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "Bounded" => Some(Self::Bounded),
+            "Unbounded" => Some(Self::Unbounded),
+            "PipelineBreaking" => Some(Self::PipelineBreaking),
             _ => None,
         }
     }

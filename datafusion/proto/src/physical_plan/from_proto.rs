@@ -21,6 +21,7 @@ use std::sync::Arc;
 
 use arrow::compute::SortOptions;
 use chrono::{TimeZone, Utc};
+use datafusion::physical_expr::equivalence::{EquivalenceClass, EquivalenceGroup};
 use datafusion_expr::dml::InsertOp;
 use object_store::path::Path;
 use object_store::ObjectMeta;
@@ -35,13 +36,17 @@ use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::datasource::physical_plan::{FileScanConfig, FileSinkConfig};
 use datafusion::execution::FunctionRegistry;
 use datafusion::logical_expr::WindowFunctionDefinition;
-use datafusion::physical_expr::{PhysicalSortExpr, ScalarFunctionExpr};
+use datafusion::physical_expr::{
+    ConstExpr, EquivalenceProperties, PhysicalSortExpr, ScalarFunctionExpr,
+};
 use datafusion::physical_plan::expressions::{
     in_list, BinaryExpr, CaseExpr, CastExpr, Column, IsNotNullExpr, IsNullExpr, LikeExpr,
     Literal, NegativeExpr, NotExpr, TryCastExpr,
 };
 use datafusion::physical_plan::windows::{create_window_expr, schema_add_window_field};
-use datafusion::physical_plan::{Partitioning, PhysicalExpr, WindowExpr};
+use datafusion::physical_plan::{
+    ExecutionMode, Partitioning, PhysicalExpr, PlanProperties, WindowExpr,
+};
 use datafusion_common::{not_impl_err, DataFusionError, Result};
 use datafusion_proto_common::common::proto_error;
 
@@ -655,5 +660,135 @@ impl TryFrom<&protobuf::FileSinkConfig> for FileSinkConfig {
             insert_op,
             keep_partition_by_columns: conf.keep_partition_by_columns,
         })
+    }
+}
+
+pub fn parse_plan_properties(
+    props: &protobuf::PhysicalPlanProperties,
+    registry: &dyn FunctionRegistry,
+    input_schema: &Schema,
+    codec: &dyn PhysicalExtensionCodec,
+) -> Result<PlanProperties> {
+    let eq_props = props
+        .eq_properties
+        .as_ref()
+        .ok_or_else(|| proto_error("Unexpected empty equivalence properties"))?;
+    let eq_properties =
+        parse_equivalence_properties(eq_props, registry, input_schema, codec)?;
+
+    let partitioning = parse_protobuf_partitioning(
+        props.partitioning.as_ref(),
+        registry,
+        input_schema,
+        codec,
+    )?
+    .ok_or_else(|| proto_error("Unexpected empty partitioning"))?;
+
+    let execution_mode: protobuf::ExecutionMode = props
+        .mode
+        .try_into()
+        .map_err(|_| proto_error("unexpected serialized execution mode"))?;
+
+    Ok(PlanProperties::new(
+        eq_properties,
+        partitioning,
+        (&execution_mode).into(),
+    ))
+}
+
+pub fn parse_equivalence_properties(
+    props: &protobuf::EquivalenceProperties,
+    registry: &dyn FunctionRegistry,
+    input_schema: &Schema,
+    codec: &dyn PhysicalExtensionCodec,
+) -> Result<EquivalenceProperties> {
+    let group = props
+        .group
+        .as_ref()
+        .ok_or_else(|| proto_error("Unexpected empty equivalence group"))?;
+    let eq_group = parse_equivalence_group(group, registry, input_schema, codec)?;
+
+    let orderings = props
+        .output_ordering_equivalence
+        .iter()
+        .map(|ordering| {
+            parse_physical_sort_exprs(
+                &ordering.physical_sort_expr_nodes,
+                registry,
+                input_schema,
+                codec,
+            )
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    let constants = parse_const_exprs(&props.constants, registry, input_schema, codec)?;
+
+    let schema = Arc::new(convert_required!(props.schema)?);
+
+    let mut equiv_props = EquivalenceProperties::new_with_orderings(schema, &orderings)
+        .with_constants(constants);
+    equiv_props.add_equivalence_group(eq_group);
+
+    Ok(equiv_props)
+}
+
+pub fn parse_equivalence_group(
+    equiv_group: &protobuf::EquivalenceGroup,
+    registry: &dyn FunctionRegistry,
+    input_schema: &Schema,
+    codec: &dyn PhysicalExtensionCodec,
+) -> Result<EquivalenceGroup> {
+    let classes: Result<Vec<_>> = equiv_group
+        .classes
+        .iter()
+        .map(|equiv_class| {
+            parse_equivalence_class(equiv_class, registry, input_schema, codec)
+        })
+        .collect();
+
+    Ok(EquivalenceGroup { classes: classes? })
+}
+
+pub fn parse_equivalence_class(
+    equiv_class: &protobuf::PhysicalExprNodeCollection,
+    registry: &dyn FunctionRegistry,
+    input_schema: &Schema,
+    codec: &dyn PhysicalExtensionCodec,
+) -> Result<EquivalenceClass> {
+    let exprs =
+        parse_physical_exprs(equiv_class.exprs.iter(), registry, input_schema, codec)?;
+
+    Ok(EquivalenceClass::new(exprs))
+}
+
+pub fn parse_const_exprs(
+    const_exprs: &[protobuf::ConstExpr],
+    registry: &dyn FunctionRegistry,
+    input_schema: &Schema,
+    codec: &dyn PhysicalExtensionCodec,
+) -> Result<Vec<ConstExpr>> {
+    const_exprs
+        .iter()
+        .map(|const_expr| {
+            let expr = const_expr
+                .expr
+                .as_ref()
+                .ok_or_else(|| proto_error("Unexpected empty physical expression"))?;
+
+            Ok(
+                ConstExpr::new(parse_physical_expr(expr, registry, input_schema, codec)?)
+                    .with_across_partitions(const_expr.across_partitions),
+            )
+        })
+        .collect()
+}
+
+impl From<&protobuf::ExecutionMode> for ExecutionMode {
+    fn from(mode: &protobuf::ExecutionMode) -> Self {
+        match mode {
+            protobuf::ExecutionMode::Bounded => ExecutionMode::Bounded,
+            protobuf::ExecutionMode::Unbounded => ExecutionMode::Unbounded,
+            protobuf::ExecutionMode::PipelineBreaking => ExecutionMode::PipelineBreaking,
+        }
     }
 }
