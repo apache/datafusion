@@ -92,7 +92,7 @@ struct GroupIndexView(u64);
 
 impl GroupIndexView {
     #[inline]
-    pub fn is_non_inlinded(&self) -> bool {
+    pub fn is_non_inlined(&self) -> bool {
         (self.0 & NON_INLINED_FLAG) > 0
     }
 
@@ -294,7 +294,7 @@ impl GroupValuesColumn {
 
             // 2. bucket found
             // Check if the `group index view` is `inlined` or `non_inlined`
-            if group_index_view.is_non_inlinded() {
+            if group_index_view.is_non_inlined() {
                 // Non-inlined case, the value of view is offset in `group_index_lists`.
                 // We use it to get `group_index_list`, and add related `rows` and `group_indices`
                 // into `vectorized_equal_to_row_indices` and `vectorized_equal_to_group_indices`.
@@ -362,13 +362,11 @@ impl GroupValuesColumn {
             );
         }
 
-        self.vectorized_equal_to_results = equal_to_results;
-
         // 2. Check `equal_to_results`, if found not equal to `row`s, just add them
         //    to `scalarized_indices`, and perform `scalarized_intern` for them after.
         let mut current_row_equal_to_result = false;
         for (idx, &row) in self.vectorized_equal_to_row_indices.iter().enumerate() {
-            let equal_to_result = self.vectorized_equal_to_results[idx];
+            let equal_to_result = equal_to_results[idx];
 
             // Equal to case, set the `group_indices` to `rows` in `groups`
             if equal_to_result {
@@ -394,6 +392,59 @@ impl GroupValuesColumn {
                 current_row_equal_to_result = false;
             }
         }
+
+        self.vectorized_equal_to_results = equal_to_results;
+    }
+
+    fn scalarized_equal_to(
+        &self,
+        group_index_view: &GroupIndexView,
+        cols: &[ArrayRef],
+        row: usize,
+        groups: &mut Vec<usize>,
+    ) -> bool {
+        // Check if this row exists in `group_values`
+        fn check_row_equal(
+            array_row: &dyn GroupColumn,
+            lhs_row: usize,
+            array: &ArrayRef,
+            rhs_row: usize,
+        ) -> bool {
+            array_row.equal_to(lhs_row, array, rhs_row)
+        }
+
+        if group_index_view.is_non_inlined() {
+            let list_offset = group_index_view.value() as usize;
+            let group_index_list = &self.group_index_lists[list_offset];
+
+            for &group_idx in group_index_list {
+                let mut check_result = true;
+                for (i, group_val) in self.group_values.iter().enumerate() {
+                    if !check_row_equal(group_val.as_ref(), group_idx, &cols[i], row) {
+                        check_result = false;
+                        break;
+                    }
+                }
+
+                if check_result {
+                    groups[row] = group_idx;
+                    return true;
+                }
+            }
+
+            // All groups unmatched, return false result
+            false
+        } else {
+            let group_idx = group_index_view.value() as usize;
+            for (i, group_val) in self.group_values.iter().enumerate() {
+                if !check_row_equal(group_val.as_ref(), group_idx, &cols[i], row) {
+                    return false;
+                }
+            }
+
+            groups[row] = group_idx;
+            true
+        }
     }
 
     fn scalarized_intern(
@@ -406,70 +457,17 @@ impl GroupValuesColumn {
             return;
         }
 
+        let mut map = mem::take(&mut self.map);
+
         for &row in &self.scalarized_indices {
             let target_hash = batch_hashes[row];
-            let entry =
-                self.map
-                    .get_mut(target_hash, |(exist_hash, group_index_view)| {
-                        // Somewhat surprisingly, this closure can be called even if the
-                        // hash doesn't match, so check the hash first with an integer
-                        // comparison first avoid the more expensive comparison with
-                        // group value. https://github.com/apache/datafusion/pull/11718
-                        if target_hash != *exist_hash {
-                            return false;
-                        }
-
-                        fn check_row_equal(
-                            array_row: &dyn GroupColumn,
-                            lhs_row: usize,
-                            array: &ArrayRef,
-                            rhs_row: usize,
-                        ) -> bool {
-                            array_row.equal_to(lhs_row, array, rhs_row)
-                        }
-
-                        if group_index_view.is_non_inlinded() {
-                            let mut check_result = false;
-                            let list_offset = group_index_view.value() as usize;
-                            let group_index_list = &self.group_index_lists[list_offset];
-
-                            for &group_idx in group_index_list {
-                                // If found one matched group, return true result
-                                if check_result {
-                                    return true;
-                                }
-
-                                for (i, group_val) in self.group_values.iter().enumerate()
-                                {
-                                    if !check_row_equal(
-                                        group_val.as_ref(),
-                                        group_idx,
-                                        &cols[i],
-                                        row,
-                                    ) {
-                                        break;
-                                    }
-                                    check_result = true;
-                                }
-                            }
-
-                            // All groups unmatched, return false result
-                            false
-                        } else {
-                            let group_idx = group_index_view.value() as usize;
-                            for (i, group_val) in self.group_values.iter().enumerate() {
-                                if !check_row_equal(
-                                    group_val.as_ref(),
-                                    group_idx,
-                                    &cols[i],
-                                    row,
-                                ) {
-                                    return false;
-                                }
-                            }
-                            true
-                        }
-                    });
+            let entry = map.get_mut(target_hash, |(exist_hash, group_index_view)| {
+                // Somewhat surprisingly, this closure can be called even if the
+                // hash doesn't match, so check the hash first with an integer
+                // comparison first avoid the more expensive comparison with
+                // group value. https://github.com/apache/datafusion/pull/11718
+                target_hash == *exist_hash
+            });
 
             // Only `rows` having the same hash value with `exist rows` but different value
             // will be process in `scalarized_intern`.
@@ -478,9 +476,15 @@ impl GroupValuesColumn {
                 unreachable!()
             };
 
+            // Perform scalarized equal to
+            if self.scalarized_equal_to(&group_index_view, cols, row, groups) {
+                // Found the row actually exists in group values,
+                // don't need to create new group for it.
+                continue;
+            }
+
             // Insert the `row` to `group_values` before checking `next row`
             let group_idx = self.group_values[0].len();
-
             let mut checklen = 0;
             for (i, group_value) in self.group_values.iter_mut().enumerate() {
                 group_value.append_val(&cols[i], row);
@@ -493,7 +497,7 @@ impl GroupValuesColumn {
             }
 
             // Check if the `view` is `inlined` or `non-inlined`
-            if group_index_view.is_non_inlinded() {
+            if group_index_view.is_non_inlined() {
                 // Non-inlined case, get `group_index_list` from `group_index_lists`,
                 // then add the new `group` with the same hash values into it.
                 let list_offset = group_index_view.value() as usize;
@@ -518,6 +522,8 @@ impl GroupValuesColumn {
 
             groups[row] = group_idx;
         }
+
+        self.map = map;
     }
 }
 
@@ -674,7 +680,7 @@ impl GroupValues for GroupValuesColumn {
                 unsafe {
                     for bucket in self.map.iter() {
                         // Check if it is `inlined` or `non-inlined`
-                        if bucket.as_ref().1.is_non_inlinded() {
+                        if bucket.as_ref().1.is_non_inlined() {
                             // Non-inlined case
                             // We take `group_index_list` from `old_group_index_lists`
                             let list_offset = bucket.as_ref().1.value() as usize;
@@ -701,8 +707,9 @@ impl GroupValues for GroupValuesColumn {
                             } else {
                                 let new_list_offset = self.group_index_lists.len();
                                 self.group_index_lists.push(new_group_index_list);
-                                bucket.as_mut().1 =
-                                    GroupIndexView::new_inlined(new_list_offset as u64);
+                                bucket.as_mut().1 = GroupIndexView::new_non_inlined(
+                                    new_list_offset as u64,
+                                );
                             }
                         } else {
                             // Inlined case, we just decrement group index by n
@@ -710,7 +717,8 @@ impl GroupValues for GroupValuesColumn {
                             match group_index.checked_sub(n) {
                                 // Group index was >= n, shift value down
                                 Some(sub) => {
-                                    bucket.as_mut().1 = GroupIndexView::new_inlined(sub as u64)
+                                    bucket.as_mut().1 =
+                                        GroupIndexView::new_inlined(sub as u64)
                                 }
                                 // Group index was < n, so remove from table
                                 None => self.map.erase(bucket),
@@ -762,8 +770,10 @@ impl GroupValues for GroupValuesColumn {
 mod tests {
     use std::sync::Arc;
 
+    use ahash::RandomState;
     use arrow_array::{ArrayRef, Int64Array, StringArray};
     use arrow_schema::{DataType, Field, Schema};
+    use datafusion_common::hash_utils::create_hashes;
 
     use crate::aggregates::group_values::{column::GroupValuesColumn, GroupValues};
 
@@ -852,5 +862,17 @@ mod tests {
         group_values.intern(&cols1, &mut groups).unwrap();
         group_values.intern(&cols2, &mut groups).unwrap();
         group_values.intern(&cols3, &mut groups).unwrap();
+    }
+
+    #[test]
+    fn test2() {
+        let col1 = Arc::new(Int64Array::from(vec![Some(1), Some(0)])) as _;
+        let col2 = Arc::new(Int64Array::from(vec![Some(0), Some(1)])) as _;
+        let col3 = Arc::new(Int64Array::from(vec![Some(0), Some(0)])) as _;
+        let cols = vec![col1, col2, col3];
+        let random_state = RandomState::with_seeds(0, 0, 0, 0);
+        let mut hash_buffer = vec![0; 2];
+        create_hashes(&cols, &random_state, &mut hash_buffer);
+        dbg!(&hash_buffer);
     }
 }
