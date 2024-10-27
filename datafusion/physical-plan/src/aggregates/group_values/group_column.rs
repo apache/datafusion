@@ -26,6 +26,7 @@ use arrow::array::StringViewBuilder;
 use arrow::array::{Array, ArrayRef, ArrowPrimitiveType, AsArray};
 use arrow::buffer::OffsetBuffer;
 use arrow::buffer::ScalarBuffer;
+use arrow::compute;
 use arrow::datatypes::ByteArrayType;
 use arrow::datatypes::ByteViewType;
 use arrow::datatypes::DataType;
@@ -39,6 +40,7 @@ use datafusion_expr::sqlparser::keywords::NULLABLE;
 use crate::aggregates::group_values::null_builder::MaybeNullBufferBuilder;
 use arrow_array::types::GenericStringType;
 use datafusion_physical_expr_common::binary_map::{OutputType, INITIAL_BUFFER_CAPACITY};
+use std::iter;
 use std::marker::PhantomData;
 use std::mem;
 use std::sync::Arc;
@@ -201,7 +203,6 @@ impl<T: ArrowPrimitiveType, const NULLABLE: bool> GroupColumn
 
             (true, Some(true)) => {
                 self.nulls.append_n(rows.len(), false);
-                self.group_values.reserve(rows.len());
                 for &row in rows {
                     self.group_values.push(arr.value(row));
                 }
@@ -209,12 +210,11 @@ impl<T: ArrowPrimitiveType, const NULLABLE: bool> GroupColumn
 
             (true, Some(false)) => {
                 self.nulls.append_n(rows.len(), true);
-                let new_len = self.group_values.len() + rows.len();
-                self.group_values.resize(new_len, T::default_value());
+                self.group_values
+                    .extend(iter::repeat(T::default_value()).take(rows.len()));
             }
 
             (false, _) => {
-                self.group_values.reserve(rows.len());
                 for &row in rows {
                     self.group_values.push(arr.value(row));
                 }
