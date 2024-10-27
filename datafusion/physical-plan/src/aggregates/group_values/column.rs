@@ -596,7 +596,6 @@ impl GroupValues for GroupValuesColumn {
             count += 1;
         }
 
-        dbg!(&count);
         self.hashes_buffer = batch_hashes;
 
         Ok(())
