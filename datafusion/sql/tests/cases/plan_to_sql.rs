@@ -968,6 +968,21 @@ fn test_table_scan_pushdown() -> Result<()> {
         table_scan_with_all.to_string(),
         "SELECT t1.id, t1.age FROM t1 WHERE (t1.id > t1.age) LIMIT 10"
     );
+
+    let table_scan_with_additional_filter = table_scan_with_filters(
+        Some("t1"),
+        &schema,
+        None,
+        vec![col("id").gt(col("age"))],
+    )?
+    .filter(col("id").eq(lit(5)))?
+    .build()?;
+    let table_scan_with_filter = plan_to_sql(&table_scan_with_additional_filter)?;
+    assert_eq!(
+        table_scan_with_filter.to_string(),
+        "SELECT * FROM t1 WHERE (t1.id = 5) AND (t1.id > t1.age)"
+    );
+
     Ok(())
 }
 
