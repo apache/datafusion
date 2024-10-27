@@ -176,10 +176,7 @@ impl DocumentationBuilder {
         self.with_argument(arg_name, description)
     }
 
-    pub fn with_alternative_syntax(
-        mut self,
-        syntax_name: impl Into<String>,
-    ) -> Self {
+    pub fn with_alternative_syntax(mut self, syntax_name: impl Into<String>) -> Self {
         let mut alternative_syntax_array = self.alternative_syntax.unwrap_or_default();
         alternative_syntax_array.push(syntax_name.into());
         self.alternative_syntax = Some(alternative_syntax_array);
