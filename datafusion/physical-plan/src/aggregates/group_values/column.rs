@@ -411,7 +411,7 @@ impl GroupValuesColumn {
 
             // Look forward next one row and check
             let next_row = self
-                .vectorized_append_row_indices
+                .vectorized_equal_to_row_indices
                 .get(idx + 1)
                 .unwrap_or(&usize::MAX);
             if row != *next_row {
@@ -462,7 +462,13 @@ impl GroupValuesColumn {
         for (group_column, col) in iter {
             group_column.vectorized_append(col, &self.vectorized_append_row_indices);
         }
-        assert_eq!(self.group_values[0].len(), self.group_values_len);
+        assert_eq!(
+            self.group_values[0].len(),
+            self.group_values_len,
+            "group_len_before_appending:{}, vectorized_append_row_indices:{}",
+            group_len_before_appending,
+            self.vectorized_append_row_indices.len(),
+        );
 
         let iter = self
             .vectorized_append_row_indices

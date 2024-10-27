@@ -209,6 +209,8 @@ impl<T: ArrowPrimitiveType, const NULLABLE: bool> GroupColumn
 
             (true, Some(false)) => {
                 self.nulls.append_n(rows.len(), true);
+                let new_len = self.group_values.len() + rows.len();
+                self.group_values.resize(new_len, T::default_value());
             }
 
             (false, _) => {
@@ -377,6 +379,10 @@ where
 
             Some(false) => {
                 self.nulls.append_n(rows.len(), true);
+
+                let new_len = self.offsets.len() + rows.len();
+                let offset = self.buffer.len();
+                self.offsets.resize(new_len, O::usize_as(offset));
             }
         }
     }
@@ -754,6 +760,8 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
 
             Some(false) => {
                 self.nulls.append_n(rows.len(), true);
+                let new_len = self.views.len() + rows.len();
+                self.views.resize(new_len, 0);
             }
         }
     }
