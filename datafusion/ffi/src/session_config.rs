@@ -144,7 +144,10 @@ impl Drop for FFI_SessionConfig {
     }
 }
 
-/// A wrapper struct for accessing [`SessionConfig`] across a FFI boundary
+/// A wrapper struct for accessing [`SessionConfig`] across a FFI boundary.
+/// The [`SessionConfig`] will be generated from a hash map of the config
+/// options in the provider and will be reconstructed on this side of the
+/// interface.s
 pub struct ForeignSessionConfig(pub SessionConfig);
 
 impl TryFrom<&FFI_SessionConfig> for ForeignSessionConfig {
