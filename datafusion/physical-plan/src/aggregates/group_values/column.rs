@@ -352,7 +352,6 @@ impl GroupValuesColumn {
         let mut equal_to_results = mem::take(&mut self.vectorized_equal_to_results);
         equal_to_results.clear();
         equal_to_results.resize(self.vectorized_equal_to_group_indices.len(), true);
-        self.scalarized_indices.clear();
 
         for (col_idx, group_col) in self.group_values.iter().enumerate() {
             group_col.vectorized_equal_to(
@@ -403,6 +402,10 @@ impl GroupValuesColumn {
         batch_hashes: &[u64],
         groups: &mut Vec<usize>,
     ) {
+        if self.scalarized_indices.is_empty() {
+            return;
+        }
+
         for &row in &self.scalarized_indices {
             let target_hash = batch_hashes[row];
             let entry =
@@ -609,6 +612,7 @@ impl GroupValues for GroupValuesColumn {
         //   3. Perform `vectorized_append`
         //   4. Update `current_indices`
         groups.resize(n_rows, usize::MAX);
+        self.scalarized_indices.clear();
 
         // 1. Collect vectorized context by checking hash values of `cols` in `map`
         self.collect_vectorized_process_context(&batch_hashes, groups);
