@@ -288,7 +288,7 @@ fn build_join_top(
 /// ```text
 /// Projection: t1.id
 ///   Filter: t1.id < 0 OR __correlated_sq_1.mark
-///     Left Join:  Filter: t1.id = __correlated_sq_1.id
+///     LeftMark Join:  Filter: t1.id = __correlated_sq_1.id
 ///       TableScan: t1
 ///       SubqueryAlias: __correlated_sq_1
 ///         Projection: t2.id
