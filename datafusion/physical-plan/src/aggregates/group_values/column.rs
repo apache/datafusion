@@ -578,6 +578,7 @@ impl GroupValues for GroupValuesColumn {
         let num_rows = cols[0].len();
         self.current_indices.clear();
         self.current_indices.extend(0..num_rows);
+        let mut count = 0;
         while self.current_indices.len() > 0 {
             // 1. Collect vectorized context by checking hash values of `cols` in `map`
             self.collect_vectorized_process_context(&batch_hashes);
@@ -590,8 +591,10 @@ impl GroupValues for GroupValuesColumn {
 
             // 4. Update `current_indices`
             mem::swap(&mut self.current_indices, &mut self.remaining_indices);
+            count += 1;
         }
 
+        dbg!(&count);
         self.hashes_buffer = batch_hashes;
 
         Ok(())
