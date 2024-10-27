@@ -17,15 +17,11 @@
 
 //! Utility functions for expression simplification
 
-use datafusion_common::{
-    internal_err,
-    tree_node::{TreeNode, TreeNodeVisitor},
-    Result, ScalarValue,
-};
+use datafusion_common::{internal_err, Result, ScalarValue};
 use datafusion_expr::{
     expr::{Between, BinaryExpr, InList},
     expr_fn::{and, bitwise_and, bitwise_or, or},
-    Expr, Like, Operator, Volatility,
+    Expr, Like, Operator,
 };
 
 pub static POWS_OF_TEN: [i128; 38] = [
