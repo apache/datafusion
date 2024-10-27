@@ -447,7 +447,9 @@ impl GroupValuesColumn {
         }
 
         // 2. Resize the `group_index_lists`, apply `pending_index_lists_updates` to it
-        self.group_index_lists.resize(self.group_values_len + 1, 0);
+        let addition = (self.group_values_len + 1) - self.group_index_lists.len();
+        self.group_index_lists
+            .extend(iter::repeat(0).take(addition));
         for &(latest_index, prev_index) in index_lists_updates.iter() {
             self.group_index_lists[latest_index] = prev_index;
         }
