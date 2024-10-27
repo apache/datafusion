@@ -148,26 +148,9 @@ All [aggregate functions](aggregate_functions.md) can be used as window function
 
 ## Analytical functions
 
-- [cume_dist](#cume_dist)
-- [percent_rank](#percent_rank)
 - [first_value](#first_value)
 - [last_value](#last_value)
 - [nth_value](#nth_value)
-
-### `cume_dist`
-
-Relative rank of the current row: (number of rows preceding or peer with current row) / (total rows).
-
-```sql
-cume_dist()
-```
-
-### `percent_rank`
-
-Relative rank of the current row: (rank - 1) / (total rows - 1).
-
-```sql
-percent_rank()
 ```
 
 ### `first_value`
