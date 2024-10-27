@@ -151,7 +151,6 @@ All [aggregate functions](aggregate_functions.md) can be used as window function
 - [first_value](#first_value)
 - [last_value](#last_value)
 - [nth_value](#nth_value)
-```
 
 ### `first_value`
 
