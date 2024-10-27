@@ -1174,8 +1174,7 @@ pub(crate) fn get_final_indices_from_bit_map(
 ) -> (UInt64Array, UInt32Array) {
     let left_size = left_bit_map.len();
     if join_type == JoinType::LeftMark {
-        let left_indices = (0..left_size)
-            .map(|idx| idx as u64)
+        let left_indices = (0..left_size as u64)
             .collect::<UInt64Array>();
         let right_indices = (0..left_size)
             .map(|idx| left_bit_map.get_bit(idx).then_some(0))
