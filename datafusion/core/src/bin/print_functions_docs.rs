@@ -195,6 +195,13 @@ fn print_docs(
                 );
             }
 
+            if let Some(alt_syntax) = &documentation.alternative_syntax {
+                let _ = writeln!(docs, "#### Alternative Syntax\n");
+                for syntax in alt_syntax {
+                    let _ = writeln!(docs, "```sql\n{}\n```", syntax);
+                }
+            }
+
             // next, aliases
             if !f.get_aliases().is_empty() {
                 let _ = writeln!(docs, "#### Aliases");

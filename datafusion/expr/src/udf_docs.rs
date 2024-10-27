@@ -47,6 +47,8 @@ pub struct Documentation {
     /// Left member of a pair is the argument name, right is a
     /// description for the argument
     pub arguments: Option<Vec<(String, String)>>,
+    /// A list of alternative syntax examples for a function
+    pub alternative_syntax: Option<Vec<String>>,
     /// Related functions if any. Values should match the related
     /// udf's name exactly. Related udf's must be of the same
     /// UDF type (scalar, aggregate or window) for proper linking to
@@ -96,6 +98,7 @@ pub struct DocumentationBuilder {
     pub syntax_example: Option<String>,
     pub sql_example: Option<String>,
     pub arguments: Option<Vec<(String, String)>>,
+    pub alternative_syntax: Option<Vec<String>>,
     pub related_udfs: Option<Vec<String>>,
 }
 
@@ -107,6 +110,7 @@ impl DocumentationBuilder {
             syntax_example: None,
             sql_example: None,
             arguments: None,
+            alternative_syntax: None,
             related_udfs: None,
         }
     }
@@ -172,6 +176,16 @@ impl DocumentationBuilder {
         self.with_argument(arg_name, description)
     }
 
+    pub fn with_alternative_syntax(
+        mut self,
+        syntax_name: impl Into<String>,
+    ) -> Self {
+        let mut alternative_syntax_array = self.alternative_syntax.unwrap_or_default();
+        alternative_syntax_array.push(syntax_name.into());
+        self.alternative_syntax = Some(alternative_syntax_array);
+        self
+    }
+
     pub fn with_related_udf(mut self, related_udf: impl Into<String>) -> Self {
         let mut related = self.related_udfs.unwrap_or_default();
         related.push(related_udf.into());
@@ -186,6 +200,7 @@ impl DocumentationBuilder {
             syntax_example,
             sql_example,
             arguments,
+            alternative_syntax,
             related_udfs,
         } = self;
 
@@ -205,6 +220,7 @@ impl DocumentationBuilder {
             syntax_example: syntax_example.unwrap(),
             sql_example,
             arguments,
+            alternative_syntax,
             related_udfs,
         })
     }
