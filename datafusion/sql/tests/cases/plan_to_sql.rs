@@ -1050,7 +1050,7 @@ fn test_join_with_table_scan_filters() -> Result<()> {
 
     assert_eq!(sql.to_string(), expected_sql);
 
-    let join_plan_no_filter = LogicalPlanBuilder::from(left_plan)
+    let join_plan_no_filter = LogicalPlanBuilder::from(left_plan.clone())
         .join(
             right_plan,
             datafusion_expr::JoinType::Inner,
@@ -1062,6 +1062,31 @@ fn test_join_with_table_scan_filters() -> Result<()> {
     let sql = plan_to_sql(&join_plan_no_filter)?;
 
     let expected_sql = r#"SELECT * FROM left_table AS "left" JOIN right_table ON "left".id = right_table.id AND ("left"."name" LIKE 'some_name' AND (age > 10))"#;
+
+    assert_eq!(sql.to_string(), expected_sql);
+
+    let right_plan_with_filter = table_scan_with_filters(
+        Some("right_table"),
+        &schema_right,
+        None,
+        vec![col("age").gt(lit(10))],
+    )?
+    .filter(col("right_table.name").eq(lit("before_join_filter_val")))?
+    .build()?;
+
+    let join_plan_multiple_filters = LogicalPlanBuilder::from(left_plan.clone())
+        .join(
+            right_plan_with_filter,
+            datafusion_expr::JoinType::Inner,
+            (vec!["left.id"], vec!["right_table.id"]),
+            Some(col("left.id").gt(lit(5))),
+        )?
+        .filter(col("left.name").eq(lit("after_join_filter_val")))?
+        .build()?;
+
+    let sql = plan_to_sql(&join_plan_multiple_filters)?;
+
+    let expected_sql = r#"SELECT * FROM left_table AS "left" JOIN right_table ON "left".id = right_table.id AND (("left".id > 5) AND (("left"."name" LIKE 'some_name' AND (right_table."name" = 'before_join_filter_val')) AND (age > 10))) WHERE ("left"."name" = 'after_join_filter_val')"#;
 
     assert_eq!(sql.to_string(), expected_sql);
 
