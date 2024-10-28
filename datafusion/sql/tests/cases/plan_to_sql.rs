@@ -24,6 +24,7 @@ use datafusion_expr::test::function_stub::{count_udaf, max_udaf, min_udaf, sum_u
 use datafusion_expr::{col, lit, table_scan, wildcard, LogicalPlanBuilder};
 use datafusion_functions::unicode;
 use datafusion_functions_aggregate::grouping::grouping_udaf;
+use datafusion_functions_nested::make_array::make_array_udf;
 use datafusion_functions_window::rank::rank_udwf;
 use datafusion_sql::planner::{ContextProvider, PlannerContext, SqlToRel};
 use datafusion_sql::unparser::dialect::{
@@ -711,7 +712,8 @@ where
             .with_aggregate_function(max_udaf())
             .with_aggregate_function(grouping_udaf())
             .with_window_function(rank_udwf())
-            .with_scalar_function(Arc::new(unicode::substr().as_ref().clone())),
+            .with_scalar_function(Arc::new(unicode::substr().as_ref().clone()))
+            .with_scalar_function(make_array_udf()),
     };
     let sql_to_rel = SqlToRel::new(&context);
     let plan = sql_to_rel.sql_statement_to_plan(statement).unwrap();
@@ -1082,5 +1084,20 @@ rank() OVER (PARTITION BY (grouping(person.id) + grouping(person.age)), CASE WHE
 rank() OVER (PARTITION BY (grouping(person.age) + grouping(person.id)), CASE WHEN (CAST(grouping(person.age) AS BIGINT) = 0) THEN person.id END ORDER BY sum(person.id) DESC NULLS FIRST RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS rank_within_parent_2
 FROM person
 GROUP BY person.id, person.first_name"#.replace("\n", " ").as_str(),
+    );
+}
+
+#[test]
+fn test_unnest_to_sql() {
+    sql_round_trip(
+        GenericDialect {},
+        r#"SELECT unnest(array_col) as u1, struct_col, array_col FROM unnest_table WHERE array_col != NULL ORDER BY struct_col, array_col"#,
+        r#"SELECT UNNEST(unnest_table.array_col) AS u1, unnest_table.struct_col, unnest_table.array_col FROM unnest_table WHERE (unnest_table.array_col <> NULL) ORDER BY unnest_table.struct_col ASC NULLS LAST, unnest_table.array_col ASC NULLS LAST"#,
+    );
+
+    sql_round_trip(
+        GenericDialect {},
+        r#"SELECT unnest(make_array(1, 2, 2, 5, NULL)) as u1"#,
+        r#"SELECT UNNEST(make_array(1, 2, 2, 5, NULL)) AS u1"#,
     );
 }
