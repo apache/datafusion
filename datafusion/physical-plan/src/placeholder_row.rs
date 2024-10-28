@@ -208,7 +208,7 @@ mod tests {
         let schema = test::aggr_test_schema();
         let placeholder = PlaceholderRowExec::new(schema);
 
-        // ask for the wrong partition
+        // Ask for the wrong partition
         assert!(placeholder.execute(1, Arc::clone(&task_ctx)).is_err());
         assert!(placeholder.execute(20, task_ctx).is_err());
         Ok(())
@@ -223,7 +223,7 @@ mod tests {
         let iter = placeholder.execute(0, task_ctx)?;
         let batches = common::collect(iter).await?;
 
-        // should have one item
+        // Should have one item
         assert_eq!(batches.len(), 1);
 
         Ok(())
@@ -240,7 +240,7 @@ mod tests {
             let iter = placeholder.execute(n, Arc::clone(&task_ctx))?;
             let batches = common::collect(iter).await?;
 
-            // should have one item
+            // Should have one item
             assert_eq!(batches.len(), 1);
         }
 

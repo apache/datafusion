@@ -112,26 +112,6 @@ macro_rules! make_stub_package {
     };
 }
 
-/// Invokes a function on each element of an array and returns the result as a new array
-///
-/// $ARG: ArrayRef
-/// $NAME: name of the function (for error messages)
-/// $ARGS_TYPE: the type of array to cast the argument to
-/// $RETURN_TYPE: the type of array to return
-/// $FUNC: the function to apply to each element of $ARG
-macro_rules! make_function_scalar_inputs_return_type {
-    ($ARG: expr, $NAME:expr, $ARG_TYPE:ident, $RETURN_TYPE:ident, $FUNC: block) => {{
-        let arg = downcast_arg!($ARG, $NAME, $ARG_TYPE);
-
-        arg.iter()
-            .map(|a| match a {
-                Some(a) => Some($FUNC(a)),
-                _ => None,
-            })
-            .collect::<$RETURN_TYPE>()
-    }};
-}
-
 /// Downcast an argument to a specific array type, returning an internal error
 /// if the cast fails
 ///
@@ -168,9 +148,9 @@ macro_rules! make_math_unary_udf {
             use std::any::Any;
             use std::sync::Arc;
 
-            use arrow::array::{ArrayRef, Float32Array, Float64Array};
-            use arrow::datatypes::DataType;
-            use datafusion_common::{exec_err, DataFusionError, Result};
+            use arrow::array::{ArrayRef, AsArray};
+            use arrow::datatypes::{DataType, Float32Type, Float64Type};
+            use datafusion_common::{exec_err, Result};
             use datafusion_expr::interval_arithmetic::Interval;
             use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
             use datafusion_expr::{
@@ -230,26 +210,17 @@ macro_rules! make_math_unary_udf {
 
                 fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
                     let args = ColumnarValue::values_to_arrays(args)?;
-
                     let arr: ArrayRef = match args[0].data_type() {
-                        DataType::Float64 => {
-                            Arc::new(make_function_scalar_inputs_return_type!(
-                                &args[0],
-                                self.name(),
-                                Float64Array,
-                                Float64Array,
-                                { f64::$UNARY_FUNC }
-                            ))
-                        }
-                        DataType::Float32 => {
-                            Arc::new(make_function_scalar_inputs_return_type!(
-                                &args[0],
-                                self.name(),
-                                Float32Array,
-                                Float32Array,
-                                { f32::$UNARY_FUNC }
-                            ))
-                        }
+                        DataType::Float64 => Arc::new(
+                            args[0]
+                                .as_primitive::<Float64Type>()
+                                .unary::<_, Float64Type>(|x: f64| f64::$UNARY_FUNC(x)),
+                        ) as ArrayRef,
+                        DataType::Float32 => Arc::new(
+                            args[0]
+                                .as_primitive::<Float32Type>()
+                                .unary::<_, Float32Type>(|x: f32| f32::$UNARY_FUNC(x)),
+                        ) as ArrayRef,
                         other => {
                             return exec_err!(
                                 "Unsupported data type {other:?} for function {}",
@@ -257,6 +228,7 @@ macro_rules! make_math_unary_udf {
                             )
                         }
                     };
+
                     Ok(ColumnarValue::Array(arr))
                 }
 
@@ -286,9 +258,9 @@ macro_rules! make_math_binary_udf {
             use std::any::Any;
             use std::sync::Arc;
 
-            use arrow::array::{ArrayRef, Float32Array, Float64Array};
-            use arrow::datatypes::DataType;
-            use datafusion_common::{exec_err, DataFusionError, Result};
+            use arrow::array::{ArrayRef, AsArray};
+            use arrow::datatypes::{DataType, Float32Type, Float64Type};
+            use datafusion_common::{exec_err, Result};
             use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
             use datafusion_expr::TypeSignature;
             use datafusion_expr::{
@@ -346,25 +318,27 @@ macro_rules! make_math_binary_udf {
 
                 fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
                     let args = ColumnarValue::values_to_arrays(args)?;
-
                     let arr: ArrayRef = match args[0].data_type() {
-                        DataType::Float64 => Arc::new(make_function_inputs2!(
-                            &args[0],
-                            &args[1],
-                            "y",
-                            "x",
-                            Float64Array,
-                            { f64::$BINARY_FUNC }
-                        )),
-
-                        DataType::Float32 => Arc::new(make_function_inputs2!(
-                            &args[0],
-                            &args[1],
-                            "y",
-                            "x",
-                            Float32Array,
-                            { f32::$BINARY_FUNC }
-                        )),
+                        DataType::Float64 => {
+                            let y = args[0].as_primitive::<Float64Type>();
+                            let x = args[1].as_primitive::<Float64Type>();
+                            let result = arrow::compute::binary::<_, _, _, Float64Type>(
+                                y,
+                                x,
+                                |y, x| f64::$BINARY_FUNC(y, x),
+                            )?;
+                            Arc::new(result) as _
+                        }
+                        DataType::Float32 => {
+                            let y = args[0].as_primitive::<Float32Type>();
+                            let x = args[1].as_primitive::<Float32Type>();
+                            let result = arrow::compute::binary::<_, _, _, Float32Type>(
+                                y,
+                                x,
+                                |y, x| f32::$BINARY_FUNC(y, x),
+                            )?;
+                            Arc::new(result) as _
+                        }
                         other => {
                             return exec_err!(
                                 "Unsupported data type {other:?} for function {}",
@@ -372,6 +346,7 @@ macro_rules! make_math_binary_udf {
                             )
                         }
                     };
+
                     Ok(ColumnarValue::Array(arr))
                 }
 
@@ -381,44 +356,4 @@ macro_rules! make_math_binary_udf {
             }
         }
     };
-}
-
-macro_rules! make_function_scalar_inputs {
-    ($ARG: expr, $NAME:expr, $ARRAY_TYPE:ident, $FUNC: block) => {{
-        let arg = downcast_arg!($ARG, $NAME, $ARRAY_TYPE);
-
-        arg.iter()
-            .map(|a| match a {
-                Some(a) => Some($FUNC(a)),
-                _ => None,
-            })
-            .collect::<$ARRAY_TYPE>()
-    }};
-}
-
-macro_rules! make_function_inputs2 {
-    ($ARG1: expr, $ARG2: expr, $NAME1:expr, $NAME2: expr, $ARRAY_TYPE:ident, $FUNC: block) => {{
-        let arg1 = downcast_arg!($ARG1, $NAME1, $ARRAY_TYPE);
-        let arg2 = downcast_arg!($ARG2, $NAME2, $ARRAY_TYPE);
-
-        arg1.iter()
-            .zip(arg2.iter())
-            .map(|(a1, a2)| match (a1, a2) {
-                (Some(a1), Some(a2)) => Some($FUNC(a1, a2.try_into().ok()?)),
-                _ => None,
-            })
-            .collect::<$ARRAY_TYPE>()
-    }};
-    ($ARG1: expr, $ARG2: expr, $NAME1:expr, $NAME2: expr, $ARRAY_TYPE1:ident, $ARRAY_TYPE2:ident, $FUNC: block) => {{
-        let arg1 = downcast_arg!($ARG1, $NAME1, $ARRAY_TYPE1);
-        let arg2 = downcast_arg!($ARG2, $NAME2, $ARRAY_TYPE2);
-
-        arg1.iter()
-            .zip(arg2.iter())
-            .map(|(a1, a2)| match (a1, a2) {
-                (Some(a1), Some(a2)) => Some($FUNC(a1, a2.try_into().ok()?)),
-                _ => None,
-            })
-            .collect::<$ARRAY_TYPE1>()
-    }};
 }

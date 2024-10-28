@@ -45,8 +45,8 @@ use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
 use test_utils::add_empty_batches;
 
 use datafusion::functions_window::row_number::row_number_udwf;
-use datafusion_functions_window::dense_rank::dense_rank_udwf;
-use datafusion_functions_window::rank::rank_udwf;
+use datafusion_functions_window::lead_lag::{lag_udwf, lead_udwf};
+use datafusion_functions_window::rank::{dense_rank_udwf, rank_udwf};
 use hashbrown::HashMap;
 use rand::distributions::Alphanumeric;
 use rand::rngs::StdRng;
@@ -198,7 +198,7 @@ async fn bounded_window_causal_non_causal() -> Result<()> {
         // )
         (
             // Window function
-            WindowFunctionDefinition::BuiltInWindowFunction(BuiltInWindowFunction::Lag),
+            WindowFunctionDefinition::WindowUDF(lag_udwf()),
             // its name
             "LAG",
             // no argument
@@ -212,7 +212,7 @@ async fn bounded_window_causal_non_causal() -> Result<()> {
         // )
         (
             // Window function
-            WindowFunctionDefinition::BuiltInWindowFunction(BuiltInWindowFunction::Lead),
+            WindowFunctionDefinition::WindowUDF(lead_udwf()),
             // its name
             "LEAD",
             // no argument
@@ -394,9 +394,7 @@ fn get_random_function(
         window_fn_map.insert(
             "lead",
             (
-                WindowFunctionDefinition::BuiltInWindowFunction(
-                    BuiltInWindowFunction::Lead,
-                ),
+                WindowFunctionDefinition::WindowUDF(lead_udwf()),
                 vec![
                     arg.clone(),
                     lit(ScalarValue::Int64(Some(rng.gen_range(1..10)))),
@@ -407,9 +405,7 @@ fn get_random_function(
         window_fn_map.insert(
             "lag",
             (
-                WindowFunctionDefinition::BuiltInWindowFunction(
-                    BuiltInWindowFunction::Lag,
-                ),
+                WindowFunctionDefinition::WindowUDF(lag_udwf()),
                 vec![
                     arg.clone(),
                     lit(ScalarValue::Int64(Some(rng.gen_range(1..10)))),

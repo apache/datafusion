@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use datafusion_expr::expr::Unnest;
 use sqlparser::ast::Value::SingleQuotedString;
 use sqlparser::ast::{
     self, BinaryOperator, Expr as AstExpr, Function, Ident, Interval, ObjectName,
@@ -74,11 +75,6 @@ use datafusion_expr::{
 pub fn expr_to_sql(expr: &Expr) -> Result<ast::Expr> {
     let unparser = Unparser::default();
     unparser.expr_to_sql(expr)
-}
-
-pub fn sort_to_sql(sort: &Sort) -> Result<ast::OrderByExpr> {
-    let unparser = Unparser::default();
-    unparser.sort_to_sql(sort)
 }
 
 const LOWEST: &BinaryOperator = &BinaryOperator::Or;
@@ -229,9 +225,10 @@ impl Unparser<'_> {
                         ast::WindowFrameUnits::Groups
                     }
                 };
-                let order_by: Vec<ast::OrderByExpr> = order_by
+
+                let order_by = order_by
                     .iter()
-                    .map(sort_to_sql)
+                    .map(|sort_expr| self.sort_to_sql(sort_expr))
                     .collect::<Result<Vec<_>>>()?;
 
                 let start_bound = self.convert_bound(&window_frame.start_bound)?;
@@ -470,7 +467,7 @@ impl Unparser<'_> {
                 Ok(ast::Expr::Value(ast::Value::Placeholder(p.id.to_string())))
             }
             Expr::OuterReferenceColumn(_, col) => self.col_to_sql(col),
-            Expr::Unnest(_) => not_impl_err!("Unsupported Expr conversion: {expr:?}"),
+            Expr::Unnest(unnest) => self.unnest_to_sql(unnest),
         }
     }
 
@@ -1344,6 +1341,29 @@ impl Unparser<'_> {
         }
     }
 
+    /// Converts an UNNEST operation to an AST expression by wrapping it as a function call,
+    /// since there is no direct representation for UNNEST in the AST.
+    fn unnest_to_sql(&self, unnest: &Unnest) -> Result<ast::Expr> {
+        let args = self.function_args_to_sql(std::slice::from_ref(&unnest.expr))?;
+
+        Ok(ast::Expr::Function(Function {
+            name: ast::ObjectName(vec![Ident {
+                value: "UNNEST".to_string(),
+                quote_style: None,
+            }]),
+            args: ast::FunctionArguments::List(ast::FunctionArgumentList {
+                duplicate_treatment: None,
+                args,
+                clauses: vec![],
+            }),
+            filter: None,
+            null_treatment: None,
+            over: None,
+            within_group: vec![],
+            parameters: ast::FunctionArguments::None,
+        }))
+    }
+
     fn arrow_dtype_to_ast_dtype(&self, data_type: &DataType) -> Result<ast::DataType> {
         match data_type {
             DataType::Null => {
@@ -1352,7 +1372,7 @@ impl Unparser<'_> {
             DataType::Boolean => Ok(ast::DataType::Bool),
             DataType::Int8 => Ok(ast::DataType::TinyInt(None)),
             DataType::Int16 => Ok(ast::DataType::SmallInt(None)),
-            DataType::Int32 => Ok(ast::DataType::Integer(None)),
+            DataType::Int32 => Ok(self.dialect.int32_cast_dtype()),
             DataType::Int64 => Ok(self.dialect.int64_cast_dtype()),
             DataType::UInt8 => Ok(ast::DataType::UnsignedTinyInt(None)),
             DataType::UInt16 => Ok(ast::DataType::UnsignedSmallInt(None)),
@@ -1859,6 +1879,15 @@ mod tests {
                 }),
                 r#"CAST(a AS DECIMAL(12,0))"#,
             ),
+            (
+                Expr::Unnest(Unnest {
+                    expr: Box::new(Expr::Column(Column {
+                        relation: Some(TableReference::partial("schema", "table")),
+                        name: "array_col".to_string(),
+                    })),
+                }),
+                r#"UNNEST("schema"."table".array_col)"#,
+            ),
         ];
 
         for (expr, expected) in tests {
@@ -2242,6 +2271,34 @@ mod tests {
             let expr = Expr::Cast(Cast {
                 expr: Box::new(col("a")),
                 data_type: DataType::Int64,
+            });
+            let ast = unparser.expr_to_sql(&expr)?;
+
+            let actual = format!("{}", ast);
+            let expected = format!(r#"CAST(a AS {identifier})"#);
+
+            assert_eq!(actual, expected);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn custom_dialect_with_int32_cast_dtype() -> Result<()> {
+        let default_dialect = CustomDialectBuilder::new().build();
+        let mysql_dialect = CustomDialectBuilder::new()
+            .with_int32_cast_dtype(ast::DataType::Custom(
+                ObjectName(vec![Ident::new("SIGNED")]),
+                vec![],
+            ))
+            .build();
+
+        for (dialect, identifier) in
+            [(default_dialect, "INTEGER"), (mysql_dialect, "SIGNED")]
+        {
+            let unparser = Unparser::new(&dialect);
+            let expr = Expr::Cast(Cast {
+                expr: Box::new(col("a")),
+                data_type: DataType::Int32,
             });
             let ast = unparser.expr_to_sql(&expr)?;
 

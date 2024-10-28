@@ -16,14 +16,16 @@
 // under the License.
 
 use crate::aggregates::group_values::group_column::{
-    ByteGroupValueBuilder, GroupColumn, PrimitiveGroupValueBuilder,
+    ByteGroupValueBuilder, ByteViewGroupValueBuilder, GroupColumn,
+    PrimitiveGroupValueBuilder,
 };
 use crate::aggregates::group_values::GroupValues;
 use ahash::RandomState;
 use arrow::compute::cast;
 use arrow::datatypes::{
-    Date32Type, Date64Type, Float32Type, Float64Type, Int16Type, Int32Type, Int64Type,
-    Int8Type, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
+    BinaryViewType, Date32Type, Date64Type, Float32Type, Float64Type, Int16Type,
+    Int32Type, Int64Type, Int8Type, StringViewType, UInt16Type, UInt32Type, UInt64Type,
+    UInt8Type,
 };
 use arrow::record_batch::RecordBatch;
 use arrow_array::{Array, ArrayRef};
@@ -119,6 +121,8 @@ impl GroupValuesColumn {
                 | DataType::LargeBinary
                 | DataType::Date32
                 | DataType::Date64
+                | DataType::Utf8View
+                | DataType::BinaryView
         )
     }
 }
@@ -182,6 +186,14 @@ impl GroupValues for GroupValuesColumn {
                     }
                     &DataType::LargeBinary => {
                         let b = ByteGroupValueBuilder::<i64>::new(OutputType::Binary);
+                        v.push(Box::new(b) as _)
+                    }
+                    &DataType::Utf8View => {
+                        let b = ByteViewGroupValueBuilder::<StringViewType>::new();
+                        v.push(Box::new(b) as _)
+                    }
+                    &DataType::BinaryView => {
+                        let b = ByteViewGroupValueBuilder::<BinaryViewType>::new();
                         v.push(Box::new(b) as _)
                     }
                     dt => {

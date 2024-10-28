@@ -1,0 +1,118 @@
+{
+    "relations": [
+        {
+        "root": {
+            "input": {
+            "set": {
+                "inputs": [
+                {
+                    "project": {
+                    "common": {
+                        "emit": {
+                        "outputMapping": [
+                            1
+                        ]
+                        }
+                    },
+                    "input": {
+                        "read": {
+                        "common": {
+                            "direct": {}
+                        },
+                        "baseSchema": {
+                            "names": [
+                            "a"
+                            ],
+                            "struct": {
+                            "types": [
+                                {
+                                "i64": {
+                                    "nullability": "NULLABILITY_NULLABLE"
+                                }
+                                }
+                            ],
+                            "nullability": "NULLABILITY_NULLABLE"
+                            }
+                        },
+                        "namedTable": {
+                            "names": [
+                            "data"
+                            ]
+                        }
+                        }
+                    },
+                    "expressions": [
+                        {
+                        "selection": {
+                            "directReference": {
+                            "structField": {}
+                            },
+                            "rootReference": {}
+                        }
+                        }
+                    ]
+                    }
+                },
+                {
+                    "project": {
+                    "common": {
+                        "emit": {
+                        "outputMapping": [
+                            1
+                        ]
+                        }
+                    },
+                    "input": {
+                        "read": {
+                        "common": {
+                            "direct": {}
+                        },
+                        "baseSchema": {
+                            "names": [
+                            "a"
+                            ],
+                            "struct": {
+                            "types": [
+                                {
+                                "i64": {
+                                    "nullability": "NULLABILITY_NULLABLE"
+                                }
+                                }
+                            ],
+                            "nullability": "NULLABILITY_NULLABLE"
+                            }
+                        },
+                        "namedTable": {
+                            "names": [
+                            "data2"
+                            ]
+                        }
+                        }
+                    },
+                    "expressions": [
+                        {
+                        "selection": {
+                            "directReference": {
+                            "structField": {}
+                            },
+                            "rootReference": {}
+                        }
+                        }
+                    ]
+                    }
+                }
+                ],
+                "op": "SET_OP_UNION_DISTINCT"
+            }
+            },
+            "names": [
+            "a"
+            ]
+        }
+        }
+    ],
+    "version": {
+        "minorNumber": 54,
+        "producer": "subframe"
+    }
+}

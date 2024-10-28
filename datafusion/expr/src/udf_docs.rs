@@ -47,6 +47,8 @@ pub struct Documentation {
     /// Left member of a pair is the argument name, right is a
     /// description for the argument
     pub arguments: Option<Vec<(String, String)>>,
+    /// A list of alternative syntax examples for a function
+    pub alternative_syntax: Option<Vec<String>>,
     /// Related functions if any. Values should match the related
     /// udf's name exactly. Related udf's must be of the same
     /// UDF type (scalar, aggregate or window) for proper linking to
@@ -96,6 +98,7 @@ pub struct DocumentationBuilder {
     pub syntax_example: Option<String>,
     pub sql_example: Option<String>,
     pub arguments: Option<Vec<(String, String)>>,
+    pub alternative_syntax: Option<Vec<String>>,
     pub related_udfs: Option<Vec<String>>,
 }
 
@@ -107,6 +110,7 @@ impl DocumentationBuilder {
             syntax_example: None,
             sql_example: None,
             arguments: None,
+            alternative_syntax: None,
             related_udfs: None,
         }
     }
@@ -147,23 +151,36 @@ impl DocumentationBuilder {
 
     /// Add a standard "expression" argument to the documentation
     ///
-    /// This is similar to  [`Self::with_argument`] except that  a standard
-    /// description is appended to the end: `"Can be a constant, column, or
-    /// function, and any combination of arithmetic operators."`
-    ///
-    /// The argument is rendered like
+    /// The argument is rendered like below if Some() is passed through:
     ///
     /// ```text
     /// <arg_name>:
     ///   <expression_type> expression to operate on. Can be a constant, column, or function, and any combination of operators.
     /// ```
+    ///
+    /// The argument is rendered like below if None is passed through:
+    ///
+    ///  ```text
+    /// <arg_name>:
+    ///   The expression to operate on. Can be a constant, column, or function, and any combination of operators.
+    /// ```
     pub fn with_standard_argument(
         self,
         arg_name: impl Into<String>,
-        expression_type: impl AsRef<str>,
+        expression_type: Option<&str>,
     ) -> Self {
-        let expression_type = expression_type.as_ref();
-        self.with_argument(arg_name, format!("{expression_type} expression to operate on. Can be a constant, column, or function, and any combination of operators."))
+        let description = format!(
+            "{} expression to operate on. Can be a constant, column, or function, and any combination of operators.",
+            expression_type.unwrap_or("The")
+        );
+        self.with_argument(arg_name, description)
+    }
+
+    pub fn with_alternative_syntax(mut self, syntax_name: impl Into<String>) -> Self {
+        let mut alternative_syntax_array = self.alternative_syntax.unwrap_or_default();
+        alternative_syntax_array.push(syntax_name.into());
+        self.alternative_syntax = Some(alternative_syntax_array);
+        self
     }
 
     pub fn with_related_udf(mut self, related_udf: impl Into<String>) -> Self {
@@ -180,6 +197,7 @@ impl DocumentationBuilder {
             syntax_example,
             sql_example,
             arguments,
+            alternative_syntax,
             related_udfs,
         } = self;
 
@@ -199,6 +217,7 @@ impl DocumentationBuilder {
             syntax_example: syntax_example.unwrap(),
             sql_example,
             arguments,
+            alternative_syntax,
             related_udfs,
         })
     }

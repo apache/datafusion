@@ -123,6 +123,49 @@ ORDER BY id, name, l_name;
 NULL bar NULL
 NULL NULL l_bar
 
+# Regression test: missing field metadata from left side of the union when right side is chosen
+query T
+select name from (
+  SELECT nonnull_name as name FROM "table_with_metadata"
+  UNION ALL
+  SELECT NULL::string as name
+) group by name order by name;
+----
+no_bar
+no_baz
+no_foo
+NULL
+
+# Regression test: missing schema metadata from union when schema with metadata isn't the first one
+# and also ensure it works fine with multiple unions
+query T
+select name from (
+  SELECT NULL::string as name
+  UNION ALL
+  SELECT nonnull_name as name FROM "table_with_metadata"
+  UNION ALL
+  SELECT NULL::string as name
+) group by name order by name;
+----
+no_bar
+no_baz
+no_foo
+NULL
+
+query P rowsort
+SELECT ts
+FROM ((
+    SELECT now() AS ts
+    FROM table_with_metadata
+) UNION ALL (
+        SELECT ts
+    FROM table_with_metadata
+))
+GROUP BY ts
+ORDER BY ts
+LIMIT 1;
+----
+2020-09-08T13:42:29.190855123Z
 
 
 statement ok

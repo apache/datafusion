@@ -719,10 +719,16 @@ impl ListingTable {
             builder.push(Field::new(part_col_name, part_col_type.clone(), false));
         }
 
+        let table_schema = Arc::new(
+            builder
+                .finish()
+                .with_metadata(file_schema.metadata().clone()),
+        );
+
         let table = Self {
             table_paths: config.table_paths,
             file_schema,
-            table_schema: Arc::new(builder.finish()),
+            table_schema,
             options,
             definition: None,
             collected_statistics: Arc::new(DefaultFileStatisticsCache::default()),
@@ -782,6 +788,16 @@ impl ListingTable {
     }
 }
 
+// Expressions can be used for parttion pruning if they can be evaluated using
+// only the partiton columns and there are partition columns.
+fn can_be_evaluted_for_partition_pruning(
+    partition_column_names: &[&str],
+    expr: &Expr,
+) -> bool {
+    !partition_column_names.is_empty()
+        && expr_applicable_for_cols(partition_column_names, expr)
+}
+
 #[async_trait]
 impl TableProvider for ListingTable {
     fn as_any(&self) -> &dyn Any {
@@ -807,10 +823,28 @@ impl TableProvider for ListingTable {
         filters: &[Expr],
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        // extract types of partition columns
+        let table_partition_cols = self
+            .options
+            .table_partition_cols
+            .iter()
+            .map(|col| Ok(self.table_schema.field_with_name(&col.0)?.clone()))
+            .collect::<Result<Vec<_>>>()?;
+
+        let table_partition_col_names = table_partition_cols
+            .iter()
+            .map(|field| field.name().as_str())
+            .collect::<Vec<_>>();
+        // If the filters can be resolved using only partition cols, there is no need to
+        // pushdown it to TableScan, otherwise, `unhandled` pruning predicates will be generated
+        let (partition_filters, filters): (Vec<_>, Vec<_>) =
+            filters.iter().cloned().partition(|filter| {
+                can_be_evaluted_for_partition_pruning(&table_partition_col_names, filter)
+            });
         // TODO (https://github.com/apache/datafusion/issues/11600) remove downcast_ref from here?
         let session_state = state.as_any().downcast_ref::<SessionState>().unwrap();
         let (mut partitioned_file_lists, statistics) = self
-            .list_files_for_scan(session_state, filters, limit)
+            .list_files_for_scan(session_state, &partition_filters, limit)
             .await?;
 
         // if no files need to be read, return an `EmptyExec`
@@ -845,28 +879,6 @@ impl TableProvider for ListingTable {
             }
             None => {} // no ordering required
         };
-
-        // extract types of partition columns
-        let table_partition_cols = self
-            .options
-            .table_partition_cols
-            .iter()
-            .map(|col| Ok(self.table_schema.field_with_name(&col.0)?.clone()))
-            .collect::<Result<Vec<_>>>()?;
-
-        // If the filters can be resolved using only partition cols, there is no need to
-        // pushdown it to TableScan, otherwise, `unhandled` pruning predicates will be generated
-        let table_partition_col_names = table_partition_cols
-            .iter()
-            .map(|field| field.name().as_str())
-            .collect::<Vec<_>>();
-        let filters = filters
-            .iter()
-            .filter(|filter| {
-                !expr_applicable_for_cols(&table_partition_col_names, filter)
-            })
-            .cloned()
-            .collect::<Vec<_>>();
 
         let filters = conjunction(filters.to_vec())
             .map(|expr| -> Result<_> {
@@ -908,18 +920,17 @@ impl TableProvider for ListingTable {
         &self,
         filters: &[&Expr],
     ) -> Result<Vec<TableProviderFilterPushDown>> {
+        let partition_column_names = self
+            .options
+            .table_partition_cols
+            .iter()
+            .map(|col| col.0.as_str())
+            .collect::<Vec<_>>();
         filters
             .iter()
             .map(|filter| {
-                if expr_applicable_for_cols(
-                    &self
-                        .options
-                        .table_partition_cols
-                        .iter()
-                        .map(|col| col.0.as_str())
-                        .collect::<Vec<_>>(),
-                    filter,
-                ) {
+                if can_be_evaluted_for_partition_pruning(&partition_column_names, filter)
+                {
                     // if filter can be handled by partition pruning, it is exact
                     return Ok(TableProviderFilterPushDown::Exact);
                 }

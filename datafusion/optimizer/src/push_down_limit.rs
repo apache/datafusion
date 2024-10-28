@@ -27,6 +27,7 @@ use datafusion_common::tree_node::Transformed;
 use datafusion_common::utils::combine_limit;
 use datafusion_common::Result;
 use datafusion_expr::logical_plan::{Join, JoinType, Limit, LogicalPlan};
+use datafusion_expr::{lit, FetchType, SkipType};
 
 /// Optimization rule that tries to push down `LIMIT`.
 ///
@@ -56,16 +57,27 @@ impl OptimizerRule for PushDownLimit {
             return Ok(Transformed::no(plan));
         };
 
-        let Limit { skip, fetch, input } = limit;
+        // Currently only rewrite if skip and fetch are both literals
+        let SkipType::Literal(skip) = limit.get_skip_type()? else {
+            return Ok(Transformed::no(LogicalPlan::Limit(limit)));
+        };
+        let FetchType::Literal(fetch) = limit.get_fetch_type()? else {
+            return Ok(Transformed::no(LogicalPlan::Limit(limit)));
+        };
 
         // Merge the Parent Limit and the Child Limit.
-        if let LogicalPlan::Limit(child) = input.as_ref() {
-            let (skip, fetch) =
-                combine_limit(limit.skip, limit.fetch, child.skip, child.fetch);
+        if let LogicalPlan::Limit(child) = limit.input.as_ref() {
+            let SkipType::Literal(child_skip) = child.get_skip_type()? else {
+                return Ok(Transformed::no(LogicalPlan::Limit(limit)));
+            };
+            let FetchType::Literal(child_fetch) = child.get_fetch_type()? else {
+                return Ok(Transformed::no(LogicalPlan::Limit(limit)));
+            };
 
+            let (skip, fetch) = combine_limit(skip, fetch, child_skip, child_fetch);
             let plan = LogicalPlan::Limit(Limit {
-                skip,
-                fetch,
+                skip: Some(Box::new(lit(skip as i64))),
+                fetch: fetch.map(|f| Box::new(lit(f as i64))),
                 input: Arc::clone(&child.input),
             });
 
@@ -75,14 +87,10 @@ impl OptimizerRule for PushDownLimit {
 
         // no fetch to push, so return the original plan
         let Some(fetch) = fetch else {
-            return Ok(Transformed::no(LogicalPlan::Limit(Limit {
-                skip,
-                fetch,
-                input,
-            })));
+            return Ok(Transformed::no(LogicalPlan::Limit(limit)));
         };
 
-        match Arc::unwrap_or_clone(input) {
+        match Arc::unwrap_or_clone(limit.input) {
             LogicalPlan::TableScan(mut scan) => {
                 let rows_needed = if fetch != 0 { fetch + skip } else { 0 };
                 let new_fetch = scan
@@ -108,13 +116,6 @@ impl OptimizerRule for PushDownLimit {
                     .map(|input| make_arc_limit(0, fetch + skip, input))
                     .collect();
                 transformed_limit(skip, fetch, LogicalPlan::Union(union))
-            }
-
-            LogicalPlan::CrossJoin(mut cross_join) => {
-                // push limit to both inputs
-                cross_join.left = make_arc_limit(0, fetch + skip, cross_join.left);
-                cross_join.right = make_arc_limit(0, fetch + skip, cross_join.right);
-                transformed_limit(skip, fetch, LogicalPlan::CrossJoin(cross_join))
             }
 
             LogicalPlan::Join(join) => Ok(push_down_join(join, fetch + skip)
@@ -162,8 +163,8 @@ impl OptimizerRule for PushDownLimit {
                     .into_iter()
                     .map(|child| {
                         LogicalPlan::Limit(Limit {
-                            skip: 0,
-                            fetch: Some(fetch + skip),
+                            skip: None,
+                            fetch: Some(Box::new(lit((fetch + skip) as i64))),
                             input: Arc::new(child.clone()),
                         })
                     })
@@ -203,8 +204,8 @@ impl OptimizerRule for PushDownLimit {
 /// ```
 fn make_limit(skip: usize, fetch: usize, input: Arc<LogicalPlan>) -> LogicalPlan {
     LogicalPlan::Limit(Limit {
-        skip,
-        fetch: Some(fetch),
+        skip: Some(Box::new(lit(skip as i64))),
+        fetch: Some(Box::new(lit(fetch as i64))),
         input,
     })
 }
@@ -224,11 +225,7 @@ fn original_limit(
     fetch: usize,
     input: LogicalPlan,
 ) -> Result<Transformed<LogicalPlan>> {
-    Ok(Transformed::no(LogicalPlan::Limit(Limit {
-        skip,
-        fetch: Some(fetch),
-        input: Arc::new(input),
-    })))
+    Ok(Transformed::no(make_limit(skip, fetch, Arc::new(input))))
 }
 
 /// Returns the a transformed limit
@@ -237,11 +234,7 @@ fn transformed_limit(
     fetch: usize,
     input: LogicalPlan,
 ) -> Result<Transformed<LogicalPlan>> {
-    Ok(Transformed::yes(LogicalPlan::Limit(Limit {
-        skip,
-        fetch: Some(fetch),
-        input: Arc::new(input),
-    })))
+    Ok(Transformed::yes(make_limit(skip, fetch, Arc::new(input))))
 }
 
 /// Adds a limit to the inputs of a join, if possible
@@ -254,15 +247,15 @@ fn push_down_join(mut join: Join, limit: usize) -> Transformed<Join> {
 
     let (left_limit, right_limit) = if is_no_join_condition(&join) {
         match join.join_type {
-            Left | Right | Full => (Some(limit), Some(limit)),
+            Left | Right | Full | Inner => (Some(limit), Some(limit)),
             LeftAnti | LeftSemi => (Some(limit), None),
             RightAnti | RightSemi => (None, Some(limit)),
-            Inner => (None, None),
         }
     } else {
         match join.join_type {
             Left => (Some(limit), None),
             Right => (None, Some(limit)),
+            Full => (Some(limit), Some(limit)),
             _ => (None, None),
         }
     };
@@ -1115,7 +1108,7 @@ mod test {
             .build()?;
 
         let expected = "Limit: skip=0, fetch=1000\
-        \n  CrossJoin:\
+        \n  Cross Join: \
         \n    Limit: skip=0, fetch=1000\
         \n      TableScan: test, fetch=1000\
         \n    Limit: skip=0, fetch=1000\
@@ -1135,7 +1128,7 @@ mod test {
             .build()?;
 
         let expected = "Limit: skip=1000, fetch=1000\
-        \n  CrossJoin:\
+        \n  Cross Join: \
         \n    Limit: skip=0, fetch=2000\
         \n      TableScan: test, fetch=2000\
         \n    Limit: skip=0, fetch=2000\

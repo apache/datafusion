@@ -157,7 +157,56 @@ All [aggregate functions](aggregate_functions.md) can be used as window function
 
 ## Ranking Functions
 
+- [cume_dist](#cume_dist)
+- [dense_rank](#dense_rank)
+- [ntile](#ntile)
+- [percent_rank](#percent_rank)
+- [rank](#rank)
 - [row_number](#row_number)
+
+### `cume_dist`
+
+Relative rank of the current row: (number of rows preceding or peer with current row) / (total rows).
+
+```
+cume_dist()
+```
+
+### `dense_rank`
+
+Returns the rank of the current row without gaps. This function ranks rows in a dense manner, meaning consecutive ranks are assigned even for identical values.
+
+```
+dense_rank()
+```
+
+### `ntile`
+
+Integer ranging from 1 to the argument value, dividing the partition as equally as possible
+
+```
+ntile(expression)
+```
+
+#### Arguments
+
+- **expression**: An integer describing the number groups the partition should be split into
+
+### `percent_rank`
+
+Returns the percentage rank of the current row within its partition. The value ranges from 0 to 1 and is computed as `(rank - 1) / (total_rows - 1)`.
+
+```
+percent_rank()
+```
+
+### `rank`
+
+Returns the rank of the current row within its partition, allowing gaps between ranks. This function provides a ranking similar to `row_number`, but skips ranks for identical values.
+
+```
+rank()
+```
 
 ### `row_number`
 
@@ -166,3 +215,36 @@ Number of the current row within its partition, counting from 1.
 ```
 row_number()
 ```
+
+## Analytical Functions
+
+- [lag](#lag)
+- [lead](#lead)
+
+### `lag`
+
+Returns value evaluated at the row that is offset rows before the current row within the partition; if there is no such row, instead return default (which must be of the same type as value).
+
+```
+lag(expression, offset, default)
+```
+
+#### Arguments
+
+- **expression**: Expression to operate on
+- **offset**: Integer. Specifies how many rows back the value of expression should be retrieved. Defaults to 1.
+- **default**: The default value if the offset is not within the partition. Must be of the same type as expression.
+
+### `lead`
+
+Returns value evaluated at the row that is offset rows after the current row within the partition; if there is no such row, instead return default (which must be of the same type as value).
+
+```
+lead(expression, offset, default)
+```
+
+#### Arguments
+
+- **expression**: Expression to operate on
+- **offset**: Integer. Specifies how many rows forward the value of expression should be retrieved. Defaults to 1.
+- **default**: The default value if the offset is not within the partition. Must be of the same type as expression.

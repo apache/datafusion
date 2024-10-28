@@ -96,7 +96,7 @@ fn get_initcap_doc() -> &'static Documentation {
 | Apache Datafusion                  |
 +------------------------------------+
 ```"#)
-            .with_standard_argument("str", "String")
+            .with_standard_argument("str", Some("String"))
             .with_related_udf("lower")
             .with_related_udf("upper")
             .build()

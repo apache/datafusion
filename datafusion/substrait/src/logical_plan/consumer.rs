@@ -196,6 +196,65 @@ fn split_eq_and_noneq_join_predicate_with_nulls_equality(
     (accum_join_keys, nulls_equal_nulls, join_filter)
 }
 
+async fn union_rels(
+    rels: &[Rel],
+    ctx: &SessionContext,
+    extensions: &Extensions,
+    is_all: bool,
+) -> Result<LogicalPlan> {
+    let mut union_builder = Ok(LogicalPlanBuilder::from(
+        from_substrait_rel(ctx, &rels[0], extensions).await?,
+    ));
+    for input in &rels[1..] {
+        let rel_plan = from_substrait_rel(ctx, input, extensions).await?;
+
+        union_builder = if is_all {
+            union_builder?.union(rel_plan)
+        } else {
+            union_builder?.union_distinct(rel_plan)
+        };
+    }
+    union_builder?.build()
+}
+
+async fn intersect_rels(
+    rels: &[Rel],
+    ctx: &SessionContext,
+    extensions: &Extensions,
+    is_all: bool,
+) -> Result<LogicalPlan> {
+    let mut rel = from_substrait_rel(ctx, &rels[0], extensions).await?;
+
+    for input in &rels[1..] {
+        rel = LogicalPlanBuilder::intersect(
+            rel,
+            from_substrait_rel(ctx, input, extensions).await?,
+            is_all,
+        )?
+    }
+
+    Ok(rel)
+}
+
+async fn except_rels(
+    rels: &[Rel],
+    ctx: &SessionContext,
+    extensions: &Extensions,
+    is_all: bool,
+) -> Result<LogicalPlan> {
+    let mut rel = from_substrait_rel(ctx, &rels[0], extensions).await?;
+
+    for input in &rels[1..] {
+        rel = LogicalPlanBuilder::except(
+            rel,
+            from_substrait_rel(ctx, input, extensions).await?,
+            is_all,
+        )?
+    }
+
+    Ok(rel)
+}
+
 /// Convert Substrait Plan to DataFusion LogicalPlan
 pub async fn from_substrait_plan(
     ctx: &SessionContext,
@@ -229,14 +288,16 @@ pub async fn from_substrait_plan(
                         match plan {
                             // If the last node of the plan produces expressions, bake the renames into those expressions.
                             // This isn't necessary for correctness, but helps with roundtrip tests.
-                            LogicalPlan::Projection(p) => Ok(LogicalPlan::Projection(Projection::try_new(rename_expressions(p.expr, p.input.schema(), &renamed_schema)?, p.input)?)),
+                            LogicalPlan::Projection(p) => Ok(LogicalPlan::Projection(Projection::try_new(rename_expressions(p.expr, p.input.schema(), renamed_schema.fields())?, p.input)?)),
                             LogicalPlan::Aggregate(a) => {
-                                let new_aggr_exprs = rename_expressions(a.aggr_expr, a.input.schema(), &renamed_schema)?;
-                                Ok(LogicalPlan::Aggregate(Aggregate::try_new(a.input, a.group_expr, new_aggr_exprs)?))
+                                let (group_fields, expr_fields) = renamed_schema.fields().split_at(a.group_expr.len());
+                                let new_group_exprs = rename_expressions(a.group_expr, a.input.schema(), group_fields)?;
+                                let new_aggr_exprs = rename_expressions(a.aggr_expr, a.input.schema(), expr_fields)?;
+                                Ok(LogicalPlan::Aggregate(Aggregate::try_new(a.input, new_group_exprs, new_aggr_exprs)?))
                             },
                             // There are probably more plans where we could bake things in, can add them later as needed.
                             // Otherwise, add a new Project to handle the renaming.
-                            _ => Ok(LogicalPlan::Projection(Projection::try_new(rename_expressions(plan.schema().columns().iter().map(|c| col(c.to_owned())), plan.schema(), &renamed_schema)?, Arc::new(plan))?))
+                            _ => Ok(LogicalPlan::Projection(Projection::try_new(rename_expressions(plan.schema().columns().iter().map(|c| col(c.to_owned())), plan.schema(), renamed_schema.fields())?, Arc::new(plan))?))
                         }
                     }
                 },
@@ -364,11 +425,11 @@ pub fn apply_masking(
 fn rename_expressions(
     exprs: impl IntoIterator<Item = Expr>,
     input_schema: &DFSchema,
-    new_schema: &DFSchema,
+    new_schema_fields: &[Arc<Field>],
 ) -> Result<Vec<Expr>> {
     exprs
         .into_iter()
-        .zip(new_schema.fields())
+        .zip(new_schema_fields)
         .map(|(old_expr, new_field)| {
             // Check if type (i.e. nested struct field names) match, use Cast to rename if needed
             let new_expr = if &old_expr.get_type(input_schema)? != new_field.data_type() {
@@ -492,6 +553,7 @@ fn make_renamed_schema(
 }
 
 /// Convert Substrait Rel to DataFusion DataFrame
+#[allow(deprecated)]
 #[async_recursion]
 pub async fn from_substrait_rel(
     ctx: &SessionContext,
@@ -561,8 +623,8 @@ pub async fn from_substrait_rel(
                     from_substrait_rel(ctx, input, extensions).await?,
                 );
                 let offset = fetch.offset as usize;
-                // Since protobuf can't directly distinguish `None` vs `0` `None` is encoded as `MAX`
-                let count = if fetch.count as usize == usize::MAX {
+                // -1 means that ALL records should be returned
+                let count = if fetch.count == -1 {
                     None
                 } else {
                     Some(fetch.count as usize)
@@ -718,7 +780,17 @@ pub async fn from_substrait_rel(
                     )?
                     .build()
                 }
-                None => plan_err!("JoinRel without join condition is not allowed"),
+                None => {
+                    let on: Vec<String> = vec![];
+                    left.join_detailed(
+                        right.build()?,
+                        join_type,
+                        (on.clone(), on),
+                        None,
+                        false,
+                    )?
+                    .build()
+                }
             }
         }
         Some(RelType::Cross(cross)) => {
@@ -732,60 +804,61 @@ pub async fn from_substrait_rel(
             let (left, right) = requalify_sides_if_needed(left, right)?;
             left.cross_join(right.build()?)?.build()
         }
-        Some(RelType::Read(read)) => match &read.as_ref().read_type {
-            Some(ReadType::NamedTable(nt)) => {
-                let named_struct = read.base_schema.as_ref().ok_or_else(|| {
-                    substrait_datafusion_err!("No base schema provided for Named Table")
-                })?;
+        Some(RelType::Read(read)) => {
+            fn read_with_schema(
+                df: DataFrame,
+                schema: DFSchema,
+                projection: &Option<MaskExpression>,
+            ) -> Result<LogicalPlan> {
+                ensure_schema_compatability(df.schema().to_owned(), schema.clone())?;
 
-                let table_reference = match nt.names.len() {
-                    0 => {
-                        return plan_err!("No table name found in NamedTable");
-                    }
-                    1 => TableReference::Bare {
-                        table: nt.names[0].clone().into(),
-                    },
-                    2 => TableReference::Partial {
-                        schema: nt.names[0].clone().into(),
-                        table: nt.names[1].clone().into(),
-                    },
-                    _ => TableReference::Full {
-                        catalog: nt.names[0].clone().into(),
-                        schema: nt.names[1].clone().into(),
-                        table: nt.names[2].clone().into(),
-                    },
-                };
+                let schema = apply_masking(schema, projection)?;
 
-                let t = ctx.table(table_reference.clone()).await?;
-
-                let substrait_schema =
-                    from_substrait_named_struct(named_struct, extensions)?
-                        .replace_qualifier(table_reference);
-
-                ensure_schema_compatability(
-                    t.schema().to_owned(),
-                    substrait_schema.clone(),
-                )?;
-
-                let substrait_schema = apply_masking(substrait_schema, &read.projection)?;
-
-                apply_projection(t, substrait_schema)
+                apply_projection(df, schema)
             }
-            Some(ReadType::VirtualTable(vt)) => {
-                let base_schema = read.base_schema.as_ref().ok_or_else(|| {
-                    substrait_datafusion_err!("No base schema provided for Virtual Table")
-                })?;
 
-                let schema = from_substrait_named_struct(base_schema, extensions)?;
+            let named_struct = read.base_schema.as_ref().ok_or_else(|| {
+                substrait_datafusion_err!("No base schema provided for Read Relation")
+            })?;
 
-                if vt.values.is_empty() {
-                    return Ok(LogicalPlan::EmptyRelation(EmptyRelation {
-                        produce_one_row: false,
-                        schema: DFSchemaRef::new(schema),
-                    }));
+            let substrait_schema = from_substrait_named_struct(named_struct, extensions)?;
+
+            match &read.as_ref().read_type {
+                Some(ReadType::NamedTable(nt)) => {
+                    let table_reference = match nt.names.len() {
+                        0 => {
+                            return plan_err!("No table name found in NamedTable");
+                        }
+                        1 => TableReference::Bare {
+                            table: nt.names[0].clone().into(),
+                        },
+                        2 => TableReference::Partial {
+                            schema: nt.names[0].clone().into(),
+                            table: nt.names[1].clone().into(),
+                        },
+                        _ => TableReference::Full {
+                            catalog: nt.names[0].clone().into(),
+                            schema: nt.names[1].clone().into(),
+                            table: nt.names[2].clone().into(),
+                        },
+                    };
+
+                    let t = ctx.table(table_reference.clone()).await?;
+
+                    let substrait_schema =
+                        substrait_schema.replace_qualifier(table_reference);
+
+                    read_with_schema(t, substrait_schema, &read.projection)
                 }
+                Some(ReadType::VirtualTable(vt)) => {
+                    if vt.values.is_empty() {
+                        return Ok(LogicalPlan::EmptyRelation(EmptyRelation {
+                            produce_one_row: false,
+                            schema: DFSchemaRef::new(substrait_schema),
+                        }));
+                    }
 
-                let values = vt
+                    let values = vt
                     .values
                     .iter()
                     .map(|row| {
@@ -798,108 +871,108 @@ pub async fn from_substrait_rel(
                                 Ok(Expr::Literal(from_substrait_literal(
                                     lit,
                                     extensions,
-                                    &base_schema.names,
+                                    &named_struct.names,
                                     &mut name_idx,
                                 )?))
                             })
                             .collect::<Result<_>>()?;
-                        if name_idx != base_schema.names.len() {
+                        if name_idx != named_struct.names.len() {
                             return substrait_err!(
                                 "Names list must match exactly to nested schema, but found {} uses for {} names",
                                 name_idx,
-                                base_schema.names.len()
+                                named_struct.names.len()
                             );
                         }
                         Ok(lits)
                     })
                     .collect::<Result<_>>()?;
 
-                Ok(LogicalPlan::Values(Values {
-                    schema: DFSchemaRef::new(schema),
-                    values,
-                }))
-            }
-            Some(ReadType::LocalFiles(lf)) => {
-                let named_struct = read.base_schema.as_ref().ok_or_else(|| {
-                    substrait_datafusion_err!("No base schema provided for LocalFiles")
-                })?;
-
-                fn extract_filename(name: &str) -> Option<String> {
-                    let corrected_url =
-                        if name.starts_with("file://") && !name.starts_with("file:///") {
+                    Ok(LogicalPlan::Values(Values {
+                        schema: DFSchemaRef::new(substrait_schema),
+                        values,
+                    }))
+                }
+                Some(ReadType::LocalFiles(lf)) => {
+                    fn extract_filename(name: &str) -> Option<String> {
+                        let corrected_url = if name.starts_with("file://")
+                            && !name.starts_with("file:///")
+                        {
                             name.replacen("file://", "file:///", 1)
                         } else {
                             name.to_string()
                         };
 
-                    Url::parse(&corrected_url).ok().and_then(|url| {
-                        let path = url.path();
-                        std::path::Path::new(path)
-                            .file_name()
-                            .map(|filename| filename.to_string_lossy().to_string())
-                    })
+                        Url::parse(&corrected_url).ok().and_then(|url| {
+                            let path = url.path();
+                            std::path::Path::new(path)
+                                .file_name()
+                                .map(|filename| filename.to_string_lossy().to_string())
+                        })
+                    }
+
+                    // we could use the file name to check the original table provider
+                    // TODO: currently does not support multiple local files
+                    let filename: Option<String> =
+                        lf.items.first().and_then(|x| match x.path_type.as_ref() {
+                            Some(UriFile(name)) => extract_filename(name),
+                            _ => None,
+                        });
+
+                    if lf.items.len() > 1 || filename.is_none() {
+                        return not_impl_err!("Only single file reads are supported");
+                    }
+                    let name = filename.unwrap();
+                    // directly use unwrap here since we could determine it is a valid one
+                    let table_reference = TableReference::Bare { table: name.into() };
+                    let t = ctx.table(table_reference.clone()).await?;
+
+                    let substrait_schema =
+                        substrait_schema.replace_qualifier(table_reference);
+
+                    read_with_schema(t, substrait_schema, &read.projection)
                 }
-
-                // we could use the file name to check the original table provider
-                // TODO: currently does not support multiple local files
-                let filename: Option<String> =
-                    lf.items.first().and_then(|x| match x.path_type.as_ref() {
-                        Some(UriFile(name)) => extract_filename(name),
-                        _ => None,
-                    });
-
-                if lf.items.len() > 1 || filename.is_none() {
-                    return not_impl_err!("Only single file reads are supported");
+                _ => {
+                    not_impl_err!("Unsupported ReadType: {:?}", &read.as_ref().read_type)
                 }
-                let name = filename.unwrap();
-                // directly use unwrap here since we could determine it is a valid one
-                let table_reference = TableReference::Bare { table: name.into() };
-                let t = ctx.table(table_reference.clone()).await?;
-
-                let substrait_schema =
-                    from_substrait_named_struct(named_struct, extensions)?
-                        .replace_qualifier(table_reference);
-
-                ensure_schema_compatability(
-                    t.schema().to_owned(),
-                    substrait_schema.clone(),
-                )?;
-
-                let substrait_schema = apply_masking(substrait_schema, &read.projection)?;
-
-                apply_projection(t, substrait_schema)
             }
-            _ => not_impl_err!("Unsupported ReadType: {:?}", &read.as_ref().read_type),
-        },
+        }
         Some(RelType::Set(set)) => match set_rel::SetOp::try_from(set.op) {
-            Ok(set_op) => match set_op {
-                set_rel::SetOp::UnionAll => {
-                    if !set.inputs.is_empty() {
-                        let mut union_builder = Ok(LogicalPlanBuilder::from(
-                            from_substrait_rel(ctx, &set.inputs[0], extensions).await?,
-                        ));
-                        for input in &set.inputs[1..] {
-                            union_builder = union_builder?
-                                .union(from_substrait_rel(ctx, input, extensions).await?);
+            Ok(set_op) => {
+                if set.inputs.len() < 2 {
+                    substrait_err!("Set operation requires at least two inputs")
+                } else {
+                    match set_op {
+                        set_rel::SetOp::UnionAll => {
+                            union_rels(&set.inputs, ctx, extensions, true).await
                         }
-                        union_builder?.build()
-                    } else {
-                        not_impl_err!("Union relation requires at least one input")
+                        set_rel::SetOp::UnionDistinct => {
+                            union_rels(&set.inputs, ctx, extensions, false).await
+                        }
+                        set_rel::SetOp::IntersectionPrimary => {
+                            LogicalPlanBuilder::intersect(
+                                from_substrait_rel(ctx, &set.inputs[0], extensions)
+                                    .await?,
+                                union_rels(&set.inputs[1..], ctx, extensions, true)
+                                    .await?,
+                                false,
+                            )
+                        }
+                        set_rel::SetOp::IntersectionMultiset => {
+                            intersect_rels(&set.inputs, ctx, extensions, false).await
+                        }
+                        set_rel::SetOp::IntersectionMultisetAll => {
+                            intersect_rels(&set.inputs, ctx, extensions, true).await
+                        }
+                        set_rel::SetOp::MinusPrimary => {
+                            except_rels(&set.inputs, ctx, extensions, false).await
+                        }
+                        set_rel::SetOp::MinusPrimaryAll => {
+                            except_rels(&set.inputs, ctx, extensions, true).await
+                        }
+                        _ => not_impl_err!("Unsupported set operator: {set_op:?}"),
                     }
                 }
-                set_rel::SetOp::IntersectionPrimary => {
-                    if set.inputs.len() == 2 {
-                        LogicalPlanBuilder::intersect(
-                            from_substrait_rel(ctx, &set.inputs[0], extensions).await?,
-                            from_substrait_rel(ctx, &set.inputs[1], extensions).await?,
-                            false,
-                        )
-                    } else {
-                        not_impl_err!("Primary Intersect relation with more than two inputs isn't supported")
-                    }
-                }
-                _ => not_impl_err!("Unsupported set operator: {set_op:?}"),
-            },
+            }
             Err(e) => not_impl_err!("Invalid set operation type {}: {e}", set.op),
         },
         Some(RelType::ExtensionLeaf(extension)) => {

@@ -1438,7 +1438,7 @@ impl HashJoinStream {
             index_alignment_range_start..index_alignment_range_end,
             self.join_type,
             self.right_side_ordered,
-        );
+        )?;
 
         let result = build_batch_from_indices(
             &self.schema,
