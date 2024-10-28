@@ -37,6 +37,7 @@ use datafusion_physical_expr::{
     expressions::{cast, col},
     PhysicalExpr, PhysicalSortExpr,
 };
+use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_optimizer::{
     limited_distinct_aggregation::LimitedDistinctAggregation, PhysicalOptimizerRule,
 };
@@ -407,10 +408,10 @@ fn test_has_filter() -> Result<()> {
 
 #[test]
 fn test_has_order_by() -> Result<()> {
-    let sort_key = vec![PhysicalSortExpr {
+    let sort_key = LexOrdering::new(vec![PhysicalSortExpr {
         expr: expressions::col("a", &schema()).unwrap(),
         options: SortOptions::default(),
-    }];
+    }]);
     let source = parquet_exec_with_sort(vec![sort_key]);
     let schema = source.schema();
 

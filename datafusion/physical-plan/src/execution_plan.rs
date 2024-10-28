@@ -37,8 +37,8 @@ pub use datafusion_physical_expr::window::WindowExpr;
 pub use datafusion_physical_expr::{
     expressions, udf, Distribution, Partitioning, PhysicalExpr,
 };
-use datafusion_physical_expr::{EquivalenceProperties, LexOrdering, PhysicalSortExpr};
-use datafusion_physical_expr_common::sort_expr::LexRequirement;
+use datafusion_physical_expr::{EquivalenceProperties, LexOrdering};
+use datafusion_physical_expr_common::sort_expr::{LexRequirement, PhysicalSortExpr};
 
 use crate::coalesce_partitions::CoalescePartitionsExec;
 use crate::display::DisplayableExecutionPlan;

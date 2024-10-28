@@ -1509,7 +1509,7 @@ pub fn create_window_expr_with_name(
                 name,
                 &physical_args,
                 &partition_by,
-                &order_by,
+                order_by.as_ref(),
                 window_frame,
                 physical_schema,
                 ignore_nulls,
@@ -1538,7 +1538,7 @@ type AggregateExprWithOptionalArgs = (
     // The filter clause, if any
     Option<Arc<dyn PhysicalExpr>>,
     // Ordering requirements, if any
-    Option<Vec<PhysicalSortExpr>>,
+    Option<LexOrdering>,
 );
 
 /// Create an aggregate expression with a name from a logical expression
@@ -1588,12 +1588,12 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
                     None => None,
                 };
 
-                let ordering_reqs: Vec<PhysicalSortExpr> =
-                    physical_sort_exprs.clone().unwrap_or(vec![]);
+                let ordering_reqs: LexOrdering =
+                    physical_sort_exprs.clone().unwrap_or(LexOrdering::default());
 
                 let agg_expr =
                     AggregateExprBuilder::new(func.to_owned(), physical_args.to_vec())
-                        .order_by(ordering_reqs.to_vec())
+                        .order_by(ordering_reqs)
                         .schema(Arc::new(physical_input_schema.to_owned()))
                         .alias(name)
                         .with_ignore_nulls(ignore_nulls)
@@ -1662,7 +1662,7 @@ pub fn create_physical_sort_exprs(
     exprs
         .iter()
         .map(|expr| create_physical_sort_expr(expr, input_dfschema, execution_props))
-        .collect::<Result<Vec<_>>>()
+        .collect::<Result<LexOrdering>>()
 }
 
 impl DefaultPhysicalPlanner {

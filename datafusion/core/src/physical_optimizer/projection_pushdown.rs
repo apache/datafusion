@@ -54,7 +54,7 @@ use datafusion_physical_expr::{
 use datafusion_physical_plan::streaming::StreamingTableExec;
 use datafusion_physical_plan::union::UnionExec;
 
-use datafusion_physical_expr_common::sort_expr::LexRequirement;
+use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use itertools::Itertools;
 
@@ -246,7 +246,7 @@ fn try_swapping_with_streaming_table(
 
     let mut lex_orderings = vec![];
     for lex_ordering in streaming_table.projected_output_ordering().into_iter() {
-        let mut orderings = vec![];
+        let mut orderings = LexOrdering::empty();
         for order in lex_ordering {
             let Some(new_ordering) = update_expr(&order.expr, projection.expr(), false)?
             else {
@@ -467,7 +467,7 @@ fn try_swapping_with_sort(
         return Ok(None);
     }
 
-    let mut updated_exprs = vec![];
+    let mut updated_exprs = LexOrdering::default();
     for sort in sort.expr() {
         let Some(new_expr) = update_expr(&sort.expr, projection.expr(), false)? else {
             return Ok(None);
@@ -497,7 +497,7 @@ fn try_swapping_with_sort_preserving_merge(
         return Ok(None);
     }
 
-    let mut updated_exprs = vec![];
+    let mut updated_exprs = LexOrdering::default();
     for sort in spm.expr() {
         let Some(updated_expr) = update_expr(&sort.expr, projection.expr(), false)?
         else {
@@ -915,8 +915,8 @@ fn try_swapping_with_sym_hash_join(
         new_filter,
         sym_join.join_type(),
         sym_join.null_equals_null(),
-        sym_join.right().output_ordering().map(|p| p.to_vec()),
-        sym_join.left().output_ordering().map(|p| p.to_vec()),
+        sym_join.right().output_ordering().map(|p| LexOrdering::new(p.to_vec())),
+        sym_join.left().output_ordering().map(|p| LexOrdering::new(p.to_vec())),
         sym_join.partition_mode(),
     )?)))
 }
@@ -1863,7 +1863,7 @@ mod tests {
             }) as _],
             Some(&vec![0_usize, 2, 4, 3]),
             vec![
-                vec![
+                LexOrdering::new(vec![
                     PhysicalSortExpr {
                         expr: Arc::new(Column::new("e", 2)),
                         options: SortOptions::default(),
@@ -1872,11 +1872,11 @@ mod tests {
                         expr: Arc::new(Column::new("a", 0)),
                         options: SortOptions::default(),
                     },
-                ],
-                vec![PhysicalSortExpr {
+                ]),
+                LexOrdering::new(vec![PhysicalSortExpr {
                     expr: Arc::new(Column::new("d", 3)),
                     options: SortOptions::default(),
-                }],
+                }]),
             ]
             .into_iter(),
             true,
@@ -1923,7 +1923,7 @@ mod tests {
         assert_eq!(
             result.projected_output_ordering().into_iter().collect_vec(),
             vec![
-                vec![
+                LexOrdering::new(vec![
                     PhysicalSortExpr {
                         expr: Arc::new(Column::new("e", 1)),
                         options: SortOptions::default(),
@@ -1932,11 +1932,11 @@ mod tests {
                         expr: Arc::new(Column::new("a", 2)),
                         options: SortOptions::default(),
                     },
-                ],
-                vec![PhysicalSortExpr {
+                ]),
+                LexOrdering::new(vec![PhysicalSortExpr {
                     expr: Arc::new(Column::new("d", 0)),
                     options: SortOptions::default(),
-                }],
+                }]),
             ]
         );
         assert!(result.is_infinite());
@@ -2553,7 +2553,7 @@ mod tests {
     fn test_sort_after_projection() -> Result<()> {
         let csv = create_simple_csv_exec();
         let sort_req: Arc<dyn ExecutionPlan> = Arc::new(SortExec::new(
-            vec![
+            LexOrdering::new(vec![
                 PhysicalSortExpr {
                     expr: Arc::new(Column::new("b", 1)),
                     options: SortOptions::default(),
@@ -2566,7 +2566,7 @@ mod tests {
                     )),
                     options: SortOptions::default(),
                 },
-            ],
+            ]),
             csv.clone(),
         ));
         let projection: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
@@ -2581,7 +2581,7 @@ mod tests {
         let initial = get_plan_string(&projection);
         let expected_initial = [
             "ProjectionExec: expr=[c@2 as c, a@0 as new_a, b@1 as b]",
-            "  SortExec: expr=[b@1 ASC,c@2 + a@0 ASC], preserve_partitioning=[false]",
+            "  SortExec: expr=[b@1 ASC, c@2 + a@0 ASC], preserve_partitioning=[false]",
             "    CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], has_header=false"
             ];
         assert_eq!(initial, expected_initial);
@@ -2590,7 +2590,7 @@ mod tests {
             ProjectionPushdown::new().optimize(projection, &ConfigOptions::new())?;
 
         let expected = [
-            "SortExec: expr=[b@2 ASC,c@0 + new_a@1 ASC], preserve_partitioning=[false]",
+            "SortExec: expr=[b@2 ASC, c@0 + new_a@1 ASC], preserve_partitioning=[false]",
             "  ProjectionExec: expr=[c@2 as c, a@0 as new_a, b@1 as b]",
             "    CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], has_header=false"
         ];
@@ -2603,7 +2603,7 @@ mod tests {
     fn test_sort_preserving_after_projection() -> Result<()> {
         let csv = create_simple_csv_exec();
         let sort_req: Arc<dyn ExecutionPlan> = Arc::new(SortPreservingMergeExec::new(
-            vec![
+            LexOrdering::new(vec![
                 PhysicalSortExpr {
                     expr: Arc::new(Column::new("b", 1)),
                     options: SortOptions::default(),
@@ -2616,7 +2616,7 @@ mod tests {
                     )),
                     options: SortOptions::default(),
                 },
-            ],
+            ]),
             csv.clone(),
         ));
         let projection: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
@@ -2631,7 +2631,7 @@ mod tests {
         let initial = get_plan_string(&projection);
         let expected_initial = [
             "ProjectionExec: expr=[c@2 as c, a@0 as new_a, b@1 as b]",
-            "  SortPreservingMergeExec: [b@1 ASC,c@2 + a@0 ASC]",
+            "  SortPreservingMergeExec: [b@1 ASC, c@2 + a@0 ASC]",
             "    CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], has_header=false"
             ];
         assert_eq!(initial, expected_initial);
@@ -2640,7 +2640,7 @@ mod tests {
             ProjectionPushdown::new().optimize(projection, &ConfigOptions::new())?;
 
         let expected = [
-            "SortPreservingMergeExec: [b@2 ASC,c@0 + new_a@1 ASC]",
+            "SortPreservingMergeExec: [b@2 ASC, c@0 + new_a@1 ASC]",
             "  ProjectionExec: expr=[c@2 as c, a@0 as new_a, b@1 as b]",
             "    CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], has_header=false"
         ];

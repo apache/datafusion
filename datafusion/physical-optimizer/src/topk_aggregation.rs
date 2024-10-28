@@ -31,6 +31,7 @@ use datafusion_physical_plan::projection::ProjectionExec;
 use datafusion_physical_plan::sorts::sort::SortExec;
 use datafusion_physical_plan::ExecutionPlan;
 use itertools::Itertools;
+use datafusion_physical_expr::LexOrdering;
 
 /// An optimizer rule that passes a `limit` hint to aggregations if the whole result is not needed
 #[derive(Debug)]
@@ -126,7 +127,7 @@ impl TopKAggregation {
             Ok(Transformed::no(plan))
         };
         let child = Arc::clone(child).transform_down(closure).data().ok()?;
-        let sort = SortExec::new(sort.expr().to_vec(), child)
+        let sort = SortExec::new(LexOrdering::new(sort.expr().to_vec()), child)
             .with_fetch(sort.fetch())
             .with_preserve_partitioning(sort.preserve_partitioning());
         Some(Arc::new(sort))

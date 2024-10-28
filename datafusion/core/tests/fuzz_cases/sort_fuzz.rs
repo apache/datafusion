@@ -32,6 +32,7 @@ use datafusion_execution::memory_pool::GreedyMemoryPool;
 use datafusion_physical_expr::expressions::col;
 use rand::Rng;
 use std::sync::Arc;
+use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use test_utils::{batches_to_vec, partitions_to_sorted_vec};
 
 const KB: usize = 1 << 10;
@@ -114,13 +115,13 @@ impl SortTest {
             .expect("at least one batch");
         let schema = first_batch.schema();
 
-        let sort = vec![PhysicalSortExpr {
+        let sort = LexOrdering::new(vec![PhysicalSortExpr {
             expr: col("x", &schema).unwrap(),
             options: SortOptions {
                 descending: false,
                 nulls_first: true,
             },
-        }];
+        }]);
 
         let exec = MemoryExec::try_new(&input, schema, None).unwrap();
         let sort = Arc::new(SortExec::new(sort, Arc::new(exec)));

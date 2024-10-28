@@ -410,6 +410,7 @@ mod tests {
     use datafusion_expr::AggregateUDF;
     use datafusion_functions_aggregate_common::utils::get_accum_scalar_values_as_arrays;
     use datafusion_physical_expr::expressions::col;
+    use datafusion_physical_expr_common::sort_expr::LexOrderingRef;
     use std::sync::Arc;
 
     #[test]
@@ -461,7 +462,7 @@ mod tests {
             return_type: &DataType::Float64,
             schema,
             ignore_nulls: false,
-            ordering_req: &[],
+            ordering_req: LexOrderingRef::empty(),
             name: "a",
             is_distinct: false,
             is_reversed: false,
@@ -472,7 +473,7 @@ mod tests {
             return_type: &DataType::Float64,
             schema,
             ignore_nulls: false,
-            ordering_req: &[],
+            ordering_req: LexOrderingRef::empty(),
             name: "a",
             is_distinct: false,
             is_reversed: false,

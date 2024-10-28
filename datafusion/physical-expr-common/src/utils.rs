@@ -24,7 +24,7 @@ use datafusion_common::Result;
 use datafusion_expr_common::sort_properties::ExprProperties;
 
 use crate::physical_expr::PhysicalExpr;
-use crate::sort_expr::PhysicalSortExpr;
+use crate::sort_expr::{LexOrdering, LexOrderingRef, PhysicalSortExpr};
 use crate::tree_node::ExprContext;
 
 /// Represents a [`PhysicalExpr`] node with associated properties (order and
@@ -96,11 +96,14 @@ pub fn scatter(mask: &BooleanArray, truthy: &dyn Array) -> Result<ArrayRef> {
 /// Reverses the ORDER BY expression, which is useful during equivalent window
 /// expression construction. For instance, 'ORDER BY a ASC, NULLS LAST' turns into
 /// 'ORDER BY a DESC, NULLS FIRST'.
-pub fn reverse_order_bys(order_bys: &[PhysicalSortExpr]) -> Vec<PhysicalSortExpr> {
-    order_bys
-        .iter()
-        .map(|e| PhysicalSortExpr::new(e.expr.clone(), !e.options))
-        .collect()
+pub fn reverse_order_bys(order_bys: &LexOrderingRef) -> LexOrdering {
+    LexOrdering::new(
+        order_bys
+            .inner
+            .iter()
+            .map(|e| PhysicalSortExpr::new(e.expr.clone(), !e.options))
+            .collect(),
+    )
 }
 
 #[cfg(test)]

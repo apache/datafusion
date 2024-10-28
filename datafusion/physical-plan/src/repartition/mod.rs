@@ -47,7 +47,7 @@ use datafusion_common::{not_impl_err, DataFusionError, Result};
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::memory_pool::MemoryConsumer;
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::{EquivalenceProperties, PhysicalExpr, PhysicalSortExpr};
+use datafusion_physical_expr::{EquivalenceProperties, PhysicalExpr};
 
 use crate::execution_plan::CardinalityEffect;
 use futures::stream::Stream;
@@ -55,6 +55,7 @@ use futures::{FutureExt, StreamExt, TryStreamExt};
 use hashbrown::HashMap;
 use log::trace;
 use parking_lot::Mutex;
+use datafusion_physical_expr_common::sort_expr::{LexOrderingRef, PhysicalSortExpr};
 
 mod distributor_channels;
 
@@ -502,11 +503,7 @@ impl DisplayAs for RepartitionExec {
                 }
 
                 if let Some(sort_exprs) = self.sort_exprs() {
-                    write!(
-                        f,
-                        ", sort_exprs={}",
-                        PhysicalSortExpr::format_list(sort_exprs)
-                    )?;
+                    write!(f, ", sort_exprs={}", LexOrderingRef::new(sort_exprs))?;
                 }
                 Ok(())
             }
@@ -1562,7 +1559,7 @@ mod test {
     use arrow_schema::{DataType, Field, Schema, SortOptions};
 
     use datafusion_physical_expr::expressions::col;
-
+    use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
     use crate::memory::MemoryExec;
     use crate::union::UnionExec;
 
@@ -1592,7 +1589,7 @@ mod test {
     #[tokio::test]
     async fn test_preserve_order() -> Result<()> {
         let schema = test_schema();
-        let sort_exprs = sort_exprs(&schema);
+        let sort_exprs = LexOrdering::new(sort_exprs(&schema));
         let source1 = sorted_memory_exec(&schema, sort_exprs.clone());
         let source2 = sorted_memory_exec(&schema, sort_exprs);
         // output has multiple partitions, and is sorted
@@ -1616,7 +1613,7 @@ mod test {
     #[tokio::test]
     async fn test_preserve_order_one_partition() -> Result<()> {
         let schema = test_schema();
-        let sort_exprs = sort_exprs(&schema);
+        let sort_exprs = LexOrdering::new(sort_exprs(&schema));
         let source = sorted_memory_exec(&schema, sort_exprs);
         // output is sorted, but has only a single partition, so no need to sort
         let exec = RepartitionExec::try_new(source, Partitioning::RoundRobinBatch(10))
@@ -1673,7 +1670,7 @@ mod test {
 
     fn sorted_memory_exec(
         schema: &SchemaRef,
-        sort_exprs: Vec<PhysicalSortExpr>,
+        sort_exprs: LexOrdering,
     ) -> Arc<dyn ExecutionPlan> {
         Arc::new(
             MemoryExec::try_new(&[vec![]], Arc::clone(schema), None)

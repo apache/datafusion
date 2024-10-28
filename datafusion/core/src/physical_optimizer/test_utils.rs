@@ -56,9 +56,7 @@ use datafusion_physical_plan::{
 
 use async_trait::async_trait;
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
-use datafusion_physical_expr_common::sort_expr::{
-    LexRequirement, PhysicalSortRequirement,
-};
+use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement, PhysicalSortRequirement};
 
 async fn register_current_csv(
     ctx: &SessionContext,
@@ -243,7 +241,7 @@ pub fn bounded_window_exec(
     sort_exprs: impl IntoIterator<Item = PhysicalSortExpr>,
     input: Arc<dyn ExecutionPlan>,
 ) -> Arc<dyn ExecutionPlan> {
-    let sort_exprs: Vec<_> = sort_exprs.into_iter().collect();
+    let sort_exprs: LexOrdering = sort_exprs.into_iter().collect();
     let schema = input.schema();
 
     Arc::new(
@@ -253,7 +251,7 @@ pub fn bounded_window_exec(
                 "count".to_owned(),
                 &[col(col_name, &schema).unwrap()],
                 &[],
-                &sort_exprs,
+                sort_exprs.as_ref(),
                 Arc::new(WindowFrame::new(Some(false))),
                 schema.as_ref(),
                 false,

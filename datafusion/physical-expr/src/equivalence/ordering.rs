@@ -21,7 +21,7 @@ use std::sync::Arc;
 use std::vec::IntoIter;
 
 use crate::equivalence::add_offset_to_expr;
-use crate::{LexOrdering, PhysicalExpr, PhysicalSortExpr};
+use crate::{LexOrdering, PhysicalExpr};
 use arrow_schema::SortOptions;
 
 /// An `OrderingEquivalenceClass` object keeps track of different alternative
@@ -146,7 +146,14 @@ impl OrderingEquivalenceClass {
     /// Returns the concatenation of all the orderings. This enables merge
     /// operations to preserve all equivalent orderings simultaneously.
     pub fn output_ordering(&self) -> Option<LexOrdering> {
-        let output_ordering = self.orderings.iter().flatten().cloned().collect();
+        let output_ordering = LexOrdering::new(
+            self.orderings
+                .iter()
+                .map(|ordering| ordering.as_ref().inner)
+                .flatten()
+                .cloned()
+                .collect(),
+        );
         let output_ordering = collapse_lex_ordering(output_ordering);
         (!output_ordering.is_empty()).then_some(output_ordering)
     }
@@ -169,7 +176,7 @@ impl OrderingEquivalenceClass {
             for idx in 0..n_ordering {
                 // Calculate cross product index
                 let idx = outer_idx * n_ordering + idx;
-                self.orderings[idx].extend(ordering.iter().cloned());
+                self.orderings[idx].inner.extend(ordering.iter().cloned());
             }
         }
         self
@@ -179,7 +186,7 @@ impl OrderingEquivalenceClass {
     /// ordering equivalence class.
     pub fn add_offset(&mut self, offset: usize) {
         for ordering in self.orderings.iter_mut() {
-            for sort_expr in ordering {
+            for sort_expr in ordering.inner.iter_mut() {
                 sort_expr.expr = add_offset_to_expr(Arc::clone(&sort_expr.expr), offset);
             }
         }
@@ -211,10 +218,10 @@ impl IntoIterator for OrderingEquivalenceClass {
 /// duplicate entries that have same physical expression inside. For example,
 /// `vec![a ASC, a DESC]` collapses to `vec![a ASC]`.
 pub fn collapse_lex_ordering(input: LexOrdering) -> LexOrdering {
-    let mut output = Vec::<PhysicalSortExpr>::new();
-    for item in input {
+    let mut output = LexOrdering::empty();
+    for item in input.iter() {
         if !output.iter().any(|req| req.expr.eq(&item.expr)) {
-            output.push(item);
+            output.push(item.clone());
         }
     }
     output
@@ -239,10 +246,10 @@ impl Display for OrderingEquivalenceClass {
         write!(f, "[")?;
         let mut iter = self.orderings.iter();
         if let Some(ordering) = iter.next() {
-            write!(f, "[{}]", PhysicalSortExpr::format_list(ordering))?;
+            write!(f, "[{}]", ordering)?;
         }
         for ordering in iter {
-            write!(f, ", [{}]", PhysicalSortExpr::format_list(ordering))?;
+            write!(f, ", [{}]", ordering)?;
         }
         write!(f, "]")?;
         Ok(())
@@ -268,6 +275,7 @@ mod tests {
     use arrow_schema::SortOptions;
     use datafusion_common::{DFSchema, Result};
     use datafusion_expr::{Operator, ScalarUDF};
+    use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
     #[test]
     fn test_ordering_satisfy() -> Result<()> {
@@ -275,11 +283,11 @@ mod tests {
             Field::new("a", DataType::Int64, true),
             Field::new("b", DataType::Int64, true),
         ]));
-        let crude = vec![PhysicalSortExpr {
+        let crude = LexOrdering::new(vec![PhysicalSortExpr {
             expr: Arc::new(Column::new("a", 0)),
             options: SortOptions::default(),
-        }];
-        let finer = vec![
+        }]);
+        let finer = LexOrdering::new(vec![
             PhysicalSortExpr {
                 expr: Arc::new(Column::new("a", 0)),
                 options: SortOptions::default(),
@@ -288,18 +296,18 @@ mod tests {
                 expr: Arc::new(Column::new("b", 1)),
                 options: SortOptions::default(),
             },
-        ];
+        ]);
         // finer ordering satisfies, crude ordering should return true
         let mut eq_properties_finer =
             EquivalenceProperties::new(Arc::clone(&input_schema));
         eq_properties_finer.oeq_class.push(finer.clone());
-        assert!(eq_properties_finer.ordering_satisfy(&crude));
+        assert!(eq_properties_finer.ordering_satisfy(crude.as_ref()));
 
         // Crude ordering doesn't satisfy finer ordering. should return false
         let mut eq_properties_crude =
             EquivalenceProperties::new(Arc::clone(&input_schema));
         eq_properties_crude.oeq_class.push(crude);
-        assert!(!eq_properties_crude.ordering_satisfy(&finer));
+        assert!(!eq_properties_crude.ordering_satisfy(finer.as_ref()));
         Ok(())
     }
 
@@ -589,7 +597,7 @@ mod tests {
 
             let reqs = convert_to_sort_exprs(&reqs);
             assert_eq!(
-                eq_properties.ordering_satisfy(&reqs),
+                eq_properties.ordering_satisfy(reqs.as_ref()),
                 expected,
                 "{}",
                 err_msg
@@ -649,7 +657,7 @@ mod tests {
                 format!("error in test reqs: {:?}, expected: {:?}", reqs, expected,);
             let reqs = convert_to_sort_exprs(&reqs);
             assert_eq!(
-                eq_properties.ordering_satisfy(&reqs),
+                eq_properties.ordering_satisfy(reqs.as_ref()),
                 expected,
                 "{}",
                 err_msg

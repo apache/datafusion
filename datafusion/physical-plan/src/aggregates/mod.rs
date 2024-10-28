@@ -937,7 +937,7 @@ fn get_aggregate_expr_req(
     // necessary, or the aggregation is performing a "second stage" calculation,
     // then ignore the ordering requirement.
     if !aggr_expr.order_sensitivity().hard_requires() || !agg_mode.is_first_stage() {
-        return vec![];
+        return LexOrdering::empty();
     }
 
     let mut req = aggr_expr.order_bys().unwrap_or_default().to_vec();
@@ -952,7 +952,7 @@ fn get_aggregate_expr_req(
         // will definitely be satisfied -- Each group by expression will have
         // distinct values per group, hence all requirements are satisfied.
         let physical_exprs = group_by.input_exprs();
-        req.retain(|sort_expr| {
+        req.inner.retain(|sort_expr| {
             !physical_exprs_contains(&physical_exprs, &sort_expr.expr)
         });
     }
@@ -983,7 +983,7 @@ fn finer_ordering(
     agg_mode: &AggregateMode,
 ) -> Option<LexOrdering> {
     let aggr_req = get_aggregate_expr_req(aggr_expr, group_by, agg_mode);
-    eq_properties.get_finer_ordering(existing_req, &aggr_req)
+    eq_properties.get_finer_ordering(existing_req.as_ref(), aggr_req.as_ref())
 }
 
 /// Concatenates the given slices.
@@ -1014,12 +1014,12 @@ pub fn get_finer_aggregate_exprs_requirement(
     eq_properties: &EquivalenceProperties,
     agg_mode: &AggregateMode,
 ) -> Result<LexRequirement> {
-    let mut requirement = vec![];
+    let mut requirement = LexOrdering::empty();
     for aggr_expr in aggr_exprs.iter_mut() {
         if let Some(finer_ordering) =
             finer_ordering(&requirement, aggr_expr, group_by, eq_properties, agg_mode)
         {
-            if eq_properties.ordering_satisfy(&finer_ordering) {
+            if eq_properties.ordering_satisfy(finer_ordering.as_ref()) {
                 // Requirement is satisfied by existing ordering
                 requirement = finer_ordering;
                 continue;
@@ -1033,7 +1033,7 @@ pub fn get_finer_aggregate_exprs_requirement(
                 eq_properties,
                 agg_mode,
             ) {
-                if eq_properties.ordering_satisfy(&finer_ordering) {
+                if eq_properties.ordering_satisfy(finer_ordering.as_ref()) {
                     // Reverse requirement is satisfied by exiting ordering.
                     // Hence reverse the aggregator
                     requirement = finer_ordering;
@@ -1074,7 +1074,9 @@ pub fn get_finer_aggregate_exprs_requirement(
         );
     }
 
-    Ok(PhysicalSortRequirement::from_sort_exprs(&requirement))
+    Ok(PhysicalSortRequirement::from_sort_exprs(
+        requirement.inner.iter(),
+    ))
 }
 
 /// Returns physical expressions for arguments to evaluate against a batch.
@@ -2089,7 +2091,7 @@ mod tests {
         let args = [col("b", schema)?];
 
         AggregateExprBuilder::new(first_value_udaf(), args.to_vec())
-            .order_by(ordering_req.to_vec())
+            .order_by(LexOrdering::new(ordering_req.to_vec()))
             .schema(Arc::new(schema.clone()))
             .alias(String::from("first_value(b) ORDER BY [b ASC NULLS LAST]"))
             .build()
@@ -2107,7 +2109,7 @@ mod tests {
         }];
         let args = [col("b", schema)?];
         AggregateExprBuilder::new(last_value_udaf(), args.to_vec())
-            .order_by(ordering_req.to_vec())
+            .order_by(LexOrdering::new(ordering_req.to_vec()))
             .schema(Arc::new(schema.clone()))
             .alias(String::from("last_value(b) ORDER BY [b ASC NULLS LAST]"))
             .build()
@@ -2273,7 +2275,7 @@ mod tests {
             ]),
         ];
 
-        let common_requirement = vec![
+        let common_requirement = LexOrdering::new(vec![
             PhysicalSortExpr {
                 expr: Arc::clone(col_a),
                 options: options1,
@@ -2282,14 +2284,14 @@ mod tests {
                 expr: Arc::clone(col_c),
                 options: options1,
             },
-        ];
+        ]);
         let mut aggr_exprs = order_by_exprs
             .into_iter()
             .map(|order_by_expr| {
                 let ordering_req = order_by_expr.unwrap_or_default();
                 AggregateExprBuilder::new(array_agg_udaf(), vec![Arc::clone(col_a)])
                     .alias("a")
-                    .order_by(ordering_req.to_vec())
+                    .order_by(LexOrdering::new(ordering_req.to_vec()))
                     .schema(Arc::clone(&test_schema))
                     .build()
                     .map(Arc::new)

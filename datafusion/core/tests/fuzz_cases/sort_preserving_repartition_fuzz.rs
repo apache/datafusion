@@ -47,6 +47,7 @@ mod sp_repartition_fuzz_tests {
 
     use itertools::izip;
     use rand::{rngs::StdRng, seq::SliceRandom, Rng, SeedableRng};
+    use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
     // Generate a schema which consists of 6 columns (a, b, c, d, e, f)
     fn create_test_schema() -> Result<SchemaRef> {
@@ -345,7 +346,7 @@ mod sp_repartition_fuzz_tests {
         let schema = input1[0].schema();
         let session_config = SessionConfig::new().with_batch_size(50);
         let ctx = SessionContext::new_with_config(session_config);
-        let mut sort_keys = vec![];
+        let mut sort_keys = LexOrdering::default();
         for ordering_col in ["a", "b", "c"] {
             sort_keys.push(PhysicalSortExpr {
                 expr: col(ordering_col, &schema).unwrap(),

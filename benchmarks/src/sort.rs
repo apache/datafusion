@@ -22,7 +22,7 @@ use crate::util::{AccessLogOpt, BenchmarkRun, CommonOpt};
 
 use arrow::util::pretty;
 use datafusion::common::Result;
-use datafusion::physical_expr::PhysicalSortExpr;
+use datafusion::physical_expr::{LexOrdering, PhysicalSortExpr};
 use datafusion::physical_plan::collect;
 use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::prelude::{SessionConfig, SessionContext};
@@ -176,7 +176,7 @@ async fn exec_sort(
 ) -> Result<(usize, std::time::Duration)> {
     let start = Instant::now();
     let scan = test_file.create_scan(ctx, None).await?;
-    let exec = Arc::new(SortExec::new(expr.to_owned(), scan));
+    let exec = Arc::new(SortExec::new(LexOrdering::new(expr.to_owned()), scan));
     let task_ctx = ctx.task_ctx();
     let result = collect(exec, task_ctx).await?;
     let elapsed = start.elapsed();

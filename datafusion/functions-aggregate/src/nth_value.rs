@@ -404,7 +404,7 @@ impl Accumulator for NthValueAccumulator {
 
 impl NthValueAccumulator {
     fn evaluate_orderings(&self) -> Result<ScalarValue> {
-        let fields = ordering_fields(&self.ordering_req, &self.datatypes[1..]);
+        let fields = ordering_fields(self.ordering_req.as_ref(), &self.datatypes[1..]);
         let struct_field = Fields::from(fields.clone());
 
         let mut column_wise_ordering_values = vec![];

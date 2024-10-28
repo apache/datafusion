@@ -21,7 +21,7 @@ use arrow_schema::Schema;
 use datafusion_common::Result;
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
 use datafusion_expr::EmitTo;
-use datafusion_physical_expr::PhysicalSortExpr;
+use datafusion_physical_expr_common::sort_expr::LexOrderingRef;
 use std::sync::Arc;
 
 /// Tracks grouping state when the data is ordered by some subset of
@@ -106,7 +106,7 @@ impl GroupOrderingPartial {
     pub fn try_new(
         input_schema: &Schema,
         order_indices: &[usize],
-        ordering: &[PhysicalSortExpr],
+        ordering: &LexOrderingRef,
     ) -> Result<Self> {
         assert!(!order_indices.is_empty());
         assert!(order_indices.len() <= ordering.len());

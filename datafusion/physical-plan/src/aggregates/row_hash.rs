@@ -48,13 +48,13 @@ use datafusion_expr::{EmitTo, GroupsAccumulator};
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::{GroupsAccumulatorAdapter, PhysicalSortExpr};
 
+use super::order::GroupOrdering;
+use super::AggregateExec;
 use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
+use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use futures::ready;
 use futures::stream::{Stream, StreamExt};
 use log::debug;
-
-use super::order::GroupOrdering;
-use super::AggregateExec;
 
 #[derive(Debug, Clone)]
 /// This object tracks the aggregation phase (input/output)
@@ -80,7 +80,7 @@ struct SpillState {
     // the execution.
     // ========================================================================
     /// Sorting expression for spilling batches
-    spill_expr: Vec<PhysicalSortExpr>,
+    spill_expr: LexOrdering,
 
     /// Schema for spilling batches
     spill_schema: SchemaRef,
@@ -490,15 +490,17 @@ impl GroupedHashAggregateStream {
             .collect::<Result<_>>()?;
 
         let group_schema = group_schema(&agg.input().schema(), &agg_group_by)?;
-        let spill_expr = group_schema
-            .fields
-            .into_iter()
-            .enumerate()
-            .map(|(idx, field)| PhysicalSortExpr {
-                expr: Arc::new(Column::new(field.name().as_str(), idx)) as _,
-                options: SortOptions::default(),
-            })
-            .collect();
+        let spill_expr = LexOrdering::new(
+            group_schema
+                .fields
+                .into_iter()
+                .enumerate()
+                .map(|(idx, field)| PhysicalSortExpr {
+                    expr: Arc::new(Column::new(field.name().as_str(), idx)) as _,
+                    options: SortOptions::default(),
+                })
+                .collect(),
+        );
 
         let name = format!("GroupedHashAggregateStream[{partition}]");
         let reservation = MemoryConsumer::new(name)
@@ -511,7 +513,7 @@ impl GroupedHashAggregateStream {
         let group_ordering = GroupOrdering::try_new(
             &group_schema,
             &agg.input_order_mode,
-            ordering.as_slice(),
+            &ordering.as_ref(),
         )?;
 
         let group_values = new_group_values(group_schema)?;
@@ -965,7 +967,7 @@ impl GroupedHashAggregateStream {
     /// Emit all rows, sort them, and store them on disk.
     fn spill(&mut self) -> Result<()> {
         let emit = self.emit(EmitTo::All, true)?;
-        let sorted = sort_batch(&emit, &self.spill_state.spill_expr, None)?;
+        let sorted = sort_batch(&emit, self.spill_state.spill_expr.as_ref(), None)?;
         let spillfile = self.runtime.disk_manager.create_tmp_file("HashAggSpill")?;
         // TODO: slice large `sorted` and write to multiple files in parallel
         spill_record_batch_by_size(
@@ -1030,7 +1032,7 @@ impl GroupedHashAggregateStream {
         streams.push(Box::pin(RecordBatchStreamAdapter::new(
             Arc::clone(&schema),
             futures::stream::once(futures::future::lazy(move |_| {
-                sort_batch(&batch, &expr, None)
+                sort_batch(&batch, expr.as_ref(), None)
             })),
         )));
         for spill in self.spill_state.spills.drain(..) {
@@ -1041,7 +1043,7 @@ impl GroupedHashAggregateStream {
         self.input = StreamingMergeBuilder::new()
             .with_streams(streams)
             .with_schema(schema)
-            .with_expressions(&self.spill_state.spill_expr)
+            .with_expressions(self.spill_state.spill_expr.as_ref().inner)
             .with_metrics(self.baseline_metrics.clone())
             .with_batch_size(self.batch_size)
             .with_reservation(self.reservation.new_empty())

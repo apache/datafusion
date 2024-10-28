@@ -34,6 +34,7 @@ use datafusion_physical_plan::tree_node::PlanContext;
 use datafusion_physical_plan::ExecutionPlanProperties;
 
 use itertools::izip;
+use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexOrderingRef};
 
 /// For a given `plan`, this object carries the information one needs from its
 /// descendants to decide whether it is beneficial to replace order-losing (but
@@ -131,7 +132,7 @@ fn plan_with_order_preserving_variants(
         if let Some(ordering) = child.output_ordering().map(Vec::from) {
             // When the input of a `CoalescePartitionsExec` has an ordering,
             // replace it with a `SortPreservingMergeExec` if appropriate:
-            let spm = SortPreservingMergeExec::new(ordering, child.clone());
+            let spm = SortPreservingMergeExec::new(LexOrdering::new(ordering), child.clone());
             sort_input.plan = Arc::new(spm) as _;
             sort_input.children[0].data = true;
             return Ok(sort_input);
@@ -255,7 +256,7 @@ pub(crate) fn replace_with_order_preserving_variants(
     if alternate_plan
         .plan
         .equivalence_properties()
-        .ordering_satisfy(requirements.plan.output_ordering().unwrap_or(&[]))
+        .ordering_satisfy(LexOrderingRef::new(requirements.plan.output_ordering().unwrap_or(&[])))
     {
         for child in alternate_plan.children.iter_mut() {
             child.data = false;
