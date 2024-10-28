@@ -31,7 +31,6 @@ use criterion::{black_box, criterion_group, criterion_main, Criterion};
 
 fn generate_spm_for_round_robin_tie_breaker(
     has_same_value: bool,
-    enable_round_robin_repartition: bool,
     batch_count: usize,
     partition_count: usize,
 ) -> SortPreservingMergeExec {
@@ -83,13 +82,11 @@ fn generate_spm_for_round_robin_tie_breaker(
 
     let exec = MemoryExec::try_new(&partitiones, schema, None).unwrap();
     SortPreservingMergeExec::new(sort, Arc::new(exec))
-        .with_round_robin_repartition(enable_round_robin_repartition)
 }
 
 fn run_bench(
     c: &mut Criterion,
     has_same_value: bool,
-    enable_round_robin_repartition: bool,
     batch_count: usize,
     partition_count: usize,
     description: &str,
@@ -99,7 +96,6 @@ fn run_bench(
 
     let spm = Arc::new(generate_spm_for_round_robin_tie_breaker(
         has_same_value,
-        enable_round_robin_repartition,
         batch_count,
         partition_count,
     )) as Arc<dyn ExecutionPlan>;
@@ -112,16 +108,14 @@ fn run_bench(
 
 fn criterion_benchmark(c: &mut Criterion) {
     let params = [
-        (true, false, "low_card_without_tiebreaker"), // low cardinality, no tie breaker
-        (true, true, "low_card_with_tiebreaker"),     // low cardinality, with tie breaker
-        (false, false, "high_card_without_tiebreaker"), // high cardinality, no tie breaker
-        (false, true, "high_card_with_tiebreaker"), // high cardinality, with tie breaker
+        (true, "low_card"),   // low cardinality, with tie breaker
+        (false, "high_card"), // high cardinality, with tie breaker
     ];
 
     let batch_counts = [1, 25, 625];
     let partition_counts = [2, 8, 32];
 
-    for &(has_same_value, enable_round_robin_repartition, cardinality_label) in &params {
+    for &(has_same_value, cardinality_label) in &params {
         for &batch_count in &batch_counts {
             for &partition_count in &partition_counts {
                 let description = format!(
@@ -131,7 +125,6 @@ fn criterion_benchmark(c: &mut Criterion) {
                 run_bench(
                     c,
                     has_same_value,
-                    enable_round_robin_repartition,
                     batch_count,
                     partition_count,
                     &description,
