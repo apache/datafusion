@@ -21,7 +21,6 @@ use datafusion::optimizer::AnalyzerRule;
 use std::sync::Arc;
 use substrait::proto::expression_reference::ExprType;
 
-use arrow_buffer::ToByteSlice;
 use datafusion::arrow::datatypes::{Field, IntervalUnit};
 use datafusion::logical_expr::{
     Distinct, FetchType, Like, Partitioning, SkipType, WindowFrameUnits,
@@ -39,8 +38,8 @@ use crate::variation_const::{
     DATE_32_TYPE_VARIATION_REF, DATE_64_TYPE_VARIATION_REF,
     DECIMAL_128_TYPE_VARIATION_REF, DECIMAL_256_TYPE_VARIATION_REF,
     DEFAULT_CONTAINER_TYPE_VARIATION_REF, DEFAULT_TYPE_VARIATION_REF,
-    INTERVAL_MONTH_DAY_NANO_TYPE_NAME, LARGE_CONTAINER_TYPE_VARIATION_REF,
-    UNSIGNED_INTEGER_TYPE_VARIATION_REF, VIEW_CONTAINER_TYPE_VARIATION_REF,
+    LARGE_CONTAINER_TYPE_VARIATION_REF, UNSIGNED_INTEGER_TYPE_VARIATION_REF,
+    VIEW_CONTAINER_TYPE_VARIATION_REF,
 };
 use datafusion::arrow::array::{Array, GenericListArray, OffsetSizeTrait};
 use datafusion::arrow::temporal_conversions::NANOSECONDS;
@@ -115,7 +114,7 @@ pub fn to_substrait_plan(plan: &LogicalPlan, ctx: &SessionContext) -> Result<Box
     let plan_rels = vec![PlanRel {
         rel_type: Some(plan_rel::RelType::Root(RelRoot {
             input: Some(*to_substrait_rel(&plan, ctx, &mut extensions)?),
-            names: to_substrait_named_struct(plan.schema(), &mut extensions)?.names,
+            names: to_substrait_named_struct(plan.schema())?.names,
         })),
     }];
 
@@ -167,7 +166,7 @@ pub fn to_substrait_extended_expr(
             })
         })
         .collect::<Result<Vec<_>>>()?;
-    let substrait_schema = to_substrait_named_struct(schema, &mut extensions)?;
+    let substrait_schema = to_substrait_named_struct(schema)?;
 
     Ok(Box::new(ExtendedExpression {
         advanced_extensions: None,
@@ -204,7 +203,7 @@ pub fn to_substrait_rel(
             });
 
             let table_schema = scan.source.schema().to_dfschema_ref()?;
-            let base_schema = to_substrait_named_struct(&table_schema, extensions)?;
+            let base_schema = to_substrait_named_struct(&table_schema)?;
 
             Ok(Box::new(Rel {
                 rel_type: Some(RelType::Read(Box::new(ReadRel {
@@ -230,7 +229,7 @@ pub fn to_substrait_rel(
             Ok(Box::new(Rel {
                 rel_type: Some(RelType::Read(Box::new(ReadRel {
                     common: None,
-                    base_schema: Some(to_substrait_named_struct(&e.schema, extensions)?),
+                    base_schema: Some(to_substrait_named_struct(&e.schema)?),
                     filter: None,
                     best_effort_filter: None,
                     projection: None,
@@ -269,7 +268,7 @@ pub fn to_substrait_rel(
             Ok(Box::new(Rel {
                 rel_type: Some(RelType::Read(Box::new(ReadRel {
                     common: None,
-                    base_schema: Some(to_substrait_named_struct(&v.schema, extensions)?),
+                    base_schema: Some(to_substrait_named_struct(&v.schema)?),
                     filter: None,
                     best_effort_filter: None,
                     projection: None,
@@ -665,10 +664,7 @@ fn flatten_names(field: &Field, skip_self: bool, names: &mut Vec<String>) -> Res
     Ok(())
 }
 
-fn to_substrait_named_struct(
-    schema: &DFSchemaRef,
-    extensions: &mut Extensions,
-) -> Result<NamedStruct> {
+fn to_substrait_named_struct(schema: &DFSchemaRef) -> Result<NamedStruct> {
     let mut names = Vec::with_capacity(schema.fields().len());
     for field in schema.fields() {
         flatten_names(field, false, &mut names)?;
@@ -678,7 +674,7 @@ fn to_substrait_named_struct(
         types: schema
             .fields()
             .iter()
-            .map(|f| to_substrait_type(f.data_type(), f.is_nullable(), extensions))
+            .map(|f| to_substrait_type(f.data_type(), f.is_nullable()))
             .collect::<Result<_>>()?,
         type_variation_reference: DEFAULT_TYPE_VARIATION_REF,
         nullability: r#type::Nullability::Unspecified as i32,
@@ -1151,7 +1147,7 @@ pub fn to_substrait_rex(
             Ok(Expression {
                 rex_type: Some(RexType::Cast(Box::new(
                     substrait::proto::expression::Cast {
-                        r#type: Some(to_substrait_type(data_type, true, extensions)?),
+                        r#type: Some(to_substrait_type(data_type, true)?),
                         input: Some(Box::new(to_substrait_rex(
                             ctx,
                             expr,
@@ -1357,11 +1353,7 @@ pub fn to_substrait_rex(
     }
 }
 
-fn to_substrait_type(
-    dt: &DataType,
-    nullable: bool,
-    extensions: &mut Extensions,
-) -> Result<substrait::proto::Type> {
+fn to_substrait_type(dt: &DataType, nullable: bool) -> Result<substrait::proto::Type> {
     let nullability = if nullable {
         r#type::Nullability::Nullable as i32
     } else {
@@ -1546,8 +1538,7 @@ fn to_substrait_type(
             })),
         }),
         DataType::List(inner) => {
-            let inner_type =
-                to_substrait_type(inner.data_type(), inner.is_nullable(), extensions)?;
+            let inner_type = to_substrait_type(inner.data_type(), inner.is_nullable())?;
             Ok(substrait::proto::Type {
                 kind: Some(r#type::Kind::List(Box::new(r#type::List {
                     r#type: Some(Box::new(inner_type)),
@@ -1557,8 +1548,7 @@ fn to_substrait_type(
             })
         }
         DataType::LargeList(inner) => {
-            let inner_type =
-                to_substrait_type(inner.data_type(), inner.is_nullable(), extensions)?;
+            let inner_type = to_substrait_type(inner.data_type(), inner.is_nullable())?;
             Ok(substrait::proto::Type {
                 kind: Some(r#type::Kind::List(Box::new(r#type::List {
                     r#type: Some(Box::new(inner_type)),
@@ -1572,12 +1562,10 @@ fn to_substrait_type(
                 let key_type = to_substrait_type(
                     key_and_value[0].data_type(),
                     key_and_value[0].is_nullable(),
-                    extensions,
                 )?;
                 let value_type = to_substrait_type(
                     key_and_value[1].data_type(),
                     key_and_value[1].is_nullable(),
-                    extensions,
                 )?;
                 Ok(substrait::proto::Type {
                     kind: Some(r#type::Kind::Map(Box::new(r#type::Map {
@@ -1593,9 +1581,7 @@ fn to_substrait_type(
         DataType::Struct(fields) => {
             let field_types = fields
                 .iter()
-                .map(|field| {
-                    to_substrait_type(field.data_type(), field.is_nullable(), extensions)
-                })
+                .map(|field| to_substrait_type(field.data_type(), field.is_nullable()))
                 .collect::<Result<Vec<_>>>()?;
             Ok(substrait::proto::Type {
                 kind: Some(r#type::Kind::Struct(r#type::Struct {
@@ -1782,7 +1768,6 @@ fn to_substrait_literal(
             literal_type: Some(LiteralType::Null(to_substrait_type(
                 &value.data_type(),
                 true,
-                extensions,
             )?)),
         });
     }
@@ -1961,7 +1946,7 @@ fn to_substrait_literal(
         ),
         ScalarValue::Map(m) => {
             let map = if m.is_empty() || m.value(0).is_empty() {
-                let mt = to_substrait_type(m.data_type(), m.is_nullable(), extensions)?;
+                let mt = to_substrait_type(m.data_type(), m.is_nullable())?;
                 let mt = match mt {
                     substrait::proto::Type {
                         kind: Some(r#type::Kind::Map(mt)),
@@ -2046,11 +2031,7 @@ fn convert_array_to_literal_list<T: OffsetSizeTrait>(
         .collect::<Result<Vec<_>>>()?;
 
     if values.is_empty() {
-        let lt = match to_substrait_type(
-            array.data_type(),
-            array.is_nullable(),
-            extensions,
-        )? {
+        let lt = match to_substrait_type(array.data_type(), array.is_nullable())? {
             substrait::proto::Type {
                 kind: Some(r#type::Kind::List(lt)),
             } => lt.as_ref().to_owned(),
@@ -2176,7 +2157,6 @@ mod test {
     use datafusion::arrow::datatypes::{Field, Fields, Schema};
     use datafusion::common::scalar::ScalarStructBuilder;
     use datafusion::common::DFSchema;
-    use std::collections::HashMap;
 
     #[test]
     fn round_trip_literals() -> Result<()> {
@@ -2382,7 +2362,7 @@ mod test {
 
         // As DataFusion doesn't consider nullability as a property of the type, but field,
         // it doesn't matter if we set nullability to true or false here.
-        let substrait = to_substrait_type(&dt, true, &mut extensions)?;
+        let substrait = to_substrait_type(&dt, true)?;
         let roundtrip_dt = from_substrait_type_without_names(&substrait, &extensions)?;
         assert_eq!(dt, roundtrip_dt);
         Ok(())
@@ -2405,7 +2385,7 @@ mod test {
             Field::new("trailer", DataType::Float64, true),
         ]))?);
 
-        let named_struct = to_substrait_named_struct(&schema, &mut extensions)?;
+        let named_struct = to_substrait_named_struct(&schema)?;
 
         // Struct field names should be flattened DFS style
         // List field names should be omitted
