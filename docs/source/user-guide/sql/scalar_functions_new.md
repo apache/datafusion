@@ -2003,7 +2003,7 @@ _Alias of [date_trunc](#date_trunc)._
 Converts an integer to RFC3339 timestamp format (`YYYY-MM-DDT00:00:00.000000000Z`). Integers and unsigned integers are interpreted as nanoseconds since the unix epoch (`1970-01-01T00:00:00Z`) return the corresponding timestamp.
 
 ```
-from_unixtime(expression, timezone)
+from_unixtime(expression[, timezone])
 ```
 
 #### Arguments
