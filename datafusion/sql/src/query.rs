@@ -53,7 +53,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 // so we need to process `SELECT` and `ORDER BY` together.
                 let oby_exprs = to_order_by_exprs(query.order_by)?;
                 let plan = self.select_to_plan(*select, oby_exprs, planner_context)?;
-                let plan = self.limit(plan, query.offset, query.limit)?;
+                let plan =
+                    self.limit(plan, query.offset, query.limit, planner_context)?;
                 // Process the `SELECT INTO` after `LIMIT`.
                 self.select_into(plan, select_into)
             }
@@ -68,7 +69,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     None,
                 )?;
                 let plan = self.order_by(plan, order_by_rex)?;
-                self.limit(plan, query.offset, query.limit)
+                self.limit(plan, query.offset, query.limit, planner_context)
             }
         }
     }
@@ -79,6 +80,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         input: LogicalPlan,
         skip: Option<SQLOffset>,
         fetch: Option<SQLExpr>,
+        planner_context: &mut PlannerContext,
     ) -> Result<LogicalPlan> {
         if skip.is_none() && fetch.is_none() {
             return Ok(input);
@@ -88,10 +90,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let empty_schema = DFSchema::empty();
 
         let skip = skip
-            .map(|o| self.sql_to_expr(o.value, &empty_schema, &mut PlannerContext::new()))
+            .map(|o| self.sql_to_expr(o.value, &empty_schema, planner_context))
             .transpose()?;
         let fetch = fetch
-            .map(|e| self.sql_to_expr(e, &empty_schema, &mut PlannerContext::new()))
+            .map(|e| self.sql_to_expr(e, &empty_schema, planner_context))
             .transpose()?;
         LogicalPlanBuilder::from(input)
             .limit_by_expr(skip, fetch)?

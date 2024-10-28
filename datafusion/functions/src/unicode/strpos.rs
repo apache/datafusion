@@ -97,6 +97,7 @@ fn get_strpos_doc() -> &'static Documentation {
 ```"#)
             .with_standard_argument("str", Some("String"))
             .with_argument("substr", "Substring expression to search for.")
+            .with_alternative_syntax("position(substr in origstr)")
             .build()
             .unwrap()
     })

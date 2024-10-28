@@ -159,6 +159,7 @@ All [aggregate functions](aggregate_functions.md) can be used as window function
 
 - [cume_dist](#cume_dist)
 - [dense_rank](#dense_rank)
+- [ntile](#ntile)
 - [percent_rank](#percent_rank)
 - [rank](#rank)
 - [row_number](#row_number)
@@ -178,6 +179,18 @@ Returns the rank of the current row without gaps. This function ranks rows in a 
 ```
 dense_rank()
 ```
+
+### `ntile`
+
+Integer ranging from 1 to the argument value, dividing the partition as equally as possible
+
+```
+ntile(expression)
+```
+
+#### Arguments
+
+- **expression**: An integer describing the number groups the partition should be split into
 
 ### `percent_rank`
 
@@ -202,3 +215,36 @@ Number of the current row within its partition, counting from 1.
 ```
 row_number()
 ```
+
+## Analytical Functions
+
+- [lag](#lag)
+- [lead](#lead)
+
+### `lag`
+
+Returns value evaluated at the row that is offset rows before the current row within the partition; if there is no such row, instead return default (which must be of the same type as value).
+
+```
+lag(expression, offset, default)
+```
+
+#### Arguments
+
+- **expression**: Expression to operate on
+- **offset**: Integer. Specifies how many rows back the value of expression should be retrieved. Defaults to 1.
+- **default**: The default value if the offset is not within the partition. Must be of the same type as expression.
+
+### `lead`
+
+Returns value evaluated at the row that is offset rows after the current row within the partition; if there is no such row, instead return default (which must be of the same type as value).
+
+```
+lead(expression, offset, default)
+```
+
+#### Arguments
+
+- **expression**: Expression to operate on
+- **offset**: Integer. Specifies how many rows forward the value of expression should be retrieved. Defaults to 1.
+- **default**: The default value if the offset is not within the partition. Must be of the same type as expression.
