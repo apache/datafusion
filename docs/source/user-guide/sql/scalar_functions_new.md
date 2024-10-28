@@ -1465,6 +1465,12 @@ strpos(str, substr)
 +----------------------------------------+
 ```
 
+#### Alternative Syntax
+
+```sql
+position(substr in origstr)
+```
+
 #### Aliases
 
 - instr

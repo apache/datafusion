@@ -103,11 +103,11 @@ CREATE TABLE orders(
 );
 
 # union_different_num_columns_error() / UNION
-query error Error during planning: Union schemas have different number of fields: query 1 has 1 fields whereas query 2 has 2 fields
+query error DataFusion error: Error during planning: UNION queries have different number of columns: left has 1 columns whereas right has 2 columns
 SELECT order_id FROM orders UNION SELECT customer_id, o_item_id FROM orders
 
 # union_different_num_columns_error() / UNION ALL
-query error Error during planning: Union schemas have different number of fields: query 1 has 1 fields whereas query 2 has 2 fields
+query error DataFusion error: Error during planning: UNION queries have different number of columns: left has 1 columns whereas right has 2 columns
 SELECT order_id FROM orders UNION ALL SELECT customer_id, o_item_id FROM orders
 
 # union_with_different_column_names()
