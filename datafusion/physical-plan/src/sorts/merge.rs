@@ -320,22 +320,6 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
     }
 
     #[inline]
-    fn is_eq_and_gt(&self, a: usize, b: usize) -> (bool, bool) {
-        match (&self.cursors[a], &self.cursors[b]) {
-            (Some(ac), Some(bc)) => {
-                let ord = ac.cmp(bc);
-                if ord.is_eq() {
-                    (true, false)
-                } else {
-                    (false, ord.is_gt())
-                }
-            }
-            (None, _) => (false, true),
-            (_, None) => (false, false),
-        }
-    }
-
-    #[inline]
     fn is_poll_count_gt(&self, a: usize, b: usize) -> bool {
         let poll_a = self.num_of_polled_with_same_value[a];
         let poll_b = self.num_of_polled_with_same_value[b];
@@ -470,14 +454,29 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
             let challenger = self.loser_tree[cmp_node];
             // If round-robin tie-breaker is enabled and we're at the final comparison (cmp_node == 1)
             if self.enable_round_robin_tie_breaker && cmp_node == 1 {
-                let (is_eq, is_gt) = self.is_eq_and_gt(winner, challenger);
-                if is_eq {
-                    self.handle_tie(cmp_node, &mut winner, challenger);
-                } else {
-                    // End of tie breaker
-                    self.round_robin_tie_breaker_mode = false;
-                    if is_gt {
+                match (&self.cursors[winner], &self.cursors[challenger]) {
+                    (Some(ac), Some(bc)) => {
+                        let ord = ac.cmp(bc);
+                        if ord.is_eq() {
+                            self.handle_tie(cmp_node, &mut winner, challenger);
+                        } else {
+                            // Ends of tie breaker
+                            self.round_robin_tie_breaker_mode = false;
+                            if ord.is_gt() {
+                                self.update_winner(cmp_node, &mut winner, challenger);
+                            }
+                        }
+                    }
+                    (None, _) => {
+                        // Challenger wins, update winner
+                        // Ends of tie breaker
+                        self.round_robin_tie_breaker_mode = false;
                         self.update_winner(cmp_node, &mut winner, challenger);
+                    }
+                    (_, None) => {
+                        // Winner wins again
+                        // Ends of tie breaker
+                        self.round_robin_tie_breaker_mode = false;
                     }
                 }
             } else if self.is_gt(winner, challenger) {
