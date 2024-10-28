@@ -431,8 +431,9 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
                 self.update_winner(cmp_node, winner, challenger);
             }
         } else if challenger < *winner {
-            // Value and polls count are all the same, we choose the smaller index
-            // The winner loses, assign the new winner
+            // If the winner doesn't surivie in the final match, it means the value has changed,
+            // The polls count are outdated (because the value advanced) but not yet cleanup at this point.
+            // Given the value is equal, we choose the smaller index if the value is the same.
             self.update_winner(cmp_node, winner, challenger);
         }
     }
