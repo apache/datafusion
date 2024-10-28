@@ -26,8 +26,9 @@ use super::{
         subquery_alias_inner_query_and_columns, TableAliasRewriter,
     },
     utils::{
-        find_agg_node_within_select, find_window_nodes_within_select,
-        unproject_sort_expr, unproject_window_exprs,
+        find_agg_node_within_select, find_unnest_node_within_select,
+        find_window_nodes_within_select, unproject_sort_expr, unproject_unnest_expr,
+        unproject_window_exprs,
     },
     Unparser,
 };
@@ -173,15 +174,24 @@ impl Unparser<'_> {
         p: &Projection,
         select: &mut SelectBuilder,
     ) -> Result<()> {
+        let mut exprs = p.expr.clone();
+
+        // If an Unnest node is found within the select, find and unproject the unnest column
+        if let Some(unnest) = find_unnest_node_within_select(plan) {
+            exprs = exprs
+                .into_iter()
+                .map(|e| unproject_unnest_expr(e, unnest))
+                .collect::<Result<Vec<_>>>()?;
+        };
+
         match (
             find_agg_node_within_select(plan, true),
             find_window_nodes_within_select(plan, None, true),
         ) {
             (Some(agg), window) => {
                 let window_option = window.as_deref();
-                let items = p
-                    .expr
-                    .iter()
+                let items = exprs
+                    .into_iter()
                     .map(|proj_expr| {
                         let unproj = unproject_agg_exprs(proj_expr, agg, window_option)?;
                         self.select_item_to_sql(&unproj)
@@ -198,9 +208,8 @@ impl Unparser<'_> {
                 ));
             }
             (None, Some(window)) => {
-                let items = p
-                    .expr
-                    .iter()
+                let items = exprs
+                    .into_iter()
                     .map(|proj_expr| {
                         let unproj = unproject_window_exprs(proj_expr, &window)?;
                         self.select_item_to_sql(&unproj)
@@ -210,8 +219,7 @@ impl Unparser<'_> {
                 select.projection(items);
             }
             _ => {
-                let items = p
-                    .expr
+                let items = exprs
                     .iter()
                     .map(|e| self.select_item_to_sql(e))
                     .collect::<Result<Vec<_>>>()?;
@@ -318,7 +326,8 @@ impl Unparser<'_> {
                 if let Some(agg) =
                     find_agg_node_within_select(plan, select.already_projected())
                 {
-                    let unprojected = unproject_agg_exprs(&filter.predicate, agg, None)?;
+                    let unprojected =
+                        unproject_agg_exprs(filter.predicate.clone(), agg, None)?;
                     let filter_expr = self.expr_to_sql(&unprojected)?;
                     select.having(Some(filter_expr));
                 } else {
@@ -596,6 +605,28 @@ impl Unparser<'_> {
                 Ok(())
             }
             LogicalPlan::Extension(_) => not_impl_err!("Unsupported operator: {plan:?}"),
+            LogicalPlan::Unnest(unnest) => {
+                if !unnest.struct_type_columns.is_empty() {
+                    return internal_err!(
+                        "Struct type columns are not currently supported in UNNEST: {:?}",
+                        unnest.struct_type_columns
+                    );
+                }
+
+                // In the case of UNNEST, the Unnest node is followed by a duplicate Projection node that we should skip.
+                // Otherwise, there will be a duplicate SELECT clause.
+                // | Projection: table.col1, UNNEST(table.col2)
+                // |   Unnest: UNNEST(table.col2)
+                // |     Projection: table.col1, table.col2 AS UNNEST(table.col2)
+                // |       Filter: table.col3 = Int64(3)
+                // |         TableScan: table projection=None
+                if let LogicalPlan::Projection(p) = unnest.input.as_ref() {
+                    // continue with projection input
+                    self.select_to_sql_recursively(&p.input, query, select, relation)
+                } else {
+                    internal_err!("Unnest input is not a Projection: {unnest:?}")
+                }
+            }
             _ => not_impl_err!("Unsupported operator: {plan:?}"),
         }
     }
