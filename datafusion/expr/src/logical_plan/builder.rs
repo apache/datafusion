@@ -1333,7 +1333,7 @@ fn mark_field(schema: &DFSchema) -> (Option<TableReference>, Arc<Field>) {
         .collect::<Vec<_>>();
     table_references.dedup();
     let table_reference = if table_references.len() == 1 {
-        table_references.first().cloned().cloned()
+        table_references.pop().cloned()
     } else {
         None
     };

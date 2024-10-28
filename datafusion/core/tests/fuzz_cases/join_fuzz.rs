@@ -255,7 +255,7 @@ async fn test_left_mark_join_1k() {
         JoinType::LeftMark,
         None,
     )
-    .run_test(&[JoinTestType::HjSmj, JoinTestType::NljHj], true)
+    .run_test(&[JoinTestType::HjSmj, JoinTestType::NljHj], false)
     .await
 }
 
@@ -267,7 +267,7 @@ async fn test_left_mark_join_1k_filtered() {
         JoinType::LeftMark,
         Some(Box::new(col_lt_col_filter)),
     )
-    .run_test(&[JoinTestType::HjSmj, JoinTestType::NljHj], true)
+    .run_test(&[JoinTestType::HjSmj, JoinTestType::NljHj], false)
     .await
 }
 
