@@ -2358,19 +2358,17 @@ mod test {
     fn round_trip_type(dt: DataType) -> Result<()> {
         println!("Checking round trip of {dt:?}");
 
-        let mut extensions = Extensions::default();
-
         // As DataFusion doesn't consider nullability as a property of the type, but field,
         // it doesn't matter if we set nullability to true or false here.
         let substrait = to_substrait_type(&dt, true)?;
-        let roundtrip_dt = from_substrait_type_without_names(&substrait, &extensions)?;
+        let roundtrip_dt =
+            from_substrait_type_without_names(&substrait, &Extensions::default())?;
         assert_eq!(dt, roundtrip_dt);
         Ok(())
     }
 
     #[test]
     fn named_struct_names() -> Result<()> {
-        let mut extensions = Extensions::default();
         let schema = DFSchemaRef::new(DFSchema::try_from(Schema::new(vec![
             Field::new("int", DataType::Int32, true),
             Field::new(
@@ -2394,7 +2392,8 @@ mod test {
             vec!["int", "struct", "inner", "trailer"]
         );
 
-        let roundtrip_schema = from_substrait_named_struct(&named_struct, &extensions)?;
+        let roundtrip_schema =
+            from_substrait_named_struct(&named_struct, &Extensions::default())?;
         assert_eq!(schema.as_ref(), &roundtrip_schema);
         Ok(())
     }
