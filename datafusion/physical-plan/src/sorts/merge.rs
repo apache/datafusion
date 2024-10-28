@@ -430,7 +430,8 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
             if self.is_poll_count_gt(*winner, challenger) {
                 self.update_winner(cmp_node, winner, challenger);
             }
-        } else if challenger < *winner { // Value and polls count are all the same, we choose the smaller index
+        } else if challenger < *winner {
+            // Value and polls count are all the same, we choose the smaller index
             // The winner loses, assign the new winner
             self.update_winner(cmp_node, winner, challenger);
         }
