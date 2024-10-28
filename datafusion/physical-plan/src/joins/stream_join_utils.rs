@@ -18,6 +18,7 @@
 //! This file contains common subroutines for symmetric hash join
 //! related functionality, used both in join calculations and optimization rules.
 
+use ahash::RandomState;
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 
@@ -58,7 +59,7 @@ impl JoinHashMapType for PruningJoinHashMap {
     ) -> (
         &mut RawTable<(u64, u64)>,
         &mut Self::NextType,
-        Option<&mut BloomFilter>,
+        Option<&mut BloomFilter<512, RandomState>>,
     ) {
         (&mut self.map, &mut self.next, None)
     }
@@ -73,7 +74,7 @@ impl JoinHashMapType for PruningJoinHashMap {
         &self.next
     }
 
-    fn get_bloom_filter(&self) -> Option<&BloomFilter> {
+    fn get_bloom_filter(&self) -> Option<&BloomFilter<512, RandomState>> {
         None
     }
 }

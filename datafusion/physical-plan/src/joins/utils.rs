@@ -17,17 +17,17 @@
 
 //! Join related functionality used both on logical and physical plans
 
+use crate::metrics::{self, ExecutionPlanMetricsSet, MetricBuilder};
+use crate::{
+    ColumnStatistics, ExecutionPlan, ExecutionPlanProperties, Partitioning, Statistics,
+};
+use ahash::RandomState;
 use std::collections::HashSet;
 use std::fmt::{self, Debug};
 use std::future::Future;
 use std::ops::{IndexMut, Range};
 use std::sync::Arc;
 use std::task::{Context, Poll};
-
-use crate::metrics::{self, ExecutionPlanMetricsSet, MetricBuilder};
-use crate::{
-    ColumnStatistics, ExecutionPlan, ExecutionPlanProperties, Partitioning, Statistics,
-};
 
 use arrow::array::{
     downcast_array, new_null_array, Array, BooleanBufferBuilder, UInt32Array,
@@ -122,7 +122,7 @@ use parking_lot::Mutex;
 /// ---------------------
 /// ```
 pub struct JoinHashMap {
-    bloom_filter: Option<BloomFilter>,
+    bloom_filter: Option<BloomFilter<512, RandomState>>,
     // Stores hash value to last row index
     map: RawTable<(u64, u64)>,
     // Stores indices in chained list data structure
@@ -142,7 +142,9 @@ impl JoinHashMap {
     pub(crate) fn with_capacity(capacity: usize) -> Self {
         JoinHashMap {
             bloom_filter: Some(
-                BloomFilter::with_num_bits(8388608).expected_items(capacity),
+                BloomFilter::with_num_bits(65536)
+                    .hasher(RandomState::default())
+                    .expected_items(capacity),
             ),
             map: RawTable::with_capacity(capacity),
             next: vec![0; capacity],
@@ -209,14 +211,14 @@ pub trait JoinHashMapType {
     ) -> (
         &mut RawTable<(u64, u64)>,
         &mut Self::NextType,
-        Option<&mut BloomFilter>,
+        Option<&mut BloomFilter<512, RandomState>>,
     );
     /// Returns a reference to the hash map.
     fn get_map(&self) -> &RawTable<(u64, u64)>;
     /// Returns a reference to the next.
     fn get_list(&self) -> &Self::NextType;
     /// Returns a reference to the bloom filter;
-    fn get_bloom_filter(&self) -> Option<&BloomFilter>;
+    fn get_bloom_filter(&self) -> Option<&BloomFilter<512, RandomState>>;
 
     /// Updates hashmap from iterator of row indices & row hashes pairs.
     fn update_from_iter<'a>(
@@ -390,7 +392,7 @@ impl JoinHashMapType for JoinHashMap {
     ) -> (
         &mut RawTable<(u64, u64)>,
         &mut Self::NextType,
-        Option<&mut BloomFilter>,
+        Option<&mut BloomFilter<512, RandomState>>,
     ) {
         (&mut self.map, &mut self.next, self.bloom_filter.as_mut())
     }
@@ -405,7 +407,7 @@ impl JoinHashMapType for JoinHashMap {
         &self.next
     }
 
-    fn get_bloom_filter(&self) -> Option<&BloomFilter> {
+    fn get_bloom_filter(&self) -> Option<&BloomFilter<512, RandomState>> {
         self.bloom_filter.as_ref()
     }
 }
