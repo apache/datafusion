@@ -39,10 +39,7 @@ use std::hash::Hash;
 use std::sync::Arc;
 
 use datafusion::execution::session_state::SessionStateBuilder;
-use substrait::proto::extensions::simple_extension_declaration::{
-    ExtensionType, MappingType,
-};
-use substrait::proto::extensions::SimpleExtensionDeclaration;
+use substrait::proto::extensions::simple_extension_declaration::MappingType;
 use substrait::proto::rel::RelType;
 use substrait::proto::{plan_rel, Plan, Rel};
 
