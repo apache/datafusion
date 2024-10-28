@@ -529,24 +529,6 @@
   </a>
   <ul class="nav section-nav flex-column">
    <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#cume-dist">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       cume_dist
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#percent-rank">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       percent_rank
-      </span>
-     </code>
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
     <a class="reference internal nav-link" href="#first-value">
      <code class="docutils literal notranslate">
       <span class="pre">
@@ -753,26 +735,10 @@ the rest of the documentation.</p>
 <section id="analytical-functions">
 <h2>Analytical functions<a class="headerlink" href="#analytical-functions" title="Link to this heading">¶</a></h2>
 <ul class="simple">
-<li><p><a class="reference internal" href="#cume-dist">cume_dist</a></p></li>
-<li><p><a class="reference internal" href="#percent-rank">percent_rank</a></p></li>
 <li><p><a class="reference internal" href="#first-value">first_value</a></p></li>
 <li><p><a class="reference internal" href="#last-value">last_value</a></p></li>
 <li><p><a class="reference internal" href="#nth-value">nth_value</a></p></li>
 </ul>
-<section id="cume-dist">
-<h3><code class="docutils literal notranslate"><span class="pre">cume_dist</span></code><a class="headerlink" href="#cume-dist" title="Link to this heading">¶</a></h3>
-<p>Relative rank of the current row: (number of rows preceding or peer with current row) / (total rows).</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">cume_dist</span><span class="p">()</span>
-</pre></div>
-</div>
-</section>
-<section id="percent-rank">
-<h3><code class="docutils literal notranslate"><span class="pre">percent_rank</span></code><a class="headerlink" href="#percent-rank" title="Link to this heading">¶</a></h3>
-<p>Relative rank of the current row: (rank - 1) / (total rows - 1).</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">percent_rank</span><span class="p">()</span>
-</pre></div>
-</div>
-</section>
 <section id="first-value">
 <h3><code class="docutils literal notranslate"><span class="pre">first_value</span></code><a class="headerlink" href="#first-value" title="Link to this heading">¶</a></h3>
 <p>Returns value evaluated at the row that is the first row of the window frame.</p>
