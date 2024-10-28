@@ -862,8 +862,19 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 right,
             }) if has_common_conjunction(&left, &right)? => {
                 let lhs: IndexSet<Expr> = iter_conjunction_owned(*left).collect();
-                let (common, rhs): (Vec<_>, Vec<_>) =
-                    iter_conjunction_owned(*right).partition(|e| lhs.contains(e));
+                let (common, rhs): (Vec<_>, Vec<_>) = iter_conjunction_owned(*right)
+                    .try_fold(
+                        (Vec::new(), Vec::new()),
+                        |(mut common, mut rhs), e| -> Result<_, DataFusionError> {
+                            Ok(if lhs.contains(&e) && !e.is_volatile()? {
+                                common.push(e);
+                                (common, rhs)
+                            } else {
+                                rhs.push(e);
+                                (common, rhs)
+                            })
+                        },
+                    )?;
                 let new_rhs = rhs.into_iter().reduce(and);
                 let new_lhs = lhs.into_iter().filter(|e| !common.contains(e)).reduce(and);
                 let common_conjunction = common.into_iter().reduce(and).unwrap();
@@ -1680,14 +1691,13 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
 }
 
 fn has_common_conjunction(lhs: &Expr, rhs: &Expr) -> Result<bool, DataFusionError> {
-    let lhs: HashSet<&Expr> = iter_conjunction(lhs).collect();
-    iter_conjunction(rhs).try_fold(false, |acc, e| {
-        if lhs.contains(&e) && e.is_volatile()? {
-            Ok(false)
-        } else {
-            Ok(acc || lhs.contains(&e))
+    let lhs_set: HashSet<&Expr> = iter_conjunction(lhs).collect();
+    for e in iter_conjunction(rhs) {
+        if lhs_set.contains(&e) && !e.is_volatile()? {
+            return Ok(true);
         }
-    })
+    }
+    Ok(false)
 }
 
 // TODO: We might not need this after defer pattern for Box is stabilized. https://github.com/rust-lang/rust/issues/87121
