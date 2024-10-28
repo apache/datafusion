@@ -327,7 +327,7 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
                 if ord.is_eq() {
                     (true, false)
                 } else {
-                    (false, ord.then_with(|| a.cmp(&b)).is_gt())
+                    (false, ord.is_gt())
                 }
             }
             (None, _) => (false, true),
