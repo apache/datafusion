@@ -26,6 +26,8 @@ SELECT ascii_1, ascii_2, unicode_1, unicode_2 FROM test_basic_operator
 Andrew X datafusion📊🔥 🔥
 Xiangpeng Xiangpeng datafusion数据融合 datafusion数据融合
 Raphael R datafusionДатаФусион аФус
+under_score un_____core un iść core chrząszcz na łące w 東京都
+percent p%t pan Tadeusz ma iść w kąt Pan Tadeusz ma frunąć stąd w kąt
 NULL R NULL 🔥
 
 # --------------------------------------
@@ -42,6 +44,8 @@ select ascii_1, ascii_2 from test_basic_operator where ascii_1 <> ascii_2
 ----
 Andrew X
 Raphael R
+under_score un_____core
+percent p%t
 
 query TT
 select unicode_1, unicode_2 from test_basic_operator where unicode_1 = unicode_2
@@ -53,6 +57,8 @@ select unicode_1, unicode_2 from test_basic_operator where unicode_1 <> unicode_
 ----
 datafusion📊🔥 🔥
 datafusionДатаФусион аФус
+un iść core chrząszcz na łące w 東京都
+pan Tadeusz ma iść w kąt Pan Tadeusz ma frunąć stąd w kąt
 
 query TT
 select ascii_1, unicode_1 from test_basic_operator where ascii_1 = unicode_1
@@ -64,6 +70,8 @@ select ascii_1, unicode_1 from test_basic_operator where ascii_1 <> unicode_1
 Andrew datafusion📊🔥
 Xiangpeng datafusion数据融合
 Raphael datafusionДатаФусион
+under_score un iść core
+percent pan Tadeusz ma iść w kąt
 
 # --------------------------------------
 # column comparison
@@ -82,6 +90,8 @@ from test_basic_operator;
 Andrew X datafusion📊🔥 🔥 false true false true false true
 Xiangpeng Xiangpeng datafusion数据融合 datafusion数据融合 true false true false false true
 Raphael R datafusionДатаФусион аФус false true false true false true
+under_score un_____core un iść core chrząszcz na łące w 東京都 false true false true false true
+percent p%t pan Tadeusz ma iść w kąt Pan Tadeusz ma frunąć stąd w kąt false true false true false true
 NULL R NULL 🔥 NULL NULL NULL NULL NULL NULL
 
 # --------------------------------------
@@ -99,6 +109,8 @@ from test_basic_operator;
 Andrew datafusion📊🔥 true false false true
 Xiangpeng datafusion数据融合 false true true false
 Raphael datafusionДатаФусион false true false true
+under_score un iść core false true false true
+percent pan Tadeusz ma iść w kąt false true false true
 NULL NULL NULL NULL NULL NULL
 
 # --------------------------------------
@@ -116,6 +128,8 @@ from test_basic_operator;
 Andrew datafusion📊🔥 true false false true
 Xiangpeng datafusion数据融合 false true true false
 Raphael datafusionДатаФусион false true false true
+under_score un iść core false true false true
+percent pan Tadeusz ma iść w kąt false true false true
 NULL NULL NULL NULL NULL NULL
 
 # --------------------------------------
@@ -133,6 +147,8 @@ from test_basic_operator;
 Andrew datafusion📊🔥 true false false true
 Xiangpeng datafusion数据融合 false true true false
 Raphael datafusionДатаФусион false true false true
+under_score un iść core false true false true
+percent pan Tadeusz ma iść w kąt false true false true
 NULL NULL NULL NULL NULL NULL
 
 # --------------------------------------
@@ -175,6 +191,8 @@ FROM test_basic_operator;
 And X dat 🔥
 Xia Xia dat dat
 Rap R dat аФу
+und un_ un  chr
+per p%t pan Pan
 NULL R NULL 🔥
 
 # --------------------------------------
@@ -187,7 +205,7 @@ SELECT
 FROM
     test_basic_operator
 ----
-3 3
+5 5
 
 query II
 SELECT
@@ -200,6 +218,8 @@ GROUP BY ascii_2;
 1 1
 1 1
 1 1
+1 1
+1 1
 
 query II
 SELECT
@@ -209,6 +229,8 @@ FROM
     test_basic_operator
 GROUP BY unicode_2;
 ----
+1 1
+1 1
 1 1
 1 1
 1 1
@@ -228,6 +250,8 @@ FROM test_basic_operator
 false false false false
 true true false false
 true false false false
+false false false false
+false false false false
 NULL NULL NULL NULL
 
 query BBBB
@@ -241,6 +265,8 @@ FROM test_basic_operator
 true false true false
 false false true true
 false false true false
+false false false false
+false false false false
 NULL false NULL false
 
 # --------------------------------------
@@ -255,6 +281,8 @@ FROM test_basic_operator;
 Andrew
 Xiangpeng
 Raphael
+under_scrre
+percent
 NULL
 
 query T
@@ -265,6 +293,8 @@ FROM test_basic_operator;
 databusirn📊🔥
 databusirn数据融合
 databusirnДатаФусион
+un iść crre
+pan Tadeusz ma iść w kąt
 NULL
 
 # --------------------------------------
@@ -280,6 +310,8 @@ FROM test_basic_operator;
 Andrfw
 Xiangpfng
 Raphafl
+undfr_score
+pfrcent
 NULL
 
 # Should run REGEXP_REPLACE with Scalar value for string with flag
@@ -291,6 +323,8 @@ FROM test_basic_operator;
 Andrfw
 Xiangpfng
 Raphafl
+undfr_score
+pfrcent
 NULL
 
 # Should run REGEXP_REPLACE with ScalarArray value for string
@@ -302,6 +336,8 @@ FROM test_basic_operator;
 Andrew
 Xiangpeng
 Raphael
+bar
+bar
 NULL
 
 # Should run REGEXP_REPLACE with ScalarArray value for string with flag
@@ -313,6 +349,8 @@ FROM test_basic_operator;
 Andrew
 Xiangpeng
 Raphael
+bar
+bar
 NULL
 
 # --------------------------------------
@@ -333,6 +371,8 @@ FROM test_lowercase;
 Andrew Datafusion📊🔥
 Xiangpeng Datafusion数据融合
 Raphael Datafusionдатафусион
+Under_Score Un Iść Core
+Percent Pan Tadeusz Ma Iść W KąT
 NULL NULL
 
 statement ok
@@ -353,6 +393,8 @@ FROM test_basic_operator;
 65 88 100 128293
 88 88 100 100
 82 82 100 1072
+117 117 117 99
+112 112 112 80
 NULL 82 NULL 128293
 
 # --------------------------------------
@@ -373,6 +415,8 @@ FROM test_basic_operator;
 Andrew ndrew NULL datafusion📊🔥 datafusion📊 NULL
 Xiangpeng Xiangpeng NULL datafusion数据融合 datafusion数据融合 NULL
 Raphael Raphael NULL datafusionДатаФусион datafusionДатаФусион NULL
+under_score under_score NULL un iść core un iść core NULL
+percent percent NULL pan Tadeusz ma iść w kąt pan Tadeusz ma iść w kąt NULL
 NULL NULL NULL NULL NULL NULL
 
 # --------------------------------------
@@ -393,6 +437,8 @@ FROM test_basic_operator;
 Andrew Andrew NULL datafusion📊🔥 NULL datafusion📊🔥
 Xiangpeng (empty) NULL datafusion数据融合 NULL datafusion数据融合
 Raphael aphael NULL datafusionДатаФусион NULL datafusionДатаФусион
+under_score der_score NULL un iść core NULL un iść core
+percent ercent NULL pan Tadeusz ma iść w kąt NULL pan Tadeusz ma iść w kąt
 NULL NULL NULL NULL NULL NULL
 
 # --------------------------------------
@@ -412,6 +458,8 @@ FROM test_basic_operator;
 And Andrew Andrew NULL datafusion📊
 Xiangpeng (empty) Xiangpeng NULL datafusion数据融合
 Raphael Raphael Raphael NULL datafusionДатаФусион
+under_sco under_s under_score NULL un iść core
+percent percen percent NULL pan Tadeusz ma iść w kąt
 NULL NULL NULL NULL NULL
 
 # --------------------------------------
@@ -431,6 +479,8 @@ FROM test_basic_operator;
 false false NULL true NULL true
 false true NULL true NULL false
 false true NULL true NULL false
+false false NULL false NULL false
+false false NULL false NULL false
 NULL NULL NULL NULL NULL NULL
 
 # --------------------------------------
@@ -443,6 +493,8 @@ SELECT LOWER(ascii_1) as c1, LOWER(unicode_1) as c2 FROM test_basic_operator;
 andrew datafusion📊🔥
 xiangpeng datafusion数据融合
 raphael datafusionдатафусион
+under_score un iść core
+percent pan tadeusz ma iść w kąt
 NULL NULL
 
 # --------------------------------------
@@ -455,6 +507,8 @@ SELECT UPPER(ascii_1) as c1, UPPER(unicode_1) as c2 FROM test_basic_operator;
 ANDREW DATAFUSION📊🔥
 XIANGPENG DATAFUSION数据融合
 RAPHAEL DATAFUSIONДАТАФУСИОН
+UNDER_SCORE UN IŚĆ CORE
+PERCENT PAN TADEUSZ MA IŚĆ W KĄT
 NULL NULL
 
 # --------------------------------------
@@ -480,6 +534,8 @@ FROM test_basic_operator;
 Andrew:Data AndrewX Andrew Andrewdatafusion📊🔥 Andrew🔥 datafusion📊🔥Andrew datafusion📊🔥🔥 datafusion📊🔥 datafusion📊🔥🔥 🔥 (empty) Andrew,datafusion📊🔥
 Xiangpeng:Data XiangpengXiangpeng Xiangpeng Xiangpengdatafusion数据融合 Xiangpengdatafusion数据融合 datafusion数据融合Xiangpeng datafusion数据融合datafusion数据融合 datafusion数据融合 datafusion数据融合🔥 🔥 (empty) Xiangpeng,datafusion数据融合
 Raphael:Data RaphaelR Raphael RaphaeldatafusionДатаФусион RaphaelаФус datafusionДатаФусионRaphael datafusionДатаФусионаФус datafusionДатаФусион datafusionДатаФусион🔥 🔥 (empty) Raphael,datafusionДатаФусион
+under_score:Data under_scoreun_____core under_score under_scoreun iść core under_scorechrząszcz na łące w 東京都 un iść coreunder_score un iść corechrząszcz na łące w 東京都 un iść core un iść core🔥 🔥 (empty) under_score,un iść core
+percent:Data percentp%t percent percentpan Tadeusz ma iść w kąt percentPan Tadeusz ma frunąć stąd w kąt pan Tadeusz ma iść w kątpercent pan Tadeusz ma iść w kątPan Tadeusz ma frunąć stąd w kąt pan Tadeusz ma iść w kąt pan Tadeusz ma iść w kąt🔥 🔥 (empty) percent,pan Tadeusz ma iść w kąt
 :Data R (empty) (empty) 🔥 (empty) 🔥 (empty) 🔥 🔥 (empty) ,
 
 # --------------------------------------
@@ -499,6 +555,8 @@ FROM test_basic_operator;
 Afooew dfoofusion📊🔥 A🔥drew d🔥tafusion📊🔥 NULL NULL
 Xfoogpeng dfoofusion数据融合 X🔥angpeng d🔥tafusion数据融合 NULL NULL
 Rfooael dfoofusionДатаФусион R🔥phael d🔥tafusionДатаФусион NULL NULL
+ufoor_score ufoość core u🔥der_score u🔥 iść core NULL NULL
+pfooent pfooTadeusz ma iść w kąt p🔥rcent p🔥n Tadeusz ma iść w kąt NULL NULL
 NULL NULL NULL NULL NULL NULL
 
 # --------------------------------------
@@ -518,6 +576,8 @@ FROM test_basic_operator;
 Andrew Andrew NULL datafusion📊bar NULL datafusion📊bar
 Xiangpeng bar NULL bar NULL datafusion数据融合
 Raphael baraphael NULL datafusionДатbarион NULL datafusionДатаФусион
+under_score under_score NULL un iść core NULL un iść core
+percent percent NULL pan Tadeusz ma iść w kąt NULL pan Tadeusz ma iść w kąt
 NULL NULL NULL NULL NULL NULL
 
 # --------------------------------------
@@ -537,6 +597,8 @@ FROM test_basic_operator;
 rew (empty) rew n📊🔥 (empty) afusion📊🔥
 eng (empty) ngpeng 据融合 (empty) afusion数据融合
 ael (empty) hael ион (empty) afusionДатаФусион
+ore (empty) er_score ore (empty) iść core
+ent (empty) cent kąt (empty)  Tadeusz ma iść w kąt
 NULL NULL NULL NULL NULL NULL
 
 # --------------------------------------
@@ -557,6 +619,8 @@ FROM test_basic_operator;
 And (empty) And dat (empty) datafusio
 Xia (empty) Xiangp dat (empty) datafusion数
 Rap (empty) Raph dat (empty) datafusionДатаФус
+und (empty) under_sc un  (empty) un iść c
+per (empty) perc pan (empty) pan Tadeusz ma iść w 
 NULL NULL NULL NULL NULL NULL
 
 # --------------------------------------
@@ -574,6 +638,8 @@ FROM test_basic_operator;
 Andrew Andrew datafusion📊🔥 datafusion📊🔥
 Xi Xiangpeng datafusion数据融合 datafusion数据融合
 R Raph datafusionД datafusionДат
+under_score under_score un iść core un iść core
+percent percent pan Tadeusz ma iść w kąt pan Tadeusz ma iść w kąt
 NULL NULL NULL NULL
 
 # --------------------------------------
@@ -591,6 +657,8 @@ FROM test_basic_operator;
 0 1 0 1
 0 2 0 2
 0 3 0 3
+0 0 0 0
+0 0 0 0
 NULL NULL NULL NULL
 
 # --------------------------------------
@@ -610,6 +678,8 @@ FROM test_basic_operator;
 Andrewfoo Andrew🔥 datafusion📊🔥foo datafusion📊🔥🔥
 Xiangpengfoo Xiangpeng🔥 datafusion数据融合foo datafusion数据融合🔥
 Raphaelfoo Raphael🔥 datafusionДатаФусионfoo datafusionДатаФусион🔥
+under_scorefoo under_score🔥 un iść corefoo un iść core🔥
+percentfoo percent🔥 pan Tadeusz ma iść w kątfoo pan Tadeusz ma iść w kąt🔥
 NULL NULL NULL NULL
 
 # || same type (column1 has null, so also tests NULL || NULL)
@@ -625,6 +695,8 @@ FROM test_basic_operator;
 AndrewX Andrew🔥 datafusion📊🔥X datafusion📊🔥🔥
 XiangpengXiangpeng Xiangpengdatafusion数据融合 datafusion数据融合Xiangpeng datafusion数据融合datafusion数据融合
 RaphaelR RaphaelаФус datafusionДатаФусионR datafusionДатаФусионаФус
+under_scoreun_____core under_scorechrząszcz na łące w 東京都 un iść coreun_____core un iść corechrząszcz na łące w 東京都
+percentp%t percentPan Tadeusz ma frunąć stąd w kąt pan Tadeusz ma iść w kątp%t pan Tadeusz ma iść w kątPan Tadeusz ma frunąć stąd w kąt
 NULL NULL NULL NULL
 
 # --------------------------------------
@@ -640,6 +712,8 @@ FROM test_basic_operator;
 false false
 true false
 false true
+false false
+false false
 NULL NULL
 
 query BB
@@ -651,6 +725,8 @@ FROM test_basic_operator;
 true false
 false false
 false true
+false false
+false false
 NULL NULL
 
 query BB
@@ -662,6 +738,8 @@ FROM test_basic_operator;
 true true
 true false
 true true
+true true
+true true
 NULL NULL
 
 query BB
@@ -672,6 +750,8 @@ FROM test_basic_operator;
 ----
 true true
 false false
+true true
+true true
 true true
 NULL NULL
 
@@ -691,6 +771,8 @@ from test_basic_operator;
 Andrew nice Andrew and X datafusion📊🔥 cool datafusion📊🔥 and 🔥 Andrew 🔥 datafusion📊🔥
 Xiangpeng nice Xiangpeng and Xiangpeng datafusion数据融合 cool datafusion数据融合 and datafusion数据融合 Xiangpeng 🔥 datafusion数据融合
 Raphael nice Raphael and R datafusionДатаФусион cool datafusionДатаФусион and аФус Raphael 🔥 datafusionДатаФусион
+under_score nice under_score and un_____core un iść core cool un iść core and chrząszcz na łące w 東京都 under_score 🔥 un iść core
+percent nice percent and p%t pan Tadeusz ma iść w kąt cool pan Tadeusz ma iść w kąt and Pan Tadeusz ma frunąć stąd w kąt percent 🔥 pan Tadeusz ma iść w kąt
 NULL NULL NULL NULL NULL
 
 # --------------------------------------
@@ -725,6 +807,8 @@ from test_basic_operator;
 Andrew datafusion📊🔥 false false false false
 Xiangpeng datafusion数据融合 false false false false
 Raphael datafusionДатаФусион false false false false
+under_score un iść core false false false false
+percent pan Tadeusz ma iść w kąt false false false false
 NULL NULL NULL NULL NULL NULL
 
 # --------------------------------------
@@ -741,6 +825,8 @@ FROM
 6 12
 9 14
 7 20
+11 11
+7 24
 NULL NULL
 
 # --------------------------------------
@@ -758,6 +844,8 @@ FROM test_basic_operator;
 true true NULL NULL
 false true NULL NULL
 false true NULL NULL
+false false NULL NULL
+false false NULL NULL
 NULL NULL NULL NULL
 
 # --------------------------------------
@@ -775,6 +863,8 @@ FROM test_basic_operator;
 true false NULL NULL
 false false NULL NULL
 false true NULL NULL
+false false NULL NULL
+false false NULL NULL
 NULL NULL NULL NULL
 
 # --------------------------------------
@@ -792,6 +882,8 @@ FROM test_basic_operator;
 0 4 NULL NULL
 7 0 NULL NULL
 6 10 NULL NULL
+8 13 NULL NULL
+6 19 NULL NULL
 NULL NULL NULL NULL
 
 # --------------------------------------
@@ -809,6 +901,8 @@ FROM test_basic_operator;
 xxxxxxxxxxxxxxAndrew NULL 🔥🔥🔥🔥🔥🔥🔥🔥datafusion📊🔥 NULL
 xxxxxxxxxxxXiangpeng NULL 🔥🔥🔥🔥🔥🔥datafusion数据融合 NULL
 xxxxxxxxxxxxxRaphael NULL datafusionДатаФусион NULL
+xxxxxxxxxunder_score NULL 🔥🔥🔥🔥🔥🔥🔥🔥🔥un iść core NULL
+xxxxxxxxxxxxxpercent NULL pan Tadeusz ma iść w NULL
 NULL NULL NULL NULL
 
 query TT
@@ -820,6 +914,8 @@ FROM test_basic_operator;
               Andrew         datafusion📊🔥
            Xiangpeng       datafusion数据融合
              Raphael datafusionДатаФусион
+         under_score          un iść core
+             percent pan Tadeusz ma iść w
 NULL NULL
 
 # --------------------------------------
@@ -837,6 +933,8 @@ FROM test_basic_operator;
 Andrewxxxxxxxxxxxxxx NULL datafusion📊🔥🔥🔥🔥🔥🔥🔥🔥🔥 NULL
 Xiangpengxxxxxxxxxxx NULL datafusion数据融合🔥🔥🔥🔥🔥🔥 NULL
 Raphaelxxxxxxxxxxxxx NULL datafusionДатаФусион NULL
+under_scorexxxxxxxxx NULL un iść core🔥🔥🔥🔥🔥🔥🔥🔥🔥 NULL
+percentxxxxxxxxxxxxx NULL pan Tadeusz ma iść w NULL
 NULL NULL NULL NULL
 
 query TT
@@ -845,9 +943,11 @@ SELECT
   RPAD(unicode_1, 20)
 FROM test_basic_operator;
 ----
-Andrew              datafusion📊🔥
-Xiangpeng           datafusion数据融合
-Raphael             datafusionДатаФусион
+Andrew               datafusion📊🔥        
+Xiangpeng            datafusion数据融合      
+Raphael              datafusionДатаФусион
+under_score          un iść core         
+percent              pan Tadeusz ma iść w
 NULL NULL
 
 # --------------------------------------
@@ -871,6 +971,8 @@ SELECT
 false false NULL NULL true false NULL NULL
 true false NULL NULL true false NULL NULL
 false true NULL NULL false true NULL NULL
+false false NULL NULL false false NULL NULL
+false false NULL NULL false false NULL NULL
 NULL NULL NULL NULL NULL NULL NULL NULL
 
 # --------------------------------------
@@ -895,6 +997,8 @@ NULL NULL NULL NULL [An] NULL NULL NULL
 [an] NULL NULL NULL [an] NULL NULL NULL
 NULL NULL NULL NULL NULL [таФ] NULL NULL
 NULL NULL NULL NULL NULL NULL NULL NULL
+NULL NULL NULL NULL NULL NULL NULL NULL
+NULL NULL NULL NULL NULL NULL NULL NULL
 
 # --------------------------------------
 # Test REPEAT
@@ -909,6 +1013,8 @@ FROM test_basic_operator;
 AndrewAndrewAndrew datafusion📊🔥datafusion📊🔥datafusion📊🔥
 XiangpengXiangpengXiangpeng datafusion数据融合datafusion数据融合datafusion数据融合
 RaphaelRaphaelRaphael datafusionДатаФусионdatafusionДатаФусионdatafusionДатаФусион
+under_scoreunder_scoreunder_score un iść coreun iść coreun iść core
+percentpercentpercent pan Tadeusz ma iść w kątpan Tadeusz ma iść w kątpan Tadeusz ma iść w kąt
 NULL NULL
 
 # --------------------------------------
@@ -928,6 +1034,8 @@ FROM test_basic_operator;
 Andr w NULL datafusion📊🔥 (empty) NULL
 Xiangp ng NULL datafusion数据融合 (empty) NULL
 Rapha l NULL datafusionДатаФус он NULL
+und r_scor NULL un iść core (empty) NULL
+p rc NULL pan Tadeusz ma iść w kąt (empty) NULL
 NULL NULL NULL NULL NULL NULL
 
 # --------------------------------------
@@ -943,6 +1051,8 @@ FROM test_basic_operator;
 werdnA 🔥📊noisufatad
 gnepgnaiX 合融据数noisufatad
 leahpaR ноисуФатаДnoisufatad
+erocs_rednu eroc ćśi nu
+tnecrep tąk w ćśi am zsuedaT nap
 NULL NULL
 
 # --------------------------------------
@@ -962,6 +1072,8 @@ FROM test_basic_operator;
 5 0 NULL 0 0 NULL
 7 3 NULL 0 0 NULL
 6 0 NULL 18 18 NULL
+4 0 NULL 0 0 NULL
+2 0 NULL 0 0 NULL
 NULL NULL NULL NULL NULL NULL
 
 # --------------------------------------
@@ -981,4 +1093,6 @@ FROM test_basic_operator;
 Andr Andrew NULL datafusion📊🔥 datafusion📊🔥 NULL
 Xiangp Xi NULL datafusion数据融合 datafusion数 NULL
 Rapha Raphael NULL datafusionДатаФус datafusionДатаФусион NULL
+und under_score NULL un iść core un iść core NULL
+p percent NULL pan Tadeusz ma iść w kąt pan Tadeusz ma iść w kąt NULL
 NULL NULL NULL NULL NULL NULL
