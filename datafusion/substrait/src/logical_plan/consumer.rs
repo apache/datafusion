@@ -1836,10 +1836,10 @@ fn from_substrait_type(
                 Ok(DataType::Interval(IntervalUnit::MonthDayNano))
             }
             r#type::Kind::UserDefined(u) => {
-                // Kept for backwards compatibility, use IntervalCompound instead
                 if let Some(name) = extensions.types.get(&u.type_reference) {
                     #[allow(deprecated)]
                     match name.as_ref() {
+                        // Kept for backwards compatibility, producers should use IntervalCompound instead
                         INTERVAL_MONTH_DAY_NANO_TYPE_NAME => Ok(DataType::Interval(IntervalUnit::MonthDayNano)),
                             _ => not_impl_err!(
                                 "Unsupported Substrait user defined type with ref {} and variation {}",
@@ -1848,18 +1848,17 @@ fn from_substrait_type(
                             ),
                     }
                 } else {
-                    // Kept for backwards compatibility, use IntervalCompound instead
                     #[allow(deprecated)]
                     match u.type_reference {
-                        // Kept for backwards compatibility, use IntervalYear instead
+                        // Kept for backwards compatibility, producers should use IntervalYear instead
                         INTERVAL_YEAR_MONTH_TYPE_REF => {
                             Ok(DataType::Interval(IntervalUnit::YearMonth))
                         }
-                        // Kept for backwards compatibility, use IntervalDay instead
+                        // Kept for backwards compatibility, producers should use IntervalDay instead
                         INTERVAL_DAY_TIME_TYPE_REF => {
                             Ok(DataType::Interval(IntervalUnit::DayTime))
                         }
-                        // Not supported yet by Substrait
+                        // Kept for backwards compatibility, producers should use IntervalCompound instead
                         INTERVAL_MONTH_DAY_NANO_TYPE_REF => {
                             Ok(DataType::Interval(IntervalUnit::MonthDayNano))
                         }
@@ -2365,7 +2364,7 @@ fn from_substrait_literal(
 
             if let Some(name) = extensions.types.get(&user_defined.type_reference) {
                 match name.as_ref() {
-                    // Kept for backwards compatibility - new plans should use IntervalCompound instead
+                    // Kept for backwards compatibility - producers should use IntervalCompound instead
                     #[allow(deprecated)]
                     INTERVAL_MONTH_DAY_NANO_TYPE_NAME => {
                         interval_month_day_nano(user_defined)?
@@ -2379,10 +2378,9 @@ fn from_substrait_literal(
                     }
                 }
             } else {
-                // Kept for backwards compatibility - new plans should include extension instead
                 #[allow(deprecated)]
                 match user_defined.type_reference {
-                    // Kept for backwards compatibility, use IntervalYearToMonth instead
+                    // Kept for backwards compatibility, producers should useIntervalYearToMonth instead
                     INTERVAL_YEAR_MONTH_TYPE_REF => {
                         let Some(Val::Value(raw_val)) = user_defined.val.as_ref() else {
                             return substrait_err!("Interval year month value is empty");
@@ -2397,7 +2395,7 @@ fn from_substrait_literal(
                             value_slice,
                         )))
                     }
-                    // Kept for backwards compatibility, use IntervalDayToSecond instead
+                    // Kept for backwards compatibility, producers should useIntervalDayToSecond instead
                     INTERVAL_DAY_TIME_TYPE_REF => {
                         let Some(Val::Value(raw_val)) = user_defined.val.as_ref() else {
                             return substrait_err!("Interval day time value is empty");
@@ -2417,7 +2415,7 @@ fn from_substrait_literal(
                             milliseconds,
                         }))
                     }
-                    // Kept for backwards compatibility, use IntervalCompound instead
+                    // Kept for backwards compatibility, producers should useIntervalCompound instead
                     INTERVAL_MONTH_DAY_NANO_TYPE_REF => {
                         interval_month_day_nano(user_defined)?
                     }
