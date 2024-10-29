@@ -130,10 +130,11 @@ mod tests {
     use super::*;
     use crate::expressions::col;
     use arrow::{array::BooleanArray, datatypes::*};
+    use std::sync::OnceLock;
 
     #[test]
     fn neg_op() -> Result<()> {
-        let schema = Schema::new(vec![Field::new("a", DataType::Boolean, true)]);
+        let schema = schema();
 
         let expr = not(col("a", &schema)?)?;
         assert_eq!(expr.data_type(&schema)?, DataType::Boolean);
@@ -142,8 +143,7 @@ mod tests {
         let input = BooleanArray::from(vec![Some(true), None, Some(false)]);
         let expected = &BooleanArray::from(vec![Some(false), None, Some(true)]);
 
-        let batch =
-            RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(input)])?;
+        let batch = RecordBatch::try_new(schema, vec![Arc::new(input)])?;
 
         let result = expr
             .evaluate(&batch)?
@@ -155,4 +155,48 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn test_evaluate_bounds() -> Result<()> {
+        // Note that `None` for boolean intervals is converted to `Some(false)`
+        // / `Some(true)` by `Interval::make`, so it is not explicitly tested
+        // here
+
+        // if the bounds are all booleans (false, true) so is the negation
+        assert_evaluate_bounds(
+            Interval::make(Some(false), Some(true))?,
+            Interval::make(Some(false), Some(true))?,
+        )?;
+        // (true, false) is not tested because it is not a valid interval (lower
+        // bound is greater than upper bound)
+        assert_evaluate_bounds(
+            Interval::make(Some(true), Some(true))?,
+            Interval::make(Some(false), Some(false))?,
+        )?;
+        assert_evaluate_bounds(
+            Interval::make(Some(false), Some(false))?,
+            Interval::make(Some(true), Some(true))?,
+        )?;
+        Ok(())
+    }
+
+    fn assert_evaluate_bounds(
+        interval: Interval,
+        expected_interval: Interval,
+    ) -> Result<()> {
+        let not_expr = not(col("a", &schema())?)?;
+        assert_eq!(
+            not_expr.evaluate_bounds(&[&interval]).unwrap(),
+            expected_interval
+        );
+        Ok(())
+    }
+
+    fn schema() -> SchemaRef {
+        Arc::clone(SCHEMA.get_or_init(|| {
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Boolean, true)]))
+        }))
+    }
+
+    static SCHEMA: OnceLock<SchemaRef> = OnceLock::new();
 }
