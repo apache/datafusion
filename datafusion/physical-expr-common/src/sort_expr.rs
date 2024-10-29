@@ -144,7 +144,7 @@ impl Hash for PhysicalSortExpr {
 }
 
 impl Display for PhysicalSortExpr {
-    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         write!(f, "{} {}", self.expr, to_str(&self.options))
     }
 }
@@ -241,7 +241,7 @@ impl PartialEq for PhysicalSortRequirement {
 }
 
 impl Display for PhysicalSortRequirement {
-    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         let opts_string = self.options.as_ref().map_or("NA", to_str);
         write!(f, "{} {}", self.expr, opts_string)
     }
@@ -255,7 +255,7 @@ pub fn format_physical_sort_requirement_list(
 ) -> impl Display + '_ {
     struct DisplayWrapper<'a>(&'a [PhysicalSortRequirement]);
     impl<'a> Display for DisplayWrapper<'a> {
-        fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
             let mut iter = self.0.iter();
             write!(f, "[")?;
             if let Some(expr) = iter.next() {
@@ -420,7 +420,7 @@ impl Display for LexOrdering {
             } else {
                 write!(f, ", ")?;
             }
-            write!(f, "{sort_expr}")?;
+            write!(f, "{}", sort_expr)?;
         }
         Ok(())
     }
@@ -523,7 +523,7 @@ impl<'a> Display for LexOrderingRef<'a> {
             } else {
                 write!(f, ", ")?;
             }
-            write!(f, "{sort_expr}")?;
+            write!(f, "{}", sort_expr)?;
         }
         Ok(())
     }
@@ -608,7 +608,7 @@ impl FromIterator<PhysicalSortRequirement> for LexRequirement {
 
 impl IntoIterator for LexRequirement {
     type Item = PhysicalSortRequirement;
-    type IntoIter = std::vec::IntoIter<Self::Item>;
+    type IntoIter = IntoIter<Self::Item>;
 
     fn into_iter(self) -> Self::IntoIter {
         self.inner.into_iter()
