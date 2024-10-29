@@ -19,7 +19,8 @@
 //! file sources.
 
 use std::{
-    borrow::Cow, collections::HashMap, fmt::Debug, marker::PhantomData, sync::Arc, vec,
+    borrow::Cow, collections::HashMap, fmt::Debug, marker::PhantomData, mem::size_of,
+    sync::Arc, vec,
 };
 
 use super::{get_projected_output_ordering, statistics::MinMaxStatistics};
@@ -248,9 +249,10 @@ impl FileScanConfig {
             column_statistics: table_cols_stats,
         };
 
-        let projected_schema = Arc::new(
-            Schema::new(table_fields).with_metadata(self.file_schema.metadata().clone()),
-        );
+        let projected_schema = Arc::new(Schema::new_with_metadata(
+            table_fields,
+            self.file_schema.metadata().clone(),
+        ));
 
         let projected_output_ordering =
             get_projected_output_ordering(self, &projected_schema);
@@ -281,7 +283,12 @@ impl FileScanConfig {
 
         fields.map_or_else(
             || Arc::clone(&self.file_schema),
-            |f| Arc::new(Schema::new(f).with_metadata(self.file_schema.metadata.clone())),
+            |f| {
+                Arc::new(Schema::new_with_metadata(
+                    f,
+                    self.file_schema.metadata.clone(),
+                ))
+            },
         )
     }
 
@@ -491,7 +498,7 @@ impl<T> ZeroBufferGenerator<T>
 where
     T: ArrowNativeType,
 {
-    const SIZE: usize = std::mem::size_of::<T>();
+    const SIZE: usize = size_of::<T>();
 
     fn get_buffer(&mut self, n_vals: usize) -> Buffer {
         match &mut self.cache {

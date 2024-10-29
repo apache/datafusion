@@ -829,7 +829,7 @@ mod tests {
     {
         let test_waker = Arc::new(TestWaker::default());
         let waker = futures::task::waker(Arc::clone(&test_waker));
-        let mut cx = std::task::Context::from_waker(&waker);
+        let mut cx = Context::from_waker(&waker);
         let res = fut.poll_unpin(&mut cx);
         (res, test_waker)
     }

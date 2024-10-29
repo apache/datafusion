@@ -35,8 +35,8 @@ use datafusion_common::{not_impl_err, DataFusionError, Result};
 use datafusion_execution::memory_pool::proxy::{RawTableAllocExt, VecAllocExt};
 use datafusion_expr::EmitTo;
 use datafusion_physical_expr::binary_map::OutputType;
-
 use hashbrown::raw::RawTable;
+use std::mem::size_of;
 
 /// A [`GroupValues`] that stores multiple columns of group values.
 ///
@@ -351,7 +351,7 @@ impl GroupValues for GroupValuesColumn {
         self.group_values.clear();
         self.map.clear();
         self.map.shrink_to(count, |_| 0); // hasher does not matter since the map is cleared
-        self.map_size = self.map.capacity() * std::mem::size_of::<(u64, usize)>();
+        self.map_size = self.map.capacity() * size_of::<(u64, usize)>();
         self.hashes_buffer.clear();
         self.hashes_buffer.shrink_to(count);
     }

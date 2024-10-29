@@ -23,6 +23,7 @@
 use std::collections::HashSet;
 use std::fmt::Debug;
 use std::hash::Hash;
+use std::mem::size_of_val;
 use std::sync::Arc;
 
 use ahash::RandomState;
@@ -117,8 +118,7 @@ where
 
     fn size(&self) -> usize {
         let num_elements = self.values.len();
-        let fixed_size =
-            std::mem::size_of_val(self) + std::mem::size_of_val(&self.values);
+        let fixed_size = size_of_val(self) + size_of_val(&self.values);
 
         estimate_memory_size::<T::Native>(num_elements, fixed_size).unwrap()
     }
@@ -206,8 +206,7 @@ where
 
     fn size(&self) -> usize {
         let num_elements = self.values.len();
-        let fixed_size =
-            std::mem::size_of_val(self) + std::mem::size_of_val(&self.values);
+        let fixed_size = size_of_val(self) + size_of_val(&self.values);
 
         estimate_memory_size::<T::Native>(num_elements, fixed_size).unwrap()
     }

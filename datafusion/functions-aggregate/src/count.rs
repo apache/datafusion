@@ -21,6 +21,7 @@ use datafusion_functions_aggregate_common::aggregate::count_distinct::BytesViewD
 use datafusion_physical_expr::expressions;
 use std::collections::HashSet;
 use std::fmt::Debug;
+use std::mem::{size_of, size_of_val};
 use std::ops::BitAnd;
 use std::sync::{Arc, OnceLock};
 
@@ -394,7 +395,7 @@ impl Accumulator for CountAccumulator {
 
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
         let counts = downcast_value!(states[0], Int64Array);
-        let delta = &arrow::compute::sum(counts);
+        let delta = &compute::sum(counts);
         if let Some(d) = delta {
             self.count += *d;
         }
@@ -410,7 +411,7 @@ impl Accumulator for CountAccumulator {
     }
 
     fn size(&self) -> usize {
-        std::mem::size_of_val(self)
+        size_of_val(self)
     }
 }
 
@@ -583,7 +584,7 @@ impl GroupsAccumulator for CountGroupsAccumulator {
     }
 
     fn size(&self) -> usize {
-        self.counts.capacity() * std::mem::size_of::<usize>()
+        self.counts.capacity() * size_of::<usize>()
     }
 }
 
@@ -627,28 +628,28 @@ impl DistinctCountAccumulator {
     // number of batches This method is faster than .full_size(), however it is
     // not suitable for variable length values like strings or complex types
     fn fixed_size(&self) -> usize {
-        std::mem::size_of_val(self)
-            + (std::mem::size_of::<ScalarValue>() * self.values.capacity())
+        size_of_val(self)
+            + (size_of::<ScalarValue>() * self.values.capacity())
             + self
                 .values
                 .iter()
                 .next()
-                .map(|vals| ScalarValue::size(vals) - std::mem::size_of_val(vals))
+                .map(|vals| ScalarValue::size(vals) - size_of_val(vals))
                 .unwrap_or(0)
-            + std::mem::size_of::<DataType>()
+            + size_of::<DataType>()
     }
 
     // calculates the size as accurately as possible. Note that calling this
     // method is expensive
     fn full_size(&self) -> usize {
-        std::mem::size_of_val(self)
-            + (std::mem::size_of::<ScalarValue>() * self.values.capacity())
+        size_of_val(self)
+            + (size_of::<ScalarValue>() * self.values.capacity())
             + self
                 .values
                 .iter()
-                .map(|vals| ScalarValue::size(vals) - std::mem::size_of_val(vals))
+                .map(|vals| ScalarValue::size(vals) - size_of_val(vals))
                 .sum::<usize>()
-            + std::mem::size_of::<DataType>()
+            + size_of::<DataType>()
     }
 }
 

@@ -91,7 +91,7 @@ impl TableProviderFactory for ListingTableFactory {
                         .field_with_name(col)
                         .map_err(|e| arrow_datafusion_err!(e))
                 })
-                .collect::<datafusion_common::Result<Vec<_>>>()?
+                .collect::<Result<Vec<_>>>()?
                 .into_iter()
                 .map(|f| (f.name().to_owned(), f.data_type().to_owned()))
                 .collect();

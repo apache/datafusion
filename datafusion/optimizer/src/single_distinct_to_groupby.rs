@@ -279,7 +279,7 @@ impl OptimizerRule for SingleDistinctToGroupBy {
 mod tests {
     use super::*;
     use crate::test::*;
-    use datafusion_expr::expr::{self, GroupingSet};
+    use datafusion_expr::expr::GroupingSet;
     use datafusion_expr::ExprFunctionExt;
     use datafusion_expr::{lit, logical_plan::builder::LogicalPlanBuilder};
     use datafusion_functions_aggregate::count::count_udaf;
@@ -288,7 +288,7 @@ mod tests {
     use datafusion_functions_aggregate::sum::sum_udaf;
 
     fn max_distinct(expr: Expr) -> Expr {
-        Expr::AggregateFunction(datafusion_expr::expr::AggregateFunction::new_udf(
+        Expr::AggregateFunction(AggregateFunction::new_udf(
             max_udaf(),
             vec![expr],
             true,
@@ -569,7 +569,7 @@ mod tests {
         let table_scan = test_table_scan()?;
 
         // sum(a) FILTER (WHERE a > 5)
-        let expr = Expr::AggregateFunction(expr::AggregateFunction::new_udf(
+        let expr = Expr::AggregateFunction(AggregateFunction::new_udf(
             sum_udaf(),
             vec![col("a")],
             false,
@@ -612,7 +612,7 @@ mod tests {
         let table_scan = test_table_scan()?;
 
         // SUM(a ORDER BY a)
-        let expr = Expr::AggregateFunction(expr::AggregateFunction::new_udf(
+        let expr = Expr::AggregateFunction(AggregateFunction::new_udf(
             sum_udaf(),
             vec![col("a")],
             false,

@@ -18,6 +18,7 @@
 //! Defines physical expressions that can evaluated at runtime during query execution
 
 use std::any::Any;
+use std::mem::size_of_val;
 use std::sync::OnceLock;
 
 use arrow::array::ArrayRef;
@@ -229,7 +230,7 @@ impl Accumulator for BoolAndAccumulator {
     }
 
     fn size(&self) -> usize {
-        std::mem::size_of_val(self)
+        size_of_val(self)
     }
 
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
@@ -378,7 +379,7 @@ impl Accumulator for BoolOrAccumulator {
     }
 
     fn size(&self) -> usize {
-        std::mem::size_of_val(self)
+        size_of_val(self)
     }
 
     fn state(&mut self) -> Result<Vec<ScalarValue>> {

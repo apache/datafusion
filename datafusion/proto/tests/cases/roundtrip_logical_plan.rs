@@ -48,7 +48,7 @@ use datafusion::functions_aggregate::expr_fn::{
 use datafusion::functions_aggregate::min_max::max_udaf;
 use datafusion::functions_nested::map::map;
 use datafusion::functions_window::expr_fn::{
-    cume_dist, dense_rank, lag, lead, percent_rank, rank, row_number,
+    cume_dist, dense_rank, lag, lead, ntile, percent_rank, rank, row_number,
 };
 use datafusion::functions_window::rank::rank_udwf;
 use datafusion::prelude::*;
@@ -951,6 +951,7 @@ async fn roundtrip_expr_api() -> Result<()> {
         lag(col("b"), None, None),
         lag(col("b"), Some(2), None),
         lag(col("b"), Some(2), Some(ScalarValue::from(100))),
+        ntile(lit(3)),
         nth_value(col("b"), 1, vec![]),
         nth_value(
             col("b"),
@@ -2170,7 +2171,7 @@ fn roundtrip_aggregate_udf() {
         }
 
         fn size(&self) -> usize {
-            std::mem::size_of_val(self)
+            size_of_val(self)
         }
     }
 
@@ -2394,7 +2395,7 @@ fn roundtrip_window() {
         }
 
         fn size(&self) -> usize {
-            std::mem::size_of_val(self)
+            size_of_val(self)
         }
     }
 

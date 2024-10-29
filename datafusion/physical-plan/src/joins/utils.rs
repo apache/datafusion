@@ -369,7 +369,7 @@ impl JoinHashMapType for JoinHashMap {
     }
 }
 
-impl fmt::Debug for JoinHashMap {
+impl Debug for JoinHashMap {
     fn fmt(&self, _f: &mut fmt::Formatter) -> fmt::Result {
         Ok(())
     }
@@ -701,7 +701,13 @@ pub fn build_join_schema(
             .unzip(),
     };
 
-    (fields.finish(), column_indices)
+    let metadata = left
+        .metadata()
+        .clone()
+        .into_iter()
+        .chain(right.metadata().clone())
+        .collect();
+    (fields.finish().with_metadata(metadata), column_indices)
 }
 
 /// A [`OnceAsync`] can be used to run an async closure once, with subsequent calls
@@ -721,8 +727,8 @@ impl<T> Default for OnceAsync<T> {
     }
 }
 
-impl<T> std::fmt::Debug for OnceAsync<T> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl<T> Debug for OnceAsync<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "OnceAsync")
     }
 }
@@ -1946,13 +1952,13 @@ mod tests {
     ) -> Statistics {
         Statistics {
             num_rows: if is_exact {
-                num_rows.map(Precision::Exact)
+                num_rows.map(Exact)
             } else {
-                num_rows.map(Precision::Inexact)
+                num_rows.map(Inexact)
             }
-            .unwrap_or(Precision::Absent),
+            .unwrap_or(Absent),
             column_statistics: column_stats,
-            total_byte_size: Precision::Absent,
+            total_byte_size: Absent,
         }
     }
 
@@ -2198,17 +2204,17 @@ mod tests {
         assert_eq!(
             estimate_inner_join_cardinality(
                 Statistics {
-                    num_rows: Precision::Inexact(400),
-                    total_byte_size: Precision::Absent,
+                    num_rows: Inexact(400),
+                    total_byte_size: Absent,
                     column_statistics: left_col_stats,
                 },
                 Statistics {
-                    num_rows: Precision::Inexact(400),
-                    total_byte_size: Precision::Absent,
+                    num_rows: Inexact(400),
+                    total_byte_size: Absent,
                     column_statistics: right_col_stats,
                 },
             ),
-            Some(Precision::Inexact((400 * 400) / 200))
+            Some(Inexact((400 * 400) / 200))
         );
         Ok(())
     }
@@ -2216,33 +2222,33 @@ mod tests {
     #[test]
     fn test_inner_join_cardinality_decimal_range() -> Result<()> {
         let left_col_stats = vec![ColumnStatistics {
-            distinct_count: Precision::Absent,
-            min_value: Precision::Inexact(ScalarValue::Decimal128(Some(32500), 14, 4)),
-            max_value: Precision::Inexact(ScalarValue::Decimal128(Some(35000), 14, 4)),
+            distinct_count: Absent,
+            min_value: Inexact(ScalarValue::Decimal128(Some(32500), 14, 4)),
+            max_value: Inexact(ScalarValue::Decimal128(Some(35000), 14, 4)),
             ..Default::default()
         }];
 
         let right_col_stats = vec![ColumnStatistics {
-            distinct_count: Precision::Absent,
-            min_value: Precision::Inexact(ScalarValue::Decimal128(Some(33500), 14, 4)),
-            max_value: Precision::Inexact(ScalarValue::Decimal128(Some(34000), 14, 4)),
+            distinct_count: Absent,
+            min_value: Inexact(ScalarValue::Decimal128(Some(33500), 14, 4)),
+            max_value: Inexact(ScalarValue::Decimal128(Some(34000), 14, 4)),
             ..Default::default()
         }];
 
         assert_eq!(
             estimate_inner_join_cardinality(
                 Statistics {
-                    num_rows: Precision::Inexact(100),
-                    total_byte_size: Precision::Absent,
+                    num_rows: Inexact(100),
+                    total_byte_size: Absent,
                     column_statistics: left_col_stats,
                 },
                 Statistics {
-                    num_rows: Precision::Inexact(100),
-                    total_byte_size: Precision::Absent,
+                    num_rows: Inexact(100),
+                    total_byte_size: Absent,
                     column_statistics: right_col_stats,
                 },
             ),
-            Some(Precision::Inexact(100))
+            Some(Inexact(100))
         );
         Ok(())
     }
