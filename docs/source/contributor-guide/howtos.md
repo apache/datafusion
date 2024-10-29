@@ -45,6 +45,8 @@ Below is a checklist of what you need to do to add a new scalar function to Data
 - In [sqllogictest/test_files], add new `sqllogictest` integration tests where the function is called through SQL against well known data and returns the expected result.
   - Documentation for `sqllogictest` [here](https://github.com/apache/datafusion/blob/main/datafusion/sqllogictest/README.md)
 - Add SQL reference documentation [here](https://github.com/apache/datafusion/blob/main/docs/source/user-guide/sql/scalar_functions.md)
+  - An example of for this can be seen [here] (https://github.com/apache/datafusion/pull/12775)
+  - Run `./dev/update_function_docs.sh` to update docs
 
 [advanced_udf.rs]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/advanced_udaf.rs
 [sqllogictest/test_files]: https://github.com/apache/datafusion/tree/main/datafusion/sqllogictest/test_files
@@ -64,6 +66,8 @@ Below is a checklist of what you need to do to add a new aggregate function to D
 - In [sqllogictest/test_files], add new `sqllogictest` integration tests where the function is called through SQL against well known data and returns the expected result.
   - Documentation for `sqllogictest` [here](https://github.com/apache/datafusion/blob/main/datafusion/sqllogictest/README.md)
 - Add SQL reference documentation [here](https://github.com/apache/datafusion/blob/main/docs/source/user-guide/sql/aggregate_functions.md)
+  - An example of for this can be seen [here] (https://github.com/apache/datafusion/pull/12775)
+  - Run `./dev/update_function_docs.sh` to update docs
 
 ## How to display plans graphically
 
