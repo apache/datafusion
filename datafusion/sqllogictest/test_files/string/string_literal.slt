@@ -123,12 +123,6 @@ SELECT substr('Hello🌏世界', 5, 3)
 ----
 o🌏世
 
-statement error The first argument of the substr function can only be a string, but got Int64
-SELECT substr(1, 3)
-
-statement error The first argument of the substr function can only be a string, but got Int64
-SELECT substr(1, 3, 4)
-
 statement error Execution error: negative substring length not allowed
 select substr(arrow_cast('foo', 'Utf8View'), 1, -1);
 

@@ -94,6 +94,7 @@ impl ScalarUDFImpl for SubstrFunc {
         let first_data_type = match &arg_types[0] {
             DataType::Null => Ok(DataType::Utf8),
             DataType::LargeUtf8 | DataType::Utf8View | DataType::Utf8 => Ok(arg_types[0].clone()),
+            DataType::Int64 | DataType::Int32 => Ok(DataType::Utf8), // Allows for first arg to be int
             DataType::Dictionary(key_type, value_type) => {
                 if key_type.is_integer() {
                     match value_type.as_ref() {
