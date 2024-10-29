@@ -113,7 +113,9 @@ pub fn check_subquery_expr(
             | LogicalPlan::Join(_) => Ok(()),
             _ => plan_err!(
                 "In/Exist subquery can only be used in \
-            Projection, Filter, Window functions, Aggregate and Join plan nodes"
+                Projection, Filter, Window functions, Aggregate and Join plan nodes, \
+                but was used in [{}]",
+                outer_plan.display()
             ),
         }?;
         check_correlations_in_subquery(inner_plan)
