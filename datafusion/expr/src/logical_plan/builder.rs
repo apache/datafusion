@@ -567,7 +567,7 @@ impl LogicalPlanBuilder {
     /// See <https://github.com/apache/datafusion/issues/5065> for more details
     fn add_missing_columns(
         curr_plan: LogicalPlan,
-        missing_cols: &[Column],
+        missing_cols: &HashSet<Column>,
         is_distinct: bool,
     ) -> Result<LogicalPlan> {
         match curr_plan {
@@ -612,7 +612,7 @@ impl LogicalPlanBuilder {
 
     fn ambiguous_distinct_check(
         missing_exprs: &[Expr],
-        missing_cols: &[Column],
+        missing_cols: &HashSet<Column>,
         projection_exprs: &[Expr],
     ) -> Result<()> {
         if missing_exprs.is_empty() {
@@ -677,15 +677,16 @@ impl LogicalPlanBuilder {
         let schema = self.plan.schema();
 
         // Collect sort columns that are missing in the input plan's schema
-        let mut missing_cols: Vec<Column> = vec![];
+        let mut missing_cols: HashSet<Column> = HashSet::new();
         sorts.iter().try_for_each::<_, Result<()>>(|sort| {
             let columns = sort.expr.column_refs();
 
-            columns.into_iter().for_each(|c| {
-                if !schema.has_column(c) && !missing_cols.contains(c) {
-                    missing_cols.push(c.clone());
-                }
-            });
+            missing_cols.extend(
+                columns
+                    .into_iter()
+                    .filter(|c| !schema.has_column(c))
+                    .cloned(),
+            );
 
             Ok(())
         })?;
