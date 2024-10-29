@@ -413,11 +413,14 @@ impl Deref for LexOrdering {
 
 impl Display for LexOrdering {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        for (i, e) in self.inner.iter().enumerate() {
-            if i > 0 {
-                write!(f, ", ")?
+        let mut first = true;
+        for sort_expr in &self.inner {
+            if first {
+                first = false;
+            } else {
+                write!(f, ", ")?;
             }
-            write!(f, "{e}")?;
+            write!(f, "{sort_expr}")?;
         }
         Ok(())
     }
@@ -513,11 +516,14 @@ impl<'a> LexOrderingRef<'a> {
 
 impl<'a> Display for LexOrderingRef<'a> {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        for (i, e) in self.inner.iter().enumerate() {
-            if i > 0 {
-                write!(f, ", ")?
+        let mut first = true;
+        for sort_expr in self.inner {
+            if first {
+                first = false;
+            } else {
+                write!(f, ", ")?;
             }
-            write!(f, "{e}")?;
+            write!(f, "{sort_expr}")?;
         }
         Ok(())
     }
