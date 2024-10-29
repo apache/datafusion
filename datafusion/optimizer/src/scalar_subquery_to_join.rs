@@ -318,8 +318,7 @@ fn build_join(
     // alias the join filter
     let join_filter_opt =
         conjunction(pull_up.join_filters).map_or(Ok(None), |filter| {
-            replace_qualified_name(filter, &all_correlated_cols, subquery_alias)
-                .map(Option::Some)
+            replace_qualified_name(filter, &all_correlated_cols, subquery_alias).map(Some)
         })?;
 
     // join our sub query into the main plan
@@ -625,11 +624,21 @@ mod tests {
             .project(vec![col("customer.c_custkey")])?
             .build()?;
 
-        let expected = "check_analyzed_plan\
-        \ncaused by\
-        \nError during planning: Correlated column is not allowed in predicate: outer_ref(customer.c_custkey) != orders.o_custkey";
+        // Unsupported predicate, subquery should not be decorrelated
+        let expected = "Projection: customer.c_custkey [c_custkey:Int64]\
+            \n  Filter: customer.c_custkey = (<subquery>) [c_custkey:Int64, c_name:Utf8]\
+            \n    Subquery: [max(orders.o_custkey):Int64;N]\
+            \n      Projection: max(orders.o_custkey) [max(orders.o_custkey):Int64;N]\
+            \n        Aggregate: groupBy=[[]], aggr=[[max(orders.o_custkey)]] [max(orders.o_custkey):Int64;N]\
+            \n          Filter: outer_ref(customer.c_custkey) != orders.o_custkey [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]\
+            \n            TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]\
+            \n    TableScan: customer [c_custkey:Int64, c_name:Utf8]";
 
-        assert_analyzer_check_err(vec![], plan, expected);
+        assert_multi_rules_optimized_plan_eq_display_indent(
+            vec![Arc::new(ScalarSubqueryToJoin::new())],
+            plan,
+            expected,
+        );
         Ok(())
     }
 
@@ -652,11 +661,21 @@ mod tests {
             .project(vec![col("customer.c_custkey")])?
             .build()?;
 
-        let expected = "check_analyzed_plan\
-        \ncaused by\
-        \nError during planning: Correlated column is not allowed in predicate: outer_ref(customer.c_custkey) < orders.o_custkey";
+        // Unsupported predicate, subquery should not be decorrelated
+        let expected = "Projection: customer.c_custkey [c_custkey:Int64]\
+            \n  Filter: customer.c_custkey = (<subquery>) [c_custkey:Int64, c_name:Utf8]\
+            \n    Subquery: [max(orders.o_custkey):Int64;N]\
+            \n      Projection: max(orders.o_custkey) [max(orders.o_custkey):Int64;N]\
+            \n        Aggregate: groupBy=[[]], aggr=[[max(orders.o_custkey)]] [max(orders.o_custkey):Int64;N]\
+            \n          Filter: outer_ref(customer.c_custkey) < orders.o_custkey [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]\
+            \n            TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]\
+            \n    TableScan: customer [c_custkey:Int64, c_name:Utf8]";
 
-        assert_analyzer_check_err(vec![], plan, expected);
+        assert_multi_rules_optimized_plan_eq_display_indent(
+            vec![Arc::new(ScalarSubqueryToJoin::new())],
+            plan,
+            expected,
+        );
         Ok(())
     }
 
@@ -680,11 +699,21 @@ mod tests {
             .project(vec![col("customer.c_custkey")])?
             .build()?;
 
-        let expected = "check_analyzed_plan\
-        \ncaused by\
-        \nError during planning: Correlated column is not allowed in predicate: outer_ref(customer.c_custkey) = orders.o_custkey OR orders.o_orderkey = Int32(1)";
+        // Unsupported predicate, subquery should not be decorrelated
+        let expected = "Projection: customer.c_custkey [c_custkey:Int64]\
+            \n  Filter: customer.c_custkey = (<subquery>) [c_custkey:Int64, c_name:Utf8]\
+            \n    Subquery: [max(orders.o_custkey):Int64;N]\
+            \n      Projection: max(orders.o_custkey) [max(orders.o_custkey):Int64;N]\
+            \n        Aggregate: groupBy=[[]], aggr=[[max(orders.o_custkey)]] [max(orders.o_custkey):Int64;N]\
+            \n          Filter: outer_ref(customer.c_custkey) = orders.o_custkey OR orders.o_orderkey = Int32(1) [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]\
+            \n            TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]\
+            \n    TableScan: customer [c_custkey:Int64, c_name:Utf8]";
 
-        assert_analyzer_check_err(vec![], plan, expected);
+        assert_multi_rules_optimized_plan_eq_display_indent(
+            vec![Arc::new(ScalarSubqueryToJoin::new())],
+            plan,
+            expected,
+        );
         Ok(())
     }
 

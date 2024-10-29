@@ -17,6 +17,7 @@
 
 use std::any::Any;
 use std::fmt::{Debug, Formatter};
+use std::mem::size_of_val;
 use std::sync::{Arc, OnceLock};
 
 use arrow::array::{Array, RecordBatch};
@@ -486,10 +487,9 @@ impl Accumulator for ApproxPercentileAccumulator {
     }
 
     fn size(&self) -> usize {
-        std::mem::size_of_val(self) + self.digest.size()
-            - std::mem::size_of_val(&self.digest)
+        size_of_val(self) + self.digest.size() - size_of_val(&self.digest)
             + self.return_type.size()
-            - std::mem::size_of_val(&self.return_type)
+            - size_of_val(&self.return_type)
     }
 }
 

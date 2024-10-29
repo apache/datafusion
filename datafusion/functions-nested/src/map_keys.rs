@@ -66,7 +66,7 @@ impl ScalarUDFImpl for MapKeysFunc {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> datafusion_common::Result<DataType> {
+    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         if arg_types.len() != 1 {
             return exec_err!("map_keys expects single argument");
         }
@@ -79,7 +79,7 @@ impl ScalarUDFImpl for MapKeysFunc {
         ))))
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> datafusion_common::Result<ColumnarValue> {
+    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
         make_scalar_function(map_keys_inner)(args)
     }
 

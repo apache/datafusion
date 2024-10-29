@@ -121,7 +121,7 @@ impl ScalarUDFImpl for ScalarFunctionWrapper {
         &self.name
     }
 
-    fn signature(&self) -> &datafusion_expr::Signature {
+    fn signature(&self) -> &Signature {
         &self.signature
     }
 

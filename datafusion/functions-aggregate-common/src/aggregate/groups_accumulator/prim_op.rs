@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::mem::size_of;
 use std::sync::Arc;
 
 use arrow::array::{ArrayRef, AsArray, BooleanArray, PrimitiveArray};
@@ -195,6 +196,6 @@ where
     }
 
     fn size(&self) -> usize {
-        self.values.capacity() * std::mem::size_of::<T::Native>() + self.null_state.size()
+        self.values.capacity() * size_of::<T::Native>() + self.null_state.size()
     }
 }

@@ -61,7 +61,7 @@ impl Statement {
     /// children.
     ///
     /// See [crate::LogicalPlan::display] for an example
-    pub fn display(&self) -> impl fmt::Display + '_ {
+    pub fn display(&self) -> impl Display + '_ {
         struct Wrapper<'a>(&'a Statement);
         impl<'a> Display for Wrapper<'a> {
             fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {

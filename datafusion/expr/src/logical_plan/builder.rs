@@ -1402,8 +1402,12 @@ pub fn build_join_schema(
         join_type,
         left.fields().len(),
     );
-    let mut metadata = left.metadata().clone();
-    metadata.extend(right.metadata().clone());
+    let metadata = left
+        .metadata()
+        .clone()
+        .into_iter()
+        .chain(right.metadata().clone())
+        .collect();
     let dfschema = DFSchema::new_with_metadata(qualified_fields, metadata)?;
     dfschema.with_functional_dependencies(func_dependencies)
 }
@@ -1478,6 +1482,15 @@ pub fn validate_unique_names<'a>(
 /// [`TypeCoercionRewriter::coerce_union`]: https://docs.rs/datafusion-optimizer/latest/datafusion_optimizer/analyzer/type_coercion/struct.TypeCoercionRewriter.html#method.coerce_union
 /// [`coerce_union_schema`]: https://docs.rs/datafusion-optimizer/latest/datafusion_optimizer/analyzer/type_coercion/fn.coerce_union_schema.html
 pub fn union(left_plan: LogicalPlan, right_plan: LogicalPlan) -> Result<LogicalPlan> {
+    if left_plan.schema().fields().len() != right_plan.schema().fields().len() {
+        return plan_err!(
+            "UNION queries have different number of columns: \
+            left has {} columns whereas right has {} columns",
+            left_plan.schema().fields().len(),
+            right_plan.schema().fields().len()
+        );
+    }
+
     // Temporarily use the schema from the left input and later rely on the analyzer to
     // coerce the two schemas into a common one.
 
@@ -1665,7 +1678,7 @@ impl TableSource for LogicalTableSource {
     fn supports_filters_pushdown(
         &self,
         filters: &[&Expr],
-    ) -> Result<Vec<crate::TableProviderFilterPushDown>> {
+    ) -> Result<Vec<TableProviderFilterPushDown>> {
         Ok(vec![TableProviderFilterPushDown::Exact; filters.len()])
     }
 }

@@ -139,7 +139,7 @@ impl TestContext {
 }
 
 #[cfg(feature = "avro")]
-pub async fn register_avro_tables(ctx: &mut crate::TestContext) {
+pub async fn register_avro_tables(ctx: &mut TestContext) {
     use datafusion::prelude::AvroReadOptions;
 
     ctx.enable_testdir();

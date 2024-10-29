@@ -257,7 +257,7 @@ mod tests {
     #[test]
     fn test_negation_valid_types() -> Result<()> {
         let negatable_types = [
-            DataType::Int8,
+            Int8,
             DataType::Timestamp(TimeUnit::Second, None),
             DataType::Interval(IntervalUnit::YearMonth),
         ];

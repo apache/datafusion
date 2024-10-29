@@ -815,11 +815,7 @@ impl SortExec {
 }
 
 impl DisplayAs for SortExec {
-    fn fmt_as(
-        &self,
-        t: DisplayFormatType,
-        f: &mut std::fmt::Formatter,
-    ) -> std::fmt::Result {
+    fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> fmt::Result {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 let expr = PhysicalSortExpr::format_list(&self.expr);
@@ -1018,7 +1014,7 @@ mod tests {
     }
 
     impl DisplayAs for SortedUnboundedExec {
-        fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> std::fmt::Result {
+        fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> fmt::Result {
             match t {
                 DisplayFormatType::Default | DisplayFormatType::Verbose => {
                     write!(f, "UnboundableExec",).unwrap()

@@ -159,6 +159,7 @@ All [aggregate functions](aggregate_functions.md) can be used as window function
 
 - [cume_dist](#cume_dist)
 - [dense_rank](#dense_rank)
+- [ntile](#ntile)
 - [percent_rank](#percent_rank)
 - [rank](#rank)
 - [row_number](#row_number)
@@ -178,6 +179,18 @@ Returns the rank of the current row without gaps. This function ranks rows in a 
 ```
 dense_rank()
 ```
+
+### `ntile`
+
+Integer ranging from 1 to the argument value, dividing the partition as equally as possible
+
+```
+ntile(expression)
+```
+
+#### Arguments
+
+- **expression**: An integer describing the number groups the partition should be split into
 
 ### `percent_rank`
 

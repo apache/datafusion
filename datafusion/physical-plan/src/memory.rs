@@ -69,11 +69,7 @@ impl fmt::Debug for MemoryExec {
 }
 
 impl DisplayAs for MemoryExec {
-    fn fmt_as(
-        &self,
-        t: DisplayFormatType,
-        f: &mut std::fmt::Formatter,
-    ) -> std::fmt::Result {
+    fn fmt_as(&self, t: DisplayFormatType, f: &mut fmt::Formatter) -> fmt::Result {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 let partition_sizes: Vec<_> =

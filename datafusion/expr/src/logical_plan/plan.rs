@@ -936,9 +936,8 @@ impl LogicalPlan {
                         expr.len()
                     );
                 }
-                // Pop order is same as the order returned by `LogicalPlan::expressions()`
-                let new_skip = skip.as_ref().and(expr.pop());
-                let new_fetch = fetch.as_ref().and(expr.pop());
+                let new_skip = skip.as_ref().and_then(|_| expr.pop());
+                let new_fetch = fetch.as_ref().and_then(|_| expr.pop());
                 let input = self.only_input(inputs)?;
                 Ok(LogicalPlan::Limit(Limit {
                     skip: new_skip.map(Box::new),
@@ -3383,8 +3382,8 @@ pub struct ColumnUnnestList {
     pub depth: usize,
 }
 
-impl fmt::Display for ColumnUnnestList {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl Display for ColumnUnnestList {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "{}|depth={}", self.output_column, self.depth)
     }
 }
@@ -4100,5 +4099,26 @@ digraph {
             Some(Ordering::Greater)
         );
         assert_eq!(describe_table.partial_cmp(&describe_table_clone), None);
+    }
+
+    #[test]
+    fn test_limit_with_new_children() {
+        let limit = LogicalPlan::Limit(Limit {
+            skip: None,
+            fetch: Some(Box::new(Expr::Literal(
+                ScalarValue::new_ten(&DataType::UInt32).unwrap(),
+            ))),
+            input: Arc::new(LogicalPlan::Values(Values {
+                schema: Arc::new(DFSchema::empty()),
+                values: vec![vec![]],
+            })),
+        });
+        let new_limit = limit
+            .with_new_exprs(
+                limit.expressions(),
+                limit.inputs().into_iter().cloned().collect(),
+            )
+            .unwrap();
+        assert_eq!(limit, new_limit);
     }
 }
