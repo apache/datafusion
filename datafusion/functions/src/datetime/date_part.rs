@@ -255,6 +255,7 @@ fn get_date_part_doc() -> &'static Documentation {
                 "expression",
                 "Time expression to operate on. Can be a constant, column, or function.",
             )
+            .with_alternative_syntax("extract(field FROM source)")
             .build()
             .unwrap()
     })
