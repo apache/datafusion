@@ -2613,7 +2613,7 @@ impl BuiltinExprBuilder {
         match name {
             "not" | "like" | "ilike" | "is_null" | "is_not_null" | "is_true"
             | "is_false" | "is_not_true" | "is_not_false" | "is_unknown"
-            | "is_not_unknown" | "negative" => Some(Self {
+            | "is_not_unknown" | "negative" | "negate" => Some(Self {
                 expr_name: name.to_string(),
             }),
             _ => None,
@@ -2634,8 +2634,9 @@ impl BuiltinExprBuilder {
             "ilike" => {
                 Self::build_like_expr(ctx, true, f, input_schema, extensions).await
             }
-            "not" | "negative" | "is_null" | "is_not_null" | "is_true" | "is_false"
-            | "is_not_true" | "is_not_false" | "is_unknown" | "is_not_unknown" => {
+            "not" | "negative" | "negate" | "is_null" | "is_not_null" | "is_true"
+            | "is_false" | "is_not_true" | "is_not_false" | "is_unknown"
+            | "is_not_unknown" => {
                 Self::build_unary_expr(ctx, &self.expr_name, f, input_schema, extensions)
                     .await
             }
@@ -2664,7 +2665,7 @@ impl BuiltinExprBuilder {
 
         let expr = match fn_name {
             "not" => Expr::Not(arg),
-            "negative" => Expr::Negative(arg),
+            "negative" | "negate" => Expr::Negative(arg),
             "is_null" => Expr::IsNull(arg),
             "is_not_null" => Expr::IsNotNull(arg),
             "is_true" => Expr::IsTrue(arg),

@@ -1344,7 +1344,7 @@ pub fn to_substrait_rex(
         ),
         Expr::Negative(arg) => to_substrait_unary_scalar_fn(
             ctx,
-            "negative",
+            "negate",
             arg,
             schema,
             col_ref_offset,
