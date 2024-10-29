@@ -122,7 +122,7 @@ impl ScalarUDFImpl for MakeArray {
         if let Some(new_type) = type_union_resolution(arg_types) {
             // TODO: Move FixedSizeList to List in type_union_resolution
             if let DataType::FixedSizeList(field, _) = new_type {
-                Ok(vec![DataType::List(field); arg_types.len()])
+                Ok(vec![List(field); arg_types.len()])
             } else if new_type.is_null() {
                 Ok(vec![DataType::Int64; arg_types.len()])
             } else {
@@ -174,7 +174,7 @@ fn get_make_array_doc() -> &'static Documentation {
 
 // Empty array is a special case that is useful for many other array functions
 pub(super) fn empty_array_type() -> DataType {
-    DataType::List(Arc::new(Field::new("item", DataType::Int64, true)))
+    List(Arc::new(Field::new("item", DataType::Int64, true)))
 }
 
 /// `make_array_inner` is the implementation of the `make_array` function.

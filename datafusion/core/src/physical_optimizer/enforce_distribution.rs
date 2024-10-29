@@ -1416,8 +1416,8 @@ pub(crate) mod tests {
     use datafusion_expr::Operator;
     use datafusion_physical_expr::expressions::{BinaryExpr, Literal};
     use datafusion_physical_expr::{
-        expressions, expressions::binary, expressions::lit, LexOrdering,
-        PhysicalSortExpr, PhysicalSortRequirement,
+        expressions::binary, expressions::lit, LexOrdering, PhysicalSortExpr,
+        PhysicalSortRequirement,
     };
     use datafusion_physical_expr_common::sort_expr::LexRequirement;
     use datafusion_physical_plan::PlanProperties;
@@ -1646,8 +1646,7 @@ pub(crate) mod tests {
             .enumerate()
             .map(|(index, (_col, name))| {
                 (
-                    Arc::new(expressions::Column::new(name, index))
-                        as Arc<dyn PhysicalExpr>,
+                    Arc::new(Column::new(name, index)) as Arc<dyn PhysicalExpr>,
                     name.clone(),
                 )
             })

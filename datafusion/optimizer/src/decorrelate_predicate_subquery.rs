@@ -357,9 +357,9 @@ fn build_join(
         .for_each(|cols| all_correlated_cols.extend(cols.clone()));
 
     // alias the join filter
-    let join_filter_opt =
-        conjunction(pull_up.join_filters).map_or(Ok(None), |filter| {
-            replace_qualified_name(filter, &all_correlated_cols, &alias).map(Option::Some)
+    let join_filter_opt = conjunction(pull_up.join_filters)
+        .map_or(Ok(None), |filter| {
+            replace_qualified_name(filter, &all_correlated_cols, &alias).map(Some)
         })?;
 
     if let Some(join_filter) = match (join_filter_opt, in_predicate_opt) {

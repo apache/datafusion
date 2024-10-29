@@ -936,11 +936,11 @@ struct ScalarFunctionWrapper {
     name: String,
     expr: Expr,
     signature: Signature,
-    return_type: arrow_schema::DataType,
+    return_type: DataType,
 }
 
 impl ScalarUDFImpl for ScalarFunctionWrapper {
-    fn as_any(&self) -> &dyn std::any::Any {
+    fn as_any(&self) -> &dyn Any {
         self
     }
 
@@ -948,21 +948,15 @@ impl ScalarUDFImpl for ScalarFunctionWrapper {
         &self.name
     }
 
-    fn signature(&self) -> &datafusion_expr::Signature {
+    fn signature(&self) -> &Signature {
         &self.signature
     }
 
-    fn return_type(
-        &self,
-        _arg_types: &[arrow_schema::DataType],
-    ) -> Result<arrow_schema::DataType> {
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
         Ok(self.return_type.clone())
     }
 
-    fn invoke(
-        &self,
-        _args: &[datafusion_expr::ColumnarValue],
-    ) -> Result<datafusion_expr::ColumnarValue> {
+    fn invoke(&self, _args: &[ColumnarValue]) -> Result<ColumnarValue> {
         internal_err!("This function should not get invoked!")
     }
 
@@ -1042,10 +1036,7 @@ impl TryFrom<CreateFunction> for ScalarFunctionWrapper {
                     .into_iter()
                     .map(|a| a.data_type)
                     .collect(),
-                definition
-                    .params
-                    .behavior
-                    .unwrap_or(datafusion_expr::Volatility::Volatile),
+                definition.params.behavior.unwrap_or(Volatility::Volatile),
             ),
         })
     }
@@ -1350,7 +1341,7 @@ fn custom_sqrt(args: &[ColumnarValue]) -> Result<ColumnarValue> {
 }
 
 async fn register_aggregate_csv(ctx: &SessionContext) -> Result<()> {
-    let testdata = datafusion::test_util::arrow_test_data();
+    let testdata = test_util::arrow_test_data();
     let schema = test_util::aggr_test_schema();
     ctx.register_csv(
         "aggregate_test_100",
@@ -1362,7 +1353,7 @@ async fn register_aggregate_csv(ctx: &SessionContext) -> Result<()> {
 }
 
 async fn register_alltypes_parquet(ctx: &SessionContext) -> Result<()> {
-    let testdata = datafusion::test_util::parquet_test_data();
+    let testdata = test_util::parquet_test_data();
     ctx.register_parquet(
         "alltypes_plain",
         &format!("{testdata}/alltypes_plain.parquet"),

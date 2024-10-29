@@ -39,10 +39,7 @@ use std::hash::Hash;
 use std::sync::Arc;
 
 use datafusion::execution::session_state::SessionStateBuilder;
-use substrait::proto::extensions::simple_extension_declaration::{
-    ExtensionType, MappingType,
-};
-use substrait::proto::extensions::SimpleExtensionDeclaration;
+use substrait::proto::extensions::simple_extension_declaration::MappingType;
 use substrait::proto::rel::RelType;
 use substrait::proto::{plan_rel, Plan, Rel};
 
@@ -69,7 +66,7 @@ impl SerializerRegistry for MockSerializerRegistry {
         &self,
         name: &str,
         bytes: &[u8],
-    ) -> Result<Arc<dyn datafusion::logical_expr::UserDefinedLogicalNode>> {
+    ) -> Result<Arc<dyn UserDefinedLogicalNode>> {
         if name == "MockUserDefinedLogicalPlan" {
             MockUserDefinedLogicalPlan::deserialize(bytes)
         } else {
@@ -227,23 +224,6 @@ async fn select_with_reused_functions() -> Result<()> {
     ];
     assert_eq!(functions, expected);
 
-    Ok(())
-}
-
-#[tokio::test]
-async fn roundtrip_udt_extensions() -> Result<()> {
-    let ctx = create_context().await?;
-    let proto =
-        roundtrip_with_ctx("SELECT INTERVAL '1 YEAR 1 DAY 1 SECOND' FROM data", ctx)
-            .await?;
-    let expected_type = SimpleExtensionDeclaration {
-        mapping_type: Some(MappingType::ExtensionType(ExtensionType {
-            extension_uri_reference: u32::MAX,
-            type_anchor: 0,
-            name: "interval-month-day-nano".to_string(),
-        })),
-    };
-    assert_eq!(proto.extensions, vec![expected_type]);
     Ok(())
 }
 
@@ -594,6 +574,11 @@ async fn roundtrip_ilike() -> Result<()> {
 }
 
 #[tokio::test]
+async fn roundtrip_modulus() -> Result<()> {
+    roundtrip("SELECT a%3 from data").await
+}
+
+#[tokio::test]
 async fn roundtrip_not() -> Result<()> {
     roundtrip("SELECT * FROM data WHERE NOT d").await
 }
@@ -688,6 +673,19 @@ async fn aggregate_wo_projection_group_expression_ref_consume() -> Result<()> {
     assert_expected_plan_substrait(
         proto_plan,
         "Aggregate: groupBy=[[data.a]], aggr=[[count(data.a) AS countA]]\
+        \n  TableScan: data projection=[a]",
+    )
+    .await
+}
+
+#[tokio::test]
+async fn aggregate_wo_projection_sorted_consume() -> Result<()> {
+    let proto_plan =
+        read_json("tests/testdata/test_plans/aggregate_sorted_no_project.substrait.json");
+
+    assert_expected_plan_substrait(
+        proto_plan,
+        "Aggregate: groupBy=[[data.a]], aggr=[[count(data.a) ORDER BY [data.a DESC NULLS FIRST] AS countA]]\
         \n  TableScan: data projection=[a]",
     )
     .await
@@ -1013,7 +1011,7 @@ async fn roundtrip_aggregate_udf() -> Result<()> {
         }
 
         fn size(&self) -> usize {
-            std::mem::size_of_val(self)
+            size_of_val(self)
         }
     }
 
@@ -1033,8 +1031,9 @@ async fn roundtrip_aggregate_udf() -> Result<()> {
 
     let ctx = create_context().await?;
     ctx.register_udaf(dummy_agg);
+    roundtrip_with_ctx("select dummy_agg(a) from data", ctx.clone()).await?;
+    roundtrip_with_ctx("select dummy_agg(a order by a) from data", ctx.clone()).await?;
 
-    roundtrip_with_ctx("select dummy_agg(a) from data", ctx).await?;
     Ok(())
 }
 

@@ -27,6 +27,7 @@ use datafusion_common::Result;
 use datafusion_execution::memory_pool::proxy::{RawTableAllocExt, VecAllocExt};
 use datafusion_expr::EmitTo;
 use hashbrown::raw::RawTable;
+use std::mem::size_of;
 use std::sync::Arc;
 
 /// A [`GroupValues`] making use of [`Rows`]
@@ -231,10 +232,8 @@ impl GroupValues for GroupValuesRows {
         // https://github.com/apache/datafusion/issues/7647
         for (field, array) in self.schema.fields.iter().zip(&mut output) {
             let expected = field.data_type();
-            *array = dictionary_encode_if_necessary(
-                Arc::<dyn arrow_array::Array>::clone(array),
-                expected,
-            )?;
+            *array =
+                dictionary_encode_if_necessary(Arc::<dyn Array>::clone(array), expected)?;
         }
 
         self.group_values = Some(group_values);
@@ -249,7 +248,7 @@ impl GroupValues for GroupValuesRows {
         });
         self.map.clear();
         self.map.shrink_to(count, |_| 0); // hasher does not matter since the map is cleared
-        self.map_size = self.map.capacity() * std::mem::size_of::<(u64, usize)>();
+        self.map_size = self.map.capacity() * size_of::<(u64, usize)>();
         self.hashes_buffer.clear();
         self.hashes_buffer.shrink_to(count);
     }
@@ -267,7 +266,7 @@ fn dictionary_encode_if_necessary(
                 .zip(struct_array.columns())
                 .map(|(expected_field, column)| {
                     dictionary_encode_if_necessary(
-                        Arc::<dyn arrow_array::Array>::clone(column),
+                        Arc::<dyn Array>::clone(column),
                         expected_field.data_type(),
                     )
                 })
@@ -286,13 +285,13 @@ fn dictionary_encode_if_necessary(
                 Arc::<arrow_schema::Field>::clone(expected_field),
                 list.offsets().clone(),
                 dictionary_encode_if_necessary(
-                    Arc::<dyn arrow_array::Array>::clone(list.values()),
+                    Arc::<dyn Array>::clone(list.values()),
                     expected_field.data_type(),
                 )?,
                 list.nulls().cloned(),
             )?))
         }
         (DataType::Dictionary(_, _), _) => Ok(cast(array.as_ref(), expected)?),
-        (_, _) => Ok(Arc::<dyn arrow_array::Array>::clone(&array)),
+        (_, _) => Ok(Arc::<dyn Array>::clone(&array)),
     }
 }

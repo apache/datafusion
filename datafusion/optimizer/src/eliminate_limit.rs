@@ -57,10 +57,7 @@ impl OptimizerRule for EliminateLimit {
         &self,
         plan: LogicalPlan,
         _config: &dyn OptimizerConfig,
-    ) -> Result<
-        datafusion_common::tree_node::Transformed<LogicalPlan>,
-        datafusion_common::DataFusionError,
-    > {
+    ) -> Result<Transformed<LogicalPlan>, datafusion_common::DataFusionError> {
         match plan {
             LogicalPlan::Limit(limit) => {
                 // Only supports rewriting for literal fetch

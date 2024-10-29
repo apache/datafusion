@@ -94,7 +94,7 @@ fn get_factorial_doc() -> &'static Documentation {
 /// Factorial SQL function
 fn factorial(args: &[ArrayRef]) -> Result<ArrayRef> {
     match args[0].data_type() {
-        DataType::Int64 => {
+        Int64 => {
             let arg = downcast_arg!((&args[0]), "value", Int64Array);
             Ok(arg
                 .iter()

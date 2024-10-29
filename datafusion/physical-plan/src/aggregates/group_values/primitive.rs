@@ -30,6 +30,7 @@ use datafusion_execution::memory_pool::proxy::VecAllocExt;
 use datafusion_expr::EmitTo;
 use half::f16;
 use hashbrown::raw::RawTable;
+use std::mem::size_of;
 use std::sync::Arc;
 
 /// A trait to allow hashing of floating point numbers
@@ -151,7 +152,7 @@ where
     }
 
     fn size(&self) -> usize {
-        self.map.capacity() * std::mem::size_of::<usize>() + self.values.allocated_size()
+        self.map.capacity() * size_of::<usize>() + self.values.allocated_size()
     }
 
     fn is_empty(&self) -> bool {

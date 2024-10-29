@@ -23,6 +23,8 @@ pub mod bool_op;
 pub mod nulls;
 pub mod prim_op;
 
+use std::mem::{size_of, size_of_val};
+
 use arrow::array::new_empty_array;
 use arrow::{
     array::{ArrayRef, AsArray, BooleanArray, PrimitiveArray},
@@ -122,9 +124,7 @@ impl AccumulatorState {
 
     /// Returns the amount of memory taken by this structure and its accumulator
     fn size(&self) -> usize {
-        self.accumulator.size()
-            + std::mem::size_of_val(self)
-            + self.indices.allocated_size()
+        self.accumulator.size() + size_of_val(self) + self.indices.allocated_size()
     }
 }
 
@@ -464,7 +464,7 @@ pub trait VecAllocExt {
 impl<T> VecAllocExt for Vec<T> {
     type T = T;
     fn allocated_size(&self) -> usize {
-        std::mem::size_of::<T>() * self.capacity()
+        size_of::<T>() * self.capacity()
     }
 }
 
