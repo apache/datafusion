@@ -97,13 +97,11 @@ pub fn scatter(mask: &BooleanArray, truthy: &dyn Array) -> Result<ArrayRef> {
 /// expression construction. For instance, 'ORDER BY a ASC, NULLS LAST' turns into
 /// 'ORDER BY a DESC, NULLS FIRST'.
 pub fn reverse_order_bys(order_bys: &LexOrderingRef) -> LexOrdering {
-    LexOrdering::new(
-        order_bys
-            .inner
-            .iter()
-            .map(|e| PhysicalSortExpr::new(e.expr.clone(), !e.options))
-            .collect(),
-    )
+    order_bys
+        .inner
+        .iter()
+        .map(|e| PhysicalSortExpr::new(e.expr.clone(), !e.options))
+        .collect()
 }
 
 #[cfg(test)]

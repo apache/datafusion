@@ -327,12 +327,10 @@ impl PhysicalSortRequirement {
     pub fn to_sort_exprs(
         requirements: impl IntoIterator<Item = PhysicalSortRequirement>,
     ) -> LexOrdering {
-        LexOrdering::new(
-            requirements
-                .into_iter()
-                .map(PhysicalSortExpr::from)
-                .collect(),
-        )
+        requirements
+            .into_iter()
+            .map(PhysicalSortExpr::from)
+            .collect()
     }
 }
 
@@ -358,12 +356,6 @@ impl LexOrdering {
     // Creates a new [`LexOrdering`] from a vector
     pub fn new(inner: Vec<PhysicalSortExpr>) -> Self {
         Self { inner }
-    }
-
-    // Creates a new [`LexOrdering`] with an empty vector
-    // replace with LexOrdering::default()
-    pub fn empty() -> Self {
-        Self { inner: vec![] }
     }
 
     pub fn as_ref(&self) -> LexOrderingRef {
@@ -496,11 +488,6 @@ impl<'a> LexOrderingRef<'a> {
     // Creates a new [`LexOrdering`] from a vector
     pub fn new(inner: &'a [PhysicalSortExpr]) -> Self {
         Self { inner }
-    }
-
-    // replace with LexOrderingRef::default()
-    pub fn empty() -> Self {
-        Self { inner: &[] }
     }
 
     pub fn as_slice(&self) -> &[PhysicalSortExpr] {

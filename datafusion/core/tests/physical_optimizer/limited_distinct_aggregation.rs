@@ -409,7 +409,7 @@ fn test_has_filter() -> Result<()> {
 #[test]
 fn test_has_order_by() -> Result<()> {
     let sort_key = LexOrdering::new(vec![PhysicalSortExpr {
-        expr: expressions::col("a", &schema()).unwrap(),
+        expr: col("a", &schema()).unwrap(),
         options: SortOptions::default(),
     }]);
     let source = parquet_exec_with_sort(vec![sort_key]);

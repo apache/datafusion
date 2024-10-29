@@ -32,7 +32,7 @@ fn prepare_accumulator(data_type: &DataType) -> Box<dyn GroupsAccumulator> {
         return_type: data_type,
         schema: &schema,
         ignore_nulls: false,
-        ordering_req: LexOrderingRef::empty(),
+        ordering_req: LexOrderingRef::default(),
         is_reversed: false,
         name: "SUM(f)",
         is_distinct: false,

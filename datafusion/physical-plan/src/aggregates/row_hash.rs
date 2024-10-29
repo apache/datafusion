@@ -490,17 +490,15 @@ impl GroupedHashAggregateStream {
             .collect::<Result<_>>()?;
 
         let group_schema = group_schema(&agg.input().schema(), &agg_group_by)?;
-        let spill_expr = LexOrdering::new(
-            group_schema
-                .fields
-                .into_iter()
-                .enumerate()
-                .map(|(idx, field)| PhysicalSortExpr {
-                    expr: Arc::new(Column::new(field.name().as_str(), idx)) as _,
-                    options: SortOptions::default(),
-                })
-                .collect(),
-        );
+        let spill_expr = group_schema
+            .fields
+            .into_iter()
+            .enumerate()
+            .map(|(idx, field)| PhysicalSortExpr {
+                expr: Arc::new(Column::new(field.name().as_str(), idx)) as _,
+                options: SortOptions::default(),
+            })
+            .collect();
 
         let name = format!("GroupedHashAggregateStream[{partition}]");
         let reservation = MemoryConsumer::new(name)

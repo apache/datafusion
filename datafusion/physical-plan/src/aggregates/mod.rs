@@ -937,7 +937,7 @@ fn get_aggregate_expr_req(
     // necessary, or the aggregation is performing a "second stage" calculation,
     // then ignore the ordering requirement.
     if !aggr_expr.order_sensitivity().hard_requires() || !agg_mode.is_first_stage() {
-        return LexOrdering::empty();
+        return LexOrdering::default();
     }
 
     let mut req = aggr_expr.order_bys().unwrap_or_default().to_vec();
@@ -1014,7 +1014,7 @@ pub fn get_finer_aggregate_exprs_requirement(
     eq_properties: &EquivalenceProperties,
     agg_mode: &AggregateMode,
 ) -> Result<LexRequirement> {
-    let mut requirement = LexOrdering::empty();
+    let mut requirement = LexOrdering::default();
     for aggr_expr in aggr_exprs.iter_mut() {
         if let Some(finer_ordering) =
             finer_ordering(&requirement, aggr_expr, group_by, eq_properties, agg_mode)

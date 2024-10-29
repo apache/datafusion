@@ -839,7 +839,7 @@ impl EquivalenceProperties {
             if prefixes.is_empty() {
                 // If prefix is empty, there is no dependency. Insert
                 // empty ordering:
-                prefixes = vec![LexOrdering::empty()];
+                prefixes = vec![LexOrdering::default()];
             }
             // Append current ordering on top its dependencies:
             for ordering in prefixes.iter_mut() {
@@ -1079,16 +1079,14 @@ impl EquivalenceProperties {
         // Rewrite orderings according to new schema:
         let mut new_orderings = vec![];
         for ordering in self.oeq_class.orderings {
-            let new_ordering = LexOrdering::new(
-                ordering
-                    .inner
-                    .into_iter()
-                    .map(|mut sort_expr| {
-                        sort_expr.expr = with_new_schema(sort_expr.expr, &schema)?;
-                        Ok(sort_expr)
-                    })
-                    .collect::<Result<_>>()?,
-            );
+            let new_ordering = ordering
+                .inner
+                .into_iter()
+                .map(|mut sort_expr| {
+                    sort_expr.expr = with_new_schema(sort_expr.expr, &schema)?;
+                    Ok(sort_expr)
+                })
+                .collect::<Result<_>>()?;
             new_orderings.push(new_ordering);
         }
 
@@ -1355,7 +1353,7 @@ fn generate_dependency_orderings(
     // No dependency, dependent is a leading ordering.
     if relevant_prefixes.is_empty() {
         // Return an empty ordering:
-        return vec![LexOrdering::empty()];
+        return vec![LexOrdering::default()];
     }
 
     relevant_prefixes
@@ -1366,15 +1364,13 @@ fn generate_dependency_orderings(
                 .iter()
                 .permutations(prefix_orderings.len())
                 .map(|prefixes| {
-                    LexOrdering::new(
-                        prefixes
-                            .into_iter()
-                            .map(|ordering| ordering.inner.clone())
-                            .flatten()
-                            .collect(),
-                    )
+                    prefixes
+                        .into_iter()
+                        .map(|ordering| ordering.inner.clone())
+                        .flatten()
+                        .collect()
                 })
-                .collect::<Vec<_>>()
+                .collect::<Vec<LexOrdering>>()
         })
         .collect()
 }
@@ -2037,7 +2033,7 @@ impl UnionEquivalentOrderingBuilder {
         existing_ordering: &LexOrdering,
         existing_constants: &[ConstExpr],
     ) -> Option<LexOrdering> {
-        let mut augmented_ordering = LexOrdering::empty();
+        let mut augmented_ordering = LexOrdering::default();
         let mut sort_expr_iter = ordering.inner.iter().peekable();
         let mut existing_sort_expr_iter = existing_ordering.inner.iter().peekable();
 
@@ -3048,17 +3044,16 @@ mod tests {
                     properties
                 },
             ] {
-                let sort = LexOrdering::new(
-                    case.sort_columns
-                        .iter()
-                        .map(|&name| {
-                            col(name, &schema).map(|col| PhysicalSortExpr {
-                                expr: col,
-                                options: SortOptions::default(),
-                            })
+                let sort = case
+                    .sort_columns
+                    .iter()
+                    .map(|&name| {
+                        col(name, &schema).map(|col| PhysicalSortExpr {
+                            expr: col,
+                            options: SortOptions::default(),
                         })
-                        .collect::<Result<Vec<_>>>()?,
-                );
+                    })
+                    .collect::<Result<LexOrdering>>()?;
 
                 assert_eq!(
                     properties.ordering_satisfy(sort.as_ref()),
@@ -3577,14 +3572,12 @@ mod tests {
             let orderings = orderings
                 .iter()
                 .map(|ordering| {
-                    LexOrdering::new(
-                        ordering
-                            .iter()
-                            .map(|name| parse_sort_expr(name, schema))
-                            .collect::<Vec<_>>(),
-                    )
+                    ordering
+                        .iter()
+                        .map(|name| parse_sort_expr(name, schema))
+                        .collect::<LexOrdering>()
                 })
-                .collect::<Vec<_>>();
+                .collect::<Vec<LexOrdering>>();
 
             let constants = constants
                 .iter()

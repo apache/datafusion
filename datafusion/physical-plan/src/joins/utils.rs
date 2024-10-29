@@ -475,17 +475,13 @@ fn offset_ordering(
     match join_type {
         // In the case below, right ordering should be offsetted with the left
         // side length, since we append the right table to the left table.
-        JoinType::Inner | JoinType::Left | JoinType::Full | JoinType::Right => {
-            LexOrdering::new(
-                ordering
-                    .iter()
-                    .map(|sort_expr| PhysicalSortExpr {
-                        expr: add_offset_to_expr(Arc::clone(&sort_expr.expr), offset),
-                        options: sort_expr.options,
-                    })
-                    .collect(),
-            )
-        }
+        JoinType::Inner | JoinType::Left | JoinType::Full | JoinType::Right => ordering
+            .iter()
+            .map(|sort_expr| PhysicalSortExpr {
+                expr: add_offset_to_expr(Arc::clone(&sort_expr.expr), offset),
+                options: sort_expr.options,
+            })
+            .collect(),
         _ => ordering.to_vec(),
     }
 }

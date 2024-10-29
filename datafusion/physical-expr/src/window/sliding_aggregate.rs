@@ -149,16 +149,15 @@ impl WindowExpr for SlidingAggregateWindowExpr {
     ) -> Option<Arc<dyn WindowExpr>> {
         debug_assert_eq!(self.order_by.len(), order_by_exprs.len());
 
-        let new_order_by = LexOrdering::new(
-            self.order_by
-                .iter()
-                .zip(order_by_exprs)
-                .map(|(req, new_expr)| PhysicalSortExpr {
-                    expr: new_expr,
-                    options: req.options,
-                })
-                .collect::<Vec<_>>(),
-        );
+        let new_order_by = self
+            .order_by
+            .iter()
+            .zip(order_by_exprs)
+            .map(|(req, new_expr)| PhysicalSortExpr {
+                expr: new_expr,
+                options: req.options,
+            })
+            .collect::<LexOrdering>();
         Some(Arc::new(SlidingAggregateWindowExpr {
             aggregate: self
                 .aggregate

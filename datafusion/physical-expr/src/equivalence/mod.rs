@@ -186,15 +186,13 @@ mod tests {
     pub fn convert_to_sort_exprs(
         in_data: &[(&Arc<dyn PhysicalExpr>, SortOptions)],
     ) -> LexOrdering {
-        LexOrdering::new(
-            in_data
-                .iter()
-                .map(|(expr, options)| PhysicalSortExpr {
-                    expr: Arc::clone(*expr),
-                    options: *options,
-                })
-                .collect(),
-        )
+        in_data
+            .iter()
+            .map(|(expr, options)| PhysicalSortExpr {
+                expr: Arc::clone(*expr),
+                options: *options,
+            })
+            .collect()
     }
 
     // Convert each inner tuple to PhysicalSortExpr

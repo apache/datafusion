@@ -246,7 +246,7 @@ fn try_swapping_with_streaming_table(
 
     let mut lex_orderings = vec![];
     for lex_ordering in streaming_table.projected_output_ordering().into_iter() {
-        let mut orderings = LexOrdering::empty();
+        let mut orderings = LexOrdering::default();
         for order in lex_ordering {
             let Some(new_ordering) = update_expr(&order.expr, projection.expr(), false)?
             else {

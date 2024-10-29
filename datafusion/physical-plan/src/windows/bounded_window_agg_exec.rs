@@ -1553,7 +1553,7 @@ mod tests {
             Arc::new(BuiltInWindowExpr::new(
                 last_value_func,
                 &[],
-                LexOrderingRef::empty(),
+                LexOrderingRef::default(),
                 Arc::new(WindowFrame::new_bounds(
                     WindowFrameUnits::Rows,
                     WindowFrameBound::Preceding(ScalarValue::UInt64(None)),
@@ -1564,7 +1564,7 @@ mod tests {
             Arc::new(BuiltInWindowExpr::new(
                 nth_value_func1,
                 &[],
-                LexOrderingRef::empty(),
+                LexOrderingRef::default(),
                 Arc::new(WindowFrame::new_bounds(
                     WindowFrameUnits::Rows,
                     WindowFrameBound::Preceding(ScalarValue::UInt64(None)),
@@ -1575,7 +1575,7 @@ mod tests {
             Arc::new(BuiltInWindowExpr::new(
                 nth_value_func2,
                 &[],
-                LexOrderingRef::empty(),
+                LexOrderingRef::default(),
                 Arc::new(WindowFrame::new_bounds(
                     WindowFrameUnits::Rows,
                     WindowFrameBound::Preceding(ScalarValue::UInt64(None)),

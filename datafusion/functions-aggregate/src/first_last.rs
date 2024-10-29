@@ -746,13 +746,13 @@ mod tests {
         let mut first_accumulator = FirstValueAccumulator::try_new(
             &DataType::Int64,
             &[],
-            LexOrdering::empty(),
+            LexOrdering::default(),
             false,
         )?;
         let mut last_accumulator = LastValueAccumulator::try_new(
             &DataType::Int64,
             &[],
-            LexOrdering::empty(),
+            LexOrdering::default(),
             false,
         )?;
         // first value in the tuple is start of the range (inclusive),
@@ -794,7 +794,7 @@ mod tests {
         let mut first_accumulator = FirstValueAccumulator::try_new(
             &DataType::Int64,
             &[],
-            LexOrdering::empty(),
+            LexOrdering::default(),
             false,
         )?;
 
@@ -804,7 +804,7 @@ mod tests {
         let mut first_accumulator = FirstValueAccumulator::try_new(
             &DataType::Int64,
             &[],
-            LexOrdering::empty(),
+            LexOrdering::default(),
             false,
         )?;
         first_accumulator.update_batch(&[Arc::clone(&arrs[1])])?;
@@ -824,7 +824,7 @@ mod tests {
         let mut first_accumulator = FirstValueAccumulator::try_new(
             &DataType::Int64,
             &[],
-            LexOrdering::empty(),
+            LexOrdering::default(),
             false,
         )?;
         first_accumulator.merge_batch(&states)?;
@@ -836,7 +836,7 @@ mod tests {
         let mut last_accumulator = LastValueAccumulator::try_new(
             &DataType::Int64,
             &[],
-            LexOrdering::empty(),
+            LexOrdering::default(),
             false,
         )?;
 
@@ -846,7 +846,7 @@ mod tests {
         let mut last_accumulator = LastValueAccumulator::try_new(
             &DataType::Int64,
             &[],
-            LexOrdering::empty(),
+            LexOrdering::default(),
             false,
         )?;
         last_accumulator.update_batch(&[Arc::clone(&arrs[1])])?;
@@ -866,7 +866,7 @@ mod tests {
         let mut last_accumulator = LastValueAccumulator::try_new(
             &DataType::Int64,
             &[],
-            LexOrdering::empty(),
+            LexOrdering::default(),
             false,
         )?;
         last_accumulator.merge_batch(&states)?;

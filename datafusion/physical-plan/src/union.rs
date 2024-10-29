@@ -627,15 +627,13 @@ mod tests {
     fn convert_to_sort_exprs(
         in_data: &[(&Arc<dyn PhysicalExpr>, SortOptions)],
     ) -> LexOrdering {
-        LexOrdering::new(
-            in_data
-                .iter()
-                .map(|(expr, options)| PhysicalSortExpr {
-                    expr: Arc::clone(*expr),
-                    options: *options,
-                })
-                .collect::<Vec<_>>(),
-        )
+        in_data
+            .iter()
+            .map(|(expr, options)| PhysicalSortExpr {
+                expr: Arc::clone(*expr),
+                options: *options,
+            })
+            .collect::<LexOrdering>()
     }
 
     #[tokio::test]

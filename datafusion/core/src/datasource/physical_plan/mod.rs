@@ -332,7 +332,7 @@ fn get_projected_output_ordering(
 ) -> Vec<LexOrdering> {
     let mut all_orderings = vec![];
     for output_ordering in &base_config.output_ordering {
-        let mut new_ordering = LexOrdering::empty();
+        let mut new_ordering = LexOrdering::default();
         for PhysicalSortExpr { expr, options } in output_ordering.iter() {
             if let Some(col) = expr.as_any().downcast_ref::<Column>() {
                 let name = col.name();

@@ -385,7 +385,7 @@ mod tests {
             expr: col("c", &schema)?,
             options: SortOptions::default(),
         }]);
-        let mut expected_output_order = LexOrdering::empty();
+        let mut expected_output_order = LexOrdering::default();
         expected_output_order.extend(sort1.clone());
         expected_output_order.extend(sort2.clone());
 

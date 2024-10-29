@@ -610,7 +610,7 @@ mod tests {
         sort_exprs: impl IntoIterator<Item = PhysicalSortExpr>,
         infinite_source: bool,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let sort_exprs = LexOrdering::new(sort_exprs.into_iter().collect());
+        let sort_exprs = sort_exprs.into_iter().collect();
 
         Ok(Arc::new(StreamingTableExec::try_new(
             Arc::clone(schema),
@@ -700,7 +700,7 @@ mod tests {
                 "count".to_owned(),
                 &[col("a", &schema)?],
                 &[],
-                LexOrderingRef::empty(),
+                LexOrderingRef::default(),
                 Arc::new(WindowFrame::new(None)),
                 schema.as_ref(),
                 false,
@@ -897,7 +897,7 @@ mod tests {
                 partition_by_exprs.push(col(col_name, &test_schema)?);
             }
 
-            let mut order_by_exprs = LexOrdering::empty();
+            let mut order_by_exprs = LexOrdering::default();
             for col_name in order_by_params {
                 let expr = col(col_name, &test_schema)?;
                 // Give default ordering, this is same with input ordering direction
@@ -1062,7 +1062,7 @@ mod tests {
                 partition_by_exprs.push(col(col_name, &test_schema)?);
             }
 
-            let mut order_by_exprs = LexOrdering::empty();
+            let mut order_by_exprs = LexOrdering::default();
             for (col_name, descending, nulls_first) in order_by_params {
                 let expr = col(col_name, &test_schema)?;
                 let options = SortOptions {

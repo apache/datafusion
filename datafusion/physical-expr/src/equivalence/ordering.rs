@@ -146,14 +146,13 @@ impl OrderingEquivalenceClass {
     /// Returns the concatenation of all the orderings. This enables merge
     /// operations to preserve all equivalent orderings simultaneously.
     pub fn output_ordering(&self) -> Option<LexOrdering> {
-        let output_ordering = LexOrdering::new(
-            self.orderings
-                .iter()
-                .map(|ordering| ordering.as_ref().inner)
-                .flatten()
-                .cloned()
-                .collect(),
-        );
+        let output_ordering = self
+            .orderings
+            .iter()
+            .map(|ordering| ordering.as_ref().inner)
+            .flatten()
+            .cloned()
+            .collect();
         let output_ordering = collapse_lex_ordering(output_ordering);
         (!output_ordering.is_empty()).then_some(output_ordering)
     }
@@ -218,7 +217,7 @@ impl IntoIterator for OrderingEquivalenceClass {
 /// duplicate entries that have same physical expression inside. For example,
 /// `vec![a ASC, a DESC]` collapses to `vec![a ASC]`.
 pub fn collapse_lex_ordering(input: LexOrdering) -> LexOrdering {
-    let mut output = LexOrdering::empty();
+    let mut output = LexOrdering::default();
     for item in input.iter() {
         if !output.iter().any(|req| req.expr.eq(&item.expr)) {
             output.push(item.clone());

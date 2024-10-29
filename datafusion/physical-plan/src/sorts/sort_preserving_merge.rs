@@ -391,7 +391,7 @@ mod tests {
         let batch = RecordBatch::try_from_iter(vec![("a", a)]).unwrap();
 
         let schema = batch.schema();
-        let sort = LexOrdering::empty(); // no sort expressions
+        let sort = LexOrdering::default(); // no sort expressions
         let exec = MemoryExec::try_new(&[vec![batch.clone()], vec![batch]], schema, None)
             .unwrap();
         let merge = Arc::new(SortPreservingMergeExec::new(sort, Arc::new(exec)));
@@ -1174,12 +1174,10 @@ mod tests {
                 .map(|(i, f)| Arc::new(Column::new(f.name(), i)) as Arc<dyn PhysicalExpr>)
                 .collect::<Vec<_>>();
             let mut eq_properties = EquivalenceProperties::new(schema);
-            eq_properties.add_new_orderings(vec![LexOrdering::new(
-                columns
-                    .iter()
-                    .map(|expr| PhysicalSortExpr::new_default(Arc::clone(expr)))
-                    .collect::<Vec<_>>(),
-            )]);
+            eq_properties.add_new_orderings(vec![columns
+                .iter()
+                .map(|expr| PhysicalSortExpr::new_default(Arc::clone(expr)))
+                .collect::<LexOrdering>()]);
             let mode = ExecutionMode::Unbounded;
             PlanProperties::new(eq_properties, Partitioning::Hash(columns, 3), mode)
         }

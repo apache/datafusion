@@ -247,13 +247,11 @@ pub fn reassign_predicate_columns(
 
 /// Merge left and right sort expressions, checking for duplicates.
 pub fn merge_vectors(left: &LexOrderingRef, right: &LexOrderingRef) -> LexOrdering {
-    LexOrdering::new(
-        left.iter()
-            .cloned()
-            .chain(right.iter().cloned())
-            .unique()
-            .collect(),
-    )
+    left.iter()
+        .cloned()
+        .chain(right.iter().cloned())
+        .unique()
+        .collect()
 }
 
 #[cfg(test)]

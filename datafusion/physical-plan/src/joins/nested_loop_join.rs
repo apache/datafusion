@@ -888,7 +888,7 @@ pub(crate) mod tests {
         let mut exec =
             MemoryExec::try_new(&[batches], Arc::clone(&schema), None).unwrap();
         if !sorted_column_names.is_empty() {
-            let mut sort_info = LexOrdering::empty();
+            let mut sort_info = LexOrdering::default();
             for name in sorted_column_names {
                 let index = schema.index_of(name).unwrap();
                 let sort_expr = PhysicalSortExpr {
