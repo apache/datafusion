@@ -2326,7 +2326,7 @@ fn from_substrait_literal(
                         p
                     );
                 }
-                let nanos = *subseconds * i64::pow(10, (*p - 9) as u32);
+                let nanos = *subseconds * i64::pow(10, (9 - p) as u32);
                 ScalarValue::new_interval_mdn(
                     *years * 12 + months,
                     *days,
