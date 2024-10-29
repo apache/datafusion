@@ -690,11 +690,11 @@ fn coerce_frame_bound(
 
 fn extract_window_frame_target_type(col_type: &DataType) -> Result<DataType> {
     if col_type.is_numeric()
-        || is_utf8_or_large_utf8(&col_type)
+        || is_utf8_or_large_utf8(col_type)
         || matches!(col_type, DataType::Null)
     {
         Ok(col_type.clone())
-    } else if is_datetime(&col_type) {
+    } else if is_datetime(col_type) {
         Ok(DataType::Interval(IntervalUnit::MonthDayNano))
     } else if let DataType::Dictionary(_, value_type) = col_type {
         extract_window_frame_target_type(value_type)
