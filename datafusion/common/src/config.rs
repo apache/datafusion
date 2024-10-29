@@ -269,8 +269,8 @@ config_namespace! {
         pub planning_concurrency: usize, default = num_cpus::get()
 
         /// When set to true, skips verifying that the schema produced by
-        /// planning `LogicalPlan::Aggregate` exactly matches the schema of the
-        /// input plan.
+        /// planning the input of `LogicalPlan::Aggregate` exactly matches the
+        /// schema of the input plan.
         ///
         /// When set to false, if the schema does not match exactly
         /// (including nullability and metadata), a planning error will be raised.
