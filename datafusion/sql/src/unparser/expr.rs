@@ -1343,7 +1343,7 @@ impl Unparser<'_> {
         let args = self.function_args_to_sql(std::slice::from_ref(&unnest.expr))?;
 
         Ok(ast::Expr::Function(Function {
-            name: ast::ObjectName(vec![Ident {
+            name: ObjectName(vec![Ident {
                 value: "UNNEST".to_string(),
                 quote_style: None,
             }]),
