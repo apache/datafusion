@@ -409,6 +409,11 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    /// This test verifies that memory usage stays within limits when the tie breaker is enabled.
+    /// Any errors here could indicate unintended changes in tie breaker logic.
+    ///
+    /// Note: If you adjust constants in this test, ensure that memory usage differs
+    /// based on whether the tie breaker is enabled or disabled.
     async fn test_round_robin_tie_breaker_success() -> Result<()> {
         let task_ctx = generate_task_ctx_for_round_robin_tie_breaker()?;
         let spm = generate_spm_for_round_robin_tie_breaker(true)?;
@@ -416,6 +421,11 @@ mod tests {
         Ok(())
     }
 
+    /// This test verifies that memory usage stays within limits when the tie breaker is enabled.
+    /// Any errors here could indicate unintended changes in tie breaker logic.
+    ///
+    /// Note: If you adjust constants in this test, ensure that memory usage differs
+    /// based on whether the tie breaker is enabled or disabled.
     #[tokio::test(flavor = "multi_thread")]
     async fn test_round_robin_tie_breaker_fail() -> Result<()> {
         let task_ctx = generate_task_ctx_for_round_robin_tie_breaker()?;

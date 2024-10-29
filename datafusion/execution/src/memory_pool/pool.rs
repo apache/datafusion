@@ -58,8 +58,10 @@ impl MemoryPool for UnboundedMemoryPool {
 #[derive(Debug)]
 pub struct GreedyMemoryPool {
     pool_size: usize,
+    // Pool size limit for each consumer, if one of the consumer exceeds the limit, error is returned
     pool_size_per_consumer: HashMap<String, usize>,
     used: AtomicUsize,
+    // Memory usage for each consumer, used to check aginst `pool_size_per_consumer`
     used_per_consumer: RwLock<HashMap<String, AtomicUsize>>,
 }
 
