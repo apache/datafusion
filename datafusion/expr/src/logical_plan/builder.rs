@@ -682,7 +682,7 @@ impl LogicalPlanBuilder {
             let columns = sort.expr.column_refs();
 
             columns.into_iter().for_each(|c| {
-                if !schema.has_column(c) {
+                if !schema.has_column(c) && !missing_cols.contains(c) {
                     missing_cols.push(c.clone());
                 }
             });
