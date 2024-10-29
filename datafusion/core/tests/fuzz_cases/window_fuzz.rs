@@ -294,7 +294,7 @@ async fn bounded_window_causal_non_causal() -> Result<()> {
                     vec![window_expr],
                     memory_exec.clone(),
                     vec![],
-                    InputOrderMode::Linear,
+                    Linear,
                 )?);
                 let task_ctx = ctx.task_ctx();
                 let mut collected_results =
@@ -593,7 +593,7 @@ async fn run_window_test(
     orderby_columns: Vec<&str>,
     search_mode: InputOrderMode,
 ) -> Result<()> {
-    let is_linear = !matches!(search_mode, InputOrderMode::Sorted);
+    let is_linear = !matches!(search_mode, Sorted);
     let mut rng = StdRng::seed_from_u64(random_seed);
     let schema = input1[0].schema();
     let session_config = SessionConfig::new().with_batch_size(50);

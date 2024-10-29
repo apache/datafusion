@@ -27,6 +27,7 @@
 
 use std::any::Any;
 use std::fmt::{self, Debug};
+use std::mem::{size_of, size_of_val};
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::vec;
@@ -607,7 +608,7 @@ impl<T: BatchTransformer + Unpin + Send> Stream for SymmetricHashJoinStream<T> {
 
     fn poll_next(
         mut self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
+        cx: &mut Context<'_>,
     ) -> Poll<Option<Self::Item>> {
         self.poll_next_impl(cx)
     }
@@ -1007,15 +1008,15 @@ pub struct OneSideHashJoiner {
 impl OneSideHashJoiner {
     pub fn size(&self) -> usize {
         let mut size = 0;
-        size += std::mem::size_of_val(self);
-        size += std::mem::size_of_val(&self.build_side);
+        size += size_of_val(self);
+        size += size_of_val(&self.build_side);
         size += self.input_buffer.get_array_memory_size();
-        size += std::mem::size_of_val(&self.on);
+        size += size_of_val(&self.on);
         size += self.hashmap.size();
-        size += self.hashes_buffer.capacity() * std::mem::size_of::<u64>();
-        size += self.visited_rows.capacity() * std::mem::size_of::<usize>();
-        size += std::mem::size_of_val(&self.offset);
-        size += std::mem::size_of_val(&self.deleted_offset);
+        size += self.hashes_buffer.capacity() * size_of::<u64>();
+        size += self.visited_rows.capacity() * size_of::<usize>();
+        size += size_of_val(&self.offset);
+        size += size_of_val(&self.deleted_offset);
         size
     }
     pub fn new(
@@ -1466,18 +1467,18 @@ impl<T: BatchTransformer> SymmetricHashJoinStream<T> {
 
     fn size(&self) -> usize {
         let mut size = 0;
-        size += std::mem::size_of_val(&self.schema);
-        size += std::mem::size_of_val(&self.filter);
-        size += std::mem::size_of_val(&self.join_type);
+        size += size_of_val(&self.schema);
+        size += size_of_val(&self.filter);
+        size += size_of_val(&self.join_type);
         size += self.left.size();
         size += self.right.size();
-        size += std::mem::size_of_val(&self.column_indices);
+        size += size_of_val(&self.column_indices);
         size += self.graph.as_ref().map(|g| g.size()).unwrap_or(0);
-        size += std::mem::size_of_val(&self.left_sorted_filter_expr);
-        size += std::mem::size_of_val(&self.right_sorted_filter_expr);
-        size += std::mem::size_of_val(&self.random_state);
-        size += std::mem::size_of_val(&self.null_equals_null);
-        size += std::mem::size_of_val(&self.metrics);
+        size += size_of_val(&self.left_sorted_filter_expr);
+        size += size_of_val(&self.right_sorted_filter_expr);
+        size += size_of_val(&self.random_state);
+        size += size_of_val(&self.null_equals_null);
+        size += size_of_val(&self.metrics);
         size
     }
 

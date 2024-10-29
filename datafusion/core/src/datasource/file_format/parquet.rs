@@ -165,7 +165,7 @@ impl GetExt for ParquetFormatFactory {
     }
 }
 
-impl fmt::Debug for ParquetFormatFactory {
+impl Debug for ParquetFormatFactory {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ParquetFormatFactory")
             .field("ParquetFormatFactory", &self.options)
@@ -1439,7 +1439,7 @@ mod tests {
     }
 
     impl Display for RequestCountingObjectStore {
-        fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
             write!(f, "RequestCounting({})", self.inner)
         }
     }
@@ -1707,7 +1707,7 @@ mod tests {
         let null_utf8 = if force_views {
             ScalarValue::Utf8View(None)
         } else {
-            ScalarValue::Utf8(None)
+            Utf8(None)
         };
 
         // Fetch statistics for first file
@@ -1720,7 +1720,7 @@ mod tests {
         let expected_type = if force_views {
             ScalarValue::Utf8View
         } else {
-            ScalarValue::Utf8
+            Utf8
         };
         assert_eq!(
             c1_stats.max_value,

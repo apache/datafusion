@@ -19,6 +19,7 @@
 //! related functionality, used both in join calculations and optimization rules.
 
 use std::collections::{HashMap, VecDeque};
+use std::mem::size_of;
 use std::sync::Arc;
 
 use crate::joins::utils::{JoinFilter, JoinHashMapType};
@@ -154,8 +155,7 @@ impl PruningJoinHashMap {
     /// # Returns
     /// The size of the hash map in bytes.
     pub(crate) fn size(&self) -> usize {
-        self.map.allocation_info().1.size()
-            + self.next.capacity() * std::mem::size_of::<u64>()
+        self.map.allocation_info().1.size() + self.next.capacity() * size_of::<u64>()
     }
 
     /// Removes hash values from the map and the list based on the given pruning

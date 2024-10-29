@@ -19,6 +19,7 @@
 
 use std::any::Any;
 use std::fmt::Debug;
+use std::mem::size_of_val;
 use std::sync::{Arc, OnceLock};
 
 use arrow::array::{ArrayRef, AsArray, BooleanArray};
@@ -367,10 +368,10 @@ impl Accumulator for FirstValueAccumulator {
     }
 
     fn size(&self) -> usize {
-        std::mem::size_of_val(self) - std::mem::size_of_val(&self.first)
+        size_of_val(self) - size_of_val(&self.first)
             + self.first.size()
             + ScalarValue::size_of_vec(&self.orderings)
-            - std::mem::size_of_val(&self.orderings)
+            - size_of_val(&self.orderings)
     }
 }
 
@@ -702,10 +703,10 @@ impl Accumulator for LastValueAccumulator {
     }
 
     fn size(&self) -> usize {
-        std::mem::size_of_val(self) - std::mem::size_of_val(&self.last)
+        size_of_val(self) - size_of_val(&self.last)
             + self.last.size()
             + ScalarValue::size_of_vec(&self.orderings)
-            - std::mem::size_of_val(&self.orderings)
+            - size_of_val(&self.orderings)
     }
 }
 
@@ -815,7 +816,7 @@ mod tests {
         let mut states = vec![];
 
         for idx in 0..state1.len() {
-            states.push(arrow::compute::concat(&[
+            states.push(compute::concat(&[
                 &state1[idx].to_array()?,
                 &state2[idx].to_array()?,
             ])?);
@@ -857,7 +858,7 @@ mod tests {
         let mut states = vec![];
 
         for idx in 0..state1.len() {
-            states.push(arrow::compute::concat(&[
+            states.push(compute::concat(&[
                 &state1[idx].to_array()?,
                 &state2[idx].to_array()?,
             ])?);

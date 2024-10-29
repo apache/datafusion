@@ -1487,7 +1487,7 @@ mod tests {
         )?);
 
         let result =
-            common::collect(partial_aggregate.execute(0, Arc::clone(&task_ctx))?).await?;
+            collect(partial_aggregate.execute(0, Arc::clone(&task_ctx))?).await?;
 
         let expected = if spill {
             // In spill mode, we test with the limited memory, if the mem usage exceeds,
@@ -1559,8 +1559,7 @@ mod tests {
             input_schema,
         )?);
 
-        let result =
-            common::collect(merged_aggregate.execute(0, Arc::clone(&task_ctx))?).await?;
+        let result = collect(merged_aggregate.execute(0, Arc::clone(&task_ctx))?).await?;
         let batch = concat_batches(&result[0].schema(), &result)?;
         assert_eq!(batch.num_columns(), 4);
         assert_eq!(batch.num_rows(), 12);
@@ -1627,7 +1626,7 @@ mod tests {
         )?);
 
         let result =
-            common::collect(partial_aggregate.execute(0, Arc::clone(&task_ctx))?).await?;
+            collect(partial_aggregate.execute(0, Arc::clone(&task_ctx))?).await?;
 
         let expected = if spill {
             vec![
@@ -1673,7 +1672,7 @@ mod tests {
         } else {
             Arc::clone(&task_ctx)
         };
-        let result = common::collect(merged_aggregate.execute(0, task_ctx)?).await?;
+        let result = collect(merged_aggregate.execute(0, task_ctx)?).await?;
         let batch = concat_batches(&result[0].schema(), &result)?;
         assert_eq!(batch.num_columns(), 2);
         assert_eq!(batch.num_rows(), 3);
@@ -1973,7 +1972,7 @@ mod tests {
             }
 
             let stream: SendableRecordBatchStream = stream.into();
-            let err = common::collect(stream).await.unwrap_err();
+            let err = collect(stream).await.unwrap_err();
 
             // error root cause traversal is a bit complicated, see #4172.
             let err = err.find_root();
@@ -2524,7 +2523,7 @@ mod tests {
 
         let input = Arc::new(MemoryExec::try_new(
             &[vec![batch.clone()]],
-            Arc::<arrow_schema::Schema>::clone(&batch.schema()),
+            Arc::<Schema>::clone(&batch.schema()),
             None,
         )?);
         let aggregate_exec = Arc::new(AggregateExec::try_new(

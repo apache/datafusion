@@ -437,12 +437,12 @@ impl ObservedStream {
 }
 
 impl RecordBatchStream for ObservedStream {
-    fn schema(&self) -> arrow::datatypes::SchemaRef {
+    fn schema(&self) -> SchemaRef {
         self.inner.schema()
     }
 }
 
-impl futures::Stream for ObservedStream {
+impl Stream for ObservedStream {
     type Item = Result<RecordBatch>;
 
     fn poll_next(

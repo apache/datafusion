@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::mem::size_of;
+
 use arrow::array::{
     make_view, Array, ArrayAccessor, ArrayDataBuilder, ArrayIter, ByteView,
     GenericStringArray, LargeStringArray, OffsetSizeTrait, StringArray, StringViewArray,
@@ -122,9 +124,8 @@ pub struct StringArrayBuilder {
 
 impl StringArrayBuilder {
     pub fn with_capacity(item_capacity: usize, data_capacity: usize) -> Self {
-        let mut offsets_buffer = MutableBuffer::with_capacity(
-            (item_capacity + 1) * std::mem::size_of::<i32>(),
-        );
+        let mut offsets_buffer =
+            MutableBuffer::with_capacity((item_capacity + 1) * size_of::<i32>());
         // SAFETY: the first offset value is definitely not going to exceed the bounds.
         unsafe { offsets_buffer.push_unchecked(0_i32) };
         Self {
@@ -186,7 +187,7 @@ impl StringArrayBuilder {
 
     pub fn finish(self, null_buffer: Option<NullBuffer>) -> StringArray {
         let array_builder = ArrayDataBuilder::new(DataType::Utf8)
-            .len(self.offsets_buffer.len() / std::mem::size_of::<i32>() - 1)
+            .len(self.offsets_buffer.len() / size_of::<i32>() - 1)
             .add_buffer(self.offsets_buffer.into())
             .add_buffer(self.value_buffer.into())
             .nulls(null_buffer);
@@ -273,9 +274,8 @@ pub struct LargeStringArrayBuilder {
 
 impl LargeStringArrayBuilder {
     pub fn with_capacity(item_capacity: usize, data_capacity: usize) -> Self {
-        let mut offsets_buffer = MutableBuffer::with_capacity(
-            (item_capacity + 1) * std::mem::size_of::<i64>(),
-        );
+        let mut offsets_buffer =
+            MutableBuffer::with_capacity((item_capacity + 1) * size_of::<i64>());
         // SAFETY: the first offset value is definitely not going to exceed the bounds.
         unsafe { offsets_buffer.push_unchecked(0_i64) };
         Self {
@@ -337,7 +337,7 @@ impl LargeStringArrayBuilder {
 
     pub fn finish(self, null_buffer: Option<NullBuffer>) -> LargeStringArray {
         let array_builder = ArrayDataBuilder::new(DataType::LargeUtf8)
-            .len(self.offsets_buffer.len() / std::mem::size_of::<i64>() - 1)
+            .len(self.offsets_buffer.len() / size_of::<i64>() - 1)
             .add_buffer(self.offsets_buffer.into())
             .add_buffer(self.value_buffer.into())
             .nulls(null_buffer);

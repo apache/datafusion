@@ -133,20 +133,6 @@ pub fn assert_analyzed_plan_with_config_eq(
     Ok(())
 }
 
-pub fn assert_analyzed_plan_ne(
-    rule: Arc<dyn AnalyzerRule + Send + Sync>,
-    plan: LogicalPlan,
-    expected: &str,
-) -> Result<()> {
-    let options = ConfigOptions::default();
-    let analyzed_plan =
-        Analyzer::with_rules(vec![rule]).execute_and_check(plan, &options, |_, _| {})?;
-    let formatted_plan = format!("{analyzed_plan}");
-    assert_ne!(formatted_plan, expected);
-
-    Ok(())
-}
-
 pub fn assert_analyzed_plan_eq_display_indent(
     rule: Arc<dyn AnalyzerRule + Send + Sync>,
     plan: LogicalPlan,
