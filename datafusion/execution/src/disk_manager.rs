@@ -173,7 +173,7 @@ fn create_local_dirs(local_dirs: Vec<PathBuf>) -> Result<Vec<Arc<TempDir>>> {
     local_dirs
         .iter()
         .map(|root| {
-            if !std::path::Path::new(root).exists() {
+            if !Path::new(root).exists() {
                 std::fs::create_dir(root)?;
             }
             Builder::new()

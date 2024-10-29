@@ -21,6 +21,7 @@ use arrow::{
     compute::interleave,
     row::{RowConverter, Rows, SortField},
 };
+use std::mem::size_of;
 use std::{cmp::Ordering, collections::BinaryHeap, sync::Arc};
 
 use arrow_array::{Array, ArrayRef, RecordBatch};
@@ -225,7 +226,7 @@ impl TopK {
 
     /// return the size of memory used by this operator, in bytes
     fn size(&self) -> usize {
-        std::mem::size_of::<Self>()
+        size_of::<Self>()
             + self.row_converter.size()
             + self.scratch_rows.size()
             + self.heap.size()
@@ -444,8 +445,8 @@ impl TopKHeap {
 
     /// return the size of memory used by this heap, in bytes
     fn size(&self) -> usize {
-        std::mem::size_of::<Self>()
-            + (self.inner.capacity() * std::mem::size_of::<TopKRow>())
+        size_of::<Self>()
+            + (self.inner.capacity() * size_of::<TopKRow>())
             + self.store.size()
             + self.owned_bytes
     }
@@ -636,9 +637,8 @@ impl RecordBatchStore {
     /// returns the size of memory used by this store, including all
     /// referenced `RecordBatch`es, in bytes
     pub fn size(&self) -> usize {
-        std::mem::size_of::<Self>()
-            + self.batches.capacity()
-                * (std::mem::size_of::<u32>() + std::mem::size_of::<RecordBatchEntry>())
+        size_of::<Self>()
+            + self.batches.capacity() * (size_of::<u32>() + size_of::<RecordBatchEntry>())
             + self.batches_size
     }
 }

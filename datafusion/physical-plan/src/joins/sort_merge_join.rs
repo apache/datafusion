@@ -26,7 +26,7 @@ use std::collections::{HashMap, VecDeque};
 use std::fmt::Formatter;
 use std::fs::File;
 use std::io::BufReader;
-use std::mem;
+use std::mem::size_of;
 use std::ops::Range;
 use std::pin::Pin;
 use std::sync::atomic::AtomicUsize;
@@ -411,13 +411,13 @@ struct SortMergeJoinMetrics {
     /// Total time for joining probe-side batches to the build-side batches
     join_time: metrics::Time,
     /// Number of batches consumed by this operator
-    input_batches: metrics::Count,
+    input_batches: Count,
     /// Number of rows consumed by this operator
-    input_rows: metrics::Count,
+    input_rows: Count,
     /// Number of batches produced by this operator
-    output_batches: metrics::Count,
+    output_batches: Count,
     /// Number of rows produced by this operator
-    output_rows: metrics::Count,
+    output_rows: Count,
     /// Peak memory used for buffered data.
     /// Calculated as sum of peak memory values across partitions
     peak_mem_used: metrics::Gauge,
@@ -630,9 +630,9 @@ impl BufferedBatch {
                 .iter()
                 .map(|arr| arr.get_array_memory_size())
                 .sum::<usize>()
-            + batch.num_rows().next_power_of_two() * mem::size_of::<usize>()
-            + mem::size_of::<Range<usize>>()
-            + mem::size_of::<usize>();
+            + batch.num_rows().next_power_of_two() * size_of::<usize>()
+            + size_of::<Range<usize>>()
+            + size_of::<usize>();
 
         let num_rows = batch.num_rows();
         BufferedBatch {
@@ -2332,7 +2332,7 @@ mod tests {
             Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
         )];
 
-        let (_, batches) = join_collect(left, right, on, JoinType::Inner).await?;
+        let (_, batches) = join_collect(left, right, on, Inner).await?;
 
         let expected = [
             "+----+----+----+----+----+----+",
@@ -2371,7 +2371,7 @@ mod tests {
             ),
         ];
 
-        let (_columns, batches) = join_collect(left, right, on, JoinType::Inner).await?;
+        let (_columns, batches) = join_collect(left, right, on, Inner).await?;
         let expected = [
             "+----+----+----+----+----+----+",
             "| a1 | b2 | c1 | a1 | b2 | c2 |",
@@ -2409,7 +2409,7 @@ mod tests {
             ),
         ];
 
-        let (_columns, batches) = join_collect(left, right, on, JoinType::Inner).await?;
+        let (_columns, batches) = join_collect(left, right, on, Inner).await?;
         let expected = [
             "+----+----+----+----+----+----+",
             "| a1 | b2 | c1 | a1 | b2 | c2 |",
@@ -2448,7 +2448,7 @@ mod tests {
             ),
         ];
 
-        let (_, batches) = join_collect(left, right, on, JoinType::Inner).await?;
+        let (_, batches) = join_collect(left, right, on, Inner).await?;
         let expected = [
             "+----+----+----+----+----+----+",
             "| a1 | b2 | c1 | a1 | b2 | c2 |",
@@ -2489,7 +2489,7 @@ mod tests {
             left,
             right,
             on,
-            JoinType::Inner,
+            Inner,
             vec![
                 SortOptions {
                     descending: true,
@@ -2539,7 +2539,7 @@ mod tests {
         ];
 
         let (_, batches) =
-            join_collect_batch_size_equals_two(left, right, on, JoinType::Inner).await?;
+            join_collect_batch_size_equals_two(left, right, on, Inner).await?;
         let expected = [
             "+----+----+----+----+----+----+",
             "| a1 | b2 | c1 | a1 | b2 | c2 |",
@@ -2574,7 +2574,7 @@ mod tests {
             Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
         )];
 
-        let (_, batches) = join_collect(left, right, on, JoinType::Left).await?;
+        let (_, batches) = join_collect(left, right, on, Left).await?;
         let expected = [
             "+----+----+----+----+----+----+",
             "| a1 | b1 | c1 | a2 | b1 | c2 |",
@@ -2606,7 +2606,7 @@ mod tests {
             Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
         )];
 
-        let (_, batches) = join_collect(left, right, on, JoinType::Right).await?;
+        let (_, batches) = join_collect(left, right, on, Right).await?;
         let expected = [
             "+----+----+----+----+----+----+",
             "| a1 | b1 | c1 | a2 | b1 | c2 |",
@@ -2638,7 +2638,7 @@ mod tests {
             Arc::new(Column::new_with_schema("b2", &right.schema()).unwrap()) as _,
         )];
 
-        let (_, batches) = join_collect(left, right, on, JoinType::Full).await?;
+        let (_, batches) = join_collect(left, right, on, Full).await?;
         let expected = [
             "+----+----+----+----+----+----+",
             "| a1 | b1 | c1 | a2 | b2 | c2 |",
@@ -2670,7 +2670,7 @@ mod tests {
             Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
         )];
 
-        let (_, batches) = join_collect(left, right, on, JoinType::LeftAnti).await?;
+        let (_, batches) = join_collect(left, right, on, LeftAnti).await?;
         let expected = [
             "+----+----+----+",
             "| a1 | b1 | c1 |",
@@ -2701,7 +2701,7 @@ mod tests {
             Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
         )];
 
-        let (_, batches) = join_collect(left, right, on, JoinType::LeftSemi).await?;
+        let (_, batches) = join_collect(left, right, on, LeftSemi).await?;
         let expected = [
             "+----+----+----+",
             "| a1 | b1 | c1 |",
@@ -2734,7 +2734,7 @@ mod tests {
             Arc::new(Column::new_with_schema("b", &right.schema())?) as _,
         )];
 
-        let (_, batches) = join_collect(left, right, on, JoinType::Inner).await?;
+        let (_, batches) = join_collect(left, right, on, Inner).await?;
         let expected = [
             "+---+---+---+----+---+----+",
             "| a | b | c | a  | b | c  |",
@@ -2766,7 +2766,7 @@ mod tests {
             Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
         )];
 
-        let (_, batches) = join_collect(left, right, on, JoinType::Inner).await?;
+        let (_, batches) = join_collect(left, right, on, Inner).await?;
 
         let expected = ["+------------+------------+------------+------------+------------+------------+",
             "| a1         | b1         | c1         | a2         | b1         | c2         |",
@@ -2798,7 +2798,7 @@ mod tests {
             Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
         )];
 
-        let (_, batches) = join_collect(left, right, on, JoinType::Inner).await?;
+        let (_, batches) = join_collect(left, right, on, Inner).await?;
 
         let expected = ["+-------------------------+---------------------+-------------------------+-------------------------+---------------------+-------------------------+",
             "| a1                      | b1                  | c1                      | a2                      | b1                  | c2                      |",
@@ -2829,7 +2829,7 @@ mod tests {
             Arc::new(Column::new_with_schema("b2", &right.schema())?) as _,
         )];
 
-        let (_, batches) = join_collect(left, right, on, JoinType::Left).await?;
+        let (_, batches) = join_collect(left, right, on, Left).await?;
         let expected = [
             "+----+----+----+----+----+----+",
             "| a1 | b1 | c1 | a2 | b2 | c2 |",
@@ -2865,7 +2865,7 @@ mod tests {
             Arc::new(Column::new_with_schema("b2", &right.schema())?) as _,
         )];
 
-        let (_, batches) = join_collect(left, right, on, JoinType::Right).await?;
+        let (_, batches) = join_collect(left, right, on, Right).await?;
         let expected = [
             "+----+----+----+----+----+----+",
             "| a1 | b1 | c1 | a2 | b2 | c2 |",
@@ -2909,7 +2909,7 @@ mod tests {
             Arc::new(Column::new_with_schema("b2", &right.schema())?) as _,
         )];
 
-        let (_, batches) = join_collect(left, right, on, JoinType::Left).await?;
+        let (_, batches) = join_collect(left, right, on, Left).await?;
         let expected = vec![
             "+----+----+----+----+----+----+",
             "| a1 | b1 | c1 | a2 | b2 | c2 |",
@@ -2958,7 +2958,7 @@ mod tests {
             Arc::new(Column::new_with_schema("b2", &right.schema())?) as _,
         )];
 
-        let (_, batches) = join_collect(left, right, on, JoinType::Right).await?;
+        let (_, batches) = join_collect(left, right, on, Right).await?;
         let expected = vec![
             "+----+----+----+----+----+----+",
             "| a1 | b1 | c1 | a2 | b2 | c2 |",
@@ -3007,7 +3007,7 @@ mod tests {
             Arc::new(Column::new_with_schema("b2", &right.schema())?) as _,
         )];
 
-        let (_, batches) = join_collect(left, right, on, JoinType::Full).await?;
+        let (_, batches) = join_collect(left, right, on, Full).await?;
         let expected = vec![
             "+----+----+----+----+----+----+",
             "| a1 | b1 | c1 | a2 | b2 | c2 |",
@@ -3047,14 +3047,7 @@ mod tests {
         )];
         let sort_options = vec![SortOptions::default(); on.len()];
 
-        let join_types = vec![
-            JoinType::Inner,
-            JoinType::Left,
-            JoinType::Right,
-            JoinType::Full,
-            JoinType::LeftSemi,
-            JoinType::LeftAnti,
-        ];
+        let join_types = vec![Inner, Left, Right, Full, LeftSemi, LeftAnti];
 
         // Disable DiskManager to prevent spilling
         let runtime = RuntimeEnvBuilder::new()
@@ -3132,14 +3125,7 @@ mod tests {
         )];
         let sort_options = vec![SortOptions::default(); on.len()];
 
-        let join_types = vec![
-            JoinType::Inner,
-            JoinType::Left,
-            JoinType::Right,
-            JoinType::Full,
-            JoinType::LeftSemi,
-            JoinType::LeftAnti,
-        ];
+        let join_types = vec![Inner, Left, Right, Full, LeftSemi, LeftAnti];
 
         // Disable DiskManager to prevent spilling
         let runtime = RuntimeEnvBuilder::new()
@@ -3195,14 +3181,7 @@ mod tests {
         )];
         let sort_options = vec![SortOptions::default(); on.len()];
 
-        let join_types = [
-            JoinType::Inner,
-            JoinType::Left,
-            JoinType::Right,
-            JoinType::Full,
-            JoinType::LeftSemi,
-            JoinType::LeftAnti,
-        ];
+        let join_types = [Inner, Left, Right, Full, LeftSemi, LeftAnti];
 
         // Enable DiskManager to allow spilling
         let runtime = RuntimeEnvBuilder::new()
@@ -3303,14 +3282,7 @@ mod tests {
         )];
         let sort_options = vec![SortOptions::default(); on.len()];
 
-        let join_types = [
-            JoinType::Inner,
-            JoinType::Left,
-            JoinType::Right,
-            JoinType::Full,
-            JoinType::LeftSemi,
-            JoinType::LeftAnti,
-        ];
+        let join_types = [Inner, Left, Right, Full, LeftSemi, LeftAnti];
 
         // Enable DiskManager to allow spilling
         let runtime = RuntimeEnvBuilder::new()

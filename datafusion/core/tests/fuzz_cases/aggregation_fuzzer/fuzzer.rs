@@ -104,7 +104,7 @@ impl AggregationFuzzerBuilder {
     }
 }
 
-impl std::default::Default for AggregationFuzzerBuilder {
+impl Default for AggregationFuzzerBuilder {
     fn default() -> Self {
         Self::new()
     }
@@ -375,7 +375,7 @@ pub struct QueryBuilder {
 }
 impl QueryBuilder {
     pub fn new() -> Self {
-        std::default::Default::default()
+        Default::default()
     }
 
     /// return the table name if any

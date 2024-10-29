@@ -57,7 +57,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     ) -> Result<Expr> {
         enum StackEntry {
             SQLExpr(Box<SQLExpr>),
-            Operator(sqlparser::ast::BinaryOperator),
+            Operator(BinaryOperator),
         }
 
         // Virtual stack machine to convert SQLExpr to Expr

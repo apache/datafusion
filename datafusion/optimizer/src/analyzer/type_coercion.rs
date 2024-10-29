@@ -1243,7 +1243,7 @@ mod test {
         }
 
         fn return_type(&self, _args: &[DataType]) -> Result<DataType> {
-            Ok(DataType::Utf8)
+            Ok(Utf8)
         }
 
         fn invoke(&self, _args: &[ColumnarValue]) -> Result<ColumnarValue> {
@@ -1446,7 +1446,7 @@ mod test {
             cast(lit("2002-05-08"), DataType::Date32)
                 + lit(ScalarValue::new_interval_ym(0, 1)),
         );
-        let empty = empty_with_type(DataType::Utf8);
+        let empty = empty_with_type(Utf8);
         let plan = LogicalPlan::Filter(Filter::try_new(expr, empty)?);
         let expected =
             "Filter: a BETWEEN Utf8(\"2002-05-08\") AND CAST(CAST(Utf8(\"2002-05-08\") AS Date32) + IntervalYearMonth(\"1\") AS Utf8)\
@@ -1462,7 +1462,7 @@ mod test {
                 + lit(ScalarValue::new_interval_ym(0, 1)),
             lit("2002-12-08"),
         );
-        let empty = empty_with_type(DataType::Utf8);
+        let empty = empty_with_type(Utf8);
         let plan = LogicalPlan::Filter(Filter::try_new(expr, empty)?);
         // TODO: we should cast col(a).
         let expected =
@@ -1517,7 +1517,7 @@ mod test {
         let expr = Box::new(col("a"));
         let pattern = Box::new(lit(ScalarValue::new_utf8("abc")));
         let like_expr = Expr::Like(Like::new(false, expr, pattern, None, false));
-        let empty = empty_with_type(DataType::Utf8);
+        let empty = empty_with_type(Utf8);
         let plan = LogicalPlan::Projection(Projection::try_new(vec![like_expr], empty)?);
         let expected = "Projection: a LIKE Utf8(\"abc\")\n  EmptyRelation";
         assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), plan, expected)?;
@@ -1525,7 +1525,7 @@ mod test {
         let expr = Box::new(col("a"));
         let pattern = Box::new(lit(ScalarValue::Null));
         let like_expr = Expr::Like(Like::new(false, expr, pattern, None, false));
-        let empty = empty_with_type(DataType::Utf8);
+        let empty = empty_with_type(Utf8);
         let plan = LogicalPlan::Projection(Projection::try_new(vec![like_expr], empty)?);
         let expected = "Projection: a LIKE CAST(NULL AS Utf8)\n  EmptyRelation";
         assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), plan, expected)?;
@@ -1545,7 +1545,7 @@ mod test {
         let expr = Box::new(col("a"));
         let pattern = Box::new(lit(ScalarValue::new_utf8("abc")));
         let ilike_expr = Expr::Like(Like::new(false, expr, pattern, None, true));
-        let empty = empty_with_type(DataType::Utf8);
+        let empty = empty_with_type(Utf8);
         let plan = LogicalPlan::Projection(Projection::try_new(vec![ilike_expr], empty)?);
         let expected = "Projection: a ILIKE Utf8(\"abc\")\n  EmptyRelation";
         assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), plan, expected)?;
@@ -1553,7 +1553,7 @@ mod test {
         let expr = Box::new(col("a"));
         let pattern = Box::new(lit(ScalarValue::Null));
         let ilike_expr = Expr::Like(Like::new(false, expr, pattern, None, true));
-        let empty = empty_with_type(DataType::Utf8);
+        let empty = empty_with_type(Utf8);
         let plan = LogicalPlan::Projection(Projection::try_new(vec![ilike_expr], empty)?);
         let expected = "Projection: a ILIKE CAST(NULL AS Utf8)\n  EmptyRelation";
         assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), plan, expected)?;
@@ -1581,7 +1581,7 @@ mod test {
         let expected = "Projection: a IS UNKNOWN\n  EmptyRelation";
         assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), plan, expected)?;
 
-        let empty = empty_with_type(DataType::Utf8);
+        let empty = empty_with_type(Utf8);
         let plan = LogicalPlan::Projection(Projection::try_new(vec![expr], empty)?);
         let ret = assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), plan, expected);
         let err = ret.unwrap_err().to_string();
@@ -1599,7 +1599,7 @@ mod test {
 
     #[test]
     fn concat_for_type_coercion() -> Result<()> {
-        let empty = empty_with_type(DataType::Utf8);
+        let empty = empty_with_type(Utf8);
         let args = [col("a"), lit("b"), lit(true), lit(false), lit(13)];
 
         // concat-type signature
@@ -1734,7 +1734,7 @@ mod test {
                     true,
                 ),
                 Field::new("binary", DataType::Binary, true),
-                Field::new("string", DataType::Utf8, true),
+                Field::new("string", Utf8, true),
                 Field::new("decimal", DataType::Decimal128(10, 10), true),
             ]
             .into(),
@@ -1751,7 +1751,7 @@ mod test {
             else_expr: None,
         };
         let case_when_common_type = DataType::Boolean;
-        let then_else_common_type = DataType::Utf8;
+        let then_else_common_type = Utf8;
         let expected = cast_helper(
             case.clone(),
             &case_when_common_type,
@@ -1770,8 +1770,8 @@ mod test {
             ],
             else_expr: Some(Box::new(col("string"))),
         };
-        let case_when_common_type = DataType::Utf8;
-        let then_else_common_type = DataType::Utf8;
+        let case_when_common_type = Utf8;
+        let then_else_common_type = Utf8;
         let expected = cast_helper(
             case.clone(),
             &case_when_common_type,
@@ -1861,7 +1861,7 @@ mod test {
             Some("list"),
             vec![(Box::new(col("large_list")), Box::new(lit("1")))],
             DataType::LargeList(Arc::new(Field::new("item", DataType::Int64, true))),
-            DataType::Utf8,
+            Utf8,
             schema
         );
 
@@ -1869,7 +1869,7 @@ mod test {
             Some("large_list"),
             vec![(Box::new(col("list")), Box::new(lit("1")))],
             DataType::LargeList(Arc::new(Field::new("item", DataType::Int64, true))),
-            DataType::Utf8,
+            Utf8,
             schema
         );
 
@@ -1877,7 +1877,7 @@ mod test {
             Some("list"),
             vec![(Box::new(col("fixed_list")), Box::new(lit("1")))],
             DataType::List(Arc::new(Field::new("item", DataType::Int64, true))),
-            DataType::Utf8,
+            Utf8,
             schema
         );
 
@@ -1885,7 +1885,7 @@ mod test {
             Some("fixed_list"),
             vec![(Box::new(col("list")), Box::new(lit("1")))],
             DataType::List(Arc::new(Field::new("item", DataType::Int64, true))),
-            DataType::Utf8,
+            Utf8,
             schema
         );
 
@@ -1893,7 +1893,7 @@ mod test {
             Some("fixed_list"),
             vec![(Box::new(col("large_list")), Box::new(lit("1")))],
             DataType::LargeList(Arc::new(Field::new("item", DataType::Int64, true))),
-            DataType::Utf8,
+            Utf8,
             schema
         );
 
@@ -1901,7 +1901,7 @@ mod test {
             Some("large_list"),
             vec![(Box::new(col("fixed_list")), Box::new(lit("1")))],
             DataType::LargeList(Arc::new(Field::new("item", DataType::Int64, true))),
-            DataType::Utf8,
+            Utf8,
             schema
         );
         Ok(())

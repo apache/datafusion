@@ -74,10 +74,7 @@ impl FileFormat for TSVFileFormat {
         "tsv".to_string()
     }
 
-    fn get_ext_with_compression(
-        &self,
-        c: &FileCompressionType,
-    ) -> datafusion::error::Result<String> {
+    fn get_ext_with_compression(&self, c: &FileCompressionType) -> Result<String> {
         if c == &FileCompressionType::UNCOMPRESSED {
             Ok("tsv".to_string())
         } else {

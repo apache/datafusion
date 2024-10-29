@@ -3382,8 +3382,8 @@ pub struct ColumnUnnestList {
     pub depth: usize,
 }
 
-impl fmt::Display for ColumnUnnestList {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl Display for ColumnUnnestList {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "{}|depth={}", self.output_column, self.depth)
     }
 }

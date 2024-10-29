@@ -118,7 +118,7 @@ impl GetExt for JsonFormatFactory {
     }
 }
 
-impl fmt::Debug for JsonFormatFactory {
+impl Debug for JsonFormatFactory {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("JsonFormatFactory")
             .field("options", &self.options)
