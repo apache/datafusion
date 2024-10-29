@@ -714,14 +714,27 @@ pub async fn from_substrait_rel(
                                 }
                                 _ => false,
                             };
+                            let order_by = if !f.sorts.is_empty() {
+                                Some(
+                                    from_substrait_sorts(
+                                        ctx,
+                                        &f.sorts,
+                                        input.schema(),
+                                        extensions,
+                                    )
+                                    .await?,
+                                )
+                            } else {
+                                None
+                            };
+
                             from_substrait_agg_func(
                                 ctx,
                                 f,
                                 input.schema(),
                                 extensions,
                                 filter,
-                                // TODO: Add parsing of order_by also
-                                None,
+                                order_by,
                                 distinct,
                             )
                             .await
