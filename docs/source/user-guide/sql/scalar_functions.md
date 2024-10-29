@@ -802,6 +802,16 @@ btrim(str[, trim_str])
 +-------------------------------------------+
 ```
 
+#### Alternative Syntax
+
+```sql
+trim(BOTH trim_str FROM str)
+```
+
+```sql
+trim(trim_str FROM str)
+```
+
 #### Aliases
 
 - trim
@@ -1185,6 +1195,12 @@ ltrim(str[, trim_str])
 +-------------------------------------------+
 ```
 
+#### Alternative Syntax
+
+```sql
+trim(LEADING trim_str FROM str)
+```
+
 **Related functions**:
 
 - [btrim](#btrim)
@@ -1381,6 +1397,12 @@ rtrim(str[, trim_str])
 +-------------------------------------------+
 ```
 
+#### Alternative Syntax
+
+```sql
+trim(TRAILING trim_str FROM str)
+```
+
 **Related functions**:
 
 - [btrim](#btrim)
@@ -1493,6 +1515,12 @@ substr(str, start_pos[, length])
 +----------------------------------------------+
 | fus                                          |
 +----------------------------------------------+
+```
+
+#### Alternative Syntax
+
+```sql
+substring(str from start_pos for length)
 ```
 
 #### Aliases
@@ -1958,6 +1986,12 @@ date_part(part, expression)
   - epoch (seconds since Unix epoch)
 
 - **expression**: Time expression to operate on. Can be a constant, column, or function.
+
+#### Alternative Syntax
+
+```sql
+extract(field FROM source)
+```
 
 #### Aliases
 
