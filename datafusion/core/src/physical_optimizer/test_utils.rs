@@ -56,7 +56,9 @@ use datafusion_physical_plan::{
 
 use async_trait::async_trait;
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
-use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement, PhysicalSortRequirement};
+use datafusion_physical_expr_common::sort_expr::{
+    LexOrdering, LexRequirement, PhysicalSortRequirement,
+};
 
 async fn register_current_csv(
     ctx: &SessionContext,

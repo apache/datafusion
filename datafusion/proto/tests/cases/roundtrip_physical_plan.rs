@@ -51,7 +51,10 @@ use datafusion::functions_aggregate::sum::sum_udaf;
 use datafusion::logical_expr::{create_udf, JoinType, Operator, Volatility};
 use datafusion::physical_expr::expressions::Literal;
 use datafusion::physical_expr::window::SlidingAggregateWindowExpr;
-use datafusion::physical_expr::{LexOrdering, LexOrderingRef, LexRequirement, PhysicalSortRequirement, ScalarFunctionExpr};
+use datafusion::physical_expr::{
+    LexOrdering, LexOrderingRef, LexRequirement, PhysicalSortRequirement,
+    ScalarFunctionExpr,
+};
 use datafusion::physical_plan::aggregates::{
     AggregateExec, AggregateMode, PhysicalGroupBy,
 };

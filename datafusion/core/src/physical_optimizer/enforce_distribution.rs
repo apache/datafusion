@@ -1491,7 +1491,9 @@ pub(crate) mod tests {
             if self.expr.is_empty() {
                 vec![None]
             } else {
-                vec![Some(PhysicalSortRequirement::from_sort_exprs(self.expr.iter()))]
+                vec![Some(PhysicalSortRequirement::from_sort_exprs(
+                    self.expr.iter(),
+                ))]
             }
         }
 

@@ -1595,8 +1595,9 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
                     None => None,
                 };
 
-                let ordering_reqs: LexOrdering =
-                    physical_sort_exprs.clone().unwrap_or(LexOrdering::default());
+                let ordering_reqs: LexOrdering = physical_sort_exprs
+                    .clone()
+                    .unwrap_or(LexOrdering::default());
 
                 let agg_expr =
                     AggregateExprBuilder::new(func.to_owned(), physical_args.to_vec())

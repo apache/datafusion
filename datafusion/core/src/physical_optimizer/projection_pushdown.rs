@@ -915,8 +915,14 @@ fn try_swapping_with_sym_hash_join(
         new_filter,
         sym_join.join_type(),
         sym_join.null_equals_null(),
-        sym_join.right().output_ordering().map(|p| LexOrdering::new(p.to_vec())),
-        sym_join.left().output_ordering().map(|p| LexOrdering::new(p.to_vec())),
+        sym_join
+            .right()
+            .output_ordering()
+            .map(|p| LexOrdering::new(p.to_vec())),
+        sym_join
+            .left()
+            .output_ordering()
+            .map(|p| LexOrdering::new(p.to_vec())),
         sym_join.partition_mode(),
     )?)))
 }

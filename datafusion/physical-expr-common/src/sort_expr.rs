@@ -432,7 +432,7 @@ impl Display for LexOrdering {
 }
 
 impl FromIterator<PhysicalSortExpr> for LexOrdering {
-    fn from_iter<T: IntoIterator<Item=PhysicalSortExpr>>(iter: T) -> Self {
+    fn from_iter<T: IntoIterator<Item = PhysicalSortExpr>>(iter: T) -> Self {
         let mut lex_ordering = LexOrdering::default();
 
         for i in iter {

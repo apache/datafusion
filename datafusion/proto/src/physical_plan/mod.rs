@@ -1104,7 +1104,9 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                                 &sink_schema,
                                 extension_codec,
                             )
-                            .map(|item| PhysicalSortRequirement::from_sort_exprs(&item.inner))
+                            .map(|item| {
+                                PhysicalSortRequirement::from_sort_exprs(&item.inner)
+                            })
                         })
                         .transpose()?;
                     Ok(Arc::new(DataSinkExec::new(

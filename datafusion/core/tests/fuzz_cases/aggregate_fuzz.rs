@@ -39,14 +39,14 @@ use datafusion_physical_expr::PhysicalSortExpr;
 use datafusion_physical_plan::InputOrderMode;
 use test_utils::{add_empty_batches, StringBatchGenerator};
 
+use crate::fuzz_cases::aggregation_fuzzer::{
+    AggregationFuzzerBuilder, ColumnDescr, DatasetGeneratorConfig, QueryBuilder,
+};
+use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use hashbrown::HashMap;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use tokio::task::JoinSet;
-use datafusion_physical_expr_common::sort_expr::LexOrdering;
-use crate::fuzz_cases::aggregation_fuzzer::{
-    AggregationFuzzerBuilder, ColumnDescr, DatasetGeneratorConfig, QueryBuilder,
-};
 
 // ========================================================================
 //  The new aggregation fuzz tests based on [`AggregationFuzzer`]

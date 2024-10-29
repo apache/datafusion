@@ -25,12 +25,12 @@ use arrow_array::{ArrayRef, RecordBatch};
 use arrow_schema::{DataType, Field, Schema};
 use datafusion_common::{arrow_datafusion_err, DataFusionError, Result};
 use datafusion_physical_expr::{expressions::col, PhysicalSortExpr};
+use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::sorts::sort::sort_batch;
 use rand::{
     rngs::{StdRng, ThreadRng},
     thread_rng, Rng, SeedableRng,
 };
-use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use test_utils::{
     array_gen::{PrimitiveArrayGenerator, StringArrayGenerator},
     stagger_batch,

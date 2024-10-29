@@ -277,7 +277,9 @@ fn pushdown_requirement_to_children(
         spm_eqs = spm_eqs.with_reorder(new_ordering);
         // Do not push-down through SortPreservingMergeExec when
         // ordering requirement invalidates requirement of sort preserving merge exec.
-        if !spm_eqs.ordering_satisfy(LexOrderingRef::new(plan.output_ordering().unwrap_or(&[]))) {
+        if !spm_eqs
+            .ordering_satisfy(LexOrderingRef::new(plan.output_ordering().unwrap_or(&[])))
+        {
             Ok(None)
         } else {
             // Can push-down through SortPreservingMergeExec, because parent requirement is finer

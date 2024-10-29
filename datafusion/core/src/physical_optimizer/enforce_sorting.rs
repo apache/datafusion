@@ -393,7 +393,9 @@ fn analyze_immediate_sort_removal(
         // If this sort is unnecessary, we should remove it:
         if sort_input
             .equivalence_properties()
-            .ordering_satisfy(LexOrderingRef::new(sort_exec.properties().output_ordering().unwrap_or(&[])))
+            .ordering_satisfy(LexOrderingRef::new(
+                sort_exec.properties().output_ordering().unwrap_or(&[]),
+            ))
         {
             node.plan = if !sort_exec.preserve_partitioning()
                 && sort_input.output_partitioning().partition_count() > 1
@@ -620,7 +622,10 @@ fn remove_corresponding_sort_from_sub_plan(
         // `SortPreservingMergeExec` instead of a `CoalescePartitionsExec`.
         let plan = node.plan.clone();
         let plan = if let Some(ordering) = plan.output_ordering() {
-            Arc::new(SortPreservingMergeExec::new(LexOrdering::new(ordering.to_vec()), plan)) as _
+            Arc::new(SortPreservingMergeExec::new(
+                LexOrdering::new(ordering.to_vec()),
+                plan,
+            )) as _
         } else {
             Arc::new(CoalescePartitionsExec::new(plan)) as _
         };

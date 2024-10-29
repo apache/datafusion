@@ -45,9 +45,9 @@ mod sp_repartition_fuzz_tests {
     };
     use test_utils::add_empty_batches;
 
+    use datafusion_physical_expr_common::sort_expr::LexOrdering;
     use itertools::izip;
     use rand::{rngs::StdRng, seq::SliceRandom, Rng, SeedableRng};
-    use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
     // Generate a schema which consists of 6 columns (a, b, c, d, e, f)
     fn create_test_schema() -> Result<SchemaRef> {

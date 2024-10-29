@@ -50,12 +50,12 @@ use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{EquivalenceProperties, PhysicalExpr};
 
 use crate::execution_plan::CardinalityEffect;
+use datafusion_physical_expr_common::sort_expr::{LexOrderingRef, PhysicalSortExpr};
 use futures::stream::Stream;
 use futures::{FutureExt, StreamExt, TryStreamExt};
 use hashbrown::HashMap;
 use log::trace;
 use parking_lot::Mutex;
-use datafusion_physical_expr_common::sort_expr::{LexOrderingRef, PhysicalSortExpr};
 
 mod distributor_channels;
 
@@ -1558,10 +1558,10 @@ mod tests {
 mod test {
     use arrow_schema::{DataType, Field, Schema, SortOptions};
 
-    use datafusion_physical_expr::expressions::col;
-    use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
     use crate::memory::MemoryExec;
     use crate::union::UnionExec;
+    use datafusion_physical_expr::expressions::col;
+    use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 
     use super::*;
 
