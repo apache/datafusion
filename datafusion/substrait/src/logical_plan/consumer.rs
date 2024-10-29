@@ -118,6 +118,7 @@ pub fn name_to_op(name: &str) -> Option<Operator> {
         "multiply" => Some(Operator::Multiply),
         "divide" => Some(Operator::Divide),
         "mod" => Some(Operator::Modulo),
+        "modulus" => Some(Operator::Modulo),
         "and" => Some(Operator::And),
         "or" => Some(Operator::Or),
         "is_distinct_from" => Some(Operator::IsDistinctFrom),

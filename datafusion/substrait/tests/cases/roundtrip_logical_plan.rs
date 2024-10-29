@@ -594,6 +594,11 @@ async fn roundtrip_ilike() -> Result<()> {
 }
 
 #[tokio::test]
+async fn roundtrip_modulus() -> Result<()> {
+    roundtrip("SELECT a%3 from data").await
+}
+
+#[tokio::test]
 async fn roundtrip_not() -> Result<()> {
     roundtrip("SELECT * FROM data WHERE NOT d").await
 }
