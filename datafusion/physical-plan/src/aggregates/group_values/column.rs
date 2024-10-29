@@ -1020,3 +1020,354 @@ fn supported_type(data_type: &DataType) -> bool {
             | DataType::BinaryView
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use ahash::RandomState;
+    use arrow::util::pretty::{pretty_format_batches, print_batches, print_columns};
+    use arrow_array::{ArrayRef, Int64Array, RecordBatch, StringArray, StringViewArray};
+    use arrow_schema::{DataType, Field, Schema};
+    use datafusion_common::hash_utils::create_hashes;
+    use datafusion_expr::EmitTo;
+
+    use crate::aggregates::group_values::{
+        column::{GroupValuesColumn, VectorizedGroupValuesColumn},
+        GroupValues,
+    };
+
+    #[test]
+    fn test_vectorized_intern() {
+        // Situations should be covered
+        //
+        // Array type:
+        //   - Primitive array
+        //   - String(byte) array
+        //   - String view(byte view) array
+        //
+        // Repeation and nullability in single batch:
+        //   - All not null rows
+        //   - Mixed null + not null rows
+        //   - All null rows
+        //   - All not null rows(repeated)
+        //   - Null + not null rows(repeated)
+        //   - All not null rows(repeated)
+        //
+        // If group exists in `map`:
+        //   - Group exists in inlined group view
+        //   - Group exists in non-inlined group view
+        //   - Group not exist + bucket not found in `map`
+        //   - Group not exist + not equal to inlined group view(tested in hash collision)
+        //   - Group not exist + not equal to non-inlined group view(tested in hash collision)
+        //
+
+        // Intern batch 1
+        let col1 = Int64Array::from(vec![
+            // Repeated rows in batch
+            Some(42),   // all not nulls + repeated rows + exist in map case
+            None,       // mixed + repeated rows + exist in map case
+            None,       // mixed + repeated rows + not exist in map case
+            Some(1142), // mixed + repeated rows + not exist in map case
+            None,       // all nulls + repeated rows + exist in map case
+            Some(42),
+            None,
+            None,
+            Some(1142),
+            None,
+            // Unique rows in batch
+            Some(4211), // all not nulls + unique rows + exist in map case
+            None,       // mixed + unique rows + exist in map case
+            None,       // mixed + unique rows + not exist in map case
+            Some(4212), // mixed + unique rows + not exist in map case
+        ]);
+
+        let col2 = StringArray::from(vec![
+            // Repeated rows in batch
+            Some("string1"), // all not nulls + repeated rows + exist in map case
+            None,            // mixed + repeated rows + exist in map case
+            Some("string2"), // mixed + repeated rows + not exist in map case
+            None,            // mixed + repeated rows + not exist in map case
+            None,            // all nulls + repeated rows + exist in map case
+            Some("string1"),
+            None,
+            Some("string2"),
+            None,
+            None,
+            // Unique rows in batch
+            Some("string3"), // all not nulls + unique rows + exist in map case
+            None,            // mixed + unique rows + exist in map case
+            Some("string4"), // mixed + unique rows + not exist in map case
+            None,            // mixed + unique rows + not exist in map case
+        ]);
+
+        let col3 = StringViewArray::from(vec![
+            // Repeated rows in batch
+            Some("stringview1"), // all not nulls + repeated rows + exist in map case
+            Some("stringview2"), // mixed + repeated rows + exist in map case
+            None,                // mixed + repeated rows + not exist in map case
+            None,                // mixed + repeated rows + not exist in map case
+            None,                // all nulls + repeated rows + exist in map case
+            Some("stringview1"),
+            Some("stringview2"),
+            None,
+            None,
+            None,
+            // Unique rows in batch
+            Some("stringview3"), // all not nulls + unique rows + exist in map case
+            Some("stringview4"), // mixed + unique rows + exist in map case
+            None,                // mixed + unique rows + not exist in map case
+            None,                // mixed + unique rows + not exist in map case
+        ]);
+        let batch1 = vec![
+            Arc::new(col1) as _,
+            Arc::new(col2) as _,
+            Arc::new(col3) as _,
+        ];
+
+        // Intern batch 2
+        let col1 = Int64Array::from(vec![
+            // Repeated rows in batch
+            Some(42),    // all not nulls + repeated rows + exist in map case
+            None,        // mixed + repeated rows + exist in map case
+            None,        // mixed + repeated rows + not exist in map case
+            Some(21142), // mixed + repeated rows + not exist in map case
+            None,        // all nulls + repeated rows + exist in map case
+            Some(42),
+            None,
+            None,
+            Some(21142),
+            None,
+            // Unique rows in batch
+            Some(4211),  // all not nulls + unique rows + exist in map case
+            None,        // mixed + unique rows + exist in map case
+            None,        // mixed + unique rows + not exist in map case
+            Some(24212), // mixed + unique rows + not exist in map case
+        ]);
+
+        let col2 = StringArray::from(vec![
+            // Repeated rows in batch
+            Some("string1"), // all not nulls + repeated rows + exist in map case
+            None,            // mixed + repeated rows + exist in map case
+            Some("2string2"), // mixed + repeated rows + not exist in map case
+            None,            // mixed + repeated rows + not exist in map case
+            None,            // all nulls + repeated rows + exist in map case
+            Some("string1"),
+            None,
+            Some("2string2"),
+            None,
+            None,
+            // Unique rows in batch
+            Some("string3"), // all not nulls + unique rows + exist in map case
+            None,            // mixed + unique rows + exist in map case
+            Some("2string4"), // mixed + unique rows + not exist in map case
+            None,            // mixed + unique rows + not exist in map case
+        ]);
+
+        let col3 = StringViewArray::from(vec![
+            // Repeated rows in batch
+            Some("stringview1"), // all not nulls + repeated rows + exist in map case
+            Some("stringview2"), // mixed + repeated rows + exist in map case
+            None,                // mixed + repeated rows + not exist in map case
+            None,                // mixed + repeated rows + not exist in map case
+            None,                // all nulls + repeated rows + exist in map case
+            Some("stringview1"),
+            Some("stringview2"),
+            None,
+            None,
+            None,
+            // Unique rows in batch
+            Some("stringview3"), // all not nulls + unique rows + exist in map case
+            Some("stringview4"), // mixed + unique rows + exist in map case
+            None,                // mixed + unique rows + not exist in map case
+            None,                // mixed + unique rows + not exist in map case
+        ]);
+        let batch2 = vec![
+            Arc::new(col1) as _,
+            Arc::new(col2) as _,
+            Arc::new(col3) as _,
+        ];
+
+        // Intern batch 3
+        let col1 = Int64Array::from(vec![
+            // Repeated rows in batch
+            Some(42),    // all not nulls + repeated rows + exist in map case
+            None,        // mixed + repeated rows + exist in map case
+            None,        // mixed + repeated rows + not exist in map case
+            Some(31142), // mixed + repeated rows + not exist in map case
+            None,        // all nulls + repeated rows + exist in map case
+            Some(42),
+            None,
+            None,
+            Some(31142),
+            None,
+            // Unique rows in batch
+            Some(4211),  // all not nulls + unique rows + exist in map case
+            None,        // mixed + unique rows + exist in map case
+            None,        // mixed + unique rows + not exist in map case
+            Some(34212), // mixed + unique rows + not exist in map case
+        ]);
+
+        let col2 = StringArray::from(vec![
+            // Repeated rows in batch
+            Some("string1"), // all not nulls + repeated rows + exist in map case
+            None,            // mixed + repeated rows + exist in map case
+            Some("3string2"), // mixed + repeated rows + not exist in map case
+            None,            // mixed + repeated rows + not exist in map case
+            None,            // all nulls + repeated rows + exist in map case
+            Some("string1"),
+            None,
+            Some("3string2"),
+            None,
+            None,
+            // Unique rows in batch
+            Some("string3"), // all not nulls + unique rows + exist in map case
+            None,            // mixed + unique rows + exist in map case
+            Some("3string4"), // mixed + unique rows + not exist in map case
+            None,            // mixed + unique rows + not exist in map case
+        ]);
+
+        let col3 = StringViewArray::from(vec![
+            // Repeated rows in batch
+            Some("stringview1"), // all not nulls + repeated rows + exist in map case
+            Some("stringview2"), // mixed + repeated rows + exist in map case
+            None,                // mixed + repeated rows + not exist in map case
+            None,                // mixed + repeated rows + not exist in map case
+            None,                // all nulls + repeated rows + exist in map case
+            Some("stringview1"),
+            Some("stringview2"),
+            None,
+            None,
+            None,
+            // Unique rows in batch
+            Some("stringview3"), // all not nulls + unique rows + exist in map case
+            Some("stringview4"), // mixed + unique rows + exist in map case
+            None,                // mixed + unique rows + not exist in map case
+            None,                // mixed + unique rows + not exist in map case
+        ]);
+        let batch3 = vec![
+            Arc::new(col1) as _,
+            Arc::new(col2) as _,
+            Arc::new(col3) as _,
+        ];
+
+        // Expected batch
+        let col1 = Int64Array::from(vec![
+            // Repeated rows in batch
+            Some(42),
+            None,
+            None,
+            Some(1142),
+            None,
+            Some(21142),
+            None,
+            Some(31142),
+            None,
+            // Unique rows in batch
+            Some(4211),
+            None,
+            None,
+            Some(4212),
+            None,
+            Some(24212),
+            None,
+            Some(34212),
+        ]);
+
+        let col2 = StringArray::from(vec![
+            // Repeated rows in batch
+            Some("string1"),
+            None,
+            Some("string2"),
+            None,
+            Some("2string2"),
+            None,
+            Some("3string2"),
+            None,
+            None,
+            // Unique rows in batch
+            Some("string3"),
+            None,
+            Some("string4"),
+            None,
+            Some("2string4"),
+            None,
+            Some("3string4"),
+            None,
+        ]);
+
+        let col3 = StringViewArray::from(vec![
+            // Repeated rows in batch
+            Some("stringview1"),
+            Some("stringview2"),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            // Unique rows in batch
+            Some("stringview3"),
+            Some("stringview4"),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        ]);
+        let expected_batch = vec![
+            Arc::new(col1) as _,
+            Arc::new(col2) as _,
+            Arc::new(col3) as _,
+        ];
+
+        // Perform vectorized intern
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int64, true),
+            Field::new("b", DataType::Utf8, true),
+            Field::new("c", DataType::Utf8View, true),
+        ]));
+        let mut group_column_values =
+            VectorizedGroupValuesColumn::try_new(schema.clone()).unwrap();
+
+        let mut groups = Vec::new();
+        group_column_values.intern(&batch1, &mut groups).unwrap();
+        group_column_values.intern(&batch2, &mut groups).unwrap();
+        group_column_values.intern(&batch3, &mut groups).unwrap();
+
+        let actual = group_column_values.emit(EmitTo::All).unwrap();
+        let actual_batch = RecordBatch::try_new(schema.clone(), actual).unwrap();
+        let formatted_actual_batch =
+            pretty_format_batches(&[actual_batch]).unwrap().to_string();
+        let mut formatted_actual_batch_sorted: Vec<&str> =
+            formatted_actual_batch.trim().lines().collect();
+        formatted_actual_batch_sorted.sort_unstable();
+
+        let expected_batch = RecordBatch::try_new(schema, expected_batch).unwrap();
+        let formatted_expected_batch = pretty_format_batches(&[expected_batch])
+            .unwrap()
+            .to_string();
+        let mut formatted_expected_batch_sorted: Vec<&str> =
+            formatted_expected_batch.trim().lines().collect();
+        formatted_expected_batch_sorted.sort_unstable();
+
+        for (i, (actual_line, expected_line)) in formatted_actual_batch_sorted
+            .iter()
+            .zip(&formatted_expected_batch_sorted)
+            .enumerate()
+        {
+            assert_eq!(
+                (i, actual_line),
+                (i, expected_line),
+                "Inconsistent result\n\n\
+                 Actual batch:\n{}\n\
+                 Expected batch:\n{}\n\
+                 ",
+                formatted_actual_batch,
+                formatted_expected_batch,
+            );
+        }
+    }
+}
