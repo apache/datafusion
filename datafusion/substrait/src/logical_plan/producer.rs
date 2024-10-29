@@ -744,7 +744,7 @@ pub fn operator_to_name(op: Operator) -> &'static str {
         Operator::Minus => "subtract",
         Operator::Multiply => "multiply",
         Operator::Divide => "divide",
-        Operator::Modulo => "mod",
+        Operator::Modulo => "modulus",
         Operator::And => "and",
         Operator::Or => "or",
         Operator::IsDistinctFrom => "is_distinct_from",
