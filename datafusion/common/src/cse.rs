@@ -597,7 +597,8 @@ impl<N: TreeNode + HashNode + Clone + Eq, C: CSEController<Node = N>> CSE<N, C> 
 mod test {
     use crate::alias::AliasGenerator;
     use crate::cse::{CSEController, HashNode, IdArray, Identifier, NodeStats, CSE};
-    use crate::tree_node::tests::TestTreeNode;
+    use crate::tree_node::tests::test_tree_node::TestTreeNode;
+    use crate::tree_node::tests::TestTree;
     use crate::Result;
     use std::collections::HashSet;
     use std::hash::{Hash, Hasher};
@@ -670,21 +671,22 @@ mod test {
             TestTreeNodeMask::Normal,
         ));
 
-        let a_plus_1 = TestTreeNode::new(
+        let a_plus_1 = TestTreeNode::new_with_children(
             vec![
                 TestTreeNode::new_leaf("a".to_string()),
                 TestTreeNode::new_leaf("1".to_string()),
             ],
             "+".to_string(),
         );
-        let avg_c = TestTreeNode::new(
+        let avg_c = TestTreeNode::new_with_children(
             vec![TestTreeNode::new_leaf("c".to_string())],
             "avg".to_string(),
         );
-        let sum_a_plus_1 = TestTreeNode::new(vec![a_plus_1], "sum".to_string());
+        let sum_a_plus_1 =
+            TestTreeNode::new_with_children(vec![a_plus_1], "sum".to_string());
         let sum_a_plus_1_minus_avg_c =
-            TestTreeNode::new(vec![sum_a_plus_1, avg_c], "-".to_string());
-        let root = TestTreeNode::new(
+            TestTreeNode::new_with_children(vec![sum_a_plus_1, avg_c], "-".to_string());
+        let root = TestTreeNode::new_with_children(
             vec![
                 sum_a_plus_1_minus_avg_c,
                 TestTreeNode::new_leaf("2".to_string()),

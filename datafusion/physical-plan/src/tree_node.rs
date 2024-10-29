@@ -31,11 +31,10 @@ impl DynTreeNode for dyn ExecutionPlan {
     }
 
     fn with_new_arc_children(
-        &self,
-        arc_self: Arc<Self>,
+        self: Arc<Self>,
         new_children: Vec<Arc<Self>>,
     ) -> Result<Arc<Self>> {
-        with_new_children_if_necessary(arc_self, new_children)
+        with_new_children_if_necessary(self, new_children)
     }
 }
 
