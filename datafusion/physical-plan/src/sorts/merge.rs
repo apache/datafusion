@@ -404,7 +404,7 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
     /// between the current winner and a challenger. This function is invoked when such a tie needs to be
     /// resolved according to the round-robin tie-breaker mode.
     ///
-    /// If round-robin tie-breaking is not active and the poll counts for all elements are reset.
+    /// If round-robin tie-breaking is not active, it is enabled, and the poll counts for all elements are reset.
     /// The function then compares the poll counts of the current winner and the challenger:
     /// - If the winner remains at the top after the final comparison, it increments the winner's poll count.
     /// - If the challenger has a lower poll count than the current winner, the challenger becomes the new winner.
@@ -415,7 +415,7 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
     /// - `winner`: A mutable reference to the current winner, which may be updated based on the tie-breaking result.
     /// - `challenger`: The index of the challenger being compared against the winner.
     ///
-    /// This function ensures fair selection among elements with equal values
+    /// This function ensures fair selection among elements with equal values when tie-breaking mode is enabled,
     /// aiming to balance the polling across different partitions.
     #[inline]
     fn handle_tie(&mut self, cmp_node: usize, winner: &mut usize, challenger: usize) {
