@@ -312,10 +312,7 @@ pub trait WindowUDFImpl: Debug + Send + Sync {
 
     /// Returns the expressions that are passed to the [`PartitionEvaluator`].
     fn expressions(&self, expr_args: ExpressionArgs) -> Vec<Arc<dyn PhysicalExpr>> {
-        expr_args
-            .input_exprs()
-            .first()
-            .map_or(vec![], |expr| vec![Arc::clone(expr)])
+        expr_args.input_exprs().into()
     }
 
     /// Invoke the function, returning the [`PartitionEvaluator`] instance
