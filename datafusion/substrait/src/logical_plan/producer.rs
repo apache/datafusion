@@ -491,7 +491,7 @@ pub fn to_substrait_rel(
                 .map(|ptr| *ptr)
                 .collect();
             Ok(Box::new(Rel {
-                rel_type: Some(substrait::proto::rel::RelType::Set(SetRel {
+                rel_type: Some(RelType::Set(SetRel {
                     common: None,
                     inputs: input_rels,
                     op: set_rel::SetOp::UnionAll as i32, // UNION DISTINCT gets translated to AGGREGATION + UNION ALL
@@ -744,7 +744,7 @@ pub fn operator_to_name(op: Operator) -> &'static str {
         Operator::Minus => "subtract",
         Operator::Multiply => "multiply",
         Operator::Divide => "divide",
-        Operator::Modulo => "mod",
+        Operator::Modulo => "modulus",
         Operator::And => "and",
         Operator::Or => "or",
         Operator::IsDistinctFrom => "is_distinct_from",
@@ -1344,7 +1344,7 @@ pub fn to_substrait_rex(
         ),
         Expr::Negative(arg) => to_substrait_unary_scalar_fn(
             ctx,
-            "negative",
+            "negate",
             arg,
             schema,
             col_ref_offset,

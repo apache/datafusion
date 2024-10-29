@@ -1434,9 +1434,7 @@ async fn unnest_analyze_metrics() -> Result<()> {
         .explain(false, true)?
         .collect()
         .await?;
-    let formatted = arrow::util::pretty::pretty_format_batches(&results)
-        .unwrap()
-        .to_string();
+    let formatted = pretty_format_batches(&results).unwrap().to_string();
     assert_contains!(&formatted, "elapsed_compute=");
     assert_contains!(&formatted, "input_batches=1");
     assert_contains!(&formatted, "input_rows=5");

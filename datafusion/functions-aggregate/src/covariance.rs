@@ -18,6 +18,7 @@
 //! [`CovarianceSample`]: covariance sample aggregations.
 
 use std::fmt::Debug;
+use std::mem::size_of_val;
 use std::sync::OnceLock;
 
 use arrow::{
@@ -448,6 +449,6 @@ impl Accumulator for CovarianceAccumulator {
     }
 
     fn size(&self) -> usize {
-        std::mem::size_of_val(self)
+        size_of_val(self)
     }
 }

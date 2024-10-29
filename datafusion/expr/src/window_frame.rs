@@ -94,7 +94,7 @@ pub struct WindowFrame {
 }
 
 impl fmt::Display for WindowFrame {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         write!(
             f,
             "{} BETWEEN {} AND {}",
@@ -416,7 +416,7 @@ fn convert_frame_bound_to_scalar_value(
 }
 
 impl fmt::Display for WindowFrameBound {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         match self {
             WindowFrameBound::Preceding(n) => {
                 if n.is_null() {
@@ -457,7 +457,7 @@ pub enum WindowFrameUnits {
 }
 
 impl fmt::Display for WindowFrameUnits {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         f.write_str(match self {
             WindowFrameUnits::Rows => "ROWS",
             WindowFrameUnits::Range => "RANGE",

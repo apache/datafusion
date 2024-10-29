@@ -77,7 +77,7 @@ use substrait::proto::expression::literal::{
     IntervalDayToSecond, IntervalYearToMonth, UserDefined,
 };
 use substrait::proto::expression::subquery::SubqueryType;
-use substrait::proto::expression::{self, FieldReference, Literal, ScalarFunction};
+use substrait::proto::expression::{FieldReference, Literal, ScalarFunction};
 use substrait::proto::read_rel::local_files::file_or_files::PathType::UriFile;
 use substrait::proto::{
     aggregate_function::AggregationInvocation,
@@ -118,6 +118,7 @@ pub fn name_to_op(name: &str) -> Option<Operator> {
         "multiply" => Some(Operator::Multiply),
         "divide" => Some(Operator::Divide),
         "mod" => Some(Operator::Modulo),
+        "modulus" => Some(Operator::Modulo),
         "and" => Some(Operator::And),
         "or" => Some(Operator::Or),
         "is_distinct_from" => Some(Operator::IsDistinctFrom),
@@ -388,7 +389,7 @@ pub async fn from_substrait_extended_expr(
 
 pub fn apply_masking(
     schema: DFSchema,
-    mask_expression: &::core::option::Option<expression::MaskExpression>,
+    mask_expression: &::core::option::Option<MaskExpression>,
 ) -> Result<DFSchema> {
     match mask_expression {
         Some(MaskExpression { select, .. }) => match &select.as_ref() {
@@ -713,14 +714,27 @@ pub async fn from_substrait_rel(
                                 }
                                 _ => false,
                             };
+                            let order_by = if !f.sorts.is_empty() {
+                                Some(
+                                    from_substrait_sorts(
+                                        ctx,
+                                        &f.sorts,
+                                        input.schema(),
+                                        extensions,
+                                    )
+                                    .await?,
+                                )
+                            } else {
+                                None
+                            };
+
                             from_substrait_agg_func(
                                 ctx,
                                 f,
                                 input.schema(),
                                 extensions,
                                 filter,
-                                // TODO: Add parsing of order_by also
-                                None,
+                                order_by,
                                 distinct,
                             )
                             .await
@@ -2116,11 +2130,7 @@ fn from_substrait_literal(
             let s = d.scale.try_into().map_err(|e| {
                 substrait_datafusion_err!("Failed to parse decimal scale: {e}")
             })?;
-            ScalarValue::Decimal128(
-                Some(std::primitive::i128::from_le_bytes(value)),
-                p,
-                s,
-            )
+            ScalarValue::Decimal128(Some(i128::from_le_bytes(value)), p, s)
         }
         Some(LiteralType::List(l)) => {
             // Each element should start the name index from the same value, then we increase it
@@ -2603,7 +2613,7 @@ impl BuiltinExprBuilder {
         match name {
             "not" | "like" | "ilike" | "is_null" | "is_not_null" | "is_true"
             | "is_false" | "is_not_true" | "is_not_false" | "is_unknown"
-            | "is_not_unknown" | "negative" => Some(Self {
+            | "is_not_unknown" | "negative" | "negate" => Some(Self {
                 expr_name: name.to_string(),
             }),
             _ => None,
@@ -2624,8 +2634,9 @@ impl BuiltinExprBuilder {
             "ilike" => {
                 Self::build_like_expr(ctx, true, f, input_schema, extensions).await
             }
-            "not" | "negative" | "is_null" | "is_not_null" | "is_true" | "is_false"
-            | "is_not_true" | "is_not_false" | "is_unknown" | "is_not_unknown" => {
+            "not" | "negative" | "negate" | "is_null" | "is_not_null" | "is_true"
+            | "is_false" | "is_not_true" | "is_not_false" | "is_unknown"
+            | "is_not_unknown" => {
                 Self::build_unary_expr(ctx, &self.expr_name, f, input_schema, extensions)
                     .await
             }
@@ -2654,7 +2665,7 @@ impl BuiltinExprBuilder {
 
         let expr = match fn_name {
             "not" => Expr::Not(arg),
-            "negative" => Expr::Negative(arg),
+            "negative" | "negate" => Expr::Negative(arg),
             "is_null" => Expr::IsNull(arg),
             "is_not_null" => Expr::IsNotNull(arg),
             "is_true" => Expr::IsTrue(arg),

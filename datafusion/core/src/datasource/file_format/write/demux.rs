@@ -280,9 +280,8 @@ async fn hive_style_partitions_demuxer(
                 Some(part_tx) => part_tx,
                 None => {
                     // Create channel for previously unseen distinct partition key and notify consumer of new file
-                    let (part_tx, part_rx) = tokio::sync::mpsc::channel::<RecordBatch>(
-                        max_buffered_recordbatches,
-                    );
+                    let (part_tx, part_rx) =
+                        mpsc::channel::<RecordBatch>(max_buffered_recordbatches);
                     let file_path = compute_hive_style_file_path(
                         &part_key,
                         &partition_by,

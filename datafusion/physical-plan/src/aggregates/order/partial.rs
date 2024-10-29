@@ -22,6 +22,7 @@ use datafusion_common::Result;
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
 use datafusion_expr::EmitTo;
 use datafusion_physical_expr::PhysicalSortExpr;
+use std::mem::size_of;
 use std::sync::Arc;
 
 /// Tracks grouping state when the data is ordered by some subset of
@@ -244,7 +245,7 @@ impl GroupOrderingPartial {
 
     /// Return the size of memory allocated by this structure
     pub(crate) fn size(&self) -> usize {
-        std::mem::size_of::<Self>()
+        size_of::<Self>()
             + self.order_indices.allocated_size()
             + self.row_converter.size()
     }

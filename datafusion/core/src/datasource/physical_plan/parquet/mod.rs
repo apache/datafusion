@@ -2227,7 +2227,7 @@ mod tests {
 
         // execute a simple query and write the results to parquet
         let out_dir = tmp_dir.as_ref().to_str().unwrap().to_string() + "/out";
-        std::fs::create_dir(&out_dir).unwrap();
+        fs::create_dir(&out_dir).unwrap();
         let df = ctx.sql("SELECT c1, c2 FROM test").await?;
         let schema: Schema = df.schema().into();
         // Register a listing table - this will use all files in the directory as data sources

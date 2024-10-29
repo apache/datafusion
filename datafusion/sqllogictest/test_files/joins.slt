@@ -4277,3 +4277,16 @@ physical_plan
 02)--HashJoinExec: mode=CollectLeft, join_type=Full, on=[(c1@0, c1@0)], filter=c2@0 >= c2@1
 03)----MemoryExec: partitions=1, partition_sizes=[1]
 04)----MemoryExec: partitions=1, partition_sizes=[1]
+
+# Test Utf8View as Join Key
+# Issue: https://github.com/apache/datafusion/issues/12468
+statement ok
+CREATE TABLE table1(v1 STRING) AS VALUES ('foo'), (NULL);
+
+statement ok
+CREATE TABLE table1_stringview AS SELECT arrow_cast(v1, 'Utf8View') AS v1 FROM table1;
+
+query T
+select * from table1 as t1 natural join table1_stringview as t2;
+----
+foo

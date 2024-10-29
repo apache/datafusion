@@ -69,7 +69,7 @@ impl SerializerRegistry for MockSerializerRegistry {
         &self,
         name: &str,
         bytes: &[u8],
-    ) -> Result<Arc<dyn datafusion::logical_expr::UserDefinedLogicalNode>> {
+    ) -> Result<Arc<dyn UserDefinedLogicalNode>> {
         if name == "MockUserDefinedLogicalPlan" {
             MockUserDefinedLogicalPlan::deserialize(bytes)
         } else {
@@ -594,6 +594,11 @@ async fn roundtrip_ilike() -> Result<()> {
 }
 
 #[tokio::test]
+async fn roundtrip_modulus() -> Result<()> {
+    roundtrip("SELECT a%3 from data").await
+}
+
+#[tokio::test]
 async fn roundtrip_not() -> Result<()> {
     roundtrip("SELECT * FROM data WHERE NOT d").await
 }
@@ -675,6 +680,19 @@ async fn aggregate_wo_projection_consume() -> Result<()> {
     assert_expected_plan_substrait(
         proto_plan,
         "Aggregate: groupBy=[[data.a]], aggr=[[count(data.a) AS countA]]\
+        \n  TableScan: data projection=[a]",
+    )
+    .await
+}
+
+#[tokio::test]
+async fn aggregate_wo_projection_sorted_consume() -> Result<()> {
+    let proto_plan =
+        read_json("tests/testdata/test_plans/aggregate_sorted_no_project.substrait.json");
+
+    assert_expected_plan_substrait(
+        proto_plan,
+        "Aggregate: groupBy=[[data.a]], aggr=[[count(data.a) ORDER BY [data.a DESC NULLS FIRST] AS countA]]\
         \n  TableScan: data projection=[a]",
     )
     .await
@@ -1000,7 +1018,7 @@ async fn roundtrip_aggregate_udf() -> Result<()> {
         }
 
         fn size(&self) -> usize {
-            std::mem::size_of_val(self)
+            size_of_val(self)
         }
     }
 
@@ -1020,8 +1038,9 @@ async fn roundtrip_aggregate_udf() -> Result<()> {
 
     let ctx = create_context().await?;
     ctx.register_udaf(dummy_agg);
+    roundtrip_with_ctx("select dummy_agg(a) from data", ctx.clone()).await?;
+    roundtrip_with_ctx("select dummy_agg(a order by a) from data", ctx.clone()).await?;
 
-    roundtrip_with_ctx("select dummy_agg(a) from data", ctx).await?;
     Ok(())
 }
 

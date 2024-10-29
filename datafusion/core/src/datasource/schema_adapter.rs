@@ -478,7 +478,7 @@ mod tests {
         writer.close().unwrap();
 
         let location = Path::parse(path.to_str().unwrap()).unwrap();
-        let metadata = std::fs::metadata(path.as_path()).expect("Local file metadata");
+        let metadata = fs::metadata(path.as_path()).expect("Local file metadata");
         let meta = ObjectMeta {
             location,
             last_modified: metadata.modified().map(chrono::DateTime::from).unwrap(),
