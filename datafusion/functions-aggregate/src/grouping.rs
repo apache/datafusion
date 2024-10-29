@@ -45,7 +45,7 @@ pub struct Grouping {
 }
 
 impl fmt::Debug for Grouping {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.debug_struct("Grouping")
             .field("name", &self.name())
             .field("signature", &self.signature)

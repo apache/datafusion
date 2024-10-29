@@ -876,7 +876,7 @@ pub trait ConfigExtension: ExtensionOptions {
 }
 
 /// An object-safe API for storing arbitrary configuration
-pub trait ExtensionOptions: Send + Sync + std::fmt::Debug + 'static {
+pub trait ExtensionOptions: Send + Sync + fmt::Debug + 'static {
     /// Return `self` as [`Any`]
     ///
     /// This is needed until trait upcasting is stabilised

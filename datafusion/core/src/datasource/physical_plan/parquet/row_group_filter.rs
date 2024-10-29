@@ -779,11 +779,8 @@ mod tests {
 
         // INT32: c1 > 5, the c1 is decimal(9,2)
         // The type of scalar value if decimal(9,2), don't need to do cast
-        let schema = Arc::new(Schema::new(vec![Field::new(
-            "c1",
-            DataType::Decimal128(9, 2),
-            false,
-        )]));
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("c1", Decimal128(9, 2), false)]));
         let field = PrimitiveTypeField::new("c1", PhysicalType::INT32)
             .with_logical_type(LogicalType::Decimal {
                 scale: 2,
@@ -849,11 +846,8 @@ mod tests {
         // The c1 type is decimal(9,0) in the parquet file, and the type of scalar is decimal(5,2).
         // We should convert all type to the coercion type, which is decimal(11,2)
         // The decimal of arrow is decimal(5,2), the decimal of parquet is decimal(9,0)
-        let schema = Arc::new(Schema::new(vec![Field::new(
-            "c1",
-            DataType::Decimal128(9, 0),
-            false,
-        )]));
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("c1", Decimal128(9, 0), false)]));
 
         let field = PrimitiveTypeField::new("c1", PhysicalType::INT32)
             .with_logical_type(LogicalType::Decimal {
@@ -863,7 +857,7 @@ mod tests {
             .with_scale(0)
             .with_precision(9);
         let schema_descr = get_test_schema_descr(vec![field]);
-        let expr = cast(col("c1"), DataType::Decimal128(11, 2)).gt(cast(
+        let expr = cast(col("c1"), Decimal128(11, 2)).gt(cast(
             lit(ScalarValue::Decimal128(Some(500), 5, 2)),
             Decimal128(11, 2),
         ));
@@ -947,7 +941,7 @@ mod tests {
         // INT64: c1 < 5, the c1 is decimal(18,2)
         let schema = Arc::new(Schema::new(vec![Field::new(
             "c1",
-            DataType::Decimal128(18, 2),
+            Decimal128(18, 2),
             false,
         )]));
         let field = PrimitiveTypeField::new("c1", PhysicalType::INT64)
@@ -1005,7 +999,7 @@ mod tests {
         // the type of parquet is decimal(18,2)
         let schema = Arc::new(Schema::new(vec![Field::new(
             "c1",
-            DataType::Decimal128(18, 2),
+            Decimal128(18, 2),
             false,
         )]));
         let field = PrimitiveTypeField::new("c1", PhysicalType::FIXED_LEN_BYTE_ARRAY)
@@ -1018,7 +1012,7 @@ mod tests {
             .with_byte_len(16);
         let schema_descr = get_test_schema_descr(vec![field]);
         // cast the type of c1 to decimal(28,3)
-        let left = cast(col("c1"), DataType::Decimal128(28, 3));
+        let left = cast(col("c1"), Decimal128(28, 3));
         let expr = left.eq(lit(ScalarValue::Decimal128(Some(100000), 28, 3)));
         let expr = logical2physical(&expr, &schema);
         let pruning_predicate = PruningPredicate::try_new(expr, schema.clone()).unwrap();
@@ -1083,7 +1077,7 @@ mod tests {
         // the type of parquet is decimal(18,2)
         let schema = Arc::new(Schema::new(vec![Field::new(
             "c1",
-            DataType::Decimal128(18, 2),
+            Decimal128(18, 2),
             false,
         )]));
         let field = PrimitiveTypeField::new("c1", PhysicalType::BYTE_ARRAY)
@@ -1096,7 +1090,7 @@ mod tests {
             .with_byte_len(16);
         let schema_descr = get_test_schema_descr(vec![field]);
         // cast the type of c1 to decimal(28,3)
-        let left = cast(col("c1"), DataType::Decimal128(28, 3));
+        let left = cast(col("c1"), Decimal128(28, 3));
         let expr = left.eq(lit(ScalarValue::Decimal128(Some(100000), 28, 3)));
         let expr = logical2physical(&expr, &schema);
         let pruning_predicate = PruningPredicate::try_new(expr, schema.clone()).unwrap();

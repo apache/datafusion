@@ -1102,7 +1102,7 @@ mod tests {
         let mut phy_exprs = vec![
             lit(1i64),
             expressions::cast(lit(2i32), &schema, DataType::Int64)?,
-            expressions::try_cast(lit(3.13f32), &schema, DataType::Int64)?,
+            try_cast(lit(3.13f32), &schema, DataType::Int64)?,
         ];
         let result = try_cast_static_filter_to_set(&phy_exprs, &schema).unwrap();
 
@@ -1130,7 +1130,7 @@ mod tests {
         try_cast_static_filter_to_set(&phy_exprs, &schema).unwrap();
 
         // column
-        phy_exprs.push(expressions::col("a", &schema)?);
+        phy_exprs.push(col("a", &schema)?);
         assert!(try_cast_static_filter_to_set(&phy_exprs, &schema).is_err());
 
         Ok(())

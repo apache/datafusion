@@ -1113,7 +1113,7 @@ impl EquivalenceProperties {
 /// order: [[a ASC, b ASC], [a ASC, c ASC]], eq: [[a = b], [a = c]], const: [a = 1]
 /// ```
 impl Display for EquivalenceProperties {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if self.eq_group.is_empty()
             && self.oeq_class.is_empty()
             && self.constants.is_empty()

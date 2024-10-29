@@ -763,7 +763,7 @@ mod tests {
     /// create a PartitionedFile for testing
     fn partitioned_file(path: &str) -> PartitionedFile {
         let object_meta = ObjectMeta {
-            location: object_store::path::Path::parse(path).unwrap(),
+            location: Path::parse(path).unwrap(),
             last_modified: Utc::now(),
             size: 42,
             e_tag: None,

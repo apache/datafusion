@@ -69,7 +69,7 @@ impl SerializerRegistry for MockSerializerRegistry {
         &self,
         name: &str,
         bytes: &[u8],
-    ) -> Result<Arc<dyn datafusion::logical_expr::UserDefinedLogicalNode>> {
+    ) -> Result<Arc<dyn UserDefinedLogicalNode>> {
         if name == "MockUserDefinedLogicalPlan" {
             MockUserDefinedLogicalPlan::deserialize(bytes)
         } else {
@@ -1005,7 +1005,7 @@ async fn roundtrip_aggregate_udf() -> Result<()> {
         }
 
         fn size(&self) -> usize {
-            std::mem::size_of_val(self)
+            size_of_val(self)
         }
     }
 

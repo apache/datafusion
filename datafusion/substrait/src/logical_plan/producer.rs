@@ -491,7 +491,7 @@ pub fn to_substrait_rel(
                 .map(|ptr| *ptr)
                 .collect();
             Ok(Box::new(Rel {
-                rel_type: Some(substrait::proto::rel::RelType::Set(SetRel {
+                rel_type: Some(RelType::Set(SetRel {
                     common: None,
                     inputs: input_rels,
                     op: set_rel::SetOp::UnionAll as i32, // UNION DISTINCT gets translated to AGGREGATION + UNION ALL

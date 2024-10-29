@@ -131,7 +131,7 @@ impl Accumulator for GeometricMean {
     }
 
     fn size(&self) -> usize {
-        std::mem::size_of_val(self)
+        size_of_val(self)
     }
 }
 

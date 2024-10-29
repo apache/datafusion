@@ -99,7 +99,7 @@ fn calc_inline_constraints_from_columns(columns: &[ColumnDef]) -> Vec<TableConst
                 ast::ColumnOption::Unique {
                     is_primary: false,
                     characteristics,
-                } => constraints.push(ast::TableConstraint::Unique {
+                } => constraints.push(TableConstraint::Unique {
                     name: name.clone(),
                     columns: vec![column.name.clone()],
                     characteristics: *characteristics,
@@ -111,7 +111,7 @@ fn calc_inline_constraints_from_columns(columns: &[ColumnDef]) -> Vec<TableConst
                 ast::ColumnOption::Unique {
                     is_primary: true,
                     characteristics,
-                } => constraints.push(ast::TableConstraint::PrimaryKey {
+                } => constraints.push(TableConstraint::PrimaryKey {
                     name: name.clone(),
                     columns: vec![column.name.clone()],
                     characteristics: *characteristics,
@@ -125,7 +125,7 @@ fn calc_inline_constraints_from_columns(columns: &[ColumnDef]) -> Vec<TableConst
                     on_delete,
                     on_update,
                     characteristics,
-                } => constraints.push(ast::TableConstraint::ForeignKey {
+                } => constraints.push(TableConstraint::ForeignKey {
                     name: name.clone(),
                     columns: vec![],
                     foreign_table: foreign_table.clone(),
@@ -135,7 +135,7 @@ fn calc_inline_constraints_from_columns(columns: &[ColumnDef]) -> Vec<TableConst
                     characteristics: *characteristics,
                 }),
                 ast::ColumnOption::Check(expr) => {
-                    constraints.push(ast::TableConstraint::Check {
+                    constraints.push(TableConstraint::Check {
                         name: name.clone(),
                         expr: Box::new(expr.clone()),
                     })
@@ -776,7 +776,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 }
                 let isolation_level: ast::TransactionIsolationLevel = modes
                     .iter()
-                    .filter_map(|m: &ast::TransactionMode| match m {
+                    .filter_map(|m: &TransactionMode| match m {
                         TransactionMode::AccessMode(_) => None,
                         TransactionMode::IsolationLevel(level) => Some(level),
                     })
@@ -785,7 +785,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     .unwrap_or(ast::TransactionIsolationLevel::Serializable);
                 let access_mode: ast::TransactionAccessMode = modes
                     .iter()
-                    .filter_map(|m: &ast::TransactionMode| match m {
+                    .filter_map(|m: &TransactionMode| match m {
                         TransactionMode::AccessMode(mode) => Some(mode),
                         TransactionMode::IsolationLevel(_) => None,
                     })
@@ -1650,7 +1650,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     None => {
                         // If the target table has an alias, use it to qualify the column name
                         if let Some(alias) = &table_alias {
-                            datafusion_expr::Expr::Column(Column::new(
+                            Expr::Column(Column::new(
                                 Some(self.ident_normalizer.normalize(alias.name.clone())),
                                 field.name(),
                             ))

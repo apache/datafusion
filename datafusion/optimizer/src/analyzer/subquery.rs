@@ -305,7 +305,7 @@ mod test {
             vec![]
         }
 
-        fn schema(&self) -> &datafusion_common::DFSchemaRef {
+        fn schema(&self) -> &DFSchemaRef {
             &self.empty_schema
         }
 

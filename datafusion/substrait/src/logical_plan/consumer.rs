@@ -77,7 +77,7 @@ use substrait::proto::expression::literal::{
     IntervalDayToSecond, IntervalYearToMonth, UserDefined,
 };
 use substrait::proto::expression::subquery::SubqueryType;
-use substrait::proto::expression::{self, FieldReference, Literal, ScalarFunction};
+use substrait::proto::expression::{FieldReference, Literal, ScalarFunction};
 use substrait::proto::read_rel::local_files::file_or_files::PathType::UriFile;
 use substrait::proto::{
     aggregate_function::AggregationInvocation,
@@ -389,7 +389,7 @@ pub async fn from_substrait_extended_expr(
 
 pub fn apply_masking(
     schema: DFSchema,
-    mask_expression: &::core::option::Option<expression::MaskExpression>,
+    mask_expression: &::core::option::Option<MaskExpression>,
 ) -> Result<DFSchema> {
     match mask_expression {
         Some(MaskExpression { select, .. }) => match &select.as_ref() {
@@ -2117,11 +2117,7 @@ fn from_substrait_literal(
             let s = d.scale.try_into().map_err(|e| {
                 substrait_datafusion_err!("Failed to parse decimal scale: {e}")
             })?;
-            ScalarValue::Decimal128(
-                Some(std::primitive::i128::from_le_bytes(value)),
-                p,
-                s,
-            )
+            ScalarValue::Decimal128(Some(i128::from_le_bytes(value)), p, s)
         }
         Some(LiteralType::List(l)) => {
             // Each element should start the name index from the same value, then we increase it

@@ -318,8 +318,7 @@ fn build_join(
     // alias the join filter
     let join_filter_opt =
         conjunction(pull_up.join_filters).map_or(Ok(None), |filter| {
-            replace_qualified_name(filter, &all_correlated_cols, subquery_alias)
-                .map(Option::Some)
+            replace_qualified_name(filter, &all_correlated_cols, subquery_alias).map(Some)
         })?;
 
     // join our sub query into the main plan

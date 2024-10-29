@@ -124,7 +124,7 @@ impl ScalarUDFImpl for NamedStructFunc {
 
     fn return_type_from_exprs(
         &self,
-        args: &[datafusion_expr::Expr],
+        args: &[Expr],
         schema: &dyn datafusion_common::ExprSchema,
         _arg_types: &[DataType],
     ) -> Result<DataType> {

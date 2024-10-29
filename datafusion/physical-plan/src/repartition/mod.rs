@@ -1326,7 +1326,7 @@ mod tests {
 
         // now, purposely drop output stream 0
         // *before* any outputs are produced
-        std::mem::drop(output_stream0);
+        drop(output_stream0);
 
         // Now, start sending input
         let mut background_task = JoinSet::new();
@@ -1401,7 +1401,7 @@ mod tests {
         let output_stream1 = exec.execute(1, Arc::clone(&task_ctx)).unwrap();
         // now, purposely drop output stream 0
         // *before* any outputs are produced
-        std::mem::drop(output_stream0);
+        drop(output_stream0);
         let mut background_task = JoinSet::new();
         background_task.spawn(async move {
             input.wait().await;
