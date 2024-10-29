@@ -58,6 +58,7 @@ use arrow::{
 use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano, ScalarBuffer};
 use arrow_schema::{UnionFields, UnionMode};
 
+use crate::format::DEFAULT_CAST_OPTIONS;
 use half::f16;
 pub use struct_builder::ScalarStructBuilder;
 
@@ -2809,22 +2810,30 @@ impl ScalarValue {
 
     /// Try to parse `value` into a ScalarValue of type `target_type`
     pub fn try_from_string(value: String, target_type: &DataType) -> Result<Self> {
-        let value = ScalarValue::from(value);
-        let cast_options = CastOptions {
-            safe: false,
-            format_options: Default::default(),
-        };
-        let cast_arr = cast_with_options(&value.to_array()?, target_type, &cast_options)?;
-        ScalarValue::try_from_array(&cast_arr, 0)
+        ScalarValue::from(value).cast_to(target_type)
     }
 
     /// Try to cast this value to a ScalarValue of type `data_type`
-    pub fn cast_to(&self, data_type: &DataType) -> Result<Self> {
-        let cast_options = CastOptions {
-            safe: false,
-            format_options: Default::default(),
+    pub fn cast_to(&self, target_type: &DataType) -> Result<Self> {
+        self.cast_to_with_options(target_type, &DEFAULT_CAST_OPTIONS)
+    }
+
+    /// Try to cast this value to a ScalarValue of type `data_type` with [`CastOptions`]
+    pub fn cast_to_with_options(
+        &self,
+        target_type: &DataType,
+        cast_options: &CastOptions<'static>,
+    ) -> Result<Self> {
+        let scalar_array = match (self, target_type) {
+            (
+                ScalarValue::Float64(Some(float_ts)),
+                DataType::Timestamp(TimeUnit::Nanosecond, None),
+            ) => ScalarValue::Int64(Some((float_ts * 1_000_000_000_f64).trunc() as i64))
+                .to_array()?,
+            _ => self.to_array()?,
         };
-        let cast_arr = cast_with_options(&self.to_array()?, data_type, &cast_options)?;
+
+        let cast_arr = cast_with_options(&scalar_array, target_type, cast_options)?;
         ScalarValue::try_from_array(&cast_arr, 0)
     }
 
