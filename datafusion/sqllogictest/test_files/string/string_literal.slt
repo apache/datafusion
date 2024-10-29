@@ -129,6 +129,11 @@ select substr(arrow_cast('foo', 'Utf8View'), 1, -1);
 statement error Execution error: negative substring length not allowed
 select substr('', 1, -1);
 
+query T
+select substr(123456, 3);
+----
+3456
+
 # StringView scalar to StringView scalar
 
 query BBBB

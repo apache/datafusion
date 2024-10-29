@@ -194,11 +194,6 @@ SELECT substr('alphabet', 3, CAST(NULL AS int))
 NULL
 
 query T
-select substr(123456, 3);
-----
-3456
-
-query T
 SELECT translate('12345', '143', 'ax')
 ----
 a2x5
