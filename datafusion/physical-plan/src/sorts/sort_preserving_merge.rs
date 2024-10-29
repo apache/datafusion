@@ -82,6 +82,8 @@ pub struct SortPreservingMergeExec {
     fetch: Option<usize>,
     /// Cache holding plan properties like equivalences, output partitioning etc.
     cache: PlanProperties,
+    /// Configuration parameter to enable round-robin selection of tied winners of loser tree.
+    enable_round_robin_repartition: bool,
 }
 
 impl SortPreservingMergeExec {
@@ -94,12 +96,22 @@ impl SortPreservingMergeExec {
             metrics: ExecutionPlanMetricsSet::new(),
             fetch: None,
             cache,
+            enable_round_robin_repartition: true,
         }
     }
 
     /// Sets the number of rows to fetch
     pub fn with_fetch(mut self, fetch: Option<usize>) -> Self {
         self.fetch = fetch;
+        self
+    }
+
+    /// Sets the selection strategy of tied winners of the loser tree algorithm
+    pub fn with_round_robin_repartition(
+        mut self,
+        enable_round_robin_repartition: bool,
+    ) -> Self {
+        self.enable_round_robin_repartition = enable_round_robin_repartition;
         self
     }
 
@@ -183,6 +195,7 @@ impl ExecutionPlan for SortPreservingMergeExec {
             metrics: self.metrics.clone(),
             fetch: limit,
             cache: self.cache.clone(),
+            enable_round_robin_repartition: true,
         }))
     }
 
@@ -282,6 +295,7 @@ impl ExecutionPlan for SortPreservingMergeExec {
                     .with_batch_size(context.session_config().batch_size())
                     .with_fetch(self.fetch)
                     .with_reservation(reservation)
+                    .with_round_robin_tie_breaker(self.enable_round_robin_repartition)
                     .build()?;
 
                 debug!("Got stream result from SortPreservingMergeStream::new_from_receivers");
@@ -360,8 +374,9 @@ mod tests {
             .with_session_config(config);
         Ok(Arc::new(task_ctx))
     }
-    fn generate_spm_for_round_robin_tie_breaker() -> Result<Arc<SortPreservingMergeExec>>
-    {
+    fn generate_spm_for_round_robin_tie_breaker(
+        enable_round_robin_repartition: bool,
+    ) -> Result<Arc<SortPreservingMergeExec>> {
         let target_batch_size = 12500;
         let row_size = 12500;
         let a: ArrayRef = Arc::new(Int32Array::from(vec![1; row_size]));
@@ -388,15 +403,24 @@ mod tests {
             RepartitionExec::try_new(Arc::new(exec), Partitioning::RoundRobinBatch(2))?;
         let coalesce_batches_exec =
             CoalesceBatchesExec::new(Arc::new(repartition_exec), target_batch_size);
-        let spm = SortPreservingMergeExec::new(sort, Arc::new(coalesce_batches_exec));
+        let spm = SortPreservingMergeExec::new(sort, Arc::new(coalesce_batches_exec))
+            .with_round_robin_repartition(enable_round_robin_repartition);
         Ok(Arc::new(spm))
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn test_round_robin_tie_breaker() -> Result<()> {
+    async fn test_round_robin_tie_breaker_success() -> Result<()> {
         let task_ctx = generate_task_ctx_for_round_robin_tie_breaker()?;
-        let spm = generate_spm_for_round_robin_tie_breaker()?;
+        let spm = generate_spm_for_round_robin_tie_breaker(true)?;
         let _collected = collect(spm, task_ctx).await.unwrap();
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_round_robin_tie_breaker_fail() -> Result<()> {
+        let task_ctx = generate_task_ctx_for_round_robin_tie_breaker()?;
+        let spm = generate_spm_for_round_robin_tie_breaker(false)?;
+        let _err = collect(spm, task_ctx).await.unwrap_err();
         Ok(())
     }
 

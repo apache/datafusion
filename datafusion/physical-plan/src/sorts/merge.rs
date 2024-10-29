@@ -97,6 +97,9 @@ pub(crate) struct SortPreservingMergeStream<C: CursorValues> {
     /// Cursors for each input partition. `None` means the input is exhausted
     cursors: Vec<Option<Cursor<C>>>,
 
+    /// Configuration parameter to enable round-robin selection of tied winners of loser tree.
+    enable_round_robin_tie_breaker: bool,
+
     /// Flag indicating whether we are in the mode of round-robin
     /// tie breaker for the loser tree winners.
     round_robin_tie_breaker_mode: bool,
@@ -135,6 +138,7 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
         batch_size: usize,
         fetch: Option<usize>,
         reservation: MemoryReservation,
+        enable_round_robin_tie_breaker: bool,
     ) -> Self {
         let stream_count = streams.partitions();
 
@@ -155,6 +159,7 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
             fetch,
             produced: 0,
             uninitiated_partitions: (0..stream_count).collect(),
+            enable_round_robin_tie_breaker,
         }
     }
 
@@ -437,7 +442,7 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
     /// This function adjusts the tree by comparing the current winner with challengers from
     /// other partitions.
     ///
-    /// If a tie occurs at the final level, the
+    /// If `enable_round_robin_tie_breaker` is true and a tie occurs at the final level, the
     /// tie-breaker logic will be applied to ensure fair selection among equal elements.
     fn update_loser_tree(&mut self) {
         // Start with the current winner
@@ -449,8 +454,8 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
         // Traverse up the tree to adjust comparisons until reaching the root.
         while cmp_node != 0 {
             let challenger = self.loser_tree[cmp_node];
-            // If we're at the final comparison (cmp_node == 1)
-            if cmp_node == 1 {
+            // If round-robin tie-breaker is enabled and we're at the final comparison (cmp_node == 1)
+            if self.enable_round_robin_tie_breaker && cmp_node == 1 {
                 match (&self.cursors[winner], &self.cursors[challenger]) {
                     (Some(ac), Some(bc)) => {
                         let ord = ac.cmp(bc);
