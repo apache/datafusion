@@ -149,8 +149,7 @@ impl OrderingEquivalenceClass {
         let output_ordering = self
             .orderings
             .iter()
-            .map(|ordering| ordering.as_ref().inner)
-            .flatten()
+            .flat_map(|ordering| ordering.as_ref().inner)
             .cloned()
             .collect();
         let output_ordering = collapse_lex_ordering(output_ordering);

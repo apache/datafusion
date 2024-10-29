@@ -490,7 +490,7 @@ impl AggregateFunctionExpr {
     /// These expressions are  (1)function arguments, (2) order by expressions.
     pub fn all_expressions(&self) -> AggregatePhysicalExpressions {
         let args = self.expressions();
-        let order_bys = self.order_bys().unwrap_or(LexOrderingRef::default());
+        let order_bys = self.order_bys().unwrap_or_default();
         let order_by_exprs = order_bys
             .inner
             .iter()

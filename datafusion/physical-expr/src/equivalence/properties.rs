@@ -642,8 +642,8 @@ impl EquivalenceProperties {
             .into_iter()
             .map(|ordering| ordering.inner)
             .multi_cartesian_product()
-            .map(|referred_orderings| LexOrdering::new(referred_orderings))
-            .collect::<Vec<_>>();
+            .map(LexOrdering::new)
+            .collect::<Vec<LexOrdering>>();
         Ok(res)
     }
 
@@ -1366,8 +1366,7 @@ fn generate_dependency_orderings(
                 .map(|prefixes| {
                     prefixes
                         .into_iter()
-                        .map(|ordering| ordering.inner.clone())
-                        .flatten()
+                        .flat_map(|ordering| ordering.inner.clone())
                         .collect()
                 })
                 .collect::<Vec<LexOrdering>>()

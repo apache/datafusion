@@ -212,8 +212,7 @@ impl MemoryExec {
         let fields = self.schema.fields();
         let ambiguous_column = sort_information
             .iter()
-            .map(|ordering| ordering.inner.clone())
-            .flatten()
+            .flat_map(|ordering| ordering.inner.clone())
             .flat_map(|expr| collect_columns(&expr.expr))
             .find(|col| {
                 fields

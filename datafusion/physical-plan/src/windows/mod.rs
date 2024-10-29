@@ -517,9 +517,8 @@ pub fn get_window_mode(
     let const_exprs = partitionby_exprs.iter().map(ConstExpr::from);
     let partition_by_eqs = input_eqs.with_constants(const_exprs);
     let order_by_reqs = PhysicalSortRequirement::from_sort_exprs(orderby_keys.iter());
-    let reverse_order_by_reqs = PhysicalSortRequirement::from_sort_exprs(
-        &mut reverse_order_bys(&orderby_keys).iter(),
-    );
+    let reverse_order_by_reqs =
+        PhysicalSortRequirement::from_sort_exprs(reverse_order_bys(&orderby_keys).iter());
     for (should_swap, order_by_reqs) in
         [(false, order_by_reqs), (true, reverse_order_by_reqs)]
     {
