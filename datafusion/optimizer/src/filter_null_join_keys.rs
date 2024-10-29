@@ -264,6 +264,25 @@ mod tests {
         assert_optimized_plan_equal(plan, expected)
     }
 
+    #[test]
+    fn one_side_unqualified() -> Result<()> {
+        let (t1, t2) = test_tables()?;
+        let plan = LogicalPlanBuilder::from(t1)
+            .join_with_expr_keys(
+                t2,
+                JoinType::Inner,
+                (vec![col("optional_id")], vec![col("t2.optional_id")]),
+                None,
+            )?
+            .build()?;
+        let expected = "Inner Join: t1.optional_id = t2.optional_id\
+        \n  Filter: t1.optional_id + UInt32(1) IS NOT NULL\
+        \n    TableScan: t1\
+        \n  Filter: t2.optional_id + UInt32(1) IS NOT NULL\
+        \n    TableScan: t2";
+        assert_optimized_plan_equal(plan, expected)
+    }
+
     fn build_plan(
         left_table: LogicalPlan,
         right_table: LogicalPlan,
