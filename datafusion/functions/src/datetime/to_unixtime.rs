@@ -15,17 +15,17 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::datatypes::{DataType, TimeUnit};
-use std::any::Any;
-use std::sync::OnceLock;
-
 use super::to_timestamp::ToTimestampSecondsFunc;
 use crate::datetime::common::*;
+use arrow::datatypes::{DataType, TimeUnit};
+use criterion::BatchSize;
 use datafusion_common::{exec_err, Result};
 use datafusion_expr::scalar_doc_sections::DOC_SECTION_DATETIME;
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
+use std::any::Any;
+use std::sync::OnceLock;
 
 #[derive(Debug)]
 pub struct ToUnixtimeFunc {
@@ -63,7 +63,11 @@ impl ScalarUDFImpl for ToUnixtimeFunc {
         Ok(DataType::Int64)
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        batch_size: usize,
+    ) -> Result<ColumnarValue> {
         if args.is_empty() {
             return exec_err!("to_unixtime function requires 1 or more arguments, got 0");
         }
@@ -81,7 +85,7 @@ impl ScalarUDFImpl for ToUnixtimeFunc {
                 .cast_to(&DataType::Timestamp(TimeUnit::Second, None), None)?
                 .cast_to(&DataType::Int64, None),
             DataType::Utf8 => ToTimestampSecondsFunc::new()
-                .invoke(args)?
+                .invoke_batch(args, batch_size)?
                 .cast_to(&DataType::Int64, None),
             other => {
                 exec_err!("Unsupported data type {:?} for function to_unixtime", other)
