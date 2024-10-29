@@ -45,7 +45,7 @@ Below is a checklist of what you need to do to add a new scalar function to Data
 - In [sqllogictest/test_files], add new `sqllogictest` integration tests where the function is called through SQL against well known data and returns the expected result.
   - Documentation for `sqllogictest` [here](https://github.com/apache/datafusion/blob/main/datafusion/sqllogictest/README.md)
 - Add SQL reference documentation [here](https://github.com/apache/datafusion/blob/main/docs/source/user-guide/sql/scalar_functions.md)
-  - An example of this being done can be seen [here] (https://github.com/apache/datafusion/pull/12775)
+  - An example of this being done can be seen [here](https://github.com/apache/datafusion/pull/12775)
   - Run `./dev/update_function_docs.sh` to update docs
 
 [advanced_udf.rs]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/advanced_udaf.rs
