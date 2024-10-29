@@ -207,7 +207,7 @@ mod tests {
         ];
 
         let result = PowerFunc::new()
-            .invoke(&args)
+            .invoke_batch(&args, 4)
             .expect("failed to initialize function power");
 
         match result {
@@ -234,7 +234,7 @@ mod tests {
         ];
 
         let result = PowerFunc::new()
-            .invoke(&args)
+            .invoke_batch(&args, 4)
             .expect("failed to initialize function power");
 
         match result {
