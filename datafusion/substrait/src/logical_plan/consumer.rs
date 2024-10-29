@@ -2766,3 +2766,52 @@ impl BuiltinExprBuilder {
         }))
     }
 }
+
+#[cfg(test)]
+mod test {
+    use crate::extensions::Extensions;
+    use crate::logical_plan::consumer::from_substrait_literal_without_names;
+    use arrow_buffer::IntervalMonthDayNano;
+    use datafusion::error::Result;
+    use datafusion::scalar::ScalarValue;
+    use substrait::proto::expression::literal::{
+        interval_day_to_second, IntervalCompound, IntervalDayToSecond,
+        IntervalYearToMonth, LiteralType,
+    };
+    use substrait::proto::expression::Literal;
+
+    #[test]
+    fn interval_compound_different_precision() -> Result<()> {
+        // DF producer (and thus roundtrip) always uses precision = 9,
+        // this test exists to test with some other value.
+        let substrait = Literal {
+            nullable: false,
+            type_variation_reference: 0,
+            literal_type: Some(LiteralType::IntervalCompound(IntervalCompound {
+                interval_year_to_month: Some(IntervalYearToMonth {
+                    years: 1,
+                    months: 2,
+                }),
+                interval_day_to_second: Some(IntervalDayToSecond {
+                    days: 3,
+                    seconds: 4,
+                    subseconds: 5,
+                    precision_mode: Some(
+                        interval_day_to_second::PrecisionMode::Precision(6),
+                    ),
+                }),
+            })),
+        };
+
+        assert_eq!(
+            from_substrait_literal_without_names(&substrait, &Extensions::default())?,
+            ScalarValue::IntervalMonthDayNano(Some(IntervalMonthDayNano {
+                months: 14,
+                days: 3,
+                nanoseconds: 4_000_005_000
+            }))
+        );
+
+        Ok(())
+    }
+}
