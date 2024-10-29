@@ -981,6 +981,7 @@ pub fn can_hash(data_type: &DataType) -> bool {
         },
         DataType::Utf8 => true,
         DataType::LargeUtf8 => true,
+        DataType::Utf8View => true,
         DataType::Decimal128(_, _) => true,
         DataType::Date32 => true,
         DataType::Date64 => true,
