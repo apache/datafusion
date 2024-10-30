@@ -166,7 +166,7 @@ impl MinMaxStatistics {
     }
 
     pub fn new(
-        sort_order: &[PhysicalSortExpr],
+        sort_order: LexOrderingRef,
         schema: &SchemaRef,
         min_values: RecordBatch,
         max_values: RecordBatch,

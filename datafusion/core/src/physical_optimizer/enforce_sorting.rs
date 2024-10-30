@@ -61,13 +61,13 @@ use crate::physical_plan::{Distribution, ExecutionPlan, InputOrderMode};
 
 use datafusion_common::plan_err;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_physical_expr::{Partitioning, PhysicalSortExpr, PhysicalSortRequirement};
+use datafusion_physical_expr::{Partitioning, PhysicalSortRequirement};
 use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::sorts::partial_sort::PartialSortExec;
 use datafusion_physical_plan::ExecutionPlanProperties;
 
-use datafusion_physical_expr_common::sort_expr::LexOrdering;
+use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexOrderingRef};
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use itertools::izip;
 
@@ -632,10 +632,10 @@ fn remove_corresponding_sort_from_sub_plan(
     Ok(node)
 }
 
-/// Converts an [ExecutionPlan] trait object to a [PhysicalSortExpr] slice when possible.
+/// Converts an [ExecutionPlan] trait object to a [LexOrderingRef] when possible.
 fn get_sort_exprs(
     sort_any: &Arc<dyn ExecutionPlan>,
-) -> Result<(&[PhysicalSortExpr], Option<usize>)> {
+) -> Result<(LexOrderingRef, Option<usize>)> {
     if let Some(sort_exec) = sort_any.as_any().downcast_ref::<SortExec>() {
         Ok((sort_exec.expr(), sort_exec.fetch()))
     } else if let Some(spm) = sort_any.as_any().downcast_ref::<SortPreservingMergeExec>()

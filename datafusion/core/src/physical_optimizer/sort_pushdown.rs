@@ -37,7 +37,7 @@ use datafusion_expr::JoinType;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::utils::collect_columns;
 use datafusion_physical_expr::{
-    LexRequirementRef, PhysicalSortExpr, PhysicalSortRequirement,
+    LexRequirementRef, PhysicalSortRequirement,
 };
 use datafusion_physical_expr_common::sort_expr::{
     LexOrdering, LexOrderingRef, LexRequirement,
@@ -419,7 +419,7 @@ fn try_pushdown_requirements_to_join(
 }
 
 fn expr_source_side(
-    required_exprs: &[PhysicalSortExpr],
+    required_exprs: LexOrderingRef,
     join_type: JoinType,
     left_columns_len: usize,
 ) -> Option<JoinSide> {

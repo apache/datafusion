@@ -762,8 +762,8 @@ impl SortExec {
     }
 
     /// Sort expressions
-    pub fn expr(&self) -> &[PhysicalSortExpr] {
-        &self.expr
+    pub fn expr(&self) -> LexOrderingRef {
+        self.expr.as_ref()
     }
 
     /// If `Some(fetch)`, limits output to only the first "fetch" items

@@ -22,7 +22,7 @@ use crate::util::{AccessLogOpt, BenchmarkRun, CommonOpt};
 
 use arrow::util::pretty;
 use datafusion::common::Result;
-use datafusion::physical_expr::{LexOrdering, PhysicalSortExpr};
+use datafusion::physical_expr::{LexOrdering, LexOrderingRef, PhysicalSortExpr};
 use datafusion::physical_plan::collect;
 use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::prelude::{SessionConfig, SessionContext};
@@ -170,7 +170,7 @@ impl RunOpt {
 
 async fn exec_sort(
     ctx: &SessionContext,
-    expr: &[PhysicalSortExpr],
+    expr: LexOrderingRef<'_>,
     test_file: &TestParquetFile,
     debug: bool,
 ) -> Result<(usize, std::time::Duration)> {

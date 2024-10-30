@@ -21,7 +21,6 @@ use std::any::Any;
 use std::sync::Arc;
 
 use crate::common::spawn_buffered;
-use crate::expressions::PhysicalSortExpr;
 use crate::limit::LimitStream;
 use crate::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use crate::sorts::streaming_merge::StreamingMergeBuilder;
@@ -35,7 +34,7 @@ use datafusion_execution::memory_pool::MemoryConsumer;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::PhysicalSortRequirement;
 
-use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};
+use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexOrderingRef, LexRequirement};
 use log::{debug, trace};
 
 /// Sort preserving merge execution plan
@@ -108,7 +107,7 @@ impl SortPreservingMergeExec {
     }
 
     /// Sort expressions
-    pub fn expr(&self) -> &[PhysicalSortExpr] {
+    pub fn expr(&self) -> LexOrderingRef {
         &self.expr
     }
 
@@ -335,6 +334,7 @@ mod tests {
 
     use futures::{FutureExt, Stream, StreamExt};
     use tokio::time::timeout;
+    use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 
     #[tokio::test]
     async fn test_merge_interleave() {

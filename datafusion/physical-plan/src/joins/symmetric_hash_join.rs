@@ -72,9 +72,7 @@ use datafusion_physical_expr::intervals::cp_solver::ExprIntervalGraph;
 use datafusion_physical_expr::{PhysicalExprRef, PhysicalSortRequirement};
 
 use ahash::RandomState;
-use datafusion_physical_expr_common::sort_expr::{
-    LexOrdering, LexRequirement, PhysicalSortExpr,
-};
+use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexOrderingRef, LexRequirement};
 use futures::{ready, Stream, StreamExt};
 use hashbrown::HashSet;
 use parking_lot::Mutex;
@@ -319,12 +317,12 @@ impl SymmetricHashJoinExec {
     }
 
     /// Get left_sort_exprs
-    pub fn left_sort_exprs(&self) -> Option<&[PhysicalSortExpr]> {
+    pub fn left_sort_exprs(&self) -> Option<LexOrderingRef> {
         self.left_sort_exprs.as_deref()
     }
 
     /// Get right_sort_exprs
-    pub fn right_sort_exprs(&self) -> Option<&[PhysicalSortExpr]> {
+    pub fn right_sort_exprs(&self) -> Option<LexOrderingRef> {
         self.right_sort_exprs.as_deref()
     }
 
