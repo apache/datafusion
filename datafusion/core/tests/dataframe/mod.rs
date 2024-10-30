@@ -114,10 +114,7 @@ async fn test_count_wildcard_on_where_in() -> Result<()> {
                     .await?
                     .aggregate(vec![], vec![count(wildcard())])?
                     .select(vec![count(wildcard())])?
-                    .into_unoptimized_plan(),
-                // Usually, into_optimized_plan() should be used here, but due to
-                // https://github.com/apache/datafusion/issues/5771,
-                // subqueries in SQL cannot be optimized, resulting in differences in logical_plan. Therefore, into_unoptimized_plan() is temporarily used here.
+                    .into_optimized_plan()?,
             ),
         ))?
         .select(vec![col("a"), col("b")])?
