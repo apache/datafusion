@@ -191,7 +191,7 @@ impl VectorizedGroupValuesColumn {
     fn collect_vectorized_process_context(
         &mut self,
         batch_hashes: &[u64],
-        groups: &mut Vec<usize>,
+        groups: &mut [usize],
     ) {
         self.vectorized_append_row_indices.clear();
         self.vectorized_equal_to_row_indices.clear();
@@ -374,7 +374,7 @@ impl VectorizedGroupValuesColumn {
         &mut self,
         cols: &[ArrayRef],
         batch_hashes: &[u64],
-        groups: &mut Vec<usize>,
+        groups: &mut [usize],
     ) {
         if self.scalarized_indices.is_empty() {
             return;
@@ -454,7 +454,7 @@ impl VectorizedGroupValuesColumn {
         group_index_view: &GroupIndexView,
         cols: &[ArrayRef],
         row: usize,
-        groups: &mut Vec<usize>,
+        groups: &mut [usize],
     ) -> bool {
         // Check if this row exists in `group_values`
         fn check_row_equal(
