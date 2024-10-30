@@ -345,7 +345,7 @@ fn to_str(options: &SortOptions) -> &str {
     }
 }
 
-///`LexOrdering` is a struct containing a `Vec<PhysicalSortExpr>`, which represents
+///`LexOrdering` contains a `Vec<PhysicalSortExpr>`, which represents
 /// a lexicographical ordering.
 #[derive(Debug, Default, Clone, PartialEq, Eq, Hash)]
 pub struct LexOrdering {
@@ -359,7 +359,7 @@ impl LexOrdering {
     }
 
     pub fn as_ref(&self) -> LexOrderingRef {
-        LexOrderingRef { inner: &self.inner }
+        &self.inner
     }
 
     pub fn capacity(&self) -> usize {
@@ -376,6 +376,10 @@ impl LexOrdering {
 
     pub fn extend<I: IntoIterator<Item = PhysicalSortExpr>>(&mut self, iter: I) {
         self.inner.extend(iter)
+    }
+
+    pub fn from_ref(lex_ordering_ref: LexOrderingRef) -> Self {
+        Self::new(lex_ordering_ref.to_vec())
     }
 
     pub fn is_empty(&self) -> bool {
@@ -396,6 +400,10 @@ impl LexOrdering {
 
     pub fn push(&mut self, physical_sort_expr: PhysicalSortExpr) {
         self.inner.push(physical_sort_expr)
+    }
+
+    pub fn retain(&mut self, f: impl FnMut(&PhysicalSortExpr) -> bool) {
+        self.inner.retain(f)
     }
 
     pub fn truncate(&mut self, len: usize) {
@@ -481,85 +489,7 @@ impl IntoIterator for LexOrdering {
 
 ///`LexOrderingRef` is an alias for the type &`[PhysicalSortExpr]`, which represents
 /// a reference to a lexicographical ordering.
-// pub type LexOrderingRef<'a> = &'a [PhysicalSortExpr];
-#[derive(Debug, Default, Clone, PartialEq)]
-pub struct LexOrderingRef<'a> {
-    pub inner: &'a [PhysicalSortExpr],
-}
-
-impl<'a> LexOrderingRef<'a> {
-    // Creates a new [`LexOrdering`] from a vector
-    pub fn new(inner: &'a [PhysicalSortExpr]) -> Self {
-        Self { inner }
-    }
-
-    pub fn as_slice(&self) -> &[PhysicalSortExpr] {
-        self.inner.iter().as_slice()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.inner.is_empty()
-    }
-
-    pub fn iter(&self) -> impl Iterator<Item = &PhysicalSortExpr> {
-        self.inner.iter()
-    }
-
-    pub fn len(&self) -> usize {
-        self.inner.len()
-    }
-
-    pub fn to_vec(&self) -> LexOrdering {
-        LexOrdering::new(self.inner.to_vec())
-    }
-}
-
-impl<'a> Display for LexOrderingRef<'a> {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        let mut first = true;
-        for sort_expr in self.inner {
-            if first {
-                first = false;
-            } else {
-                write!(f, ", ")?;
-            }
-            write!(f, "{}", sort_expr)?;
-        }
-        Ok(())
-    }
-}
-
-impl Index<usize> for LexOrderingRef<'_> {
-    type Output = PhysicalSortExpr;
-
-    fn index(&self, index: usize) -> &Self::Output {
-        &self.inner[index]
-    }
-}
-
-impl Index<Range<usize>> for LexOrderingRef<'_> {
-    type Output = [PhysicalSortExpr];
-
-    fn index(&self, range: Range<usize>) -> &Self::Output {
-        &self.inner[range]
-    }
-}
-
-impl Index<RangeFrom<usize>> for LexOrderingRef<'_> {
-    type Output = [PhysicalSortExpr];
-
-    fn index(&self, range_from: RangeFrom<usize>) -> &Self::Output {
-        &self.inner[range_from]
-    }
-}
-
-impl Index<RangeTo<usize>> for LexOrderingRef<'_> {
-    type Output = [PhysicalSortExpr];
-
-    fn index(&self, range_to: RangeTo<usize>) -> &Self::Output {
-        &self.inner[range_to]
-    }
-}
+pub type LexOrderingRef<'a> = &'a [PhysicalSortExpr];
 
 ///`LexRequirement` is an struct containing a `Vec<PhysicalSortRequirement>`, which
 /// represents a lexicographical ordering requirement.

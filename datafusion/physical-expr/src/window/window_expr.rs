@@ -360,7 +360,7 @@ pub(crate) fn is_end_bound_safe(
             &window_frame.end_bound,
             &order_bys[0],
             most_recent_order_bys.map(|items| &items[0]),
-            &sort_exprs.inner[0].options,
+            &sort_exprs[0].options,
             idx,
         ),
         WindowFrameContext::Groups {
@@ -371,7 +371,7 @@ pub(crate) fn is_end_bound_safe(
             state,
             &order_bys[0],
             most_recent_order_bys.map(|items| &items[0]),
-            &sort_exprs.inner[0].options,
+            &sort_exprs[0].options,
         ),
     }
 }

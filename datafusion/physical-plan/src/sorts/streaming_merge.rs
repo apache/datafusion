@@ -77,7 +77,7 @@ impl<'a> StreamingMergeBuilder<'a> {
     }
 
     pub fn with_expressions(mut self, expressions: &'a [PhysicalSortExpr]) -> Self {
-        self.expressions = LexOrderingRef::new(expressions);
+        self.expressions = expressions;
         self
     }
 

@@ -288,13 +288,13 @@ fn roundtrip_window() -> Result<()> {
             false,
         )),
         &[col("b", &schema)?],
-        LexOrderingRef::new(&[PhysicalSortExpr {
+        &[PhysicalSortExpr {
             expr: col("a", &schema)?,
             options: SortOptions {
                 descending: false,
                 nulls_first: false,
             },
-        }]),
+        }],
         Arc::new(window_frame),
     ));
 

@@ -472,8 +472,8 @@ pub fn display_orderings(f: &mut Formatter, orderings: &[LexOrdering]) -> fmt::R
                 orderings.iter().enumerate().filter(|(_, o)| !o.is_empty())
             {
                 match idx {
-                    0 => write!(f, "[{}]", ordering.as_ref())?,
-                    _ => write!(f, ", [{}]", ordering.as_ref())?,
+                    0 => write!(f, "[{}]", ordering)?,
+                    _ => write!(f, ", [{}]", ordering)?,
                 }
             }
             let end = if orderings.len() == 1 { "" } else { "]" };

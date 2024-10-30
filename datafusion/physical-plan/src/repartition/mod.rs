@@ -50,7 +50,7 @@ use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{EquivalenceProperties, PhysicalExpr};
 
 use crate::execution_plan::CardinalityEffect;
-use datafusion_physical_expr_common::sort_expr::{LexOrderingRef, PhysicalSortExpr};
+use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 use futures::stream::Stream;
 use futures::{FutureExt, StreamExt, TryStreamExt};
 use hashbrown::HashMap;
@@ -503,7 +503,7 @@ impl DisplayAs for RepartitionExec {
                 }
 
                 if let Some(sort_exprs) = self.sort_exprs() {
-                    write!(f, ", sort_exprs={}", LexOrderingRef::new(sort_exprs))?;
+                    write!(f, ", sort_exprs={}", LexOrdering::from_ref(sort_exprs))?;
                 }
                 Ok(())
             }
@@ -1589,7 +1589,7 @@ mod test {
     #[tokio::test]
     async fn test_preserve_order() -> Result<()> {
         let schema = test_schema();
-        let sort_exprs = LexOrdering::new(sort_exprs(&schema));
+        let sort_exprs = sort_exprs(&schema);
         let source1 = sorted_memory_exec(&schema, sort_exprs.clone());
         let source2 = sorted_memory_exec(&schema, sort_exprs);
         // output has multiple partitions, and is sorted
@@ -1613,7 +1613,7 @@ mod test {
     #[tokio::test]
     async fn test_preserve_order_one_partition() -> Result<()> {
         let schema = test_schema();
-        let sort_exprs = LexOrdering::new(sort_exprs(&schema));
+        let sort_exprs = sort_exprs(&schema);
         let source = sorted_memory_exec(&schema, sort_exprs);
         // output is sorted, but has only a single partition, so no need to sort
         let exec = RepartitionExec::try_new(source, Partitioning::RoundRobinBatch(10))
@@ -1656,12 +1656,12 @@ mod test {
         Arc::new(Schema::new(vec![Field::new("c0", DataType::UInt32, false)]))
     }
 
-    fn sort_exprs(schema: &Schema) -> Vec<PhysicalSortExpr> {
+    fn sort_exprs(schema: &Schema) -> LexOrdering {
         let options = SortOptions::default();
-        vec![PhysicalSortExpr {
+        LexOrdering::new(vec![PhysicalSortExpr {
             expr: col("c0", schema).unwrap(),
             options,
-        }]
+        }])
     }
 
     fn memory_exec(schema: &SchemaRef) -> Arc<dyn ExecutionPlan> {

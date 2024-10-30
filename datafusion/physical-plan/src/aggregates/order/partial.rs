@@ -107,7 +107,7 @@ impl GroupOrderingPartial {
     pub fn try_new(
         input_schema: &Schema,
         order_indices: &[usize],
-        ordering: &LexOrderingRef,
+        ordering: LexOrderingRef,
     ) -> Result<Self> {
         assert!(!order_indices.is_empty());
         assert!(order_indices.len() <= ordering.len());

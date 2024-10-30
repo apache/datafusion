@@ -73,7 +73,7 @@ use datafusion_physical_expr::{PhysicalExprRef, PhysicalSortRequirement};
 
 use ahash::RandomState;
 use datafusion_physical_expr_common::sort_expr::{
-    LexOrdering, LexOrderingRef, LexRequirement, PhysicalSortExpr,
+    LexOrdering, LexRequirement, PhysicalSortExpr,
 };
 use futures::{ready, Stream, StreamExt};
 use hashbrown::HashSet;
@@ -481,8 +481,8 @@ impl ExecutionPlan for SymmetricHashJoinExec {
                     filter,
                     &self.left,
                     &self.right,
-                    &LexOrderingRef::new(left_sort_exprs),
-                    &LexOrderingRef::new(right_sort_exprs),
+                    left_sort_exprs,
+                    right_sort_exprs,
                 )?;
                 (Some(left), Some(right), Some(graph))
             }

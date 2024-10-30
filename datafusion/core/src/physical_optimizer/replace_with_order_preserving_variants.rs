@@ -33,7 +33,7 @@ use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion_physical_plan::tree_node::PlanContext;
 use datafusion_physical_plan::ExecutionPlanProperties;
 
-use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexOrderingRef};
+use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use itertools::izip;
 
 /// For a given `plan`, this object carries the information one needs from its
@@ -257,9 +257,7 @@ pub(crate) fn replace_with_order_preserving_variants(
     if alternate_plan
         .plan
         .equivalence_properties()
-        .ordering_satisfy(LexOrderingRef::new(
-            requirements.plan.output_ordering().unwrap_or(&[]),
-        ))
+        .ordering_satisfy(requirements.plan.output_ordering().unwrap_or_default())
     {
         for child in alternate_plan.children.iter_mut() {
             child.data = false;

@@ -133,7 +133,7 @@ impl AggregateUDFImpl for NthValueAgg {
             n,
             &data_type,
             &ordering_dtypes,
-            acc_args.ordering_req.to_vec(),
+            LexOrdering::from_ref(acc_args.ordering_req),
         )
         .map(|acc| Box::new(acc) as _)
     }

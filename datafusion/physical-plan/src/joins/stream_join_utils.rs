@@ -745,8 +745,8 @@ pub fn prepare_sorted_exprs(
     filter: &JoinFilter,
     left: &Arc<dyn ExecutionPlan>,
     right: &Arc<dyn ExecutionPlan>,
-    left_sort_exprs: &LexOrderingRef,
-    right_sort_exprs: &LexOrderingRef,
+    left_sort_exprs: LexOrderingRef,
+    right_sort_exprs: LexOrderingRef,
 ) -> Result<(SortedFilterExpr, SortedFilterExpr, ExprIntervalGraph)> {
     let err = || {
         datafusion_common::plan_datafusion_err!("Filter does not include the child order")

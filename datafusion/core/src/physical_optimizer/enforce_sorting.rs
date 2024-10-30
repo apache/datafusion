@@ -67,7 +67,7 @@ use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::sorts::partial_sort::PartialSortExec;
 use datafusion_physical_plan::ExecutionPlanProperties;
 
-use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexOrderingRef};
+use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use itertools::izip;
 
@@ -391,12 +391,9 @@ fn analyze_immediate_sort_removal(
     if let Some(sort_exec) = node.plan.as_any().downcast_ref::<SortExec>() {
         let sort_input = sort_exec.input();
         // If this sort is unnecessary, we should remove it:
-        if sort_input
-            .equivalence_properties()
-            .ordering_satisfy(LexOrderingRef::new(
-                sort_exec.properties().output_ordering().unwrap_or(&[]),
-            ))
-        {
+        if sort_input.equivalence_properties().ordering_satisfy(
+            sort_exec.properties().output_ordering().unwrap_or_default(),
+        ) {
             node.plan = if !sort_exec.preserve_partitioning()
                 && sort_input.output_partitioning().partition_count() > 1
             {
@@ -651,7 +648,6 @@ fn get_sort_exprs(
 
 #[cfg(test)]
 mod tests {
-
     use super::*;
     use crate::physical_optimizer::enforce_distribution::EnforceDistribution;
     use crate::physical_optimizer::test_utils::{
@@ -2522,8 +2518,8 @@ mod tests {
         //    SortExec: expr=[a]
         //      MemoryExec
         let schema = create_test_schema3()?;
-        let sort_exprs_a = vec![sort_expr("a", &schema)];
-        let sort_exprs_b = vec![sort_expr("b", &schema)];
+        let sort_exprs_a = LexOrdering::new(vec![sort_expr("a", &schema)]);
+        let sort_exprs_b = LexOrdering::new(vec![sort_expr("b", &schema)]);
         let plan = memory_exec(&schema);
         let plan = sort_exec(sort_exprs_a.clone(), plan);
         let plan = RequirementsTestExec::new(plan)
@@ -2552,8 +2548,9 @@ mod tests {
         //    SortExec: expr=[a]
         //      MemoryExec
         let schema = create_test_schema3()?;
-        let sort_exprs_a = vec![sort_expr("a", &schema)];
-        let sort_exprs_ab = vec![sort_expr("a", &schema), sort_expr("b", &schema)];
+        let sort_exprs_a = LexOrdering::new(vec![sort_expr("a", &schema)]);
+        let sort_exprs_ab =
+            LexOrdering::new(vec![sort_expr("a", &schema), sort_expr("b", &schema)]);
         let plan = memory_exec(&schema);
         let plan = sort_exec(sort_exprs_a.clone(), plan);
         let plan = RequirementsTestExec::new(plan)

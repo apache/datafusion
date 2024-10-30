@@ -492,7 +492,6 @@ impl AggregateFunctionExpr {
         let args = self.expressions();
         let order_bys = self.order_bys().unwrap_or_default();
         let order_by_exprs = order_bys
-            .inner
             .iter()
             .map(|sort_expr| Arc::clone(&sort_expr.expr))
             .collect::<Vec<_>>();

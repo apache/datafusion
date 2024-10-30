@@ -940,7 +940,7 @@ fn get_aggregate_expr_req(
         return LexOrdering::default();
     }
 
-    let mut req = aggr_expr.order_bys().unwrap_or_default().to_vec();
+    let mut req = LexOrdering::from_ref(aggr_expr.order_bys().unwrap_or_default());
 
     // In non-first stage modes, we accumulate data (using `merge_batch`) from
     // different partitions (i.e. merge partial results). During this merge, we
@@ -952,7 +952,7 @@ fn get_aggregate_expr_req(
         // will definitely be satisfied -- Each group by expression will have
         // distinct values per group, hence all requirements are satisfied.
         let physical_exprs = group_by.input_exprs();
-        req.inner.retain(|sort_expr| {
+        req.retain(|sort_expr| {
             !physical_exprs_contains(&physical_exprs, &sort_expr.expr)
         });
     }

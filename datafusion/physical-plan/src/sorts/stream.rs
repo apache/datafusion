@@ -93,7 +93,7 @@ pub struct RowCursorStream {
 impl RowCursorStream {
     pub fn try_new(
         schema: &Schema,
-        expressions: &LexOrderingRef,
+        expressions: LexOrderingRef,
         streams: Vec<SendableRecordBatchStream>,
         reservation: MemoryReservation,
     ) -> Result<Self> {

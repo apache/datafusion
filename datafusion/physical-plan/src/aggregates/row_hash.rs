@@ -1041,7 +1041,7 @@ impl GroupedHashAggregateStream {
         self.input = StreamingMergeBuilder::new()
             .with_streams(streams)
             .with_schema(schema)
-            .with_expressions(self.spill_state.spill_expr.as_ref().inner)
+            .with_expressions(self.spill_state.spill_expr.as_ref())
             .with_metrics(self.baseline_metrics.clone())
             .with_batch_size(self.batch_size)
             .with_reservation(self.reservation.new_empty())

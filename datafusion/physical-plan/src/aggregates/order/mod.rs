@@ -45,7 +45,7 @@ impl GroupOrdering {
     pub fn try_new(
         input_schema: &Schema,
         mode: &InputOrderMode,
-        ordering: &LexOrderingRef,
+        ordering: LexOrderingRef,
     ) -> Result<Self> {
         match mode {
             InputOrderMode::Linear => Ok(GroupOrdering::None),

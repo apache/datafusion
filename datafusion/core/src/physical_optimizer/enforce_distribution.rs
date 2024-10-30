@@ -55,7 +55,7 @@ use datafusion_physical_expr::{
 use datafusion_physical_plan::windows::{get_best_fitting_window, BoundedWindowAggExec};
 use datafusion_physical_plan::ExecutionPlanProperties;
 
-use datafusion_physical_expr_common::sort_expr::LexOrderingRef;
+use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_optimizer::output_requirements::OutputRequirementExec;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use itertools::izip;
@@ -935,7 +935,7 @@ fn add_spm_on_top(input: DistributionContext) -> DistributionContext {
 
         let new_plan = if should_preserve_ordering {
             Arc::new(SortPreservingMergeExec::new(
-                LexOrderingRef::new(input.plan.output_ordering().unwrap_or(&[])).to_vec(),
+                LexOrdering::from_ref(input.plan.output_ordering().unwrap_or(&[])),
                 input.plan.clone(),
             )) as _
         } else {

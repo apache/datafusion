@@ -364,7 +364,7 @@ pub fn sort_exec(
 /// A test [`ExecutionPlan`] whose requirements can be configured.
 #[derive(Debug)]
 pub struct RequirementsTestExec {
-    required_input_ordering: Vec<PhysicalSortExpr>,
+    required_input_ordering: LexOrdering,
     maintains_input_order: bool,
     input: Arc<dyn ExecutionPlan>,
 }
@@ -372,7 +372,7 @@ pub struct RequirementsTestExec {
 impl RequirementsTestExec {
     pub fn new(input: Arc<dyn ExecutionPlan>) -> Self {
         Self {
-            required_input_ordering: vec![],
+            required_input_ordering: LexOrdering::default(),
             maintains_input_order: true,
             input,
         }
@@ -381,7 +381,7 @@ impl RequirementsTestExec {
     /// sets the required input ordering
     pub fn with_required_input_ordering(
         mut self,
-        required_input_ordering: Vec<PhysicalSortExpr>,
+        required_input_ordering: LexOrdering,
     ) -> Self {
         self.required_input_ordering = required_input_ordering;
         self
@@ -419,8 +419,9 @@ impl ExecutionPlan for RequirementsTestExec {
     }
 
     fn required_input_ordering(&self) -> Vec<Option<LexRequirement>> {
-        let requirement =
-            PhysicalSortRequirement::from_sort_exprs(&self.required_input_ordering);
+        let requirement = PhysicalSortRequirement::from_sort_exprs(
+            self.required_input_ordering.as_ref().iter(),
+        );
         vec![Some(requirement)]
     }
 

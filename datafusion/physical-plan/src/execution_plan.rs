@@ -38,7 +38,7 @@ pub use datafusion_physical_expr::{
     expressions, udf, Distribution, Partitioning, PhysicalExpr,
 };
 use datafusion_physical_expr::{EquivalenceProperties, LexOrdering};
-use datafusion_physical_expr_common::sort_expr::{LexRequirement, PhysicalSortExpr};
+use datafusion_physical_expr_common::sort_expr::{LexOrderingRef, LexRequirement};
 
 use crate::coalesce_partitions::CoalescePartitionsExec;
 use crate::display::DisplayableExecutionPlan;
@@ -443,7 +443,7 @@ pub trait ExecutionPlanProperties {
     /// For example, `SortExec` (obviously) produces sorted output as does
     /// `SortPreservingMergeStream`. Less obviously, `Projection` produces sorted
     /// output if its input is sorted as it does not reorder the input rows.
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]>;
+    fn output_ordering(&self) -> Option<LexOrderingRef>;
 
     /// Get the [`EquivalenceProperties`] within the plan.
     ///
@@ -474,7 +474,7 @@ impl ExecutionPlanProperties for Arc<dyn ExecutionPlan> {
         self.properties().execution_mode()
     }
 
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+    fn output_ordering(&self) -> Option<LexOrderingRef> {
         self.properties().output_ordering()
     }
 
@@ -492,7 +492,7 @@ impl ExecutionPlanProperties for &dyn ExecutionPlan {
         self.properties().execution_mode()
     }
 
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+    fn output_ordering(&self) -> Option<LexOrderingRef> {
         self.properties().output_ordering()
     }
 
@@ -643,7 +643,7 @@ impl PlanProperties {
         &self.partitioning
     }
 
-    pub fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+    pub fn output_ordering(&self) -> Option<LexOrderingRef> {
         self.output_ordering.as_deref()
     }
 

@@ -39,7 +39,9 @@ use datafusion_physical_expr::utils::collect_columns;
 use datafusion_physical_expr::{
     LexRequirementRef, PhysicalSortExpr, PhysicalSortRequirement,
 };
-use datafusion_physical_expr_common::sort_expr::{LexOrderingRef, LexRequirement};
+use datafusion_physical_expr_common::sort_expr::{
+    LexOrdering, LexOrderingRef, LexRequirement,
+};
 
 use hashbrown::HashSet;
 
@@ -277,9 +279,7 @@ fn pushdown_requirement_to_children(
         spm_eqs = spm_eqs.with_reorder(new_ordering);
         // Do not push-down through SortPreservingMergeExec when
         // ordering requirement invalidates requirement of sort preserving merge exec.
-        if !spm_eqs
-            .ordering_satisfy(LexOrderingRef::new(plan.output_ordering().unwrap_or(&[])))
-        {
+        if !spm_eqs.ordering_satisfy(plan.output_ordering().unwrap_or_default()) {
             Ok(None)
         } else {
             // Can push-down through SortPreservingMergeExec, because parent requirement is finer
@@ -350,7 +350,7 @@ fn determine_children_requirement(
 fn try_pushdown_requirements_to_join(
     smj: &SortMergeJoinExec,
     parent_required: LexRequirementRef,
-    sort_expr: &LexOrderingRef,
+    sort_expr: LexOrderingRef,
     push_side: JoinSide,
 ) -> Result<Option<Vec<Option<LexRequirement>>>> {
     let left_eq_properties = smj.left().equivalence_properties();
@@ -358,13 +358,13 @@ fn try_pushdown_requirements_to_join(
     let mut smj_required_orderings = smj.required_input_ordering();
     let right_requirement = smj_required_orderings.swap_remove(1);
     let left_requirement = smj_required_orderings.swap_remove(0);
-    let left_ordering = &LexOrderingRef::new(smj.left().output_ordering().unwrap_or(&[]));
-    let right_ordering =
-        &LexOrderingRef::new(smj.right().output_ordering().unwrap_or(&[]));
+    let left_ordering = smj.left().output_ordering().unwrap_or_default();
+    let right_ordering = smj.right().output_ordering().unwrap_or_default();
     let (new_left_ordering, new_right_ordering) = match push_side {
         JoinSide::Left => {
-            let left_eq_properties =
-                left_eq_properties.clone().with_reorder(sort_expr.to_vec());
+            let left_eq_properties = left_eq_properties
+                .clone()
+                .with_reorder(LexOrdering::from_ref(sort_expr));
             if left_eq_properties
                 .ordering_satisfy_requirement(&left_requirement.unwrap_or_default())
             {
@@ -375,8 +375,9 @@ fn try_pushdown_requirements_to_join(
             }
         }
         JoinSide::Right => {
-            let right_eq_properties =
-                right_eq_properties.clone().with_reorder(sort_expr.to_vec());
+            let right_eq_properties = right_eq_properties
+                .clone()
+                .with_reorder(LexOrdering::from_ref(sort_expr));
             if right_eq_properties
                 .ordering_satisfy_requirement(&right_requirement.unwrap_or_default())
             {
@@ -404,7 +405,7 @@ fn try_pushdown_requirements_to_join(
     let should_pushdown = smj_eqs.ordering_satisfy_requirement(parent_required);
     Ok(should_pushdown.then(|| {
         let mut required_input_ordering = smj.required_input_ordering();
-        let new_req = Some(PhysicalSortRequirement::from_sort_exprs(sort_expr.inner));
+        let new_req = Some(PhysicalSortRequirement::from_sort_exprs(sort_expr));
         match push_side {
             JoinSide::Left => {
                 required_input_ordering[0] = new_req;

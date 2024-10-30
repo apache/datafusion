@@ -552,8 +552,8 @@ impl EquivalenceProperties {
         rhs: LexOrderingRef,
     ) -> Option<LexOrdering> {
         // Convert the given sort expressions to sort requirements:
-        let lhs = PhysicalSortRequirement::from_sort_exprs(lhs.inner);
-        let rhs = PhysicalSortRequirement::from_sort_exprs(rhs.inner);
+        let lhs = PhysicalSortRequirement::from_sort_exprs(lhs);
+        let rhs = PhysicalSortRequirement::from_sort_exprs(rhs);
         let finer = self.get_finer_requirement(&lhs, &rhs);
         // Convert the chosen sort requirements back to sort expressions:
         finer.map(PhysicalSortRequirement::to_sort_exprs)

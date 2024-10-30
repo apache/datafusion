@@ -78,7 +78,7 @@ impl DisplayAs for MemoryExec {
                     .sort_information
                     .first()
                     .map(|output_ordering| {
-                        format!(", output_ordering={}", output_ordering.as_ref())
+                        format!(", output_ordering={}", output_ordering)
                     })
                     .unwrap_or_default();
 
