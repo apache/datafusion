@@ -1409,7 +1409,8 @@ pub(crate) mod tests {
             .collect()
     }
 
-    pub(crate) trait TestTree<T>
+    /// Implement this train in order for your struct to be supported in parametrisation
+    pub(crate) trait TestTree<T: PartialEq>
     where
         T: Sized,
     {
@@ -1420,10 +1421,128 @@ pub(crate) mod tests {
         fn new_leaf(data: T) -> Self;
 
         fn is_leaf(&self) -> bool;
+
+        fn eq_data(&self, other: &T) -> bool;
+
+        fn with_children_from(data: T, other: Self) -> Self;
     }
 
     macro_rules! gen_tests {
         ($TYPE:ident) => {
+            fn visit_continue<T: PartialEq>(_: &$TYPE<T>) -> Result<TreeNodeRecursion> {
+                Ok(TreeNodeRecursion::Continue)
+            }
+
+            type TestVisitorF<T> = Box<dyn FnMut(&$TYPE<T>) -> Result<TreeNodeRecursion>>;
+
+            struct TestVisitor<T: PartialEq> {
+                visits: Vec<String>,
+                f_down: TestVisitorF<T>,
+                f_up: TestVisitorF<T>,
+            }
+
+            impl<T: PartialEq> TestVisitor<T> {
+                fn new(f_down: TestVisitorF<T>, f_up: TestVisitorF<T>) -> Self {
+                    Self {
+                        visits: vec![],
+                        f_down,
+                        f_up,
+                    }
+                }
+            }
+
+            impl<'n, T: Display + Eq> TreeNodeVisitor<'n> for TestVisitor<T> {
+                type Node = $TYPE<T>;
+
+                fn f_down(&mut self, node: &'n Self::Node) -> Result<TreeNodeRecursion> {
+                    self.visits.push(format!("f_down({})", node.data));
+                    (*self.f_down)(node)
+                }
+
+                fn f_up(&mut self, node: &'n Self::Node) -> Result<TreeNodeRecursion> {
+                    self.visits.push(format!("f_up({})", node.data));
+                    (*self.f_up)(node)
+                }
+            }
+
+            fn visit_event_on<T: PartialEq, D: Into<T>>(
+                data: D,
+                event: TreeNodeRecursion,
+            ) -> impl FnMut(&$TYPE<T>) -> Result<TreeNodeRecursion> {
+                let d = data.into();
+                move |node| {
+                    Ok(if node.eq_data(&d) {
+                        event
+                    } else {
+                        TreeNodeRecursion::Continue
+                    })
+                }
+            }
+
+            type TestRewriterF<T> =
+                Box<dyn FnMut($TYPE<T>) -> Result<Transformed<$TYPE<T>>>>;
+
+            struct TestRewriter<T: PartialEq> {
+                f_down: TestRewriterF<T>,
+                f_up: TestRewriterF<T>,
+            }
+
+            impl<T: PartialEq> TestRewriter<T> {
+                fn new(f_down: TestRewriterF<T>, f_up: TestRewriterF<T>) -> Self {
+                    Self { f_down, f_up }
+                }
+            }
+
+            impl<T: Display + PartialEq> TreeNodeRewriter for TestRewriter<T> {
+                type Node = $TYPE<T>;
+
+                fn f_down(
+                    &mut self,
+                    node: Self::Node,
+                ) -> Result<Transformed<Self::Node>> {
+                    (*self.f_down)(node)
+                }
+
+                fn f_up(&mut self, node: Self::Node) -> Result<Transformed<Self::Node>> {
+                    (*self.f_up)(node)
+                }
+            }
+
+            fn transform_yes<N: Display, T: Display + From<String> + PartialEq>(
+                transformation_name: N,
+            ) -> impl FnMut($TYPE<T>) -> Result<Transformed<$TYPE<T>>> {
+                move |node| {
+                    Ok(Transformed::yes($TYPE::with_children_from(
+                        format!("{}({})", transformation_name, node.data).into(),
+                        node,
+                    )))
+                }
+            }
+
+            fn transform_and_event_on<
+                N: Display,
+                T: PartialEq + Display + From<String>,
+                D: Into<T>,
+            >(
+                transformation_name: N,
+                data: D,
+                event: TreeNodeRecursion,
+            ) -> impl FnMut($TYPE<T>) -> Result<Transformed<$TYPE<T>>> {
+                let d = data.into();
+                move |node| {
+                    let node_eq = node.eq_data(&d);
+                    let new_node = $TYPE::with_children_from(
+                        format!("{}({})", transformation_name, node.data).into(),
+                        node,
+                    );
+                    Ok(if node_eq {
+                        Transformed::new(new_node, true, event)
+                    } else {
+                        Transformed::yes(new_node)
+                    })
+                }
+            }
+
             //       J
             //       |
             //       I
@@ -2374,12 +2493,12 @@ pub(crate) mod tests {
         use super::*;
 
         #[derive(Debug, Eq, Hash, PartialEq, Clone)]
-        pub struct TestTreeNode<T> {
+        pub struct TestTreeNode<T: PartialEq> {
             pub(crate) children: Vec<TestTreeNode<T>>,
             pub(crate) data: T,
         }
 
-        impl<T> TestTree<T> for TestTreeNode<T> {
+        impl<T: PartialEq> TestTree<T> for TestTreeNode<T> {
             fn new_with_children(children: Vec<TestTreeNode<T>>, data: T) -> Self {
                 Self { children, data }
             }
@@ -2394,9 +2513,17 @@ pub(crate) mod tests {
             fn is_leaf(&self) -> bool {
                 self.children.is_empty()
             }
+
+            fn eq_data(&self, other: &T) -> bool {
+                self.data == *other
+            }
+
+            fn with_children_from(data: T, other: Self) -> Self {
+                Self::new_with_children(other.children, data)
+            }
         }
 
-        impl<T> TreeNode for TestTreeNode<T> {
+        impl<T: PartialEq> TreeNode for TestTreeNode<T> {
             fn apply_children<'n, F: FnMut(&'n Self) -> Result<TreeNodeRecursion>>(
                 &'n self,
                 f: F,
@@ -2419,117 +2546,6 @@ pub(crate) mod tests {
             }
         }
 
-        fn visit_continue<T>(_: &TestTreeNode<T>) -> Result<TreeNodeRecursion> {
-            Ok(TreeNodeRecursion::Continue)
-        }
-
-        type TestVisitorF<T> =
-            Box<dyn FnMut(&TestTreeNode<T>) -> Result<TreeNodeRecursion>>;
-
-        struct TestVisitor<T> {
-            visits: Vec<String>,
-            f_down: TestVisitorF<T>,
-            f_up: TestVisitorF<T>,
-        }
-
-        impl<T> TestVisitor<T> {
-            fn new(f_down: TestVisitorF<T>, f_up: TestVisitorF<T>) -> Self {
-                Self {
-                    visits: vec![],
-                    f_down,
-                    f_up,
-                }
-            }
-        }
-
-        impl<'n, T: Display> TreeNodeVisitor<'n> for TestVisitor<T> {
-            type Node = TestTreeNode<T>;
-
-            fn f_down(&mut self, node: &'n Self::Node) -> Result<TreeNodeRecursion> {
-                self.visits.push(format!("f_down({})", node.data));
-                (*self.f_down)(node)
-            }
-
-            fn f_up(&mut self, node: &'n Self::Node) -> Result<TreeNodeRecursion> {
-                self.visits.push(format!("f_up({})", node.data));
-                (*self.f_up)(node)
-            }
-        }
-
-        fn visit_event_on<T: PartialEq, D: Into<T>>(
-            data: D,
-            event: TreeNodeRecursion,
-        ) -> impl FnMut(&TestTreeNode<T>) -> Result<TreeNodeRecursion> {
-            let d = data.into();
-            move |node| {
-                Ok(if node.data == d {
-                    event
-                } else {
-                    TreeNodeRecursion::Continue
-                })
-            }
-        }
-
-        type TestRewriterF<T> =
-            Box<dyn FnMut(TestTreeNode<T>) -> Result<Transformed<TestTreeNode<T>>>>;
-
-        struct TestRewriter<T> {
-            f_down: TestRewriterF<T>,
-            f_up: TestRewriterF<T>,
-        }
-
-        impl<T> TestRewriter<T> {
-            fn new(f_down: TestRewriterF<T>, f_up: TestRewriterF<T>) -> Self {
-                Self { f_down, f_up }
-            }
-        }
-
-        impl<T: Display> TreeNodeRewriter for TestRewriter<T> {
-            type Node = TestTreeNode<T>;
-
-            fn f_down(&mut self, node: Self::Node) -> Result<Transformed<Self::Node>> {
-                (*self.f_down)(node)
-            }
-
-            fn f_up(&mut self, node: Self::Node) -> Result<Transformed<Self::Node>> {
-                (*self.f_up)(node)
-            }
-        }
-
-        fn transform_yes<N: Display, T: Display + From<String>>(
-            transformation_name: N,
-        ) -> impl FnMut(TestTreeNode<T>) -> Result<Transformed<TestTreeNode<T>>> {
-            move |node| {
-                Ok(Transformed::yes(TestTreeNode::new_with_children(
-                    node.children,
-                    format!("{}({})", transformation_name, node.data).into(),
-                )))
-            }
-        }
-
-        fn transform_and_event_on<
-            N: Display,
-            T: PartialEq + Display + From<String>,
-            D: Into<T>,
-        >(
-            transformation_name: N,
-            data: D,
-            event: TreeNodeRecursion,
-        ) -> impl FnMut(TestTreeNode<T>) -> Result<Transformed<TestTreeNode<T>>> {
-            let d = data.into();
-            move |node| {
-                let new_node = TestTreeNode::new_with_children(
-                    node.children,
-                    format!("{}({})", transformation_name, node.data).into(),
-                );
-                Ok(if node.data == d {
-                    Transformed::new(new_node, true, event)
-                } else {
-                    Transformed::yes(new_node)
-                })
-            }
-        }
-
         gen_tests!(TestTreeNode);
     }
 
@@ -2542,7 +2558,7 @@ pub(crate) mod tests {
             pub(crate) children: Vec<Arc<DynTestNode<T>>>,
         }
 
-        impl<T> TestTree<T> for Arc<DynTestNode<T>> {
+        impl<T: PartialEq> TestTree<T> for Arc<DynTestNode<T>> {
             fn new_with_children(children: Vec<Self>, data: T) -> Self
             where
                 Self: Sized,
@@ -2563,6 +2579,14 @@ pub(crate) mod tests {
             fn is_leaf(&self) -> bool {
                 self.children.is_empty()
             }
+
+            fn eq_data(&self, other: &T) -> bool {
+                self.data.as_ref().eq(other)
+            }
+
+            fn with_children_from(data: T, other: Self) -> Self {
+                Self::new_with_children(other.children.clone(), data)
+            }
         }
 
         impl<T> DynTreeNode for DynTestNode<T> {
@@ -2582,117 +2606,6 @@ pub(crate) mod tests {
         }
 
         type ArcTestNode<T> = Arc<DynTestNode<T>>;
-
-        fn visit_continue<T>(_: &ArcTestNode<T>) -> Result<TreeNodeRecursion> {
-            Ok(TreeNodeRecursion::Continue)
-        }
-
-        type TestVisitorF<T> =
-            Box<dyn FnMut(&ArcTestNode<T>) -> Result<TreeNodeRecursion>>;
-
-        struct TestVisitor<T> {
-            visits: Vec<String>,
-            f_down: TestVisitorF<T>,
-            f_up: TestVisitorF<T>,
-        }
-
-        impl<T> TestVisitor<T> {
-            fn new(f_down: TestVisitorF<T>, f_up: TestVisitorF<T>) -> Self {
-                Self {
-                    visits: vec![],
-                    f_down,
-                    f_up,
-                }
-            }
-        }
-
-        impl<'n, T: Display> TreeNodeVisitor<'n> for TestVisitor<T> {
-            type Node = ArcTestNode<T>;
-
-            fn f_down(&mut self, node: &'n Self::Node) -> Result<TreeNodeRecursion> {
-                self.visits.push(format!("f_down({})", node.data));
-                (*self.f_down)(node)
-            }
-
-            fn f_up(&mut self, node: &'n Self::Node) -> Result<TreeNodeRecursion> {
-                self.visits.push(format!("f_up({})", node.data));
-                (*self.f_up)(node)
-            }
-        }
-
-        fn visit_event_on<T: PartialEq, D: Into<T>>(
-            data: D,
-            event: TreeNodeRecursion,
-        ) -> impl FnMut(&ArcTestNode<T>) -> Result<TreeNodeRecursion> {
-            let d = data.into();
-            move |node| {
-                Ok(if node.data.as_ref() == &d {
-                    event
-                } else {
-                    TreeNodeRecursion::Continue
-                })
-            }
-        }
-
-        type TestRewriterF<T> =
-            Box<dyn FnMut(ArcTestNode<T>) -> Result<Transformed<ArcTestNode<T>>>>;
-
-        struct TestRewriter<T> {
-            f_down: TestRewriterF<T>,
-            f_up: TestRewriterF<T>,
-        }
-
-        impl<T> TestRewriter<T> {
-            fn new(f_down: TestRewriterF<T>, f_up: TestRewriterF<T>) -> Self {
-                Self { f_down, f_up }
-            }
-        }
-
-        impl<T: Display> TreeNodeRewriter for TestRewriter<T> {
-            type Node = ArcTestNode<T>;
-
-            fn f_down(&mut self, node: Self::Node) -> Result<Transformed<Self::Node>> {
-                (*self.f_down)(node)
-            }
-
-            fn f_up(&mut self, node: Self::Node) -> Result<Transformed<Self::Node>> {
-                (*self.f_up)(node)
-            }
-        }
-
-        fn transform_yes<N: Display, T: Display + From<String>>(
-            transformation_name: N,
-        ) -> impl FnMut(ArcTestNode<T>) -> Result<Transformed<ArcTestNode<T>>> {
-            move |node| {
-                Ok(Transformed::yes(ArcTestNode::new_with_children(
-                    node.children.clone(),
-                    format!("{}({})", transformation_name, node.data).into(),
-                )))
-            }
-        }
-
-        fn transform_and_event_on<
-            N: Display,
-            T: PartialEq + Display + From<String>,
-            D: Into<T>,
-        >(
-            transformation_name: N,
-            data: D,
-            event: TreeNodeRecursion,
-        ) -> impl FnMut(ArcTestNode<T>) -> Result<Transformed<ArcTestNode<T>>> {
-            let d = data.into();
-            move |node| {
-                let new_node = ArcTestNode::new_with_children(
-                    node.children.clone(),
-                    format!("{}({})", transformation_name, node.data).into(),
-                );
-                Ok(if node.data.as_ref() == &d {
-                    Transformed::new(new_node, true, event)
-                } else {
-                    Transformed::yes(new_node)
-                })
-            }
-        }
 
         gen_tests!(ArcTestNode);
 
