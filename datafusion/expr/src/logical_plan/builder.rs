@@ -1217,7 +1217,7 @@ impl LogicalPlanBuilder {
         let exprs: Vec<(Expr, Expr)> = equi_exprs
             .0
             .into_iter()
-            .zip(equi_exprs.1.into_iter())
+            .zip(equi_exprs.1)
             .map(|(l, r)| (l.into(), r.into()))
             .collect();
 
