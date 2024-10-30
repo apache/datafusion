@@ -277,7 +277,9 @@ config_namespace! {
         ///
         /// This is used to workaround bugs in the planner that are now caught by
         /// the new schema verification step.
-        pub skip_physical_aggregate_schema_check: bool, default = false
+        ///
+        /// This configuration option will default to `false` in future releases.
+        pub skip_physical_aggregate_schema_check: bool, default = true
 
         /// Specifies the reserved memory for each spillable sort operation to
         /// facilitate an in-memory merge.
