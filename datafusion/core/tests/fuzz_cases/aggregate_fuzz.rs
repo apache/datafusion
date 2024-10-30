@@ -65,10 +65,6 @@ use crate::fuzz_cases::aggregation_fuzzer::{
 //
 // TODO: test other aggregate functions
 // - AVG (unstable given the wide range of inputs)
-//
-// TODO: specific test for ordering (ensure all group by columns are ordered)
-//  Currently the data is sorted by random columns, so there are almost no
-//  repeated runs. To improve coverage we should also sort by lower cardinality columns
 #[tokio::test(flavor = "multi_thread")]
 async fn test_min() {
     let data_gen_config = baseline_config();
@@ -79,7 +75,7 @@ async fn test_min() {
         .with_aggregate_function("min")
         // min works on all column types
         .with_aggregate_arguments(data_gen_config.all_columns())
-        .with_group_by_columns(data_gen_config.all_columns());
+        .set_group_by_columns(data_gen_config.all_columns());
 
     AggregationFuzzerBuilder::from(data_gen_config)
         .add_query_builder(query_builder)
@@ -98,7 +94,7 @@ async fn test_max() {
         .with_aggregate_function("max")
         // max works on all column types
         .with_aggregate_arguments(data_gen_config.all_columns())
-        .with_group_by_columns(data_gen_config.all_columns());
+        .set_group_by_columns(data_gen_config.all_columns());
 
     AggregationFuzzerBuilder::from(data_gen_config)
         .add_query_builder(query_builder)
@@ -118,7 +114,7 @@ async fn test_sum() {
         .with_distinct_aggregate_function("sum")
         // sum only works on numeric columns
         .with_aggregate_arguments(data_gen_config.numeric_columns())
-        .with_group_by_columns(data_gen_config.all_columns());
+        .set_group_by_columns(data_gen_config.all_columns());
 
     AggregationFuzzerBuilder::from(data_gen_config)
         .add_query_builder(query_builder)
@@ -138,7 +134,7 @@ async fn test_count() {
         .with_distinct_aggregate_function("count")
         // count work for all arguments
         .with_aggregate_arguments(data_gen_config.all_columns())
-        .with_group_by_columns(data_gen_config.all_columns());
+        .set_group_by_columns(data_gen_config.all_columns());
 
     AggregationFuzzerBuilder::from(data_gen_config)
         .add_query_builder(query_builder)
@@ -174,15 +170,21 @@ fn baseline_config() -> DatasetGeneratorConfig {
         // TODO add support for utf8view in data generator
         // ColumnDescr::new("utf8view", DataType::Utf8View),
         // todo binary
+        // low cardinality columns
+        ColumnDescr::new("u8_low", DataType::UInt8).with_max_num_distinct(10),
+        ColumnDescr::new("utf8_low", DataType::Utf8).with_max_num_distinct(10),
     ];
+
+    let min_num_rows = 512;
+    let max_num_rows = 1024;
 
     DatasetGeneratorConfig {
         columns,
-        rows_num_range: (512, 1024),
+        rows_num_range: (min_num_rows, max_num_rows),
         sort_keys_set: vec![
             // low cardinality to try and get many repeated runs
-            vec![String::from("u8")],
-            vec![String::from("utf8"), String::from("u8")],
+            vec![String::from("u8_low")],
+            vec![String::from("utf8_low"), String::from("u8_low")],
         ],
     }
 }
