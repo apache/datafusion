@@ -38,6 +38,10 @@ pub trait CursorValues {
     /// Returns true if `l[l_idx] == r[r_idx]`
     fn eq(l: &Self, l_idx: usize, r: &Self, r_idx: usize) -> bool;
 
+    /// Returns true if `row[idx] == row[idx - 1]`
+    /// Given `idx` should be greater than 0
+    fn eq_to_previous(cursor: &Self, idx: usize) -> bool;
+
     /// Returns comparison of `l[l_idx]` and `r[r_idx]`
     fn compare(l: &Self, l_idx: usize, r: &Self, r_idx: usize) -> Ordering;
 }
@@ -95,11 +99,37 @@ impl<T: CursorValues> Cursor<T> {
         self.offset += 1;
         t
     }
+
+    pub fn is_eq_to_prev_one(&self, prev_cursor: Option<&Cursor<T>>) -> bool {
+        if self.offset > 0 {
+            self.is_eq_to_prev_row()
+        } else if let Some(prev_cursor) = prev_cursor {
+            self.is_eq_to_prev_row_in_prev_batch(prev_cursor)
+        } else {
+            false
+        }
+    }
 }
 
 impl<T: CursorValues> PartialEq for Cursor<T> {
     fn eq(&self, other: &Self) -> bool {
         T::eq(&self.values, self.offset, &other.values, other.offset)
+    }
+}
+
+impl<T: CursorValues> Cursor<T> {
+    fn is_eq_to_prev_row(&self) -> bool {
+        T::eq_to_previous(&self.values, self.offset)
+    }
+
+    fn is_eq_to_prev_row_in_prev_batch(&self, other: &Self) -> bool {
+        assert_eq!(self.offset, 0);
+        T::eq(
+            &self.values,
+            self.offset,
+            &other.values,
+            other.values.len() - 1,
+        )
     }
 }
 
@@ -156,6 +186,11 @@ impl CursorValues for RowValues {
         l.rows.row(l_idx) == r.rows.row(r_idx)
     }
 
+    fn eq_to_previous(cursor: &Self, idx: usize) -> bool {
+        assert!(idx > 0);
+        cursor.rows.row(idx) == cursor.rows.row(idx - 1)
+    }
+
     fn compare(l: &Self, l_idx: usize, r: &Self, r_idx: usize) -> Ordering {
         l.rows.row(l_idx).cmp(&r.rows.row(r_idx))
     }
@@ -188,6 +223,11 @@ impl<T: ArrowNativeTypeOp> CursorValues for PrimitiveValues<T> {
         l.0[l_idx].is_eq(r.0[r_idx])
     }
 
+    fn eq_to_previous(cursor: &Self, idx: usize) -> bool {
+        assert!(idx > 0);
+        cursor.0[idx].is_eq(cursor.0[idx - 1])
+    }
+
     fn compare(l: &Self, l_idx: usize, r: &Self, r_idx: usize) -> Ordering {
         l.0[l_idx].compare(r.0[r_idx])
     }
@@ -217,6 +257,11 @@ impl<T: OffsetSizeTrait> CursorValues for ByteArrayValues<T> {
 
     fn eq(l: &Self, l_idx: usize, r: &Self, r_idx: usize) -> bool {
         l.value(l_idx) == r.value(r_idx)
+    }
+
+    fn eq_to_previous(cursor: &Self, idx: usize) -> bool {
+        assert!(idx > 0);
+        cursor.value(idx) == cursor.value(idx - 1)
     }
 
     fn compare(l: &Self, l_idx: usize, r: &Self, r_idx: usize) -> Ordering {
@@ -280,6 +325,15 @@ impl<T: CursorValues> CursorValues for ArrayValues<T> {
         match (l.is_null(l_idx), r.is_null(r_idx)) {
             (true, true) => true,
             (false, false) => T::eq(&l.values, l_idx, &r.values, r_idx),
+            _ => false,
+        }
+    }
+
+    fn eq_to_previous(cursor: &Self, idx: usize) -> bool {
+        assert!(idx > 0);
+        match (cursor.is_null(idx), cursor.is_null(idx - 1)) {
+            (true, true) => true,
+            (false, false) => T::eq(&cursor.values, idx, &cursor.values, idx - 1),
             _ => false,
         }
     }

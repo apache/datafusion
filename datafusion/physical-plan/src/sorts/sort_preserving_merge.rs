@@ -82,6 +82,8 @@ pub struct SortPreservingMergeExec {
     fetch: Option<usize>,
     /// Cache holding plan properties like equivalences, output partitioning etc.
     cache: PlanProperties,
+    /// Configuration parameter to enable round-robin selection of tied winners of loser tree.
+    enable_round_robin_repartition: bool,
 }
 
 impl SortPreservingMergeExec {
@@ -94,11 +96,22 @@ impl SortPreservingMergeExec {
             metrics: ExecutionPlanMetricsSet::new(),
             fetch: None,
             cache,
+            enable_round_robin_repartition: true,
         }
     }
+
     /// Sets the number of rows to fetch
     pub fn with_fetch(mut self, fetch: Option<usize>) -> Self {
         self.fetch = fetch;
+        self
+    }
+
+    /// Sets the selection strategy of tied winners of the loser tree algorithm
+    pub fn with_round_robin_repartition(
+        mut self,
+        enable_round_robin_repartition: bool,
+    ) -> Self {
+        self.enable_round_robin_repartition = enable_round_robin_repartition;
         self
     }
 
@@ -182,6 +195,7 @@ impl ExecutionPlan for SortPreservingMergeExec {
             metrics: self.metrics.clone(),
             fetch: limit,
             cache: self.cache.clone(),
+            enable_round_robin_repartition: true,
         }))
     }
 
@@ -281,6 +295,7 @@ impl ExecutionPlan for SortPreservingMergeExec {
                     .with_batch_size(context.session_config().batch_size())
                     .with_fetch(self.fetch)
                     .with_reservation(reservation)
+                    .with_round_robin_tie_breaker(self.enable_round_robin_repartition)
                     .build()?;
 
                 debug!("Got stream result from SortPreservingMergeStream::new_from_receivers");
@@ -312,10 +327,12 @@ mod tests {
     use std::time::Duration;
 
     use super::*;
+    use crate::coalesce_batches::CoalesceBatchesExec;
     use crate::coalesce_partitions::CoalescePartitionsExec;
     use crate::expressions::col;
     use crate::memory::MemoryExec;
     use crate::metrics::{MetricValue, Timestamp};
+    use crate::repartition::RepartitionExec;
     use crate::sorts::sort::SortExec;
     use crate::stream::RecordBatchReceiverStream;
     use crate::test::exec::{assert_strong_count_converges_to_zero, BlockingExec};
@@ -326,10 +343,12 @@ mod tests {
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow::record_batch::RecordBatch;
+    use arrow_array::Int64Array;
     use arrow_schema::SchemaRef;
     use datafusion_common::{assert_batches_eq, assert_contains, DataFusionError};
     use datafusion_common_runtime::SpawnedTask;
     use datafusion_execution::config::SessionConfig;
+    use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use datafusion_execution::RecordBatchStream;
     use datafusion_physical_expr::expressions::Column;
     use datafusion_physical_expr::EquivalenceProperties;
@@ -337,6 +356,80 @@ mod tests {
 
     use futures::{FutureExt, Stream, StreamExt};
     use tokio::time::timeout;
+
+    // The number in the function is highly related to the memory limit we are testing
+    // any change of the constant should be aware of
+    fn generate_task_ctx_for_round_robin_tie_breaker() -> Result<Arc<TaskContext>> {
+        let runtime = RuntimeEnvBuilder::new()
+            .with_memory_limit(20_000_000, 1.0)
+            .build_arc()?;
+        let config = SessionConfig::new();
+        let task_ctx = TaskContext::default()
+            .with_runtime(runtime)
+            .with_session_config(config);
+        Ok(Arc::new(task_ctx))
+    }
+    // The number in the function is highly related to the memory limit we are testing,
+    // any change of the constant should be aware of
+    fn generate_spm_for_round_robin_tie_breaker(
+        enable_round_robin_repartition: bool,
+    ) -> Result<Arc<SortPreservingMergeExec>> {
+        let target_batch_size = 12500;
+        let row_size = 12500;
+        let a: ArrayRef = Arc::new(Int32Array::from(vec![1; row_size]));
+        let b: ArrayRef = Arc::new(StringArray::from_iter(vec![Some("a"); row_size]));
+        let c: ArrayRef = Arc::new(Int64Array::from_iter(vec![0; row_size]));
+        let rb = RecordBatch::try_from_iter(vec![("a", a), ("b", b), ("c", c)]).unwrap();
+
+        let rbs = (0..1024).map(|_| rb.clone()).collect::<Vec<_>>();
+
+        let schema = rb.schema();
+        let sort = vec![
+            PhysicalSortExpr {
+                expr: col("b", &schema).unwrap(),
+                options: Default::default(),
+            },
+            PhysicalSortExpr {
+                expr: col("c", &schema).unwrap(),
+                options: Default::default(),
+            },
+        ];
+
+        let exec = MemoryExec::try_new(&[rbs], schema, None).unwrap();
+        let repartition_exec =
+            RepartitionExec::try_new(Arc::new(exec), Partitioning::RoundRobinBatch(2))?;
+        let coalesce_batches_exec =
+            CoalesceBatchesExec::new(Arc::new(repartition_exec), target_batch_size);
+        let spm = SortPreservingMergeExec::new(sort, Arc::new(coalesce_batches_exec))
+            .with_round_robin_repartition(enable_round_robin_repartition);
+        Ok(Arc::new(spm))
+    }
+
+    /// This test verifies that memory usage stays within limits when the tie breaker is enabled.
+    /// Any errors here could indicate unintended changes in tie breaker logic.
+    ///
+    /// Note: If you adjust constants in this test, ensure that memory usage differs
+    /// based on whether the tie breaker is enabled or disabled.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_round_robin_tie_breaker_success() -> Result<()> {
+        let task_ctx = generate_task_ctx_for_round_robin_tie_breaker()?;
+        let spm = generate_spm_for_round_robin_tie_breaker(true)?;
+        let _collected = collect(spm, task_ctx).await.unwrap();
+        Ok(())
+    }
+
+    /// This test verifies that memory usage stays within limits when the tie breaker is enabled.
+    /// Any errors here could indicate unintended changes in tie breaker logic.
+    ///
+    /// Note: If you adjust constants in this test, ensure that memory usage differs
+    /// based on whether the tie breaker is enabled or disabled.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_round_robin_tie_breaker_fail() -> Result<()> {
+        let task_ctx = generate_task_ctx_for_round_robin_tie_breaker()?;
+        let spm = generate_spm_for_round_robin_tie_breaker(false)?;
+        let _err = collect(spm, task_ctx).await.unwrap_err();
+        Ok(())
+    }
 
     #[tokio::test]
     async fn test_merge_interleave() {
