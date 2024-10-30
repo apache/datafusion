@@ -1568,9 +1568,7 @@ fn get_timestamp_values<T: TimeZone>(
     timestamp_type: &str,
     tz: &T,
 ) -> SparkResult<Option<i64>> {
-    let values: Vec<_> = value
-        .split(|c| c == 'T' || c == '-' || c == ':' || c == '.')
-        .collect();
+    let values: Vec<_> = value.split(['T', '-', ':', '.']).collect();
     let year = values[0].parse::<i32>().unwrap_or_default();
     let month = values.get(1).map_or(1, |m| m.parse::<u32>().unwrap_or(1));
     let day = values.get(2).map_or(1, |d| d.parse::<u32>().unwrap_or(1));

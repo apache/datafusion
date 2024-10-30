@@ -33,7 +33,6 @@ mod temporal;
 pub mod timezone;
 mod to_json;
 pub mod utils;
-mod xxhash64;
 
 pub use cast::{spark_cast, Cast};
 pub use error::{SparkError, SparkResult};

@@ -22,6 +22,7 @@ use arrow::{
     datatypes::{ArrowNativeTypeOp, UInt16Type, UInt32Type, UInt64Type, UInt8Type},
 };
 use std::sync::Arc;
+use twox_hash::XxHash64;
 
 use datafusion::{
     arrow::{
@@ -34,7 +35,10 @@ use datafusion::{
     error::{DataFusionError, Result},
 };
 
-use crate::xxhash64::spark_compatible_xxhash64;
+#[inline]
+pub(crate) fn spark_compatible_xxhash64<T: AsRef<[u8]>>(data: T, seed: u64) -> u64 {
+    XxHash64::oneshot(seed, data.as_ref())
+}
 
 /// Spark-compatible murmur3 hash function
 #[inline]
