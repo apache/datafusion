@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::mem;
+use std::mem::{self, size_of};
 
 use crate::aggregates::group_values::group_column::{
     ByteGroupValueBuilder, ByteViewGroupValueBuilder, GroupColumn,
@@ -708,7 +708,7 @@ impl GroupValues for VectorizedGroupValuesColumn {
         self.group_values.clear();
         self.map.clear();
         self.map.shrink_to(count, |_| 0); // hasher does not matter since the map is cleared
-        self.map_size = self.map.capacity() * mem::size_of::<(u64, usize)>();
+        self.map_size = self.map.capacity() * size_of::<(u64, usize)>();
         self.hashes_buffer.clear();
         self.hashes_buffer.shrink_to(count);
         self.group_index_lists.clear();
@@ -970,7 +970,7 @@ impl GroupValues for GroupValuesColumn {
         self.group_values.clear();
         self.map.clear();
         self.map.shrink_to(count, |_| 0); // hasher does not matter since the map is cleared
-        self.map_size = self.map.capacity() * mem::size_of::<(u64, usize)>();
+        self.map_size = self.map.capacity() * size_of::<(u64, usize)>();
         self.hashes_buffer.clear();
         self.hashes_buffer.shrink_to(count);
     }
