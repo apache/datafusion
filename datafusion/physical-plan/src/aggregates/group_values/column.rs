@@ -199,13 +199,9 @@ impl VectorizedGroupValuesColumn {
 
         let mut group_values_len = self.group_values[0].len();
         for (row, &target_hash) in batch_hashes.iter().enumerate() {
-            let entry = self.map.get(target_hash, |(exist_hash, _)| {
-                // Somewhat surprisingly, this closure can be called even if the
-                // hash doesn't match, so check the hash first with an integer
-                // comparison first avoid the more expensive comparison with
-                // group value. https://github.com/apache/datafusion/pull/11718
-                target_hash == *exist_hash
-            });
+            let entry = self
+                .map
+                .get(target_hash, |(exist_hash, _)| target_hash == *exist_hash);
 
             let Some((_, group_index_view)) = entry else {
                 // 1. Bucket not found case
