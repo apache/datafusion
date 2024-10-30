@@ -41,6 +41,8 @@ SELECT ascii_1, ascii_2, unicode_1, unicode_2 FROM test_basic_operator
 Andrew X datafusion📊🔥 🔥
 Xiangpeng Xiangpeng datafusion数据融合 datafusion数据融合
 Raphael R datafusionДатаФусион аФус
+under_score un_____core un iść core chrząszcz na łące w 東京都
+percent p%t pan Tadeusz ma iść w kąt Pan Tadeusz ma frunąć stąd w kąt
 NULL R NULL 🔥
 
 # TODO: move it back to `string_query.slt.part` after fixing the issue
@@ -57,6 +59,8 @@ from test_basic_operator;
 Andrew datafusion📊🔥 true false true false
 Xiangpeng datafusion数据融合 false true false true
 Raphael datafusionДатаФусион false false false false
+under_score un iść core false false false false
+percent pan Tadeusz ma iść w kąt false false false false
 NULL NULL NULL NULL NULL NULL
 
 #
