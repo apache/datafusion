@@ -2549,7 +2549,7 @@ pub(crate) mod tests {
         gen_tests!(TestTreeNode);
     }
 
-    pub mod arc_test_tree_node {
+    pub mod test_dyn_tree_node {
         use super::*;
 
         #[derive(Debug, Eq, Hash, PartialEq, Clone)]
@@ -2610,9 +2610,7 @@ pub(crate) mod tests {
         gen_tests!(ArcTestNode);
 
         #[test]
-        fn test_recursion() {
-            // todo: switch to test gen
-
+        fn test_large_tree() {
             let mut item = ArcTestNode::new_leaf("initial".to_string());
             for i in 0..3000 {
                 item =
