@@ -119,7 +119,6 @@ impl RunOpt {
         let mut config = self.common.config();
         {
             let parquet_options = &mut config.options_mut().execution.parquet;
-            parquet_options.schema_force_view_types = self.common.force_view_types;
             // The hits_partitioned dataset specifies string columns
             // as binary due to how it was written. Force it to strings
             parquet_options.binary_as_string = true;
