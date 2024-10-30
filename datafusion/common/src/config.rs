@@ -268,6 +268,19 @@ config_namespace! {
         /// Defaults to the number of CPU cores on the system
         pub planning_concurrency: usize, default = num_cpus::get()
 
+        /// When set to true, skips verifying that the schema produced by
+        /// planning the input of `LogicalPlan::Aggregate` exactly matches the
+        /// schema of the input plan.
+        ///
+        /// When set to false, if the schema does not match exactly
+        /// (including nullability and metadata), a planning error will be raised.
+        ///
+        /// This is used to workaround bugs in the planner that are now caught by
+        /// the new schema verification step.
+        ///
+        /// This configuration option will default to `false` in future releases.
+        pub skip_physical_aggregate_schema_check: bool, default = true
+
         /// Specifies the reserved memory for each spillable sort operation to
         /// facilitate an in-memory merge.
         ///
