@@ -740,7 +740,7 @@ fn test_default_expressions() -> Result<()> {
     for input_exprs in &test_cases {
         let input_types = input_exprs
             .iter()
-            .map(|expr: &std::sync::Arc<dyn PhysicalExpr>| {
+            .map(|expr: &Arc<dyn PhysicalExpr>| {
                 expr.data_type(&schema).unwrap()
             })
             .collect::<Vec<_>>();
