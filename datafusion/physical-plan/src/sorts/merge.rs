@@ -445,9 +445,14 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
                 self.update_winner(cmp_node, winner, challenger);
             }
         } else if challenger < *winner {
-            // If the winner doesn't survive in the final match, it means the value has changed.
-            // The polls count are outdated (because the value advanced) but not yet cleaned-up at this point.
-            // Given the value is equal, we choose the smaller index if the value is the same.
+            // If the winner doesn’t survive in the final match, it indicates that the original winner
+            // has moved up in value, so the challenger now becomes the new winner.
+            // This also means that we’re in a new round of the tie breaker,
+            // and the polls count is outdated (though not yet cleaned up).
+            //
+            // By the time we reach this code, both the new winner and the current challenger
+            // have the same value, and neither has an updated polls count.
+            // Therefore, we simply select the one with the smaller index.
             self.update_winner(cmp_node, winner, challenger);
         }
     }

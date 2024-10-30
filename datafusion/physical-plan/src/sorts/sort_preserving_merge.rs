@@ -357,6 +357,8 @@ mod tests {
     use futures::{FutureExt, Stream, StreamExt};
     use tokio::time::timeout;
 
+    // The number in the function is highly related to the memory limit we are testing
+    // any change of the constant should be aware of
     fn generate_task_ctx_for_round_robin_tie_breaker() -> Result<Arc<TaskContext>> {
         let runtime = RuntimeEnvBuilder::new()
             .with_memory_limit(20_000_000, 1.0)
@@ -367,6 +369,8 @@ mod tests {
             .with_session_config(config);
         Ok(Arc::new(task_ctx))
     }
+    // The number in the function is highly related to the memory limit we are testing,
+    // any change of the constant should be aware of
     fn generate_spm_for_round_robin_tie_breaker(
         enable_round_robin_repartition: bool,
     ) -> Result<Arc<SortPreservingMergeExec>> {
