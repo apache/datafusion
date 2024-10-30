@@ -335,6 +335,14 @@ select column1 from foo order by log(column2);
 3
 5
 
+# Test issue: https://github.com/apache/datafusion/issues/13157
+query I
+select column1 from foo order by column2 % 2, column2;
+----
+1
+3
+5
+
 # Cleanup
 statement ok
 drop table foo;
