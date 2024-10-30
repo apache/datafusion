@@ -111,7 +111,7 @@ pub(crate) struct SortPreservingMergeStream<C: CursorValues> {
     /// To resolve this, we are modifying the tie-breaking logic. Instead of always choosing the partition with the smallest index,
     /// we now select the partition that has the fewest poll counts for the same value.
     /// This ensures that multiple partitions with the same value are chosen equally, distributing the polling load in a round-robin fashion.
-    /// This approach balances the workload more effectively across partitions and avoids excessive buffer growth.Round robin tie breaker
+    /// This approach balances the workload more effectively across partitions and avoids excessive buffer growth.
     enable_round_robin_tie_breaker: bool,
 
     /// Flag indicating whether we are in the mode of round-robin
