@@ -102,14 +102,14 @@ pub fn estimate_memory_size<T>(num_elements: usize, fixed_size: usize) -> Result
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashSet;
+    use std::{collections::HashSet, mem};
 
     use super::estimate_memory_size;
 
     #[test]
     fn test_estimate_memory() {
         // size (bytes): 48
-        let fixed_size = size_of::<HashSet<u32>>();
+        let fixed_size = mem::size_of::<HashSet<u32>>();
 
         // estimated buckets: 16 = (8 * 8 / 7).next_power_of_two()
         let num_elements = 8;
@@ -127,7 +127,7 @@ mod tests {
     #[test]
     fn test_estimate_memory_overflow() {
         let num_elements = usize::MAX;
-        let fixed_size = size_of::<HashSet<u32>>();
+        let fixed_size = mem::size_of::<HashSet<u32>>();
         let estimated = estimate_memory_size::<u32>(num_elements, fixed_size);
 
         assert!(estimated.is_err());

@@ -15,8 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::ops::Sub;
-use std::{iter, mem, usize};
+use std::mem;
 
 use crate::aggregates::group_values::group_column::{
     ByteGroupValueBuilder, ByteViewGroupValueBuilder, GroupColumn,
@@ -24,29 +23,22 @@ use crate::aggregates::group_values::group_column::{
 };
 use crate::aggregates::group_values::GroupValues;
 use ahash::RandomState;
-use arrow::compute::{self, cast};
+use arrow::compute::cast;
 use arrow::datatypes::{
     BinaryViewType, Date32Type, Date64Type, Float32Type, Float64Type, Int16Type,
     Int32Type, Int64Type, Int8Type, StringViewType, UInt16Type, UInt32Type, UInt64Type,
     UInt8Type,
 };
 use arrow::record_batch::RecordBatch;
-use arrow_array::{
-    Array, ArrayRef, BinaryArray, BinaryViewArray, BooleanArray, Date32Array,
-    Date64Array, Decimal128Array, Float32Array, Float64Array, Int16Array, Int32Array,
-    Int64Array, Int8Array, LargeStringArray, StringArray, StringViewArray,
-    TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
-    TimestampSecondArray, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
-};
-use arrow_schema::{DataType, Schema, SchemaRef, TimeUnit};
+use arrow_array::{Array, ArrayRef};
+use arrow_schema::{DataType, Schema, SchemaRef};
 use datafusion_common::hash_utils::create_hashes;
 use datafusion_common::{not_impl_err, DataFusionError, Result};
 use datafusion_execution::memory_pool::proxy::{RawTableAllocExt, VecAllocExt};
 use datafusion_expr::EmitTo;
 use datafusion_physical_expr::binary_map::OutputType;
 
-use datafusion_physical_expr_common::datum::compare_with_eq;
-use hashbrown::raw::{Bucket, RawTable};
+use hashbrown::raw::RawTable;
 
 const NON_INLINED_FLAG: u64 = 0x8000000000000000;
 const VALUE_MASK: u64 = 0x7FFFFFFFFFFFFFFF;
@@ -424,7 +416,7 @@ impl VectorizedGroupValuesColumn {
 
         for &row in &self.scalarized_indices {
             let target_hash = batch_hashes[row];
-            let entry = map.get_mut(target_hash, |(exist_hash, group_index_view)| {
+            let entry = map.get_mut(target_hash, |(exist_hash, _)| {
                 // Somewhat surprisingly, this closure can be called even if the
                 // hash doesn't match, so check the hash first with an integer
                 // comparison first avoid the more expensive comparison with
@@ -440,7 +432,7 @@ impl VectorizedGroupValuesColumn {
             };
 
             // Perform scalarized equal to
-            if self.scalarized_equal_to(&group_index_view, cols, row, groups) {
+            if self.scalarized_equal_to(group_index_view, cols, row, groups) {
                 // Found the row actually exists in group values,
                 // don't need to create new group for it.
                 continue;
@@ -1023,21 +1015,15 @@ fn supported_type(data_type: &DataType) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use std::{cmp, sync::Arc};
+    use std::sync::Arc;
 
-    use ahash::RandomState;
-    use arrow::{
-        compute::concat_batches,
-        util::pretty::{pretty_format_batches, print_batches, print_columns},
-    };
+    use arrow::{compute::concat_batches, util::pretty::pretty_format_batches};
     use arrow_array::{ArrayRef, Int64Array, RecordBatch, StringArray, StringViewArray};
     use arrow_schema::{DataType, Field, Schema, SchemaRef};
-    use datafusion_common::hash_utils::create_hashes;
     use datafusion_expr::EmitTo;
 
     use crate::aggregates::group_values::{
-        column::{GroupValuesColumn, VectorizedGroupValuesColumn},
-        GroupValues,
+        column::VectorizedGroupValuesColumn, GroupValues,
     };
 
     #[test]
