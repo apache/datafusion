@@ -36,6 +36,7 @@ use datafusion_expr::{
 use std::any::Any;
 use std::collections::HashMap;
 use std::fmt::Debug;
+use std::mem::size_of_val;
 use std::sync::OnceLock;
 
 macro_rules! make_regr_udaf_expr_and_func {
@@ -614,6 +615,6 @@ impl Accumulator for RegrAccumulator {
     }
 
     fn size(&self) -> usize {
-        std::mem::size_of_val(self)
+        size_of_val(self)
     }
 }

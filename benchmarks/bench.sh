@@ -78,6 +78,7 @@ sort:                   Benchmark of sorting speed
 clickbench_1:           ClickBench queries against a single parquet file
 clickbench_partitioned: ClickBench queries against a partitioned (100 files) parquet
 clickbench_extended:    ClickBench \"inspired\" queries against a single parquet (DataFusion specific)
+external_aggr:          External aggregation benchmark
 
 **********
 * Supported Configuration (Environment Variables)
@@ -170,6 +171,10 @@ main() {
                 imdb)
                     data_imdb
                     ;;
+                external_aggr)
+                    # same data as for tpch
+                    data_tpch "1"
+                    ;;
                 *)
                     echo "Error: unknown benchmark '$BENCHMARK' for data generation"
                     usage
@@ -212,6 +217,7 @@ main() {
                     run_clickbench_partitioned
                     run_clickbench_extended
                     run_imdb
+                    run_external_aggr
                     ;;
                 tpch)
                     run_tpch "1"
@@ -242,6 +248,9 @@ main() {
                     ;;
                 imdb)
                     run_imdb
+                    ;;
+                external_aggr)
+                    run_external_aggr
                     ;;
                 *)
                     echo "Error: unknown benchmark '$BENCHMARK' for run"
@@ -357,7 +366,7 @@ run_parquet() {
     RESULTS_FILE="${RESULTS_DIR}/parquet.json"
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running parquet filter benchmark..."
-    $CARGO_COMMAND --bin parquet -- filter --path "${DATA_DIR}" --prefer_hash_join "${PREFER_HASH_JOIN}" --scale-factor 1.0 --iterations 5 -o "${RESULTS_FILE}"
+    $CARGO_COMMAND --bin parquet -- filter --path "${DATA_DIR}" --scale-factor 1.0 --iterations 5 -o "${RESULTS_FILE}"
 }
 
 # Runs the sort benchmark
@@ -365,7 +374,7 @@ run_sort() {
     RESULTS_FILE="${RESULTS_DIR}/sort.json"
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running sort benchmark..."
-    $CARGO_COMMAND --bin parquet -- sort --path "${DATA_DIR}" --prefer_hash_join "${PREFER_HASH_JOIN}" --scale-factor 1.0 --iterations 5 -o "${RESULTS_FILE}"
+    $CARGO_COMMAND --bin parquet -- sort --path "${DATA_DIR}" --scale-factor 1.0 --iterations 5 -o "${RESULTS_FILE}"
 }
 
 
@@ -524,7 +533,21 @@ run_imdb() {
     $CARGO_COMMAND --bin imdb -- benchmark datafusion --iterations 5 --path "${IMDB_DIR}" --prefer_hash_join "${PREFER_HASH_JOIN}" --format parquet -o "${RESULTS_FILE}"
 }
 
+# Runs the external aggregation benchmark
+run_external_aggr() {
+    # Use TPC-H SF1 dataset
+    TPCH_DIR="${DATA_DIR}/tpch_sf1"
+    RESULTS_FILE="${RESULTS_DIR}/external_aggr.json"
+    echo "RESULTS_FILE: ${RESULTS_FILE}"
+    echo "Running external aggregation benchmark..."
 
+    # Only parquet is supported.
+    # Since per-operator memory limit is calculated as (total-memory-limit / 
+    # number-of-partitions), and by default `--partitions` is set to number of
+    # CPU cores, we set a constant number of partitions to prevent this 
+    # benchmark to fail on some machines.
+    $CARGO_COMMAND --bin external_aggr -- benchmark --partitions 4 --iterations 5 --path "${TPCH_DIR}" -o "${RESULTS_FILE}"
+}
 
 
 compare_benchmarks() {

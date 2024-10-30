@@ -23,8 +23,8 @@ use datafusion::datasource::file_format::parquet::ParquetSink;
 use datafusion::physical_expr::window::{NthValueKind, SlidingAggregateWindowExpr};
 use datafusion::physical_expr::{PhysicalSortExpr, ScalarFunctionExpr};
 use datafusion::physical_plan::expressions::{
-    BinaryExpr, CaseExpr, CastExpr, Column, CumeDist, InListExpr, IsNotNullExpr,
-    IsNullExpr, Literal, NegativeExpr, NotExpr, NthValue, Ntile, TryCastExpr,
+    BinaryExpr, CaseExpr, CastExpr, Column, InListExpr, IsNotNullExpr, IsNullExpr,
+    Literal, NegativeExpr, NotExpr, NthValue, TryCastExpr,
 };
 use datafusion::physical_plan::udaf::AggregateFunctionExpr;
 use datafusion::physical_plan::windows::{BuiltInWindowExpr, PlainAggregateWindowExpr};
@@ -108,33 +108,24 @@ pub fn serialize_physical_window_expr(
         let expr = built_in_window_expr.get_built_in_func_expr();
         let built_in_fn_expr = expr.as_any();
 
-        let builtin_fn = if built_in_fn_expr.downcast_ref::<CumeDist>().is_some() {
-            protobuf::BuiltInWindowFunction::CumeDist
-        } else if let Some(ntile_expr) = built_in_fn_expr.downcast_ref::<Ntile>() {
-            args.insert(
-                0,
-                Arc::new(Literal::new(datafusion_common::ScalarValue::Int64(Some(
-                    ntile_expr.get_n() as i64,
-                )))),
-            );
-            protobuf::BuiltInWindowFunction::Ntile
-        } else if let Some(nth_value_expr) = built_in_fn_expr.downcast_ref::<NthValue>() {
-            match nth_value_expr.get_kind() {
-                NthValueKind::First => protobuf::BuiltInWindowFunction::FirstValue,
-                NthValueKind::Last => protobuf::BuiltInWindowFunction::LastValue,
-                NthValueKind::Nth(n) => {
-                    args.insert(
-                        1,
-                        Arc::new(Literal::new(datafusion_common::ScalarValue::Int64(
-                            Some(n),
-                        ))),
-                    );
-                    protobuf::BuiltInWindowFunction::NthValue
+        let builtin_fn =
+            if let Some(nth_value_expr) = built_in_fn_expr.downcast_ref::<NthValue>() {
+                match nth_value_expr.get_kind() {
+                    NthValueKind::First => protobuf::BuiltInWindowFunction::FirstValue,
+                    NthValueKind::Last => protobuf::BuiltInWindowFunction::LastValue,
+                    NthValueKind::Nth(n) => {
+                        args.insert(
+                            1,
+                            Arc::new(Literal::new(
+                                datafusion_common::ScalarValue::Int64(Some(n)),
+                            )),
+                        );
+                        protobuf::BuiltInWindowFunction::NthValue
+                    }
                 }
-            }
-        } else {
-            return not_impl_err!("BuiltIn function not supported: {expr:?}");
-        };
+            } else {
+                return not_impl_err!("BuiltIn function not supported: {expr:?}");
+            };
 
         (
             physical_window_expr_node::WindowFunction::BuiltInFunction(builtin_fn as i32),

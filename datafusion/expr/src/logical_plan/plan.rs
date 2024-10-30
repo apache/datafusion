@@ -49,7 +49,8 @@ use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion_common::{
     aggregate_functional_dependencies, internal_err, plan_err, Column, Constraints,
     DFSchema, DFSchemaRef, DataFusionError, Dependency, FunctionalDependence,
-    FunctionalDependencies, ParamValues, Result, TableReference, UnnestOptions,
+    FunctionalDependencies, ParamValues, Result, ScalarValue, TableReference,
+    UnnestOptions,
 };
 use indexmap::IndexSet;
 
@@ -220,10 +221,6 @@ pub enum LogicalPlan {
     /// Join two logical plans on one or more join columns.
     /// This is used to implement SQL `JOIN`
     Join(Join),
-    /// Apply Cross Join to two logical plans.
-    /// This is used to implement SQL `CROSS JOIN`
-    /// Deprecated: use [LogicalPlan::Join] instead with empty `on` / no filter
-    CrossJoin(CrossJoin),
     /// Repartitions the input based on a partitioning scheme. This is
     /// used to add parallelism and is sometimes referred to as an
     /// "exchange" operator in other systems
@@ -311,7 +308,6 @@ impl LogicalPlan {
             LogicalPlan::Aggregate(Aggregate { schema, .. }) => schema,
             LogicalPlan::Sort(Sort { input, .. }) => input.schema(),
             LogicalPlan::Join(Join { schema, .. }) => schema,
-            LogicalPlan::CrossJoin(CrossJoin { schema, .. }) => schema,
             LogicalPlan::Repartition(Repartition { input, .. }) => input.schema(),
             LogicalPlan::Limit(Limit { input, .. }) => input.schema(),
             LogicalPlan::Statement(statement) => statement.schema(),
@@ -344,8 +340,7 @@ impl LogicalPlan {
             | LogicalPlan::Projection(_)
             | LogicalPlan::Aggregate(_)
             | LogicalPlan::Unnest(_)
-            | LogicalPlan::Join(_)
-            | LogicalPlan::CrossJoin(_) => self
+            | LogicalPlan::Join(_) => self
                 .inputs()
                 .iter()
                 .map(|input| input.schema().as_ref())
@@ -423,27 +418,6 @@ impl LogicalPlan {
         exprs
     }
 
-    #[deprecated(since = "37.0.0", note = "Use `apply_expressions` instead")]
-    pub fn inspect_expressions<F, E>(self: &LogicalPlan, mut f: F) -> Result<(), E>
-    where
-        F: FnMut(&Expr) -> Result<(), E>,
-    {
-        let mut err = Ok(());
-        self.apply_expressions(|e| {
-            if let Err(e) = f(e) {
-                // save the error for later (it may not be a DataFusionError
-                err = Err(e);
-                Ok(TreeNodeRecursion::Stop)
-            } else {
-                Ok(TreeNodeRecursion::Continue)
-            }
-        })
-        // The closure always returns OK, so this will always too
-        .expect("no way to return error during recursion");
-
-        err
-    }
-
     /// Returns all inputs / children of this `LogicalPlan` node.
     ///
     /// Note does not include inputs to inputs, or subqueries.
@@ -456,7 +430,6 @@ impl LogicalPlan {
             LogicalPlan::Aggregate(Aggregate { input, .. }) => vec![input],
             LogicalPlan::Sort(Sort { input, .. }) => vec![input],
             LogicalPlan::Join(Join { left, right, .. }) => vec![left, right],
-            LogicalPlan::CrossJoin(CrossJoin { left, right, .. }) => vec![left, right],
             LogicalPlan::Limit(Limit { input, .. }) => vec![input],
             LogicalPlan::Subquery(Subquery { subquery, .. }) => vec![subquery],
             LogicalPlan::SubqueryAlias(SubqueryAlias { input, .. }) => vec![input],
@@ -562,13 +535,6 @@ impl LogicalPlan {
                 JoinType::LeftSemi | JoinType::LeftAnti => left.head_output_expr(),
                 JoinType::RightSemi | JoinType::RightAnti => right.head_output_expr(),
             },
-            LogicalPlan::CrossJoin(cross) => {
-                if cross.left.schema().fields().is_empty() {
-                    cross.right.head_output_expr()
-                } else {
-                    cross.left.head_output_expr()
-                }
-            }
             LogicalPlan::RecursiveQuery(RecursiveQuery { static_term, .. }) => {
                 static_term.head_output_expr()
             }
@@ -692,20 +658,6 @@ impl LogicalPlan {
                     filter,
                     schema: DFSchemaRef::new(schema),
                     null_equals_null,
-                }))
-            }
-            LogicalPlan::CrossJoin(CrossJoin {
-                left,
-                right,
-                schema: _,
-            }) => {
-                let join_schema =
-                    build_join_schema(left.schema(), right.schema(), &JoinType::Inner)?;
-
-                Ok(LogicalPlan::CrossJoin(CrossJoin {
-                    left,
-                    right,
-                    schema: join_schema.into(),
                 }))
             }
             LogicalPlan::Subquery(_) => Ok(self),
@@ -958,11 +910,6 @@ impl LogicalPlan {
                     null_equals_null: *null_equals_null,
                 }))
             }
-            LogicalPlan::CrossJoin(_) => {
-                self.assert_no_expressions(expr)?;
-                let (left, right) = self.only_two_inputs(inputs)?;
-                LogicalPlanBuilder::from(left).cross_join(right)?.build()
-            }
             LogicalPlan::Subquery(Subquery {
                 outer_ref_columns, ..
             }) => {
@@ -981,11 +928,20 @@ impl LogicalPlan {
                     .map(LogicalPlan::SubqueryAlias)
             }
             LogicalPlan::Limit(Limit { skip, fetch, .. }) => {
-                self.assert_no_expressions(expr)?;
+                let old_expr_len = skip.iter().chain(fetch.iter()).count();
+                if old_expr_len != expr.len() {
+                    return internal_err!(
+                        "Invalid number of new Limit expressions: expected {}, got {}",
+                        old_expr_len,
+                        expr.len()
+                    );
+                }
+                let new_skip = skip.as_ref().and_then(|_| expr.pop());
+                let new_fetch = fetch.as_ref().and_then(|_| expr.pop());
                 let input = self.only_input(inputs)?;
                 Ok(LogicalPlan::Limit(Limit {
-                    skip: *skip,
-                    fetch: *fetch,
+                    skip: new_skip.map(Box::new),
+                    fetch: new_fetch.map(Box::new),
                     input: Arc::new(input),
                 }))
             }
@@ -1337,12 +1293,6 @@ impl LogicalPlan {
                 JoinType::LeftSemi | JoinType::LeftAnti => left.max_rows(),
                 JoinType::RightSemi | JoinType::RightAnti => right.max_rows(),
             },
-            LogicalPlan::CrossJoin(CrossJoin { left, right, .. }) => {
-                match (left.max_rows(), right.max_rows()) {
-                    (Some(left_max), Some(right_max)) => Some(left_max * right_max),
-                    _ => None,
-                }
-            }
             LogicalPlan::Repartition(Repartition { input, .. }) => input.max_rows(),
             LogicalPlan::Union(Union { inputs, .. }) => inputs
                 .iter()
@@ -1360,7 +1310,10 @@ impl LogicalPlan {
             LogicalPlan::RecursiveQuery(_) => None,
             LogicalPlan::Subquery(_) => None,
             LogicalPlan::SubqueryAlias(SubqueryAlias { input, .. }) => input.max_rows(),
-            LogicalPlan::Limit(Limit { fetch, .. }) => *fetch,
+            LogicalPlan::Limit(limit) => match limit.get_fetch_type() {
+                Ok(FetchType::Literal(s)) => s,
+                _ => None,
+            },
             LogicalPlan::Distinct(
                 Distinct::All(input) | Distinct::On(DistinctOn { input, .. }),
             ) => input.max_rows(),
@@ -1900,9 +1853,6 @@ impl LogicalPlan {
                             }
                         }
                     }
-                    LogicalPlan::CrossJoin(_) => {
-                        write!(f, "CrossJoin:")
-                    }
                     LogicalPlan::Repartition(Repartition {
                         partitioning_scheme,
                         ..
@@ -1930,16 +1880,20 @@ impl LogicalPlan {
                             )
                         }
                     },
-                    LogicalPlan::Limit(Limit {
-                        ref skip,
-                        ref fetch,
-                        ..
-                    }) => {
+                    LogicalPlan::Limit(limit) => {
+                        // Attempt to display `skip` and `fetch` as literals if possible, otherwise as expressions.
+                        let skip_str = match limit.get_skip_type() {
+                            Ok(SkipType::Literal(n)) => n.to_string(),
+                            _ => limit.skip.as_ref().map_or_else(|| "None".to_string(), |x| x.to_string()),
+                        };
+                        let fetch_str = match limit.get_fetch_type() {
+                            Ok(FetchType::Literal(Some(n))) => n.to_string(),
+                            Ok(FetchType::Literal(None)) => "None".to_string(),
+                            _ => limit.fetch.as_ref().map_or_else(|| "None".to_string(), |x| x.to_string())
+                        };
                         write!(
                             f,
-                            "Limit: skip={}, fetch={}",
-                            skip,
-                            fetch.map_or_else(|| "None".to_string(), |x| x.to_string())
+                            "Limit: skip={}, fetch={}", skip_str,fetch_str,
                         )
                     }
                     LogicalPlan::Subquery(Subquery { .. }) => {
@@ -2604,28 +2558,7 @@ impl TableScan {
     }
 }
 
-/// Apply Cross Join to two logical plans
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct CrossJoin {
-    /// Left input
-    pub left: Arc<LogicalPlan>,
-    /// Right input
-    pub right: Arc<LogicalPlan>,
-    /// The output schema, containing fields from the left and right inputs
-    pub schema: DFSchemaRef,
-}
-
-// Manual implementation needed because of `schema` field. Comparison excludes this field.
-impl PartialOrd for CrossJoin {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        match self.left.partial_cmp(&other.left) {
-            Some(Ordering::Equal) => self.right.partial_cmp(&other.right),
-            cmp => cmp,
-        }
-    }
-}
-
-/// Repartition the plan based on a partitioning scheme.
+// Repartition the plan based on a partitioning scheme.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
 pub struct Repartition {
     /// The incoming logical plan
@@ -2799,12 +2732,69 @@ impl PartialOrd for Extension {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
 pub struct Limit {
     /// Number of rows to skip before fetch
-    pub skip: usize,
+    pub skip: Option<Box<Expr>>,
     /// Maximum number of rows to fetch,
     /// None means fetching all rows
-    pub fetch: Option<usize>,
+    pub fetch: Option<Box<Expr>>,
     /// The logical plan
     pub input: Arc<LogicalPlan>,
+}
+
+/// Different types of skip expression in Limit plan.
+pub enum SkipType {
+    /// The skip expression is a literal value.
+    Literal(usize),
+    /// Currently only supports expressions that can be folded into constants.
+    UnsupportedExpr,
+}
+
+/// Different types of fetch expression in Limit plan.
+pub enum FetchType {
+    /// The fetch expression is a literal value.
+    /// `Literal(None)` means the fetch expression is not provided.
+    Literal(Option<usize>),
+    /// Currently only supports expressions that can be folded into constants.
+    UnsupportedExpr,
+}
+
+impl Limit {
+    /// Get the skip type from the limit plan.
+    pub fn get_skip_type(&self) -> Result<SkipType> {
+        match self.skip.as_deref() {
+            Some(expr) => match *expr {
+                Expr::Literal(ScalarValue::Int64(s)) => {
+                    // `skip = NULL` is equivalent to `skip = 0`
+                    let s = s.unwrap_or(0);
+                    if s >= 0 {
+                        Ok(SkipType::Literal(s as usize))
+                    } else {
+                        plan_err!("OFFSET must be >=0, '{}' was provided", s)
+                    }
+                }
+                _ => Ok(SkipType::UnsupportedExpr),
+            },
+            // `skip = None` is equivalent to `skip = 0`
+            None => Ok(SkipType::Literal(0)),
+        }
+    }
+
+    /// Get the fetch type from the limit plan.
+    pub fn get_fetch_type(&self) -> Result<FetchType> {
+        match self.fetch.as_deref() {
+            Some(expr) => match *expr {
+                Expr::Literal(ScalarValue::Int64(Some(s))) => {
+                    if s >= 0 {
+                        Ok(FetchType::Literal(Some(s as usize)))
+                    } else {
+                        plan_err!("LIMIT must be >= 0, '{}' was provided", s)
+                    }
+                }
+                Expr::Literal(ScalarValue::Int64(None)) => Ok(FetchType::Literal(None)),
+                _ => Ok(FetchType::UnsupportedExpr),
+            },
+            None => Ok(FetchType::Literal(None)),
+        }
+    }
 }
 
 /// Removes duplicate rows from the input
@@ -3392,8 +3382,8 @@ pub struct ColumnUnnestList {
     pub depth: usize,
 }
 
-impl fmt::Display for ColumnUnnestList {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl Display for ColumnUnnestList {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "{}|depth={}", self.output_column, self.depth)
     }
 }
@@ -4109,5 +4099,26 @@ digraph {
             Some(Ordering::Greater)
         );
         assert_eq!(describe_table.partial_cmp(&describe_table_clone), None);
+    }
+
+    #[test]
+    fn test_limit_with_new_children() {
+        let limit = LogicalPlan::Limit(Limit {
+            skip: None,
+            fetch: Some(Box::new(Expr::Literal(
+                ScalarValue::new_ten(&DataType::UInt32).unwrap(),
+            ))),
+            input: Arc::new(LogicalPlan::Values(Values {
+                schema: Arc::new(DFSchema::empty()),
+                values: vec![vec![]],
+            })),
+        });
+        let new_limit = limit
+            .with_new_exprs(
+                limit.expressions(),
+                limit.inputs().into_iter().cloned().collect(),
+            )
+            .unwrap();
+        assert_eq!(limit, new_limit);
     }
 }

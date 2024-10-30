@@ -18,6 +18,7 @@
 //! [`HashJoinExec`] Partitioned Hash Join Operator
 
 use std::fmt;
+use std::mem::size_of;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::task::Poll;
@@ -849,7 +850,7 @@ async fn collect_left_input(
 
     // Estimation of memory size, required for hashtable, prior to allocation.
     // Final result can be verified using `RawTable.allocation_info()`
-    let fixed_size = std::mem::size_of::<JoinHashMap>();
+    let fixed_size = size_of::<JoinHashMap>();
     let estimated_hashtable_size =
         estimate_memory_size::<(u64, u64)>(num_rows, fixed_size)?;
 
@@ -1524,7 +1525,7 @@ impl Stream for HashJoinStream {
     fn poll_next(
         mut self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Option<Self::Item>> {
+    ) -> Poll<Option<Self::Item>> {
         self.poll_next_impl(cx)
     }
 }
@@ -3594,10 +3595,7 @@ mod tests {
             let stream = join.execute(0, task_ctx).unwrap();
 
             // Expect that an error is returned
-            let result_string = crate::common::collect(stream)
-                .await
-                .unwrap_err()
-                .to_string();
+            let result_string = common::collect(stream).await.unwrap_err().to_string();
             assert!(
                 result_string.contains("bad data error"),
                 "actual: {result_string}"

@@ -110,7 +110,7 @@ struct CustomDataSourceInner {
 }
 
 impl Debug for CustomDataSource {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.write_str("custom_db")
     }
 }
@@ -220,7 +220,7 @@ impl CustomExec {
 }
 
 impl DisplayAs for CustomExec {
-    fn fmt_as(&self, _t: DisplayFormatType, f: &mut fmt::Formatter) -> std::fmt::Result {
+    fn fmt_as(&self, _t: DisplayFormatType, f: &mut Formatter) -> fmt::Result {
         write!(f, "CustomExec")
     }
 }

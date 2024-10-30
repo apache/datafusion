@@ -41,6 +41,7 @@ use datafusion::physical_plan::joins::{
 };
 use datafusion::physical_plan::memory::MemoryExec;
 
+use crate::fuzz_cases::join_fuzz::JoinTestType::NljHj;
 use datafusion::prelude::{SessionConfig, SessionContext};
 use test_utils::stagger_batch_with_seed;
 
@@ -89,6 +90,7 @@ fn col_lt_col_filter(schema1: Arc<Schema>, schema2: Arc<Schema>) -> JoinFilter {
 }
 
 #[tokio::test]
+#[allow(unused_qualifications)]
 async fn test_inner_join_1k_filtered() {
     JoinFuzzTestCase::new(
         make_staggered_batches(1000),
@@ -101,6 +103,7 @@ async fn test_inner_join_1k_filtered() {
 }
 
 #[tokio::test]
+#[allow(unused_qualifications)]
 async fn test_inner_join_1k() {
     JoinFuzzTestCase::new(
         make_staggered_batches(1000),
@@ -113,6 +116,7 @@ async fn test_inner_join_1k() {
 }
 
 #[tokio::test]
+#[allow(unused_qualifications)]
 async fn test_left_join_1k() {
     JoinFuzzTestCase::new(
         make_staggered_batches(1000),
@@ -125,6 +129,7 @@ async fn test_left_join_1k() {
 }
 
 #[tokio::test]
+#[allow(unused_qualifications)]
 async fn test_left_join_1k_filtered() {
     JoinFuzzTestCase::new(
         make_staggered_batches(1000),
@@ -137,6 +142,7 @@ async fn test_left_join_1k_filtered() {
 }
 
 #[tokio::test]
+#[allow(unused_qualifications)]
 async fn test_right_join_1k() {
     JoinFuzzTestCase::new(
         make_staggered_batches(1000),
@@ -149,8 +155,7 @@ async fn test_right_join_1k() {
 }
 
 #[tokio::test]
-// flaky for HjSmj case
-// https://github.com/apache/datafusion/issues/12359
+#[allow(unused_qualifications)]
 async fn test_right_join_1k_filtered() {
     JoinFuzzTestCase::new(
         make_staggered_batches(1000),
@@ -158,11 +163,12 @@ async fn test_right_join_1k_filtered() {
         JoinType::Right,
         Some(Box::new(col_lt_col_filter)),
     )
-    .run_test(&[JoinTestType::NljHj], false)
+    .run_test(&[JoinTestType::HjSmj, JoinTestType::NljHj], false)
     .await
 }
 
 #[tokio::test]
+#[allow(unused_qualifications)]
 async fn test_full_join_1k() {
     JoinFuzzTestCase::new(
         make_staggered_batches(1000),
@@ -175,6 +181,7 @@ async fn test_full_join_1k() {
 }
 
 #[tokio::test]
+#[allow(unused_qualifications)]
 // flaky for HjSmj case
 // https://github.com/apache/datafusion/issues/12359
 async fn test_full_join_1k_filtered() {
@@ -189,6 +196,7 @@ async fn test_full_join_1k_filtered() {
 }
 
 #[tokio::test]
+#[allow(unused_qualifications)]
 async fn test_semi_join_1k() {
     JoinFuzzTestCase::new(
         make_staggered_batches(1000),
@@ -201,6 +209,7 @@ async fn test_semi_join_1k() {
 }
 
 #[tokio::test]
+#[allow(unused_qualifications)]
 async fn test_semi_join_1k_filtered() {
     JoinFuzzTestCase::new(
         make_staggered_batches(1000),
@@ -213,6 +222,7 @@ async fn test_semi_join_1k_filtered() {
 }
 
 #[tokio::test]
+#[allow(unused_qualifications)]
 async fn test_anti_join_1k() {
     JoinFuzzTestCase::new(
         make_staggered_batches(1000),
@@ -225,9 +235,7 @@ async fn test_anti_join_1k() {
 }
 
 #[tokio::test]
-// flaky for HjSmj case, giving 1 rows difference sometimes
-// https://github.com/apache/datafusion/issues/11555
-#[ignore]
+#[allow(unused_qualifications)]
 async fn test_anti_join_1k_filtered() {
     JoinFuzzTestCase::new(
         make_staggered_batches(1000),
@@ -235,7 +243,7 @@ async fn test_anti_join_1k_filtered() {
         JoinType::LeftAnti,
         Some(Box::new(col_lt_col_filter)),
     )
-    .run_test(&[JoinTestType::NljHj], false)
+    .run_test(&[JoinTestType::HjSmj, NljHj], false)
     .await
 }
 
@@ -453,6 +461,7 @@ impl JoinFuzzTestCase {
     /// `join_tests` - identifies what join types to test
     /// if `debug` flag is set the test will save randomly generated inputs and outputs to user folders,
     /// so it is easy to debug a test on top of the failed data
+    #[allow(unused_qualifications)]
     async fn run_test(&self, join_tests: &[JoinTestType], debug: bool) {
         for batch_size in self.batch_sizes {
             let session_config = SessionConfig::new().with_batch_size(*batch_size);

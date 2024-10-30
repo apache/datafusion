@@ -693,7 +693,7 @@ mod tests {
         let result = cast(
             col("a", &schema).unwrap(),
             &schema,
-            DataType::Interval(IntervalUnit::MonthDayNano),
+            Interval(IntervalUnit::MonthDayNano),
         );
         result.expect_err("expected Invalid CAST");
     }

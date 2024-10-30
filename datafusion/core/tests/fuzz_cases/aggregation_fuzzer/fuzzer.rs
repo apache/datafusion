@@ -79,7 +79,7 @@ impl AggregationFuzzerBuilder {
         if let Some(data_gen_config) = &self.data_gen_config {
             for sort_keys in &data_gen_config.sort_keys_set {
                 let group_by_columns = sort_keys.iter().map(|s| s.as_str());
-                query_builder = query_builder.with_group_by_columns(group_by_columns);
+                query_builder = query_builder.set_group_by_columns(group_by_columns);
                 for _ in 0..NUM_QUERIES {
                     let sql = query_builder.generate_query();
                     self.candidate_sqls.push(Arc::from(sql));
@@ -87,7 +87,7 @@ impl AggregationFuzzerBuilder {
             }
         }
         // also add a query with no grouping
-        query_builder = query_builder.with_group_by_columns(vec![]);
+        query_builder = query_builder.set_group_by_columns(vec![]);
         let sql = query_builder.generate_query();
         self.candidate_sqls.push(Arc::from(sql));
 
@@ -122,7 +122,7 @@ impl AggregationFuzzerBuilder {
     }
 }
 
-impl std::default::Default for AggregationFuzzerBuilder {
+impl Default for AggregationFuzzerBuilder {
     fn default() -> Self {
         Self::new()
     }
@@ -393,7 +393,7 @@ pub struct QueryBuilder {
 }
 impl QueryBuilder {
     pub fn new() -> Self {
-        std::default::Default::default()
+        Default::default()
     }
 
     /// return the table name if any
@@ -430,8 +430,8 @@ impl QueryBuilder {
         self
     }
 
-    /// Add a column to be used in the group bys
-    pub fn with_group_by_columns<'a>(
+    /// Set the columns to be used in the group bys clauses
+    pub fn set_group_by_columns<'a>(
         mut self,
         group_by: impl IntoIterator<Item = &'a str>,
     ) -> Self {
@@ -439,7 +439,7 @@ impl QueryBuilder {
         self
     }
 
-    /// Add a column to be used as an argument in the aggregate functions
+    /// Add one or more columns to be used as an argument in the aggregate functions
     pub fn with_aggregate_arguments<'a>(
         mut self,
         arguments: impl IntoIterator<Item = &'a str>,

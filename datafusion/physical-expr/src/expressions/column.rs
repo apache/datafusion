@@ -107,7 +107,7 @@ impl std::fmt::Display for Column {
 
 impl PhysicalExpr for Column {
     /// Return a reference to Any that can be used for downcasting
-    fn as_any(&self) -> &dyn std::any::Any {
+    fn as_any(&self) -> &dyn Any {
         self
     }
 

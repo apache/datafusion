@@ -70,7 +70,7 @@ impl AggregateUDFImpl for BetterAvgUdaf {
         unimplemented!("should not be invoked")
     }
 
-    fn state_fields(&self, _args: StateFieldsArgs) -> Result<Vec<arrow_schema::Field>> {
+    fn state_fields(&self, _args: StateFieldsArgs) -> Result<Vec<Field>> {
         unimplemented!("should not be invoked")
     }
 
@@ -90,8 +90,7 @@ impl AggregateUDFImpl for BetterAvgUdaf {
     fn simplify(&self) -> Option<AggregateFunctionSimplification> {
         // as an example for this functionality we replace UDF function
         // with build-in aggregate function to illustrate the use
-        let simplify = |aggregate_function: datafusion_expr::expr::AggregateFunction,
-                        _: &dyn SimplifyInfo| {
+        let simplify = |aggregate_function: AggregateFunction, _: &dyn SimplifyInfo| {
             Ok(Expr::AggregateFunction(AggregateFunction::new_udf(
                 avg_udaf(),
                 // yes it is the same Avg, `BetterAvgUdaf` was just a

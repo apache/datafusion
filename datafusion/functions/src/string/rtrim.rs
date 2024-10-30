@@ -124,6 +124,7 @@ fn get_rtrim_doc() -> &'static Documentation {
 ```"#)
             .with_standard_argument("str", Some("String"))
             .with_argument("trim_str", "String expression to trim from the end of the input string. Can be a constant, column, or function, and any combination of arithmetic operators. _Default is whitespace characters._")
+            .with_alternative_syntax("trim(TRAILING trim_str FROM str)")
             .with_related_udf("btrim")
             .with_related_udf("ltrim")
             .build()

@@ -67,7 +67,7 @@ impl ExplainExec {
         &self.stringified_plans
     }
 
-    /// access to verbose
+    /// Access to verbose
     pub fn verbose(&self) -> bool {
         self.verbose
     }
@@ -112,7 +112,7 @@ impl ExecutionPlan for ExplainExec {
     }
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
-        // this is a leaf node and has no children
+        // This is a leaf node and has no children
         vec![]
     }
 

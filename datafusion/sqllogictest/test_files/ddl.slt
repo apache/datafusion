@@ -799,3 +799,9 @@ CREATE EXTERNAL TEMPORARY TABLE tty STORED as ARROW LOCATION '../core/tests/data
 
 statement error DataFusion error: This feature is not implemented: Temporary views not supported
 CREATE TEMPORARY VIEW y AS VALUES (1,2,3);
+
+query error DataFusion error: Schema error: No field named a\.
+EXPLAIN CREATE TABLE t(a int) AS VALUES (a + a);
+
+statement error DataFusion error: Schema error: No field named a\.
+CREATE TABLE t(a int) AS SELECT x FROM (VALUES (a)) t(x) WHERE false;

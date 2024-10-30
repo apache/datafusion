@@ -367,17 +367,6 @@ fn optimize_projections(
                 right_indices.with_projection_beneficial(),
             ]
         }
-        LogicalPlan::CrossJoin(cross_join) => {
-            let left_len = cross_join.left.schema().fields().len();
-            let (left_indices, right_indices) =
-                split_join_requirements(left_len, indices, &JoinType::Inner);
-            // Joins benefit from "small" input tables (lower memory usage).
-            // Therefore, each child benefits from projection:
-            vec![
-                left_indices.with_projection_beneficial(),
-                right_indices.with_projection_beneficial(),
-            ]
-        }
         // these nodes are explicitly rewritten in the match statement above
         LogicalPlan::Projection(_)
         | LogicalPlan::Aggregate(_)

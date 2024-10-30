@@ -56,7 +56,7 @@ pub(crate) struct ReceiverStreamBuilder<O> {
 }
 
 impl<O: Send + 'static> ReceiverStreamBuilder<O> {
-    /// create new channels with the specified buffer size
+    /// Create new channels with the specified buffer size
     pub fn new(capacity: usize) -> Self {
         let (tx, rx) = tokio::sync::mpsc::channel(capacity);
 
@@ -83,10 +83,10 @@ impl<O: Send + 'static> ReceiverStreamBuilder<O> {
     }
 
     /// Spawn a blocking task that will be aborted if this builder (or the stream
-    /// built from it) are dropped
+    /// built from it) are dropped.
     ///
-    /// this is often used to spawn tasks that write to the sender
-    /// retrieved from `Self::tx`
+    /// This is often used to spawn tasks that write to the sender
+    /// retrieved from `Self::tx`.
     pub fn spawn_blocking<F>(&mut self, f: F)
     where
         F: FnOnce() -> Result<()>,
@@ -103,7 +103,7 @@ impl<O: Send + 'static> ReceiverStreamBuilder<O> {
             mut join_set,
         } = self;
 
-        // don't need tx
+        // Doesn't need tx
         drop(tx);
 
         // future that checks the result of the join set, and propagates panic if seen
@@ -112,7 +112,7 @@ impl<O: Send + 'static> ReceiverStreamBuilder<O> {
                 match result {
                     Ok(task_result) => {
                         match task_result {
-                            // nothing to report
+                            // Nothing to report
                             Ok(_) => continue,
                             // This means a blocking task error
                             Err(error) => return Some(Err(error)),
@@ -215,7 +215,7 @@ pub struct RecordBatchReceiverStreamBuilder {
 }
 
 impl RecordBatchReceiverStreamBuilder {
-    /// create new channels with the specified buffer size
+    /// Create new channels with the specified buffer size
     pub fn new(schema: SchemaRef, capacity: usize) -> Self {
         Self {
             schema,
@@ -256,7 +256,7 @@ impl RecordBatchReceiverStreamBuilder {
         self.inner.spawn_blocking(f)
     }
 
-    /// runs the `partition` of the `input` ExecutionPlan on the
+    /// Runs the `partition` of the `input` ExecutionPlan on the
     /// tokio threadpool and writes its outputs to this stream
     ///
     /// If the input partition produces an error, the error will be
@@ -299,7 +299,7 @@ impl RecordBatchReceiverStreamBuilder {
                     return Ok(());
                 }
 
-                // stop after the first error is encontered (don't
+                // Stop after the first error is encountered (Don't
                 // drive all streams to completion)
                 if is_err {
                     debug!(
@@ -437,12 +437,12 @@ impl ObservedStream {
 }
 
 impl RecordBatchStream for ObservedStream {
-    fn schema(&self) -> arrow::datatypes::SchemaRef {
+    fn schema(&self) -> SchemaRef {
         self.inner.schema()
     }
 }
 
-impl futures::Stream for ObservedStream {
+impl Stream for ObservedStream {
     type Item = Result<RecordBatch>;
 
     fn poll_next(
@@ -483,13 +483,13 @@ mod test {
     async fn record_batch_receiver_stream_propagates_panics_early_shutdown() {
         let schema = schema();
 
-        // make 2 partitions, second partition panics before the first
+        // Make 2 partitions, second partition panics before the first
         let num_partitions = 2;
         let input = PanicExec::new(Arc::clone(&schema), num_partitions)
             .with_partition_panic(0, 10)
             .with_partition_panic(1, 3); // partition 1 should panic first (after 3 )
 
-        // ensure that the panic results in an early shutdown (that
+        // Ensure that the panic results in an early shutdown (that
         // everything stops after the first panic).
 
         // Since the stream reads every other batch: (0,1,0,1,0,panic)
@@ -512,10 +512,10 @@ mod test {
         builder.run_input(Arc::new(input), 0, Arc::clone(&task_ctx));
         let stream = builder.build();
 
-        // input should still be present
+        // Input should still be present
         assert!(std::sync::Weak::strong_count(&refs) > 0);
 
-        // drop the stream, ensure the refs go to zero
+        // Drop the stream, ensure the refs go to zero
         drop(stream);
         assert_strong_count_converges_to_zero(refs).await;
     }
@@ -539,7 +539,7 @@ mod test {
         builder.run_input(Arc::new(error_stream), 0, Arc::clone(&task_ctx));
         let mut stream = builder.build();
 
-        // get the first result, which should be an error
+        // Get the first result, which should be an error
         let first_batch = stream.next().await.unwrap();
         let first_err = first_batch.unwrap_err();
         assert_eq!(first_err.strip_backtrace(), "Execution error: Test1");
@@ -570,7 +570,7 @@ mod test {
         }
         let mut stream = builder.build();
 
-        // drain the stream until it is complete, panic'ing on error
+        // Drain the stream until it is complete, panic'ing on error
         let mut num_batches = 0;
         while let Some(next) = stream.next().await {
             next.unwrap();

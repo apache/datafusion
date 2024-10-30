@@ -418,7 +418,7 @@ impl<T: BatchTransformer + Unpin + Send> Stream for CrossJoinStream<T> {
     fn poll_next(
         mut self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Option<Self::Item>> {
+    ) -> Poll<Option<Self::Item>> {
         self.poll_next_impl(cx)
     }
 }
@@ -429,7 +429,7 @@ impl<T: BatchTransformer> CrossJoinStream<T> {
     fn poll_next_impl(
         &mut self,
         cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Option<Result<RecordBatch>>> {
+    ) -> Poll<Option<Result<RecordBatch>>> {
         loop {
             return match self.state {
                 CrossJoinStreamState::WaitBuildSide => {

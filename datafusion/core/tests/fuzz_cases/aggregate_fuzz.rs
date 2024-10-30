@@ -75,7 +75,7 @@ async fn test_min() {
         .with_aggregate_function("min")
         // min works on all column types
         .with_aggregate_arguments(data_gen_config.all_columns())
-        .with_group_by_columns(data_gen_config.all_columns());
+        .set_group_by_columns(data_gen_config.all_columns());
 
     AggregationFuzzerBuilder::from(data_gen_config)
         .add_query_builder(query_builder)
@@ -94,7 +94,7 @@ async fn test_max() {
         .with_aggregate_function("max")
         // max works on all column types
         .with_aggregate_arguments(data_gen_config.all_columns())
-        .with_group_by_columns(data_gen_config.all_columns());
+        .set_group_by_columns(data_gen_config.all_columns());
 
     AggregationFuzzerBuilder::from(data_gen_config)
         .add_query_builder(query_builder)
@@ -114,7 +114,7 @@ async fn test_sum() {
         .with_distinct_aggregate_function("sum")
         // sum only works on numeric columns
         .with_aggregate_arguments(data_gen_config.numeric_columns())
-        .with_group_by_columns(data_gen_config.all_columns());
+        .set_group_by_columns(data_gen_config.all_columns());
 
     AggregationFuzzerBuilder::from(data_gen_config)
         .add_query_builder(query_builder)
@@ -134,7 +134,7 @@ async fn test_count() {
         .with_distinct_aggregate_function("count")
         // count work for all arguments
         .with_aggregate_arguments(data_gen_config.all_columns())
-        .with_group_by_columns(data_gen_config.all_columns());
+        .set_group_by_columns(data_gen_config.all_columns());
 
     AggregationFuzzerBuilder::from(data_gen_config)
         .add_query_builder(query_builder)
@@ -160,6 +160,8 @@ fn baseline_config() -> DatasetGeneratorConfig {
         ColumnDescr::new("u16", DataType::UInt16),
         ColumnDescr::new("u32", DataType::UInt32),
         ColumnDescr::new("u64", DataType::UInt64),
+        ColumnDescr::new("date32", DataType::Date32),
+        ColumnDescr::new("date64", DataType::Date64),
         // TODO: date/time columns
         // todo decimal columns
         // begin string columns

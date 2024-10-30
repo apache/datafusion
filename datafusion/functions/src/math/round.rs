@@ -138,7 +138,7 @@ pub fn round(args: &[ArrayRef]) -> Result<ArrayRef> {
     }
 
     match args[0].data_type() {
-        DataType::Float64 => match decimal_places {
+        Float64 => match decimal_places {
             ColumnarValue::Scalar(ScalarValue::Int64(Some(decimal_places))) => {
                 let decimal_places: i32 = decimal_places.try_into().map_err(|e| {
                     exec_datafusion_err!(
@@ -181,7 +181,7 @@ pub fn round(args: &[ArrayRef]) -> Result<ArrayRef> {
             }
         },
 
-        DataType::Float32 => match decimal_places {
+        Float32 => match decimal_places {
             ColumnarValue::Scalar(ScalarValue::Int64(Some(decimal_places))) => {
                 let decimal_places: i32 = decimal_places.try_into().map_err(|e| {
                     exec_datafusion_err!(

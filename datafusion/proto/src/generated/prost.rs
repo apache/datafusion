@@ -1818,8 +1818,8 @@ pub enum BuiltInWindowFunction {
     ///   RANK = 1;
     ///   DENSE_RANK = 2;
     ///   PERCENT_RANK = 3;
-    CumeDist = 4,
-    Ntile = 5,
+    ///   CUME_DIST = 4;
+    ///   NTILE = 5;
     /// LAG = 6;
     /// LEAD = 7;
     FirstValue = 8,
@@ -1834,8 +1834,6 @@ impl BuiltInWindowFunction {
     pub fn as_str_name(&self) -> &'static str {
         match self {
             Self::Unspecified => "UNSPECIFIED",
-            Self::CumeDist => "CUME_DIST",
-            Self::Ntile => "NTILE",
             Self::FirstValue => "FIRST_VALUE",
             Self::LastValue => "LAST_VALUE",
             Self::NthValue => "NTH_VALUE",
@@ -1845,8 +1843,6 @@ impl BuiltInWindowFunction {
     pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
         match value {
             "UNSPECIFIED" => Some(Self::Unspecified),
-            "CUME_DIST" => Some(Self::CumeDist),
-            "NTILE" => Some(Self::Ntile),
             "FIRST_VALUE" => Some(Self::FirstValue),
             "LAST_VALUE" => Some(Self::LastValue),
             "NTH_VALUE" => Some(Self::NthValue),

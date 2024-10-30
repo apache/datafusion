@@ -98,7 +98,7 @@ impl OptimizerRule for EliminateCrossJoin {
                 LogicalPlan::Join(Join {
                     join_type: JoinType::Inner,
                     ..
-                }) | LogicalPlan::CrossJoin(_)
+                })
             );
 
             if !rewriteable {
@@ -241,20 +241,6 @@ fn flatten_join_inputs(
                 all_filters,
             )?;
         }
-        LogicalPlan::CrossJoin(join) => {
-            flatten_join_inputs(
-                Arc::unwrap_or_clone(join.left),
-                possible_join_keys,
-                all_inputs,
-                all_filters,
-            )?;
-            flatten_join_inputs(
-                Arc::unwrap_or_clone(join.right),
-                possible_join_keys,
-                all_inputs,
-                all_filters,
-            )?;
-        }
         _ => {
             all_inputs.push(plan);
         }
@@ -270,23 +256,18 @@ fn can_flatten_join_inputs(plan: &LogicalPlan) -> bool {
     // can only flatten inner / cross joins
     match plan {
         LogicalPlan::Join(join) if join.join_type == JoinType::Inner => {}
-        LogicalPlan::CrossJoin(_) => {}
         _ => return false,
     };
 
     for child in plan.inputs() {
-        match child {
-            LogicalPlan::Join(Join {
-                join_type: JoinType::Inner,
-                ..
-            })
-            | LogicalPlan::CrossJoin(_) => {
-                if !can_flatten_join_inputs(child) {
-                    return false;
-                }
+        if let LogicalPlan::Join(Join {
+            join_type: JoinType::Inner,
+            ..
+        }) = child
+        {
+            if !can_flatten_join_inputs(child) {
+                return false;
             }
-            // the child is not a join/cross join
-            _ => (),
         }
     }
     true

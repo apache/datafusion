@@ -89,9 +89,9 @@ impl ScalarUDFImpl for MakeDateFunc {
                 ColumnarValue::Array(a) => Some(a.len()),
             });
 
-        let years = args[0].cast_to(&DataType::Int32, None)?;
-        let months = args[1].cast_to(&DataType::Int32, None)?;
-        let days = args[2].cast_to(&DataType::Int32, None)?;
+        let years = args[0].cast_to(&Int32, None)?;
+        let months = args[1].cast_to(&Int32, None)?;
+        let days = args[2].cast_to(&Int32, None)?;
 
         let scalar_value_fn = |col: &ColumnarValue| -> Result<i32> {
             let ColumnarValue::Scalar(s) = col else {

@@ -24,7 +24,7 @@ SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "${SOURCE_DIR}/../" && pwd
 
 
-TARGET_FILE="docs/source/user-guide/sql/aggregate_functions_new.md"
+TARGET_FILE="docs/source/user-guide/sql/aggregate_functions.md"
 PRINT_AGGREGATE_FUNCTION_DOCS_COMMAND="cargo run --manifest-path datafusion/core/Cargo.toml --bin print_functions_docs -- aggregate"
 
 echo "Inserting header"
@@ -56,13 +56,7 @@ update documentation for an individual UDF or the
 dev/update_function_docs.sh file for updating surrounding text.
 -->
 
-# Aggregate Functions (NEW)
-
-Note: this documentation is in the process of being migrated to be  [automatically created from the codebase].
-Please see the [Aggregate Functions (old)](aggregate_functions.md) page for
-the rest of the documentation.
-
-[automatically created from the codebase]: https://github.com/apache/datafusion/issues/12740
+# Aggregate Functions
 
 Aggregate functions operate on a set of values to compute a single result.
 EOF
@@ -75,7 +69,7 @@ npx prettier@2.3.2 --write "$TARGET_FILE"
 
 echo "'$TARGET_FILE' successfully updated!"
 
-TARGET_FILE="docs/source/user-guide/sql/scalar_functions_new.md"
+TARGET_FILE="docs/source/user-guide/sql/scalar_functions.md"
 PRINT_SCALAR_FUNCTION_DOCS_COMMAND="cargo run --manifest-path datafusion/core/Cargo.toml --bin print_functions_docs -- scalar"
 
 echo "Inserting header"
@@ -107,13 +101,7 @@ update documentation for an individual UDF or the
 dev/update_function_docs.sh file for updating surrounding text.
 -->
 
-# Scalar Functions (NEW)
-
-Note: this documentation is in the process of being migrated to be [automatically created from the codebase].
-Please see the [Scalar Functions (old)](aggregate_functions.md) page for
-the rest of the documentation.
-
-[automatically created from the codebase]: https://github.com/apache/datafusion/issues/12740
+# Scalar Functions
 
 EOF
 
@@ -297,4 +285,3 @@ echo "Running prettier"
 npx prettier@2.3.2 --write "$TARGET_FILE"
 
 echo "'$TARGET_FILE' successfully updated!"
-
