@@ -139,14 +139,14 @@ impl WindowExpr for PlainAggregateWindowExpr {
                 Arc::new(PlainAggregateWindowExpr::new(
                     Arc::new(reverse_expr),
                     &self.partition_by.clone(),
-                    reverse_order_bys(&self.order_by.as_ref()).as_ref(),
+                    reverse_order_bys(self.order_by.as_ref()).as_ref(),
                     Arc::new(self.window_frame.reverse()),
                 )) as _
             } else {
                 Arc::new(SlidingAggregateWindowExpr::new(
                     Arc::new(reverse_expr),
                     &self.partition_by.clone(),
-                    reverse_order_bys(&self.order_by.as_ref()).as_ref(),
+                    reverse_order_bys(self.order_by.as_ref()).as_ref(),
                     Arc::new(self.window_frame.reverse()),
                 )) as _
             }

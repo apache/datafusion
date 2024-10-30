@@ -511,7 +511,7 @@ impl GroupedHashAggregateStream {
         let group_ordering = GroupOrdering::try_new(
             &group_schema,
             &agg.input_order_mode,
-            &ordering.as_ref(),
+            ordering.as_ref(),
         )?;
 
         let group_values = new_group_values(group_schema)?;

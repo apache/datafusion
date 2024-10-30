@@ -237,7 +237,7 @@ fn pushdown_requirement_to_children(
             Some(JoinSide::Left) => try_pushdown_requirements_to_join(
                 smj,
                 parent_required,
-                &parent_required_expr.as_ref(),
+                parent_required_expr.as_ref(),
                 JoinSide::Left,
             ),
             Some(JoinSide::Right) => {
@@ -250,7 +250,7 @@ fn pushdown_requirement_to_children(
                 try_pushdown_requirements_to_join(
                     smj,
                     parent_required,
-                    &new_right_required_expr.as_ref(),
+                    new_right_required_expr.as_ref(),
                     JoinSide::Right,
                 )
             }

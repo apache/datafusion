@@ -507,7 +507,7 @@ pub fn calculate_join_output_ordering(
                 .ok()?;
                 merge_vectors(
                     left_ordering,
-                    &offset_ordering(right_ordering, &join_type, left_columns_len)
+                    offset_ordering(right_ordering, &join_type, left_columns_len)
                         .as_ref(),
                 )
             } else {
@@ -523,7 +523,7 @@ pub fn calculate_join_output_ordering(
                 )
                 .ok()?;
                 merge_vectors(
-                    &offset_ordering(right_ordering, &join_type, left_columns_len)
+                    offset_ordering(right_ordering, &join_type, left_columns_len)
                         .as_ref(),
                     left_ordering,
                 )
@@ -2673,8 +2673,8 @@ mod tests {
         {
             assert_eq!(
                 calculate_join_output_ordering(
-                    &left_ordering.as_ref(),
-                    &right_ordering.as_ref(),
+                    left_ordering.as_ref(),
+                    right_ordering.as_ref(),
                     join_type,
                     &on_columns,
                     left_columns_len,

@@ -463,7 +463,7 @@ impl AggregateFunctionExpr {
             ReversedUDAF::NotSupported => None,
             ReversedUDAF::Identical => Some(self.clone()),
             ReversedUDAF::Reversed(reverse_udf) => {
-                let reverse_ordering_req = reverse_order_bys(&self.ordering_req.as_ref());
+                let reverse_ordering_req = reverse_order_bys(self.ordering_req.as_ref());
                 let mut name = self.name().to_string();
                 // If the function is changed, we need to reverse order_by clause as well
                 // i.e. First(a order by b asc null first) -> Last(a order by b desc null last)

@@ -153,7 +153,7 @@ impl<'a> StreamingMergeBuilder<'a> {
 
         let streams = RowCursorStream::try_new(
             schema.as_ref(),
-            &expressions,
+            expressions,
             streams,
             reservation.new_empty(),
         )?;
