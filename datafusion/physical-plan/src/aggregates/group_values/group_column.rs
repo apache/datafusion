@@ -1555,12 +1555,69 @@ mod tests {
 
         let output = Box::new(builder).build();
         // should be 2 output buffers to hold all the data
-        assert_eq!(output.as_string_view().data_buffers().len(), 2,);
+        assert_eq!(output.as_string_view().data_buffers().len(), 2);
         assert_eq!(&output, &builder_array)
     }
 
     #[test]
     fn test_byte_view_equal_to() {
+        let append = |builder: &mut ByteViewGroupValueBuilder<StringViewType>,
+                      builder_array: &ArrayRef,
+                      append_rows: &[usize]| {
+            for &index in append_rows {
+                builder.append_val(builder_array, index);
+            }
+        };
+
+        let equal_to = |builder: &ByteViewGroupValueBuilder<StringViewType>,
+                        lhs_rows: &[usize],
+                        input_array: &ArrayRef,
+                        rhs_rows: &[usize],
+                        equal_to_results: &mut Vec<bool>| {
+            let iter = lhs_rows.iter().zip(rhs_rows.iter());
+            for (idx, (&lhs_row, &rhs_row)) in iter.enumerate() {
+                equal_to_results[idx] = builder.equal_to(lhs_row, &input_array, rhs_row);
+            }
+        };
+
+        test_byte_view_equal_to_internal(append, equal_to);
+    }
+
+    #[test]
+    fn test_byte_view_vectorized_equal_to() {
+        let append = |builder: &mut ByteViewGroupValueBuilder<StringViewType>,
+                      builder_array: &ArrayRef,
+                      append_rows: &[usize]| {
+            builder.vectorized_append(builder_array, append_rows);
+        };
+
+        let equal_to = |builder: &ByteViewGroupValueBuilder<StringViewType>,
+                        lhs_rows: &[usize],
+                        input_array: &ArrayRef,
+                        rhs_rows: &[usize],
+                        equal_to_results: &mut Vec<bool>| {
+            builder.vectorized_equal_to(
+                lhs_rows,
+                input_array,
+                rhs_rows,
+                equal_to_results,
+            );
+        };
+
+        test_byte_view_equal_to_internal(append, equal_to);
+    }
+
+    fn test_byte_view_equal_to_internal<A, E>(mut append: A, mut equal_to: E)
+    where
+        A: FnMut(&mut ByteViewGroupValueBuilder<StringViewType>, &ArrayRef, &[usize]),
+        E: FnMut(
+            &ByteViewGroupValueBuilder<StringViewType>,
+            &[usize],
+            &ArrayRef,
+            &[usize],
+            &mut Vec<bool>,
+        ),
+    {
         // Will cover such cases:
         //   - exist null, input not null
         //   - exist null, input null; values not equal
@@ -1600,15 +1657,7 @@ mod tests {
             Some("I am a long string for test eq in completed"),
             Some("I am a long string for test eq in progress"),
         ])) as ArrayRef;
-        builder.append_val(&builder_array, 0);
-        builder.append_val(&builder_array, 1);
-        builder.append_val(&builder_array, 2);
-        builder.append_val(&builder_array, 3);
-        builder.append_val(&builder_array, 4);
-        builder.append_val(&builder_array, 5);
-        builder.append_val(&builder_array, 6);
-        builder.append_val(&builder_array, 7);
-        builder.append_val(&builder_array, 8);
+        append(&mut builder, &builder_array, &[0, 1, 2, 3, 4, 5, 6, 7, 8]);
 
         // Define input array
         let (views, buffer, _nulls) = StringViewArray::from(vec![
@@ -1646,18 +1695,27 @@ mod tests {
             Arc::new(StringViewArray::new(views, buffer, Some(nulls))) as ArrayRef;
 
         // Check
-        assert!(!builder.equal_to(0, &input_array, 0));
-        assert!(builder.equal_to(1, &input_array, 1));
-        assert!(builder.equal_to(2, &input_array, 2));
-        assert!(!builder.equal_to(3, &input_array, 3));
-        assert!(!builder.equal_to(4, &input_array, 4));
-        assert!(!builder.equal_to(5, &input_array, 5));
-        assert!(builder.equal_to(6, &input_array, 6));
-        assert!(!builder.equal_to(7, &input_array, 7));
-        assert!(!builder.equal_to(7, &input_array, 8));
-        assert!(builder.equal_to(7, &input_array, 9));
-        assert!(!builder.equal_to(8, &input_array, 10));
-        assert!(builder.equal_to(8, &input_array, 11));
+        let mut equal_to_results = vec![true; input_array.len()];
+        equal_to(
+            &builder,
+            &[0, 1, 2, 3, 4, 5, 6, 7, 7, 7, 8, 8],
+            &input_array,
+            &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
+            &mut equal_to_results,
+        );
+
+        assert!(!equal_to_results[0]);
+        assert!(equal_to_results[1]);
+        assert!(equal_to_results[2]);
+        assert!(!equal_to_results[3]);
+        assert!(!equal_to_results[4]);
+        assert!(!equal_to_results[5]);
+        assert!(equal_to_results[6]);
+        assert!(!equal_to_results[7]);
+        assert!(!equal_to_results[8]);
+        assert!(equal_to_results[9]);
+        assert!(!equal_to_results[10]);
+        assert!(equal_to_results[11]);
     }
 
     #[test]
