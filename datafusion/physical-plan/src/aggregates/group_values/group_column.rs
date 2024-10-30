@@ -1414,6 +1414,63 @@ mod tests {
 
     #[test]
     fn test_byte_equal_to() {
+        let append = |builder: &mut ByteGroupValueBuilder<i32>,
+                      builder_array: &ArrayRef,
+                      append_rows: &[usize]| {
+            for &index in append_rows {
+                builder.append_val(builder_array, index);
+            }
+        };
+
+        let equal_to = |builder: &ByteGroupValueBuilder<i32>,
+                        lhs_rows: &[usize],
+                        input_array: &ArrayRef,
+                        rhs_rows: &[usize],
+                        equal_to_results: &mut Vec<bool>| {
+            let iter = lhs_rows.iter().zip(rhs_rows.iter());
+            for (idx, (&lhs_row, &rhs_row)) in iter.enumerate() {
+                equal_to_results[idx] = builder.equal_to(lhs_row, &input_array, rhs_row);
+            }
+        };
+
+        test_byte_equal_to_internal(append, equal_to);
+    }
+
+    #[test]
+    fn test_byte_vectorized_equal_to() {
+        let append = |builder: &mut ByteGroupValueBuilder<i32>,
+                      builder_array: &ArrayRef,
+                      append_rows: &[usize]| {
+            builder.vectorized_append(builder_array, append_rows);
+        };
+
+        let equal_to = |builder: &ByteGroupValueBuilder<i32>,
+                        lhs_rows: &[usize],
+                        input_array: &ArrayRef,
+                        rhs_rows: &[usize],
+                        equal_to_results: &mut Vec<bool>| {
+            builder.vectorized_equal_to(
+                lhs_rows,
+                input_array,
+                rhs_rows,
+                equal_to_results,
+            );
+        };
+
+        test_byte_equal_to_internal(append, equal_to);
+    }
+
+    fn test_byte_equal_to_internal<A, E>(mut append: A, mut equal_to: E)
+    where
+        A: FnMut(&mut ByteGroupValueBuilder<i32>, &ArrayRef, &[usize]),
+        E: FnMut(
+            &ByteGroupValueBuilder<i32>,
+            &[usize],
+            &ArrayRef,
+            &[usize],
+            &mut Vec<bool>,
+        ),
+    {
         // Will cover such cases:
         //   - exist null, input not null
         //   - exist null, input null; values not equal
@@ -1432,12 +1489,7 @@ mod tests {
             Some("bar"),
             Some("baz"),
         ])) as ArrayRef;
-        builder.append_val(&builder_array, 0);
-        builder.append_val(&builder_array, 1);
-        builder.append_val(&builder_array, 2);
-        builder.append_val(&builder_array, 3);
-        builder.append_val(&builder_array, 4);
-        builder.append_val(&builder_array, 5);
+        append(&mut builder, &builder_array, &[0, 1, 2, 3, 4, 5]);
 
         // Define input array
         let (offsets, buffer, _nulls) = StringArray::from(vec![
@@ -1463,12 +1515,21 @@ mod tests {
             Arc::new(StringArray::new(offsets, buffer, Some(nulls))) as ArrayRef;
 
         // Check
-        assert!(!builder.equal_to(0, &input_array, 0));
-        assert!(builder.equal_to(1, &input_array, 1));
-        assert!(builder.equal_to(2, &input_array, 2));
-        assert!(!builder.equal_to(3, &input_array, 3));
-        assert!(!builder.equal_to(4, &input_array, 4));
-        assert!(builder.equal_to(5, &input_array, 5));
+        let mut equal_to_results = vec![true; builder.len()];
+        equal_to(
+            &builder,
+            &[0, 1, 2, 3, 4, 5],
+            &input_array,
+            &[0, 1, 2, 3, 4, 5],
+            &mut equal_to_results,
+        );
+
+        assert!(!equal_to_results[0]);
+        assert!(equal_to_results[1]);
+        assert!(equal_to_results[2]);
+        assert!(!equal_to_results[3]);
+        assert!(!equal_to_results[4]);
+        assert!(equal_to_results[5]);
     }
 
     // ========================================================================
