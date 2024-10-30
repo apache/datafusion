@@ -745,16 +745,6 @@ impl<T> Transformed<T> {
         Ok(self)
     }
 
-    pub fn on_transform_children(mut self) -> Transformed<T> {
-        self.tnr = match self.tnr {
-            TreeNodeRecursion::Continue => TreeNodeRecursion::Jump,
-            TreeNodeRecursion::Jump => TreeNodeRecursion::Continue,
-            TreeNodeRecursion::Stop => TreeNodeRecursion::Stop,
-        };
-
-        self
-    }
-
     /// Maps the [`Transformed`] object to the result of the given `f` depending on the
     /// current [`TreeNodeRecursion`] value and the fact that `f` is changing the current
     /// node's sibling.
