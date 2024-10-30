@@ -36,8 +36,8 @@ use datafusion_common::stats::Precision;
 use datafusion_common::{exec_err, ColumnStatistics, DataFusionError, Statistics};
 use datafusion_physical_expr::LexOrdering;
 
-use log::warn;
 use datafusion_physical_expr_common::sort_expr::LexOrderingRef;
+use log::warn;
 
 /// Convert type to a type suitable for use as a [`ListingTable`]
 /// partition column. Returns `Dictionary(UInt16, val_type)`, which is

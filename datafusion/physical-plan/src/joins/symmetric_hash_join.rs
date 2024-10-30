@@ -72,7 +72,9 @@ use datafusion_physical_expr::intervals::cp_solver::ExprIntervalGraph;
 use datafusion_physical_expr::{PhysicalExprRef, PhysicalSortRequirement};
 
 use ahash::RandomState;
-use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexOrderingRef, LexRequirement};
+use datafusion_physical_expr_common::sort_expr::{
+    LexOrdering, LexOrderingRef, LexRequirement,
+};
 use futures::{ready, Stream, StreamExt};
 use hashbrown::HashSet;
 use parking_lot::Mutex;

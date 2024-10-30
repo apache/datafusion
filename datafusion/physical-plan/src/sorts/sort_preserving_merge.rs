@@ -34,7 +34,9 @@ use datafusion_execution::memory_pool::MemoryConsumer;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::PhysicalSortRequirement;
 
-use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexOrderingRef, LexRequirement};
+use datafusion_physical_expr_common::sort_expr::{
+    LexOrdering, LexOrderingRef, LexRequirement,
+};
 use log::{debug, trace};
 
 /// Sort preserving merge execution plan
@@ -332,9 +334,9 @@ mod tests {
     use datafusion_physical_expr::EquivalenceProperties;
     use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 
+    use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
     use futures::{FutureExt, Stream, StreamExt};
     use tokio::time::timeout;
-    use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 
     #[tokio::test]
     async fn test_merge_interleave() {
