@@ -112,6 +112,7 @@ impl Unparser<'_> {
             | LogicalPlan::Analyze(_)
             | LogicalPlan::Extension(_)
             | LogicalPlan::Prepare(_)
+            | LogicalPlan::Execute(_)
             | LogicalPlan::Ddl(_)
             | LogicalPlan::Copy(_)
             | LogicalPlan::DescribeTable(_)
