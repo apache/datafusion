@@ -1152,7 +1152,7 @@ mod tests {
         array::AsArray,
         datatypes::{Int64Type, StringViewType},
     };
-    use arrow_array::{ArrayRef, Int64Array, StringArray, StringViewArray};
+    use arrow_array::{Array, ArrayRef, Int64Array, StringArray, StringViewArray};
     use arrow_buffer::{BooleanBufferBuilder, NullBuffer};
     use datafusion_physical_expr::binary_map::OutputType;
 
@@ -1364,6 +1364,62 @@ mod tests {
         assert!(!equal_to_results[1]);
     }
 
+    #[test]
+    fn test_nullable_primitive_vectorized_operation_special_case() {
+        // Test the special `all nulls` or `not nulls` input array case
+        // for vectorized append and equal to
+
+        let mut builder = PrimitiveGroupValueBuilder::<Int64Type, true>::new();
+
+        // All nulls input array
+        let all_nulls_input_array = Arc::new(Int64Array::from(vec![
+            Option::<i64>::None,
+            None,
+            None,
+            None,
+            None,
+        ])) as _;
+        builder.vectorized_append(&all_nulls_input_array, &[0, 1, 2, 3, 4]);
+
+        let mut equal_to_results = vec![true; all_nulls_input_array.len()];
+        builder.vectorized_equal_to(
+            &[0, 1, 2, 3, 4],
+            &all_nulls_input_array,
+            &[0, 1, 2, 3, 4],
+            &mut equal_to_results,
+        );
+
+        assert!(equal_to_results[0]);
+        assert!(equal_to_results[1]);
+        assert!(equal_to_results[2]);
+        assert!(equal_to_results[3]);
+        assert!(equal_to_results[4]);
+
+        // All not nulls input array
+        let all_not_nulls_input_array = Arc::new(Int64Array::from(vec![
+            Some(1),
+            Some(2),
+            Some(3),
+            Some(4),
+            Some(5),
+        ])) as _;
+        builder.vectorized_append(&all_not_nulls_input_array, &[0, 1, 2, 3, 4]);
+
+        let mut equal_to_results = vec![true; all_not_nulls_input_array.len()];
+        builder.vectorized_equal_to(
+            &[5, 6, 7, 8, 9],
+            &all_not_nulls_input_array,
+            &[0, 1, 2, 3, 4],
+            &mut equal_to_results,
+        );
+
+        assert!(equal_to_results[0]);
+        assert!(equal_to_results[1]);
+        assert!(equal_to_results[2]);
+        assert!(equal_to_results[3]);
+        assert!(equal_to_results[4]);
+    }
+
     // ========================================================================
     // Tests for byte builders
     // ========================================================================
@@ -1458,6 +1514,62 @@ mod tests {
         };
 
         test_byte_equal_to_internal(append, equal_to);
+    }
+
+    #[test]
+    fn test_byte_vectorized_operation_special_case() {
+        // Test the special `all nulls` or `not nulls` input array case
+        // for vectorized append and equal to
+
+        let mut builder = ByteGroupValueBuilder::<i32>::new(OutputType::Utf8);
+
+        // All nulls input array
+        let all_nulls_input_array = Arc::new(StringArray::from(vec![
+            Option::<&str>::None,
+            None,
+            None,
+            None,
+            None,
+        ])) as _;
+        builder.vectorized_append(&all_nulls_input_array, &[0, 1, 2, 3, 4]);
+
+        let mut equal_to_results = vec![true; all_nulls_input_array.len()];
+        builder.vectorized_equal_to(
+            &[0, 1, 2, 3, 4],
+            &all_nulls_input_array,
+            &[0, 1, 2, 3, 4],
+            &mut equal_to_results,
+        );
+
+        assert!(equal_to_results[0]);
+        assert!(equal_to_results[1]);
+        assert!(equal_to_results[2]);
+        assert!(equal_to_results[3]);
+        assert!(equal_to_results[4]);
+
+        // All not nulls input array
+        let all_not_nulls_input_array = Arc::new(StringArray::from(vec![
+            Some("string1"),
+            Some("string2"),
+            Some("string3"),
+            Some("string4"),
+            Some("string5"),
+        ])) as _;
+        builder.vectorized_append(&all_not_nulls_input_array, &[0, 1, 2, 3, 4]);
+
+        let mut equal_to_results = vec![true; all_not_nulls_input_array.len()];
+        builder.vectorized_equal_to(
+            &[5, 6, 7, 8, 9],
+            &all_not_nulls_input_array,
+            &[0, 1, 2, 3, 4],
+            &mut equal_to_results,
+        );
+
+        assert!(equal_to_results[0]);
+        assert!(equal_to_results[1]);
+        assert!(equal_to_results[2]);
+        assert!(equal_to_results[3]);
+        assert!(equal_to_results[4]);
     }
 
     fn test_byte_equal_to_internal<A, E>(mut append: A, mut equal_to: E)
@@ -1605,6 +1717,63 @@ mod tests {
         };
 
         test_byte_view_equal_to_internal(append, equal_to);
+    }
+
+    #[test]
+    fn test_byte_view_vectorized_operation_special_case() {
+        // Test the special `all nulls` or `not nulls` input array case
+        // for vectorized append and equal to
+
+        let mut builder =
+            ByteViewGroupValueBuilder::<StringViewType>::new().with_max_block_size(60);
+
+        // All nulls input array
+        let all_nulls_input_array = Arc::new(StringViewArray::from(vec![
+            Option::<&str>::None,
+            None,
+            None,
+            None,
+            None,
+        ])) as _;
+        builder.vectorized_append(&all_nulls_input_array, &[0, 1, 2, 3, 4]);
+
+        let mut equal_to_results = vec![true; all_nulls_input_array.len()];
+        builder.vectorized_equal_to(
+            &[0, 1, 2, 3, 4],
+            &all_nulls_input_array,
+            &[0, 1, 2, 3, 4],
+            &mut equal_to_results,
+        );
+
+        assert!(equal_to_results[0]);
+        assert!(equal_to_results[1]);
+        assert!(equal_to_results[2]);
+        assert!(equal_to_results[3]);
+        assert!(equal_to_results[4]);
+
+        // All not nulls input array
+        let all_not_nulls_input_array = Arc::new(StringViewArray::from(vec![
+            Some("stringview1"),
+            Some("stringview2"),
+            Some("stringview3"),
+            Some("stringview4"),
+            Some("stringview5"),
+        ])) as _;
+        builder.vectorized_append(&all_not_nulls_input_array, &[0, 1, 2, 3, 4]);
+
+        let mut equal_to_results = vec![true; all_not_nulls_input_array.len()];
+        builder.vectorized_equal_to(
+            &[5, 6, 7, 8, 9],
+            &all_not_nulls_input_array,
+            &[0, 1, 2, 3, 4],
+            &mut equal_to_results,
+        );
+
+        assert!(equal_to_results[0]);
+        assert!(equal_to_results[1]);
+        assert!(equal_to_results[2]);
+        assert!(equal_to_results[3]);
+        assert!(equal_to_results[4]);
     }
 
     fn test_byte_view_equal_to_internal<A, E>(mut append: A, mut equal_to: E)
