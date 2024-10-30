@@ -2791,7 +2791,7 @@ mod tests {
             Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
         )];
 
-        let (_, batches) = join_collect(left, right, on, JoinType::LeftMark).await?;
+        let (_, batches) = join_collect(left, right, on, LeftMark).await?;
         let expected = [
             "+----+----+----+-------+",
             "| a1 | b1 | c1 | mark  |",
