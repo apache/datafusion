@@ -169,6 +169,7 @@ impl<T: ArrowPrimitiveType, const NULLABLE: bool> GroupColumn
             .iter()
             .zip(rhs_rows.iter())
             .zip(equal_to_results.iter_mut());
+
         for ((&lhs_row, &rhs_row), equal_to_result) in iter {
             // Has found not equal to, don't need to check
             if !*equal_to_result {
@@ -344,14 +345,18 @@ where
     {
         let array = array.as_bytes::<B>();
 
-        for (idx, &lhs_row) in lhs_rows.iter().enumerate() {
+        let iter = lhs_rows
+            .iter()
+            .zip(rhs_rows.iter())
+            .zip(equal_to_results.iter_mut());
+
+        for ((&lhs_row, &rhs_row), equal_to_result) in iter {
             // Has found not equal to, don't need to check
-            if !equal_to_results[idx] {
+            if !*equal_to_result {
                 continue;
             }
 
-            let rhs_row = rhs_rows[idx];
-            equal_to_results[idx] = self.do_equal_to_inner(lhs_row, array, rhs_row);
+            *equal_to_result = self.do_equal_to_inner(lhs_row, array, rhs_row);
         }
     }
 
@@ -722,21 +727,25 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
 
     fn vectorized_equal_to_inner(
         &self,
-        group_indices: &[usize],
+        lhs_rows: &[usize],
         array: &ArrayRef,
-        rows: &[usize],
+        rhs_rows: &[usize],
         equal_to_results: &mut [bool],
     ) {
         let array = array.as_byte_view::<B>();
 
-        for (idx, &lhs_row) in group_indices.iter().enumerate() {
+        let iter = lhs_rows
+            .iter()
+            .zip(rhs_rows.iter())
+            .zip(equal_to_results.iter_mut());
+
+        for ((&lhs_row, &rhs_row), equal_to_result) in iter {
             // Has found not equal to, don't need to check
-            if !equal_to_results[idx] {
+            if !*equal_to_result {
                 continue;
             }
 
-            let rhs_row = rows[idx];
-            equal_to_results[idx] = self.do_equal_to_inner(lhs_row, array, rhs_row);
+            *equal_to_result = self.do_equal_to_inner(lhs_row, array, rhs_row);
         }
     }
 
