@@ -58,25 +58,40 @@ pub trait GroupColumn: Send + Sync {
     ///
     /// Note that this comparison returns true if both elements are NULL
     fn equal_to(&self, lhs_row: usize, array: &ArrayRef, rhs_row: usize) -> bool;
+
     /// Appends the row at `row` in `array` to this builder
     fn append_val(&mut self, array: &ArrayRef, row: usize);
 
+    /// The vectorized version equal to
+    ///
+    /// When found nth row stored in this builder at `lhs_row`
+    /// is equal to the row in `array` at `rhs_row`,
+    /// it will record the `true` result at the corresponding
+    /// position in `equal_to_results`.
+    ///
+    /// And if found nth result in `equal_to_results` is already
+    /// `false`, the check for nth row will be skipped.
+    ///
     fn vectorized_equal_to(
         &self,
-        group_indices: &[usize],
+        lhs_rows: &[usize],
         array: &ArrayRef,
-        rows: &[usize],
+        rhs_rows: &[usize],
         equal_to_results: &mut [bool],
     );
 
+    /// The vectorized version `append_val`
     fn vectorized_append(&mut self, array: &ArrayRef, rows: &[usize]);
 
     /// Returns the number of rows stored in this builder
     fn len(&self) -> usize;
+
     /// Returns the number of bytes used by this [`GroupColumn`]
     fn size(&self) -> usize;
+
     /// Builds a new array from all of the stored rows
     fn build(self: Box<Self>) -> ArrayRef;
+
     /// Builds a new array from the first `n` stored rows, shifting the
     /// remaining rows to the start of the builder
     fn take_n(&mut self, n: usize) -> ArrayRef;
@@ -143,16 +158,16 @@ impl<T: ArrowPrimitiveType, const NULLABLE: bool> GroupColumn
 
     fn vectorized_equal_to(
         &self,
-        group_indices: &[usize],
+        lhs_rows: &[usize],
         array: &ArrayRef,
-        rows: &[usize],
+        rhs_rows: &[usize],
         equal_to_results: &mut [bool],
     ) {
         let array = array.as_primitive::<T>();
 
-        let iter = group_indices
+        let iter = lhs_rows
             .iter()
-            .zip(rows.iter())
+            .zip(rhs_rows.iter())
             .zip(equal_to_results.iter_mut());
         for ((&lhs_row, &rhs_row), equal_to_result) in iter {
             // Has found not equal to, don't need to check
@@ -320,22 +335,22 @@ where
 
     fn vectorized_equal_to_inner<B>(
         &self,
-        group_indices: &[usize],
+        lhs_rows: &[usize],
         array: &ArrayRef,
-        rows: &[usize],
+        rhs_rows: &[usize],
         equal_to_results: &mut [bool],
     ) where
         B: ByteArrayType,
     {
         let array = array.as_bytes::<B>();
 
-        for (idx, &lhs_row) in group_indices.iter().enumerate() {
+        for (idx, &lhs_row) in lhs_rows.iter().enumerate() {
             // Has found not equal to, don't need to check
             if !equal_to_results[idx] {
                 continue;
             }
 
-            let rhs_row = rows[idx];
+            let rhs_row = rhs_rows[idx];
             equal_to_results[idx] = self.do_equal_to_inner(lhs_row, array, rhs_row);
         }
     }
@@ -471,9 +486,9 @@ where
 
     fn vectorized_equal_to(
         &self,
-        group_indices: &[usize],
+        lhs_rows: &[usize],
         array: &ArrayRef,
-        rows: &[usize],
+        rhs_rows: &[usize],
         equal_to_results: &mut [bool],
     ) {
         // Sanity array type
@@ -484,9 +499,9 @@ where
                     DataType::Binary | DataType::LargeBinary
                 ));
                 self.vectorized_equal_to_inner::<GenericBinaryType<O>>(
-                    group_indices,
+                    lhs_rows,
                     array,
-                    rows,
+                    rhs_rows,
                     equal_to_results,
                 );
             }
@@ -496,9 +511,9 @@ where
                     DataType::Utf8 | DataType::LargeUtf8
                 ));
                 self.vectorized_equal_to_inner::<GenericStringType<O>>(
-                    group_indices,
+                    lhs_rows,
                     array,
-                    rows,
+                    rhs_rows,
                     equal_to_results,
                 );
             }
