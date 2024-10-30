@@ -1214,15 +1214,37 @@ impl LogicalPlanBuilder {
             return plan_err!("left_keys and right_keys were not the same length");
         }
 
-        let join_key_pairs = equi_exprs
+        let exprs: Vec<(Expr, Expr)> = equi_exprs
             .0
             .into_iter()
             .zip(equi_exprs.1.into_iter())
-            .map(|(l, r)| {
-                let left_key = l.into();
-                let right_key = r.into();
+            .map(|(l, r)| (l.into(), r.into()))
+            .collect();
 
-                let mut left_using_columns = HashSet::new();
+        let columns: Vec<_> = exprs
+            .iter()
+            .filter_map(|(l, r)| {
+                l.try_as_col().and_then(|left_col| {
+                    r.try_as_col().map(|right_col| (left_col, right_col))
+                })
+            })
+            .collect();
+        if columns.len() == exprs.len() {
+            // all expressions are columns
+            return self.join(
+                right,
+                join_type,
+                columns
+                    .into_iter()
+                    .map(|(c1, c2)| (c1.clone(), c2.clone()))
+                    .unzip(),
+                filter,
+            );
+        }
+
+        let join_key_pairs = exprs.into_iter()
+            .map(|(left_key, right_key)| {
+                let mut left_using_columns  = HashSet::new();
                 expr_to_columns(&left_key, &mut left_using_columns)?;
                 let normalized_left_key = normalize_col_with_schemas_and_ambiguity_check(
                     left_key,
