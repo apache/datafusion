@@ -355,18 +355,11 @@ mod tests {
     use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 
     use futures::{FutureExt, Stream, StreamExt};
-    use hashbrown::HashMap;
     use tokio::time::timeout;
 
     fn generate_task_ctx_for_round_robin_tie_breaker() -> Result<Arc<TaskContext>> {
-        let mut pool_per_consumer = HashMap::new();
-        // Bytes from 660_000 to 30_000_000 (or even more) are all valid limits
-        pool_per_consumer.insert("RepartitionExec[0]".to_string(), 10_000_000);
-        pool_per_consumer.insert("RepartitionExec[1]".to_string(), 10_000_000);
-
         let runtime = RuntimeEnvBuilder::new()
-            // Random large number for total mem limit, we only care about RepartitionExec only
-            .with_memory_limit_per_consumer(2_000_000_000, 1.0, pool_per_consumer)
+            .with_memory_limit(20_000_000, 1.0)
             .build_arc()?;
         let config = SessionConfig::new();
         let task_ctx = TaskContext::default()

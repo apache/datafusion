@@ -58,11 +58,7 @@ impl MemoryPool for UnboundedMemoryPool {
 #[derive(Debug)]
 pub struct GreedyMemoryPool {
     pool_size: usize,
-    // Pool size limit for each consumer, if one of the consumer exceeds the limit, error is returned
-    pool_size_per_consumer: HashMap<String, usize>,
     used: AtomicUsize,
-    // Memory usage for each consumer, used to check aginst `pool_size_per_consumer`
-    used_per_consumer: RwLock<HashMap<String, AtomicUsize>>,
 }
 
 impl GreedyMemoryPool {
@@ -71,67 +67,21 @@ impl GreedyMemoryPool {
         debug!("Created new GreedyMemoryPool(pool_size={pool_size})");
         Self {
             pool_size,
-            pool_size_per_consumer: Default::default(),
             used: AtomicUsize::new(0),
-            used_per_consumer: RwLock::new(HashMap::new()),
         }
-    }
-
-    pub fn with_pool_size_per_consumer(
-        mut self,
-        pool_size_per_consumer: HashMap<String, usize>,
-    ) -> Self {
-        self.pool_size_per_consumer = pool_size_per_consumer;
-        self
     }
 }
 
 impl MemoryPool for GreedyMemoryPool {
-    fn grow(&self, reservation: &MemoryReservation, additional: usize) {
-        let consumer_name = reservation.consumer().name();
+    fn grow(&self, _reservation: &MemoryReservation, additional: usize) {
         self.used.fetch_add(additional, Ordering::Relaxed);
-
-        let mut used_per_consumer = self.used_per_consumer.write();
-        let consumer_usage = used_per_consumer
-            .entry(consumer_name.to_string())
-            .or_insert_with(|| AtomicUsize::new(0));
-        consumer_usage.fetch_add(additional, Ordering::Relaxed);
     }
 
-    fn shrink(&self, reservation: &MemoryReservation, shrink: usize) {
-        let consumer_name = reservation.consumer().name();
-
+    fn shrink(&self, _reservation: &MemoryReservation, shrink: usize) {
         self.used.fetch_sub(shrink, Ordering::Relaxed);
-
-        let mut used_per_consumer = self.used_per_consumer.write();
-        let consumer_usage = used_per_consumer
-            .entry(consumer_name.to_string())
-            .or_insert_with(|| AtomicUsize::new(0));
-        consumer_usage.fetch_sub(shrink, Ordering::Relaxed);
     }
 
     fn try_grow(&self, reservation: &MemoryReservation, additional: usize) -> Result<()> {
-        let consumer_name = reservation.consumer().name();
-
-        if let Some(pool_size) = self.pool_size_per_consumer.get(consumer_name) {
-            let mut used_per_consumer = self.used_per_consumer.write();
-            let consumer_usage = used_per_consumer
-                .entry(consumer_name.to_string())
-                .or_insert_with(|| AtomicUsize::new(0));
-            consumer_usage
-                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |used| {
-                    let new_used = used + additional;
-                    (new_used <= *pool_size).then_some(new_used)
-                })
-                .map_err(|used| {
-                    insufficient_capacity_err(
-                        reservation,
-                        additional,
-                        pool_size.saturating_sub(used),
-                    )
-                })?;
-        }
-
         self.used
             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |used| {
                 let new_used = used + additional;
