@@ -1146,6 +1146,33 @@ fn test_join_with_table_scan_filters() -> Result<()> {
 
     assert_eq!(sql.to_string(), expected_sql);
 
+    let right_plan_with_filter_schema = table_scan_with_filters(
+        Some("right_table"),
+        &schema_right,
+        None,
+        vec![col("right_table.age").gt(lit(10))],
+    )?
+    .build()?;
+    let right_plan_with_duplicated_filter =
+        LogicalPlanBuilder::from(right_plan_with_filter_schema.clone())
+            .filter(col("right_table.age").gt(lit(10)))?
+            .build()?;
+
+    let join_plan_duplicated_filter = LogicalPlanBuilder::from(left_plan)
+        .join(
+            right_plan_with_duplicated_filter,
+            datafusion_expr::JoinType::Inner,
+            (vec!["left.id"], vec!["right_table.id"]),
+            Some(col("left.id").gt(lit(5))),
+        )?
+        .build()?;
+
+    let sql = plan_to_sql(&join_plan_duplicated_filter)?;
+
+    let expected_sql = r#"SELECT * FROM left_table AS "left" JOIN right_table ON "left".id = right_table.id AND (("left".id > 5) AND ("left"."name" LIKE 'some_name' AND (right_table.age > 10)))"#;
+
+    assert_eq!(sql.to_string(), expected_sql);
+
     Ok(())
 }
 
