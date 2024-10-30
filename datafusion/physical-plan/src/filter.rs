@@ -370,7 +370,12 @@ impl ExecutionPlan for FilterExec {
     /// The output statistics of a filtering operation can be estimated if the
     /// predicate's selectivity value can be determined for the incoming data.
     fn statistics(&self) -> Result<Statistics> {
-        Self::statistics_helper(&self.input, self.predicate(), self.default_selectivity)
+        let stats = Self::statistics_helper(
+            &self.input,
+            self.predicate(),
+            self.default_selectivity,
+        )?;
+        Ok(stats.project(self.projection.as_ref()))
     }
 }
 

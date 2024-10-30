@@ -258,6 +258,26 @@ impl Statistics {
         self
     }
 
+    /// Project the statistics to the given column indices.
+    ///
+    /// For example, if we had statistics for columns `{"a", "b", "c"}`,
+    /// projecting to `vec![2, 1]` would return statistics for columns `{"c",
+    /// "b"}`.
+    pub fn project(mut self, projection: Option<&Vec<usize>>) -> Self {
+        let Some(projection) = projection else {
+            return self;
+        };
+
+        // todo: it would be nice to avoid cloning column statistics if
+        // possible (e.g. if the projection did not contain duplicates)
+        self.column_statistics = projection
+            .iter()
+            .map(|&i| self.column_statistics[i].clone())
+            .collect();
+
+        self
+    }
+
     /// Calculates the statistics after `fetch` and `skip` operations apply.
     /// Here, `self` denotes per-partition statistics. Use the `n_partitions`
     /// parameter to compute global statistics in a multi-partition setting.
