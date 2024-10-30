@@ -273,7 +273,7 @@ impl VectorizedGroupValuesColumn {
     ///    and perform `scalarized_intern` for them after.
     ///    Usually, such `rows` having same hash but different value with `exists rows`
     ///    are very few.
-    fn vectorized_equal_to(&mut self, cols: &[ArrayRef], groups: &mut Vec<usize>) {
+    fn vectorized_equal_to(&mut self, cols: &[ArrayRef], groups: &mut [usize]) {
         assert_eq!(
             self.vectorized_equal_to_group_indices.len(),
             self.vectorized_equal_to_row_indices.len()
@@ -1142,7 +1142,8 @@ mod tests {
                 };
 
                 let sub_batch = group_values.emit(EmitTo::First(num_emit)).unwrap();
-                let sub_batch = RecordBatch::try_new(schema.clone(), sub_batch).unwrap();
+                let sub_batch =
+                    RecordBatch::try_new(Arc::clone(&schema), sub_batch).unwrap();
                 actual_sub_batches.push(sub_batch);
 
                 num_remaining_rows -= num_emit;
@@ -1463,7 +1464,7 @@ mod tests {
 
         fn load_to_group_values(&self, group_values: &mut impl GroupValues) {
             for batch in self.test_batches.iter() {
-                group_values.intern(&batch, &mut vec![]).unwrap();
+                group_values.intern(batch, &mut vec![]).unwrap();
             }
         }
 
