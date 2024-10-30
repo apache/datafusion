@@ -959,7 +959,8 @@ impl GroupValues for GroupValuesColumn {
     }
 }
 
-/// Returns true if [`GroupValuesColumn`] supported for the specified schema
+/// Returns true if [`GroupValuesColumn`] or [`VectorizedGroupValuesColumn`]
+/// supported for the specified schema
 pub fn supported_schema(schema: &Schema) -> bool {
     schema
         .fields()
@@ -968,10 +969,12 @@ pub fn supported_schema(schema: &Schema) -> bool {
         .all(supported_type)
 }
 
-/// Returns true if the specified data type is supported by [`GroupValuesColumn`]
+/// Returns true if the specified data type is supported by
+/// [`GroupValuesColumn`]  or [`VectorizedGroupValuesColumn`]
 ///
 /// In order to be supported, there must be a specialized implementation of
-/// [`GroupColumn`] for the data type, instantiated in [`Self::intern`]
+/// [`GroupColumn`] for the data type, instantiated in [`GroupValuesColumn::intern`]
+/// or [`VectorizedGroupValuesColumn::intern`]
 fn supported_type(data_type: &DataType) -> bool {
     matches!(
         *data_type,
