@@ -19,12 +19,13 @@
 
 use std::any::Any;
 use std::fmt::Debug;
+use std::mem::size_of_val;
 use std::sync::{Arc, OnceLock};
 
 use arrow::array::{ArrayRef, AsArray, BooleanArray};
-use arrow::compute::{self, lexsort_to_indices, SortColumn};
+use arrow::compute::{self, lexsort_to_indices, take_arrays, SortColumn};
 use arrow::datatypes::{DataType, Field};
-use datafusion_common::utils::{compare_rows, get_row_at_idx, take_arrays};
+use datafusion_common::utils::{compare_rows, get_row_at_idx};
 use datafusion_common::{
     arrow_datafusion_err, internal_err, DataFusionError, Result, ScalarValue,
 };
@@ -191,7 +192,7 @@ fn get_first_value_doc() -> &'static Documentation {
 +-----------------------------------------------+
 ```"#,
             )
-            .with_standard_argument("expression", "The")
+            .with_standard_argument("expression", None)
             .build()
             .unwrap()
     })
@@ -340,7 +341,7 @@ impl Accumulator for FirstValueAccumulator {
             filtered_states
         } else {
             let indices = lexsort_to_indices(&sort_cols, None)?;
-            take_arrays(&filtered_states, &indices)?
+            take_arrays(&filtered_states, &indices, None)?
         };
         if !ordered_states[0].is_empty() {
             let first_row = get_row_at_idx(&ordered_states, 0)?;
@@ -365,10 +366,10 @@ impl Accumulator for FirstValueAccumulator {
     }
 
     fn size(&self) -> usize {
-        std::mem::size_of_val(self) - std::mem::size_of_val(&self.first)
+        size_of_val(self) - size_of_val(&self.first)
             + self.first.size()
             + ScalarValue::size_of_vec(&self.orderings)
-            - std::mem::size_of_val(&self.orderings)
+            - size_of_val(&self.orderings)
     }
 }
 
@@ -519,7 +520,7 @@ fn get_last_value_doc() -> &'static Documentation {
 +-----------------------------------------------+
 ```"#,
             )
-            .with_standard_argument("expression", "The")
+            .with_standard_argument("expression", None)
             .build()
             .unwrap()
     })
@@ -670,7 +671,7 @@ impl Accumulator for LastValueAccumulator {
             filtered_states
         } else {
             let indices = lexsort_to_indices(&sort_cols, None)?;
-            take_arrays(&filtered_states, &indices)?
+            take_arrays(&filtered_states, &indices, None)?
         };
 
         if !ordered_states[0].is_empty() {
@@ -698,10 +699,10 @@ impl Accumulator for LastValueAccumulator {
     }
 
     fn size(&self) -> usize {
-        std::mem::size_of_val(self) - std::mem::size_of_val(&self.last)
+        size_of_val(self) - size_of_val(&self.last)
             + self.last.size()
             + ScalarValue::size_of_vec(&self.orderings)
-            - std::mem::size_of_val(&self.orderings)
+            - size_of_val(&self.orderings)
     }
 }
 
@@ -795,7 +796,7 @@ mod tests {
         let mut states = vec![];
 
         for idx in 0..state1.len() {
-            states.push(arrow::compute::concat(&[
+            states.push(compute::concat(&[
                 &state1[idx].to_array()?,
                 &state2[idx].to_array()?,
             ])?);
@@ -825,7 +826,7 @@ mod tests {
         let mut states = vec![];
 
         for idx in 0..state1.len() {
-            states.push(arrow::compute::concat(&[
+            states.push(compute::concat(&[
                 &state1[idx].to_array()?,
                 &state2[idx].to_array()?,
             ])?);

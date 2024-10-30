@@ -488,7 +488,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                     })
                     .collect::<Result<Vec<_>, _>>()?;
 
-                let physical_aggr_expr: Vec<AggregateFunctionExpr> = hash_agg
+                let physical_aggr_expr: Vec<Arc<AggregateFunctionExpr>> = hash_agg
                     .aggr_expr
                     .iter()
                     .zip(hash_agg.aggr_expr_name.iter())
@@ -518,6 +518,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                                                 .with_distinct(agg_node.distinct)
                                                 .order_by(ordering_req)
                                                 .build()
+                                                .map(Arc::new)
                                         }
                                     }
                                 }).transpose()?.ok_or_else(|| {
@@ -850,7 +851,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                                 "physical_plan::from_proto() Unexpected expr {self:?}"
                             ))
                         })?;
-                        if let protobuf::physical_expr_node::ExprType::Sort(sort_expr) = expr {
+                        if let ExprType::Sort(sort_expr) = expr {
                             let expr = sort_expr
                                 .expr
                                 .as_ref()
@@ -897,7 +898,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                                 "physical_plan::from_proto() Unexpected expr {self:?}"
                             ))
                         })?;
-                        if let protobuf::physical_expr_node::ExprType::Sort(sort_expr) = expr {
+                        if let ExprType::Sort(sort_expr) = expr {
                             let expr = sort_expr
                                 .expr
                                 .as_ref()
@@ -1712,9 +1713,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                         nulls_first: expr.options.nulls_first,
                     });
                     Ok(protobuf::PhysicalExprNode {
-                        expr_type: Some(protobuf::physical_expr_node::ExprType::Sort(
-                            sort_expr,
-                        )),
+                        expr_type: Some(ExprType::Sort(sort_expr)),
                     })
                 })
                 .collect::<Result<Vec<_>>>()?;
@@ -1781,9 +1780,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                         nulls_first: expr.options.nulls_first,
                     });
                     Ok(protobuf::PhysicalExprNode {
-                        expr_type: Some(protobuf::physical_expr_node::ExprType::Sort(
-                            sort_expr,
-                        )),
+                        expr_type: Some(ExprType::Sort(sort_expr)),
                     })
                 })
                 .collect::<Result<Vec<_>>>()?;

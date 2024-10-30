@@ -17,6 +17,10 @@
 
 use std::sync::Arc;
 
+use arrow::datatypes::{
+    Date32Type, Date64Type, Float32Type, Float64Type, Int16Type, Int32Type, Int64Type,
+    Int8Type, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
+};
 use arrow_array::{ArrayRef, RecordBatch};
 use arrow_schema::{DataType, Field, Schema};
 use datafusion_common::{arrow_datafusion_err, DataFusionError, Result};
@@ -48,14 +52,39 @@ use test_utils::{
 ///
 #[derive(Debug, Clone)]
 pub struct DatasetGeneratorConfig {
-    // Descriptions of columns in datasets, it's `required`
+    /// Descriptions of columns in datasets, it's `required`
     pub columns: Vec<ColumnDescr>,
 
-    // Rows num range of the generated datasets, it's `required`
+    /// Rows num range of the generated datasets, it's `required`
     pub rows_num_range: (usize, usize),
 
-    // Sort keys used to generate the sorted data set, it's optional
+    /// Additional optional sort keys
+    ///
+    /// The generated datasets always include a non-sorted copy. For each
+    /// element in `sort_keys_set`, an additional datasets is created that
+    /// is sorted by these values as well.
     pub sort_keys_set: Vec<Vec<String>>,
+}
+
+impl DatasetGeneratorConfig {
+    /// return a list of all column names
+    pub fn all_columns(&self) -> Vec<&str> {
+        self.columns.iter().map(|d| d.name.as_str()).collect()
+    }
+
+    /// return a list of column names that are "numeric"
+    pub fn numeric_columns(&self) -> Vec<&str> {
+        self.columns
+            .iter()
+            .filter_map(|d| {
+                if d.column_type.is_numeric() {
+                    Some(d.name.as_str())
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
 }
 
 /// Dataset generator
@@ -96,7 +125,7 @@ impl DatasetGenerator {
     pub fn generate(&self) -> Result<Vec<Dataset>> {
         let mut datasets = Vec::with_capacity(self.sort_keys_set.len() + 1);
 
-        // Generate the base batch
+        // Generate the base batch (unsorted)
         let base_batch = self.batch_generator.generate()?;
         let batches = stagger_batch(base_batch.clone());
         let dataset = Dataset::new(batches, Vec::new());
@@ -197,7 +226,7 @@ macro_rules! generate_string_array {
 }
 
 macro_rules! generate_primitive_array {
-    ($SELF:ident, $NUM_ROWS:ident, $BATCH_GEN_RNG:ident, $ARRAY_GEN_RNG:ident, $DATA_TYPE:ident) => {
+    ($SELF:ident, $NUM_ROWS:ident, $BATCH_GEN_RNG:ident, $ARRAY_GEN_RNG:ident, $ARROW_TYPE:ident) => {
         paste::paste! {{
             let null_pct_idx = $BATCH_GEN_RNG.gen_range(0..$SELF.candidate_null_pcts.len());
             let null_pct = $SELF.candidate_null_pcts[null_pct_idx];
@@ -214,7 +243,7 @@ macro_rules! generate_primitive_array {
                 rng: $ARRAY_GEN_RNG,
             };
 
-            generator.[< gen_data_ $DATA_TYPE >]()
+            generator.gen_data::<$ARROW_TYPE>()
     }}}
 }
 
@@ -272,7 +301,7 @@ impl RecordBatchGenerator {
                     num_rows,
                     batch_gen_rng,
                     array_gen_rng,
-                    i8
+                    Int8Type
                 )
             }
             DataType::Int16 => {
@@ -281,7 +310,7 @@ impl RecordBatchGenerator {
                     num_rows,
                     batch_gen_rng,
                     array_gen_rng,
-                    i16
+                    Int16Type
                 )
             }
             DataType::Int32 => {
@@ -290,7 +319,7 @@ impl RecordBatchGenerator {
                     num_rows,
                     batch_gen_rng,
                     array_gen_rng,
-                    i32
+                    Int32Type
                 )
             }
             DataType::Int64 => {
@@ -299,7 +328,7 @@ impl RecordBatchGenerator {
                     num_rows,
                     batch_gen_rng,
                     array_gen_rng,
-                    i64
+                    Int64Type
                 )
             }
             DataType::UInt8 => {
@@ -308,7 +337,7 @@ impl RecordBatchGenerator {
                     num_rows,
                     batch_gen_rng,
                     array_gen_rng,
-                    u8
+                    UInt8Type
                 )
             }
             DataType::UInt16 => {
@@ -317,7 +346,7 @@ impl RecordBatchGenerator {
                     num_rows,
                     batch_gen_rng,
                     array_gen_rng,
-                    u16
+                    UInt16Type
                 )
             }
             DataType::UInt32 => {
@@ -326,7 +355,7 @@ impl RecordBatchGenerator {
                     num_rows,
                     batch_gen_rng,
                     array_gen_rng,
-                    u32
+                    UInt32Type
                 )
             }
             DataType::UInt64 => {
@@ -335,7 +364,7 @@ impl RecordBatchGenerator {
                     num_rows,
                     batch_gen_rng,
                     array_gen_rng,
-                    u64
+                    UInt64Type
                 )
             }
             DataType::Float32 => {
@@ -344,7 +373,7 @@ impl RecordBatchGenerator {
                     num_rows,
                     batch_gen_rng,
                     array_gen_rng,
-                    f32
+                    Float32Type
                 )
             }
             DataType::Float64 => {
@@ -353,7 +382,25 @@ impl RecordBatchGenerator {
                     num_rows,
                     batch_gen_rng,
                     array_gen_rng,
-                    f64
+                    Float64Type
+                )
+            }
+            DataType::Date32 => {
+                generate_primitive_array!(
+                    self,
+                    num_rows,
+                    batch_gen_rng,
+                    array_gen_rng,
+                    Date32Type
+                )
+            }
+            DataType::Date64 => {
+                generate_primitive_array!(
+                    self,
+                    num_rows,
+                    batch_gen_rng,
+                    array_gen_rng,
+                    Date64Type
                 )
             }
             DataType::Utf8 => {
@@ -362,7 +409,9 @@ impl RecordBatchGenerator {
             DataType::LargeUtf8 => {
                 generate_string_array!(self, num_rows, batch_gen_rng, array_gen_rng, i64)
             }
-            _ => unreachable!(),
+            _ => {
+                panic!("Unsupported data generator type: {data_type}")
+            }
         }
     }
 }

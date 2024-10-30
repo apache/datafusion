@@ -747,7 +747,7 @@ impl Accumulator for FirstSelector {
     }
 
     fn size(&self) -> usize {
-        std::mem::size_of_val(self)
+        size_of_val(self)
     }
 }
 
@@ -816,7 +816,7 @@ impl Accumulator for TestGroupsAccumulator {
     }
 
     fn size(&self) -> usize {
-        std::mem::size_of::<u64>()
+        size_of::<u64>()
     }
 
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
@@ -864,6 +864,6 @@ impl GroupsAccumulator for TestGroupsAccumulator {
     }
 
     fn size(&self) -> usize {
-        std::mem::size_of::<u64>()
+        size_of::<u64>()
     }
 }

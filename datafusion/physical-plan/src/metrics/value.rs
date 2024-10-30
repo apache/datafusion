@@ -168,7 +168,7 @@ impl PartialEq for Time {
 
 impl Display for Time {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        let duration = std::time::Duration::from_nanos(self.value() as u64);
+        let duration = Duration::from_nanos(self.value() as u64);
         write!(f, "{duration:?}")
     }
 }

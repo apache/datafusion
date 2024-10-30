@@ -24,6 +24,7 @@ use arrow::{
     compute::kernels::cast,
     datatypes::{DataType, Field},
 };
+use std::mem::{size_of, size_of_val};
 use std::sync::OnceLock;
 use std::{fmt::Debug, sync::Arc};
 
@@ -153,7 +154,7 @@ fn get_variance_sample_doc() -> &'static Documentation {
                 "Returns the statistical sample variance of a set of numbers.",
             )
             .with_syntax_example("var(expression)")
-            .with_standard_argument("expression", "Numeric")
+            .with_standard_argument("expression", Some("Numeric"))
             .build()
             .unwrap()
     })
@@ -259,7 +260,7 @@ fn get_variance_population_doc() -> &'static Documentation {
                 "Returns the statistical population variance of a set of numbers.",
             )
             .with_syntax_example("var_pop(expression)")
-            .with_standard_argument("expression", "Numeric")
+            .with_standard_argument("expression", Some("Numeric"))
             .build()
             .unwrap()
     })
@@ -424,7 +425,7 @@ impl Accumulator for VarianceAccumulator {
     }
 
     fn size(&self) -> usize {
-        std::mem::size_of_val(self)
+        size_of_val(self)
     }
 
     fn supports_retract_batch(&self) -> bool {
@@ -529,7 +530,7 @@ impl GroupsAccumulator for VarianceGroupsAccumulator {
         &mut self,
         values: &[ArrayRef],
         group_indices: &[usize],
-        opt_filter: Option<&arrow::array::BooleanArray>,
+        opt_filter: Option<&BooleanArray>,
         total_num_groups: usize,
     ) -> Result<()> {
         assert_eq!(values.len(), 1, "single argument to update_batch");
@@ -555,7 +556,7 @@ impl GroupsAccumulator for VarianceGroupsAccumulator {
         &mut self,
         values: &[ArrayRef],
         group_indices: &[usize],
-        opt_filter: Option<&arrow::array::BooleanArray>,
+        opt_filter: Option<&BooleanArray>,
         total_num_groups: usize,
     ) -> Result<()> {
         assert_eq!(values.len(), 3, "two arguments to merge_batch");
@@ -606,8 +607,8 @@ impl GroupsAccumulator for VarianceGroupsAccumulator {
     }
 
     fn size(&self) -> usize {
-        self.m2s.capacity() * std::mem::size_of::<f64>()
-            + self.means.capacity() * std::mem::size_of::<f64>()
-            + self.counts.capacity() * std::mem::size_of::<u64>()
+        self.m2s.capacity() * size_of::<f64>()
+            + self.means.capacity() * size_of::<f64>()
+            + self.counts.capacity() * size_of::<u64>()
     }
 }

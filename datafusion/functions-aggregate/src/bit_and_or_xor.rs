@@ -20,6 +20,7 @@
 use std::any::Any;
 use std::collections::HashSet;
 use std::fmt::{Display, Formatter};
+use std::mem::{size_of, size_of_val};
 
 use ahash::RandomState;
 use arrow::array::{downcast_integer, Array, ArrayRef, AsArray};
@@ -142,7 +143,7 @@ fn get_bit_and_doc() -> &'static Documentation {
             .with_doc_section(DOC_SECTION_GENERAL)
             .with_description("Computes the bitwise AND of all non-null input values.")
             .with_syntax_example("bit_and(expression)")
-            .with_standard_argument("expression", "Integer")
+            .with_standard_argument("expression", Some("Integer"))
             .build()
             .unwrap()
     })
@@ -156,7 +157,7 @@ fn get_bit_or_doc() -> &'static Documentation {
             .with_doc_section(DOC_SECTION_GENERAL)
             .with_description("Computes the bitwise OR of all non-null input values.")
             .with_syntax_example("bit_or(expression)")
-            .with_standard_argument("expression", "Integer")
+            .with_standard_argument("expression", Some("Integer"))
             .build()
             .unwrap()
     })
@@ -172,7 +173,7 @@ fn get_bit_xor_doc() -> &'static Documentation {
                 "Computes the bitwise exclusive OR of all non-null input values.",
             )
             .with_syntax_example("bit_xor(expression)")
-            .with_standard_argument("expression", "Integer")
+            .with_standard_argument("expression", Some("Integer"))
             .build()
             .unwrap()
     })
@@ -347,7 +348,7 @@ where
     }
 
     fn size(&self) -> usize {
-        std::mem::size_of_val(self)
+        size_of_val(self)
     }
 
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
@@ -392,7 +393,7 @@ where
     }
 
     fn size(&self) -> usize {
-        std::mem::size_of_val(self)
+        size_of_val(self)
     }
 
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
@@ -446,7 +447,7 @@ where
     }
 
     fn size(&self) -> usize {
-        std::mem::size_of_val(self)
+        size_of_val(self)
     }
 
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
@@ -509,8 +510,7 @@ where
     }
 
     fn size(&self) -> usize {
-        std::mem::size_of_val(self)
-            + self.values.capacity() * std::mem::size_of::<T::Native>()
+        size_of_val(self) + self.values.capacity() * size_of::<T::Native>()
     }
 
     fn state(&mut self) -> Result<Vec<ScalarValue>> {

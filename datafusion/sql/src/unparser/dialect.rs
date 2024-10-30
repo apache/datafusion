@@ -59,8 +59,8 @@ pub trait Dialect: Send + Sync {
 
     /// Does the dialect use DOUBLE PRECISION to represent Float64 rather than DOUBLE?
     /// E.g. Postgres uses DOUBLE PRECISION instead of DOUBLE
-    fn float64_ast_dtype(&self) -> sqlparser::ast::DataType {
-        sqlparser::ast::DataType::Double
+    fn float64_ast_dtype(&self) -> ast::DataType {
+        ast::DataType::Double
     }
 
     /// The SQL type to use for Arrow Utf8 unparsing
@@ -86,6 +86,12 @@ pub trait Dialect: Send + Sync {
         ast::DataType::BigInt(None)
     }
 
+    /// The SQL type to use for Arrow Int32 unparsing
+    /// Most dialects use Integer, but some, like MySQL, require SIGNED
+    fn int32_cast_dtype(&self) -> ast::DataType {
+        ast::DataType::Integer(None)
+    }
+
     /// The SQL type to use for Timestamp unparsing
     /// Most dialects use Timestamp, but some, like MySQL, require Datetime
     /// Some dialects like Dremio does not support WithTimeZone and requires always Timestamp
@@ -104,14 +110,20 @@ pub trait Dialect: Send + Sync {
 
     /// The SQL type to use for Arrow Date32 unparsing
     /// Most dialects use Date, but some, like SQLite require TEXT
-    fn date32_cast_dtype(&self) -> sqlparser::ast::DataType {
-        sqlparser::ast::DataType::Date
+    fn date32_cast_dtype(&self) -> ast::DataType {
+        ast::DataType::Date
     }
 
     /// Does the dialect support specifying column aliases as part of alias table definition?
     /// (SELECT col1, col2 from my_table) AS my_table_alias(col1_alias, col2_alias)
     fn supports_column_alias_in_table_alias(&self) -> bool {
         true
+    }
+
+    /// Whether the dialect requires a table alias for any subquery in the FROM clause
+    /// This affects behavior when deriving logical plans for Sort, Limit, etc.
+    fn requires_derived_table_alias(&self) -> bool {
+        false
     }
 
     /// Allows the dialect to override scalar function unparsing if the dialect has specific rules.
@@ -185,8 +197,8 @@ impl Dialect for PostgreSqlDialect {
         IntervalStyle::PostgresVerbose
     }
 
-    fn float64_ast_dtype(&self) -> sqlparser::ast::DataType {
-        sqlparser::ast::DataType::DoublePrecision
+    fn float64_ast_dtype(&self) -> ast::DataType {
+        ast::DataType::DoublePrecision
     }
 
     fn scalar_function_to_sql_overrides(
@@ -233,7 +245,7 @@ impl PostgreSqlDialect {
         }
 
         Ok(ast::Expr::Function(Function {
-            name: ast::ObjectName(vec![Ident {
+            name: ObjectName(vec![Ident {
                 value: func_name.to_string(),
                 quote_style: None,
             }]),
@@ -282,12 +294,20 @@ impl Dialect for MySqlDialect {
         ast::DataType::Custom(ObjectName(vec![Ident::new("SIGNED")]), vec![])
     }
 
+    fn int32_cast_dtype(&self) -> ast::DataType {
+        ast::DataType::Custom(ObjectName(vec![Ident::new("SIGNED")]), vec![])
+    }
+
     fn timestamp_cast_dtype(
         &self,
         _time_unit: &TimeUnit,
         _tz: &Option<Arc<str>>,
     ) -> ast::DataType {
         ast::DataType::Datetime(None)
+    }
+
+    fn requires_derived_table_alias(&self) -> bool {
+        true
     }
 
     fn scalar_function_to_sql_overrides(
@@ -315,8 +335,8 @@ impl Dialect for SqliteDialect {
         DateFieldExtractStyle::Strftime
     }
 
-    fn date32_cast_dtype(&self) -> sqlparser::ast::DataType {
-        sqlparser::ast::DataType::Text
+    fn date32_cast_dtype(&self) -> ast::DataType {
+        ast::DataType::Text
     }
 
     fn supports_column_alias_in_table_alias(&self) -> bool {
@@ -342,15 +362,17 @@ pub struct CustomDialect {
     supports_nulls_first_in_sort: bool,
     use_timestamp_for_date64: bool,
     interval_style: IntervalStyle,
-    float64_ast_dtype: sqlparser::ast::DataType,
+    float64_ast_dtype: ast::DataType,
     utf8_cast_dtype: ast::DataType,
     large_utf8_cast_dtype: ast::DataType,
     date_field_extract_style: DateFieldExtractStyle,
     int64_cast_dtype: ast::DataType,
+    int32_cast_dtype: ast::DataType,
     timestamp_cast_dtype: ast::DataType,
     timestamp_tz_cast_dtype: ast::DataType,
-    date32_cast_dtype: sqlparser::ast::DataType,
+    date32_cast_dtype: ast::DataType,
     supports_column_alias_in_table_alias: bool,
+    requires_derived_table_alias: bool,
 }
 
 impl Default for CustomDialect {
@@ -360,18 +382,20 @@ impl Default for CustomDialect {
             supports_nulls_first_in_sort: true,
             use_timestamp_for_date64: false,
             interval_style: IntervalStyle::SQLStandard,
-            float64_ast_dtype: sqlparser::ast::DataType::Double,
+            float64_ast_dtype: ast::DataType::Double,
             utf8_cast_dtype: ast::DataType::Varchar(None),
             large_utf8_cast_dtype: ast::DataType::Text,
             date_field_extract_style: DateFieldExtractStyle::DatePart,
             int64_cast_dtype: ast::DataType::BigInt(None),
+            int32_cast_dtype: ast::DataType::Integer(None),
             timestamp_cast_dtype: ast::DataType::Timestamp(None, TimezoneInfo::None),
             timestamp_tz_cast_dtype: ast::DataType::Timestamp(
                 None,
                 TimezoneInfo::WithTimeZone,
             ),
-            date32_cast_dtype: sqlparser::ast::DataType::Date,
+            date32_cast_dtype: ast::DataType::Date,
             supports_column_alias_in_table_alias: true,
+            requires_derived_table_alias: false,
         }
     }
 }
@@ -404,7 +428,7 @@ impl Dialect for CustomDialect {
         self.interval_style
     }
 
-    fn float64_ast_dtype(&self) -> sqlparser::ast::DataType {
+    fn float64_ast_dtype(&self) -> ast::DataType {
         self.float64_ast_dtype.clone()
     }
 
@@ -424,6 +448,10 @@ impl Dialect for CustomDialect {
         self.int64_cast_dtype.clone()
     }
 
+    fn int32_cast_dtype(&self) -> ast::DataType {
+        self.int32_cast_dtype.clone()
+    }
+
     fn timestamp_cast_dtype(
         &self,
         _time_unit: &TimeUnit,
@@ -436,7 +464,7 @@ impl Dialect for CustomDialect {
         }
     }
 
-    fn date32_cast_dtype(&self) -> sqlparser::ast::DataType {
+    fn date32_cast_dtype(&self) -> ast::DataType {
         self.date32_cast_dtype.clone()
     }
 
@@ -455,6 +483,10 @@ impl Dialect for CustomDialect {
         }
 
         Ok(None)
+    }
+
+    fn requires_derived_table_alias(&self) -> bool {
+        self.requires_derived_table_alias
     }
 }
 
@@ -477,15 +509,17 @@ pub struct CustomDialectBuilder {
     supports_nulls_first_in_sort: bool,
     use_timestamp_for_date64: bool,
     interval_style: IntervalStyle,
-    float64_ast_dtype: sqlparser::ast::DataType,
+    float64_ast_dtype: ast::DataType,
     utf8_cast_dtype: ast::DataType,
     large_utf8_cast_dtype: ast::DataType,
     date_field_extract_style: DateFieldExtractStyle,
     int64_cast_dtype: ast::DataType,
+    int32_cast_dtype: ast::DataType,
     timestamp_cast_dtype: ast::DataType,
     timestamp_tz_cast_dtype: ast::DataType,
     date32_cast_dtype: ast::DataType,
     supports_column_alias_in_table_alias: bool,
+    requires_derived_table_alias: bool,
 }
 
 impl Default for CustomDialectBuilder {
@@ -501,18 +535,20 @@ impl CustomDialectBuilder {
             supports_nulls_first_in_sort: true,
             use_timestamp_for_date64: false,
             interval_style: IntervalStyle::PostgresVerbose,
-            float64_ast_dtype: sqlparser::ast::DataType::Double,
+            float64_ast_dtype: ast::DataType::Double,
             utf8_cast_dtype: ast::DataType::Varchar(None),
             large_utf8_cast_dtype: ast::DataType::Text,
             date_field_extract_style: DateFieldExtractStyle::DatePart,
             int64_cast_dtype: ast::DataType::BigInt(None),
+            int32_cast_dtype: ast::DataType::Integer(None),
             timestamp_cast_dtype: ast::DataType::Timestamp(None, TimezoneInfo::None),
             timestamp_tz_cast_dtype: ast::DataType::Timestamp(
                 None,
                 TimezoneInfo::WithTimeZone,
             ),
-            date32_cast_dtype: sqlparser::ast::DataType::Date,
+            date32_cast_dtype: ast::DataType::Date,
             supports_column_alias_in_table_alias: true,
+            requires_derived_table_alias: false,
         }
     }
 
@@ -527,11 +563,13 @@ impl CustomDialectBuilder {
             large_utf8_cast_dtype: self.large_utf8_cast_dtype,
             date_field_extract_style: self.date_field_extract_style,
             int64_cast_dtype: self.int64_cast_dtype,
+            int32_cast_dtype: self.int32_cast_dtype,
             timestamp_cast_dtype: self.timestamp_cast_dtype,
             timestamp_tz_cast_dtype: self.timestamp_tz_cast_dtype,
             date32_cast_dtype: self.date32_cast_dtype,
             supports_column_alias_in_table_alias: self
                 .supports_column_alias_in_table_alias,
+            requires_derived_table_alias: self.requires_derived_table_alias,
         }
     }
 
@@ -566,10 +604,7 @@ impl CustomDialectBuilder {
     }
 
     /// Customize the dialect with a specific SQL type for Float64 casting: DOUBLE, DOUBLE PRECISION, etc.
-    pub fn with_float64_ast_dtype(
-        mut self,
-        float64_ast_dtype: sqlparser::ast::DataType,
-    ) -> Self {
+    pub fn with_float64_ast_dtype(mut self, float64_ast_dtype: ast::DataType) -> Self {
         self.float64_ast_dtype = float64_ast_dtype;
         self
     }
@@ -604,6 +639,12 @@ impl CustomDialectBuilder {
         self
     }
 
+    /// Customize the dialect with a specific SQL type for Int32 casting: Integer, SIGNED, etc.
+    pub fn with_int32_cast_dtype(mut self, int32_cast_dtype: ast::DataType) -> Self {
+        self.int32_cast_dtype = int32_cast_dtype;
+        self
+    }
+
     /// Customize the dialect with a specific SQL type for Timestamp casting: Timestamp, Datetime, etc.
     pub fn with_timestamp_cast_dtype(
         mut self,
@@ -626,6 +667,14 @@ impl CustomDialectBuilder {
         supports_column_alias_in_table_alias: bool,
     ) -> Self {
         self.supports_column_alias_in_table_alias = supports_column_alias_in_table_alias;
+        self
+    }
+
+    pub fn with_requires_derived_table_alias(
+        mut self,
+        requires_derived_table_alias: bool,
+    ) -> Self {
+        self.requires_derived_table_alias = requires_derived_table_alias;
         self
     }
 }

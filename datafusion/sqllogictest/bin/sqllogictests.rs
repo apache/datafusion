@@ -61,7 +61,16 @@ async fn run_tests() -> Result<()> {
     // Enable logging (e.g. set RUST_LOG=debug to see debug logs)
     env_logger::init();
 
-    let options: Options = clap::Parser::parse();
+    let options: Options = Parser::parse();
+    if options.list {
+        // nextest parses stdout, so print messages to stderr
+        eprintln!("NOTICE: --list option unsupported, quitting");
+        // return Ok, not error so that tools like nextest which are listing all
+        // workspace tests (by running `cargo test ... --list --format terse`)
+        // do not fail when they encounter this binary. Instead, print nothing
+        // to stdout and return OK so they can continue listing other tests.
+        return Ok(());
+    }
     options.warn_on_ignored();
 
     // Run all tests in parallel, reporting failures at the end
@@ -255,7 +264,7 @@ fn read_dir_recursive<P: AsRef<Path>>(path: P) -> Result<Vec<PathBuf>> {
 
 /// Append all paths recursively to dst
 fn read_dir_recursive_impl(dst: &mut Vec<PathBuf>, path: &Path) -> Result<()> {
-    let entries = std::fs::read_dir(path)
+    let entries = fs::read_dir(path)
         .map_err(|e| exec_datafusion_err!("Error reading directory {path:?}: {e}"))?;
     for entry in entries {
         let path = entry
@@ -276,7 +285,7 @@ fn read_dir_recursive_impl(dst: &mut Vec<PathBuf>, path: &Path) -> Result<()> {
 
 /// Parsed command line options
 ///
-/// This structure attempts to mimic the command line options
+/// This structure attempts to mimic the command line options of the built in rust test runner
 /// accepted by IDEs such as CLion that pass arguments
 ///
 /// See <https://github.com/apache/datafusion/issues/8287> for more details
@@ -320,6 +329,18 @@ struct Options {
         help = "IGNORED (for compatibility with built in rust test runner)"
     )]
     show_output: bool,
+
+    #[clap(
+        long,
+        help = "Quits immediately, not listing anything (for compatibility with built-in rust test runner)"
+    )]
+    list: bool,
+
+    #[clap(
+        long,
+        help = "IGNORED (for compatibility with built-in rust test runner)"
+    )]
+    ignored: bool,
 }
 
 impl Options {
@@ -354,15 +375,15 @@ impl Options {
     /// Logs warning messages to stdout if any ignored options are passed
     fn warn_on_ignored(&self) {
         if self.format.is_some() {
-            println!("WARNING: Ignoring `--format` compatibility option");
+            eprintln!("WARNING: Ignoring `--format` compatibility option");
         }
 
         if self.z_options.is_some() {
-            println!("WARNING: Ignoring `-Z` compatibility option");
+            eprintln!("WARNING: Ignoring `-Z` compatibility option");
         }
 
         if self.show_output {
-            println!("WARNING: Ignoring `--show-output` compatibility option");
+            eprintln!("WARNING: Ignoring `--show-output` compatibility option");
         }
     }
 }

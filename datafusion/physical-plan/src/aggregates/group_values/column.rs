@@ -620,7 +620,7 @@ impl GroupValues for VectorizedGroupValuesColumn {
     fn emit(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
         let mut output = match emit_to {
             EmitTo::All => {
-                let group_values = std::mem::take(&mut self.group_values);
+                let group_values = mem::take(&mut self.group_values);
                 debug_assert!(self.group_values.is_empty());
 
                 group_values
@@ -637,7 +637,7 @@ impl GroupValues for VectorizedGroupValuesColumn {
                 let new_group_index_lists =
                     Vec::with_capacity(self.group_index_lists.len());
                 let old_group_index_lists =
-                    std::mem::replace(&mut self.group_index_lists, new_group_index_lists);
+                    mem::replace(&mut self.group_index_lists, new_group_index_lists);
 
                 // SAFETY: self.map outlives iterator and is not modified concurrently
                 unsafe {
@@ -716,7 +716,7 @@ impl GroupValues for VectorizedGroupValuesColumn {
         self.group_values.clear();
         self.map.clear();
         self.map.shrink_to(count, |_| 0); // hasher does not matter since the map is cleared
-        self.map_size = self.map.capacity() * std::mem::size_of::<(u64, usize)>();
+        self.map_size = self.map.capacity() * mem::size_of::<(u64, usize)>();
         self.hashes_buffer.clear();
         self.hashes_buffer.shrink_to(count);
         self.group_index_lists.clear();
@@ -924,7 +924,7 @@ impl GroupValues for GroupValuesColumn {
     fn emit(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
         let mut output = match emit_to {
             EmitTo::All => {
-                let group_values = std::mem::take(&mut self.group_values);
+                let group_values = mem::take(&mut self.group_values);
                 debug_assert!(self.group_values.is_empty());
 
                 group_values
@@ -978,7 +978,7 @@ impl GroupValues for GroupValuesColumn {
         self.group_values.clear();
         self.map.clear();
         self.map.shrink_to(count, |_| 0); // hasher does not matter since the map is cleared
-        self.map_size = self.map.capacity() * std::mem::size_of::<(u64, usize)>();
+        self.map_size = self.map.capacity() * mem::size_of::<(u64, usize)>();
         self.hashes_buffer.clear();
         self.hashes_buffer.shrink_to(count);
     }

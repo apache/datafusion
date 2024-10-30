@@ -278,13 +278,9 @@ impl MinMaxStatistics {
 
 fn sort_columns_from_physical_sort_exprs(
     sort_order: &[PhysicalSortExpr],
-) -> Option<Vec<&datafusion_physical_plan::expressions::Column>> {
+) -> Option<Vec<&Column>> {
     sort_order
         .iter()
-        .map(|expr| {
-            expr.expr
-                .as_any()
-                .downcast_ref::<datafusion_physical_expr::expressions::Column>()
-        })
+        .map(|expr| expr.expr.as_any().downcast_ref::<Column>())
         .collect::<Option<Vec<_>>>()
 }

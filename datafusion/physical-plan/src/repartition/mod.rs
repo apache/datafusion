@@ -38,10 +38,11 @@ use crate::sorts::streaming_merge::StreamingMergeBuilder;
 use crate::stream::RecordBatchStreamAdapter;
 use crate::{DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties, Statistics};
 
+use arrow::compute::take_arrays;
 use arrow::datatypes::{SchemaRef, UInt32Type};
 use arrow::record_batch::RecordBatch;
 use arrow_array::{PrimitiveArray, RecordBatchOptions};
-use datafusion_common::utils::{take_arrays, transpose};
+use datafusion_common::utils::transpose;
 use datafusion_common::{not_impl_err, DataFusionError, Result};
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::memory_pool::MemoryConsumer;
@@ -300,7 +301,7 @@ impl BatchPartitioner {
                             let _timer = partitioner_timer.timer();
 
                             // Produce batches based on indices
-                            let columns = take_arrays(batch.columns(), &indices)?;
+                            let columns = take_arrays(batch.columns(), &indices, None)?;
 
                             let mut options = RecordBatchOptions::new();
                             options = options.with_row_count(Some(indices.len()));
@@ -1325,7 +1326,7 @@ mod tests {
 
         // now, purposely drop output stream 0
         // *before* any outputs are produced
-        std::mem::drop(output_stream0);
+        drop(output_stream0);
 
         // Now, start sending input
         let mut background_task = JoinSet::new();
@@ -1400,7 +1401,7 @@ mod tests {
         let output_stream1 = exec.execute(1, Arc::clone(&task_ctx)).unwrap();
         // now, purposely drop output stream 0
         // *before* any outputs are produced
-        std::mem::drop(output_stream0);
+        drop(output_stream0);
         let mut background_task = JoinSet::new();
         background_task.spawn(async move {
             input.wait().await;

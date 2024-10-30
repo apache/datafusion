@@ -29,11 +29,12 @@ use crate::logical_plan::Subquery;
 use crate::utils::expr_to_columns;
 use crate::Volatility;
 use crate::{
-    built_in_window_function, udaf, BuiltInWindowFunction, ExprSchemable, Operator,
-    Signature, WindowFrame, WindowUDF,
+    udaf, BuiltInWindowFunction, ExprSchemable, Operator, Signature, WindowFrame,
+    WindowUDF,
 };
 
 use arrow::datatypes::{DataType, FieldRef};
+use datafusion_common::cse::HashNode;
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
 };
@@ -694,11 +695,11 @@ impl AggregateFunction {
 pub enum WindowFunctionDefinition {
     /// A built in aggregate function that leverages an aggregate function
     /// A a built-in window function
-    BuiltInWindowFunction(built_in_window_function::BuiltInWindowFunction),
+    BuiltInWindowFunction(BuiltInWindowFunction),
     /// A user defined aggregate function
     AggregateUDF(Arc<crate::AggregateUDF>),
     /// A user defined aggregate function
-    WindowUDF(Arc<crate::WindowUDF>),
+    WindowUDF(Arc<WindowUDF>),
 }
 
 impl WindowFunctionDefinition {
@@ -741,14 +742,12 @@ impl WindowFunctionDefinition {
     }
 }
 
-impl fmt::Display for WindowFunctionDefinition {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+impl Display for WindowFunctionDefinition {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         match self {
-            WindowFunctionDefinition::BuiltInWindowFunction(fun) => {
-                std::fmt::Display::fmt(fun, f)
-            }
-            WindowFunctionDefinition::AggregateUDF(fun) => std::fmt::Display::fmt(fun, f),
-            WindowFunctionDefinition::WindowUDF(fun) => std::fmt::Display::fmt(fun, f),
+            WindowFunctionDefinition::BuiltInWindowFunction(fun) => Display::fmt(fun, f),
+            WindowFunctionDefinition::AggregateUDF(fun) => Display::fmt(fun, f),
+            WindowFunctionDefinition::WindowUDF(fun) => Display::fmt(fun, f),
         }
     }
 }
@@ -832,9 +831,7 @@ pub fn find_df_window_func(name: &str) -> Option<WindowFunctionDefinition> {
     // may have different implementations for these cases. If the sought
     // function is not found among built-in window functions, we search for
     // it among aggregate functions.
-    if let Ok(built_in_function) =
-        built_in_window_function::BuiltInWindowFunction::from_str(name.as_str())
-    {
+    if let Ok(built_in_function) = BuiltInWindowFunction::from_str(name.as_str()) {
         Some(WindowFunctionDefinition::BuiltInWindowFunction(
             built_in_function,
         ))
@@ -1652,47 +1649,39 @@ impl Expr {
             | Expr::Placeholder(..) => false,
         }
     }
+}
 
-    /// Hashes the direct content of an `Expr` without recursing into its children.
-    ///
-    /// This method is useful to incrementally compute hashes, such as  in
-    /// `CommonSubexprEliminate` which builds a deep hash of a node and its descendants
-    /// during the bottom-up phase of the first traversal and so avoid computing the hash
-    /// of the node and then the hash of its descendants separately.
-    ///
-    /// If a node doesn't have any children then this method is similar to `.hash()`, but
-    /// not necessarily returns the same value.
-    ///
+impl HashNode for Expr {
     /// As it is pretty easy to forget changing this method when `Expr` changes the
     /// implementation doesn't use wildcard patterns (`..`, `_`) to catch changes
     /// compile time.
-    pub fn hash_node<H: Hasher>(&self, hasher: &mut H) {
-        mem::discriminant(self).hash(hasher);
+    fn hash_node<H: Hasher>(&self, state: &mut H) {
+        mem::discriminant(self).hash(state);
         match self {
             Expr::Alias(Alias {
                 expr: _expr,
                 relation,
                 name,
             }) => {
-                relation.hash(hasher);
-                name.hash(hasher);
+                relation.hash(state);
+                name.hash(state);
             }
             Expr::Column(column) => {
-                column.hash(hasher);
+                column.hash(state);
             }
             Expr::ScalarVariable(data_type, name) => {
-                data_type.hash(hasher);
-                name.hash(hasher);
+                data_type.hash(state);
+                name.hash(state);
             }
             Expr::Literal(scalar_value) => {
-                scalar_value.hash(hasher);
+                scalar_value.hash(state);
             }
             Expr::BinaryExpr(BinaryExpr {
                 left: _left,
                 op,
                 right: _right,
             }) => {
-                op.hash(hasher);
+                op.hash(state);
             }
             Expr::Like(Like {
                 negated,
@@ -1708,9 +1697,9 @@ impl Expr {
                 escape_char,
                 case_insensitive,
             }) => {
-                negated.hash(hasher);
-                escape_char.hash(hasher);
-                case_insensitive.hash(hasher);
+                negated.hash(state);
+                escape_char.hash(state);
+                case_insensitive.hash(state);
             }
             Expr::Not(_expr)
             | Expr::IsNotNull(_expr)
@@ -1728,7 +1717,7 @@ impl Expr {
                 low: _low,
                 high: _high,
             }) => {
-                negated.hash(hasher);
+                negated.hash(state);
             }
             Expr::Case(Case {
                 expr: _expr,
@@ -1743,10 +1732,10 @@ impl Expr {
                 expr: _expr,
                 data_type,
             }) => {
-                data_type.hash(hasher);
+                data_type.hash(state);
             }
             Expr::ScalarFunction(ScalarFunction { func, args: _args }) => {
-                func.hash(hasher);
+                func.hash(state);
             }
             Expr::AggregateFunction(AggregateFunction {
                 func,
@@ -1756,9 +1745,9 @@ impl Expr {
                 order_by: _order_by,
                 null_treatment,
             }) => {
-                func.hash(hasher);
-                distinct.hash(hasher);
-                null_treatment.hash(hasher);
+                func.hash(state);
+                distinct.hash(state);
+                null_treatment.hash(state);
             }
             Expr::WindowFunction(WindowFunction {
                 fun,
@@ -1768,49 +1757,49 @@ impl Expr {
                 window_frame,
                 null_treatment,
             }) => {
-                fun.hash(hasher);
-                window_frame.hash(hasher);
-                null_treatment.hash(hasher);
+                fun.hash(state);
+                window_frame.hash(state);
+                null_treatment.hash(state);
             }
             Expr::InList(InList {
                 expr: _expr,
                 list: _list,
                 negated,
             }) => {
-                negated.hash(hasher);
+                negated.hash(state);
             }
             Expr::Exists(Exists { subquery, negated }) => {
-                subquery.hash(hasher);
-                negated.hash(hasher);
+                subquery.hash(state);
+                negated.hash(state);
             }
             Expr::InSubquery(InSubquery {
                 expr: _expr,
                 subquery,
                 negated,
             }) => {
-                subquery.hash(hasher);
-                negated.hash(hasher);
+                subquery.hash(state);
+                negated.hash(state);
             }
             Expr::ScalarSubquery(subquery) => {
-                subquery.hash(hasher);
+                subquery.hash(state);
             }
             Expr::Wildcard { qualifier, options } => {
-                qualifier.hash(hasher);
-                options.hash(hasher);
+                qualifier.hash(state);
+                options.hash(state);
             }
             Expr::GroupingSet(grouping_set) => {
-                mem::discriminant(grouping_set).hash(hasher);
+                mem::discriminant(grouping_set).hash(state);
                 match grouping_set {
                     GroupingSet::Rollup(_exprs) | GroupingSet::Cube(_exprs) => {}
                     GroupingSet::GroupingSets(_exprs) => {}
                 }
             }
             Expr::Placeholder(place_holder) => {
-                place_holder.hash(hasher);
+                place_holder.hash(state);
             }
             Expr::OuterReferenceColumn(data_type, column) => {
-                data_type.hash(hasher);
-                column.hash(hasher);
+                data_type.hash(state);
+                column.hash(state);
             }
             Expr::Unnest(Unnest { expr: _expr }) => {}
         };
@@ -2148,8 +2137,8 @@ pub fn schema_name_from_sorts(sorts: &[Sort]) -> Result<String, fmt::Error> {
 
 /// Format expressions for display as part of a logical plan. In many cases, this will produce
 /// similar output to `Expr.name()` except that column names will be prefixed with '#'.
-impl fmt::Display for Expr {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+impl Display for Expr {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         match self {
             Expr::Alias(Alias { expr, name, .. }) => write!(f, "{expr} AS {name}"),
             Expr::Column(c) => write!(f, "{c}"),
@@ -2353,7 +2342,7 @@ impl fmt::Display for Expr {
 }
 
 fn fmt_function(
-    f: &mut fmt::Formatter,
+    f: &mut Formatter,
     fun: &str,
     distinct: bool,
     args: &[Expr],
@@ -2561,30 +2550,6 @@ mod test {
     }
 
     #[test]
-    fn test_lead_return_type() -> Result<()> {
-        let fun = find_df_window_func("lead").unwrap();
-        let observed = fun.return_type(&[DataType::Utf8], &[true], "")?;
-        assert_eq!(DataType::Utf8, observed);
-
-        let observed = fun.return_type(&[DataType::Float64], &[true], "")?;
-        assert_eq!(DataType::Float64, observed);
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_lag_return_type() -> Result<()> {
-        let fun = find_df_window_func("lag").unwrap();
-        let observed = fun.return_type(&[DataType::Utf8], &[true], "")?;
-        assert_eq!(DataType::Utf8, observed);
-
-        let observed = fun.return_type(&[DataType::Float64], &[true], "")?;
-        assert_eq!(DataType::Float64, observed);
-
-        Ok(())
-    }
-
-    #[test]
     fn test_nth_value_return_type() -> Result<()> {
         let fun = find_df_window_func("nth_value").unwrap();
         let observed =
@@ -2599,34 +2564,8 @@ mod test {
     }
 
     #[test]
-    fn test_cume_dist_return_type() -> Result<()> {
-        let fun = find_df_window_func("cume_dist").unwrap();
-        let observed = fun.return_type(&[], &[], "")?;
-        assert_eq!(DataType::Float64, observed);
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_ntile_return_type() -> Result<()> {
-        let fun = find_df_window_func("ntile").unwrap();
-        let observed = fun.return_type(&[DataType::Int16], &[true], "")?;
-        assert_eq!(DataType::UInt64, observed);
-
-        Ok(())
-    }
-
-    #[test]
     fn test_window_function_case_insensitive() -> Result<()> {
-        let names = vec![
-            "cume_dist",
-            "ntile",
-            "lag",
-            "lead",
-            "first_value",
-            "last_value",
-            "nth_value",
-        ];
+        let names = vec!["first_value", "last_value", "nth_value"];
         for name in names {
             let fun = find_df_window_func(name).unwrap();
             let fun2 = find_df_window_func(name.to_uppercase().as_str()).unwrap();
@@ -2643,33 +2582,15 @@ mod test {
     #[test]
     fn test_find_df_window_function() {
         assert_eq!(
-            find_df_window_func("cume_dist"),
-            Some(WindowFunctionDefinition::BuiltInWindowFunction(
-                built_in_window_function::BuiltInWindowFunction::CumeDist
-            ))
-        );
-        assert_eq!(
             find_df_window_func("first_value"),
             Some(WindowFunctionDefinition::BuiltInWindowFunction(
-                built_in_window_function::BuiltInWindowFunction::FirstValue
+                BuiltInWindowFunction::FirstValue
             ))
         );
         assert_eq!(
             find_df_window_func("LAST_value"),
             Some(WindowFunctionDefinition::BuiltInWindowFunction(
-                built_in_window_function::BuiltInWindowFunction::LastValue
-            ))
-        );
-        assert_eq!(
-            find_df_window_func("LAG"),
-            Some(WindowFunctionDefinition::BuiltInWindowFunction(
-                built_in_window_function::BuiltInWindowFunction::Lag
-            ))
-        );
-        assert_eq!(
-            find_df_window_func("LEAD"),
-            Some(WindowFunctionDefinition::BuiltInWindowFunction(
-                built_in_window_function::BuiltInWindowFunction::Lead
+                BuiltInWindowFunction::LastValue
             ))
         );
         assert_eq!(find_df_window_func("not_exist"), None)

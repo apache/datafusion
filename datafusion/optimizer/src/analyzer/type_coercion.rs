@@ -51,8 +51,9 @@ use datafusion_expr::type_coercion::{is_datetime, is_utf8_or_large_utf8};
 use datafusion_expr::utils::merge_schema;
 use datafusion_expr::{
     is_false, is_not_false, is_not_true, is_not_unknown, is_true, is_unknown, not,
-    AggregateUDF, Expr, ExprFunctionExt, ExprSchemable, Join, LogicalPlan, Operator,
-    Projection, ScalarUDF, Union, WindowFrame, WindowFrameBound, WindowFrameUnits,
+    AggregateUDF, Expr, ExprFunctionExt, ExprSchemable, Join, Limit, LogicalPlan,
+    Operator, Projection, ScalarUDF, Union, WindowFrame, WindowFrameBound,
+    WindowFrameUnits,
 };
 
 /// Performs type coercion by determining the schema
@@ -169,6 +170,7 @@ impl<'a> TypeCoercionRewriter<'a> {
         match plan {
             LogicalPlan::Join(join) => self.coerce_join(join),
             LogicalPlan::Union(union) => Self::coerce_union(union),
+            LogicalPlan::Limit(limit) => Self::coerce_limit(limit),
             _ => Ok(plan),
         }
     }
@@ -227,6 +229,37 @@ impl<'a> TypeCoercionRewriter<'a> {
         Ok(LogicalPlan::Union(Union {
             inputs: new_inputs,
             schema: union_schema,
+        }))
+    }
+
+    /// Coerce the fetch and skip expression to Int64 type.
+    fn coerce_limit(limit: Limit) -> Result<LogicalPlan> {
+        fn coerce_limit_expr(
+            expr: Expr,
+            schema: &DFSchema,
+            expr_name: &str,
+        ) -> Result<Expr> {
+            let dt = expr.get_type(schema)?;
+            if dt.is_integer() || dt.is_null() {
+                expr.cast_to(&DataType::Int64, schema)
+            } else {
+                plan_err!("Expected {expr_name} to be an integer or null, but got {dt:?}")
+            }
+        }
+
+        let empty_schema = DFSchema::empty();
+        let new_fetch = limit
+            .fetch
+            .map(|expr| coerce_limit_expr(*expr, &empty_schema, "LIMIT"))
+            .transpose()?;
+        let new_skip = limit
+            .skip
+            .map(|expr| coerce_limit_expr(*expr, &empty_schema, "OFFSET"))
+            .transpose()?;
+        Ok(LogicalPlan::Limit(Limit {
+            input: limit.input,
+            fetch: new_fetch.map(Box::new),
+            skip: new_skip.map(Box::new),
         }))
     }
 
@@ -663,20 +696,20 @@ fn coerce_window_frame(
     expressions: &[Sort],
 ) -> Result<WindowFrame> {
     let mut window_frame = window_frame;
-    let current_types = expressions
-        .iter()
-        .map(|s| s.expr.get_type(schema))
-        .collect::<Result<Vec<_>>>()?;
     let target_type = match window_frame.units {
         WindowFrameUnits::Range => {
-            if let Some(col_type) = current_types.first() {
+            let current_types = expressions
+                .first()
+                .map(|s| s.expr.get_type(schema))
+                .transpose()?;
+            if let Some(col_type) = current_types {
                 if col_type.is_numeric()
-                    || is_utf8_or_large_utf8(col_type)
+                    || is_utf8_or_large_utf8(&col_type)
                     || matches!(col_type, DataType::Null)
                 {
                     col_type
-                } else if is_datetime(col_type) {
-                    &DataType::Interval(IntervalUnit::MonthDayNano)
+                } else if is_datetime(&col_type) {
+                    DataType::Interval(IntervalUnit::MonthDayNano)
                 } else {
                     return internal_err!(
                         "Cannot run range queries on datatype: {col_type:?}"
@@ -686,10 +719,11 @@ fn coerce_window_frame(
                 return internal_err!("ORDER BY column cannot be empty");
             }
         }
-        WindowFrameUnits::Rows | WindowFrameUnits::Groups => &DataType::UInt64,
+        WindowFrameUnits::Rows | WindowFrameUnits::Groups => DataType::UInt64,
     };
-    window_frame.start_bound = coerce_frame_bound(target_type, window_frame.start_bound)?;
-    window_frame.end_bound = coerce_frame_bound(target_type, window_frame.end_bound)?;
+    window_frame.start_bound =
+        coerce_frame_bound(&target_type, window_frame.start_bound)?;
+    window_frame.end_bound = coerce_frame_bound(&target_type, window_frame.end_bound)?;
     Ok(window_frame)
 }
 
@@ -1209,7 +1243,7 @@ mod test {
         }
 
         fn return_type(&self, _args: &[DataType]) -> Result<DataType> {
-            Ok(DataType::Utf8)
+            Ok(Utf8)
         }
 
         fn invoke(&self, _args: &[ColumnarValue]) -> Result<ColumnarValue> {
@@ -1412,7 +1446,7 @@ mod test {
             cast(lit("2002-05-08"), DataType::Date32)
                 + lit(ScalarValue::new_interval_ym(0, 1)),
         );
-        let empty = empty_with_type(DataType::Utf8);
+        let empty = empty_with_type(Utf8);
         let plan = LogicalPlan::Filter(Filter::try_new(expr, empty)?);
         let expected =
             "Filter: a BETWEEN Utf8(\"2002-05-08\") AND CAST(CAST(Utf8(\"2002-05-08\") AS Date32) + IntervalYearMonth(\"1\") AS Utf8)\
@@ -1428,7 +1462,7 @@ mod test {
                 + lit(ScalarValue::new_interval_ym(0, 1)),
             lit("2002-12-08"),
         );
-        let empty = empty_with_type(DataType::Utf8);
+        let empty = empty_with_type(Utf8);
         let plan = LogicalPlan::Filter(Filter::try_new(expr, empty)?);
         // TODO: we should cast col(a).
         let expected =
@@ -1483,7 +1517,7 @@ mod test {
         let expr = Box::new(col("a"));
         let pattern = Box::new(lit(ScalarValue::new_utf8("abc")));
         let like_expr = Expr::Like(Like::new(false, expr, pattern, None, false));
-        let empty = empty_with_type(DataType::Utf8);
+        let empty = empty_with_type(Utf8);
         let plan = LogicalPlan::Projection(Projection::try_new(vec![like_expr], empty)?);
         let expected = "Projection: a LIKE Utf8(\"abc\")\n  EmptyRelation";
         assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), plan, expected)?;
@@ -1491,7 +1525,7 @@ mod test {
         let expr = Box::new(col("a"));
         let pattern = Box::new(lit(ScalarValue::Null));
         let like_expr = Expr::Like(Like::new(false, expr, pattern, None, false));
-        let empty = empty_with_type(DataType::Utf8);
+        let empty = empty_with_type(Utf8);
         let plan = LogicalPlan::Projection(Projection::try_new(vec![like_expr], empty)?);
         let expected = "Projection: a LIKE CAST(NULL AS Utf8)\n  EmptyRelation";
         assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), plan, expected)?;
@@ -1511,7 +1545,7 @@ mod test {
         let expr = Box::new(col("a"));
         let pattern = Box::new(lit(ScalarValue::new_utf8("abc")));
         let ilike_expr = Expr::Like(Like::new(false, expr, pattern, None, true));
-        let empty = empty_with_type(DataType::Utf8);
+        let empty = empty_with_type(Utf8);
         let plan = LogicalPlan::Projection(Projection::try_new(vec![ilike_expr], empty)?);
         let expected = "Projection: a ILIKE Utf8(\"abc\")\n  EmptyRelation";
         assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), plan, expected)?;
@@ -1519,7 +1553,7 @@ mod test {
         let expr = Box::new(col("a"));
         let pattern = Box::new(lit(ScalarValue::Null));
         let ilike_expr = Expr::Like(Like::new(false, expr, pattern, None, true));
-        let empty = empty_with_type(DataType::Utf8);
+        let empty = empty_with_type(Utf8);
         let plan = LogicalPlan::Projection(Projection::try_new(vec![ilike_expr], empty)?);
         let expected = "Projection: a ILIKE CAST(NULL AS Utf8)\n  EmptyRelation";
         assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), plan, expected)?;
@@ -1547,7 +1581,7 @@ mod test {
         let expected = "Projection: a IS UNKNOWN\n  EmptyRelation";
         assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), plan, expected)?;
 
-        let empty = empty_with_type(DataType::Utf8);
+        let empty = empty_with_type(Utf8);
         let plan = LogicalPlan::Projection(Projection::try_new(vec![expr], empty)?);
         let ret = assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), plan, expected);
         let err = ret.unwrap_err().to_string();
@@ -1565,7 +1599,7 @@ mod test {
 
     #[test]
     fn concat_for_type_coercion() -> Result<()> {
-        let empty = empty_with_type(DataType::Utf8);
+        let empty = empty_with_type(Utf8);
         let args = [col("a"), lit("b"), lit(true), lit(false), lit(13)];
 
         // concat-type signature
@@ -1700,7 +1734,7 @@ mod test {
                     true,
                 ),
                 Field::new("binary", DataType::Binary, true),
-                Field::new("string", DataType::Utf8, true),
+                Field::new("string", Utf8, true),
                 Field::new("decimal", DataType::Decimal128(10, 10), true),
             ]
             .into(),
@@ -1717,7 +1751,7 @@ mod test {
             else_expr: None,
         };
         let case_when_common_type = DataType::Boolean;
-        let then_else_common_type = DataType::Utf8;
+        let then_else_common_type = Utf8;
         let expected = cast_helper(
             case.clone(),
             &case_when_common_type,
@@ -1736,8 +1770,8 @@ mod test {
             ],
             else_expr: Some(Box::new(col("string"))),
         };
-        let case_when_common_type = DataType::Utf8;
-        let then_else_common_type = DataType::Utf8;
+        let case_when_common_type = Utf8;
+        let then_else_common_type = Utf8;
         let expected = cast_helper(
             case.clone(),
             &case_when_common_type,
@@ -1827,7 +1861,7 @@ mod test {
             Some("list"),
             vec![(Box::new(col("large_list")), Box::new(lit("1")))],
             DataType::LargeList(Arc::new(Field::new("item", DataType::Int64, true))),
-            DataType::Utf8,
+            Utf8,
             schema
         );
 
@@ -1835,7 +1869,7 @@ mod test {
             Some("large_list"),
             vec![(Box::new(col("list")), Box::new(lit("1")))],
             DataType::LargeList(Arc::new(Field::new("item", DataType::Int64, true))),
-            DataType::Utf8,
+            Utf8,
             schema
         );
 
@@ -1843,7 +1877,7 @@ mod test {
             Some("list"),
             vec![(Box::new(col("fixed_list")), Box::new(lit("1")))],
             DataType::List(Arc::new(Field::new("item", DataType::Int64, true))),
-            DataType::Utf8,
+            Utf8,
             schema
         );
 
@@ -1851,7 +1885,7 @@ mod test {
             Some("fixed_list"),
             vec![(Box::new(col("list")), Box::new(lit("1")))],
             DataType::List(Arc::new(Field::new("item", DataType::Int64, true))),
-            DataType::Utf8,
+            Utf8,
             schema
         );
 
@@ -1859,7 +1893,7 @@ mod test {
             Some("fixed_list"),
             vec![(Box::new(col("large_list")), Box::new(lit("1")))],
             DataType::LargeList(Arc::new(Field::new("item", DataType::Int64, true))),
-            DataType::Utf8,
+            Utf8,
             schema
         );
 
@@ -1867,7 +1901,7 @@ mod test {
             Some("large_list"),
             vec![(Box::new(col("fixed_list")), Box::new(lit("1")))],
             DataType::LargeList(Arc::new(Field::new("item", DataType::Int64, true))),
-            DataType::Utf8,
+            Utf8,
             schema
         );
         Ok(())

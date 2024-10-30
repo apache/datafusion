@@ -139,7 +139,7 @@ impl TestContext {
 }
 
 #[cfg(feature = "avro")]
-pub async fn register_avro_tables(ctx: &mut crate::TestContext) {
+pub async fn register_avro_tables(ctx: &mut TestContext) {
     use datafusion::prelude::AvroReadOptions;
 
     ctx.enable_testdir();
@@ -319,17 +319,27 @@ pub async fn register_metadata_tables(ctx: &SessionContext) {
             String::from("metadata_key"),
             String::from("the l_name field"),
         )]));
+
     let ts = Field::new("ts", DataType::Timestamp(TimeUnit::Nanosecond, None), false)
         .with_metadata(HashMap::from([(
             String::from("metadata_key"),
             String::from("ts non-nullable field"),
         )]));
 
-    let schema =
-        Schema::new(vec![id, name, l_name, ts]).with_metadata(HashMap::from([(
+    let nonnull_name =
+        Field::new("nonnull_name", DataType::Utf8, false).with_metadata(HashMap::from([
+            (
+                String::from("metadata_key"),
+                String::from("the nonnull_name field"),
+            ),
+        ]));
+
+    let schema = Schema::new(vec![id, name, l_name, ts, nonnull_name]).with_metadata(
+        HashMap::from([(
             String::from("metadata_key"),
             String::from("the entire schema"),
-        )]));
+        )]),
+    );
 
     let batch = RecordBatch::try_new(
         Arc::new(schema),
@@ -341,6 +351,11 @@ pub async fn register_metadata_tables(ctx: &SessionContext) {
                 1599572549190855123,
                 1599572549190855123,
                 1599572549190855123,
+            ])) as _,
+            Arc::new(StringArray::from(vec![
+                Some("no_foo"),
+                Some("no_bar"),
+                Some("no_baz"),
             ])) as _,
         ],
     )

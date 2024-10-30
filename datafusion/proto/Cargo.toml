@@ -27,13 +27,10 @@ repository = { workspace = true }
 license = { workspace = true }
 authors = { workspace = true }
 # Specify MSRV here as `cargo msrv` doesn't support workspace version
-rust-version = "1.78"
+rust-version = "1.79"
 
 # Exclude proto files so crates.io consumers don't need protoc
 exclude = ["*.proto"]
-
-[lints]
-workspace = true
 
 [lib]
 name = "datafusion_proto"

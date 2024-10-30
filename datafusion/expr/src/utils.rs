@@ -437,7 +437,10 @@ pub fn expand_qualified_wildcard(
         return plan_err!("Invalid qualifier {qualifier}");
     }
 
-    let qualified_schema = Arc::new(Schema::new(fields_with_qualified));
+    let qualified_schema = Arc::new(Schema::new_with_metadata(
+        fields_with_qualified,
+        schema.metadata().clone(),
+    ));
     let qualified_dfschema =
         DFSchema::try_from_qualified_schema(qualifier.clone(), &qualified_schema)?
             .with_functional_dependencies(projected_func_dependencies)?;
@@ -978,6 +981,7 @@ pub fn can_hash(data_type: &DataType) -> bool {
         },
         DataType::Utf8 => true,
         DataType::LargeUtf8 => true,
+        DataType::Utf8View => true,
         DataType::Decimal128(_, _) => true,
         DataType::Date32 => true,
         DataType::Date64 => true,
@@ -1099,6 +1103,54 @@ fn split_conjunction_impl<'a>(expr: &'a Expr, mut exprs: Vec<&'a Expr>) -> Vec<&
             exprs
         }
     }
+}
+
+/// Iteratate parts in a conjunctive [`Expr`] such as `A AND B AND C` => `[A, B, C]`
+///
+/// See [`split_conjunction_owned`] for more details and an example.
+pub fn iter_conjunction(expr: &Expr) -> impl Iterator<Item = &Expr> {
+    let mut stack = vec![expr];
+    std::iter::from_fn(move || {
+        while let Some(expr) = stack.pop() {
+            match expr {
+                Expr::BinaryExpr(BinaryExpr {
+                    right,
+                    op: Operator::And,
+                    left,
+                }) => {
+                    stack.push(right);
+                    stack.push(left);
+                }
+                Expr::Alias(Alias { expr, .. }) => stack.push(expr),
+                other => return Some(other),
+            }
+        }
+        None
+    })
+}
+
+/// Iteratate parts in a conjunctive [`Expr`] such as `A AND B AND C` => `[A, B, C]`
+///
+/// See [`split_conjunction_owned`] for more details and an example.
+pub fn iter_conjunction_owned(expr: Expr) -> impl Iterator<Item = Expr> {
+    let mut stack = vec![expr];
+    std::iter::from_fn(move || {
+        while let Some(expr) = stack.pop() {
+            match expr {
+                Expr::BinaryExpr(BinaryExpr {
+                    right,
+                    op: Operator::And,
+                    left,
+                }) => {
+                    stack.push(*right);
+                    stack.push(*left);
+                }
+                Expr::Alias(Alias { expr, .. }) => stack.push(*expr),
+                other => return Some(other),
+            }
+        }
+        None
+    })
 }
 
 /// Splits an owned conjunctive [`Expr`] such as `A AND B AND C` => `[A, B, C]`
@@ -1347,7 +1399,7 @@ pub fn format_state_name(name: &str, state_name: &str) -> String {
 mod tests {
     use super::*;
     use crate::{
-        col, cube, expr, expr_vec_fmt, grouping_set, lit, rollup,
+        col, cube, expr_vec_fmt, grouping_set, lit, rollup,
         test::function_stub::max_udaf, test::function_stub::min_udaf,
         test::function_stub::sum_udaf, Cast, ExprFunctionExt, WindowFunctionDefinition,
     };
@@ -1362,19 +1414,19 @@ mod tests {
 
     #[test]
     fn test_group_window_expr_by_sort_keys_empty_window() -> Result<()> {
-        let max1 = Expr::WindowFunction(expr::WindowFunction::new(
+        let max1 = Expr::WindowFunction(WindowFunction::new(
             WindowFunctionDefinition::AggregateUDF(max_udaf()),
             vec![col("name")],
         ));
-        let max2 = Expr::WindowFunction(expr::WindowFunction::new(
+        let max2 = Expr::WindowFunction(WindowFunction::new(
             WindowFunctionDefinition::AggregateUDF(max_udaf()),
             vec![col("name")],
         ));
-        let min3 = Expr::WindowFunction(expr::WindowFunction::new(
+        let min3 = Expr::WindowFunction(WindowFunction::new(
             WindowFunctionDefinition::AggregateUDF(min_udaf()),
             vec![col("name")],
         ));
-        let sum4 = Expr::WindowFunction(expr::WindowFunction::new(
+        let sum4 = Expr::WindowFunction(WindowFunction::new(
             WindowFunctionDefinition::AggregateUDF(sum_udaf()),
             vec![col("age")],
         ));
@@ -1389,28 +1441,28 @@ mod tests {
 
     #[test]
     fn test_group_window_expr_by_sort_keys() -> Result<()> {
-        let age_asc = expr::Sort::new(col("age"), true, true);
-        let name_desc = expr::Sort::new(col("name"), false, true);
-        let created_at_desc = expr::Sort::new(col("created_at"), false, true);
-        let max1 = Expr::WindowFunction(expr::WindowFunction::new(
+        let age_asc = Sort::new(col("age"), true, true);
+        let name_desc = Sort::new(col("name"), false, true);
+        let created_at_desc = Sort::new(col("created_at"), false, true);
+        let max1 = Expr::WindowFunction(WindowFunction::new(
             WindowFunctionDefinition::AggregateUDF(max_udaf()),
             vec![col("name")],
         ))
         .order_by(vec![age_asc.clone(), name_desc.clone()])
         .build()
         .unwrap();
-        let max2 = Expr::WindowFunction(expr::WindowFunction::new(
+        let max2 = Expr::WindowFunction(WindowFunction::new(
             WindowFunctionDefinition::AggregateUDF(max_udaf()),
             vec![col("name")],
         ));
-        let min3 = Expr::WindowFunction(expr::WindowFunction::new(
+        let min3 = Expr::WindowFunction(WindowFunction::new(
             WindowFunctionDefinition::AggregateUDF(min_udaf()),
             vec![col("name")],
         ))
         .order_by(vec![age_asc.clone(), name_desc.clone()])
         .build()
         .unwrap();
-        let sum4 = Expr::WindowFunction(expr::WindowFunction::new(
+        let sum4 = Expr::WindowFunction(WindowFunction::new(
             WindowFunctionDefinition::AggregateUDF(sum_udaf()),
             vec![col("age")],
         ))

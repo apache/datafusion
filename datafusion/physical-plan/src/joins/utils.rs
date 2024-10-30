@@ -369,7 +369,7 @@ impl JoinHashMapType for JoinHashMap {
     }
 }
 
-impl fmt::Debug for JoinHashMap {
+impl Debug for JoinHashMap {
     fn fmt(&self, _f: &mut fmt::Formatter) -> fmt::Result {
         Ok(())
     }
@@ -546,15 +546,16 @@ pub struct ColumnIndex {
     pub side: JoinSide,
 }
 
-/// Filter applied before join output
+/// Filter applied before join output. Fields are crate-public to allow
+/// downstream implementations to experiment with custom joins.
 #[derive(Debug, Clone)]
 pub struct JoinFilter {
     /// Filter expression
-    expression: Arc<dyn PhysicalExpr>,
+    pub(crate) expression: Arc<dyn PhysicalExpr>,
     /// Column indices required to construct intermediate batch for filtering
-    column_indices: Vec<ColumnIndex>,
+    pub(crate) column_indices: Vec<ColumnIndex>,
     /// Physical schema of intermediate batch
-    schema: Schema,
+    pub(crate) schema: Schema,
 }
 
 impl JoinFilter {
@@ -700,7 +701,13 @@ pub fn build_join_schema(
             .unzip(),
     };
 
-    (fields.finish(), column_indices)
+    let metadata = left
+        .metadata()
+        .clone()
+        .into_iter()
+        .chain(right.metadata().clone())
+        .collect();
+    (fields.finish().with_metadata(metadata), column_indices)
 }
 
 /// A [`OnceAsync`] can be used to run an async closure once, with subsequent calls
@@ -720,8 +727,8 @@ impl<T> Default for OnceAsync<T> {
     }
 }
 
-impl<T> std::fmt::Debug for OnceAsync<T> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl<T> Debug for OnceAsync<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "OnceAsync")
     }
 }
@@ -1280,15 +1287,15 @@ pub(crate) fn adjust_indices_by_join_type(
     adjust_range: Range<usize>,
     join_type: JoinType,
     preserve_order_for_right: bool,
-) -> (UInt64Array, UInt32Array) {
+) -> Result<(UInt64Array, UInt32Array)> {
     match join_type {
         JoinType::Inner => {
             // matched
-            (left_indices, right_indices)
+            Ok((left_indices, right_indices))
         }
         JoinType::Left => {
             // matched
-            (left_indices, right_indices)
+            Ok((left_indices, right_indices))
             // unmatched left row will be produced in the end of loop, and it has been set in the left visited bitmap
         }
         JoinType::Right => {
@@ -1307,22 +1314,22 @@ pub(crate) fn adjust_indices_by_join_type(
             // need to remove the duplicated record in the right side
             let right_indices = get_semi_indices(adjust_range, &right_indices);
             // the left_indices will not be used later for the `right semi` join
-            (left_indices, right_indices)
+            Ok((left_indices, right_indices))
         }
         JoinType::RightAnti => {
             // need to remove the duplicated record in the right side
             // get the anti index for the right side
             let right_indices = get_anti_indices(adjust_range, &right_indices);
             // the left_indices will not be used later for the `right anti` join
-            (left_indices, right_indices)
+            Ok((left_indices, right_indices))
         }
         JoinType::LeftSemi | JoinType::LeftAnti => {
             // matched or unmatched left row will be produced in the end of loop
             // When visit the right batch, we can output the matched left row and don't need to wait the end of loop
-            (
+            Ok((
                 UInt64Array::from_iter_values(vec![]),
                 UInt32Array::from_iter_values(vec![]),
-            )
+            ))
         }
     }
 }
@@ -1347,27 +1354,64 @@ pub(crate) fn append_right_indices(
     right_indices: UInt32Array,
     adjust_range: Range<usize>,
     preserve_order_for_right: bool,
-) -> (UInt64Array, UInt32Array) {
+) -> Result<(UInt64Array, UInt32Array)> {
     if preserve_order_for_right {
-        append_probe_indices_in_order(left_indices, right_indices, adjust_range)
+        Ok(append_probe_indices_in_order(
+            left_indices,
+            right_indices,
+            adjust_range,
+        ))
     } else {
         let right_unmatched_indices = get_anti_indices(adjust_range, &right_indices);
 
         if right_unmatched_indices.is_empty() {
-            (left_indices, right_indices)
+            Ok((left_indices, right_indices))
         } else {
-            let unmatched_size = right_unmatched_indices.len();
+            // `into_builder()` can fail here when there is nothing to be filtered and
+            // left_indices or right_indices has the same reference to the cached indices.
+            // In that case, we use a slower alternative.
+
             // the new left indices: left_indices + null array
+            let mut new_left_indices_builder =
+                left_indices.into_builder().unwrap_or_else(|left_indices| {
+                    let mut builder = UInt64Builder::with_capacity(
+                        left_indices.len() + right_unmatched_indices.len(),
+                    );
+                    debug_assert_eq!(
+                        left_indices.null_count(),
+                        0,
+                        "expected left indices to have no nulls"
+                    );
+                    builder.append_slice(left_indices.values());
+                    builder
+                });
+            new_left_indices_builder.append_nulls(right_unmatched_indices.len());
+            let new_left_indices = UInt64Array::from(new_left_indices_builder.finish());
+
             // the new right indices: right_indices + right_unmatched_indices
-            let new_left_indices = left_indices
-                .iter()
-                .chain(std::iter::repeat(None).take(unmatched_size))
-                .collect();
-            let new_right_indices = right_indices
-                .iter()
-                .chain(right_unmatched_indices.iter())
-                .collect();
-            (new_left_indices, new_right_indices)
+            let mut new_right_indices_builder = right_indices
+                .into_builder()
+                .unwrap_or_else(|right_indices| {
+                    let mut builder = UInt32Builder::with_capacity(
+                        right_indices.len() + right_unmatched_indices.len(),
+                    );
+                    debug_assert_eq!(
+                        right_indices.null_count(),
+                        0,
+                        "expected right indices to have no nulls"
+                    );
+                    builder.append_slice(right_indices.values());
+                    builder
+                });
+            debug_assert_eq!(
+                right_unmatched_indices.null_count(),
+                0,
+                "expected right unmatched indices to have no nulls"
+            );
+            new_right_indices_builder.append_slice(right_unmatched_indices.values());
+            let new_right_indices = UInt32Array::from(new_right_indices_builder.finish());
+
+            Ok((new_left_indices, new_right_indices))
         }
     }
 }
@@ -1635,6 +1679,91 @@ pub(crate) fn asymmetric_join_output_partitioning(
     }
 }
 
+/// Trait for incrementally generating Join output.
+///
+/// This trait is used to limit some join outputs
+/// so it does not produce single large batches
+pub(crate) trait BatchTransformer: Debug + Clone {
+    /// Sets the next `RecordBatch` to be processed.
+    fn set_batch(&mut self, batch: RecordBatch);
+
+    /// Retrieves the next `RecordBatch` from the transformer.
+    /// Returns `None` if all batches have been produced.
+    /// The boolean flag indicates whether the batch is the last one.
+    fn next(&mut self) -> Option<(RecordBatch, bool)>;
+}
+
+#[derive(Debug, Clone)]
+/// A batch transformer that does nothing.
+pub(crate) struct NoopBatchTransformer {
+    /// RecordBatch to be processed
+    batch: Option<RecordBatch>,
+}
+
+impl NoopBatchTransformer {
+    pub fn new() -> Self {
+        Self { batch: None }
+    }
+}
+
+impl BatchTransformer for NoopBatchTransformer {
+    fn set_batch(&mut self, batch: RecordBatch) {
+        self.batch = Some(batch);
+    }
+
+    fn next(&mut self) -> Option<(RecordBatch, bool)> {
+        self.batch.take().map(|batch| (batch, true))
+    }
+}
+
+#[derive(Debug, Clone)]
+/// Splits large batches into smaller batches with a maximum number of rows.
+pub(crate) struct BatchSplitter {
+    /// RecordBatch to be split
+    batch: Option<RecordBatch>,
+    /// Maximum number of rows in a split batch
+    batch_size: usize,
+    /// Current row index
+    row_index: usize,
+}
+
+impl BatchSplitter {
+    /// Creates a new `BatchSplitter` with the specified batch size.
+    pub(crate) fn new(batch_size: usize) -> Self {
+        Self {
+            batch: None,
+            batch_size,
+            row_index: 0,
+        }
+    }
+}
+
+impl BatchTransformer for BatchSplitter {
+    fn set_batch(&mut self, batch: RecordBatch) {
+        self.batch = Some(batch);
+        self.row_index = 0;
+    }
+
+    fn next(&mut self) -> Option<(RecordBatch, bool)> {
+        let Some(batch) = &self.batch else {
+            return None;
+        };
+
+        let remaining_rows = batch.num_rows() - self.row_index;
+        let rows_to_slice = remaining_rows.min(self.batch_size);
+        let sliced_batch = batch.slice(self.row_index, rows_to_slice);
+        self.row_index += rows_to_slice;
+
+        let mut last = false;
+        if self.row_index >= batch.num_rows() {
+            self.batch = None;
+            last = true;
+        }
+
+        Some((sliced_batch, last))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::pin::Pin;
@@ -1643,10 +1772,12 @@ mod tests {
 
     use arrow::datatypes::{DataType, Fields};
     use arrow::error::{ArrowError, Result as ArrowResult};
+    use arrow_array::Int32Array;
     use arrow_schema::SortOptions;
-
     use datafusion_common::stats::Precision::{Absent, Exact, Inexact};
     use datafusion_common::{arrow_datafusion_err, arrow_err, ScalarValue};
+
+    use rstest::rstest;
 
     fn check(
         left: &[Column],
@@ -1821,13 +1952,13 @@ mod tests {
     ) -> Statistics {
         Statistics {
             num_rows: if is_exact {
-                num_rows.map(Precision::Exact)
+                num_rows.map(Exact)
             } else {
-                num_rows.map(Precision::Inexact)
+                num_rows.map(Inexact)
             }
-            .unwrap_or(Precision::Absent),
+            .unwrap_or(Absent),
             column_statistics: column_stats,
-            total_byte_size: Precision::Absent,
+            total_byte_size: Absent,
         }
     }
 
@@ -2073,17 +2204,17 @@ mod tests {
         assert_eq!(
             estimate_inner_join_cardinality(
                 Statistics {
-                    num_rows: Precision::Inexact(400),
-                    total_byte_size: Precision::Absent,
+                    num_rows: Inexact(400),
+                    total_byte_size: Absent,
                     column_statistics: left_col_stats,
                 },
                 Statistics {
-                    num_rows: Precision::Inexact(400),
-                    total_byte_size: Precision::Absent,
+                    num_rows: Inexact(400),
+                    total_byte_size: Absent,
                     column_statistics: right_col_stats,
                 },
             ),
-            Some(Precision::Inexact((400 * 400) / 200))
+            Some(Inexact((400 * 400) / 200))
         );
         Ok(())
     }
@@ -2091,33 +2222,33 @@ mod tests {
     #[test]
     fn test_inner_join_cardinality_decimal_range() -> Result<()> {
         let left_col_stats = vec![ColumnStatistics {
-            distinct_count: Precision::Absent,
-            min_value: Precision::Inexact(ScalarValue::Decimal128(Some(32500), 14, 4)),
-            max_value: Precision::Inexact(ScalarValue::Decimal128(Some(35000), 14, 4)),
+            distinct_count: Absent,
+            min_value: Inexact(ScalarValue::Decimal128(Some(32500), 14, 4)),
+            max_value: Inexact(ScalarValue::Decimal128(Some(35000), 14, 4)),
             ..Default::default()
         }];
 
         let right_col_stats = vec![ColumnStatistics {
-            distinct_count: Precision::Absent,
-            min_value: Precision::Inexact(ScalarValue::Decimal128(Some(33500), 14, 4)),
-            max_value: Precision::Inexact(ScalarValue::Decimal128(Some(34000), 14, 4)),
+            distinct_count: Absent,
+            min_value: Inexact(ScalarValue::Decimal128(Some(33500), 14, 4)),
+            max_value: Inexact(ScalarValue::Decimal128(Some(34000), 14, 4)),
             ..Default::default()
         }];
 
         assert_eq!(
             estimate_inner_join_cardinality(
                 Statistics {
-                    num_rows: Precision::Inexact(100),
-                    total_byte_size: Precision::Absent,
+                    num_rows: Inexact(100),
+                    total_byte_size: Absent,
                     column_statistics: left_col_stats,
                 },
                 Statistics {
-                    num_rows: Precision::Inexact(100),
-                    total_byte_size: Precision::Absent,
+                    num_rows: Inexact(100),
+                    total_byte_size: Absent,
                     column_statistics: right_col_stats,
                 },
             ),
-            Some(Precision::Inexact(100))
+            Some(Inexact(100))
         );
         Ok(())
     }
@@ -2553,5 +2684,50 @@ mod tests {
         }
 
         Ok(())
+    }
+
+    fn create_test_batch(num_rows: usize) -> RecordBatch {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+        let data = Arc::new(Int32Array::from_iter_values(0..num_rows as i32));
+        RecordBatch::try_new(schema, vec![data]).unwrap()
+    }
+
+    fn assert_split_batches(
+        batches: Vec<(RecordBatch, bool)>,
+        batch_size: usize,
+        num_rows: usize,
+    ) {
+        let mut row_count = 0;
+        for (batch, last) in batches.into_iter() {
+            assert_eq!(batch.num_rows(), (num_rows - row_count).min(batch_size));
+            let column = batch
+                .column(0)
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .unwrap();
+            for i in 0..batch.num_rows() {
+                assert_eq!(column.value(i), i as i32 + row_count as i32);
+            }
+            row_count += batch.num_rows();
+            assert_eq!(last, row_count == num_rows);
+        }
+    }
+
+    #[rstest]
+    #[test]
+    fn test_batch_splitter(
+        #[values(1, 3, 11)] batch_size: usize,
+        #[values(1, 6, 50)] num_rows: usize,
+    ) {
+        let mut splitter = BatchSplitter::new(batch_size);
+        splitter.set_batch(create_test_batch(num_rows));
+
+        let mut batches = Vec::with_capacity(num_rows.div_ceil(batch_size));
+        while let Some(batch) = splitter.next() {
+            batches.push(batch);
+        }
+
+        assert!(splitter.next().is_none());
+        assert_split_batches(batches, batch_size, num_rows);
     }
 }

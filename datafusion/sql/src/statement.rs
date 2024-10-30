@@ -30,10 +30,11 @@ use crate::planner::{
 use crate::utils::normalize_ident;
 
 use arrow_schema::{DataType, Fields};
+use datafusion_common::error::_plan_err;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{
     exec_err, not_impl_err, plan_datafusion_err, plan_err, schema_err,
-    unqualified_field_not_found, Column, Constraints, DFSchema, DFSchemaRef,
+    unqualified_field_not_found, Column, Constraint, Constraints, DFSchema, DFSchemaRef,
     DataFusionError, Result, ScalarValue, SchemaError, SchemaReference, TableReference,
     ToDFSchema,
 };
@@ -98,7 +99,7 @@ fn calc_inline_constraints_from_columns(columns: &[ColumnDef]) -> Vec<TableConst
                 ast::ColumnOption::Unique {
                     is_primary: false,
                     characteristics,
-                } => constraints.push(ast::TableConstraint::Unique {
+                } => constraints.push(TableConstraint::Unique {
                     name: name.clone(),
                     columns: vec![column.name.clone()],
                     characteristics: *characteristics,
@@ -110,7 +111,7 @@ fn calc_inline_constraints_from_columns(columns: &[ColumnDef]) -> Vec<TableConst
                 ast::ColumnOption::Unique {
                     is_primary: true,
                     characteristics,
-                } => constraints.push(ast::TableConstraint::PrimaryKey {
+                } => constraints.push(TableConstraint::PrimaryKey {
                     name: name.clone(),
                     columns: vec![column.name.clone()],
                     characteristics: *characteristics,
@@ -124,7 +125,7 @@ fn calc_inline_constraints_from_columns(columns: &[ColumnDef]) -> Vec<TableConst
                     on_delete,
                     on_update,
                     characteristics,
-                } => constraints.push(ast::TableConstraint::ForeignKey {
+                } => constraints.push(TableConstraint::ForeignKey {
                     name: name.clone(),
                     columns: vec![],
                     foreign_table: foreign_table.clone(),
@@ -134,7 +135,7 @@ fn calc_inline_constraints_from_columns(columns: &[ColumnDef]) -> Vec<TableConst
                     characteristics: *characteristics,
                 }),
                 ast::ColumnOption::Check(expr) => {
-                    constraints.push(ast::TableConstraint::Check {
+                    constraints.push(TableConstraint::Check {
                         name: name.clone(),
                         expr: Box::new(expr.clone()),
                     })
@@ -393,13 +394,19 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 // Build column default values
                 let column_defaults =
                     self.build_column_defaults(&columns, planner_context)?;
+
+                let has_columns = !columns.is_empty();
+                let schema = self.build_schema(columns)?.to_dfschema_ref()?;
+                if has_columns {
+                    planner_context.set_table_schema(Some(Arc::clone(&schema)));
+                }
+
                 match query {
                     Some(query) => {
                         let plan = self.query_to_plan(*query, planner_context)?;
                         let input_schema = plan.schema();
 
-                        let plan = if !columns.is_empty() {
-                            let schema = self.build_schema(columns)?.to_dfschema_ref()?;
+                        let plan = if has_columns {
                             if schema.fields().len() != input_schema.fields().len() {
                                 return plan_err!(
                             "Mismatch: {} columns specified, but result has {} columns",
@@ -427,7 +434,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                             plan
                         };
 
-                        let constraints = Constraints::new_from_table_constraints(
+                        let constraints = Self::new_constraint_from_table_constraints(
                             &all_constraints,
                             plan.schema(),
                         )?;
@@ -446,13 +453,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     }
 
                     None => {
-                        let schema = self.build_schema(columns)?.to_dfschema_ref()?;
                         let plan = EmptyRelation {
                             produce_one_row: false,
                             schema,
                         };
                         let plan = LogicalPlan::EmptyRelation(plan);
-                        let constraints = Constraints::new_from_table_constraints(
+                        let constraints = Self::new_constraint_from_table_constraints(
                             &all_constraints,
                             plan.schema(),
                         )?;
@@ -770,7 +776,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 }
                 let isolation_level: ast::TransactionIsolationLevel = modes
                     .iter()
-                    .filter_map(|m: &ast::TransactionMode| match m {
+                    .filter_map(|m: &TransactionMode| match m {
                         TransactionMode::AccessMode(_) => None,
                         TransactionMode::IsolationLevel(level) => Some(level),
                     })
@@ -779,7 +785,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     .unwrap_or(ast::TransactionIsolationLevel::Serializable);
                 let access_mode: ast::TransactionAccessMode = modes
                     .iter()
-                    .filter_map(|m: &ast::TransactionMode| match m {
+                    .filter_map(|m: &TransactionMode| match m {
                         TransactionMode::AccessMode(mode) => Some(mode),
                         TransactionMode::IsolationLevel(_) => None,
                     })
@@ -1242,7 +1248,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         let name = self.object_name_to_table_reference(name)?;
         let constraints =
-            Constraints::new_from_table_constraints(&all_constraints, &df_schema)?;
+            Self::new_constraint_from_table_constraints(&all_constraints, &df_schema)?;
         Ok(LogicalPlan::Ddl(DdlStatement::CreateExternalTable(
             PlanCreateExternalTable {
                 schema: df_schema,
@@ -1260,6 +1266,74 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 column_defaults,
             },
         )))
+    }
+
+    /// Convert each [TableConstraint] to corresponding [Constraint]
+    fn new_constraint_from_table_constraints(
+        constraints: &[TableConstraint],
+        df_schema: &DFSchemaRef,
+    ) -> Result<Constraints> {
+        let constraints = constraints
+            .iter()
+            .map(|c: &TableConstraint| match c {
+                TableConstraint::Unique { name, columns, .. } => {
+                    let field_names = df_schema.field_names();
+                    // Get unique constraint indices in the schema:
+                    let indices = columns
+                        .iter()
+                        .map(|u| {
+                            let idx = field_names
+                                .iter()
+                                .position(|item| *item == u.value)
+                                .ok_or_else(|| {
+                                    let name = name
+                                        .as_ref()
+                                        .map(|name| format!("with name '{name}' "))
+                                        .unwrap_or("".to_string());
+                                    DataFusionError::Execution(
+                                        format!("Column for unique constraint {}not found in schema: {}", name,u.value)
+                                    )
+                                })?;
+                            Ok(idx)
+                        })
+                        .collect::<Result<Vec<_>>>()?;
+                    Ok(Constraint::Unique(indices))
+                }
+                TableConstraint::PrimaryKey { columns, .. } => {
+                    let field_names = df_schema.field_names();
+                    // Get primary key indices in the schema:
+                    let indices = columns
+                        .iter()
+                        .map(|pk| {
+                            let idx = field_names
+                                .iter()
+                                .position(|item| *item == pk.value)
+                                .ok_or_else(|| {
+                                    DataFusionError::Execution(format!(
+                                        "Column for primary key not found in schema: {}",
+                                        pk.value
+                                    ))
+                                })?;
+                            Ok(idx)
+                        })
+                        .collect::<Result<Vec<_>>>()?;
+                    Ok(Constraint::PrimaryKey(indices))
+                }
+                TableConstraint::ForeignKey { .. } => {
+                    _plan_err!("Foreign key constraints are not currently supported")
+                }
+                TableConstraint::Check { .. } => {
+                    _plan_err!("Check constraints are not currently supported")
+                }
+                TableConstraint::Index { .. } => {
+                    _plan_err!("Indexes are not currently supported")
+                }
+                TableConstraint::FulltextOrSpatial { .. } => {
+                    _plan_err!("Indexes are not currently supported")
+                }
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(Constraints::new_unverified(constraints))
     }
 
     fn parse_options_map(
@@ -1576,7 +1650,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     None => {
                         // If the target table has an alias, use it to qualify the column name
                         if let Some(alias) = &table_alias {
-                            datafusion_expr::Expr::Column(Column::new(
+                            Expr::Column(Column::new(
                                 Some(self.ident_normalizer.normalize(alias.name.clone())),
                                 field.name(),
                             ))

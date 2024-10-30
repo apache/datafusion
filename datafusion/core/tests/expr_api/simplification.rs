@@ -29,10 +29,10 @@ use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::logical_plan::builder::table_scan_with_filters;
 use datafusion_expr::simplify::SimplifyInfo;
 use datafusion_expr::{
-    expr, table_scan, Cast, ColumnarValue, ExprSchemable, LogicalPlan,
-    LogicalPlanBuilder, ScalarUDF, Volatility,
+    table_scan, Cast, ColumnarValue, ExprSchemable, LogicalPlan, LogicalPlanBuilder,
+    ScalarUDF, Volatility,
 };
-use datafusion_functions::{math, string};
+use datafusion_functions::math;
 use datafusion_optimizer::optimizer::Optimizer;
 use datafusion_optimizer::simplify_expressions::{ExprSimplifier, SimplifyExpressions};
 use datafusion_optimizer::{OptimizerContext, OptimizerRule};
@@ -333,8 +333,8 @@ fn simplify_scan_predicate() -> Result<()> {
     .build()?;
 
     // before simplify: t.g = power(t.f, 1.0)
-    // after simplify:  (t.g = t.f) as "t.g = power(t.f, 1.0)"
-    let expected = "TableScan: test, full_filters=[g = f AS g = power(f,Float64(1))]";
+    // after simplify:  t.g = t.f"
+    let expected = "TableScan: test, full_filters=[g = f]";
     let actual = get_optimized_plan_formatted(plan, &Utc::now());
     assert_eq!(expected, actual);
     Ok(())
@@ -368,13 +368,13 @@ fn test_const_evaluator() {
 #[test]
 fn test_const_evaluator_scalar_functions() {
     // concat("foo", "bar") --> "foobar"
-    let expr = string::expr_fn::concat(vec![lit("foo"), lit("bar")]);
+    let expr = concat(vec![lit("foo"), lit("bar")]);
     test_evaluate(expr, lit("foobar"));
 
     // ensure arguments are also constant folded
     // concat("foo", concat("bar", "baz")) --> "foobarbaz"
-    let concat1 = string::expr_fn::concat(vec![lit("bar"), lit("baz")]);
-    let expr = string::expr_fn::concat(vec![lit("foo"), concat1]);
+    let concat1 = concat(vec![lit("bar"), lit("baz")]);
+    let expr = concat(vec![lit("foo"), concat1]);
     test_evaluate(expr, lit("foobarbaz"));
 
     // Check non string arguments
@@ -407,7 +407,7 @@ fn test_const_evaluator_scalar_functions() {
 #[test]
 fn test_const_evaluator_now() {
     let ts_nanos = 1599566400000000000i64;
-    let time = chrono::Utc.timestamp_nanos(ts_nanos);
+    let time = Utc.timestamp_nanos(ts_nanos);
     let ts_string = "2020-09-08T12:05:00+00:00";
     // now() --> ts
     test_evaluate_with_start_time(now(), lit_timestamp_nano(ts_nanos), &time);
@@ -429,7 +429,7 @@ fn test_evaluator_udfs() {
 
     // immutable UDF should get folded
     // udf_add(1+2, 30+40) --> 73
-    let expr = Expr::ScalarFunction(expr::ScalarFunction::new_udf(
+    let expr = Expr::ScalarFunction(ScalarFunction::new_udf(
         make_udf_add(Volatility::Immutable),
         args.clone(),
     ));
@@ -438,21 +438,16 @@ fn test_evaluator_udfs() {
     // stable UDF should be entirely folded
     // udf_add(1+2, 30+40) --> 73
     let fun = make_udf_add(Volatility::Stable);
-    let expr = Expr::ScalarFunction(expr::ScalarFunction::new_udf(
-        Arc::clone(&fun),
-        args.clone(),
-    ));
+    let expr =
+        Expr::ScalarFunction(ScalarFunction::new_udf(Arc::clone(&fun), args.clone()));
     test_evaluate(expr, lit(73));
 
     // volatile UDF should have args folded
     // udf_add(1+2, 30+40) --> udf_add(3, 70)
     let fun = make_udf_add(Volatility::Volatile);
-    let expr =
-        Expr::ScalarFunction(expr::ScalarFunction::new_udf(Arc::clone(&fun), args));
-    let expected_expr = Expr::ScalarFunction(expr::ScalarFunction::new_udf(
-        Arc::clone(&fun),
-        folded_args,
-    ));
+    let expr = Expr::ScalarFunction(ScalarFunction::new_udf(Arc::clone(&fun), args));
+    let expected_expr =
+        Expr::ScalarFunction(ScalarFunction::new_udf(Arc::clone(&fun), folded_args));
     test_evaluate(expr, expected_expr);
 }
 

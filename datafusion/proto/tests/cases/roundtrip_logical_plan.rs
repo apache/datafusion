@@ -47,8 +47,10 @@ use datafusion::functions_aggregate::expr_fn::{
 };
 use datafusion::functions_aggregate::min_max::max_udaf;
 use datafusion::functions_nested::map::map;
-use datafusion::functions_window::rank::{dense_rank, percent_rank, rank, rank_udwf};
-use datafusion::functions_window::row_number::row_number;
+use datafusion::functions_window::expr_fn::{
+    cume_dist, dense_rank, lag, lead, ntile, percent_rank, rank, row_number,
+};
+use datafusion::functions_window::rank::rank_udwf;
 use datafusion::prelude::*;
 use datafusion::test_util::{TestTableFactory, TestTableProvider};
 use datafusion_common::config::TableOptions;
@@ -938,10 +940,18 @@ async fn roundtrip_expr_api() -> Result<()> {
             vec![lit(1), lit(2), lit(3)],
             vec![lit(10), lit(20), lit(30)],
         ),
+        cume_dist(),
         row_number(),
         rank(),
         dense_rank(),
         percent_rank(),
+        lead(col("b"), None, None),
+        lead(col("b"), Some(2), None),
+        lead(col("b"), Some(2), Some(ScalarValue::from(100))),
+        lag(col("b"), None, None),
+        lag(col("b"), Some(2), None),
+        lag(col("b"), Some(2), Some(ScalarValue::from(100))),
+        ntile(lit(3)),
         nth_value(col("b"), 1, vec![]),
         nth_value(
             col("b"),
@@ -2161,7 +2171,7 @@ fn roundtrip_aggregate_udf() {
         }
 
         fn size(&self) -> usize {
-            std::mem::size_of_val(self)
+            size_of_val(self)
         }
     }
 
@@ -2385,7 +2395,7 @@ fn roundtrip_window() {
         }
 
         fn size(&self) -> usize {
-            std::mem::size_of_val(self)
+            size_of_val(self)
         }
     }
 

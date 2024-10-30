@@ -84,6 +84,11 @@ select case when current_time() = (now()::bigint % 86400000000000)::time then 'O
 ----
 OK
 
+query B
+select now() = current_timestamp;
+----
+true
+
 ##########
 ## Timestamp Handling Tests
 ##########
@@ -2774,6 +2779,11 @@ FROM
 ----
 NULL
 01:01:2025 23-59-58
+
+query T
+select to_char('2020-01-01 00:10:20.123'::timestamp at time zone 'America/New_York', '%Y-%m-%d %H:%M:%S.%3f');
+----
+2020-01-01 00:10:20.123
 
 statement ok
 drop table formats;

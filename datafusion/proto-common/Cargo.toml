@@ -26,7 +26,7 @@ homepage = { workspace = true }
 repository = { workspace = true }
 license = { workspace = true }
 authors = { workspace = true }
-rust-version = "1.78"
+rust-version = "1.79"
 
 # Exclude proto files so crates.io consumers don't need protoc
 exclude = ["*.proto"]

@@ -19,7 +19,7 @@
 
 use arrow::array::{Array, ArrayRef, NullArray};
 use arrow::compute::{kernels, CastOptions};
-use arrow::datatypes::{DataType, TimeUnit};
+use arrow::datatypes::DataType;
 use datafusion_common::format::DEFAULT_CAST_OPTIONS;
 use datafusion_common::{internal_err, Result, ScalarValue};
 use std::sync::Arc;
@@ -193,39 +193,9 @@ impl ColumnarValue {
             ColumnarValue::Array(array) => Ok(ColumnarValue::Array(
                 kernels::cast::cast_with_options(array, cast_type, &cast_options)?,
             )),
-            ColumnarValue::Scalar(scalar) => {
-                let scalar_array =
-                    if cast_type == &DataType::Timestamp(TimeUnit::Nanosecond, None) {
-                        if let ScalarValue::Float64(Some(float_ts)) = scalar {
-                            ScalarValue::Int64(Some(
-                                (float_ts * 1_000_000_000_f64).trunc() as i64,
-                            ))
-                            .to_array()?
-                        } else {
-                            scalar.to_array()?
-                        }
-                    } else {
-                        scalar.to_array()?
-                    };
-                let cast_array = kernels::cast::cast_with_options(
-                    &scalar_array,
-                    cast_type,
-                    &cast_options,
-                )?;
-                let cast_scalar = ScalarValue::try_from_array(&cast_array, 0)?;
-                Ok(ColumnarValue::Scalar(cast_scalar))
-            }
-        }
-    }
-
-    /// Converts an [`ArrayRef`] to a [`ColumnarValue`] based on the supplied arguments.
-    /// This is useful for scalar UDF implementations to fulfil their contract:
-    /// if all arguments are scalar values, the result should also be a scalar value.
-    pub fn from_args_and_result(args: &[Self], result: ArrayRef) -> Result<Self> {
-        if result.len() == 1 && args.iter().all(|arg| matches!(arg, Self::Scalar(_))) {
-            Ok(Self::Scalar(ScalarValue::try_from_array(&result, 0)?))
-        } else {
-            Ok(Self::Array(result))
+            ColumnarValue::Scalar(scalar) => Ok(ColumnarValue::Scalar(
+                scalar.cast_to_with_options(cast_type, &cast_options)?,
+            )),
         }
     }
 }

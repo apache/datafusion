@@ -17,6 +17,7 @@
 
 use std::any::Any;
 use std::fmt::{Debug, Formatter};
+use std::mem::size_of_val;
 use std::sync::{Arc, OnceLock};
 
 use arrow::{
@@ -179,7 +180,7 @@ fn get_approx_percentile_cont_with_weight_doc() -> &'static Documentation {
 +----------------------------------------------------------------------+
 ```"#,
             )
-            .with_standard_argument("expression", "The")
+            .with_standard_argument("expression", None)
             .with_argument("weight", "Expression to use as weight. Can be a constant, column, or function, and any combination of arithmetic operators.")
             .with_argument("percentile", "Percentile to compute. Must be a float value between 0 and 1 (inclusive).")
             .build()
@@ -239,8 +240,7 @@ impl Accumulator for ApproxPercentileWithWeightAccumulator {
     }
 
     fn size(&self) -> usize {
-        std::mem::size_of_val(self)
-            - std::mem::size_of_val(&self.approx_percentile_cont_accumulator)
+        size_of_val(self) - size_of_val(&self.approx_percentile_cont_accumulator)
             + self.approx_percentile_cont_accumulator.size()
     }
 }

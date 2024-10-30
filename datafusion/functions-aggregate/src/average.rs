@@ -18,8 +18,8 @@
 //! Defines `Avg` & `Mean` aggregate & accumulators
 
 use arrow::array::{
-    self, Array, ArrayRef, ArrowNativeTypeOp, ArrowNumericType, ArrowPrimitiveType,
-    AsArray, BooleanArray, PrimitiveArray, PrimitiveBuilder, UInt64Array,
+    Array, ArrayRef, ArrowNativeTypeOp, ArrowNumericType, ArrowPrimitiveType, AsArray,
+    BooleanArray, PrimitiveArray, PrimitiveBuilder, UInt64Array,
 };
 
 use arrow::compute::sum;
@@ -47,6 +47,7 @@ use datafusion_functions_aggregate_common::utils::DecimalAverager;
 use log::debug;
 use std::any::Any;
 use std::fmt::Debug;
+use std::mem::{size_of, size_of_val};
 use std::sync::{Arc, OnceLock};
 
 make_udaf_expr_and_func!(
@@ -263,7 +264,7 @@ fn get_avg_doc() -> &'static Documentation {
 +---------------------------+
 ```"#,
             )
-            .with_standard_argument("expression", "The")
+            .with_standard_argument("expression", None)
             .build()
             .unwrap()
     })
@@ -294,7 +295,7 @@ impl Accumulator for AvgAccumulator {
     }
 
     fn size(&self) -> usize {
-        std::mem::size_of_val(self)
+        size_of_val(self)
     }
 
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
@@ -372,7 +373,7 @@ impl<T: DecimalType + ArrowNumericType + Debug> Accumulator for DecimalAvgAccumu
     }
 
     fn size(&self) -> usize {
-        std::mem::size_of_val(self)
+        size_of_val(self)
     }
 
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
@@ -471,7 +472,7 @@ where
         &mut self,
         values: &[ArrayRef],
         group_indices: &[usize],
-        opt_filter: Option<&array::BooleanArray>,
+        opt_filter: Option<&BooleanArray>,
         total_num_groups: usize,
     ) -> Result<()> {
         assert_eq!(values.len(), 1, "single argument to update_batch");
@@ -554,7 +555,7 @@ where
         &mut self,
         values: &[ArrayRef],
         group_indices: &[usize],
-        opt_filter: Option<&array::BooleanArray>,
+        opt_filter: Option<&BooleanArray>,
         total_num_groups: usize,
     ) -> Result<()> {
         assert_eq!(values.len(), 2, "two arguments to merge_batch");
@@ -614,7 +615,6 @@ where
     }
 
     fn size(&self) -> usize {
-        self.counts.capacity() * std::mem::size_of::<u64>()
-            + self.sums.capacity() * std::mem::size_of::<T>()
+        self.counts.capacity() * size_of::<u64>() + self.sums.capacity() * size_of::<T>()
     }
 }
