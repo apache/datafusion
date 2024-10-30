@@ -150,25 +150,28 @@ impl<T: ArrowPrimitiveType, const NULLABLE: bool> GroupColumn
     ) {
         let array = array.as_primitive::<T>();
 
-        for (idx, &lhs_row) in group_indices.iter().enumerate() {
+        let iter = group_indices
+            .iter()
+            .zip(rows.iter())
+            .zip(equal_to_results.iter_mut());
+        for ((&lhs_row, &rhs_row), equal_to_result) in iter {
             // Has found not equal to, don't need to check
-            if !equal_to_results[idx] {
+            if !*equal_to_result {
                 continue;
             }
 
-            let rhs_row = rows[idx];
             // Perf: skip null check (by short circuit) if input is not nullable
             if NULLABLE {
                 let exist_null = self.nulls.is_null(lhs_row);
                 let input_null = array.is_null(rhs_row);
                 if let Some(result) = nulls_equal_to(exist_null, input_null) {
-                    equal_to_results[idx] = result;
+                    *equal_to_result = result;
                     continue;
                 }
                 // Otherwise, we need to check their values
             }
 
-            equal_to_results[idx] = self.group_values[lhs_row] == array.value(rhs_row);
+            *equal_to_result = self.group_values[lhs_row] == array.value(rhs_row);
         }
     }
 

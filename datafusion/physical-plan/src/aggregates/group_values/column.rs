@@ -43,41 +43,21 @@ use hashbrown::raw::RawTable;
 const NON_INLINED_FLAG: u64 = 0x8000000000000000;
 const VALUE_MASK: u64 = 0x7FFFFFFFFFFFFFFF;
 
-/// `BucketContext` is a packed struct
+/// The view of indices pointing to the actual values in `GroupValues`
 ///
-/// ### Format:
+/// If only single `group index` represented by view,
+/// value of view is just the `group index`, and we call it a `inlined view`.
 ///
-///   +---------------------+--------------------+
-///   | checking flag(1bit) | group index(63bit) |
-///   +---------------------+--------------------+
-///    
-/// ### Checking flag
+/// If multiple `group indices` represented by view,
+/// value of view is the actually the index pointing to `group indices`,
+/// and we call it `non-inlined view`.
 ///
-///   It is possible that rows with same hash values exist in `input cols`.
-///   And if we `vectorized_equal_to` and `vectorized append` them
-///   in the same round, some fault cases will occur especially when
-///   they are totally the repeated rows...
+/// The view(a u64) format is like:
+///   +---------------------+---------------------------------------------+
+///   | inlined flag(1bit)  | group index / index to group indices(63bit) |
+///   +---------------------+---------------------------------------------+
 ///
-///   For example:
-///     - Two repeated rows exist in `input cols`.
-///
-///     - We found their hash values equal to one exist group
-///
-///     - We then perform `vectorized_equal_to` for them to the exist group,
-///       and found their values not equal to the exist one
-///
-///     - Finally when perform `vectorized append`, we decide to build two
-///       respective new groups for them, even we actually just need one
-///       new group...
-///
-///   So for solving such cases simply, if some rows with same hash value
-///   in `input cols`, just allow to process one of them in a round,
-///   and this flag is used to represent that one of them is processing
-///   in current round.
-///
-/// ### Group index
-///
-///     The group's index in group values
+/// `inlined flag`: 1 represents `non-inlined`, and 0 represents `inlined`
 ///
 #[derive(Debug, Clone, Copy)]
 struct GroupIndexView(u64);
@@ -114,11 +94,17 @@ pub struct VectorizedGroupValuesColumn {
     /// Logically maps group values to a group_index in
     /// [`Self::group_values`] and in each accumulator
     ///
-    /// Uses the raw API of hashbrown to avoid actually storing the
-    /// keys (group values) in the table
+    /// It is a `hashtable` based on `hashbrown`.
     ///
-    /// keys: u64 hashes of the GroupValue
-    /// values: (hash, group_index)
+    /// Key and value in the `hashtable`:
+    ///   - The `key` is `hash value(u64)` of the `group value`
+    ///   - The `value` is the `group values` with the same `hash value`
+    ///
+    /// We don't really store the actual `group values` in `hashtable`,
+    /// instead we store the `group indices` pointing to values in `GroupValues`.
+    /// And we use [`GroupIndexView`] to represent such `group indices` in table.
+    ///
+    ///
     map: RawTable<(u64, GroupIndexView)>,
 
     /// The size of `map` in bytes
@@ -131,9 +117,8 @@ pub struct VectorizedGroupValuesColumn {
     ///
     /// The chained indices is like:
     ///   `latest group index -> older group index -> even older group index -> ...`
+    ///
     group_index_lists: Vec<Vec<usize>>,
-
-    index_lists_updates: Vec<(usize, usize)>,
 
     /// Similar as `current_indices`, but `remaining_indices`
     /// is used to store the rows will be processed in next round.
@@ -176,7 +161,6 @@ impl VectorizedGroupValuesColumn {
             schema,
             map,
             group_index_lists: Vec::new(),
-            index_lists_updates: Vec::new(),
             map_size: 0,
             group_values: vec![],
             hashes_buffer: Default::default(),
@@ -712,7 +696,6 @@ impl GroupValues for VectorizedGroupValuesColumn {
         self.hashes_buffer.clear();
         self.hashes_buffer.shrink_to(count);
         self.group_index_lists.clear();
-        self.index_lists_updates.clear();
         self.scalarized_indices.clear();
         self.vectorized_append_row_indices.clear();
         self.vectorized_equal_to_row_indices.clear();
