@@ -740,9 +740,7 @@ fn test_default_expressions() -> Result<()> {
     for input_exprs in &test_cases {
         let input_types = input_exprs
             .iter()
-            .map(|expr: &Arc<dyn PhysicalExpr>| {
-                expr.data_type(&schema).unwrap()
-            })
+            .map(|expr: &Arc<dyn PhysicalExpr>| expr.data_type(&schema).unwrap())
             .collect::<Vec<_>>();
         let expr_args = ExpressionArgs::new(input_exprs, &input_types);
 
