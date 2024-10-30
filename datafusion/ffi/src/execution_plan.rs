@@ -227,7 +227,7 @@ impl ExecutionPlan for ForeignExecutionPlan {
         self
     }
 
-    fn properties(&self) -> &datafusion::physical_plan::PlanProperties {
+    fn properties(&self) -> &PlanProperties {
         &self.properties
     }
 
@@ -241,7 +241,7 @@ impl ExecutionPlan for ForeignExecutionPlan {
     fn with_new_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
-    ) -> datafusion::error::Result<Arc<dyn ExecutionPlan>> {
+    ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(Arc::new(ForeignExecutionPlan {
             plan: self.plan.clone(),
             name: self.name.clone(),

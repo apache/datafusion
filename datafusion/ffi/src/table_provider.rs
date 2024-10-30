@@ -348,7 +348,7 @@ impl TableProvider for ForeignTableProvider {
             match maybe_plan {
                 RResult::ROk(p) => ForeignExecutionPlan::try_from(&p)?,
                 RResult::RErr(_) => {
-                    return Err(datafusion::error::DataFusionError::Internal(
+                    return Err(DataFusionError::Internal(
                         "Unable to perform scan via FFI".to_string(),
                     ))
                 }
