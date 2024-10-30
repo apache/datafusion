@@ -19,7 +19,7 @@ use crate::memory_pool::{MemoryConsumer, MemoryPool, MemoryReservation};
 use datafusion_common::{resources_datafusion_err, DataFusionError, Result};
 use hashbrown::HashMap;
 use log::debug;
-use parking_lot::{Mutex, RwLock};
+use parking_lot::Mutex;
 use std::{
     num::NonZeroUsize,
     sync::atomic::{AtomicU64, AtomicUsize, Ordering},

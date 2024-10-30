@@ -28,7 +28,6 @@ use crate::{
 
 use crate::cache::cache_manager::{CacheManager, CacheManagerConfig};
 use datafusion_common::{DataFusionError, Result};
-use hashbrown::HashMap;
 use object_store::ObjectStore;
 use std::path::PathBuf;
 use std::sync::Arc;
