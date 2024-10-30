@@ -599,7 +599,7 @@ fn push_down_join(
 ///   identified as join predicates
 ///
 /// # Return Value
-/// A tuple of Vec<Expr> - (inferred_from_predicates, inferred_from_on_filters).
+/// A tuple of Expr Vec - (inferred_from_predicates, inferred_from_on_filters).
 fn infer_join_predicates(
     join: &Join,
     predicates: &[Expr],
