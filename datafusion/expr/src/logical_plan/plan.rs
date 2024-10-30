@@ -1945,7 +1945,7 @@ impl LogicalPlan {
                         write!(f, "Prepare: {name:?} {data_types:?} ")
                     }
                     LogicalPlan::Execute(Execute { name, parameters, .. }) => {
-                        write!(f, "Execute: {} {}", name, expr_vec_fmt!(parameters))
+                        write!(f, "Execute: {} params=[{}]", name, expr_vec_fmt!(parameters))
                     }
                     LogicalPlan::DescribeTable(DescribeTable { .. }) => {
                         write!(f, "DescribeTable")
@@ -2624,7 +2624,7 @@ pub struct Execute {
     pub schema: DFSchemaRef,
 }
 
-// Comparison excludes then `schema` field.
+// Comparison excludes the `schema` field.
 impl PartialOrd for Execute {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         match self.name.partial_cmp(&other.name) {
