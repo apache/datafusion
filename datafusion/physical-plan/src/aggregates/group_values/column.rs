@@ -85,7 +85,8 @@ impl GroupIndexView {
     }
 }
 
-/// A [`GroupValues`] that stores multiple columns of group values.
+/// A [`GroupValues`] that stores multiple columns of group values,
+/// and supports vectorized operators for them
 ///
 pub struct VectorizedGroupValuesColumn {
     /// The output schema
@@ -574,7 +575,9 @@ impl GroupValues for VectorizedGroupValuesColumn {
                         v.push(Box::new(b) as _)
                     }
                     dt => {
-                        return not_impl_err!("{dt} not supported in GroupValuesColumn")
+                        return not_impl_err!(
+                            "{dt} not supported in VectorizedGroupValuesColumn"
+                        )
                     }
                 }
             }
@@ -756,8 +759,47 @@ impl GroupValues for VectorizedGroupValuesColumn {
     }
 }
 
-/// A [`GroupValues`] that stores multiple columns of group values.
+/// A [`GroupValues`] that stores multiple columns of group values,
+/// and supports scalarized operators for them
 ///
+/// This scalarized implementation is used only for `streaming aggregation`,
+/// because it depends on the order between `input rows` and their corresponding
+/// `group indices`.
+///
+/// For example, assuming a `input rows` with 4 new rows
+/// (not equal to `exist rows` in `group_values`, and need to create
+/// new groups for them):
+///
+/// ```text
+///   row1 (hash collision with the exist rows)
+///   row2
+///   row3 (hash collision with the exist rows)
+///   row4
+/// ```
+///
+/// # In [`GroupValuesColumn`], their `group indices` will be
+///
+/// ```text
+///   row1 --> 0
+///   row2 --> 1
+///   row3 --> 2
+///   row4 --> 3
+/// ```
+///
+/// `Group indices` order agrees with their input order, and the `streaming aggregation`
+/// depends on this.
+///
+/// # However In [`VectorizedGroupValuesColumn`], their `group indices` will be
+///
+/// ```text
+///   row1 --> 2
+///   row2 --> 0
+///   row3 --> 3
+///   row4 --> 1
+/// ```
+///
+/// `Group indices` order are against with their input order, and this will lead to error
+/// in `streaming aggregation`.
 ///
 pub struct GroupValuesColumn {
     /// The output schema
