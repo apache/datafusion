@@ -282,6 +282,8 @@ impl VectorizedGroupValuesColumn {
             self.vectorized_equal_to_row_indices.len()
         );
 
+        self.scalarized_indices.clear();
+
         if self.vectorized_equal_to_group_indices.is_empty() {
             return;
         }
@@ -335,57 +337,42 @@ impl VectorizedGroupValuesColumn {
         self.vectorized_equal_to_results = equal_to_results;
     }
 
-    fn scalarized_equal_to(
-        &self,
-        group_index_view: &GroupIndexView,
-        cols: &[ArrayRef],
-        row: usize,
-        groups: &mut Vec<usize>,
-    ) -> bool {
-        // Check if this row exists in `group_values`
-        fn check_row_equal(
-            array_row: &dyn GroupColumn,
-            lhs_row: usize,
-            array: &ArrayRef,
-            rhs_row: usize,
-        ) -> bool {
-            array_row.equal_to(lhs_row, array, rhs_row)
-        }
-
-        if group_index_view.is_non_inlined() {
-            let list_offset = group_index_view.value() as usize;
-            let group_index_list = &self.group_index_lists[list_offset];
-
-            for &group_idx in group_index_list {
-                let mut check_result = true;
-                for (i, group_val) in self.group_values.iter().enumerate() {
-                    if !check_row_equal(group_val.as_ref(), group_idx, &cols[i], row) {
-                        check_result = false;
-                        break;
-                    }
-                }
-
-                if check_result {
-                    groups[row] = group_idx;
-                    return true;
-                }
-            }
-
-            // All groups unmatched, return false result
-            false
-        } else {
-            let group_idx = group_index_view.value() as usize;
-            for (i, group_val) in self.group_values.iter().enumerate() {
-                if !check_row_equal(group_val.as_ref(), group_idx, &cols[i], row) {
-                    return false;
-                }
-            }
-
-            groups[row] = group_idx;
-            true
-        }
-    }
-
+    /// It is possible that some `input rows` have the same
+    /// hash values with the `exist rows`, but have the different
+    /// actual values the exists.
+    ///
+    /// We can found them in `vectorized_equal_to`, and put them
+    /// into `scalarized_indices`. And for these `input rows`,
+    /// we will perform the `scalarized_intern` similar as what in
+    /// [`GroupValuesColumn`].
+    ///
+    /// This design can make the process simple and still efficient enough:
+    ///
+    /// # About making the process simple
+    ///
+    /// Some corner cases become really easy to solve, like following cases:
+    ///
+    /// ```text
+    ///   input row1 (same hash value with exist rows, but value different)
+    ///   input row1
+    ///   ...
+    ///   input row1
+    /// ```
+    ///
+    /// After performing `vectorized_equal_to`, we will found multiple `input rows`
+    /// not equal to the `exist rows`. However such `input rows` are repeated, only
+    /// one new group should be create for them.
+    ///
+    /// If we don't fallback to `scalarized_intern`, it is really hard for us to
+    /// distinguish the such `repeated rows` in `input rows`. And if we just fallback,
+    /// it is really easy to solve, and the performance is at least not worse than origin.
+    ///
+    /// # About performance
+    ///
+    /// The hash collision may be not frequent, so the fallback will indeed hardly happen.
+    /// In most situations, `scalarized_indices` will found to be empty after finishing to
+    /// preform `vectorized_equal_to`.
+    ///
     fn scalarized_intern(
         &mut self,
         cols: &[ArrayRef],
@@ -463,6 +450,57 @@ impl VectorizedGroupValuesColumn {
         }
 
         self.map = map;
+    }
+
+    fn scalarized_equal_to(
+        &self,
+        group_index_view: &GroupIndexView,
+        cols: &[ArrayRef],
+        row: usize,
+        groups: &mut Vec<usize>,
+    ) -> bool {
+        // Check if this row exists in `group_values`
+        fn check_row_equal(
+            array_row: &dyn GroupColumn,
+            lhs_row: usize,
+            array: &ArrayRef,
+            rhs_row: usize,
+        ) -> bool {
+            array_row.equal_to(lhs_row, array, rhs_row)
+        }
+
+        if group_index_view.is_non_inlined() {
+            let list_offset = group_index_view.value() as usize;
+            let group_index_list = &self.group_index_lists[list_offset];
+
+            for &group_idx in group_index_list {
+                let mut check_result = true;
+                for (i, group_val) in self.group_values.iter().enumerate() {
+                    if !check_row_equal(group_val.as_ref(), group_idx, &cols[i], row) {
+                        check_result = false;
+                        break;
+                    }
+                }
+
+                if check_result {
+                    groups[row] = group_idx;
+                    return true;
+                }
+            }
+
+            // All groups unmatched, return false result
+            false
+        } else {
+            let group_idx = group_index_view.value() as usize;
+            for (i, group_val) in self.group_values.iter().enumerate() {
+                if !check_row_equal(group_val.as_ref(), group_idx, &cols[i], row) {
+                    return false;
+                }
+            }
+
+            groups[row] = group_idx;
+            true
+        }
     }
 }
 
@@ -545,6 +583,7 @@ impl GroupValues for VectorizedGroupValuesColumn {
 
         // tracks to which group each of the input rows belongs
         groups.clear();
+        groups.resize(n_rows, usize::MAX);
 
         let mut batch_hashes = mem::take(&mut self.hashes_buffer);
         batch_hashes.clear();
@@ -552,12 +591,25 @@ impl GroupValues for VectorizedGroupValuesColumn {
         create_hashes(cols, &self.random_state, &mut batch_hashes)?;
 
         // General steps for one round `vectorized equal_to & append`:
-        //   1. Collect vectorized context by checking hash values of `cols` in `map`
-        //   2. Perform `vectorized_equal_to`
-        //   3. Perform `vectorized_append`
-        //   4. Update `current_indices`
-        groups.resize(n_rows, usize::MAX);
-        self.scalarized_indices.clear();
+        //   1. Collect vectorized context by checking hash values of `cols` in `map`,
+        //      mainly fill `vectorized_append_row_indices`, `vectorized_equal_to_row_indices`
+        //      and `vectorized_equal_to_group_indices`
+        //
+        //   2. Perform `vectorized_append` for `vectorized_append_row_indices`.
+        //     `vectorized_append` must be performed before `vectorized_equal_to`,
+        //      because some `group indices` in `vectorized_equal_to_group_indices`
+        //      may be actually placeholders, and still point to no actual values in
+        //      `group_values` before performing append.
+        //
+        //   3. Perform `vectorized_equal_to` for `vectorized_equal_to_row_indices`
+        //      and `vectorized_equal_to_group_indices`. If found some rows in input `cols`
+        //      not equal to `exist rows` in `group_values`, place them in `scalarized_indices`
+        //      and perform `scalarized_intern` for them similar as what in [`GroupValuesColumn`]
+        //      after.
+        //
+        //   4. Perform `scalarized_intern` for rows mentioned above, when we process like this
+        //      can see the comments of `scalarized_intern`.
+        //
 
         // 1. Collect vectorized context by checking hash values of `cols` in `map`
         self.collect_vectorized_process_context(&batch_hashes, groups);
@@ -568,7 +620,7 @@ impl GroupValues for VectorizedGroupValuesColumn {
         // 3. Perform `vectorized_equal_to`
         self.vectorized_equal_to(cols, groups);
 
-        // 4. Update `current_indices`
+        // 4. Perform `scalarized_intern`
         self.scalarized_intern(cols, &batch_hashes, groups);
 
         self.hashes_buffer = batch_hashes;
