@@ -101,17 +101,26 @@ fn criterion_benchmark(c: &mut Criterion) {
 
         let args = create_args::<i32>(size, 32, false);
         group.bench_function(BenchmarkId::new("utf8 type", size), |b| {
-            b.iter(|| criterion::black_box(lpad().invoke(&args).unwrap()))
+            b.iter(|| {
+                #[allow(deprecated)] // TODO use invoke_batch
+                criterion::black_box(lpad().invoke(&args).unwrap())
+            })
         });
 
         let args = create_args::<i64>(size, 32, false);
         group.bench_function(BenchmarkId::new("largeutf8 type", size), |b| {
-            b.iter(|| criterion::black_box(lpad().invoke(&args).unwrap()))
+            b.iter(|| {
+                #[allow(deprecated)] // TODO use invoke_batch
+                criterion::black_box(lpad().invoke(&args).unwrap())
+            })
         });
 
         let args = create_args::<i32>(size, 32, true);
         group.bench_function(BenchmarkId::new("stringview type", size), |b| {
-            b.iter(|| criterion::black_box(lpad().invoke(&args).unwrap()))
+            b.iter(|| {
+                #[allow(deprecated)] // TODO use invoke_batch
+                criterion::black_box(lpad().invoke(&args).unwrap())
+            })
         });
 
         group.finish();
@@ -120,18 +129,27 @@ fn criterion_benchmark(c: &mut Criterion) {
 
         let args = create_args::<i32>(size, 32, false);
         group.bench_function(BenchmarkId::new("utf8 type", size), |b| {
-            b.iter(|| criterion::black_box(rpad().invoke(&args).unwrap()))
+            b.iter(|| {
+                #[allow(deprecated)] // TODO use invoke_batch
+                criterion::black_box(rpad().invoke(&args).unwrap())
+            })
         });
 
         let args = create_args::<i64>(size, 32, false);
         group.bench_function(BenchmarkId::new("largeutf8 type", size), |b| {
-            b.iter(|| criterion::black_box(rpad().invoke(&args).unwrap()))
+            b.iter(|| {
+                #[allow(deprecated)] // TODO use invoke_batch
+                criterion::black_box(rpad().invoke(&args).unwrap())
+            })
         });
 
         // rpad for stringview type
         let args = create_args::<i32>(size, 32, true);
         group.bench_function(BenchmarkId::new("stringview type", size), |b| {
-            b.iter(|| criterion::black_box(rpad().invoke(&args).unwrap()))
+            b.iter(|| {
+                #[allow(deprecated)] // TODO use invoke_batch
+                criterion::black_box(rpad().invoke(&args).unwrap())
+            })
         });
 
         group.finish();

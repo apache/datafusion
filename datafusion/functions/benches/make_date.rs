@@ -62,6 +62,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         let days = ColumnarValue::Array(Arc::new(days(&mut rng)) as ArrayRef);
 
         b.iter(|| {
+            #[allow(deprecated)] // TODO use invoke_batch
             black_box(
                 make_date()
                     .invoke(&[years.clone(), months.clone(), days.clone()])
@@ -77,6 +78,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         let days = ColumnarValue::Array(Arc::new(days(&mut rng)) as ArrayRef);
 
         b.iter(|| {
+            #[allow(deprecated)] // TODO use invoke_batch
             black_box(
                 make_date()
                     .invoke(&[year.clone(), months.clone(), days.clone()])
@@ -92,6 +94,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         let days = ColumnarValue::Array(Arc::new(days(&mut rng)) as ArrayRef);
 
         b.iter(|| {
+            #[allow(deprecated)] // TODO use invoke_batch
             black_box(
                 make_date()
                     .invoke(&[year.clone(), month.clone(), days.clone()])
@@ -106,6 +109,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         let day = ColumnarValue::Scalar(ScalarValue::Int32(Some(26)));
 
         b.iter(|| {
+            #[allow(deprecated)] // TODO use invoke_batch
             black_box(
                 make_date()
                     .invoke(&[year.clone(), month.clone(), day.clone()])
