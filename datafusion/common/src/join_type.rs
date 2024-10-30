@@ -44,7 +44,19 @@ pub enum JoinType {
     LeftAnti,
     /// Right Anti Join
     RightAnti,
-    /// Left Mark join, used for correlated subqueries EXIST/IN
+    /// Left Mark join
+    ///
+    /// Returns one record for each record from the left input. The output contains an additional
+    /// column "mark" which is true if there is at least one match in the right input where the
+    /// join condition evaluates to true. Otherwise, the mark column is false. For more details see
+    /// [1]. This join type is used to decorrelate EXISTS subqueries used inside disjunctive
+    /// predicates.
+    ///
+    /// Note: This we currently do not implement the full null semantics for the mark join described
+    /// in [1] which will be needed if we and ANY subqueries. In our version the mark column will
+    /// only be true for had a match and false when no match was found, never null.
+    ///
+    /// [1] http://btw2017.informatik.uni-stuttgart.de/slidesandpapers/F1-10-37/paper_web.pdf
     LeftMark,
 }
 
