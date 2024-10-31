@@ -661,10 +661,7 @@ impl GroupValues for VectorizedGroupValuesColumn {
                     .iter_mut()
                     .map(|v| v.take_n(n))
                     .collect::<Vec<_>>();
-                let new_group_index_lists =
-                    Vec::with_capacity(self.group_index_lists.len());
-                let old_group_index_lists =
-                    mem::replace(&mut self.group_index_lists, new_group_index_lists);
+                let mut index = 0;
 
                 // SAFETY: self.map outlives iterator and is not modified concurrently
                 unsafe {
@@ -673,12 +670,12 @@ impl GroupValues for VectorizedGroupValuesColumn {
                         if bucket.as_ref().1.is_non_inlined() {
                             // Non-inlined case
                             // We take `group_index_list` from `old_group_index_lists`
-                            let list_offset = bucket.as_ref().1.value() as usize;
-                            let old_group_index_list =
-                                &old_group_index_lists[list_offset];
 
+                            // list_offset is incrementally
+                            let list_offset = bucket.as_ref().1.value() as usize;
+                            println!("list_offset: {:?}", list_offset);
                             let mut new_group_index_list = Vec::new();
-                            for &group_index in old_group_index_list {
+                            for group_index in self.group_index_lists[list_offset].iter() {
                                 if let Some(remaining) = group_index.checked_sub(n) {
                                     new_group_index_list.push(remaining);
                                 }
@@ -695,11 +692,11 @@ impl GroupValues for VectorizedGroupValuesColumn {
                                 bucket.as_mut().1 =
                                     GroupIndexView::new_inlined(*group_index as u64);
                             } else {
-                                let new_list_offset = self.group_index_lists.len();
-                                self.group_index_lists.push(new_group_index_list);
+                                self.group_index_lists[index] = new_group_index_list;
                                 bucket.as_mut().1 = GroupIndexView::new_non_inlined(
-                                    new_list_offset as u64,
+                                    index as u64,
                                 );
+                                index += 1;
                             }
                         } else {
                             // Inlined case, we just decrement group index by n
@@ -716,6 +713,8 @@ impl GroupValues for VectorizedGroupValuesColumn {
                         }
                     }
                 }
+
+                self.group_index_lists.truncate(index);
 
                 output
             }
