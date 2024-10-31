@@ -173,7 +173,7 @@ impl<T: ArrowPrimitiveType, const NULLABLE: bool> GroupColumn
         );
 
         for (&lhs_row, &rhs_row, equal_to_result) in iter {
-            // Has found not equal to, don't need to check
+            // Has found not equal to in previous column, don't need to check
             if !*equal_to_result {
                 continue;
             }
