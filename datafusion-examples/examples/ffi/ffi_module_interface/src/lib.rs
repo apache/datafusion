@@ -27,6 +27,11 @@ use datafusion_ffi::table_provider::FFI_TableProvider;
 #[repr(C)]
 #[derive(StableAbi)]
 #[sabi(kind(Prefix(prefix_ref = TableProviderModuleRef)))]
+/// This struct defines the module interfaces. It is to be shared by
+/// both the module loading program and library that implements the
+/// module. It is possible to move this definition into the loading
+/// program and reference it in the modules, but this example shows
+/// how a user may wish to separate these concerns.
 pub struct TableProviderModule {
     /// Constructs the table provider
     pub create_table: extern "C" fn() -> FFI_TableProvider,

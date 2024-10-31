@@ -28,13 +28,19 @@ use ffi_module_interface::TableProviderModuleRef;
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Find the location of the library. This is specific to the build environment,
+    // so you will need to change the approach here based on your use case.
     let target: &std::path::Path = "../../../../target/".as_ref();
-    let library_path = compute_library_path::<TableProviderModuleRef>(target).unwrap();
+    let library_path = compute_library_path::<TableProviderModuleRef>(target)
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
+    // Load the module
     let table_provider_module =
         TableProviderModuleRef::load_from_directory(&library_path)
-            .unwrap_or_else(|e| panic!("{}", e));
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
+    // By calling the code below, the table provided will be created within
+    // the module's code.
     let ffi_table_provider =
         table_provider_module
             .create_table()
@@ -42,14 +48,15 @@ async fn main() -> Result<()> {
                 "External table provider failed to implement create_table".to_string(),
             ))?();
 
+    // In order to access the table provider within this executable, we need to
+    // turn it into a `ForeignTableProvider`.
     let foreign_table_provider: ForeignTableProvider = (&ffi_table_provider).into();
 
     let ctx = SessionContext::new();
 
+    // Display the data to show the full cycle works.
     ctx.register_table("external_table", Arc::new(foreign_table_provider))?;
-
     let df = ctx.table("external_table").await?;
-
     df.show().await?;
 
     Ok(())
