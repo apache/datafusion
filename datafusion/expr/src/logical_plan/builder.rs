@@ -20,6 +20,7 @@
 use std::any::Any;
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
+use std::iter::once;
 use std::sync::Arc;
 
 use crate::dml::CopyTo;
@@ -1326,6 +1327,25 @@ pub fn change_redundant_column(fields: &Fields) -> Vec<Field> {
         })
         .collect()
 }
+
+fn mark_field(schema: &DFSchema) -> (Option<TableReference>, Arc<Field>) {
+    let mut table_references = schema
+        .iter()
+        .filter_map(|(qualifier, _)| qualifier)
+        .collect::<Vec<_>>();
+    table_references.dedup();
+    let table_reference = if table_references.len() == 1 {
+        table_references.pop().cloned()
+    } else {
+        None
+    };
+
+    (
+        table_reference,
+        Arc::new(Field::new("mark", DataType::Boolean, false)),
+    )
+}
+
 /// Creates a schema for a join operation.
 /// The fields from the left side are first
 pub fn build_join_schema(
@@ -1392,6 +1412,10 @@ pub fn build_join_schema(
                 .map(|(q, f)| (q.cloned(), Arc::clone(f)))
                 .collect()
         }
+        JoinType::LeftMark => left_fields
+            .map(|(q, f)| (q.cloned(), Arc::clone(f)))
+            .chain(once(mark_field(right)))
+            .collect(),
         JoinType::RightSemi | JoinType::RightAnti => {
             // Only use the right side for the schema
             right_fields

@@ -62,6 +62,7 @@ use arrow::array::{
 use arrow::compute::concat_batches;
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
+use arrow_buffer::ArrowNativeType;
 use datafusion_common::hash_utils::create_hashes;
 use datafusion_common::utils::bisect;
 use datafusion_common::{internal_err, plan_err, JoinSide, JoinType, Result};
@@ -670,7 +671,11 @@ fn need_to_produce_result_in_final(build_side: JoinSide, join_type: JoinType) ->
     if build_side == JoinSide::Left {
         matches!(
             join_type,
-            JoinType::Left | JoinType::LeftAnti | JoinType::Full | JoinType::LeftSemi
+            JoinType::Left
+                | JoinType::LeftAnti
+                | JoinType::Full
+                | JoinType::LeftSemi
+                | JoinType::LeftMark
         )
     } else {
         matches!(
@@ -709,6 +714,20 @@ where
 {
     // Store the result in a tuple
     let result = match (build_side, join_type) {
+        (JoinSide::Left, JoinType::LeftMark) => {
+            let build_indices = (0..prune_length)
+                .map(L::Native::from_usize)
+                .collect::<PrimitiveArray<L>>();
+            let probe_indices = (0..prune_length)
+                .map(|idx| {
+                    // For mark join we output a dummy index 0 to indicate the row had a match
+                    visited_rows
+                        .contains(&(idx + deleted_offset))
+                        .then_some(R::Native::from_usize(0).unwrap())
+                })
+                .collect();
+            (build_indices, probe_indices)
+        }
         // In the case of `Left` or `Right` join, or `Full` join, get the anti indices
         (JoinSide::Left, JoinType::Left | JoinType::LeftAnti)
         | (JoinSide::Right, JoinType::Right | JoinType::RightAnti)
@@ -872,6 +891,7 @@ pub(crate) fn join_with_probe_batch(
         JoinType::LeftAnti
             | JoinType::RightAnti
             | JoinType::LeftSemi
+            | JoinType::LeftMark
             | JoinType::RightSemi
     ) {
         Ok(None)
@@ -1707,6 +1727,7 @@ mod tests {
             JoinType::RightSemi,
             JoinType::LeftSemi,
             JoinType::LeftAnti,
+            JoinType::LeftMark,
             JoinType::RightAnti,
             JoinType::Full
         )]
@@ -1791,6 +1812,7 @@ mod tests {
             JoinType::RightSemi,
             JoinType::LeftSemi,
             JoinType::LeftAnti,
+            JoinType::LeftMark,
             JoinType::RightAnti,
             JoinType::Full
         )]
@@ -1855,6 +1877,7 @@ mod tests {
             JoinType::RightSemi,
             JoinType::LeftSemi,
             JoinType::LeftAnti,
+            JoinType::LeftMark,
             JoinType::RightAnti,
             JoinType::Full
         )]
@@ -1906,6 +1929,7 @@ mod tests {
             JoinType::RightSemi,
             JoinType::LeftSemi,
             JoinType::LeftAnti,
+            JoinType::LeftMark,
             JoinType::RightAnti,
             JoinType::Full
         )]
@@ -1933,6 +1957,7 @@ mod tests {
             JoinType::RightSemi,
             JoinType::LeftSemi,
             JoinType::LeftAnti,
+            JoinType::LeftMark,
             JoinType::RightAnti,
             JoinType::Full
         )]
@@ -2298,6 +2323,7 @@ mod tests {
             JoinType::RightSemi,
             JoinType::LeftSemi,
             JoinType::LeftAnti,
+            JoinType::LeftMark,
             JoinType::RightAnti,
             JoinType::Full
         )]
@@ -2380,6 +2406,7 @@ mod tests {
             JoinType::RightSemi,
             JoinType::LeftSemi,
             JoinType::LeftAnti,
+            JoinType::LeftMark,
             JoinType::RightAnti,
             JoinType::Full
         )]
@@ -2454,6 +2481,7 @@ mod tests {
             JoinType::RightSemi,
             JoinType::LeftSemi,
             JoinType::LeftAnti,
+            JoinType::LeftMark,
             JoinType::RightAnti,
             JoinType::Full
         )]

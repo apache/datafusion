@@ -181,7 +181,10 @@ fn check_inner_plan(inner_plan: &LogicalPlan, can_contain_outer_ref: bool) -> Re
                 })?;
                 Ok(())
             }
-            JoinType::Left | JoinType::LeftSemi | JoinType::LeftAnti => {
+            JoinType::Left
+            | JoinType::LeftSemi
+            | JoinType::LeftAnti
+            | JoinType::LeftMark => {
                 check_inner_plan(left, can_contain_outer_ref)?;
                 check_inner_plan(right, false)
             }

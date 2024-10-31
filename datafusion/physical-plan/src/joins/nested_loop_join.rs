@@ -1245,6 +1245,37 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
+    async fn join_left_mark_with_filter() -> Result<()> {
+        let task_ctx = Arc::new(TaskContext::default());
+        let left = build_left_table();
+        let right = build_right_table();
+
+        let filter = prepare_join_filter();
+        let (columns, batches) = multi_partitioned_join_collect(
+            left,
+            right,
+            &JoinType::LeftMark,
+            Some(filter),
+            task_ctx,
+        )
+        .await?;
+        assert_eq!(columns, vec!["a1", "b1", "c1", "mark"]);
+        let expected = [
+            "+----+----+-----+-------+",
+            "| a1 | b1 | c1  | mark  |",
+            "+----+----+-----+-------+",
+            "| 11 | 8  | 110 | false |",
+            "| 5  | 5  | 50  | true  |",
+            "| 9  | 8  | 90  | false |",
+            "+----+----+-----+-------+",
+        ];
+
+        assert_batches_sorted_eq!(expected, &batches);
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_overallocation() -> Result<()> {
         let left = build_table(
             ("a1", &vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 0]),
@@ -1269,6 +1300,7 @@ pub(crate) mod tests {
             JoinType::Full,
             JoinType::LeftSemi,
             JoinType::LeftAnti,
+            JoinType::LeftMark,
             JoinType::RightSemi,
             JoinType::RightAnti,
         ];

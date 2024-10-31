@@ -35,7 +35,9 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use arrow::array::*;
-use arrow::compute::{self, concat_batches, filter_record_batch, take, SortOptions};
+use arrow::compute::{
+    self, concat_batches, filter_record_batch, is_not_null, take, SortOptions,
+};
 use arrow::datatypes::{DataType, SchemaRef, TimeUnit};
 use arrow::error::ArrowError;
 use arrow::ipc::reader::FileReader;
@@ -178,7 +180,8 @@ impl SortMergeJoinExec {
             | JoinType::Left
             | JoinType::Full
             | JoinType::LeftAnti
-            | JoinType::LeftSemi => JoinSide::Left,
+            | JoinType::LeftSemi
+            | JoinType::LeftMark => JoinSide::Left,
         }
     }
 
@@ -186,7 +189,10 @@ impl SortMergeJoinExec {
     fn maintains_input_order(join_type: JoinType) -> Vec<bool> {
         match join_type {
             JoinType::Inner => vec![true, false],
-            JoinType::Left | JoinType::LeftSemi | JoinType::LeftAnti => vec![true, false],
+            JoinType::Left
+            | JoinType::LeftSemi
+            | JoinType::LeftAnti
+            | JoinType::LeftMark => vec![true, false],
             JoinType::Right | JoinType::RightSemi | JoinType::RightAnti => {
                 vec![false, true]
             }
@@ -784,6 +790,29 @@ fn get_corrected_filter_mask(
             corrected_mask.extend(vec![Some(false); null_matched]);
             Some(corrected_mask.finish())
         }
+        JoinType::LeftMark => {
+            for i in 0..row_indices_length {
+                let last_index =
+                    last_index_for_row(i, row_indices, batch_ids, row_indices_length);
+                if filter_mask.value(i) && !seen_true {
+                    seen_true = true;
+                    corrected_mask.append_value(true);
+                } else if seen_true || !filter_mask.value(i) && !last_index {
+                    corrected_mask.append_null(); // to be ignored and not set to output
+                } else {
+                    corrected_mask.append_value(false); // to be converted to null joined row
+                }
+
+                if last_index {
+                    seen_true = false;
+                }
+            }
+
+            // Generate null joined rows for records which have no matching join key
+            let null_matched = expected_size - corrected_mask.len();
+            corrected_mask.extend(vec![Some(false); null_matched]);
+            Some(corrected_mask.finish())
+        }
         JoinType::LeftSemi => {
             for i in 0..row_indices_length {
                 let last_index =
@@ -860,6 +889,7 @@ impl Stream for SMJStream {
                                             self.join_type,
                                             JoinType::Left
                                                 | JoinType::LeftSemi
+                                                | JoinType::LeftMark
                                                 | JoinType::Right
                                                 | JoinType::LeftAnti
                                         )
@@ -943,6 +973,7 @@ impl Stream for SMJStream {
                                         | JoinType::LeftSemi
                                         | JoinType::Right
                                         | JoinType::LeftAnti
+                                        | JoinType::LeftMark
                                 )
                             {
                                 continue;
@@ -964,6 +995,7 @@ impl Stream for SMJStream {
                                     | JoinType::LeftSemi
                                     | JoinType::Right
                                     | JoinType::LeftAnti
+                                    | JoinType::LeftMark
                             )
                         {
                             let out = self.filter_joined_batch()?;
@@ -1264,6 +1296,8 @@ impl SMJStream {
         let mut join_streamed = false;
         // Whether to join buffered rows
         let mut join_buffered = false;
+        // For Mark join we store a dummy id to indicate the the row has a match
+        let mut mark_row_as_match = false;
 
         // determine whether we need to join streamed/buffered rows
         match self.current_ordering {
@@ -1275,12 +1309,14 @@ impl SMJStream {
                         | JoinType::RightSemi
                         | JoinType::Full
                         | JoinType::LeftAnti
+                        | JoinType::LeftMark
                 ) {
                     join_streamed = !self.streamed_joined;
                 }
             }
             Ordering::Equal => {
-                if matches!(self.join_type, JoinType::LeftSemi) {
+                if matches!(self.join_type, JoinType::LeftSemi | JoinType::LeftMark) {
+                    mark_row_as_match = matches!(self.join_type, JoinType::LeftMark);
                     // if the join filter is specified then its needed to output the streamed index
                     // only if it has not been emitted before
                     // the `join_filter_matched_idxs` keeps track on if streamed index has a successful
@@ -1357,9 +1393,11 @@ impl SMJStream {
             } else {
                 Some(self.buffered_data.scanning_batch_idx)
             };
+            // For Mark join we store a dummy id to indicate the the row has a match
+            let scanning_idx = mark_row_as_match.then_some(0);
 
             self.streamed_batch
-                .append_output_pair(scanning_batch_idx, None);
+                .append_output_pair(scanning_batch_idx, scanning_idx);
             self.output_size += 1;
             self.buffered_data.scanning_finish();
             self.streamed_joined = true;
@@ -1461,24 +1499,25 @@ impl SMJStream {
 
             // The row indices of joined buffered batch
             let buffered_indices: UInt64Array = chunk.buffered_indices.finish();
-            let mut buffered_columns =
-                if matches!(self.join_type, JoinType::LeftSemi | JoinType::LeftAnti) {
-                    vec![]
-                } else if let Some(buffered_idx) = chunk.buffered_batch_idx {
-                    get_buffered_columns(
-                        &self.buffered_data,
-                        buffered_idx,
-                        &buffered_indices,
-                    )?
-                } else {
-                    // If buffered batch none, meaning it is null joined batch.
-                    // We need to create null arrays for buffered columns to join with streamed rows.
-                    self.buffered_schema
-                        .fields()
-                        .iter()
-                        .map(|f| new_null_array(f.data_type(), buffered_indices.len()))
-                        .collect::<Vec<_>>()
-                };
+            let mut buffered_columns = if matches!(self.join_type, JoinType::LeftMark) {
+                vec![Arc::new(is_not_null(&buffered_indices)?) as ArrayRef]
+            } else if matches!(self.join_type, JoinType::LeftSemi | JoinType::LeftAnti) {
+                vec![]
+            } else if let Some(buffered_idx) = chunk.buffered_batch_idx {
+                get_buffered_columns(
+                    &self.buffered_data,
+                    buffered_idx,
+                    &buffered_indices,
+                )?
+            } else {
+                // If buffered batch none, meaning it is null joined batch.
+                // We need to create null arrays for buffered columns to join with streamed rows.
+                create_unmatched_columns(
+                    self.join_type,
+                    &self.buffered_schema,
+                    buffered_indices.len(),
+                )
+            };
 
             let streamed_columns_length = streamed_columns.len();
 
@@ -1489,7 +1528,7 @@ impl SMJStream {
                     get_filter_column(&self.filter, &buffered_columns, &streamed_columns)
                 } else if matches!(
                     self.join_type,
-                    JoinType::LeftSemi | JoinType::LeftAnti
+                    JoinType::LeftSemi | JoinType::LeftAnti | JoinType::LeftMark
                 ) {
                     // unwrap is safe here as we check is_some on top of if statement
                     let buffered_columns = get_buffered_columns(
@@ -1517,7 +1556,6 @@ impl SMJStream {
             };
 
             let output_batch = RecordBatch::try_new(Arc::clone(&self.schema), columns)?;
-
             // Apply join filter if any
             if !filter_columns.is_empty() {
                 if let Some(f) = &self.filter {
@@ -1553,6 +1591,7 @@ impl SMJStream {
                             | JoinType::LeftSemi
                             | JoinType::Right
                             | JoinType::LeftAnti
+                            | JoinType::LeftMark
                     ) {
                         self.output_record_batches
                             .batches
@@ -1691,6 +1730,7 @@ impl SMJStream {
                     | JoinType::LeftSemi
                     | JoinType::Right
                     | JoinType::LeftAnti
+                    | JoinType::LeftMark
             ))
         {
             self.output_record_batches.batches.clear();
@@ -1721,16 +1761,18 @@ impl SMJStream {
         let buffered_columns_length = self.buffered_schema.fields.len();
         let streamed_columns_length = self.streamed_schema.fields.len();
 
-        if matches!(self.join_type, JoinType::Left | JoinType::Right) {
+        if matches!(
+            self.join_type,
+            JoinType::Left | JoinType::LeftMark | JoinType::Right
+        ) {
             let null_mask = compute::not(corrected_mask)?;
             let null_joined_batch = filter_record_batch(&record_batch, &null_mask)?;
 
-            let mut buffered_columns = self
-                .buffered_schema
-                .fields()
-                .iter()
-                .map(|f| new_null_array(f.data_type(), null_joined_batch.num_rows()))
-                .collect::<Vec<_>>();
+            let mut buffered_columns = create_unmatched_columns(
+                self.join_type,
+                &self.buffered_schema,
+                null_joined_batch.num_rows(),
+            );
 
             let columns = if matches!(self.join_type, JoinType::Right) {
                 let streamed_columns = null_joined_batch
@@ -1774,6 +1816,22 @@ impl SMJStream {
         self.output_record_batches.filter_mask = BooleanBuilder::new();
         self.output_record_batches.row_indices = UInt64Builder::new();
         Ok(filtered_record_batch)
+    }
+}
+
+fn create_unmatched_columns(
+    join_type: JoinType,
+    schema: &SchemaRef,
+    size: usize,
+) -> Vec<ArrayRef> {
+    if matches!(join_type, JoinType::LeftMark) {
+        vec![Arc::new(BooleanArray::from(vec![false; size])) as ArrayRef]
+    } else {
+        schema
+            .fields()
+            .iter()
+            .map(|f| new_null_array(f.data_type(), size))
+            .collect::<Vec<_>>()
     }
 }
 
@@ -2717,6 +2775,39 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn join_left_mark() -> Result<()> {
+        let left = build_table(
+            ("a1", &vec![1, 2, 2, 3]),
+            ("b1", &vec![4, 5, 5, 7]), // 7 does not exist on the right
+            ("c1", &vec![7, 8, 8, 9]),
+        );
+        let right = build_table(
+            ("a2", &vec![10, 20, 30, 40]),
+            ("b1", &vec![4, 4, 5, 6]), // 5 is double on the right
+            ("c2", &vec![60, 70, 80, 90]),
+        );
+        let on = vec![(
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
+        )];
+
+        let (_, batches) = join_collect(left, right, on, LeftMark).await?;
+        let expected = [
+            "+----+----+----+-------+",
+            "| a1 | b1 | c1 | mark  |",
+            "+----+----+----+-------+",
+            "| 1  | 4  | 7  | true  |",
+            "| 2  | 5  | 8  | true  |",
+            "| 2  | 5  | 8  | true  |",
+            "| 3  | 7  | 9  | false |",
+            "+----+----+----+-------+",
+        ];
+        // The output order is important as SMJ preserves sortedness
+        assert_batches_eq!(expected, &batches);
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn join_with_duplicated_column_names() -> Result<()> {
         let left = build_table(
             ("a", &vec![1, 2, 3]),
@@ -3047,7 +3138,7 @@ mod tests {
         )];
         let sort_options = vec![SortOptions::default(); on.len()];
 
-        let join_types = vec![Inner, Left, Right, Full, LeftSemi, LeftAnti];
+        let join_types = vec![Inner, Left, Right, Full, LeftSemi, LeftAnti, LeftMark];
 
         // Disable DiskManager to prevent spilling
         let runtime = RuntimeEnvBuilder::new()
@@ -3125,7 +3216,7 @@ mod tests {
         )];
         let sort_options = vec![SortOptions::default(); on.len()];
 
-        let join_types = vec![Inner, Left, Right, Full, LeftSemi, LeftAnti];
+        let join_types = vec![Inner, Left, Right, Full, LeftSemi, LeftAnti, LeftMark];
 
         // Disable DiskManager to prevent spilling
         let runtime = RuntimeEnvBuilder::new()
@@ -3181,7 +3272,7 @@ mod tests {
         )];
         let sort_options = vec![SortOptions::default(); on.len()];
 
-        let join_types = [Inner, Left, Right, Full, LeftSemi, LeftAnti];
+        let join_types = [Inner, Left, Right, Full, LeftSemi, LeftAnti, LeftMark];
 
         // Enable DiskManager to allow spilling
         let runtime = RuntimeEnvBuilder::new()
@@ -3282,7 +3373,7 @@ mod tests {
         )];
         let sort_options = vec![SortOptions::default(); on.len()];
 
-        let join_types = [Inner, Left, Right, Full, LeftSemi, LeftAnti];
+        let join_types = [Inner, Left, Right, Full, LeftSemi, LeftAnti, LeftMark];
 
         // Enable DiskManager to allow spilling
         let runtime = RuntimeEnvBuilder::new()
