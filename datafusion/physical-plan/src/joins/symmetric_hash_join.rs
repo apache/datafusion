@@ -69,7 +69,7 @@ use datafusion_execution::TaskContext;
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_physical_expr::equivalence::join_equivalence_properties;
 use datafusion_physical_expr::intervals::cp_solver::ExprIntervalGraph;
-use datafusion_physical_expr::{PhysicalExprRef};
+use datafusion_physical_expr::PhysicalExprRef;
 
 use ahash::RandomState;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};

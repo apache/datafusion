@@ -516,9 +516,8 @@ pub fn get_window_mode(
     // Treat partition by exprs as constant. During analysis of requirements are satisfied.
     let const_exprs = partitionby_exprs.iter().map(ConstExpr::from);
     let partition_by_eqs = input_eqs.with_constants(const_exprs);
-    let order_by_reqs =  LexRequirement::from(orderby_keys.clone());
-    let reverse_order_by_reqs =
-        LexRequirement::from(reverse_order_bys(orderby_keys));
+    let order_by_reqs = LexRequirement::from(orderby_keys.clone());
+    let reverse_order_by_reqs = LexRequirement::from(reverse_order_bys(orderby_keys));
     for (should_swap, order_by_reqs) in
         [(false, order_by_reqs), (true, reverse_order_by_reqs)]
     {

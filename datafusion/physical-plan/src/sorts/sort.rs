@@ -52,7 +52,7 @@ use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::LexOrdering;
-use datafusion_physical_expr_common::sort_expr::{LexRequirement};
+use datafusion_physical_expr_common::sort_expr::LexRequirement;
 
 use crate::execution_plan::CardinalityEffect;
 use futures::{StreamExt, TryStreamExt};
@@ -793,9 +793,9 @@ impl SortExec {
     ) -> PlanProperties {
         // Determine execution mode:
         let requirement = LexRequirement::from(sort_exprs);
-        let sort_satisfied = input.equivalence_properties().ordering_satisfy_requirement(
-            &requirement,
-        );
+        let sort_satisfied = input
+            .equivalence_properties()
+            .ordering_satisfy_requirement(&requirement);
         let mode = match input.execution_mode() {
             ExecutionMode::Unbounded if sort_satisfied => ExecutionMode::Unbounded,
             ExecutionMode::Bounded => ExecutionMode::Bounded,
@@ -892,9 +892,7 @@ impl ExecutionPlan for SortExec {
         let sort_satisfied = self
             .input
             .equivalence_properties()
-            .ordering_satisfy_requirement(
-                &LexRequirement::from(self.expr.clone())
-            );
+            .ordering_satisfy_requirement(&LexRequirement::from(self.expr.clone()));
 
         match (sort_satisfied, self.fetch.as_ref()) {
             (true, Some(fetch)) => Ok(Box::pin(LimitStream::new(

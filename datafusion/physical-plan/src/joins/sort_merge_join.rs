@@ -49,7 +49,7 @@ use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::equivalence::join_equivalence_properties;
-use datafusion_physical_expr::{PhysicalExprRef};
+use datafusion_physical_expr::PhysicalExprRef;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};
 use futures::{Stream, StreamExt};
 use hashbrown::HashSet;
@@ -292,12 +292,8 @@ impl ExecutionPlan for SortMergeJoinExec {
 
     fn required_input_ordering(&self) -> Vec<Option<LexRequirement>> {
         vec![
-            Some(LexRequirement::from(
-                self.left_sort_exprs.clone(),
-            )),
-            Some(LexRequirement::from(
-                self.right_sort_exprs.clone(),
-            )),
+            Some(LexRequirement::from(self.left_sort_exprs.clone())),
+            Some(LexRequirement::from(self.right_sort_exprs.clone())),
         ]
     }
 

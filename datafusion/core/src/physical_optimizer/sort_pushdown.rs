@@ -38,7 +38,7 @@ use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::utils::collect_columns;
 use datafusion_physical_expr::{LexRequirementRef, PhysicalSortRequirement};
 use datafusion_physical_expr_common::sort_expr::{
-    LexOrdering, LexOrderingRef, LexRequirement,
+    LexOrdering, LexRequirement,
 };
 
 use hashbrown::HashSet;
@@ -89,15 +89,15 @@ fn pushdown_sorts_helper(
     let parent_reqs = requirements
         .data
         .ordering_requirement
-        .as_deref()
-        .unwrap_or(&[]);
+        .unwrap_or_default();
     let satisfy_parent = plan
         .equivalence_properties()
-        .ordering_satisfy_requirement(parent_reqs);
+        .ordering_satisfy_requirement(&parent_reqs);
     if is_sort(plan) {
         let required_ordering = plan
             .output_ordering()
-            .map(PhysicalSortRequirement::from_sort_exprs)
+            .cloned()
+            .map(LexRequirement::from)
             .unwrap_or_default();
         if !satisfy_parent {
             // Make sure this `SortExec` satisfies parent requirements:
@@ -348,7 +348,7 @@ fn determine_children_requirement(
 fn try_pushdown_requirements_to_join(
     smj: &SortMergeJoinExec,
     parent_required: LexRequirementRef,
-    sort_expr: LexOrderingRef,
+    sort_expr: &LexOrdering,
     push_side: JoinSide,
 ) -> Result<Option<Vec<Option<LexRequirement>>>> {
     let left_eq_properties = smj.left().equivalence_properties();
@@ -417,7 +417,7 @@ fn try_pushdown_requirements_to_join(
 }
 
 fn expr_source_side(
-    required_exprs: LexOrderingRef,
+    required_exprs: &LexOrdering,
     join_type: JoinType,
     left_columns_len: usize,
 ) -> Option<JoinSide> {

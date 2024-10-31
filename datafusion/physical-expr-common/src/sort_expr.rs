@@ -409,13 +409,17 @@ impl LexOrdering {
     /// This function converts `PhysicalSortRequirement` to `PhysicalSortExpr`
     /// for each entry in the input. If required ordering is None for an entry
     /// default ordering `ASC, NULLS LAST` if given (see the `PhysicalSortExpr::from`).
-    pub fn from_lex_requirement(
-        requirements: LexRequirement
-    ) -> LexOrdering {
+    pub fn from_lex_requirement(requirements: LexRequirement) -> LexOrdering {
         requirements
             .into_iter()
             .map(PhysicalSortExpr::from)
             .collect()
+    }
+}
+
+impl From<Vec<PhysicalSortExpr>> for LexOrdering {
+    fn from(value: Vec<PhysicalSortExpr>) -> Self {
+        Self::new(value)
     }
 }
 
@@ -539,9 +543,7 @@ impl LexRequirement {
     /// use implementing [`ExecutionPlan::required_input_ordering`].
     ///
     /// [`ExecutionPlan::required_input_ordering`]: https://docs.rs/datafusion/latest/datafusion/physical_plan/trait.ExecutionPlan.html#method.required_input_ordering
-    pub fn from_lex_ordering(
-        ordering: LexOrdering,
-    ) -> Self {
+    pub fn from_lex_ordering(ordering: LexOrdering) -> Self {
         Self::new(
             ordering
                 .into_iter()
@@ -549,8 +551,6 @@ impl LexRequirement {
                 .collect(),
         )
     }
-
-
 }
 
 impl From<LexOrdering> for LexRequirement {
@@ -558,7 +558,6 @@ impl From<LexOrdering> for LexRequirement {
         Self::from_lex_ordering(value)
     }
 }
-
 
 impl Deref for LexRequirement {
     type Target = [PhysicalSortRequirement];

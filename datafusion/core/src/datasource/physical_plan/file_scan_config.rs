@@ -35,7 +35,6 @@ use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::stats::Precision;
 use datafusion_common::{exec_err, ColumnStatistics, DataFusionError, Statistics};
 use datafusion_physical_expr::LexOrdering;
-use datafusion_physical_expr_common::sort_expr::LexOrderingRef;
 
 use log::warn;
 
@@ -308,7 +307,7 @@ impl FileScanConfig {
     pub fn split_groups_by_statistics(
         table_schema: &SchemaRef,
         file_groups: &[Vec<PartitionedFile>],
-        sort_order: LexOrderingRef,
+        sort_order: &LexOrdering,
     ) -> Result<Vec<Vec<PartitionedFile>>> {
         let flattened_files = file_groups.iter().flatten().collect::<Vec<_>>();
         // First Fit:
@@ -1130,7 +1129,7 @@ mod tests {
             let result = FileScanConfig::split_groups_by_statistics(
                 &table_schema,
                 &[partitioned_files.clone()],
-                &sort_order,
+                &LexOrdering::from(sort_order),
             );
             let results_by_name = result
                 .as_ref()

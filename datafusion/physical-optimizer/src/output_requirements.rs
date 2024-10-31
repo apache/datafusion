@@ -33,7 +33,7 @@ use datafusion_physical_plan::{
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{Result, Statistics};
-use datafusion_physical_expr::{Distribution, LexRequirement, PhysicalSortRequirement};
+use datafusion_physical_expr::{Distribution, LexRequirement};
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion_physical_plan::{ExecutionPlanProperties, PlanProperties};
 
@@ -256,13 +256,13 @@ fn require_top_ordering_helper(
         // Therefore; we check the sort expression field of the SortExec to assign the requirements.
         let req_ordering = sort_exec.expr();
         let req_dist = sort_exec.required_input_distribution()[0].clone();
-        let reqs = PhysicalSortRequirement::from_sort_exprs(req_ordering);
+        let reqs = LexRequirement::from(req_ordering.clone());
         Ok((
             Arc::new(OutputRequirementExec::new(plan, Some(reqs), req_dist)) as _,
             true,
         ))
     } else if let Some(spm) = plan.as_any().downcast_ref::<SortPreservingMergeExec>() {
-        let reqs = PhysicalSortRequirement::from_sort_exprs(spm.expr());
+        let reqs = LexRequirement::from(spm.expr().clone());
         Ok((
             Arc::new(OutputRequirementExec::new(
                 plan,
