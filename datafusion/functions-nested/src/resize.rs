@@ -136,19 +136,21 @@ pub(crate) fn array_resize_inner(arg: &[ArrayRef]) -> Result<ArrayRef> {
         return exec_err!("array_resize needs two or three arguments");
     }
 
+    let array = &arg[0];
+
     // Checks if entire array is null
-    if &arg[0].null_count() == &arg[0].len() {
-        let return_type = match &arg[0].data_type() {
+    if array.null_count() == array.len() {
+        let return_type = match array.data_type() {
             List(field) => List(Arc::clone(field)),
             LargeList(field) => LargeList(Arc::clone(field)),
             _ => {
                 return exec_err!(
                     "array_resize does not support type '{:?}'.",
-                    &arg[0].data_type()
+                    array.data_type()
                 )
             }
         };
-        return Ok(new_null_array(&return_type, arg[0].len()));
+        return Ok(new_null_array(&return_type, array.len()));
     }
 
     let new_len = as_int64_array(&arg[1])?;
