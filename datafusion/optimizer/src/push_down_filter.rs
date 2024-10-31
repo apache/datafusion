@@ -1200,7 +1200,7 @@ fn rewrite_projection(
 
             (qualified_name(qualifier, field.name()), expr)
         })
-        .partition(|(_, value)| value.is_volatile().unwrap_or(true));
+        .partition(|(_, value)| value.is_volatile());
 
     let mut push_predicates = vec![];
     let mut keep_predicates = vec![];
