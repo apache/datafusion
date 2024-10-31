@@ -20,6 +20,7 @@
 use std::collections::HashSet;
 use std::fmt::{self, Debug};
 use std::future::Future;
+use std::iter::once;
 use std::ops::{IndexMut, Range};
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -619,6 +620,7 @@ fn output_join_field(old_field: &Field, join_type: &JoinType, is_left: bool) -> 
         JoinType::RightSemi => false, // doesn't introduce nulls
         JoinType::LeftAnti => false, // doesn't introduce nulls (or can it??)
         JoinType::RightAnti => false, // doesn't introduce nulls (or can it??)
+        JoinType::LeftMark => false,
     };
 
     if force_nullable {
@@ -635,44 +637,10 @@ pub fn build_join_schema(
     right: &Schema,
     join_type: &JoinType,
 ) -> (Schema, Vec<ColumnIndex>) {
-    let (fields, column_indices): (SchemaBuilder, Vec<ColumnIndex>) = match join_type {
-        JoinType::Inner | JoinType::Left | JoinType::Full | JoinType::Right => {
-            let left_fields = left
-                .fields()
-                .iter()
-                .map(|f| output_join_field(f, join_type, true))
-                .enumerate()
-                .map(|(index, f)| {
-                    (
-                        f,
-                        ColumnIndex {
-                            index,
-                            side: JoinSide::Left,
-                        },
-                    )
-                });
-            let right_fields = right
-                .fields()
-                .iter()
-                .map(|f| output_join_field(f, join_type, false))
-                .enumerate()
-                .map(|(index, f)| {
-                    (
-                        f,
-                        ColumnIndex {
-                            index,
-                            side: JoinSide::Right,
-                        },
-                    )
-                });
-
-            // left then right
-            left_fields.chain(right_fields).unzip()
-        }
-        JoinType::LeftSemi | JoinType::LeftAnti => left
-            .fields()
+    let left_fields = || {
+        left.fields()
             .iter()
-            .cloned()
+            .map(|f| output_join_field(f, join_type, true))
             .enumerate()
             .map(|(index, f)| {
                 (
@@ -683,11 +651,13 @@ pub fn build_join_schema(
                     },
                 )
             })
-            .unzip(),
-        JoinType::RightSemi | JoinType::RightAnti => right
+    };
+
+    let right_fields = || {
+        right
             .fields()
             .iter()
-            .cloned()
+            .map(|f| output_join_field(f, join_type, false))
             .enumerate()
             .map(|(index, f)| {
                 (
@@ -698,7 +668,25 @@ pub fn build_join_schema(
                     },
                 )
             })
-            .unzip(),
+    };
+
+    let (fields, column_indices): (SchemaBuilder, Vec<ColumnIndex>) = match join_type {
+        JoinType::Inner | JoinType::Left | JoinType::Full | JoinType::Right => {
+            // left then right
+            left_fields().chain(right_fields()).unzip()
+        }
+        JoinType::LeftSemi | JoinType::LeftAnti => left_fields().unzip(),
+        JoinType::LeftMark => {
+            let right_field = once((
+                Field::new("mark", arrow_schema::DataType::Boolean, false),
+                ColumnIndex {
+                    index: 0,
+                    side: JoinSide::None,
+                },
+            ));
+            left_fields().chain(right_field).unzip()
+        }
+        JoinType::RightSemi | JoinType::RightAnti => right_fields().unzip(),
     };
 
     let metadata = left
@@ -900,6 +888,16 @@ fn estimate_join_cardinality(
             Some(PartialJoinStatistics {
                 num_rows: *outer_stats.num_rows.get_value()?,
                 column_statistics: outer_stats.column_statistics,
+            })
+        }
+
+        JoinType::LeftMark => {
+            let num_rows = *left_stats.num_rows.get_value()?;
+            let mut column_statistics = left_stats.column_statistics;
+            column_statistics.push(ColumnStatistics::new_unknown());
+            Some(PartialJoinStatistics {
+                num_rows,
+                column_statistics,
             })
         }
     }
@@ -1153,7 +1151,11 @@ impl<T: 'static> OnceFut<T> {
 pub(crate) fn need_produce_result_in_final(join_type: JoinType) -> bool {
     matches!(
         join_type,
-        JoinType::Left | JoinType::LeftAnti | JoinType::LeftSemi | JoinType::Full
+        JoinType::Left
+            | JoinType::LeftAnti
+            | JoinType::LeftSemi
+            | JoinType::LeftMark
+            | JoinType::Full
     )
 }
 
@@ -1171,6 +1173,13 @@ pub(crate) fn get_final_indices_from_bit_map(
     join_type: JoinType,
 ) -> (UInt64Array, UInt32Array) {
     let left_size = left_bit_map.len();
+    if join_type == JoinType::LeftMark {
+        let left_indices = (0..left_size as u64).collect::<UInt64Array>();
+        let right_indices = (0..left_size)
+            .map(|idx| left_bit_map.get_bit(idx).then_some(0))
+            .collect::<UInt32Array>();
+        return (left_indices, right_indices);
+    }
     let left_indices = if join_type == JoinType::LeftSemi {
         (0..left_size)
             .filter_map(|idx| (left_bit_map.get_bit(idx)).then_some(idx as u64))
@@ -1254,7 +1263,10 @@ pub(crate) fn build_batch_from_indices(
     let mut columns: Vec<Arc<dyn Array>> = Vec::with_capacity(schema.fields().len());
 
     for column_index in column_indices {
-        let array = if column_index.side == build_side {
+        let array = if column_index.side == JoinSide::None {
+            // LeftMark join, the mark column is a true if the indices is not null, otherwise it will be false
+            Arc::new(compute::is_not_null(probe_indices)?)
+        } else if column_index.side == build_side {
             let array = build_input_buffer.column(column_index.index);
             if array.is_empty() || build_indices.null_count() == build_indices.len() {
                 // Outer join would generate a null index when finding no match at our side.
@@ -1323,7 +1335,7 @@ pub(crate) fn adjust_indices_by_join_type(
             // the left_indices will not be used later for the `right anti` join
             Ok((left_indices, right_indices))
         }
-        JoinType::LeftSemi | JoinType::LeftAnti => {
+        JoinType::LeftSemi | JoinType::LeftAnti | JoinType::LeftMark => {
             // matched or unmatched left row will be produced in the end of loop
             // When visit the right batch, we can output the matched left row and don't need to wait the end of loop
             Ok((
@@ -1646,7 +1658,7 @@ pub(crate) fn symmetric_join_output_partitioning(
     let left_partitioning = left.output_partitioning();
     let right_partitioning = right.output_partitioning();
     match join_type {
-        JoinType::Left | JoinType::LeftSemi | JoinType::LeftAnti => {
+        JoinType::Left | JoinType::LeftSemi | JoinType::LeftAnti | JoinType::LeftMark => {
             left_partitioning.clone()
         }
         JoinType::RightSemi | JoinType::RightAnti => right_partitioning.clone(),
@@ -1671,11 +1683,13 @@ pub(crate) fn asymmetric_join_output_partitioning(
             left.schema().fields().len(),
         ),
         JoinType::RightSemi | JoinType::RightAnti => right.output_partitioning().clone(),
-        JoinType::Left | JoinType::LeftSemi | JoinType::LeftAnti | JoinType::Full => {
-            Partitioning::UnknownPartitioning(
-                right.output_partitioning().partition_count(),
-            )
-        }
+        JoinType::Left
+        | JoinType::LeftSemi
+        | JoinType::LeftAnti
+        | JoinType::Full
+        | JoinType::LeftMark => Partitioning::UnknownPartitioning(
+            right.output_partitioning().partition_count(),
+        ),
     }
 }
 
