@@ -79,6 +79,14 @@ pub fn optimize_children(
 /// Returns true if `expr` contains all columns in `schema_cols`
 pub(crate) fn has_all_column_refs(expr: &Expr, schema_cols: &HashSet<Column>) -> bool {
     let column_refs = expr.column_refs();
+    contain_all_columns(&column_refs, schema_cols)
+}
+
+/// Returns true if `column_refs` contains all columns in `schema_cols`
+pub(crate) fn contain_all_columns(
+    column_refs: &HashSet<&Column>,
+    schema_cols: &HashSet<Column>,
+) -> bool {
     // note can't use HashSet::intersect because of different types (owned vs References)
     schema_cols
         .iter()
