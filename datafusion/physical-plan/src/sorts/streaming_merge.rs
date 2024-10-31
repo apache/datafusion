@@ -36,7 +36,7 @@ macro_rules! primitive_merge_helper {
 }
 
 macro_rules! merge_helper {
-    ($t:ty, $sort:ident, $streams:ident, $schema:ident, $tracking_metrics:ident, $batch_size:ident, $fetch:ident, $reservation:ident) => {{
+    ($t:ty, $sort:ident, $streams:ident, $schema:ident, $tracking_metrics:ident, $batch_size:ident, $fetch:ident, $reservation:ident, $enable_round_robin_tie_breaker:ident) => {{
         let streams = FieldCursorStream::<$t>::new($sort, $streams);
         return Ok(Box::pin(SortPreservingMergeStream::new(
             Box::new(streams),
@@ -45,6 +45,7 @@ macro_rules! merge_helper {
             $batch_size,
             $fetch,
             $reservation,
+            $enable_round_robin_tie_breaker,
         )));
     }};
 }
@@ -58,11 +59,15 @@ pub struct StreamingMergeBuilder<'a> {
     batch_size: Option<usize>,
     fetch: Option<usize>,
     reservation: Option<MemoryReservation>,
+    enable_round_robin_tie_breaker: bool,
 }
 
 impl<'a> StreamingMergeBuilder<'a> {
     pub fn new() -> Self {
-        Self::default()
+        Self {
+            enable_round_robin_tie_breaker: true,
+            ..Default::default()
+        }
     }
 
     pub fn with_streams(mut self, streams: Vec<SendableRecordBatchStream>) -> Self {
@@ -100,6 +105,14 @@ impl<'a> StreamingMergeBuilder<'a> {
         self
     }
 
+    pub fn with_round_robin_tie_breaker(
+        mut self,
+        enable_round_robin_tie_breaker: bool,
+    ) -> Self {
+        self.enable_round_robin_tie_breaker = enable_round_robin_tie_breaker;
+        self
+    }
+
     pub fn build(self) -> Result<SendableRecordBatchStream> {
         let Self {
             streams,
@@ -109,6 +122,7 @@ impl<'a> StreamingMergeBuilder<'a> {
             reservation,
             fetch,
             expressions,
+            enable_round_robin_tie_breaker,
         } = self;
 
         // Early return if streams or expressions are empty
@@ -141,11 +155,11 @@ impl<'a> StreamingMergeBuilder<'a> {
             let sort = expressions[0].clone();
             let data_type = sort.expr.data_type(schema.as_ref())?;
             downcast_primitive! {
-                data_type => (primitive_merge_helper, sort, streams, schema, metrics, batch_size, fetch, reservation),
-                DataType::Utf8 => merge_helper!(StringArray, sort, streams, schema, metrics, batch_size, fetch, reservation)
-                DataType::LargeUtf8 => merge_helper!(LargeStringArray, sort, streams, schema, metrics, batch_size, fetch, reservation)
-                DataType::Binary => merge_helper!(BinaryArray, sort, streams, schema, metrics, batch_size, fetch, reservation)
-                DataType::LargeBinary => merge_helper!(LargeBinaryArray, sort, streams, schema, metrics, batch_size, fetch, reservation)
+                data_type => (primitive_merge_helper, sort, streams, schema, metrics, batch_size, fetch, reservation, enable_round_robin_tie_breaker),
+                DataType::Utf8 => merge_helper!(StringArray, sort, streams, schema, metrics, batch_size, fetch, reservation, enable_round_robin_tie_breaker)
+                DataType::LargeUtf8 => merge_helper!(LargeStringArray, sort, streams, schema, metrics, batch_size, fetch, reservation, enable_round_robin_tie_breaker)
+                DataType::Binary => merge_helper!(BinaryArray, sort, streams, schema, metrics, batch_size, fetch, reservation, enable_round_robin_tie_breaker)
+                DataType::LargeBinary => merge_helper!(LargeBinaryArray, sort, streams, schema, metrics, batch_size, fetch, reservation, enable_round_robin_tie_breaker)
                 _ => {}
             }
         }
@@ -163,6 +177,7 @@ impl<'a> StreamingMergeBuilder<'a> {
             batch_size,
             fetch,
             reservation,
+            enable_round_robin_tie_breaker,
         )))
     }
 }

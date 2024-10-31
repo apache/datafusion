@@ -1,0 +1,51 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+[package]
+name = "datafusion-ffi"
+description = "Foreign Function Interface implementation for DataFusion"
+readme = "README.md"
+version = { workspace = true }
+edition = { workspace = true }
+homepage = { workspace = true }
+repository = { workspace = true }
+license = { workspace = true }
+authors = { workspace = true }
+# Specify MSRV here as `cargo msrv` doesn't support workspace version
+rust-version = "1.76"
+
+[lints]
+workspace = true
+
+[lib]
+name = "datafusion_ffi"
+path = "src/lib.rs"
+
+[dependencies]
+abi_stable = "0.11.3"
+arrow = { workspace = true, features = ["ffi"] }
+async-ffi = { version = "0.5.0", features = ["abi_stable"] }
+async-trait = { workspace = true }
+datafusion = { workspace = true, default-features = false }
+datafusion-proto = { workspace = true }
+doc-comment = { workspace = true }
+futures = { workspace = true }
+log = { workspace = true }
+prost = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
