@@ -24,18 +24,18 @@ NULL
 query TT
 select 'a'::VARCHAR, ''::VARCHAR
 ----
-a  (empty)
+a (empty)
 
 skipif postgres
 query TT
 select 'a'::CHAR, ''::CHAR
 ----
-a  (empty)
+a (empty)
 
 query TT
 select 'a'::TEXT, ''::TEXT
 ----
-a  (empty)
+a (empty)
 
 skipif postgres
 query I
