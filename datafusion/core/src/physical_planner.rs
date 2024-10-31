@@ -649,14 +649,16 @@ impl DefaultPhysicalPlanner {
                 aggr_expr,
                 ..
             }) => {
+                let options = session_state.config().options();
                 // Initially need to perform the aggregate and then merge the partitions
                 let input_exec = children.one()?;
                 let physical_input_schema = input_exec.schema();
                 let logical_input_schema = input.as_ref().schema();
-                let physical_input_schema_from_logical: Arc<Schema> =
-                    logical_input_schema.as_ref().clone().into();
+                let physical_input_schema_from_logical = logical_input_schema.inner();
 
-                if physical_input_schema != physical_input_schema_from_logical {
+                if &physical_input_schema != physical_input_schema_from_logical
+                    && !options.execution.skip_physical_aggregate_schema_check
+                {
                     return internal_err!("Physical input schema should be the same as the one converted from logical input schema.");
                 }
 
