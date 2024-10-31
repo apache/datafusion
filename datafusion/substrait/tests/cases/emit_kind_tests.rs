@@ -22,8 +22,10 @@ mod tests {
     use crate::utils::test::{add_plan_schemas_to_ctx, read_json};
 
     use datafusion::common::Result;
-    use datafusion::prelude::SessionContext;
+    use datafusion::execution::SessionStateBuilder;
+    use datafusion::prelude::{CsvReadOptions, SessionConfig, SessionContext};
     use datafusion_substrait::logical_plan::consumer::from_substrait_plan;
+    use datafusion_substrait::logical_plan::producer::to_substrait_plan;
 
     #[tokio::test]
     async fn project_respects_direct_emit_kind() -> Result<()> {
@@ -60,6 +62,66 @@ mod tests {
              \n  Filter: DATA.B = Int64(2)\
              \n    TableScan: DATA"
         );
+        Ok(())
+    }
+
+    async fn make_context() -> Result<SessionContext> {
+        let state = SessionStateBuilder::new()
+            .with_config(SessionConfig::default())
+            .with_default_features()
+            .build();
+        let ctx = SessionContext::new_with_state(state);
+        ctx.register_csv("data", "tests/testdata/data.csv", CsvReadOptions::default())
+            .await?;
+        Ok(ctx)
+    }
+
+    #[tokio::test]
+    async fn handle_emit_as_project_with_volatile_expr() -> Result<()> {
+        let ctx = make_context().await?;
+
+        let df = ctx
+            .sql("SELECT random() AS c1, a + 1 AS c2 FROM data")
+            .await?;
+
+        let plan = df.into_unoptimized_plan();
+        assert_eq!(
+            format!("{}", plan),
+            "Projection: random() AS c1, data.a + Int64(1) AS c2\
+             \n  TableScan: data"
+        );
+
+        let proto = to_substrait_plan(&plan, &ctx)?;
+        let plan2 = from_substrait_plan(&ctx, &proto).await?;
+        // note how the Projections are not flattened
+        assert_eq!(
+            format!("{}", plan2),
+            "Projection: random() AS c1, data.a + Int64(1) AS c2\
+             \n  Projection: data.a, data.b, data.c, data.d, data.e, data.f, random(), data.a + Int64(1)\
+             \n    TableScan: data"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn handle_emit_as_project_without_volatile_exprs() -> Result<()> {
+        let ctx = make_context().await?;
+        let df = ctx.sql("SELECT a + 1, b + 2 FROM data").await?;
+
+        let plan = df.into_unoptimized_plan();
+        assert_eq!(
+            format!("{}", plan),
+            "Projection: data.a + Int64(1), data.b + Int64(2)\
+             \n  TableScan: data"
+        );
+
+        let proto = to_substrait_plan(&plan, &ctx)?;
+        let plan2 = from_substrait_plan(&ctx, &proto).await?;
+
+        let plan1str = format!("{plan}");
+        let plan2str = format!("{plan2}");
+        assert_eq!(plan1str, plan2str);
+
         Ok(())
     }
 }

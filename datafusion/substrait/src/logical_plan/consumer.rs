@@ -568,17 +568,21 @@ pub async fn from_substrait_rel(
                 let mut input = LogicalPlanBuilder::from(
                     from_substrait_rel(ctx, input, extensions).await?,
                 );
+                let original_schema = input.schema().clone();
 
-                let mut default_exprs: Vec<Expr> = vec![];
+                // Ensure that all expressions have a unique display name, so that
+                // validate_unique_names does not fail when constructing the project.
+                let mut name_tracker = NameTracker::new();
 
-                // By default, a Substrait Project emits all inputs fields
-                let input_schema = input.schema();
-                for index in 0..(input_schema.fields().len()) {
-                    let e =
-                        Expr::Column(Column::from(input_schema.qualified_field(index)));
-                    default_exprs.push(e);
-                }
-                // followed by all expressions
+                // By default, a Substrait Project emits all inputs fields followed by all expressions.
+                // We build the explicit expressions first, and then the input expressions to avoid
+                // adding aliases to the explicit expressions (as part of ensuring unique names).
+                //
+                // This is helpful for plan visualization and tests, because when DataFusion produces
+                // Substrait Projects it adds an output mapping that excludes all input columns
+                // leaving only explicit expressions.
+
+                let mut explicit_exprs: Vec<Expr> = vec![];
                 for expr in &p.expressions {
                     let e =
                         from_substrait_rex(ctx, expr, input.clone().schema(), extensions)
@@ -590,35 +594,20 @@ pub async fn from_substrait_rel(
                         // to transform it into a column reference
                         input = input.window(vec![e.clone()])?
                     }
-                    default_exprs.push(e);
+                    explicit_exprs.push(name_tracker.get_uniquely_named_expr(e)?);
                 }
-
-                // Ensure that all expressions have a unique display name, so that
-                // validate_unique_names does not fail when constructing the project.
-                let mut name_tracker = NameTracker::new();
 
                 let mut final_exprs: Vec<Expr> = vec![];
-                match retrieve_emit_kind(p.common.as_ref()) {
-                    EmitKind::Direct(_) => {
-                        for expr in default_exprs.into_iter() {
-                            final_exprs.push(name_tracker.get_uniquely_named_expr(expr)?)
-                        }
-                    }
-                    EmitKind::Emit(Emit { output_mapping }) => {
-                        for field in output_mapping {
-                            let expr = default_exprs
-                                .get(field as usize)
-                                .ok_or_else(|| substrait_datafusion_err!(
-                                  "Emit output field {} cannot be resolved in input schema {}",
-                                  field, input.schema().clone()
-                                ))?;
-                            final_exprs.push(
-                                name_tracker.get_uniquely_named_expr(expr.clone())?,
-                            );
-                        }
-                    }
+                for index in 0..original_schema.fields().len() {
+                    let e = Expr::Column(Column::from(
+                        original_schema.qualified_field(index),
+                    ));
+                    final_exprs.push(name_tracker.get_uniquely_named_expr(e)?);
                 }
-                input.project(final_exprs)?.build()
+                final_exprs.append(&mut explicit_exprs);
+
+                let plan = input.project(final_exprs)?.build()?;
+                apply_emit_kind(p.common.as_ref(), plan)
             } else {
                 not_impl_err!("Projection without an input is not supported")
             }
@@ -1106,28 +1095,62 @@ fn retrieve_emit_kind(rel_common: Option<&RelCommon>) -> EmitKind {
         .map_or(default, |ek| ek.clone())
 }
 
+fn contains_volatile_expr(proj: &Projection) -> Result<bool> {
+    for expr in proj.expr.iter() {
+        if expr.is_volatile()? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 fn apply_emit_kind(
     rel_common: Option<&RelCommon>,
     plan: LogicalPlan,
 ) -> Result<LogicalPlan> {
     match retrieve_emit_kind(rel_common) {
         EmitKind::Direct(_) => Ok(plan),
-        EmitKind::Emit(emit) => {
-            let input_schema = plan.schema();
-
+        EmitKind::Emit(Emit { output_mapping }) => {
             // It is valid to reference the same field multiple times in the Emit
             // In this case, we need to provide unique names to avoid collisions
             let mut name_tracker = NameTracker::new();
+            match plan {
+                // To avoid adding a projection on top of a projection, we apply special case
+                // handling to flatten Substrait Emits. This is only applicable if none of the
+                // expressions in the projection are volatile. This is to avoid issues like
+                // converting a single call of the random() function into multiple calls due to
+                // duplicate fields in the output_mapping.
+                LogicalPlan::Projection(proj) if !contains_volatile_expr(&proj)? => {
+                    let mut exprs: Vec<Expr> = vec![];
+                    for field in output_mapping {
+                        let expr = proj.expr
+                            .get(field as usize)
+                            .ok_or_else(|| substrait_datafusion_err!(
+                                  "Emit output field {} cannot be resolved in input schema {}",
+                                  field, proj.input.schema().clone()
+                                ))?;
+                        exprs.push(name_tracker.get_uniquely_named_expr(expr.clone())?);
+                    }
 
-            let mut exprs: Vec<Expr> = vec![];
-            for index in emit.output_mapping.into_iter() {
-                let column = Expr::Column(Column::from(
-                    input_schema.qualified_field(index as usize),
-                ));
-                let expr = name_tracker.get_uniquely_named_expr(column)?;
-                exprs.push(expr);
+                    let input = Arc::unwrap_or_clone(proj.input);
+                    project(input, exprs)
+                }
+                // Otherwise we just handle the output_mapping as a projection
+                _ => {
+                    let input_schema = plan.schema();
+
+                    let mut exprs: Vec<Expr> = vec![];
+                    for index in output_mapping.into_iter() {
+                        let column = Expr::Column(Column::from(
+                            input_schema.qualified_field(index as usize),
+                        ));
+                        let expr = name_tracker.get_uniquely_named_expr(column)?;
+                        exprs.push(expr);
+                    }
+
+                    project(plan, exprs)
+                }
             }
-            project(plan, exprs)
         }
     }
 }
