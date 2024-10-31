@@ -27,7 +27,7 @@ use datafusion_common::ScalarValue;
 use datafusion_common::{DFSchemaRef, ToDFSchema};
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::logical_plan::builder::table_scan_with_filters;
-use datafusion_expr::simplify::{self, SimplifyInfo};
+use datafusion_expr::simplify::SimplifyInfo;
 use datafusion_expr::{
     expr, table_scan, Cast, ColumnarValue, ExprSchemable, LogicalPlan,
     LogicalPlanBuilder, ScalarUDF, Volatility,
