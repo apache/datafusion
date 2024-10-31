@@ -384,7 +384,7 @@ mod tests {
         let rbs = (0..1024).map(|_| rb.clone()).collect::<Vec<_>>();
 
         let schema = rb.schema();
-        let sort = vec![
+        let sort = LexOrdering::new(vec![
             PhysicalSortExpr {
                 expr: col("b", &schema).unwrap(),
                 options: Default::default(),
@@ -393,7 +393,7 @@ mod tests {
                 expr: col("c", &schema).unwrap(),
                 options: Default::default(),
             },
-        ];
+        ]);
 
         let exec = MemoryExec::try_new(&[rbs], schema, None).unwrap();
         let repartition_exec =
