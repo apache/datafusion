@@ -446,7 +446,7 @@ physical_plan
 03)----MemoryExec: partitions=1, partition_sizes=[1]
 
 # Window Functions
-query TTTT
+query I
 select dense_rank() over (order by arrow_cast('abc', 'Dictionary(UInt16, Utf8)'));
 ----
 1
