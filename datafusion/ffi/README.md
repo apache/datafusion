@@ -25,7 +25,7 @@ with functions from other languages using a stable interface.
 See [API Docs] for details and examples.
 
 We expect this crate may be used by both sides of the FFI. This allows users
-to create modules that can interoperate with the necessity of using the same
+to create modules that can interoperate without the necessity of using the same
 version of DataFusion. The driving use case has been the `datafusion-python`
 repository, but many other use cases may exist. We envision at least two
 use cases.
@@ -43,7 +43,7 @@ In this crate we have a variety of structs which closely mimic the behavior of
 their internal counterparts. In the following example, we will refer to the
 `TableProvider`, but the same pattern exists for other structs.
 
-Each of the exposted structs in this crate is provided with a variant prefixed
+Each of the exposed structs in this crate is provided with a variant prefixed
 with `Foreign`. This variant is designed to be used by the consumer of the
 foreign code. The `Foreign` structs should _never_ access the `private_data`
 fields. Instead they should only access the data returned through the function
