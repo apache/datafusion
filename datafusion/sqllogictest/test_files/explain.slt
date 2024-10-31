@@ -413,38 +413,3 @@ physical_plan
 02)--PlaceholderRowExec
 
 
-
-
-query TT
-explain select * from VALUES (1), (2) where random() = 0 OR (column1 = 2 AND random() = 0);
-----
-logical_plan
-01)Filter: random() = Float64(0) OR column1 = Int64(2) AND random() = Float64(0)
-02)--Values: (Int64(1)), (Int64(2))
-physical_plan
-01)CoalesceBatchesExec: target_batch_size=8192
-02)--FilterExec: random() = 0 OR column1@0 = 2 AND random() = 0
-03)----ValuesExec
-
-query TT
-explain select * from VALUES (1), (2) where column1 = 2 OR (column1 = 2 AND random() = 0);
-----
-logical_plan
-01)Filter: column1 = Int64(2)
-02)--Values: (Int64(1)), (Int64(2))
-physical_plan
-01)CoalesceBatchesExec: target_batch_size=8192
-02)--FilterExec: column1@0 = 2
-03)----ValuesExec
-
-
-query TT
-explain select * from VALUES (1), (2) where column1 = 2 AND random() = 0 OR column1 = 2 AND random() = 0;
-----
-logical_plan
-01)Filter: column1 = Int64(2) AND (random() = Float64(0) OR random() = Float64(0))
-02)--Values: (Int64(1)), (Int64(2))
-physical_plan
-01)CoalesceBatchesExec: target_batch_size=8192
-02)--FilterExec: column1@0 = 2 AND (random() = 0 OR random() = 0)
-03)----ValuesExec

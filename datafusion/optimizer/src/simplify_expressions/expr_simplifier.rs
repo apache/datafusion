@@ -3994,4 +3994,69 @@ mod tests {
             unimplemented!("not needed for tests")
         }
     }
+    #[derive(Debug)]
+    struct VolatileUdf {
+        signature: Signature,
+    }
+
+    impl VolatileUdf {
+        pub fn new() -> Self {
+            Self {
+                signature: Signature::exact(vec![], Volatility::Volatile),
+            }
+        }
+    }
+    impl ScalarUDFImpl for VolatileUdf {
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+
+        fn name(&self) -> &str {
+            "VolatileUdf"
+        }
+
+        fn signature(&self) -> &Signature {
+            &self.signature
+        }
+
+        fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+            Ok(DataType::Int16)
+        }
+    }
+    #[test]
+    fn test_optimize_volatile_conditions() {
+        let fun = Arc::new(ScalarUDF::new_from_impl(VolatileUdf::new()));
+        let rand = Expr::ScalarFunction(ScalarFunction::new_udf(fun, vec![]));
+        {
+            let expr = rand
+                .clone()
+                .eq(lit(0))
+                .or(col("column1").eq(lit(2)).and(rand.clone().eq(lit(0))));
+
+            assert_eq!(simplify(expr.clone()), expr);
+        }
+
+        {
+            let expr = col("column1")
+                .eq(lit(2))
+                .or(col("column1").eq(lit(2)).and(rand.clone().eq(lit(0))));
+
+            assert_eq!(simplify(expr), col("column1").eq(lit(2)));
+        }
+
+        {
+            let expr = (col("column1").eq(lit(2)).and(rand.clone().eq(lit(0)))).or(col(
+                "column1",
+            )
+            .eq(lit(2))
+            .and(rand.clone().eq(lit(0))));
+
+            assert_eq!(
+                simplify(expr),
+                col("column1")
+                    .eq(lit(2))
+                    .and((rand.clone().eq(lit(0))).or(rand.clone().eq(lit(0))))
+            );
+        }
+    }
 }
