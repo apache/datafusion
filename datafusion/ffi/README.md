@@ -19,63 +19,87 @@
 
 # `datafusion-ffi`: Apache DataFusion Foreign Function Interface
 
-This crate contains code to allow interoperability of Apache [DataFusion]
-with functions from other languages using a stable interface.
+This crate contains code to allow interoperability of Apache [DataFusion] with
+functions from other libraries and/or [DataFusion] versions using a stable
+interface.
+
+One of the limitations of the Rust programming language is that there is no
+stable [Rust ABI] (Application Binary Interface). If a library is compiled with
+one version of the Rust compiler and you attempt to use that library with a
+program compiled by a different Rust compiler, there is no guarantee that you
+can access the data structures. In order to share code between libraries loaded
+at runtime, you need to use Rust's [FFI](Foreign Function Interface (FFI)).
+
+The purpose of this crate is to define interfaces between [DataFusion] libraries
+that will remain stable across different versions of [DataFusion]. This allows
+users to write libraries that can interface between each other at runtime rather
+than require compiling all of the code into a single executable.
+
+In general, it is recommended to run the same version of DataFusion by both the
+producer and consumer of the data and functions shared across the [FFI], but
+this is not strictly required.
 
 See [API Docs] for details and examples.
 
-We expect this crate may be used by both sides of the FFI. This allows users
-to create modules that can interoperate without the necessity of using the same
-version of DataFusion. The driving use case has been the `datafusion-python`
-repository, but many other use cases may exist. We envision at least two
-use cases.
+## Use Cases
+
+Two use cases have been identified for this crate, but they are not intended to
+be all inclusive.
 
 1. `datafusion-python` which will use the FFI to provide external services such
    as a `TableProvider` without needing to re-export the entire `datafusion-python`
    code base. With `datafusion-ffi` these packages do not need `datafusion-python`
    as a dependency at all.
 2. Users may want to create a modular interface that allows runtime loading of
-   libraries.
+   libraries. For example, you may wish to design a program that only uses the 
+   built in table sources, but also allows for extension from the community led
+   [datafusion-contrib] repositories. You could enable module loading so that
+   users could at runtime load a library to access additional data sources.
+   Alternatively, you could use this approach so that customers could interface
+   with their own proprietary data sources.
+
+## Limitations
+
+One limitation of the approach in this crate is that it is designed specifically
+to work across Rust libraries. In general, you can use Rust's [FFI] to
+operate across different programming languages, but that is not the design
+intent of this crate. Instead, we are using external crates that provide
+stable interfaces that closely mirror the Rust native approach. To learn more
+about this approach see the [abi_stable] and [async-ffi] crates.
+
+If you have a library in another language that you wish to interface to
+[DataFusion] the recommendation is to create a Rust wrapper crate to interface
+with your library and then to connect it to [DataFusion] using this crate.
+Alternatively, you could use [bindgen] to interface directly to the [FFI] provided
+by this crate, but that is currently not supported.
+
+## FFI Boundary
+
+We expect this crate to be used by both sides of the FFI Boundary. This should
+provide ergonamic ways to both produce and consume structs and functions across
+this layer.
+
+For example, if you have a library that provides a custom `TableProvider`, you
+can expose it by using `FFI_TableProvider::new()`. When you need to consume a
+`FFI_TableProvider`, you can access it by converting using
+`ForeignTableProvider::from()` which will create a struct that implements
+`TableProvider`.
+
+There is a complete end to end demonstration in the
+[examples](https://github.com/apache/datafusion/tree/main/datafusion-examples/examples/ffi).
 
 ## Struct Layout
 
 In this crate we have a variety of structs which closely mimic the behavior of
-their internal counterparts. In the following example, we will refer to the
-`TableProvider`, but the same pattern exists for other structs.
-
-Each of the exposed structs in this crate is provided with a variant prefixed
-with `Foreign`. This variant is designed to be used by the consumer of the
-foreign code. The `Foreign` structs should _never_ access the `private_data`
-fields. Instead they should only access the data returned through the function
-calls defined on the `FFI_` structs. The second purpose of the `Foreign`
-structs is to contain additional data that may be needed by the traits that
-are implemented on them. Some of these traits require borrowing data which
-can be far more convienent to be locally stored.
-
-For example, we have a struct `FFI_TableProvider` to give access to the
-`TableProvider` functions like `table_type()` and `scan()`. If we write a
-library that wishes to expose it's `TableProvider`, then we can access the
-private data that contains the Arc reference to the `TableProvider` via
-`FFI_TableProvider`. This data is local to the library.
-
-If we have a program that accesses a `TableProvider` via FFI, then it
-will use `ForeignTableProvider`. When using `ForeignTableProvider` we **must**
-not attempt to access the `private_data` field in `FFI_TableProvider`. If a
-user is testing locally, you may be able to successfully access this field, but
-it will only work if you are building against the exact same version of
-`DataFusion` for both libraries **and** the same compiler. It will not work
-in general.
-
-It is worth noting that which library is the `local` and which is `foreign`
-depends on which interface we are considering. For example, suppose we have a
-Python library called `my_provider` that exposes a `TableProvider` called
-`MyProvider` via `FFI_TableProvider`. Within the library `my_provider` we can
-access the `private_data` via `FFI_TableProvider`. We connect this to
-`datafusion-python`, where we access it as a `ForeignTableProvider`. Now when
-we call `scan()` on this interface, we have to pass it a `FFI_SessionConfig`.
-The `SessionConfig` is local to `datafusion-python` and **not** `my_provider`.
-It is important to be careful when expanding these functions to be certain which
-side of the interface each object refers to.
+their internal counterparts. To see detailed notes about how to use them, see
+the example in `FFI_TableProvider`.
 
 [datafusion]: https://datafusion.apache.org
 [api docs]: http://docs.rs/datafusion-ffi/latest
+[Rust ABI]: https://doc.rust-lang.org/reference/abi.html
+[FFI]: https://doc.rust-lang.org/nomicon/ffi.html
+[abi_stable]: https://crates.io/crates/abi_stable
+[async-ffi]: https://crates.io/crates/async-ffi
+[bindgen]: https://crates.io/crates/bindgen
+[datafusion-python]: https://datafusion.apache.org/python/
+[datafusion-contrib]: https://github.com/datafusion-contrib
