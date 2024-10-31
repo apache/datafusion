@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::engines::output::DFColumnType;
-use arrow::array::Array;
+use arrow::array::{Array, AsArray};
 use arrow::datatypes::Fields;
 use arrow::util::display::ArrayFormatter;
 use arrow::{array, array::ArrayRef, datatypes::DataType, record_batch::RecordBatch};
@@ -238,6 +238,11 @@ pub fn cell_to_string(col: &ArrayRef, row: usize) -> Result<String> {
                 col,
                 row
             ))),
+            DataType::Dictionary(_, _) => {
+                let dict = col.as_any_dictionary();
+                let key = dict.normalized_keys()[row];
+                Ok(cell_to_string(dict.values(), key)?)
+            }
             _ => {
                 let f = ArrayFormatter::try_new(col.as_ref(), &DEFAULT_FORMAT_OPTIONS);
                 Ok(f.unwrap().value(row).to_string())
