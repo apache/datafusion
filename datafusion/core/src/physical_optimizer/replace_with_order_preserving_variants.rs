@@ -33,7 +33,6 @@ use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion_physical_plan::tree_node::PlanContext;
 use datafusion_physical_plan::ExecutionPlanProperties;
 
-use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use itertools::izip;
 
 /// For a given `plan`, this object carries the information one needs from its
@@ -129,11 +128,10 @@ fn plan_with_order_preserving_variants(
         return Ok(sort_input);
     } else if is_coalesce_partitions(&sort_input.plan) && is_spm_better {
         let child = &sort_input.children[0].plan;
-        if let Some(ordering) = child.output_ordering().map(Vec::from) {
+        if let Some(ordering) = child.output_ordering() {
             // When the input of a `CoalescePartitionsExec` has an ordering,
             // replace it with a `SortPreservingMergeExec` if appropriate:
-            let spm =
-                SortPreservingMergeExec::new(LexOrdering::new(ordering), child.clone());
+            let spm = SortPreservingMergeExec::new(ordering.clone(), child.clone());
             sort_input.plan = Arc::new(spm) as _;
             sort_input.children[0].data = true;
             return Ok(sort_input);
@@ -257,7 +255,13 @@ pub(crate) fn replace_with_order_preserving_variants(
     if alternate_plan
         .plan
         .equivalence_properties()
-        .ordering_satisfy(requirements.plan.output_ordering().unwrap_or_default())
+        .ordering_satisfy(
+            &requirements
+                .plan
+                .output_ordering()
+                .cloned()
+                .unwrap_or_default(),
+        )
     {
         for child in alternate_plan.children.iter_mut() {
             child.data = false;

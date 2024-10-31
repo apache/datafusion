@@ -37,9 +37,7 @@ use datafusion_expr::JoinType;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::utils::collect_columns;
 use datafusion_physical_expr::{LexRequirementRef, PhysicalSortRequirement};
-use datafusion_physical_expr_common::sort_expr::{
-    LexOrdering, LexRequirement,
-};
+use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};
 
 use hashbrown::HashSet;
 
@@ -86,10 +84,7 @@ fn pushdown_sorts_helper(
     mut requirements: SortPushDown,
 ) -> Result<Transformed<SortPushDown>> {
     let plan = &requirements.plan;
-    let parent_reqs = requirements
-        .data
-        .ordering_requirement
-        .unwrap_or_default();
+    let parent_reqs = requirements.data.ordering_requirement.unwrap_or_default();
     let satisfy_parent = plan
         .equivalence_properties()
         .ordering_satisfy_requirement(&parent_reqs);

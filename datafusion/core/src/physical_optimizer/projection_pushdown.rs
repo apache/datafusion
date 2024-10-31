@@ -468,7 +468,7 @@ fn try_swapping_with_sort(
     }
 
     let mut updated_exprs = LexOrdering::default();
-    for sort in sort.expr() {
+    for sort in sort.expr().iter() {
         let Some(new_expr) = update_expr(&sort.expr, projection.expr(), false)? else {
             return Ok(None);
         };
@@ -498,7 +498,7 @@ fn try_swapping_with_sort_preserving_merge(
     }
 
     let mut updated_exprs = LexOrdering::default();
-    for sort in spm.expr() {
+    for sort in spm.expr().iter() {
         let Some(updated_expr) = update_expr(&sort.expr, projection.expr(), false)?
         else {
             return Ok(None);

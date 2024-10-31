@@ -936,10 +936,7 @@ fn add_spm_on_top(input: DistributionContext) -> DistributionContext {
 
         let new_plan = if let Some(ordering) = ordering {
             // should_preserve_ordering
-            Arc::new(SortPreservingMergeExec::new(
-                ordering,
-                input.plan.clone(),
-            )) as _
+            Arc::new(SortPreservingMergeExec::new(ordering, input.plan.clone())) as _
         } else {
             // no ordering to preserve
             Arc::new(CoalescePartitionsExec::new(input.plan.clone())) as _
@@ -1421,7 +1418,6 @@ pub(crate) mod tests {
     use datafusion_physical_expr::expressions::{BinaryExpr, Literal};
     use datafusion_physical_expr::{
         expressions::binary, expressions::lit, LexOrdering, PhysicalSortExpr,
-        PhysicalSortRequirement,
     };
     use datafusion_physical_expr_common::sort_expr::LexRequirement;
     use datafusion_physical_plan::PlanProperties;
@@ -1494,9 +1490,7 @@ pub(crate) mod tests {
             if self.expr.is_empty() {
                 vec![None]
             } else {
-                vec![Some(PhysicalSortRequirement::from_sort_exprs(
-                    self.expr.iter(),
-                ))]
+                vec![Some(LexRequirement::from(self.expr.clone()))]
             }
         }
 

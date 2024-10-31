@@ -36,7 +36,7 @@ use arrow_array::RecordBatch;
 use arrow_schema::SchemaRef;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_physical_expr::{expressions::Column, PhysicalSortExpr};
-use datafusion_physical_expr_common::sort_expr::{LexOrdering};
+use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
 /// A normalized representation of file min/max statistics that allows for efficient sorting & comparison.
 /// The min/max values are ordered by [`Self::sort_order`].
@@ -67,7 +67,7 @@ impl MinMaxStatistics {
 
     pub fn new_from_files<'a>(
         projected_sort_order: &LexOrdering, // Sort order with respect to projected schema
-        projected_schema: &SchemaRef,         // Projected schema
+        projected_schema: &SchemaRef,       // Projected schema
         projection: Option<&[usize]>, // Indices of projection in full table schema (None = all columns)
         files: impl IntoIterator<Item = &'a PartitionedFile>,
     ) -> Result<Self> {
