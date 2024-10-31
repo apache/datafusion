@@ -37,6 +37,11 @@ select arrow_cast(col1, 'Dictionary(Int32, Utf8)') as c1 from test_substr_base;
 statement ok
 drop table test_source
 
+query T
+SELECT arrow_cast('', 'Dictionary(Int32, Utf8)');
+----
+(empty)
+
 # TODO: move it back to `string_query.slt.part` after fixing the issue
 # see detail: https://github.com/apache/datafusion/issues/12637
 # Test pattern with wildcard characters
