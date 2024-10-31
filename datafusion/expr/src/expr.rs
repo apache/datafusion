@@ -21,17 +21,13 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Display, Formatter, Write};
 use std::hash::{Hash, Hasher};
 use std::mem;
-use std::str::FromStr;
 use std::sync::Arc;
 
 use crate::expr_fn::binary_expr;
 use crate::logical_plan::Subquery;
 use crate::utils::expr_to_columns;
 use crate::Volatility;
-use crate::{
-    udaf, BuiltInWindowFunction, ExprSchemable, Operator, Signature, WindowFrame,
-    WindowUDF,
-};
+use crate::{udaf, ExprSchemable, Operator, Signature, WindowFrame, WindowUDF};
 
 use arrow::datatypes::{DataType, FieldRef};
 use datafusion_common::cse::HashNode;
@@ -693,9 +689,6 @@ impl AggregateFunction {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
 /// Defines which implementation of an aggregate function DataFusion should call.
 pub enum WindowFunctionDefinition {
-    /// A built in aggregate function that leverages an aggregate function
-    /// A a built-in window function
-    BuiltInWindowFunction(BuiltInWindowFunction),
     /// A user defined aggregate function
     AggregateUDF(Arc<crate::AggregateUDF>),
     /// A user defined aggregate function
@@ -711,9 +704,6 @@ impl WindowFunctionDefinition {
         display_name: &str,
     ) -> Result<DataType> {
         match self {
-            WindowFunctionDefinition::BuiltInWindowFunction(fun) => {
-                fun.return_type(input_expr_types)
-            }
             WindowFunctionDefinition::AggregateUDF(fun) => {
                 fun.return_type(input_expr_types)
             }
@@ -726,7 +716,6 @@ impl WindowFunctionDefinition {
     /// The signatures supported by the function `fun`.
     pub fn signature(&self) -> Signature {
         match self {
-            WindowFunctionDefinition::BuiltInWindowFunction(fun) => fun.signature(),
             WindowFunctionDefinition::AggregateUDF(fun) => fun.signature().clone(),
             WindowFunctionDefinition::WindowUDF(fun) => fun.signature().clone(),
         }
@@ -735,7 +724,6 @@ impl WindowFunctionDefinition {
     /// Function's name for display
     pub fn name(&self) -> &str {
         match self {
-            WindowFunctionDefinition::BuiltInWindowFunction(fun) => fun.name(),
             WindowFunctionDefinition::WindowUDF(fun) => fun.name(),
             WindowFunctionDefinition::AggregateUDF(fun) => fun.name(),
         }
@@ -745,16 +733,9 @@ impl WindowFunctionDefinition {
 impl Display for WindowFunctionDefinition {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         match self {
-            WindowFunctionDefinition::BuiltInWindowFunction(fun) => Display::fmt(fun, f),
             WindowFunctionDefinition::AggregateUDF(fun) => Display::fmt(fun, f),
             WindowFunctionDefinition::WindowUDF(fun) => Display::fmt(fun, f),
         }
-    }
-}
-
-impl From<BuiltInWindowFunction> for WindowFunctionDefinition {
-    fn from(value: BuiltInWindowFunction) -> Self {
-        Self::BuiltInWindowFunction(value)
     }
 }
 
@@ -783,9 +764,10 @@ impl From<Arc<WindowUDF>> for WindowFunctionDefinition {
 /// ```
 /// # use datafusion_expr::{Expr, BuiltInWindowFunction, col, ExprFunctionExt};
 /// # use datafusion_expr::expr::WindowFunction;
+/// use datafusion_expr::WindowFunctionDefinition::WindowUDF;
 /// // Create FIRST_VALUE(a) OVER (PARTITION BY b ORDER BY c)
 /// let expr = Expr::WindowFunction(
-///     WindowFunction::new(BuiltInWindowFunction::FirstValue, vec![col("a")])
+///     WindowFunction::new(WindowUDF::, vec![col("a")])
 /// )
 ///   .partition_by(vec![col("b")])
 ///   .order_by(vec![col("b").sort(true, true)])
@@ -820,23 +802,6 @@ impl WindowFunction {
             window_frame: WindowFrame::new(None),
             null_treatment: None,
         }
-    }
-}
-
-/// Find DataFusion's built-in window function by name.
-pub fn find_df_window_func(name: &str) -> Option<WindowFunctionDefinition> {
-    let name = name.to_lowercase();
-    // Code paths for window functions leveraging ordinary aggregators and
-    // built-in window functions are quite different, and the same function
-    // may have different implementations for these cases. If the sought
-    // function is not found among built-in window functions, we search for
-    // it among aggregate functions.
-    if let Ok(built_in_function) = BuiltInWindowFunction::from_str(name.as_str()) {
-        Some(WindowFunctionDefinition::BuiltInWindowFunction(
-            built_in_function,
-        ))
-    } else {
-        None
     }
 }
 
@@ -2524,77 +2489,6 @@ mod test {
     }
 
     use super::*;
-
-    #[test]
-    fn test_first_value_return_type() -> Result<()> {
-        let fun = find_df_window_func("first_value").unwrap();
-        let observed = fun.return_type(&[DataType::Utf8], &[true], "")?;
-        assert_eq!(DataType::Utf8, observed);
-
-        let observed = fun.return_type(&[DataType::UInt64], &[true], "")?;
-        assert_eq!(DataType::UInt64, observed);
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_last_value_return_type() -> Result<()> {
-        let fun = find_df_window_func("last_value").unwrap();
-        let observed = fun.return_type(&[DataType::Utf8], &[true], "")?;
-        assert_eq!(DataType::Utf8, observed);
-
-        let observed = fun.return_type(&[DataType::Float64], &[true], "")?;
-        assert_eq!(DataType::Float64, observed);
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_nth_value_return_type() -> Result<()> {
-        let fun = find_df_window_func("nth_value").unwrap();
-        let observed =
-            fun.return_type(&[DataType::Utf8, DataType::UInt64], &[true, true], "")?;
-        assert_eq!(DataType::Utf8, observed);
-
-        let observed =
-            fun.return_type(&[DataType::Float64, DataType::UInt64], &[true, true], "")?;
-        assert_eq!(DataType::Float64, observed);
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_window_function_case_insensitive() -> Result<()> {
-        let names = vec!["first_value", "last_value", "nth_value"];
-        for name in names {
-            let fun = find_df_window_func(name).unwrap();
-            let fun2 = find_df_window_func(name.to_uppercase().as_str()).unwrap();
-            assert_eq!(fun, fun2);
-            if fun.to_string() == "first_value" || fun.to_string() == "last_value" {
-                assert_eq!(fun.to_string(), name);
-            } else {
-                assert_eq!(fun.to_string(), name.to_uppercase());
-            }
-        }
-        Ok(())
-    }
-
-    #[test]
-    fn test_find_df_window_function() {
-        assert_eq!(
-            find_df_window_func("first_value"),
-            Some(WindowFunctionDefinition::BuiltInWindowFunction(
-                BuiltInWindowFunction::FirstValue
-            ))
-        );
-        assert_eq!(
-            find_df_window_func("LAST_value"),
-            Some(WindowFunctionDefinition::BuiltInWindowFunction(
-                BuiltInWindowFunction::LastValue
-            ))
-        );
-        assert_eq!(find_df_window_func("not_exist"), None)
-    }
 
     #[test]
     fn test_display_wildcard() {

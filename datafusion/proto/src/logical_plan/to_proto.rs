@@ -312,12 +312,6 @@ pub fn serialize_expr(
             null_treatment: _,
         }) => {
             let (window_function, fun_definition) = match fun {
-                WindowFunctionDefinition::BuiltInWindowFunction(fun) => (
-                    protobuf::window_expr_node::WindowFunction::BuiltInFunction(
-                        protobuf::BuiltInWindowFunction::from(fun).into(),
-                    ),
-                    None,
-                ),
                 WindowFunctionDefinition::AggregateUDF(aggr_udf) => {
                     let mut buf = Vec::new();
                     let _ = codec.try_encode_udaf(aggr_udf, &mut buf);

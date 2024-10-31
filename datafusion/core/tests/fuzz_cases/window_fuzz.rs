@@ -34,8 +34,7 @@ use datafusion_common::{Result, ScalarValue};
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_expr::type_coercion::functions::data_types_with_aggregate_udf;
 use datafusion_expr::{
-    BuiltInWindowFunction, WindowFrame, WindowFrameBound, WindowFrameUnits,
-    WindowFunctionDefinition,
+    WindowFrame, WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition,
 };
 use datafusion_functions_aggregate::count::count_udaf;
 use datafusion_functions_aggregate::min_max::{max_udaf, min_udaf};
@@ -414,36 +413,6 @@ fn get_random_function(
             ),
         );
     }
-    window_fn_map.insert(
-        "first_value",
-        (
-            WindowFunctionDefinition::BuiltInWindowFunction(
-                BuiltInWindowFunction::FirstValue,
-            ),
-            vec![arg.clone()],
-        ),
-    );
-    window_fn_map.insert(
-        "last_value",
-        (
-            WindowFunctionDefinition::BuiltInWindowFunction(
-                BuiltInWindowFunction::LastValue,
-            ),
-            vec![arg.clone()],
-        ),
-    );
-    window_fn_map.insert(
-        "nth_value",
-        (
-            WindowFunctionDefinition::BuiltInWindowFunction(
-                BuiltInWindowFunction::NthValue,
-            ),
-            vec![
-                arg.clone(),
-                lit(ScalarValue::Int64(Some(rng.gen_range(1..10)))),
-            ],
-        ),
-    );
 
     let rand_fn_idx = rng.gen_range(0..window_fn_map.len());
     let fn_name = window_fn_map.keys().collect::<Vec<_>>()[rand_fn_idx];

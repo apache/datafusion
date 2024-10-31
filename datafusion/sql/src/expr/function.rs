@@ -393,12 +393,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         }) {
             Ok(WindowFunctionDefinition::AggregateUDF(udaf.unwrap()))
         } else {
-            expr::find_df_window_func(name)
-                .or_else(|| {
-                    self.context_provider
-                        .get_window_meta(name)
-                        .map(WindowFunctionDefinition::WindowUDF)
-                })
+            self.context_provider
+                .get_window_meta(name)
+                .map(WindowFunctionDefinition::WindowUDF)
                 .ok_or_else(|| {
                     plan_datafusion_err!("There is no window function named {name}")
                 })

@@ -34,6 +34,7 @@ pub mod macros;
 
 pub mod cume_dist;
 pub mod lead_lag;
+pub mod nth_value;
 pub mod ntile;
 pub mod rank;
 pub mod row_number;
@@ -44,6 +45,7 @@ pub mod expr_fn {
     pub use super::cume_dist::cume_dist;
     pub use super::lead_lag::lag;
     pub use super::lead_lag::lead;
+    pub use super::nth_value::{first_value, last_value, nth_value};
     pub use super::ntile::ntile;
     pub use super::rank::{dense_rank, percent_rank, rank};
     pub use super::row_number::row_number;
@@ -60,6 +62,9 @@ pub fn all_default_window_functions() -> Vec<Arc<WindowUDF>> {
         rank::dense_rank_udwf(),
         rank::percent_rank_udwf(),
         ntile::ntile_udwf(),
+        nth_value::first_value_udwf(),
+        nth_value::last_value_udwf(),
+        nth_value::nth_value_udwf(),
     ]
 }
 /// Registers all enabled packages with a [`FunctionRegistry`]

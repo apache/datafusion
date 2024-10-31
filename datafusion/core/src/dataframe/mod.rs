@@ -1946,9 +1946,8 @@ mod tests {
     use datafusion_common_runtime::SpawnedTask;
     use datafusion_expr::expr::WindowFunction;
     use datafusion_expr::{
-        cast, create_udf, lit, BuiltInWindowFunction, ExprFunctionExt,
-        ScalarFunctionImplementation, Volatility, WindowFrame, WindowFrameBound,
-        WindowFrameUnits, WindowFunctionDefinition,
+        cast, create_udf, lit, ExprFunctionExt, ScalarFunctionImplementation, Volatility,
+        WindowFrame, WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition,
     };
     use datafusion_functions_aggregate::expr_fn::{array_agg, count_distinct};
     use datafusion_functions_window::expr_fn::row_number;
@@ -2169,31 +2168,6 @@ mod tests {
 
         assert_same_plan(&expected_plan, &plan);
 
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn select_with_window_exprs() -> Result<()> {
-        // build plan using Table API
-        let t = test_table().await?;
-        let first_row = Expr::WindowFunction(WindowFunction::new(
-            WindowFunctionDefinition::BuiltInWindowFunction(
-                BuiltInWindowFunction::FirstValue,
-            ),
-            vec![col("aggregate_test_100.c1")],
-        ))
-        .partition_by(vec![col("aggregate_test_100.c2")])
-        .build()
-        .unwrap();
-        let t2 = t.select(vec![col("c1"), first_row])?;
-        let plan = t2.plan.clone();
-
-        let sql_plan = create_plan(
-            "select c1, first_value(c1) over (partition by c2) from aggregate_test_100",
-        )
-        .await?;
-
-        assert_same_plan(&plan, &sql_plan);
         Ok(())
     }
 
