@@ -643,7 +643,7 @@ impl EquivalenceProperties {
             .map(|ordering| ordering.inner)
             .multi_cartesian_product()
             .map(LexOrdering::new)
-            .collect::<Vec<LexOrdering>>();
+            .collect::<Vec<_>>();
         Ok(res)
     }
 
@@ -1369,7 +1369,7 @@ fn generate_dependency_orderings(
                         .flat_map(|ordering| ordering.inner.clone())
                         .collect()
                 })
-                .collect::<Vec<LexOrdering>>()
+                .collect::<Vec<_>>()
         })
         .collect()
 }
@@ -3576,7 +3576,7 @@ mod tests {
                         .map(|name| parse_sort_expr(name, schema))
                         .collect::<LexOrdering>()
                 })
-                .collect::<Vec<LexOrdering>>();
+                .collect::<Vec<_>>();
 
             let constants = constants
                 .iter()

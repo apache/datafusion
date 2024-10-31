@@ -27,6 +27,7 @@
 use std::sync::Arc;
 
 use crate::datasource::listing::PartitionedFile;
+
 use arrow::{
     compute::SortColumn,
     row::{Row, Rows},

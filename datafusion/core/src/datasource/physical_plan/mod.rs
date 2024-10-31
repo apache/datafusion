@@ -65,8 +65,8 @@ use crate::{
 use arrow::datatypes::{DataType, SchemaRef};
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::PhysicalSortExpr;
-
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
+
 use futures::StreamExt;
 use log::debug;
 use object_store::{path::Path, GetOptions, GetRange, ObjectMeta, ObjectStore};

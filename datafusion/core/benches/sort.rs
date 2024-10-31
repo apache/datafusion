@@ -266,7 +266,7 @@ fn make_sort_exprs(schema: &Schema) -> LexOrdering {
             expr: col(f.name(), schema).unwrap(),
             options: SortOptions::default(),
         })
-        .collect::<LexOrdering>()
+        .collect()
 }
 
 /// Create streams of int64 (where approximately 1/3 values is repeated)
