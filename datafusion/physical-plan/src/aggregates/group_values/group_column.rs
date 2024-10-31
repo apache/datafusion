@@ -33,6 +33,7 @@ use arrow_array::GenericByteArray;
 use arrow_array::GenericByteViewArray;
 use arrow_buffer::Buffer;
 use datafusion_common::utils::proxy::VecAllocExt;
+use itertools::izip;
 
 use crate::aggregates::group_values::null_builder::MaybeNullBufferBuilder;
 use arrow_array::types::GenericStringType;
@@ -165,12 +166,13 @@ impl<T: ArrowPrimitiveType, const NULLABLE: bool> GroupColumn
     ) {
         let array = array.as_primitive::<T>();
 
-        let iter = lhs_rows
-            .iter()
-            .zip(rhs_rows.iter())
-            .zip(equal_to_results.iter_mut());
+        let iter = izip!(
+            lhs_rows.iter(),
+            rhs_rows.iter(),
+            equal_to_results.iter_mut(),
+        );
 
-        for ((&lhs_row, &rhs_row), equal_to_result) in iter {
+        for (&lhs_row, &rhs_row, equal_to_result) in iter {
             // Has found not equal to, don't need to check
             if !*equal_to_result {
                 continue;
@@ -345,12 +347,13 @@ where
     {
         let array = array.as_bytes::<B>();
 
-        let iter = lhs_rows
-            .iter()
-            .zip(rhs_rows.iter())
-            .zip(equal_to_results.iter_mut());
+        let iter = izip!(
+            lhs_rows.iter(),
+            rhs_rows.iter(),
+            equal_to_results.iter_mut(),
+        );
 
-        for ((&lhs_row, &rhs_row), equal_to_result) in iter {
+        for (&lhs_row, &rhs_row, equal_to_result) in iter {
             // Has found not equal to, don't need to check
             if !*equal_to_result {
                 continue;
@@ -734,12 +737,13 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
     ) {
         let array = array.as_byte_view::<B>();
 
-        let iter = lhs_rows
-            .iter()
-            .zip(rhs_rows.iter())
-            .zip(equal_to_results.iter_mut());
+        let iter = izip!(
+            lhs_rows.iter(),
+            rhs_rows.iter(),
+            equal_to_results.iter_mut(),
+        );
 
-        for ((&lhs_row, &rhs_row), equal_to_result) in iter {
+        for (&lhs_row, &rhs_row, equal_to_result) in iter {
             // Has found not equal to, don't need to check
             if !*equal_to_result {
                 continue;
