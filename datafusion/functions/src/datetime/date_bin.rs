@@ -867,7 +867,7 @@ mod tests {
 
     #[test]
     fn test_date_bin_before_epoch() {
-        let cases = vec![
+        let cases = [
             (
                 (TimeDelta::try_minutes(15), "1969-12-31T23:44:59.999999999"),
                 "1969-12-31T23:30:00",
