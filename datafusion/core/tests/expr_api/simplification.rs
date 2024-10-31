@@ -693,4 +693,3 @@ fn test_simplify_cycles() {
     let expected = lit(true);
     test_simplify_with_cycle_count(expr, expected, 3);
 }
-
