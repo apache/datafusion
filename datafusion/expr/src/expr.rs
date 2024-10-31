@@ -1580,8 +1580,7 @@ impl Expr {
     ///
     /// See [`Volatility`] for more information.
     pub fn is_volatile(&self) -> bool {
-        self.exists(|expr| Ok(expr.is_volatile_node()))
-            .unwrap()
+        self.exists(|expr| Ok(expr.is_volatile_node())).unwrap()
     }
 
     /// Recursively find all [`Expr::Placeholder`] expressions, and
