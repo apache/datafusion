@@ -72,6 +72,11 @@ impl ExplainExec {
         self.verbose
     }
 
+    /// check if current plan is a failed explain plan
+    pub fn is_failed_explain(&self) -> bool {
+        self.stringified_plans.len() == 1 && self.schema.fields().len() == 1
+    }
+
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
     fn compute_properties(schema: SchemaRef) -> PlanProperties {
         let eq_properties = EquivalenceProperties::new(schema);
@@ -132,7 +137,18 @@ impl ExecutionPlan for ExplainExec {
         if 0 != partition {
             return internal_err!("ExplainExec invalid partition {partition}");
         }
-
+        if self.is_failed_explain() {
+            let mut err_builder = StringBuilder::with_capacity(1, 1024);
+            err_builder.append_value(&*self.stringified_plans[0].plan);
+            let record_batch = RecordBatch::try_new(
+                Arc::clone(&self.schema),
+                vec![Arc::new(err_builder.finish())],
+            )?;
+            return Ok(Box::pin(RecordBatchStreamAdapter::new(
+                Arc::clone(&self.schema),
+                futures::stream::iter(vec![Ok(record_batch)]),
+            )));
+        }
         let mut type_builder =
             StringBuilder::with_capacity(self.stringified_plans.len(), 1024);
         let mut plan_builder =

@@ -1792,11 +1792,19 @@ impl DefaultPhysicalPlanner {
                             Err(e) => return Err(e),
                         }
                     }
-                    Err(e) => stringified_plans
-                        .push(StringifiedPlan::new(InitialPhysicalPlan, e.to_string())),
+                    Err(err) => {
+                        return Ok(Some(Arc::new(ExplainExec::new(
+                            SchemaRef::new(Schema::new(vec![arrow_schema::Field::new(
+                                "Err",
+                                arrow_schema::DataType::Utf8,
+                                false,
+                            )])),
+                            vec![StringifiedPlan::new(FinalLogicalPlan, err.to_string())],
+                            e.verbose,
+                        ))))
+                    }
                 }
             }
-
             Ok(Some(Arc::new(ExplainExec::new(
                 SchemaRef::new(e.schema.as_ref().to_owned().into()),
                 stringified_plans,
