@@ -51,7 +51,7 @@ type JoinLeftData = (RecordBatch, MemoryReservation);
 
 /// executes partitions in parallel and combines them into a set of
 /// partitions by combining all values from the left with all values on the right
-#[derive(Debug)]
+#[derive(Debug)] // note not Clone because of the OnceAsync
 pub struct CrossJoinExec {
     /// left (build) side which gets loaded in memory
     pub left: Arc<dyn ExecutionPlan>,

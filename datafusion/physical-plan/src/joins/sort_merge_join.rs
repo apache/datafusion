@@ -69,7 +69,7 @@ use crate::{
 
 /// join execution plan executes partitions in parallel and combines them into a set of
 /// partitions.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct SortMergeJoinExec {
     /// Left sorted joining execution plan
     pub left: Arc<dyn ExecutionPlan>,

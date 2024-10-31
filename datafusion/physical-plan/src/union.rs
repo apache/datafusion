@@ -85,7 +85,7 @@ use tokio::macros::support::thread_rng_n;
 ///                  │Input 1          │  │Input 2           │
 ///                  └─────────────────┘  └──────────────────┘
 /// ```
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct UnionExec {
     /// Input execution plan
     inputs: Vec<Arc<dyn ExecutionPlan>>,
@@ -298,7 +298,7 @@ impl ExecutionPlan for UnionExec {
 /// |         |-----------------+
 /// +---------+
 /// ```
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct InterleaveExec {
     /// Input execution plan
     inputs: Vec<Arc<dyn ExecutionPlan>>,

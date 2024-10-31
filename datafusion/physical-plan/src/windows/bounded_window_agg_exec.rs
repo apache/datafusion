@@ -68,7 +68,7 @@ use indexmap::IndexMap;
 use log::debug;
 
 /// Window execution plan
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct BoundedWindowAggExec {
     /// Input plan
     input: Arc<dyn ExecutionPlan>,

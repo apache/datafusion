@@ -41,6 +41,7 @@ use datafusion_physical_expr::{EquivalenceProperties, LexOrdering};
 use futures::Stream;
 
 /// Execution plan for reading in-memory batches of data
+#[derive(Clone)]
 pub struct MemoryExec {
     /// The partitions to query
     partitions: Vec<Vec<RecordBatch>>,

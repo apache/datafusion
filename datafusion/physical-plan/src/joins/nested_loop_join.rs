@@ -140,7 +140,7 @@ impl JoinLeftData {
 /// "reports" about probe phase completion (which means that "visited" bitmap won't be
 /// updated anymore), and only the last thread, reporting about completion, will return output.
 ///
-#[derive(Debug)]
+#[derive(Debug)] // note not Clone because of the OnceAsync
 pub struct NestedLoopJoinExec {
     /// left side
     pub(crate) left: Arc<dyn ExecutionPlan>,

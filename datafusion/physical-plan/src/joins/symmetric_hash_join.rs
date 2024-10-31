@@ -165,7 +165,7 @@ const HASHMAP_SHRINK_SCALE_FACTOR: usize = 4;
 /// making the smallest value in 'left_sorted' 1231 and any rows below (since ascending)
 /// than that can be dropped from the inner buffer.
 /// ```
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct SymmetricHashJoinExec {
     /// Left side stream
     pub(crate) left: Arc<dyn ExecutionPlan>,

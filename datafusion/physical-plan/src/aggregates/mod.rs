@@ -344,7 +344,7 @@ impl From<StreamType> for SendableRecordBatchStream {
 }
 
 /// Hash aggregate execution plan
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct AggregateExec {
     /// Aggregation mode (full, partial)
     mode: AggregateMode,

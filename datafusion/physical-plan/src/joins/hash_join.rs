@@ -293,7 +293,7 @@ impl JoinLeftData {
 ///                       │  "dimension"  │     │    "fact"     │
 ///                       └───────────────┘     └───────────────┘
 /// ```
-#[derive(Debug)]
+#[derive(Debug)] // note not Clone because of the OnceAsync
 pub struct HashJoinExec {
     /// left (build) side which gets hashed
     pub left: Arc<dyn ExecutionPlan>,
