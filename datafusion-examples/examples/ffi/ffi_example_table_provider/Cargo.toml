@@ -19,6 +19,7 @@
 name = "ffi_example_table_provider"
 version = "0.1.0"
 edition = "2021"
+publish = false
 
 [dependencies]
 abi_stable = "0.11.3"
