@@ -7013,6 +7013,12 @@ select array_resize(arrow_cast([[1], [2], [3]], 'LargeList(List(Int64))'), 10, [
 ----
 [[1], [2], [3], [5], [5], [5], [5], [5], [5], [5]]
 
+# array_resize null value
+query ?
+select array_resize(arrow_cast(NULL, 'List(Int8)'), 1);
+----
+NULL
+
 ## array_reverse
 query ??
 select array_reverse(make_array(1, 2, 3)), array_reverse(make_array(1));

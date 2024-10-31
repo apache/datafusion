@@ -19,7 +19,9 @@
 
 use crate::utils::make_scalar_function;
 use arrow::array::{Capacities, MutableArrayData};
-use arrow_array::{ArrayRef, GenericListArray, Int64Array, OffsetSizeTrait};
+use arrow_array::{
+    new_null_array, Array, ArrayRef, GenericListArray, Int64Array, OffsetSizeTrait,
+};
 use arrow_buffer::{ArrowNativeType, OffsetBuffer};
 use arrow_schema::DataType::{FixedSizeList, LargeList, List};
 use arrow_schema::{DataType, FieldRef};
@@ -132,6 +134,20 @@ fn get_array_resize_doc() -> &'static Documentation {
 pub(crate) fn array_resize_inner(arg: &[ArrayRef]) -> Result<ArrayRef> {
     if arg.len() < 2 || arg.len() > 3 {
         return exec_err!("array_resize needs two or three arguments");
+    }
+
+    if &arg[0].null_count() == &arg[0].len() {
+        let return_type = match &arg[0].data_type() {
+            List(field) => List(Arc::clone(field)),
+            LargeList(field) => LargeList(Arc::clone(field)),
+            _ => {
+                return exec_err!(
+                    "array_resize does not support type '{:?}'.",
+                    &arg[0].data_type()
+                )
+            }
+        };
+        return Ok(new_null_array(&return_type, arg[0].len()));
     }
 
     let new_len = as_int64_array(&arg[1])?;
