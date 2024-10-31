@@ -56,7 +56,7 @@ pub enum JoinType {
     /// in [1] which will be needed if we and ANY subqueries. In our version the mark column will
     /// only be true for had a match and false when no match was found, never null.
     ///
-    /// [1] http://btw2017.informatik.uni-stuttgart.de/slidesandpapers/F1-10-37/paper_web.pdf
+    /// [1]: http://btw2017.informatik.uni-stuttgart.de/slidesandpapers/F1-10-37/paper_web.pdf
     LeftMark,
 }
 
