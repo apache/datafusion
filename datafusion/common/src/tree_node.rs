@@ -1084,16 +1084,20 @@ impl<T: DynTreeNode + ?Sized> TreeNode for Arc<T> {
 
                     stack.push(match node.tnr {
                         TreeNodeRecursion::Continue => {
+                            let non_processed_children: Vec<_> = node
+                                .data
+                                .arc_children()
+                                .into_iter()
+                                .cloned()
+                                .rev()
+                                .collect();
+
                             TransformingState::ProcessingChildren {
-                                non_processed_children: node
-                                    .data
-                                    .arc_children()
-                                    .into_iter()
-                                    .cloned()
-                                    .rev()
-                                    .collect(),
+                                processed_children: Vec::with_capacity(
+                                    non_processed_children.len(),
+                                ),
+                                non_processed_children,
                                 item: node,
-                                processed_children: vec![],
                             }
                         }
                         TreeNodeRecursion::Jump => {
@@ -1163,7 +1167,7 @@ impl<T: DynTreeNode + ?Sized> TreeNode for Arc<T> {
                             processed_children,
                         })
                     } else {
-                        debug_assert_eq!(stack.len(), 0);
+                        debug_assert!(stack.is_empty());
                         return Ok(node);
                     }
                 }
@@ -1179,53 +1183,47 @@ impl<T: DynTreeNode + ?Sized> TreeNode for Arc<T> {
     ) -> Result<TreeNodeRecursion> {
         let mut stack = vec![VisitingState::NotStarted(self)];
 
-        while let Some(item) = stack.pop() {
-            match item {
+        while let Some(node) = stack.last_mut() {
+            match node {
                 VisitingState::NotStarted(item) => {
                     let tnr = visitor.f_down(item)?;
-                    stack.push(match tnr {
-                        TreeNodeRecursion::Continue => VisitingState::VisitingChildren {
-                            non_processed_children: item
-                                .arc_children()
-                                .into_iter()
-                                .rev()
-                                .collect(),
-                            item,
-                            tnr,
-                        },
+                    *node = match tnr {
+                        TreeNodeRecursion::Continue => {
+                            let mut non_processed_children = item.arc_children();
+                            non_processed_children.reverse();
+
+                            VisitingState::VisitingChildren {
+                                non_processed_children,
+                                item,
+                                tnr,
+                            }
+                        }
                         TreeNodeRecursion::Jump => VisitingState::VisitedAllChildren {
                             item,
                             tnr: TreeNodeRecursion::Continue,
                         },
                         TreeNodeRecursion::Stop => return Ok(tnr),
-                    });
+                    };
                 }
                 VisitingState::VisitingChildren {
                     item,
-                    mut non_processed_children,
+                    ref mut non_processed_children,
                     tnr,
                 } => match tnr {
                     TreeNodeRecursion::Continue | TreeNodeRecursion::Jump => {
                         if let Some(non_processed_item) = non_processed_children.pop() {
-                            stack.extend([
-                                // Returning the node on the stack because there are more children to process
-                                VisitingState::VisitingChildren {
-                                    item,
-                                    non_processed_children,
-                                    tnr,
-                                },
-                                VisitingState::NotStarted(non_processed_item),
-                            ]);
+                            stack.push(VisitingState::NotStarted(non_processed_item));
                         } else {
-                            stack.push(VisitingState::VisitedAllChildren { item, tnr });
+                            *node = VisitingState::VisitedAllChildren { item, tnr: *tnr }
                         }
                     }
                     TreeNodeRecursion::Stop => {
-                        return Ok(tnr);
+                        return Ok(*tnr);
                     }
                 },
                 VisitingState::VisitedAllChildren { item, tnr } => {
                     let tnr = tnr.visit_parent(|| visitor.f_up(item))?;
+                    stack.pop();
 
                     if let Some(VisitingState::VisitingChildren {
                                     item,
@@ -1239,7 +1237,7 @@ impl<T: DynTreeNode + ?Sized> TreeNode for Arc<T> {
                             tnr,
                         });
                     } else {
-                        debug_assert_eq!(stack.len(), 0);
+                        debug_assert!(stack.is_empty());
                         return Ok(tnr);
                     }
                 }
