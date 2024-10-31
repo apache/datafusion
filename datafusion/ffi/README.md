@@ -51,7 +51,7 @@ be all inclusive.
    code base. With `datafusion-ffi` these packages do not need `datafusion-python`
    as a dependency at all.
 2. Users may want to create a modular interface that allows runtime loading of
-   libraries. For example, you may wish to design a program that only uses the 
+   libraries. For example, you may wish to design a program that only uses the
    built in table sources, but also allows for extension from the community led
    [datafusion-contrib] repositories. You could enable module loading so that
    users could at runtime load a library to access additional data sources.
@@ -96,8 +96,8 @@ the example in `FFI_TableProvider`.
 
 [datafusion]: https://datafusion.apache.org
 [api docs]: http://docs.rs/datafusion-ffi/latest
-[Rust ABI]: https://doc.rust-lang.org/reference/abi.html
-[FFI]: https://doc.rust-lang.org/nomicon/ffi.html
+[rust abi]: https://doc.rust-lang.org/reference/abi.html
+[ffi]: https://doc.rust-lang.org/nomicon/ffi.html
 [abi_stable]: https://crates.io/crates/abi_stable
 [async-ffi]: https://crates.io/crates/async-ffi
 [bindgen]: https://crates.io/crates/bindgen
