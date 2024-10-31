@@ -54,10 +54,10 @@ use datafusion_physical_expr::{
 };
 use datafusion_physical_plan::windows::{get_best_fitting_window, BoundedWindowAggExec};
 use datafusion_physical_plan::ExecutionPlanProperties;
-
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_optimizer::output_requirements::OutputRequirementExec;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
+
 use itertools::izip;
 
 /// The `EnforceDistribution` rule ensures that distribution requirements are

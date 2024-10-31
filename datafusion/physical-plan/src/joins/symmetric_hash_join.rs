@@ -1629,8 +1629,8 @@ mod tests {
     use datafusion_execution::config::SessionConfig;
     use datafusion_expr::Operator;
     use datafusion_physical_expr::expressions::{binary, col, lit, Column};
-
     use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
+    
     use once_cell::sync::Lazy;
     use rstest::*;
 
