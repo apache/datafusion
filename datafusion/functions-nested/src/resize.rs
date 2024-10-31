@@ -136,6 +136,7 @@ pub(crate) fn array_resize_inner(arg: &[ArrayRef]) -> Result<ArrayRef> {
         return exec_err!("array_resize needs two or three arguments");
     }
 
+    // Checks if entire array is null
     if &arg[0].null_count() == &arg[0].len() {
         let return_type = match &arg[0].data_type() {
             List(field) => List(Arc::clone(field)),
