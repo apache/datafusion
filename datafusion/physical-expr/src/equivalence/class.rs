@@ -21,8 +21,8 @@ use std::sync::Arc;
 use super::{add_offset_to_expr, collapse_lex_req, ProjectionMapping};
 use crate::{
     expressions::Column, physical_expr::deduplicate_physical_exprs,
-    physical_exprs_bag_equal, physical_exprs_contains, LexOrdering, LexOrderingRef,
-    LexRequirement, LexRequirementRef, PhysicalExpr, PhysicalExprRef, PhysicalSortExpr,
+    physical_exprs_bag_equal, physical_exprs_contains, LexOrdering, LexRequirement,
+    LexRequirementRef, PhysicalExpr, PhysicalExprRef, PhysicalSortExpr,
     PhysicalSortRequirement,
 };
 
@@ -475,13 +475,13 @@ impl EquivalenceGroup {
     /// This function applies the `normalize_sort_expr` function for all sort
     /// expressions in `sort_exprs` and returns the corresponding normalized
     /// sort expressions.
-    pub fn normalize_sort_exprs(&self, sort_exprs: LexOrderingRef) -> LexOrdering {
+    pub fn normalize_sort_exprs(&self, sort_exprs: &LexOrdering) -> LexOrdering {
         // Convert sort expressions to sort requirements:
-        let sort_reqs = PhysicalSortRequirement::from_sort_exprs(sort_exprs.iter());
+        let sort_reqs = LexRequirement::from_lex_ordering(sort_exprs.clone());
         // Normalize the requirements:
         let normalized_sort_reqs = self.normalize_sort_requirements(&sort_reqs);
         // Convert sort requirements back to sort expressions:
-        PhysicalSortRequirement::to_sort_exprs(normalized_sort_reqs.inner)
+        LexOrdering::from_lex_requirement(normalized_sort_reqs)
     }
 
     /// This function applies the `normalize_sort_requirement` function for all

@@ -35,8 +35,6 @@ use datafusion_common::tree_node::{
 use datafusion_common::Result;
 use datafusion_expr::Operator;
 
-use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexOrderingRef};
-use itertools::Itertools;
 use petgraph::graph::NodeIndex;
 use petgraph::stable_graph::StableGraph;
 
@@ -243,15 +241,6 @@ pub fn reassign_predicate_columns(
         Ok(Transformed::no(expr))
     })
     .data()
-}
-
-/// Merge left and right sort expressions, checking for duplicates.
-pub fn merge_vectors(left: LexOrderingRef, right: LexOrderingRef) -> LexOrdering {
-    left.iter()
-        .cloned()
-        .chain(right.iter().cloned())
-        .unique()
-        .collect()
 }
 
 #[cfg(test)]

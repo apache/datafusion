@@ -940,7 +940,7 @@ fn get_aggregate_expr_req(
         return LexOrdering::default();
     }
 
-    let mut req = LexOrdering::from_ref(aggr_expr.order_bys().unwrap_or_default());
+    let mut req = aggr_expr.order_bys().cloned().unwrap_or_default();
 
     // In non-first stage modes, we accumulate data (using `merge_batch`) from
     // different partitions (i.e. merge partial results). During this merge, we
@@ -983,7 +983,7 @@ fn finer_ordering(
     agg_mode: &AggregateMode,
 ) -> Option<LexOrdering> {
     let aggr_req = get_aggregate_expr_req(aggr_expr, group_by, agg_mode);
-    eq_properties.get_finer_ordering(existing_req.as_ref(), aggr_req.as_ref())
+    eq_properties.get_finer_ordering(existing_req, &aggr_req)
 }
 
 /// Concatenates the given slices.
@@ -1019,7 +1019,7 @@ pub fn get_finer_aggregate_exprs_requirement(
         if let Some(finer_ordering) =
             finer_ordering(&requirement, aggr_expr, group_by, eq_properties, agg_mode)
         {
-            if eq_properties.ordering_satisfy(finer_ordering.as_ref()) {
+            if eq_properties.ordering_satisfy(&finer_ordering) {
                 // Requirement is satisfied by existing ordering
                 requirement = finer_ordering;
                 continue;
@@ -1033,7 +1033,7 @@ pub fn get_finer_aggregate_exprs_requirement(
                 eq_properties,
                 agg_mode,
             ) {
-                if eq_properties.ordering_satisfy(finer_ordering.as_ref()) {
+                if eq_properties.ordering_satisfy(&finer_ordering) {
                     // Reverse requirement is satisfied by exiting ordering.
                     // Hence reverse the aggregator
                     requirement = finer_ordering;
@@ -1074,9 +1074,7 @@ pub fn get_finer_aggregate_exprs_requirement(
         );
     }
 
-    Ok(PhysicalSortRequirement::from_sort_exprs(
-        requirement.inner.iter(),
-    ))
+    Ok(LexRequirement::from(requirement))
 }
 
 /// Returns physical expressions for arguments to evaluate against a batch.
@@ -2304,7 +2302,7 @@ mod tests {
             &eq_properties,
             &AggregateMode::Partial,
         )?;
-        let res = PhysicalSortRequirement::to_sort_exprs(res);
+        let res = LexOrdering::from(res);
         assert_eq!(res, common_requirement);
         Ok(())
     }

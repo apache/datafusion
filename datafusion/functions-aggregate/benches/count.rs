@@ -23,16 +23,17 @@ use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use datafusion_expr::{function::AccumulatorArgs, AggregateUDFImpl, GroupsAccumulator};
 use datafusion_functions_aggregate::count::Count;
 use datafusion_physical_expr::expressions::col;
-use datafusion_physical_expr_common::sort_expr::LexOrderingRef;
+use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use std::sync::Arc;
 
 fn prepare_accumulator() -> Box<dyn GroupsAccumulator> {
     let schema = Arc::new(Schema::new(vec![Field::new("f", DataType::Int32, true)]));
+    let empty_ordering = LexOrdering::default();
     let accumulator_args = AccumulatorArgs {
         return_type: &DataType::Int64,
         schema: &schema,
         ignore_nulls: false,
-        ordering_req: LexOrderingRef::default(),
+        ordering_req: &empty_ordering,
         is_reversed: false,
         name: "COUNT(f)",
         is_distinct: false,

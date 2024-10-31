@@ -320,6 +320,41 @@ ORDER BY
 2023-12-20T01:30:00 1000 f1 32.0
 2023-12-20T01:30:00 1000 f2 foo
 
+# Window Functions
+query TTTT
+SELECT "tag_id", "type",
+  lead("type") OVER (PARTITION BY "tag_id" ORDER BY "time") as "next_type",
+  lag("type") OVER (PARTITION BY "tag_id" ORDER BY "time") as "last_type"
+FROM m2;
+----
+1000 active active NULL
+1000 active active active
+1000 active active active
+1000 active active active
+1000 active active active
+1000 active passive active
+1000 passive passive active
+1000 passive passive passive
+1000 passive passive passive
+1000 passive NULL passive
+
+query TTTT
+SELECT "tag_id", "type",
+  lead("type") OVER (PARTITION BY "tag_id" ORDER BY "time"  RANGE BETWEEN 2 PRECEDING AND CURRENT ROW) as "next_type",
+  lag("type") OVER (PARTITION BY "tag_id" ORDER BY "time") as "last_type"
+FROM m2;
+----
+1000 active active NULL
+1000 active active active
+1000 active active active
+1000 active active active
+1000 active active active
+1000 active passive active
+1000 passive passive active
+1000 passive passive passive
+1000 passive passive passive
+1000 passive NULL passive
+
 # Cleanup
 statement ok
 drop view m1;
@@ -378,7 +413,6 @@ FROM m3
 GROUP BY column3;
 ----
 1 2
-
 
 # Cleanup
 statement ok
@@ -444,3 +478,14 @@ physical_plan
 01)CoalesceBatchesExec: target_batch_size=8192
 02)--FilterExec: column2@1 = 1
 03)----MemoryExec: partitions=1, partition_sizes=[1]
+
+## Test that filtering on dictionary columns coerces the filter value to the dictionary type
+statement error DataFusion error: SQL error: ParserError\("Expected: an SQL statement, found: \#"\)
+create table test as values
+  ('row1', arrow_cast('1', 'Dictionary(Int32, Utf8)')),
+  ('row2', arrow_cast('2', 'Dictionary(Int32, Utf8)')),
+  ('row3', arrow_cast('3', 'Dictionary(Int32, Utf8)'))
+;
+# Cleanup
+statement ok
+drop table test;

@@ -20,7 +20,7 @@ use std::fmt::Debug;
 use std::ops::Range;
 use std::sync::Arc;
 
-use crate::{LexOrderingRef, PhysicalExpr};
+use crate::PhysicalExpr;
 
 use arrow::array::{new_empty_array, Array, ArrayRef};
 use arrow::compute::kernels::sort::SortColumn;
@@ -34,6 +34,7 @@ use datafusion_expr::window_state::{
 };
 use datafusion_expr::{Accumulator, PartitionEvaluator, WindowFrame, WindowFrameBound};
 
+use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use indexmap::IndexMap;
 
 /// Common trait for [window function] implementations
@@ -109,7 +110,7 @@ pub trait WindowExpr: Send + Sync + Debug {
     fn partition_by(&self) -> &[Arc<dyn PhysicalExpr>];
 
     /// Expressions that's from the window function's order by clause, empty if absent
-    fn order_by(&self) -> LexOrderingRef;
+    fn order_by(&self) -> &LexOrdering;
 
     /// Get order by columns, empty if absent
     fn order_by_columns(&self, batch: &RecordBatch) -> Result<Vec<SortColumn>> {
@@ -344,7 +345,7 @@ pub(crate) fn is_end_bound_safe(
     window_frame_ctx: &WindowFrameContext,
     order_bys: &[ArrayRef],
     most_recent_order_bys: Option<&[ArrayRef]>,
-    sort_exprs: LexOrderingRef,
+    sort_exprs: &LexOrdering,
     idx: usize,
 ) -> Result<bool> {
     if sort_exprs.is_empty() {

@@ -52,9 +52,7 @@ use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::LexOrdering;
-use datafusion_physical_expr_common::sort_expr::{
-    LexOrderingRef, PhysicalSortRequirement,
-};
+use datafusion_physical_expr_common::sort_expr::{LexRequirement};
 
 use crate::execution_plan::CardinalityEffect;
 use futures::{StreamExt, TryStreamExt};
@@ -344,10 +342,12 @@ impl ExternalSorter {
                 streams.push(stream);
             }
 
+            let expressions: LexOrdering = self.expr.iter().cloned().collect();
+
             StreamingMergeBuilder::new()
                 .with_streams(streams)
                 .with_schema(Arc::clone(&self.schema))
-                .with_expressions(self.expr.to_vec().as_slice())
+                .with_expressions(&expressions)
                 .with_metrics(self.metrics.baseline.clone())
                 .with_batch_size(self.batch_size)
                 .with_fetch(self.fetch)
@@ -536,10 +536,12 @@ impl ExternalSorter {
             })
             .collect::<Result<_>>()?;
 
+        let expressions: LexOrdering = self.expr.iter().cloned().collect();
+
         StreamingMergeBuilder::new()
             .with_streams(streams)
             .with_schema(Arc::clone(&self.schema))
-            .with_expressions(self.expr.as_ref())
+            .with_expressions(&expressions)
             .with_metrics(metrics)
             .with_batch_size(self.batch_size)
             .with_fetch(self.fetch)
@@ -561,7 +563,7 @@ impl ExternalSorter {
         let schema = batch.schema();
 
         let fetch = self.fetch;
-        let expressions = Arc::clone(&self.expr);
+        let expressions: LexOrdering = self.expr.iter().cloned().collect();
         let stream = futures::stream::once(futures::future::lazy(move |_| {
             let timer = metrics.elapsed_compute().timer();
             let sorted = sort_batch(&batch, &expressions, fetch)?;
@@ -603,7 +605,7 @@ impl Debug for ExternalSorter {
 
 pub fn sort_batch(
     batch: &RecordBatch,
-    expressions: LexOrderingRef,
+    expressions: &LexOrdering,
     fetch: Option<usize>,
 ) -> Result<RecordBatch> {
     let sort_columns = expressions
@@ -762,8 +764,8 @@ impl SortExec {
     }
 
     /// Sort expressions
-    pub fn expr(&self) -> LexOrderingRef {
-        self.expr.as_ref()
+    pub fn expr(&self) -> &LexOrdering {
+        &self.expr
     }
 
     /// If `Some(fetch)`, limits output to only the first "fetch" items
@@ -790,10 +792,9 @@ impl SortExec {
         preserve_partitioning: bool,
     ) -> PlanProperties {
         // Determine execution mode:
+        let requirement = LexRequirement::from(sort_exprs);
         let sort_satisfied = input.equivalence_properties().ordering_satisfy_requirement(
-            PhysicalSortRequirement::from_sort_exprs(sort_exprs.iter())
-                .inner
-                .as_slice(),
+            &requirement,
         );
         let mode = match input.execution_mode() {
             ExecutionMode::Unbounded if sort_satisfied => ExecutionMode::Unbounded,
@@ -803,6 +804,7 @@ impl SortExec {
 
         // Calculate equivalence properties; i.e. reset the ordering equivalence
         // class with the new ordering:
+        let sort_exprs = LexOrdering::from(requirement);
         let eq_properties = input
             .equivalence_properties()
             .clone()
@@ -891,9 +893,7 @@ impl ExecutionPlan for SortExec {
             .input
             .equivalence_properties()
             .ordering_satisfy_requirement(
-                PhysicalSortRequirement::from_sort_exprs(self.expr.iter())
-                    .inner
-                    .as_slice(),
+                &LexRequirement::from(self.expr.clone())
             );
 
         match (sort_satisfied, self.fetch.as_ref()) {
@@ -1551,7 +1551,7 @@ mod tests {
             options: SortOptions::default(),
         }]);
 
-        let result = sort_batch(&batch, expressions.as_ref(), None).unwrap();
+        let result = sort_batch(&batch, &expressions, None).unwrap();
         assert_eq!(result.num_rows(), 1);
     }
 
