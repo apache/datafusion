@@ -84,6 +84,7 @@ enum JoinType {
   LEFTANTI = 5;
   RIGHTSEMI = 6;
   RIGHTANTI = 7;
+  LEFTMARK = 8;
 }
 
 enum JoinConstraint {
@@ -541,9 +542,10 @@ message ParquetOptions {
   string created_by = 16;
 }
 
-enum JoinSide{
+enum JoinSide {
   LEFT_SIDE = 0;
   RIGHT_SIDE = 1;
+  NONE = 2;
 }
 
 message Precision{
