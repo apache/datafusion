@@ -208,10 +208,12 @@ physical_plan
 06)----------CoalesceBatchesExec: target_batch_size=2
 07)------------RepartitionExec: partitioning=Hash([t2_id@0], 4), input_partitions=4
 08)--------------AggregateExec: mode=Partial, gby=[t2_id@0 as t2_id], aggr=[sum(t2.t2_int)]
-09)----------------MemoryExec: partitions=4, partition_sizes=[1, 0, 0, 0]
-10)------CoalesceBatchesExec: target_batch_size=2
-11)--------RepartitionExec: partitioning=Hash([t1_id@0], 4), input_partitions=4
-12)----------MemoryExec: partitions=4, partition_sizes=[1, 0, 0, 0]
+09)----------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+10)------------------MemoryExec: partitions=1, partition_sizes=[1]
+11)------CoalesceBatchesExec: target_batch_size=2
+12)--------RepartitionExec: partitioning=Hash([t1_id@0], 4), input_partitions=4
+13)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+14)------------MemoryExec: partitions=1, partition_sizes=[1]
 
 query II rowsort
 SELECT t1_id, (SELECT sum(t2_int) FROM t2 WHERE t2.t2_id = t1.t1_id) as t2_sum from t1
@@ -242,10 +244,12 @@ physical_plan
 06)----------CoalesceBatchesExec: target_batch_size=2
 07)------------RepartitionExec: partitioning=Hash([t2_id@0], 4), input_partitions=4
 08)--------------AggregateExec: mode=Partial, gby=[t2_id@0 as t2_id], aggr=[sum(t2.t2_int * Float64(1))]
-09)----------------MemoryExec: partitions=4, partition_sizes=[1, 0, 0, 0]
-10)------CoalesceBatchesExec: target_batch_size=2
-11)--------RepartitionExec: partitioning=Hash([t1_id@0], 4), input_partitions=4
-12)----------MemoryExec: partitions=4, partition_sizes=[1, 0, 0, 0]
+09)----------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+10)------------------MemoryExec: partitions=1, partition_sizes=[1]
+11)------CoalesceBatchesExec: target_batch_size=2
+12)--------RepartitionExec: partitioning=Hash([t1_id@0], 4), input_partitions=4
+13)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+14)------------MemoryExec: partitions=1, partition_sizes=[1]
 
 query IR rowsort
 SELECT t1_id, (SELECT sum(t2_int * 1.0) + 1 FROM t2 WHERE t2.t2_id = t1.t1_id) as t2_sum from t1
@@ -276,10 +280,12 @@ physical_plan
 06)----------CoalesceBatchesExec: target_batch_size=2
 07)------------RepartitionExec: partitioning=Hash([t2_id@0], 4), input_partitions=4
 08)--------------AggregateExec: mode=Partial, gby=[t2_id@0 as t2_id], aggr=[sum(t2.t2_int)]
-09)----------------MemoryExec: partitions=4, partition_sizes=[1, 0, 0, 0]
-10)------CoalesceBatchesExec: target_batch_size=2
-11)--------RepartitionExec: partitioning=Hash([t1_id@0], 4), input_partitions=4
-12)----------MemoryExec: partitions=4, partition_sizes=[1, 0, 0, 0]
+09)----------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+10)------------------MemoryExec: partitions=1, partition_sizes=[1]
+11)------CoalesceBatchesExec: target_batch_size=2
+12)--------RepartitionExec: partitioning=Hash([t1_id@0], 4), input_partitions=4
+13)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+14)------------MemoryExec: partitions=1, partition_sizes=[1]
 
 query II rowsort
 SELECT t1_id, (SELECT sum(t2_int) FROM t2 WHERE t2.t2_id = t1.t1_id group by t2_id, 'a') as t2_sum from t1
@@ -313,10 +319,12 @@ physical_plan
 08)--------------CoalesceBatchesExec: target_batch_size=2
 09)----------------RepartitionExec: partitioning=Hash([t2_id@0], 4), input_partitions=4
 10)------------------AggregateExec: mode=Partial, gby=[t2_id@0 as t2_id], aggr=[sum(t2.t2_int)]
-11)--------------------MemoryExec: partitions=4, partition_sizes=[1, 0, 0, 0]
-12)------CoalesceBatchesExec: target_batch_size=2
-13)--------RepartitionExec: partitioning=Hash([t1_id@0], 4), input_partitions=4
-14)----------MemoryExec: partitions=4, partition_sizes=[1, 0, 0, 0]
+11)--------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+12)----------------------MemoryExec: partitions=1, partition_sizes=[1]
+13)------CoalesceBatchesExec: target_batch_size=2
+14)--------RepartitionExec: partitioning=Hash([t1_id@0], 4), input_partitions=4
+15)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+16)------------MemoryExec: partitions=1, partition_sizes=[1]
 
 query II rowsort
 SELECT t1_id, (SELECT sum(t2_int) FROM t2 WHERE t2.t2_id = t1.t1_id having sum(t2_int) < 3) as t2_sum from t1
@@ -391,7 +399,7 @@ logical_plan
 01)Filter: EXISTS (<subquery>)
 02)--Subquery:
 03)----Projection: t1.t1_int
-04)------Filter: t1.t1_id > t1.t1_int
+04)------Filter: t1.t1_int < t1.t1_id
 05)--------TableScan: t1
 06)--TableScan: t1 projection=[t1_id, t1_name, t1_int]
 
@@ -415,13 +423,13 @@ query TT
 explain SELECT t1_id, t1_name, t1_int FROM t1 WHERE t1_id IN(SELECT t2_id FROM t2 WHERE EXISTS(select * from t1 WHERE t1.t1_int > t2.t2_int))
 ----
 logical_plan
-01)LeftSemi Join: t1.t1_id = __correlated_sq_1.t2_id
+01)LeftSemi Join: t1.t1_id = __correlated_sq_2.t2_id
 02)--TableScan: t1 projection=[t1_id, t1_name, t1_int]
-03)--SubqueryAlias: __correlated_sq_1
+03)--SubqueryAlias: __correlated_sq_2
 04)----Projection: t2.t2_id
-05)------LeftSemi Join:  Filter: __correlated_sq_2.t1_int > t2.t2_int
+05)------LeftSemi Join:  Filter: __correlated_sq_1.t1_int > t2.t2_int
 06)--------TableScan: t2 projection=[t2_id, t2_int]
-07)--------SubqueryAlias: __correlated_sq_2
+07)--------SubqueryAlias: __correlated_sq_1
 08)----------TableScan: t1 projection=[t1_int]
 
 #invalid_scalar_subquery
@@ -430,7 +438,7 @@ SELECT t1_id, t1_name, t1_int, (select t2_id, t2_name FROM t2 WHERE t2.t2_id = t
 
 #subquery_not_allowed
 #In/Exist Subquery is not allowed in ORDER BY clause.
-statement error DataFusion error: check_analyzed_plan\ncaused by\nError during planning: In/Exist subquery can only be used in Projection, Filter, Window functions, Aggregate and Join plan nodes
+statement error DataFusion error: check_analyzed_plan\ncaused by\nError during planning: In/Exist subquery can only be used in Projection, Filter, Window functions, Aggregate and Join plan nodes, but was used in \[Sort: t1.t1_int IN \(<subquery>\) ASC NULLS LAST\]
 SELECT t1_id, t1_name, t1_int FROM t1 order by t1_int in (SELECT t2_int FROM t2 WHERE t1.t1_id > t1.t1_int)
 
 #non_aggregated_correlated_scalar_subquery
@@ -462,8 +470,8 @@ explain SELECT t1_id, (SELECT t2_int FROM t2 WHERE t2.t2_int = t1.t1_int limit 1
 logical_plan
 01)Projection: t1.t1_id, (<subquery>) AS t2_int
 02)--Subquery:
-03)----Limit: skip=0, fetch=1
-04)------Projection: t2.t2_int
+03)----Projection: t2.t2_int
+04)------Limit: skip=0, fetch=1
 05)--------Filter: t2.t2_int = outer_ref(t1.t1_int)
 06)----------TableScan: t2
 07)--TableScan: t1 projection=[t1_id, t1_int]
@@ -475,8 +483,8 @@ logical_plan
 01)Projection: t1.t1_id
 02)--Filter: t1.t1_int = (<subquery>)
 03)----Subquery:
-04)------Limit: skip=0, fetch=1
-05)--------Projection: t2.t2_int
+04)------Projection: t2.t2_int
+05)--------Limit: skip=0, fetch=1
 06)----------Filter: t2.t2_int = outer_ref(t1.t1_int)
 07)------------TableScan: t2
 08)----TableScan: t1 projection=[t1_id, t1_int]
@@ -501,8 +509,18 @@ SELECT t1_id, (SELECT a FROM (select 1 as a) WHERE a = t1.t1_int) as t2_int from
 44 NULL
 
 #non_equal_correlated_scalar_subquery
-statement error DataFusion error: check_analyzed_plan\ncaused by\nError during planning: Correlated column is not allowed in predicate: t2\.t2_id < outer_ref\(t1\.t1_id\)
-SELECT t1_id, (SELECT sum(t2_int) FROM t2 WHERE t2.t2_id < t1.t1_id) as t2_sum from t1
+# Currently not supported and should not be decorrelated
+query TT
+explain SELECT t1_id, (SELECT sum(t2_int) FROM t2 WHERE t2.t2_id < t1.t1_id) as t2_sum from t1
+----
+logical_plan
+01)Projection: t1.t1_id, (<subquery>) AS t2_sum
+02)--Subquery:
+03)----Projection: sum(t2.t2_int)
+04)------Aggregate: groupBy=[[]], aggr=[[sum(CAST(t2.t2_int AS Int64))]]
+05)--------Filter: t2.t2_id < outer_ref(t1.t1_id)
+06)----------TableScan: t2
+07)--TableScan: t1 projection=[t1_id]
 
 #aggregated_correlated_scalar_subquery_with_extra_group_by_columns
 statement error DataFusion error: check_analyzed_plan\ncaused by\nError during planning: A GROUP BY clause in a scalar correlated subquery cannot contain non-correlated columns
@@ -542,13 +560,13 @@ query TT
 explain SELECT t0_id, t0_name FROM t0 WHERE EXISTS (SELECT 1 FROM t1 INNER JOIN t2 ON(t1.t1_id = t2.t2_id and t1.t1_name = t0.t0_name))
 ----
 logical_plan
-01)Filter: EXISTS (<subquery>)
-02)--Subquery:
-03)----Projection: Int64(1)
-04)------Inner Join:  Filter: t1.t1_id = t2.t2_id AND t1.t1_name = outer_ref(t0.t0_name)
-05)--------TableScan: t1
-06)--------TableScan: t2
-07)--TableScan: t0 projection=[t0_id, t0_name]
+01)LeftSemi Join: t0.t0_name = __correlated_sq_2.t1_name
+02)--TableScan: t0 projection=[t0_id, t0_name]
+03)--SubqueryAlias: __correlated_sq_2
+04)----Projection: t1.t1_name
+05)------Inner Join: t1.t1_id = t2.t2_id
+06)--------TableScan: t1 projection=[t1_id, t1_name]
+07)--------TableScan: t2 projection=[t2_id]
 
 #subquery_contains_join_contains_correlated_columns
 query TT
@@ -656,8 +674,8 @@ explain SELECT t1_id, t1_name FROM t1 WHERE t1_id in (SELECT t2_id FROM t2 where
 logical_plan
 01)Filter: t1.t1_id IN (<subquery>)
 02)--Subquery:
-03)----Limit: skip=0, fetch=10
-04)------Projection: t2.t2_id
+03)----Projection: t2.t2_id
+04)------Limit: skip=0, fetch=10
 05)--------Filter: outer_ref(t1.t1_name) = t2.t2_name
 06)----------TableScan: t2
 07)--TableScan: t1 projection=[t1_id, t1_name]
@@ -1028,6 +1046,168 @@ false
 true
 true
 
+# in_subquery_to_join_with_correlated_outer_filter_disjunction
+query TT
+explain select t1.t1_id,
+       t1.t1_name,
+       t1.t1_int
+from t1
+where t1.t1_id > 40 or t1.t1_id in (select t2.t2_id from t2 where t1.t1_int > 0)
+----
+logical_plan
+01)Projection: t1.t1_id, t1.t1_name, t1.t1_int
+02)--Filter: t1.t1_id > Int32(40) OR __correlated_sq_1.__exists IS NOT NULL
+03)----Projection: t1.t1_id, t1.t1_name, t1.t1_int, __correlated_sq_1.__exists
+04)------Left Join: t1.t1_id = __correlated_sq_1.t2_id Filter: t1.t1_int > Int32(0)
+05)--------TableScan: t1 projection=[t1_id, t1_name, t1_int]
+06)--------SubqueryAlias: __correlated_sq_1
+07)----------Projection: t2.t2_id, Boolean(true) AS __exists
+08)------------TableScan: t2 projection=[t2_id]
+
+query ITI rowsort
+select t1.t1_id,
+       t1.t1_name,
+       t1.t1_int
+from t1
+where t1.t1_id > 40 or t1.t1_id in (select t2.t2_id from t2 where t1.t1_int > 0)
+----
+11 a 1
+22 b 2
+44 d 4
+
+# not_in_subquery_to_join_with_correlated_outer_filter_disjunction
+query TT
+explain select t1.t1_id,
+       t1.t1_name,
+       t1.t1_int
+from t1
+where t1.t1_id = 11 or t1.t1_id + 12 not in (select t2.t2_id + 1 from t2 where t1.t1_int > 0)
+----
+logical_plan
+01)Projection: t1.t1_id, t1.t1_name, t1.t1_int
+02)--Filter: t1.t1_id = Int32(11) OR __correlated_sq_1.__exists IS NULL
+03)----Projection: t1.t1_id, t1.t1_name, t1.t1_int, __correlated_sq_1.__exists
+04)------Left Join: CAST(t1.t1_id AS Int64) + Int64(12) = __correlated_sq_1.t2.t2_id + Int64(1) Filter: t1.t1_int > Int32(0)
+05)--------TableScan: t1 projection=[t1_id, t1_name, t1_int]
+06)--------SubqueryAlias: __correlated_sq_1
+07)----------Projection: CAST(t2.t2_id AS Int64) + Int64(1), Boolean(true) AS __exists
+08)------------TableScan: t2 projection=[t2_id]
+
+query ITI rowsort
+select t1.t1_id,
+       t1.t1_name,
+       t1.t1_int
+from t1
+where t1.t1_id = 11 or t1.t1_id + 12 not in (select t2.t2_id + 1 from t2 where t1.t1_int > 0)
+----
+11 a 1
+22 b 2
+
+# exists_subquery_to_join_with_correlated_outer_filter_disjunction
+query TT
+explain select t1.t1_id,
+       t1.t1_name,
+       t1.t1_int
+from t1
+where t1.t1_id > 40 or exists (select * from t2 where t1.t1_id = t2.t2_id)
+----
+logical_plan
+01)Projection: t1.t1_id, t1.t1_name, t1.t1_int
+02)--Filter: t1.t1_id > Int32(40) OR __correlated_sq_1.__exists IS NOT NULL
+03)----Projection: t1.t1_id, t1.t1_name, t1.t1_int, __correlated_sq_1.__exists
+04)------Left Join: t1.t1_id = __correlated_sq_1.t2_id
+05)--------TableScan: t1 projection=[t1_id, t1_name, t1_int]
+06)--------SubqueryAlias: __correlated_sq_1
+07)----------Projection: t2.t2_id, Boolean(true) AS __exists
+08)------------TableScan: t2 projection=[t2_id]
+
+query ITI rowsort
+select t1.t1_id,
+       t1.t1_name,
+       t1.t1_int
+from t1
+where t1.t1_id > 40 or exists (select * from t2 where t1.t1_id = t2.t2_id)
+----
+11 a 1
+22 b 2
+44 d 4
+
+# not_exists_subquery_to_join_with_correlated_outer_filter_disjunction
+query TT
+explain select t1.t1_id,
+       t1.t1_name,
+       t1.t1_int
+from t1
+where t1.t1_id > 40 or not exists (select * from t2 where t1.t1_id = t2.t2_id)
+----
+logical_plan
+01)Projection: t1.t1_id, t1.t1_name, t1.t1_int
+02)--Filter: t1.t1_id > Int32(40) OR __correlated_sq_1.__exists IS NULL
+03)----Projection: t1.t1_id, t1.t1_name, t1.t1_int, __correlated_sq_1.__exists
+04)------Left Join: t1.t1_id = __correlated_sq_1.t2_id
+05)--------TableScan: t1 projection=[t1_id, t1_name, t1_int]
+06)--------SubqueryAlias: __correlated_sq_1
+07)----------Projection: t2.t2_id, Boolean(true) AS __exists
+08)------------TableScan: t2 projection=[t2_id]
+
+query ITI rowsort
+select t1.t1_id,
+       t1.t1_name,
+       t1.t1_int
+from t1
+where t1.t1_id > 40 or not exists (select * from t2 where t1.t1_id = t2.t2_id)
+----
+33 c 3
+44 d 4
+
+# in_subquery_to_join_with_correlated_outer_filter_and_or
+query TT
+explain select t1.t1_id,
+       t1.t1_name,
+       t1.t1_int
+from t1
+where t1.t1_id in (select t3.t3_id from t3) and (t1.t1_id > 40 or t1.t1_id in (select t2.t2_id from t2 where t1.t1_int > 0))
+----
+logical_plan
+01)Projection: t1.t1_id, t1.t1_name, t1.t1_int
+02)--Filter: t1.t1_id > Int32(40) OR __correlated_sq_2.__exists IS NOT NULL
+03)----Projection: t1.t1_id, t1.t1_name, t1.t1_int, __correlated_sq_2.__exists
+04)------Left Join: t1.t1_id = __correlated_sq_2.t2_id Filter: t1.t1_int > Int32(0)
+05)--------LeftSemi Join: t1.t1_id = __correlated_sq_1.t3_id
+06)----------TableScan: t1 projection=[t1_id, t1_name, t1_int]
+07)----------SubqueryAlias: __correlated_sq_1
+08)------------TableScan: t3 projection=[t3_id]
+09)--------SubqueryAlias: __correlated_sq_2
+10)----------Projection: t2.t2_id, Boolean(true) AS __exists
+11)------------TableScan: t2 projection=[t2_id]
+
+query ITI rowsort
+select t1.t1_id,
+       t1.t1_name,
+       t1.t1_int
+from t1
+where t1.t1_id in (select t3.t3_id from t3) and (t1.t1_id > 40 or t1.t1_id in (select t2.t2_id from t2 where t1.t1_int > 0))
+----
+11 a 1
+22 b 2
+44 d 4
+
+# Nested subqueries
+query ITI rowsort
+select t1.t1_id,
+       t1.t1_name,
+       t1.t1_int
+from t1
+where exists (
+    select * from t2 where t1.t1_id = t2.t2_id OR exists (
+        select * from t3 where t2.t2_id = t3.t3_id
+    )
+)
+----
+11 a 1
+22 b 2
+33 c 3
+44 d 4
 
 # issue: https://github.com/apache/datafusion/issues/7027
 query TTTT rowsort

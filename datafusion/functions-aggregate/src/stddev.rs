@@ -19,6 +19,7 @@
 
 use std::any::Any;
 use std::fmt::{Debug, Formatter};
+use std::mem::align_of_val;
 use std::sync::{Arc, OnceLock};
 
 use arrow::array::Float64Array;
@@ -158,7 +159,7 @@ fn get_stddev_doc() -> &'static Documentation {
 +----------------------+
 ```"#,
             )
-            .with_standard_argument("expression", "The")
+            .with_standard_argument("expression", None)
             .build()
             .unwrap()
     })
@@ -282,7 +283,7 @@ fn get_stddev_pop_doc() -> &'static Documentation {
 +--------------------------+
 ```"#,
             )
-            .with_standard_argument("expression", "The")
+            .with_standard_argument("expression", None)
             .build()
             .unwrap()
     })
@@ -343,8 +344,7 @@ impl Accumulator for StddevAccumulator {
     }
 
     fn size(&self) -> usize {
-        std::mem::align_of_val(self) - std::mem::align_of_val(&self.variance)
-            + self.variance.size()
+        align_of_val(self) - align_of_val(&self.variance) + self.variance.size()
     }
 
     fn supports_retract_batch(&self) -> bool {

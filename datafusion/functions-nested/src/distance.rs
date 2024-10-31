@@ -247,7 +247,7 @@ fn compute_array_distance(
 /// Converts an array of any numeric type to a Float64Array.
 fn convert_to_f64_array(array: &ArrayRef) -> Result<Float64Array> {
     match array.data_type() {
-        DataType::Float64 => Ok(as_float64_array(array)?.clone()),
+        Float64 => Ok(as_float64_array(array)?.clone()),
         DataType::Float32 => {
             let array = as_float32_array(array)?;
             let converted: Float64Array =

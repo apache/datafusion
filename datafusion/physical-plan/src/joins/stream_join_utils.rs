@@ -19,6 +19,7 @@
 //! related functionality, used both in join calculations and optimization rules.
 
 use std::collections::{HashMap, VecDeque};
+use std::mem::size_of;
 use std::sync::Arc;
 
 use crate::joins::utils::{JoinFilter, JoinHashMapType};
@@ -31,8 +32,7 @@ use arrow_buffer::{ArrowNativeType, BooleanBufferBuilder};
 use arrow_schema::{Schema, SchemaRef};
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{
-    arrow_datafusion_err, plan_datafusion_err, DataFusionError, JoinSide, Result,
-    ScalarValue,
+    arrow_datafusion_err, DataFusionError, JoinSide, Result, ScalarValue,
 };
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_physical_expr::expressions::Column;
@@ -154,8 +154,7 @@ impl PruningJoinHashMap {
     /// # Returns
     /// The size of the hash map in bytes.
     pub(crate) fn size(&self) -> usize {
-        self.map.allocation_info().1.size()
-            + self.next.capacity() * std::mem::size_of::<u64>()
+        self.map.allocation_info().1.size() + self.next.capacity() * size_of::<u64>()
     }
 
     /// Removes hash values from the map and the list based on the given pruning
@@ -369,34 +368,40 @@ impl SortedFilterExpr {
         filter_expr: Arc<dyn PhysicalExpr>,
         filter_schema: &Schema,
     ) -> Result<Self> {
-        let dt = &filter_expr.data_type(filter_schema)?;
+        let dt = filter_expr.data_type(filter_schema)?;
         Ok(Self {
             origin_sorted_expr,
             filter_expr,
-            interval: Interval::make_unbounded(dt)?,
+            interval: Interval::make_unbounded(&dt)?,
             node_index: 0,
         })
     }
+
     /// Get origin expr information
     pub fn origin_sorted_expr(&self) -> &PhysicalSortExpr {
         &self.origin_sorted_expr
     }
+
     /// Get filter expr information
     pub fn filter_expr(&self) -> &Arc<dyn PhysicalExpr> {
         &self.filter_expr
     }
+
     /// Get interval information
     pub fn interval(&self) -> &Interval {
         &self.interval
     }
+
     /// Sets interval
     pub fn set_interval(&mut self, interval: Interval) {
         self.interval = interval;
     }
+
     /// Node index in ExprIntervalGraph
     pub fn node_index(&self) -> usize {
         self.node_index
     }
+
     /// Node index setter in ExprIntervalGraph
     pub fn set_node_index(&mut self, node_index: usize) {
         self.node_index = node_index;
@@ -409,41 +414,45 @@ impl SortedFilterExpr {
 /// on the first or the last value of the expression in `build_input_buffer`
 /// and `probe_batch`.
 ///
-/// # Arguments
+/// # Parameters
 ///
 /// * `build_input_buffer` - The [RecordBatch] on the build side of the join.
 /// * `build_sorted_filter_expr` - Build side [SortedFilterExpr] to update.
 /// * `probe_batch` - The `RecordBatch` on the probe side of the join.
 /// * `probe_sorted_filter_expr` - Probe side `SortedFilterExpr` to update.
 ///
-/// ### Note
-/// ```text
+/// ## Note
 ///
-/// Interval arithmetic is used to calculate viable join ranges for build-side
-/// pruning. This is done by first creating an interval for join filter values in
-/// the build side of the join, which spans [-∞, FV] or [FV, ∞] depending on the
-/// ordering (descending/ascending) of the filter expression. Here, FV denotes the
-/// first value on the build side. This range is then compared with the probe side
-/// interval, which either spans [-∞, LV] or [LV, ∞] depending on the ordering
-/// (ascending/descending) of the probe side. Here, LV denotes the last value on
-/// the probe side.
+/// Utilizing interval arithmetic, this function computes feasible join intervals
+/// on the pruning side by evaluating the prospective value ranges that might
+/// emerge in subsequent data batches from the enforcer side. This is done by
+/// first creating an interval for join filter values in the pruning side of the
+/// join, which spans `[-∞, FV]` or `[FV, ∞]` depending on the ordering (descending/
+/// ascending) of the filter expression. Here, `FV` denotes the first value on the
+/// pruning side. This range is then compared with the enforcer side interval,
+/// which either spans `[-∞, LV]` or `[LV, ∞]` depending on the ordering (ascending/
+/// descending) of the probe side. Here, `LV` denotes the last value on the enforcer
+/// side.
 ///
 /// As a concrete example, consider the following query:
 ///
+/// ```text
 ///   SELECT * FROM left_table, right_table
 ///   WHERE
 ///     left_key = right_key AND
 ///     a > b - 3 AND
 ///     a < b + 10
+/// ```
 ///
-/// where columns "a" and "b" come from tables "left_table" and "right_table",
+/// where columns `a` and `b` come from tables `left_table` and `right_table`,
 /// respectively. When a new `RecordBatch` arrives at the right side, the
-/// condition a > b - 3 will possibly indicate a prunable range for the left
+/// condition `a > b - 3` will possibly indicate a prunable range for the left
 /// side. Conversely, when a new `RecordBatch` arrives at the left side, the
-/// condition a < b + 10 will possibly indicate prunability for the right side.
-/// Let’s inspect what happens when a new RecordBatch` arrives at the right
+/// condition `a < b + 10` will possibly indicate prunability for the right side.
+/// Let’s inspect what happens when a new `RecordBatch` arrives at the right
 /// side (i.e. when the left side is the build side):
 ///
+/// ```text
 ///         Build      Probe
 ///       +-------+  +-------+
 ///       | a | z |  | b | y |
@@ -456,13 +465,13 @@ impl SortedFilterExpr {
 ///       |+--|--+|  |+--|--+|
 ///       | 7 | 1 |  | 6 | 3 |
 ///       +-------+  +-------+
+/// ```
 ///
 /// In this case, the interval representing viable (i.e. joinable) values for
-/// column "a" is [1, ∞], and the interval representing possible future values
-/// for column "b" is [6, ∞]. With these intervals at hand, we next calculate
+/// column `a` is `[1, ∞]`, and the interval representing possible future values
+/// for column `b` is `[6, ∞]`. With these intervals at hand, we next calculate
 /// intervals for the whole filter expression and propagate join constraint by
 /// traversing the expression graph.
-/// ```
 pub fn calculate_filter_expr_intervals(
     build_input_buffer: &RecordBatch,
     build_sorted_filter_expr: &mut SortedFilterExpr,
@@ -710,13 +719,21 @@ fn update_sorted_exprs_with_node_indices(
     }
 }
 
-/// Prepares and sorts expressions based on a given filter, left and right execution plans, and sort expressions.
+/// Prepares and sorts expressions based on a given filter, left and right schemas,
+/// and sort expressions.
 ///
-/// # Arguments
+/// This function prepares sorted filter expressions for both the left and right
+/// sides of a join operation. It first builds the filter order for each side
+/// based on the provided `ExecutionPlan`. If both sides have valid sorted filter
+/// expressions, the function then constructs an expression interval graph and
+/// updates the sorted expressions with node indices. The final sorted filter
+/// expressions for both sides are then returned.
+///
+/// # Parameters
 ///
 /// * `filter` - The join filter to base the sorting on.
-/// * `left` - The left execution plan.
-/// * `right` - The right execution plan.
+/// * `left` - The `ExecutionPlan` for the left side of the join.
+/// * `right` - The `ExecutionPlan` for the right side of the join.
 /// * `left_sort_exprs` - The expressions to sort on the left side.
 /// * `right_sort_exprs` - The expressions to sort on the right side.
 ///
@@ -730,9 +747,11 @@ pub fn prepare_sorted_exprs(
     left_sort_exprs: &[PhysicalSortExpr],
     right_sort_exprs: &[PhysicalSortExpr],
 ) -> Result<(SortedFilterExpr, SortedFilterExpr, ExprIntervalGraph)> {
-    // Build the filter order for the left side
-    let err = || plan_datafusion_err!("Filter does not include the child order");
+    let err = || {
+        datafusion_common::plan_datafusion_err!("Filter does not include the child order")
+    };
 
+    // Build the filter order for the left side:
     let left_temp_sorted_filter_expr = build_filter_input_order(
         JoinSide::Left,
         filter,
@@ -741,7 +760,7 @@ pub fn prepare_sorted_exprs(
     )?
     .ok_or_else(err)?;
 
-    // Build the filter order for the right side
+    // Build the filter order for the right side:
     let right_temp_sorted_filter_expr = build_filter_input_order(
         JoinSide::Right,
         filter,
@@ -952,15 +971,15 @@ pub mod tests {
         let filter_expr = complicated_filter(&intermediate_schema)?;
         let column_indices = vec![
             ColumnIndex {
-                index: 0,
+                index: left_schema.index_of("la1")?,
                 side: JoinSide::Left,
             },
             ColumnIndex {
-                index: 4,
+                index: left_schema.index_of("la2")?,
                 side: JoinSide::Left,
             },
             ColumnIndex {
-                index: 0,
+                index: right_schema.index_of("ra1")?,
                 side: JoinSide::Right,
             },
         ];

@@ -17,6 +17,10 @@
 
 use std::sync::Arc;
 
+use arrow::datatypes::{
+    Date32Type, Date64Type, Float32Type, Float64Type, Int16Type, Int32Type, Int64Type,
+    Int8Type, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
+};
 use arrow_array::{ArrayRef, RecordBatch};
 use arrow_schema::{DataType, Field, Schema};
 use datafusion_common::{arrow_datafusion_err, DataFusionError, Result};
@@ -48,14 +52,39 @@ use test_utils::{
 ///
 #[derive(Debug, Clone)]
 pub struct DatasetGeneratorConfig {
-    // Descriptions of columns in datasets, it's `required`
+    /// Descriptions of columns in datasets, it's `required`
     pub columns: Vec<ColumnDescr>,
 
-    // Rows num range of the generated datasets, it's `required`
+    /// Rows num range of the generated datasets, it's `required`
     pub rows_num_range: (usize, usize),
 
-    // Sort keys used to generate the sorted data set, it's optional
+    /// Additional optional sort keys
+    ///
+    /// The generated datasets always include a non-sorted copy. For each
+    /// element in `sort_keys_set`, an additional datasets is created that
+    /// is sorted by these values as well.
     pub sort_keys_set: Vec<Vec<String>>,
+}
+
+impl DatasetGeneratorConfig {
+    /// return a list of all column names
+    pub fn all_columns(&self) -> Vec<&str> {
+        self.columns.iter().map(|d| d.name.as_str()).collect()
+    }
+
+    /// return a list of column names that are "numeric"
+    pub fn numeric_columns(&self) -> Vec<&str> {
+        self.columns
+            .iter()
+            .filter_map(|d| {
+                if d.column_type.is_numeric() {
+                    Some(d.name.as_str())
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
 }
 
 /// Dataset generator
@@ -96,7 +125,7 @@ impl DatasetGenerator {
     pub fn generate(&self) -> Result<Vec<Dataset>> {
         let mut datasets = Vec::with_capacity(self.sort_keys_set.len() + 1);
 
-        // Generate the base batch
+        // Generate the base batch (unsorted)
         let base_batch = self.batch_generator.generate()?;
         let batches = stagger_batch(base_batch.clone());
         let dataset = Dataset::new(batches, Vec::new());
@@ -145,11 +174,16 @@ impl Dataset {
 
 #[derive(Debug, Clone)]
 pub struct ColumnDescr {
-    // Column name
+    /// Column name
     name: String,
 
-    // Data type of this column
+    /// Data type of this column
     column_type: DataType,
+
+    /// The maximum number of distinct values in this column.
+    ///
+    /// See [`ColumnDescr::with_max_num_distinct`] for more information
+    max_num_distinct: Option<usize>,
 }
 
 impl ColumnDescr {
@@ -158,7 +192,17 @@ impl ColumnDescr {
         Self {
             name: name.to_string(),
             column_type,
+            max_num_distinct: None,
         }
+    }
+
+    /// set the maximum number of distinct values in this column
+    ///
+    /// If `None`, the number of distinct values is randomly selected between 1
+    /// and the number of rows.
+    pub fn with_max_num_distinct(mut self, num_distinct: usize) -> Self {
+        self.max_num_distinct = Some(num_distinct);
+        self
     }
 }
 
@@ -174,20 +218,15 @@ struct RecordBatchGenerator {
 }
 
 macro_rules! generate_string_array {
-    ($SELF:ident, $NUM_ROWS:ident, $BATCH_GEN_RNG:ident, $ARRAY_GEN_RNG:ident, $OFFSET_TYPE:ty) => {{
+    ($SELF:ident, $NUM_ROWS:ident, $MAX_NUM_DISTINCT:expr, $BATCH_GEN_RNG:ident, $ARRAY_GEN_RNG:ident, $OFFSET_TYPE:ty) => {{
         let null_pct_idx = $BATCH_GEN_RNG.gen_range(0..$SELF.candidate_null_pcts.len());
         let null_pct = $SELF.candidate_null_pcts[null_pct_idx];
         let max_len = $BATCH_GEN_RNG.gen_range(1..50);
-        let num_distinct_strings = if $NUM_ROWS > 1 {
-            $BATCH_GEN_RNG.gen_range(1..$NUM_ROWS)
-        } else {
-            $NUM_ROWS
-        };
 
         let mut generator = StringArrayGenerator {
             max_len,
             num_strings: $NUM_ROWS,
-            num_distinct_strings,
+            num_distinct_strings: $MAX_NUM_DISTINCT,
             null_pct,
             rng: $ARRAY_GEN_RNG,
         };
@@ -197,24 +236,19 @@ macro_rules! generate_string_array {
 }
 
 macro_rules! generate_primitive_array {
-    ($SELF:ident, $NUM_ROWS:ident, $BATCH_GEN_RNG:ident, $ARRAY_GEN_RNG:ident, $DATA_TYPE:ident) => {
+    ($SELF:ident, $NUM_ROWS:ident, $MAX_NUM_DISTINCT:expr, $BATCH_GEN_RNG:ident, $ARRAY_GEN_RNG:ident, $ARROW_TYPE:ident) => {
         paste::paste! {{
             let null_pct_idx = $BATCH_GEN_RNG.gen_range(0..$SELF.candidate_null_pcts.len());
             let null_pct = $SELF.candidate_null_pcts[null_pct_idx];
-            let num_distinct_primitives = if $NUM_ROWS > 1 {
-                $BATCH_GEN_RNG.gen_range(1..$NUM_ROWS)
-            } else {
-                $NUM_ROWS
-            };
 
             let mut generator = PrimitiveArrayGenerator {
                 num_primitives: $NUM_ROWS,
-                num_distinct_primitives,
+                num_distinct_primitives: $MAX_NUM_DISTINCT,
                 null_pct,
                 rng: $ARRAY_GEN_RNG,
             };
 
-            generator.[< gen_data_ $DATA_TYPE >]()
+            generator.gen_data::<$ARROW_TYPE>()
     }}}
 }
 
@@ -239,7 +273,7 @@ impl RecordBatchGenerator {
         let mut arrays = Vec::with_capacity(self.columns.len());
         for col in self.columns.iter() {
             let array = self.generate_array_of_type(
-                col.column_type.clone(),
+                col,
                 num_rows,
                 &mut rng,
                 array_gen_rng.clone(),
@@ -260,109 +294,166 @@ impl RecordBatchGenerator {
 
     fn generate_array_of_type(
         &self,
-        data_type: DataType,
+        col: &ColumnDescr,
         num_rows: usize,
         batch_gen_rng: &mut ThreadRng,
         array_gen_rng: StdRng,
     ) -> ArrayRef {
-        match data_type {
+        let num_distinct = if num_rows > 1 {
+            batch_gen_rng.gen_range(1..num_rows)
+        } else {
+            num_rows
+        };
+        // cap to at most the num_distinct values
+        let max_num_distinct = col
+            .max_num_distinct
+            .map(|max| num_distinct.min(max))
+            .unwrap_or(num_distinct);
+
+        match col.column_type {
             DataType::Int8 => {
                 generate_primitive_array!(
                     self,
                     num_rows,
+                    max_num_distinct,
                     batch_gen_rng,
                     array_gen_rng,
-                    i8
+                    Int8Type
                 )
             }
             DataType::Int16 => {
                 generate_primitive_array!(
                     self,
                     num_rows,
+                    max_num_distinct,
                     batch_gen_rng,
                     array_gen_rng,
-                    i16
+                    Int16Type
                 )
             }
             DataType::Int32 => {
                 generate_primitive_array!(
                     self,
                     num_rows,
+                    max_num_distinct,
                     batch_gen_rng,
                     array_gen_rng,
-                    i32
+                    Int32Type
                 )
             }
             DataType::Int64 => {
                 generate_primitive_array!(
                     self,
                     num_rows,
+                    max_num_distinct,
                     batch_gen_rng,
                     array_gen_rng,
-                    i64
+                    Int64Type
                 )
             }
             DataType::UInt8 => {
                 generate_primitive_array!(
                     self,
                     num_rows,
+                    max_num_distinct,
                     batch_gen_rng,
                     array_gen_rng,
-                    u8
+                    UInt8Type
                 )
             }
             DataType::UInt16 => {
                 generate_primitive_array!(
                     self,
                     num_rows,
+                    max_num_distinct,
                     batch_gen_rng,
                     array_gen_rng,
-                    u16
+                    UInt16Type
                 )
             }
             DataType::UInt32 => {
                 generate_primitive_array!(
                     self,
                     num_rows,
+                    max_num_distinct,
                     batch_gen_rng,
                     array_gen_rng,
-                    u32
+                    UInt32Type
                 )
             }
             DataType::UInt64 => {
                 generate_primitive_array!(
                     self,
                     num_rows,
+                    max_num_distinct,
                     batch_gen_rng,
                     array_gen_rng,
-                    u64
+                    UInt64Type
                 )
             }
             DataType::Float32 => {
                 generate_primitive_array!(
                     self,
                     num_rows,
+                    max_num_distinct,
                     batch_gen_rng,
                     array_gen_rng,
-                    f32
+                    Float32Type
                 )
             }
             DataType::Float64 => {
                 generate_primitive_array!(
                     self,
                     num_rows,
+                    max_num_distinct,
                     batch_gen_rng,
                     array_gen_rng,
-                    f64
+                    Float64Type
+                )
+            }
+            DataType::Date32 => {
+                generate_primitive_array!(
+                    self,
+                    num_rows,
+                    max_num_distinct,
+                    batch_gen_rng,
+                    array_gen_rng,
+                    Date32Type
+                )
+            }
+            DataType::Date64 => {
+                generate_primitive_array!(
+                    self,
+                    num_rows,
+                    max_num_distinct,
+                    batch_gen_rng,
+                    array_gen_rng,
+                    Date64Type
                 )
             }
             DataType::Utf8 => {
-                generate_string_array!(self, num_rows, batch_gen_rng, array_gen_rng, i32)
+                generate_string_array!(
+                    self,
+                    num_rows,
+                    max_num_distinct,
+                    batch_gen_rng,
+                    array_gen_rng,
+                    i32
+                )
             }
             DataType::LargeUtf8 => {
-                generate_string_array!(self, num_rows, batch_gen_rng, array_gen_rng, i64)
+                generate_string_array!(
+                    self,
+                    num_rows,
+                    max_num_distinct,
+                    batch_gen_rng,
+                    array_gen_rng,
+                    i64
+                )
             }
-            _ => unreachable!(),
+            _ => {
+                panic!("Unsupported data generator type: {}", col.column_type)
+            }
         }
     }
 }
@@ -386,14 +477,8 @@ mod test {
         //  - Their rows num should be same and between [16, 32]
         let config = DatasetGeneratorConfig {
             columns: vec![
-                ColumnDescr {
-                    name: "a".to_string(),
-                    column_type: DataType::Utf8,
-                },
-                ColumnDescr {
-                    name: "b".to_string(),
-                    column_type: DataType::UInt32,
-                },
+                ColumnDescr::new("a", DataType::Utf8),
+                ColumnDescr::new("b", DataType::UInt32),
             ],
             rows_num_range: (16, 32),
             sort_keys_set: vec![vec!["b".to_string()]],

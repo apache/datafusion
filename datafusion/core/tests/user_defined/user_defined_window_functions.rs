@@ -593,11 +593,7 @@ impl PartitionEvaluator for OddCounter {
         Ok(scalar)
     }
 
-    fn evaluate_all(
-        &mut self,
-        values: &[arrow_array::ArrayRef],
-        num_rows: usize,
-    ) -> Result<arrow_array::ArrayRef> {
+    fn evaluate_all(&mut self, values: &[ArrayRef], num_rows: usize) -> Result<ArrayRef> {
         println!("evaluate_all, values: {values:#?}, num_rows: {num_rows}");
 
         self.test_state.inc_evaluate_all_called();
@@ -641,7 +637,7 @@ fn odd_count(arr: &Int64Array) -> i64 {
 }
 
 /// returns an array of num_rows that has the number of odd values in `arr`
-fn odd_count_arr(arr: &Int64Array, num_rows: usize) -> arrow_array::ArrayRef {
+fn odd_count_arr(arr: &Int64Array, num_rows: usize) -> ArrayRef {
     let array: Int64Array = std::iter::repeat(odd_count(arr)).take(num_rows).collect();
     Arc::new(array)
 }

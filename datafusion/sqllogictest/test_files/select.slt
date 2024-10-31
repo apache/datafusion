@@ -558,7 +558,7 @@ EXPLAIN SELECT * FROM ((SELECT column1 FROM foo) "T1" CROSS JOIN (SELECT column2
 ----
 logical_plan
 01)SubqueryAlias: F
-02)--CrossJoin:
+02)--Cross Join:
 03)----SubqueryAlias: T1
 04)------TableScan: foo projection=[column1]
 05)----SubqueryAlias: T2
@@ -581,8 +581,31 @@ select * from (select 1 a union all select 2) b order by a limit 1;
 1
 
 # select limit clause invalid
-statement error DataFusion error: Error during planning: LIMIT must be >= 0, '\-1' was provided\.
+statement error Error during planning: LIMIT must be >= 0, '-1' was provided
 select * from (select 1 a union all select 2) b order by a limit -1;
+
+statement error Error during planning: OFFSET must be >=0, '-1' was provided
+select * from (select 1 a union all select 2) b order by a offset -1;
+
+statement error Unsupported LIMIT expression
+select * from (values(1),(2)) limit (select 1);
+
+statement error Unsupported OFFSET expression
+select * from (values(1),(2)) offset (select 1);
+
+# disallow non-integer limit/offset
+statement error Expected LIMIT to be an integer or null, but got Float64
+select * from (values(1),(2)) limit 0.5;
+
+statement error Expected OFFSET to be an integer or null, but got Utf8
+select * from (values(1),(2)) offset '1';
+
+# test with different integer types
+query I
+select * from (values (1), (2), (3), (4)) limit 2::int OFFSET 1::tinyint
+----
+2
+3
 
 # select limit with basic arithmetic
 query I
@@ -597,18 +620,50 @@ select * from (values (1)) LIMIT 10*100;
 ----
 1
 
-# More complex expressions in the limit is not supported yet.
-# See issue: https://github.com/apache/datafusion/issues/9821
-statement error DataFusion error: Error during planning: Unsupported operator for LIMIT clause
+# select limit with complex arithmetic
+query I
 select * from (values (1)) LIMIT 100/10;
+----
+1
 
-# More complex expressions in the limit is not supported yet.
-statement error DataFusion error: Error during planning: Unexpected expression in LIMIT clause
+# test constant-folding of LIMIT expr
+query I
+select * from (values (1), (2), (3), (4)) LIMIT abs(-4) + 4 / -2; -- LIMIT 2
+----
+1
+2
+
+# test constant-folding of OFFSET expr
+query I
+select * from (values (1), (2), (3), (4)) OFFSET abs(-4) + 4 / -2; -- OFFSET 2
+----
+3
+4
+
+# test constant-folding of LIMIT and OFFSET
+query I
+select * from (values (1), (2), (3), (4))
+  -- LIMIT 2
+  LIMIT abs(-4) + -1 * 2
+  -- OFFSET 1
+  OFFSET case when 1 < 2 then 1 else 0 end;
+----
+2
+3
+
+statement error Schema error: No field named column1.
 select * from (values (1)) LIMIT cast(column1 as tinyint);
 
 # select limit clause
 query I
 select * from (select 1 a union all select 2) b order by a limit null;
+----
+1
+2
+
+# offset null takes no effect
+query I
+select * from (select 1 a union all select 2) b order by a offset null;
 ----
 1
 2

@@ -21,6 +21,7 @@ use ahash::RandomState;
 use datafusion_expr::utils::AggregateOrderSensitivity;
 use std::any::Any;
 use std::collections::HashSet;
+use std::mem::{size_of, size_of_val};
 use std::sync::OnceLock;
 
 use arrow::array::Array;
@@ -260,7 +261,7 @@ fn get_sum_doc() -> &'static Documentation {
 +-----------------------+
 ```"#,
             )
-            .with_standard_argument("expression", "The")
+            .with_standard_argument("expression", None)
             .build()
             .unwrap()
     })
@@ -310,7 +311,7 @@ impl<T: ArrowNumericType> Accumulator for SumAccumulator<T> {
     }
 
     fn size(&self) -> usize {
-        std::mem::size_of_val(self)
+        size_of_val(self)
     }
 }
 
@@ -370,7 +371,7 @@ impl<T: ArrowNumericType> Accumulator for SlidingSumAccumulator<T> {
     }
 
     fn size(&self) -> usize {
-        std::mem::size_of_val(self)
+        size_of_val(self)
     }
 
     fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
@@ -464,7 +465,6 @@ impl<T: ArrowPrimitiveType> Accumulator for DistinctSumAccumulator<T> {
     }
 
     fn size(&self) -> usize {
-        std::mem::size_of_val(self)
-            + self.values.capacity() * std::mem::size_of::<T::Native>()
+        size_of_val(self) + self.values.capacity() * size_of::<T::Native>()
     }
 }

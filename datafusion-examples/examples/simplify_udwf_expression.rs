@@ -70,8 +70,7 @@ impl WindowUDFImpl for SimplifySmoothItUdf {
 
     /// this function will simplify `SimplifySmoothItUdf` to `SmoothItUdf`.
     fn simplify(&self) -> Option<WindowFunctionSimplification> {
-        let simplify = |window_function: datafusion_expr::expr::WindowFunction,
-                        _: &dyn SimplifyInfo| {
+        let simplify = |window_function: WindowFunction, _: &dyn SimplifyInfo| {
             Ok(Expr::WindowFunction(WindowFunction {
                 fun: datafusion_expr::WindowFunctionDefinition::AggregateUDF(avg_udaf()),
                 args: window_function.args,

@@ -139,7 +139,7 @@ impl Hash for PhysicalSortExpr {
 }
 
 impl Display for PhysicalSortExpr {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         write!(f, "{} {}", self.expr, to_str(&self.options))
     }
 }
@@ -184,7 +184,7 @@ impl PhysicalSortExpr {
     pub fn format_list(input: &[PhysicalSortExpr]) -> impl Display + '_ {
         struct DisplayableList<'a>(&'a [PhysicalSortExpr]);
         impl<'a> Display for DisplayableList<'a> {
-            fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
                 let mut first = true;
                 for sort_expr in self.0 {
                     if first {
@@ -256,7 +256,7 @@ impl PartialEq for PhysicalSortRequirement {
 }
 
 impl Display for PhysicalSortRequirement {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         let opts_string = self.options.as_ref().map_or("NA", to_str);
         write!(f, "{} {}", self.expr, opts_string)
     }

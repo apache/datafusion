@@ -15,8 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::ops::Deref;
-
 use crate::analyzer::check_plan;
 use crate::utils::collect_subquery_cols;
 
@@ -24,10 +22,7 @@ use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_common::{plan_err, Result};
 use datafusion_expr::expr_rewriter::strip_outer_reference;
 use datafusion_expr::utils::split_conjunction;
-use datafusion_expr::{
-    Aggregate, BinaryExpr, Cast, Expr, Filter, Join, JoinType, LogicalPlan, Operator,
-    Window,
-};
+use datafusion_expr::{Aggregate, Expr, Filter, Join, JoinType, LogicalPlan, Window};
 
 /// Do necessary check on subquery expressions and fail the invalid plan
 /// 1) Check whether the outer plan is in the allowed outer plans list to use subquery expressions,
@@ -98,7 +93,7 @@ pub fn check_subquery_expr(
                 )
             }?;
         }
-        check_correlations_in_subquery(inner_plan, true)
+        check_correlations_in_subquery(inner_plan)
     } else {
         if let Expr::InSubquery(subquery) = expr {
             // InSubquery should only return one column
@@ -118,28 +113,22 @@ pub fn check_subquery_expr(
             | LogicalPlan::Join(_) => Ok(()),
             _ => plan_err!(
                 "In/Exist subquery can only be used in \
-            Projection, Filter, Window functions, Aggregate and Join plan nodes"
+                Projection, Filter, Window functions, Aggregate and Join plan nodes, \
+                but was used in [{}]",
+                outer_plan.display()
             ),
         }?;
-        check_correlations_in_subquery(inner_plan, false)
+        check_correlations_in_subquery(inner_plan)
     }
 }
 
 // Recursively check the unsupported outer references in the sub query plan.
-fn check_correlations_in_subquery(
-    inner_plan: &LogicalPlan,
-    is_scalar: bool,
-) -> Result<()> {
-    check_inner_plan(inner_plan, is_scalar, false, true)
+fn check_correlations_in_subquery(inner_plan: &LogicalPlan) -> Result<()> {
+    check_inner_plan(inner_plan, true)
 }
 
 // Recursively check the unsupported outer references in the sub query plan.
-fn check_inner_plan(
-    inner_plan: &LogicalPlan,
-    is_scalar: bool,
-    is_aggregate: bool,
-    can_contain_outer_ref: bool,
-) -> Result<()> {
+fn check_inner_plan(inner_plan: &LogicalPlan, can_contain_outer_ref: bool) -> Result<()> {
     if !can_contain_outer_ref && inner_plan.contains_outer_reference() {
         return plan_err!("Accessing outer reference columns is not allowed in the plan");
     }
@@ -147,32 +136,18 @@ fn check_inner_plan(
     match inner_plan {
         LogicalPlan::Aggregate(_) => {
             inner_plan.apply_children(|plan| {
-                check_inner_plan(plan, is_scalar, true, can_contain_outer_ref)?;
+                check_inner_plan(plan, can_contain_outer_ref)?;
                 Ok(TreeNodeRecursion::Continue)
             })?;
             Ok(())
         }
-        LogicalPlan::Filter(Filter {
-            predicate, input, ..
-        }) => {
-            let (correlated, _): (Vec<_>, Vec<_>) = split_conjunction(predicate)
-                .into_iter()
-                .partition(|e| e.contains_outer());
-            let maybe_unsupported = correlated
-                .into_iter()
-                .filter(|expr| !can_pullup_over_aggregation(expr))
-                .collect::<Vec<_>>();
-            if is_aggregate && is_scalar && !maybe_unsupported.is_empty() {
-                return plan_err!(
-                    "Correlated column is not allowed in predicate: {predicate}"
-                );
-            }
-            check_inner_plan(input, is_scalar, is_aggregate, can_contain_outer_ref)
+        LogicalPlan::Filter(Filter { input, .. }) => {
+            check_inner_plan(input, can_contain_outer_ref)
         }
         LogicalPlan::Window(window) => {
             check_mixed_out_refer_in_window(window)?;
             inner_plan.apply_children(|plan| {
-                check_inner_plan(plan, is_scalar, is_aggregate, can_contain_outer_ref)?;
+                check_inner_plan(plan, can_contain_outer_ref)?;
                 Ok(TreeNodeRecursion::Continue)
             })?;
             Ok(())
@@ -180,7 +155,6 @@ fn check_inner_plan(
         LogicalPlan::Projection(_)
         | LogicalPlan::Distinct(_)
         | LogicalPlan::Sort(_)
-        | LogicalPlan::CrossJoin(_)
         | LogicalPlan::Union(_)
         | LogicalPlan::TableScan(_)
         | LogicalPlan::EmptyRelation(_)
@@ -189,7 +163,7 @@ fn check_inner_plan(
         | LogicalPlan::Subquery(_)
         | LogicalPlan::SubqueryAlias(_) => {
             inner_plan.apply_children(|plan| {
-                check_inner_plan(plan, is_scalar, is_aggregate, can_contain_outer_ref)?;
+                check_inner_plan(plan, can_contain_outer_ref)?;
                 Ok(TreeNodeRecursion::Continue)
             })?;
             Ok(())
@@ -202,27 +176,22 @@ fn check_inner_plan(
         }) => match join_type {
             JoinType::Inner => {
                 inner_plan.apply_children(|plan| {
-                    check_inner_plan(
-                        plan,
-                        is_scalar,
-                        is_aggregate,
-                        can_contain_outer_ref,
-                    )?;
+                    check_inner_plan(plan, can_contain_outer_ref)?;
                     Ok(TreeNodeRecursion::Continue)
                 })?;
                 Ok(())
             }
             JoinType::Left | JoinType::LeftSemi | JoinType::LeftAnti => {
-                check_inner_plan(left, is_scalar, is_aggregate, can_contain_outer_ref)?;
-                check_inner_plan(right, is_scalar, is_aggregate, false)
+                check_inner_plan(left, can_contain_outer_ref)?;
+                check_inner_plan(right, false)
             }
             JoinType::Right | JoinType::RightSemi | JoinType::RightAnti => {
-                check_inner_plan(left, is_scalar, is_aggregate, false)?;
-                check_inner_plan(right, is_scalar, is_aggregate, can_contain_outer_ref)
+                check_inner_plan(left, false)?;
+                check_inner_plan(right, can_contain_outer_ref)
             }
             JoinType::Full => {
                 inner_plan.apply_children(|plan| {
-                    check_inner_plan(plan, is_scalar, is_aggregate, false)?;
+                    check_inner_plan(plan, false)?;
                     Ok(TreeNodeRecursion::Continue)
                 })?;
                 Ok(())
@@ -291,34 +260,6 @@ fn get_correlated_expressions(inner_plan: &LogicalPlan) -> Result<Vec<Expr>> {
     Ok(exprs)
 }
 
-/// Check whether the expression can pull up over the aggregation without change the result of the query
-fn can_pullup_over_aggregation(expr: &Expr) -> bool {
-    if let Expr::BinaryExpr(BinaryExpr {
-        left,
-        op: Operator::Eq,
-        right,
-    }) = expr
-    {
-        match (left.deref(), right.deref()) {
-            (Expr::Column(_), right) => !right.any_column_refs(),
-            (left, Expr::Column(_)) => !left.any_column_refs(),
-            (Expr::Cast(Cast { expr, .. }), right)
-                if matches!(expr.deref(), Expr::Column(_)) =>
-            {
-                !right.any_column_refs()
-            }
-            (left, Expr::Cast(Cast { expr, .. }))
-                if matches!(expr.deref(), Expr::Column(_)) =>
-            {
-                !left.any_column_refs()
-            }
-            (_, _) => false,
-        }
-    } else {
-        false
-    }
-}
-
 /// Check whether the window expressions contain a mixture of out reference columns and inner columns
 fn check_mixed_out_refer_in_window(window: &Window) -> Result<()> {
     let mixed = window
@@ -364,7 +305,7 @@ mod test {
             vec![]
         }
 
-        fn schema(&self) -> &datafusion_common::DFSchemaRef {
+        fn schema(&self) -> &DFSchemaRef {
             &self.empty_schema
         }
 
@@ -399,6 +340,6 @@ mod test {
             }),
         });
 
-        check_inner_plan(&plan, false, false, true).unwrap();
+        check_inner_plan(&plan, true).unwrap();
     }
 }

@@ -22,11 +22,10 @@ use std::sync::{Arc, OnceLock};
 
 use super::power::PowerFunc;
 
-use arrow::array::{ArrayRef, Float32Array, Float64Array};
-use arrow::datatypes::DataType;
+use arrow::array::{ArrayRef, AsArray};
+use arrow::datatypes::{DataType, Float32Type, Float64Type};
 use datafusion_common::{
-    exec_err, internal_err, plan_datafusion_err, plan_err, DataFusionError, Result,
-    ScalarValue,
+    exec_err, internal_err, plan_datafusion_err, plan_err, Result, ScalarValue,
 };
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::scalar_doc_sections::DOC_SECTION_MATH;
@@ -57,8 +56,8 @@ fn get_log_doc() -> &'static Documentation {
             .with_description("Returns the base-x logarithm of a number. Can either provide a specified base, or if omitted then takes the base-10 of a number.")
             .with_syntax_example(r#"log(base, numeric_expression)
 log(numeric_expression)"#)
-            .with_standard_argument("base", "Base numeric")
-            .with_standard_argument("numeric_expression", "Numeric")
+            .with_standard_argument("base", Some("Base numeric"))
+            .with_standard_argument("numeric_expression", Some("Numeric"))
             .build()
             .unwrap()
     })
@@ -140,37 +139,40 @@ impl ScalarUDFImpl for LogFunc {
         let arr: ArrayRef = match args[0].data_type() {
             DataType::Float64 => match base {
                 ColumnarValue::Scalar(ScalarValue::Float32(Some(base))) => {
-                    Arc::new(make_function_scalar_inputs!(x, "x", Float64Array, {
-                        |value: f64| f64::log(value, base as f64)
-                    }))
+                    Arc::new(x.as_primitive::<Float64Type>().unary::<_, Float64Type>(
+                        |value: f64| f64::log(value, base as f64),
+                    ))
                 }
-                ColumnarValue::Array(base) => Arc::new(make_function_inputs2!(
-                    x,
-                    base,
-                    "x",
-                    "base",
-                    Float64Array,
-                    { f64::log }
-                )),
+                ColumnarValue::Array(base) => {
+                    let x = x.as_primitive::<Float64Type>();
+                    let base = base.as_primitive::<Float64Type>();
+                    let result = arrow::compute::binary::<_, _, _, Float64Type>(
+                        x,
+                        base,
+                        f64::log,
+                    )?;
+                    Arc::new(result) as _
+                }
                 _ => {
                     return exec_err!("log function requires a scalar or array for base")
                 }
             },
 
             DataType::Float32 => match base {
-                ColumnarValue::Scalar(ScalarValue::Float32(Some(base))) => {
-                    Arc::new(make_function_scalar_inputs!(x, "x", Float32Array, {
-                        |value: f32| f32::log(value, base)
-                    }))
+                ColumnarValue::Scalar(ScalarValue::Float32(Some(base))) => Arc::new(
+                    x.as_primitive::<Float32Type>()
+                        .unary::<_, Float32Type>(|value: f32| f32::log(value, base)),
+                ),
+                ColumnarValue::Array(base) => {
+                    let x = x.as_primitive::<Float32Type>();
+                    let base = base.as_primitive::<Float32Type>();
+                    let result = arrow::compute::binary::<_, _, _, Float32Type>(
+                        x,
+                        base,
+                        f32::log,
+                    )?;
+                    Arc::new(result) as _
                 }
-                ColumnarValue::Array(base) => Arc::new(make_function_inputs2!(
-                    x,
-                    base,
-                    "x",
-                    "base",
-                    Float32Array,
-                    { f32::log }
-                )),
                 _ => {
                     return exec_err!("log function requires a scalar or array for base")
                 }
@@ -259,11 +261,191 @@ mod tests {
 
     use super::*;
 
+    use arrow::array::{Float32Array, Float64Array, Int64Array};
     use arrow::compute::SortOptions;
     use datafusion_common::cast::{as_float32_array, as_float64_array};
     use datafusion_common::DFSchema;
     use datafusion_expr::execution_props::ExecutionProps;
     use datafusion_expr::simplify::SimplifyContext;
+
+    #[test]
+    #[should_panic]
+    fn test_log_invalid_base_type() {
+        let args = [
+            ColumnarValue::Array(Arc::new(Float64Array::from(vec![
+                10.0, 100.0, 1000.0, 10000.0,
+            ]))), // num
+            ColumnarValue::Array(Arc::new(Int64Array::from(vec![5, 10, 15, 20]))),
+        ];
+
+        let _ = LogFunc::new().invoke(&args);
+    }
+
+    #[test]
+    fn test_log_invalid_value() {
+        let args = [
+            ColumnarValue::Array(Arc::new(Int64Array::from(vec![10]))), // num
+        ];
+
+        let result = LogFunc::new().invoke(&args);
+        result.expect_err("expected error");
+    }
+
+    #[test]
+    fn test_log_scalar_f32_unary() {
+        let args = [
+            ColumnarValue::Scalar(ScalarValue::Float32(Some(10.0))), // num
+        ];
+
+        let result = LogFunc::new()
+            .invoke(&args)
+            .expect("failed to initialize function log");
+
+        match result {
+            ColumnarValue::Array(arr) => {
+                let floats = as_float32_array(&arr)
+                    .expect("failed to convert result to a Float32Array");
+
+                assert_eq!(floats.len(), 1);
+                assert!((floats.value(0) - 1.0).abs() < 1e-10);
+            }
+            ColumnarValue::Scalar(_) => {
+                panic!("Expected an array value")
+            }
+        }
+    }
+
+    #[test]
+    fn test_log_scalar_f64_unary() {
+        let args = [
+            ColumnarValue::Scalar(ScalarValue::Float64(Some(10.0))), // num
+        ];
+
+        let result = LogFunc::new()
+            .invoke(&args)
+            .expect("failed to initialize function log");
+
+        match result {
+            ColumnarValue::Array(arr) => {
+                let floats = as_float64_array(&arr)
+                    .expect("failed to convert result to a Float64Array");
+
+                assert_eq!(floats.len(), 1);
+                assert!((floats.value(0) - 1.0).abs() < 1e-10);
+            }
+            ColumnarValue::Scalar(_) => {
+                panic!("Expected an array value")
+            }
+        }
+    }
+
+    #[test]
+    fn test_log_scalar_f32() {
+        let args = [
+            ColumnarValue::Scalar(ScalarValue::Float32(Some(2.0))), // num
+            ColumnarValue::Scalar(ScalarValue::Float32(Some(32.0))), // num
+        ];
+
+        let result = LogFunc::new()
+            .invoke(&args)
+            .expect("failed to initialize function log");
+
+        match result {
+            ColumnarValue::Array(arr) => {
+                let floats = as_float32_array(&arr)
+                    .expect("failed to convert result to a Float32Array");
+
+                assert_eq!(floats.len(), 1);
+                assert!((floats.value(0) - 5.0).abs() < 1e-10);
+            }
+            ColumnarValue::Scalar(_) => {
+                panic!("Expected an array value")
+            }
+        }
+    }
+
+    #[test]
+    fn test_log_scalar_f64() {
+        let args = [
+            ColumnarValue::Scalar(ScalarValue::Float64(Some(2.0))), // num
+            ColumnarValue::Scalar(ScalarValue::Float64(Some(64.0))), // num
+        ];
+
+        let result = LogFunc::new()
+            .invoke(&args)
+            .expect("failed to initialize function log");
+
+        match result {
+            ColumnarValue::Array(arr) => {
+                let floats = as_float64_array(&arr)
+                    .expect("failed to convert result to a Float64Array");
+
+                assert_eq!(floats.len(), 1);
+                assert!((floats.value(0) - 6.0).abs() < 1e-10);
+            }
+            ColumnarValue::Scalar(_) => {
+                panic!("Expected an array value")
+            }
+        }
+    }
+
+    #[test]
+    fn test_log_f64_unary() {
+        let args = [
+            ColumnarValue::Array(Arc::new(Float64Array::from(vec![
+                10.0, 100.0, 1000.0, 10000.0,
+            ]))), // num
+        ];
+
+        let result = LogFunc::new()
+            .invoke(&args)
+            .expect("failed to initialize function log");
+
+        match result {
+            ColumnarValue::Array(arr) => {
+                let floats = as_float64_array(&arr)
+                    .expect("failed to convert result to a Float64Array");
+
+                assert_eq!(floats.len(), 4);
+                assert!((floats.value(0) - 1.0).abs() < 1e-10);
+                assert!((floats.value(1) - 2.0).abs() < 1e-10);
+                assert!((floats.value(2) - 3.0).abs() < 1e-10);
+                assert!((floats.value(3) - 4.0).abs() < 1e-10);
+            }
+            ColumnarValue::Scalar(_) => {
+                panic!("Expected an array value")
+            }
+        }
+    }
+
+    #[test]
+    fn test_log_f32_unary() {
+        let args = [
+            ColumnarValue::Array(Arc::new(Float32Array::from(vec![
+                10.0, 100.0, 1000.0, 10000.0,
+            ]))), // num
+        ];
+
+        let result = LogFunc::new()
+            .invoke(&args)
+            .expect("failed to initialize function log");
+
+        match result {
+            ColumnarValue::Array(arr) => {
+                let floats = as_float32_array(&arr)
+                    .expect("failed to convert result to a Float64Array");
+
+                assert_eq!(floats.len(), 4);
+                assert!((floats.value(0) - 1.0).abs() < 1e-10);
+                assert!((floats.value(1) - 2.0).abs() < 1e-10);
+                assert!((floats.value(2) - 3.0).abs() < 1e-10);
+                assert!((floats.value(3) - 4.0).abs() < 1e-10);
+            }
+            ColumnarValue::Scalar(_) => {
+                panic!("Expected an array value")
+            }
+        }
+    }
 
     #[test]
     fn test_log_f64() {

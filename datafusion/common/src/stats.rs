@@ -190,7 +190,7 @@ impl Precision<ScalarValue> {
     }
 }
 
-impl<T: fmt::Debug + Clone + PartialEq + Eq + PartialOrd> Debug for Precision<T> {
+impl<T: Debug + Clone + PartialEq + Eq + PartialOrd> Debug for Precision<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Precision::Exact(inner) => write!(f, "Exact({:?})", inner),
@@ -200,7 +200,7 @@ impl<T: fmt::Debug + Clone + PartialEq + Eq + PartialOrd> Debug for Precision<T>
     }
 }
 
-impl<T: fmt::Debug + Clone + PartialEq + Eq + PartialOrd> Display for Precision<T> {
+impl<T: Debug + Clone + PartialEq + Eq + PartialOrd> Display for Precision<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Precision::Exact(inner) => write!(f, "Exact({:?})", inner),
@@ -341,7 +341,7 @@ fn check_num_rows(value: Option<usize>, is_exact: bool) -> Precision<usize> {
 }
 
 impl Display for Statistics {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         // string of column statistics
         let column_stats = self
             .column_statistics

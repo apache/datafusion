@@ -130,6 +130,7 @@ To get started, see
    library-user-guide/extending-operators
    library-user-guide/profiling
    library-user-guide/query-optimizer
+   library-user-guide/api-health
 .. _toc.contributor-guide:
 
 .. toctree::

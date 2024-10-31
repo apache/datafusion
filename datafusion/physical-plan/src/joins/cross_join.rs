@@ -19,7 +19,8 @@
 //! and producing batches in parallel for the right partitions
 
 use super::utils::{
-    adjust_right_output_partitioning, BuildProbeJoinMetrics, OnceAsync, OnceFut,
+    adjust_right_output_partitioning, BatchSplitter, BatchTransformer,
+    BuildProbeJoinMetrics, NoopBatchTransformer, OnceAsync, OnceFut,
     StatefulStreamResult,
 };
 use crate::coalesce_partitions::CoalescePartitionsExec;
@@ -86,6 +87,7 @@ impl CrossJoinExec {
 
         let schema = Arc::new(Schema::new(all_columns).with_metadata(metadata));
         let cache = Self::compute_properties(&left, &right, Arc::clone(&schema));
+
         CrossJoinExec {
             left,
             right,
@@ -246,6 +248,10 @@ impl ExecutionPlan for CrossJoinExec {
         let reservation =
             MemoryConsumer::new("CrossJoinExec").register(context.memory_pool());
 
+        let batch_size = context.session_config().batch_size();
+        let enforce_batch_size_in_joins =
+            context.session_config().enforce_batch_size_in_joins();
+
         let left_fut = self.left_fut.once(|| {
             load_left_input(
                 Arc::clone(&self.left),
@@ -255,15 +261,29 @@ impl ExecutionPlan for CrossJoinExec {
             )
         });
 
-        Ok(Box::pin(CrossJoinStream {
-            schema: Arc::clone(&self.schema),
-            left_fut,
-            right: stream,
-            left_index: 0,
-            join_metrics,
-            state: CrossJoinStreamState::WaitBuildSide,
-            left_data: RecordBatch::new_empty(self.left().schema()),
-        }))
+        if enforce_batch_size_in_joins {
+            Ok(Box::pin(CrossJoinStream {
+                schema: Arc::clone(&self.schema),
+                left_fut,
+                right: stream,
+                left_index: 0,
+                join_metrics,
+                state: CrossJoinStreamState::WaitBuildSide,
+                left_data: RecordBatch::new_empty(self.left().schema()),
+                batch_transformer: BatchSplitter::new(batch_size),
+            }))
+        } else {
+            Ok(Box::pin(CrossJoinStream {
+                schema: Arc::clone(&self.schema),
+                left_fut,
+                right: stream,
+                left_index: 0,
+                join_metrics,
+                state: CrossJoinStreamState::WaitBuildSide,
+                left_data: RecordBatch::new_empty(self.left().schema()),
+                batch_transformer: NoopBatchTransformer::new(),
+            }))
+        }
     }
 
     fn statistics(&self) -> Result<Statistics> {
@@ -319,7 +339,7 @@ fn stats_cartesian_product(
 }
 
 /// A stream that issues [RecordBatch]es as they arrive from the right  of the join.
-struct CrossJoinStream {
+struct CrossJoinStream<T> {
     /// Input schema
     schema: Arc<Schema>,
     /// Future for data from left side
@@ -334,9 +354,11 @@ struct CrossJoinStream {
     state: CrossJoinStreamState,
     /// Left data
     left_data: RecordBatch,
+    /// Batch transformer
+    batch_transformer: T,
 }
 
-impl RecordBatchStream for CrossJoinStream {
+impl<T: BatchTransformer + Unpin + Send> RecordBatchStream for CrossJoinStream<T> {
     fn schema(&self) -> SchemaRef {
         Arc::clone(&self.schema)
     }
@@ -390,24 +412,24 @@ fn build_batch(
 }
 
 #[async_trait]
-impl Stream for CrossJoinStream {
+impl<T: BatchTransformer + Unpin + Send> Stream for CrossJoinStream<T> {
     type Item = Result<RecordBatch>;
 
     fn poll_next(
         mut self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Option<Self::Item>> {
+    ) -> Poll<Option<Self::Item>> {
         self.poll_next_impl(cx)
     }
 }
 
-impl CrossJoinStream {
+impl<T: BatchTransformer> CrossJoinStream<T> {
     /// Separate implementation function that unpins the [`CrossJoinStream`] so
     /// that partial borrows work correctly
     fn poll_next_impl(
         &mut self,
         cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Option<Result<RecordBatch>>> {
+    ) -> Poll<Option<Result<RecordBatch>>> {
         loop {
             return match self.state {
                 CrossJoinStreamState::WaitBuildSide => {
@@ -470,21 +492,33 @@ impl CrossJoinStream {
     fn build_batches(&mut self) -> Result<StatefulStreamResult<Option<RecordBatch>>> {
         let right_batch = self.state.try_as_record_batch()?;
         if self.left_index < self.left_data.num_rows() {
-            let join_timer = self.join_metrics.join_time.timer();
-            let result =
-                build_batch(self.left_index, right_batch, &self.left_data, &self.schema);
-            join_timer.done();
+            match self.batch_transformer.next() {
+                None => {
+                    let join_timer = self.join_metrics.join_time.timer();
+                    let result = build_batch(
+                        self.left_index,
+                        right_batch,
+                        &self.left_data,
+                        &self.schema,
+                    );
+                    join_timer.done();
 
-            if let Ok(ref batch) = result {
-                self.join_metrics.output_batches.add(1);
-                self.join_metrics.output_rows.add(batch.num_rows());
+                    self.batch_transformer.set_batch(result?);
+                }
+                Some((batch, last)) => {
+                    if last {
+                        self.left_index += 1;
+                    }
+
+                    self.join_metrics.output_batches.add(1);
+                    self.join_metrics.output_rows.add(batch.num_rows());
+                    return Ok(StatefulStreamResult::Ready(Some(batch)));
+                }
             }
-            self.left_index += 1;
-            result.map(|r| StatefulStreamResult::Ready(Some(r)))
         } else {
             self.state = CrossJoinStreamState::FetchProbeBatch;
-            Ok(StatefulStreamResult::Continue)
         }
+        Ok(StatefulStreamResult::Continue)
     }
 }
 
