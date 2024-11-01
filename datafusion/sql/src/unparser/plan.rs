@@ -553,7 +553,7 @@ impl Unparser<'_> {
                     relation,
                     global: false,
                     join_operator: self
-                        .join_operator_to_sql(join.join_type, join_constraint),
+                        .join_operator_to_sql(join.join_type, join_constraint)?,
                 };
                 let mut from = select.pop_from().unwrap();
                 from.push_join(ast_join);
@@ -856,8 +856,8 @@ impl Unparser<'_> {
         &self,
         join_type: JoinType,
         constraint: ast::JoinConstraint,
-    ) -> ast::JoinOperator {
-        match join_type {
+    ) -> Result<ast::JoinOperator> {
+        Ok(match join_type {
             JoinType::Inner => ast::JoinOperator::Inner(constraint),
             JoinType::Left => ast::JoinOperator::LeftOuter(constraint),
             JoinType::Right => ast::JoinOperator::RightOuter(constraint),
@@ -866,7 +866,8 @@ impl Unparser<'_> {
             JoinType::LeftSemi => ast::JoinOperator::LeftSemi(constraint),
             JoinType::RightAnti => ast::JoinOperator::RightAnti(constraint),
             JoinType::RightSemi => ast::JoinOperator::RightSemi(constraint),
-        }
+            JoinType::LeftMark => unimplemented!("Unparsing of Left Mark join type"),
+        })
     }
 
     /// Convert the components of a USING clause to the USING AST. Returns
