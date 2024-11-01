@@ -78,8 +78,8 @@ fn expr_contains_inner(expr: &Expr, needle: &Expr, search_op: Operator) -> bool 
 }
 
 /// check volatile calls and return if expr contains needle
-pub fn expr_contains(expr: &Expr, needle: &Expr, search_op: Operator) -> Result<bool> {
-    Ok(expr_contains_inner(expr, needle, search_op) && !needle.is_volatile()?)
+pub fn expr_contains(expr: &Expr, needle: &Expr, search_op: Operator) -> bool {
+    expr_contains_inner(expr, needle, search_op) && !needle.is_volatile()
 }
 
 /// Deletes all 'needles' or remains one 'needle' that are found in a chain of xor
@@ -210,10 +210,8 @@ pub fn is_false(expr: &Expr) -> bool {
 }
 
 /// returns true if `haystack` looks like (needle OP X) or (X OP needle)
-pub fn is_op_with(target_op: Operator, haystack: &Expr, needle: &Expr) -> Result<bool> {
-    Ok(
-        matches!(haystack, Expr::BinaryExpr(BinaryExpr { left, op, right }) if op == &target_op && (needle == left.as_ref() || needle == right.as_ref()) && !needle.is_volatile()?),
-    )
+pub fn is_op_with(target_op: Operator, haystack: &Expr, needle: &Expr) -> bool {
+        matches!(haystack, Expr::BinaryExpr(BinaryExpr { left, op, right }) if op == &target_op && (needle == left.as_ref() || needle == right.as_ref()) && !needle.is_volatile())
 }
 
 /// returns true if `not_expr` is !`expr` (not)
