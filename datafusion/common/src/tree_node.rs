@@ -943,12 +943,16 @@ impl<T> TransformedResult<T> for Result<Transformed<T>> {
     }
 }
 
+/// A node trait which makes all tree traversal iterative and not recursive.
 pub trait RecursiveNode: Sized {
+    /// Read-only access to children
     fn children(&self) -> Vec<&Self>;
 
-    /// Detaches children from the parent node (if possible)
+    /// Detaches children from the parent node (if possible).
+    /// Unlike [`ConcreteTreeNode`] it doesn't possible that the value will actually be removed from the parent
     fn take_children(self) -> (Self, Vec<Self>);
 
+    /// Replaces children with the given one
     fn with_new_children(self, children: Vec<Self>) -> Result<Self>;
 }
 
@@ -1106,7 +1110,7 @@ impl<T: RecursiveNode> TreeNode for T {
                         }
                         TreeNodeRecursion::Jump => {
                             TransformingState::ProcessedAllChildren(
-                                // No need to process children, we can just this stage
+                                // No need to process children, we can just skip that stage
                                 node.with_tnr(TreeNodeRecursion::Continue),
                             )
                         }
@@ -1123,7 +1127,7 @@ impl<T: RecursiveNode> TreeNode for T {
                     TreeNodeRecursion::Continue | TreeNodeRecursion::Jump => {
                         if let Some(non_processed_item) = non_processed_children.pop() {
                             stack.extend([
-                                // This node still has children, so put it back in the stack
+                                // This node still has children, so put it back on the stack
                                 TransformingState::ProcessingChildren {
                                     item,
                                     non_processed_children,
@@ -1155,7 +1159,7 @@ impl<T: RecursiveNode> TreeNode for T {
                         ..
                     }) = stack.last_mut()
                     {
-                        // We need to use the returned recursion state when processing the remaining children
+                        // We need to use the returned iteration state when processing the remaining children
                         parent_node.tnr = node.tnr;
                         parent_node.transformed |= node.transformed;
                         processed_children.push(node.data);
