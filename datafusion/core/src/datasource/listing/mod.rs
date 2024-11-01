@@ -81,6 +81,8 @@ pub struct PartitionedFile {
     pub statistics: Option<Statistics>,
     /// An optional field for user defined per object metadata
     pub extensions: Option<Arc<dyn std::any::Any + Send + Sync>>,
+    /// The estimated size of the parquet metadata, in bytes
+    pub metadata_size_hint: Option<usize>,
 }
 
 impl PartitionedFile {
@@ -98,6 +100,7 @@ impl PartitionedFile {
             range: None,
             statistics: None,
             extensions: None,
+            metadata_size_hint: None,
         }
     }
 
@@ -115,8 +118,14 @@ impl PartitionedFile {
             range: Some(FileRange { start, end }),
             statistics: None,
             extensions: None,
+            metadata_size_hint: None,
         }
         .with_range(start, end)
+    }
+
+    pub fn with_metadata_size_hint(mut self, metadata_size_hint: usize) -> Self {
+        self.metadata_size_hint = Some(metadata_size_hint);
+        self
     }
 
     /// Return a file reference from the given path
@@ -156,6 +165,7 @@ impl From<ObjectMeta> for PartitionedFile {
             range: None,
             statistics: None,
             extensions: None,
+            metadata_size_hint: None,
         }
     }
 }

@@ -422,6 +422,7 @@ pub(crate) mod test_util {
             range: None,
             statistics: None,
             extensions: None,
+            metadata_size_hint: None,
         }]];
 
         let exec = format

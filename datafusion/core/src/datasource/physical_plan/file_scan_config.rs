@@ -1207,6 +1207,7 @@ mod tests {
                             .collect::<Vec<_>>(),
                     }),
                     extensions: None,
+                    metadata_size_hint: None,
                 }
             }
         }

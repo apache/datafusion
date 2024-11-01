@@ -1656,6 +1656,7 @@ mod tests {
                 range: Some(FileRange { start, end }),
                 statistics: None,
                 extensions: None,
+                metadata_size_hint: None,
             }
         }
 
@@ -1748,6 +1749,7 @@ mod tests {
             range: None,
             statistics: None,
             extensions: None,
+            metadata_size_hint: None,
         };
 
         let expected_schema = Schema::new(vec![
@@ -1835,6 +1837,7 @@ mod tests {
             range: None,
             statistics: None,
             extensions: None,
+            metadata_size_hint: None,
         };
 
         let file_schema = Arc::new(Schema::empty());

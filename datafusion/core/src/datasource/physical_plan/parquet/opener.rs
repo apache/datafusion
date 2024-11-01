@@ -88,12 +88,14 @@ impl FileOpener for ParquetOpener {
         let file_name = file_meta.location().to_string();
         let file_metrics =
             ParquetFileMetrics::new(self.partition_index, &file_name, &self.metrics);
+        
+        let metadata_size_hint = file_meta.metadata_size_hint.or(self.metadata_size_hint);
 
         let mut reader: Box<dyn AsyncFileReader> =
             self.parquet_file_reader_factory.create_reader(
                 self.partition_index,
                 file_meta,
-                self.metadata_size_hint,
+                metadata_size_hint,
                 &self.metrics,
             )?;
 
