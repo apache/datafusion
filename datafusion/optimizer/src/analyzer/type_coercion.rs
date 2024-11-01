@@ -688,6 +688,21 @@ fn coerce_frame_bound(
     }
 }
 
+fn extract_window_frame_target_type(col_type: &DataType) -> Result<DataType> {
+    if col_type.is_numeric()
+        || is_utf8_or_large_utf8(col_type)
+        || matches!(col_type, DataType::Null)
+    {
+        Ok(col_type.clone())
+    } else if is_datetime(col_type) {
+        Ok(DataType::Interval(IntervalUnit::MonthDayNano))
+    } else if let DataType::Dictionary(_, value_type) = col_type {
+        extract_window_frame_target_type(value_type)
+    } else {
+        return internal_err!("Cannot run range queries on datatype: {col_type:?}");
+    }
+}
+
 // Coerces the given `window_frame` to use appropriate natural types.
 // For example, ROWS and GROUPS frames use `UInt64` during calculations.
 fn coerce_window_frame(
@@ -703,18 +718,7 @@ fn coerce_window_frame(
                 .map(|s| s.expr.get_type(schema))
                 .transpose()?;
             if let Some(col_type) = current_types {
-                if col_type.is_numeric()
-                    || is_utf8_or_large_utf8(&col_type)
-                    || matches!(col_type, DataType::Null)
-                {
-                    col_type
-                } else if is_datetime(&col_type) {
-                    DataType::Interval(IntervalUnit::MonthDayNano)
-                } else {
-                    return internal_err!(
-                        "Cannot run range queries on datatype: {col_type:?}"
-                    );
-                }
+                extract_window_frame_target_type(&col_type)?
             } else {
                 return internal_err!("ORDER BY column cannot be empty");
             }
