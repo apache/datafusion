@@ -1151,21 +1151,14 @@ impl<T: DynTreeNode + ?Sized> TreeNode for Arc<T> {
                     let node = node.transform_parent(|n| rewriter.f_up(n))?;
 
                     if let Some(TransformingState::ProcessingChildren {
-                        item: mut parent_node,
-                        non_processed_children,
-                        mut processed_children,
+                        item: ref mut parent_node,
+                        ref mut processed_children,
                         ..
-                    }) = stack.pop()
+                    }) = stack.last_mut()
                     {
-                        // We need use returned recursion state when processing the remaining children
+                        // We need to use the returned recursion state when processing the remaining children
                         parent_node.tnr = node.tnr;
                         processed_children.push(node);
-
-                        stack.push(TransformingState::ProcessingChildren {
-                            item: parent_node,
-                            non_processed_children,
-                            processed_children,
-                        })
                     } else {
                         debug_assert!(stack.is_empty());
                         return Ok(node);
