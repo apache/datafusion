@@ -980,6 +980,23 @@ SELECT DATE_BIN('3 years 1 months', '2022-09-01 00:00:00Z');
 ----
 2022-06-01T00:00:00
 
+# Times before the unix epoch
+query P
+select date_bin('1 hour', column1)
+from (values
+  (timestamp '1969-01-01 00:00:00'),
+  (timestamp '1969-01-01 00:15:00'),
+  (timestamp '1969-01-01 00:30:00'),
+  (timestamp '1969-01-01 00:45:00'),
+  (timestamp '1969-01-01 01:00:00')
+) as sq
+----
+1969-01-01T00:00:00
+1969-01-01T00:00:00
+1969-01-01T00:00:00
+1969-01-01T00:00:00
+1969-01-01T01:00:00
+
 ###
 ## test date_trunc function
 ###
