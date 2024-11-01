@@ -15,8 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
+mod decimal;
 mod primitive;
 mod string;
 
+pub use decimal::DecimalArrayGenerator;
 pub use primitive::PrimitiveArrayGenerator;
 pub use string::StringArrayGenerator;

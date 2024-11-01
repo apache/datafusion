@@ -16,7 +16,7 @@
 // under the License.
 
 use arrow::array::{ArrayRef, ArrowPrimitiveType, PrimitiveArray, UInt32Array};
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, IntervalDayTime, IntervalMonthDayNano};
 use rand::distributions::Standard;
 use rand::prelude::Distribution;
 use rand::rngs::StdRng;
@@ -31,11 +31,11 @@ pub trait FromNative: std::fmt::Debug + Send + Sync + Copy + Default {
 }
 
 macro_rules! native_type {
-    ($t: ty $(, $from:ident)*) => {
-        impl FromNative for $t {
+    ($T: ty $(, $from:ident)*) => {
+        impl FromNative for $T {
             $(
                 #[inline]
-                fn $from(v: $t) -> Option<Self> {
+                fn $from(v: $T) -> Option<Self> {
                     Some(v)
                 }
             )*
@@ -53,6 +53,57 @@ native_type!(u32);
 native_type!(u64);
 native_type!(f32);
 native_type!(f64);
+native_type!(IntervalDayTime);
+native_type!(IntervalMonthDayNano);
+
+/// Trait for generating random (single) data.
+pub trait RandomData {
+    fn generate_random_data(rng: &mut StdRng) -> Self;
+}
+
+macro_rules! basic_random_data {
+    ($T: ty) => {
+        impl RandomData for $T
+        where
+            Standard: Distribution<$T>,
+        {
+            #[inline]
+            fn generate_random_data(rng: &mut StdRng) -> Self {
+                rng.gen::<$T>()
+            }
+        }
+    };
+}
+
+basic_random_data!(i8);
+basic_random_data!(i16);
+basic_random_data!(i32);
+basic_random_data!(i64);
+basic_random_data!(u8);
+basic_random_data!(u16);
+basic_random_data!(u32);
+basic_random_data!(u64);
+basic_random_data!(f32);
+basic_random_data!(f64);
+
+impl RandomData for IntervalDayTime {
+    fn generate_random_data(rng: &mut StdRng) -> Self {
+        IntervalDayTime {
+            days: rng.gen::<i32>(),
+            milliseconds: rng.gen::<i32>(),
+        }
+    }
+}
+
+impl RandomData for IntervalMonthDayNano {
+    fn generate_random_data(rng: &mut StdRng) -> Self {
+        IntervalMonthDayNano {
+            months: rng.gen::<i32>(),
+            days: rng.gen::<i32>(),
+            nanoseconds: rng.gen::<i64>(),
+        }
+    }
+}
 
 /// Randomly generate primitive array
 pub struct PrimitiveArrayGenerator {
@@ -71,40 +122,42 @@ impl PrimitiveArrayGenerator {
     pub fn gen_data<A>(&mut self) -> ArrayRef
     where
         A: ArrowPrimitiveType,
-        A::Native: FromNative,
-        Standard: Distribution<<A as ArrowPrimitiveType>::Native>,
+        A::Native: FromNative + RandomData,
     {
         // table of primitives from which to draw
-        let distinct_primitives: PrimitiveArray<A> = (0..self.num_distinct_primitives)
-            .map(|_| {
-                Some(match A::DATA_TYPE {
-                    DataType::Int8
-                    | DataType::Int16
-                    | DataType::Int32
-                    | DataType::Int64
-                    | DataType::UInt8
-                    | DataType::UInt16
-                    | DataType::UInt32
-                    | DataType::UInt64
-                    | DataType::Float32
-                    | DataType::Float64
-                    | DataType::Date32 => self.rng.gen::<A::Native>(),
+        let distinct_primitives: PrimitiveArray<A> = match A::DATA_TYPE {
+            DataType::Int8
+            | DataType::Int16
+            | DataType::Int32
+            | DataType::Int64
+            | DataType::UInt8
+            | DataType::UInt16
+            | DataType::UInt32
+            | DataType::UInt64
+            | DataType::Float32
+            | DataType::Float64
+            | DataType::Date32
+            | DataType::Time32(_)
+            | DataType::Time64(_)
+            | DataType::Interval(_) => (0..self.num_distinct_primitives)
+                .map(|_| Some(A::Native::generate_random_data(&mut self.rng)))
+                .collect(),
 
-                    DataType::Date64 => {
-                        // TODO: constrain this range to valid dates if necessary
-                        let date_value = self.rng.gen_range(i64::MIN..=i64::MAX);
-                        let millis_per_day = 86_400_000;
-                        let adjusted_value = date_value - (date_value % millis_per_day);
-                        A::Native::from_i64(adjusted_value).unwrap()
-                    }
+            DataType::Date64 => {
+                // TODO: constrain this range to valid dates if necessary
+                let date_value = self.rng.gen_range(i64::MIN..=i64::MAX);
+                let millis_per_day = 86_400_000;
+                let adjusted_value = date_value - (date_value % millis_per_day);
+                (0..self.num_distinct_primitives)
+                    .map(|_| Some(A::Native::from_i64(adjusted_value).unwrap()))
+                    .collect()
+            }
 
-                    _ => {
-                        let arrow_type = A::DATA_TYPE;
-                        panic!("Unsupported arrow data type: {arrow_type}")
-                    }
-                })
-            })
-            .collect();
+            _ => {
+                let arrow_type = A::DATA_TYPE;
+                panic!("Unsupported arrow data type: {arrow_type}")
+            }
+        };
 
         // pick num_primitves randomly from the distinct string table
         let indicies: UInt32Array = (0..self.num_primitives)
