@@ -562,7 +562,7 @@ pub async fn from_substrait_rel(
     rel: &Rel,
     extensions: &Extensions,
 ) -> Result<LogicalPlan> {
-    match &rel.rel_type {
+    let plan: Result<LogicalPlan> = match &rel.rel_type {
         Some(RelType::Project(p)) => {
             if let Some(input) = p.input.as_ref() {
                 let mut input = LogicalPlanBuilder::from(
@@ -606,8 +606,7 @@ pub async fn from_substrait_rel(
                 }
                 final_exprs.append(&mut explicit_exprs);
 
-                let plan = input.project(final_exprs)?.build()?;
-                apply_emit_kind(p.common.as_ref(), plan)
+                input.project(final_exprs)?.build()
             } else {
                 not_impl_err!("Projection without an input is not supported")
             }
@@ -621,8 +620,7 @@ pub async fn from_substrait_rel(
                     let expr =
                         from_substrait_rex(ctx, condition, input.schema(), extensions)
                             .await?;
-                    let plan = input.filter(expr)?.build()?;
-                    apply_emit_kind(filter.common.as_ref(), plan)
+                    input.filter(expr)?.build()
                 } else {
                     not_impl_err!("Filter without an condition is not valid")
                 }
@@ -642,8 +640,7 @@ pub async fn from_substrait_rel(
                 } else {
                     Some(fetch.count as usize)
                 };
-                let plan = input.limit(offset, count)?.build()?;
-                apply_emit_kind(fetch.common.as_ref(), plan)
+                input.limit(offset, count)?.build()
             } else {
                 not_impl_err!("Fetch without an input is not valid")
             }
@@ -656,8 +653,7 @@ pub async fn from_substrait_rel(
                 let sorts =
                     from_substrait_sorts(ctx, &sort.sorts, input.schema(), extensions)
                         .await?;
-                let plan = input.sort(sorts)?.build()?;
-                apply_emit_kind(sort.common.as_ref(), plan)
+                input.sort(sorts)?.build()
             } else {
                 not_impl_err!("Sort without an input is not valid")
             }
@@ -746,8 +742,7 @@ pub async fn from_substrait_rel(
                     };
                     aggr_expr.push(agg_func?.as_ref().clone());
                 }
-                let plan = input.aggregate(group_expr, aggr_expr)?.build()?;
-                apply_emit_kind(agg.common.as_ref(), plan)
+                input.aggregate(group_expr, aggr_expr)?.build()
             } else {
                 not_impl_err!("Aggregate without an input is not valid")
             }
@@ -774,7 +769,7 @@ pub async fn from_substrait_rel(
 
             // If join expression exists, parse the `on` condition expression, build join and return
             // Otherwise, build join with only the filter, without join keys
-            let plan = match &join.expression.as_ref() {
+            match &join.expression.as_ref() {
                 Some(expr) => {
                     let on = from_substrait_rex(ctx, expr, &in_join_schema, extensions)
                         .await?;
@@ -807,8 +802,7 @@ pub async fn from_substrait_rel(
                     )?
                     .build()
                 }
-            }?;
-            apply_emit_kind(join.common.as_ref(), plan)
+            }
         }
         Some(RelType::Cross(cross)) => {
             let left = LogicalPlanBuilder::from(
@@ -819,8 +813,7 @@ pub async fn from_substrait_rel(
                     .await?,
             );
             let (left, right) = requalify_sides_if_needed(left, right)?;
-            let plan = left.cross_join(right.build()?)?.build()?;
-            apply_emit_kind(cross.common.as_ref(), plan)
+            left.cross_join(right.build()?)?.build()
         }
         Some(RelType::Read(read)) => {
             fn read_with_schema(
@@ -841,7 +834,7 @@ pub async fn from_substrait_rel(
 
             let substrait_schema = from_substrait_named_struct(named_struct, extensions)?;
 
-            let plan = match &read.as_ref().read_type {
+            match &read.as_ref().read_type {
                 Some(ReadType::NamedTable(nt)) => {
                     let table_reference = match nt.names.len() {
                         0 => {
@@ -952,15 +945,14 @@ pub async fn from_substrait_rel(
                 _ => {
                     not_impl_err!("Unsupported ReadType: {:?}", &read.as_ref().read_type)
                 }
-            }?;
-            apply_emit_kind(read.common.as_ref(), plan)
+            }
         }
         Some(RelType::Set(set)) => match set_rel::SetOp::try_from(set.op) {
             Ok(set_op) => {
                 if set.inputs.len() < 2 {
                     substrait_err!("Set operation requires at least two inputs")
                 } else {
-                    let plan = match set_op {
+                    match set_op {
                         set_rel::SetOp::UnionAll => {
                             union_rels(&set.inputs, ctx, extensions, true).await
                         }
@@ -989,8 +981,7 @@ pub async fn from_substrait_rel(
                             except_rels(&set.inputs, ctx, extensions, true).await
                         }
                         _ => not_impl_err!("Unsupported set operator: {set_op:?}"),
-                    }?;
-                    apply_emit_kind(set.common.as_ref(), plan)
+                    }
                 }
             }
             Err(e) => not_impl_err!("Invalid set operation type {}: {e}", set.op),
@@ -999,18 +990,17 @@ pub async fn from_substrait_rel(
             let Some(ext_detail) = &extension.detail else {
                 return substrait_err!("Unexpected empty detail in ExtensionLeafRel");
             };
-            let node = ctx
+            let plan = ctx
                 .state()
                 .serializer_registry()
                 .deserialize_logical_plan(&ext_detail.type_url, &ext_detail.value)?;
-            let plan = LogicalPlan::Extension(Extension { node });
-            apply_emit_kind(extension.common.as_ref(), plan)
+            Ok(LogicalPlan::Extension(Extension { node: plan }))
         }
         Some(RelType::ExtensionSingle(extension)) => {
             let Some(ext_detail) = &extension.detail else {
                 return substrait_err!("Unexpected empty detail in ExtensionSingleRel");
             };
-            let node = ctx
+            let plan = ctx
                 .state()
                 .serializer_registry()
                 .deserialize_logical_plan(&ext_detail.type_url, &ext_detail.value)?;
@@ -1020,10 +1010,9 @@ pub async fn from_substrait_rel(
                 );
             };
             let input_plan = from_substrait_rel(ctx, input_rel, extensions).await?;
-            let plan = LogicalPlan::Extension(Extension {
-                node: node.with_exprs_and_inputs(node.expressions(), vec![input_plan])?,
-            });
-            apply_emit_kind(extension.common.as_ref(), plan)
+            let plan =
+                plan.with_exprs_and_inputs(plan.expressions(), vec![input_plan])?;
+            Ok(LogicalPlan::Extension(Extension { node: plan }))
         }
         Some(RelType::ExtensionMulti(extension)) => {
             let Some(ext_detail) = &extension.detail else {
@@ -1038,10 +1027,8 @@ pub async fn from_substrait_rel(
                 let input_plan = from_substrait_rel(ctx, input, extensions).await?;
                 inputs.push(input_plan);
             }
-            let plan = LogicalPlan::Extension(Extension {
-                node: plan.with_exprs_and_inputs(plan.expressions(), inputs)?,
-            });
-            apply_emit_kind(extension.common.as_ref(), plan)
+            let plan = plan.with_exprs_and_inputs(plan.expressions(), inputs)?;
+            Ok(LogicalPlan::Extension(Extension { node: plan }))
         }
         Some(RelType::Exchange(exchange)) => {
             let Some(input) = exchange.input.as_ref() else {
@@ -1077,13 +1064,42 @@ pub async fn from_substrait_rel(
                     return not_impl_err!("Unsupported exchange kind: {exchange_kind:?}");
                 }
             };
-            let plan = LogicalPlan::Repartition(Repartition {
+            Ok(LogicalPlan::Repartition(Repartition {
                 input,
                 partitioning_scheme,
-            });
-            apply_emit_kind(exchange.common.as_ref(), plan)
+            }))
         }
         _ => not_impl_err!("Unsupported RelType: {:?}", rel.rel_type),
+    };
+    apply_emit_kind(retrieve_rel_common(rel), plan?)
+}
+
+fn retrieve_rel_common(rel: &Rel) -> Option<&RelCommon> {
+    match rel.rel_type.as_ref() {
+        None => None,
+        Some(rt) => match rt {
+            RelType::Read(r) => r.common.as_ref(),
+            RelType::Filter(f) => f.common.as_ref(),
+            RelType::Fetch(f) => f.common.as_ref(),
+            RelType::Aggregate(a) => a.common.as_ref(),
+            RelType::Sort(s) => s.common.as_ref(),
+            RelType::Join(j) => j.common.as_ref(),
+            RelType::Project(p) => p.common.as_ref(),
+            RelType::Set(s) => s.common.as_ref(),
+            RelType::ExtensionSingle(e) => e.common.as_ref(),
+            RelType::ExtensionMulti(e) => e.common.as_ref(),
+            RelType::ExtensionLeaf(e) => e.common.as_ref(),
+            RelType::Cross(c) => c.common.as_ref(),
+            RelType::Reference(_) => None,
+            RelType::Write(w) => w.common.as_ref(),
+            RelType::Ddl(d) => d.common.as_ref(),
+            RelType::HashJoin(j) => j.common.as_ref(),
+            RelType::MergeJoin(j) => j.common.as_ref(),
+            RelType::NestedLoopJoin(j) => j.common.as_ref(),
+            RelType::Window(w) => w.common.as_ref(),
+            RelType::Exchange(e) => e.common.as_ref(),
+            RelType::Expand(e) => e.common.as_ref(),
+        },
     }
 }
 
