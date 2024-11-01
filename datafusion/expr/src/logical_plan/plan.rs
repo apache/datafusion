@@ -266,6 +266,8 @@ pub enum LogicalPlan {
     /// Prepare a statement and find any bind parameters
     /// (e.g. `?`). This is used to implement SQL-prepared statements.
     Prepare(Prepare),
+    /// Execute a prepared statement. This is used to implement SQL 'EXECUTE'.
+    Execute(Execute),
     /// Data Manipulation Language (DML): Insert / Update / Delete
     Dml(DmlStatement),
     /// Data Definition Language (DDL): CREATE / DROP TABLES / VIEWS / SCHEMAS
@@ -314,6 +316,7 @@ impl LogicalPlan {
             LogicalPlan::Subquery(Subquery { subquery, .. }) => subquery.schema(),
             LogicalPlan::SubqueryAlias(SubqueryAlias { schema, .. }) => schema,
             LogicalPlan::Prepare(Prepare { input, .. }) => input.schema(),
+            LogicalPlan::Execute(Execute { schema, .. }) => schema,
             LogicalPlan::Explain(explain) => &explain.schema,
             LogicalPlan::Analyze(analyze) => &analyze.schema,
             LogicalPlan::Extension(extension) => extension.node.schema(),
@@ -457,6 +460,7 @@ impl LogicalPlan {
             | LogicalPlan::Statement { .. }
             | LogicalPlan::EmptyRelation { .. }
             | LogicalPlan::Values { .. }
+            | LogicalPlan::Execute { .. }
             | LogicalPlan::DescribeTable(_) => vec![],
         }
     }
@@ -532,7 +536,9 @@ impl LogicalPlan {
                         left.head_output_expr()
                     }
                 }
-                JoinType::LeftSemi | JoinType::LeftAnti => left.head_output_expr(),
+                JoinType::LeftSemi | JoinType::LeftAnti | JoinType::LeftMark => {
+                    left.head_output_expr()
+                }
                 JoinType::RightSemi | JoinType::RightAnti => right.head_output_expr(),
             },
             LogicalPlan::RecursiveQuery(RecursiveQuery { static_term, .. }) => {
@@ -558,6 +564,7 @@ impl LogicalPlan {
             LogicalPlan::Subquery(_) => Ok(None),
             LogicalPlan::EmptyRelation(_)
             | LogicalPlan::Prepare(_)
+            | LogicalPlan::Execute(_)
             | LogicalPlan::Statement(_)
             | LogicalPlan::Values(_)
             | LogicalPlan::Explain(_)
@@ -710,6 +717,7 @@ impl LogicalPlan {
             LogicalPlan::Analyze(_) => Ok(self),
             LogicalPlan::Explain(_) => Ok(self),
             LogicalPlan::Prepare(_) => Ok(self),
+            LogicalPlan::Execute(_) => Ok(self),
             LogicalPlan::TableScan(_) => Ok(self),
             LogicalPlan::EmptyRelation(_) => Ok(self),
             LogicalPlan::Statement(_) => Ok(self),
@@ -936,9 +944,8 @@ impl LogicalPlan {
                         expr.len()
                     );
                 }
-                // Pop order is same as the order returned by `LogicalPlan::expressions()`
-                let new_skip = skip.as_ref().and(expr.pop());
-                let new_fetch = fetch.as_ref().and(expr.pop());
+                let new_skip = skip.as_ref().and_then(|_| expr.pop());
+                let new_fetch = fetch.as_ref().and_then(|_| expr.pop());
                 let input = self.only_input(inputs)?;
                 Ok(LogicalPlan::Limit(Limit {
                     skip: new_skip.map(Box::new),
@@ -1069,6 +1076,14 @@ impl LogicalPlan {
                     name: name.clone(),
                     data_types: data_types.clone(),
                     input: Arc::new(input),
+                }))
+            }
+            LogicalPlan::Execute(Execute { name, schema, .. }) => {
+                self.assert_no_inputs(inputs)?;
+                Ok(LogicalPlan::Execute(Execute {
+                    name: name.clone(),
+                    schema: Arc::clone(schema),
+                    parameters: expr,
                 }))
             }
             LogicalPlan::TableScan(ts) => {
@@ -1291,7 +1306,9 @@ impl LogicalPlan {
                         _ => None,
                     }
                 }
-                JoinType::LeftSemi | JoinType::LeftAnti => left.max_rows(),
+                JoinType::LeftSemi | JoinType::LeftAnti | JoinType::LeftMark => {
+                    left.max_rows()
+                }
                 JoinType::RightSemi | JoinType::RightAnti => right.max_rows(),
             },
             LogicalPlan::Repartition(Repartition { input, .. }) => input.max_rows(),
@@ -1327,6 +1344,7 @@ impl LogicalPlan {
             | LogicalPlan::Copy(_)
             | LogicalPlan::DescribeTable(_)
             | LogicalPlan::Prepare(_)
+            | LogicalPlan::Execute(_)
             | LogicalPlan::Statement(_)
             | LogicalPlan::Extension(_) => None,
         }
@@ -1929,6 +1947,9 @@ impl LogicalPlan {
                         name, data_types, ..
                     }) => {
                         write!(f, "Prepare: {name:?} {data_types:?} ")
+                    }
+                    LogicalPlan::Execute(Execute { name, parameters, .. }) => {
+                        write!(f, "Execute: {} params=[{}]", name, expr_vec_fmt!(parameters))
                     }
                     LogicalPlan::DescribeTable(DescribeTable { .. }) => {
                         write!(f, "DescribeTable")
@@ -2594,6 +2615,27 @@ pub struct Prepare {
     pub data_types: Vec<DataType>,
     /// The logical plan of the statements
     pub input: Arc<LogicalPlan>,
+}
+
+/// Execute a prepared statement.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Execute {
+    /// The name of the prepared statement to execute
+    pub name: String,
+    /// The execute parameters
+    pub parameters: Vec<Expr>,
+    /// Dummy schema
+    pub schema: DFSchemaRef,
+}
+
+// Comparison excludes the `schema` field.
+impl PartialOrd for Execute {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        match self.name.partial_cmp(&other.name) {
+            Some(Ordering::Equal) => self.parameters.partial_cmp(&other.parameters),
+            cmp => cmp,
+        }
+    }
 }
 
 /// Describe the schema of table
@@ -3383,8 +3425,8 @@ pub struct ColumnUnnestList {
     pub depth: usize,
 }
 
-impl fmt::Display for ColumnUnnestList {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl Display for ColumnUnnestList {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "{}|depth={}", self.output_column, self.depth)
     }
 }
@@ -4100,5 +4142,26 @@ digraph {
             Some(Ordering::Greater)
         );
         assert_eq!(describe_table.partial_cmp(&describe_table_clone), None);
+    }
+
+    #[test]
+    fn test_limit_with_new_children() {
+        let limit = LogicalPlan::Limit(Limit {
+            skip: None,
+            fetch: Some(Box::new(Expr::Literal(
+                ScalarValue::new_ten(&DataType::UInt32).unwrap(),
+            ))),
+            input: Arc::new(LogicalPlan::Values(Values {
+                schema: Arc::new(DFSchema::empty()),
+                values: vec![vec![]],
+            })),
+        });
+        let new_limit = limit
+            .with_new_exprs(
+                limit.expressions(),
+                limit.inputs().into_iter().cloned().collect(),
+            )
+            .unwrap();
+        assert_eq!(limit, new_limit);
     }
 }

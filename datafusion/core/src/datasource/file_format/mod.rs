@@ -42,7 +42,7 @@ use crate::error::Result;
 use crate::execution::context::SessionState;
 use crate::physical_plan::{ExecutionPlan, Statistics};
 
-use arrow_schema::{DataType, Field, Schema};
+use arrow_schema::{DataType, Field, FieldRef, Schema};
 use datafusion_common::file_options::file_type::FileType;
 use datafusion_common::{internal_err, not_impl_err, GetExt};
 use datafusion_expr::Expr;
@@ -79,7 +79,7 @@ pub trait FileFormatFactory: Sync + Send + GetExt + Debug {
 ///
 /// [`TableProvider`]: crate::catalog::TableProvider
 #[async_trait]
-pub trait FileFormat: Send + Sync + fmt::Debug {
+pub trait FileFormat: Send + Sync + Debug {
     /// Returns the table provider as [`Any`](std::any::Any) so that it can be
     /// downcast to a specific implementation.
     fn as_any(&self) -> &dyn Any;
@@ -224,7 +224,7 @@ pub fn format_as_file_type(
 /// downcasted to a [DefaultFileType].
 pub fn file_type_to_format(
     file_type: &Arc<dyn FileType>,
-) -> datafusion_common::Result<Arc<dyn FileFormatFactory>> {
+) -> Result<Arc<dyn FileFormatFactory>> {
     match file_type
         .as_ref()
         .as_any()
@@ -235,20 +235,26 @@ pub fn file_type_to_format(
     }
 }
 
+/// Create a new field with the specified data type, copying the other
+/// properties from the input field
+fn field_with_new_type(field: &FieldRef, new_type: DataType) -> FieldRef {
+    Arc::new(field.as_ref().clone().with_data_type(new_type))
+}
+
 /// Transform a schema to use view types for Utf8 and Binary
+///
+/// See [parquet::ParquetFormat::force_view_types] for details
 pub fn transform_schema_to_view(schema: &Schema) -> Schema {
     let transformed_fields: Vec<Arc<Field>> = schema
         .fields
         .iter()
         .map(|field| match field.data_type() {
-            DataType::Utf8 | DataType::LargeUtf8 => Arc::new(
-                Field::new(field.name(), DataType::Utf8View, field.is_nullable())
-                    .with_metadata(field.metadata().to_owned()),
-            ),
-            DataType::Binary | DataType::LargeBinary => Arc::new(
-                Field::new(field.name(), DataType::BinaryView, field.is_nullable())
-                    .with_metadata(field.metadata().to_owned()),
-            ),
+            DataType::Utf8 | DataType::LargeUtf8 => {
+                field_with_new_type(field, DataType::Utf8View)
+            }
+            DataType::Binary | DataType::LargeBinary => {
+                field_with_new_type(field, DataType::BinaryView)
+            }
             _ => field.clone(),
         })
         .collect();
@@ -274,6 +280,7 @@ pub(crate) fn coerce_file_schema_to_view_type(
             (f.name(), dt)
         })
         .collect();
+
     if !transform {
         return None;
     }
@@ -283,14 +290,13 @@ pub(crate) fn coerce_file_schema_to_view_type(
         .iter()
         .map(
             |field| match (table_fields.get(field.name()), field.data_type()) {
-                (Some(DataType::Utf8View), DataType::Utf8)
-                | (Some(DataType::Utf8View), DataType::LargeUtf8) => Arc::new(
-                    Field::new(field.name(), DataType::Utf8View, field.is_nullable()),
-                ),
-                (Some(DataType::BinaryView), DataType::Binary)
-                | (Some(DataType::BinaryView), DataType::LargeBinary) => Arc::new(
-                    Field::new(field.name(), DataType::BinaryView, field.is_nullable()),
-                ),
+                (Some(DataType::Utf8View), DataType::Utf8 | DataType::LargeUtf8) => {
+                    field_with_new_type(field, DataType::Utf8View)
+                }
+                (
+                    Some(DataType::BinaryView),
+                    DataType::Binary | DataType::LargeBinary,
+                ) => field_with_new_type(field, DataType::BinaryView),
                 _ => field.clone(),
             },
         )
@@ -300,6 +306,78 @@ pub(crate) fn coerce_file_schema_to_view_type(
         transformed_fields,
         file_schema.metadata.clone(),
     ))
+}
+
+/// Transform a schema so that any binary types are strings
+pub fn transform_binary_to_string(schema: &Schema) -> Schema {
+    let transformed_fields: Vec<Arc<Field>> = schema
+        .fields
+        .iter()
+        .map(|field| match field.data_type() {
+            DataType::Binary => field_with_new_type(field, DataType::Utf8),
+            DataType::LargeBinary => field_with_new_type(field, DataType::LargeUtf8),
+            DataType::BinaryView => field_with_new_type(field, DataType::Utf8View),
+            _ => field.clone(),
+        })
+        .collect();
+    Schema::new_with_metadata(transformed_fields, schema.metadata.clone())
+}
+
+/// If the table schema uses a string type, coerce the file schema to use a string type.
+///
+/// See [parquet::ParquetFormat::binary_as_string] for details
+pub(crate) fn coerce_file_schema_to_string_type(
+    table_schema: &Schema,
+    file_schema: &Schema,
+) -> Option<Schema> {
+    let mut transform = false;
+    let table_fields: HashMap<_, _> = table_schema
+        .fields
+        .iter()
+        .map(|f| (f.name(), f.data_type()))
+        .collect();
+    let transformed_fields: Vec<Arc<Field>> = file_schema
+        .fields
+        .iter()
+        .map(
+            |field| match (table_fields.get(field.name()), field.data_type()) {
+                // table schema uses string type, coerce the file schema to use string type
+                (
+                    Some(DataType::Utf8),
+                    DataType::Binary | DataType::LargeBinary | DataType::BinaryView,
+                ) => {
+                    transform = true;
+                    field_with_new_type(field, DataType::Utf8)
+                }
+                // table schema uses large string type, coerce the file schema to use large string type
+                (
+                    Some(DataType::LargeUtf8),
+                    DataType::Binary | DataType::LargeBinary | DataType::BinaryView,
+                ) => {
+                    transform = true;
+                    field_with_new_type(field, DataType::LargeUtf8)
+                }
+                // table schema uses string view type, coerce the file schema to use view type
+                (
+                    Some(DataType::Utf8View),
+                    DataType::Binary | DataType::LargeBinary | DataType::BinaryView,
+                ) => {
+                    transform = true;
+                    field_with_new_type(field, DataType::Utf8View)
+                }
+                _ => field.clone(),
+            },
+        )
+        .collect();
+
+    if !transform {
+        None
+    } else {
+        Some(Schema::new_with_metadata(
+            transformed_fields,
+            file_schema.metadata.clone(),
+        ))
+    }
 }
 
 #[cfg(test)]
@@ -369,8 +447,8 @@ pub(crate) mod test_util {
         iterations_detected: Arc<Mutex<usize>>,
     }
 
-    impl std::fmt::Display for VariableStream {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    impl Display for VariableStream {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
             write!(f, "VariableStream")
         }
     }

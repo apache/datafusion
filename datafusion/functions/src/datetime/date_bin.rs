@@ -240,7 +240,7 @@ fn date_bin_nanos_interval(stride_nanos: i64, source: i64, origin: i64) -> i64 {
 fn compute_distance(time_diff: i64, stride: i64) -> i64 {
     let time_delta = time_diff - (time_diff % stride);
 
-    if time_diff < 0 && stride > 1 {
+    if time_diff < 0 && stride > 1 && time_delta != time_diff {
         // The origin is later than the source timestamp, round down to the previous bin
         time_delta - stride
     } else {
@@ -863,5 +863,33 @@ mod tests {
                 let result = date_bin_nanos_interval(stride1, source1, origin1);
                 assert_eq!(result, expected1, "{source} = {expected}");
             })
+    }
+
+    #[test]
+    fn test_date_bin_before_epoch() {
+        let cases = [
+            (
+                (TimeDelta::try_minutes(15), "1969-12-31T23:44:59.999999999"),
+                "1969-12-31T23:30:00",
+            ),
+            (
+                (TimeDelta::try_minutes(15), "1969-12-31T23:45:00"),
+                "1969-12-31T23:45:00",
+            ),
+            (
+                (TimeDelta::try_minutes(15), "1969-12-31T23:45:00.000000001"),
+                "1969-12-31T23:45:00",
+            ),
+        ];
+
+        cases.iter().for_each(|((stride, source), expected)| {
+            let stride = stride.unwrap();
+            let stride1 = stride.num_nanoseconds().unwrap();
+            let source1 = string_to_timestamp_nanos(source).unwrap();
+
+            let expected1 = string_to_timestamp_nanos(expected).unwrap();
+            let result = date_bin_nanos_interval(stride1, source1, 0);
+            assert_eq!(result, expected1, "{source} = {expected}");
+        })
     }
 }

@@ -20,6 +20,7 @@ use arrow_array::{Array, ArrayRef, RecordBatch};
 use datafusion_expr::EmitTo;
 use datafusion_physical_expr::binary_map::OutputType;
 use datafusion_physical_expr_common::binary_view_map::ArrowBytesViewMap;
+use std::mem::size_of;
 
 /// A [`GroupValues`] storing single column of Utf8View/BinaryView values
 ///
@@ -74,7 +75,7 @@ impl GroupValues for GroupValuesBytesView {
     }
 
     fn size(&self) -> usize {
-        self.map.size() + std::mem::size_of::<Self>()
+        self.map.size() + size_of::<Self>()
     }
 
     fn is_empty(&self) -> bool {

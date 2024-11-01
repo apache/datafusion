@@ -31,7 +31,7 @@ use datafusion_common::hash_utils::create_hashes;
 use datafusion_common::utils::proxy::{RawTableAllocExt, VecAllocExt};
 use std::any::type_name;
 use std::fmt::Debug;
-use std::mem;
+use std::mem::{size_of, swap};
 use std::ops::Range;
 use std::sync::Arc;
 
@@ -260,7 +260,7 @@ where
     /// the same output type
     pub fn take(&mut self) -> Self {
         let mut new_self = Self::new(self.output_type);
-        mem::swap(self, &mut new_self);
+        swap(self, &mut new_self);
         new_self
     }
 
@@ -545,7 +545,7 @@ where
     /// this set, not including `self`
     pub fn size(&self) -> usize {
         self.map_size
-            + self.buffer.capacity() * mem::size_of::<u8>()
+            + self.buffer.capacity() * size_of::<u8>()
             + self.offsets.allocated_size()
             + self.hashes_buffer.allocated_size()
     }
@@ -575,7 +575,7 @@ where
 }
 
 /// Maximum size of a value that can be inlined in the hash table
-const SHORT_VALUE_LEN: usize = mem::size_of::<usize>();
+const SHORT_VALUE_LEN: usize = size_of::<usize>();
 
 /// Entry in the hash table -- see [`ArrowBytesMap`] for more details
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]

@@ -34,7 +34,6 @@ use crate::{
     function::{AccumulatorArgs, StateFieldsArgs},
     utils::AggregateOrderSensitivity,
     Accumulator, AggregateUDFImpl, Expr, GroupsAccumulator, ReversedUDAF, Signature,
-    Volatility,
 };
 
 macro_rules! create_func {
@@ -106,7 +105,7 @@ pub struct Sum {
 impl Sum {
     pub fn new() -> Self {
         Self {
-            signature: Signature::user_defined(Volatility::Immutable),
+            signature: Signature::user_defined(Immutable),
         }
     }
 }
@@ -236,13 +235,13 @@ impl Count {
     pub fn new() -> Self {
         Self {
             aliases: vec!["count".to_string()],
-            signature: Signature::variadic_any(Volatility::Immutable),
+            signature: Signature::variadic_any(Immutable),
         }
     }
 }
 
 impl AggregateUDFImpl for Count {
-    fn as_any(&self) -> &dyn std::any::Any {
+    fn as_any(&self) -> &dyn Any {
         self
     }
 
@@ -318,13 +317,13 @@ impl Default for Min {
 impl Min {
     pub fn new() -> Self {
         Self {
-            signature: Signature::variadic_any(Volatility::Immutable),
+            signature: Signature::variadic_any(Immutable),
         }
     }
 }
 
 impl AggregateUDFImpl for Min {
-    fn as_any(&self) -> &dyn std::any::Any {
+    fn as_any(&self) -> &dyn Any {
         self
     }
 
@@ -403,13 +402,13 @@ impl Default for Max {
 impl Max {
     pub fn new() -> Self {
         Self {
-            signature: Signature::variadic_any(Volatility::Immutable),
+            signature: Signature::variadic_any(Immutable),
         }
     }
 }
 
 impl AggregateUDFImpl for Max {
-    fn as_any(&self) -> &dyn std::any::Any {
+    fn as_any(&self) -> &dyn Any {
         self
     }
 

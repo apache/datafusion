@@ -1941,12 +1941,12 @@ mod tests {
     use crate::physical_plan::{ColumnarValue, Partitioning, PhysicalExpr};
     use crate::test_util::{register_aggregate_csv, test_table, test_table_with_name};
 
-    use arrow::array::{self, Int32Array};
+    use arrow::array::Int32Array;
     use datafusion_common::{assert_batches_eq, Constraint, Constraints, ScalarValue};
     use datafusion_common_runtime::SpawnedTask;
     use datafusion_expr::expr::WindowFunction;
     use datafusion_expr::{
-        cast, create_udf, expr, lit, BuiltInWindowFunction, ExprFunctionExt,
+        cast, create_udf, lit, BuiltInWindowFunction, ExprFunctionExt,
         ScalarFunctionImplementation, Volatility, WindowFrame, WindowFrameBound,
         WindowFrameUnits, WindowFunctionDefinition,
     };
@@ -1979,8 +1979,8 @@ mod tests {
         let batch = RecordBatch::try_new(
             dual_schema.clone(),
             vec![
-                Arc::new(array::Int32Array::from(vec![1])),
-                Arc::new(array::StringArray::from(vec!["a"])),
+                Arc::new(Int32Array::from(vec![1])),
+                Arc::new(StringArray::from(vec!["a"])),
             ],
         )
         .unwrap();
@@ -2176,7 +2176,7 @@ mod tests {
     async fn select_with_window_exprs() -> Result<()> {
         // build plan using Table API
         let t = test_table().await?;
-        let first_row = Expr::WindowFunction(expr::WindowFunction::new(
+        let first_row = Expr::WindowFunction(WindowFunction::new(
             WindowFunctionDefinition::BuiltInWindowFunction(
                 BuiltInWindowFunction::FirstValue,
             ),
@@ -3570,11 +3570,10 @@ mod tests {
 
     #[tokio::test]
     async fn with_column_renamed_case_sensitive() -> Result<()> {
-        let config =
-            SessionConfig::from_string_hash_map(&std::collections::HashMap::from([(
-                "datafusion.sql_parser.enable_ident_normalization".to_owned(),
-                "false".to_owned(),
-            )]))?;
+        let config = SessionConfig::from_string_hash_map(&HashMap::from([(
+            "datafusion.sql_parser.enable_ident_normalization".to_owned(),
+            "false".to_owned(),
+        )]))?;
         let ctx = SessionContext::new_with_config(config);
         let name = "aggregate_test_100";
         register_aggregate_csv(&ctx, name).await?;
@@ -3646,7 +3645,7 @@ mod tests {
 
     #[tokio::test]
     async fn row_writer_resize_test() -> Result<()> {
-        let schema = Arc::new(Schema::new(vec![arrow::datatypes::Field::new(
+        let schema = Arc::new(Schema::new(vec![Field::new(
             "column_1",
             DataType::Utf8,
             false,
@@ -3655,7 +3654,7 @@ mod tests {
         let data = RecordBatch::try_new(
             schema,
             vec![
-                Arc::new(arrow::array::StringArray::from(vec![
+                Arc::new(StringArray::from(vec![
                     Some("2a0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"),
                     Some("3a0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000800"),
                 ]))
@@ -3865,6 +3864,7 @@ mod tests {
             JoinType::RightSemi,
             JoinType::LeftAnti,
             JoinType::RightAnti,
+            JoinType::LeftMark,
         ];
 
         let default_partition_count = SessionConfig::new().target_partitions();
@@ -3882,7 +3882,10 @@ mod tests {
             let join_schema = physical_plan.schema();
 
             match join_type {
-                JoinType::Left | JoinType::LeftSemi | JoinType::LeftAnti => {
+                JoinType::Left
+                | JoinType::LeftSemi
+                | JoinType::LeftAnti
+                | JoinType::LeftMark => {
                     let left_exprs: Vec<Arc<dyn PhysicalExpr>> = vec![
                         Arc::new(Column::new_with_schema("c1", &join_schema)?),
                         Arc::new(Column::new_with_schema("c2", &join_schema)?),

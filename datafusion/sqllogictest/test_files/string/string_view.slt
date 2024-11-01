@@ -60,6 +60,7 @@ create table test_source as values
   ('Andrew', 'X'),
   ('Xiangpeng', 'Xiangpeng'),
   ('Raphael', 'R'),
+  ('', 'Warsaw'),
   (NULL, 'R');
 
 # Table with the different combination of column types
@@ -89,6 +90,7 @@ select octet_length(column1_utf8view) from test;
 6
 9
 7
+0
 NULL
 
 query error DataFusion error: Arrow error: Compute error: bit_length not supported for Utf8View
@@ -100,6 +102,7 @@ select btrim(column1_large_utf8) from test;
 Andrew
 Xiangpeng
 Raphael
+(empty)
 NULL
 
 ########
@@ -119,6 +122,7 @@ from test;
 Andrew X false false true true
 Xiangpeng Xiangpeng true true false false
 Raphael R false false true true
+(empty) Warsaw false false true true
 NULL R NULL NULL NULL NULL
 
 # test StringViewArray with LargeUtf8 columns
@@ -134,6 +138,7 @@ from test;
 Andrew X false false true true
 Xiangpeng Xiangpeng true true false false
 Raphael R false false true true
+(empty) Warsaw false false true true
 NULL R NULL NULL NULL NULL
 
 ########
@@ -153,6 +158,7 @@ from test;
 Andrew X false false true true
 Xiangpeng Xiangpeng true true false false
 Raphael R false false true true
+(empty) Warsaw false false true true
 NULL R NULL NULL NULL NULL
 
 # StringView column to Dict scalar
@@ -168,6 +174,7 @@ from test;
 Andrew X true true false false
 Xiangpeng Xiangpeng false false true true
 Raphael R false false true true
+(empty) Warsaw false false true true
 NULL R NULL NULL NULL NULL
 
 # Dict column to StringView scalar
@@ -183,6 +190,7 @@ from test;
 Andrew X true true false false
 Xiangpeng Xiangpeng false false true true
 Raphael R false false true true
+(empty) Warsaw false false true true
 NULL R NULL NULL NULL NULL
 
 ########
@@ -296,6 +304,7 @@ FROM test;
 false false false
 true true true
 true true true
+false false false
 NULL NULL NULL
 
 # Test STARTS_WITH with utf8 against utf8view, utf8, and largeutf8
@@ -322,6 +331,7 @@ FROM test;
 false false false
 true true true
 true true true
+false false false
 NULL NULL NULL
 
 
@@ -702,6 +712,7 @@ FROM test;
 AndrewX
 XiangpengXiangpeng
 RaphaelR
+Warsaw
 R
 
 ## Should run CONCAT successfully with utf8 utf8view and largeutf8
@@ -713,6 +724,7 @@ FROM test;
 AndrewXX
 XiangpengXiangpengXiangpeng
 RaphaelRR
+WarsawWarsaw
 RR
 
 ## Ensure no casts for REGEXP_LIKE

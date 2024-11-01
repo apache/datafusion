@@ -152,7 +152,6 @@ impl From<protobuf::BuiltInWindowFunction> for BuiltInWindowFunction {
         match built_in_function {
             protobuf::BuiltInWindowFunction::Unspecified => todo!(),
             protobuf::BuiltInWindowFunction::FirstValue => Self::FirstValue,
-            protobuf::BuiltInWindowFunction::Ntile => Self::Ntile,
             protobuf::BuiltInWindowFunction::NthValue => Self::NthValue,
             protobuf::BuiltInWindowFunction::LastValue => Self::LastValue,
         }
@@ -214,6 +213,7 @@ impl From<protobuf::JoinType> for JoinType {
             protobuf::JoinType::Rightsemi => JoinType::RightSemi,
             protobuf::JoinType::Leftanti => JoinType::LeftAnti,
             protobuf::JoinType::Rightanti => JoinType::RightAnti,
+            protobuf::JoinType::Leftmark => JoinType::LeftMark,
         }
     }
 }

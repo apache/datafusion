@@ -384,6 +384,7 @@ fn try_pushdown_requirements_to_join(
                 return Ok(None);
             }
         }
+        JoinSide::None => return Ok(None),
     };
     let join_type = smj.join_type();
     let probe_side = SortMergeJoinExec::probe_side(&join_type);
@@ -410,6 +411,7 @@ fn try_pushdown_requirements_to_join(
             JoinSide::Right => {
                 required_input_ordering[1] = new_req;
             }
+            JoinSide::None => unreachable!(),
         }
         required_input_ordering
     }))
@@ -421,7 +423,11 @@ fn expr_source_side(
     left_columns_len: usize,
 ) -> Option<JoinSide> {
     match join_type {
-        JoinType::Inner | JoinType::Left | JoinType::Right | JoinType::Full => {
+        JoinType::Inner
+        | JoinType::Left
+        | JoinType::Right
+        | JoinType::Full
+        | JoinType::LeftMark => {
             let all_column_sides = required_exprs
                 .iter()
                 .filter_map(|r| {

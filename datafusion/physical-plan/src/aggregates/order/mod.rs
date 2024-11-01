@@ -20,6 +20,7 @@ use arrow_schema::Schema;
 use datafusion_common::Result;
 use datafusion_expr::EmitTo;
 use datafusion_physical_expr::PhysicalSortExpr;
+use std::mem::size_of;
 
 mod full;
 mod partial;
@@ -118,7 +119,7 @@ impl GroupOrdering {
 
     /// Return the size of memory used by the ordering state, in bytes
     pub fn size(&self) -> usize {
-        std::mem::size_of::<Self>()
+        size_of::<Self>()
             + match self {
                 GroupOrdering::None => 0,
                 GroupOrdering::Partial(partial) => partial.size(),

@@ -21,11 +21,27 @@
 
 Tests are critical to ensure that DataFusion is working properly and
 is not accidentally broken during refactorings. All new features
-should have test coverage.
+should have test coverage and the entire test suite is run as part of CI.
 
-DataFusion has several levels of tests in its [Test
-Pyramid](https://martinfowler.com/articles/practical-test-pyramid.html)
-and tries to follow the Rust standard [Testing Organization](https://doc.rust-lang.org/book/ch11-03-test-organization.html) in the The Book.
+DataFusion has several levels of tests in its [Test Pyramid] and tries to follow
+the Rust standard [Testing Organization] described in [The Book].
+
+Run tests using `cargo`:
+
+```shell
+cargo test
+```
+
+You can also use other runners such as [cargo-nextest].
+
+```shell
+cargo nextest run
+```
+
+[test pyramid]: https://martinfowler.com/articles/practical-test-pyramid.html
+[testing organization]: https://doc.rust-lang.org/book/ch11-03-test-organization.html
+[the book]: https://doc.rust-lang.org/book/
+[cargo-nextest]: https://nexte.st/
 
 ## Unit tests
 
@@ -34,7 +50,7 @@ The [test_util](https://github.com/apache/datafusion/tree/main/datafusion/common
 
 ## sqllogictests Tests
 
-DataFusion's SQL implementation is tested using [sqllogictest](https://github.com/apache/datafusion/tree/main/datafusion/sqllogictest) which are run like any other Rust test using `cargo test --test sqllogictests`.
+DataFusion's SQL implementation is tested using [sqllogictest](https://github.com/apache/datafusion/tree/main/datafusion/sqllogictest) which are run like other tests using `cargo test --test sqllogictests`.
 
 `sqllogictests` tests may be less convenient for new contributors who are familiar with writing `.rs` tests as they require learning another tool. However, `sqllogictest` based tests are much easier to develop and maintain as they 1) do not require a slow recompile/link cycle and 2) can be automatically updated via `cargo test --test sqllogictests -- --complete`.
 

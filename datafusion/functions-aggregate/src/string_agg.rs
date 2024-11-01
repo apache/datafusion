@@ -29,6 +29,7 @@ use datafusion_expr::{
 };
 use datafusion_physical_expr::expressions::Literal;
 use std::any::Any;
+use std::mem::size_of_val;
 use std::sync::OnceLock;
 
 make_udaf_expr_and_func!(
@@ -179,7 +180,7 @@ impl Accumulator for StringAggAccumulator {
     }
 
     fn size(&self) -> usize {
-        std::mem::size_of_val(self)
+        size_of_val(self)
             + self.values.as_ref().map(|v| v.capacity()).unwrap_or(0)
             + self.delimiter.capacity()
     }

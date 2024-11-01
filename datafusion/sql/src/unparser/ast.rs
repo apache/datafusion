@@ -182,7 +182,28 @@ impl SelectBuilder {
         self
     }
     pub fn selection(&mut self, value: Option<ast::Expr>) -> &mut Self {
-        self.selection = value;
+        // With filter pushdown optimization, the LogicalPlan can have filters defined as part of `TableScan` and `Filter` nodes.
+        // To avoid overwriting one of the filters, we combine the existing filter with the additional filter.
+        // Example:                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+        // |  Projection: customer.c_phone AS cntrycode, customer.c_acctbal                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+        // |   Filter: CAST(customer.c_acctbal AS Decimal128(38, 6)) > (<subquery>)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+        // |     Subquery:
+        // |     ..                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+        // |     TableScan: customer, full_filters=[customer.c_mktsegment = Utf8("BUILDING")]
+        match (&self.selection, value) {
+            (Some(existing_selection), Some(new_selection)) => {
+                self.selection = Some(ast::Expr::BinaryOp {
+                    left: Box::new(existing_selection.clone()),
+                    op: ast::BinaryOperator::And,
+                    right: Box::new(new_selection),
+                });
+            }
+            (None, Some(new_selection)) => {
+                self.selection = Some(new_selection);
+            }
+            (_, None) => (),
+        }
+
         self
     }
     pub fn group_by(&mut self, value: ast::GroupByExpr) -> &mut Self {

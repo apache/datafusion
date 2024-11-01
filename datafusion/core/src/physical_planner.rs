@@ -649,14 +649,16 @@ impl DefaultPhysicalPlanner {
                 aggr_expr,
                 ..
             }) => {
+                let options = session_state.config().options();
                 // Initially need to perform the aggregate and then merge the partitions
                 let input_exec = children.one()?;
                 let physical_input_schema = input_exec.schema();
                 let logical_input_schema = input.as_ref().schema();
-                let physical_input_schema_from_logical: Arc<Schema> =
-                    logical_input_schema.as_ref().clone().into();
+                let physical_input_schema_from_logical = logical_input_schema.inner();
 
-                if physical_input_schema != physical_input_schema_from_logical {
+                if &physical_input_schema != physical_input_schema_from_logical
+                    && !options.execution.skip_physical_aggregate_schema_check
+                {
                     return internal_err!("Physical input schema should be the same as the one converted from logical input schema.");
                 }
 
@@ -1025,14 +1027,21 @@ impl DefaultPhysicalPlanner {
                             })
                             .collect();
 
+                        let metadata: HashMap<_, _> = left_df_schema
+                            .metadata()
+                            .clone()
+                            .into_iter()
+                            .chain(right_df_schema.metadata().clone())
+                            .collect();
+
                         // Construct intermediate schemas used for filtering data and
                         // convert logical expression to physical according to filter schema
                         let filter_df_schema = DFSchema::new_with_metadata(
                             filter_df_fields,
-                            HashMap::new(),
+                            metadata.clone(),
                         )?;
                         let filter_schema =
-                            Schema::new_with_metadata(filter_fields, HashMap::new());
+                            Schema::new_with_metadata(filter_fields, metadata);
                         let filter_expr = create_physical_expr(
                             expr,
                             &filter_df_schema,
@@ -1191,6 +1200,9 @@ impl DefaultPhysicalPlanner {
                 // handled at a higher level (so that the appropriate
                 // statement can be prepared)
                 return not_impl_err!("Unsupported logical plan: Prepare");
+            }
+            LogicalPlan::Execute(_) => {
+                return not_impl_err!("Unsupported logical plan: Execute");
             }
             LogicalPlan::Dml(dml) => {
                 // DataFusion is a read-only query engine, but also a library, so consumers may implement this
