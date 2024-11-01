@@ -265,7 +265,7 @@ mod tests {
     }
 
     #[test]
-    fn exprs_are_all_columns() -> Result<()> {
+    fn one_side_unqualified() -> Result<()> {
         let (t1, t2) = test_tables()?;
         let plan_from_exprs = LogicalPlanBuilder::from(t1.clone())
             .join_with_expr_keys(
