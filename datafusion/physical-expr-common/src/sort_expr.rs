@@ -299,13 +299,7 @@ impl PhysicalSortRequirement {
             })
     }
 
-    /// Returns [`PhysicalSortRequirement`] that requires the exact
-    /// sort of the [`PhysicalSortExpr`]s in `ordering`
-    ///
-    /// This method takes `&'a PhysicalSortExpr` to make it easy to
-    /// use implementing [`ExecutionPlan::required_input_ordering`].
-    ///
-    /// [`ExecutionPlan::required_input_ordering`]: https://docs.rs/datafusion/latest/datafusion/physical_plan/trait.ExecutionPlan.html#method.required_input_ordering
+    #[deprecated(since = "43.0.0", note = "use  LexRequirement::from_lex_ordering")]
     pub fn from_sort_exprs<'a>(
         ordering: impl IntoIterator<Item = &'a PhysicalSortExpr>,
     ) -> LexRequirement {
@@ -317,13 +311,7 @@ impl PhysicalSortRequirement {
                 .collect(),
         )
     }
-
-    /// Converts an iterator of [`PhysicalSortRequirement`] into a Vec
-    /// of [`PhysicalSortExpr`]s.
-    ///
-    /// This function converts `PhysicalSortRequirement` to `PhysicalSortExpr`
-    /// for each entry in the input. If required ordering is None for an entry
-    /// default ordering `ASC, NULLS LAST` if given (see the `PhysicalSortExpr::from`).
+    #[deprecated(since = "43.0.0", note = "use  LexOrdering::from_lex_requirement")]
     pub fn to_sort_exprs(
         requirements: impl IntoIterator<Item = PhysicalSortRequirement>,
     ) -> LexOrdering {
@@ -408,6 +396,30 @@ impl LexOrdering {
 
     pub fn truncate(&mut self, len: usize) {
         self.inner.truncate(len)
+    }
+
+    /// Converts a `LexRequirement` into a `LexOrdering`.
+    ///
+    /// This function converts `PhysicalSortRequirement` to `PhysicalSortExpr`
+    /// for each entry in the input. If required ordering is None for an entry
+    /// default ordering `ASC, NULLS LAST` if given (see the `PhysicalSortExpr::from`).
+    pub fn from_lex_requirement(requirement: LexRequirement) -> LexOrdering {
+        requirement
+            .into_iter()
+            .map(PhysicalSortExpr::from)
+            .collect()
+    }
+}
+
+impl From<Vec<PhysicalSortExpr>> for LexOrdering {
+    fn from(value: Vec<PhysicalSortExpr>) -> Self {
+        Self::new(value)
+    }
+}
+
+impl From<LexRequirement> for LexOrdering {
+    fn from(value: LexRequirement) -> Self {
+        Self::from_lex_requirement(value)
     }
 }
 
@@ -513,6 +525,31 @@ impl LexRequirement {
 
     pub fn push(&mut self, physical_sort_requirement: PhysicalSortRequirement) {
         self.inner.push(physical_sort_requirement)
+    }
+
+    /// Create a new [`LexRequirement`] from a [`LexOrdering`]
+    ///
+    /// Returns [`LexRequirement`] that requires the exact
+    /// sort of the [`PhysicalSortExpr`]s in `ordering`
+    pub fn from_lex_ordering(ordering: LexOrdering) -> Self {
+        Self::new(
+            ordering
+                .into_iter()
+                .map(PhysicalSortRequirement::from)
+                .collect(),
+        )
+    }
+}
+
+impl From<LexOrdering> for LexRequirement {
+    fn from(value: LexOrdering) -> Self {
+        Self::from_lex_ordering(value)
+    }
+}
+
+impl From<Vec<PhysicalSortRequirement>> for LexRequirement {
+    fn from(value: Vec<PhysicalSortRequirement>) -> Self {
+        Self::new(value)
     }
 }
 
