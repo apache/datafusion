@@ -17,7 +17,6 @@
 
 //! [`DecorrelatePredicateSubquery`] converts `IN`/`EXISTS` subquery predicates to `SEMI`/`ANTI` joins
 use std::collections::BTreeSet;
-use std::iter;
 use std::ops::Deref;
 use std::sync::Arc;
 
@@ -34,11 +33,10 @@ use datafusion_expr::expr_rewriter::create_col_from_scalar_expr;
 use datafusion_expr::logical_plan::{JoinType, Subquery};
 use datafusion_expr::utils::{conjunction, split_conjunction_owned};
 use datafusion_expr::{
-    exists, in_subquery, lit, not, not_exists, not_in_subquery, BinaryExpr, Expr, Filter,
+    exists, in_subquery, not, not_exists, not_in_subquery, BinaryExpr, Expr, Filter,
     LogicalPlan, LogicalPlanBuilder, Operator,
 };
 
-use itertools::chain;
 use log::debug;
 
 /// Optimizer rule for rewriting predicate(IN/EXISTS) subquery to left semi/anti joins
@@ -138,17 +136,14 @@ fn rewrite_inner_subqueries(
         Expr::Exists(Exists {
             subquery: Subquery { subquery, .. },
             negated,
-        }) => {
-            match existence_join(&cur_input, Arc::clone(&subquery), None, negated, alias)?
-            {
-                Some((plan, exists_expr)) => {
-                    cur_input = plan;
-                    Ok(Transformed::yes(exists_expr))
-                }
-                None if negated => Ok(Transformed::no(not_exists(subquery))),
-                None => Ok(Transformed::no(exists(subquery))),
+        }) => match mark_join(&cur_input, Arc::clone(&subquery), None, negated, alias)? {
+            Some((plan, exists_expr)) => {
+                cur_input = plan;
+                Ok(Transformed::yes(exists_expr))
             }
-        }
+            None if negated => Ok(Transformed::no(not_exists(subquery))),
+            None => Ok(Transformed::no(exists(subquery))),
+        },
         Expr::InSubquery(InSubquery {
             expr,
             subquery: Subquery { subquery, .. },
@@ -159,7 +154,7 @@ fn rewrite_inner_subqueries(
                 .map_or(plan_err!("single expression required."), |output_expr| {
                     Ok(Expr::eq(*expr.clone(), output_expr))
                 })?;
-            match existence_join(
+            match mark_join(
                 &cur_input,
                 Arc::clone(&subquery),
                 Some(in_predicate),
@@ -283,10 +278,6 @@ fn build_join_top(
     build_join(left, subquery, in_predicate_opt, join_type, subquery_alias)
 }
 
-/// Existence join is emulated by adding a non-nullable column to the subquery and using a left join
-/// and checking if the column is null or not. If native support is added for Existence/Mark then
-/// we should use that instead.
-///
 /// This is used to handle the case when the subquery is embedded in a more complex boolean
 /// expression like and OR. For example
 ///
@@ -296,37 +287,26 @@ fn build_join_top(
 ///
 /// ```text
 /// Projection: t1.id
-///   Filter: t1.id < 0 OR __correlated_sq_1.__exists IS NOT NULL
-///     Left Join:  Filter: t1.id = __correlated_sq_1.id
+///   Filter: t1.id < 0 OR __correlated_sq_1.mark
+///     LeftMark Join:  Filter: t1.id = __correlated_sq_1.id
 ///       TableScan: t1
 ///       SubqueryAlias: __correlated_sq_1
-///         Projection: t2.id, true as __exists
+///         Projection: t2.id
 ///           TableScan: t2
-fn existence_join(
+fn mark_join(
     left: &LogicalPlan,
     subquery: Arc<LogicalPlan>,
     in_predicate_opt: Option<Expr>,
     negated: bool,
     alias_generator: &Arc<AliasGenerator>,
 ) -> Result<Option<(LogicalPlan, Expr)>> {
-    // Add non nullable column to emulate existence join
-    let always_true_expr = lit(true).alias("__exists");
-    let cols = chain(
-        subquery.schema().columns().into_iter().map(Expr::Column),
-        iter::once(always_true_expr),
-    );
-    let subquery = LogicalPlanBuilder::from(subquery).project(cols)?.build()?;
     let alias = alias_generator.next("__correlated_sq");
 
-    let exists_col = Expr::Column(Column::new(Some(alias.clone()), "__exists"));
-    let exists_expr = if negated {
-        exists_col.is_null()
-    } else {
-        exists_col.is_not_null()
-    };
+    let exists_col = Expr::Column(Column::new(Some(alias.clone()), "mark"));
+    let exists_expr = if negated { !exists_col } else { exists_col };
 
     Ok(
-        build_join(left, &subquery, in_predicate_opt, JoinType::Left, alias)?
+        build_join(left, &subquery, in_predicate_opt, JoinType::LeftMark, alias)?
             .map(|plan| (plan, exists_expr)),
     )
 }

@@ -25,6 +25,7 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::Result;
 use datafusion_physical_expr::expressions::Column;
+use datafusion_physical_expr::LexOrdering;
 use datafusion_physical_plan::aggregates::AggregateExec;
 use datafusion_physical_plan::execution_plan::CardinalityEffect;
 use datafusion_physical_plan::projection::ProjectionExec;
@@ -126,7 +127,7 @@ impl TopKAggregation {
             Ok(Transformed::no(plan))
         };
         let child = Arc::clone(child).transform_down(closure).data().ok()?;
-        let sort = SortExec::new(sort.expr().to_vec(), child)
+        let sort = SortExec::new(LexOrdering::new(sort.expr().to_vec()), child)
             .with_fetch(sort.fetch())
             .with_preserve_partitioning(sort.preserve_partitioning());
         Some(Arc::new(sort))

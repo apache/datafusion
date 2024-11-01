@@ -80,6 +80,7 @@ mod tests {
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow_schema::{SchemaRef, SortOptions};
     use datafusion_common::{plan_datafusion_err, Result};
+    use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
     pub fn output_schema(
         mapping: &ProjectionMapping,
@@ -184,7 +185,7 @@ mod tests {
     // Convert each tuple to PhysicalSortExpr
     pub fn convert_to_sort_exprs(
         in_data: &[(&Arc<dyn PhysicalExpr>, SortOptions)],
-    ) -> Vec<PhysicalSortExpr> {
+    ) -> LexOrdering {
         in_data
             .iter()
             .map(|(expr, options)| PhysicalSortExpr {
@@ -197,7 +198,7 @@ mod tests {
     // Convert each inner tuple to PhysicalSortExpr
     pub fn convert_to_orderings(
         orderings: &[Vec<(&Arc<dyn PhysicalExpr>, SortOptions)>],
-    ) -> Vec<Vec<PhysicalSortExpr>> {
+    ) -> Vec<LexOrdering> {
         orderings
             .iter()
             .map(|sort_exprs| convert_to_sort_exprs(sort_exprs))
@@ -207,20 +208,22 @@ mod tests {
     // Convert each tuple to PhysicalSortExpr
     pub fn convert_to_sort_exprs_owned(
         in_data: &[(Arc<dyn PhysicalExpr>, SortOptions)],
-    ) -> Vec<PhysicalSortExpr> {
-        in_data
-            .iter()
-            .map(|(expr, options)| PhysicalSortExpr {
-                expr: Arc::clone(expr),
-                options: *options,
-            })
-            .collect()
+    ) -> LexOrdering {
+        LexOrdering::new(
+            in_data
+                .iter()
+                .map(|(expr, options)| PhysicalSortExpr {
+                    expr: Arc::clone(expr),
+                    options: *options,
+                })
+                .collect(),
+        )
     }
 
     // Convert each inner tuple to PhysicalSortExpr
     pub fn convert_to_orderings_owned(
         orderings: &[Vec<(Arc<dyn PhysicalExpr>, SortOptions)>],
-    ) -> Vec<Vec<PhysicalSortExpr>> {
+    ) -> Vec<LexOrdering> {
         orderings
             .iter()
             .map(|sort_exprs| convert_to_sort_exprs_owned(sort_exprs))

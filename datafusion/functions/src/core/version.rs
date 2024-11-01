@@ -118,7 +118,7 @@ mod test {
     #[tokio::test]
     async fn test_version_udf() {
         let version_udf = ScalarUDF::from(VersionFunc::new());
-        let version = version_udf.invoke_no_args(0).unwrap();
+        let version = version_udf.invoke_batch(&[], 1).unwrap();
 
         if let ColumnarValue::Scalar(ScalarValue::Utf8(Some(version))) = version {
             assert!(version.starts_with("Apache DataFusion"));

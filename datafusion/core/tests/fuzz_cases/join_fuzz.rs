@@ -234,6 +234,30 @@ async fn test_anti_join_1k_filtered() {
     .await
 }
 
+#[tokio::test]
+async fn test_left_mark_join_1k() {
+    JoinFuzzTestCase::new(
+        make_staggered_batches(1000),
+        make_staggered_batches(1000),
+        JoinType::LeftMark,
+        None,
+    )
+    .run_test(&[JoinTestType::HjSmj, JoinTestType::NljHj], false)
+    .await
+}
+
+#[tokio::test]
+async fn test_left_mark_join_1k_filtered() {
+    JoinFuzzTestCase::new(
+        make_staggered_batches(1000),
+        make_staggered_batches(1000),
+        JoinType::LeftMark,
+        Some(Box::new(col_lt_col_filter)),
+    )
+    .run_test(&[JoinTestType::HjSmj, JoinTestType::NljHj], false)
+    .await
+}
+
 type JoinFilterBuilder = Box<dyn Fn(Arc<Schema>, Arc<Schema>) -> JoinFilter>;
 
 struct JoinFuzzTestCase {

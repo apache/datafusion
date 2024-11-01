@@ -24,6 +24,7 @@ use arrow::{
 use std::mem::size_of;
 use std::{cmp::Ordering, collections::BinaryHeap, sync::Arc};
 
+use crate::{stream::RecordBatchStreamAdapter, SendableRecordBatchStream};
 use arrow_array::{Array, ArrayRef, RecordBatch};
 use arrow_schema::SchemaRef;
 use datafusion_common::Result;
@@ -32,9 +33,8 @@ use datafusion_execution::{
     runtime_env::RuntimeEnv,
 };
 use datafusion_physical_expr::PhysicalSortExpr;
+use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use hashbrown::HashMap;
-
-use crate::{stream::RecordBatchStreamAdapter, SendableRecordBatchStream};
 
 use super::metrics::{BaselineMetrics, Count, ExecutionPlanMetricsSet, MetricBuilder};
 
@@ -101,7 +101,7 @@ impl TopK {
     pub fn try_new(
         partition_id: usize,
         schema: SchemaRef,
-        expr: Vec<PhysicalSortExpr>,
+        expr: LexOrdering,
         k: usize,
         batch_size: usize,
         runtime: Arc<RuntimeEnv>,
@@ -111,7 +111,7 @@ impl TopK {
         let reservation = MemoryConsumer::new(format!("TopK[{partition_id}]"))
             .register(&runtime.memory_pool);
 
-        let expr: Arc<[PhysicalSortExpr]> = expr.into();
+        let expr: Arc<[PhysicalSortExpr]> = expr.inner.into();
 
         let sort_fields: Vec<_> = expr
             .iter()

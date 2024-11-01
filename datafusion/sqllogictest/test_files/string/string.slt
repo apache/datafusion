@@ -50,6 +50,8 @@ Xiangpeng datafusion数据融合 false true false true
 Raphael datafusionДатаФусион false false false false
 under_score un iść core false false false false
 percent pan Tadeusz ma iść w kąt false false false false
+(empty) (empty) false false false false
+NULL NULL NULL NULL NULL NULL
 NULL NULL NULL NULL NULL NULL
 
 #
@@ -72,6 +74,9 @@ SELECT unicode_2, 'is LIKE', ascii_2 FROM test_basic_operator WHERE unicode_2 LI
 UNION ALL
 SELECT unicode_2, 'is NOT LIKE', ascii_2 FROM test_basic_operator WHERE unicode_2 NOT LIKE ascii_2
 ----
+(empty) is LIKE %
+(empty) is LIKE %
+(empty) is LIKE %
 Andrew is NOT LIKE X
 Pan Tadeusz ma frunąć stąd w kąt is NOT LIKE p%t
 Raphael is NOT LIKE R
@@ -100,7 +105,9 @@ SELECT
     (unicode_2 LIKE ascii_2) AS unicode_2_like_ascii_2
 FROM test_basic_operator
 ----
+(empty) % (empty) (empty) true false true true
 Andrew X datafusion📊🔥 🔥 false false false false
+NULL % NULL NULL NULL NULL NULL NULL
 NULL R NULL 🔥 NULL NULL NULL false
 Raphael R datafusionДатаФусион аФус false false false false
 Xiangpeng Xiangpeng datafusion数据融合 datafusion数据融合 true true false false
@@ -122,6 +129,9 @@ SELECT unicode_2, 'is ILIKE', ascii_2 FROM test_basic_operator WHERE unicode_2 I
 UNION ALL
 SELECT unicode_2, 'is NOT ILIKE', ascii_2 FROM test_basic_operator WHERE unicode_2 NOT ILIKE ascii_2
 ----
+(empty) is ILIKE %
+(empty) is ILIKE %
+(empty) is ILIKE %
 Andrew is NOT ILIKE X
 Pan Tadeusz ma frunąć stąd w kąt is ILIKE p%t
 Raphael is NOT ILIKE R
@@ -150,7 +160,9 @@ SELECT
     (unicode_2 ILIKE ascii_2) AS unicode_2_ilike_ascii_2
 FROM test_basic_operator
 ----
+(empty) % (empty) (empty) true false true true
 Andrew X datafusion📊🔥 🔥 false false false false
+NULL % NULL NULL NULL NULL NULL NULL
 NULL R NULL 🔥 NULL NULL NULL false
 Raphael R datafusionДатаФусион аФус false false false false
 Xiangpeng Xiangpeng datafusion数据融合 datafusion数据融合 true true false false
