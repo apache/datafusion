@@ -3679,14 +3679,14 @@ SELECT
 FROM score_board s
 ORDER BY team_name, score;
 ----
-Mongrels	Apu	350	1
-Mongrels	Ned	666	1
-Mongrels	Meg	1030	2
-Mongrels	Burns	1270	2
-Simpsons	Homer	1	1
-Simpsons	Lisa	710	1
-Simpsons	Marge	990	2
-Simpsons	Bart	2010	2
+Mongrels Apu 350 1
+Mongrels Ned 666 1
+Mongrels Meg 1030 2
+Mongrels Burns 1270 2
+Simpsons Homer 1 1
+Simpsons Lisa 710 1
+Simpsons Marge 990 2
+Simpsons Bart 2010 2
 
 query TTII
 SELECT
@@ -3697,14 +3697,14 @@ SELECT
 FROM score_board s
 ORDER BY score;
 ----
-Simpsons	Homer	1	1
-Mongrels	Apu	350	1
-Mongrels	Ned	666	1
-Simpsons	Lisa	710	1
-Simpsons	Marge	990	2
-Mongrels	Meg	1030	2
-Mongrels	Burns	1270	2
-Simpsons	Bart	2010	2
+Simpsons Homer 1 1
+Mongrels Apu 350 1
+Mongrels Ned 666 1
+Simpsons Lisa 710 1
+Simpsons Marge 990 2
+Mongrels Meg 1030 2
+Mongrels Burns 1270 2
+Simpsons Bart 2010 2
 
 query TTII
 SELECT
@@ -3715,14 +3715,14 @@ SELECT
 FROM score_board s
 ORDER BY team_name, score;
 ----
-Mongrels	Apu	350	1
-Mongrels	Ned	666	2
-Mongrels	Meg	1030	3
-Mongrels	Burns	1270	4
-Simpsons	Homer	1	1
-Simpsons	Lisa	710	2
-Simpsons	Marge	990	3
-Simpsons	Bart	2010	4
+Mongrels Apu 350 1
+Mongrels Ned 666 2
+Mongrels Meg 1030 3
+Mongrels Burns 1270 4
+Simpsons Homer 1 1
+Simpsons Lisa 710 2
+Simpsons Marge 990 3
+Simpsons Bart 2010 4
 
 query TTII
 SELECT
@@ -3733,14 +3733,14 @@ SELECT
 FROM score_board s
 ORDER BY team_name, score;
 ----
-Mongrels	Apu	350	1
-Mongrels	Ned	666	1
-Mongrels	Meg	1030	1
-Mongrels	Burns	1270	1
-Simpsons	Homer	1	1
-Simpsons	Lisa	710	1
-Simpsons	Marge	990	1
-Simpsons	Bart	2010	1
+Mongrels Apu 350 1
+Mongrels Ned 666 1
+Mongrels Meg 1030 1
+Mongrels Burns 1270 1
+Simpsons Homer 1 1
+Simpsons Lisa 710 1
+Simpsons Marge 990 1
+Simpsons Bart 2010 1
 
 # incorrect number of parameters for ntile
 query error DataFusion error: Execution error: NTILE requires a positive integer, but finds NULL
@@ -4849,10 +4849,10 @@ SELECT
   nth_value(column2, arrow_cast(2, 'Int32')) OVER (order by column1)
 FROM t;
 ----
-3 1 1 4    4    NULL NULL NULL NULL
-4 1 1 5    5    3    3    4    4
-5 2 2 6    6    4    4    4    4
-6 2 2 NULL NULL 5    5    4    4
+3 1 1 4 4 NULL NULL NULL NULL
+4 1 1 5 5 3 3 4 4
+5 2 2 6 6 4 4 4 4
+6 2 2 NULL NULL 5 5 4 4
 
 # NTILE specifies the argument types so the error is different
 query error
