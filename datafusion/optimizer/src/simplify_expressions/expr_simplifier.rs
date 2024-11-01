@@ -863,21 +863,12 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
             }) if has_common_conjunction(&left, &right) => {
                 let lhs: IndexSet<Expr> = iter_conjunction_owned(*left).collect();
                 let (common, rhs): (Vec<_>, Vec<_>) = iter_conjunction_owned(*right)
-                    .try_fold(
-                        (Vec::new(), Vec::new()),
-                        |(mut common, mut rhs), e| -> Result<_, DataFusionError> {
-                            Ok(if lhs.contains(&e) && !e.is_volatile() {
-                                common.push(e);
-                                (common, rhs)
-                            } else {
-                                rhs.push(e);
-                                (common, rhs)
-                            })
-                        },
-                    )?;
+                    .partition(|e| lhs.contains(e) && !e.is_volatile());
+
                 let new_rhs = rhs.into_iter().reduce(and);
                 let new_lhs = lhs.into_iter().filter(|e| !common.contains(e)).reduce(and);
                 let common_conjunction = common.into_iter().reduce(and).unwrap();
+
                 let new_expr = match (new_lhs, new_rhs) {
                     (Some(lhs), Some(rhs)) => and(common_conjunction, or(lhs, rhs)),
                     (_, _) => common_conjunction,
