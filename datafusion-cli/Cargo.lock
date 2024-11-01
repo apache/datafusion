@@ -1261,6 +1261,7 @@ dependencies = [
  "parking_lot",
  "parquet",
  "rand",
+ "regex",
  "sqlparser",
  "tempfile",
  "tokio",

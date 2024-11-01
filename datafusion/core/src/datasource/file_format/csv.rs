@@ -59,6 +59,7 @@ use datafusion_physical_expr_common::sort_expr::LexRequirement;
 use futures::stream::BoxStream;
 use futures::{pin_mut, Stream, StreamExt, TryStreamExt};
 use object_store::{delimited::newline_delimited_stream, ObjectMeta, ObjectStore};
+use regex::Regex;
 
 #[derive(Default)]
 /// Factory struct used to create [CsvFormatFactory]
@@ -215,6 +216,13 @@ impl CsvFormat {
     /// - default to true
     pub fn with_has_header(mut self, has_header: bool) -> Self {
         self.options.has_header = Some(has_header);
+        self
+    }
+
+    /// Set the regex to use for null values in the CSV reader.
+    /// - default to treat empty values as null.
+    pub fn with_null_regex(mut self, null_regex: Option<String>) -> Self {
+        self.options.null_regex = null_regex;
         self
     }
 
@@ -501,6 +509,12 @@ impl CsvFormat {
                 )
                 .with_delimiter(self.options.delimiter)
                 .with_quote(self.options.quote);
+
+            if let Some(null_regex) = &self.options.null_regex {
+                let regex = Regex::new(null_regex.as_str())
+                    .expect("Unable to parse CSV null regex.");
+                format = format.with_null_regex(regex);
+            }
 
             if let Some(escape) = self.options.escape {
                 format = format.with_escape(escape);
@@ -813,8 +827,17 @@ mod tests {
         let state = session_ctx.state();
 
         let projection = None;
-        let exec =
-            get_exec(&state, "aggregate_test_100.csv", projection, None, true).await?;
+        let root = "./tests/data/csv";
+        let format = CsvFormat::default().with_has_header(true);
+        let exec = scan_format(
+            &state,
+            &format,
+            root,
+            "aggregate_test_100_with_nulls.csv",
+            projection,
+            None,
+        )
+        .await?;
 
         let x: Vec<String> = exec
             .schema()
@@ -836,7 +859,59 @@ mod tests {
                 "c10: Utf8",
                 "c11: Float64",
                 "c12: Float64",
-                "c13: Utf8"
+                "c13: Utf8",
+                "c14: Null",
+                "c15: Utf8"
+            ],
+            x
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn infer_schema_with_null_regex() -> Result<()> {
+        let session_ctx = SessionContext::new();
+        let state = session_ctx.state();
+
+        let projection = None;
+        let root = "./tests/data/csv";
+        let format = CsvFormat::default()
+            .with_has_header(true)
+            .with_null_regex(Some("^NULL$|^$".to_string()));
+        let exec = scan_format(
+            &state,
+            &format,
+            root,
+            "aggregate_test_100_with_nulls.csv",
+            projection,
+            None,
+        )
+        .await?;
+
+        let x: Vec<String> = exec
+            .schema()
+            .fields()
+            .iter()
+            .map(|f| format!("{}: {:?}", f.name(), f.data_type()))
+            .collect();
+        assert_eq!(
+            vec![
+                "c1: Utf8",
+                "c2: Int64",
+                "c3: Int64",
+                "c4: Int64",
+                "c5: Int64",
+                "c6: Int64",
+                "c7: Int64",
+                "c8: Int64",
+                "c9: Int64",
+                "c10: Utf8",
+                "c11: Float64",
+                "c12: Float64",
+                "c13: Utf8",
+                "c14: Null",
+                "c15: Null"
             ],
             x
         );
