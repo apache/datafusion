@@ -477,11 +477,11 @@ impl EquivalenceGroup {
     /// sort expressions.
     pub fn normalize_sort_exprs(&self, sort_exprs: LexOrderingRef) -> LexOrdering {
         // Convert sort expressions to sort requirements:
-        let sort_reqs = PhysicalSortRequirement::from_sort_exprs(sort_exprs.iter());
+        let sort_reqs = LexRequirement::from(sort_exprs);
         // Normalize the requirements:
         let normalized_sort_reqs = self.normalize_sort_requirements(&sort_reqs);
         // Convert sort requirements back to sort expressions:
-        PhysicalSortRequirement::to_sort_exprs(normalized_sort_reqs.inner)
+        LexOrdering::from(normalized_sort_reqs)
     }
 
     /// This function applies the `normalize_sort_requirement` function for all

@@ -70,7 +70,7 @@ use datafusion_execution::TaskContext;
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_physical_expr::equivalence::join_equivalence_properties;
 use datafusion_physical_expr::intervals::cp_solver::ExprIntervalGraph;
-use datafusion_physical_expr::{PhysicalExprRef, PhysicalSortRequirement};
+use datafusion_physical_expr::PhysicalExprRef;
 
 use ahash::RandomState;
 use datafusion_physical_expr_common::sort_expr::{
@@ -418,12 +418,12 @@ impl ExecutionPlan for SymmetricHashJoinExec {
         vec![
             self.left_sort_exprs
                 .as_ref()
-                .map(LexOrdering::iter)
-                .map(PhysicalSortRequirement::from_sort_exprs),
+                .cloned()
+                .map(LexRequirement::from),
             self.right_sort_exprs
                 .as_ref()
-                .map(LexOrdering::iter)
-                .map(PhysicalSortRequirement::from_sort_exprs),
+                .cloned()
+                .map(LexRequirement::from),
         ]
     }
 

@@ -411,6 +411,14 @@ impl LexOrdering {
     }
 }
 
+// TODO Remove when https://github.com/apache/datafusion/issues/13220 is
+// done. This From clones things non obviously
+impl From<LexRequirementRef<'_>> for LexOrdering {
+    fn from(value: LexRequirementRef) -> Self {
+        Self::new(value.iter().cloned().map(PhysicalSortExpr::from).collect())
+    }
+}
+
 impl From<Vec<PhysicalSortExpr>> for LexOrdering {
     fn from(value: Vec<PhysicalSortExpr>) -> Self {
         Self::new(value)
@@ -544,6 +552,20 @@ impl LexRequirement {
 impl From<LexOrdering> for LexRequirement {
     fn from(value: LexOrdering) -> Self {
         Self::from_lex_ordering(value)
+    }
+}
+
+// TODO Remove when https://github.com/apache/datafusion/issues/13220 is
+// done. This impl clones things non obviously
+impl From<LexOrderingRef<'_>> for LexRequirement {
+    fn from(value: LexOrderingRef) -> Self {
+        Self::new(
+            value
+                .iter()
+                .cloned()
+                .map(PhysicalSortRequirement::from)
+                .collect(),
+        )
     }
 }
 

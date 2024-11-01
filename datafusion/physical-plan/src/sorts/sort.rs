@@ -52,9 +52,7 @@ use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::LexOrdering;
-use datafusion_physical_expr_common::sort_expr::{
-    LexOrderingRef, PhysicalSortRequirement,
-};
+use datafusion_physical_expr_common::sort_expr::{LexOrderingRef, LexRequirement};
 
 use crate::execution_plan::CardinalityEffect;
 use futures::{StreamExt, TryStreamExt};
@@ -790,11 +788,9 @@ impl SortExec {
         preserve_partitioning: bool,
     ) -> PlanProperties {
         // Determine execution mode:
-        let sort_satisfied = input.equivalence_properties().ordering_satisfy_requirement(
-            PhysicalSortRequirement::from_sort_exprs(sort_exprs.iter())
-                .inner
-                .as_slice(),
-        );
+        let sort_satisfied = input
+            .equivalence_properties()
+            .ordering_satisfy_requirement(&LexRequirement::from(sort_exprs.clone()));
         let mode = match input.execution_mode() {
             ExecutionMode::Unbounded if sort_satisfied => ExecutionMode::Unbounded,
             ExecutionMode::Bounded => ExecutionMode::Bounded,
@@ -890,11 +886,7 @@ impl ExecutionPlan for SortExec {
         let sort_satisfied = self
             .input
             .equivalence_properties()
-            .ordering_satisfy_requirement(
-                PhysicalSortRequirement::from_sort_exprs(self.expr.iter())
-                    .inner
-                    .as_slice(),
-            );
+            .ordering_satisfy_requirement(&LexRequirement::from(self.expr.clone()));
 
         match (sort_satisfied, self.fetch.as_ref()) {
             (true, Some(fetch)) => Ok(Box::pin(LimitStream::new(
