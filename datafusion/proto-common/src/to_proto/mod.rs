@@ -759,6 +759,7 @@ impl From<JoinSide> for protobuf::JoinSide {
         match t {
             JoinSide::Left => protobuf::JoinSide::LeftSide,
             JoinSide::Right => protobuf::JoinSide::RightSide,
+            JoinSide::None => protobuf::JoinSide::None,
         }
     }
 }

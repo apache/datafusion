@@ -62,7 +62,7 @@ fn create_ordering(
 
     for exprs in sort_order {
         // Construct PhysicalSortExpr objects from Expr objects:
-        let mut sort_exprs = vec![];
+        let mut sort_exprs = LexOrdering::default();
         for sort in exprs {
             match &sort.expr {
                 Expr::Column(col) => match expressions::col(&col.name, schema) {

@@ -862,8 +862,8 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 right,
             }) if has_common_conjunction(&left, &right) => {
                 let lhs: IndexSet<Expr> = iter_conjunction_owned(*left).collect();
-                let (common, rhs): (Vec<_>, Vec<_>) =
-                    iter_conjunction_owned(*right).partition(|e| lhs.contains(e));
+                let (common, rhs): (Vec<_>, Vec<_>) = iter_conjunction_owned(*right)
+                    .partition(|e| lhs.contains(e) && !e.is_volatile());
 
                 let new_rhs = rhs.into_iter().reduce(and);
                 let new_lhs = lhs.into_iter().filter(|e| !common.contains(e)).reduce(and);
@@ -1682,8 +1682,8 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
 }
 
 fn has_common_conjunction(lhs: &Expr, rhs: &Expr) -> bool {
-    let lhs: HashSet<&Expr> = iter_conjunction(lhs).collect();
-    iter_conjunction(rhs).any(|e| lhs.contains(&e))
+    let lhs_set: HashSet<&Expr> = iter_conjunction(lhs).collect();
+    iter_conjunction(rhs).any(|e| lhs_set.contains(&e) && !e.is_volatile())
 }
 
 // TODO: We might not need this after defer pattern for Box is stabilized. https://github.com/rust-lang/rust/issues/87121
@@ -3976,6 +3976,71 @@ mod tests {
 
         fn field(&self, _field_args: WindowUDFFieldArgs) -> Result<Field> {
             unimplemented!("not needed for tests")
+        }
+    }
+    #[derive(Debug)]
+    struct VolatileUdf {
+        signature: Signature,
+    }
+
+    impl VolatileUdf {
+        pub fn new() -> Self {
+            Self {
+                signature: Signature::exact(vec![], Volatility::Volatile),
+            }
+        }
+    }
+    impl ScalarUDFImpl for VolatileUdf {
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+
+        fn name(&self) -> &str {
+            "VolatileUdf"
+        }
+
+        fn signature(&self) -> &Signature {
+            &self.signature
+        }
+
+        fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+            Ok(DataType::Int16)
+        }
+    }
+    #[test]
+    fn test_optimize_volatile_conditions() {
+        let fun = Arc::new(ScalarUDF::new_from_impl(VolatileUdf::new()));
+        let rand = Expr::ScalarFunction(ScalarFunction::new_udf(fun, vec![]));
+        {
+            let expr = rand
+                .clone()
+                .eq(lit(0))
+                .or(col("column1").eq(lit(2)).and(rand.clone().eq(lit(0))));
+
+            assert_eq!(simplify(expr.clone()), expr);
+        }
+
+        {
+            let expr = col("column1")
+                .eq(lit(2))
+                .or(col("column1").eq(lit(2)).and(rand.clone().eq(lit(0))));
+
+            assert_eq!(simplify(expr), col("column1").eq(lit(2)));
+        }
+
+        {
+            let expr = (col("column1").eq(lit(2)).and(rand.clone().eq(lit(0)))).or(col(
+                "column1",
+            )
+            .eq(lit(2))
+            .and(rand.clone().eq(lit(0))));
+
+            assert_eq!(
+                simplify(expr),
+                col("column1")
+                    .eq(lit(2))
+                    .and((rand.clone().eq(lit(0))).or(rand.clone().eq(lit(0))))
+            );
         }
     }
 }

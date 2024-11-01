@@ -17,12 +17,13 @@
 
 //! Sort expressions
 
+use crate::physical_expr::PhysicalExpr;
+use std::fmt;
 use std::fmt::{Display, Formatter};
 use std::hash::{Hash, Hasher};
-use std::ops::Deref;
+use std::ops::{Deref, Index, Range, RangeFrom, RangeTo};
 use std::sync::Arc;
-
-use crate::physical_expr::PhysicalExpr;
+use std::vec::IntoIter;
 
 use arrow::compute::kernels::sort::{SortColumn, SortOptions};
 use arrow::datatypes::Schema;
@@ -143,7 +144,7 @@ impl Hash for PhysicalSortExpr {
 }
 
 impl Display for PhysicalSortExpr {
-    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         write!(f, "{} {}", self.expr, to_str(&self.options))
     }
 }
@@ -182,26 +183,6 @@ impl PhysicalSortExpr {
                     .options
                     .map_or(true, |opts| self.options.descending == opts.descending)
             }
-    }
-
-    /// Returns a [`Display`]able list of `PhysicalSortExpr`.
-    pub fn format_list(input: &[PhysicalSortExpr]) -> impl Display + '_ {
-        struct DisplayableList<'a>(&'a [PhysicalSortExpr]);
-        impl<'a> Display for DisplayableList<'a> {
-            fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
-                let mut first = true;
-                for sort_expr in self.0 {
-                    if first {
-                        first = false;
-                    } else {
-                        write!(f, ",")?;
-                    }
-                    write!(f, "{}", sort_expr)?;
-                }
-                Ok(())
-            }
-        }
-        DisplayableList(input)
     }
 }
 
@@ -260,7 +241,7 @@ impl PartialEq for PhysicalSortRequirement {
 }
 
 impl Display for PhysicalSortRequirement {
-    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         let opts_string = self.options.as_ref().map_or("NA", to_str);
         write!(f, "{} {}", self.expr, opts_string)
     }
@@ -274,7 +255,7 @@ pub fn format_physical_sort_requirement_list(
 ) -> impl Display + '_ {
     struct DisplayWrapper<'a>(&'a [PhysicalSortRequirement]);
     impl<'a> Display for DisplayWrapper<'a> {
-        fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
             let mut iter = self.0.iter();
             write!(f, "[")?;
             if let Some(expr) = iter.next() {
@@ -345,7 +326,7 @@ impl PhysicalSortRequirement {
     /// default ordering `ASC, NULLS LAST` if given (see the `PhysicalSortExpr::from`).
     pub fn to_sort_exprs(
         requirements: impl IntoIterator<Item = PhysicalSortRequirement>,
-    ) -> Vec<PhysicalSortExpr> {
+    ) -> LexOrdering {
         requirements
             .into_iter()
             .map(PhysicalSortExpr::from)
@@ -364,9 +345,147 @@ fn to_str(options: &SortOptions) -> &str {
     }
 }
 
-///`LexOrdering` is an alias for the type `Vec<PhysicalSortExpr>`, which represents
+///`LexOrdering` contains a `Vec<PhysicalSortExpr>`, which represents
 /// a lexicographical ordering.
-pub type LexOrdering = Vec<PhysicalSortExpr>;
+#[derive(Debug, Default, Clone, PartialEq, Eq, Hash)]
+pub struct LexOrdering {
+    pub inner: Vec<PhysicalSortExpr>,
+}
+
+impl LexOrdering {
+    // Creates a new [`LexOrdering`] from a vector
+    pub fn new(inner: Vec<PhysicalSortExpr>) -> Self {
+        Self { inner }
+    }
+
+    pub fn as_ref(&self) -> LexOrderingRef {
+        &self.inner
+    }
+
+    pub fn capacity(&self) -> usize {
+        self.inner.capacity()
+    }
+
+    pub fn clear(&mut self) {
+        self.inner.clear()
+    }
+
+    pub fn contains(&self, expr: &PhysicalSortExpr) -> bool {
+        self.inner.contains(expr)
+    }
+
+    pub fn extend<I: IntoIterator<Item = PhysicalSortExpr>>(&mut self, iter: I) {
+        self.inner.extend(iter)
+    }
+
+    pub fn from_ref(lex_ordering_ref: LexOrderingRef) -> Self {
+        Self::new(lex_ordering_ref.to_vec())
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.inner.is_empty()
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &PhysicalSortExpr> {
+        self.inner.iter()
+    }
+
+    pub fn len(&self) -> usize {
+        self.inner.len()
+    }
+
+    pub fn pop(&mut self) -> Option<PhysicalSortExpr> {
+        self.inner.pop()
+    }
+
+    pub fn push(&mut self, physical_sort_expr: PhysicalSortExpr) {
+        self.inner.push(physical_sort_expr)
+    }
+
+    pub fn retain(&mut self, f: impl FnMut(&PhysicalSortExpr) -> bool) {
+        self.inner.retain(f)
+    }
+
+    pub fn truncate(&mut self, len: usize) {
+        self.inner.truncate(len)
+    }
+}
+
+impl Deref for LexOrdering {
+    type Target = [PhysicalSortExpr];
+
+    fn deref(&self) -> &Self::Target {
+        self.inner.as_slice()
+    }
+}
+
+impl Display for LexOrdering {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        let mut first = true;
+        for sort_expr in &self.inner {
+            if first {
+                first = false;
+            } else {
+                write!(f, ", ")?;
+            }
+            write!(f, "{}", sort_expr)?;
+        }
+        Ok(())
+    }
+}
+
+impl FromIterator<PhysicalSortExpr> for LexOrdering {
+    fn from_iter<T: IntoIterator<Item = PhysicalSortExpr>>(iter: T) -> Self {
+        let mut lex_ordering = LexOrdering::default();
+
+        for i in iter {
+            lex_ordering.push(i);
+        }
+
+        lex_ordering
+    }
+}
+
+impl Index<usize> for LexOrdering {
+    type Output = PhysicalSortExpr;
+
+    fn index(&self, index: usize) -> &Self::Output {
+        &self.inner[index]
+    }
+}
+
+impl Index<Range<usize>> for LexOrdering {
+    type Output = [PhysicalSortExpr];
+
+    fn index(&self, range: Range<usize>) -> &Self::Output {
+        &self.inner[range]
+    }
+}
+
+impl Index<RangeFrom<usize>> for LexOrdering {
+    type Output = [PhysicalSortExpr];
+
+    fn index(&self, range_from: RangeFrom<usize>) -> &Self::Output {
+        &self.inner[range_from]
+    }
+}
+
+impl Index<RangeTo<usize>> for LexOrdering {
+    type Output = [PhysicalSortExpr];
+
+    fn index(&self, range_to: RangeTo<usize>) -> &Self::Output {
+        &self.inner[range_to]
+    }
+}
+
+impl IntoIterator for LexOrdering {
+    type Item = PhysicalSortExpr;
+    type IntoIter = IntoIter<PhysicalSortExpr>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.inner.into_iter()
+    }
+}
 
 ///`LexOrderingRef` is an alias for the type &`[PhysicalSortExpr]`, which represents
 /// a reference to a lexicographical ordering.
@@ -382,6 +501,10 @@ pub struct LexRequirement {
 impl LexRequirement {
     pub fn new(inner: Vec<PhysicalSortRequirement>) -> Self {
         Self { inner }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.inner.is_empty()
     }
 
     pub fn iter(&self) -> impl Iterator<Item = &PhysicalSortRequirement> {
@@ -415,7 +538,7 @@ impl FromIterator<PhysicalSortRequirement> for LexRequirement {
 
 impl IntoIterator for LexRequirement {
     type Item = PhysicalSortRequirement;
-    type IntoIter = std::vec::IntoIter<Self::Item>;
+    type IntoIter = IntoIter<Self::Item>;
 
     fn into_iter(self) -> Self::IntoIter {
         self.inner.into_iter()
