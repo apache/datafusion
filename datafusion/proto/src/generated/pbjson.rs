@@ -12844,7 +12844,6 @@ impl<'de> serde::Deserialize<'de> for PartitionedFile {
                     partition_values: partition_values__.unwrap_or_default(),
                     range: range__,
                     statistics: statistics__,
-                    metadata_size_hint: None,
                 })
             }
         }
