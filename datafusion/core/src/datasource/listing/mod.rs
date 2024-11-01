@@ -123,6 +123,7 @@ impl PartitionedFile {
         .with_range(start, end)
     }
 
+    /// Add a metadata size hint to this file
     pub fn with_metadata_size_hint(mut self, metadata_size_hint: usize) -> Self {
         self.metadata_size_hint = Some(metadata_size_hint);
         self
