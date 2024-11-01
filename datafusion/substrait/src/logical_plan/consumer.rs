@@ -1126,13 +1126,8 @@ fn retrieve_emit_kind(rel_common: Option<&RelCommon>) -> EmitKind {
         .map_or(default, |ek| ek.clone())
 }
 
-fn contains_volatile_expr(proj: &Projection) -> Result<bool> {
-    for expr in proj.expr.iter() {
-        if expr.is_volatile()? {
-            return Ok(true);
-        }
-    }
-    Ok(false)
+fn contains_volatile_expr(proj: &Projection) -> bool {
+    proj.expr.iter().any(|e| e.is_volatile())
 }
 
 fn apply_emit_kind(
@@ -1151,7 +1146,7 @@ fn apply_emit_kind(
                 // expressions in the projection are volatile. This is to avoid issues like
                 // converting a single call of the random() function into multiple calls due to
                 // duplicate fields in the output_mapping.
-                LogicalPlan::Projection(proj) if !contains_volatile_expr(&proj)? => {
+                LogicalPlan::Projection(proj) if !contains_volatile_expr(&proj) => {
                     let mut exprs: Vec<Expr> = vec![];
                     for field in output_mapping {
                         let expr = proj.expr
