@@ -700,11 +700,15 @@ pub fn build_join_schema(
     (fields.finish().with_metadata(metadata), column_indices)
 }
 
-/// A [`OnceAsync`] can be used to run an async closure once, with subsequent calls
-/// to [`OnceAsync::once`] returning a [`OnceFut`] to the same asynchronous computation
+/// A [`OnceAsync`] run an `async` closure once, with subsequent calls to
+/// [`OnceAsync::once`] returning a [`OnceFut`] to the same asynchronous
+/// computation
 ///
-/// This is useful for joins where the results of one child are buffered in memory
-/// and shared across potentially multiple output partitions
+/// This is useful for joins where the results of one child (for example,
+/// building a hash table) are buffered in memory and shared across
+/// potentially multiple output partitions
+///
+/// Each output partition waits on the `OnceAsync` to complete before proceeding.
 pub(crate) struct OnceAsync<T> {
     fut: Mutex<Option<OnceFut<T>>>,
 }
