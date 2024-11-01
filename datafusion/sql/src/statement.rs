@@ -48,7 +48,7 @@ use datafusion_expr::{
     CreateExternalTable as PlanCreateExternalTable, CreateFunction, CreateFunctionBody,
     CreateIndex as PlanCreateIndex, CreateMemoryTable, CreateView, DescribeTable,
     DmlStatement, DropCatalogSchema, DropFunction, DropTable, DropView, EmptyRelation,
-    Explain, Expr, ExprSchemable, Filter, LogicalPlan, LogicalPlanBuilder,
+    Execute, Explain, Expr, ExprSchemable, Filter, LogicalPlan, LogicalPlanBuilder,
     OperateFunctionArg, PlanType, Prepare, SetVariable, SortExpr,
     Statement as PlanStatement, ToStringifiedPlan, TransactionAccessMode,
     TransactionConclusion, TransactionEnd, TransactionIsolationLevel, TransactionStart,
@@ -640,6 +640,30 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     name: ident_to_string(&name),
                     data_types,
                     input: Arc::new(plan),
+                }))
+            }
+            Statement::Execute {
+                name,
+                parameters,
+                using,
+            } => {
+                // `USING` is a MySQL-specific syntax and currently not supported.
+                if !using.is_empty() {
+                    return not_impl_err!(
+                        "Execute statement with USING is not supported"
+                    );
+                }
+
+                let empty_schema = DFSchema::empty();
+                let parameters = parameters
+                    .into_iter()
+                    .map(|expr| self.sql_to_expr(expr, &empty_schema, planner_context))
+                    .collect::<Result<Vec<Expr>>>()?;
+
+                Ok(LogicalPlan::Execute(Execute {
+                    name: ident_to_string(&name),
+                    parameters,
+                    schema: DFSchemaRef::new(empty_schema),
                 }))
             }
 

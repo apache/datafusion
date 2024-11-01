@@ -193,12 +193,7 @@ impl ExternalAggrConfig {
     ) -> Result<Vec<QueryResult>> {
         let query_name =
             format!("Q{query_id}({})", human_readable_size(mem_limit as usize));
-        let mut config = self.common.config();
-        config
-            .options_mut()
-            .execution
-            .parquet
-            .schema_force_view_types = self.common.force_view_types;
+        let config = self.common.config();
         let runtime_config = RuntimeConfig::new()
             .with_memory_pool(Arc::new(FairSpillPool::new(mem_limit as usize)))
             .build_arc()?;

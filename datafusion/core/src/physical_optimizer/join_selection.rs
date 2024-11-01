@@ -132,6 +132,9 @@ fn swap_join_type(join_type: JoinType) -> JoinType {
         JoinType::RightSemi => JoinType::LeftSemi,
         JoinType::LeftAnti => JoinType::RightAnti,
         JoinType::RightAnti => JoinType::LeftAnti,
+        JoinType::LeftMark => {
+            unreachable!("LeftMark join type does not support swapping")
+        }
     }
 }
 
@@ -573,6 +576,7 @@ fn hash_join_convert_symmetric_subrule(
                                         hash_join.right().equivalence_properties(),
                                         hash_join.right().schema(),
                                     ),
+                                    JoinSide::None => return false,
                                 };
 
                                 let name = schema.field(*index).name();
@@ -588,6 +592,7 @@ fn hash_join_convert_symmetric_subrule(
                         match side {
                             JoinSide::Left => hash_join.left().output_ordering(),
                             JoinSide::Right => hash_join.right().output_ordering(),
+                            JoinSide::None => unreachable!(),
                         }
                         .map(|p| p.to_vec())
                     })

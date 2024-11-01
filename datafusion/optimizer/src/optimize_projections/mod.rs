@@ -348,7 +348,8 @@ fn optimize_projections(
         | LogicalPlan::RecursiveQuery(_)
         | LogicalPlan::Statement(_)
         | LogicalPlan::Values(_)
-        | LogicalPlan::DescribeTable(_) => {
+        | LogicalPlan::DescribeTable(_)
+        | LogicalPlan::Execute(_) => {
             // These operators have no inputs, so stop the optimization process.
             return Ok(Transformed::no(plan));
         }
@@ -677,7 +678,11 @@ fn split_join_requirements(
 ) -> (RequiredIndicies, RequiredIndicies) {
     match join_type {
         // In these cases requirements are split between left/right children:
-        JoinType::Inner | JoinType::Left | JoinType::Right | JoinType::Full => {
+        JoinType::Inner
+        | JoinType::Left
+        | JoinType::Right
+        | JoinType::Full
+        | JoinType::LeftMark => {
             // Decrease right side indices by `left_len` so that they point to valid
             // positions within the right child:
             indices.split_off(left_len)
