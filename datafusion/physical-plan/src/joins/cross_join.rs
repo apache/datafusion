@@ -49,9 +49,14 @@ use futures::{ready, Stream, StreamExt, TryStreamExt};
 /// Data of the left side
 type JoinLeftData = (RecordBatch, MemoryReservation);
 
+#[allow(rustdoc::private_intra_doc_links)]
 /// executes partitions in parallel and combines them into a set of
 /// partitions by combining all values from the left with all values on the right
-#[derive(Debug)] // note not Clone because of the OnceAsync
+///
+/// Note that the `Clone` trait is not implemented for this struct due to the
+/// `left_fut` [`OnceAsync`], which is used to coordinate the loading of the
+/// left side with the processing in each output stream.
+#[derive(Debug)]
 pub struct CrossJoinExec {
     /// left (build) side which gets loaded in memory
     pub left: Arc<dyn ExecutionPlan>,

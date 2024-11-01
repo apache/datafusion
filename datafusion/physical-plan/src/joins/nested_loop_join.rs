@@ -105,6 +105,7 @@ impl JoinLeftData {
     }
 }
 
+#[allow(rustdoc::private_intra_doc_links)]
 /// NestedLoopJoinExec is build-probe join operator, whose main task is to
 /// perform joins without any equijoin conditions in `ON` clause.
 ///
@@ -140,7 +141,10 @@ impl JoinLeftData {
 /// "reports" about probe phase completion (which means that "visited" bitmap won't be
 /// updated anymore), and only the last thread, reporting about completion, will return output.
 ///
-#[derive(Debug)] // note not Clone because of the OnceAsync
+/// Note that the `Clone` trait is not implemented for this struct due to the
+/// `left_fut` [`OnceAsync`], which is used to coordinate the loading of the
+/// left side with the processing in each output stream.
+#[derive(Debug)]
 pub struct NestedLoopJoinExec {
     /// left side
     pub(crate) left: Arc<dyn ExecutionPlan>,
