@@ -999,19 +999,6 @@ impl<
     }
 }
 
-/// Replaces node's children and recomputes the state
-macro_rules! update_node_after_recursion {
-    ($NAME:ident, $CHILDREN:ident) => {{
-        $NAME.transformed |= $CHILDREN.iter().any(|item| item.transformed);
-
-        $NAME.data = $NAME
-            .data
-            .with_new_arc_children($CHILDREN.into_iter().map(|c| c.data).collect())?;
-
-        $NAME
-    }};
-}
-
 /// Blanket implementation for any `Arc<T>` where `T` implements [`DynTreeNode`]
 /// (such as [`Arc<dyn PhysicalExpr>`]).
 /// Unlike [`TreeNode`], performs node traversal iteratively rather than recursively to avoid stack overflow
@@ -1129,22 +1116,18 @@ impl<T: DynTreeNode + ?Sized> TreeNode for Arc<T> {
                                 TransformingState::NotStarted(non_processed_item),
                             ]);
                         } else {
-                            stack.push(TransformingState::ProcessedAllChildren(
-                                update_node_after_recursion!(item, processed_children),
-                            ))
+                            item.data =
+                                item.data.with_new_arc_children(processed_children)?;
+                            stack.push(TransformingState::ProcessedAllChildren(item))
                         }
                     }
                     TreeNodeRecursion::Stop => {
                         // At this point, we might have some children we haven't yet processed
-                        processed_children.extend(
-                            non_processed_children
-                                .into_iter()
-                                .rev()
-                                .map(Transformed::no),
-                        );
-                        stack.push(TransformingState::ProcessedAllChildren(
-                            update_node_after_recursion!(item, processed_children),
-                        ));
+                        processed_children
+                            .extend(non_processed_children.into_iter().rev());
+                        item.data =
+                            item.data.with_new_arc_children(processed_children)?;
+                        stack.push(TransformingState::ProcessedAllChildren(item));
                     }
                 },
                 TransformingState::ProcessedAllChildren(node) => {
@@ -1158,7 +1141,8 @@ impl<T: DynTreeNode + ?Sized> TreeNode for Arc<T> {
                     {
                         // We need to use the returned recursion state when processing the remaining children
                         parent_node.tnr = node.tnr;
-                        processed_children.push(node);
+                        parent_node.transformed |= node.transformed;
+                        processed_children.push(node.data);
                     } else {
                         debug_assert!(stack.is_empty());
                         return Ok(node);
@@ -1249,7 +1233,7 @@ enum TransformingState<T> {
     ProcessingChildren {
         item: Transformed<T>,
         non_processed_children: Vec<T>,
-        processed_children: Vec<Transformed<T>>,
+        processed_children: Vec<T>,
     },
     /// All children are processed (or jumped through). When executed, f_up may be called
     ProcessedAllChildren(Transformed<T>),
