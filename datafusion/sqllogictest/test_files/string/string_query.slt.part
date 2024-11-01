@@ -1373,3 +1373,20 @@ p percent NULL pan Tadeusz ma iść w kąt pan Tadeusz ma iść w kąt NULL
 _ _ NULL (empty) (empty) NULL
 NULL NULL NULL NULL NULL NULL
 NULL NULL NULL NULL NULL NULL
+
+# TODO: Support Utf8View for bit_length array string function
+# --------------------------------------
+# Test BIT_LENGTH
+# --------------------------------------
+# query II
+# SELECT
+#   BIT_LENGTH(ascii_1),
+#   BIT_LENGTH(unicode_1)
+# FROM test_basic_operator;
+# ----
+# 48 144
+# 72 176
+# 56 240
+# 88 104
+# 56 216
+# NULL NULL

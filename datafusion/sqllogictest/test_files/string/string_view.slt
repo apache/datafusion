@@ -93,6 +93,16 @@ select octet_length(column1_utf8view) from test;
 0
 NULL
 
+query IIII
+SELECT
+  BIT_LENGTH(arrow_cast('Andrew', 'Utf8View')),
+  BIT_LENGTH(arrow_cast('datafusion数据融合', 'Utf8View')),
+  BIT_LENGTH(arrow_cast('💖', 'Utf8View')),
+  BIT_LENGTH(arrow_cast('josé', 'Utf8View'))
+;
+----
+48 176 32 40
+
 query error DataFusion error: Arrow error: Compute error: bit_length not supported for Utf8View
 select bit_length(column1_utf8view) from test;
 
