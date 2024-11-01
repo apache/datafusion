@@ -42,7 +42,8 @@ use crate::{
     logical_expr::{
         CreateCatalog, CreateCatalogSchema, CreateExternalTable, CreateFunction,
         CreateMemoryTable, CreateView, DropCatalogSchema, DropFunction, DropTable,
-        DropView, LogicalPlan, LogicalPlanBuilder, SetVariable, TableType, UNNAMED_TABLE,
+        DropView, Execute, LogicalPlan, LogicalPlanBuilder, Prepare, SetVariable,
+        TableType, UNNAMED_TABLE,
     },
     physical_expr::PhysicalExpr,
     physical_plan::ExecutionPlan,
@@ -54,9 +55,9 @@ use arrow::record_batch::RecordBatch;
 use arrow_schema::Schema;
 use datafusion_common::{
     config::{ConfigExtension, TableOptions},
-    exec_err, not_impl_err, plan_datafusion_err, plan_err,
+    exec_datafusion_err, exec_err, not_impl_err, plan_datafusion_err, plan_err,
     tree_node::{TreeNodeRecursion, TreeNodeVisitor},
-    DFSchema, SchemaReference, TableReference,
+    DFSchema, ScalarValue, SchemaReference, TableReference,
 };
 use datafusion_execution::registry::SerializerRegistry;
 use datafusion_expr::{
@@ -687,7 +688,26 @@ impl SessionContext {
             LogicalPlan::Statement(Statement::SetVariable(stmt)) => {
                 self.set_variable(stmt).await
             }
-
+            LogicalPlan::Prepare(Prepare { name, input, .. }) => {
+                self.state.write().store_prepared(name, input)?;
+                self.return_empty_dataframe()
+            }
+            LogicalPlan::Execute(Execute {
+                name, parameters, ..
+            }) => {
+                let plan = self.state.read().get_prepared(&name).ok_or_else(|| {
+                    exec_datafusion_err!("Prepared statement '{}' not exists", name)
+                })?;
+                let values: Vec<ScalarValue> = parameters
+                    .into_iter()
+                    .map(|e| match e {
+                        Expr::Literal(scalar) => Ok(scalar),
+                        _ => exec_err!("Invalid parameter type"),
+                    })
+                    .collect::<Result<_>>()?;
+                let plan = plan.as_ref().clone().with_param_values(values)?;
+                Ok(DataFrame::new(self.state(), plan))
+            }
             plan => Ok(DataFrame::new(self.state(), plan)),
         }
     }
