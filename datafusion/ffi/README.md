@@ -88,6 +88,13 @@ can expose it by using `FFI_TableProvider::new()`. When you need to consume a
 There is a complete end to end demonstration in the
 [examples](https://github.com/apache/datafusion/tree/main/datafusion-examples/examples/ffi).
 
+## Asynchronous Calls
+
+Some of the functions with this crate require asynchronous operation. These
+will perform similar to their pure rust counterparts by using the [async-ffi]
+crate. In general, any call to an asynchronous function in this interface will
+not block the rest of the program's execution.
+
 ## Struct Layout
 
 In this crate we have a variety of structs which closely mimic the behavior of
