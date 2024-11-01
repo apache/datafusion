@@ -627,8 +627,7 @@ impl GroupValues for VectorizedGroupValuesColumn {
         //   2. Perform `vectorized_append` for `vectorized_append_row_indices`.
         //     `vectorized_append` must be performed before `vectorized_equal_to`,
         //      because some `group indices` in `vectorized_equal_to_group_indices`
-        //      may be actually placeholders, and still point to no actual values in
-        //      `group_values` before performing append.
+        //      maybe still point to no actual values in `group_values` before performing append.
         //
         //   3. Perform `vectorized_equal_to` for `vectorized_equal_to_row_indices`
         //      and `vectorized_equal_to_group_indices`. If found some rows in input `cols`
