@@ -607,6 +607,7 @@ mod tests {
     use datafusion_common::ScalarValue;
     use datafusion_physical_expr::expressions::col;
     use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
+    use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
     // Generate a schema which consists of 7 columns (a, b, c, d, e, f, g)
     fn create_test_schema() -> Result<SchemaRef> {
@@ -625,14 +626,14 @@ mod tests {
     // Convert each tuple to PhysicalSortExpr
     fn convert_to_sort_exprs(
         in_data: &[(&Arc<dyn PhysicalExpr>, SortOptions)],
-    ) -> Vec<PhysicalSortExpr> {
+    ) -> LexOrdering {
         in_data
             .iter()
             .map(|(expr, options)| PhysicalSortExpr {
                 expr: Arc::clone(*expr),
                 options: *options,
             })
-            .collect::<Vec<_>>()
+            .collect::<LexOrdering>()
     }
 
     #[tokio::test]

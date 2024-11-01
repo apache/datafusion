@@ -45,6 +45,7 @@ mod sp_repartition_fuzz_tests {
     };
     use test_utils::add_empty_batches;
 
+    use datafusion_physical_expr_common::sort_expr::LexOrdering;
     use itertools::izip;
     use rand::{rngs::StdRng, seq::SliceRandom, Rng, SeedableRng};
 
@@ -345,7 +346,7 @@ mod sp_repartition_fuzz_tests {
         let schema = input1[0].schema();
         let session_config = SessionConfig::new().with_batch_size(50);
         let ctx = SessionContext::new_with_config(session_config);
-        let mut sort_keys = vec![];
+        let mut sort_keys = LexOrdering::default();
         for ordering_col in ["a", "b", "c"] {
             sort_keys.push(PhysicalSortExpr {
                 expr: col(ordering_col, &schema).unwrap(),
