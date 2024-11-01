@@ -661,10 +661,7 @@ impl GroupValues for VectorizedGroupValuesColumn {
                     .iter_mut()
                     .map(|v| v.take_n(n))
                     .collect::<Vec<_>>();
-                let new_group_index_lists =
-                    Vec::with_capacity(self.group_index_lists.len());
-                let old_group_index_lists =
-                    mem::replace(&mut self.group_index_lists, new_group_index_lists);
+                let mut index = 0;
 
                 // SAFETY: self.map outlives iterator and is not modified concurrently
                 unsafe {
@@ -673,12 +670,12 @@ impl GroupValues for VectorizedGroupValuesColumn {
                         if bucket.as_ref().1.is_non_inlined() {
                             // Non-inlined case
                             // We take `group_index_list` from `old_group_index_lists`
-                            let list_offset = bucket.as_ref().1.value() as usize;
-                            let old_group_index_list =
-                                &old_group_index_lists[list_offset];
 
+                            // list_offset is incrementally
+                            let list_offset = bucket.as_ref().1.value() as usize;
                             let mut new_group_index_list = Vec::new();
-                            for &group_index in old_group_index_list {
+                            for group_index in self.group_index_lists[list_offset].iter()
+                            {
                                 if let Some(remaining) = group_index.checked_sub(n) {
                                     new_group_index_list.push(remaining);
                                 }
@@ -695,11 +692,10 @@ impl GroupValues for VectorizedGroupValuesColumn {
                                 bucket.as_mut().1 =
                                     GroupIndexView::new_inlined(*group_index as u64);
                             } else {
-                                let new_list_offset = self.group_index_lists.len();
-                                self.group_index_lists.push(new_group_index_list);
-                                bucket.as_mut().1 = GroupIndexView::new_non_inlined(
-                                    new_list_offset as u64,
-                                );
+                                self.group_index_lists[index] = new_group_index_list;
+                                bucket.as_mut().1 =
+                                    GroupIndexView::new_non_inlined(index as u64);
+                                index += 1;
                             }
                         } else {
                             // Inlined case, we just decrement group index by n
@@ -716,6 +712,8 @@ impl GroupValues for VectorizedGroupValuesColumn {
                         }
                     }
                 }
+
+                self.group_index_lists.truncate(index);
 
                 output
             }
@@ -1091,16 +1089,19 @@ fn supported_type(data_type: &DataType) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use std::{collections::HashMap, sync::Arc};
 
     use arrow::{compute::concat_batches, util::pretty::pretty_format_batches};
     use arrow_array::{ArrayRef, Int64Array, RecordBatch, StringArray, StringViewArray};
     use arrow_schema::{DataType, Field, Schema, SchemaRef};
+    use datafusion_common::utils::proxy::RawTableAllocExt;
     use datafusion_expr::EmitTo;
 
     use crate::aggregates::group_values::{
         column::VectorizedGroupValuesColumn, GroupValues,
     };
+
+    use super::GroupIndexView;
 
     #[test]
     fn test_intern_for_vectorized_group_values() {
@@ -1113,6 +1114,71 @@ mod tests {
         let actual_batch = RecordBatch::try_new(data_set.schema(), actual_batch).unwrap();
 
         check_result(&actual_batch, &data_set.expected_batch);
+    }
+
+    #[test]
+    fn test_emit_first_n_non_inlined_1() {
+        let field = Field::new("item", DataType::Int32, true);
+        let schema = Arc::new(Schema::new_with_metadata(vec![field], HashMap::new()));
+        let mut group_values = VectorizedGroupValuesColumn::try_new(schema).unwrap();
+
+        insert_inline(&mut group_values, 0, 0);
+        insert_non_inline(&mut group_values, 1, 0, vec![1, 2]);
+        insert_inline(&mut group_values, 2, 3);
+        let _ = group_values.emit(EmitTo::First(4)).unwrap();
+        // All the index < 4, all erased
+        assert_eq!(group_values.map.len(), 0);
+    }
+
+    #[test]
+    fn test_emit_first_n_non_inlined_2() {
+        let field = Field::new("item", DataType::Int32, true);
+        let schema = Arc::new(Schema::new_with_metadata(vec![field], HashMap::new()));
+        let mut group_values = VectorizedGroupValuesColumn::try_new(schema).unwrap();
+        insert_inline(&mut group_values, 0, 0); // erased
+        insert_non_inline(&mut group_values, 1, 0, vec![1, 5]); // remain 1 (5 - 4)
+        insert_inline(&mut group_values, 2, 7); // remain 3 (7 - 4)
+        insert_non_inline(&mut group_values, 3, 1, vec![2, 8, 9]); // remain 2 (8 - 4) and (9 - 4)
+        let _ = group_values.emit(EmitTo::First(4)).unwrap();
+        assert_eq!(group_values.map.len(), 3);
+        let group_index = group_values.map.get(1, |_| true).unwrap().1;
+        assert!(!group_index.is_non_inlined());
+        assert_eq!(group_index.value(), 1);
+        let group_index = group_values.map.get(2, |_| true).unwrap().1;
+        assert!(!group_index.is_non_inlined());
+        assert_eq!(group_index.value(), 3);
+        let group_index = group_values.map.get(3, |_| true).unwrap().1;
+        assert!(group_index.is_non_inlined());
+        assert_eq!(group_index.value(), 0); // offset is 0
+        assert_eq!(group_values.group_index_lists[0], vec![4, 5]);
+    }
+
+    fn insert_inline(
+        group_values: &mut VectorizedGroupValuesColumn,
+        hash_key: u64,
+        group_index: u64,
+    ) {
+        let group_index_view = GroupIndexView::new_inlined(group_index);
+        group_values.map.insert_accounted(
+            (hash_key, group_index_view),
+            |(hash, _)| *hash,
+            &mut group_values.map_size,
+        );
+    }
+
+    fn insert_non_inline(
+        group_values: &mut VectorizedGroupValuesColumn,
+        hash_key: u64,
+        list_offset: u64,
+        group_indexes: Vec<usize>,
+    ) {
+        let group_index_view = GroupIndexView::new_non_inlined(list_offset);
+        group_values.group_index_lists.push(group_indexes);
+        group_values.map.insert_accounted(
+            (hash_key, group_index_view),
+            |(hash, _)| *hash,
+            &mut group_values.map_size,
+        );
     }
 
     #[test]
