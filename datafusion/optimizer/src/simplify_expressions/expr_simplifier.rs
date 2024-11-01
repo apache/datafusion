@@ -1546,7 +1546,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
             // i.e. `a = 1 OR a = 2 OR a = 3` -> `a IN (1, 2, 3)`
             Expr::BinaryExpr(BinaryExpr {
                 left,
-                op: Operator::Or,
+                op: Or,
                 right,
             }) if are_inlist_and_eq(left.as_ref(), right.as_ref()) => {
                 let lhs = to_inlist(*left).unwrap();
@@ -1586,7 +1586,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
             //     8. `a in (1,2,3,4) AND a not in (5,6,7,8) -> a in (1,2,3,4)`
             Expr::BinaryExpr(BinaryExpr {
                 left,
-                op: Operator::And,
+                op: And,
                 right,
             }) if are_inlist_and_eq_and_match_neg(
                 left.as_ref(),
@@ -1606,7 +1606,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
 
             Expr::BinaryExpr(BinaryExpr {
                 left,
-                op: Operator::And,
+                op: And,
                 right,
             }) if are_inlist_and_eq_and_match_neg(
                 left.as_ref(),
@@ -1626,7 +1626,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
 
             Expr::BinaryExpr(BinaryExpr {
                 left,
-                op: Operator::And,
+                op: And,
                 right,
             }) if are_inlist_and_eq_and_match_neg(
                 left.as_ref(),
@@ -1646,7 +1646,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
 
             Expr::BinaryExpr(BinaryExpr {
                 left,
-                op: Operator::And,
+                op: And,
                 right,
             }) if are_inlist_and_eq_and_match_neg(
                 left.as_ref(),
@@ -1666,7 +1666,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
 
             Expr::BinaryExpr(BinaryExpr {
                 left,
-                op: Operator::Or,
+                op: Or,
                 right,
             }) if are_inlist_and_eq_and_match_neg(
                 left.as_ref(),
@@ -3832,7 +3832,7 @@ mod tests {
     fn test_simplify_udaf() {
         let udaf = AggregateUDF::new_from_impl(SimplifyMockUdaf::new_with_simplify());
         let aggregate_function_expr =
-            Expr::AggregateFunction(datafusion_expr::expr::AggregateFunction::new_udf(
+            Expr::AggregateFunction(expr::AggregateFunction::new_udf(
                 udaf.into(),
                 vec![],
                 false,
@@ -3846,7 +3846,7 @@ mod tests {
 
         let udaf = AggregateUDF::new_from_impl(SimplifyMockUdaf::new_without_simplify());
         let aggregate_function_expr =
-            Expr::AggregateFunction(datafusion_expr::expr::AggregateFunction::new_udf(
+            Expr::AggregateFunction(expr::AggregateFunction::new_udf(
                 udaf.into(),
                 vec![],
                 false,
@@ -3896,7 +3896,7 @@ mod tests {
 
         fn accumulator(
             &self,
-            _acc_args: function::AccumulatorArgs,
+            _acc_args: AccumulatorArgs,
         ) -> Result<Box<dyn Accumulator>> {
             unimplemented!("not needed for tests")
         }
@@ -3926,9 +3926,8 @@ mod tests {
         let udwf = WindowFunctionDefinition::WindowUDF(
             WindowUDF::new_from_impl(SimplifyMockUdwf::new_with_simplify()).into(),
         );
-        let window_function_expr = Expr::WindowFunction(
-            datafusion_expr::expr::WindowFunction::new(udwf, vec![]),
-        );
+        let window_function_expr =
+            Expr::WindowFunction(WindowFunction::new(udwf, vec![]));
 
         let expected = col("result_column");
         assert_eq!(simplify(window_function_expr), expected);
@@ -3936,9 +3935,8 @@ mod tests {
         let udwf = WindowFunctionDefinition::WindowUDF(
             WindowUDF::new_from_impl(SimplifyMockUdwf::new_without_simplify()).into(),
         );
-        let window_function_expr = Expr::WindowFunction(
-            datafusion_expr::expr::WindowFunction::new(udwf, vec![]),
-        );
+        let window_function_expr =
+            Expr::WindowFunction(WindowFunction::new(udwf, vec![]));
 
         let expected = window_function_expr.clone();
         assert_eq!(simplify(window_function_expr), expected);

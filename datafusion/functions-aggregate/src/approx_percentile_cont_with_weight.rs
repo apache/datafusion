@@ -17,6 +17,7 @@
 
 use std::any::Any;
 use std::fmt::{Debug, Formatter};
+use std::mem::size_of_val;
 use std::sync::{Arc, OnceLock};
 
 use arrow::{
@@ -239,8 +240,7 @@ impl Accumulator for ApproxPercentileWithWeightAccumulator {
     }
 
     fn size(&self) -> usize {
-        std::mem::size_of_val(self)
-            - std::mem::size_of_val(&self.approx_percentile_cont_accumulator)
+        size_of_val(self) - size_of_val(&self.approx_percentile_cont_accumulator)
             + self.approx_percentile_cont_accumulator.size()
     }
 }

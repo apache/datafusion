@@ -24,6 +24,7 @@ use datafusion_expr::test::function_stub::{count_udaf, max_udaf, min_udaf, sum_u
 use datafusion_expr::{col, lit, table_scan, wildcard, LogicalPlanBuilder};
 use datafusion_functions::unicode;
 use datafusion_functions_aggregate::grouping::grouping_udaf;
+use datafusion_functions_nested::make_array::make_array_udf;
 use datafusion_functions_window::rank::rank_udwf;
 use datafusion_sql::planner::{ContextProvider, PlannerContext, SqlToRel};
 use datafusion_sql::unparser::dialect::{
@@ -711,7 +712,8 @@ where
             .with_aggregate_function(max_udaf())
             .with_aggregate_function(grouping_udaf())
             .with_window_function(rank_udwf())
-            .with_scalar_function(Arc::new(unicode::substr().as_ref().clone())),
+            .with_scalar_function(Arc::new(unicode::substr().as_ref().clone()))
+            .with_scalar_function(make_array_udf()),
     };
     let sql_to_rel = SqlToRel::new(&context);
     let plan = sql_to_rel.sql_statement_to_plan(statement).unwrap();
@@ -968,6 +970,21 @@ fn test_table_scan_pushdown() -> Result<()> {
         table_scan_with_all.to_string(),
         "SELECT t1.id, t1.age FROM t1 WHERE (t1.id > t1.age) LIMIT 10"
     );
+
+    let table_scan_with_additional_filter = table_scan_with_filters(
+        Some("t1"),
+        &schema,
+        None,
+        vec![col("id").gt(col("age"))],
+    )?
+    .filter(col("id").eq(lit(5)))?
+    .build()?;
+    let table_scan_with_filter = plan_to_sql(&table_scan_with_additional_filter)?;
+    assert_eq!(
+        table_scan_with_filter.to_string(),
+        "SELECT * FROM t1 WHERE (t1.id = 5) AND (t1.id > t1.age)"
+    );
+
     Ok(())
 }
 
@@ -988,6 +1005,93 @@ fn test_sort_with_push_down_fetch() -> Result<()> {
         format!("{}", sql),
         "SELECT t1.id, t1.age FROM t1 ORDER BY t1.age ASC NULLS FIRST LIMIT 10"
     );
+    Ok(())
+}
+
+#[test]
+fn test_join_with_table_scan_filters() -> Result<()> {
+    let schema_left = Schema::new(vec![
+        Field::new("id", DataType::Utf8, false),
+        Field::new("name", DataType::Utf8, false),
+    ]);
+
+    let schema_right = Schema::new(vec![
+        Field::new("id", DataType::Utf8, false),
+        Field::new("age", DataType::Utf8, false),
+    ]);
+
+    let left_plan = table_scan_with_filters(
+        Some("left_table"),
+        &schema_left,
+        None,
+        vec![col("name").like(lit("some_name"))],
+    )?
+    .alias("left")?
+    .build()?;
+
+    let right_plan = table_scan_with_filters(
+        Some("right_table"),
+        &schema_right,
+        None,
+        vec![col("age").gt(lit(10))],
+    )?
+    .build()?;
+
+    let join_plan_with_filter = LogicalPlanBuilder::from(left_plan.clone())
+        .join(
+            right_plan.clone(),
+            datafusion_expr::JoinType::Inner,
+            (vec!["left.id"], vec!["right_table.id"]),
+            Some(col("left.id").gt(lit(5))),
+        )?
+        .build()?;
+
+    let sql = plan_to_sql(&join_plan_with_filter)?;
+
+    let expected_sql = r#"SELECT * FROM left_table AS "left" JOIN right_table ON "left".id = right_table.id AND (("left".id > 5) AND ("left"."name" LIKE 'some_name' AND (age > 10)))"#;
+
+    assert_eq!(sql.to_string(), expected_sql);
+
+    let join_plan_no_filter = LogicalPlanBuilder::from(left_plan.clone())
+        .join(
+            right_plan,
+            datafusion_expr::JoinType::Inner,
+            (vec!["left.id"], vec!["right_table.id"]),
+            None,
+        )?
+        .build()?;
+
+    let sql = plan_to_sql(&join_plan_no_filter)?;
+
+    let expected_sql = r#"SELECT * FROM left_table AS "left" JOIN right_table ON "left".id = right_table.id AND ("left"."name" LIKE 'some_name' AND (age > 10))"#;
+
+    assert_eq!(sql.to_string(), expected_sql);
+
+    let right_plan_with_filter = table_scan_with_filters(
+        Some("right_table"),
+        &schema_right,
+        None,
+        vec![col("age").gt(lit(10))],
+    )?
+    .filter(col("right_table.name").eq(lit("before_join_filter_val")))?
+    .build()?;
+
+    let join_plan_multiple_filters = LogicalPlanBuilder::from(left_plan.clone())
+        .join(
+            right_plan_with_filter,
+            datafusion_expr::JoinType::Inner,
+            (vec!["left.id"], vec!["right_table.id"]),
+            Some(col("left.id").gt(lit(5))),
+        )?
+        .filter(col("left.name").eq(lit("after_join_filter_val")))?
+        .build()?;
+
+    let sql = plan_to_sql(&join_plan_multiple_filters)?;
+
+    let expected_sql = r#"SELECT * FROM left_table AS "left" JOIN right_table ON "left".id = right_table.id AND (("left".id > 5) AND (("left"."name" LIKE 'some_name' AND (right_table."name" = 'before_join_filter_val')) AND (age > 10))) WHERE ("left"."name" = 'after_join_filter_val')"#;
+
+    assert_eq!(sql.to_string(), expected_sql);
+
     Ok(())
 }
 
@@ -1067,5 +1171,20 @@ rank() OVER (PARTITION BY (grouping(person.id) + grouping(person.age)), CASE WHE
 rank() OVER (PARTITION BY (grouping(person.age) + grouping(person.id)), CASE WHEN (CAST(grouping(person.age) AS BIGINT) = 0) THEN person.id END ORDER BY sum(person.id) DESC NULLS FIRST RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS rank_within_parent_2
 FROM person
 GROUP BY person.id, person.first_name"#.replace("\n", " ").as_str(),
+    );
+}
+
+#[test]
+fn test_unnest_to_sql() {
+    sql_round_trip(
+        GenericDialect {},
+        r#"SELECT unnest(array_col) as u1, struct_col, array_col FROM unnest_table WHERE array_col != NULL ORDER BY struct_col, array_col"#,
+        r#"SELECT UNNEST(unnest_table.array_col) AS u1, unnest_table.struct_col, unnest_table.array_col FROM unnest_table WHERE (unnest_table.array_col <> NULL) ORDER BY unnest_table.struct_col ASC NULLS LAST, unnest_table.array_col ASC NULLS LAST"#,
+    );
+
+    sql_round_trip(
+        GenericDialect {},
+        r#"SELECT unnest(make_array(1, 2, 2, 5, NULL)) as u1"#,
+        r#"SELECT UNNEST(make_array(1, 2, 2, 5, NULL)) AS u1"#,
     );
 }

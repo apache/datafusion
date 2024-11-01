@@ -328,7 +328,8 @@ fn adjust_input_keys_ordering(
                     JoinType::Left
                     | JoinType::LeftSemi
                     | JoinType::LeftAnti
-                    | JoinType::Full => vec![],
+                    | JoinType::Full
+                    | JoinType::LeftMark => vec![],
                 };
             }
             PartitionMode::Auto => {
@@ -1416,8 +1417,8 @@ pub(crate) mod tests {
     use datafusion_expr::Operator;
     use datafusion_physical_expr::expressions::{BinaryExpr, Literal};
     use datafusion_physical_expr::{
-        expressions, expressions::binary, expressions::lit, LexOrdering,
-        PhysicalSortExpr, PhysicalSortRequirement,
+        expressions::binary, expressions::lit, LexOrdering, PhysicalSortExpr,
+        PhysicalSortRequirement,
     };
     use datafusion_physical_expr_common::sort_expr::LexRequirement;
     use datafusion_physical_plan::PlanProperties;
@@ -1646,8 +1647,7 @@ pub(crate) mod tests {
             .enumerate()
             .map(|(index, (_col, name))| {
                 (
-                    Arc::new(expressions::Column::new(name, index))
-                        as Arc<dyn PhysicalExpr>,
+                    Arc::new(Column::new(name, index)) as Arc<dyn PhysicalExpr>,
                     name.clone(),
                 )
             })
@@ -1960,6 +1960,7 @@ pub(crate) mod tests {
             JoinType::Full,
             JoinType::LeftSemi,
             JoinType::LeftAnti,
+            JoinType::LeftMark,
             JoinType::RightSemi,
             JoinType::RightAnti,
         ];
@@ -1982,7 +1983,8 @@ pub(crate) mod tests {
                 | JoinType::Right
                 | JoinType::Full
                 | JoinType::LeftSemi
-                | JoinType::LeftAnti => {
+                | JoinType::LeftAnti
+                | JoinType::LeftMark => {
                     // Join on (a == c)
                     let top_join_on = vec![(
                         Arc::new(Column::new_with_schema("a", &join.schema()).unwrap())
@@ -2000,7 +2002,7 @@ pub(crate) mod tests {
 
                     let expected = match join_type {
                         // Should include 3 RepartitionExecs
-                        JoinType::Inner | JoinType::Left | JoinType::LeftSemi | JoinType::LeftAnti => vec![
+                        JoinType::Inner | JoinType::Left | JoinType::LeftSemi | JoinType::LeftAnti | JoinType::LeftMark => vec![
                             top_join_plan.as_str(),
                             join_plan.as_str(),
                             "RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=10",
@@ -2099,7 +2101,7 @@ pub(crate) mod tests {
                     assert_optimized!(expected, top_join.clone(), true);
                     assert_optimized!(expected, top_join, false);
                 }
-                JoinType::LeftSemi | JoinType::LeftAnti => {}
+                JoinType::LeftSemi | JoinType::LeftAnti | JoinType::LeftMark => {}
             }
         }
 

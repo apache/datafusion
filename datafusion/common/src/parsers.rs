@@ -18,7 +18,6 @@
 //! Interval parsing logic
 
 use std::fmt::Display;
-use std::result;
 use std::str::FromStr;
 
 use sqlparser::parser::ParserError;
@@ -41,7 +40,7 @@ pub enum CompressionTypeVariant {
 impl FromStr for CompressionTypeVariant {
     type Err = ParserError;
 
-    fn from_str(s: &str) -> result::Result<Self, ParserError> {
+    fn from_str(s: &str) -> Result<Self, ParserError> {
         let s = s.to_uppercase();
         match s.as_str() {
             "GZIP" | "GZ" => Ok(Self::GZIP),

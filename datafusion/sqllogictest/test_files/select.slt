@@ -459,7 +459,7 @@ VALUES (-1)
 query IIB
 VALUES (2+1,2-1,2>1)
 ----
-3    1    true
+3 1 true
 
 # multiple rows values
 query I rowsort
@@ -472,8 +472,8 @@ VALUES (1),(2)
 query IT rowsort
 VALUES (1,'a'),(2,'b')
 ----
-1   a
-2   b
+1 a
+2 b
 
 # table foo for distinct order by
 statement ok

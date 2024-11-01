@@ -341,7 +341,7 @@ async fn run_limit_test(fetch: usize, data: &SortedData) {
 
 /// Return random ASCII String with len
 fn get_random_string(len: usize) -> String {
-    rand::thread_rng()
+    thread_rng()
         .sample_iter(rand::distributions::Alphanumeric)
         .take(len)
         .map(char::from)

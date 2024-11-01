@@ -38,10 +38,10 @@
 //! * [`LogicalPlan::expressions`]: Return a copy of the plan's expressions
 use crate::{
     dml::CopyTo, Aggregate, Analyze, CreateMemoryTable, CreateView, DdlStatement,
-    Distinct, DistinctOn, DmlStatement, Explain, Expr, Extension, Filter, Join, Limit,
-    LogicalPlan, Partitioning, Prepare, Projection, RecursiveQuery, Repartition, Sort,
-    Subquery, SubqueryAlias, TableScan, Union, Unnest, UserDefinedLogicalNode, Values,
-    Window,
+    Distinct, DistinctOn, DmlStatement, Execute, Explain, Expr, Extension, Filter, Join,
+    Limit, LogicalPlan, Partitioning, Prepare, Projection, RecursiveQuery, Repartition,
+    Sort, Subquery, SubqueryAlias, TableScan, Union, Unnest, UserDefinedLogicalNode,
+    Values, Window,
 };
 use std::ops::Deref;
 use std::sync::Arc;
@@ -363,6 +363,7 @@ impl TreeNode for LogicalPlan {
             | LogicalPlan::Statement { .. }
             | LogicalPlan::EmptyRelation { .. }
             | LogicalPlan::Values { .. }
+            | LogicalPlan::Execute { .. }
             | LogicalPlan::DescribeTable(_) => Transformed::no(self),
         })
     }
@@ -505,6 +506,9 @@ impl LogicalPlan {
                 .chain(fetch.iter())
                 .map(|e| e.deref())
                 .apply_until_stop(f),
+            LogicalPlan::Execute(Execute { parameters, .. }) => {
+                parameters.iter().apply_until_stop(f)
+            }
             // plans without expressions
             LogicalPlan::EmptyRelation(_)
             | LogicalPlan::RecursiveQuery(_)
@@ -734,6 +738,20 @@ impl LogicalPlan {
                     })
                 })
             }
+            LogicalPlan::Execute(Execute {
+                parameters,
+                name,
+                schema,
+            }) => parameters
+                .into_iter()
+                .map_until_stop_and_collect(f)?
+                .update_data(|parameters| {
+                    LogicalPlan::Execute(Execute {
+                        parameters,
+                        name,
+                        schema,
+                    })
+                }),
             // plans without expressions
             LogicalPlan::EmptyRelation(_)
             | LogicalPlan::Unnest(_)

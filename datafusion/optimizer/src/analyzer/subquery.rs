@@ -113,7 +113,9 @@ pub fn check_subquery_expr(
             | LogicalPlan::Join(_) => Ok(()),
             _ => plan_err!(
                 "In/Exist subquery can only be used in \
-            Projection, Filter, Window functions, Aggregate and Join plan nodes"
+                Projection, Filter, Window functions, Aggregate and Join plan nodes, \
+                but was used in [{}]",
+                outer_plan.display()
             ),
         }?;
         check_correlations_in_subquery(inner_plan)
@@ -179,7 +181,10 @@ fn check_inner_plan(inner_plan: &LogicalPlan, can_contain_outer_ref: bool) -> Re
                 })?;
                 Ok(())
             }
-            JoinType::Left | JoinType::LeftSemi | JoinType::LeftAnti => {
+            JoinType::Left
+            | JoinType::LeftSemi
+            | JoinType::LeftAnti
+            | JoinType::LeftMark => {
                 check_inner_plan(left, can_contain_outer_ref)?;
                 check_inner_plan(right, false)
             }
@@ -303,7 +308,7 @@ mod test {
             vec![]
         }
 
-        fn schema(&self) -> &datafusion_common::DFSchemaRef {
+        fn schema(&self) -> &DFSchemaRef {
             &self.empty_schema
         }
 
