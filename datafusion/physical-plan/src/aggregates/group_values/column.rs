@@ -121,6 +121,13 @@ pub struct VectorizedGroupValuesColumn {
     ///
     group_index_lists: Vec<Vec<usize>>,
 
+    /// When emitting first n, we need to decrease/erase group indices in
+    /// `map` and `group_index_lists`.
+    ///
+    /// This buffer is used to temporarily store the remaining group indices in
+    /// a specific list in `group_index_lists`.
+    emit_group_index_list_buffer: Vec<usize>,
+
     /// Similar as `current_indices`, but `remaining_indices`
     /// is used to store the rows will be processed in next round.
     scalarized_indices: Vec<usize>,
@@ -162,6 +169,7 @@ impl VectorizedGroupValuesColumn {
             schema,
             map,
             group_index_lists: Vec::new(),
+            emit_group_index_list_buffer: Vec::new(),
             map_size: 0,
             group_values: vec![],
             hashes_buffer: Default::default(),
@@ -683,7 +691,7 @@ impl GroupValues for VectorizedGroupValuesColumn {
                     .iter_mut()
                     .map(|v| v.take_n(n))
                     .collect::<Vec<_>>();
-                let mut index = 0;
+                let mut next_new_list_offset = 0;
 
                 // SAFETY: self.map outlives iterator and is not modified concurrently
                 unsafe {
@@ -694,12 +702,12 @@ impl GroupValues for VectorizedGroupValuesColumn {
                             // We take `group_index_list` from `old_group_index_lists`
 
                             // list_offset is incrementally
+                            self.emit_group_index_list_buffer.clear();
                             let list_offset = bucket.as_ref().1.value() as usize;
-                            let mut new_group_index_list = Vec::new();
                             for group_index in self.group_index_lists[list_offset].iter()
                             {
                                 if let Some(remaining) = group_index.checked_sub(n) {
-                                    new_group_index_list.push(remaining);
+                                    self.emit_group_index_list_buffer.push(remaining);
                                 }
                             }
 
@@ -707,17 +715,23 @@ impl GroupValues for VectorizedGroupValuesColumn {
                             //   - `new_group_index_list` is empty, we should erase this bucket
                             //   - only one value in `new_group_index_list`, switch the `view` to `inlined`
                             //   - still multiple values in `new_group_index_list`, build and set the new `unlined view`
-                            if new_group_index_list.is_empty() {
+                            if self.emit_group_index_list_buffer.is_empty() {
                                 self.map.erase(bucket);
-                            } else if new_group_index_list.len() == 1 {
-                                let group_index = new_group_index_list.first().unwrap();
+                            } else if self.emit_group_index_list_buffer.len() == 1 {
+                                let group_index =
+                                    self.emit_group_index_list_buffer.first().unwrap();
                                 bucket.as_mut().1 =
                                     GroupIndexView::new_inlined(*group_index as u64);
                             } else {
-                                self.group_index_lists[index] = new_group_index_list;
-                                bucket.as_mut().1 =
-                                    GroupIndexView::new_non_inlined(index as u64);
-                                index += 1;
+                                let group_index_list =
+                                    &mut self.group_index_lists[next_new_list_offset];
+                                group_index_list.clear();
+                                group_index_list
+                                    .extend(self.emit_group_index_list_buffer.iter());
+                                bucket.as_mut().1 = GroupIndexView::new_non_inlined(
+                                    next_new_list_offset as u64,
+                                );
+                                next_new_list_offset += 1;
                             }
                         } else {
                             // Inlined case, we just decrement group index by n
@@ -735,7 +749,7 @@ impl GroupValues for VectorizedGroupValuesColumn {
                     }
                 }
 
-                self.group_index_lists.truncate(index);
+                self.group_index_lists.truncate(next_new_list_offset);
 
                 output
             }
@@ -767,6 +781,7 @@ impl GroupValues for VectorizedGroupValuesColumn {
         self.hashes_buffer.clear();
         self.hashes_buffer.shrink_to(count);
         self.group_index_lists.clear();
+        self.emit_group_index_list_buffer.clear();
         self.scalarized_indices.clear();
         self.vectorized_append_row_indices.clear();
         self.vectorized_equal_to_row_indices.clear();
