@@ -449,10 +449,10 @@ pub fn adjust_right_output_partitioning(
 /// the left column (zeroth index in the tuple) inside `right_ordering`.
 fn replace_on_columns_of_right_ordering(
     on_columns: &[(PhysicalExprRef, PhysicalExprRef)],
-    right_ordering: &mut [PhysicalSortExpr],
+    right_ordering: &mut LexOrdering,
 ) -> Result<()> {
     for (left_col, right_col) in on_columns {
-        for item in right_ordering.iter_mut() {
+        for item in right_ordering.inner.iter_mut() {
             let new_expr = Arc::clone(&item.expr)
                 .transform(|e| {
                     if e.eq(right_col) {
@@ -472,7 +472,7 @@ fn offset_ordering(
     ordering: LexOrderingRef,
     join_type: &JoinType,
     offset: usize,
-) -> Vec<PhysicalSortExpr> {
+) -> LexOrdering {
     match join_type {
         // In the case below, right ordering should be offsetted with the left
         // side length, since we append the right table to the left table.
@@ -483,7 +483,7 @@ fn offset_ordering(
                 options: sort_expr.options,
             })
             .collect(),
-        _ => ordering.to_vec(),
+        _ => LexOrdering::from_ref(ordering),
     }
 }
 
@@ -503,15 +503,16 @@ pub fn calculate_join_output_ordering(
             if join_type == JoinType::Inner && probe_side == Some(JoinSide::Left) {
                 replace_on_columns_of_right_ordering(
                     on_columns,
-                    &mut right_ordering.to_vec(),
+                    &mut LexOrdering::from_ref(right_ordering),
                 )
                 .ok()?;
                 merge_vectors(
                     left_ordering,
-                    &offset_ordering(right_ordering, &join_type, left_columns_len),
+                    offset_ordering(right_ordering, &join_type, left_columns_len)
+                        .as_ref(),
                 )
             } else {
-                left_ordering.to_vec()
+                LexOrdering::from_ref(left_ordering)
             }
         }
         [false, true] => {
@@ -519,11 +520,12 @@ pub fn calculate_join_output_ordering(
             if join_type == JoinType::Inner && probe_side == Some(JoinSide::Right) {
                 replace_on_columns_of_right_ordering(
                     on_columns,
-                    &mut right_ordering.to_vec(),
+                    &mut LexOrdering::from_ref(right_ordering),
                 )
                 .ok()?;
                 merge_vectors(
-                    &offset_ordering(right_ordering, &join_type, left_columns_len),
+                    offset_ordering(right_ordering, &join_type, left_columns_len)
+                        .as_ref(),
                     left_ordering,
                 )
             } else {
@@ -2600,7 +2602,7 @@ mod tests {
     #[test]
     fn test_calculate_join_output_ordering() -> Result<()> {
         let options = SortOptions::default();
-        let left_ordering = vec![
+        let left_ordering = LexOrdering::new(vec![
             PhysicalSortExpr {
                 expr: Arc::new(Column::new("a", 0)),
                 options,
@@ -2613,8 +2615,8 @@ mod tests {
                 expr: Arc::new(Column::new("d", 3)),
                 options,
             },
-        ];
-        let right_ordering = vec![
+        ]);
+        let right_ordering = LexOrdering::new(vec![
             PhysicalSortExpr {
                 expr: Arc::new(Column::new("z", 2)),
                 options,
@@ -2623,7 +2625,7 @@ mod tests {
                 expr: Arc::new(Column::new("y", 1)),
                 options,
             },
-        ];
+        ]);
         let join_type = JoinType::Inner;
         let on_columns = [(
             Arc::new(Column::new("b", 1)) as _,
@@ -2634,7 +2636,7 @@ mod tests {
         let probe_sides = [Some(JoinSide::Left), Some(JoinSide::Right)];
 
         let expected = [
-            Some(vec![
+            Some(LexOrdering::new(vec![
                 PhysicalSortExpr {
                     expr: Arc::new(Column::new("a", 0)),
                     options,
@@ -2655,8 +2657,8 @@ mod tests {
                     expr: Arc::new(Column::new("y", 6)),
                     options,
                 },
-            ]),
-            Some(vec![
+            ])),
+            Some(LexOrdering::new(vec![
                 PhysicalSortExpr {
                     expr: Arc::new(Column::new("z", 7)),
                     options,
@@ -2677,7 +2679,7 @@ mod tests {
                     expr: Arc::new(Column::new("d", 3)),
                     options,
                 },
-            ]),
+            ])),
         ];
 
         for (i, (maintains_input_order, probe_side)) in
@@ -2685,8 +2687,8 @@ mod tests {
         {
             assert_eq!(
                 calculate_join_output_ordering(
-                    &left_ordering,
-                    &right_ordering,
+                    left_ordering.as_ref(),
+                    right_ordering.as_ref(),
                     join_type,
                     &on_columns,
                     left_columns_len,
