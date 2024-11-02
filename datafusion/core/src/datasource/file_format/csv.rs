@@ -761,12 +761,15 @@ mod tests {
         let state = session_ctx.state();
 
         let projection = None;
-        let exec = get_exec(
+        let root = "./tests/data/csv";
+        let format = CsvFormat::default().with_has_header(true);
+        let exec = scan_format(
             &state,
+            &format,
+            &root,
             "aggregate_test_100_with_nulls.csv",
             projection,
             None,
-            true,
         )
         .await?;
 
