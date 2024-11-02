@@ -18,7 +18,6 @@
 use super::to_timestamp::ToTimestampSecondsFunc;
 use crate::datetime::common::*;
 use arrow::datatypes::{DataType, TimeUnit};
-use criterion::BatchSize;
 use datafusion_common::{exec_err, Result};
 use datafusion_expr::scalar_doc_sections::DOC_SECTION_DATETIME;
 use datafusion_expr::{
