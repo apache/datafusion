@@ -353,7 +353,7 @@ impl LexOrdering {
     }
 
     pub fn as_ref(&self) -> &LexOrdering {
-        &self
+        self
     }
 
     pub fn capacity(&self) -> usize {

@@ -225,7 +225,7 @@ fn replace_with_partial_sort(
 
         let mut common_prefix_length = 0;
         while child_eq_properties.ordering_satisfy_requirement(&LexRequirement {
-            inner: (&sort_req[0..common_prefix_length + 1]).to_vec(),
+            inner: sort_req[0..common_prefix_length + 1].to_vec(),
         }) {
             common_prefix_length += 1;
         }
