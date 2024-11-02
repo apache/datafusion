@@ -1629,6 +1629,9 @@ fn build_statistics_expr(
     Ok(statistics_expr)
 }
 
+/// Convert `column LIKE literal` where P is a constant prefix of the literal
+/// to a range check on the column: `P <= column && column < P'`, where P' is the
+/// lowest string after all P* strings.
 fn build_like_match(
     expr_builder: &mut PruningExpressionBuilder,
 ) -> Option<Arc<dyn PhysicalExpr>> {
