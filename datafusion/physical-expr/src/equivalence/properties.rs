@@ -30,9 +30,8 @@ use crate::equivalence::{
 };
 use crate::expressions::{with_new_schema, CastExpr, Column, Literal};
 use crate::{
-    physical_exprs_contains, ConstExpr, LexOrdering, LexOrderingRef, LexRequirement,
-    LexRequirementRef, PhysicalExpr, PhysicalExprRef, PhysicalSortExpr,
-    PhysicalSortRequirement,
+    physical_exprs_contains, ConstExpr, LexOrdering, LexRequirement, LexRequirementRef,
+    PhysicalExpr, PhysicalExprRef, PhysicalSortExpr, PhysicalSortRequirement,
 };
 
 use arrow_schema::{SchemaRef, SortOptions};
@@ -197,7 +196,7 @@ impl EquivalenceProperties {
         OrderingEquivalenceClass::new(
             self.oeq_class
                 .iter()
-                .map(|ordering| self.normalize_sort_exprs(ordering.as_ref()))
+                .map(|ordering| self.normalize_sort_exprs(ordering))
                 .collect(),
         )
     }
@@ -408,7 +407,7 @@ impl EquivalenceProperties {
     /// function would return `vec![a ASC, c ASC]`. Internally, it would first
     /// normalize to `vec![a ASC, c ASC, a ASC]` and end up with the final result
     /// after deduplication.
-    fn normalize_sort_exprs(&self, sort_exprs: LexOrderingRef) -> LexOrdering {
+    fn normalize_sort_exprs(&self, sort_exprs: &LexOrdering) -> LexOrdering {
         // Convert sort expressions to sort requirements:
         let sort_reqs = PhysicalSortRequirement::from_sort_exprs(sort_exprs.iter());
         // Normalize the requirements:
@@ -456,7 +455,7 @@ impl EquivalenceProperties {
 
     /// Checks whether the given ordering is satisfied by any of the existing
     /// orderings.
-    pub fn ordering_satisfy(&self, given: LexOrderingRef) -> bool {
+    pub fn ordering_satisfy(&self, given: &LexOrdering) -> bool {
         // Convert the given sort expressions to sort requirements:
         let sort_requirements = PhysicalSortRequirement::from_sort_exprs(given.iter());
         self.ordering_satisfy_requirement(&sort_requirements)
@@ -548,8 +547,8 @@ impl EquivalenceProperties {
     /// the latter.
     pub fn get_finer_ordering(
         &self,
-        lhs: LexOrderingRef,
-        rhs: LexOrderingRef,
+        lhs: &LexOrdering,
+        rhs: &LexOrdering,
     ) -> Option<LexOrdering> {
         // Convert the given sort expressions to sort requirements:
         let lhs = PhysicalSortRequirement::from_sort_exprs(lhs);
@@ -606,7 +605,7 @@ impl EquivalenceProperties {
     pub fn substitute_ordering_component(
         &self,
         mapping: &ProjectionMapping,
-        sort_expr: LexOrderingRef,
+        sort_expr: &LexOrdering,
     ) -> Result<Vec<LexOrdering>> {
         let new_orderings = sort_expr
             .iter()
@@ -656,7 +655,7 @@ impl EquivalenceProperties {
         let orderings = &self.oeq_class.orderings;
         let new_order = orderings
             .iter()
-            .map(|order| self.substitute_ordering_component(mapping, order.as_ref()))
+            .map(|order| self.substitute_ordering_component(mapping, order))
             .collect::<Result<Vec<_>>>()?;
         let new_order = new_order.into_iter().flatten().collect();
         self.oeq_class = OrderingEquivalenceClass::new(new_order);
@@ -1971,7 +1970,7 @@ impl UnionEquivalentOrderingBuilder {
     ) -> AddedOrdering {
         if ordering.is_empty() {
             AddedOrdering::Yes
-        } else if constants.is_empty() && properties.ordering_satisfy(ordering.as_ref()) {
+        } else if constants.is_empty() && properties.ordering_satisfy(&ordering) {
             // If the ordering satisfies the target properties, no need to
             // augment it with constants.
             self.orderings.push(ordering);
@@ -2012,7 +2011,7 @@ impl UnionEquivalentOrderingBuilder {
                 &properties.constants,
             ) {
                 if !augmented_ordering.is_empty() {
-                    assert!(properties.ordering_satisfy(augmented_ordering.as_ref()));
+                    assert!(properties.ordering_satisfy(&augmented_ordering));
                     self.orderings.push(augmented_ordering);
                 }
             }
@@ -3055,7 +3054,7 @@ mod tests {
                     .collect::<Result<LexOrdering>>()?;
 
                 assert_eq!(
-                    properties.ordering_satisfy(sort.as_ref()),
+                    properties.ordering_satisfy(&sort),
                     case.should_satisfy_ordering,
                     "failed test '{}'",
                     case.name

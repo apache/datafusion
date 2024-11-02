@@ -74,7 +74,7 @@ fn test_ordering_satisfy_with_equivalence_random() -> Result<()> {
                 // Check whether ordering_satisfy API result and
                 // experimental result matches.
                 assert_eq!(
-                    eq_properties.ordering_satisfy(requirement.as_ref()),
+                    eq_properties.ordering_satisfy(&requirement),
                     expected,
                     "{}",
                     err_msg
@@ -148,7 +148,7 @@ fn test_ordering_satisfy_with_equivalence_complex_random() -> Result<()> {
                 // experimental result matches.
 
                 assert_eq!(
-                    eq_properties.ordering_satisfy(requirement.as_ref()),
+                    eq_properties.ordering_satisfy(&requirement),
                     (expected | false),
                     "{}",
                     err_msg
@@ -322,7 +322,7 @@ fn test_ordering_satisfy_with_equivalence() -> Result<()> {
             expected
         );
         assert_eq!(
-            eq_properties.ordering_satisfy(required.as_ref()),
+            eq_properties.ordering_satisfy(&required),
             expected,
             "{err_msg}"
         );

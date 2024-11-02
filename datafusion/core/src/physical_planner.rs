@@ -1521,7 +1521,7 @@ pub fn create_window_expr_with_name(
                 name,
                 &physical_args,
                 &partition_by,
-                order_by.as_ref(),
+                &order_by,
                 window_frame,
                 physical_schema,
                 ignore_nulls,

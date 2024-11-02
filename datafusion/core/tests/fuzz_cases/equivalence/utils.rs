@@ -32,7 +32,7 @@ use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 use datafusion_physical_expr::equivalence::{EquivalenceClass, ProjectionMapping};
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
-use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexOrderingRef};
+use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
 use itertools::izip;
 use rand::prelude::*;
@@ -459,13 +459,13 @@ pub fn generate_table_for_orderings(
     let batch = RecordBatch::try_from_iter(arrays)?;
 
     // Sort batch according to first ordering expression
-    let sort_columns = get_sort_columns(&batch, orderings[0].as_ref())?;
+    let sort_columns = get_sort_columns(&batch, &orderings[0])?;
     let sort_indices = lexsort_to_indices(&sort_columns, None)?;
     let mut batch = take_record_batch(&batch, &sort_indices)?;
 
     // prune out rows that is invalid according to remaining orderings.
     for ordering in orderings.iter().skip(1) {
-        let sort_columns = get_sort_columns(&batch, ordering.as_ref())?;
+        let sort_columns = get_sort_columns(&batch, &ordering)?;
 
         // Collect sort options and values into separate vectors.
         let (sort_options, sort_col_values): (Vec<_>, Vec<_>) = sort_columns
@@ -530,7 +530,7 @@ fn generate_random_f64_array(
 // Helper function to get sort columns from a batch
 fn get_sort_columns(
     batch: &RecordBatch,
-    ordering: LexOrderingRef,
+    ordering: &LexOrdering,
 ) -> Result<Vec<SortColumn>> {
     ordering
         .iter()

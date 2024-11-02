@@ -138,7 +138,7 @@ fn try_convert_aggregate_if_better(
     aggr_exprs
         .into_iter()
         .map(|aggr_expr| {
-            let aggr_sort_exprs = &aggr_expr.order_bys().unwrap_or_default();
+            let aggr_sort_exprs = &aggr_expr.order_bys().cloned().unwrap_or_default();
             let reverse_aggr_sort_exprs = reverse_order_bys(aggr_sort_exprs);
             let aggr_sort_reqs =
                 PhysicalSortRequirement::from_sort_exprs(aggr_sort_exprs.iter());

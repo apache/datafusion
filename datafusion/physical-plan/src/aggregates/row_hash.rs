@@ -508,11 +508,8 @@ impl GroupedHashAggregateStream {
             .properties()
             .equivalence_properties()
             .find_longest_permutation(&agg_group_by.output_exprs());
-        let group_ordering = GroupOrdering::try_new(
-            &group_schema,
-            &agg.input_order_mode,
-            ordering.as_ref(),
-        )?;
+        let group_ordering =
+            GroupOrdering::try_new(&group_schema, &agg.input_order_mode, &ordering)?;
 
         let group_values = new_group_values(group_schema)?;
         timer.done();
@@ -965,7 +962,7 @@ impl GroupedHashAggregateStream {
     /// Emit all rows, sort them, and store them on disk.
     fn spill(&mut self) -> Result<()> {
         let emit = self.emit(EmitTo::All, true)?;
-        let sorted = sort_batch(&emit, self.spill_state.spill_expr.as_ref(), None)?;
+        let sorted = sort_batch(&emit, &self.spill_state.spill_expr, None)?;
         let spillfile = self.runtime.disk_manager.create_tmp_file("HashAggSpill")?;
         // TODO: slice large `sorted` and write to multiple files in parallel
         spill_record_batch_by_size(
@@ -1030,7 +1027,7 @@ impl GroupedHashAggregateStream {
         streams.push(Box::pin(RecordBatchStreamAdapter::new(
             Arc::clone(&schema),
             futures::stream::once(futures::future::lazy(move |_| {
-                sort_batch(&batch, expr.as_ref(), None)
+                sort_batch(&batch, &expr, None)
             })),
         )));
         for spill in self.spill_state.spills.drain(..) {
@@ -1041,7 +1038,7 @@ impl GroupedHashAggregateStream {
         self.input = StreamingMergeBuilder::new()
             .with_streams(streams)
             .with_schema(schema)
-            .with_expressions(self.spill_state.spill_expr.as_ref())
+            .with_expressions(&self.spill_state.spill_expr)
             .with_metrics(self.baseline_metrics.clone())
             .with_batch_size(self.batch_size)
             .with_reservation(self.reservation.new_empty())

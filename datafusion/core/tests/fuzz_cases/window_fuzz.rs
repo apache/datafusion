@@ -285,7 +285,7 @@ async fn bounded_window_causal_non_causal() -> Result<()> {
                     fn_name.to_string(),
                     &args,
                     &partitionby_exprs,
-                    orderby_exprs.as_ref(),
+                    &orderby_exprs,
                     Arc::new(window_frame),
                     &extended_schema,
                     false,
@@ -454,7 +454,7 @@ fn get_random_function(
         if !args.is_empty() {
             // Do type coercion first argument
             let a = args[0].clone();
-            let dt = a.data_type(schema.as_ref()).unwrap();
+            let dt = a.data_type(&schema).unwrap();
             let coerced = data_types_with_aggregate_udf(&[dt], udf).unwrap();
             args[0] = cast(a, schema, coerced[0].clone()).unwrap();
         }
@@ -660,7 +660,7 @@ async fn run_window_test(
             fn_name.clone(),
             &args,
             &partitionby_exprs,
-            orderby_exprs.as_ref(),
+            &orderby_exprs,
             Arc::new(window_frame.clone()),
             &extended_schema,
             false,
@@ -678,7 +678,7 @@ async fn run_window_test(
             fn_name,
             &args,
             &partitionby_exprs,
-            orderby_exprs.as_ref(),
+            &orderby_exprs,
             Arc::new(window_frame.clone()),
             &extended_schema,
             false,

@@ -50,7 +50,7 @@ use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{EquivalenceProperties, PhysicalExpr};
 
 use crate::execution_plan::CardinalityEffect;
-use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
+use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use futures::stream::Stream;
 use futures::{FutureExt, StreamExt, TryStreamExt};
 use hashbrown::HashMap;
@@ -399,7 +399,7 @@ impl BatchPartitioner {
 /// Paper](https://w6113.github.io/files/papers/volcanoparallelism-89.pdf)
 /// which uses the term "Exchange" for the concept of repartitioning
 /// data across threads.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct RepartitionExec {
     /// Input execution plan
     input: Arc<dyn ExecutionPlan>,
@@ -503,7 +503,7 @@ impl DisplayAs for RepartitionExec {
                 }
 
                 if let Some(sort_exprs) = self.sort_exprs() {
-                    write!(f, ", sort_exprs={}", LexOrdering::from_ref(sort_exprs))?;
+                    write!(f, ", sort_exprs={sort_exprs}")?;
                 }
                 Ok(())
             }
@@ -572,7 +572,7 @@ impl ExecutionPlan for RepartitionExec {
         let schema_captured = Arc::clone(&schema);
 
         // Get existing ordering to use for merging
-        let sort_exprs = self.sort_exprs().unwrap_or(&[]).to_owned();
+        let sort_exprs = self.sort_exprs().cloned().unwrap_or_default();
 
         let stream = futures::stream::once(async move {
             let num_input_partitions = input.output_partitioning().partition_count();
@@ -745,8 +745,8 @@ impl RepartitionExec {
     /// and the node remains a `RepartitionExec`.
     pub fn with_preserve_order(mut self) -> Self {
         self.preserve_order =
-                // If the input isn't ordered, there is no ordering to preserve
-                self.input.output_ordering().is_some() &&
+            // If the input isn't ordered, there is no ordering to preserve
+            self.input.output_ordering().is_some() &&
                 // if there is only one input partition, merging is not required
                 // to maintain order
                 self.input.output_partitioning().partition_count() > 1;
@@ -756,7 +756,7 @@ impl RepartitionExec {
     }
 
     /// Return the sort expressions that are used to merge
-    fn sort_exprs(&self) -> Option<&[PhysicalSortExpr]> {
+    fn sort_exprs(&self) -> Option<&LexOrdering> {
         if self.preserve_order {
             self.input.output_ordering()
         } else {

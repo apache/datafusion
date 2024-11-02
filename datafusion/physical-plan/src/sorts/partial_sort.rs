@@ -72,7 +72,6 @@ use datafusion_common::Result;
 use datafusion_execution::{RecordBatchStream, TaskContext};
 use datafusion_physical_expr::LexOrdering;
 
-use datafusion_physical_expr_common::sort_expr::LexOrderingRef;
 use futures::{ready, Stream, StreamExt};
 use log::trace;
 
@@ -159,8 +158,8 @@ impl PartialSortExec {
     }
 
     /// Sort expressions
-    pub fn expr(&self) -> LexOrderingRef {
-        self.expr.as_ref()
+    pub fn expr(&self) -> &LexOrdering {
+        &self.expr
     }
 
     /// If `Some(fetch)`, limits output to only the first "fetch" items
@@ -393,7 +392,7 @@ impl PartialSortStream {
     fn sort_in_mem_batches(self: &mut Pin<&mut Self>) -> Result<RecordBatch> {
         let input_batch = concat_batches(&self.schema(), &self.in_mem_batches)?;
         self.in_mem_batches.clear();
-        let result = sort_batch(&input_batch, self.expr.as_ref(), self.fetch)?;
+        let result = sort_batch(&input_batch, &self.expr, self.fetch)?;
         if let Some(remaining_fetch) = self.fetch {
             // remaining_fetch - result.num_rows() is always be >= 0
             // because result length of sort_batch with limit cannot be

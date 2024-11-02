@@ -175,7 +175,7 @@ pub fn parse_physical_window_expr(
         name,
         &window_node_expr,
         &partition_by,
-        order_by.as_ref(),
+        &order_by,
         Arc::new(window_frame),
         &extended_schema,
         false,

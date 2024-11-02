@@ -37,7 +37,7 @@ use datafusion_expr::{
     ExprFunctionExt, Signature, SortExpr, TypeSignature, Volatility,
 };
 use datafusion_functions_aggregate_common::utils::get_sort_options;
-use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexOrderingRef};
+use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
 create_func!(FirstValue, first_value_udaf);
 
@@ -130,7 +130,7 @@ impl AggregateUDFImpl for FirstValue {
         FirstValueAccumulator::try_new(
             acc_args.return_type,
             &ordering_dtypes,
-            LexOrdering::from_ref(acc_args.ordering_req),
+            acc_args.ordering_req.clone(),
             acc_args.ignore_nulls,
         )
         .map(|acc| Box::new(acc.with_requirement_satisfied(requirement_satisfied)) as _)
@@ -315,7 +315,7 @@ impl Accumulator for FirstValueAccumulator {
                 if compare_rows(
                     &self.orderings,
                     orderings,
-                    &get_sort_options(self.ordering_req.as_ref()),
+                    &get_sort_options(&self.ordering_req),
                 )?
                 .is_gt()
                 {
@@ -333,10 +333,8 @@ impl Accumulator for FirstValueAccumulator {
         let flags = states[is_set_idx].as_boolean();
         let filtered_states = filter_states_according_to_is_set(states, flags)?;
         // 1..is_set_idx range corresponds to ordering section
-        let sort_cols = convert_to_sort_cols(
-            &filtered_states[1..is_set_idx],
-            self.ordering_req.as_ref(),
-        );
+        let sort_cols =
+            convert_to_sort_cols(&filtered_states[1..is_set_idx], &self.ordering_req);
 
         let ordered_states = if sort_cols.is_empty() {
             // When no ordering is given, use the existing state as is:
@@ -349,7 +347,7 @@ impl Accumulator for FirstValueAccumulator {
             let first_row = get_row_at_idx(&ordered_states, 0)?;
             // When collecting orderings, we exclude the is_set flag from the state.
             let first_ordering = &first_row[1..is_set_idx];
-            let sort_options = get_sort_options(self.ordering_req.as_ref());
+            let sort_options = get_sort_options(&self.ordering_req);
             // Either there is no existing value, or there is an earlier version in new data.
             if !self.is_set
                 || compare_rows(&self.orderings, first_ordering, &sort_options)?.is_gt()
@@ -455,7 +453,7 @@ impl AggregateUDFImpl for LastValue {
         LastValueAccumulator::try_new(
             acc_args.return_type,
             &ordering_dtypes,
-            LexOrdering::from_ref(acc_args.ordering_req),
+            acc_args.ordering_req.clone(),
             acc_args.ignore_nulls,
         )
         .map(|acc| Box::new(acc.with_requirement_satisfied(requirement_satisfied)) as _)
@@ -647,7 +645,7 @@ impl Accumulator for LastValueAccumulator {
             if compare_rows(
                 &self.orderings,
                 orderings,
-                &get_sort_options(self.ordering_req.as_ref()),
+                &get_sort_options(&self.ordering_req),
             )?
             .is_lt()
             {
@@ -665,10 +663,8 @@ impl Accumulator for LastValueAccumulator {
         let flags = states[is_set_idx].as_boolean();
         let filtered_states = filter_states_according_to_is_set(states, flags)?;
         // 1..is_set_idx range corresponds to ordering section
-        let sort_cols = convert_to_sort_cols(
-            &filtered_states[1..is_set_idx],
-            self.ordering_req.as_ref(),
-        );
+        let sort_cols =
+            convert_to_sort_cols(&filtered_states[1..is_set_idx], &self.ordering_req);
 
         let ordered_states = if sort_cols.is_empty() {
             // When no ordering is given, use existing state as is:
@@ -683,7 +679,7 @@ impl Accumulator for LastValueAccumulator {
             let last_row = get_row_at_idx(&ordered_states, last_idx)?;
             // When collecting orderings, we exclude the is_set flag from the state.
             let last_ordering = &last_row[1..is_set_idx];
-            let sort_options = get_sort_options(self.ordering_req.as_ref());
+            let sort_options = get_sort_options(&self.ordering_req);
             // Either there is no existing value, or there is a newer (latest)
             // version in the new data:
             if !self.is_set
@@ -723,10 +719,7 @@ fn filter_states_according_to_is_set(
 }
 
 /// Combines array refs and their corresponding orderings to construct `SortColumn`s.
-fn convert_to_sort_cols(
-    arrs: &[ArrayRef],
-    sort_exprs: LexOrderingRef,
-) -> Vec<SortColumn> {
+fn convert_to_sort_cols(arrs: &[ArrayRef], sort_exprs: &LexOrdering) -> Vec<SortColumn> {
     arrs.iter()
         .zip(sort_exprs.iter())
         .map(|(item, sort_expr)| SortColumn {

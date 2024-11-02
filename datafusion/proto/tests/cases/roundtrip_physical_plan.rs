@@ -52,8 +52,7 @@ use datafusion::logical_expr::{create_udf, JoinType, Operator, Volatility};
 use datafusion::physical_expr::expressions::Literal;
 use datafusion::physical_expr::window::SlidingAggregateWindowExpr;
 use datafusion::physical_expr::{
-    LexOrdering, LexOrderingRef, LexRequirement, PhysicalSortRequirement,
-    ScalarFunctionExpr,
+    LexOrdering, LexRequirement, PhysicalSortRequirement, ScalarFunctionExpr,
 };
 use datafusion::physical_plan::aggregates::{
     AggregateExec, AggregateMode, PhysicalGroupBy,
@@ -288,13 +287,15 @@ fn roundtrip_window() -> Result<()> {
             false,
         )),
         &[col("b", &schema)?],
-        &[PhysicalSortExpr {
-            expr: col("a", &schema)?,
-            options: SortOptions {
-                descending: false,
-                nulls_first: false,
-            },
-        }],
+        &LexOrdering{
+            inner: vec![PhysicalSortExpr {
+                expr: col("a", &schema)?,
+                options: SortOptions {
+                    descending: false,
+                    nulls_first: false,
+                },
+            }]
+        },
         Arc::new(window_frame),
     ));
 
@@ -308,7 +309,7 @@ fn roundtrip_window() -> Result<()> {
         .build()
         .map(Arc::new)?,
         &[],
-        LexOrderingRef::default(),
+        &LexOrdering::default(),
         Arc::new(WindowFrame::new(None)),
     ));
 
@@ -328,7 +329,7 @@ fn roundtrip_window() -> Result<()> {
     let sliding_aggr_window_expr = Arc::new(SlidingAggregateWindowExpr::new(
         sum_expr,
         &[],
-        LexOrderingRef::default(),
+        &LexOrdering::default(),
         Arc::new(window_frame),
     ));
 
@@ -1014,7 +1015,7 @@ fn roundtrip_scalar_udf_extension_codec() -> Result<()> {
         vec![Arc::new(PlainAggregateWindowExpr::new(
             aggr_expr.clone(),
             &[col("author", &schema)?],
-            LexOrderingRef::default(),
+            &LexOrdering::default(),
             Arc::new(WindowFrame::new(None)),
         ))],
         filter,
@@ -1075,7 +1076,7 @@ fn roundtrip_aggregate_udf_extension_codec() -> Result<()> {
         vec![Arc::new(PlainAggregateWindowExpr::new(
             aggr_expr,
             &[col("author", &schema)?],
-            LexOrderingRef::default(),
+            &LexOrdering::default(),
             Arc::new(WindowFrame::new(None)),
         ))],
         filter,

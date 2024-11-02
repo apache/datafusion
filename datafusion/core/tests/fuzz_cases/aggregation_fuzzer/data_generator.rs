@@ -142,7 +142,7 @@ impl DatasetGenerator {
                     Ok(PhysicalSortExpr::new_default(col_expr))
                 })
                 .collect::<Result<LexOrdering>>()?;
-            let sorted_batch = sort_batch(&base_batch, sort_exprs.as_ref(), None)?;
+            let sorted_batch = sort_batch(&base_batch, &sort_exprs, None)?;
 
             let batches = stagger_batch(sorted_batch);
             let dataset = Dataset::new(batches, sort_keys);

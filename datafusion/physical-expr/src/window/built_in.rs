@@ -33,7 +33,7 @@ use datafusion_common::utils::evaluate_partition_ranges;
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::window_state::{WindowAggState, WindowFrameContext};
 use datafusion_expr::WindowFrame;
-use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexOrderingRef};
+use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
 /// A window expr that takes the form of a [`BuiltInWindowFunctionExpr`].
 #[derive(Debug)]
@@ -49,13 +49,13 @@ impl BuiltInWindowExpr {
     pub fn new(
         expr: Arc<dyn BuiltInWindowFunctionExpr>,
         partition_by: &[Arc<dyn PhysicalExpr>],
-        order_by: LexOrderingRef,
+        order_by: &LexOrdering,
         window_frame: Arc<WindowFrame>,
     ) -> Self {
         Self {
             expr,
             partition_by: partition_by.to_vec(),
-            order_by: LexOrdering::from_ref(order_by),
+            order_by: order_by.clone(),
             window_frame,
         }
     }
@@ -118,8 +118,8 @@ impl WindowExpr for BuiltInWindowExpr {
         &self.partition_by
     }
 
-    fn order_by(&self) -> LexOrderingRef {
-        self.order_by.as_ref()
+    fn order_by(&self) -> &LexOrdering {
+        &self.order_by
     }
 
     fn evaluate(&self, batch: &RecordBatch) -> Result<ArrayRef> {
@@ -267,7 +267,7 @@ impl WindowExpr for BuiltInWindowExpr {
             Arc::new(BuiltInWindowExpr::new(
                 reverse_expr,
                 &self.partition_by.clone(),
-                reverse_order_bys(self.order_by.as_ref()).as_ref(),
+                &reverse_order_bys(&self.order_by),
                 Arc::new(self.window_frame.reverse()),
             )) as _
         })
