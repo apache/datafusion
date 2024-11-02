@@ -399,7 +399,7 @@ impl BatchPartitioner {
 /// Paper](https://w6113.github.io/files/papers/volcanoparallelism-89.pdf)
 /// which uses the term "Exchange" for the concept of repartitioning
 /// data across threads.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct RepartitionExec {
     /// Input execution plan
     input: Arc<dyn ExecutionPlan>,

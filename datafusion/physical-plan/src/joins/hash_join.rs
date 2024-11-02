@@ -136,6 +136,7 @@ impl JoinLeftData {
     }
 }
 
+#[allow(rustdoc::private_intra_doc_links)]
 /// Join execution plan: Evaluates eqijoin predicates in parallel on multiple
 /// partitions using a hash table and an optional filter list to apply post
 /// join.
@@ -293,6 +294,10 @@ impl JoinLeftData {
 ///                       │  "dimension"  │     │    "fact"     │
 ///                       └───────────────┘     └───────────────┘
 /// ```
+///
+/// Note that the `Clone` trait is not implemented for this struct due to the
+/// `left_fut` [`OnceAsync`], which is used to coordinate the loading of the
+/// left side with the processing in each output stream.
 #[derive(Debug)]
 pub struct HashJoinExec {
     /// left (build) side which gets hashed
