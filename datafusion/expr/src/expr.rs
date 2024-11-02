@@ -1574,8 +1574,13 @@ impl Expr {
 
     /// Returns true if the expression is volatile, i.e. whether it can return different
     /// results when evaluated multiple times with the same input.
-    pub fn is_volatile(&self) -> Result<bool> {
-        self.exists(|expr| Ok(expr.is_volatile_node()))
+    ///
+    /// For example the function call `RANDOM()` is volatile as each call will
+    /// return a different value.
+    ///
+    /// See [`Volatility`] for more information.
+    pub fn is_volatile(&self) -> bool {
+        self.exists(|expr| Ok(expr.is_volatile_node())).unwrap()
     }
 
     /// Recursively find all [`Expr::Placeholder`] expressions, and

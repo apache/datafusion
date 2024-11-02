@@ -89,6 +89,7 @@ use datafusion_physical_expr::{expressions::col, PhysicalSortExpr};
 
 /// Benchmarks for SortPreservingMerge stream
 use criterion::{criterion_group, criterion_main, Criterion};
+use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use futures::StreamExt;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
@@ -257,7 +258,7 @@ impl BenchCase {
 }
 
 /// Make sort exprs for each column in `schema`
-fn make_sort_exprs(schema: &Schema) -> Vec<PhysicalSortExpr> {
+fn make_sort_exprs(schema: &Schema) -> LexOrdering {
     schema
         .fields()
         .iter()

@@ -433,7 +433,7 @@ SELECT MAP {'a': 1, null: 2}
 query ?
 SELECT MAP {[1,2,3]:1, [2,4]:2};
 ----
- {[1, 2, 3]: 1, [2, 4]: 2}
+{[1, 2, 3]: 1, [2, 4]: 2}
 
 # array with different type as key
 # expect to fail due to type coercion error
@@ -483,7 +483,7 @@ SELECT MAP { MAP {1:'a', 2:'b'}:1, MAP {1:'c', 2:'d'}:2 };
 query ?
 SELECT MAP { MAP {1:'a', 2:'b', 3:'c'}:1, MAP {2:'c', 4:'d'}:2 };
 ----
- {{1: a, 2: b, 3: c}: 1, {2: c, 4: d}: 2}
+{{1: a, 2: b, 3: c}: 1, {2: c, 4: d}: 2}
 
 # map as value
 query ?

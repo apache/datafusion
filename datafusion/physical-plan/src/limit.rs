@@ -39,7 +39,7 @@ use futures::stream::{Stream, StreamExt};
 use log::trace;
 
 /// Limit execution plan
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct GlobalLimitExec {
     /// Input execution plan
     input: Arc<dyn ExecutionPlan>,
