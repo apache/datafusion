@@ -1672,7 +1672,7 @@ fn build_like_match(
         let prefix = &s[..wildcard_index];
         let lower_bound_lit = Arc::new(phys_expr::Literal::new(ScalarValue::Utf8(Some(
             prefix.to_string(),
-        ))));        
+        ))));
         let upper_bound_lit = Arc::new(phys_expr::Literal::new(ScalarValue::Utf8(Some(
             increment_utf8(prefix)?,
         ))));
