@@ -36,7 +36,7 @@ use datafusion_common::{plan_err, JoinSide, Result};
 use datafusion_expr::JoinType;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::utils::collect_columns;
-use datafusion_physical_expr::{LexRequirementRef, PhysicalSortRequirement};
+use datafusion_physical_expr::PhysicalSortRequirement;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};
 
 use hashbrown::HashSet;
@@ -87,11 +87,12 @@ fn pushdown_sorts_helper(
     let parent_reqs = requirements
         .data
         .ordering_requirement
-        .as_deref()
-        .unwrap_or(&[]);
+        .clone()
+        .unwrap_or_default();
     let satisfy_parent = plan
         .equivalence_properties()
-        .ordering_satisfy_requirement(parent_reqs);
+        .ordering_satisfy_requirement(&parent_reqs);
+
     if is_sort(plan) {
         let required_ordering = plan
             .output_ordering()
@@ -139,7 +140,7 @@ fn pushdown_sorts_helper(
         for (child, order) in requirements.children.iter_mut().zip(reqs) {
             child.data.ordering_requirement = order;
         }
-    } else if let Some(adjusted) = pushdown_requirement_to_children(plan, parent_reqs)? {
+    } else if let Some(adjusted) = pushdown_requirement_to_children(plan, &parent_reqs)? {
         // Can not satisfy the parent requirements, check whether we can push
         // requirements down:
         for (child, order) in requirements.children.iter_mut().zip(adjusted) {
@@ -162,14 +163,16 @@ fn pushdown_sorts_helper(
 
 fn pushdown_requirement_to_children(
     plan: &Arc<dyn ExecutionPlan>,
-    parent_required: LexRequirementRef,
+    parent_required: &LexRequirement,
 ) -> Result<Option<Vec<Option<LexRequirement>>>> {
     let maintains_input_order = plan.maintains_input_order();
     if is_window(plan) {
         let required_input_ordering = plan.required_input_ordering();
-        let request_child = required_input_ordering[0].as_deref().unwrap_or(&[]);
+        let request_child = required_input_ordering[0].clone().unwrap_or_default();
         let child_plan = plan.children().swap_remove(0);
-        match determine_children_requirement(parent_required, request_child, child_plan) {
+
+        match determine_children_requirement(parent_required, &request_child, child_plan)
+        {
             RequirementsCompatibility::Satisfy => {
                 let req = (!request_child.is_empty())
                     .then(|| LexRequirement::new(request_child.to_vec()));
@@ -303,7 +306,7 @@ fn pushdown_requirement_to_children(
 /// Return true if pushing the sort requirements through a node would violate
 /// the input sorting requirements for the plan
 fn pushdown_would_violate_requirements(
-    parent_required: LexRequirementRef,
+    parent_required: &LexRequirement,
     child: &dyn ExecutionPlan,
 ) -> bool {
     child
@@ -329,8 +332,8 @@ fn pushdown_would_violate_requirements(
 /// - If parent requirements are more specific, push down parent requirements.
 /// - If they are not compatible, need to add a sort.
 fn determine_children_requirement(
-    parent_required: LexRequirementRef,
-    request_child: LexRequirementRef,
+    parent_required: &LexRequirement,
+    request_child: &LexRequirement,
     child_plan: &Arc<dyn ExecutionPlan>,
 ) -> RequirementsCompatibility {
     if child_plan
@@ -355,7 +358,7 @@ fn determine_children_requirement(
 
 fn try_pushdown_requirements_to_join(
     smj: &SortMergeJoinExec,
-    parent_required: LexRequirementRef,
+    parent_required: &LexRequirement,
     sort_expr: &LexOrdering,
     push_side: JoinSide,
 ) -> Result<Option<Vec<Option<LexRequirement>>>> {
@@ -480,7 +483,7 @@ fn expr_source_side(
 }
 
 fn shift_right_required(
-    parent_required: LexRequirementRef,
+    parent_required: &LexRequirement,
     left_columns_len: usize,
 ) -> Result<LexRequirement> {
     let new_right_required = parent_required
@@ -518,7 +521,7 @@ fn shift_right_required(
 /// pushed down, `Ok(None)` if not. On error, returns a `Result::Err`.
 fn handle_custom_pushdown(
     plan: &Arc<dyn ExecutionPlan>,
-    parent_required: LexRequirementRef,
+    parent_required: &LexRequirement,
     maintains_input_order: Vec<bool>,
 ) -> Result<Option<Vec<Option<LexRequirement>>>> {
     // If there's no requirement from the parent or the plan has no children, return early

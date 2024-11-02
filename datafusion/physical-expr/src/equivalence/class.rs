@@ -22,8 +22,7 @@ use super::{add_offset_to_expr, collapse_lex_req, ProjectionMapping};
 use crate::{
     expressions::Column, physical_expr::deduplicate_physical_exprs,
     physical_exprs_bag_equal, physical_exprs_contains, LexOrdering, LexRequirement,
-    LexRequirementRef, PhysicalExpr, PhysicalExprRef, PhysicalSortExpr,
-    PhysicalSortRequirement,
+    PhysicalExpr, PhysicalExprRef, PhysicalSortExpr, PhysicalSortRequirement,
 };
 
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
@@ -489,7 +488,7 @@ impl EquivalenceGroup {
     /// sort requirements.
     pub fn normalize_sort_requirements(
         &self,
-        sort_reqs: LexRequirementRef,
+        sort_reqs: &LexRequirement,
     ) -> LexRequirement {
         collapse_lex_req(LexRequirement::new(
             sort_reqs

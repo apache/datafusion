@@ -30,8 +30,8 @@ use crate::equivalence::{
 };
 use crate::expressions::{with_new_schema, CastExpr, Column, Literal};
 use crate::{
-    physical_exprs_contains, ConstExpr, LexOrdering, LexRequirement, LexRequirementRef,
-    PhysicalExpr, PhysicalExprRef, PhysicalSortExpr, PhysicalSortRequirement,
+    physical_exprs_contains, ConstExpr, LexOrdering, LexRequirement, PhysicalExpr,
+    PhysicalExprRef, PhysicalSortExpr, PhysicalSortRequirement,
 };
 
 use arrow_schema::{SchemaRef, SortOptions};
@@ -429,10 +429,7 @@ impl EquivalenceProperties {
     /// function would return `vec![a ASC, c ASC]`. Internally, it would first
     /// normalize to `vec![a ASC, c ASC, a ASC]` and end up with the final result
     /// after deduplication.
-    fn normalize_sort_requirements(
-        &self,
-        sort_reqs: LexRequirementRef,
-    ) -> LexRequirement {
+    fn normalize_sort_requirements(&self, sort_reqs: &LexRequirement) -> LexRequirement {
         let normalized_sort_reqs = self.eq_group.normalize_sort_requirements(sort_reqs);
         let mut constant_exprs = vec![];
         constant_exprs.extend(
@@ -463,7 +460,7 @@ impl EquivalenceProperties {
 
     /// Checks whether the given sort requirements are satisfied by any of the
     /// existing orderings.
-    pub fn ordering_satisfy_requirement(&self, reqs: LexRequirementRef) -> bool {
+    pub fn ordering_satisfy_requirement(&self, reqs: &LexRequirement) -> bool {
         let mut eq_properties = self.clone();
         // First, standardize the given requirement:
         let normalized_reqs = eq_properties.normalize_sort_requirements(reqs);
@@ -524,8 +521,8 @@ impl EquivalenceProperties {
     /// than the `reference` sort requirements.
     pub fn requirements_compatible(
         &self,
-        given: LexRequirementRef,
-        reference: LexRequirementRef,
+        given: &LexRequirement,
+        reference: &LexRequirement,
     ) -> bool {
         let normalized_given = self.normalize_sort_requirements(given);
         let normalized_reference = self.normalize_sort_requirements(reference);
@@ -568,8 +565,8 @@ impl EquivalenceProperties {
     /// is the latter.
     pub fn get_finer_requirement(
         &self,
-        req1: LexRequirementRef,
-        req2: LexRequirementRef,
+        req1: &LexRequirement,
+        req2: &LexRequirement,
     ) -> Option<LexRequirement> {
         let mut lhs = self.normalize_sort_requirements(req1);
         let mut rhs = self.normalize_sort_requirements(req2);

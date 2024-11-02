@@ -611,4 +611,5 @@ impl<'a> IntoIterator for &'a LexOrdering {
 
 ///`LexRequirementRef` is an alias for the type &`[PhysicalSortRequirement]`, which
 /// represents a reference to a lexicographical ordering requirement.
+/// #[deprecated(since = "43.0.0", note = "use &LexRequirement instead")]
 pub type LexRequirementRef<'a> = &'a [PhysicalSortRequirement];
