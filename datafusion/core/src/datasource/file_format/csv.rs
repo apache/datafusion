@@ -766,7 +766,7 @@ mod tests {
         let exec = scan_format(
             &state,
             &format,
-            &root,
+            root,
             "aggregate_test_100_with_nulls.csv",
             projection,
             None,
