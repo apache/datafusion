@@ -1668,29 +1668,29 @@ fn build_like_match(
         // there's no filtering we could possibly do, return an error and have this be handled by the unhandled hook
         return None;
     }
-    let (upper_bound, lower_bound) = if let Some(wildcard_index) = first_wildcard_index {
+    let (lower_bound, upper_bound) = if let Some(wildcard_index) = first_wildcard_index {
         let prefix = &s[..wildcard_index];
+        let lower_bound_lit = Arc::new(phys_expr::Literal::new(ScalarValue::Utf8(Some(
+            prefix.to_string(),
+        ))));        
         let upper_bound_lit = Arc::new(phys_expr::Literal::new(ScalarValue::Utf8(Some(
             increment_utf8(prefix)?,
         ))));
-        let lower_bound_lit = Arc::new(phys_expr::Literal::new(ScalarValue::Utf8(Some(
-            prefix.to_string(),
-        ))));
-        (upper_bound_lit, lower_bound_lit)
+        (lower_bound_lit, upper_bound_lit)
     } else {
         // the like expression is a literal and can be converted into a comparison
         let bound = Arc::new(phys_expr::Literal::new(ScalarValue::Utf8(Some(s.clone()))));
         (bound.clone(), bound)
     };
-    let upper_bound_expr = Arc::new(phys_expr::BinaryExpr::new(
-        min_column_expr.clone(),
-        Operator::LtEq,
-        upper_bound,
-    ));
     let lower_bound_expr = Arc::new(phys_expr::BinaryExpr::new(
         lower_bound,
         Operator::LtEq,
         max_column_expr.clone(),
+    ));
+    let upper_bound_expr = Arc::new(phys_expr::BinaryExpr::new(
+        min_column_expr.clone(),
+        Operator::LtEq,
+        upper_bound,
     ));
     let combined = Arc::new(phys_expr::BinaryExpr::new(
         upper_bound_expr,
