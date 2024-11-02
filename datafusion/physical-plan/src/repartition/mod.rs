@@ -503,7 +503,7 @@ impl DisplayAs for RepartitionExec {
                 }
 
                 if let Some(sort_exprs) = self.sort_exprs() {
-                    write!(f, ", sort_exprs={sort_exprs}")?;
+                    write!(f, ", sort_exprs={}", LexOrdering::from_ref(sort_exprs))?;
                 }
                 Ok(())
             }

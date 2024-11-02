@@ -356,6 +356,10 @@ impl LexOrdering {
         self.inner.capacity()
     }
 
+    pub fn from_ref(lex_ordering_ref: &LexOrdering) -> Self {
+        Self::new(lex_ordering_ref.to_vec())
+    }
+
     pub fn clear(&mut self) {
         self.inner.clear()
     }

@@ -483,7 +483,7 @@ fn offset_ordering(
                 options: sort_expr.options,
             })
             .collect(),
-        _ => ordering.clone(),
+        _ => LexOrdering::from_ref(ordering),
     }
 }
 
@@ -503,7 +503,7 @@ pub fn calculate_join_output_ordering(
             if join_type == JoinType::Inner && probe_side == Some(JoinSide::Left) {
                 replace_on_columns_of_right_ordering(
                     on_columns,
-                    &mut right_ordering.clone(),
+                    &mut LexOrdering::from_ref(right_ordering),
                 )
                 .ok()?;
                 merge_vectors(
@@ -511,7 +511,7 @@ pub fn calculate_join_output_ordering(
                     &offset_ordering(right_ordering, &join_type, left_columns_len),
                 )
             } else {
-                left_ordering.clone()
+                LexOrdering::from_ref(left_ordering)
             }
         }
         [false, true] => {
@@ -519,7 +519,7 @@ pub fn calculate_join_output_ordering(
             if join_type == JoinType::Inner && probe_side == Some(JoinSide::Right) {
                 replace_on_columns_of_right_ordering(
                     on_columns,
-                    &mut right_ordering.clone(),
+                    &mut LexOrdering::from_ref(right_ordering),
                 )
                 .ok()?;
                 merge_vectors(
