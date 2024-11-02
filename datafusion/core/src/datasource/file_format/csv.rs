@@ -761,8 +761,14 @@ mod tests {
         let state = session_ctx.state();
 
         let projection = None;
-        let exec =
-            get_exec(&state, "aggregate_test_100_with_nulls.csv", projection, None, true).await?;
+        let exec = get_exec(
+            &state,
+            "aggregate_test_100_with_nulls.csv",
+            projection,
+            None,
+            true,
+        )
+        .await?;
 
         let x: Vec<String> = exec
             .schema()
