@@ -677,7 +677,7 @@ pub(crate) fn lexsort_to_indices_multi_columns(
 ///
 /// Support sorting datasets that are larger than the memory allotted
 /// by the memory manager, by spilling to disk.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct SortExec {
     /// Input schema
     pub(crate) input: Arc<dyn ExecutionPlan>,

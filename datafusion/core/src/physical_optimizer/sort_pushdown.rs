@@ -242,7 +242,7 @@ fn pushdown_requirement_to_children(
             Some(JoinSide::Left) => try_pushdown_requirements_to_join(
                 smj,
                 parent_required,
-                &parent_required_expr,
+                parent_required_expr.as_ref(),
                 JoinSide::Left,
             ),
             Some(JoinSide::Right) => {
@@ -364,29 +364,32 @@ fn try_pushdown_requirements_to_join(
     let mut smj_required_orderings = smj.required_input_ordering();
     let right_requirement = smj_required_orderings.swap_remove(1);
     let left_requirement = smj_required_orderings.swap_remove(0);
-    let left_ordering = smj.left().output_ordering().cloned().unwrap_or_default();
-    let right_ordering = smj.right().output_ordering().cloned().unwrap_or_default();
+    let left_ordering = &smj.left().output_ordering().cloned().unwrap_or_default();
+    let right_ordering = &smj.right().output_ordering().cloned().unwrap_or_default();
+
     let (new_left_ordering, new_right_ordering) = match push_side {
         JoinSide::Left => {
-            let left_eq_properties =
-                left_eq_properties.clone().with_reorder(sort_expr.clone());
+            let left_eq_properties = left_eq_properties
+                .clone()
+                .with_reorder(LexOrdering::from_ref(sort_expr));
             if left_eq_properties
                 .ordering_satisfy_requirement(&left_requirement.unwrap_or_default())
             {
                 // After re-ordering requirement is still satisfied
-                (sort_expr, &right_ordering)
+                (sort_expr, right_ordering)
             } else {
                 return Ok(None);
             }
         }
         JoinSide::Right => {
-            let right_eq_properties =
-                right_eq_properties.clone().with_reorder(sort_expr.clone());
+            let right_eq_properties = right_eq_properties
+                .clone()
+                .with_reorder(LexOrdering::from_ref(sort_expr));
             if right_eq_properties
                 .ordering_satisfy_requirement(&right_requirement.unwrap_or_default())
             {
                 // After re-ordering requirement is still satisfied
-                (&left_ordering, sort_expr)
+                (left_ordering, sort_expr)
             } else {
                 return Ok(None);
             }

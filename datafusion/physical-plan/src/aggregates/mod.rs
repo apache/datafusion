@@ -1019,7 +1019,7 @@ pub fn get_finer_aggregate_exprs_requirement(
         if let Some(finer_ordering) =
             finer_ordering(&requirement, aggr_expr, group_by, eq_properties, agg_mode)
         {
-            if eq_properties.ordering_satisfy(&finer_ordering) {
+            if eq_properties.ordering_satisfy(finer_ordering.as_ref()) {
                 // Requirement is satisfied by existing ordering
                 requirement = finer_ordering;
                 continue;
@@ -1033,7 +1033,7 @@ pub fn get_finer_aggregate_exprs_requirement(
                 eq_properties,
                 agg_mode,
             ) {
-                if eq_properties.ordering_satisfy(&finer_ordering) {
+                if eq_properties.ordering_satisfy(finer_ordering.as_ref()) {
                     // Reverse requirement is satisfied by exiting ordering.
                     // Hence reverse the aggregator
                     requirement = finer_ordering;

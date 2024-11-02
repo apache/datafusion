@@ -269,7 +269,7 @@ impl MinMaxStatistics {
         Ok(Self {
             min_by_sort_order: min.map_err(|e| e.context("build min rows"))?,
             max_by_sort_order: max.map_err(|e| e.context("build max rows"))?,
-            sort_order: sort_order.clone(),
+            sort_order: LexOrdering::from_ref(sort_order),
         })
     }
 

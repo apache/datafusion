@@ -298,7 +298,7 @@ impl AggregateFunctionExpr {
         }
 
         if !self.order_sensitivity().is_insensitive() {
-            return Some(&self.ordering_req);
+            return Some(self.ordering_req.as_ref());
         }
 
         None

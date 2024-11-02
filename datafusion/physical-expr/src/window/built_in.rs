@@ -267,7 +267,7 @@ impl WindowExpr for BuiltInWindowExpr {
             Arc::new(BuiltInWindowExpr::new(
                 reverse_expr,
                 &self.partition_by.clone(),
-                &reverse_order_bys(&self.order_by),
+                reverse_order_bys(self.order_by.as_ref()).as_ref(),
                 Arc::new(self.window_frame.reverse()),
             )) as _
         })
