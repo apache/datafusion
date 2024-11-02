@@ -315,7 +315,7 @@ impl Accumulator for FirstValueAccumulator {
                 if compare_rows(
                     &self.orderings,
                     orderings,
-                    &get_sort_options(&self.ordering_req),
+                    &get_sort_options(self.ordering_req.as_ref()),
                 )?
                 .is_gt()
                 {
@@ -333,8 +333,10 @@ impl Accumulator for FirstValueAccumulator {
         let flags = states[is_set_idx].as_boolean();
         let filtered_states = filter_states_according_to_is_set(states, flags)?;
         // 1..is_set_idx range corresponds to ordering section
-        let sort_cols =
-            convert_to_sort_cols(&filtered_states[1..is_set_idx], &self.ordering_req);
+        let sort_cols = convert_to_sort_cols(
+            &filtered_states[1..is_set_idx],
+            self.ordering_req.as_ref(),
+        );
 
         let ordered_states = if sort_cols.is_empty() {
             // When no ordering is given, use the existing state as is:
@@ -347,7 +349,7 @@ impl Accumulator for FirstValueAccumulator {
             let first_row = get_row_at_idx(&ordered_states, 0)?;
             // When collecting orderings, we exclude the is_set flag from the state.
             let first_ordering = &first_row[1..is_set_idx];
-            let sort_options = get_sort_options(&self.ordering_req);
+            let sort_options = get_sort_options(self.ordering_req.as_ref());
             // Either there is no existing value, or there is an earlier version in new data.
             if !self.is_set
                 || compare_rows(&self.orderings, first_ordering, &sort_options)?.is_gt()
@@ -663,8 +665,10 @@ impl Accumulator for LastValueAccumulator {
         let flags = states[is_set_idx].as_boolean();
         let filtered_states = filter_states_according_to_is_set(states, flags)?;
         // 1..is_set_idx range corresponds to ordering section
-        let sort_cols =
-            convert_to_sort_cols(&filtered_states[1..is_set_idx], &self.ordering_req);
+        let sort_cols = convert_to_sort_cols(
+            &filtered_states[1..is_set_idx],
+            self.ordering_req.as_ref(),
+        );
 
         let ordered_states = if sort_cols.is_empty() {
             // When no ordering is given, use existing state as is:
@@ -679,7 +683,7 @@ impl Accumulator for LastValueAccumulator {
             let last_row = get_row_at_idx(&ordered_states, last_idx)?;
             // When collecting orderings, we exclude the is_set flag from the state.
             let last_ordering = &last_row[1..is_set_idx];
-            let sort_options = get_sort_options(&self.ordering_req);
+            let sort_options = get_sort_options(self.ordering_req.as_ref());
             // Either there is no existing value, or there is a newer (latest)
             // version in the new data:
             if !self.is_set

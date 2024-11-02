@@ -111,7 +111,8 @@ impl AggregateExprBuilder {
                 .map(|e| e.expr.data_type(&schema))
                 .collect::<Result<Vec<_>>>()?;
 
-            ordering_fields = utils::ordering_fields(&ordering_req, &ordering_types);
+            ordering_fields =
+                utils::ordering_fields(ordering_req.as_ref(), &ordering_types);
         }
 
         let input_exprs_types = args
@@ -265,7 +266,7 @@ impl AggregateFunctionExpr {
             return_type: &self.data_type,
             schema: &self.schema,
             ignore_nulls: self.ignore_nulls,
-            ordering_req: &self.ordering_req,
+            ordering_req: self.ordering_req.as_ref(),
             is_distinct: self.is_distinct,
             name: &self.name,
             is_reversed: self.is_reversed,
@@ -356,7 +357,7 @@ impl AggregateFunctionExpr {
             return_type: &self.data_type,
             schema: &self.schema,
             ignore_nulls: self.ignore_nulls,
-            ordering_req: &self.ordering_req,
+            ordering_req: self.ordering_req.as_ref(),
             is_distinct: self.is_distinct,
             name: &self.name,
             is_reversed: self.is_reversed,
@@ -425,7 +426,7 @@ impl AggregateFunctionExpr {
             return_type: &self.data_type,
             schema: &self.schema,
             ignore_nulls: self.ignore_nulls,
-            ordering_req: &self.ordering_req,
+            ordering_req: self.ordering_req.as_ref(),
             is_distinct: self.is_distinct,
             name: &self.name,
             is_reversed: self.is_reversed,
@@ -444,7 +445,7 @@ impl AggregateFunctionExpr {
             return_type: &self.data_type,
             schema: &self.schema,
             ignore_nulls: self.ignore_nulls,
-            ordering_req: &self.ordering_req,
+            ordering_req: self.ordering_req.as_ref(),
             is_distinct: self.is_distinct,
             name: &self.name,
             is_reversed: self.is_reversed,
@@ -462,7 +463,7 @@ impl AggregateFunctionExpr {
             ReversedUDAF::NotSupported => None,
             ReversedUDAF::Identical => Some(self.clone()),
             ReversedUDAF::Reversed(reverse_udf) => {
-                let reverse_ordering_req = reverse_order_bys(&self.ordering_req);
+                let reverse_ordering_req = reverse_order_bys(self.ordering_req.as_ref());
                 let mut name = self.name().to_string();
                 // If the function is changed, we need to reverse order_by clause as well
                 // i.e. First(a order by b asc null first) -> Last(a order by b desc null last)

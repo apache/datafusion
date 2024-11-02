@@ -983,7 +983,7 @@ fn finer_ordering(
     agg_mode: &AggregateMode,
 ) -> Option<LexOrdering> {
     let aggr_req = get_aggregate_expr_req(aggr_expr, group_by, agg_mode);
-    eq_properties.get_finer_ordering(existing_req, &aggr_req)
+    eq_properties.get_finer_ordering(existing_req, aggr_req.as_ref())
 }
 
 /// Concatenates the given slices.

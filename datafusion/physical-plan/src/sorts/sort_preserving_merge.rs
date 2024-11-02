@@ -121,7 +121,7 @@ impl SortPreservingMergeExec {
 
     /// Sort expressions
     pub fn expr(&self) -> &LexOrdering {
-        &self.expr
+        self.expr.as_ref()
     }
 
     /// Fetch
@@ -287,7 +287,7 @@ impl ExecutionPlan for SortPreservingMergeExec {
                 let result = StreamingMergeBuilder::new()
                     .with_streams(receivers)
                     .with_schema(schema)
-                    .with_expressions(&self.expr)
+                    .with_expressions(self.expr.as_ref())
                     .with_metrics(BaselineMetrics::new(&self.metrics, partition))
                     .with_batch_size(context.session_config().batch_size())
                     .with_fetch(self.fetch)
@@ -1054,7 +1054,7 @@ mod tests {
         let merge_stream = StreamingMergeBuilder::new()
             .with_streams(streams)
             .with_schema(batches.schema())
-            .with_expressions(&sort)
+            .with_expressions(sort.as_ref())
             .with_metrics(BaselineMetrics::new(&metrics, 0))
             .with_batch_size(task_ctx.session_config().batch_size())
             .with_fetch(fetch)

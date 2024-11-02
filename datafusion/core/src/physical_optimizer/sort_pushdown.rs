@@ -234,7 +234,11 @@ fn pushdown_requirement_to_children(
         let left_columns_len = smj.left().schema().fields().len();
         let parent_required_expr =
             PhysicalSortRequirement::to_sort_exprs(parent_required.iter().cloned());
-        match expr_source_side(&parent_required_expr, smj.join_type(), left_columns_len) {
+        match expr_source_side(
+            parent_required_expr.as_ref(),
+            smj.join_type(),
+            left_columns_len,
+        ) {
             Some(JoinSide::Left) => try_pushdown_requirements_to_join(
                 smj,
                 parent_required,
@@ -251,7 +255,7 @@ fn pushdown_requirement_to_children(
                 try_pushdown_requirements_to_join(
                     smj,
                     parent_required,
-                    &new_right_required_expr,
+                    new_right_required_expr.as_ref(),
                     JoinSide::Right,
                 )
             }

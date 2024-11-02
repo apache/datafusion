@@ -904,8 +904,11 @@ mod tests {
                 let options = SortOptions::default();
                 order_by_exprs.push(PhysicalSortExpr { expr, options });
             }
-            let res =
-                get_window_mode(&partition_by_exprs, &order_by_exprs, &exec_unbounded);
+            let res = get_window_mode(
+                &partition_by_exprs,
+                order_by_exprs.as_ref(),
+                &exec_unbounded,
+            );
             // Since reversibility is not important in this test. Convert Option<(bool, InputOrderMode)> to Option<InputOrderMode>
             let res = res.map(|(_, mode)| mode);
             assert_eq!(

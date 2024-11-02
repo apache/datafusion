@@ -347,7 +347,7 @@ impl ExternalSorter {
             StreamingMergeBuilder::new()
                 .with_streams(streams)
                 .with_schema(Arc::clone(&self.schema))
-                .with_expressions(&expressions)
+                .with_expressions(expressions.as_ref())
                 .with_metrics(self.metrics.baseline.clone())
                 .with_batch_size(self.batch_size)
                 .with_fetch(self.fetch)
@@ -541,7 +541,7 @@ impl ExternalSorter {
         StreamingMergeBuilder::new()
             .with_streams(streams)
             .with_schema(Arc::clone(&self.schema))
-            .with_expressions(&expressions)
+            .with_expressions(expressions.as_ref())
             .with_metrics(metrics)
             .with_batch_size(self.batch_size)
             .with_fetch(self.fetch)
@@ -1549,7 +1549,7 @@ mod tests {
             options: SortOptions::default(),
         }]);
 
-        let result = sort_batch(&batch, &expressions, None).unwrap();
+        let result = sort_batch(&batch, expressions.as_ref(), None).unwrap();
         assert_eq!(result.num_rows(), 1);
     }
 

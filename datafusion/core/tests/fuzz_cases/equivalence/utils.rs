@@ -459,13 +459,13 @@ pub fn generate_table_for_orderings(
     let batch = RecordBatch::try_from_iter(arrays)?;
 
     // Sort batch according to first ordering expression
-    let sort_columns = get_sort_columns(&batch, &orderings[0])?;
+    let sort_columns = get_sort_columns(&batch, orderings[0].as_ref())?;
     let sort_indices = lexsort_to_indices(&sort_columns, None)?;
     let mut batch = take_record_batch(&batch, &sort_indices)?;
 
     // prune out rows that is invalid according to remaining orderings.
     for ordering in orderings.iter().skip(1) {
-        let sort_columns = get_sort_columns(&batch, &ordering)?;
+        let sort_columns = get_sort_columns(&batch, ordering.as_ref())?;
 
         // Collect sort options and values into separate vectors.
         let (sort_options, sort_col_values): (Vec<_>, Vec<_>) = sort_columns

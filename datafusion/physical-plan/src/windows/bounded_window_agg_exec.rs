@@ -1306,7 +1306,7 @@ mod tests {
                 fn_name,
                 &args,
                 &partitionby_exprs,
-                &orderby_exprs,
+                orderby_exprs.as_ref(),
                 Arc::new(window_frame),
                 &input.schema(),
                 false,

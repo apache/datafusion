@@ -299,13 +299,13 @@ mod tests {
         let mut eq_properties_finer =
             EquivalenceProperties::new(Arc::clone(&input_schema));
         eq_properties_finer.oeq_class.push(finer.clone());
-        assert!(eq_properties_finer.ordering_satisfy(&crude));
+        assert!(eq_properties_finer.ordering_satisfy(crude.as_ref()));
 
         // Crude ordering doesn't satisfy finer ordering. should return false
         let mut eq_properties_crude =
             EquivalenceProperties::new(Arc::clone(&input_schema));
         eq_properties_crude.oeq_class.push(crude);
-        assert!(!eq_properties_crude.ordering_satisfy(&finer));
+        assert!(!eq_properties_crude.ordering_satisfy(finer.as_ref()));
         Ok(())
     }
 
@@ -595,7 +595,7 @@ mod tests {
 
             let reqs = convert_to_sort_exprs(&reqs);
             assert_eq!(
-                eq_properties.ordering_satisfy(&reqs),
+                eq_properties.ordering_satisfy(reqs.as_ref()),
                 expected,
                 "{}",
                 err_msg
@@ -655,7 +655,7 @@ mod tests {
                 format!("error in test reqs: {:?}, expected: {:?}", reqs, expected,);
             let reqs = convert_to_sort_exprs(&reqs);
             assert_eq!(
-                eq_properties.ordering_satisfy(&reqs),
+                eq_properties.ordering_satisfy(reqs.as_ref()),
                 expected,
                 "{}",
                 err_msg

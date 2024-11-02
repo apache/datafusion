@@ -109,7 +109,7 @@ impl WindowExpr for SlidingAggregateWindowExpr {
     }
 
     fn order_by(&self) -> &LexOrdering {
-        &self.order_by
+        self.order_by.as_ref()
     }
 
     fn get_window_frame(&self) -> &Arc<WindowFrame> {
@@ -123,14 +123,14 @@ impl WindowExpr for SlidingAggregateWindowExpr {
                 Arc::new(PlainAggregateWindowExpr::new(
                     Arc::new(reverse_expr),
                     &self.partition_by.clone(),
-                    &reverse_order_bys(&self.order_by),
+                    reverse_order_bys(self.order_by.as_ref()).as_ref(),
                     Arc::new(self.window_frame.reverse()),
                 )) as _
             } else {
                 Arc::new(SlidingAggregateWindowExpr::new(
                     Arc::new(reverse_expr),
                     &self.partition_by.clone(),
-                    &reverse_order_bys(&self.order_by),
+                    reverse_order_bys(self.order_by.as_ref()).as_ref(),
                     Arc::new(self.window_frame.reverse()),
                 )) as _
             }

@@ -119,7 +119,7 @@ impl WindowExpr for BuiltInWindowExpr {
     }
 
     fn order_by(&self) -> &LexOrdering {
-        &self.order_by
+        self.order_by.as_ref()
     }
 
     fn evaluate(&self, batch: &RecordBatch) -> Result<ArrayRef> {

@@ -352,6 +352,10 @@ impl LexOrdering {
         Self { inner }
     }
 
+    pub fn as_ref(&self) -> &LexOrdering {
+        &self
+    }
+
     pub fn capacity(&self) -> usize {
         self.inner.capacity()
     }
