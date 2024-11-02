@@ -459,7 +459,7 @@ VALUES (-1)
 query IIB
 VALUES (2+1,2-1,2>1)
 ----
-3    1    true
+3 1 true
 
 # multiple rows values
 query I rowsort
@@ -472,8 +472,8 @@ VALUES (1),(2)
 query IT rowsort
 VALUES (1,'a'),(2,'b')
 ----
-1   a
-2   b
+1 a
+2 b
 
 # table foo for distinct order by
 statement ok
@@ -1439,7 +1439,7 @@ logical_plan
 02)--Filter: annotated_data_finite2.a = Int32(0)
 03)----TableScan: annotated_data_finite2 projection=[a0, a, b, c, d], partial_filters=[annotated_data_finite2.a = Int32(0)]
 physical_plan
-01)SortPreservingMergeExec: [b@2 ASC NULLS LAST,c@3 ASC NULLS LAST]
+01)SortPreservingMergeExec: [b@2 ASC NULLS LAST, c@3 ASC NULLS LAST]
 02)--CoalesceBatchesExec: target_batch_size=8192
 03)----FilterExec: a@1 = 0
 04)------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
@@ -1481,7 +1481,7 @@ logical_plan
 02)--Filter: annotated_data_finite2.a = Int32(0) AND annotated_data_finite2.b = Int32(0)
 03)----TableScan: annotated_data_finite2 projection=[a0, a, b, c, d], partial_filters=[annotated_data_finite2.a = Int32(0), annotated_data_finite2.b = Int32(0)]
 physical_plan
-01)SortPreservingMergeExec: [b@2 ASC NULLS LAST,c@3 ASC NULLS LAST]
+01)SortPreservingMergeExec: [b@2 ASC NULLS LAST, c@3 ASC NULLS LAST]
 02)--CoalesceBatchesExec: target_batch_size=8192
 03)----FilterExec: a@1 = 0 AND b@2 = 0
 04)------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
@@ -1502,7 +1502,7 @@ logical_plan
 02)--Filter: annotated_data_finite2.a = Int32(0) AND annotated_data_finite2.b = Int32(0)
 03)----TableScan: annotated_data_finite2 projection=[a0, a, b, c, d], partial_filters=[annotated_data_finite2.a = Int32(0), annotated_data_finite2.b = Int32(0)]
 physical_plan
-01)SortPreservingMergeExec: [a@1 ASC NULLS LAST,b@2 ASC NULLS LAST,c@3 ASC NULLS LAST]
+01)SortPreservingMergeExec: [a@1 ASC NULLS LAST, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST]
 02)--CoalesceBatchesExec: target_batch_size=8192
 03)----FilterExec: a@1 = 0 AND b@2 = 0
 04)------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
@@ -1553,7 +1553,7 @@ physical_plan
 04)------AggregateExec: mode=Partial, gby=[c2@0 as c2], aggr=[count(*)]
 05)--------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
 06)----------ProjectionExec: expr=[c2@0 as c2]
-07)------------SortExec: TopK(fetch=4), expr=[c1@1 ASC NULLS LAST,c2@0 ASC NULLS LAST], preserve_partitioning=[false]
+07)------------SortExec: TopK(fetch=4), expr=[c1@1 ASC NULLS LAST, c2@0 ASC NULLS LAST], preserve_partitioning=[false]
 08)--------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c2, c1], has_header=true
 
 # FilterExec can track equality of non-column expressions.

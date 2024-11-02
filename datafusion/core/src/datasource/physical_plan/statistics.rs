@@ -26,6 +26,8 @@
 
 use std::sync::Arc;
 
+use crate::datasource::listing::PartitionedFile;
+
 use arrow::{
     compute::SortColumn,
     row::{Row, Rows},
@@ -34,8 +36,7 @@ use arrow_array::RecordBatch;
 use arrow_schema::SchemaRef;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_physical_expr::{expressions::Column, PhysicalSortExpr};
-
-use crate::datasource::listing::PartitionedFile;
+use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexOrderingRef};
 
 /// A normalized representation of file min/max statistics that allows for efficient sorting & comparison.
 /// The min/max values are ordered by [`Self::sort_order`].
@@ -43,13 +44,13 @@ use crate::datasource::listing::PartitionedFile;
 pub(crate) struct MinMaxStatistics {
     min_by_sort_order: Rows,
     max_by_sort_order: Rows,
-    sort_order: Vec<PhysicalSortExpr>,
+    sort_order: LexOrdering,
 }
 
 impl MinMaxStatistics {
     /// Sort order used to sort the statistics
     #[allow(unused)]
-    pub fn sort_order(&self) -> &[PhysicalSortExpr] {
+    pub fn sort_order(&self) -> LexOrderingRef {
         &self.sort_order
     }
 
@@ -65,8 +66,8 @@ impl MinMaxStatistics {
     }
 
     pub fn new_from_files<'a>(
-        projected_sort_order: &[PhysicalSortExpr], // Sort order with respect to projected schema
-        projected_schema: &SchemaRef,              // Projected schema
+        projected_sort_order: LexOrderingRef, // Sort order with respect to projected schema
+        projected_schema: &SchemaRef,         // Projected schema
         projection: Option<&[usize]>, // Indices of projection in full table schema (None = all columns)
         files: impl IntoIterator<Item = &'a PartitionedFile>,
     ) -> Result<Self> {
@@ -166,7 +167,7 @@ impl MinMaxStatistics {
     }
 
     pub fn new(
-        sort_order: &[PhysicalSortExpr],
+        sort_order: LexOrderingRef,
         schema: &SchemaRef,
         min_values: RecordBatch,
         max_values: RecordBatch,
@@ -256,7 +257,7 @@ impl MinMaxStatistics {
         Ok(Self {
             min_by_sort_order: min.map_err(|e| e.context("build min rows"))?,
             max_by_sort_order: max.map_err(|e| e.context("build max rows"))?,
-            sort_order: sort_order.to_vec(),
+            sort_order: LexOrdering::from_ref(sort_order),
         })
     }
 
@@ -277,7 +278,7 @@ impl MinMaxStatistics {
 }
 
 fn sort_columns_from_physical_sort_exprs(
-    sort_order: &[PhysicalSortExpr],
+    sort_order: LexOrderingRef,
 ) -> Option<Vec<&Column>> {
     sort_order
         .iter()

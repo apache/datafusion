@@ -56,6 +56,7 @@ use datafusion::arrow::array::{new_empty_array, AsArray};
 use datafusion::arrow::temporal_conversions::NANOSECONDS;
 use datafusion::common::scalar::ScalarStructBuilder;
 use datafusion::dataframe::DataFrame;
+use datafusion::logical_expr::builder::project;
 use datafusion::logical_expr::expr::InList;
 use datafusion::logical_expr::{
     col, expr, Cast, Extension, GroupingSet, Like, LogicalPlanBuilder, Partitioning,
@@ -80,6 +81,7 @@ use substrait::proto::expression::literal::{
 use substrait::proto::expression::subquery::SubqueryType;
 use substrait::proto::expression::{FieldReference, Literal, ScalarFunction};
 use substrait::proto::read_rel::local_files::file_or_files::PathType::UriFile;
+use substrait::proto::rel_common::{Emit, EmitKind};
 use substrait::proto::{
     aggregate_function::AggregationInvocation,
     expression::{
@@ -93,9 +95,9 @@ use substrait::proto::{
     join_rel, plan_rel, r#type,
     read_rel::ReadType,
     rel::RelType,
-    set_rel,
+    rel_common, set_rel,
     sort_field::{SortDirection, SortKind::*},
-    AggregateFunction, Expression, NamedStruct, Plan, Rel, Type,
+    AggregateFunction, Expression, NamedStruct, Plan, Rel, RelCommon, Type,
 };
 use substrait::proto::{ExtendedExpression, FunctionArgument, SortField};
 
@@ -562,42 +564,51 @@ pub async fn from_substrait_rel(
     rel: &Rel,
     extensions: &Extensions,
 ) -> Result<LogicalPlan> {
-    match &rel.rel_type {
+    let plan: Result<LogicalPlan> = match &rel.rel_type {
         Some(RelType::Project(p)) => {
             if let Some(input) = p.input.as_ref() {
                 let mut input = LogicalPlanBuilder::from(
                     from_substrait_rel(ctx, input, extensions).await?,
                 );
-                let mut names: HashSet<String> = HashSet::new();
-                let mut exprs: Vec<Expr> = vec![];
-                for e in &p.expressions {
-                    let x =
-                        from_substrait_rex(ctx, e, input.clone().schema(), extensions)
+                let original_schema = input.schema().clone();
+
+                // Ensure that all expressions have a unique display name, so that
+                // validate_unique_names does not fail when constructing the project.
+                let mut name_tracker = NameTracker::new();
+
+                // By default, a Substrait Project emits all inputs fields followed by all expressions.
+                // We build the explicit expressions first, and then the input expressions to avoid
+                // adding aliases to the explicit expressions (as part of ensuring unique names).
+                //
+                // This is helpful for plan visualization and tests, because when DataFusion produces
+                // Substrait Projects it adds an output mapping that excludes all input columns
+                // leaving only explicit expressions.
+
+                let mut explicit_exprs: Vec<Expr> = vec![];
+                for expr in &p.expressions {
+                    let e =
+                        from_substrait_rex(ctx, expr, input.clone().schema(), extensions)
                             .await?;
                     // if the expression is WindowFunction, wrap in a Window relation
-                    if let Expr::WindowFunction(_) = &x {
+                    if let Expr::WindowFunction(_) = &e {
                         // Adding the same expression here and in the project below
                         // works because the project's builder uses columnize_expr(..)
                         // to transform it into a column reference
-                        input = input.window(vec![x.clone()])?
+                        input = input.window(vec![e.clone()])?
                     }
-                    // Ensure the expression has a unique display name, so that project's
-                    // validate_unique_names doesn't fail
-                    let name = x.schema_name().to_string();
-                    let mut new_name = name.clone();
-                    let mut i = 0;
-                    while names.contains(&new_name) {
-                        new_name = format!("{}__temp__{}", name, i);
-                        i += 1;
-                    }
-                    if new_name != name {
-                        exprs.push(x.alias(new_name.clone()));
-                    } else {
-                        exprs.push(x);
-                    }
-                    names.insert(new_name);
+                    explicit_exprs.push(name_tracker.get_uniquely_named_expr(e)?);
                 }
-                input.project(exprs)?.build()
+
+                let mut final_exprs: Vec<Expr> = vec![];
+                for index in 0..original_schema.fields().len() {
+                    let e = Expr::Column(Column::from(
+                        original_schema.qualified_field(index),
+                    ));
+                    final_exprs.push(name_tracker.get_uniquely_named_expr(e)?);
+                }
+                final_exprs.append(&mut explicit_exprs);
+
+                input.project(final_exprs)?.build()
             } else {
                 not_impl_err!("Projection without an input is not supported")
             }
@@ -1074,6 +1085,138 @@ pub async fn from_substrait_rel(
             }))
         }
         _ => not_impl_err!("Unsupported RelType: {:?}", rel.rel_type),
+    };
+    apply_emit_kind(retrieve_rel_common(rel), plan?)
+}
+
+fn retrieve_rel_common(rel: &Rel) -> Option<&RelCommon> {
+    match rel.rel_type.as_ref() {
+        None => None,
+        Some(rt) => match rt {
+            RelType::Read(r) => r.common.as_ref(),
+            RelType::Filter(f) => f.common.as_ref(),
+            RelType::Fetch(f) => f.common.as_ref(),
+            RelType::Aggregate(a) => a.common.as_ref(),
+            RelType::Sort(s) => s.common.as_ref(),
+            RelType::Join(j) => j.common.as_ref(),
+            RelType::Project(p) => p.common.as_ref(),
+            RelType::Set(s) => s.common.as_ref(),
+            RelType::ExtensionSingle(e) => e.common.as_ref(),
+            RelType::ExtensionMulti(e) => e.common.as_ref(),
+            RelType::ExtensionLeaf(e) => e.common.as_ref(),
+            RelType::Cross(c) => c.common.as_ref(),
+            RelType::Reference(_) => None,
+            RelType::Write(w) => w.common.as_ref(),
+            RelType::Ddl(d) => d.common.as_ref(),
+            RelType::HashJoin(j) => j.common.as_ref(),
+            RelType::MergeJoin(j) => j.common.as_ref(),
+            RelType::NestedLoopJoin(j) => j.common.as_ref(),
+            RelType::Window(w) => w.common.as_ref(),
+            RelType::Exchange(e) => e.common.as_ref(),
+            RelType::Expand(e) => e.common.as_ref(),
+        },
+    }
+}
+
+fn retrieve_emit_kind(rel_common: Option<&RelCommon>) -> EmitKind {
+    // the default EmitKind is Direct if it is not set explicitly
+    let default = EmitKind::Direct(rel_common::Direct {});
+    rel_common
+        .and_then(|rc| rc.emit_kind.as_ref())
+        .map_or(default, |ek| ek.clone())
+}
+
+fn contains_volatile_expr(proj: &Projection) -> bool {
+    proj.expr.iter().any(|e| e.is_volatile())
+}
+
+fn apply_emit_kind(
+    rel_common: Option<&RelCommon>,
+    plan: LogicalPlan,
+) -> Result<LogicalPlan> {
+    match retrieve_emit_kind(rel_common) {
+        EmitKind::Direct(_) => Ok(plan),
+        EmitKind::Emit(Emit { output_mapping }) => {
+            // It is valid to reference the same field multiple times in the Emit
+            // In this case, we need to provide unique names to avoid collisions
+            let mut name_tracker = NameTracker::new();
+            match plan {
+                // To avoid adding a projection on top of a projection, we apply special case
+                // handling to flatten Substrait Emits. This is only applicable if none of the
+                // expressions in the projection are volatile. This is to avoid issues like
+                // converting a single call of the random() function into multiple calls due to
+                // duplicate fields in the output_mapping.
+                LogicalPlan::Projection(proj) if !contains_volatile_expr(&proj) => {
+                    let mut exprs: Vec<Expr> = vec![];
+                    for field in output_mapping {
+                        let expr = proj.expr
+                            .get(field as usize)
+                            .ok_or_else(|| substrait_datafusion_err!(
+                                  "Emit output field {} cannot be resolved in input schema {}",
+                                  field, proj.input.schema().clone()
+                                ))?;
+                        exprs.push(name_tracker.get_uniquely_named_expr(expr.clone())?);
+                    }
+
+                    let input = Arc::unwrap_or_clone(proj.input);
+                    project(input, exprs)
+                }
+                // Otherwise we just handle the output_mapping as a projection
+                _ => {
+                    let input_schema = plan.schema();
+
+                    let mut exprs: Vec<Expr> = vec![];
+                    for index in output_mapping.into_iter() {
+                        let column = Expr::Column(Column::from(
+                            input_schema.qualified_field(index as usize),
+                        ));
+                        let expr = name_tracker.get_uniquely_named_expr(column)?;
+                        exprs.push(expr);
+                    }
+
+                    project(plan, exprs)
+                }
+            }
+        }
+    }
+}
+
+struct NameTracker {
+    seen_names: HashSet<String>,
+}
+
+enum NameTrackerStatus {
+    NeverSeen,
+    SeenBefore,
+}
+
+impl NameTracker {
+    fn new() -> Self {
+        NameTracker {
+            seen_names: HashSet::default(),
+        }
+    }
+    fn get_unique_name(&mut self, name: String) -> (String, NameTrackerStatus) {
+        match self.seen_names.insert(name.clone()) {
+            true => (name, NameTrackerStatus::NeverSeen),
+            false => {
+                let mut counter = 0;
+                loop {
+                    let candidate_name = format!("{}__temp__{}", name, counter);
+                    if self.seen_names.insert(candidate_name.clone()) {
+                        return (candidate_name, NameTrackerStatus::SeenBefore);
+                    }
+                    counter += 1;
+                }
+            }
+        }
+    }
+
+    fn get_uniquely_named_expr(&mut self, expr: Expr) -> Result<Expr> {
+        match self.get_unique_name(expr.name_for_alias()?) {
+            (_, NameTrackerStatus::NeverSeen) => Ok(expr),
+            (name, NameTrackerStatus::SeenBefore) => Ok(expr.alias(name)),
+        }
     }
 }
 
@@ -1226,6 +1369,7 @@ fn from_substrait_jointype(join_type: i32) -> Result<JoinType> {
             join_rel::JoinType::Outer => Ok(JoinType::Full),
             join_rel::JoinType::LeftAnti => Ok(JoinType::LeftAnti),
             join_rel::JoinType::LeftSemi => Ok(JoinType::LeftSemi),
+            join_rel::JoinType::LeftMark => Ok(JoinType::LeftMark),
             _ => plan_err!("unsupported join type {substrait_join_type:?}"),
         }
     } else {

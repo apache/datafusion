@@ -79,6 +79,7 @@ pub type FileSinkExec = DataSinkExec;
 /// Execution plan for writing record batches to a [`DataSink`]
 ///
 /// Returns a single row with the number of values written
+#[derive(Clone)]
 pub struct DataSinkExec {
     /// Input plan that produces the record batches to be written.
     input: Arc<dyn ExecutionPlan>,

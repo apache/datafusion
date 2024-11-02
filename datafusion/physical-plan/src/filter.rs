@@ -54,7 +54,7 @@ use log::trace;
 
 /// FilterExec evaluates a boolean predicate against all input batches to determine which rows to
 /// include in its output batches.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct FilterExec {
     /// The expression to filter on. This expression must evaluate to a boolean value.
     predicate: Arc<dyn PhysicalExpr>,
