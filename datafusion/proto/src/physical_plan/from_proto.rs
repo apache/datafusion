@@ -35,7 +35,7 @@ use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::datasource::physical_plan::{FileScanConfig, FileSinkConfig};
 use datafusion::execution::FunctionRegistry;
 use datafusion::logical_expr::WindowFunctionDefinition;
-use datafusion::physical_expr::{PhysicalSortExpr, ScalarFunctionExpr};
+use datafusion::physical_expr::{LexOrdering, PhysicalSortExpr, ScalarFunctionExpr};
 use datafusion::physical_plan::expressions::{
     in_list, BinaryExpr, CaseExpr, CastExpr, Column, IsNotNullExpr, IsNullExpr, LikeExpr,
     Literal, NegativeExpr, NotExpr, TryCastExpr,
@@ -99,13 +99,13 @@ pub fn parse_physical_sort_exprs(
     registry: &dyn FunctionRegistry,
     input_schema: &Schema,
     codec: &dyn PhysicalExtensionCodec,
-) -> Result<Vec<PhysicalSortExpr>> {
+) -> Result<LexOrdering> {
     proto
         .iter()
         .map(|sort_expr| {
             parse_physical_sort_expr(sort_expr, registry, input_schema, codec)
         })
-        .collect::<Result<Vec<_>>>()
+        .collect::<Result<LexOrdering>>()
 }
 
 /// Parses a physical window expr from a protobuf.
@@ -166,7 +166,7 @@ pub fn parse_physical_window_expr(
         name,
         &window_node_expr,
         &partition_by,
-        &order_by,
+        order_by.as_ref(),
         Arc::new(window_frame),
         &extended_schema,
         false,

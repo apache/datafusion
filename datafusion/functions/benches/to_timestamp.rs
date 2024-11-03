@@ -113,6 +113,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         let string_array = ColumnarValue::Array(Arc::new(data()) as ArrayRef);
 
         b.iter(|| {
+            #[allow(deprecated)] // TODO use invoke_batch
             black_box(
                 to_timestamp()
                     .invoke(&[string_array.clone()])
@@ -126,6 +127,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         let string_array = ColumnarValue::Array(Arc::new(data) as ArrayRef);
 
         b.iter(|| {
+            #[allow(deprecated)] // TODO use invoke_batch
             black_box(
                 to_timestamp()
                     .invoke(&[string_array.clone()])
@@ -139,6 +141,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         let string_array = ColumnarValue::Array(Arc::new(data) as ArrayRef);
 
         b.iter(|| {
+            #[allow(deprecated)] // TODO use invoke_batch
             black_box(
                 to_timestamp()
                     .invoke(&[string_array.clone()])
@@ -157,6 +160,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             ColumnarValue::Array(Arc::new(format3) as ArrayRef),
         ];
         b.iter(|| {
+            #[allow(deprecated)] // TODO use invoke_batch
             black_box(
                 to_timestamp()
                     .invoke(&args.clone())
@@ -183,6 +187,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             ),
         ];
         b.iter(|| {
+            #[allow(deprecated)] // TODO use invoke_batch
             black_box(
                 to_timestamp()
                     .invoke(&args.clone())
@@ -209,6 +214,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             ),
         ];
         b.iter(|| {
+            #[allow(deprecated)] // TODO use invoke_batch
             black_box(
                 to_timestamp()
                     .invoke(&args.clone())

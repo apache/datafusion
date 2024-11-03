@@ -193,6 +193,7 @@ impl ScalarUDF {
     /// Invoke the function on `args`, returning the appropriate result.
     ///
     /// See [`ScalarUDFImpl::invoke`] for more details.
+    #[deprecated(since = "42.1.0", note = "Use `invoke_batch` instead")]
     pub fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
         self.inner.invoke(args)
     }
@@ -215,13 +216,14 @@ impl ScalarUDF {
     /// Invoke the function without `args` but number of rows, returning the appropriate result.
     ///
     /// See [`ScalarUDFImpl::invoke_no_args`] for more details.
+    #[deprecated(since = "42.1.0", note = "Use `invoke_batch` instead")]
     pub fn invoke_no_args(&self, number_rows: usize) -> Result<ColumnarValue> {
         self.inner.invoke_no_args(number_rows)
     }
 
     /// Returns a `ScalarFunctionImplementation` that can invoke the function
     /// during execution
-    #[deprecated(since = "42.0.0", note = "Use `invoke` or `invoke_no_args` instead")]
+    #[deprecated(since = "42.0.0", note = "Use `invoke_batch` instead")]
     pub fn fun(&self) -> ScalarFunctionImplementation {
         let captured = Arc::clone(&self.inner);
         Arc::new(move |args| captured.invoke(args))

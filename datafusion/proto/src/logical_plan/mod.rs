@@ -1633,6 +1633,9 @@ impl AsLogicalPlan for LogicalPlanNode {
             LogicalPlan::RecursiveQuery(_) => Err(proto_error(
                 "LogicalPlan serde is not yet implemented for RecursiveQuery",
             )),
+            LogicalPlan::Execute(_) => Err(proto_error(
+                "LogicalPlan serde is not yet implemented for Execute",
+            )),
         }
     }
 }

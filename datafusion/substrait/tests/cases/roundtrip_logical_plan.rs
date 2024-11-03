@@ -453,15 +453,15 @@ async fn roundtrip_inlist_5() -> Result<()> {
     // on roundtrip there is an additional projection during TableScan which includes all column of the table,
     // using assert_expected_plan here as a workaround
     assert_expected_plan(
-    "SELECT a, f FROM data WHERE (f IN ('a', 'b', 'c') OR a in (SELECT data2.a FROM data2 WHERE f IN ('b', 'c', 'd')))",
-    "Projection: data.a, data.f\
-     \n  Filter: data.f = Utf8(\"a\") OR data.f = Utf8(\"b\") OR data.f = Utf8(\"c\") OR Boolean(true) IS NOT NULL\
-     \n    Projection: data.a, data.f, Boolean(true)\
-     \n      Left Join: data.a = data2.a\
-     \n        TableScan: data projection=[a, f]\
-     \n        Projection: data2.a, Boolean(true)\
-     \n          Filter: data2.f = Utf8(\"b\") OR data2.f = Utf8(\"c\") OR data2.f = Utf8(\"d\")\
-     \n            TableScan: data2 projection=[a, f], partial_filters=[data2.f = Utf8(\"b\") OR data2.f = Utf8(\"c\") OR data2.f = Utf8(\"d\")]",
+        "SELECT a, f FROM data WHERE (f IN ('a', 'b', 'c') OR a in (SELECT data2.a FROM data2 WHERE f IN ('b', 'c', 'd')))",
+
+        "Projection: data.a, data.f\
+        \n  Filter: data.f = Utf8(\"a\") OR data.f = Utf8(\"b\") OR data.f = Utf8(\"c\") OR data2.mark\
+        \n    LeftMark Join: data.a = data2.a\
+        \n      TableScan: data projection=[a, f]\
+        \n      Projection: data2.a\
+        \n        Filter: data2.f = Utf8(\"b\") OR data2.f = Utf8(\"c\") OR data2.f = Utf8(\"d\")\
+        \n          TableScan: data2 projection=[a, f], partial_filters=[data2.f = Utf8(\"b\") OR data2.f = Utf8(\"c\") OR data2.f = Utf8(\"d\")]",
     true).await
 }
 
@@ -656,6 +656,19 @@ async fn simple_intersect() -> Result<()> {
 async fn aggregate_wo_projection_consume() -> Result<()> {
     let proto_plan =
         read_json("tests/testdata/test_plans/aggregate_no_project.substrait.json");
+
+    assert_expected_plan_substrait(
+        proto_plan,
+        "Aggregate: groupBy=[[data.a]], aggr=[[count(data.a) AS countA]]\
+        \n  TableScan: data projection=[a]",
+    )
+    .await
+}
+
+#[tokio::test]
+async fn aggregate_wo_projection_group_expression_ref_consume() -> Result<()> {
+    let proto_plan =
+        read_json("tests/testdata/test_plans/aggregate_no_project_group_expression_ref.substrait.json");
 
     assert_expected_plan_substrait(
         proto_plan,

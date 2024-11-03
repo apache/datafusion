@@ -40,7 +40,8 @@ use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{internal_err, JoinSide, JoinType};
 use datafusion_expr::sort_properties::SortProperties;
 use datafusion_physical_expr::expressions::Column;
-use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
+use datafusion_physical_expr::PhysicalExpr;
+use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 
 /// The [`JoinSelection`] rule tries to modify a given plan so that it can
@@ -132,6 +133,9 @@ fn swap_join_type(join_type: JoinType) -> JoinType {
         JoinType::RightSemi => JoinType::LeftSemi,
         JoinType::LeftAnti => JoinType::RightAnti,
         JoinType::RightAnti => JoinType::LeftAnti,
+        JoinType::LeftMark => {
+            unreachable!("LeftMark join type does not support swapping")
+        }
     }
 }
 
@@ -550,7 +554,7 @@ fn hash_join_convert_symmetric_subrule(
             // the function concludes that no specific order is required for the SymmetricHashJoinExec. This approach
             // ensures that the symmetric hash join operation only imposes ordering constraints when necessary,
             // based on the properties of the child nodes and the filter condition.
-            let determine_order = |side: JoinSide| -> Option<Vec<PhysicalSortExpr>> {
+            let determine_order = |side: JoinSide| -> Option<LexOrdering> {
                 hash_join
                     .filter()
                     .map(|filter| {
@@ -573,6 +577,7 @@ fn hash_join_convert_symmetric_subrule(
                                         hash_join.right().equivalence_properties(),
                                         hash_join.right().schema(),
                                     ),
+                                    JoinSide::None => return false,
                                 };
 
                                 let name = schema.field(*index).name();
@@ -588,8 +593,9 @@ fn hash_join_convert_symmetric_subrule(
                         match side {
                             JoinSide::Left => hash_join.left().output_ordering(),
                             JoinSide::Right => hash_join.right().output_ordering(),
+                            JoinSide::None => unreachable!(),
                         }
-                        .map(|p| p.to_vec())
+                        .map(|p| LexOrdering::new(p.to_vec()))
                     })
                     .flatten()
             };
@@ -719,7 +725,6 @@ fn apply_subrules(
 
 #[cfg(test)]
 mod tests_statistical {
-
     use super::*;
     use crate::{
         physical_plan::{displayable, ColumnStatistics, Statistics},

@@ -136,6 +136,7 @@ impl JoinLeftData {
     }
 }
 
+#[allow(rustdoc::private_intra_doc_links)]
 /// Join execution plan: Evaluates eqijoin predicates in parallel on multiple
 /// partitions using a hash table and an optional filter list to apply post
 /// join.
@@ -293,6 +294,10 @@ impl JoinLeftData {
 ///                       │  "dimension"  │     │    "fact"     │
 ///                       └───────────────┘     └───────────────┘
 /// ```
+///
+/// Note that the `Clone` trait is not implemented for this struct due to the
+/// `left_fut` [`OnceAsync`], which is used to coordinate the loading of the
+/// left side with the processing in each output stream.
 #[derive(Debug)]
 pub struct HashJoinExec {
     /// left (build) side which gets hashed
@@ -524,6 +529,7 @@ impl HashJoinExec {
                         | JoinType::Full
                         | JoinType::LeftAnti
                         | JoinType::LeftSemi
+                        | JoinType::LeftMark
                 ));
 
         let mode = if pipeline_breaking {
@@ -779,7 +785,7 @@ impl ExecutionPlan for HashJoinExec {
         // TODO stats: it is not possible in general to know the output size of joins
         // There are some special cases though, for example:
         // - `A LEFT JOIN B ON A.col=B.col` with `COUNT_DISTINCT(B.col)=COUNT(B.col)`
-        let mut stats = estimate_join_statistics(
+        let stats = estimate_join_statistics(
             Arc::clone(&self.left),
             Arc::clone(&self.right),
             self.on.clone(),
@@ -787,16 +793,7 @@ impl ExecutionPlan for HashJoinExec {
             &self.join_schema,
         )?;
         // Project statistics if there is a projection
-        if let Some(projection) = &self.projection {
-            stats.column_statistics = stats
-                .column_statistics
-                .into_iter()
-                .enumerate()
-                .filter(|(i, _)| projection.contains(i))
-                .map(|(_, s)| s)
-                .collect();
-        }
-        Ok(stats)
+        Ok(stats.project(self.projection.as_ref()))
     }
 }
 
@@ -3091,6 +3088,94 @@ mod tests {
         Ok(())
     }
 
+    #[apply(batch_sizes)]
+    #[tokio::test]
+    async fn join_left_mark(batch_size: usize) -> Result<()> {
+        let task_ctx = prepare_task_ctx(batch_size);
+        let left = build_table(
+            ("a1", &vec![1, 2, 3]),
+            ("b1", &vec![4, 5, 7]), // 7 does not exist on the right
+            ("c1", &vec![7, 8, 9]),
+        );
+        let right = build_table(
+            ("a2", &vec![10, 20, 30]),
+            ("b1", &vec![4, 5, 6]),
+            ("c2", &vec![70, 80, 90]),
+        );
+        let on = vec![(
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
+        )];
+
+        let (columns, batches) = join_collect(
+            Arc::clone(&left),
+            Arc::clone(&right),
+            on.clone(),
+            &JoinType::LeftMark,
+            false,
+            task_ctx,
+        )
+        .await?;
+        assert_eq!(columns, vec!["a1", "b1", "c1", "mark"]);
+
+        let expected = [
+            "+----+----+----+-------+",
+            "| a1 | b1 | c1 | mark  |",
+            "+----+----+----+-------+",
+            "| 1  | 4  | 7  | true  |",
+            "| 2  | 5  | 8  | true  |",
+            "| 3  | 7  | 9  | false |",
+            "+----+----+----+-------+",
+        ];
+        assert_batches_sorted_eq!(expected, &batches);
+
+        Ok(())
+    }
+
+    #[apply(batch_sizes)]
+    #[tokio::test]
+    async fn partitioned_join_left_mark(batch_size: usize) -> Result<()> {
+        let task_ctx = prepare_task_ctx(batch_size);
+        let left = build_table(
+            ("a1", &vec![1, 2, 3]),
+            ("b1", &vec![4, 5, 7]), // 7 does not exist on the right
+            ("c1", &vec![7, 8, 9]),
+        );
+        let right = build_table(
+            ("a2", &vec![10, 20, 30, 40]),
+            ("b1", &vec![4, 4, 5, 6]),
+            ("c2", &vec![60, 70, 80, 90]),
+        );
+        let on = vec![(
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
+        )];
+
+        let (columns, batches) = partitioned_join_collect(
+            Arc::clone(&left),
+            Arc::clone(&right),
+            on.clone(),
+            &JoinType::LeftMark,
+            false,
+            task_ctx,
+        )
+        .await?;
+        assert_eq!(columns, vec!["a1", "b1", "c1", "mark"]);
+
+        let expected = [
+            "+----+----+----+-------+",
+            "| a1 | b1 | c1 | mark  |",
+            "+----+----+----+-------+",
+            "| 1  | 4  | 7  | true  |",
+            "| 2  | 5  | 8  | true  |",
+            "| 3  | 7  | 9  | false |",
+            "+----+----+----+-------+",
+        ];
+        assert_batches_sorted_eq!(expected, &batches);
+
+        Ok(())
+    }
+
     #[test]
     fn join_with_hash_collision() -> Result<()> {
         let mut hashmap_left = RawTable::with_capacity(2);
@@ -3476,6 +3561,15 @@ mod tests {
             "| 30 | 6  | 90 |",
             "+----+----+----+",
         ];
+        let expected_left_mark = vec![
+            "+----+----+----+-------+",
+            "| a1 | b1 | c1 | mark  |",
+            "+----+----+----+-------+",
+            "| 1  | 4  | 7  | true  |",
+            "| 2  | 5  | 8  | true  |",
+            "| 3  | 7  | 9  | false |",
+            "+----+----+----+-------+",
+        ];
 
         let test_cases = vec![
             (JoinType::Inner, expected_inner),
@@ -3486,6 +3580,7 @@ mod tests {
             (JoinType::LeftAnti, expected_left_anti),
             (JoinType::RightSemi, expected_right_semi),
             (JoinType::RightAnti, expected_right_anti),
+            (JoinType::LeftMark, expected_left_mark),
         ];
 
         for (join_type, expected) in test_cases {
@@ -3768,6 +3863,7 @@ mod tests {
             JoinType::LeftAnti,
             JoinType::RightSemi,
             JoinType::RightAnti,
+            JoinType::LeftMark,
         ];
 
         for join_type in join_types {

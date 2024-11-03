@@ -816,3 +816,8 @@ query B
 SELECT starts_with('foobar', 'bar')
 ----
 false
+
+query TT
+select '   ', '|'
+----
+    |
