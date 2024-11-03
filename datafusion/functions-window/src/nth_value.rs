@@ -17,17 +17,18 @@
 
 //! `nth_value` window function implementation
 
+use crate::utils::{get_scalar_value_from_args, get_signed_integer};
+
 use std::any::Any;
 use std::cmp::Ordering;
 use std::fmt::Debug;
 use std::ops::Range;
 use std::sync::OnceLock;
 
-use crate::utils::{get_scalar_value_from_args, get_signed_integer};
 use datafusion_common::arrow::array::ArrayRef;
 use datafusion_common::arrow::datatypes::{DataType, Field};
 use datafusion_common::{Result, ScalarValue};
-use datafusion_expr::window_doc_sections::DOC_SECTION_RANKING;
+use datafusion_expr::window_doc_sections::DOC_SECTION_ANALYTICAL;
 use datafusion_expr::window_state::WindowAggState;
 use datafusion_expr::{
     Documentation, PartitionEvaluator, ReversedUDWF, Signature, TypeSignature,
@@ -35,25 +36,26 @@ use datafusion_expr::{
 };
 use datafusion_functions_window_common::field;
 use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
+
 use field::WindowUDFFieldArgs;
 
 define_udwf_and_expr!(
     First,
     first_value,
     "returns the first value in the window frame",
-    NthValue::first
+    NthValue::first_value
 );
 define_udwf_and_expr!(
     Last,
     last_value,
     "returns the last value in the window frame",
-    NthValue::last
+    NthValue::last_value
 );
 define_udwf_and_expr!(
     NthValue,
     nth_value,
     "returns the nth value in the window frame",
-    NthValue::nth
+    NthValue::nth_value
 );
 
 /// Tag to differentiate special use cases of the NTH_VALUE built-in window function.
@@ -67,9 +69,9 @@ pub enum NthValueKind {
 impl NthValueKind {
     fn name(&self) -> &'static str {
         match self {
-            NthValueKind::First => "first",
-            NthValueKind::Last => "last",
-            NthValueKind::Nth => "nth",
+            NthValueKind::First => "first_value",
+            NthValueKind::Last => "last_value",
+            NthValueKind::Nth => "nth_value",
         }
     }
 }
@@ -87,7 +89,8 @@ impl NthValue {
             signature: Signature::one_of(
                 vec![
                     TypeSignature::Any(0),
-                    TypeSignature::Exact(vec![DataType::UInt64]),
+                    TypeSignature::Any(1),
+                    TypeSignature::Any(2),
                 ],
                 Volatility::Immutable,
             ),
@@ -95,27 +98,69 @@ impl NthValue {
         }
     }
 
-    pub fn first() -> Self {
+    pub fn first_value() -> Self {
         Self::new(NthValueKind::First)
     }
 
-    pub fn last() -> Self {
+    pub fn last_value() -> Self {
         Self::new(NthValueKind::Last)
     }
-    pub fn nth() -> Self {
+    pub fn nth_value() -> Self {
         Self::new(NthValueKind::Nth)
     }
 }
 
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+static FIRST_VALUE_DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
-fn get_ntile_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
+fn get_first_value_doc() -> &'static Documentation {
+    FIRST_VALUE_DOCUMENTATION.get_or_init(|| {
         Documentation::builder()
-            .with_doc_section(DOC_SECTION_RANKING)
+            .with_doc_section(DOC_SECTION_ANALYTICAL)
             .with_description(
-                "Integer ranging from 1 to the argument value, dividing the partition as equally as possible",
+                "Returns value evaluated at the row that is the first row of the window \
+                frame.",
             )
+            .with_syntax_example("first_value(expression)")
+            .with_argument("expression", "Expression to operate on")
+            .build()
+            .unwrap()
+    })
+}
+
+static LAST_VALUE_DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+
+fn get_last_value_doc() -> &'static Documentation {
+    LAST_VALUE_DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_ANALYTICAL)
+            .with_description(
+                "Returns value evaluated at the row that is the last row of the window \
+                frame.",
+            )
+            .with_syntax_example("last_value(expression)")
+            .with_argument("expression", "Expression to operate on")
+            .build()
+            .unwrap()
+    })
+}
+
+static NTH_VALUE_DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+
+fn get_nth_value_doc() -> &'static Documentation {
+    NTH_VALUE_DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_ANALYTICAL)
+            .with_description(
+                "Returns value evaluated at the row that is the nth row of the window \
+                frame (counting from 1); null if no such row.",
+            )
+            .with_syntax_example("nth_value(expression, n)")
+            .with_argument(
+                "expression",
+                "The name the column of which nth \
+            value to retrieve",
+            )
+            .with_argument("n", "Integer. Specifies the n in nth")
             .build()
             .unwrap()
     })
@@ -166,7 +211,7 @@ impl WindowUDFImpl for NthValue {
     }
 
     fn field(&self, field_args: WindowUDFFieldArgs) -> Result<Field> {
-        let nullable = false;
+        let nullable = true;
 
         Ok(Field::new(field_args.name(), DataType::UInt64, nullable))
     }
@@ -180,7 +225,11 @@ impl WindowUDFImpl for NthValue {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_ntile_doc())
+        match self.kind {
+            NthValueKind::First => Some(get_first_value_doc()),
+            NthValueKind::Last => Some(get_last_value_doc()),
+            NthValueKind::Nth => Some(get_nth_value_doc()),
+        }
     }
 }
 
@@ -362,102 +411,111 @@ impl PartitionEvaluator for NthValueEvaluator {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use arrow::array::*;
+    use datafusion_common::cast::as_int32_array;
+    use datafusion_physical_expr::expressions::{Column, Literal};
+    use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
+    use std::sync::Arc;
 
-    // fn test_i32_result(expr: NthValue, expected: Int32Array) -> Result<()> {
-    //     let arr: ArrayRef = Arc::new(Int32Array::from(vec![1, -2, 3, -4, 5, -6, 7, 8]));
-    //     let values = vec![arr];
-    //     let schema = Schema::new(vec![Field::new("arr", DataType::Int32, false)]);
-    //     let batch = RecordBatch::try_new(Arc::new(schema), values.clone())?;
-    //     let mut ranges: Vec<Range<usize>> = vec![];
-    //     for i in 0..8 {
-    //         ranges.push(Range {
-    //             start: 0,
-    //             end: i + 1,
-    //         })
-    //     }
-    //     let mut evaluator = expr.create_evaluator()?;
-    //     let values = expr.evaluate_args(&batch)?;
-    //     let result = ranges
-    //         .iter()
-    //         .map(|range| evaluator.evaluate(&values, range))
-    //         .collect::<Result<Vec<ScalarValue>>>()?;
-    //     let result = ScalarValue::iter_to_array(result.into_iter())?;
-    //     let result = as_int32_array(&result)?;
-    //     assert_eq!(expected, *result);
-    //     Ok(())
-    // }
-    //
-    // // #[test]
-    // // fn first_value() -> Result<()> {
-    // //     let first_value = NthValue::first(
-    // //         "first_value".to_owned(),
-    // //         Arc::new(Column::new("arr", 0)),
-    // //         DataType::Int32,
-    // //         false,
-    // //     );
-    // //     test_i32_result(first_value, Int32Array::from(vec![1; 8]))?;
-    // //     Ok(())
-    // // }
-    // //
-    // // #[test]
-    // // fn last_value() -> Result<()> {
-    // //     let last_value = NthValue::last(
-    // //         "last_value".to_owned(),
-    // //         Arc::new(Column::new("arr", 0)),
-    // //         DataType::Int32,
-    // //         false,
-    // //     );
-    // //     test_i32_result(
-    // //         last_value,
-    // //         Int32Array::from(vec![
-    // //             Some(1),
-    // //             Some(-2),
-    // //             Some(3),
-    // //             Some(-4),
-    // //             Some(5),
-    // //             Some(-6),
-    // //             Some(7),
-    // //             Some(8),
-    // //         ]),
-    // //     )?;
-    // //     Ok(())
-    // // }
-    // //
-    // // #[test]
-    // // fn nth_value_1() -> Result<()> {
-    // //     let nth_value = NthValue::nth(
-    // //         "nth_value".to_owned(),
-    // //         Arc::new(Column::new("arr", 0)),
-    // //         DataType::Int32,
-    // //         1,
-    // //         false,
-    // //     )?;
-    // //     test_i32_result(nth_value, Int32Array::from(vec![1; 8]))?;
-    // //     Ok(())
-    // // }
-    // //
-    // // #[test]
-    // // fn nth_value_2() -> Result<()> {
-    // //     let nth_value = NthValue::nth(
-    // //         "nth_value".to_owned(),
-    // //         Arc::new(Column::new("arr", 0)),
-    // //         DataType::Int32,
-    // //         2,
-    // //         false,
-    // //     )?;
-    // //     test_i32_result(
-    // //         nth_value,
-    // //         Int32Array::from(vec![
-    // //             None,
-    // //             Some(-2),
-    // //             Some(-2),
-    // //             Some(-2),
-    // //             Some(-2),
-    // //             Some(-2),
-    // //             Some(-2),
-    // //             Some(-2),
-    // //         ]),
-    // //     )?;
-    // //     Ok(())
-    // // }
+    fn test_i32_result(
+        expr: NthValue,
+        partition_evaluator_args: PartitionEvaluatorArgs,
+        expected: Int32Array,
+    ) -> Result<()> {
+        let arr: ArrayRef = Arc::new(Int32Array::from(vec![1, -2, 3, -4, 5, -6, 7, 8]));
+        let values = vec![arr];
+        let mut ranges: Vec<Range<usize>> = vec![];
+        for i in 0..8 {
+            ranges.push(Range {
+                start: 0,
+                end: i + 1,
+            })
+        }
+        let mut evaluator = expr.partition_evaluator(partition_evaluator_args)?;
+        let result = ranges
+            .iter()
+            .map(|range| evaluator.evaluate(&values, range))
+            .collect::<Result<Vec<ScalarValue>>>()?;
+        let result = ScalarValue::iter_to_array(result.into_iter())?;
+        let result = as_int32_array(&result)?;
+        assert_eq!(expected, *result);
+        Ok(())
+    }
+
+    #[test]
+    fn first_value() -> Result<()> {
+        let expr = Arc::new(Column::new("c3", 0)) as Arc<dyn PhysicalExpr>;
+        test_i32_result(
+            NthValue::first_value(),
+            PartitionEvaluatorArgs::new(&[expr], &[DataType::Int32], false, false),
+            Int32Array::from(vec![1; 8]).iter().collect::<Int32Array>(),
+        )
+    }
+
+    #[test]
+    fn last_value() -> Result<()> {
+        let expr = Arc::new(Column::new("c3", 0)) as Arc<dyn PhysicalExpr>;
+        test_i32_result(
+            NthValue::last_value(),
+            PartitionEvaluatorArgs::new(&[expr], &[DataType::Int32], false, false),
+            Int32Array::from(vec![
+                Some(1),
+                Some(-2),
+                Some(3),
+                Some(-4),
+                Some(5),
+                Some(-6),
+                Some(7),
+                Some(8),
+            ]),
+        )
+    }
+
+    #[test]
+    fn nth_value_1() -> Result<()> {
+        let expr = Arc::new(Column::new("c3", 0)) as Arc<dyn PhysicalExpr>;
+        let n_value =
+            Arc::new(Literal::new(ScalarValue::Int32(Some(1)))) as Arc<dyn PhysicalExpr>;
+
+        test_i32_result(
+            NthValue::nth_value(),
+            PartitionEvaluatorArgs::new(
+                &[expr, n_value],
+                &[DataType::Int32],
+                false,
+                false,
+            ),
+            Int32Array::from(vec![1; 8]),
+        )?;
+        Ok(())
+    }
+
+    #[test]
+    fn nth_value_2() -> Result<()> {
+        let expr = Arc::new(Column::new("c3", 0)) as Arc<dyn PhysicalExpr>;
+        let n_value =
+            Arc::new(Literal::new(ScalarValue::Int32(Some(2)))) as Arc<dyn PhysicalExpr>;
+
+        test_i32_result(
+            NthValue::nth_value(),
+            PartitionEvaluatorArgs::new(
+                &[expr, n_value],
+                &[DataType::Int32],
+                false,
+                false,
+            ),
+            Int32Array::from(vec![
+                None,
+                Some(-2),
+                Some(-2),
+                Some(-2),
+                Some(-2),
+                Some(-2),
+                Some(-2),
+                Some(-2),
+            ]),
+        )?;
+        Ok(())
+    }
 }

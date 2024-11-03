@@ -22,6 +22,9 @@
 //!
 //! [DataFusion]: https://crates.io/crates/datafusion
 //!
+
+extern crate core;
+
 use std::sync::Arc;
 
 use log::debug;
