@@ -34,7 +34,7 @@ use datafusion_execution::{
 };
 use datafusion_physical_expr::PhysicalSortExpr;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
-use hashbrown::HashMap;
+use datafusion_common::HashMap;
 
 use super::metrics::{BaselineMetrics, Count, ExecutionPlanMetricsSet, MetricBuilder};
 

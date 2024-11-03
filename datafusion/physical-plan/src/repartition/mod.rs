@@ -53,7 +53,7 @@ use crate::execution_plan::CardinalityEffect;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 use futures::stream::Stream;
 use futures::{FutureExt, StreamExt, TryStreamExt};
-use hashbrown::HashMap;
+use datafusion_common::HashMap;
 use log::trace;
 use parking_lot::Mutex;
 

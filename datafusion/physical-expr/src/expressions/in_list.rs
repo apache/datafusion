@@ -45,7 +45,7 @@ use datafusion_physical_expr_common::datum::compare_with_eq;
 
 use ahash::RandomState;
 use hashbrown::hash_map::RawEntryMut;
-use hashbrown::HashMap;
+use datafusion_common::HashMap;
 
 /// InList
 pub struct InListExpr {

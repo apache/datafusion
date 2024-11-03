@@ -49,6 +49,7 @@ pub mod utils;
 
 /// Reexport arrow crate
 pub use arrow;
+use hashbrown::hash_map::DefaultHashBuilder;
 pub use column::Column;
 pub use dfschema::{
     qualified_name, DFSchema, DFSchemaRef, ExprSchema, SchemaExt, ToDFSchema,
@@ -86,6 +87,9 @@ pub use error::{
     _not_impl_datafusion_err, _plan_datafusion_err, _resources_datafusion_err,
     _substrait_datafusion_err,
 };
+
+// The HashMap implementation that should be the uniform default
+pub type HashMap<K, V, S = DefaultHashBuilder> = hashbrown::HashMap<K, V, S>;
 
 /// Downcast an Arrow Array to a concrete type, return an `DataFusionError::Internal` if the cast is
 /// not possible. In normal usage of DataFusion the downcast should always succeed.

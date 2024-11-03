@@ -48,7 +48,7 @@ use datafusion::functions_window::row_number::row_number_udwf;
 use datafusion_functions_window::lead_lag::{lag_udwf, lead_udwf};
 use datafusion_functions_window::rank::{dense_rank_udwf, rank_udwf};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
-use hashbrown::HashMap;
+use datafusion_common::HashMap;
 use rand::distributions::Alphanumeric;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
