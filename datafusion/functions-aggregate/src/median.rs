@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::collections::HashSet;
 use std::fmt::{Debug, Formatter};
 use std::mem::{size_of, size_of_val};
 use std::sync::{Arc, OnceLock};
@@ -33,7 +32,7 @@ use arrow::array::Array;
 use arrow::array::ArrowNativeTypeOp;
 use arrow::datatypes::ArrowNativeType;
 
-use datafusion_common::{DataFusionError, Result, ScalarValue};
+use datafusion_common::{DataFusionError, HashSet, Result, ScalarValue};
 use datafusion_expr::aggregate_doc_sections::DOC_SECTION_GENERAL;
 use datafusion_expr::function::StateFieldsArgs;
 use datafusion_expr::{
