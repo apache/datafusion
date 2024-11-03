@@ -1471,20 +1471,18 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
 
             // Rules for Like
             Expr::Like(ref like_expr) => {
-                if let Expr::Literal(ScalarValue::Utf8(Some(pattern_str))) = like_expr.pattern.as_ref() {
+                if let Expr::Literal(ScalarValue::Utf8(Some(pattern_str))) =
+                    like_expr.pattern.as_ref()
+                {
                     if !is_null(&like_expr.expr) && pattern_str == "%" {
                         Transformed::yes(lit(!like_expr.negated))
                     } else if !pattern_str.contains(['%', '_'].as_ref()) {
                         // If the pattern does not contain any wildcards, we can simplify the like expression to an equality expression
-                        Transformed::yes(
-                            Expr::BinaryExpr(
-                                BinaryExpr {
-                                    left: like_expr.expr.clone(),
-                                    op: if like_expr.negated { NotEq } else { Eq },
-                                    right: like_expr.pattern.clone(),
-                                }
-                            )
-                        )
+                        Transformed::yes(Expr::BinaryExpr(BinaryExpr {
+                            left: like_expr.expr.clone(),
+                            op: if like_expr.negated { NotEq } else { Eq },
+                            right: like_expr.pattern.clone(),
+                        }))
                     } else {
                         Transformed::no(expr)
                     }
