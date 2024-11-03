@@ -47,9 +47,10 @@ use datafusion_common::{not_impl_err, DataFusionError, Result};
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::memory_pool::MemoryConsumer;
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::{EquivalenceProperties, PhysicalExpr, PhysicalSortExpr};
+use datafusion_physical_expr::{EquivalenceProperties, PhysicalExpr};
 
 use crate::execution_plan::CardinalityEffect;
+use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 use futures::stream::Stream;
 use futures::{FutureExt, StreamExt, TryStreamExt};
 use hashbrown::HashMap;
@@ -398,7 +399,7 @@ impl BatchPartitioner {
 /// Paper](https://w6113.github.io/files/papers/volcanoparallelism-89.pdf)
 /// which uses the term "Exchange" for the concept of repartitioning
 /// data across threads.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct RepartitionExec {
     /// Input execution plan
     input: Arc<dyn ExecutionPlan>,
@@ -502,11 +503,7 @@ impl DisplayAs for RepartitionExec {
                 }
 
                 if let Some(sort_exprs) = self.sort_exprs() {
-                    write!(
-                        f,
-                        ", sort_exprs={}",
-                        PhysicalSortExpr::format_list(sort_exprs)
-                    )?;
+                    write!(f, ", sort_exprs={}", LexOrdering::from_ref(sort_exprs))?;
                 }
                 Ok(())
             }
@@ -1561,10 +1558,10 @@ mod tests {
 mod test {
     use arrow_schema::{DataType, Field, Schema, SortOptions};
 
-    use datafusion_physical_expr::expressions::col;
-
     use crate::memory::MemoryExec;
     use crate::union::UnionExec;
+    use datafusion_physical_expr::expressions::col;
+    use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 
     use super::*;
 
@@ -1659,12 +1656,12 @@ mod test {
         Arc::new(Schema::new(vec![Field::new("c0", DataType::UInt32, false)]))
     }
 
-    fn sort_exprs(schema: &Schema) -> Vec<PhysicalSortExpr> {
+    fn sort_exprs(schema: &Schema) -> LexOrdering {
         let options = SortOptions::default();
-        vec![PhysicalSortExpr {
+        LexOrdering::new(vec![PhysicalSortExpr {
             expr: col("c0", schema).unwrap(),
             options,
-        }]
+        }])
     }
 
     fn memory_exec(schema: &SchemaRef) -> Arc<dyn ExecutionPlan> {
@@ -1673,7 +1670,7 @@ mod test {
 
     fn sorted_memory_exec(
         schema: &SchemaRef,
-        sort_exprs: Vec<PhysicalSortExpr>,
+        sort_exprs: LexOrdering,
     ) -> Arc<dyn ExecutionPlan> {
         Arc::new(
             MemoryExec::try_new(&[vec![]], Arc::clone(schema), None)

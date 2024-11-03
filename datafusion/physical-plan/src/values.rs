@@ -36,7 +36,7 @@ use datafusion_execution::TaskContext;
 use datafusion_physical_expr::EquivalenceProperties;
 
 /// Execution plan for values list based relation (produces constant rows)
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ValuesExec {
     /// The schema
     schema: SchemaRef,

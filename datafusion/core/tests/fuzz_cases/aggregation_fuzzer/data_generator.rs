@@ -25,6 +25,7 @@ use arrow_array::{ArrayRef, RecordBatch};
 use arrow_schema::{DataType, Field, Schema};
 use datafusion_common::{arrow_datafusion_err, DataFusionError, Result};
 use datafusion_physical_expr::{expressions::col, PhysicalSortExpr};
+use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::sorts::sort::sort_batch;
 use rand::{
     rngs::{StdRng, ThreadRng},
@@ -140,8 +141,8 @@ impl DatasetGenerator {
                     let col_expr = col(key, schema)?;
                     Ok(PhysicalSortExpr::new_default(col_expr))
                 })
-                .collect::<Result<Vec<_>>>()?;
-            let sorted_batch = sort_batch(&base_batch, &sort_exprs, None)?;
+                .collect::<Result<LexOrdering>>()?;
+            let sorted_batch = sort_batch(&base_batch, sort_exprs.as_ref(), None)?;
 
             let batches = stagger_batch(sorted_batch);
             let dataset = Dataset::new(batches, sort_keys);
