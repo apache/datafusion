@@ -86,11 +86,13 @@ query TT
 EXPLAIN EXECUTE my_plan;
 ----
 logical_plan Execute: my_plan params=[]
+physical_plan_error This feature is not implemented: Unsupported logical plan: Execute
 
 query TT
 EXPLAIN EXECUTE my_plan(10*2 + 1, 'Foo');
 ----
 logical_plan Execute: my_plan params=[Int64(21), Utf8("Foo")]
+physical_plan_error This feature is not implemented: Unsupported logical plan: Execute
 
 query error DataFusion error: Schema error: No field named a\.
 EXPLAIN EXECUTE my_plan(a);
