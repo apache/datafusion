@@ -2443,6 +2443,7 @@ mod tests {
         }
     }
 
+    /// Test passing `metadata_size_hint` to either a single file or the whole exec
     #[tokio::test]
     async fn test_metadata_size_hint() {
         let store =
