@@ -108,7 +108,7 @@ async fn test_prepare_statement() -> Result<()> {
     // sql to statement then to prepare logical plan with parameters
     // c1 defined as UINT32, c2 defined as UInt64 but the params are Int32 and Float64
     let dataframe =
-        ctx.sql("PREPARE my_plan(INT, DOUBLE) AS SELECT c1, c2 FROM test WHERE c1 > $2 AND c1 < $1").await?;
+        ctx.state().create_logical_plan("PREPARE my_plan(INT, DOUBLE) AS SELECT c1, c2 FROM test WHERE c1 > $2 AND c1 < $1").await?;
 
     // prepare logical plan to logical plan without parameters
     let param_values = vec![ScalarValue::Int32(Some(3)), ScalarValue::Float64(Some(0.0))];

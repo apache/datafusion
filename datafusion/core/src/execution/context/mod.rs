@@ -57,7 +57,7 @@ use datafusion_common::{
     config::{ConfigExtension, TableOptions},
     exec_datafusion_err, exec_err, not_impl_err, plan_datafusion_err, plan_err,
     tree_node::{TreeNodeRecursion, TreeNodeVisitor},
-    DFSchema, ScalarValue, SchemaReference, TableReference,
+    DFSchema, ParamValues, ScalarValue, SchemaReference, TableReference,
 };
 use datafusion_execution::registry::SerializerRegistry;
 use datafusion_expr::{
@@ -688,26 +688,15 @@ impl SessionContext {
             LogicalPlan::Statement(Statement::SetVariable(stmt)) => {
                 self.set_variable(stmt).await
             }
-            LogicalPlan::Prepare(Prepare { name, input, .. }) => {
-                self.state.write().store_prepared(name, input)?;
+            LogicalPlan::Prepare(Prepare {
+                name,
+                input,
+                data_types,
+            }) => {
+                self.state.write().store_prepared(name, data_types, input)?;
                 self.return_empty_dataframe()
             }
-            LogicalPlan::Execute(Execute {
-                name, parameters, ..
-            }) => {
-                let plan = self.state.read().get_prepared(&name).ok_or_else(|| {
-                    exec_datafusion_err!("Prepared statement '{}' not exists", name)
-                })?;
-                let values: Vec<ScalarValue> = parameters
-                    .into_iter()
-                    .map(|e| match e {
-                        Expr::Literal(scalar) => Ok(scalar),
-                        _ => exec_err!("Invalid parameter type"),
-                    })
-                    .collect::<Result<_>>()?;
-                let plan = plan.as_ref().clone().with_param_values(values)?;
-                Ok(DataFrame::new(self.state(), plan))
-            }
+            LogicalPlan::Execute(execute) => self.execute_prepared(execute),
             plan => Ok(DataFrame::new(self.state(), plan)),
         }
     }
@@ -1106,6 +1095,49 @@ impl SessionContext {
         } else {
             self.return_empty_dataframe()
         }
+    }
+
+    fn execute_prepared(&self, execute: Execute) -> Result<DataFrame> {
+        let Execute {
+            name, parameters, ..
+        } = execute;
+        let prepared = self.state.read().get_prepared(&name).ok_or_else(|| {
+            exec_datafusion_err!("Prepared statement '{}' not exists", name)
+        })?;
+
+        // Only allow literals as parameters for now.
+        let mut params: Vec<ScalarValue> = parameters
+            .into_iter()
+            .map(|e| match e {
+                Expr::Literal(scalar) => Ok(scalar),
+                _ => not_impl_err!("Unsupported data type for parameter: {}", e),
+            })
+            .collect::<Result<_>>()?;
+
+        // If the prepared statement provides data types, cast the params to those types.
+        if !prepared.data_types.is_empty() {
+            if params.len() != prepared.data_types.len() {
+                return exec_err!(
+                    "Prepared statement '{}' expects {} parameters, but {} provided",
+                    name,
+                    prepared.data_types.len(),
+                    params.len()
+                );
+            }
+            params = params
+                .into_iter()
+                .zip(prepared.data_types.iter())
+                .map(|(e, dt)| e.cast_to(dt))
+                .collect::<Result<_>>()?;
+        }
+
+        let params = ParamValues::List(params);
+        let plan = prepared
+            .plan
+            .as_ref()
+            .clone()
+            .replace_params_with_values(&params)?;
+        Ok(DataFrame::new(self.state(), plan))
     }
 
     /// Registers a variable provider within this context.

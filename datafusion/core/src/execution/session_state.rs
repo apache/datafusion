@@ -173,7 +173,7 @@ pub struct SessionState {
     function_factory: Option<Arc<dyn FunctionFactory>>,
     /// Cache logical plans of prepared statements for later execution.
     /// Key is the prepared statement name.
-    prepared_plans: HashMap<String, Arc<LogicalPlan>>,
+    prepared_plans: HashMap<String, Arc<PreparedPlan>>,
 }
 
 impl Debug for SessionState {
@@ -911,15 +911,16 @@ impl SessionState {
         Ok(udtf.map(|x| x.function().clone()))
     }
 
-    /// Store the logical plan of a prepared statement.
+    /// Store the logical plan and parameter types of a prepared statement.
     pub(crate) fn store_prepared(
         &mut self,
         name: String,
+        data_types: Vec<DataType>,
         plan: Arc<LogicalPlan>,
     ) -> datafusion_common::Result<()> {
         match self.prepared_plans.entry(name) {
             Entry::Vacant(e) => {
-                e.insert(plan);
+                e.insert(Arc::new(PreparedPlan { data_types, plan }));
                 Ok(())
             }
             Entry::Occupied(e) => {
@@ -928,8 +929,8 @@ impl SessionState {
         }
     }
 
-    /// Get the logical plan for the prepared statement named `name`.
-    pub(crate) fn get_prepared(&self, name: &str) -> Option<Arc<LogicalPlan>> {
+    /// Get the prepared plan with the given name.
+    pub(crate) fn get_prepared(&self, name: &str) -> Option<Arc<PreparedPlan>> {
         self.prepared_plans.get(name).map(Arc::clone)
     }
 }
@@ -1901,6 +1902,14 @@ impl<'a> SimplifyInfo for SessionSimplifyProvider<'a> {
     fn get_data_type(&self, expr: &Expr) -> datafusion_common::Result<DataType> {
         expr.get_type(self.df_schema)
     }
+}
+
+#[derive(Debug)]
+pub(crate) struct PreparedPlan {
+    /// Data types of the parameters
+    pub(crate) data_types: Vec<DataType>,
+    /// The prepared logical plan
+    pub(crate) plan: Arc<LogicalPlan>,
 }
 
 #[cfg(test)]
