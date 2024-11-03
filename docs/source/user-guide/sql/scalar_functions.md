@@ -2042,8 +2042,19 @@ from_unixtime(expression, timezone)
 
 #### Arguments
 
-- **expression**: Expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators.
+- **expression**: The expression to operate on. Can be a constant, column, or function, and any combination of operators.
 - **timezone**: Optional timezone to use when converting the integer to a timestamp. If not provided, the default timezone is UTC.
+
+#### Example
+
+```sql
+> select from_unixtime(1599572549, 'America/New_York');
++-----------------------------------------------------------+
+| from_unixtime(Int64(1599572549),Utf8("America/New_York")) |
++-----------------------------------------------------------+
+| 2020-09-08T09:42:29-04:00                                 |
++-----------------------------------------------------------+
+```
 
 ### `make_date`
 

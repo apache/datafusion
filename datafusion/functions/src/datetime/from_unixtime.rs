@@ -136,15 +136,19 @@ fn get_from_unixtime_doc() -> &'static Documentation {
             .with_doc_section(DOC_SECTION_DATETIME)
             .with_description("Converts an integer to RFC3339 timestamp format (`YYYY-MM-DDT00:00:00.000000000Z`). Integers and unsigned integers are interpreted as nanoseconds since the unix epoch (`1970-01-01T00:00:00Z`) return the corresponding timestamp.")
             .with_syntax_example("from_unixtime(expression, timezone)")
-            .with_argument(
-                "expression",
-                "Expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators.",
-            )
+            .with_standard_argument("expression", None)
             .with_argument(
                 "timezone",
                 "Optional timezone to use when converting the integer to a timestamp. If not provided, the default timezone is UTC.",
             )
-
+            .with_sql_example(r#"```sql
+> select from_unixtime(1599572549, 'America/New_York');
++-----------------------------------------------------------+
+| from_unixtime(Int64(1599572549),Utf8("America/New_York")) |
++-----------------------------------------------------------+
+| 2020-09-08T09:42:29-04:00                                 |
++-----------------------------------------------------------+
+```"#)
             .build()
             .unwrap()
     })
