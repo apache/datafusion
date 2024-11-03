@@ -123,7 +123,9 @@ impl PartitionedFile {
         .with_range(start, end)
     }
 
-    /// Add a metadata size hint to this file
+    /// Provide a hint to the size of the file metadata. If a hint is provided
+    /// the reader will try and fetch the last `size_hint` bytes of the parquet file optimistically.
+    /// Without an appropriate hint, two read may be required to fetch the metadata.
     pub fn with_metadata_size_hint(mut self, metadata_size_hint: usize) -> Self {
         self.metadata_size_hint = Some(metadata_size_hint);
         self
