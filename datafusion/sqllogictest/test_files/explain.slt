@@ -419,10 +419,17 @@ create table t1(a int);
 statement ok
 create table t2(b int);
 
-query T
+query TT
 explain select a from t1 where exists (select count(*) from t2);
 ----
-This feature is not implemented: Physical plan does not support logical expression Exists(Exists { subquery: <subquery>, negated: false })
+logical_plan
+01)Filter: EXISTS (<subquery>)
+02)--Subquery:
+03)----Projection: count(*)
+04)------Aggregate: groupBy=[[]], aggr=[[count(Int64(1)) AS count(*)]]
+05)--------TableScan: t2
+06)--TableScan: t1 projection=[a]
+physical_plan_error This feature is not implemented: Physical plan does not support logical expression Exists(Exists { subquery: <subquery>, negated: false })
 
 statement ok
 drop table t1;

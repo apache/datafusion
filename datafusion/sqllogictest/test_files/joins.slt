@@ -4049,10 +4049,20 @@ physical_plan
 
 
 # Test CROSS JOIN LATERAL syntax (planning)
-query T
+query TT
 explain select t1_id, t1_name, i from join_t1 t1 cross join lateral (select * from unnest(generate_series(1, t1_int))) as series(i);
 ----
-This feature is not implemented: Physical plan does not support logical expression OuterReferenceColumn(UInt32, Column { relation: Some(Bare { table: "t1" }), name: "t1_int" })
+logical_plan
+01)Cross Join: 
+02)--SubqueryAlias: t1
+03)----TableScan: join_t1 projection=[t1_id, t1_name]
+04)--SubqueryAlias: series
+05)----Subquery:
+06)------Projection: unnest_placeholder(generate_series(Int64(1),outer_ref(t1.t1_int)),depth=1) AS i
+07)--------Unnest: lists[unnest_placeholder(generate_series(Int64(1),outer_ref(t1.t1_int)))|depth=1] structs[]
+08)----------Projection: generate_series(Int64(1), CAST(outer_ref(t1.t1_int) AS Int64)) AS unnest_placeholder(generate_series(Int64(1),outer_ref(t1.t1_int)))
+09)------------EmptyRelation
+physical_plan_error This feature is not implemented: Physical plan does not support logical expression OuterReferenceColumn(UInt32, Column { relation: Some(Bare { table: "t1" }), name: "t1_int" })
 
 
 # Test CROSS JOIN LATERAL syntax (execution)
@@ -4062,10 +4072,20 @@ select t1_id, t1_name, i from join_t1 t1 cross join lateral (select * from unnes
 
 
 # Test INNER JOIN LATERAL syntax (planning)
-query T
+query TT
 explain select t1_id, t1_name, i from join_t1 t2 inner join lateral (select * from unnest(generate_series(1, t1_int))) as series(i) on(t1_id > i);
 ----
-This feature is not implemented: Physical plan does not support logical expression OuterReferenceColumn(UInt32, Column { relation: Some(Bare { table: "t2" }), name: "t1_int" })
+logical_plan
+01)Inner Join:  Filter: CAST(t2.t1_id AS Int64) > series.i
+02)--SubqueryAlias: t2
+03)----TableScan: join_t1 projection=[t1_id, t1_name]
+04)--SubqueryAlias: series
+05)----Subquery:
+06)------Projection: unnest_placeholder(generate_series(Int64(1),outer_ref(t2.t1_int)),depth=1) AS i
+07)--------Unnest: lists[unnest_placeholder(generate_series(Int64(1),outer_ref(t2.t1_int)))|depth=1] structs[]
+08)----------Projection: generate_series(Int64(1), CAST(outer_ref(t2.t1_int) AS Int64)) AS unnest_placeholder(generate_series(Int64(1),outer_ref(t2.t1_int)))
+09)------------EmptyRelation
+physical_plan_error This feature is not implemented: Physical plan does not support logical expression OuterReferenceColumn(UInt32, Column { relation: Some(Bare { table: "t2" }), name: "t1_int" })
 
 
 # Test INNER JOIN LATERAL syntax (execution)

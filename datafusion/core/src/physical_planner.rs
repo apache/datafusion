@@ -1798,18 +1798,14 @@ impl DefaultPhysicalPlanner {
                         }
                     }
                     Err(err) => {
-                        return Ok(Some(Arc::new(ExplainExec::new(
-                            SchemaRef::new(Schema::new(vec![arrow_schema::Field::new(
-                                "Err",
-                                arrow_schema::DataType::Utf8,
-                                false,
-                            )])),
-                            vec![StringifiedPlan::new(FinalLogicalPlan, err.to_string())],
-                            e.verbose,
-                        ))))
+                        // use FinalLogicalPlan so the error appears in the final output by default
+                        // Initial plans are only shown in verbose mode
+                        stringified_plans
+                            .push(StringifiedPlan::new(PhysicalPlanError, err.to_string()));
                     }
                 }
             }
+
             Ok(Some(Arc::new(ExplainExec::new(
                 SchemaRef::new(e.schema.as_ref().to_owned().into()),
                 stringified_plans,

@@ -38,6 +38,7 @@ use crate::protobuf::{
         FinalPhysicalPlan, FinalPhysicalPlanWithSchema, FinalPhysicalPlanWithStats,
         InitialLogicalPlan, InitialPhysicalPlan, InitialPhysicalPlanWithSchema,
         InitialPhysicalPlanWithStats, OptimizedLogicalPlan, OptimizedPhysicalPlan,
+        PhysicalPlanError,
     },
     AnalyzedLogicalPlanType, CubeNode, EmptyMessage, GroupingSetNode, LogicalExprList,
     OptimizedLogicalPlanType, OptimizedPhysicalPlanType, PlaceholderNode, RollupNode,
@@ -115,7 +116,9 @@ impl From<&StringifiedPlan> for protobuf::StringifiedPlan {
                 PlanType::FinalPhysicalPlanWithSchema => Some(protobuf::PlanType {
                     plan_type_enum: Some(FinalPhysicalPlanWithSchema(EmptyMessage {})),
                 }),
-            },
+                PlanType::PhysicalPlanError => Some(protobuf::PlanType {
+                    plan_type_enum: Some(PhysicalPlanError(EmptyMessage {})),
+                }),            },
             plan: stringified_plan.plan.to_string(),
         }
     }
