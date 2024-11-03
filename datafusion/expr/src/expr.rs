@@ -34,7 +34,7 @@ use crate::{
 };
 
 use arrow::datatypes::{DataType, FieldRef};
-use datafusion_common::cse::HashNode;
+use datafusion_common::cse::{HashNode, NormalizeNode};
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
 };
@@ -1647,6 +1647,60 @@ impl Expr {
             | Expr::WindowFunction(..)
             | Expr::Literal(..)
             | Expr::Placeholder(..) => false,
+        }
+    }
+}
+
+impl NormalizeNode for Expr {
+    fn normalize(&self) -> Expr {
+        match self {
+            Expr::BinaryExpr(BinaryExpr {
+                ref left,
+                ref op,
+                ref right,
+            }) => {
+                let normalized_left = left.normalize();
+                let normalized_right = right.normalize();
+                let new_binary = match op {
+                    Operator::Eq
+                    | Operator::NotEq
+                    | Operator::Plus
+                    | Operator::Multiply
+                    | Operator::BitwiseAnd
+                    | Operator::BitwiseOr
+                    | Operator::BitwiseXor => {
+                        let (l_expr, r_expr) = if format!("{normalized_left}")
+                            < format!("{normalized_right}")
+                        {
+                            (normalized_left, normalized_right)
+                        } else {
+                            (normalized_right, normalized_left)
+                        };
+                        BinaryExpr {
+                            left: Box::new(l_expr),
+                            op: *op,
+                            right: Box::new(r_expr),
+                        }
+                    }
+                    Operator::Gt => BinaryExpr {
+                        left: Box::new(normalized_right),
+                        op: Operator::Lt,
+                        right: Box::new(normalized_left),
+                    },
+                    Operator::GtEq => BinaryExpr {
+                        left: Box::new(normalized_right),
+                        op: Operator::LtEq,
+                        right: Box::new(normalized_left),
+                    },
+                    _ => BinaryExpr {
+                        left: Box::new(normalized_left),
+                        op: *op,
+                        right: Box::new(normalized_right),
+                    },
+                };
+                Expr::BinaryExpr(new_binary)
+            }
+            other => other.clone(),
         }
     }
 }

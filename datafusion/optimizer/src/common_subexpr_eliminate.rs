@@ -851,7 +851,7 @@ mod test {
             ])?
             .build()?;
 
-        let expected = "Projection: __common_expr_1 - test.c AS alias1 * __common_expr_1 AS test.a + test.b, __common_expr_1 AS test.a + test.b\
+        let expected = "Projection: __common_expr_1 AS test.a + test.b * __common_expr_1 - test.c AS alias1, __common_expr_1 AS test.a + test.b\
         \n  Projection: test.a + test.b AS __common_expr_1, test.a, test.b, test.c\
         \n    TableScan: test";
 
@@ -1043,8 +1043,9 @@ mod test {
             .project(vec![lit(1) + col("a"), col("a") + lit(1)])?
             .build()?;
 
-        let expected = "Projection: Int32(1) + test.a, test.a + Int32(1)\
-        \n  TableScan: test";
+        let expected = "Projection: __common_expr_1 AS Int32(1) + test.a, __common_expr_1 AS Int32(1) + test.a\
+        \n  Projection: Int32(1) + test.a AS __common_expr_1, test.a, test.b, test.c\
+        \n    TableScan: test";
 
         assert_optimized_plan_eq(expected, plan, None);
 
@@ -1180,7 +1181,7 @@ mod test {
             .build()?;
 
         let expected = "Projection: test.a, test.b, test.c\
-        \n  Filter: __common_expr_1 - Int32(10) > __common_expr_1\
+        \n  Filter: __common_expr_1 < __common_expr_1 - Int32(10)\
         \n    Projection: Int32(1) + test.a AS __common_expr_1, test.a, test.b, test.c\
         \n      TableScan: test";
 
@@ -1396,6 +1397,150 @@ mod test {
         \n    Projection: test.a + test.b AS __common_expr_2, test.a, test.b, test.c\
         \n      TableScan: test";
 
+        assert_optimized_plan_eq(expected, plan, None);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_normalize_add_expression() -> Result<()> {
+        // a + b <=> b + a
+        let table_scan = test_table_scan()?;
+        let expr = ((col("a") + col("b")) * (col("b") + col("a"))).eq(lit(30));
+        let plan = LogicalPlanBuilder::from(table_scan).filter(expr)?.build()?;
+
+        let expected = "Projection: test.a, test.b, test.c\
+        \n  Filter: __common_expr_1 * __common_expr_1 = Int32(30)\
+        \n    Projection: test.a + test.b AS __common_expr_1, test.a, test.b, test.c\
+        \n      TableScan: test";
+        assert_optimized_plan_eq(expected, plan, None);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_normalize_multi_expression() -> Result<()> {
+        // a * b <=> b * a
+        let table_scan = test_table_scan()?;
+        let expr = ((col("a") * col("b")) + (col("b") * col("a"))).eq(lit(30));
+        let plan = LogicalPlanBuilder::from(table_scan).filter(expr)?.build()?;
+
+        let expected = "Projection: test.a, test.b, test.c\
+        \n  Filter: Int32(30) = __common_expr_1 + __common_expr_1\
+        \n    Projection: test.a * test.b AS __common_expr_1, test.a, test.b, test.c\
+        \n      TableScan: test";
+        assert_optimized_plan_eq(expected, plan, None);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_normalize_bitset_and_expression() -> Result<()> {
+        // a & b <=> b & a
+        let table_scan = test_table_scan()?;
+        let expr = ((col("a") & col("b")) + (col("b") & col("a"))).eq(lit(30));
+        let plan = LogicalPlanBuilder::from(table_scan).filter(expr)?.build()?;
+
+        let expected = "Projection: test.a, test.b, test.c\
+        \n  Filter: __common_expr_1 + __common_expr_1 = Int32(30)\
+        \n    Projection: test.a & test.b AS __common_expr_1, test.a, test.b, test.c\
+        \n      TableScan: test";
+        assert_optimized_plan_eq(expected, plan, None);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_normalize_bitset_or_expression() -> Result<()> {
+        // a | b <=> b | a
+        let table_scan = test_table_scan()?;
+        let expr = ((col("a") | col("b")) + (col("b") | col("a"))).eq(lit(30));
+        let plan = LogicalPlanBuilder::from(table_scan).filter(expr)?.build()?;
+
+        let expected = "Projection: test.a, test.b, test.c\
+        \n  Filter: __common_expr_1 + __common_expr_1 = Int32(30)\
+        \n    Projection: test.a | test.b AS __common_expr_1, test.a, test.b, test.c\
+        \n      TableScan: test";
+        assert_optimized_plan_eq(expected, plan, None);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_normalize_bitset_xor_expression() -> Result<()> {
+        // a # b <=> b # a
+        let table_scan = test_table_scan()?;
+        let expr = ((col("a") ^ col("b")) + (col("b") ^ col("a"))).eq(lit(30));
+        let plan = LogicalPlanBuilder::from(table_scan).filter(expr)?.build()?;
+
+        let expected = "Projection: test.a, test.b, test.c\
+        \n  Filter: __common_expr_1 + __common_expr_1 = Int32(30)\
+        \n    Projection: test.a BIT_XOR test.b AS __common_expr_1, test.a, test.b, test.c\
+        \n      TableScan: test";
+        assert_optimized_plan_eq(expected, plan, None);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_normalize_gt_expression() -> Result<()> {
+        // a > b <=> b < a
+        let table_scan = test_table_scan()?;
+        let expr = (col("a").gt(col("b"))).and(col("b").lt(col("a")));
+        let plan = LogicalPlanBuilder::from(table_scan).filter(expr)?.build()?;
+
+        let expected = "Projection: test.a, test.b, test.c\
+        \n  Filter: __common_expr_1 AND __common_expr_1\
+        \n    Projection: test.b < test.a AS __common_expr_1, test.a, test.b, test.c\
+        \n      TableScan: test";
+        assert_optimized_plan_eq(expected, plan, None);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_normalize_gte_expression() -> Result<()> {
+        // a >= b <=> b <= a
+        let table_scan = test_table_scan()?;
+        let expr = (col("a").gt_eq(col("b"))).and(col("b").lt_eq(col("a")));
+        let plan = LogicalPlanBuilder::from(table_scan).filter(expr)?.build()?;
+
+        let expected = "Projection: test.a, test.b, test.c\
+        \n  Filter: __common_expr_1 AND __common_expr_1\
+        \n    Projection: test.b <= test.a AS __common_expr_1, test.a, test.b, test.c\
+        \n      TableScan: test";
+        assert_optimized_plan_eq(expected, plan, None);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_normalize_eq_expression() -> Result<()> {
+        // a = b <=> b = a
+        let table_scan = test_table_scan()?;
+        let expr = (col("a").eq(col("b"))).and(col("b").eq(col("a")));
+        let plan = LogicalPlanBuilder::from(table_scan).filter(expr)?.build()?;
+
+        let expected = "Projection: test.a, test.b, test.c\
+        \n  Filter: __common_expr_1 AND __common_expr_1\
+        \n    Projection: test.a = test.b AS __common_expr_1, test.a, test.b, test.c\
+        \n      TableScan: test";
+        assert_optimized_plan_eq(expected, plan, None);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_normalize_ne_expression() -> Result<()> {
+        // a != b <=> b != a
+        let table_scan = test_table_scan()?;
+        let expr = (col("a").not_eq(col("b"))).and(col("b").not_eq(col("a")));
+        let plan = LogicalPlanBuilder::from(table_scan).filter(expr)?.build()?;
+
+        let expected = "Projection: test.a, test.b, test.c\
+        \n  Filter: __common_expr_1 AND __common_expr_1\
+        \n    Projection: test.a != test.b AS __common_expr_1, test.a, test.b, test.c\
+        \n      TableScan: test";
         assert_optimized_plan_eq(expected, plan, None);
 
         Ok(())

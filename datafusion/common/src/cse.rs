@@ -50,6 +50,16 @@ impl<T: HashNode + ?Sized> HashNode for Arc<T> {
     }
 }
 
+/// A trait that defines how to normalize a node.
+///
+/// This trait is used to normalize nodes before comparing them for CSE. Normalization
+/// can be used to ensure that two nodes that are semantically equivalent are considered
+/// equal for CSE.
+/// For example：`a + b` and `b + a` are semantically equivalent.
+pub trait NormalizeNode: Eq {
+    fn normalize(&self) -> Self;
+}
+
 /// Identifier that represents a [`TreeNode`] tree.
 ///
 /// This identifier is designed to be efficient and  "hash", "accumulate", "equal" and
@@ -441,7 +451,11 @@ pub struct CSE<N, C: CSEController<Node = N>> {
     controller: C,
 }
 
-impl<N: TreeNode + HashNode + Clone + Eq, C: CSEController<Node = N>> CSE<N, C> {
+impl<N, C> CSE<N, C>
+where
+    N: TreeNode + HashNode + Clone + NormalizeNode,
+    C: CSEController<Node = N>,
+{
     pub fn new(controller: C) -> Self {
         Self {
             random_state: RandomState::new(),
@@ -557,7 +571,14 @@ impl<N: TreeNode + HashNode + Clone + Eq, C: CSEController<Node = N>> CSE<N, C> 
     ) -> Result<FoundCommonNodes<N>> {
         let mut found_common = false;
         let mut node_stats = NodeStats::new();
-        let id_arrays_list = nodes_list
+
+        // replace references to original nodes with references to normalized nodes
+        let normalize_nodes_list = nodes_list
+            .iter()
+            .map(|nodes| nodes.iter().map(|n| n.normalize()).collect::<Vec<N>>())
+            .collect::<Vec<Vec<N>>>();
+
+        let id_arrays_list = normalize_nodes_list
             .iter()
             .map(|nodes| {
                 self.to_arrays(nodes, &mut node_stats)
@@ -573,7 +594,7 @@ impl<N: TreeNode + HashNode + Clone + Eq, C: CSEController<Node = N>> CSE<N, C> 
             let new_nodes_list = self.rewrite_nodes_list(
                 // Must clone the list of nodes as Identifiers use references to original
                 // nodes so we have to keep them intact.
-                nodes_list.clone(),
+                normalize_nodes_list.clone(),
                 &id_arrays_list,
                 &node_stats,
                 &mut common_nodes,
@@ -596,7 +617,9 @@ impl<N: TreeNode + HashNode + Clone + Eq, C: CSEController<Node = N>> CSE<N, C> 
 #[cfg(test)]
 mod test {
     use crate::alias::AliasGenerator;
-    use crate::cse::{CSEController, HashNode, IdArray, Identifier, NodeStats, CSE};
+    use crate::cse::{
+        CSEController, HashNode, IdArray, Identifier, NodeStats, NormalizeNode, CSE,
+    };
     use crate::tree_node::tests::TestTreeNode;
     use crate::Result;
     use std::collections::HashSet;
@@ -659,6 +682,12 @@ mod test {
     impl HashNode for TestTreeNode<String> {
         fn hash_node<H: Hasher>(&self, state: &mut H) {
             self.data.hash(state);
+        }
+    }
+
+    impl NormalizeNode for TestTreeNode<String> {
+        fn normalize(&self) -> Self {
+            self.clone()
         }
     }
 
