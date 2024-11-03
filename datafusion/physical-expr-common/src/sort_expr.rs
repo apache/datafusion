@@ -346,14 +346,16 @@ pub struct LexOrdering {
     pub inner: Vec<PhysicalSortExpr>,
 }
 
+impl AsRef<LexOrdering> for LexOrdering {
+    fn as_ref(&self) -> &LexOrdering {
+        self
+    }
+}
+
 impl LexOrdering {
     // Creates a new [`LexOrdering`] from a vector
     pub fn new(inner: Vec<PhysicalSortExpr>) -> Self {
         Self { inner }
-    }
-
-    pub fn as_ref(&self) -> &LexOrdering {
-        self
     }
 
     pub fn capacity(&self) -> usize {
