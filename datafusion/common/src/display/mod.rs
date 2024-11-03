@@ -121,7 +121,9 @@ impl StringifiedPlan {
     /// `verbose_mode = true` will display all available plans
     pub fn should_display(&self, verbose_mode: bool) -> bool {
         match self.plan_type {
-            PlanType::FinalLogicalPlan | PlanType::FinalPhysicalPlan | PlanType::PhysicalPlanError=> true,
+            PlanType::FinalLogicalPlan
+            | PlanType::FinalPhysicalPlan
+            | PlanType::PhysicalPlanError => true,
             _ => verbose_mode,
         }
     }

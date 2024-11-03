@@ -1798,10 +1798,10 @@ impl DefaultPhysicalPlanner {
                         }
                     }
                     Err(err) => {
-                        // use FinalLogicalPlan so the error appears in the final output by default
-                        // Initial plans are only shown in verbose mode
-                        stringified_plans
-                            .push(StringifiedPlan::new(PhysicalPlanError, err.to_string()));
+                        stringified_plans.push(StringifiedPlan::new(
+                            PhysicalPlanError,
+                            err.to_string(),
+                        ));
                     }
                 }
             }

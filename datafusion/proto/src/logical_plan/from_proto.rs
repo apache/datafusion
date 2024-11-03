@@ -44,7 +44,7 @@ use crate::protobuf::{
         AnalyzedLogicalPlan, FinalAnalyzedLogicalPlan, FinalLogicalPlan,
         FinalPhysicalPlan, FinalPhysicalPlanWithStats, InitialLogicalPlan,
         InitialPhysicalPlan, InitialPhysicalPlanWithStats, OptimizedLogicalPlan,
-        OptimizedPhysicalPlan, PhysicalPlanError
+        OptimizedPhysicalPlan, PhysicalPlanError,
     },
     AnalyzedLogicalPlanType, CubeNode, GroupingSetNode, OptimizedLogicalPlanType,
     OptimizedPhysicalPlanType, PlaceholderNode, RollupNode,

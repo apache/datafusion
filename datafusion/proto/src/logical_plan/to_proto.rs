@@ -118,7 +118,8 @@ impl From<&StringifiedPlan> for protobuf::StringifiedPlan {
                 }),
                 PlanType::PhysicalPlanError => Some(protobuf::PlanType {
                     plan_type_enum: Some(PhysicalPlanError(EmptyMessage {})),
-                }),            },
+                }),
+            },
             plan: stringified_plan.plan.to_string(),
         }
     }
