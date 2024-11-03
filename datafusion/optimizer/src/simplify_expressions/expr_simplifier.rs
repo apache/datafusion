@@ -34,7 +34,7 @@ use datafusion_common::{
 use datafusion_common::{internal_err, DFSchema, DataFusionError, Result, ScalarValue};
 use datafusion_expr::simplify::ExprSimplifyResult;
 use datafusion_expr::{
-    and, lit, or, BinaryExpr, Case, ColumnarValue, Expr, Like, Operator, Volatility,
+    and, lit, or, BinaryExpr, Case, ColumnarValue, Expr, Operator, Volatility,
     WindowFunctionDefinition,
 };
 use datafusion_expr::{expr::ScalarFunction, interval_arithmetic::NullableInterval};
@@ -1470,19 +1470,27 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
             }) => Transformed::yes(simplify_regex_expr(left, op, right)?),
 
             // Rules for Like
-            Expr::Like(Like {
-                expr,
-                pattern,
-                negated,
-                escape_char: _,
-                case_insensitive: _,
-            }) if !is_null(&expr)
-                && matches!(
-                    pattern.as_ref(),
-                    Expr::Literal(ScalarValue::Utf8(Some(pattern_str))) if pattern_str == "%"
-                ) =>
-            {
-                Transformed::yes(lit(!negated))
+            Expr::Like(ref like_expr) => {
+                if let Expr::Literal(ScalarValue::Utf8(Some(pattern_str))) = like_expr.pattern.as_ref() {
+                    if !is_null(&like_expr.expr) && pattern_str == "%" {
+                        Transformed::yes(lit(!like_expr.negated))
+                    } else if !pattern_str.contains(['%', '_'].as_ref()) {
+                        // If the pattern does not contain any wildcards, we can simplify the like expression to an equality expression
+                        Transformed::yes(
+                            Expr::BinaryExpr(
+                                BinaryExpr {
+                                    left: like_expr.expr.clone(),
+                                    op: if like_expr.negated { NotEq } else { Eq },
+                                    right: like_expr.pattern.clone(),
+                                }
+                            )
+                        )
+                    } else {
+                        Transformed::no(expr)
+                    }
+                } else {
+                    Transformed::no(expr)
+                }
             }
 
             // a is not null/unknown --> true (if a is not nullable)
@@ -3632,6 +3640,16 @@ mod tests {
 
         let expr = not_ilike(null, "%");
         assert_eq!(simplify(expr), lit_bool_null());
+
+        // test cases that get converted to equality
+        let expr = like(col("c1"), "a");
+        assert_eq!(simplify(expr), col("c1").eq(lit("a")));
+        let expr = not_like(col("c1"), "a");
+        assert_eq!(simplify(expr), col("c1").not_eq(lit("a")));
+        let expr = like(col("c1"), "a_");
+        assert_eq!(simplify(expr), col("c1").like(lit("a_")));
+        let expr = not_like(col("c1"), "a_");
+        assert_eq!(simplify(expr), col("c1").not_like(lit("a_")));
     }
 
     #[test]
