@@ -465,7 +465,7 @@ pub fn generate_table_for_orderings(
 
     // prune out rows that is invalid according to remaining orderings.
     for ordering in orderings.iter().skip(1) {
-        let sort_columns = get_sort_columns(&batch, ordering.as_ref())?;
+        let sort_columns = get_sort_columns(&batch, ordering)?;
 
         // Collect sort options and values into separate vectors.
         let (sort_options, sort_col_values): (Vec<_>, Vec<_>) = sort_columns
