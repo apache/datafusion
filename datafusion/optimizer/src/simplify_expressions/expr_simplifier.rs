@@ -1514,6 +1514,19 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                                     ..like
                                 }))
                             }
+                            Some(pattern_str)
+                                if like.escape_char.is_none()
+                                    && !pattern_str.contains(['%', '_'].as_ref()) =>
+                            {
+                                // If the pattern does not contain any wildcards, we can simplify the like expression to an equality expression
+                                // TODO: handle escape characters
+                                Transformed::yes(Expr::BinaryExpr(BinaryExpr {
+                                    left: like.expr.clone(),
+                                    op: if like.negated { NotEq } else { Eq },
+                                    right: like.pattern.clone(),
+                                }))
+                            }
+
                             Some(_pattern_str) => Transformed::no(Expr::Like(like)),
                         }
                     }
@@ -3791,6 +3804,16 @@ mod tests {
 
         let expr = not_ilike(null, lit("a%"));
         assert_eq!(simplify(expr), lit_bool_null());
+
+        // expr [NOT] [I]LIKE with pattern without wildcards
+        let expr = like(col("c1"), lit("a"));
+        assert_eq!(simplify(expr), col("c1").eq(lit("a")));
+        let expr = not_like(col("c1"), lit("a"));
+        assert_eq!(simplify(expr), col("c1").not_eq(lit("a")));
+        let expr = like(col("c1"), lit("a_"));
+        assert_eq!(simplify(expr), col("c1").like(lit("a_")));
+        let expr = not_like(col("c1"), lit("a_"));
+        assert_eq!(simplify(expr), col("c1").not_like(lit("a_")));
     }
 
     #[test]
@@ -4166,6 +4189,7 @@ mod tests {
             Ok(DataType::Int16)
         }
     }
+
     #[test]
     fn test_optimize_volatile_conditions() {
         let fun = Arc::new(ScalarUDF::new_from_impl(VolatileUdf::new()));

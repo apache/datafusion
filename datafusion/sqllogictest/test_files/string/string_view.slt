@@ -396,8 +396,9 @@ EXPLAIN SELECT
 FROM test;
 ----
 logical_plan
-01)Projection: test.column1_utf8view LIKE Utf8View("foo") AS like, test.column1_utf8view ILIKE Utf8View("foo") AS ilike
-02)--TableScan: test projection=[column1_utf8view]
+01)Projection: __common_expr_1 AS like, __common_expr_1 AS ilike
+02)--Projection: test.column1_utf8view = Utf8View("foo") AS __common_expr_1
+03)----TableScan: test projection=[column1_utf8view]
 
 
 query TT
