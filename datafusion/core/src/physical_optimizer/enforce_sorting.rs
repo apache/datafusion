@@ -392,11 +392,10 @@ fn analyze_immediate_sort_removal(
         let sort_input = sort_exec.input();
         // If this sort is unnecessary, we should remove it:
         if sort_input.equivalence_properties().ordering_satisfy(
-            &sort_exec
+            sort_exec
                 .properties()
                 .output_ordering()
-                .cloned()
-                .unwrap_or_default(),
+                .unwrap_or(LexOrdering::empty()),
         ) {
             node.plan = if !sort_exec.preserve_partitioning()
                 && sort_input.output_partitioning().partition_count() > 1

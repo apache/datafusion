@@ -58,7 +58,7 @@ impl SlidingAggregateWindowExpr {
         Self {
             aggregate,
             partition_by: partition_by.to_vec(),
-            order_by: LexOrdering::from_ref(order_by),
+            order_by: order_by.clone(),
             window_frame,
         }
     }

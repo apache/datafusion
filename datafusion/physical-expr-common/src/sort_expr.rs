@@ -22,7 +22,7 @@ use std::fmt;
 use std::fmt::{Display, Formatter};
 use std::hash::{Hash, Hasher};
 use std::ops::{Deref, Index, Range, RangeFrom, RangeTo};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::vec::IntoIter;
 
 use arrow::compute::kernels::sort::{SortColumn, SortOptions};
@@ -352,18 +352,21 @@ impl AsRef<LexOrdering> for LexOrdering {
     }
 }
 
+static EMPTY_ORDER: OnceLock<LexOrdering> = OnceLock::new();
+
 impl LexOrdering {
     // Creates a new [`LexOrdering`] from a vector
     pub fn new(inner: Vec<PhysicalSortExpr>) -> Self {
         Self { inner }
     }
 
-    pub fn capacity(&self) -> usize {
-        self.inner.capacity()
+    /// Return an empty LexOrdering (no expressions)
+    pub fn empty() -> &'static LexOrdering {
+        EMPTY_ORDER.get_or_init(LexOrdering::default)
     }
 
-    pub fn from_ref(lex_ordering_ref: &LexOrdering) -> Self {
-        Self::new(lex_ordering_ref.to_vec())
+    pub fn capacity(&self) -> usize {
+        self.inner.capacity()
     }
 
     pub fn clear(&mut self) {

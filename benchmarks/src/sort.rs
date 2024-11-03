@@ -70,88 +70,76 @@ impl RunOpt {
         let sort_cases = vec![
             (
                 "sort utf8",
-                LexOrdering {
-                    inner: vec![PhysicalSortExpr {
-                        expr: col("request_method", &schema)?,
-                        options: Default::default(),
-                    }],
-                },
+                LexOrdering::new(vec![PhysicalSortExpr {
+                    expr: col("request_method", &schema)?,
+                    options: Default::default(),
+                }]),
             ),
             (
                 "sort int",
-                LexOrdering {
-                    inner: vec![PhysicalSortExpr {
-                        expr: col("response_bytes", &schema)?,
-                        options: Default::default(),
-                    }],
-                },
+                LexOrdering::new(vec![PhysicalSortExpr {
+                    expr: col("response_bytes", &schema)?,
+                    options: Default::default(),
+                }]),
             ),
             (
                 "sort decimal",
-                LexOrdering {
-                    inner: vec![PhysicalSortExpr {
-                        expr: col("decimal_price", &schema)?,
-                        options: Default::default(),
-                    }],
-                },
+                LexOrdering::new(vec![PhysicalSortExpr {
+                    expr: col("decimal_price", &schema)?,
+                    options: Default::default(),
+                }]),
             ),
             (
                 "sort integer tuple",
-                LexOrdering {
-                    inner: vec![
-                        PhysicalSortExpr {
-                            expr: col("request_bytes", &schema)?,
-                            options: Default::default(),
-                        },
-                        PhysicalSortExpr {
-                            expr: col("response_bytes", &schema)?,
-                            options: Default::default(),
-                        },
-                    ],
-                },
+                LexOrdering::new(vec![
+                    PhysicalSortExpr {
+                        expr: col("request_bytes", &schema)?,
+                        options: Default::default(),
+                    },
+                    PhysicalSortExpr {
+                        expr: col("response_bytes", &schema)?,
+                        options: Default::default(),
+                    },
+                ]),
             ),
             (
                 "sort utf8 tuple",
-                LexOrdering {
-                    inner: vec![
-                        // sort utf8 tuple
-                        PhysicalSortExpr {
-                            expr: col("service", &schema)?,
-                            options: Default::default(),
-                        },
-                        PhysicalSortExpr {
-                            expr: col("host", &schema)?,
-                            options: Default::default(),
-                        },
-                        PhysicalSortExpr {
-                            expr: col("pod", &schema)?,
-                            options: Default::default(),
-                        },
-                        PhysicalSortExpr {
-                            expr: col("image", &schema)?,
-                            options: Default::default(),
-                        },
-                    ],
-                },
+                LexOrdering::new(vec![
+                    // sort utf8 tuple
+                    PhysicalSortExpr {
+                        expr: col("service", &schema)?,
+                        options: Default::default(),
+                    },
+                    PhysicalSortExpr {
+                        expr: col("host", &schema)?,
+                        options: Default::default(),
+                    },
+                    PhysicalSortExpr {
+                        expr: col("pod", &schema)?,
+                        options: Default::default(),
+                    },
+                    PhysicalSortExpr {
+                        expr: col("image", &schema)?,
+                        options: Default::default(),
+                    },
+                ]),
             ),
             (
                 "sort mixed tuple",
-                LexOrdering {
-                    inner: vec![
-                        PhysicalSortExpr {
-                            expr: col("service", &schema)?,
-                            options: Default::default(),
-                        },
-                        PhysicalSortExpr {
-                            expr: col("request_bytes", &schema)?,
-                            options: Default::default(),
-                        },
-                        PhysicalSortExpr {
-                            expr: col("decimal_price", &schema)?,
-                            options: Default::default(),
-                        },
-                    ],
-                },
+                LexOrdering::new(vec![
+                    PhysicalSortExpr {
+                        expr: col("service", &schema)?,
+                        options: Default::default(),
+                    },
+                    PhysicalSortExpr {
+                        expr: col("request_bytes", &schema)?,
+                        options: Default::default(),
+                    },
+                    PhysicalSortExpr {
+                        expr: col("decimal_price", &schema)?,
+                        options: Default::default(),
+                    },
+                ]),
             ),
         ];
         for (title, expr) in sort_cases {

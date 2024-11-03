@@ -260,11 +260,10 @@ pub(crate) fn replace_with_order_preserving_variants(
         .plan
         .equivalence_properties()
         .ordering_satisfy(
-            &requirements
+            requirements
                 .plan
                 .output_ordering()
-                .cloned()
-                .unwrap_or_default(),
+                .unwrap_or(LexOrdering::empty()),
         )
     {
         for child in alternate_plan.children.iter_mut() {

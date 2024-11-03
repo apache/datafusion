@@ -372,9 +372,8 @@ fn try_pushdown_requirements_to_join(
 
     let (new_left_ordering, new_right_ordering) = match push_side {
         JoinSide::Left => {
-            let left_eq_properties = left_eq_properties
-                .clone()
-                .with_reorder(LexOrdering::from_ref(sort_expr));
+            let left_eq_properties =
+                left_eq_properties.clone().with_reorder(sort_expr.clone());
             if left_eq_properties
                 .ordering_satisfy_requirement(&left_requirement.unwrap_or_default())
             {
@@ -385,9 +384,8 @@ fn try_pushdown_requirements_to_join(
             }
         }
         JoinSide::Right => {
-            let right_eq_properties = right_eq_properties
-                .clone()
-                .with_reorder(LexOrdering::from_ref(sort_expr));
+            let right_eq_properties =
+                right_eq_properties.clone().with_reorder(sort_expr.clone());
             if right_eq_properties
                 .ordering_satisfy_requirement(&right_requirement.unwrap_or_default())
             {
