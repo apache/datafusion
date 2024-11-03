@@ -49,7 +49,6 @@ pub mod utils;
 
 /// Reexport arrow crate
 pub use arrow;
-use hashbrown::hash_map::DefaultHashBuilder;
 pub use column::Column;
 pub use dfschema::{
     qualified_name, DFSchema, DFSchemaRef, ExprSchema, SchemaExt, ToDFSchema,
@@ -67,6 +66,7 @@ pub use functional_dependencies::{
     get_target_functional_dependencies, Constraint, Constraints, Dependency,
     FunctionalDependence, FunctionalDependencies,
 };
+use hashbrown::hash_map::DefaultHashBuilder;
 pub use join_type::{JoinConstraint, JoinSide, JoinType};
 pub use param_value::ParamValues;
 pub use scalar::{ScalarType, ScalarValue};
