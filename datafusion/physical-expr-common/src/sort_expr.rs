@@ -429,12 +429,6 @@ impl From<Vec<PhysicalSortExpr>> for LexOrdering {
     }
 }
 
-// impl From<LexOrdering> for LexOrdering {
-//     fn from(value: Vec<PhysicalSortExpr>) -> Self {
-//         Self::new(value)
-//     }
-// }
-
 impl From<LexRequirement> for LexOrdering {
     fn from(value: LexRequirement) -> Self {
         Self::from_lex_requirement(value)
