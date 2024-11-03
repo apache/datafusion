@@ -71,15 +71,12 @@ impl ScalarUDFImpl for FromUnixtimeFunc {
     ) -> Result<DataType> {
         match arg_types.len() {
             1 => Ok(Timestamp(Second, None)),
-            2 => {
-                match &args[1] {
+            2 => match &args[1] {
                     Expr::Literal(ScalarValue::Utf8(Some(tz))) => Ok(Timestamp(Second, Some(Arc::from(tz.to_string())))),
                     _ => exec_err!(
-                "Second argument for `from_unixtime` must be non-null utf8, received {:?}",
-                arg_types[1]
-            ),
-                }
-            }
+                        "Second argument for `from_unixtime` must be non-null utf8, received {:?}",
+                        arg_types[1]),
+            },
             _ => exec_err!(
                 "from_unixtime function requires 1 or 2 arguments, got {}",
                 arg_types.len()
@@ -135,7 +132,7 @@ fn get_from_unixtime_doc() -> &'static Documentation {
         Documentation::builder()
             .with_doc_section(DOC_SECTION_DATETIME)
             .with_description("Converts an integer to RFC3339 timestamp format (`YYYY-MM-DDT00:00:00.000000000Z`). Integers and unsigned integers are interpreted as nanoseconds since the unix epoch (`1970-01-01T00:00:00Z`) return the corresponding timestamp.")
-            .with_syntax_example("from_unixtime(expression, timezone)")
+            .with_syntax_example("from_unixtime(expression[, timezone])")
             .with_standard_argument("expression", None)
             .with_argument(
                 "timezone",
