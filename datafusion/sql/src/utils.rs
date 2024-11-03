@@ -26,9 +26,8 @@ use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion, TreeNodeRewriter,
 };
 use datafusion_common::{
-    HashMap,
-    exec_err, internal_err, plan_err, Column, DFSchemaRef, DataFusionError, Result,
-    ScalarValue,
+    exec_err, internal_err, plan_err, Column, DFSchemaRef, DataFusionError, HashMap,
+    Result, ScalarValue,
 };
 use datafusion_expr::builder::get_struct_unnested_columns;
 use datafusion_expr::expr::{Alias, GroupingSet, Unnest, WindowFunction};

@@ -20,7 +20,6 @@ pub use guarantee::{Guarantee, LiteralGuarantee};
 use hashbrown::HashSet;
 
 use std::borrow::Borrow;
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::expressions::{BinaryExpr, Column};
@@ -32,7 +31,7 @@ use arrow::datatypes::SchemaRef;
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
 };
-use datafusion_common::Result;
+use datafusion_common::{HashMap, Result};
 use datafusion_expr::Operator;
 
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexOrderingRef};

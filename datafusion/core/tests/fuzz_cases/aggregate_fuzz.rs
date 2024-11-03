@@ -42,8 +42,8 @@ use test_utils::{add_empty_batches, StringBatchGenerator};
 use crate::fuzz_cases::aggregation_fuzzer::{
     AggregationFuzzerBuilder, ColumnDescr, DatasetGeneratorConfig, QueryBuilder,
 };
-use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_common::HashMap;
+use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use tokio::task::JoinSet;
