@@ -309,7 +309,7 @@ fn roundtrip_window() -> Result<()> {
         .build()
         .map(Arc::new)?,
         &[],
-        &LexOrdering::default(),
+        LexOrdering::default().as_ref(),
         Arc::new(WindowFrame::new(None)),
     ));
 
@@ -329,7 +329,7 @@ fn roundtrip_window() -> Result<()> {
     let sliding_aggr_window_expr = Arc::new(SlidingAggregateWindowExpr::new(
         sum_expr,
         &[],
-        &LexOrdering::default(),
+        LexOrdering::default().as_ref(),
         Arc::new(window_frame),
     ));
 
@@ -1015,7 +1015,7 @@ fn roundtrip_scalar_udf_extension_codec() -> Result<()> {
         vec![Arc::new(PlainAggregateWindowExpr::new(
             aggr_expr.clone(),
             &[col("author", &schema)?],
-            &LexOrdering::default(),
+            LexOrdering::default().as_ref(),
             Arc::new(WindowFrame::new(None)),
         ))],
         filter,
@@ -1076,7 +1076,7 @@ fn roundtrip_aggregate_udf_extension_codec() -> Result<()> {
         vec![Arc::new(PlainAggregateWindowExpr::new(
             aggr_expr,
             &[col("author", &schema)?],
-            &LexOrdering::default(),
+            LexOrdering::default().as_ref(),
             Arc::new(WindowFrame::new(None)),
         ))],
         filter,

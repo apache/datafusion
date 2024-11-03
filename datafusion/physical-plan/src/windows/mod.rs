@@ -699,7 +699,7 @@ mod tests {
                 "count".to_owned(),
                 &[col("a", &schema)?],
                 &[],
-                &LexOrdering::default(),
+                LexOrdering::default().as_ref(),
                 Arc::new(WindowFrame::new(None)),
                 schema.as_ref(),
                 false,
@@ -1072,7 +1072,7 @@ mod tests {
             }
 
             assert_eq!(
-                get_window_mode(&partition_by_exprs, &order_by_exprs, &exec_unbounded),
+                get_window_mode(&partition_by_exprs, order_by_exprs.as_ref(), &exec_unbounded),
                 *expected,
                 "Unexpected result for in unbounded test case#: {case_idx:?}, case: {test_case:?}"
             );
