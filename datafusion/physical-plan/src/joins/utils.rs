@@ -700,15 +700,19 @@ pub fn build_join_schema(
     (fields.finish().with_metadata(metadata), column_indices)
 }
 
-/// A [`OnceAsync`] run an `async` closure once, with subsequent calls to
-/// [`OnceAsync::once`] returning a [`OnceFut`] to the same asynchronous
-/// computation
+/// A [`OnceAsync`] runs an `async` closure once, where multiple calls to
+/// [`OnceAsync::once`] return a [`OnceFut`] that resolves to the result of the
+/// same computation.
 ///
-/// This is useful for joins where the results of one child (for example,
-/// building a hash table) are buffered in memory and shared across
-/// potentially multiple output partitions
+/// This is useful for joins where the results of one child are needed to proceed
+/// with multiple output stream
 ///
-/// Each output partition waits on the `OnceAsync` to complete before proceeding.
+///
+/// For example, in a hash join, one input is buffered and shared across
+/// potentially multiple output partitions. Each output partition must wait for
+/// the hash table to be built before proceeding.
+///
+/// Each output partition waits on the same `OnceAsync` before proceeding.
 pub(crate) struct OnceAsync<T> {
     fut: Mutex<Option<OnceFut<T>>>,
 }
