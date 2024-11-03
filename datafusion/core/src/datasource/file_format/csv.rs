@@ -456,6 +456,7 @@ impl CsvFormat {
                             .unwrap_or(state.config_options().catalog.has_header),
                 )
                 .with_delimiter(self.options.delimiter)
+                // Support literal NULL or empty string as null
                 .with_null_regex(Regex::new(r"^NULL$|^$").unwrap());
 
             if let Some(comment) = self.options.comment {
