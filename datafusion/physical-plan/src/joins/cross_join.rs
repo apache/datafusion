@@ -57,6 +57,12 @@ type JoinLeftData = (RecordBatch, MemoryReservation);
 /// Buffers the left input into memory and then streams batches from each
 /// partition on the right input combining them with the buffered left input
 /// to generate the output.
+///
+/// # Clone / Shared State
+///
+/// Note this structure includes a [`OnceAsync`] that is used to coordinate the
+/// loading of the left side with the processing in each output stream.
+/// Therefore it can not be [`Clone`]
 #[derive(Debug)]
 pub struct CrossJoinExec {
     /// left (build) side which gets loaded in memory

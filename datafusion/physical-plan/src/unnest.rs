@@ -56,7 +56,7 @@ use log::trace;
 /// Thus the original RecordBatch with dimension (n x m) may have new dimension (n' x m')
 ///
 /// See [`UnnestOptions`] for more details and an example.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct UnnestExec {
     /// Input execution plan
     input: Arc<dyn ExecutionPlan>,

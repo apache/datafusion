@@ -89,25 +89,20 @@ logical_plan
 02)--Projection: t2.a AS a2, t2.b
 03)----RightSemi Join: t1.d = t2.d, t1.c = t2.c
 04)------SubqueryAlias: t1
-05)--------Filter: annotated_data.d = Int32(3)
-06)----------TableScan: annotated_data projection=[c, d], partial_filters=[annotated_data.d = Int32(3)]
-07)------SubqueryAlias: t2
-08)--------Filter: annotated_data.d = Int32(3)
-09)----------TableScan: annotated_data projection=[a, b, c, d], partial_filters=[annotated_data.d = Int32(3)]
+05)--------TableScan: annotated_data projection=[c, d]
+06)------SubqueryAlias: t2
+07)--------Filter: annotated_data.d = Int32(3)
+08)----------TableScan: annotated_data projection=[a, b, c, d], partial_filters=[annotated_data.d = Int32(3)]
 physical_plan
 01)SortPreservingMergeExec: [a2@0 ASC NULLS LAST, b@1 ASC NULLS LAST], fetch=10
 02)--ProjectionExec: expr=[a@0 as a2, b@1 as b]
 03)----CoalesceBatchesExec: target_batch_size=8192, fetch=10
 04)------HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(d@1, d@3), (c@0, c@2)], projection=[a@0, b@1]
-05)--------CoalescePartitionsExec
-06)----------CoalesceBatchesExec: target_batch_size=8192
-07)------------FilterExec: d@1 = 3
-08)--------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-09)----------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[c, d], has_header=true
-10)--------CoalesceBatchesExec: target_batch_size=8192
-11)----------FilterExec: d@3 = 3
-12)------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-13)--------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b, c, d], output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST, c@2 ASC NULLS LAST], has_header=true
+05)--------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[c, d], has_header=true
+06)--------CoalesceBatchesExec: target_batch_size=8192
+07)----------FilterExec: d@3 = 3
+08)------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+09)--------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b, c, d], output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST, c@2 ASC NULLS LAST], has_header=true
 
 # preserve_right_semi_join
 query II nosort

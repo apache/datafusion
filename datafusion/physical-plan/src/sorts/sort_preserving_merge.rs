@@ -71,7 +71,7 @@ use log::{debug, trace};
 ///
 /// If any of the input partitions return an error, the error is propagated to
 /// the output and inputs are not polled again.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct SortPreservingMergeExec {
     /// Input plan
     input: Arc<dyn ExecutionPlan>,
