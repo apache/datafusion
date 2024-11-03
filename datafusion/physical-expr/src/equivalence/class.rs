@@ -632,7 +632,7 @@ impl EquivalenceGroup {
                 }
                 result
             }
-            JoinType::LeftSemi | JoinType::LeftAnti => self.clone(),
+            JoinType::LeftSemi | JoinType::LeftAnti | JoinType::LeftMark => self.clone(),
             JoinType::RightSemi | JoinType::RightAnti => right_equivalences.clone(),
         }
     }

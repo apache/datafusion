@@ -165,7 +165,7 @@ impl GetExt for ParquetFormatFactory {
     }
 }
 
-impl fmt::Debug for ParquetFormatFactory {
+impl Debug for ParquetFormatFactory {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ParquetFormatFactory")
             .field("ParquetFormatFactory", &self.options)
@@ -1439,7 +1439,7 @@ mod tests {
     }
 
     impl Display for RequestCountingObjectStore {
-        fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
             write!(f, "RequestCounting({})", self.inner)
         }
     }
@@ -1707,7 +1707,7 @@ mod tests {
         let null_utf8 = if force_views {
             ScalarValue::Utf8View(None)
         } else {
-            ScalarValue::Utf8(None)
+            Utf8(None)
         };
 
         // Fetch statistics for first file
@@ -1720,7 +1720,7 @@ mod tests {
         let expected_type = if force_views {
             ScalarValue::Utf8View
         } else {
-            ScalarValue::Utf8
+            Utf8
         };
         assert_eq!(
             c1_stats.max_value,
@@ -2274,47 +2274,7 @@ mod tests {
 
     #[tokio::test]
     async fn parquet_sink_write() -> Result<()> {
-        let field_a = Field::new("a", DataType::Utf8, false);
-        let field_b = Field::new("b", DataType::Utf8, false);
-        let schema = Arc::new(Schema::new(vec![field_a, field_b]));
-        let object_store_url = ObjectStoreUrl::local_filesystem();
-
-        let file_sink_config = FileSinkConfig {
-            object_store_url: object_store_url.clone(),
-            file_groups: vec![PartitionedFile::new("/tmp".to_string(), 1)],
-            table_paths: vec![ListingTableUrl::parse("file:///")?],
-            output_schema: schema.clone(),
-            table_partition_cols: vec![],
-            insert_op: InsertOp::Overwrite,
-            keep_partition_by_columns: false,
-        };
-        let parquet_sink = Arc::new(ParquetSink::new(
-            file_sink_config,
-            TableParquetOptions {
-                key_value_metadata: std::collections::HashMap::from([
-                    ("my-data".to_string(), Some("stuff".to_string())),
-                    ("my-data-bool-key".to_string(), None),
-                ]),
-                ..Default::default()
-            },
-        ));
-
-        // create data
-        let col_a: ArrayRef = Arc::new(StringArray::from(vec!["foo", "bar"]));
-        let col_b: ArrayRef = Arc::new(StringArray::from(vec!["baz", "baz"]));
-        let batch = RecordBatch::try_from_iter(vec![("a", col_a), ("b", col_b)]).unwrap();
-
-        // write stream
-        parquet_sink
-            .write_all(
-                Box::pin(RecordBatchStreamAdapter::new(
-                    schema,
-                    futures::stream::iter(vec![Ok(batch)]),
-                )),
-                &build_ctx(object_store_url.as_ref()),
-            )
-            .await
-            .unwrap();
+        let parquet_sink = create_written_parquet_sink("file:///").await?;
 
         // assert written
         let mut written = parquet_sink.written();
@@ -2364,6 +2324,140 @@ mod tests {
         assert_eq!(key_value_metadata, expected_metadata);
 
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn parquet_sink_write_with_extension() -> Result<()> {
+        let filename = "test_file.custom_ext";
+        let file_path = format!("file:///path/to/{}", filename);
+        let parquet_sink = create_written_parquet_sink(file_path.as_str()).await?;
+
+        // assert written
+        let mut written = parquet_sink.written();
+        let written = written.drain();
+        assert_eq!(
+            written.len(),
+            1,
+            "expected a single parquet file to be written, instead found {}",
+            written.len()
+        );
+
+        let (path, ..) = written.take(1).next().unwrap();
+
+        let path_parts = path.parts().collect::<Vec<_>>();
+        assert_eq!(
+            path_parts.len(),
+            3,
+            "Expected 3 path parts, instead found {}",
+            path_parts.len()
+        );
+        assert_eq!(path_parts.last().unwrap().as_ref(), filename);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn parquet_sink_write_with_directory_name() -> Result<()> {
+        let file_path = "file:///path/to";
+        let parquet_sink = create_written_parquet_sink(file_path).await?;
+
+        // assert written
+        let mut written = parquet_sink.written();
+        let written = written.drain();
+        assert_eq!(
+            written.len(),
+            1,
+            "expected a single parquet file to be written, instead found {}",
+            written.len()
+        );
+
+        let (path, ..) = written.take(1).next().unwrap();
+
+        let path_parts = path.parts().collect::<Vec<_>>();
+        assert_eq!(
+            path_parts.len(),
+            3,
+            "Expected 3 path parts, instead found {}",
+            path_parts.len()
+        );
+        assert!(path_parts.last().unwrap().as_ref().ends_with(".parquet"));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn parquet_sink_write_with_folder_ending() -> Result<()> {
+        let file_path = "file:///path/to/";
+        let parquet_sink = create_written_parquet_sink(file_path).await?;
+
+        // assert written
+        let mut written = parquet_sink.written();
+        let written = written.drain();
+        assert_eq!(
+            written.len(),
+            1,
+            "expected a single parquet file to be written, instead found {}",
+            written.len()
+        );
+
+        let (path, ..) = written.take(1).next().unwrap();
+
+        let path_parts = path.parts().collect::<Vec<_>>();
+        assert_eq!(
+            path_parts.len(),
+            3,
+            "Expected 3 path parts, instead found {}",
+            path_parts.len()
+        );
+        assert!(path_parts.last().unwrap().as_ref().ends_with(".parquet"));
+
+        Ok(())
+    }
+
+    async fn create_written_parquet_sink(table_path: &str) -> Result<Arc<ParquetSink>> {
+        let field_a = Field::new("a", DataType::Utf8, false);
+        let field_b = Field::new("b", DataType::Utf8, false);
+        let schema = Arc::new(Schema::new(vec![field_a, field_b]));
+        let object_store_url = ObjectStoreUrl::local_filesystem();
+
+        let file_sink_config = FileSinkConfig {
+            object_store_url: object_store_url.clone(),
+            file_groups: vec![PartitionedFile::new("/tmp".to_string(), 1)],
+            table_paths: vec![ListingTableUrl::parse(table_path)?],
+            output_schema: schema.clone(),
+            table_partition_cols: vec![],
+            insert_op: InsertOp::Overwrite,
+            keep_partition_by_columns: false,
+        };
+        let parquet_sink = Arc::new(ParquetSink::new(
+            file_sink_config,
+            TableParquetOptions {
+                key_value_metadata: std::collections::HashMap::from([
+                    ("my-data".to_string(), Some("stuff".to_string())),
+                    ("my-data-bool-key".to_string(), None),
+                ]),
+                ..Default::default()
+            },
+        ));
+
+        // create data
+        let col_a: ArrayRef = Arc::new(StringArray::from(vec!["foo", "bar"]));
+        let col_b: ArrayRef = Arc::new(StringArray::from(vec!["baz", "baz"]));
+        let batch = RecordBatch::try_from_iter(vec![("a", col_a), ("b", col_b)]).unwrap();
+
+        // write stream
+        parquet_sink
+            .write_all(
+                Box::pin(RecordBatchStreamAdapter::new(
+                    schema,
+                    futures::stream::iter(vec![Ok(batch)]),
+                )),
+                &build_ctx(object_store_url.as_ref()),
+            )
+            .await
+            .unwrap();
+
+        Ok(parquet_sink)
     }
 
     #[tokio::test]

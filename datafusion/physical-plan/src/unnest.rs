@@ -56,7 +56,7 @@ use log::trace;
 /// Thus the original RecordBatch with dimension (n x m) may have new dimension (n' x m')
 ///
 /// See [`UnnestOptions`] for more details and an example.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct UnnestExec {
     /// Input execution plan
     input: Arc<dyn ExecutionPlan>,
@@ -984,7 +984,7 @@ mod tests {
         list_array: &dyn ListArrayType,
         lengths: Vec<i64>,
         expected: Vec<Option<&str>>,
-    ) -> datafusion_common::Result<()> {
+    ) -> Result<()> {
         let length_array = Int64Array::from(lengths);
         let unnested_array = unnest_list_array(list_array, &length_array, 3 * 6)?;
         let strs = unnested_array.as_string::<i32>().iter().collect::<Vec<_>>();
@@ -993,7 +993,7 @@ mod tests {
     }
 
     #[test]
-    fn test_build_batch_list_arr_recursive() -> datafusion_common::Result<()> {
+    fn test_build_batch_list_arr_recursive() -> Result<()> {
         // col1                             | col2
         // [[1,2,3],null,[4,5]]             | ['a','b']
         // [[7,8,9,10], null, [11,12,13]]   | ['c','d']
@@ -1125,7 +1125,7 @@ mod tests {
     }
 
     #[test]
-    fn test_unnest_list_array() -> datafusion_common::Result<()> {
+    fn test_unnest_list_array() -> Result<()> {
         // [A, B, C], [], NULL, [D], NULL, [NULL, F]
         let list_array = make_generic_array::<i32>();
         verify_unnest_list_array(
@@ -1173,7 +1173,7 @@ mod tests {
         list_arrays: &[ArrayRef],
         preserve_nulls: bool,
         expected: Vec<i64>,
-    ) -> datafusion_common::Result<()> {
+    ) -> Result<()> {
         let options = UnnestOptions {
             preserve_nulls,
             recursions: vec![],
@@ -1191,7 +1191,7 @@ mod tests {
     }
 
     #[test]
-    fn test_longest_list_length() -> datafusion_common::Result<()> {
+    fn test_longest_list_length() -> Result<()> {
         // Test with single ListArray
         //  [A, B, C], [], NULL, [D], NULL, [NULL, F]
         let list_array = Arc::new(make_generic_array::<i32>()) as ArrayRef;
@@ -1223,7 +1223,7 @@ mod tests {
     }
 
     #[test]
-    fn test_create_take_indicies() -> datafusion_common::Result<()> {
+    fn test_create_take_indicies() -> Result<()> {
         let length_array = Int64Array::from(vec![2, 3, 1]);
         let take_indicies = create_take_indicies(&length_array, 6);
         let expected = Int64Array::from(vec![0, 0, 1, 1, 1, 2]);

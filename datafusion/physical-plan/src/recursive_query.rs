@@ -53,7 +53,7 @@ use futures::{ready, Stream, StreamExt};
 /// Note that there won't be any limit or checks applied to detect
 /// an infinite recursion, so it is up to the planner to ensure that
 /// it won't happen.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct RecursiveQueryExec {
     /// Name of the query handler
     name: String,

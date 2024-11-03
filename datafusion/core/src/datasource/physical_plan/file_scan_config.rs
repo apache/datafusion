@@ -19,7 +19,8 @@
 //! file sources.
 
 use std::{
-    borrow::Cow, collections::HashMap, fmt::Debug, marker::PhantomData, sync::Arc, vec,
+    borrow::Cow, collections::HashMap, fmt::Debug, marker::PhantomData, mem::size_of,
+    sync::Arc, vec,
 };
 
 use super::{get_projected_output_ordering, statistics::MinMaxStatistics};
@@ -33,7 +34,8 @@ use arrow_array::{ArrayRef, DictionaryArray, RecordBatch, RecordBatchOptions};
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::stats::Precision;
 use datafusion_common::{exec_err, ColumnStatistics, DataFusionError, Statistics};
-use datafusion_physical_expr::{LexOrdering, PhysicalSortExpr};
+use datafusion_physical_expr::LexOrdering;
+use datafusion_physical_expr_common::sort_expr::LexOrderingRef;
 
 use log::warn;
 
@@ -306,7 +308,7 @@ impl FileScanConfig {
     pub fn split_groups_by_statistics(
         table_schema: &SchemaRef,
         file_groups: &[Vec<PartitionedFile>],
-        sort_order: &[PhysicalSortExpr],
+        sort_order: LexOrderingRef,
     ) -> Result<Vec<Vec<PartitionedFile>>> {
         let flattened_files = file_groups.iter().flatten().collect::<Vec<_>>();
         // First Fit:
@@ -497,7 +499,7 @@ impl<T> ZeroBufferGenerator<T>
 where
     T: ArrowNativeType,
 {
-    const SIZE: usize = std::mem::size_of::<T>();
+    const SIZE: usize = size_of::<T>();
 
     fn get_buffer(&mut self, n_vals: usize) -> Buffer {
         match &mut self.cache {

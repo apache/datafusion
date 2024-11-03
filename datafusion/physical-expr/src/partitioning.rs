@@ -121,8 +121,8 @@ pub enum Partitioning {
     UnknownPartitioning(usize),
 }
 
-impl fmt::Display for Partitioning {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+impl Display for Partitioning {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Partitioning::RoundRobinBatch(size) => write!(f, "RoundRobinBatch({size})"),
             Partitioning::Hash(phy_exprs, size) => {

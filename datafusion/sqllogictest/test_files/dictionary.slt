@@ -444,3 +444,9 @@ physical_plan
 01)CoalesceBatchesExec: target_batch_size=8192
 02)--FilterExec: column2@1 = 1
 03)----MemoryExec: partitions=1, partition_sizes=[1]
+
+# Window Functions
+query I
+select dense_rank() over (order by arrow_cast('abc', 'Dictionary(UInt16, Utf8)'));
+----
+1

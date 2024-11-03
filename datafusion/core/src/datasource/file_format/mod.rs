@@ -79,7 +79,7 @@ pub trait FileFormatFactory: Sync + Send + GetExt + Debug {
 ///
 /// [`TableProvider`]: crate::catalog::TableProvider
 #[async_trait]
-pub trait FileFormat: Send + Sync + fmt::Debug {
+pub trait FileFormat: Send + Sync + Debug {
     /// Returns the table provider as [`Any`](std::any::Any) so that it can be
     /// downcast to a specific implementation.
     fn as_any(&self) -> &dyn Any;
@@ -224,7 +224,7 @@ pub fn format_as_file_type(
 /// downcasted to a [DefaultFileType].
 pub fn file_type_to_format(
     file_type: &Arc<dyn FileType>,
-) -> datafusion_common::Result<Arc<dyn FileFormatFactory>> {
+) -> Result<Arc<dyn FileFormatFactory>> {
     match file_type
         .as_ref()
         .as_any()
@@ -447,8 +447,8 @@ pub(crate) mod test_util {
         iterations_detected: Arc<Mutex<usize>>,
     }
 
-    impl std::fmt::Display for VariableStream {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    impl Display for VariableStream {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
             write!(f, "VariableStream")
         }
     }

@@ -55,6 +55,7 @@ pub trait PartitionStream: Debug + Send + Sync {
 ///
 /// If your source can be represented as one or more [`PartitionStream`]s, you can
 /// use this struct to implement [`ExecutionPlan`].
+#[derive(Clone)]
 pub struct StreamingTableExec {
     partitions: Vec<Arc<dyn PartitionStream>>,
     projection: Option<Arc<[usize]>>,
@@ -163,7 +164,7 @@ impl StreamingTableExec {
     }
 }
 
-impl std::fmt::Debug for StreamingTableExec {
+impl Debug for StreamingTableExec {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("LazyMemTableExec").finish_non_exhaustive()
     }

@@ -19,6 +19,7 @@
 //! related functionality, used both in join calculations and optimization rules.
 
 use std::collections::{HashMap, VecDeque};
+use std::mem::size_of;
 use std::sync::Arc;
 
 use crate::joins::utils::{JoinFilter, JoinHashMapType};
@@ -39,6 +40,7 @@ use datafusion_physical_expr::intervals::cp_solver::ExprIntervalGraph;
 use datafusion_physical_expr::utils::collect_columns;
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
 
+use datafusion_physical_expr_common::sort_expr::LexOrderingRef;
 use hashbrown::raw::RawTable;
 use hashbrown::HashSet;
 
@@ -153,8 +155,7 @@ impl PruningJoinHashMap {
     /// # Returns
     /// The size of the hash map in bytes.
     pub(crate) fn size(&self) -> usize {
-        self.map.allocation_info().1.size()
-            + self.next.capacity() * std::mem::size_of::<u64>()
+        self.map.allocation_info().1.size() + self.next.capacity() * size_of::<u64>()
     }
 
     /// Removes hash values from the map and the list based on the given pruning
@@ -744,8 +745,8 @@ pub fn prepare_sorted_exprs(
     filter: &JoinFilter,
     left: &Arc<dyn ExecutionPlan>,
     right: &Arc<dyn ExecutionPlan>,
-    left_sort_exprs: &[PhysicalSortExpr],
-    right_sort_exprs: &[PhysicalSortExpr],
+    left_sort_exprs: LexOrderingRef,
+    right_sort_exprs: LexOrderingRef,
 ) -> Result<(SortedFilterExpr, SortedFilterExpr, ExprIntervalGraph)> {
     let err = || {
         datafusion_common::plan_datafusion_err!("Filter does not include the child order")

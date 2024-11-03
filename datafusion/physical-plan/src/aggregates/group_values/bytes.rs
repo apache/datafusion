@@ -19,6 +19,7 @@ use crate::aggregates::group_values::GroupValues;
 use arrow_array::{Array, ArrayRef, OffsetSizeTrait, RecordBatch};
 use datafusion_expr::EmitTo;
 use datafusion_physical_expr_common::binary_map::{ArrowBytesMap, OutputType};
+use std::mem::size_of;
 
 /// A [`GroupValues`] storing single column of Utf8/LargeUtf8/Binary/LargeBinary values
 ///
@@ -73,7 +74,7 @@ impl<O: OffsetSizeTrait> GroupValues for GroupValuesByes<O> {
     }
 
     fn size(&self) -> usize {
-        self.map.size() + std::mem::size_of::<Self>()
+        self.map.size() + size_of::<Self>()
     }
 
     fn is_empty(&self) -> bool {

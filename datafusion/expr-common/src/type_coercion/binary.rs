@@ -89,7 +89,7 @@ fn signature(lhs: &DataType, op: &Operator, rhs: &DataType) -> Result<Signature>
         And | Or => if matches!((lhs, rhs), (Boolean | Null, Boolean | Null)) {
             // Logical binary boolean operators can only be evaluated for
             // boolean or null arguments.                   
-            Ok(Signature::uniform(DataType::Boolean))
+            Ok(Signature::uniform(Boolean))
         } else {
             plan_err!(
                 "Cannot infer common argument type for logical boolean operation {lhs} {op} {rhs}"
@@ -1225,9 +1225,9 @@ pub fn like_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataTyp
 fn regex_null_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
     use arrow::datatypes::DataType::*;
     match (lhs_type, rhs_type) {
-        (DataType::Null, Utf8View | Utf8 | LargeUtf8) => Some(rhs_type.clone()),
-        (Utf8View | Utf8 | LargeUtf8, DataType::Null) => Some(lhs_type.clone()),
-        (DataType::Null, DataType::Null) => Some(Utf8),
+        (Null, Utf8View | Utf8 | LargeUtf8) => Some(rhs_type.clone()),
+        (Utf8View | Utf8 | LargeUtf8, Null) => Some(lhs_type.clone()),
+        (Null, Null) => Some(Utf8),
         _ => None,
     }
 }

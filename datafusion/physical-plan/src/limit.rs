@@ -39,7 +39,7 @@ use futures::stream::{Stream, StreamExt};
 use log::trace;
 
 /// Limit execution plan
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct GlobalLimitExec {
     /// Input execution plan
     input: Arc<dyn ExecutionPlan>,
@@ -473,7 +473,7 @@ mod tests {
     use super::*;
     use crate::coalesce_partitions::CoalescePartitionsExec;
     use crate::common::collect;
-    use crate::{common, test};
+    use crate::test;
 
     use crate::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
     use arrow_array::RecordBatchOptions;
@@ -497,7 +497,7 @@ mod tests {
 
         // The result should contain 4 batches (one per input partition)
         let iter = limit.execute(0, task_ctx)?;
-        let batches = common::collect(iter).await?;
+        let batches = collect(iter).await?;
 
         // There should be a total of 100 rows
         let row_count: usize = batches.iter().map(|batch| batch.num_rows()).sum();
@@ -613,7 +613,7 @@ mod tests {
 
         // The result should contain 4 batches (one per input partition)
         let iter = offset.execute(0, task_ctx)?;
-        let batches = common::collect(iter).await?;
+        let batches = collect(iter).await?;
         Ok(batches.iter().map(|batch| batch.num_rows()).sum())
     }
 

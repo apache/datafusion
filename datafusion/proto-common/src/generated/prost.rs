@@ -883,6 +883,7 @@ pub enum JoinType {
     Leftanti = 5,
     Rightsemi = 6,
     Rightanti = 7,
+    Leftmark = 8,
 }
 impl JoinType {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -899,6 +900,7 @@ impl JoinType {
             Self::Leftanti => "LEFTANTI",
             Self::Rightsemi => "RIGHTSEMI",
             Self::Rightanti => "RIGHTANTI",
+            Self::Leftmark => "LEFTMARK",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -912,6 +914,7 @@ impl JoinType {
             "LEFTANTI" => Some(Self::Leftanti),
             "RIGHTSEMI" => Some(Self::Rightsemi),
             "RIGHTANTI" => Some(Self::Rightanti),
+            "LEFTMARK" => Some(Self::Leftmark),
             _ => None,
         }
     }
@@ -1069,6 +1072,7 @@ impl CompressionTypeVariant {
 pub enum JoinSide {
     LeftSide = 0,
     RightSide = 1,
+    None = 2,
 }
 impl JoinSide {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -1079,6 +1083,7 @@ impl JoinSide {
         match self {
             Self::LeftSide => "LEFT_SIDE",
             Self::RightSide => "RIGHT_SIDE",
+            Self::None => "NONE",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -1086,6 +1091,7 @@ impl JoinSide {
         match value {
             "LEFT_SIDE" => Some(Self::LeftSide),
             "RIGHT_SIDE" => Some(Self::RightSide),
+            "NONE" => Some(Self::None),
             _ => None,
         }
     }

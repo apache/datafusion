@@ -356,7 +356,6 @@ impl RecordBatchStream for ProjectionStream {
 mod tests {
     use super::*;
     use crate::common::collect;
-    use crate::expressions;
     use crate::test;
 
     use arrow_schema::DataType;
@@ -418,8 +417,8 @@ mod tests {
         let schema = get_schema();
 
         let exprs: Vec<Arc<dyn PhysicalExpr>> = vec![
-            Arc::new(expressions::Column::new("col1", 1)),
-            Arc::new(expressions::Column::new("col0", 0)),
+            Arc::new(Column::new("col1", 1)),
+            Arc::new(Column::new("col0", 0)),
         ];
 
         let result = stats_projection(source, exprs.into_iter(), Arc::new(schema));
@@ -452,8 +451,8 @@ mod tests {
         let schema = get_schema();
 
         let exprs: Vec<Arc<dyn PhysicalExpr>> = vec![
-            Arc::new(expressions::Column::new("col2", 2)),
-            Arc::new(expressions::Column::new("col0", 0)),
+            Arc::new(Column::new("col2", 2)),
+            Arc::new(Column::new("col0", 0)),
         ];
 
         let result = stats_projection(source, exprs.into_iter(), Arc::new(schema));

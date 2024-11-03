@@ -2171,7 +2171,7 @@ fn roundtrip_aggregate_udf() {
         }
 
         fn size(&self) -> usize {
-            std::mem::size_of_val(self)
+            size_of_val(self)
         }
     }
 
@@ -2395,7 +2395,7 @@ fn roundtrip_window() {
         }
 
         fn size(&self) -> usize {
-            std::mem::size_of_val(self)
+            size_of_val(self)
         }
     }
 
