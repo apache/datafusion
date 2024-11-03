@@ -16,12 +16,11 @@
 // under the License.
 
 use datafusion::execution::SessionStateDefaults;
-use datafusion_common::{not_impl_err, Result};
+use datafusion_common::{not_impl_err, HashSet, Result};
 use datafusion_expr::{
     aggregate_doc_sections, scalar_doc_sections, window_doc_sections, AggregateUDF,
     DocSection, Documentation, ScalarUDF, WindowUDF,
 };
-use hashbrown::HashSet;
 use itertools::Itertools;
 use std::env::args;
 use std::fmt::Write as _;

@@ -64,7 +64,7 @@ use arrow::record_batch::RecordBatch;
 use arrow_buffer::ArrowNativeType;
 use datafusion_common::hash_utils::create_hashes;
 use datafusion_common::utils::bisect;
-use datafusion_common::{internal_err, plan_err, JoinSide, JoinType, Result};
+use datafusion_common::{internal_err, plan_err, HashSet, JoinSide, JoinType, Result};
 use datafusion_execution::memory_pool::MemoryConsumer;
 use datafusion_execution::TaskContext;
 use datafusion_expr::interval_arithmetic::Interval;
@@ -77,7 +77,6 @@ use datafusion_physical_expr_common::sort_expr::{
     LexOrdering, LexOrderingRef, LexRequirement,
 };
 use futures::{ready, Stream, StreamExt};
-use hashbrown::HashSet;
 use parking_lot::Mutex;
 
 const HASHMAP_SHRINK_SCALE_FACTOR: usize = 4;

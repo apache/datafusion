@@ -88,8 +88,9 @@ pub use error::{
     _substrait_datafusion_err,
 };
 
-// The HashMap implementation that should be the uniform default
+// The HashMap and HashSet implementations that should be used as the uniform defaults
 pub type HashMap<K, V, S = DefaultHashBuilder> = hashbrown::HashMap<K, V, S>;
+pub type HashSet<T, S = DefaultHashBuilder> = hashbrown::HashSet<T, S>;
 
 /// Downcast an Arrow Array to a concrete type, return an `DataFusionError::Internal` if the cast is
 /// not possible. In normal usage of DataFusion the downcast should always succeed.

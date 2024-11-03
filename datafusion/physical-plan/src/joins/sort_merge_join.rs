@@ -43,8 +43,8 @@ use arrow::error::ArrowError;
 use arrow::ipc::reader::FileReader;
 use arrow_array::types::UInt64Type;
 use datafusion_common::{
-    exec_err, internal_err, not_impl_err, plan_err, DataFusionError, JoinSide, JoinType,
-    Result,
+    exec_err, internal_err, not_impl_err, plan_err, DataFusionError, HashSet, JoinSide,
+    JoinType, Result,
 };
 use datafusion_execution::disk_manager::RefCountedTempFile;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
@@ -54,7 +54,6 @@ use datafusion_physical_expr::equivalence::join_equivalence_properties;
 use datafusion_physical_expr::{PhysicalExprRef, PhysicalSortRequirement};
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};
 use futures::{Stream, StreamExt};
-use hashbrown::HashSet;
 
 use crate::expressions::PhysicalSortExpr;
 use crate::joins::utils::{
