@@ -21,11 +21,11 @@ use std::sync::{Arc, OnceLock};
 use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::{Int64, Timestamp, Utf8};
 use arrow::datatypes::TimeUnit::Second;
-use datafusion_common::{exec_err, Result, ScalarValue};
+use datafusion_common::{exec_err, internal_err, ExprSchema, Result, ScalarValue};
 use datafusion_expr::scalar_doc_sections::DOC_SECTION_DATETIME;
 use datafusion_expr::TypeSignature::Exact;
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, Documentation, Expr, ScalarUDFImpl, Signature, Volatility,
 };
 
 #[derive(Debug)]
@@ -63,21 +63,32 @@ impl ScalarUDFImpl for FromUnixtimeFunc {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+    fn return_type_from_exprs(
+        &self,
+        args: &[Expr],
+        _schema: &dyn ExprSchema,
+        arg_types: &[DataType],
+    ) -> Result<DataType> {
         match arg_types.len() {
             1 => Ok(Timestamp(Second, None)),
-            2 => match &arg_types[1] {
-                Utf8 => Ok(Timestamp(Second, Some(Utf8.to_string().into()))),
-                _ => exec_err!(
-                    "Second argument for `from_unixtime` must be non-null Utf8, received {:?}",
-                    arg_types[1]
-                ),
+            2 => {
+                match &args[1] {
+                    Expr::Literal(ScalarValue::Utf8(Some(tz))) => Ok(Timestamp(Second, Some(Arc::from(tz.to_string())))),
+                    _ => exec_err!(
+                "Second argument for `from_unixtime` must be non-null utf8, received {:?}",
+                arg_types[1]
+            ),
+                }
             }
             _ => exec_err!(
                 "from_unixtime function requires 1 or 2 arguments, got {}",
                 arg_types.len()
             ),
         }
+    }
+
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        internal_err!("return_type should not be called")
     }
 
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
