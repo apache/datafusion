@@ -694,14 +694,21 @@ impl SessionContext {
                 data_types,
             }) => {
                 // The number of parameters must match the specified data types length.
-                let param_names = input.get_parameter_names()?;
-                if param_names.len() != data_types.len() {
-                    return plan_err!(
-                        "Prepare specifies {} data types but query has {} parameters",
-                        data_types.len(),
-                        param_names.len()
-                    );
+                if !data_types.is_empty() {
+                    let param_names = input.get_parameter_names()?;
+                    if param_names.len() != data_types.len() {
+                        return plan_err!(
+                            "Prepare specifies {} data types but query has {} parameters",
+                            data_types.len(),
+                            param_names.len()
+                        );
+                    }
                 }
+                // Store the unoptimized plan into the session state. Although storing the
+                // optimized plan or the physical plan would be more efficient, doing so is
+                // not currently feasible. This is because `now()` would be optimized to a
+                // constant value, causing each EXECUTE to yield the same result, which is
+                // incorrect behavior.
                 self.state.write().store_prepared(name, data_types, input)?;
                 self.return_empty_dataframe()
             }

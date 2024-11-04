@@ -911,7 +911,7 @@ impl SessionState {
         Ok(udtf.map(|x| x.function().clone()))
     }
 
-    /// Store the logical plan and parameter types of a prepared statement.
+    /// Store the logical plan and the parameter types of a prepared statement.
     pub(crate) fn store_prepared(
         &mut self,
         name: String,
