@@ -564,7 +564,7 @@ fn get_valid_types(
             // Aim to keep this logic as SIMPLE as possible!
             // Make sure the corresponding test is covered
             // If this function becomes COMPLEX, create another new signature!
-            fn can_cast_to(logical_type: &NativeType, target_type: &NativeType) -> bool {
+            fn can_coerce_to(logical_type: &NativeType, target_type: &NativeType) -> bool {
                 if logical_type == target_type {
                     return true;
                 }
@@ -586,7 +586,7 @@ fn get_valid_types(
             {
                 let logical_type: NativeType = current_type.into();
                 let target_logical_type = target_type.native();
-                if can_cast_to(&logical_type, target_logical_type) {
+                if can_coerce_to(&logical_type, target_logical_type) {
                     let target_type =
                         target_logical_type.default_cast_for(current_type)?;
                     new_types.push(target_type);
