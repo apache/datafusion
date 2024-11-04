@@ -31,7 +31,6 @@ use crate::datasource::{
 };
 use crate::error::Result;
 use crate::execution::context::{SessionConfig, SessionState};
-use crate::logical_expr::Expr;
 
 use arrow::datatypes::{DataType, Schema, SchemaRef};
 use datafusion_common::config::TableOptions;
@@ -41,6 +40,7 @@ use datafusion_common::{
 };
 
 use async_trait::async_trait;
+use datafusion_expr::SortExpr;
 
 /// Options that control the reading of CSV files.
 ///
@@ -59,6 +59,8 @@ pub struct CsvReadOptions<'a> {
     pub delimiter: u8,
     /// An optional quote character. Defaults to `b'"'`.
     pub quote: u8,
+    /// An optional terminator character. Defaults to None (CRLF).
+    pub terminator: Option<u8>,
     /// An optional escape character. Defaults to None.
     pub escape: Option<u8>,
     /// If enabled, lines beginning with this byte are ignored.
@@ -84,7 +86,7 @@ pub struct CsvReadOptions<'a> {
     /// File compression type
     pub file_compression_type: FileCompressionType,
     /// Indicates how the file is sorted
-    pub file_sort_order: Vec<Vec<Expr>>,
+    pub file_sort_order: Vec<Vec<SortExpr>>,
 }
 
 impl<'a> Default for CsvReadOptions<'a> {
@@ -102,6 +104,7 @@ impl<'a> CsvReadOptions<'a> {
             schema_infer_max_records: DEFAULT_SCHEMA_INFER_MAX_RECORD,
             delimiter: b',',
             quote: b'"',
+            terminator: None,
             escape: None,
             newlines_in_values: false,
             file_extension: DEFAULT_CSV_EXTENSION,
@@ -133,6 +136,12 @@ impl<'a> CsvReadOptions<'a> {
     /// Specify quote to use for CSV read
     pub fn quote(mut self, quote: u8) -> Self {
         self.quote = quote;
+        self
+    }
+
+    /// Specify terminator to use for CSV read
+    pub fn terminator(mut self, terminator: Option<u8>) -> Self {
+        self.terminator = terminator;
         self
     }
 
@@ -199,7 +208,7 @@ impl<'a> CsvReadOptions<'a> {
     }
 
     /// Configure if file has known sort order
-    pub fn file_sort_order(mut self, file_sort_order: Vec<Vec<Expr>>) -> Self {
+    pub fn file_sort_order(mut self, file_sort_order: Vec<Vec<SortExpr>>) -> Self {
         self.file_sort_order = file_sort_order;
         self
     }
@@ -231,7 +240,7 @@ pub struct ParquetReadOptions<'a> {
     /// based on data in file.
     pub schema: Option<&'a Schema>,
     /// Indicates how the file is sorted
-    pub file_sort_order: Vec<Vec<Expr>>,
+    pub file_sort_order: Vec<Vec<SortExpr>>,
 }
 
 impl<'a> Default for ParquetReadOptions<'a> {
@@ -248,6 +257,11 @@ impl<'a> Default for ParquetReadOptions<'a> {
 }
 
 impl<'a> ParquetReadOptions<'a> {
+    /// Create a new ParquetReadOptions with default values
+    pub fn new() -> Self {
+        Default::default()
+    }
+
     /// Specify parquet_pruning
     pub fn parquet_pruning(mut self, parquet_pruning: bool) -> Self {
         self.parquet_pruning = Some(parquet_pruning);
@@ -278,7 +292,7 @@ impl<'a> ParquetReadOptions<'a> {
     }
 
     /// Configure if file has known sort order
-    pub fn file_sort_order(mut self, file_sort_order: Vec<Vec<Expr>>) -> Self {
+    pub fn file_sort_order(mut self, file_sort_order: Vec<Vec<SortExpr>>) -> Self {
         self.file_sort_order = file_sort_order;
         self
     }
@@ -397,7 +411,7 @@ pub struct NdJsonReadOptions<'a> {
     /// Flag indicating whether this file may be unbounded (as in a FIFO file).
     pub infinite: bool,
     /// Indicates how the file is sorted
-    pub file_sort_order: Vec<Vec<Expr>>,
+    pub file_sort_order: Vec<Vec<SortExpr>>,
 }
 
 impl<'a> Default for NdJsonReadOptions<'a> {
@@ -452,7 +466,7 @@ impl<'a> NdJsonReadOptions<'a> {
     }
 
     /// Configure if file has known sort order
-    pub fn file_sort_order(mut self, file_sort_order: Vec<Vec<Expr>>) -> Self {
+    pub fn file_sort_order(mut self, file_sort_order: Vec<Vec<SortExpr>>) -> Self {
         self.file_sort_order = file_sort_order;
         self
     }
@@ -511,6 +525,7 @@ impl ReadOptions<'_> for CsvReadOptions<'_> {
             .with_delimiter(self.delimiter)
             .with_quote(self.quote)
             .with_escape(self.escape)
+            .with_terminator(self.terminator)
             .with_newlines_in_values(self.newlines_in_values)
             .with_schema_infer_max_rec(self.schema_infer_max_records)
             .with_file_compression_type(self.file_compression_type.to_owned());

@@ -17,6 +17,7 @@
 
 //! [`ContextProvider`] and [`ExprPlanner`] APIs to customize SQL query planning
 
+use std::fmt::Debug;
 use std::sync::Arc;
 
 use arrow::datatypes::{DataType, Field, SchemaRef};
@@ -88,7 +89,7 @@ pub trait ContextProvider {
 }
 
 /// This trait allows users to customize the behavior of the SQL planner
-pub trait ExprPlanner: Send + Sync {
+pub trait ExprPlanner: Debug + Send + Sync {
     /// Plan the binary operation between two expressions, returns original
     /// BinaryExpr if not possible
     fn plan_binary_op(

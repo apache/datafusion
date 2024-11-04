@@ -67,7 +67,7 @@ AS SELECT arrow_cast(x, 'Dictionary(Int32, Utf8)') as d1,
 y as d2,
 arrow_cast(z, 'LargeUtf8') as d3 FROM window_null_string_value_prepare;
 
-query ?I
+query TI
 SELECT d1, row_number() OVER (partition by d1) as rn1 FROM window_null_string_table order by d1 asc;
 ----
 one 1
@@ -241,7 +241,7 @@ AS SELECT arrow_cast(x, 'Dictionary(Int32, Utf8)') as d1,
 arrow_cast(y, 'Dictionary(Int32, Utf8)') as d2,
 z as d3 FROM value;
 
-query ?
+query T
 SELECT d1 FROM string_dictionary_table;
 ----
 one
@@ -249,38 +249,38 @@ NULL
 three
 
 # basic filtering
-query ?
+query T
 SELECT d1 FROM string_dictionary_table WHERE d1 IS NOT NULL;
 ----
 one
 three
 
 # comparison with constant
-query ?
+query T
 SELECT d1 FROM string_dictionary_table WHERE d1 = 'three';
 ----
 three
 
 # comparison with another dictionary column
-query ?
+query T
 SELECT d1 FROM string_dictionary_table WHERE d1 = d2;
 ----
 three
 
 # order comparison with another dictionary column
-query ?
+query T
 SELECT d1 FROM string_dictionary_table WHERE d1 <= d2;
 ----
 three
 
 # comparison with a non dictionary column
-query ?
+query T
 SELECT d1 FROM string_dictionary_table WHERE d1 = d3;
 ----
 three
 
 # filtering with constant
-query ?
+query T
 SELECT d1 FROM string_dictionary_table WHERE d1 = 'three';
 ----
 three
@@ -320,7 +320,7 @@ SELECT MAX(d1) FROM string_dictionary_table;
 three
 
 # grouping
-query ?I
+query TI
 SELECT d1, COUNT(*) FROM string_dictionary_table group by d1 order by d1;
 ----
 one 1
@@ -328,7 +328,7 @@ three 1
 NULL 1
 
 # window functions
-query ?I
+query TI
 SELECT d1, row_number() OVER (partition by d1) as rn1 FROM string_dictionary_table order by d1;
 ----
 one 1
@@ -348,8 +348,11 @@ VALUES (1),()
 statement error DataFusion error: Error during planning: Inconsistent data length across values list: got 2 values in row 1 but expected 1
 VALUES (1),(1,2)
 
-statement error DataFusion error: Error during planning: Inconsistent data type across values list at row 1 column 0
+query I
 VALUES (1),('2')
+----
+1
+2
 
 query R
 VALUES (1),(2.0)
@@ -357,8 +360,11 @@ VALUES (1),(2.0)
 1
 2
 
-statement error DataFusion error: Error during planning: Inconsistent data type across values list at row 1 column 1
+query II
 VALUES (1,2), (1,'2')
+----
+1 2
+1 2
 
 query IT
 VALUES (1,'a'),(NULL,'b'),(3,'c')
@@ -374,7 +380,7 @@ NULL a
 NULL b
 3 c
 
-query TT
+query ?T
 VALUES (NULL,'a'),(NULL,'b'),(NULL,'c')
 ----
 NULL a
@@ -395,7 +401,7 @@ VALUES (1,NULL),(2,NULL),(3,'c')
 2 NULL
 3 c
 
-query IIIIIIIIIIIIITTR
+query IIIIIIIIIIIII?TR
 VALUES (1,2,3,4,5,6,7,8,9,10,11,12,13,NULL,'F',3.5)
 ----
 1 2 3 4 5 6 7 8 9 10 11 12 13 NULL F 3.5
@@ -453,7 +459,7 @@ VALUES (-1)
 query IIB
 VALUES (2+1,2-1,2>1)
 ----
-3    1    true
+3 1 true
 
 # multiple rows values
 query I rowsort
@@ -466,8 +472,8 @@ VALUES (1),(2)
 query IT rowsort
 VALUES (1,'a'),(2,'b')
 ----
-1   a
-2   b
+1 a
+2 b
 
 # table foo for distinct order by
 statement ok
@@ -482,6 +488,21 @@ CREATE TABLE foo2(c1 double, c2 double) AS VALUES
 (1.1, 4.1),
 (2, 5),
 (3, 6);
+
+query T
+SELECT arrow_typeof(COALESCE(column1, column2)) FROM VALUES (null, 1.2);
+----
+Float64
+
+# multiple rows and columns with null need type coercion
+query TTT
+select arrow_typeof(column1), arrow_typeof(column2), arrow_typeof(column3) from (SELECT column1, column2, column3 FROM VALUES
+(null, 2, 'a'),
+(1.1, null, 'b'),
+(2, 5, null)) LIMIT 1;
+----
+Float64 Int64 Utf8
+
 
 # foo distinct
 query T
@@ -537,7 +558,7 @@ EXPLAIN SELECT * FROM ((SELECT column1 FROM foo) "T1" CROSS JOIN (SELECT column2
 ----
 logical_plan
 01)SubqueryAlias: F
-02)--CrossJoin:
+02)--Cross Join:
 03)----SubqueryAlias: T1
 04)------TableScan: foo projection=[column1]
 05)----SubqueryAlias: T2
@@ -560,8 +581,31 @@ select * from (select 1 a union all select 2) b order by a limit 1;
 1
 
 # select limit clause invalid
-statement error DataFusion error: Error during planning: LIMIT must be >= 0, '\-1' was provided\.
+statement error Error during planning: LIMIT must be >= 0, '-1' was provided
 select * from (select 1 a union all select 2) b order by a limit -1;
+
+statement error Error during planning: OFFSET must be >=0, '-1' was provided
+select * from (select 1 a union all select 2) b order by a offset -1;
+
+statement error Unsupported LIMIT expression
+select * from (values(1),(2)) limit (select 1);
+
+statement error Unsupported OFFSET expression
+select * from (values(1),(2)) offset (select 1);
+
+# disallow non-integer limit/offset
+statement error Expected LIMIT to be an integer or null, but got Float64
+select * from (values(1),(2)) limit 0.5;
+
+statement error Expected OFFSET to be an integer or null, but got Utf8
+select * from (values(1),(2)) offset '1';
+
+# test with different integer types
+query I
+select * from (values (1), (2), (3), (4)) limit 2::int OFFSET 1::tinyint
+----
+2
+3
 
 # select limit with basic arithmetic
 query I
@@ -576,18 +620,50 @@ select * from (values (1)) LIMIT 10*100;
 ----
 1
 
-# More complex expressions in the limit is not supported yet.
-# See issue: https://github.com/apache/datafusion/issues/9821
-statement error DataFusion error: Error during planning: Unsupported operator for LIMIT clause
+# select limit with complex arithmetic
+query I
 select * from (values (1)) LIMIT 100/10;
+----
+1
 
-# More complex expressions in the limit is not supported yet.
-statement error DataFusion error: Error during planning: Unexpected expression in LIMIT clause
+# test constant-folding of LIMIT expr
+query I
+select * from (values (1), (2), (3), (4)) LIMIT abs(-4) + 4 / -2; -- LIMIT 2
+----
+1
+2
+
+# test constant-folding of OFFSET expr
+query I
+select * from (values (1), (2), (3), (4)) OFFSET abs(-4) + 4 / -2; -- OFFSET 2
+----
+3
+4
+
+# test constant-folding of LIMIT and OFFSET
+query I
+select * from (values (1), (2), (3), (4))
+  -- LIMIT 2
+  LIMIT abs(-4) + -1 * 2
+  -- OFFSET 1
+  OFFSET case when 1 < 2 then 1 else 0 end;
+----
+2
+3
+
+statement error Schema error: No field named column1.
 select * from (values (1)) LIMIT cast(column1 as tinyint);
 
 # select limit clause
 query I
 select * from (select 1 a union all select 2) b order by a limit null;
+----
+1
+2
+
+# offset null takes no effect
+query I
+select * from (select 1 a union all select 2) b order by a offset null;
 ----
 1
 2
@@ -990,13 +1066,13 @@ FROM (
     ) AS a
 ) AS b
 ----
-a 5 -101
-a 5 -54
 a 5 -38
-a 5 65
-a 6 -101
-a 6 -31
+a 5 -54
 a 6 36
+a 6 -31
+a 5 65
+a 5 -101
+a 6 -101
 
 # nested select without aliases
 query TII
@@ -1011,13 +1087,13 @@ FROM (
     )
 )
 ----
-a 5 -101
-a 5 -54
 a 5 -38
-a 5 65
-a 6 -101
-a 6 -31
+a 5 -54
 a 6 36
+a 6 -31
+a 5 65
+a 5 -101
+a 6 -101
 
 # select with join unaliased subqueries
 query TIITII
@@ -1118,9 +1194,8 @@ EXPLAIN SELECT a FROM annotated_data_finite2
         LIMIT 5
 ----
 logical_plan
-01)Limit: skip=0, fetch=5
-02)--Sort: annotated_data_finite2.a ASC NULLS LAST, fetch=5
-03)----TableScan: annotated_data_finite2 projection=[a]
+01)Sort: annotated_data_finite2.a ASC NULLS LAST, fetch=5
+02)--TableScan: annotated_data_finite2 projection=[a]
 physical_plan CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a], limit=5, output_ordering=[a@0 ASC NULLS LAST], has_header=true
 
 query I
@@ -1364,7 +1439,7 @@ logical_plan
 02)--Filter: annotated_data_finite2.a = Int32(0)
 03)----TableScan: annotated_data_finite2 projection=[a0, a, b, c, d], partial_filters=[annotated_data_finite2.a = Int32(0)]
 physical_plan
-01)SortPreservingMergeExec: [b@2 ASC NULLS LAST,c@3 ASC NULLS LAST]
+01)SortPreservingMergeExec: [b@2 ASC NULLS LAST, c@3 ASC NULLS LAST]
 02)--CoalesceBatchesExec: target_batch_size=8192
 03)----FilterExec: a@1 = 0
 04)------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
@@ -1406,7 +1481,7 @@ logical_plan
 02)--Filter: annotated_data_finite2.a = Int32(0) AND annotated_data_finite2.b = Int32(0)
 03)----TableScan: annotated_data_finite2 projection=[a0, a, b, c, d], partial_filters=[annotated_data_finite2.a = Int32(0), annotated_data_finite2.b = Int32(0)]
 physical_plan
-01)SortPreservingMergeExec: [b@2 ASC NULLS LAST,c@3 ASC NULLS LAST]
+01)SortPreservingMergeExec: [b@2 ASC NULLS LAST, c@3 ASC NULLS LAST]
 02)--CoalesceBatchesExec: target_batch_size=8192
 03)----FilterExec: a@1 = 0 AND b@2 = 0
 04)------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
@@ -1427,7 +1502,7 @@ logical_plan
 02)--Filter: annotated_data_finite2.a = Int32(0) AND annotated_data_finite2.b = Int32(0)
 03)----TableScan: annotated_data_finite2 projection=[a0, a, b, c, d], partial_filters=[annotated_data_finite2.a = Int32(0), annotated_data_finite2.b = Int32(0)]
 physical_plan
-01)SortPreservingMergeExec: [a@1 ASC NULLS LAST,b@2 ASC NULLS LAST,c@3 ASC NULLS LAST]
+01)SortPreservingMergeExec: [a@1 ASC NULLS LAST, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST]
 02)--CoalesceBatchesExec: target_batch_size=8192
 03)----FilterExec: a@1 = 0 AND b@2 = 0
 04)------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
@@ -1461,13 +1536,14 @@ query TT
 EXPLAIN SELECT c2, COUNT(*)
 FROM (SELECT c2
 FROM aggregate_test_100
-ORDER BY c1, c2)
+ORDER BY c1, c2
+LIMIT 4)
 GROUP BY c2;
 ----
 logical_plan
 01)Aggregate: groupBy=[[aggregate_test_100.c2]], aggr=[[count(Int64(1)) AS count(*)]]
 02)--Projection: aggregate_test_100.c2
-03)----Sort: aggregate_test_100.c1 ASC NULLS LAST, aggregate_test_100.c2 ASC NULLS LAST
+03)----Sort: aggregate_test_100.c1 ASC NULLS LAST, aggregate_test_100.c2 ASC NULLS LAST, fetch=4
 04)------Projection: aggregate_test_100.c2, aggregate_test_100.c1
 05)--------TableScan: aggregate_test_100 projection=[c1, c2]
 physical_plan
@@ -1476,7 +1552,9 @@ physical_plan
 03)----RepartitionExec: partitioning=Hash([c2@0], 2), input_partitions=2
 04)------AggregateExec: mode=Partial, gby=[c2@0 as c2], aggr=[count(*)]
 05)--------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
-06)----------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c2], has_header=true
+06)----------ProjectionExec: expr=[c2@0 as c2]
+07)------------SortExec: TopK(fetch=4), expr=[c1@1 ASC NULLS LAST, c2@0 ASC NULLS LAST], preserve_partitioning=[false]
+08)--------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c2, c1], has_header=true
 
 # FilterExec can track equality of non-column expressions.
 # plan below shouldn't have a SortExec because given column 'a' is ordered.
@@ -1683,6 +1761,9 @@ SELECT i + i FROM test WHERE i > 2;
 ----
 6
 
+statement ok
+DROP TABLE test;
+
 query error DataFusion error: Arrow error: Parser error: Error parsing timestamp from 'I AM NOT A TIMESTAMP': error parsing date
 SELECT to_timestamp('I AM NOT A TIMESTAMP');
 
@@ -1739,3 +1820,19 @@ select a from t;
 
 statement ok
 set datafusion.optimizer.max_passes=3;
+
+# Test issue: https://github.com/apache/datafusion/issues/12183
+statement ok
+CREATE TABLE test(a BIGINT) AS VALUES (1);
+
+query I
+SELECT "test.a" FROM (SELECT a AS "test.a" FROM test)
+----
+1
+
+statement ok
+DROP TABLE test;
+
+# Can't reference an unqualified column by a qualified name
+query error DataFusion error: Schema error: No field named t1\.v1\. Valid fields are "t1\.v1"\.
+SELECT t1.v1 FROM (SELECT 1 AS "t1.v1");

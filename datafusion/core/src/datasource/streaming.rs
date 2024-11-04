@@ -32,6 +32,7 @@ use datafusion_expr::{Expr, TableType};
 use log::debug;
 
 /// A [`TableProvider`] that streams a set of [`PartitionStream`]
+#[derive(Debug)]
 pub struct StreamingTable {
     schema: SchemaRef,
     partitions: Vec<Arc<dyn PartitionStream>>,

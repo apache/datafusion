@@ -17,6 +17,7 @@
 
 use std::sync::Arc;
 
+use crate::aggregate::groups_accumulator::nulls::filtered_null_mask;
 use arrow::array::{ArrayRef, AsArray, BooleanArray, BooleanBufferBuilder};
 use arrow::buffer::BooleanBuffer;
 use datafusion_common::Result;
@@ -46,17 +47,22 @@ where
 
     /// Function that computes the output
     bool_fn: F,
+
+    /// The identity element for the boolean operation.
+    /// Any value combined with this returns the original value.
+    identity: bool,
 }
 
 impl<F> BooleanGroupsAccumulator<F>
 where
     F: Fn(bool, bool) -> bool + Send + Sync,
 {
-    pub fn new(bitop_fn: F) -> Self {
+    pub fn new(bool_fn: F, identity: bool) -> Self {
         Self {
             values: BooleanBufferBuilder::new(0),
             null_state: NullState::new(),
-            bool_fn: bitop_fn,
+            bool_fn,
+            identity,
         }
     }
 }
@@ -77,7 +83,9 @@ where
 
         if self.values.len() < total_num_groups {
             let new_groups = total_num_groups - self.values.len();
-            self.values.append_n(new_groups, Default::default());
+            // Fill with the identity element, so that when the first non-null value is encountered,
+            // it will combine with the identity and the result will be the first non-null value itself.
+            self.values.append_n(new_groups, self.identity);
         }
 
         // NullState dispatches / handles tracking nulls and groups that saw no values
@@ -134,5 +142,23 @@ where
     fn size(&self) -> usize {
         // capacity is in bits, so convert to bytes
         self.values.capacity() / 8 + self.null_state.size()
+    }
+
+    fn convert_to_state(
+        &self,
+        values: &[ArrayRef],
+        opt_filter: Option<&BooleanArray>,
+    ) -> Result<Vec<ArrayRef>> {
+        let values = values[0].as_boolean().clone();
+
+        let values_null_buffer_filtered = filtered_null_mask(opt_filter, &values);
+        let (values_buf, _) = values.into_parts();
+        let values_filtered = BooleanArray::new(values_buf, values_null_buffer_filtered);
+
+        Ok(vec![Arc::new(values_filtered)])
+    }
+
+    fn supports_convert_to_state(&self) -> bool {
+        true
     }
 }

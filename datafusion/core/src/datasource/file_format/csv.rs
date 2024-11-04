@@ -46,11 +46,13 @@ use datafusion_common::{
     exec_err, not_impl_err, DataFusionError, GetExt, DEFAULT_CSV_EXTENSION,
 };
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::{PhysicalExpr, PhysicalSortRequirement};
+use datafusion_expr::dml::InsertOp;
+use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_plan::metrics::MetricsSet;
 
 use async_trait::async_trait;
 use bytes::{Buf, Bytes};
+use datafusion_physical_expr_common::sort_expr::LexRequirement;
 use futures::stream::BoxStream;
 use futures::{pin_mut, Stream, StreamExt, TryStreamExt};
 use object_store::{delimited::newline_delimited_stream, ObjectMeta, ObjectStore};
@@ -76,7 +78,7 @@ impl CsvFormatFactory {
     }
 }
 
-impl fmt::Debug for CsvFormatFactory {
+impl Debug for CsvFormatFactory {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("CsvFormatFactory")
             .field("options", &self.options)
@@ -246,6 +248,13 @@ impl CsvFormat {
         self
     }
 
+    /// The character used to indicate the end of a row.
+    /// - default to None (CRLF)
+    pub fn with_terminator(mut self, terminator: Option<u8>) -> Self {
+        self.options.terminator = terminator;
+        self
+    }
+
     /// Specifies whether newlines in (quoted) values are supported.
     ///
     /// Parsing newlines in quoted values may be affected by execution behaviour such as
@@ -316,7 +325,13 @@ impl FileFormat for CsvFormat {
             let stream = self.read_to_delimited_chunks(store, object).await;
             let (schema, records_read) = self
                 .infer_schema_from_stream(state, records_to_read, stream)
-                .await?;
+                .await
+                .map_err(|err| {
+                    DataFusionError::Context(
+                        format!("Error when processing CSV file {}", &object.location),
+                        Box::new(err),
+                    )
+                })?;
             records_to_read -= records_read;
             schemas.push(schema);
             if records_to_read == 0 {
@@ -358,6 +373,7 @@ impl FileFormat for CsvFormat {
             .with_has_header(has_header)
             .with_delimeter(self.options.delimiter)
             .with_quote(self.options.quote)
+            .with_terminator(self.options.terminator)
             .with_escape(self.options.escape)
             .with_comment(self.options.comment)
             .with_newlines_in_values(newlines_in_values)
@@ -369,15 +385,34 @@ impl FileFormat for CsvFormat {
     async fn create_writer_physical_plan(
         &self,
         input: Arc<dyn ExecutionPlan>,
-        _state: &SessionState,
+        state: &SessionState,
         conf: FileSinkConfig,
-        order_requirements: Option<Vec<PhysicalSortRequirement>>,
+        order_requirements: Option<LexRequirement>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        if conf.overwrite {
+        if conf.insert_op != InsertOp::Append {
             return not_impl_err!("Overwrites are not implemented yet for CSV");
         }
 
-        let writer_options = CsvWriterOptions::try_from(&self.options)?;
+        // `has_header` and `newlines_in_values` fields of CsvOptions may inherit
+        // their values from session from configuration settings. To support
+        // this logic, writer options are built from the copy of `self.options`
+        // with updated values of these special fields.
+        let has_header = self
+            .options()
+            .has_header
+            .unwrap_or(state.config_options().catalog.has_header);
+        let newlines_in_values = self
+            .options()
+            .newlines_in_values
+            .unwrap_or(state.config_options().catalog.newlines_in_values);
+
+        let options = self
+            .options()
+            .clone()
+            .with_has_header(has_header)
+            .with_newlines_in_values(newlines_in_values);
+
+        let writer_options = CsvWriterOptions::try_from(&options)?;
 
         let sink_schema = conf.output_schema().clone();
         let sink = Arc::new(CsvSink::new(conf, writer_options));
@@ -404,11 +439,13 @@ impl CsvFormat {
         let mut total_records_read = 0;
         let mut column_names = vec![];
         let mut column_type_possibilities = vec![];
-        let mut first_chunk = true;
+        let mut record_number = -1;
 
         pin_mut!(stream);
 
         while let Some(chunk) = stream.next().await.transpose()? {
+            record_number += 1;
+            let first_chunk = record_number == 0;
             let mut format = arrow::csv::reader::Format::default()
                 .with_header(
                     first_chunk
@@ -442,14 +479,14 @@ impl CsvFormat {
                         (field.name().clone(), possibilities)
                     })
                     .unzip();
-                first_chunk = false;
             } else {
                 if fields.len() != column_type_possibilities.len() {
                     return exec_err!(
                             "Encountered unequal lengths between records on CSV file whilst inferring schema. \
-                             Expected {} records, found {} records",
+                             Expected {} fields, found {} fields at record {}",
                             column_type_possibilities.len(),
-                            fields.len()
+                            fields.len(),
+                            record_number + 1
                         );
                 }
 
@@ -660,7 +697,7 @@ mod tests {
     use datafusion_common::cast::as_string_array;
     use datafusion_common::internal_err;
     use datafusion_common::stats::Precision;
-    use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
+    use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use datafusion_expr::{col, lit};
 
     use crate::execution::session_state::SessionStateBuilder;
@@ -742,7 +779,7 @@ mod tests {
                 "c7: Int64",
                 "c8: Int64",
                 "c9: Int64",
-                "c10: Int64",
+                "c10: Utf8",
                 "c11: Float64",
                 "c12: Float64",
                 "c13: Utf8"
@@ -843,7 +880,7 @@ mod tests {
     async fn query_compress_data(
         file_compression_type: FileCompressionType,
     ) -> Result<()> {
-        let runtime = Arc::new(RuntimeEnv::new(RuntimeConfig::new()).unwrap());
+        let runtime = Arc::new(RuntimeEnvBuilder::new().build()?);
         let mut cfg = SessionConfig::new();
         cfg.options_mut().catalog.has_header = true;
         let session_state = SessionStateBuilder::new()
@@ -878,7 +915,7 @@ mod tests {
             Field::new("c7", DataType::Int64, true),
             Field::new("c8", DataType::Int64, true),
             Field::new("c9", DataType::Int64, true),
-            Field::new("c10", DataType::Int64, true),
+            Field::new("c10", DataType::Utf8, true),
             Field::new("c11", DataType::Float64, true),
             Field::new("c12", DataType::Float64, true),
             Field::new("c13", DataType::Utf8, true),
@@ -939,7 +976,7 @@ mod tests {
         limit: Option<usize>,
         has_header: bool,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let root = format!("{}/csv", crate::test_util::arrow_test_data());
+        let root = format!("{}/csv", arrow_test_data());
         let format = CsvFormat::default().with_has_header(has_header);
         scan_format(state, &format, &root, file_name, projection, limit).await
     }

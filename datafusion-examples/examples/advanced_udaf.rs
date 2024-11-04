@@ -193,7 +193,7 @@ impl Accumulator for GeometricMean {
     }
 
     fn size(&self) -> usize {
-        std::mem::size_of_val(self)
+        size_of_val(self)
     }
 }
 
@@ -394,8 +394,8 @@ impl GroupsAccumulator for GeometricMeanGroupsAccumulator {
     }
 
     fn size(&self) -> usize {
-        self.counts.capacity() * std::mem::size_of::<u32>()
-            + self.prods.capacity() * std::mem::size_of::<Float64Type>()
+        self.counts.capacity() * size_of::<u32>()
+            + self.prods.capacity() * size_of::<Float64Type>()
     }
 }
 

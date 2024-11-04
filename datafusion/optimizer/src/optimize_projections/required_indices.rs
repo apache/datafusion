@@ -96,7 +96,7 @@ impl RequiredIndicies {
         // Add indices of the child fields referred to by the expressions in the
         // parent
         plan.apply_expressions(|e| {
-            self.add_expr(schema, e)?;
+            self.add_expr(schema, e);
             Ok(TreeNodeRecursion::Continue)
         })?;
         Ok(self.compact())
@@ -111,7 +111,7 @@ impl RequiredIndicies {
     ///
     /// * `input_schema`: The input schema to analyze for index requirements.
     /// * `expr`: An expression for which we want to find necessary field indices.
-    fn add_expr(&mut self, input_schema: &DFSchemaRef, expr: &Expr) -> Result<()> {
+    fn add_expr(&mut self, input_schema: &DFSchemaRef, expr: &Expr) {
         // TODO could remove these clones (and visit the expression directly)
         let mut cols = expr.column_refs();
         // Get outer-referenced (subquery) columns:
@@ -122,7 +122,6 @@ impl RequiredIndicies {
                 self.indices.push(idx);
             }
         }
-        Ok(())
     }
 
     /// Adds the indices of the fields referred to by the given expressions
@@ -136,14 +135,14 @@ impl RequiredIndicies {
         self,
         schema: &DFSchemaRef,
         exprs: impl IntoIterator<Item = &'a Expr>,
-    ) -> Result<Self> {
+    ) -> Self {
         exprs
             .into_iter()
-            .try_fold(self, |mut acc, expr| {
-                acc.add_expr(schema, expr)?;
-                Ok(acc)
+            .fold(self, |mut acc, expr| {
+                acc.add_expr(schema, expr);
+                acc
             })
-            .map(|acc| acc.compact())
+            .compact()
     }
 
     /// Adds all `indices` into this instance.

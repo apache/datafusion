@@ -37,16 +37,17 @@
 //! * [`LogicalPlan::with_new_exprs`]: Create a new plan with different expressions
 //! * [`LogicalPlan::expressions`]: Return a copy of the plan's expressions
 use crate::{
-    dml::CopyTo, Aggregate, Analyze, CreateMemoryTable, CreateView, CrossJoin,
-    DdlStatement, Distinct, DistinctOn, DmlStatement, Explain, Expr, Extension, Filter,
-    Join, Limit, LogicalPlan, Partitioning, Prepare, Projection, RecursiveQuery,
-    Repartition, Sort, Subquery, SubqueryAlias, TableScan, Union, Unnest,
-    UserDefinedLogicalNode, Values, Window,
+    dml::CopyTo, Aggregate, Analyze, CreateMemoryTable, CreateView, DdlStatement,
+    Distinct, DistinctOn, DmlStatement, Execute, Explain, Expr, Extension, Filter, Join,
+    Limit, LogicalPlan, Partitioning, Prepare, Projection, RecursiveQuery, Repartition,
+    Sort, Subquery, SubqueryAlias, TableScan, Union, Unnest, UserDefinedLogicalNode,
+    Values, Window,
 };
+use std::ops::Deref;
 use std::sync::Arc;
 
 use crate::expr::{Exists, InSubquery};
-use crate::tree_node::transform_option_vec;
+use crate::tree_node::{transform_sort_option_vec, transform_sort_vec};
 use datafusion_common::tree_node::{
     Transformed, TreeNode, TreeNodeIterator, TreeNodeRecursion, TreeNodeRewriter,
     TreeNodeVisitor,
@@ -87,8 +88,17 @@ impl TreeNode for LogicalPlan {
                     schema,
                 })
             }),
-            LogicalPlan::Filter(Filter { predicate, input }) => rewrite_arc(input, f)?
-                .update_data(|input| LogicalPlan::Filter(Filter { predicate, input })),
+            LogicalPlan::Filter(Filter {
+                predicate,
+                input,
+                having,
+            }) => rewrite_arc(input, f)?.update_data(|input| {
+                LogicalPlan::Filter(Filter {
+                    predicate,
+                    input,
+                    having,
+                })
+            }),
             LogicalPlan::Repartition(Repartition {
                 input,
                 partitioning_scheme,
@@ -148,22 +158,6 @@ impl TreeNode for LogicalPlan {
                     join_constraint,
                     schema,
                     null_equals_null,
-                })
-            }),
-            LogicalPlan::CrossJoin(CrossJoin {
-                left,
-                right,
-                schema,
-            }) => map_until_stop_and_collect!(
-                rewrite_arc(left, &mut f),
-                right,
-                rewrite_arc(right, &mut f)
-            )?
-            .update_data(|(left, right)| {
-                LogicalPlan::CrossJoin(CrossJoin {
-                    left,
-                    right,
-                    schema,
                 })
             }),
             LogicalPlan::Limit(Limit { skip, fetch, input }) => rewrite_arc(input, f)?
@@ -276,6 +270,7 @@ impl TreeNode for LogicalPlan {
                         if_not_exists,
                         or_replace,
                         column_defaults,
+                        temporary,
                     }) => rewrite_arc(input, f)?.update_data(|input| {
                         DdlStatement::CreateMemoryTable(CreateMemoryTable {
                             name,
@@ -284,6 +279,7 @@ impl TreeNode for LogicalPlan {
                             if_not_exists,
                             or_replace,
                             column_defaults,
+                            temporary,
                         })
                     }),
                     DdlStatement::CreateView(CreateView {
@@ -291,12 +287,14 @@ impl TreeNode for LogicalPlan {
                         input,
                         or_replace,
                         definition,
+                        temporary,
                     }) => rewrite_arc(input, f)?.update_data(|input| {
                         DdlStatement::CreateView(CreateView {
                             name,
                             input,
                             or_replace,
                             definition,
+                            temporary,
                         })
                     }),
                     // no inputs in these statements
@@ -365,18 +363,10 @@ impl TreeNode for LogicalPlan {
             | LogicalPlan::Statement { .. }
             | LogicalPlan::EmptyRelation { .. }
             | LogicalPlan::Values { .. }
+            | LogicalPlan::Execute { .. }
             | LogicalPlan::DescribeTable(_) => Transformed::no(self),
         })
     }
-}
-
-/// Converts a `Arc<LogicalPlan>` without copying, if possible. Copies the plan
-/// if there is a shared reference
-pub fn unwrap_arc(plan: Arc<LogicalPlan>) -> LogicalPlan {
-    Arc::try_unwrap(plan)
-        // if None is returned, there is another reference to this
-        // LogicalPlan, so we can not own it, and must clone instead
-        .unwrap_or_else(|node| node.as_ref().clone())
 }
 
 /// Applies `f` to rewrite a `Arc<LogicalPlan>` without copying, if possible
@@ -384,7 +374,7 @@ fn rewrite_arc<F: FnMut(LogicalPlan) -> Result<Transformed<LogicalPlan>>>(
     plan: Arc<LogicalPlan>,
     mut f: F,
 ) -> Result<Transformed<Arc<LogicalPlan>>> {
-    f(unwrap_arc(plan))?.map_data(|new_plan| Ok(Arc::new(new_plan)))
+    f(Arc::unwrap_or_clone(plan))?.map_data(|new_plan| Ok(Arc::new(new_plan)))
 }
 
 /// rewrite a `Vec` of `Arc<LogicalPlan>` without copying, if possible
@@ -481,7 +471,9 @@ impl LogicalPlan {
                     .apply_until_stop(|e| f(&e))?
                     .visit_sibling(|| filter.iter().apply_until_stop(f))
             }
-            LogicalPlan::Sort(Sort { expr, .. }) => expr.iter().apply_until_stop(f),
+            LogicalPlan::Sort(Sort { expr, .. }) => {
+                expr.iter().apply_until_stop(|sort| f(&sort.expr))
+            }
             LogicalPlan::Extension(extension) => {
                 // would be nice to avoid this copy -- maybe can
                 // update extension to just observer Exprs
@@ -507,16 +499,22 @@ impl LogicalPlan {
             })) => on_expr
                 .iter()
                 .chain(select_expr.iter())
-                .chain(sort_expr.iter().flatten())
+                .chain(sort_expr.iter().flatten().map(|sort| &sort.expr))
                 .apply_until_stop(f),
+            LogicalPlan::Limit(Limit { skip, fetch, .. }) => skip
+                .iter()
+                .chain(fetch.iter())
+                .map(|e| e.deref())
+                .apply_until_stop(f),
+            LogicalPlan::Execute(Execute { parameters, .. }) => {
+                parameters.iter().apply_until_stop(f)
+            }
             // plans without expressions
             LogicalPlan::EmptyRelation(_)
             | LogicalPlan::RecursiveQuery(_)
             | LogicalPlan::Subquery(_)
             | LogicalPlan::SubqueryAlias(_)
-            | LogicalPlan::Limit(_)
             | LogicalPlan::Statement(_)
-            | LogicalPlan::CrossJoin(_)
             | LogicalPlan::Analyze(_)
             | LogicalPlan::Explain(_)
             | LogicalPlan::Union(_)
@@ -561,10 +559,17 @@ impl LogicalPlan {
                     value.into_iter().map_until_stop_and_collect(&mut f)
                 })?
                 .update_data(|values| LogicalPlan::Values(Values { schema, values })),
-            LogicalPlan::Filter(Filter { predicate, input }) => f(predicate)?
-                .update_data(|predicate| {
-                    LogicalPlan::Filter(Filter { predicate, input })
-                }),
+            LogicalPlan::Filter(Filter {
+                predicate,
+                input,
+                having,
+            }) => f(predicate)?.update_data(|predicate| {
+                LogicalPlan::Filter(Filter {
+                    predicate,
+                    input,
+                    having,
+                })
+            }),
             LogicalPlan::Repartition(Repartition {
                 input,
                 partitioning_scheme,
@@ -651,10 +656,10 @@ impl LogicalPlan {
                     null_equals_null,
                 })
             }),
-            LogicalPlan::Sort(Sort { expr, input, fetch }) => expr
-                .into_iter()
-                .map_until_stop_and_collect(f)?
-                .update_data(|expr| LogicalPlan::Sort(Sort { expr, input, fetch })),
+            LogicalPlan::Sort(Sort { expr, input, fetch }) => {
+                transform_sort_vec(expr, &mut f)?
+                    .update_data(|expr| LogicalPlan::Sort(Sort { expr, input, fetch }))
+            }
             LogicalPlan::Extension(Extension { node }) => {
                 // would be nice to avoid this copy -- maybe can
                 // update extension to just observer Exprs
@@ -702,7 +707,7 @@ impl LogicalPlan {
                 select_expr,
                 select_expr.into_iter().map_until_stop_and_collect(&mut f),
                 sort_expr,
-                transform_option_vec(sort_expr, &mut f)
+                transform_sort_option_vec(sort_expr, &mut f)
             )?
             .update_data(|(on_expr, select_expr, sort_expr)| {
                 LogicalPlan::Distinct(Distinct::On(DistinctOn {
@@ -713,15 +718,47 @@ impl LogicalPlan {
                     schema,
                 }))
             }),
+            LogicalPlan::Limit(Limit { skip, fetch, input }) => {
+                let skip = skip.map(|e| *e);
+                let fetch = fetch.map(|e| *e);
+                map_until_stop_and_collect!(
+                    skip.map_or(Ok::<_, DataFusionError>(Transformed::no(None)), |e| {
+                        Ok(f(e)?.update_data(Some))
+                    }),
+                    fetch,
+                    fetch.map_or(Ok::<_, DataFusionError>(Transformed::no(None)), |e| {
+                        Ok(f(e)?.update_data(Some))
+                    })
+                )?
+                .update_data(|(skip, fetch)| {
+                    LogicalPlan::Limit(Limit {
+                        skip: skip.map(Box::new),
+                        fetch: fetch.map(Box::new),
+                        input,
+                    })
+                })
+            }
+            LogicalPlan::Execute(Execute {
+                parameters,
+                name,
+                schema,
+            }) => parameters
+                .into_iter()
+                .map_until_stop_and_collect(f)?
+                .update_data(|parameters| {
+                    LogicalPlan::Execute(Execute {
+                        parameters,
+                        name,
+                        schema,
+                    })
+                }),
             // plans without expressions
             LogicalPlan::EmptyRelation(_)
             | LogicalPlan::Unnest(_)
             | LogicalPlan::RecursiveQuery(_)
             | LogicalPlan::Subquery(_)
             | LogicalPlan::SubqueryAlias(_)
-            | LogicalPlan::Limit(_)
             | LogicalPlan::Statement(_)
-            | LogicalPlan::CrossJoin(_)
             | LogicalPlan::Analyze(_)
             | LogicalPlan::Explain(_)
             | LogicalPlan::Union(_)

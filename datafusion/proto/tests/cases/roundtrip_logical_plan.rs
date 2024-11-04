@@ -47,6 +47,10 @@ use datafusion::functions_aggregate::expr_fn::{
 };
 use datafusion::functions_aggregate::min_max::max_udaf;
 use datafusion::functions_nested::map::map;
+use datafusion::functions_window::expr_fn::{
+    cume_dist, dense_rank, lag, lead, ntile, percent_rank, rank, row_number,
+};
+use datafusion::functions_window::rank::rank_udwf;
 use datafusion::prelude::*;
 use datafusion::test_util::{TestTableFactory, TestTableProvider};
 use datafusion_common::config::TableOptions;
@@ -58,7 +62,7 @@ use datafusion_common::{
 use datafusion_expr::dml::CopyTo;
 use datafusion_expr::expr::{
     self, Between, BinaryExpr, Case, Cast, GroupingSet, InList, Like, ScalarFunction,
-    Sort, Unnest, WildcardOptions,
+    Unnest, WildcardOptions,
 };
 use datafusion_expr::logical_plan::{Extension, UserDefinedLogicalNodeCore};
 use datafusion_expr::{
@@ -70,8 +74,11 @@ use datafusion_expr::{
 use datafusion_functions_aggregate::average::avg_udaf;
 use datafusion_functions_aggregate::expr_fn::{
     approx_distinct, array_agg, avg, bit_and, bit_or, bit_xor, bool_and, bool_or, corr,
+    nth_value,
 };
 use datafusion_functions_aggregate::string_agg::string_agg;
+use datafusion_functions_window_common::field::WindowUDFFieldArgs;
+use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
 use datafusion_proto::bytes::{
     logical_plan_from_bytes, logical_plan_from_bytes_with_extension_codec,
     logical_plan_to_bytes, logical_plan_to_bytes_with_extension_codec,
@@ -103,10 +110,8 @@ fn roundtrip_json_test(_proto: &protobuf::LogicalExprNode) {}
 fn roundtrip_expr_test(initial_struct: Expr, ctx: SessionContext) {
     let extension_codec = DefaultLogicalExtensionCodec {};
     let proto: protobuf::LogicalExprNode =
-        match serialize_expr(&initial_struct, &extension_codec) {
-            Ok(p) => p,
-            Err(e) => panic!("Error serializing expression: {:?}", e),
-        };
+        serialize_expr(&initial_struct, &extension_codec)
+            .unwrap_or_else(|e| panic!("Error serializing expression: {:?}", e));
     let round_trip: Expr =
         from_proto::parse_expr(&proto, &ctx, &extension_codec).unwrap();
 
@@ -330,6 +335,32 @@ async fn roundtrip_logical_plan_aggregation() -> Result<()> {
     .await?;
 
     let query = "SELECT a, SUM(b + 1) as b_sum FROM t1 GROUP BY a ORDER BY b_sum DESC";
+    let plan = ctx.sql(query).await?.into_optimized_plan()?;
+
+    let bytes = logical_plan_to_bytes(&plan)?;
+    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
+    assert_eq!(format!("{plan}"), format!("{logical_round_trip}"));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn roundtrip_logical_plan_sort() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    let schema = Schema::new(vec![
+        Field::new("a", DataType::Int64, true),
+        Field::new("b", DataType::Decimal128(15, 2), true),
+    ]);
+
+    ctx.register_csv(
+        "t1",
+        "tests/testdata/test.csv",
+        CsvReadOptions::default().schema(&schema),
+    )
+    .await?;
+
+    let query = "SELECT a, b FROM t1 ORDER BY b LIMIT 5";
     let plan = ctx.sql(query).await?.into_optimized_plan()?;
 
     let bytes = logical_plan_to_bytes(&plan)?;
@@ -840,6 +871,12 @@ async fn roundtrip_expr_api() -> Result<()> {
         ),
         array_pop_front(make_array(vec![lit(1), lit(2), lit(3)])),
         array_pop_back(make_array(vec![lit(1), lit(2), lit(3)])),
+        array_any_value(make_array(vec![
+            lit(ScalarValue::Null),
+            lit(1),
+            lit(2),
+            lit(3),
+        ])),
         array_reverse(make_array(vec![lit(1), lit(2), lit(3)])),
         array_position(
             make_array(vec![lit(1), lit(2), lit(3), lit(4)]),
@@ -903,6 +940,30 @@ async fn roundtrip_expr_api() -> Result<()> {
             vec![lit(1), lit(2), lit(3)],
             vec![lit(10), lit(20), lit(30)],
         ),
+        cume_dist(),
+        row_number(),
+        rank(),
+        dense_rank(),
+        percent_rank(),
+        lead(col("b"), None, None),
+        lead(col("b"), Some(2), None),
+        lead(col("b"), Some(2), Some(ScalarValue::from(100))),
+        lag(col("b"), None, None),
+        lag(col("b"), Some(2), None),
+        lag(col("b"), Some(2), Some(ScalarValue::from(100))),
+        ntile(lit(3)),
+        nth_value(col("b"), 1, vec![]),
+        nth_value(
+            col("b"),
+            1,
+            vec![col("a").sort(false, false), col("b").sort(true, false)],
+        ),
+        nth_value(col("b"), -1, vec![]),
+        nth_value(
+            col("b"),
+            -1,
+            vec![col("a").sort(false, false), col("b").sort(true, false)],
+        ),
     ];
 
     // ensure expressions created with the expr api can be round tripped
@@ -957,7 +1018,7 @@ pub mod proto {
     }
 }
 
-#[derive(PartialEq, Eq, Hash)]
+#[derive(PartialEq, Eq, PartialOrd, Hash)]
 struct TopKPlanNode {
     k: usize,
     input: LogicalPlan,
@@ -1013,6 +1074,10 @@ impl UserDefinedLogicalNodeCore for TopKPlanNode {
             input: inputs.swap_remove(0),
             expr: exprs.swap_remove(0),
         })
+    }
+
+    fn supports_limit_pushdown(&self) -> bool {
+        false // Disallow limit push-down by default
     }
 }
 
@@ -1176,7 +1241,7 @@ impl LogicalExtensionCodec for UDFExtensionCodec {
 }
 
 #[test]
-fn round_trip_scalar_values() {
+fn round_trip_scalar_values_and_data_types() {
     let should_pass: Vec<ScalarValue> = vec![
         ScalarValue::Boolean(None),
         ScalarValue::Float32(None),
@@ -1230,6 +1295,8 @@ fn round_trip_scalar_values() {
         ScalarValue::UInt64(Some(0)),
         ScalarValue::Utf8(Some(String::from("Test string   "))),
         ScalarValue::LargeUtf8(Some(String::from("Test Large utf8"))),
+        ScalarValue::Utf8View(Some(String::from("Test stringview"))),
+        ScalarValue::BinaryView(Some(b"binaryview".to_vec())),
         ScalarValue::Date32(Some(0)),
         ScalarValue::Date32(Some(i32::MAX)),
         ScalarValue::Date32(None),
@@ -1456,19 +1523,36 @@ fn round_trip_scalar_values() {
         ScalarValue::FixedSizeBinary(5, None),
     ];
 
-    for test_case in should_pass.into_iter() {
-        let proto: protobuf::ScalarValue = (&test_case)
-            .try_into()
-            .expect("failed conversion to protobuf");
-
+    // ScalarValue directly
+    for test_case in should_pass.iter() {
+        let proto: protobuf::ScalarValue =
+            test_case.try_into().expect("failed conversion to protobuf");
         let roundtrip: ScalarValue = (&proto)
             .try_into()
             .expect("failed conversion from protobuf");
 
         assert_eq!(
-            test_case, roundtrip,
+            test_case, &roundtrip,
             "ScalarValue was not the same after round trip!\n\n\
                         Input: {test_case:?}\n\nRoundtrip: {roundtrip:?}"
+        );
+    }
+
+    //  DataType conversion
+    for test_case in should_pass.iter() {
+        let dt = test_case.data_type();
+
+        let proto: protobuf::ArrowType = (&dt)
+            .try_into()
+            .expect("datatype failed conversion to protobuf");
+        let roundtrip: DataType = (&proto)
+            .try_into()
+            .expect("datatype failed conversion from protobuf");
+
+        assert_eq!(
+            dt, roundtrip,
+            "DataType was not the same after round trip!\n\n\
+                        Input: {dt:?}\n\nRoundtrip: {roundtrip:?}"
         );
     }
 }
@@ -1938,14 +2022,6 @@ fn roundtrip_try_cast() {
 }
 
 #[test]
-fn roundtrip_sort_expr() {
-    let test_expr = Expr::Sort(Sort::new(Box::new(lit(1.0_f32)), true, true));
-
-    let ctx = SessionContext::new();
-    roundtrip_expr_test(test_expr, ctx);
-}
-
-#[test]
 fn roundtrip_negative() {
     let test_expr = Expr::Negative(Box::new(lit(1.0_f32)));
 
@@ -2095,7 +2171,7 @@ fn roundtrip_aggregate_udf() {
         }
 
         fn size(&self) -> usize {
-            std::mem::size_of_val(self)
+            size_of_val(self)
         }
     }
 
@@ -2140,7 +2216,7 @@ fn roundtrip_scalar_udf() {
     let udf = create_udf(
         "dummy",
         vec![DataType::Utf8],
-        Arc::new(DataType::Utf8),
+        DataType::Utf8,
         Volatility::Immutable,
         scalar_fn,
     );
@@ -2243,9 +2319,7 @@ fn roundtrip_window() {
 
     // 1. without window_frame
     let test_expr1 = Expr::WindowFunction(expr::WindowFunction::new(
-        WindowFunctionDefinition::BuiltInWindowFunction(
-            datafusion_expr::BuiltInWindowFunction::Rank,
-        ),
+        WindowFunctionDefinition::WindowUDF(rank_udwf()),
         vec![],
     ))
     .partition_by(vec![col("col1")])
@@ -2256,9 +2330,7 @@ fn roundtrip_window() {
 
     // 2. with default window_frame
     let test_expr2 = Expr::WindowFunction(expr::WindowFunction::new(
-        WindowFunctionDefinition::BuiltInWindowFunction(
-            datafusion_expr::BuiltInWindowFunction::Rank,
-        ),
+        WindowFunctionDefinition::WindowUDF(rank_udwf()),
         vec![],
     ))
     .partition_by(vec![col("col1")])
@@ -2275,9 +2347,7 @@ fn roundtrip_window() {
     );
 
     let test_expr3 = Expr::WindowFunction(expr::WindowFunction::new(
-        WindowFunctionDefinition::BuiltInWindowFunction(
-            datafusion_expr::BuiltInWindowFunction::Rank,
-        ),
+        WindowFunctionDefinition::WindowUDF(rank_udwf()),
         vec![],
     ))
     .partition_by(vec![col("col1")])
@@ -2325,7 +2395,7 @@ fn roundtrip_window() {
         }
 
         fn size(&self) -> usize {
-            std::mem::size_of_val(self)
+            size_of_val(self)
         }
     }
 
@@ -2398,19 +2468,23 @@ fn roundtrip_window() {
             &self.signature
         }
 
-        fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-            if arg_types.len() != 1 {
-                return plan_err!(
-                    "dummy_udwf expects 1 argument, got {}: {:?}",
-                    arg_types.len(),
-                    arg_types
-                );
-            }
-            Ok(arg_types[0].clone())
+        fn partition_evaluator(
+            &self,
+            _partition_evaluator_args: PartitionEvaluatorArgs,
+        ) -> Result<Box<dyn PartitionEvaluator>> {
+            make_partition_evaluator()
         }
 
-        fn partition_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>> {
-            make_partition_evaluator()
+        fn field(&self, field_args: WindowUDFFieldArgs) -> Result<Field> {
+            if let Some(return_type) = field_args.get_input_type(0) {
+                Ok(Field::new(field_args.name(), return_type, true))
+            } else {
+                plan_err!(
+                    "dummy_udwf expects 1 argument, got {}: {:?}",
+                    field_args.input_types().len(),
+                    field_args.input_types()
+                )
+            }
         }
     }
 
@@ -2434,7 +2508,7 @@ fn roundtrip_window() {
         WindowFunctionDefinition::AggregateUDF(avg_udaf()),
         vec![col("col1")],
     ))
-    .window_frame(row_number_frame.clone())
+    .window_frame(row_number_frame)
     .build()
     .unwrap();
 

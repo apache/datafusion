@@ -17,15 +17,19 @@
 
 //! [`Partitioning`] and [`Distribution`] for `ExecutionPlans`
 
+use crate::{
+    equivalence::ProjectionMapping, expressions::UnKnownColumn, physical_exprs_equal,
+    EquivalenceProperties, PhysicalExpr,
+};
+use datafusion_physical_expr_common::physical_expr::format_physical_expr_list;
 use std::fmt;
+use std::fmt::Display;
 use std::sync::Arc;
-
-use crate::{physical_exprs_equal, EquivalenceProperties, PhysicalExpr};
 
 /// Output partitioning supported by [`ExecutionPlan`]s.
 ///
-/// When `executed`, `ExecutionPlan`s  produce one or more independent stream of
-/// data batches in parallel, referred to as partitions. The streams are Rust
+/// Calling [`ExecutionPlan::execute`] produce one or more independent streams of
+/// [`RecordBatch`]es in parallel, referred to as partitions. The streams are Rust
 /// `async` [`Stream`]s (a special kind of future). The number of output
 /// partitions varies based on the input and the operation performed.
 ///
@@ -102,6 +106,8 @@ use crate::{physical_exprs_equal, EquivalenceProperties, PhysicalExpr};
 /// Plans such as `FilterExec` produce the same number of output streams
 /// (partitions) as input streams (partitions).
 ///
+/// [`RecordBatch`]: arrow::record_batch::RecordBatch
+/// [`ExecutionPlan::execute`]: https://docs.rs/datafusion/latest/datafusion/physical_plan/trait.ExecutionPlan.html#tymethod.execute
 /// [`ExecutionPlan`]: https://docs.rs/datafusion/latest/datafusion/physical_plan/trait.ExecutionPlan.html
 /// [`Stream`]: https://docs.rs/futures/latest/futures/stream/trait.Stream.html
 #[derive(Debug, Clone)]
@@ -115,8 +121,8 @@ pub enum Partitioning {
     UnknownPartitioning(usize),
 }
 
-impl fmt::Display for Partitioning {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+impl Display for Partitioning {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Partitioning::RoundRobinBatch(size) => write!(f, "RoundRobinBatch({size})"),
             Partitioning::Hash(phy_exprs, size) => {
@@ -189,6 +195,29 @@ impl Partitioning {
             _ => false,
         }
     }
+
+    /// Calculate the output partitioning after applying the given projection.
+    pub fn project(
+        &self,
+        projection_mapping: &ProjectionMapping,
+        input_eq_properties: &EquivalenceProperties,
+    ) -> Self {
+        if let Partitioning::Hash(exprs, part) = self {
+            let normalized_exprs = exprs
+                .iter()
+                .map(|expr| {
+                    input_eq_properties
+                        .project_expr(expr, projection_mapping)
+                        .unwrap_or_else(|| {
+                            Arc::new(UnKnownColumn::new(&expr.to_string()))
+                        })
+                })
+                .collect();
+            Partitioning::Hash(normalized_exprs, *part)
+        } else {
+            self.clone()
+        }
+    }
 }
 
 impl PartialEq for Partitioning {
@@ -231,6 +260,18 @@ impl Distribution {
             Distribution::SinglePartition => Partitioning::UnknownPartitioning(1),
             Distribution::HashPartitioned(expr) => {
                 Partitioning::Hash(expr, partition_count)
+            }
+        }
+    }
+}
+
+impl Display for Distribution {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Distribution::UnspecifiedDistribution => write!(f, "Unspecified"),
+            Distribution::SinglePartition => write!(f, "SinglePartition"),
+            Distribution::HashPartitioned(exprs) => {
+                write!(f, "HashPartitioned[{}])", format_physical_expr_list(exprs))
             }
         }
     }

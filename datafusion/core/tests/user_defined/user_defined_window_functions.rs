@@ -29,11 +29,19 @@ use std::{
 
 use arrow::array::AsArray;
 use arrow_array::{ArrayRef, Int64Array, RecordBatch, StringArray};
-use arrow_schema::DataType;
+use arrow_schema::{DataType, Field, Schema};
 use datafusion::{assert_batches_eq, prelude::SessionContext};
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::{
-    PartitionEvaluator, Signature, Volatility, WindowUDF, WindowUDFImpl,
+    PartitionEvaluator, Signature, TypeSignature, Volatility, WindowUDF, WindowUDFImpl,
+};
+use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
+use datafusion_functions_window_common::{
+    expr::ExpressionArgs, field::WindowUDFFieldArgs,
+};
+use datafusion_physical_expr::{
+    expressions::{col, lit},
+    PhysicalExpr,
 };
 
 /// A query with a window function evaluated over the entire partition
@@ -522,7 +530,6 @@ impl OddCounter {
         #[derive(Debug, Clone)]
         struct SimpleWindowUDF {
             signature: Signature,
-            return_type: DataType,
             test_state: Arc<TestState>,
             aliases: Vec<String>,
         }
@@ -531,10 +538,8 @@ impl OddCounter {
             fn new(test_state: Arc<TestState>) -> Self {
                 let signature =
                     Signature::exact(vec![DataType::Float64], Volatility::Immutable);
-                let return_type = DataType::Int64;
                 Self {
                     signature,
-                    return_type,
                     test_state,
                     aliases: vec!["odd_counter_alias".to_string()],
                 }
@@ -554,16 +559,19 @@ impl OddCounter {
                 &self.signature
             }
 
-            fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-                Ok(self.return_type.clone())
-            }
-
-            fn partition_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>> {
+            fn partition_evaluator(
+                &self,
+                _partition_evaluator_args: PartitionEvaluatorArgs,
+            ) -> Result<Box<dyn PartitionEvaluator>> {
                 Ok(Box::new(OddCounter::new(Arc::clone(&self.test_state))))
             }
 
             fn aliases(&self) -> &[String] {
                 &self.aliases
+            }
+
+            fn field(&self, field_args: WindowUDFFieldArgs) -> Result<Field> {
+                Ok(Field::new(field_args.name(), DataType::Int64, true))
             }
         }
 
@@ -591,11 +599,7 @@ impl PartitionEvaluator for OddCounter {
         Ok(scalar)
     }
 
-    fn evaluate_all(
-        &mut self,
-        values: &[arrow_array::ArrayRef],
-        num_rows: usize,
-    ) -> Result<arrow_array::ArrayRef> {
+    fn evaluate_all(&mut self, values: &[ArrayRef], num_rows: usize) -> Result<ArrayRef> {
         println!("evaluate_all, values: {values:#?}, num_rows: {num_rows}");
 
         self.test_state.inc_evaluate_all_called();
@@ -639,7 +643,124 @@ fn odd_count(arr: &Int64Array) -> i64 {
 }
 
 /// returns an array of num_rows that has the number of odd values in `arr`
-fn odd_count_arr(arr: &Int64Array, num_rows: usize) -> arrow_array::ArrayRef {
+fn odd_count_arr(arr: &Int64Array, num_rows: usize) -> ArrayRef {
     let array: Int64Array = std::iter::repeat(odd_count(arr)).take(num_rows).collect();
     Arc::new(array)
+}
+
+#[derive(Debug)]
+struct VariadicWindowUDF {
+    signature: Signature,
+}
+
+impl VariadicWindowUDF {
+    fn new() -> Self {
+        Self {
+            signature: Signature::one_of(
+                vec![
+                    TypeSignature::Any(0),
+                    TypeSignature::Any(1),
+                    TypeSignature::Any(2),
+                    TypeSignature::Any(3),
+                ],
+                Volatility::Immutable,
+            ),
+        }
+    }
+}
+
+impl WindowUDFImpl for VariadicWindowUDF {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn name(&self) -> &str {
+        "variadic_window_udf"
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn partition_evaluator(
+        &self,
+        _: PartitionEvaluatorArgs,
+    ) -> Result<Box<dyn PartitionEvaluator>> {
+        unimplemented!("unnecessary for testing");
+    }
+
+    fn field(&self, _: WindowUDFFieldArgs) -> Result<Field> {
+        unimplemented!("unnecessary for testing");
+    }
+}
+
+#[test]
+// Fixes: default implementation of `WindowUDFImpl::expressions`
+// returns all input expressions to the user-defined window
+// function unmodified.
+//
+// See: https://github.com/apache/datafusion/pull/13169
+fn test_default_expressions() -> Result<()> {
+    let udwf = WindowUDF::from(VariadicWindowUDF::new());
+
+    let field_a = Field::new("a", DataType::Int32, false);
+    let field_b = Field::new("b", DataType::Float32, false);
+    let field_c = Field::new("c", DataType::Boolean, false);
+    let schema = Schema::new(vec![field_a, field_b, field_c]);
+
+    let test_cases = vec![
+        //
+        // Zero arguments
+        //
+        vec![],
+        //
+        // Single argument
+        //
+        vec![col("a", &schema)?],
+        vec![lit(1)],
+        //
+        // Two arguments
+        //
+        vec![col("a", &schema)?, col("b", &schema)?],
+        vec![col("a", &schema)?, lit(2)],
+        vec![lit(false), col("a", &schema)?],
+        //
+        // Three arguments
+        //
+        vec![col("a", &schema)?, col("b", &schema)?, col("c", &schema)?],
+        vec![col("a", &schema)?, col("b", &schema)?, lit(false)],
+        vec![col("a", &schema)?, lit(0.5), col("c", &schema)?],
+        vec![lit(3), col("b", &schema)?, col("c", &schema)?],
+    ];
+
+    for input_exprs in &test_cases {
+        let input_types = input_exprs
+            .iter()
+            .map(|expr: &Arc<dyn PhysicalExpr>| expr.data_type(&schema).unwrap())
+            .collect::<Vec<_>>();
+        let expr_args = ExpressionArgs::new(input_exprs, &input_types);
+
+        let ret_exprs = udwf.expressions(expr_args);
+
+        // Verify same number of input expressions are returned
+        assert_eq!(
+            input_exprs.len(),
+            ret_exprs.len(),
+            "\nInput expressions: {:?}\nReturned expressions: {:?}",
+            input_exprs,
+            ret_exprs
+        );
+
+        // Compares each returned expression with original input expressions
+        for (expected, actual) in input_exprs.iter().zip(&ret_exprs) {
+            assert_eq!(
+                format!("{expected:?}"),
+                format!("{actual:?}"),
+                "\nInput expressions: {:?}\nReturned expressions: {:?}",
+                input_exprs,
+                ret_exprs
+            );
+        }
+    }
+    Ok(())
 }

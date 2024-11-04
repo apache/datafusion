@@ -61,6 +61,7 @@ pub use access_plan::{ParquetAccessPlan, RowGroupAccess};
 pub use metrics::ParquetFileMetrics;
 use opener::ParquetOpener;
 pub use reader::{DefaultParquetFileReaderFactory, ParquetFileReaderFactory};
+pub use row_filter::can_expr_be_pushed_down_with_schemas;
 pub use writer::plan_to_parquet;
 
 /// Execution plan for reading one or more Parquet files.
@@ -116,13 +117,12 @@ pub use writer::plan_to_parquet;
 ///
 /// Supports the following optimizations:
 ///
-/// * Concurrent reads: Can read from one or more files in parallel as multiple
+/// * Concurrent reads: reads from one or more files in parallel as multiple
 ///   partitions, including concurrently reading multiple row groups from a single
 ///   file.
 ///
-/// * Predicate push down: skips row groups and pages based on
-///   min/max/null_counts in the row group metadata, the page index and bloom
-///   filters.
+/// * Predicate push down: skips row groups, pages, rows based on metadata
+///   and late materialization. See "Predicate Pushdown" below.
 ///
 /// * Projection pushdown: reads and decodes only the columns required.
 ///
@@ -132,9 +132,8 @@ pub use writer::plan_to_parquet;
 ///   coalesce I/O operations, etc. See [`ParquetFileReaderFactory`] for more
 ///   details.
 ///
-/// * Schema adapters: read parquet files with different schemas into a unified
-///   table schema. This can be used to implement "schema evolution". See
-///   [`SchemaAdapterFactory`] for more details.
+/// * Schema evolution: read parquet files with different schemas into a unified
+///   table schema. See [`SchemaAdapterFactory`] for more details.
 ///
 /// * metadata_size_hint: controls the number of bytes read from the end of the
 ///   file in the initial I/O when the default [`ParquetFileReaderFactory`]. If a
@@ -143,6 +142,56 @@ pub use writer::plan_to_parquet;
 ///
 /// * User provided  [`ParquetAccessPlan`]s to skip row groups and/or pages
 ///   based on external information. See "Implementing External Indexes" below
+///
+/// # Predicate Pushdown
+///
+/// `ParquetExec` uses the provided [`PhysicalExpr`] predicate as a filter to
+/// skip reading unnecessary data and improve query performance using several techniques:
+///
+/// * Row group pruning: skips entire row groups based on min/max statistics
+///   found in [`ParquetMetaData`] and any Bloom filters that are present.
+///
+/// * Page pruning: skips individual pages within a ColumnChunk using the
+///   [Parquet PageIndex], if present.
+///
+/// * Row filtering: skips rows within a page using a form of late
+///   materialization. When possible, predicates are applied by the parquet
+///   decoder *during* decode (see [`ArrowPredicate`] and [`RowFilter`] for more
+///   details). This is only enabled if `ParquetScanOptions::pushdown_filters` is set to true.
+///
+/// Note: If the predicate can not be used to accelerate the scan, it is ignored
+/// (no error is raised on predicate evaluation errors).
+///
+/// [`ArrowPredicate`]: parquet::arrow::arrow_reader::ArrowPredicate
+/// [`RowFilter`]: parquet::arrow::arrow_reader::RowFilter
+/// [Parquet PageIndex]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
+///
+/// # Example: rewriting `ParquetExec`
+///
+/// You can modify a `ParquetExec` using [`ParquetExecBuilder`], for example
+/// to change files or add a predicate.
+///
+/// ```no_run
+/// # use std::sync::Arc;
+/// # use arrow::datatypes::Schema;
+/// # use datafusion::datasource::physical_plan::{FileScanConfig, ParquetExec};
+/// # use datafusion::datasource::listing::PartitionedFile;
+/// # fn parquet_exec() -> ParquetExec { unimplemented!() }
+/// // Split a single ParquetExec into multiple ParquetExecs, one for each file
+/// let exec = parquet_exec();
+/// let existing_file_groups = &exec.base_config().file_groups;
+/// let new_execs = existing_file_groups
+///   .iter()
+///   .map(|file_group| {
+///     // create a new exec by copying the existing exec into a builder
+///     let new_exec = exec.clone()
+///        .into_builder()
+///        .with_file_groups(vec![file_group.clone()])
+///       .build();
+///     new_exec
+///   })
+///   .collect::<Vec<_>>();
+/// ```
 ///
 /// # Implementing External Indexes
 ///
@@ -199,10 +248,11 @@ pub use writer::plan_to_parquet;
 ///   applying predicates to metadata. The plan and projections are used to
 ///   determine what pages must be read.
 ///
-/// * Step 4: The stream begins reading data, fetching the required pages
-///   and incrementally decoding them.
+/// * Step 4: The stream begins reading data, fetching the required parquet
+///   pages incrementally decoding them, and applying any row filters (see
+///   [`Self::with_pushdown_filters`]).
 ///
-/// * Step 5: As each [`RecordBatch]` is read, it may be adapted by a
+/// * Step 5: As each [`RecordBatch`] is read, it may be adapted by a
 ///   [`SchemaAdapter`] to match the table schema. By default missing columns are
 ///   filled with nulls, but this can be customized via [`SchemaAdapterFactory`].
 ///
@@ -232,6 +282,12 @@ pub struct ParquetExec {
     table_parquet_options: TableParquetOptions,
     /// Optional user defined schema adapter
     schema_adapter_factory: Option<Arc<dyn SchemaAdapterFactory>>,
+}
+
+impl From<ParquetExec> for ParquetExecBuilder {
+    fn from(exec: ParquetExec) -> Self {
+        exec.into_builder()
+    }
 }
 
 /// [`ParquetExecBuilder`], builder for [`ParquetExec`].
@@ -268,13 +324,16 @@ impl ParquetExecBuilder {
         }
     }
 
-    /// Set the predicate for the scan.
+    /// Update the list of files groups to read
+    pub fn with_file_groups(mut self, file_groups: Vec<Vec<PartitionedFile>>) -> Self {
+        self.file_scan_config.file_groups = file_groups;
+        self
+    }
+
+    /// Set the filter predicate when reading.
     ///
-    /// The ParquetExec uses this predicate to filter row groups and data pages
-    /// using the Parquet statistics and bloom filters.
-    ///
-    /// If the predicate can not be used to prune the scan, it is ignored (no
-    /// error is raised).
+    /// See the "Predicate Pushdown" section of the [`ParquetExec`] documenation
+    /// for more details.
     pub fn with_predicate(mut self, predicate: Arc<dyn PhysicalExpr>) -> Self {
         self.predicate = Some(predicate);
         self
@@ -291,7 +350,7 @@ impl ParquetExecBuilder {
         self
     }
 
-    /// Set the table parquet options that control how the ParquetExec reads.
+    /// Set the options for controlling how the ParquetExec reads parquet files.
     ///
     /// See also [`Self::new_with_options`]
     pub fn with_table_parquet_options(
@@ -386,6 +445,7 @@ impl ParquetExecBuilder {
 
         let (projected_schema, projected_statistics, projected_output_ordering) =
             base_config.project();
+
         let cache = ParquetExec::compute_properties(
             projected_schema,
             &projected_output_ordering,
@@ -438,6 +498,34 @@ impl ParquetExec {
         ParquetExecBuilder::new(file_scan_config)
     }
 
+    /// Convert this `ParquetExec` into a builder for modification
+    pub fn into_builder(self) -> ParquetExecBuilder {
+        // list out fields so it is clear what is being dropped
+        // (note the fields which are dropped are re-created as part of calling
+        // `build` on the builder)
+        let Self {
+            base_config,
+            projected_statistics: _,
+            metrics: _,
+            predicate,
+            pruning_predicate: _,
+            page_pruning_predicate: _,
+            metadata_size_hint,
+            parquet_file_reader_factory,
+            cache: _,
+            table_parquet_options,
+            schema_adapter_factory,
+        } = self;
+        ParquetExecBuilder {
+            file_scan_config: base_config,
+            predicate,
+            metadata_size_hint,
+            table_parquet_options,
+            parquet_file_reader_factory,
+            schema_adapter_factory,
+        }
+    }
+
     /// [`FileScanConfig`] that controls this scan (such as which files to read)
     pub fn base_config(&self) -> &FileScanConfig {
         &self.base_config
@@ -458,15 +546,26 @@ impl ParquetExec {
         self.pruning_predicate.as_ref()
     }
 
+    /// return the optional file reader factory
+    pub fn parquet_file_reader_factory(
+        &self,
+    ) -> Option<&Arc<dyn ParquetFileReaderFactory>> {
+        self.parquet_file_reader_factory.as_ref()
+    }
+
     /// Optional user defined parquet file reader factory.
     ///
-    /// See documentation on [`ParquetExecBuilder::with_parquet_file_reader_factory`]
     pub fn with_parquet_file_reader_factory(
         mut self,
         parquet_file_reader_factory: Arc<dyn ParquetFileReaderFactory>,
     ) -> Self {
         self.parquet_file_reader_factory = Some(parquet_file_reader_factory);
         self
+    }
+
+    /// return the optional schema adapter factory
+    pub fn schema_adapter_factory(&self) -> Option<&Arc<dyn SchemaAdapterFactory>> {
+        self.schema_adapter_factory.as_ref()
     }
 
     /// Optional schema adapter factory.
@@ -480,11 +579,8 @@ impl ParquetExec {
         self
     }
 
-    /// If true, any filter [`Expr`]s on the scan will converted to a
-    /// [`RowFilter`](parquet::arrow::arrow_reader::RowFilter) in the
-    /// `ParquetRecordBatchStream`. These filters are applied by the
-    /// parquet decoder to skip unecessairly decoding other columns
-    /// which would not pass the predicate. Defaults to false
+    /// If true, the predicate will be used during the parquet scan.
+    /// Defaults to false
     ///
     /// [`Expr`]: datafusion_expr::Expr
     pub fn with_pushdown_filters(mut self, pushdown_filters: bool) -> Self {
@@ -568,7 +664,14 @@ impl ParquetExec {
         )
     }
 
-    fn with_file_groups(mut self, file_groups: Vec<Vec<PartitionedFile>>) -> Self {
+    /// Updates the file groups to read and recalculates the output partitioning
+    ///
+    /// Note this function does not update statistics or other properties
+    /// that depend on the file groups.
+    fn with_file_groups_and_update_partitioning(
+        mut self,
+        file_groups: Vec<Vec<PartitionedFile>>,
+    ) -> Self {
         self.base_config.file_groups = file_groups;
         // Changing file groups may invalidate output partitioning. Update it also
         let output_partitioning = Self::output_partitioning_helper(&self.base_config);
@@ -595,14 +698,16 @@ impl DisplayAs for ParquetExec {
                     .pruning_predicate
                     .as_ref()
                     .map(|pre| {
+                        let mut guarantees = pre
+                            .literal_guarantees()
+                            .iter()
+                            .map(|item| format!("{}", item))
+                            .collect_vec();
+                        guarantees.sort();
                         format!(
                             ", pruning_predicate={}, required_guarantees=[{}]",
                             pre.predicate_expr(),
-                            pre.literal_guarantees()
-                                .iter()
-                                .map(|item| format!("{}", item))
-                                .collect_vec()
-                                .join(", ")
+                            guarantees.join(", ")
                         )
                     })
                     .unwrap_or_default();
@@ -659,7 +764,8 @@ impl ExecutionPlan for ParquetExec {
 
         let mut new_plan = self.clone();
         if let Some(repartitioned_file_groups) = repartitioned_file_groups_option {
-            new_plan = new_plan.with_file_groups(repartitioned_file_groups);
+            new_plan = new_plan
+                .with_file_groups_and_update_partitioning(repartitioned_file_groups);
         }
         Ok(Some(Arc::new(new_plan)))
     }
@@ -669,10 +775,12 @@ impl ExecutionPlan for ParquetExec {
         partition_index: usize,
         ctx: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        let projection = match self.base_config.file_column_projection_indices() {
-            Some(proj) => proj,
-            None => (0..self.base_config.file_schema.fields().len()).collect(),
-        };
+        let projection = self
+            .base_config
+            .file_column_projection_indices()
+            .unwrap_or_else(|| {
+                (0..self.base_config.file_schema.fields().len()).collect()
+            });
 
         let parquet_file_reader_factory = self
             .parquet_file_reader_factory
@@ -682,15 +790,14 @@ impl ExecutionPlan for ParquetExec {
                 ctx.runtime_env()
                     .object_store(&self.base_config.object_store_url)
                     .map(|store| {
-                        Arc::new(DefaultParquetFileReaderFactory::new(store))
-                            as Arc<dyn ParquetFileReaderFactory>
+                        Arc::new(DefaultParquetFileReaderFactory::new(store)) as _
                     })
             })?;
 
         let schema_adapter_factory = self
             .schema_adapter_factory
             .clone()
-            .unwrap_or_else(|| Arc::new(DefaultSchemaAdapterFactory::default()));
+            .unwrap_or_else(|| Arc::new(DefaultSchemaAdapterFactory));
 
         let opener = ParquetOpener {
             partition_index,
@@ -709,10 +816,6 @@ impl ExecutionPlan for ParquetExec {
             enable_page_index: self.enable_page_index(),
             enable_bloom_filter: self.bloom_filter_on_read(),
             schema_adapter_factory,
-            schema_force_string_view: self
-                .table_parquet_options
-                .global
-                .schema_force_string_view,
         };
 
         let stream =
@@ -726,7 +829,22 @@ impl ExecutionPlan for ParquetExec {
     }
 
     fn statistics(&self) -> Result<Statistics> {
-        Ok(self.projected_statistics.clone())
+        // When filters are pushed down, we have no way of knowing the exact statistics.
+        // Note that pruning predicate is also a kind of filter pushdown.
+        // (bloom filters use `pruning_predicate` too)
+        let stats = if self.pruning_predicate.is_some()
+            || self.page_pruning_predicate.is_some()
+            || (self.predicate.is_some() && self.pushdown_filters())
+        {
+            self.projected_statistics.clone().to_inexact()
+        } else {
+            self.projected_statistics.clone()
+        };
+        Ok(stats)
+    }
+
+    fn fetch(&self) -> Option<usize> {
+        self.base_config.limit
     }
 
     fn with_fetch(&self, limit: Option<usize>) -> Option<Arc<dyn ExecutionPlan>> {
@@ -1152,7 +1270,8 @@ mod tests {
         assert_batches_sorted_eq!(expected, &rt.batches.unwrap());
         let metrics = rt.parquet_exec.metrics().unwrap();
         // Note there are were 6 rows in total (across three batches)
-        assert_eq!(get_value(&metrics, "pushdown_rows_filtered"), 4);
+        assert_eq!(get_value(&metrics, "pushdown_rows_pruned"), 4);
+        assert_eq!(get_value(&metrics, "pushdown_rows_matched"), 2);
     }
 
     #[tokio::test]
@@ -1304,7 +1423,8 @@ mod tests {
         assert_batches_sorted_eq!(expected, &rt.batches.unwrap());
         let metrics = rt.parquet_exec.metrics().unwrap();
         // Note there are were 6 rows in total (across three batches)
-        assert_eq!(get_value(&metrics, "pushdown_rows_filtered"), 5);
+        assert_eq!(get_value(&metrics, "pushdown_rows_pruned"), 5);
+        assert_eq!(get_value(&metrics, "pushdown_rows_matched"), 1);
     }
 
     #[tokio::test]
@@ -1378,7 +1498,8 @@ mod tests {
         // There are 4 rows pruned in each of batch2, batch3, and
         // batch4 for a total of 12. batch1 had no pruning as c2 was
         // filled in as null
-        assert_eq!(get_value(&metrics, "page_index_rows_filtered"), 12);
+        assert_eq!(get_value(&metrics, "page_index_rows_pruned"), 12);
+        assert_eq!(get_value(&metrics, "page_index_rows_matched"), 6);
     }
 
     #[tokio::test]
@@ -1765,7 +1886,8 @@ mod tests {
             "+-----+"
         ];
         assert_batches_sorted_eq!(expected, &rt.batches.unwrap());
-        assert_eq!(get_value(&metrics, "page_index_rows_filtered"), 4);
+        assert_eq!(get_value(&metrics, "page_index_rows_pruned"), 4);
+        assert_eq!(get_value(&metrics, "page_index_rows_matched"), 2);
         assert!(
             get_value(&metrics, "page_index_eval_time") > 0,
             "no eval time in metrics: {metrics:#?}"
@@ -1787,6 +1909,26 @@ mod tests {
 
         // batch1: c1(string)
         create_batch(vec![("c1", c1.clone())])
+    }
+
+    /// Returns a int64 array with contents:
+    /// "[-1, 1, null, 2, 3, null, null]"
+    fn int64_batch() -> RecordBatch {
+        let contents: ArrayRef = Arc::new(Int64Array::from(vec![
+            Some(-1),
+            Some(1),
+            None,
+            Some(2),
+            Some(3),
+            None,
+            None,
+        ]));
+
+        create_batch(vec![
+            ("a", contents.clone()),
+            ("b", contents.clone()),
+            ("c", contents.clone()),
+        ])
     }
 
     #[tokio::test]
@@ -1814,10 +1956,19 @@ mod tests {
 
         // pushdown predicates have eliminated all 4 bar rows and the
         // null row for 5 rows total
-        assert_eq!(get_value(&metrics, "pushdown_rows_filtered"), 5);
+        assert_eq!(get_value(&metrics, "pushdown_rows_pruned"), 5);
+        assert_eq!(get_value(&metrics, "pushdown_rows_matched"), 2);
         assert!(
-            get_value(&metrics, "pushdown_eval_time") > 0,
-            "no eval time in metrics: {metrics:#?}"
+            get_value(&metrics, "row_pushdown_eval_time") > 0,
+            "no pushdown eval time in metrics: {metrics:#?}"
+        );
+        assert!(
+            get_value(&metrics, "statistics_eval_time") > 0,
+            "no statistics eval time in metrics: {metrics:#?}"
+        );
+        assert!(
+            get_value(&metrics, "bloom_filter_eval_time") > 0,
+            "no Bloom Filter eval time in metrics: {metrics:#?}"
         );
     }
 
@@ -1852,6 +2003,93 @@ mod tests {
         assert_contains!(&display, r#"predicate=c1@0 != bar"#);
 
         assert_contains!(&display, "projection=[c1]");
+    }
+
+    #[tokio::test]
+    async fn parquet_exec_display_deterministic() {
+        // batches: a(int64), b(int64), c(int64)
+        let batches = int64_batch();
+
+        fn extract_required_guarantees(s: &str) -> Option<&str> {
+            s.split("required_guarantees=").nth(1)
+        }
+
+        // Ensuring that the required_guarantees remain consistent across every display plan of the filter conditions
+        for _ in 0..100 {
+            // c = 1 AND b = 1 AND a = 1
+            let filter0 = col("c")
+                .eq(lit(1))
+                .and(col("b").eq(lit(1)))
+                .and(col("a").eq(lit(1)));
+
+            let rt0 = RoundTrip::new()
+                .with_predicate(filter0)
+                .with_pushdown_predicate()
+                .round_trip(vec![batches.clone()])
+                .await;
+
+            let pruning_predicate = &rt0.parquet_exec.pruning_predicate;
+            assert!(pruning_predicate.is_some());
+
+            let display0 = displayable(rt0.parquet_exec.as_ref())
+                .indent(true)
+                .to_string();
+
+            let guarantees0: &str = extract_required_guarantees(&display0)
+                .expect("Failed to extract required_guarantees");
+            // Compare only the required_guarantees part (Because the file_groups part will not be the same)
+            assert_eq!(
+                guarantees0.trim(),
+                "[a in (1), b in (1), c in (1)]",
+                "required_guarantees don't match"
+            );
+        }
+
+        // c = 1 AND a = 1 AND b = 1
+        let filter1 = col("c")
+            .eq(lit(1))
+            .and(col("a").eq(lit(1)))
+            .and(col("b").eq(lit(1)));
+
+        let rt1 = RoundTrip::new()
+            .with_predicate(filter1)
+            .with_pushdown_predicate()
+            .round_trip(vec![batches.clone()])
+            .await;
+
+        // b = 1 AND a = 1 AND c = 1
+        let filter2 = col("b")
+            .eq(lit(1))
+            .and(col("a").eq(lit(1)))
+            .and(col("c").eq(lit(1)));
+
+        let rt2 = RoundTrip::new()
+            .with_predicate(filter2)
+            .with_pushdown_predicate()
+            .round_trip(vec![batches])
+            .await;
+
+        // should have a pruning predicate
+        let pruning_predicate = &rt1.parquet_exec.pruning_predicate;
+        assert!(pruning_predicate.is_some());
+        let pruning_predicate = &rt2.parquet_exec.pruning_predicate;
+        assert!(pruning_predicate.is_some());
+
+        // convert to explain plan form
+        let display1 = displayable(rt1.parquet_exec.as_ref())
+            .indent(true)
+            .to_string();
+        let display2 = displayable(rt2.parquet_exec.as_ref())
+            .indent(true)
+            .to_string();
+
+        let guarantees1 = extract_required_guarantees(&display1)
+            .expect("Failed to extract required_guarantees");
+        let guarantees2 = extract_required_guarantees(&display2)
+            .expect("Failed to extract required_guarantees");
+
+        // Compare only the required_guarantees part (Because the predicate part will not be the same)
+        assert_eq!(guarantees1, guarantees2, "required_guarantees don't match");
     }
 
     #[tokio::test]
@@ -1989,7 +2227,7 @@ mod tests {
 
         // execute a simple query and write the results to parquet
         let out_dir = tmp_dir.as_ref().to_str().unwrap().to_string() + "/out";
-        std::fs::create_dir(&out_dir).unwrap();
+        fs::create_dir(&out_dir).unwrap();
         let df = ctx.sql("SELECT c1, c2 FROM test").await?;
         let schema: Schema = df.schema().into();
         // Register a listing table - this will use all files in the directory as data sources
@@ -2057,6 +2295,36 @@ mod tests {
         write_file(&path);
         let ctx = SessionContext::new();
         let opt = ListingOptions::new(Arc::new(ParquetFormat::default()));
+        ctx.register_listing_table("base_table", path, opt, None, None)
+            .await
+            .unwrap();
+        let sql = "select * from base_table where name='test02'";
+        let batch = ctx.sql(sql).await.unwrap().collect().await.unwrap();
+        assert_eq!(batch.len(), 1);
+        let expected = [
+            "+---------------------+----+--------+",
+            "| struct              | id | name   |",
+            "+---------------------+----+--------+",
+            "| {id: 4, name: aaa2} | 2  | test02 |",
+            "+---------------------+----+--------+",
+        ];
+        crate::assert_batches_eq!(expected, &batch);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_struct_filter_parquet_with_view_types() -> Result<()> {
+        let tmp_dir = TempDir::new().unwrap();
+        let path = tmp_dir.path().to_str().unwrap().to_string() + "/test.parquet";
+        write_file(&path);
+
+        let ctx = SessionContext::new();
+
+        let mut options = TableParquetOptions::default();
+        options.global.schema_force_view_types = true;
+        let opt =
+            ListingOptions::new(Arc::new(ParquetFormat::default().with_options(options)));
+
         ctx.register_listing_table("base_table", path, opt, None, None)
             .await
             .unwrap();

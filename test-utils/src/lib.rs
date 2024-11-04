@@ -22,6 +22,7 @@ use datafusion_common::cast::as_int32_array;
 use rand::prelude::StdRng;
 use rand::{Rng, SeedableRng};
 
+pub mod array_gen;
 mod data_gen;
 mod string_gen;
 pub mod tpcds;

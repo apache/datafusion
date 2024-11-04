@@ -31,7 +31,7 @@ pub use datafusion_expr::{Accumulator, ColumnarValue};
 pub use datafusion_physical_expr::window::WindowExpr;
 use datafusion_physical_expr::PhysicalSortExpr;
 pub use datafusion_physical_expr::{
-    expressions, functions, udf, AggregateExpr, Distribution, Partitioning, PhysicalExpr,
+    expressions, udf, Distribution, Partitioning, PhysicalExpr,
 };
 
 pub use crate::display::{DefaultDisplay, DisplayAs, DisplayFormatType, VerboseDisplay};
@@ -82,8 +82,10 @@ pub mod windows;
 pub mod work_table;
 
 pub mod udaf {
-    pub use datafusion_physical_expr_functions_aggregate::aggregate::AggregateFunctionExpr;
+    pub use datafusion_expr::StatisticsArgs;
+    pub use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
 }
 
+pub mod coalesce;
 #[cfg(test)]
 pub mod test;

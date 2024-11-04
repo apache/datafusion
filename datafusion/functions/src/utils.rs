@@ -15,14 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::sync::Arc;
-
 use arrow::array::ArrayRef;
 use arrow::datatypes::DataType;
 
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::function::Hint;
-use datafusion_expr::{ColumnarValue, ScalarFunctionImplementation};
+use datafusion_expr::ColumnarValue;
 
 /// Creates a function to identify the optimal return type of a string function given
 /// the type of its first argument.
@@ -80,11 +78,11 @@ get_optimal_return_type!(utf8_to_int_type, DataType::Int64, DataType::Int32);
 pub(super) fn make_scalar_function<F>(
     inner: F,
     hints: Vec<Hint>,
-) -> ScalarFunctionImplementation
+) -> impl Fn(&[ColumnarValue]) -> Result<ColumnarValue>
 where
-    F: Fn(&[ArrayRef]) -> Result<ArrayRef> + Sync + Send + 'static,
+    F: Fn(&[ArrayRef]) -> Result<ArrayRef>,
 {
-    Arc::new(move |args: &[ColumnarValue]| {
+    move |args: &[ColumnarValue]| {
         // first, identify if any of the arguments is an Array. If yes, store its `len`,
         // as any scalar will need to be converted to an array of len `len`.
         let len = args
@@ -109,7 +107,7 @@ where
                 };
                 arg.clone().into_array(expansion_len)
             })
-            .collect::<datafusion_common::Result<Vec<_>>>()?;
+            .collect::<Result<Vec<_>>>()?;
 
         let result = (inner)(&args);
         if is_scalar {
@@ -119,7 +117,7 @@ where
         } else {
             result.map(ColumnarValue::Array)
         }
-    })
+    }
 }
 
 #[cfg(test)]
@@ -144,7 +142,7 @@ pub mod test {
                     assert_eq!(return_type.unwrap(), $EXPECTED_DATA_TYPE);
 
                     let result = func.invoke($ARGS);
-                    assert_eq!(result.is_ok(), true);
+                    assert_eq!(result.is_ok(), true, "function returned an error: {}", result.unwrap_err());
 
                     let len = $ARGS
                         .iter()

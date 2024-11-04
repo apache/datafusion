@@ -188,8 +188,9 @@ async fn main() -> Result<()> {
     // read example.csv file into a DataFrame
     let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
     // stream the contents of the DataFrame to the `example.parquet` file
+    let target_path = tempfile::tempdir()?.path().join("example.parquet");
     df.write_parquet(
-        "example.parquet",
+        target_path.to_str().unwrap(),
         DataFrameWriteOptions::new(),
         None, // writer_options
     ).await;
@@ -262,14 +263,14 @@ async fn main() -> Result<()>{
     let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
     // Create a new DataFrame sorted by  `id`, `bank_account`
     let new_df = df.select(vec![col("a"), col("b")])?
-        .sort(vec![col("a")])?;
+        .sort_by(vec![col("a")])?;
     // Build the same plan using the LogicalPlanBuilder
     // Similar to `SELECT a, b FROM example.csv ORDER BY a`
     let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
     let (_state, plan) = df.into_parts(); // get the DataFrame's LogicalPlan
     let plan = LogicalPlanBuilder::from(plan)
         .project(vec![col("a"), col("b")])?
-        .sort(vec![col("a")])?
+        .sort_by(vec![col("a")])?
         .build()?;
     // prove they are the same
     assert_eq!(new_df.logical_plan(), &plan);

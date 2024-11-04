@@ -101,8 +101,10 @@ pub async fn partitioned_sym_join_with_filter(
         filter,
         join_type,
         null_equals_null,
-        left.output_ordering().map(|p| p.to_vec()),
-        right.output_ordering().map(|p| p.to_vec()),
+        left.output_ordering().map(|p| LexOrdering::new(p.to_vec())),
+        right
+            .output_ordering()
+            .map(|p| LexOrdering::new(p.to_vec())),
         StreamJoinPartitionMode::Partitioned,
     )?;
 
@@ -289,7 +291,7 @@ macro_rules! join_expr_tests {
                     ScalarValue::$SCALAR(Some(10 as $type)),
                     (Operator::Gt, Operator::Lt),
                 ),
-                // left_col - 1 > right_col + 5 AND left_col + 3 < right_col + 10
+                // left_col - 1 > right_col + 3 AND left_col + 3 < right_col + 15
                 1 => gen_conjunctive_numerical_expr(
                     left_col,
                     right_col,
@@ -300,9 +302,9 @@ macro_rules! join_expr_tests {
                         Operator::Plus,
                     ),
                     ScalarValue::$SCALAR(Some(1 as $type)),
-                    ScalarValue::$SCALAR(Some(5 as $type)),
                     ScalarValue::$SCALAR(Some(3 as $type)),
-                    ScalarValue::$SCALAR(Some(10 as $type)),
+                    ScalarValue::$SCALAR(Some(3 as $type)),
+                    ScalarValue::$SCALAR(Some(15 as $type)),
                     (Operator::Gt, Operator::Lt),
                 ),
                 // left_col - 1 > right_col + 5 AND left_col - 3 < right_col + 10
@@ -353,7 +355,8 @@ macro_rules! join_expr_tests {
                     ScalarValue::$SCALAR(Some(3 as $type)),
                     (Operator::Gt, Operator::Lt),
                 ),
-                // left_col - 2 >= right_col - 5 AND left_col - 7 <= right_col - 3
+                // left_col - 2 >= right_col + 5 AND left_col + 7 <= right_col - 3
+                // (filters all input rows)
                 5 => gen_conjunctive_numerical_expr(
                     left_col,
                     right_col,
@@ -369,7 +372,7 @@ macro_rules! join_expr_tests {
                     ScalarValue::$SCALAR(Some(3 as $type)),
                     (Operator::GtEq, Operator::LtEq),
                 ),
-                // left_col - 28 >= right_col - 11 AND left_col - 21 <= right_col - 39
+                // left_col + 28 >= right_col - 11 AND left_col + 21 <= right_col + 39
                 6 => gen_conjunctive_numerical_expr(
                     left_col,
                     right_col,
@@ -385,7 +388,7 @@ macro_rules! join_expr_tests {
                     ScalarValue::$SCALAR(Some(39 as $type)),
                     (Operator::Gt, Operator::LtEq),
                 ),
-                // left_col - 28 >= right_col - 11 AND left_col - 21 <= right_col + 39
+                // left_col + 28 >= right_col - 11 AND left_col - 21 <= right_col + 39
                 7 => gen_conjunctive_numerical_expr(
                     left_col,
                     right_col,
@@ -526,10 +529,10 @@ pub fn create_memory_table(
 ) -> Result<(Arc<dyn ExecutionPlan>, Arc<dyn ExecutionPlan>)> {
     let left_schema = left_partition[0].schema();
     let left = MemoryExec::try_new(&[left_partition], left_schema, None)?
-        .with_sort_information(left_sorted);
+        .try_with_sort_information(left_sorted)?;
     let right_schema = right_partition[0].schema();
     let right = MemoryExec::try_new(&[right_partition], right_schema, None)?
-        .with_sort_information(right_sorted);
+        .try_with_sort_information(right_sorted)?;
     Ok((Arc::new(left), Arc::new(right)))
 }
 

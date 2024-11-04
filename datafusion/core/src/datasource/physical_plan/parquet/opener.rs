@@ -17,7 +17,9 @@
 
 //! [`ParquetOpener`] for opening Parquet files
 
-use crate::datasource::file_format::transform_schema_to_view;
+use crate::datasource::file_format::{
+    coerce_file_schema_to_string_type, coerce_file_schema_to_view_type,
+};
 use crate::datasource::physical_plan::parquet::page_filter::PagePruningAccessPlanFilter;
 use crate::datasource::physical_plan::parquet::row_group_filter::RowGroupAccessPlanFilter;
 use crate::datasource::physical_plan::parquet::{
@@ -41,27 +43,46 @@ use std::sync::Arc;
 
 /// Implements [`FileOpener`] for a parquet file
 pub(super) struct ParquetOpener {
+    /// Execution partition index
     pub partition_index: usize,
+    /// Column indexes in `table_schema` needed by the query
     pub projection: Arc<[usize]>,
+    /// Target number of rows in each output RecordBatch
     pub batch_size: usize,
+    /// Optional limit on the number of rows to read
     pub limit: Option<usize>,
+    /// Optional predicate to apply during the scan
     pub predicate: Option<Arc<dyn PhysicalExpr>>,
+    /// Optional pruning predicate applied to row group statistics
     pub pruning_predicate: Option<Arc<PruningPredicate>>,
+    /// Optional pruning predicate applied to data page statistics
     pub page_pruning_predicate: Option<Arc<PagePruningAccessPlanFilter>>,
+    /// Schema of the output table
     pub table_schema: SchemaRef,
+    /// Optional hint for how large the initial request to read parquet metadata
+    /// should be
     pub metadata_size_hint: Option<usize>,
+    /// Metrics for reporting
     pub metrics: ExecutionPlanMetricsSet,
+    /// Factory for instantiating parquet reader
     pub parquet_file_reader_factory: Arc<dyn ParquetFileReaderFactory>,
+    /// Should the filters be evaluated during the parquet scan using
+    /// [`DataFusionArrowPredicate`](row_filter::DatafusionArrowPredicate)?
     pub pushdown_filters: bool,
+    /// Should the filters be reordered to optimize the scan?
     pub reorder_filters: bool,
+    /// Should the page index be read from parquet files, if present, to skip
+    /// data pages
     pub enable_page_index: bool,
+    /// Should the bloom filter be read from parquet, if present, to skip row
+    /// groups
     pub enable_bloom_filter: bool,
+    /// Schema adapter factory
     pub schema_adapter_factory: Arc<dyn SchemaAdapterFactory>,
-    pub schema_force_string_view: bool,
 }
 
 impl FileOpener for ParquetOpener {
-    fn open(&self, file_meta: FileMeta) -> datafusion_common::Result<FileOpenFuture> {
+    fn open(&self, file_meta: FileMeta) -> Result<FileOpenFuture> {
         let file_range = file_meta.range.clone();
         let extensions = file_meta.extensions.clone();
         let file_name = file_meta.location().to_string();
@@ -77,9 +98,12 @@ impl FileOpener for ParquetOpener {
             )?;
 
         let batch_size = self.batch_size;
-        let projection = self.projection.clone();
-        let projected_schema = SchemaRef::from(self.table_schema.project(&projection)?);
-        let schema_adapter = self.schema_adapter_factory.create(projected_schema);
+
+        let projected_schema =
+            SchemaRef::from(self.table_schema.project(&self.projection)?);
+        let schema_adapter = self
+            .schema_adapter_factory
+            .create(projected_schema, self.table_schema.clone());
         let predicate = self.predicate.clone();
         let pruning_predicate = self.pruning_predicate.clone();
         let page_pruning_predicate = self.page_pruning_predicate.clone();
@@ -92,29 +116,39 @@ impl FileOpener for ParquetOpener {
         );
         let enable_bloom_filter = self.enable_bloom_filter;
         let limit = self.limit;
-        let schema_force_string_view = self.schema_force_string_view;
 
         Ok(Box::pin(async move {
             let options = ArrowReaderOptions::new().with_page_index(enable_page_index);
 
+            let mut metadata_timer = file_metrics.metadata_load_time.timer();
             let metadata =
                 ArrowReaderMetadata::load_async(&mut reader, options.clone()).await?;
-            let mut schema = metadata.schema().clone();
+            let mut schema = Arc::clone(metadata.schema());
 
-            if schema_force_string_view {
-                schema = Arc::new(transform_schema_to_view(&schema));
+            if let Some(merged) =
+                coerce_file_schema_to_string_type(&table_schema, &schema)
+            {
+                schema = Arc::new(merged);
+            }
+
+            // read with view types
+            if let Some(merged) = coerce_file_schema_to_view_type(&table_schema, &schema)
+            {
+                schema = Arc::new(merged);
             }
 
             let options = ArrowReaderOptions::new()
                 .with_page_index(enable_page_index)
-                .with_schema(schema.clone());
+                .with_schema(Arc::clone(&schema));
             let metadata =
-                ArrowReaderMetadata::try_new(metadata.metadata().clone(), options)?;
+                ArrowReaderMetadata::try_new(Arc::clone(metadata.metadata()), options)?;
+
+            metadata_timer.stop();
 
             let mut builder =
                 ParquetRecordBatchStreamBuilder::new_with_metadata(reader, metadata);
 
-            let file_schema = builder.schema().clone();
+            let file_schema = Arc::clone(builder.schema());
 
             let (schema_mapping, adapted_projections) =
                 schema_adapter.map_schema(&file_schema)?;
@@ -152,7 +186,7 @@ impl FileOpener for ParquetOpener {
 
             // Determine which row groups to actually read. The idea is to skip
             // as many row groups as possible based on the metadata and query
-            let file_metadata = builder.metadata().clone();
+            let file_metadata = Arc::clone(builder.metadata());
             let predicate = pruning_predicate.as_ref().map(|p| p.as_ref());
             let rg_metadata = file_metadata.row_groups();
             // track which row groups to actually read

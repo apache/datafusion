@@ -43,6 +43,11 @@ SELECT * FROM arrow_simple
 3 baz false
 4 NULL true
 
+# Ensure that local files can not be read by default (a potential security issue)
+# (url table is only supported when DynamicFileCatalog is enabled)
+statement error DataFusion error: Error during planning: table 'datafusion.public.../core/tests/data/example.arrow' not found
+SELECT * FROM '../core/tests/data/example.arrow';
+
 # ARROW partitioned table
 statement ok
 CREATE EXTERNAL TABLE arrow_partitioned (
@@ -113,3 +118,8 @@ EXPLAIN SELECT f0 FROM arrow_partitioned WHERE part = 456
 ----
 logical_plan TableScan: arrow_partitioned projection=[f0], full_filters=[arrow_partitioned.part = Int32(456)]
 physical_plan ArrowExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/partitioned_table_arrow/part=456/data.arrow]]}, projection=[f0]
+
+
+# Errors in partition filters should be reported
+query error Divide by zero error
+SELECT f0 FROM arrow_partitioned WHERE CASE WHEN true THEN 1 / 0 ELSE part END = 1;

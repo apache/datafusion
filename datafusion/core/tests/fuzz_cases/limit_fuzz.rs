@@ -226,7 +226,7 @@ impl SortedData {
     }
 
     /// Return the sort expression to use for this data, depending on the type
-    fn sort_expr(&self) -> Vec<datafusion_expr::Expr> {
+    fn sort_expr(&self) -> Vec<datafusion_expr::SortExpr> {
         match self {
             Self::I32 { .. } | Self::F64 { .. } | Self::Str { .. } => {
                 vec![datafusion_expr::col("x").sort(true, true)]
@@ -341,7 +341,7 @@ async fn run_limit_test(fetch: usize, data: &SortedData) {
 
 /// Return random ASCII String with len
 fn get_random_string(len: usize) -> String {
-    rand::thread_rng()
+    thread_rng()
         .sample_iter(rand::distributions::Alphanumeric)
         .take(len)
         .map(char::from)

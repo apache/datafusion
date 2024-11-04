@@ -21,6 +21,8 @@
 
 The `EXPLAIN` command shows the logical and physical execution plan for the specified SQL statement.
 
+See the [Reading Explain Plans](../explain-usage.md) page for more information on how to interpret these plans.
+
 <pre>
 EXPLAIN [ANALYZE] [VERBOSE] statement
 </pre>

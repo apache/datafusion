@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{any::Any, sync::Arc};
+use std::sync::Arc;
 
 use arrow::array::{ArrayRef, AsArray};
 use arrow::datatypes::ArrowNativeType;
@@ -30,26 +30,7 @@ use arrow::{
 };
 use datafusion_common::{exec_err, DataFusionError, Result};
 use datafusion_expr_common::accumulator::Accumulator;
-use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
-
-use crate::aggregate::AggregateExpr;
-
-/// Downcast a `Box<dyn AggregateExpr>` or `Arc<dyn AggregateExpr>`
-/// and return the inner trait object as [`Any`] so
-/// that it can be downcast to a specific implementation.
-///
-/// This method is used when implementing the `PartialEq<dyn Any>`
-/// for [`AggregateExpr`] aggregation expressions and allows comparing the equality
-/// between the trait objects.
-pub fn down_cast_any_ref(any: &dyn Any) -> &dyn Any {
-    if let Some(obj) = any.downcast_ref::<Arc<dyn AggregateExpr>>() {
-        obj.as_any()
-    } else if let Some(obj) = any.downcast_ref::<Box<dyn AggregateExpr>>() {
-        obj.as_any()
-    } else {
-        any
-    }
-}
+use datafusion_physical_expr_common::sort_expr::LexOrderingRef;
 
 /// Convert scalar values from an accumulator into arrays.
 pub fn get_accum_scalar_values_as_arrays(
@@ -107,7 +88,7 @@ pub fn adjust_output_array(data_type: &DataType, array: ArrayRef) -> Result<Arra
 
 /// Construct corresponding fields for lexicographical ordering requirement expression
 pub fn ordering_fields(
-    ordering_req: &[PhysicalSortExpr],
+    ordering_req: LexOrderingRef,
     // Data type of each expression in the ordering requirement
     data_types: &[DataType],
 ) -> Vec<Field> {
@@ -126,7 +107,7 @@ pub fn ordering_fields(
 }
 
 /// Selects the sort option attribute from all the given `PhysicalSortExpr`s.
-pub fn get_sort_options(ordering_req: &[PhysicalSortExpr]) -> Vec<SortOptions> {
+pub fn get_sort_options(ordering_req: LexOrderingRef) -> Vec<SortOptions> {
     ordering_req.iter().map(|item| item.options).collect()
 }
 

@@ -33,7 +33,8 @@ use arrow_schema::SchemaRef;
 use datafusion_common::{config_err, plan_err, Constraints, DataFusionError, Result};
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
-use datafusion_expr::{CreateExternalTable, Expr, TableType};
+use datafusion_expr::dml::InsertOp;
+use datafusion_expr::{CreateExternalTable, Expr, SortExpr, TableType};
 use datafusion_physical_plan::insert::{DataSink, DataSinkExec};
 use datafusion_physical_plan::metrics::MetricsSet;
 use datafusion_physical_plan::stream::RecordBatchReceiverStreamBuilder;
@@ -248,7 +249,7 @@ impl StreamProvider for FileStreamProvider {
 #[derive(Debug)]
 pub struct StreamConfig {
     source: Arc<dyn StreamProvider>,
-    order: Vec<Vec<Expr>>,
+    order: Vec<Vec<SortExpr>>,
     constraints: Constraints,
 }
 
@@ -263,7 +264,7 @@ impl StreamConfig {
     }
 
     /// Specify a sort order for the stream
-    pub fn with_order(mut self, order: Vec<Vec<Expr>>) -> Self {
+    pub fn with_order(mut self, order: Vec<Vec<SortExpr>>) -> Self {
         self.order = order;
         self
     }
@@ -293,6 +294,7 @@ impl StreamConfig {
 ///
 /// [Hadoop]: https://hadoop.apache.org/
 /// [`ListingTable`]: crate::datasource::listing::ListingTable
+#[derive(Debug)]
 pub struct StreamTable(Arc<StreamConfig>);
 
 impl StreamTable {
@@ -349,7 +351,7 @@ impl TableProvider for StreamTable {
         &self,
         _state: &dyn Session,
         input: Arc<dyn ExecutionPlan>,
-        _overwrite: bool,
+        _insert_op: InsertOp,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let ordering = match self.0.order.first() {
             Some(x) => {
@@ -370,6 +372,7 @@ impl TableProvider for StreamTable {
     }
 }
 
+#[derive(Debug)]
 struct StreamRead(Arc<StreamConfig>);
 
 impl PartitionStream for StreamRead {
@@ -438,6 +441,9 @@ impl DataSink for StreamWrite {
             }
         }
         drop(sender);
-        write_task.join_unwind().await
+        write_task
+            .join_unwind()
+            .await
+            .map_err(DataFusionError::ExecutionJoin)?
     }
 }

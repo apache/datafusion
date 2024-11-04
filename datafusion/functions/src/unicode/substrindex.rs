@@ -16,7 +16,7 @@
 // under the License.
 
 use std::any::Any;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use arrow::array::{
     ArrayAccessor, ArrayIter, ArrayRef, ArrowPrimitiveType, AsArray, OffsetSizeTrait,
@@ -24,11 +24,13 @@ use arrow::array::{
 };
 use arrow::datatypes::{DataType, Int32Type, Int64Type};
 
-use datafusion_common::{exec_err, Result};
-use datafusion_expr::TypeSignature::Exact;
-use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
-
 use crate::utils::{make_scalar_function, utf8_to_str_type};
+use datafusion_common::{exec_err, Result};
+use datafusion_expr::scalar_doc_sections::DOC_SECTION_STRING;
+use datafusion_expr::TypeSignature::Exact;
+use datafusion_expr::{
+    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+};
 
 #[derive(Debug)]
 pub struct SubstrIndexFunc {
@@ -83,6 +85,42 @@ impl ScalarUDFImpl for SubstrIndexFunc {
     fn aliases(&self) -> &[String] {
         &self.aliases
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_substr_index_doc())
+    }
+}
+
+static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+
+fn get_substr_index_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_STRING)
+            .with_description(r#"Returns the substring from str before count occurrences of the delimiter delim.
+If count is positive, everything to the left of the final delimiter (counting from the left) is returned.
+If count is negative, everything to the right of the final delimiter (counting from the right) is returned."#)
+            .with_syntax_example("substr_index(str, delim, count)")
+            .with_sql_example(r#"```sql
+> select substr_index('www.apache.org', '.', 1);
++---------------------------------------------------------+
+| substr_index(Utf8("www.apache.org"),Utf8("."),Int64(1)) |
++---------------------------------------------------------+
+| www                                                     |
++---------------------------------------------------------+
+> select substr_index('www.apache.org', '.', -1);
++----------------------------------------------------------+
+| substr_index(Utf8("www.apache.org"),Utf8("."),Int64(-1)) |
++----------------------------------------------------------+
+| org                                                      |
++----------------------------------------------------------+
+```"#)
+            .with_standard_argument("str", Some("String"))
+            .with_argument("delim", "The string to find in str to split str.")
+            .with_argument("count", "The number of times to search for the delimiter. Can be either a positive or negative number.")
+            .build()
+            .unwrap()
+    })
 }
 
 /// Returns the substring from str before count occurrences of the delimiter delim. If count is positive, everything to the left of the final delimiter (counting from the left) is returned. If count is negative, everything to the right of the final delimiter (counting from the right) is returned.

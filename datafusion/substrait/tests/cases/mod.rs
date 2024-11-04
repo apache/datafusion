@@ -16,8 +16,10 @@
 // under the License.
 
 mod consumer_integration;
+mod emit_kind_tests;
 mod function_test;
 mod logical_plans;
 mod roundtrip_logical_plan;
 mod roundtrip_physical_plan;
 mod serialize;
+mod substrait_validations;

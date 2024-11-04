@@ -15,14 +15,15 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use itertools::Itertools;
-use std::ops::Deref;
+use datafusion::config::ConfigOptions;
+use datafusion::optimizer::analyzer::expand_wildcard_rule::ExpandWildcardRule;
+use datafusion::optimizer::AnalyzerRule;
 use std::sync::Arc;
+use substrait::proto::expression_reference::ExprType;
 
-use arrow_buffer::ToByteSlice;
-use datafusion::arrow::datatypes::IntervalUnit;
+use datafusion::arrow::datatypes::{Field, IntervalUnit};
 use datafusion::logical_expr::{
-    CrossJoin, Distinct, Like, Partitioning, WindowFrameUnits,
+    Distinct, FetchType, Like, Partitioning, SkipType, WindowFrameUnits,
 };
 use datafusion::{
     arrow::datatypes::{DataType, TimeUnit},
@@ -37,16 +38,15 @@ use crate::variation_const::{
     DATE_32_TYPE_VARIATION_REF, DATE_64_TYPE_VARIATION_REF,
     DECIMAL_128_TYPE_VARIATION_REF, DECIMAL_256_TYPE_VARIATION_REF,
     DEFAULT_CONTAINER_TYPE_VARIATION_REF, DEFAULT_TYPE_VARIATION_REF,
-    INTERVAL_MONTH_DAY_NANO_TYPE_NAME, LARGE_CONTAINER_TYPE_VARIATION_REF,
-    TIMESTAMP_MICRO_TYPE_VARIATION_REF, TIMESTAMP_MILLI_TYPE_VARIATION_REF,
-    TIMESTAMP_NANO_TYPE_VARIATION_REF, TIMESTAMP_SECOND_TYPE_VARIATION_REF,
-    UNSIGNED_INTEGER_TYPE_VARIATION_REF,
+    LARGE_CONTAINER_TYPE_VARIATION_REF, UNSIGNED_INTEGER_TYPE_VARIATION_REF,
+    VIEW_CONTAINER_TYPE_VARIATION_REF,
 };
 use datafusion::arrow::array::{Array, GenericListArray, OffsetSizeTrait};
+use datafusion::arrow::temporal_conversions::NANOSECONDS;
 use datafusion::common::{
     exec_err, internal_err, not_impl_err, plan_err, substrait_datafusion_err,
+    substrait_err, DFSchemaRef, ToDFSchema,
 };
-use datafusion::common::{substrait_err, DFSchemaRef};
 #[allow(unused_imports)]
 use datafusion::logical_expr::expr::{
     Alias, BinaryExpr, Case, Cast, GroupingSet, InList, InSubquery, Sort, WindowFunction,
@@ -55,15 +55,20 @@ use datafusion::logical_expr::{expr, Between, JoinConstraint, LogicalPlan, Opera
 use datafusion::prelude::Expr;
 use pbjson_types::Any as ProtoAny;
 use substrait::proto::exchange_rel::{ExchangeKind, RoundRobin, ScatterFields};
+use substrait::proto::expression::literal::interval_day_to_second::PrecisionMode;
 use substrait::proto::expression::literal::map::KeyValue;
 use substrait::proto::expression::literal::{
-    user_defined, IntervalDayToSecond, IntervalYearToMonth, List, Map, Struct,
-    UserDefined,
+    IntervalCompound, IntervalDayToSecond, IntervalYearToMonth, List, Map,
+    PrecisionTimestamp, Struct,
 };
 use substrait::proto::expression::subquery::InPredicate;
 use substrait::proto::expression::window_function::BoundsType;
 use substrait::proto::read_rel::VirtualTable;
-use substrait::proto::{CrossRel, ExchangeRel};
+use substrait::proto::rel_common::EmitKind;
+use substrait::proto::rel_common::EmitKind::Emit;
+use substrait::proto::{
+    rel_common, ExchangeRel, ExpressionReference, ExtendedExpression, RelCommon,
+};
 use substrait::{
     proto::{
         aggregate_function::AggregationInvocation,
@@ -101,10 +106,15 @@ pub fn to_substrait_plan(plan: &LogicalPlan, ctx: &SessionContext) -> Result<Box
     // Parse relation nodes
     // Generate PlanRel(s)
     // Note: Only 1 relation tree is currently supported
+
+    // We have to expand wildcard expressions first as wildcards can't be represented in substrait
+    let plan = Arc::new(ExpandWildcardRule::new())
+        .analyze(plan.clone(), &ConfigOptions::default())?;
+
     let plan_rels = vec![PlanRel {
         rel_type: Some(plan_rel::RelType::Root(RelRoot {
-            input: Some(*to_substrait_rel(plan, ctx, &mut extensions)?),
-            names: to_substrait_named_struct(plan.schema(), &mut extensions)?.names,
+            input: Some(*to_substrait_rel(&plan, ctx, &mut extensions)?),
+            names: to_substrait_named_struct(plan.schema())?.names,
         })),
     }];
 
@@ -119,7 +129,58 @@ pub fn to_substrait_plan(plan: &LogicalPlan, ctx: &SessionContext) -> Result<Box
     }))
 }
 
+/// Serializes a collection of expressions to a Substrait ExtendedExpression message
+///
+/// The ExtendedExpression message is a top-level message that can be used to send
+/// expressions (not plans) between systems.
+///
+/// Each expression is also given names for the output type.  These are provided as a
+/// field and not a String (since the names may be nested, e.g. a struct).  The data
+/// type and nullability of this field is redundant (those can be determined by the
+/// Expr) and will be ignored.
+///
+/// Substrait also requires the input schema of the expressions to be included in the
+/// message.  The field names of the input schema will be serialized.
+pub fn to_substrait_extended_expr(
+    exprs: &[(&Expr, &Field)],
+    schema: &DFSchemaRef,
+    ctx: &SessionContext,
+) -> Result<Box<ExtendedExpression>> {
+    let mut extensions = Extensions::default();
+
+    let substrait_exprs = exprs
+        .iter()
+        .map(|(expr, field)| {
+            let substrait_expr = to_substrait_rex(
+                ctx,
+                expr,
+                schema,
+                /*col_ref_offset=*/ 0,
+                &mut extensions,
+            )?;
+            let mut output_names = Vec::new();
+            flatten_names(field, false, &mut output_names)?;
+            Ok(ExpressionReference {
+                output_names,
+                expr_type: Some(ExprType::Expression(substrait_expr)),
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let substrait_schema = to_substrait_named_struct(schema)?;
+
+    Ok(Box::new(ExtendedExpression {
+        advanced_extensions: None,
+        expected_type_urls: vec![],
+        extension_uris: vec![],
+        extensions: extensions.into(),
+        version: Some(version::version_with_producer("datafusion")),
+        referred_expr: substrait_exprs,
+        base_schema: Some(substrait_schema),
+    }))
+}
+
 /// Convert DataFusion LogicalPlan to Substrait Rel
+#[allow(deprecated)]
 pub fn to_substrait_rel(
     plan: &LogicalPlan,
     ctx: &SessionContext,
@@ -141,19 +202,13 @@ pub fn to_substrait_rel(
                 maintain_singular_struct: false,
             });
 
+            let table_schema = scan.source.schema().to_dfschema_ref()?;
+            let base_schema = to_substrait_named_struct(&table_schema)?;
+
             Ok(Box::new(Rel {
                 rel_type: Some(RelType::Read(Box::new(ReadRel {
                     common: None,
-                    base_schema: Some(NamedStruct {
-                        names: scan
-                            .source
-                            .schema()
-                            .fields()
-                            .iter()
-                            .map(|f| f.name().to_owned())
-                            .collect(),
-                        r#struct: None,
-                    }),
+                    base_schema: Some(base_schema),
                     filter: None,
                     best_effort_filter: None,
                     projection,
@@ -174,13 +229,14 @@ pub fn to_substrait_rel(
             Ok(Box::new(Rel {
                 rel_type: Some(RelType::Read(Box::new(ReadRel {
                     common: None,
-                    base_schema: Some(to_substrait_named_struct(&e.schema, extensions)?),
+                    base_schema: Some(to_substrait_named_struct(&e.schema)?),
                     filter: None,
                     best_effort_filter: None,
                     projection: None,
                     advanced_extension: None,
                     read_type: Some(ReadType::VirtualTable(VirtualTable {
                         values: vec![],
+                        expressions: vec![],
                     })),
                 }))),
             }))
@@ -212,12 +268,15 @@ pub fn to_substrait_rel(
             Ok(Box::new(Rel {
                 rel_type: Some(RelType::Read(Box::new(ReadRel {
                     common: None,
-                    base_schema: Some(to_substrait_named_struct(&v.schema, extensions)?),
+                    base_schema: Some(to_substrait_named_struct(&v.schema)?),
                     filter: None,
                     best_effort_filter: None,
                     projection: None,
                     advanced_extension: None,
-                    read_type: Some(ReadType::VirtualTable(VirtualTable { values })),
+                    read_type: Some(ReadType::VirtualTable(VirtualTable {
+                        values,
+                        expressions: vec![],
+                    })),
                 }))),
             }))
         }
@@ -227,9 +286,20 @@ pub fn to_substrait_rel(
                 .iter()
                 .map(|e| to_substrait_rex(ctx, e, p.input.schema(), 0, extensions))
                 .collect::<Result<Vec<_>>>()?;
+
+            let emit_kind = create_project_remapping(
+                expressions.len(),
+                p.input.as_ref().schema().fields().len(),
+            );
+            let common = RelCommon {
+                emit_kind: Some(emit_kind),
+                hint: None,
+                advanced_extension: None,
+            };
+
             Ok(Box::new(Rel {
                 rel_type: Some(RelType::Project(Box::new(ProjectRel {
-                    common: None,
+                    common: Some(common),
                     input: Some(to_substrait_rel(p.input.as_ref(), ctx, extensions)?),
                     expressions,
                     advanced_extension: None,
@@ -256,14 +326,19 @@ pub fn to_substrait_rel(
         }
         LogicalPlan::Limit(limit) => {
             let input = to_substrait_rel(limit.input.as_ref(), ctx, extensions)?;
-            // Since protobuf can't directly distinguish `None` vs `0` encode `None` as `MAX`
-            let limit_fetch = limit.fetch.unwrap_or(usize::MAX);
+            let FetchType::Literal(fetch) = limit.get_fetch_type()? else {
+                return not_impl_err!("Non-literal limit fetch");
+            };
+            let SkipType::Literal(skip) = limit.get_skip_type()? else {
+                return not_impl_err!("Non-literal limit skip");
+            };
             Ok(Box::new(Rel {
                 rel_type: Some(RelType::Fetch(Box::new(FetchRel {
                     common: None,
                     input: Some(input),
-                    offset: limit.skip as i64,
-                    count: limit_fetch as i64,
+                    offset: skip as i64,
+                    // use -1 to signal that ALL records should be returned
+                    count: fetch.map(|f| f as i64).unwrap_or(-1),
                     advanced_extension: None,
                 }))),
             }))
@@ -286,7 +361,7 @@ pub fn to_substrait_rel(
         }
         LogicalPlan::Aggregate(agg) => {
             let input = to_substrait_rel(agg.input.as_ref(), ctx, extensions)?;
-            let groupings = to_substrait_groupings(
+            let (grouping_expressions, groupings) = to_substrait_groupings(
                 ctx,
                 &agg.group_expr,
                 agg.input.schema(),
@@ -302,6 +377,7 @@ pub fn to_substrait_rel(
                 rel_type: Some(RelType::Aggregate(Box::new(AggregateRel {
                     common: None,
                     input: Some(input),
+                    grouping_expressions,
                     groupings,
                     measures,
                     advanced_extension: None,
@@ -320,8 +396,10 @@ pub fn to_substrait_rel(
                 rel_type: Some(RelType::Aggregate(Box::new(AggregateRel {
                     common: None,
                     input: Some(input),
+                    grouping_expressions: vec![],
                     groupings: vec![Grouping {
                         grouping_expressions: grouping,
+                        expression_references: vec![],
                     }],
                     measures: vec![],
                     advanced_extension: None,
@@ -398,23 +476,6 @@ pub fn to_substrait_rel(
                 }))),
             }))
         }
-        LogicalPlan::CrossJoin(cross_join) => {
-            let CrossJoin {
-                left,
-                right,
-                schema: _,
-            } = cross_join;
-            let left = to_substrait_rel(left.as_ref(), ctx, extensions)?;
-            let right = to_substrait_rel(right.as_ref(), ctx, extensions)?;
-            Ok(Box::new(Rel {
-                rel_type: Some(RelType::Cross(Box::new(CrossRel {
-                    common: None,
-                    left: Some(left),
-                    right: Some(right),
-                    advanced_extension: None,
-                }))),
-            }))
-        }
         LogicalPlan::SubqueryAlias(alias) => {
             // Do nothing if encounters SubqueryAlias
             // since there is no corresponding relation type in Substrait
@@ -430,7 +491,7 @@ pub fn to_substrait_rel(
                 .map(|ptr| *ptr)
                 .collect();
             Ok(Box::new(Rel {
-                rel_type: Some(substrait::proto::rel::RelType::Set(SetRel {
+                rel_type: Some(RelType::Set(SetRel {
                     common: None,
                     inputs: input_rels,
                     op: set_rel::SetOp::UnionAll as i32, // UNION DISTINCT gets translated to AGGREGATION + UNION ALL
@@ -440,29 +501,15 @@ pub fn to_substrait_rel(
         }
         LogicalPlan::Window(window) => {
             let input = to_substrait_rel(window.input.as_ref(), ctx, extensions)?;
-            // If the input is a Project relation, we can just append the WindowFunction expressions
-            // before returning
-            // Otherwise, wrap the input in a Project relation before appending the WindowFunction
-            // expressions
-            let mut project_rel: Box<ProjectRel> = match &input.as_ref().rel_type {
-                Some(RelType::Project(p)) => Box::new(*p.clone()),
-                _ => {
-                    // Create Projection with field referencing all output fields in the input relation
-                    let expressions = (0..window.input.schema().fields().len())
-                        .map(substrait_field_ref)
-                        .collect::<Result<Vec<_>>>()?;
-                    Box::new(ProjectRel {
-                        common: None,
-                        input: Some(input),
-                        expressions,
-                        advanced_extension: None,
-                    })
-                }
-            };
-            // Parse WindowFunction expression
-            let mut window_exprs = vec![];
+
+            // create a field reference for each input field
+            let mut expressions = (0..window.input.schema().fields().len())
+                .map(substrait_field_ref)
+                .collect::<Result<Vec<_>>>()?;
+
+            // process and add each window function expression
             for expr in &window.window_expr {
-                window_exprs.push(to_substrait_rex(
+                expressions.push(to_substrait_rex(
                     ctx,
                     expr,
                     window.input.schema(),
@@ -470,8 +517,23 @@ pub fn to_substrait_rel(
                     extensions,
                 )?);
             }
-            // Append parsed WindowFunction expressions
-            project_rel.expressions.extend(window_exprs);
+
+            let emit_kind = create_project_remapping(
+                expressions.len(),
+                window.input.schema().fields().len(),
+            );
+            let common = RelCommon {
+                emit_kind: Some(emit_kind),
+                hint: None,
+                advanced_extension: None,
+            };
+            let project_rel = Box::new(ProjectRel {
+                common: Some(common),
+                input: Some(input),
+                expressions,
+                advanced_extension: None,
+            });
+
             Ok(Box::new(Rel {
                 rel_type: Some(RelType::Project(project_rel)),
             }))
@@ -561,55 +623,58 @@ pub fn to_substrait_rel(
     }
 }
 
-fn to_substrait_named_struct(
-    schema: &DFSchemaRef,
-    extensions: &mut Extensions,
-) -> Result<NamedStruct> {
-    // Substrait wants a list of all field names, including nested fields from structs,
-    // also from within e.g. lists and maps. However, it does not want the list and map field names
-    // themselves - only proper structs fields are considered to have useful names.
-    fn names_dfs(dtype: &DataType) -> Result<Vec<String>> {
-        match dtype {
-            DataType::Struct(fields) => {
-                let mut names = Vec::new();
-                for field in fields {
-                    names.push(field.name().to_string());
-                    names.extend(names_dfs(field.data_type())?);
-                }
-                Ok(names)
-            }
-            DataType::List(l) => names_dfs(l.data_type()),
-            DataType::LargeList(l) => names_dfs(l.data_type()),
-            DataType::Map(m, _) => match m.data_type() {
-                DataType::Struct(key_and_value) if key_and_value.len() == 2 => {
-                    let key_names =
-                        names_dfs(key_and_value.first().unwrap().data_type())?;
-                    let value_names =
-                        names_dfs(key_and_value.last().unwrap().data_type())?;
-                    Ok([key_names, value_names].concat())
-                }
-                _ => plan_err!("Map fields must contain a Struct with exactly 2 fields"),
-            },
-            _ => Ok(Vec::new()),
-        }
-    }
+/// By default, a Substrait Project outputs all input fields followed by all expressions.
+/// A DataFusion Projection only outputs expressions. In order to keep the Substrait
+/// plan consistent with DataFusion, we must apply an output mapping that skips the input
+/// fields so that the Substrait Project will only output the expression fields.
+fn create_project_remapping(expr_count: usize, input_field_count: usize) -> EmitKind {
+    let expression_field_start = input_field_count;
+    let expression_field_end = expression_field_start + expr_count;
+    let output_mapping = (expression_field_start..expression_field_end)
+        .map(|i| i as i32)
+        .collect();
+    Emit(rel_common::Emit { output_mapping })
+}
 
-    let names = schema
-        .fields()
-        .iter()
-        .map(|f| {
-            let mut names = vec![f.name().to_string()];
-            names.extend(names_dfs(f.data_type())?);
-            Ok(names)
-        })
-        .flatten_ok()
-        .collect::<Result<_>>()?;
+// Substrait wants a list of all field names, including nested fields from structs,
+// also from within e.g. lists and maps. However, it does not want the list and map field names
+// themselves - only proper structs fields are considered to have useful names.
+fn flatten_names(field: &Field, skip_self: bool, names: &mut Vec<String>) -> Result<()> {
+    if !skip_self {
+        names.push(field.name().to_string());
+    }
+    match field.data_type() {
+        DataType::Struct(fields) => {
+            for field in fields {
+                flatten_names(field, false, names)?;
+            }
+            Ok(())
+        }
+        DataType::List(l) => flatten_names(l, true, names),
+        DataType::LargeList(l) => flatten_names(l, true, names),
+        DataType::Map(m, _) => match m.data_type() {
+            DataType::Struct(key_and_value) if key_and_value.len() == 2 => {
+                flatten_names(&key_and_value[0], true, names)?;
+                flatten_names(&key_and_value[1], true, names)
+            }
+            _ => plan_err!("Map fields must contain a Struct with exactly 2 fields"),
+        },
+        _ => Ok(()),
+    }?;
+    Ok(())
+}
+
+fn to_substrait_named_struct(schema: &DFSchemaRef) -> Result<NamedStruct> {
+    let mut names = Vec::with_capacity(schema.fields().len());
+    for field in schema.fields() {
+        flatten_names(field, false, &mut names)?;
+    }
 
     let field_types = r#type::Struct {
         types: schema
             .fields()
             .iter()
-            .map(|f| to_substrait_type(f.data_type(), f.is_nullable(), extensions))
+            .map(|f| to_substrait_type(f.data_type(), f.is_nullable()))
             .collect::<Result<_>>()?,
         type_variation_reference: DEFAULT_TYPE_VARIATION_REF,
         nullability: r#type::Nullability::Unspecified as i32,
@@ -658,9 +723,12 @@ fn to_substrait_jointype(join_type: JoinType) -> join_rel::JoinType {
         JoinType::Left => join_rel::JoinType::Left,
         JoinType::Right => join_rel::JoinType::Right,
         JoinType::Full => join_rel::JoinType::Outer,
-        JoinType::LeftAnti => join_rel::JoinType::Anti,
-        JoinType::LeftSemi => join_rel::JoinType::Semi,
-        JoinType::RightAnti | JoinType::RightSemi => unimplemented!(),
+        JoinType::LeftAnti => join_rel::JoinType::LeftAnti,
+        JoinType::LeftSemi => join_rel::JoinType::LeftSemi,
+        JoinType::LeftMark => join_rel::JoinType::LeftMark,
+        JoinType::RightAnti | JoinType::RightSemi => {
+            unimplemented!()
+        }
     }
 }
 
@@ -676,7 +744,7 @@ pub fn operator_to_name(op: Operator) -> &'static str {
         Operator::Minus => "subtract",
         Operator::Multiply => "multiply",
         Operator::Divide => "divide",
-        Operator::Modulo => "mod",
+        Operator::Modulo => "modulus",
         Operator::And => "and",
         Operator::Or => "or",
         Operator::IsDistinctFrom => "is_distinct_from",
@@ -700,18 +768,26 @@ pub fn operator_to_name(op: Operator) -> &'static str {
     }
 }
 
+#[allow(deprecated)]
 pub fn parse_flat_grouping_exprs(
     ctx: &SessionContext,
     exprs: &[Expr],
     schema: &DFSchemaRef,
     extensions: &mut Extensions,
+    ref_group_exprs: &mut Vec<Expression>,
 ) -> Result<Grouping> {
-    let grouping_expressions = exprs
-        .iter()
-        .map(|e| to_substrait_rex(ctx, e, schema, 0, extensions))
-        .collect::<Result<Vec<_>>>()?;
+    let mut expression_references = vec![];
+    let mut grouping_expressions = vec![];
+
+    for e in exprs {
+        let rex = to_substrait_rex(ctx, e, schema, 0, extensions)?;
+        grouping_expressions.push(rex.clone());
+        ref_group_exprs.push(rex);
+        expression_references.push((ref_group_exprs.len() - 1) as u32);
+    }
     Ok(Grouping {
         grouping_expressions,
+        expression_references,
     })
 }
 
@@ -720,8 +796,9 @@ pub fn to_substrait_groupings(
     exprs: &[Expr],
     schema: &DFSchemaRef,
     extensions: &mut Extensions,
-) -> Result<Vec<Grouping>> {
-    match exprs.len() {
+) -> Result<(Vec<Expression>, Vec<Grouping>)> {
+    let mut ref_group_exprs = vec![];
+    let groupings = match exprs.len() {
         1 => match &exprs[0] {
             Expr::GroupingSet(gs) => match gs {
                 GroupingSet::Cube(_) => Err(DataFusionError::NotImplemented(
@@ -729,7 +806,15 @@ pub fn to_substrait_groupings(
                 )),
                 GroupingSet::GroupingSets(sets) => Ok(sets
                     .iter()
-                    .map(|set| parse_flat_grouping_exprs(ctx, set, schema, extensions))
+                    .map(|set| {
+                        parse_flat_grouping_exprs(
+                            ctx,
+                            set,
+                            schema,
+                            extensions,
+                            &mut ref_group_exprs,
+                        )
+                    })
                     .collect::<Result<Vec<_>>>()?),
                 GroupingSet::Rollup(set) => {
                     let mut sets: Vec<Vec<Expr>> = vec![vec![]];
@@ -740,19 +825,34 @@ pub fn to_substrait_groupings(
                         .iter()
                         .rev()
                         .map(|set| {
-                            parse_flat_grouping_exprs(ctx, set, schema, extensions)
+                            parse_flat_grouping_exprs(
+                                ctx,
+                                set,
+                                schema,
+                                extensions,
+                                &mut ref_group_exprs,
+                            )
                         })
                         .collect::<Result<Vec<_>>>()?)
                 }
             },
             _ => Ok(vec![parse_flat_grouping_exprs(
-                ctx, exprs, schema, extensions,
+                ctx,
+                exprs,
+                schema,
+                extensions,
+                &mut ref_group_exprs,
             )?]),
         },
         _ => Ok(vec![parse_flat_grouping_exprs(
-            ctx, exprs, schema, extensions,
+            ctx,
+            exprs,
+            schema,
+            extensions,
+            &mut ref_group_exprs,
         )?]),
-    }
+    }?;
+    Ok((ref_group_exprs, groupings))
 }
 
 #[allow(deprecated)]
@@ -809,31 +909,20 @@ pub fn to_substrait_agg_measure(
 /// Converts sort expression to corresponding substrait `SortField`
 fn to_substrait_sort_field(
     ctx: &SessionContext,
-    expr: &Expr,
+    sort: &Sort,
     schema: &DFSchemaRef,
     extensions: &mut Extensions,
 ) -> Result<SortField> {
-    match expr {
-        Expr::Sort(sort) => {
-            let sort_kind = match (sort.asc, sort.nulls_first) {
-                (true, true) => SortDirection::AscNullsFirst,
-                (true, false) => SortDirection::AscNullsLast,
-                (false, true) => SortDirection::DescNullsFirst,
-                (false, false) => SortDirection::DescNullsLast,
-            };
-            Ok(SortField {
-                expr: Some(to_substrait_rex(
-                    ctx,
-                    sort.expr.deref(),
-                    schema,
-                    0,
-                    extensions,
-                )?),
-                sort_kind: Some(SortKind::Direction(sort_kind.into())),
-            })
-        }
-        _ => exec_err!("expects to receive sort expression"),
-    }
+    let sort_kind = match (sort.asc, sort.nulls_first) {
+        (true, true) => SortDirection::AscNullsFirst,
+        (true, false) => SortDirection::AscNullsLast,
+        (false, true) => SortDirection::DescNullsFirst,
+        (false, false) => SortDirection::DescNullsLast,
+    };
+    Ok(SortField {
+        expr: Some(to_substrait_rex(ctx, &sort.expr, schema, 0, extensions)?),
+        sort_kind: Some(SortKind::Direction(sort_kind.into())),
+    })
 }
 
 /// Return Substrait scalar function with two arguments
@@ -1091,7 +1180,7 @@ pub fn to_substrait_rex(
             Ok(Expression {
                 rex_type: Some(RexType::Cast(Box::new(
                     substrait::proto::expression::Cast {
-                        r#type: Some(to_substrait_type(data_type, true, extensions)?),
+                        r#type: Some(to_substrait_type(data_type, true)?),
                         input: Some(Box::new(to_substrait_rex(
                             ctx,
                             expr,
@@ -1285,7 +1374,7 @@ pub fn to_substrait_rex(
         ),
         Expr::Negative(arg) => to_substrait_unary_scalar_fn(
             ctx,
-            "negative",
+            "negate",
             arg,
             schema,
             col_ref_offset,
@@ -1297,11 +1386,7 @@ pub fn to_substrait_rex(
     }
 }
 
-fn to_substrait_type(
-    dt: &DataType,
-    nullable: bool,
-    extensions: &mut Extensions,
-) -> Result<substrait::proto::Type> {
+fn to_substrait_type(dt: &DataType, nullable: bool) -> Result<substrait::proto::Type> {
     let nullability = if nullable {
         r#type::Nullability::Nullable as i32
     } else {
@@ -1376,20 +1461,31 @@ fn to_substrait_type(
                 nullability,
             })),
         }),
-        // Timezone is ignored.
-        DataType::Timestamp(unit, _) => {
-            let type_variation_reference = match unit {
-                TimeUnit::Second => TIMESTAMP_SECOND_TYPE_VARIATION_REF,
-                TimeUnit::Millisecond => TIMESTAMP_MILLI_TYPE_VARIATION_REF,
-                TimeUnit::Microsecond => TIMESTAMP_MICRO_TYPE_VARIATION_REF,
-                TimeUnit::Nanosecond => TIMESTAMP_NANO_TYPE_VARIATION_REF,
+        DataType::Timestamp(unit, tz) => {
+            let precision = match unit {
+                TimeUnit::Second => 0,
+                TimeUnit::Millisecond => 3,
+                TimeUnit::Microsecond => 6,
+                TimeUnit::Nanosecond => 9,
             };
-            Ok(substrait::proto::Type {
-                kind: Some(r#type::Kind::Timestamp(r#type::Timestamp {
-                    type_variation_reference,
+            let kind = match tz {
+                None => r#type::Kind::PrecisionTimestamp(r#type::PrecisionTimestamp {
+                    type_variation_reference: DEFAULT_TYPE_VARIATION_REF,
                     nullability,
-                })),
-            })
+                    precision,
+                }),
+                Some(_) => {
+                    // If timezone is present, no matter what the actual tz value is, it indicates the
+                    // value of the timestamp is tied to UTC epoch. That's all that Substrait cares about.
+                    // As the timezone is lost, this conversion may be lossy for downstream use of the value.
+                    r#type::Kind::PrecisionTimestampTz(r#type::PrecisionTimestampTz {
+                        type_variation_reference: DEFAULT_TYPE_VARIATION_REF,
+                        nullability,
+                        precision,
+                    })
+                }
+            };
+            Ok(substrait::proto::Type { kind: Some(kind) })
         }
         DataType::Date32 => Ok(substrait::proto::Type {
             kind: Some(r#type::Kind::Date(r#type::Date {
@@ -1415,19 +1511,18 @@ fn to_substrait_type(
                     kind: Some(r#type::Kind::IntervalDay(r#type::IntervalDay {
                         type_variation_reference: DEFAULT_TYPE_VARIATION_REF,
                         nullability,
+                        precision: Some(3), // DayTime precision is always milliseconds
                     })),
                 }),
                 IntervalUnit::MonthDayNano => {
-                    // Substrait doesn't currently support this type, so we represent it as a UDT
                     Ok(substrait::proto::Type {
-                        kind: Some(r#type::Kind::UserDefined(r#type::UserDefined {
-                            type_reference: extensions.register_type(
-                                INTERVAL_MONTH_DAY_NANO_TYPE_NAME.to_string(),
-                            ),
-                            type_variation_reference: DEFAULT_TYPE_VARIATION_REF,
-                            nullability,
-                            type_parameters: vec![],
-                        })),
+                        kind: Some(r#type::Kind::IntervalCompound(
+                            r#type::IntervalCompound {
+                                type_variation_reference: DEFAULT_TYPE_VARIATION_REF,
+                                nullability,
+                                precision: 9, // nanos
+                            },
+                        )),
                     })
                 }
             }
@@ -1451,6 +1546,12 @@ fn to_substrait_type(
                 nullability,
             })),
         }),
+        DataType::BinaryView => Ok(substrait::proto::Type {
+            kind: Some(r#type::Kind::Binary(r#type::Binary {
+                type_variation_reference: VIEW_CONTAINER_TYPE_VARIATION_REF,
+                nullability,
+            })),
+        }),
         DataType::Utf8 => Ok(substrait::proto::Type {
             kind: Some(r#type::Kind::String(r#type::String {
                 type_variation_reference: DEFAULT_CONTAINER_TYPE_VARIATION_REF,
@@ -1463,9 +1564,14 @@ fn to_substrait_type(
                 nullability,
             })),
         }),
+        DataType::Utf8View => Ok(substrait::proto::Type {
+            kind: Some(r#type::Kind::String(r#type::String {
+                type_variation_reference: VIEW_CONTAINER_TYPE_VARIATION_REF,
+                nullability,
+            })),
+        }),
         DataType::List(inner) => {
-            let inner_type =
-                to_substrait_type(inner.data_type(), inner.is_nullable(), extensions)?;
+            let inner_type = to_substrait_type(inner.data_type(), inner.is_nullable())?;
             Ok(substrait::proto::Type {
                 kind: Some(r#type::Kind::List(Box::new(r#type::List {
                     r#type: Some(Box::new(inner_type)),
@@ -1475,8 +1581,7 @@ fn to_substrait_type(
             })
         }
         DataType::LargeList(inner) => {
-            let inner_type =
-                to_substrait_type(inner.data_type(), inner.is_nullable(), extensions)?;
+            let inner_type = to_substrait_type(inner.data_type(), inner.is_nullable())?;
             Ok(substrait::proto::Type {
                 kind: Some(r#type::Kind::List(Box::new(r#type::List {
                     r#type: Some(Box::new(inner_type)),
@@ -1490,12 +1595,10 @@ fn to_substrait_type(
                 let key_type = to_substrait_type(
                     key_and_value[0].data_type(),
                     key_and_value[0].is_nullable(),
-                    extensions,
                 )?;
                 let value_type = to_substrait_type(
                     key_and_value[1].data_type(),
                     key_and_value[1].is_nullable(),
-                    extensions,
                 )?;
                 Ok(substrait::proto::Type {
                     kind: Some(r#type::Kind::Map(Box::new(r#type::Map {
@@ -1511,9 +1614,7 @@ fn to_substrait_type(
         DataType::Struct(fields) => {
             let field_types = fields
                 .iter()
-                .map(|field| {
-                    to_substrait_type(field.data_type(), field.is_nullable(), extensions)
-                })
+                .map(|field| to_substrait_type(field.data_type(), field.is_nullable()))
                 .collect::<Result<Vec<_>>>()?;
             Ok(substrait::proto::Type {
                 kind: Some(r#type::Kind::Struct(r#type::Struct {
@@ -1635,98 +1736,38 @@ fn make_substrait_like_expr(
     }
 }
 
+fn to_substrait_bound_offset(value: &ScalarValue) -> Option<i64> {
+    match value {
+        ScalarValue::UInt8(Some(v)) => Some(*v as i64),
+        ScalarValue::UInt16(Some(v)) => Some(*v as i64),
+        ScalarValue::UInt32(Some(v)) => Some(*v as i64),
+        ScalarValue::UInt64(Some(v)) => Some(*v as i64),
+        ScalarValue::Int8(Some(v)) => Some(*v as i64),
+        ScalarValue::Int16(Some(v)) => Some(*v as i64),
+        ScalarValue::Int32(Some(v)) => Some(*v as i64),
+        ScalarValue::Int64(Some(v)) => Some(*v),
+        _ => None,
+    }
+}
+
 fn to_substrait_bound(bound: &WindowFrameBound) -> Bound {
     match bound {
         WindowFrameBound::CurrentRow => Bound {
             kind: Some(BoundKind::CurrentRow(SubstraitBound::CurrentRow {})),
         },
-        WindowFrameBound::Preceding(s) => match s {
-            ScalarValue::UInt8(Some(v)) => Bound {
-                kind: Some(BoundKind::Preceding(SubstraitBound::Preceding {
-                    offset: *v as i64,
-                })),
+        WindowFrameBound::Preceding(s) => match to_substrait_bound_offset(s) {
+            Some(offset) => Bound {
+                kind: Some(BoundKind::Preceding(SubstraitBound::Preceding { offset })),
             },
-            ScalarValue::UInt16(Some(v)) => Bound {
-                kind: Some(BoundKind::Preceding(SubstraitBound::Preceding {
-                    offset: *v as i64,
-                })),
-            },
-            ScalarValue::UInt32(Some(v)) => Bound {
-                kind: Some(BoundKind::Preceding(SubstraitBound::Preceding {
-                    offset: *v as i64,
-                })),
-            },
-            ScalarValue::UInt64(Some(v)) => Bound {
-                kind: Some(BoundKind::Preceding(SubstraitBound::Preceding {
-                    offset: *v as i64,
-                })),
-            },
-            ScalarValue::Int8(Some(v)) => Bound {
-                kind: Some(BoundKind::Preceding(SubstraitBound::Preceding {
-                    offset: *v as i64,
-                })),
-            },
-            ScalarValue::Int16(Some(v)) => Bound {
-                kind: Some(BoundKind::Preceding(SubstraitBound::Preceding {
-                    offset: *v as i64,
-                })),
-            },
-            ScalarValue::Int32(Some(v)) => Bound {
-                kind: Some(BoundKind::Preceding(SubstraitBound::Preceding {
-                    offset: *v as i64,
-                })),
-            },
-            ScalarValue::Int64(Some(v)) => Bound {
-                kind: Some(BoundKind::Preceding(SubstraitBound::Preceding {
-                    offset: *v,
-                })),
-            },
-            _ => Bound {
+            None => Bound {
                 kind: Some(BoundKind::Unbounded(SubstraitBound::Unbounded {})),
             },
         },
-        WindowFrameBound::Following(s) => match s {
-            ScalarValue::UInt8(Some(v)) => Bound {
-                kind: Some(BoundKind::Following(SubstraitBound::Following {
-                    offset: *v as i64,
-                })),
+        WindowFrameBound::Following(s) => match to_substrait_bound_offset(s) {
+            Some(offset) => Bound {
+                kind: Some(BoundKind::Following(SubstraitBound::Following { offset })),
             },
-            ScalarValue::UInt16(Some(v)) => Bound {
-                kind: Some(BoundKind::Following(SubstraitBound::Following {
-                    offset: *v as i64,
-                })),
-            },
-            ScalarValue::UInt32(Some(v)) => Bound {
-                kind: Some(BoundKind::Following(SubstraitBound::Following {
-                    offset: *v as i64,
-                })),
-            },
-            ScalarValue::UInt64(Some(v)) => Bound {
-                kind: Some(BoundKind::Following(SubstraitBound::Following {
-                    offset: *v as i64,
-                })),
-            },
-            ScalarValue::Int8(Some(v)) => Bound {
-                kind: Some(BoundKind::Following(SubstraitBound::Following {
-                    offset: *v as i64,
-                })),
-            },
-            ScalarValue::Int16(Some(v)) => Bound {
-                kind: Some(BoundKind::Following(SubstraitBound::Following {
-                    offset: *v as i64,
-                })),
-            },
-            ScalarValue::Int32(Some(v)) => Bound {
-                kind: Some(BoundKind::Following(SubstraitBound::Following {
-                    offset: *v as i64,
-                })),
-            },
-            ScalarValue::Int64(Some(v)) => Bound {
-                kind: Some(BoundKind::Following(SubstraitBound::Following {
-                    offset: *v,
-                })),
-            },
-            _ => Bound {
+            None => Bound {
                 kind: Some(BoundKind::Unbounded(SubstraitBound::Unbounded {})),
             },
         },
@@ -1760,7 +1801,6 @@ fn to_substrait_literal(
             literal_type: Some(LiteralType::Null(to_substrait_type(
                 &value.data_type(),
                 true,
-                extensions,
             )?)),
         });
     }
@@ -1798,21 +1838,64 @@ fn to_substrait_literal(
         ScalarValue::Float64(Some(f)) => {
             (LiteralType::Fp64(*f), DEFAULT_TYPE_VARIATION_REF)
         }
-        ScalarValue::TimestampSecond(Some(t), _) => (
-            LiteralType::Timestamp(*t),
-            TIMESTAMP_SECOND_TYPE_VARIATION_REF,
+        ScalarValue::TimestampSecond(Some(t), None) => (
+            LiteralType::PrecisionTimestamp(PrecisionTimestamp {
+                precision: 0,
+                value: *t,
+            }),
+            DEFAULT_TYPE_VARIATION_REF,
         ),
-        ScalarValue::TimestampMillisecond(Some(t), _) => (
-            LiteralType::Timestamp(*t),
-            TIMESTAMP_MILLI_TYPE_VARIATION_REF,
+        ScalarValue::TimestampMillisecond(Some(t), None) => (
+            LiteralType::PrecisionTimestamp(PrecisionTimestamp {
+                precision: 3,
+                value: *t,
+            }),
+            DEFAULT_TYPE_VARIATION_REF,
         ),
-        ScalarValue::TimestampMicrosecond(Some(t), _) => (
-            LiteralType::Timestamp(*t),
-            TIMESTAMP_MICRO_TYPE_VARIATION_REF,
+        ScalarValue::TimestampMicrosecond(Some(t), None) => (
+            LiteralType::PrecisionTimestamp(PrecisionTimestamp {
+                precision: 6,
+                value: *t,
+            }),
+            DEFAULT_TYPE_VARIATION_REF,
         ),
-        ScalarValue::TimestampNanosecond(Some(t), _) => (
-            LiteralType::Timestamp(*t),
-            TIMESTAMP_NANO_TYPE_VARIATION_REF,
+        ScalarValue::TimestampNanosecond(Some(t), None) => (
+            LiteralType::PrecisionTimestamp(PrecisionTimestamp {
+                precision: 9,
+                value: *t,
+            }),
+            DEFAULT_TYPE_VARIATION_REF,
+        ),
+        // If timezone is present, no matter what the actual tz value is, it indicates the
+        // value of the timestamp is tied to UTC epoch. That's all that Substrait cares about.
+        // As the timezone is lost, this conversion may be lossy for downstream use of the value.
+        ScalarValue::TimestampSecond(Some(t), Some(_)) => (
+            LiteralType::PrecisionTimestampTz(PrecisionTimestamp {
+                precision: 0,
+                value: *t,
+            }),
+            DEFAULT_TYPE_VARIATION_REF,
+        ),
+        ScalarValue::TimestampMillisecond(Some(t), Some(_)) => (
+            LiteralType::PrecisionTimestampTz(PrecisionTimestamp {
+                precision: 3,
+                value: *t,
+            }),
+            DEFAULT_TYPE_VARIATION_REF,
+        ),
+        ScalarValue::TimestampMicrosecond(Some(t), Some(_)) => (
+            LiteralType::PrecisionTimestampTz(PrecisionTimestamp {
+                precision: 6,
+                value: *t,
+            }),
+            DEFAULT_TYPE_VARIATION_REF,
+        ),
+        ScalarValue::TimestampNanosecond(Some(t), Some(_)) => (
+            LiteralType::PrecisionTimestampTz(PrecisionTimestamp {
+                precision: 9,
+                value: *t,
+            }),
+            DEFAULT_TYPE_VARIATION_REF,
         ),
         ScalarValue::Date32(Some(d)) => {
             (LiteralType::Date(*d), DATE_32_TYPE_VARIATION_REF)
@@ -1826,28 +1909,27 @@ fn to_substrait_literal(
             }),
             DEFAULT_TYPE_VARIATION_REF,
         ),
-        ScalarValue::IntervalMonthDayNano(Some(i)) => {
-            // IntervalMonthDayNano is internally represented as a 128-bit integer, containing
-            // months (32bit), days (32bit), and nanoseconds (64bit)
-            let bytes = i.to_byte_slice();
-            (
-                LiteralType::UserDefined(UserDefined {
-                    type_reference: extensions
-                        .register_type(INTERVAL_MONTH_DAY_NANO_TYPE_NAME.to_string()),
-                    type_parameters: vec![],
-                    val: Some(user_defined::Val::Value(ProtoAny {
-                        type_url: INTERVAL_MONTH_DAY_NANO_TYPE_NAME.to_string(),
-                        value: bytes.to_vec().into(),
-                    })),
+        ScalarValue::IntervalMonthDayNano(Some(i)) => (
+            LiteralType::IntervalCompound(IntervalCompound {
+                interval_year_to_month: Some(IntervalYearToMonth {
+                    years: i.months / 12,
+                    months: i.months % 12,
                 }),
-                DEFAULT_TYPE_VARIATION_REF,
-            )
-        }
+                interval_day_to_second: Some(IntervalDayToSecond {
+                    days: i.days,
+                    seconds: (i.nanoseconds / NANOSECONDS) as i32,
+                    subseconds: i.nanoseconds % NANOSECONDS,
+                    precision_mode: Some(PrecisionMode::Precision(9)), // nanoseconds
+                }),
+            }),
+            DEFAULT_TYPE_VARIATION_REF,
+        ),
         ScalarValue::IntervalDayTime(Some(i)) => (
             LiteralType::IntervalDayToSecond(IntervalDayToSecond {
                 days: i.days,
                 seconds: i.milliseconds / 1000,
-                microseconds: (i.milliseconds % 1000) * 1000,
+                subseconds: (i.milliseconds % 1000) as i64,
+                precision_mode: Some(PrecisionMode::Precision(3)), // 3 for milliseconds
             }),
             DEFAULT_TYPE_VARIATION_REF,
         ),
@@ -1858,6 +1940,10 @@ fn to_substrait_literal(
         ScalarValue::LargeBinary(Some(b)) => (
             LiteralType::Binary(b.clone()),
             LARGE_CONTAINER_TYPE_VARIATION_REF,
+        ),
+        ScalarValue::BinaryView(Some(b)) => (
+            LiteralType::Binary(b.clone()),
+            VIEW_CONTAINER_TYPE_VARIATION_REF,
         ),
         ScalarValue::FixedSizeBinary(_, Some(b)) => (
             LiteralType::FixedBinary(b.clone()),
@@ -1870,6 +1956,10 @@ fn to_substrait_literal(
         ScalarValue::LargeUtf8(Some(s)) => (
             LiteralType::String(s.clone()),
             LARGE_CONTAINER_TYPE_VARIATION_REF,
+        ),
+        ScalarValue::Utf8View(Some(s)) => (
+            LiteralType::String(s.clone()),
+            VIEW_CONTAINER_TYPE_VARIATION_REF,
         ),
         ScalarValue::Decimal128(v, p, s) if v.is_some() => (
             LiteralType::Decimal(Decimal {
@@ -1889,7 +1979,7 @@ fn to_substrait_literal(
         ),
         ScalarValue::Map(m) => {
             let map = if m.is_empty() || m.value(0).is_empty() {
-                let mt = to_substrait_type(m.data_type(), m.is_nullable(), extensions)?;
+                let mt = to_substrait_type(m.data_type(), m.is_nullable())?;
                 let mt = match mt {
                     substrait::proto::Type {
                         kind: Some(r#type::Kind::Map(mt)),
@@ -1974,11 +2064,7 @@ fn convert_array_to_literal_list<T: OffsetSizeTrait>(
         .collect::<Result<Vec<_>>>()?;
 
     if values.is_empty() {
-        let lt = match to_substrait_type(
-            array.data_type(),
-            array.is_nullable(),
-            extensions,
-        )? {
+        let lt = match to_substrait_type(array.data_type(), array.is_nullable())? {
             substrait::proto::Type {
                 kind: Some(r#type::Kind::List(lt)),
             } => lt.as_ref().to_owned(),
@@ -2052,30 +2138,26 @@ fn try_to_substrait_field_reference(
 
 fn substrait_sort_field(
     ctx: &SessionContext,
-    expr: &Expr,
+    sort: &Sort,
     schema: &DFSchemaRef,
     extensions: &mut Extensions,
 ) -> Result<SortField> {
-    match expr {
-        Expr::Sort(Sort {
-            expr,
-            asc,
-            nulls_first,
-        }) => {
-            let e = to_substrait_rex(ctx, expr, schema, 0, extensions)?;
-            let d = match (asc, nulls_first) {
-                (true, true) => SortDirection::AscNullsFirst,
-                (true, false) => SortDirection::AscNullsLast,
-                (false, true) => SortDirection::DescNullsFirst,
-                (false, false) => SortDirection::DescNullsLast,
-            };
-            Ok(SortField {
-                expr: Some(e),
-                sort_kind: Some(SortKind::Direction(d as i32)),
-            })
-        }
-        _ => not_impl_err!("Expecting sort expression but got {expr:?}"),
-    }
+    let Sort {
+        expr,
+        asc,
+        nulls_first,
+    } = sort;
+    let e = to_substrait_rex(ctx, expr, schema, 0, extensions)?;
+    let d = match (asc, nulls_first) {
+        (true, true) => SortDirection::AscNullsFirst,
+        (true, false) => SortDirection::AscNullsLast,
+        (false, true) => SortDirection::DescNullsFirst,
+        (false, false) => SortDirection::DescNullsLast,
+    };
+    Ok(SortField {
+        expr: Some(e),
+        sort_kind: Some(SortKind::Direction(d as i32)),
+    })
 }
 
 fn substrait_field_ref(index: usize) -> Result<Expression> {
@@ -2098,15 +2180,16 @@ fn substrait_field_ref(index: usize) -> Result<Expression> {
 mod test {
     use super::*;
     use crate::logical_plan::consumer::{
-        from_substrait_literal_without_names, from_substrait_type_without_names,
+        from_substrait_extended_expr, from_substrait_literal_without_names,
+        from_substrait_named_struct, from_substrait_type_without_names,
     };
     use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano};
     use datafusion::arrow::array::{
         GenericListArray, Int64Builder, MapBuilder, StringBuilder,
     };
-    use datafusion::arrow::datatypes::Field;
+    use datafusion::arrow::datatypes::{Field, Fields, Schema};
     use datafusion::common::scalar::ScalarStructBuilder;
-    use std::collections::HashMap;
+    use datafusion::common::DFSchema;
 
     #[test]
     fn round_trip_literals() -> Result<()> {
@@ -2141,6 +2224,18 @@ mod test {
         round_trip_literal(ScalarValue::UInt64(None))?;
         round_trip_literal(ScalarValue::UInt64(Some(u64::MIN)))?;
         round_trip_literal(ScalarValue::UInt64(Some(u64::MAX)))?;
+
+        for (ts, tz) in [
+            (Some(12345), None),
+            (None, None),
+            (Some(12345), Some("UTC".into())),
+            (None, Some("UTC".into())),
+        ] {
+            round_trip_literal(ScalarValue::TimestampSecond(ts, tz.clone()))?;
+            round_trip_literal(ScalarValue::TimestampMillisecond(ts, tz.clone()))?;
+            round_trip_literal(ScalarValue::TimestampMicrosecond(ts, tz.clone()))?;
+            round_trip_literal(ScalarValue::TimestampNanosecond(ts, tz))?;
+        }
 
         round_trip_literal(ScalarValue::List(ScalarValue::new_list_nullable(
             &[ScalarValue::Float32(Some(1.0))],
@@ -2226,39 +2321,6 @@ mod test {
     }
 
     #[test]
-    fn custom_type_literal_extensions() -> Result<()> {
-        let mut extensions = Extensions::default();
-        // IntervalMonthDayNano is represented as a custom type in Substrait
-        let scalar = ScalarValue::IntervalMonthDayNano(Some(IntervalMonthDayNano::new(
-            17, 25, 1234567890,
-        )));
-        let substrait_literal = to_substrait_literal(&scalar, &mut extensions)?;
-        let roundtrip_scalar =
-            from_substrait_literal_without_names(&substrait_literal, &extensions)?;
-        assert_eq!(scalar, roundtrip_scalar);
-
-        assert_eq!(
-            extensions,
-            Extensions {
-                functions: HashMap::new(),
-                types: HashMap::from([(
-                    0,
-                    INTERVAL_MONTH_DAY_NANO_TYPE_NAME.to_string()
-                )]),
-                type_variations: HashMap::new(),
-            }
-        );
-
-        // Check we fail if we don't propagate extensions
-        assert!(from_substrait_literal_without_names(
-            &substrait_literal,
-            &Extensions::default()
-        )
-        .is_err());
-        Ok(())
-    }
-
-    #[test]
     fn round_trip_types() -> Result<()> {
         round_trip_type(DataType::Boolean)?;
         round_trip_type(DataType::Int8)?;
@@ -2271,17 +2333,23 @@ mod test {
         round_trip_type(DataType::UInt64)?;
         round_trip_type(DataType::Float32)?;
         round_trip_type(DataType::Float64)?;
-        round_trip_type(DataType::Timestamp(TimeUnit::Second, None))?;
-        round_trip_type(DataType::Timestamp(TimeUnit::Millisecond, None))?;
-        round_trip_type(DataType::Timestamp(TimeUnit::Microsecond, None))?;
-        round_trip_type(DataType::Timestamp(TimeUnit::Nanosecond, None))?;
+
+        for tz in [None, Some("UTC".into())] {
+            round_trip_type(DataType::Timestamp(TimeUnit::Second, tz.clone()))?;
+            round_trip_type(DataType::Timestamp(TimeUnit::Millisecond, tz.clone()))?;
+            round_trip_type(DataType::Timestamp(TimeUnit::Microsecond, tz.clone()))?;
+            round_trip_type(DataType::Timestamp(TimeUnit::Nanosecond, tz))?;
+        }
+
         round_trip_type(DataType::Date32)?;
         round_trip_type(DataType::Date64)?;
         round_trip_type(DataType::Binary)?;
         round_trip_type(DataType::FixedSizeBinary(10))?;
         round_trip_type(DataType::LargeBinary)?;
+        round_trip_type(DataType::BinaryView)?;
         round_trip_type(DataType::Utf8)?;
         round_trip_type(DataType::LargeUtf8)?;
+        round_trip_type(DataType::Utf8View)?;
         round_trip_type(DataType::Decimal128(10, 2))?;
         round_trip_type(DataType::Decimal256(30, 2))?;
 
@@ -2323,44 +2391,109 @@ mod test {
     fn round_trip_type(dt: DataType) -> Result<()> {
         println!("Checking round trip of {dt:?}");
 
-        let mut extensions = Extensions::default();
-
         // As DataFusion doesn't consider nullability as a property of the type, but field,
         // it doesn't matter if we set nullability to true or false here.
-        let substrait = to_substrait_type(&dt, true, &mut extensions)?;
-        let roundtrip_dt = from_substrait_type_without_names(&substrait, &extensions)?;
+        let substrait = to_substrait_type(&dt, true)?;
+        let roundtrip_dt =
+            from_substrait_type_without_names(&substrait, &Extensions::default())?;
         assert_eq!(dt, roundtrip_dt);
         Ok(())
     }
 
     #[test]
-    fn custom_type_extensions() -> Result<()> {
-        let mut extensions = Extensions::default();
-        // IntervalMonthDayNano is represented as a custom type in Substrait
-        let dt = DataType::Interval(IntervalUnit::MonthDayNano);
+    fn named_struct_names() -> Result<()> {
+        let schema = DFSchemaRef::new(DFSchema::try_from(Schema::new(vec![
+            Field::new("int", DataType::Int32, true),
+            Field::new(
+                "struct",
+                DataType::Struct(Fields::from(vec![Field::new(
+                    "inner",
+                    DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))),
+                    true,
+                )])),
+                true,
+            ),
+            Field::new("trailer", DataType::Float64, true),
+        ]))?);
 
-        let substrait = to_substrait_type(&dt, true, &mut extensions)?;
-        let roundtrip_dt = from_substrait_type_without_names(&substrait, &extensions)?;
-        assert_eq!(dt, roundtrip_dt);
+        let named_struct = to_substrait_named_struct(&schema)?;
 
+        // Struct field names should be flattened DFS style
+        // List field names should be omitted
         assert_eq!(
-            extensions,
-            Extensions {
-                functions: HashMap::new(),
-                types: HashMap::from([(
-                    0,
-                    INTERVAL_MONTH_DAY_NANO_TYPE_NAME.to_string()
-                )]),
-                type_variations: HashMap::new(),
-            }
+            named_struct.names,
+            vec!["int", "struct", "inner", "trailer"]
         );
 
-        // Check we fail if we don't propagate extensions
-        assert!(
-            from_substrait_type_without_names(&substrait, &Extensions::default())
-                .is_err()
-        );
+        let roundtrip_schema =
+            from_substrait_named_struct(&named_struct, &Extensions::default())?;
+        assert_eq!(schema.as_ref(), &roundtrip_schema);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn extended_expressions() -> Result<()> {
+        let ctx = SessionContext::new();
+
+        // One expression, empty input schema
+        let expr = Expr::Literal(ScalarValue::Int32(Some(42)));
+        let field = Field::new("out", DataType::Int32, false);
+        let empty_schema = DFSchemaRef::new(DFSchema::empty());
+        let substrait =
+            to_substrait_extended_expr(&[(&expr, &field)], &empty_schema, &ctx)?;
+        let roundtrip_expr = from_substrait_extended_expr(&ctx, &substrait).await?;
+
+        assert_eq!(roundtrip_expr.input_schema, empty_schema);
+        assert_eq!(roundtrip_expr.exprs.len(), 1);
+
+        let (rt_expr, rt_field) = roundtrip_expr.exprs.first().unwrap();
+        assert_eq!(rt_field, &field);
+        assert_eq!(rt_expr, &expr);
+
+        // Multiple expressions, with column references
+        let expr1 = Expr::Column("c0".into());
+        let expr2 = Expr::Column("c1".into());
+        let out1 = Field::new("out1", DataType::Int32, true);
+        let out2 = Field::new("out2", DataType::Utf8, true);
+        let input_schema = DFSchemaRef::new(DFSchema::try_from(Schema::new(vec![
+            Field::new("c0", DataType::Int32, true),
+            Field::new("c1", DataType::Utf8, true),
+        ]))?);
+
+        let substrait = to_substrait_extended_expr(
+            &[(&expr1, &out1), (&expr2, &out2)],
+            &input_schema,
+            &ctx,
+        )?;
+        let roundtrip_expr = from_substrait_extended_expr(&ctx, &substrait).await?;
+
+        assert_eq!(roundtrip_expr.input_schema, input_schema);
+        assert_eq!(roundtrip_expr.exprs.len(), 2);
+
+        let mut exprs = roundtrip_expr.exprs.into_iter();
+
+        let (rt_expr, rt_field) = exprs.next().unwrap();
+        assert_eq!(rt_field, out1);
+        assert_eq!(rt_expr, expr1);
+
+        let (rt_expr, rt_field) = exprs.next().unwrap();
+        assert_eq!(rt_field, out2);
+        assert_eq!(rt_expr, expr2);
 
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn invalid_extended_expression() {
+        let ctx = SessionContext::new();
+
+        // Not ok if input schema is missing field referenced by expr
+        let expr = Expr::Column("missing".into());
+        let field = Field::new("out", DataType::Int32, false);
+        let empty_schema = DFSchemaRef::new(DFSchema::empty());
+
+        let err = to_substrait_extended_expr(&[(&expr, &field)], &empty_schema, &ctx);
+
+        assert!(matches!(err, Err(DataFusionError::SchemaError(_, _))));
     }
 }

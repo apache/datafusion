@@ -18,6 +18,7 @@
 //! Generic plans for deferred execution: [`StreamingTableExec`] and [`PartitionStream`]
 
 use std::any::Any;
+use std::fmt::Debug;
 use std::sync::Arc;
 
 use super::{DisplayAs, DisplayFormatType, ExecutionMode, PlanProperties};
@@ -42,7 +43,7 @@ use log::debug;
 /// Combined with [`StreamingTableExec`], you can use this trait to implement
 /// [`ExecutionPlan`] for a custom source with less boiler plate than
 /// implementing `ExecutionPlan` directly for many use cases.
-pub trait PartitionStream: Send + Sync {
+pub trait PartitionStream: Debug + Send + Sync {
     /// Returns the schema of this partition
     fn schema(&self) -> &SchemaRef;
 
@@ -54,6 +55,7 @@ pub trait PartitionStream: Send + Sync {
 ///
 /// If your source can be represented as one or more [`PartitionStream`]s, you can
 /// use this struct to implement [`ExecutionPlan`].
+#[derive(Clone)]
 pub struct StreamingTableExec {
     partitions: Vec<Arc<dyn PartitionStream>>,
     projection: Option<Arc<[usize]>>,
@@ -162,7 +164,7 @@ impl StreamingTableExec {
     }
 }
 
-impl std::fmt::Debug for StreamingTableExec {
+impl Debug for StreamingTableExec {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("LazyMemTableExec").finish_non_exhaustive()
     }
@@ -215,6 +217,10 @@ impl ExecutionPlan for StreamingTableExec {
 
     fn properties(&self) -> &PlanProperties {
         &self.cache
+    }
+
+    fn fetch(&self) -> Option<usize> {
+        self.limit
     }
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
@@ -290,7 +296,7 @@ mod test {
     #[tokio::test]
     async fn test_no_limit() {
         let exec = TestBuilder::new()
-            // make 2 batches, each with 100 rows
+            // Make 2 batches, each with 100 rows
             .with_batches(vec![make_partition(100), make_partition(100)])
             .build();
 
@@ -301,9 +307,9 @@ mod test {
     #[tokio::test]
     async fn test_limit() {
         let exec = TestBuilder::new()
-            // make 2 batches, each with 100 rows
+            // Make 2 batches, each with 100 rows
             .with_batches(vec![make_partition(100), make_partition(100)])
-            // limit to only the first 75 rows back
+            // Limit to only the first 75 rows back
             .with_limit(Some(75))
             .build();
 

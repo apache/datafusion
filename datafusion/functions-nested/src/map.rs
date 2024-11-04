@@ -16,17 +16,21 @@
 // under the License.
 
 use std::any::Any;
-use std::collections::VecDeque;
-use std::sync::Arc;
+use std::collections::{HashSet, VecDeque};
+use std::sync::{Arc, OnceLock};
 
 use arrow::array::ArrayData;
 use arrow_array::{Array, ArrayRef, MapArray, OffsetSizeTrait, StructArray};
 use arrow_buffer::{Buffer, ToByteSlice};
 use arrow_schema::{DataType, Field, SchemaBuilder};
 
-use datafusion_common::{exec_err, ScalarValue};
+use datafusion_common::utils::{fixed_size_list_to_arrays, list_to_arrays};
+use datafusion_common::{exec_err, Result, ScalarValue};
 use datafusion_expr::expr::ScalarFunction;
-use datafusion_expr::{ColumnarValue, Expr, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::scalar_doc_sections::DOC_SECTION_MAP;
+use datafusion_expr::{
+    ColumnarValue, Documentation, Expr, ScalarUDFImpl, Signature, Volatility,
+};
 
 use crate::make_array::make_array;
 
@@ -51,7 +55,7 @@ fn can_evaluate_to_const(args: &[ColumnarValue]) -> bool {
         .all(|arg| matches!(arg, ColumnarValue::Scalar(_)))
 }
 
-fn make_map_batch(args: &[ColumnarValue]) -> datafusion_common::Result<ColumnarValue> {
+fn make_map_batch(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     if args.len() != 2 {
         return exec_err!(
             "make_map requires exactly 2 arguments, got {} instead",
@@ -59,16 +63,56 @@ fn make_map_batch(args: &[ColumnarValue]) -> datafusion_common::Result<ColumnarV
         );
     }
 
-    let data_type = args[0].data_type();
     let can_evaluate_to_const = can_evaluate_to_const(args);
-    let key = get_first_array_ref(&args[0])?;
-    let value = get_first_array_ref(&args[1])?;
-    make_map_batch_internal(key, value, can_evaluate_to_const, data_type)
+
+    // check the keys array is unique
+    let keys = get_first_array_ref(&args[0])?;
+    if keys.null_count() > 0 {
+        return exec_err!("map key cannot be null");
+    }
+    let key_array = keys.as_ref();
+
+    match &args[0] {
+        ColumnarValue::Array(_) => {
+            let row_keys = match key_array.data_type() {
+                DataType::List(_) => list_to_arrays::<i32>(&keys),
+                DataType::LargeList(_) => list_to_arrays::<i64>(&keys),
+                DataType::FixedSizeList(_, _) => fixed_size_list_to_arrays(&keys),
+                data_type => {
+                    return exec_err!(
+                        "Expected list, large_list or fixed_size_list, got {:?}",
+                        data_type
+                    );
+                }
+            };
+
+            row_keys
+                .iter()
+                .try_for_each(|key| check_unique_keys(key.as_ref()))?;
+        }
+        ColumnarValue::Scalar(_) => {
+            check_unique_keys(key_array)?;
+        }
+    }
+
+    let values = get_first_array_ref(&args[1])?;
+    make_map_batch_internal(keys, values, can_evaluate_to_const, args[0].data_type())
 }
 
-fn get_first_array_ref(
-    columnar_value: &ColumnarValue,
-) -> datafusion_common::Result<ArrayRef> {
+fn check_unique_keys(array: &dyn Array) -> Result<()> {
+    let mut seen_keys = HashSet::with_capacity(array.len());
+
+    for i in 0..array.len() {
+        let key = ScalarValue::try_from_array(array, i)?;
+        if seen_keys.contains(&key) {
+            return exec_err!("map key must be unique, duplicate key found: {}", key);
+        }
+        seen_keys.insert(key);
+    }
+    Ok(())
+}
+
+fn get_first_array_ref(columnar_value: &ColumnarValue) -> Result<ArrayRef> {
     match columnar_value {
         ColumnarValue::Scalar(value) => match value {
             ScalarValue::List(array) => Ok(array.value(0)),
@@ -85,11 +129,7 @@ fn make_map_batch_internal(
     values: ArrayRef,
     can_evaluate_to_const: bool,
     data_type: DataType,
-) -> datafusion_common::Result<ColumnarValue> {
-    if keys.null_count() > 0 {
-        return exec_err!("map key cannot be null");
-    }
-
+) -> Result<ColumnarValue> {
     if keys.len() != values.len() {
         return exec_err!("map requires key and value lists to have the same length");
     }
@@ -173,7 +213,7 @@ impl ScalarUDFImpl for MapFunc {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> datafusion_common::Result<DataType> {
+    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         if arg_types.len() % 2 != 0 {
             return exec_err!(
                 "map requires an even number of arguments, got {} instead",
@@ -198,11 +238,73 @@ impl ScalarUDFImpl for MapFunc {
         ))
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> datafusion_common::Result<ColumnarValue> {
+    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
         make_map_batch(args)
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_map_doc())
+    }
 }
-fn get_element_type(data_type: &DataType) -> datafusion_common::Result<&DataType> {
+
+static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+
+fn get_map_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+                Documentation::builder()
+                    .with_doc_section(DOC_SECTION_MAP)
+                    .with_description(
+                        "Returns an Arrow map with the specified key-value pairs.\n\n\
+                        The `make_map` function creates a map from two lists: one for keys and one for values. Each key must be unique and non-null."
+                    )
+                    .with_syntax_example(
+                        "map(key, value)\nmap(key: value)\nmake_map(['key1', 'key2'], ['value1', 'value2'])"
+                    )
+                    .with_sql_example(
+                        r#"```sql
+        -- Using map function
+        SELECT MAP('type', 'test');
+        ----
+        {type: test}
+        
+        SELECT MAP(['POST', 'HEAD', 'PATCH'], [41, 33, null]);
+        ----
+        {POST: 41, HEAD: 33, PATCH: }
+        
+        SELECT MAP([[1,2], [3,4]], ['a', 'b']);
+        ----
+        {[1, 2]: a, [3, 4]: b}
+        
+        SELECT MAP { 'a': 1, 'b': 2 };
+        ----
+        {a: 1, b: 2}
+        
+        -- Using make_map function
+        SELECT MAKE_MAP(['POST', 'HEAD'], [41, 33]);
+        ----
+        {POST: 41, HEAD: 33}
+        
+        SELECT MAKE_MAP(['key1', 'key2'], ['value1', null]);
+        ----
+        {key1: value1, key2: }
+        ```"#
+                    )
+                    .with_argument(
+                        "key",
+                        "For `map`: Expression to be used for key. Can be a constant, column, function, or any combination of arithmetic or string operators.\n\
+                        For `make_map`: The list of keys to be used in the map. Each key must be unique and non-null."
+                    )
+                    .with_argument(
+                        "value",
+                        "For `map`: Expression to be used for value. Can be a constant, column, function, or any combination of arithmetic or string operators.\n\
+                        For `make_map`: The list of values to be mapped to the corresponding keys."
+                    )
+                    .build()
+                    .unwrap()
+            })
+}
+
+fn get_element_type(data_type: &DataType) -> Result<&DataType> {
     match data_type {
         DataType::List(element) => Ok(element.data_type()),
         DataType::LargeList(element) => Ok(element.data_type()),
@@ -273,12 +375,12 @@ fn get_element_type(data_type: &DataType) -> datafusion_common::Result<&DataType
 fn make_map_array_internal<O: OffsetSizeTrait>(
     keys: ArrayRef,
     values: ArrayRef,
-) -> datafusion_common::Result<ColumnarValue> {
+) -> Result<ColumnarValue> {
     let mut offset_buffer = vec![O::zero()];
     let mut running_offset = O::zero();
 
-    let keys = datafusion_common::utils::list_to_arrays::<O>(keys);
-    let values = datafusion_common::utils::list_to_arrays::<O>(values);
+    let keys = list_to_arrays::<O>(&keys);
+    let values = list_to_arrays::<O>(&values);
 
     let mut key_array_vec = vec![];
     let mut value_array_vec = vec![];

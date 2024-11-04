@@ -22,7 +22,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use crate::expressions::PhysicalSortExpr;
+use super::utils::create_schema;
 use crate::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use crate::windows::{
     calc_requirements, get_ordered_partition_by_indices, get_partition_by_sort_exprs,
@@ -33,22 +33,20 @@ use crate::{
     ExecutionPlan, ExecutionPlanProperties, PhysicalExpr, PlanProperties,
     RecordBatchStream, SendableRecordBatchStream, Statistics, WindowExpr,
 };
-
 use arrow::array::ArrayRef;
 use arrow::compute::{concat, concat_batches};
-use arrow::datatypes::{Schema, SchemaBuilder, SchemaRef};
+use arrow::datatypes::SchemaRef;
 use arrow::error::ArrowError;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::stats::Precision;
 use datafusion_common::utils::{evaluate_partition_ranges, transpose};
 use datafusion_common::{internal_err, Result};
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::PhysicalSortRequirement;
-
+use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};
 use futures::{ready, Stream, StreamExt};
 
 /// Window execution plan
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct WindowAggExec {
     /// Input plan
     pub(crate) input: Arc<dyn ExecutionPlan>,
@@ -106,7 +104,7 @@ impl WindowAggExec {
     // We are sure that partition by columns are always at the beginning of sort_keys
     // Hence returned `PhysicalSortExpr` corresponding to `PARTITION BY` columns can be used safely
     // to calculate partition separation points
-    pub fn partition_by_sort_keys(&self) -> Result<Vec<PhysicalSortExpr>> {
+    pub fn partition_by_sort_keys(&self) -> Result<LexOrdering> {
         let partition_by = self.window_expr()[0].partition_by();
         get_partition_by_sort_exprs(
             &self.input,
@@ -192,17 +190,17 @@ impl ExecutionPlan for WindowAggExec {
         vec![true]
     }
 
-    fn required_input_ordering(&self) -> Vec<Option<Vec<PhysicalSortRequirement>>> {
+    fn required_input_ordering(&self) -> Vec<Option<LexRequirement>> {
         let partition_bys = self.window_expr()[0].partition_by();
         let order_keys = self.window_expr()[0].order_by();
         if self.ordered_partition_by_indices.len() < partition_bys.len() {
-            vec![calc_requirements(partition_bys, order_keys)]
+            vec![calc_requirements(partition_bys, order_keys.iter())]
         } else {
             let partition_bys = self
                 .ordered_partition_by_indices
                 .iter()
                 .map(|idx| &partition_bys[*idx]);
-            vec![calc_requirements(partition_bys, order_keys)]
+            vec![calc_requirements(partition_bys, order_keys.iter())]
         }
     }
 
@@ -265,20 +263,6 @@ impl ExecutionPlan for WindowAggExec {
     }
 }
 
-fn create_schema(
-    input_schema: &Schema,
-    window_expr: &[Arc<dyn WindowExpr>],
-) -> Result<Schema> {
-    let capacity = input_schema.fields().len() + window_expr.len();
-    let mut builder = SchemaBuilder::with_capacity(capacity);
-    builder.extend(input_schema.fields().iter().cloned());
-    // append results to the schema
-    for expr in window_expr {
-        builder.push(expr.field()?);
-    }
-    Ok(builder.finish())
-}
-
 /// Compute the window aggregate columns
 fn compute_window_aggregates(
     window_expr: &[Arc<dyn WindowExpr>],
@@ -297,7 +281,7 @@ pub struct WindowAggStream {
     batches: Vec<RecordBatch>,
     finished: bool,
     window_expr: Vec<Arc<dyn WindowExpr>>,
-    partition_by_sort_keys: Vec<PhysicalSortExpr>,
+    partition_by_sort_keys: LexOrdering,
     baseline_metrics: BaselineMetrics,
     ordered_partition_by_indices: Vec<usize>,
 }
@@ -309,7 +293,7 @@ impl WindowAggStream {
         window_expr: Vec<Arc<dyn WindowExpr>>,
         input: SendableRecordBatchStream,
         baseline_metrics: BaselineMetrics,
-        partition_by_sort_keys: Vec<PhysicalSortExpr>,
+        partition_by_sort_keys: LexOrdering,
         ordered_partition_by_indices: Vec<usize>,
     ) -> Result<Self> {
         // In WindowAggExec all partition by columns should be ordered.

@@ -79,9 +79,8 @@ mod test {
     use super::*;
     use datafusion::execution::context::SessionContext;
     use datafusion_execution::{
-        config::SessionConfig,
-        disk_manager::DiskManagerConfig,
-        runtime_env::{RuntimeConfig, RuntimeEnv},
+        config::SessionConfig, disk_manager::DiskManagerConfig,
+        runtime_env::RuntimeEnvBuilder,
     };
     use datafusion_physical_plan::collect;
     use datafusion_sql::parser::DFParser;
@@ -89,23 +88,22 @@ mod test {
 
     wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
 
-    #[wasm_bindgen_test]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test)]
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
     fn datafusion_test() {
         basic_exprs();
         basic_parse();
     }
 
-    #[wasm_bindgen_test]
+    #[wasm_bindgen_test(unsupported = tokio::test)]
     async fn basic_execute() {
         let sql = "SELECT 2 + 2;";
 
         // Execute SQL (using datafusion)
-        let rt = Arc::new(
-            RuntimeEnv::new(
-                RuntimeConfig::new().with_disk_manager(DiskManagerConfig::Disabled),
-            )
-            .unwrap(),
-        );
+        let rt = RuntimeEnvBuilder::new()
+            .with_disk_manager(DiskManagerConfig::Disabled)
+            .build_arc()
+            .unwrap();
         let session_config = SessionConfig::new().with_target_partitions(1);
         let session_context =
             Arc::new(SessionContext::new_with_config_rt(session_config, rt));

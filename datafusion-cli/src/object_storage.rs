@@ -27,6 +27,7 @@ use datafusion::error::{DataFusionError, Result};
 use datafusion::execution::context::SessionState;
 
 use async_trait::async_trait;
+use aws_config::BehaviorVersion;
 use aws_credential_types::provider::ProvideCredentials;
 use object_store::aws::{AmazonS3Builder, AwsCredential};
 use object_store::gcp::GoogleCloudStorageBuilder;
@@ -61,7 +62,7 @@ pub async fn get_s3_object_store_builder(
             builder = builder.with_token(session_token);
         }
     } else {
-        let config = aws_config::from_env().load().await;
+        let config = aws_config::defaults(BehaviorVersion::latest()).load().await;
         if let Some(region) = config.region() {
             builder = builder.with_region(region.to_string());
         }
@@ -494,7 +495,7 @@ mod tests {
 
         if let LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) = &mut plan {
             ctx.register_table_options_extension_from_scheme(scheme);
-            let mut table_options = ctx.state().default_table_options().clone();
+            let mut table_options = ctx.state().default_table_options();
             table_options.alter_with_string_hash_map(&cmd.options)?;
             let aws_options = table_options.extensions.get::<AwsOptions>().unwrap();
             let builder =
@@ -539,7 +540,7 @@ mod tests {
 
         if let LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) = &mut plan {
             ctx.register_table_options_extension_from_scheme(scheme);
-            let mut table_options = ctx.state().default_table_options().clone();
+            let mut table_options = ctx.state().default_table_options();
             table_options.alter_with_string_hash_map(&cmd.options)?;
             let aws_options = table_options.extensions.get::<AwsOptions>().unwrap();
             let err = get_s3_object_store_builder(table_url.as_ref(), aws_options)
@@ -565,7 +566,7 @@ mod tests {
 
         if let LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) = &mut plan {
             ctx.register_table_options_extension_from_scheme(scheme);
-            let mut table_options = ctx.state().default_table_options().clone();
+            let mut table_options = ctx.state().default_table_options();
             table_options.alter_with_string_hash_map(&cmd.options)?;
             let aws_options = table_options.extensions.get::<AwsOptions>().unwrap();
             // ensure this isn't an error
@@ -593,7 +594,7 @@ mod tests {
 
         if let LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) = &mut plan {
             ctx.register_table_options_extension_from_scheme(scheme);
-            let mut table_options = ctx.state().default_table_options().clone();
+            let mut table_options = ctx.state().default_table_options();
             table_options.alter_with_string_hash_map(&cmd.options)?;
             let aws_options = table_options.extensions.get::<AwsOptions>().unwrap();
             let builder = get_oss_object_store_builder(table_url.as_ref(), aws_options)?;
@@ -630,7 +631,7 @@ mod tests {
 
         if let LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) = &mut plan {
             ctx.register_table_options_extension_from_scheme(scheme);
-            let mut table_options = ctx.state().default_table_options().clone();
+            let mut table_options = ctx.state().default_table_options();
             table_options.alter_with_string_hash_map(&cmd.options)?;
             let gcp_options = table_options.extensions.get::<GcpOptions>().unwrap();
             let builder = get_gcs_object_store_builder(table_url.as_ref(), gcp_options)?;

@@ -260,19 +260,22 @@ Verify that the Cargo.toml in the tarball contains the correct version
 
 ```shell
 (cd datafusion/common && cargo publish)
+(cd datafusion/expr-common && cargo publish)
+(cd datafusion/physical-expr-common && cargo publish)
+(cd datafusion/functions-aggregate-common && cargo publish)
 (cd datafusion/expr && cargo publish)
 (cd datafusion/execution && cargo publish)
-(cd datafusion/physical-expr-common && cargo publish)
-(cd datafusion/functions-aggregate && cargo publish)
 (cd datafusion/physical-expr && cargo publish)
 (cd datafusion/functions && cargo publish)
+(cd datafusion/functions-aggregate && cargo publish)
+(cd datafusion/functions-window && cargo publish)
 (cd datafusion/functions-nested && cargo publish)
 (cd datafusion/sql && cargo publish)
 (cd datafusion/optimizer && cargo publish)
 (cd datafusion/common-runtime && cargo publish)
-(cd datafusion/catalog && cargo publish)
 (cd datafusion/physical-plan && cargo publish)
 (cd datafusion/physical-optimizer && cargo publish)
+(cd datafusion/catalog && cargo publish)
 (cd datafusion/core && cargo publish)
 (cd datafusion/proto-common && cargo publish)
 (cd datafusion/proto && cargo publish)
@@ -407,3 +410,7 @@ Here is an example blog post PR:
 - https://github.com/apache/arrow-site/pull/217
 
 Once the PR is merged, a GitHub action will publish the new blog post to https://arrow.apache.org/blog/.
+
+### Update the version on the download page
+
+Update the version on the [download page](https://datafusion.apache.org/download) to point to the latest release [here](../../docs/source/download.md).

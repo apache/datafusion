@@ -54,6 +54,7 @@ pub(crate) struct MockSessionState {
     scalar_functions: HashMap<String, Arc<ScalarUDF>>,
     aggregate_functions: HashMap<String, Arc<AggregateUDF>>,
     expr_planners: Vec<Arc<dyn ExprPlanner>>,
+    window_functions: HashMap<String, Arc<WindowUDF>>,
     pub config_options: ConfigOptions,
 }
 
@@ -78,6 +79,12 @@ impl MockSessionState {
             aggregate_function.name().to_string().to_lowercase(),
             aggregate_function,
         );
+        self
+    }
+
+    pub fn with_window_function(mut self, window_function: Arc<WindowUDF>) -> Self {
+        self.window_functions
+            .insert(window_function.name().to_string(), window_function);
         self
     }
 }
@@ -217,18 +224,15 @@ impl ContextProvider for MockContextProvider {
         unimplemented!()
     }
 
-    fn get_window_meta(&self, _name: &str) -> Option<Arc<WindowUDF>> {
-        None
+    fn get_window_meta(&self, name: &str) -> Option<Arc<WindowUDF>> {
+        self.state.window_functions.get(name).cloned()
     }
 
     fn options(&self) -> &ConfigOptions {
         &self.state.config_options
     }
 
-    fn get_file_type(
-        &self,
-        _ext: &str,
-    ) -> Result<Arc<dyn datafusion_common::file_options::file_type::FileType>> {
+    fn get_file_type(&self, _ext: &str) -> Result<Arc<dyn FileType>> {
         Ok(Arc::new(MockCsvType {}))
     }
 
@@ -268,7 +272,7 @@ impl EmptyTable {
 }
 
 impl TableSource for EmptyTable {
-    fn as_any(&self) -> &dyn std::any::Any {
+    fn as_any(&self) -> &dyn Any {
         self
     }
 

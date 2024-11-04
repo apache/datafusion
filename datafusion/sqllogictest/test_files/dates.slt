@@ -123,6 +123,7 @@ SELECT to_date(ts / 100000000) FROM to_date_t1 LIMIT 3
 2003-11-02
 2003-11-29
 
+# verify date with time zone, where the time zone date is already the next day, but result date in UTC is day before
 query D
 SELECT to_date('01-14-2023 01:01:30+05:30', '%q', '%d-%m-%Y %H/%M/%S', '%+', '%m-%d-%Y %H:%M:%S%#z');
 ----
@@ -137,8 +138,15 @@ select to_date(arrow_cast(123, 'Int64'))
 ----
 1970-05-04
 
-statement error DataFusion error: Arrow error:
+# Parse sequence of digits which yield a valid date, e.g. "21311111" would be "2131-11-11"
+query D
 SELECT to_date('21311111');
+----
+2131-11-11
+
+# Parse sequence of digits which do not make up a valid date
+statement error DataFusion error: Arrow error:
+SELECT to_date('213111111');
 
 # verify date cast with integer input
 query DDDDDD
@@ -186,6 +194,14 @@ create table ts_utf8_data(ts varchar(100), format varchar(100)) as values
   ('1926632005', '%s'),
   ('2000-01-01T01:01:01+07:00', '%+');
 
+statement ok
+create table ts_largeutf8_data as
+select arrow_cast(ts, 'LargeUtf8') as ts, arrow_cast(format, 'LargeUtf8') as format from ts_utf8_data;
+
+statement ok
+create table ts_utf8view_data as
+select arrow_cast(ts, 'Utf8View') as ts, arrow_cast(format, 'Utf8View') as format from ts_utf8_data;
+
 # verify date data using tables with formatting options
 query D
 SELECT to_date(t.ts, t.format) from ts_utf8_data as t
@@ -196,9 +212,45 @@ SELECT to_date(t.ts, t.format) from ts_utf8_data as t
 2031-01-19
 1999-12-31
 
+query D
+SELECT to_date(t.ts, t.format) from ts_largeutf8_data as t
+----
+2020-09-08
+2031-01-19
+2020-09-08
+2031-01-19
+1999-12-31
+
+query D
+SELECT to_date(t.ts, t.format) from ts_utf8view_data as t
+----
+2020-09-08
+2031-01-19
+2020-09-08
+2031-01-19
+1999-12-31
+
 # verify date data using tables with formatting options
 query D
 SELECT to_date(t.ts, '%Y-%m-%d %H/%M/%S%#z', '%+', '%s', '%d-%m-%Y %H:%M:%S%#z') from ts_utf8_data as t
+----
+2020-09-08
+2031-01-19
+2020-09-08
+2031-01-19
+1999-12-31
+
+query D
+SELECT to_date(t.ts, '%Y-%m-%d %H/%M/%S%#z', '%+', '%s', '%d-%m-%Y %H:%M:%S%#z') from ts_largeutf8_data as t
+----
+2020-09-08
+2031-01-19
+2020-09-08
+2031-01-19
+1999-12-31
+
+query D
+SELECT to_date(t.ts, '%Y-%m-%d %H/%M/%S%#z', '%+', '%s', '%d-%m-%Y %H:%M:%S%#z') from ts_utf8view_data as t
 ----
 2020-09-08
 2031-01-19
@@ -220,6 +272,24 @@ SELECT to_date(t.ts, '%Y-%m-%d %H/%M/%S%#z', '%s', '%q', '%d-%m-%Y %H:%M:%S%#z',
 2031-01-19
 1999-12-31
 
+query D
+SELECT to_date(t.ts, '%Y-%m-%d %H/%M/%S%#z', '%s', '%q', '%d-%m-%Y %H:%M:%S%#z', '%+') from ts_largeutf8_data as t
+----
+2020-09-08
+2031-01-19
+2020-09-08
+2031-01-19
+1999-12-31
+
+query D
+SELECT to_date(t.ts, '%Y-%m-%d %H/%M/%S%#z', '%s', '%q', '%d-%m-%Y %H:%M:%S%#z', '%+') from ts_utf8view_data as t
+----
+2020-09-08
+2031-01-19
+2020-09-08
+2031-01-19
+1999-12-31
+
 # timestamp data using tables with formatting options in an array is not supported at this time
 query error function unsupported data type at index 1:
 SELECT to_date(t.ts, make_array('%Y-%m-%d %H/%M/%S%#z', '%s', '%q', '%d-%m-%Y %H:%M:%S%#z', '%+')) from ts_utf8_data as t
@@ -229,6 +299,42 @@ query D
 select to_date('2022-01-23', '%Y-%m-%d');
 ----
 2022-01-23
+
+query PPPP
+select
+    date_trunc('YEAR', to_date('2022-02-23', '%Y-%m-%d')),
+    date_trunc('MONTH', to_date('2022-02-23', '%Y-%m-%d')),
+    date_trunc('DAY', to_date('2022-02-23', '%Y-%m-%d')),
+    date_trunc('WEEK', to_date('2022-02-23', '%Y-%m-%d'));
+----
+2022-01-01T00:00:00 2022-02-01T00:00:00 2022-02-23T00:00:00 2022-02-21T00:00:00
+
+query PPPPP
+select
+    date_trunc('HOUR', to_date('2022-02-23', '%Y-%m-%d')),
+    date_trunc('MINUTE', to_date('2022-02-23', '%Y-%m-%d')),
+    date_trunc('SECOND', to_date('2022-02-23', '%Y-%m-%d')),
+    date_trunc('MILLISECOND', to_date('2022-02-23', '%Y-%m-%d')),
+    date_trunc('MICROSECOND', to_date('2022-02-23', '%Y-%m-%d'));
+----
+2022-02-23T00:00:00 2022-02-23T00:00:00 2022-02-23T00:00:00 2022-02-23T00:00:00 2022-02-23T00:00:00
+
+query PPPP
+select
+    date_trunc('YEAR', d2_date),
+    date_trunc('MONTH', d2_date),
+    date_trunc('DAY', d2_date),
+    date_trunc('WEEK', d2_date)
+FROM test
+----
+2022-01-01T00:00:00 2022-12-01T00:00:00 2022-12-12T00:00:00 2022-12-12T00:00:00
+2022-01-01T00:00:00 2022-12-01T00:00:00 2022-12-11T00:00:00 2022-12-05T00:00:00
+2022-01-01T00:00:00 2022-12-01T00:00:00 2022-12-10T00:00:00 2022-12-05T00:00:00
+2022-01-01T00:00:00 2022-12-01T00:00:00 2022-12-09T00:00:00 2022-12-05T00:00:00
+2022-01-01T00:00:00 2022-12-01T00:00:00 2022-12-08T00:00:00 2022-12-05T00:00:00
+2022-01-01T00:00:00 2022-12-01T00:00:00 2022-12-07T00:00:00 2022-12-05T00:00:00
+2022-01-01T00:00:00 2022-12-01T00:00:00 2022-12-06T00:00:00 2022-12-05T00:00:00
+2022-01-01T00:00:00 2022-12-01T00:00:00 2022-12-05T00:00:00 2022-12-05T00:00:00
 
 statement ok
 drop table ts_utf8_data

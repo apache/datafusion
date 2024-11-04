@@ -21,12 +21,22 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 
 use crate::{OptimizerConfig, OptimizerRule};
 
-use datafusion_common::{Column, DFSchema, DFSchemaRef, Result};
+use crate::analyzer::type_coercion::TypeCoercionRewriter;
+use arrow::array::{new_null_array, Array, RecordBatch};
+use arrow::datatypes::{DataType, Field, Schema};
+use datafusion_common::cast::as_boolean_array;
+use datafusion_common::tree_node::{TransformedResult, TreeNode};
+use datafusion_common::{Column, DFSchema, Result, ScalarValue};
+use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::expr_rewriter::replace_col;
-use datafusion_expr::utils as expr_utils;
-use datafusion_expr::{logical_plan::LogicalPlan, Expr, Operator};
-
+use datafusion_expr::{logical_plan::LogicalPlan, ColumnarValue, Expr};
+use datafusion_physical_expr::create_physical_expr;
 use log::{debug, trace};
+use std::sync::Arc;
+
+/// Re-export of `NamesPreserver` for backwards compatibility,
+/// as it was initially placed here and then moved elsewhere.
+pub use datafusion_expr::expr_rewriter::NamePreserver;
 
 /// Convenience rule for writing optimizers: recursively invoke
 /// optimize on plan's children and then return a node of the same
@@ -79,7 +89,7 @@ pub(crate) fn has_all_column_refs(expr: &Expr, schema_cols: &HashSet<Column>) ->
 
 pub(crate) fn collect_subquery_cols(
     exprs: &[Expr],
-    subquery_schema: DFSchemaRef,
+    subquery_schema: &DFSchema,
 ) -> Result<BTreeSet<Column>> {
     exprs.iter().try_fold(BTreeSet::new(), |mut cols, expr| {
         let mut using_cols: Vec<Column> = vec![];
@@ -101,9 +111,7 @@ pub(crate) fn replace_qualified_name(
 ) -> Result<Expr> {
     let alias_cols: Vec<Column> = cols
         .iter()
-        .map(|col| {
-            Column::from_qualified_name(format!("{}.{}", subquery_alias, col.name))
-        })
+        .map(|col| Column::new(Some(subquery_alias), &col.name))
         .collect();
     let replace_map: HashMap<&Column, &Column> =
         cols.iter().zip(alias_cols.iter()).collect();
@@ -117,231 +125,160 @@ pub fn log_plan(description: &str, plan: &LogicalPlan) {
     trace!("{description}::\n{}\n", plan.display_indent_schema());
 }
 
-/// Splits a conjunctive [`Expr`] such as `A AND B AND C` => `[A, B, C]`
-///
-/// See [`split_conjunction_owned`] for more details and an example.
-#[deprecated(
-    since = "34.0.0",
-    note = "use `datafusion_expr::utils::split_conjunction` instead"
-)]
-pub fn split_conjunction(expr: &Expr) -> Vec<&Expr> {
-    expr_utils::split_conjunction(expr)
-}
+/// Determine whether a predicate can restrict NULLs. e.g.
+/// `c0 > 8` return true;
+/// `c0 IS NULL` return false.
+pub fn is_restrict_null_predicate<'a>(
+    predicate: Expr,
+    join_cols_of_predicate: impl IntoIterator<Item = &'a Column>,
+) -> Result<bool> {
+    if matches!(predicate, Expr::Column(_)) {
+        return Ok(true);
+    }
 
-/// Splits an owned conjunctive [`Expr`] such as `A AND B AND C` => `[A, B, C]`
-///
-/// This is often used to "split" filter expressions such as `col1 = 5
-/// AND col2 = 10` into [`col1 = 5`, `col2 = 10`];
-///
-/// # Example
-/// ```
-/// # use datafusion_expr::{col, lit};
-/// # use datafusion_optimizer::utils::split_conjunction_owned;
-/// // a=1 AND b=2
-/// let expr = col("a").eq(lit(1)).and(col("b").eq(lit(2)));
-///
-/// // [a=1, b=2]
-/// let split = vec![
-///   col("a").eq(lit(1)),
-///   col("b").eq(lit(2)),
-/// ];
-///
-/// // use split_conjunction_owned to split them
-/// assert_eq!(split_conjunction_owned(expr), split);
-/// ```
-#[deprecated(
-    since = "34.0.0",
-    note = "use `datafusion_expr::utils::split_conjunction_owned` instead"
-)]
-pub fn split_conjunction_owned(expr: Expr) -> Vec<Expr> {
-    expr_utils::split_conjunction_owned(expr)
-}
+    static DUMMY_COL_NAME: &str = "?";
+    let schema = Schema::new(vec![Field::new(DUMMY_COL_NAME, DataType::Null, true)]);
+    let input_schema = DFSchema::try_from(schema.clone())?;
+    let column = new_null_array(&DataType::Null, 1);
+    let input_batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![column])?;
+    let execution_props = ExecutionProps::default();
+    let null_column = Column::from_name(DUMMY_COL_NAME);
 
-/// Splits an owned binary operator tree [`Expr`] such as `A <OP> B <OP> C` => `[A, B, C]`
-///
-/// This is often used to "split" expressions such as `col1 = 5
-/// AND col2 = 10` into [`col1 = 5`, `col2 = 10`];
-///
-/// # Example
-/// ```
-/// # use datafusion_expr::{col, lit, Operator};
-/// # use datafusion_optimizer::utils::split_binary_owned;
-/// # use std::ops::Add;
-/// // a=1 + b=2
-/// let expr = col("a").eq(lit(1)).add(col("b").eq(lit(2)));
-///
-/// // [a=1, b=2]
-/// let split = vec![
-///   col("a").eq(lit(1)),
-///   col("b").eq(lit(2)),
-/// ];
-///
-/// // use split_binary_owned to split them
-/// assert_eq!(split_binary_owned(expr, Operator::Plus), split);
-/// ```
-#[deprecated(
-    since = "34.0.0",
-    note = "use `datafusion_expr::utils::split_binary_owned` instead"
-)]
-pub fn split_binary_owned(expr: Expr, op: Operator) -> Vec<Expr> {
-    expr_utils::split_binary_owned(expr, op)
-}
+    let join_cols_to_replace = join_cols_of_predicate
+        .into_iter()
+        .map(|column| (column, &null_column))
+        .collect::<HashMap<_, _>>();
 
-/// Splits an binary operator tree [`Expr`] such as `A <OP> B <OP> C` => `[A, B, C]`
-///
-/// See [`split_binary_owned`] for more details and an example.
-#[deprecated(
-    since = "34.0.0",
-    note = "use `datafusion_expr::utils::split_binary` instead"
-)]
-pub fn split_binary(expr: &Expr, op: Operator) -> Vec<&Expr> {
-    expr_utils::split_binary(expr, op)
-}
+    let replaced_predicate = replace_col(predicate, &join_cols_to_replace)?;
+    let coerced_predicate = coerce(replaced_predicate, &input_schema)?;
+    let phys_expr =
+        create_physical_expr(&coerced_predicate, &input_schema, &execution_props)?;
 
-/// Combines an array of filter expressions into a single filter
-/// expression consisting of the input filter expressions joined with
-/// logical AND.
-///
-/// Returns None if the filters array is empty.
-///
-/// # Example
-/// ```
-/// # use datafusion_expr::{col, lit};
-/// # use datafusion_optimizer::utils::conjunction;
-/// // a=1 AND b=2
-/// let expr = col("a").eq(lit(1)).and(col("b").eq(lit(2)));
-///
-/// // [a=1, b=2]
-/// let split = vec![
-///   col("a").eq(lit(1)),
-///   col("b").eq(lit(2)),
-/// ];
-///
-/// // use conjunction to join them together with `AND`
-/// assert_eq!(conjunction(split), Some(expr));
-/// ```
-#[deprecated(
-    since = "34.0.0",
-    note = "use `datafusion_expr::utils::conjunction` instead"
-)]
-pub fn conjunction(filters: impl IntoIterator<Item = Expr>) -> Option<Expr> {
-    expr_utils::conjunction(filters)
-}
+    let result_type = phys_expr.data_type(&schema)?;
+    if !matches!(&result_type, DataType::Boolean) {
+        return Ok(false);
+    }
 
-/// Combines an array of filter expressions into a single filter
-/// expression consisting of the input filter expressions joined with
-/// logical OR.
-///
-/// Returns None if the filters array is empty.
-#[deprecated(
-    since = "34.0.0",
-    note = "use `datafusion_expr::utils::disjunction` instead"
-)]
-pub fn disjunction(filters: impl IntoIterator<Item = Expr>) -> Option<Expr> {
-    expr_utils::disjunction(filters)
-}
-
-/// returns a new [LogicalPlan] that wraps `plan` in a [LogicalPlan::Filter] with
-/// its predicate be all `predicates` ANDed.
-#[deprecated(
-    since = "34.0.0",
-    note = "use `datafusion_expr::utils::add_filter` instead"
-)]
-pub fn add_filter(plan: LogicalPlan, predicates: &[&Expr]) -> Result<LogicalPlan> {
-    expr_utils::add_filter(plan, predicates)
-}
-
-/// Looks for correlating expressions: for example, a binary expression with one field from the subquery, and
-/// one not in the subquery (closed upon from outer scope)
-///
-/// # Arguments
-///
-/// * `exprs` - List of expressions that may or may not be joins
-///
-/// # Return value
-///
-/// Tuple of (expressions containing joins, remaining non-join expressions)
-#[deprecated(
-    since = "34.0.0",
-    note = "use `datafusion_expr::utils::find_join_exprs` instead"
-)]
-pub fn find_join_exprs(exprs: Vec<&Expr>) -> Result<(Vec<Expr>, Vec<Expr>)> {
-    expr_utils::find_join_exprs(exprs)
-}
-
-/// Returns the first (and only) element in a slice, or an error
-///
-/// # Arguments
-///
-/// * `slice` - The slice to extract from
-///
-/// # Return value
-///
-/// The first element, or an error
-#[deprecated(
-    since = "34.0.0",
-    note = "use `datafusion_expr::utils::only_or_err` instead"
-)]
-pub fn only_or_err<T>(slice: &[T]) -> Result<&T> {
-    expr_utils::only_or_err(slice)
-}
-
-/// merge inputs schema into a single schema.
-#[deprecated(
-    since = "34.0.0",
-    note = "use `datafusion_expr::utils::merge_schema` instead"
-)]
-pub fn merge_schema(inputs: Vec<&LogicalPlan>) -> DFSchema {
-    expr_utils::merge_schema(inputs)
-}
-
-/// Handles ensuring the name of rewritten expressions is not changed.
-///
-/// For example, if an expression `1 + 2` is rewritten to `3`, the name of the
-/// expression should be preserved: `3 as "1 + 2"`
-///
-/// See <https://github.com/apache/datafusion/issues/3555> for details
-pub struct NamePreserver {
-    use_alias: bool,
-}
-
-/// If the name of an expression is remembered, it will be preserved when
-/// rewriting the expression
-pub struct SavedName(Option<String>);
-
-impl NamePreserver {
-    /// Create a new NamePreserver for rewriting the `expr` that is part of the specified plan
-    pub fn new(plan: &LogicalPlan) -> Self {
-        Self {
-            use_alias: !matches!(plan, LogicalPlan::Filter(_) | LogicalPlan::Join(_)),
+    // If result is single `true`, return false;
+    // If result is single `NULL` or `false`, return true;
+    Ok(match phys_expr.evaluate(&input_batch)? {
+        ColumnarValue::Array(array) => {
+            if array.len() == 1 {
+                let boolean_array = as_boolean_array(&array)?;
+                boolean_array.is_null(0) || !boolean_array.value(0)
+            } else {
+                false
+            }
         }
-    }
-
-    /// Create a new NamePreserver for rewriting the `expr`s in `Projection`
-    ///
-    /// This will use aliases
-    pub fn new_for_projection() -> Self {
-        Self { use_alias: true }
-    }
-
-    pub fn save(&self, expr: &Expr) -> Result<SavedName> {
-        let original_name = if self.use_alias {
-            Some(expr.name_for_alias()?)
-        } else {
-            None
-        };
-
-        Ok(SavedName(original_name))
-    }
+        ColumnarValue::Scalar(scalar) => matches!(
+            scalar,
+            ScalarValue::Boolean(None) | ScalarValue::Boolean(Some(false))
+        ),
+    })
 }
 
-impl SavedName {
-    /// Ensures the name of the rewritten expression is preserved
-    pub fn restore(self, expr: Expr) -> Result<Expr> {
-        let Self(original_name) = self;
-        match original_name {
-            Some(name) => expr.alias_if_changed(name),
-            None => Ok(expr),
+fn coerce(expr: Expr, schema: &DFSchema) -> Result<Expr> {
+    let mut expr_rewrite = TypeCoercionRewriter { schema };
+    expr.rewrite(&mut expr_rewrite).data()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use datafusion_expr::{binary_expr, case, col, in_list, is_null, lit, Operator};
+
+    #[test]
+    fn expr_is_restrict_null_predicate() -> Result<()> {
+        let test_cases = vec![
+            // a
+            (col("a"), true),
+            // a IS NULL
+            (is_null(col("a")), false),
+            // a IS NOT NULL
+            (Expr::IsNotNull(Box::new(col("a"))), true),
+            // a = NULL
+            (
+                binary_expr(col("a"), Operator::Eq, Expr::Literal(ScalarValue::Null)),
+                true,
+            ),
+            // a > 8
+            (binary_expr(col("a"), Operator::Gt, lit(8i64)), true),
+            // a <= 8
+            (binary_expr(col("a"), Operator::LtEq, lit(8i32)), true),
+            // CASE a WHEN 1 THEN true WHEN 0 THEN false ELSE NULL END
+            (
+                case(col("a"))
+                    .when(lit(1i64), lit(true))
+                    .when(lit(0i64), lit(false))
+                    .otherwise(lit(ScalarValue::Null))?,
+                true,
+            ),
+            // CASE a WHEN 1 THEN true ELSE false END
+            (
+                case(col("a"))
+                    .when(lit(1i64), lit(true))
+                    .otherwise(lit(false))?,
+                true,
+            ),
+            // CASE a WHEN 0 THEN false ELSE true END
+            (
+                case(col("a"))
+                    .when(lit(0i64), lit(false))
+                    .otherwise(lit(true))?,
+                false,
+            ),
+            // (CASE a WHEN 0 THEN false ELSE true END) OR false
+            (
+                binary_expr(
+                    case(col("a"))
+                        .when(lit(0i64), lit(false))
+                        .otherwise(lit(true))?,
+                    Operator::Or,
+                    lit(false),
+                ),
+                false,
+            ),
+            // (CASE a WHEN 0 THEN true ELSE false END) OR false
+            (
+                binary_expr(
+                    case(col("a"))
+                        .when(lit(0i64), lit(true))
+                        .otherwise(lit(false))?,
+                    Operator::Or,
+                    lit(false),
+                ),
+                true,
+            ),
+            // a IN (1, 2, 3)
+            (
+                in_list(col("a"), vec![lit(1i64), lit(2i64), lit(3i64)], false),
+                true,
+            ),
+            // a NOT IN (1, 2, 3)
+            (
+                in_list(col("a"), vec![lit(1i64), lit(2i64), lit(3i64)], true),
+                true,
+            ),
+            // a IN (NULL)
+            (
+                in_list(col("a"), vec![Expr::Literal(ScalarValue::Null)], false),
+                true,
+            ),
+            // a NOT IN (NULL)
+            (
+                in_list(col("a"), vec![Expr::Literal(ScalarValue::Null)], true),
+                true,
+            ),
+        ];
+
+        let column_a = Column::from_name("a");
+        for (predicate, expected) in test_cases {
+            let join_cols_of_predicate = std::iter::once(&column_a);
+            let actual =
+                is_restrict_null_predicate(predicate.clone(), join_cols_of_predicate)?;
+            assert_eq!(actual, expected, "{}", predicate);
         }
+
+        Ok(())
     }
 }

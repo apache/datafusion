@@ -34,12 +34,17 @@ struct MyRegexUdf {
     signature: Signature,
     // regex as original string
     pattern: String,
+    aliases: Vec<String>,
 }
 
 impl MyRegexUdf {
     fn new(pattern: String) -> Self {
         let signature = Signature::exact(vec![DataType::Utf8], Volatility::Immutable);
-        Self { signature, pattern }
+        Self {
+            signature,
+            pattern,
+            aliases: vec!["aggregate_udf_alias".to_string()],
+        }
     }
 }
 
@@ -66,6 +71,9 @@ impl ScalarUDFImpl for MyRegexUdf {
         _args: &[ColumnarValue],
     ) -> datafusion_common::Result<ColumnarValue> {
         unimplemented!()
+    }
+    fn aliases(&self) -> &[String] {
+        &self.aliases
     }
 }
 

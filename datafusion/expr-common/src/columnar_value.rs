@@ -17,10 +17,9 @@
 
 //! [`ColumnarValue`] represents the result of evaluating an expression.
 
-use arrow::array::ArrayRef;
-use arrow::array::NullArray;
+use arrow::array::{Array, ArrayRef, NullArray};
 use arrow::compute::{kernels, CastOptions};
-use arrow::datatypes::{DataType, TimeUnit};
+use arrow::datatypes::DataType;
 use datafusion_common::format::DEFAULT_CAST_OPTIONS;
 use datafusion_common::{internal_err, Result, ScalarValue};
 use std::sync::Arc;
@@ -130,7 +129,7 @@ impl ColumnarValue {
         })
     }
 
-    /// null columnar values are implemented as a null array in order to pass batch
+    /// Null columnar values are implemented as a null array in order to pass batch
     /// num_rows
     pub fn create_null_array(num_rows: usize) -> Self {
         ColumnarValue::Array(Arc::new(NullArray::new(num_rows)))
@@ -194,28 +193,9 @@ impl ColumnarValue {
             ColumnarValue::Array(array) => Ok(ColumnarValue::Array(
                 kernels::cast::cast_with_options(array, cast_type, &cast_options)?,
             )),
-            ColumnarValue::Scalar(scalar) => {
-                let scalar_array =
-                    if cast_type == &DataType::Timestamp(TimeUnit::Nanosecond, None) {
-                        if let ScalarValue::Float64(Some(float_ts)) = scalar {
-                            ScalarValue::Int64(Some(
-                                (float_ts * 1_000_000_000_f64).trunc() as i64,
-                            ))
-                            .to_array()?
-                        } else {
-                            scalar.to_array()?
-                        }
-                    } else {
-                        scalar.to_array()?
-                    };
-                let cast_array = kernels::cast::cast_with_options(
-                    &scalar_array,
-                    cast_type,
-                    &cast_options,
-                )?;
-                let cast_scalar = ScalarValue::try_from_array(&cast_array, 0)?;
-                Ok(ColumnarValue::Scalar(cast_scalar))
-            }
+            ColumnarValue::Scalar(scalar) => Ok(ColumnarValue::Scalar(
+                scalar.cast_to_with_options(cast_type, &cast_options)?,
+            )),
         }
     }
 }

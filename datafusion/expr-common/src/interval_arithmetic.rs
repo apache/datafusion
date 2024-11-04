@@ -1223,8 +1223,8 @@ pub fn satisfy_greater(
         }
     }
 
-    // Only the lower bound of left hand side and the upper bound of the right
-    // hand side can change after propagating the greater-than operation.
+    // Only the lower bound of left-hand side and the upper bound of the right-hand
+    // side can change after propagating the greater-than operation.
     let new_left_lower = if left.lower.is_null() || left.lower <= right.lower {
         if strict {
             next_value(right.lower.clone())
@@ -1753,7 +1753,7 @@ impl NullableInterval {
                         }
                         _ => Ok(Self::MaybeNull { values }),
                     }
-                } else if op.is_comparison_operator() {
+                } else if op.supports_propagation() {
                     Ok(Self::Null {
                         datatype: DataType::Boolean,
                     })
@@ -1877,11 +1877,7 @@ mod tests {
                 .sub(value.clone())
                 .unwrap()
                 .lt(&eps));
-            assert!(value
-                .clone()
-                .sub(prev_value(value.clone()))
-                .unwrap()
-                .lt(&eps));
+            assert!(value.sub(prev_value(value.clone())).unwrap().lt(&eps));
             assert_ne!(next_value(value.clone()), value);
             assert_ne!(prev_value(value.clone()), value);
         });
@@ -1913,11 +1909,11 @@ mod tests {
         min_max.into_iter().zip(inf).for_each(|((min, max), inf)| {
             assert_eq!(next_value(max.clone()), inf);
             assert_ne!(prev_value(max.clone()), max);
-            assert_ne!(prev_value(max.clone()), inf);
+            assert_ne!(prev_value(max), inf);
 
             assert_eq!(prev_value(min.clone()), inf);
             assert_ne!(next_value(min.clone()), min);
-            assert_ne!(next_value(min.clone()), inf);
+            assert_ne!(next_value(min), inf);
 
             assert_eq!(next_value(inf.clone()), inf);
             assert_eq!(prev_value(inf.clone()), inf);

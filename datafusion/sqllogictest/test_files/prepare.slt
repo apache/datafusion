@@ -80,3 +80,21 @@ PREPARE my_plan(INT, DOUBLE, DOUBLE, DOUBLE) AS SELECT id, SUM(age) FROM person 
 
 statement error
 PREPARE my_plan(STRING, STRING) AS SELECT * FROM (VALUES(1, $1), (2, $2)) AS t (num, letter);
+
+# test creating logical plan for EXECUTE statements
+query TT
+EXPLAIN EXECUTE my_plan;
+----
+logical_plan Execute: my_plan params=[]
+
+query TT
+EXPLAIN EXECUTE my_plan(10*2 + 1, 'Foo');
+----
+logical_plan Execute: my_plan params=[Int64(21), Utf8("Foo")]
+
+query error DataFusion error: Schema error: No field named a\.
+EXPLAIN EXECUTE my_plan(a);
+
+# TODO: support EXECUTE queries
+query error DataFusion error: This feature is not implemented: Unsupported logical plan: Execute
+EXECUTE my_plan;

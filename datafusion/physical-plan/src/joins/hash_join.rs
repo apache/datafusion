@@ -18,6 +18,7 @@
 //! [`HashJoinExec`] Partitioned Hash Join Operator
 
 use std::fmt;
+use std::mem::size_of;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::task::Poll;
@@ -49,8 +50,7 @@ use crate::{
 };
 
 use arrow::array::{
-    Array, ArrayRef, BooleanArray, BooleanBufferBuilder, PrimitiveArray, UInt32Array,
-    UInt64Array,
+    Array, ArrayRef, BooleanArray, BooleanBufferBuilder, UInt32Array, UInt64Array,
 };
 use arrow::compute::kernels::cmp::{eq, not_distinct};
 use arrow::compute::{and, concat_batches, take, FilterBuilder};
@@ -69,8 +69,7 @@ use datafusion_execution::TaskContext;
 use datafusion_physical_expr::equivalence::{
     join_equivalence_properties, ProjectionMapping,
 };
-use datafusion_physical_expr::expressions::UnKnownColumn;
-use datafusion_physical_expr::{PhysicalExpr, PhysicalExprRef};
+use datafusion_physical_expr::PhysicalExprRef;
 
 use ahash::RandomState;
 use datafusion_expr::Operator;
@@ -137,6 +136,7 @@ impl JoinLeftData {
     }
 }
 
+#[allow(rustdoc::private_intra_doc_links)]
 /// Join execution plan: Evaluates eqijoin predicates in parallel on multiple
 /// partitions using a hash table and an optional filter list to apply post
 /// join.
@@ -294,6 +294,10 @@ impl JoinLeftData {
 ///                       │  "dimension"  │     │    "fact"     │
 ///                       └───────────────┘     └───────────────┘
 /// ```
+///
+/// Note that the `Clone` trait is not implemented for this struct due to the
+/// `left_fut` [`OnceAsync`], which is used to coordinate the loading of the
+/// left side with the processing in each output stream.
 #[derive(Debug)]
 pub struct HashJoinExec {
     /// left (build) side which gets hashed
@@ -417,6 +421,12 @@ impl HashJoinExec {
         &self.join_type
     }
 
+    /// The schema after join. Please be careful when using this schema,
+    /// if there is a projection, the schema isn't the same as the output schema.
+    pub fn join_schema(&self) -> &SchemaRef {
+        &self.join_schema
+    }
+
     /// The partitioning mode of this hash join
     pub fn partition_mode(&self) -> &PartitionMode {
         &self.mode
@@ -519,6 +529,7 @@ impl HashJoinExec {
                         | JoinType::Full
                         | JoinType::LeftAnti
                         | JoinType::LeftSemi
+                        | JoinType::LeftMark
                 ));
 
         let mode = if pipeline_breaking {
@@ -529,24 +540,12 @@ impl HashJoinExec {
 
         // If contains projection, update the PlanProperties.
         if let Some(projection) = projection {
-            let projection_exprs = project_index_to_exprs(projection, &schema);
             // construct a map from the input expressions to the output expression of the Projection
             let projection_mapping =
-                ProjectionMapping::try_new(&projection_exprs, &schema)?;
+                ProjectionMapping::from_indices(projection, &schema)?;
             let out_schema = project_schema(&schema, Some(projection))?;
-            if let Partitioning::Hash(exprs, part) = output_partitioning {
-                let normalized_exprs = exprs
-                    .iter()
-                    .map(|expr| {
-                        eq_properties
-                            .project_expr(expr, &projection_mapping)
-                            .unwrap_or_else(|| {
-                                Arc::new(UnKnownColumn::new(&expr.to_string()))
-                            })
-                    })
-                    .collect();
-                output_partitioning = Partitioning::Hash(normalized_exprs, part);
-            }
+            output_partitioning =
+                output_partitioning.project(&projection_mapping, &eq_properties);
             eq_properties = eq_properties.project(&projection_mapping, out_schema);
         }
         Ok(PlanProperties::new(
@@ -597,25 +596,6 @@ impl DisplayAs for HashJoinExec {
             }
         }
     }
-}
-
-fn project_index_to_exprs(
-    projection_index: &[usize],
-    schema: &SchemaRef,
-) -> Vec<(Arc<dyn PhysicalExpr>, String)> {
-    projection_index
-        .iter()
-        .map(|index| {
-            let field = schema.field(*index);
-            (
-                Arc::new(datafusion_physical_expr::expressions::Column::new(
-                    field.name(),
-                    *index,
-                )) as Arc<dyn PhysicalExpr>,
-                field.name().to_owned(),
-            )
-        })
-        .collect::<Vec<_>>()
 }
 
 impl ExecutionPlan for HashJoinExec {
@@ -805,7 +785,7 @@ impl ExecutionPlan for HashJoinExec {
         // TODO stats: it is not possible in general to know the output size of joins
         // There are some special cases though, for example:
         // - `A LEFT JOIN B ON A.col=B.col` with `COUNT_DISTINCT(B.col)=COUNT(B.col)`
-        let mut stats = estimate_join_statistics(
+        let stats = estimate_join_statistics(
             Arc::clone(&self.left),
             Arc::clone(&self.right),
             self.on.clone(),
@@ -813,16 +793,7 @@ impl ExecutionPlan for HashJoinExec {
             &self.join_schema,
         )?;
         // Project statistics if there is a projection
-        if let Some(projection) = &self.projection {
-            stats.column_statistics = stats
-                .column_statistics
-                .into_iter()
-                .enumerate()
-                .filter(|(i, _)| projection.contains(i))
-                .map(|(_, s)| s)
-                .collect();
-        }
-        Ok(stats)
+        Ok(stats.project(self.projection.as_ref()))
     }
 }
 
@@ -876,7 +847,7 @@ async fn collect_left_input(
 
     // Estimation of memory size, required for hashtable, prior to allocation.
     // Final result can be verified using `RawTable.allocation_info()`
-    let fixed_size = std::mem::size_of::<JoinHashMap>();
+    let fixed_size = size_of::<JoinHashMap>();
     let estimated_hashtable_size =
         estimate_memory_size::<(u64, u64)>(num_rows, fixed_size)?;
 
@@ -1204,13 +1175,11 @@ fn lookup_join_hashmap(
         })
         .collect::<Result<Vec<_>>>()?;
 
-    let (mut probe_builder, mut build_builder, next_offset) = build_hashmap
+    let (probe_indices, build_indices, next_offset) = build_hashmap
         .get_matched_indices_with_limit_offset(hashes_buffer, None, limit, offset);
 
-    let build_indices: UInt64Array =
-        PrimitiveArray::new(build_builder.finish().into(), None);
-    let probe_indices: UInt32Array =
-        PrimitiveArray::new(probe_builder.finish().into(), None);
+    let build_indices: UInt64Array = build_indices.into();
+    let probe_indices: UInt32Array = probe_indices.into();
 
     let (build_indices, probe_indices) = equal_rows_arr(
         &build_indices,
@@ -1467,7 +1436,7 @@ impl HashJoinStream {
             index_alignment_range_start..index_alignment_range_end,
             self.join_type,
             self.right_side_ordered,
-        );
+        )?;
 
         let result = build_batch_from_indices(
             &self.schema,
@@ -1553,7 +1522,7 @@ impl Stream for HashJoinStream {
     fn poll_next(
         mut self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Option<Self::Item>> {
+    ) -> Poll<Option<Self::Item>> {
         self.poll_next_impl(cx)
     }
 }
@@ -1566,7 +1535,7 @@ mod tests {
         test::build_table_i32, test::exec::MockExec,
     };
 
-    use arrow::array::{Date32Array, Int32Array, UInt32Builder, UInt64Builder};
+    use arrow::array::{Date32Array, Int32Array};
     use arrow::datatypes::{DataType, Field};
     use arrow_array::StructArray;
     use arrow_buffer::NullBuffer;
@@ -1575,9 +1544,10 @@ mod tests {
         ScalarValue,
     };
     use datafusion_execution::config::SessionConfig;
-    use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
+    use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use datafusion_expr::Operator;
     use datafusion_physical_expr::expressions::{BinaryExpr, Literal};
+    use datafusion_physical_expr::PhysicalExpr;
 
     use hashbrown::raw::RawTable;
     use rstest::*;
@@ -3118,6 +3088,94 @@ mod tests {
         Ok(())
     }
 
+    #[apply(batch_sizes)]
+    #[tokio::test]
+    async fn join_left_mark(batch_size: usize) -> Result<()> {
+        let task_ctx = prepare_task_ctx(batch_size);
+        let left = build_table(
+            ("a1", &vec![1, 2, 3]),
+            ("b1", &vec![4, 5, 7]), // 7 does not exist on the right
+            ("c1", &vec![7, 8, 9]),
+        );
+        let right = build_table(
+            ("a2", &vec![10, 20, 30]),
+            ("b1", &vec![4, 5, 6]),
+            ("c2", &vec![70, 80, 90]),
+        );
+        let on = vec![(
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
+        )];
+
+        let (columns, batches) = join_collect(
+            Arc::clone(&left),
+            Arc::clone(&right),
+            on.clone(),
+            &JoinType::LeftMark,
+            false,
+            task_ctx,
+        )
+        .await?;
+        assert_eq!(columns, vec!["a1", "b1", "c1", "mark"]);
+
+        let expected = [
+            "+----+----+----+-------+",
+            "| a1 | b1 | c1 | mark  |",
+            "+----+----+----+-------+",
+            "| 1  | 4  | 7  | true  |",
+            "| 2  | 5  | 8  | true  |",
+            "| 3  | 7  | 9  | false |",
+            "+----+----+----+-------+",
+        ];
+        assert_batches_sorted_eq!(expected, &batches);
+
+        Ok(())
+    }
+
+    #[apply(batch_sizes)]
+    #[tokio::test]
+    async fn partitioned_join_left_mark(batch_size: usize) -> Result<()> {
+        let task_ctx = prepare_task_ctx(batch_size);
+        let left = build_table(
+            ("a1", &vec![1, 2, 3]),
+            ("b1", &vec![4, 5, 7]), // 7 does not exist on the right
+            ("c1", &vec![7, 8, 9]),
+        );
+        let right = build_table(
+            ("a2", &vec![10, 20, 30, 40]),
+            ("b1", &vec![4, 4, 5, 6]),
+            ("c2", &vec![60, 70, 80, 90]),
+        );
+        let on = vec![(
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
+        )];
+
+        let (columns, batches) = partitioned_join_collect(
+            Arc::clone(&left),
+            Arc::clone(&right),
+            on.clone(),
+            &JoinType::LeftMark,
+            false,
+            task_ctx,
+        )
+        .await?;
+        assert_eq!(columns, vec!["a1", "b1", "c1", "mark"]);
+
+        let expected = [
+            "+----+----+----+-------+",
+            "| a1 | b1 | c1 | mark  |",
+            "+----+----+----+-------+",
+            "| 1  | 4  | 7  | true  |",
+            "| 2  | 5  | 8  | true  |",
+            "| 3  | 7  | 9  | false |",
+            "+----+----+----+-------+",
+        ];
+        assert_batches_sorted_eq!(expected, &batches);
+
+        Ok(())
+    }
+
     #[test]
     fn join_with_hash_collision() -> Result<()> {
         let mut hashmap_left = RawTable::with_capacity(2);
@@ -3169,17 +3227,13 @@ mod tests {
             (0, None),
         )?;
 
-        let mut left_ids = UInt64Builder::with_capacity(0);
-        left_ids.append_value(0);
-        left_ids.append_value(1);
+        let left_ids: UInt64Array = vec![0, 1].into();
 
-        let mut right_ids = UInt32Builder::with_capacity(0);
-        right_ids.append_value(0);
-        right_ids.append_value(1);
+        let right_ids: UInt32Array = vec![0, 1].into();
 
-        assert_eq!(left_ids.finish(), l);
+        assert_eq!(left_ids, l);
 
-        assert_eq!(right_ids.finish(), r);
+        assert_eq!(right_ids, r);
 
         Ok(())
     }
@@ -3507,6 +3561,15 @@ mod tests {
             "| 30 | 6  | 90 |",
             "+----+----+----+",
         ];
+        let expected_left_mark = vec![
+            "+----+----+----+-------+",
+            "| a1 | b1 | c1 | mark  |",
+            "+----+----+----+-------+",
+            "| 1  | 4  | 7  | true  |",
+            "| 2  | 5  | 8  | true  |",
+            "| 3  | 7  | 9  | false |",
+            "+----+----+----+-------+",
+        ];
 
         let test_cases = vec![
             (JoinType::Inner, expected_inner),
@@ -3517,6 +3580,7 @@ mod tests {
             (JoinType::LeftAnti, expected_left_anti),
             (JoinType::RightSemi, expected_right_semi),
             (JoinType::RightAnti, expected_right_anti),
+            (JoinType::LeftMark, expected_left_mark),
         ];
 
         for (join_type, expected) in test_cases {
@@ -3626,10 +3690,7 @@ mod tests {
             let stream = join.execute(0, task_ctx).unwrap();
 
             // Expect that an error is returned
-            let result_string = crate::common::collect(stream)
-                .await
-                .unwrap_err()
-                .to_string();
+            let result_string = common::collect(stream).await.unwrap_err().to_string();
             assert!(
                 result_string.contains("bad data error"),
                 "actual: {result_string}"
@@ -3802,11 +3863,13 @@ mod tests {
             JoinType::LeftAnti,
             JoinType::RightSemi,
             JoinType::RightAnti,
+            JoinType::LeftMark,
         ];
 
         for join_type in join_types {
-            let runtime_config = RuntimeConfig::new().with_memory_limit(100, 1.0);
-            let runtime = Arc::new(RuntimeEnv::new(runtime_config)?);
+            let runtime = RuntimeEnvBuilder::new()
+                .with_memory_limit(100, 1.0)
+                .build_arc()?;
             let task_ctx = TaskContext::default().with_runtime(runtime);
             let task_ctx = Arc::new(task_ctx);
 
@@ -3821,13 +3884,11 @@ mod tests {
             let stream = join.execute(0, task_ctx)?;
             let err = common::collect(stream).await.unwrap_err();
 
+            // Asserting that operator-level reservation attempting to overallocate
             assert_contains!(
                 err.to_string(),
-                "External error: Resources exhausted: Failed to allocate additional"
+                "External error: Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as: HashJoinInput"
             );
-
-            // Asserting that operator-level reservation attempting to overallocate
-            assert_contains!(err.to_string(), "HashJoinInput");
         }
 
         Ok(())
@@ -3880,8 +3941,9 @@ mod tests {
         ];
 
         for join_type in join_types {
-            let runtime_config = RuntimeConfig::new().with_memory_limit(100, 1.0);
-            let runtime = Arc::new(RuntimeEnv::new(runtime_config)?);
+            let runtime = RuntimeEnvBuilder::new()
+                .with_memory_limit(100, 1.0)
+                .build_arc()?;
             let session_config = SessionConfig::default().with_batch_size(50);
             let task_ctx = TaskContext::default()
                 .with_session_config(session_config)
@@ -3902,13 +3964,12 @@ mod tests {
             let stream = join.execute(1, task_ctx)?;
             let err = common::collect(stream).await.unwrap_err();
 
+            // Asserting that stream-level reservation attempting to overallocate
             assert_contains!(
                 err.to_string(),
-                "External error: Resources exhausted: Failed to allocate additional"
-            );
+                "External error: Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as: HashJoinInput[1]"
 
-            // Asserting that stream-level reservation attempting to overallocate
-            assert_contains!(err.to_string(), "HashJoinInput[1]");
+            );
         }
 
         Ok(())

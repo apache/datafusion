@@ -22,7 +22,7 @@ use crate::{Expr, LogicalPlan};
 use arrow::datatypes::SchemaRef;
 use datafusion_common::{Constraints, Result};
 
-use std::any::Any;
+use std::{any::Any, borrow::Cow};
 
 /// Indicates how a filter expression is handled by
 /// [`TableProvider::scan`].
@@ -98,31 +98,19 @@ pub trait TableSource: Sync + Send {
         TableType::Base
     }
 
-    /// Tests whether the table provider can make use of a filter expression
-    /// to optimise data retrieval.
-    #[deprecated(since = "20.0.0", note = "use supports_filters_pushdown instead")]
-    fn supports_filter_pushdown(
-        &self,
-        _filter: &Expr,
-    ) -> Result<TableProviderFilterPushDown> {
-        Ok(TableProviderFilterPushDown::Unsupported)
-    }
-
     /// Tests whether the table provider can make use of any or all filter expressions
     /// to optimise data retrieval.
-    #[allow(deprecated)]
     fn supports_filters_pushdown(
         &self,
         filters: &[&Expr],
     ) -> Result<Vec<TableProviderFilterPushDown>> {
-        filters
-            .iter()
-            .map(|f| self.supports_filter_pushdown(f))
-            .collect()
+        Ok((0..filters.len())
+            .map(|_| TableProviderFilterPushDown::Unsupported)
+            .collect())
     }
 
     /// Get the Logical plan of this table provider, if available.
-    fn get_logical_plan(&self) -> Option<&LogicalPlan> {
+    fn get_logical_plan(&self) -> Option<Cow<LogicalPlan>> {
         None
     }
 

@@ -55,7 +55,7 @@ fn main() -> Result<(), String> {
     let common_path = proto_dir.join("src/datafusion_common.rs");
     println!(
         "Copying {} to {}",
-        prost.clone().display(),
+        prost.display(),
         proto_dir.join("src/generated/prost.rs").display()
     );
     std::fs::copy(prost, proto_dir.join("src/generated/prost.rs")).unwrap();

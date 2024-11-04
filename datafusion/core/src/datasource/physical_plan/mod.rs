@@ -36,6 +36,7 @@ pub use self::parquet::{ParquetExec, ParquetFileMetrics, ParquetFileReaderFactor
 pub use arrow_file::ArrowExec;
 pub use avro::AvroExec;
 pub use csv::{CsvConfig, CsvExec, CsvExecBuilder, CsvOpener};
+use datafusion_expr::dml::InsertOp;
 pub use file_groups::FileGroupPartitioner;
 pub use file_scan_config::{
     wrap_partition_type_in_dict, wrap_partition_value_in_dict, FileScanConfig,
@@ -64,6 +65,7 @@ use crate::{
 use arrow::datatypes::{DataType, SchemaRef};
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::PhysicalSortExpr;
+use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
 use futures::StreamExt;
 use log::debug;
@@ -83,8 +85,9 @@ pub struct FileSinkConfig {
     /// A vector of column names and their corresponding data types,
     /// representing the partitioning columns for the file
     pub table_partition_cols: Vec<(String, DataType)>,
-    /// Controls whether existing data should be overwritten by this sink
-    pub overwrite: bool,
+    /// Controls how new data should be written to the file, determining whether
+    /// to append to, overwrite, or replace records in existing files.
+    pub insert_op: InsertOp,
     /// Controls whether partition columns are kept for the file
     pub keep_partition_by_columns: bool,
 }
@@ -326,11 +329,11 @@ impl From<ObjectMeta> for FileMeta {
 fn get_projected_output_ordering(
     base_config: &FileScanConfig,
     projected_schema: &SchemaRef,
-) -> Vec<Vec<PhysicalSortExpr>> {
+) -> Vec<LexOrdering> {
     let mut all_orderings = vec![];
     for output_ordering in &base_config.output_ordering {
-        let mut new_ordering = vec![];
-        for PhysicalSortExpr { expr, options } in output_ordering {
+        let mut new_ordering = LexOrdering::default();
+        for PhysicalSortExpr { expr, options } in output_ordering.iter() {
             if let Some(col) = expr.as_any().downcast_ref::<Column>() {
                 let name = col.name();
                 if let Some((idx, _)) = projected_schema.column_with_name(name) {
@@ -516,7 +519,8 @@ mod tests {
             Field::new("c3", DataType::Float64, true),
         ]));
 
-        let adapter = DefaultSchemaAdapterFactory::default().create(table_schema.clone());
+        let adapter = DefaultSchemaAdapterFactory
+            .create(table_schema.clone(), table_schema.clone());
 
         let file_schema = Schema::new(vec![
             Field::new("c1", DataType::Utf8, true),
@@ -573,7 +577,7 @@ mod tests {
 
         let indices = vec![1, 2, 4];
         let schema = SchemaRef::from(table_schema.project(&indices).unwrap());
-        let adapter = DefaultSchemaAdapterFactory::default().create(schema);
+        let adapter = DefaultSchemaAdapterFactory.create(schema, table_schema.clone());
         let (mapping, projection) = adapter.map_schema(&file_schema).unwrap();
 
         let id = Int32Array::from(vec![Some(1), Some(2), Some(3)]);
@@ -760,7 +764,7 @@ mod tests {
     /// create a PartitionedFile for testing
     fn partitioned_file(path: &str) -> PartitionedFile {
         let object_meta = ObjectMeta {
-            location: object_store::path::Path::parse(path).unwrap(),
+            location: Path::parse(path).unwrap(),
             last_modified: Utc::now(),
             size: 42,
             e_tag: None,

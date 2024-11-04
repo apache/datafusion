@@ -16,17 +16,17 @@
 // under the License.
 
 use std::any::Any;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use arrow::array::{ArrayRef, GenericStringArray, OffsetSizeTrait, StringArray};
 use arrow::datatypes::DataType;
 
+use crate::utils::{make_scalar_function, utf8_to_str_type};
 use datafusion_common::cast::{as_generic_string_array, as_string_view_array};
 use datafusion_common::{exec_err, Result};
-use datafusion_expr::{ColumnarValue, Volatility};
+use datafusion_expr::scalar_doc_sections::DOC_SECTION_STRING;
+use datafusion_expr::{ColumnarValue, Documentation, Volatility};
 use datafusion_expr::{ScalarUDFImpl, Signature};
-
-use crate::utils::{make_scalar_function, utf8_to_str_type};
 
 #[derive(Debug)]
 pub struct InitcapFunc {
@@ -41,13 +41,8 @@ impl Default for InitcapFunc {
 
 impl InitcapFunc {
     pub fn new() -> Self {
-        use DataType::*;
         Self {
-            signature: Signature::uniform(
-                1,
-                vec![Utf8, LargeUtf8, Utf8View],
-                Volatility::Immutable,
-            ),
+            signature: Signature::string(1, Volatility::Immutable),
         }
     }
 }
@@ -79,6 +74,34 @@ impl ScalarUDFImpl for InitcapFunc {
             }
         }
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_initcap_doc())
+    }
+}
+
+static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+
+fn get_initcap_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_STRING)
+            .with_description("Capitalizes the first character in each word in the input string. Words are delimited by non-alphanumeric characters.")
+            .with_syntax_example("initcap(str)")
+            .with_sql_example(r#"```sql
+> select initcap('apache datafusion');
++------------------------------------+
+| initcap(Utf8("apache datafusion")) |
++------------------------------------+
+| Apache Datafusion                  |
++------------------------------------+
+```"#)
+            .with_standard_argument("str", Some("String"))
+            .with_related_udf("lower")
+            .with_related_udf("upper")
+            .build()
+            .unwrap()
+    })
 }
 
 /// Converts the first letter of each word to upper case and the rest to lower case. Words are sequences of alphanumeric characters separated by non-alphanumeric characters.

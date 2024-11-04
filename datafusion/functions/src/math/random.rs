@@ -16,7 +16,7 @@
 // under the License.
 
 use std::any::Any;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use arrow::array::Float64Array;
 use arrow::datatypes::DataType;
@@ -24,8 +24,9 @@ use arrow::datatypes::DataType::Float64;
 use rand::{thread_rng, Rng};
 
 use datafusion_common::{not_impl_err, Result};
+use datafusion_expr::scalar_doc_sections::DOC_SECTION_MATH;
 use datafusion_expr::ColumnarValue;
-use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{Documentation, ScalarUDFImpl, Signature, Volatility};
 
 #[derive(Debug)]
 pub struct RandomFunc {
@@ -69,8 +70,31 @@ impl ScalarUDFImpl for RandomFunc {
 
     fn invoke_no_args(&self, num_rows: usize) -> Result<ColumnarValue> {
         let mut rng = thread_rng();
-        let values = std::iter::repeat_with(|| rng.gen_range(0.0..1.0)).take(num_rows);
-        let array = Float64Array::from_iter_values(values);
+        let mut values = vec![0.0; num_rows];
+        // Equivalent to set each element with rng.gen_range(0.0..1.0), but more efficient
+        rng.fill(&mut values[..]);
+        let array = Float64Array::from(values);
+
         Ok(ColumnarValue::Array(Arc::new(array)))
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_random_doc())
+    }
+}
+
+static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+
+fn get_random_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_MATH)
+            .with_description(
+                r#"Returns a random float value in the range [0, 1).
+The random seed is unique to each row."#,
+            )
+            .with_syntax_example("random()")
+            .build()
+            .unwrap()
+    })
 }

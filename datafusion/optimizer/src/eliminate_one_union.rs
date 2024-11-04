@@ -16,13 +16,15 @@
 // under the License.
 
 //! [`EliminateOneUnion`]  eliminates single element `Union`
+
 use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::{tree_node::Transformed, Result};
-use datafusion_expr::logical_plan::{tree_node::unwrap_arc, LogicalPlan, Union};
+use datafusion_expr::logical_plan::{LogicalPlan, Union};
+use std::sync::Arc;
 
 use crate::optimizer::ApplyOrder;
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 /// An optimization rule that eliminates union with one element.
 pub struct EliminateOneUnion;
 
@@ -48,9 +50,9 @@ impl OptimizerRule for EliminateOneUnion {
         _config: &dyn OptimizerConfig,
     ) -> Result<Transformed<LogicalPlan>> {
         match plan {
-            LogicalPlan::Union(Union { mut inputs, .. }) if inputs.len() == 1 => {
-                Ok(Transformed::yes(unwrap_arc(inputs.pop().unwrap())))
-            }
+            LogicalPlan::Union(Union { mut inputs, .. }) if inputs.len() == 1 => Ok(
+                Transformed::yes(Arc::unwrap_or_clone(inputs.pop().unwrap())),
+            ),
             _ => Ok(Transformed::no(plan)),
         }
     }
@@ -92,10 +94,7 @@ mod tests {
     fn eliminate_nothing() -> Result<()> {
         let plan_builder = table_scan(Some("table"), &schema(), None)?;
 
-        let plan = plan_builder
-            .clone()
-            .union(plan_builder.clone().build()?)?
-            .build()?;
+        let plan = plan_builder.clone().union(plan_builder.build()?)?.build()?;
 
         let expected = "\
         Union\
@@ -107,7 +106,7 @@ mod tests {
     #[test]
     fn eliminate_one_union() -> Result<()> {
         let table_plan = coerce_plan_expr_for_schema(
-            &table_scan(Some("table"), &schema(), None)?.build()?,
+            table_scan(Some("table"), &schema(), None)?.build()?,
             &schema().to_dfschema()?,
         )?;
         let schema = Arc::clone(table_plan.schema());

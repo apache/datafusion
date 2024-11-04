@@ -72,11 +72,6 @@ async fn explain_analyze_baseline_metrics() {
     assert_metrics!(
         &formatted,
         "GlobalLimitExec: skip=0, fetch=3, ",
-        "metrics=[output_rows=1, elapsed_compute="
-    );
-    assert_metrics!(
-        &formatted,
-        "LocalLimitExec: fetch=3",
         "metrics=[output_rows=3, elapsed_compute="
     );
     assert_metrics!(
@@ -612,18 +607,17 @@ async fn test_physical_plan_display_indent() {
     let dataframe = ctx.sql(sql).await.unwrap();
     let physical_plan = dataframe.create_physical_plan().await.unwrap();
     let expected = vec![
-        "GlobalLimitExec: skip=0, fetch=10",
-        "  SortPreservingMergeExec: [the_min@2 DESC], fetch=10",
-        "    SortExec: TopK(fetch=10), expr=[the_min@2 DESC], preserve_partitioning=[true]",
-        "      ProjectionExec: expr=[c1@0 as c1, max(aggregate_test_100.c12)@1 as max(aggregate_test_100.c12), min(aggregate_test_100.c12)@2 as the_min]",
-        "        AggregateExec: mode=FinalPartitioned, gby=[c1@0 as c1], aggr=[max(aggregate_test_100.c12), min(aggregate_test_100.c12)]",
-        "          CoalesceBatchesExec: target_batch_size=4096",
-        "            RepartitionExec: partitioning=Hash([c1@0], 9000), input_partitions=9000",
-        "              AggregateExec: mode=Partial, gby=[c1@0 as c1], aggr=[max(aggregate_test_100.c12), min(aggregate_test_100.c12)]",
-        "                CoalesceBatchesExec: target_batch_size=4096",
-        "                  FilterExec: c12@1 < 10",
-        "                    RepartitionExec: partitioning=RoundRobinBatch(9000), input_partitions=1",
-        "                      CsvExec: file_groups={1 group: [[ARROW_TEST_DATA/csv/aggregate_test_100.csv]]}, projection=[c1, c12], has_header=true",
+        "SortPreservingMergeExec: [the_min@2 DESC], fetch=10",
+        "  SortExec: TopK(fetch=10), expr=[the_min@2 DESC], preserve_partitioning=[true]",
+        "    ProjectionExec: expr=[c1@0 as c1, max(aggregate_test_100.c12)@1 as max(aggregate_test_100.c12), min(aggregate_test_100.c12)@2 as the_min]",
+        "      AggregateExec: mode=FinalPartitioned, gby=[c1@0 as c1], aggr=[max(aggregate_test_100.c12), min(aggregate_test_100.c12)]",
+        "        CoalesceBatchesExec: target_batch_size=4096",
+        "          RepartitionExec: partitioning=Hash([c1@0], 9000), input_partitions=9000",
+        "            AggregateExec: mode=Partial, gby=[c1@0 as c1], aggr=[max(aggregate_test_100.c12), min(aggregate_test_100.c12)]",
+        "              CoalesceBatchesExec: target_batch_size=4096",
+        "                FilterExec: c12@1 < 10",
+        "                  RepartitionExec: partitioning=RoundRobinBatch(9000), input_partitions=1",
+        "                    CsvExec: file_groups={1 group: [[ARROW_TEST_DATA/csv/aggregate_test_100.csv]]}, projection=[c1, c12], has_header=true",
     ];
 
     let normalizer = ExplainNormalizer::new();

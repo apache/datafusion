@@ -16,45 +16,11 @@
 # under the License.
 
 apache-rat-*.jar
-arrow-src.tar
-arrow-src.tar.gz
-
-# Compiled source
-*.a
-*.dll
-*.o
-*.py[ocd]
-*.so
-*.so.*
-*.bundle
-*.dylib
-.build_cache_dir
-dependency-reduced-pom.xml
-MANIFEST
-compile_commands.json
-build.ninja
-
-# Generated Visual Studio files
-*.vcxproj
-*.vcxproj.*
-*.sln
-*.iml
 
 # Linux perf sample data
 perf.data
 perf.data.old
 
-cpp/.idea/
-.clangd/
-cpp/.clangd/
-cpp/apidoc/xml/
-docs/example.gz
-docs/example1.dat
-docs/example3.dat
-python/.eggs/
-python/doc/
-# Egg metadata
-*.egg-info
 
 .vscode
 .idea/
@@ -66,16 +32,9 @@ docker_cache
 .*.swp
 .*.swo
 
-site/
-
-# R files
-**/.Rproj.user
-**/*.Rcheck/
-**/.Rhistory
-.Rproj.user
+venv/*
 
 # macOS
-cpp/Brewfile.lock.json
 .DS_Store
 
 # docker volumes used for caching
@@ -89,9 +48,6 @@ Cargo.lock
 rusty-tags.vi
 .history
 .flatbuffers/
-
-.vscode
-venv/*
 
 # apache release artifacts
 dev/dist

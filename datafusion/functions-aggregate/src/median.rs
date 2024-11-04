@@ -16,8 +16,9 @@
 // under the License.
 
 use std::collections::HashSet;
-use std::fmt::Formatter;
-use std::{fmt::Debug, sync::Arc};
+use std::fmt::{Debug, Formatter};
+use std::mem::{size_of, size_of_val};
+use std::sync::{Arc, OnceLock};
 
 use arrow::array::{downcast_integer, ArrowNumericType};
 use arrow::{
@@ -33,10 +34,11 @@ use arrow::array::ArrowNativeTypeOp;
 use arrow::datatypes::ArrowNativeType;
 
 use datafusion_common::{DataFusionError, Result, ScalarValue};
+use datafusion_expr::aggregate_doc_sections::DOC_SECTION_GENERAL;
 use datafusion_expr::function::StateFieldsArgs;
 use datafusion_expr::{
     function::AccumulatorArgs, utils::format_state_name, Accumulator, AggregateUDFImpl,
-    Signature, Volatility,
+    Documentation, Signature, Volatility,
 };
 use datafusion_functions_aggregate_common::utils::Hashable;
 
@@ -61,7 +63,7 @@ pub struct Median {
 }
 
 impl Debug for Median {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         f.debug_struct("Median")
             .field("name", &self.name())
             .field("signature", &self.signature)
@@ -152,6 +154,34 @@ impl AggregateUDFImpl for Median {
     fn aliases(&self) -> &[String] {
         &[]
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_median_doc())
+    }
+}
+
+static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+
+fn get_median_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_GENERAL)
+            .with_description("Returns the median value in the specified column.")
+            .with_syntax_example("median(expression)")
+            .with_sql_example(
+                r#"```sql
+> SELECT median(column_name) FROM table_name;
++----------------------+
+| median(column_name)   |
++----------------------+
+| 45.5                 |
++----------------------+
+```"#,
+            )
+            .with_standard_argument("expression", None)
+            .build()
+            .unwrap()
+    })
 }
 
 /// The median accumulator accumulates the raw input values
@@ -166,7 +196,7 @@ struct MedianAccumulator<T: ArrowNumericType> {
     all_values: Vec<T::Native>,
 }
 
-impl<T: ArrowNumericType> std::fmt::Debug for MedianAccumulator<T> {
+impl<T: ArrowNumericType> Debug for MedianAccumulator<T> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "MedianAccumulator({})", self.data_type)
     }
@@ -206,8 +236,7 @@ impl<T: ArrowNumericType> Accumulator for MedianAccumulator<T> {
     }
 
     fn size(&self) -> usize {
-        std::mem::size_of_val(self)
-            + self.all_values.capacity() * std::mem::size_of::<T::Native>()
+        size_of_val(self) + self.all_values.capacity() * size_of::<T::Native>()
     }
 }
 
@@ -223,7 +252,7 @@ struct DistinctMedianAccumulator<T: ArrowNumericType> {
     distinct_values: HashSet<Hashable<T::Native>>,
 }
 
-impl<T: ArrowNumericType> std::fmt::Debug for DistinctMedianAccumulator<T> {
+impl<T: ArrowNumericType> Debug for DistinctMedianAccumulator<T> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "DistinctMedianAccumulator({})", self.data_type)
     }
@@ -278,8 +307,7 @@ impl<T: ArrowNumericType> Accumulator for DistinctMedianAccumulator<T> {
     }
 
     fn size(&self) -> usize {
-        std::mem::size_of_val(self)
-            + self.distinct_values.capacity() * std::mem::size_of::<T::Native>()
+        size_of_val(self) + self.distinct_values.capacity() * size_of::<T::Native>()
     }
 }
 

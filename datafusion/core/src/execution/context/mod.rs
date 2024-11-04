@@ -69,17 +69,18 @@ use datafusion_expr::{
 // backwards compatibility
 pub use crate::execution::session_state::SessionState;
 
+use crate::datasource::dynamic_file::DynamicListTableFactory;
+use crate::execution::session_state::SessionStateBuilder;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use object_store::ObjectStore;
-use parking_lot::RwLock;
-use url::Url;
-
-use crate::execution::session_state::SessionStateBuilder;
+use datafusion_catalog::{DynamicFileCatalog, SessionStore, UrlTableFactory};
 pub use datafusion_execution::config::SessionConfig;
 pub use datafusion_execution::TaskContext;
 pub use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_optimizer::{AnalyzerRule, OptimizerRule};
+use object_store::ObjectStore;
+use parking_lot::RwLock;
+use url::Url;
 
 mod avro;
 mod csv;
@@ -127,6 +128,9 @@ where
 /// Main interface for executing queries with DataFusion. Maintains
 /// the state of the connection between a user and an instance of the
 /// DataFusion engine.
+///
+/// See examples below for how to use the `SessionContext` to execute queries
+/// and how to configure the session.
 ///
 /// # Overview
 ///
@@ -200,7 +204,38 @@ where
 /// # }
 /// ```
 ///
-/// # `SessionContext`, `SessionState`, and `TaskContext`
+/// # Example: Configuring `SessionContext`
+///
+/// The `SessionContext` can be configured by creating a [`SessionState`] using
+/// [`SessionStateBuilder`]:
+///
+/// ```
+/// # use std::sync::Arc;
+/// # use datafusion::prelude::*;
+/// # use datafusion::execution::SessionStateBuilder;
+/// # use datafusion_execution::runtime_env::RuntimeEnvBuilder;
+/// // Configure a 4k batch size
+/// let config = SessionConfig::new() .with_batch_size(4 * 1024);
+///
+/// // configure a memory limit of 1GB with 20%  slop
+///  let runtime_env = RuntimeEnvBuilder::new()
+///     .with_memory_limit(1024 * 1024 * 1024, 0.80)
+///     .build_arc()
+///     .unwrap();
+///
+/// // Create a SessionState using the config and runtime_env
+/// let state = SessionStateBuilder::new()
+///   .with_config(config)
+///   .with_runtime_env(runtime_env)
+///   // include support for built in functions and configurations
+///   .with_default_features()
+///   .build();
+///
+/// // Create a SessionContext
+/// let ctx = SessionContext::from(state);
+/// ```
+///
+/// # Relationship between `SessionContext`, `SessionState`, and `TaskContext`
 ///
 /// The state required to optimize, and evaluate queries is
 /// broken into three levels to allow tailoring
@@ -278,13 +313,6 @@ impl SessionContext {
     }
 
     /// Creates a new `SessionContext` using the provided
-    /// [`SessionConfig`] and a new [`RuntimeEnv`].
-    #[deprecated(since = "32.0.0", note = "Use SessionContext::new_with_config")]
-    pub fn with_config(config: SessionConfig) -> Self {
-        Self::new_with_config(config)
-    }
-
-    /// Creates a new `SessionContext` using the provided
     /// [`SessionConfig`] and a [`RuntimeEnv`].
     ///
     /// # Resource Limits
@@ -306,13 +334,6 @@ impl SessionContext {
         Self::new_with_state(state)
     }
 
-    /// Creates a new `SessionContext` using the provided
-    /// [`SessionConfig`] and a [`RuntimeEnv`].
-    #[deprecated(since = "32.0.0", note = "Use SessionState::new_with_config_rt")]
-    pub fn with_config_rt(config: SessionConfig, runtime: Arc<RuntimeEnv>) -> Self {
-        Self::new_with_config_rt(config, runtime)
-    }
-
     /// Creates a new `SessionContext` using the provided [`SessionState`]
     pub fn new_with_state(state: SessionState) -> Self {
         Self {
@@ -322,11 +343,99 @@ impl SessionContext {
         }
     }
 
-    /// Creates a new `SessionContext` using the provided [`SessionState`]
-    #[deprecated(since = "32.0.0", note = "Use SessionContext::new_with_state")]
-    pub fn with_state(state: SessionState) -> Self {
-        Self::new_with_state(state)
+    /// Enable querying local files as tables.
+    ///
+    /// This feature is security sensitive and should only be enabled for
+    /// systems that wish to permit direct access to the file system from SQL.
+    ///
+    /// When enabled, this feature permits direct access to arbitrary files via
+    /// SQL like
+    ///
+    /// ```sql
+    /// SELECT * from 'my_file.parquet'
+    /// ```
+    ///
+    /// See [DynamicFileCatalog] for more details
+    ///
+    /// ```
+    /// # use datafusion::prelude::*;
+    /// # use datafusion::{error::Result, assert_batches_eq};
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<()> {
+    /// let ctx = SessionContext::new()
+    ///   .enable_url_table(); // permit local file access
+    /// let results = ctx
+    ///   .sql("SELECT a, MIN(b) FROM 'tests/data/example.csv' as example GROUP BY a LIMIT 100")
+    ///   .await?
+    ///   .collect()
+    ///   .await?;
+    /// assert_batches_eq!(
+    ///  &[
+    ///    "+---+----------------+",
+    ///    "| a | min(example.b) |",
+    ///    "+---+----------------+",
+    ///    "| 1 | 2              |",
+    ///    "+---+----------------+",
+    ///  ],
+    ///  &results
+    /// );
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn enable_url_table(self) -> Self {
+        let current_catalog_list = Arc::clone(self.state.read().catalog_list());
+        let factory = Arc::new(DynamicListTableFactory::new(SessionStore::new()));
+        let catalog_list = Arc::new(DynamicFileCatalog::new(
+            current_catalog_list,
+            Arc::clone(&factory) as Arc<dyn UrlTableFactory>,
+        ));
+        let ctx: SessionContext = self
+            .into_state_builder()
+            .with_catalog_list(catalog_list)
+            .build()
+            .into();
+        // register new state with the factory
+        factory.session_store().with_state(ctx.state_weak_ref());
+        ctx
     }
+
+    /// Convert the current `SessionContext` into a [`SessionStateBuilder`]
+    ///
+    /// This is useful to switch back to `SessionState` with custom settings such as
+    /// [`Self::enable_url_table`].
+    ///
+    /// Avoids cloning the SessionState if possible.
+    ///
+    /// # Example
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use datafusion::prelude::*;
+    /// # use datafusion::execution::SessionStateBuilder;
+    /// # use datafusion_optimizer::push_down_filter::PushDownFilter;
+    /// let my_rule = PushDownFilter{}; // pretend it is a new rule
+    /// // Create a new builder with a custom optimizer rule
+    /// let context: SessionContext = SessionStateBuilder::new()
+    ///   .with_optimizer_rule(Arc::new(my_rule))
+    ///   .build()
+    ///   .into();
+    /// // Enable local file access and convert context back to a builder
+    /// let builder = context
+    ///   .enable_url_table()
+    ///   .into_state_builder();
+    /// ```
+    pub fn into_state_builder(self) -> SessionStateBuilder {
+        let SessionContext {
+            session_id: _,
+            session_start_time: _,
+            state,
+        } = self;
+        let state = match Arc::try_unwrap(state) {
+            Ok(rwlock) => rwlock.into_inner(),
+            Err(state) => state.read().clone(),
+        };
+        SessionStateBuilder::from(state)
+    }
+
     /// Returns the time this `SessionContext` was created
     pub fn session_start_time(&self) -> DateTime<Utc> {
         self.session_start_time
@@ -629,6 +738,11 @@ impl SessionContext {
         cmd: &CreateExternalTable,
     ) -> Result<DataFrame> {
         let exist = self.table_exist(cmd.name.clone())?;
+
+        if cmd.temporary {
+            return not_impl_err!("Temporary tables not supported");
+        }
+
         if exist {
             match cmd.if_not_exists {
                 true => return self.return_empty_dataframe(),
@@ -652,10 +766,16 @@ impl SessionContext {
             or_replace,
             constraints,
             column_defaults,
+            temporary,
         } = cmd;
 
-        let input = Arc::try_unwrap(input).unwrap_or_else(|e| e.as_ref().clone());
+        let input = Arc::unwrap_or_clone(input);
         let input = self.state().optimize(&input)?;
+
+        if temporary {
+            return not_impl_err!("Temporary tables not supported");
+        }
+
         let table = self.table(name.clone()).await;
         match (if_not_exists, or_replace, table) {
             (true, false, Ok(_)) => self.return_empty_dataframe(),
@@ -704,9 +824,14 @@ impl SessionContext {
             input,
             or_replace,
             definition,
+            temporary,
         } = cmd;
 
         let view = self.table(name.clone()).await;
+
+        if temporary {
+            return not_impl_err!("Temporary views not supported");
+        }
 
         match (or_replace, view) {
             (true, Ok(_)) => {
@@ -1131,7 +1256,7 @@ impl SessionContext {
         // check schema uniqueness
         let mut batches = batches.into_iter().peekable();
         let schema = if let Some(batch) = batches.peek() {
-            batch.schema().clone()
+            batch.schema()
         } else {
             Arc::new(Schema::empty())
         };
@@ -1155,7 +1280,7 @@ impl SessionContext {
     /// [`ObjectStore`]: object_store::ObjectStore
     pub async fn register_listing_table(
         &self,
-        name: &str,
+        table_ref: impl Into<TableReference>,
         table_path: impl AsRef<str>,
         options: ListingOptions,
         provided_schema: Option<SchemaRef>,
@@ -1170,10 +1295,7 @@ impl SessionContext {
             .with_listing_options(options)
             .with_schema(resolved_schema);
         let table = ListingTable::try_new(config)?.with_definition(sql_definition);
-        self.register_table(
-            TableReference::Bare { table: name.into() },
-            Arc::new(table),
-        )?;
+        self.register_table(table_ref, Arc::new(table))?;
         Ok(())
     }
 
@@ -1427,9 +1549,21 @@ impl From<&SessionContext> for TaskContext {
     }
 }
 
+impl From<SessionState> for SessionContext {
+    fn from(state: SessionState) -> Self {
+        Self::new_with_state(state)
+    }
+}
+
+impl From<SessionContext> for SessionStateBuilder {
+    fn from(session: SessionContext) -> Self {
+        session.into_state_builder()
+    }
+}
+
 /// A planner used to add extensions to DataFusion logical and physical plans.
 #[async_trait]
-pub trait QueryPlanner {
+pub trait QueryPlanner: Debug {
     /// Given a `LogicalPlan`, create an [`ExecutionPlan`] suitable for execution
     async fn create_physical_plan(
         &self,
@@ -1442,7 +1576,7 @@ pub trait QueryPlanner {
 /// and interact with [SessionState] to registers new udf, udaf or udwf.
 
 #[async_trait]
-pub trait FunctionFactory: Sync + Send {
+pub trait FunctionFactory: Debug + Sync + Send {
     /// Handles creation of user defined function specified in [CreateFunction] statement
     async fn create(
         &self,
@@ -1465,6 +1599,7 @@ pub enum RegisterFunction {
 
 /// Default implementation of [SerializerRegistry] that throws unimplemented error
 /// for all requests.
+#[derive(Debug)]
 pub struct EmptySerializerRegistry;
 
 impl SerializerRegistry for EmptySerializerRegistry {
@@ -1583,7 +1718,7 @@ mod tests {
     use super::{super::options::CsvReadOptions, *};
     use crate::assert_batches_eq;
     use crate::execution::memory_pool::MemoryConsumer;
-    use crate::execution::runtime_env::RuntimeConfig;
+    use crate::execution::runtime_env::RuntimeEnvBuilder;
     use crate::test;
     use crate::test_util::{plan_and_collect, populate_csv_partitions};
 
@@ -1718,8 +1853,7 @@ mod tests {
         let path = path.join("tests/tpch-csv");
         let url = format!("file://{}", path.display());
 
-        let rt_cfg = RuntimeConfig::new();
-        let runtime = Arc::new(RuntimeEnv::new(rt_cfg).unwrap());
+        let runtime = RuntimeEnvBuilder::new().build_arc()?;
         let cfg = SessionConfig::new()
             .set_str("datafusion.catalog.location", url.as_str())
             .set_str("datafusion.catalog.format", "CSV")
@@ -1735,6 +1869,38 @@ mod tests {
         let result =
             plan_and_collect(&ctx, "select c_name from default.customer limit 3;")
                 .await?;
+
+        let actual = arrow::util::pretty::pretty_format_batches(&result)
+            .unwrap()
+            .to_string();
+        let expected = r#"+--------------------+
+| c_name             |
++--------------------+
+| Customer#000000002 |
+| Customer#000000003 |
+| Customer#000000004 |
++--------------------+"#;
+        assert_eq!(actual, expected);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_dynamic_file_query() -> Result<()> {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let path = path.join("tests/tpch-csv/customer.csv");
+        let url = format!("file://{}", path.display());
+        let cfg = SessionConfig::new();
+        let session_state = SessionStateBuilder::new()
+            .with_default_features()
+            .with_config(cfg)
+            .build();
+        let ctx = SessionContext::new_with_state(session_state).enable_url_table();
+        let result = plan_and_collect(
+            &ctx,
+            format!("select c_name from '{}' limit 3;", &url).as_str(),
+        )
+        .await?;
 
         let actual = arrow::util::pretty::pretty_format_batches(&result)
             .unwrap()
@@ -1973,13 +2139,14 @@ mod tests {
         fn create_physical_expr(
             &self,
             _expr: &Expr,
-            _input_dfschema: &crate::common::DFSchema,
+            _input_dfschema: &DFSchema,
             _session_state: &SessionState,
-        ) -> Result<Arc<dyn crate::physical_plan::PhysicalExpr>> {
+        ) -> Result<Arc<dyn PhysicalExpr>> {
             unimplemented!()
         }
     }
 
+    #[derive(Debug)]
     struct MyQueryPlanner {}
 
     #[async_trait]

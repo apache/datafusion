@@ -19,12 +19,11 @@
 //! file sources.
 
 use std::{
-    borrow::Cow, collections::HashMap, fmt::Debug, marker::PhantomData, sync::Arc, vec,
+    borrow::Cow, collections::HashMap, fmt::Debug, marker::PhantomData, mem::size_of,
+    sync::Arc, vec,
 };
 
-use super::{
-    get_projected_output_ordering, statistics::MinMaxStatistics, FileGroupPartitioner,
-};
+use super::{get_projected_output_ordering, statistics::MinMaxStatistics};
 use crate::datasource::{listing::PartitionedFile, object_store::ObjectStoreUrl};
 use crate::{error::Result, scalar::ScalarValue};
 
@@ -35,7 +34,8 @@ use arrow_array::{ArrayRef, DictionaryArray, RecordBatch, RecordBatchOptions};
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::stats::Precision;
 use datafusion_common::{exec_err, ColumnStatistics, DataFusionError, Statistics};
-use datafusion_physical_expr::{LexOrdering, PhysicalSortExpr};
+use datafusion_physical_expr::LexOrdering;
+use datafusion_physical_expr_common::sort_expr::LexOrderingRef;
 
 use log::warn;
 
@@ -250,9 +250,10 @@ impl FileScanConfig {
             column_statistics: table_cols_stats,
         };
 
-        let projected_schema = Arc::new(
-            Schema::new(table_fields).with_metadata(self.file_schema.metadata().clone()),
-        );
+        let projected_schema = Arc::new(Schema::new_with_metadata(
+            table_fields,
+            self.file_schema.metadata().clone(),
+        ));
 
         let projected_output_ordering =
             get_projected_output_ordering(self, &projected_schema);
@@ -260,7 +261,7 @@ impl FileScanConfig {
         (projected_schema, table_stats, projected_output_ordering)
     }
 
-    #[allow(unused)] // Only used by avro
+    #[cfg_attr(not(feature = "avro"), allow(unused))] // Only used by avro
     pub(crate) fn projected_file_column_names(&self) -> Option<Vec<String>> {
         self.projection.as_ref().map(|p| {
             p.iter()
@@ -283,7 +284,12 @@ impl FileScanConfig {
 
         fields.map_or_else(
             || Arc::clone(&self.file_schema),
-            |f| Arc::new(Schema::new(f).with_metadata(self.file_schema.metadata.clone())),
+            |f| {
+                Arc::new(Schema::new_with_metadata(
+                    f,
+                    self.file_schema.metadata.clone(),
+                ))
+            },
         )
     }
 
@@ -296,26 +302,13 @@ impl FileScanConfig {
         })
     }
 
-    #[allow(missing_docs)]
-    #[deprecated(since = "33.0.0", note = "Use SessionContext::new_with_config")]
-    pub fn repartition_file_groups(
-        file_groups: Vec<Vec<PartitionedFile>>,
-        target_partitions: usize,
-        repartition_file_min_size: usize,
-    ) -> Option<Vec<Vec<PartitionedFile>>> {
-        FileGroupPartitioner::new()
-            .with_target_partitions(target_partitions)
-            .with_repartition_file_min_size(repartition_file_min_size)
-            .repartition_file_groups(&file_groups)
-    }
-
     /// Attempts to do a bin-packing on files into file groups, such that any two files
     /// in a file group are ordered and non-overlapping with respect to their statistics.
     /// It will produce the smallest number of file groups possible.
     pub fn split_groups_by_statistics(
         table_schema: &SchemaRef,
         file_groups: &[Vec<PartitionedFile>],
-        sort_order: &[PhysicalSortExpr],
+        sort_order: LexOrderingRef,
     ) -> Result<Vec<Vec<PartitionedFile>>> {
         let flattened_files = file_groups.iter().flatten().collect::<Vec<_>>();
         // First Fit:
@@ -506,7 +499,7 @@ impl<T> ZeroBufferGenerator<T>
 where
     T: ArrowNativeType,
 {
-    const SIZE: usize = std::mem::size_of::<T>();
+    const SIZE: usize = size_of::<T>();
 
     fn get_buffer(&mut self, n_vals: usize) -> Buffer {
         match &mut self.cache {
@@ -908,7 +901,7 @@ mod tests {
             schema.clone(),
             Some(vec![0, 3, 5, schema.fields().len()]),
             Statistics::new_unknown(&schema),
-            to_partition_cols(partition_cols.clone()),
+            to_partition_cols(partition_cols),
         )
         .projected_file_schema();
 
@@ -941,7 +934,7 @@ mod tests {
             schema.clone(),
             None,
             Statistics::new_unknown(&schema),
-            to_partition_cols(partition_cols.clone()),
+            to_partition_cols(partition_cols),
         )
         .projected_file_schema();
 
@@ -979,7 +972,7 @@ mod tests {
             name: &'static str,
             file_schema: Schema,
             files: Vec<File>,
-            sort: Vec<datafusion_expr::Expr>,
+            sort: Vec<datafusion_expr::SortExpr>,
             expected_result: Result<Vec<Vec<&'static str>>, &'static str>,
         }
 

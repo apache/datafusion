@@ -1,0 +1,71 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# Use `interval` SQL literal syntax with MySQL dialect
+
+# this should fail with the generic dialect
+query error DataFusion error: Error during planning: Cannot coerce arithmetic expression Interval\(MonthDayNano\) \+ Utf8 to valid types
+select interval '1' + '1' month
+
+statement ok
+set datafusion.sql_parser.dialect = 'Mysql';
+
+# Interval with string literal addition and leading field
+query ?
+select interval '1' + '1' month
+----
+2 mons
+
+# Interval with nested string literal addition
+query ?
+select interval 1 + 1 + 1 month
+----
+3 mons
+
+# Interval with nested string literal addition and leading field
+query ?
+select interval '1' + '1' + '1' month
+----
+3 mons
+
+# Interval with string literal subtraction and leading field
+query ?
+select interval '5' - '1' - '2' year;
+----
+24 mons
+
+# Interval with nested string literal subtraction and leading field
+query ?
+select interval '10' - '1' - '1' month;
+----
+8 mons
+
+# Interval with string literal negation and leading field
+query ?
+select -interval '5' - '1' - '2' year;
+----
+-96 mons
+
+# Interval with nested string literal negation and leading field
+query ?
+select -interval '10' - '1' - '1' month;
+----
+-12 mons
+
+# revert to standard dialect
+statement ok
+set datafusion.sql_parser.dialect = 'Generic';

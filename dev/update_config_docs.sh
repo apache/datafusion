@@ -24,7 +24,7 @@ SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "${SOURCE_DIR}/../" && pwd
 
 TARGET_FILE="docs/source/user-guide/configs.md"
-PRINT_DOCS_COMMAND="cargo run --manifest-path datafusion/core/Cargo.toml --bin print_config_docs"
+PRINT_CONFIG_DOCS_COMMAND="cargo run --manifest-path datafusion/core/Cargo.toml --bin print_config_docs"
 
 echo "Inserting header"
 cat <<'EOF' > "$TARGET_FILE"
@@ -67,8 +67,8 @@ Environment variables are read during `SessionConfig` initialisation so they mus
 
 EOF
 
-echo "Running CLI and inserting docs table"
-$PRINT_DOCS_COMMAND >> "$TARGET_FILE"
+echo "Running CLI and inserting config docs table"
+$PRINT_CONFIG_DOCS_COMMAND >> "$TARGET_FILE"
 
 echo "Running prettier"
 npx prettier@2.3.2 --write "$TARGET_FILE"

@@ -20,7 +20,7 @@ use std::{
     str::FromStr,
 };
 
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Debug, Clone)]
 pub enum PoolType {
     Greedy,
     Fair,

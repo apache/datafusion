@@ -44,6 +44,10 @@ use datafusion_physical_expr::expressions::{cast, col, lit};
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
 use test_utils::add_empty_batches;
 
+use datafusion::functions_window::row_number::row_number_udwf;
+use datafusion_functions_window::lead_lag::{lag_udwf, lead_udwf};
+use datafusion_functions_window::rank::{dense_rank_udwf, rank_udwf};
+use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use hashbrown::HashMap;
 use rand::distributions::Alphanumeric;
 use rand::rngs::StdRng;
@@ -180,12 +184,10 @@ async fn bounded_window_causal_non_causal() -> Result<()> {
         //     ROWS BETWEEN UNBOUNDED PRECEDING AND <end_bound> PRECEDING/FOLLOWING
         // )
         (
-            // Window function
-            WindowFunctionDefinition::BuiltInWindowFunction(
-                BuiltInWindowFunction::RowNumber,
-            ),
+            // user-defined window function
+            WindowFunctionDefinition::WindowUDF(row_number_udwf()),
             // its name
-            "ROW_NUMBER",
+            "row_number",
             // no argument
             vec![],
             // Expected causality, for None cases causality will be determined from window frame boundaries
@@ -197,7 +199,7 @@ async fn bounded_window_causal_non_causal() -> Result<()> {
         // )
         (
             // Window function
-            WindowFunctionDefinition::BuiltInWindowFunction(BuiltInWindowFunction::Lag),
+            WindowFunctionDefinition::WindowUDF(lag_udwf()),
             // its name
             "LAG",
             // no argument
@@ -211,7 +213,7 @@ async fn bounded_window_causal_non_causal() -> Result<()> {
         // )
         (
             // Window function
-            WindowFunctionDefinition::BuiltInWindowFunction(BuiltInWindowFunction::Lead),
+            WindowFunctionDefinition::WindowUDF(lead_udwf()),
             // its name
             "LEAD",
             // no argument
@@ -225,9 +227,9 @@ async fn bounded_window_causal_non_causal() -> Result<()> {
         // )
         (
             // Window function
-            WindowFunctionDefinition::BuiltInWindowFunction(BuiltInWindowFunction::Rank),
+            WindowFunctionDefinition::WindowUDF(rank_udwf()),
             // its name
-            "RANK",
+            "rank",
             // no argument
             vec![],
             // Expected causality, for None cases causality will be determined from window frame boundaries
@@ -239,11 +241,9 @@ async fn bounded_window_causal_non_causal() -> Result<()> {
         // )
         (
             // Window function
-            WindowFunctionDefinition::BuiltInWindowFunction(
-                BuiltInWindowFunction::DenseRank,
-            ),
+            WindowFunctionDefinition::WindowUDF(dense_rank_udwf()),
             // its name
-            "DENSE_RANK",
+            "dense_rank",
             // no argument
             vec![],
             // Expected causality, for None cases causality will be determined from window frame boundaries
@@ -252,7 +252,7 @@ async fn bounded_window_causal_non_causal() -> Result<()> {
     ];
 
     let partitionby_exprs = vec![];
-    let orderby_exprs = vec![];
+    let orderby_exprs = LexOrdering::default();
     // Window frame starts with "UNBOUNDED PRECEDING":
     let start_bound = WindowFrameBound::Preceding(ScalarValue::UInt64(None));
 
@@ -285,7 +285,7 @@ async fn bounded_window_causal_non_causal() -> Result<()> {
                     fn_name.to_string(),
                     &args,
                     &partitionby_exprs,
-                    &orderby_exprs,
+                    orderby_exprs.as_ref(),
                     Arc::new(window_frame),
                     &extended_schema,
                     false,
@@ -294,7 +294,7 @@ async fn bounded_window_causal_non_causal() -> Result<()> {
                     vec![window_expr],
                     memory_exec.clone(),
                     vec![],
-                    InputOrderMode::Linear,
+                    Linear,
                 )?);
                 let task_ctx = ctx.task_ctx();
                 let mut collected_results =
@@ -377,36 +377,25 @@ fn get_random_function(
         window_fn_map.insert(
             "row_number",
             (
-                WindowFunctionDefinition::BuiltInWindowFunction(
-                    BuiltInWindowFunction::RowNumber,
-                ),
+                WindowFunctionDefinition::WindowUDF(row_number_udwf()),
                 vec![],
             ),
         );
         window_fn_map.insert(
             "rank",
-            (
-                WindowFunctionDefinition::BuiltInWindowFunction(
-                    BuiltInWindowFunction::Rank,
-                ),
-                vec![],
-            ),
+            (WindowFunctionDefinition::WindowUDF(rank_udwf()), vec![]),
         );
         window_fn_map.insert(
             "dense_rank",
             (
-                WindowFunctionDefinition::BuiltInWindowFunction(
-                    BuiltInWindowFunction::DenseRank,
-                ),
+                WindowFunctionDefinition::WindowUDF(dense_rank_udwf()),
                 vec![],
             ),
         );
         window_fn_map.insert(
             "lead",
             (
-                WindowFunctionDefinition::BuiltInWindowFunction(
-                    BuiltInWindowFunction::Lead,
-                ),
+                WindowFunctionDefinition::WindowUDF(lead_udwf()),
                 vec![
                     arg.clone(),
                     lit(ScalarValue::Int64(Some(rng.gen_range(1..10)))),
@@ -417,9 +406,7 @@ fn get_random_function(
         window_fn_map.insert(
             "lag",
             (
-                WindowFunctionDefinition::BuiltInWindowFunction(
-                    BuiltInWindowFunction::Lag,
-                ),
+                WindowFunctionDefinition::WindowUDF(lag_udwf()),
                 vec![
                     arg.clone(),
                     lit(ScalarValue::Int64(Some(rng.gen_range(1..10)))),
@@ -606,14 +593,14 @@ async fn run_window_test(
     orderby_columns: Vec<&str>,
     search_mode: InputOrderMode,
 ) -> Result<()> {
-    let is_linear = !matches!(search_mode, InputOrderMode::Sorted);
+    let is_linear = !matches!(search_mode, Sorted);
     let mut rng = StdRng::seed_from_u64(random_seed);
     let schema = input1[0].schema();
     let session_config = SessionConfig::new().with_batch_size(50);
     let ctx = SessionContext::new_with_config(session_config);
     let (window_fn, args, fn_name) = get_random_function(&schema, &mut rng, is_linear);
     let window_frame = get_random_window_frame(&mut rng, is_linear);
-    let mut orderby_exprs = vec![];
+    let mut orderby_exprs = LexOrdering::default();
     for column in &orderby_columns {
         orderby_exprs.push(PhysicalSortExpr {
             expr: col(column, &schema)?,
@@ -621,27 +608,27 @@ async fn run_window_test(
         })
     }
     if orderby_exprs.len() > 1 && !window_frame.can_accept_multi_orderby() {
-        orderby_exprs = orderby_exprs[0..1].to_vec();
+        orderby_exprs = LexOrdering::new(orderby_exprs[0..1].to_vec());
     }
     let mut partitionby_exprs = vec![];
     for column in &partition_by_columns {
         partitionby_exprs.push(col(column, &schema)?);
     }
-    let mut sort_keys = vec![];
+    let mut sort_keys = LexOrdering::default();
     for partition_by_expr in &partitionby_exprs {
         sort_keys.push(PhysicalSortExpr {
             expr: partition_by_expr.clone(),
             options: SortOptions::default(),
         })
     }
-    for order_by_expr in &orderby_exprs {
+    for order_by_expr in &orderby_exprs.inner {
         if !sort_keys.contains(order_by_expr) {
             sort_keys.push(order_by_expr.clone())
         }
     }
 
     let concat_input_record = concat_batches(&schema, &input1)?;
-    let source_sort_keys = vec![
+    let source_sort_keys = LexOrdering::new(vec![
         PhysicalSortExpr {
             expr: col("a", &schema)?,
             options: Default::default(),
@@ -654,10 +641,10 @@ async fn run_window_test(
             expr: col("c", &schema)?,
             options: Default::default(),
         },
-    ];
+    ]);
     let mut exec1 = Arc::new(
         MemoryExec::try_new(&[vec![concat_input_record]], schema.clone(), None)?
-            .with_sort_information(vec![source_sort_keys.clone()]),
+            .try_with_sort_information(vec![source_sort_keys.clone()])?,
     ) as _;
     // Table is ordered according to ORDER BY a, b, c In linear test we use PARTITION BY b, ORDER BY a
     // For WindowAggExec  to produce correct result it need table to be ordered by b,a. Hence add a sort.
@@ -673,7 +660,7 @@ async fn run_window_test(
             fn_name.clone(),
             &args,
             &partitionby_exprs,
-            &orderby_exprs,
+            orderby_exprs.as_ref(),
             Arc::new(window_frame.clone()),
             &extended_schema,
             false,
@@ -683,7 +670,7 @@ async fn run_window_test(
     )?) as _;
     let exec2 = Arc::new(
         MemoryExec::try_new(&[input1.clone()], schema.clone(), None)?
-            .with_sort_information(vec![source_sort_keys.clone()]),
+            .try_with_sort_information(vec![source_sort_keys.clone()])?,
     );
     let running_window_exec = Arc::new(BoundedWindowAggExec::try_new(
         vec![create_window_expr(
@@ -691,7 +678,7 @@ async fn run_window_test(
             fn_name,
             &args,
             &partitionby_exprs,
-            &orderby_exprs,
+            orderby_exprs.as_ref(),
             Arc::new(window_frame.clone()),
             &extended_schema,
             false,

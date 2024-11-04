@@ -38,7 +38,7 @@ type EquijoinPredicate = (Expr, Expr);
 /// has one equijoin predicate (`A.x = B.y`) and one filter predicate (`B.z > 50`).
 /// See [find_valid_equijoin_key_pair] for more information on what predicates
 /// are considered equijoins.
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct ExtractEquijoinPredicate;
 
 impl ExtractEquijoinPredicate {

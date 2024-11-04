@@ -24,7 +24,7 @@ use datafusion_expr::{
     Expr,
 };
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct UserDefinedFunctionPlanner;
 
 impl ExprPlanner for UserDefinedFunctionPlanner {

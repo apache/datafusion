@@ -32,9 +32,7 @@ use super::{
     DisplayAs, ExecutionPlanProperties, PlanProperties, RecordBatchStream,
     SendableRecordBatchStream, Statistics,
 };
-use crate::{
-    ColumnStatistics, DisplayFormatType, ExecutionPlan, Partitioning, PhysicalExpr,
-};
+use crate::{ColumnStatistics, DisplayFormatType, ExecutionPlan, PhysicalExpr};
 
 use arrow::datatypes::{Field, Schema, SchemaRef};
 use arrow::record_batch::{RecordBatch, RecordBatchOptions};
@@ -42,8 +40,9 @@ use datafusion_common::stats::Precision;
 use datafusion_common::Result;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::equivalence::ProjectionMapping;
-use datafusion_physical_expr::expressions::{Literal, UnKnownColumn};
+use datafusion_physical_expr::expressions::{CastExpr, Literal};
 
+use crate::execution_plan::CardinalityEffect;
 use futures::stream::{Stream, StreamExt};
 use log::trace;
 
@@ -91,7 +90,7 @@ impl ProjectionExec {
             input_schema.metadata().clone(),
         ));
 
-        // construct a map from the input expressions to the output expression of the Projection
+        // Construct a map from the input expressions to the output expression of the Projection
         let projection_mapping = ProjectionMapping::try_new(&expr, &input_schema)?;
         let cache =
             Self::compute_properties(&input, &projection_mapping, Arc::clone(&schema))?;
@@ -127,22 +126,8 @@ impl ProjectionExec {
 
         // Calculate output partitioning, which needs to respect aliases:
         let input_partition = input.output_partitioning();
-        let output_partitioning = if let Partitioning::Hash(exprs, part) = input_partition
-        {
-            let normalized_exprs = exprs
-                .iter()
-                .map(|expr| {
-                    input_eq_properties
-                        .project_expr(expr, projection_mapping)
-                        .unwrap_or_else(|| {
-                            Arc::new(UnKnownColumn::new(&expr.to_string()))
-                        })
-                })
-                .collect();
-            Partitioning::Hash(normalized_exprs, *part)
-        } else {
-            input_partition.clone()
-        };
+        let output_partitioning =
+            input_partition.project(projection_mapping, &input_eq_properties);
 
         Ok(PlanProperties::new(
             eq_properties,
@@ -198,7 +183,7 @@ impl ExecutionPlan for ProjectionExec {
     }
 
     fn maintains_input_order(&self) -> Vec<bool> {
-        // tell optimizer this operator doesn't reorder its input
+        // Tell optimizer this operator doesn't reorder its input
         vec![true]
     }
 
@@ -249,14 +234,22 @@ impl ExecutionPlan for ProjectionExec {
     fn supports_limit_pushdown(&self) -> bool {
         true
     }
+
+    fn cardinality_effect(&self) -> CardinalityEffect {
+        CardinalityEffect::Equal
+    }
 }
 
-/// If e is a direct column reference, returns the field level
+/// If 'e' is a direct column reference, returns the field level
 /// metadata for that field, if any. Otherwise returns None
-fn get_field_metadata(
+pub(crate) fn get_field_metadata(
     e: &Arc<dyn PhysicalExpr>,
     input_schema: &Schema,
 ) -> Option<HashMap<String, String>> {
+    if let Some(cast) = e.as_any().downcast_ref::<CastExpr>() {
+        return get_field_metadata(cast.expr(), input_schema);
+    }
+
     // Look up field by index in schema (not NAME as there can be more than one
     // column with the same name)
     e.as_any()
@@ -301,7 +294,7 @@ fn stats_projection(
 
 impl ProjectionStream {
     fn batch_project(&self, batch: &RecordBatch) -> Result<RecordBatch> {
-        // records time on drop
+        // Records time on drop
         let _timer = self.baseline_metrics.elapsed_compute().timer();
         let arrays = self
             .expr
@@ -347,7 +340,7 @@ impl Stream for ProjectionStream {
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
-        // same number of record batches
+        // Same number of record batches
         self.input.size_hint()
     }
 }
@@ -363,7 +356,6 @@ impl RecordBatchStream for ProjectionStream {
 mod tests {
     use super::*;
     use crate::common::collect;
-    use crate::expressions;
     use crate::test;
 
     use arrow_schema::DataType;
@@ -425,8 +417,8 @@ mod tests {
         let schema = get_schema();
 
         let exprs: Vec<Arc<dyn PhysicalExpr>> = vec![
-            Arc::new(expressions::Column::new("col1", 1)),
-            Arc::new(expressions::Column::new("col0", 0)),
+            Arc::new(Column::new("col1", 1)),
+            Arc::new(Column::new("col0", 0)),
         ];
 
         let result = stats_projection(source, exprs.into_iter(), Arc::new(schema));
@@ -459,8 +451,8 @@ mod tests {
         let schema = get_schema();
 
         let exprs: Vec<Arc<dyn PhysicalExpr>> = vec![
-            Arc::new(expressions::Column::new("col2", 2)),
-            Arc::new(expressions::Column::new("col0", 0)),
+            Arc::new(Column::new("col2", 2)),
+            Arc::new(Column::new("col0", 0)),
         ];
 
         let result = stats_projection(source, exprs.into_iter(), Arc::new(schema));

@@ -29,7 +29,7 @@ mod sp_repartition_fuzz_tests {
         metrics::{BaselineMetrics, ExecutionPlanMetricsSet},
         repartition::RepartitionExec,
         sorts::sort_preserving_merge::SortPreservingMergeExec,
-        sorts::streaming_merge::streaming_merge,
+        sorts::streaming_merge::StreamingMergeBuilder,
         stream::RecordBatchStreamAdapter,
         ExecutionPlan, Partitioning,
     };
@@ -45,6 +45,7 @@ mod sp_repartition_fuzz_tests {
     };
     use test_utils::add_empty_batches;
 
+    use datafusion_physical_expr_common::sort_expr::LexOrdering;
     use itertools::izip;
     use rand::{rngs::StdRng, seq::SliceRandom, Rng, SeedableRng};
 
@@ -80,7 +81,7 @@ mod sp_repartition_fuzz_tests {
         // Define a and f are aliases
         eq_properties.add_equal_conditions(col_a, col_f)?;
         // Column e has constant value.
-        eq_properties = eq_properties.add_constants([ConstExpr::from(col_e)]);
+        eq_properties = eq_properties.with_constants([ConstExpr::from(col_e)]);
 
         // Randomly order columns for sorting
         let mut rng = StdRng::seed_from_u64(seed);
@@ -174,7 +175,7 @@ mod sp_repartition_fuzz_tests {
                 })
                 .unzip();
 
-            let sort_arrs = arrow::compute::lexsort(&sort_columns, None)?;
+            let sort_arrs = lexsort(&sort_columns, None)?;
             for (idx, arr) in izip!(indices, sort_arrs) {
                 schema_vec[idx] = Some(arr);
             }
@@ -246,15 +247,14 @@ mod sp_repartition_fuzz_tests {
                 MemoryConsumer::new("test".to_string()).register(context.memory_pool());
 
             // Internally SortPreservingMergeExec uses this function for merging.
-            let res = streaming_merge(
-                streams,
-                schema,
-                &exprs,
-                BaselineMetrics::new(&ExecutionPlanMetricsSet::new(), 0),
-                1,
-                None,
-                mem_reservation,
-            )?;
+            let res = StreamingMergeBuilder::new()
+                .with_streams(streams)
+                .with_schema(schema)
+                .with_expressions(&exprs)
+                .with_metrics(BaselineMetrics::new(&ExecutionPlanMetricsSet::new(), 0))
+                .with_batch_size(1)
+                .with_reservation(mem_reservation)
+                .build()?;
             let res = collect(res).await?;
             // Contains the merged result.
             let res = concat_batches(&res[0].schema(), &res)?;
@@ -346,7 +346,7 @@ mod sp_repartition_fuzz_tests {
         let schema = input1[0].schema();
         let session_config = SessionConfig::new().with_batch_size(50);
         let ctx = SessionContext::new_with_config(session_config);
-        let mut sort_keys = vec![];
+        let mut sort_keys = LexOrdering::default();
         for ordering_col in ["a", "b", "c"] {
             sort_keys.push(PhysicalSortExpr {
                 expr: col(ordering_col, &schema).unwrap(),
@@ -359,7 +359,8 @@ mod sp_repartition_fuzz_tests {
         let running_source = Arc::new(
             MemoryExec::try_new(&[input1.clone()], schema.clone(), None)
                 .unwrap()
-                .with_sort_information(vec![sort_keys.clone()]),
+                .try_with_sort_information(vec![sort_keys.clone()])
+                .unwrap(),
         );
         let hash_exprs = vec![col("c", &schema).unwrap()];
 

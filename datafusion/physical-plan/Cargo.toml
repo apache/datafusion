@@ -51,11 +51,10 @@ datafusion-common = { workspace = true, default-features = true }
 datafusion-common-runtime = { workspace = true, default-features = true }
 datafusion-execution = { workspace = true }
 datafusion-expr = { workspace = true }
-datafusion-functions-aggregate = { workspace = true }
 datafusion-functions-aggregate-common = { workspace = true }
+datafusion-functions-window-common = { workspace = true }
 datafusion-physical-expr = { workspace = true, default-features = true }
 datafusion-physical-expr-common = { workspace = true }
-datafusion-physical-expr-functions-aggregate = { workspace = true }
 futures = { workspace = true }
 half = { workspace = true }
 hashbrown = { workspace = true }
@@ -69,6 +68,8 @@ rand = { workspace = true }
 tokio = { workspace = true }
 
 [dev-dependencies]
+criterion = { version = "0.5", features = ["async_futures"] }
+datafusion-functions-aggregate = { workspace = true }
 rstest = { workspace = true }
 rstest_reuse = "0.7.0"
 tokio = { workspace = true, features = [
@@ -76,3 +77,7 @@ tokio = { workspace = true, features = [
     "fs",
     "parking_lot",
 ] }
+
+[[bench]]
+harness = false
+name = "spm"

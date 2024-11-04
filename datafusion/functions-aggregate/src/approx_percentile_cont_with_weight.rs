@@ -17,7 +17,8 @@
 
 use std::any::Any;
 use std::fmt::{Debug, Formatter};
-use std::sync::Arc;
+use std::mem::size_of_val;
+use std::sync::{Arc, OnceLock};
 
 use arrow::{
     array::ArrayRef,
@@ -26,10 +27,13 @@ use arrow::{
 
 use datafusion_common::ScalarValue;
 use datafusion_common::{not_impl_err, plan_err, Result};
+use datafusion_expr::aggregate_doc_sections::DOC_SECTION_APPROXIMATE;
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::type_coercion::aggregates::NUMERICS;
 use datafusion_expr::Volatility::Immutable;
-use datafusion_expr::{Accumulator, AggregateUDFImpl, Signature, TypeSignature};
+use datafusion_expr::{
+    Accumulator, AggregateUDFImpl, Documentation, Signature, TypeSignature,
+};
 use datafusion_functions_aggregate_common::tdigest::{
     Centroid, TDigest, DEFAULT_MAX_SIZE,
 };
@@ -151,6 +155,37 @@ impl AggregateUDFImpl for ApproxPercentileContWithWeight {
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
         self.approx_percentile_cont.state_fields(args)
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_approx_percentile_cont_with_weight_doc())
+    }
+}
+
+static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+
+fn get_approx_percentile_cont_with_weight_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_APPROXIMATE)
+            .with_description(
+                "Returns the weighted approximate percentile of input values using the t-digest algorithm.",
+            )
+            .with_syntax_example("approx_percentile_cont_with_weight(expression, weight, percentile)")
+            .with_sql_example(r#"```sql
+> SELECT approx_percentile_cont_with_weight(column_name, weight_column, 0.90) FROM table_name;
++----------------------------------------------------------------------+
+| approx_percentile_cont_with_weight(column_name, weight_column, 0.90) |
++----------------------------------------------------------------------+
+| 78.5                                                                 |
++----------------------------------------------------------------------+
+```"#,
+            )
+            .with_standard_argument("expression", None)
+            .with_argument("weight", "Expression to use as weight. Can be a constant, column, or function, and any combination of arithmetic operators.")
+            .with_argument("percentile", "Percentile to compute. Must be a float value between 0 and 1 (inclusive).")
+            .build()
+            .unwrap()
+    })
 }
 
 #[derive(Debug)]
@@ -205,8 +240,7 @@ impl Accumulator for ApproxPercentileWithWeightAccumulator {
     }
 
     fn size(&self) -> usize {
-        std::mem::size_of_val(self)
-            - std::mem::size_of_val(&self.approx_percentile_cont_accumulator)
+        size_of_val(self) - size_of_val(&self.approx_percentile_cont_accumulator)
             + self.approx_percentile_cont_accumulator.size()
     }
 }

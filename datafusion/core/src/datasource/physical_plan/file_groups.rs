@@ -256,7 +256,7 @@ impl FileGroupPartitioner {
                 },
             )
             .flatten()
-            .group_by(|(partition_idx, _)| *partition_idx)
+            .chunk_by(|(partition_idx, _)| *partition_idx)
             .into_iter()
             .map(|(_, group)| group.map(|(_, vals)| vals).collect_vec())
             .collect_vec();
@@ -394,7 +394,7 @@ mod test {
     #[test]
     fn repartition_empty_file_only() {
         let partitioned_file_empty = pfile("empty", 0);
-        let file_group = vec![vec![partitioned_file_empty.clone()]];
+        let file_group = vec![vec![partitioned_file_empty]];
 
         let partitioned_files = FileGroupPartitioner::new()
             .with_target_partitions(4)
@@ -817,10 +817,7 @@ mod test {
             .with_preserve_order_within_groups(true)
             .repartition_file_groups(&file_groups);
 
-        assert_partitioned_files(
-            repartitioned.clone(),
-            repartitioned_preserving_sort.clone(),
-        );
+        assert_partitioned_files(repartitioned.clone(), repartitioned_preserving_sort);
         repartitioned
     }
 }

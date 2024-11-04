@@ -31,9 +31,11 @@ use datafusion::logical_expr::expr::{Exists, InSubquery, Sort};
 
 use datafusion::logical_expr::{
     expr::find_df_window_func, Aggregate, BinaryExpr, Case, EmptyRelation, Expr,
-    ExprSchemable, LogicalPlan, Operator, Projection, Values,
+    ExprSchemable, LogicalPlan, Operator, Projection, SortExpr, Values,
 };
+use substrait::proto::aggregate_rel::Grouping;
 use substrait::proto::expression::subquery::set_predicate::PredicateOp;
+use substrait::proto::expression_reference::ExprType;
 use url::Url;
 
 use crate::extensions::Extensions;
@@ -41,18 +43,21 @@ use crate::variation_const::{
     DATE_32_TYPE_VARIATION_REF, DATE_64_TYPE_VARIATION_REF,
     DECIMAL_128_TYPE_VARIATION_REF, DECIMAL_256_TYPE_VARIATION_REF,
     DEFAULT_CONTAINER_TYPE_VARIATION_REF, DEFAULT_TYPE_VARIATION_REF,
-    INTERVAL_MONTH_DAY_NANO_TYPE_NAME, LARGE_CONTAINER_TYPE_VARIATION_REF,
-    TIMESTAMP_MICRO_TYPE_VARIATION_REF, TIMESTAMP_MILLI_TYPE_VARIATION_REF,
-    TIMESTAMP_NANO_TYPE_VARIATION_REF, TIMESTAMP_SECOND_TYPE_VARIATION_REF,
-    UNSIGNED_INTEGER_TYPE_VARIATION_REF,
+    LARGE_CONTAINER_TYPE_VARIATION_REF, UNSIGNED_INTEGER_TYPE_VARIATION_REF,
+    VIEW_CONTAINER_TYPE_VARIATION_REF,
 };
 #[allow(deprecated)]
 use crate::variation_const::{
-    INTERVAL_DAY_TIME_TYPE_REF, INTERVAL_MONTH_DAY_NANO_TYPE_REF,
-    INTERVAL_YEAR_MONTH_TYPE_REF,
+    INTERVAL_DAY_TIME_TYPE_REF, INTERVAL_MONTH_DAY_NANO_TYPE_NAME,
+    INTERVAL_MONTH_DAY_NANO_TYPE_REF, INTERVAL_YEAR_MONTH_TYPE_REF,
+    TIMESTAMP_MICRO_TYPE_VARIATION_REF, TIMESTAMP_MILLI_TYPE_VARIATION_REF,
+    TIMESTAMP_NANO_TYPE_VARIATION_REF, TIMESTAMP_SECOND_TYPE_VARIATION_REF,
 };
 use datafusion::arrow::array::{new_empty_array, AsArray};
+use datafusion::arrow::temporal_conversions::NANOSECONDS;
 use datafusion::common::scalar::ScalarStructBuilder;
+use datafusion::dataframe::DataFrame;
+use datafusion::logical_expr::builder::project;
 use datafusion::logical_expr::expr::InList;
 use datafusion::logical_expr::{
     col, expr, Cast, Extension, GroupingSet, Like, LogicalPlanBuilder, Partitioning,
@@ -66,16 +71,18 @@ use datafusion::{
     prelude::{Column, SessionContext},
     scalar::ScalarValue,
 };
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::sync::Arc;
 use substrait::proto::exchange_rel::ExchangeKind;
 use substrait::proto::expression::literal::user_defined::Val;
 use substrait::proto::expression::literal::{
-    IntervalDayToSecond, IntervalYearToMonth, UserDefined,
+    interval_day_to_second, IntervalCompound, IntervalDayToSecond, IntervalYearToMonth,
+    UserDefined,
 };
 use substrait::proto::expression::subquery::SubqueryType;
-use substrait::proto::expression::{self, FieldReference, Literal, ScalarFunction};
+use substrait::proto::expression::{FieldReference, Literal, ScalarFunction};
 use substrait::proto::read_rel::local_files::file_or_files::PathType::UriFile;
+use substrait::proto::rel_common::{Emit, EmitKind};
 use substrait::proto::{
     aggregate_function::AggregationInvocation,
     expression::{
@@ -89,11 +96,18 @@ use substrait::proto::{
     join_rel, plan_rel, r#type,
     read_rel::ReadType,
     rel::RelType,
-    set_rel,
+    rel_common, set_rel,
     sort_field::{SortDirection, SortKind::*},
-    AggregateFunction, Expression, NamedStruct, Plan, Rel, Type,
+    AggregateFunction, Expression, NamedStruct, Plan, Rel, RelCommon, Type,
 };
-use substrait::proto::{FunctionArgument, SortField};
+use substrait::proto::{ExtendedExpression, FunctionArgument, SortField};
+
+// Substrait PrecisionTimestampTz indicates that the timestamp is relative to UTC, which
+// is the same as the expectation for any non-empty timezone in DF, so any non-empty timezone
+// results in correct points on the timeline, and we pick UTC as a reasonable default.
+// However, DF uses the timezone also for some arithmetic and display purposes (see e.g.
+// https://github.com/apache/arrow-rs/blob/ee5694078c86c8201549654246900a4232d531a9/arrow-cast/src/cast/mod.rs#L1749).
+const DEFAULT_TIMEZONE: &str = "UTC";
 
 pub fn name_to_op(name: &str) -> Option<Operator> {
     match name {
@@ -108,6 +122,7 @@ pub fn name_to_op(name: &str) -> Option<Operator> {
         "multiply" => Some(Operator::Multiply),
         "divide" => Some(Operator::Divide),
         "mod" => Some(Operator::Modulo),
+        "modulus" => Some(Operator::Modulo),
         "and" => Some(Operator::And),
         "or" => Some(Operator::Or),
         "is_distinct_from" => Some(Operator::IsDistinctFrom),
@@ -186,6 +201,65 @@ fn split_eq_and_noneq_join_predicate_with_nulls_equality(
     (accum_join_keys, nulls_equal_nulls, join_filter)
 }
 
+async fn union_rels(
+    rels: &[Rel],
+    ctx: &SessionContext,
+    extensions: &Extensions,
+    is_all: bool,
+) -> Result<LogicalPlan> {
+    let mut union_builder = Ok(LogicalPlanBuilder::from(
+        from_substrait_rel(ctx, &rels[0], extensions).await?,
+    ));
+    for input in &rels[1..] {
+        let rel_plan = from_substrait_rel(ctx, input, extensions).await?;
+
+        union_builder = if is_all {
+            union_builder?.union(rel_plan)
+        } else {
+            union_builder?.union_distinct(rel_plan)
+        };
+    }
+    union_builder?.build()
+}
+
+async fn intersect_rels(
+    rels: &[Rel],
+    ctx: &SessionContext,
+    extensions: &Extensions,
+    is_all: bool,
+) -> Result<LogicalPlan> {
+    let mut rel = from_substrait_rel(ctx, &rels[0], extensions).await?;
+
+    for input in &rels[1..] {
+        rel = LogicalPlanBuilder::intersect(
+            rel,
+            from_substrait_rel(ctx, input, extensions).await?,
+            is_all,
+        )?
+    }
+
+    Ok(rel)
+}
+
+async fn except_rels(
+    rels: &[Rel],
+    ctx: &SessionContext,
+    extensions: &Extensions,
+    is_all: bool,
+) -> Result<LogicalPlan> {
+    let mut rel = from_substrait_rel(ctx, &rels[0], extensions).await?;
+
+    for input in &rels[1..] {
+        rel = LogicalPlanBuilder::except(
+            rel,
+            from_substrait_rel(ctx, input, extensions).await?,
+            is_all,
+        )?
+    }
+
+    Ok(rel)
+}
+
 /// Convert Substrait Plan to DataFusion LogicalPlan
 pub async fn from_substrait_plan(
     ctx: &SessionContext,
@@ -216,18 +290,19 @@ pub async fn from_substrait_plan(
                             // Nothing to do if the schema is already equivalent
                             return Ok(plan);
                         }
-
                         match plan {
                             // If the last node of the plan produces expressions, bake the renames into those expressions.
                             // This isn't necessary for correctness, but helps with roundtrip tests.
-                            LogicalPlan::Projection(p) => Ok(LogicalPlan::Projection(Projection::try_new(rename_expressions(p.expr, p.input.schema(), &renamed_schema)?, p.input)?)),
+                            LogicalPlan::Projection(p) => Ok(LogicalPlan::Projection(Projection::try_new(rename_expressions(p.expr, p.input.schema(), renamed_schema.fields())?, p.input)?)),
                             LogicalPlan::Aggregate(a) => {
-                                let new_aggr_exprs = rename_expressions(a.aggr_expr, a.input.schema(), &renamed_schema)?;
-                                Ok(LogicalPlan::Aggregate(Aggregate::try_new(a.input, a.group_expr, new_aggr_exprs)?))
+                                let (group_fields, expr_fields) = renamed_schema.fields().split_at(a.group_expr.len());
+                                let new_group_exprs = rename_expressions(a.group_expr, a.input.schema(), group_fields)?;
+                                let new_aggr_exprs = rename_expressions(a.aggr_expr, a.input.schema(), expr_fields)?;
+                                Ok(LogicalPlan::Aggregate(Aggregate::try_new(a.input, new_group_exprs, new_aggr_exprs)?))
                             },
                             // There are probably more plans where we could bake things in, can add them later as needed.
                             // Otherwise, add a new Project to handle the renaming.
-                            _ => Ok(LogicalPlan::Projection(Projection::try_new(rename_expressions(plan.schema().columns().iter().map(|c| col(c.to_owned())), plan.schema(), &renamed_schema)?, Arc::new(plan))?))
+                            _ => Ok(LogicalPlan::Projection(Projection::try_new(rename_expressions(plan.schema().columns().iter().map(|c| col(c.to_owned())), plan.schema(), renamed_schema.fields())?, Arc::new(plan))?))
                         }
                     }
                 },
@@ -241,12 +316,86 @@ pub async fn from_substrait_plan(
     }
 }
 
-/// parse projection
-pub fn extract_projection(
-    t: LogicalPlan,
-    projection: &::core::option::Option<expression::MaskExpression>,
-) -> Result<LogicalPlan> {
-    match projection {
+/// An ExprContainer is a container for a collection of expressions with a common input schema
+///
+/// In addition, each expression is associated with a field, which defines the
+/// expression's output.  The data type and nullability of the field are calculated from the
+/// expression and the input schema.  However the names of the field (and its nested fields) are
+/// derived from the Substrait message.
+pub struct ExprContainer {
+    /// The input schema for the expressions
+    pub input_schema: DFSchemaRef,
+    /// The expressions
+    ///
+    /// Each item contains an expression and the field that defines the expected nullability and name of the expr's output
+    pub exprs: Vec<(Expr, Field)>,
+}
+
+/// Convert Substrait ExtendedExpression to ExprContainer
+///
+/// A Substrait ExtendedExpression message contains one or more expressions,
+/// with names for the outputs, and an input schema.  These pieces are all included
+/// in the ExprContainer.
+///
+/// This is a top-level message and can be used to send expressions (not plans)
+/// between systems.  This is often useful for scenarios like pushdown where filter
+/// expressions need to be sent to remote systems.
+pub async fn from_substrait_extended_expr(
+    ctx: &SessionContext,
+    extended_expr: &ExtendedExpression,
+) -> Result<ExprContainer> {
+    // Register function extension
+    let extensions = Extensions::try_from(&extended_expr.extensions)?;
+    if !extensions.type_variations.is_empty() {
+        return not_impl_err!("Type variation extensions are not supported");
+    }
+
+    let input_schema = DFSchemaRef::new(match &extended_expr.base_schema {
+        Some(base_schema) => from_substrait_named_struct(base_schema, &extensions),
+        None => {
+            plan_err!("required property `base_schema` missing from Substrait ExtendedExpression message")
+        }
+    }?);
+
+    // Parse expressions
+    let mut exprs = Vec::with_capacity(extended_expr.referred_expr.len());
+    for (expr_idx, substrait_expr) in extended_expr.referred_expr.iter().enumerate() {
+        let scalar_expr = match &substrait_expr.expr_type {
+            Some(ExprType::Expression(scalar_expr)) => Ok(scalar_expr),
+            Some(ExprType::Measure(_)) => {
+                not_impl_err!("Measure expressions are not yet supported")
+            }
+            None => {
+                plan_err!("required property `expr_type` missing from Substrait ExpressionReference message")
+            }
+        }?;
+        let expr =
+            from_substrait_rex(ctx, scalar_expr, &input_schema, &extensions).await?;
+        let (output_type, expected_nullability) =
+            expr.data_type_and_nullable(&input_schema)?;
+        let output_field = Field::new("", output_type, expected_nullability);
+        let mut names_idx = 0;
+        let output_field = rename_field(
+            &output_field,
+            &substrait_expr.output_names,
+            expr_idx,
+            &mut names_idx,
+            /*rename_self=*/ true,
+        )?;
+        exprs.push((expr, output_field));
+    }
+
+    Ok(ExprContainer {
+        input_schema,
+        exprs,
+    })
+}
+
+pub fn apply_masking(
+    schema: DFSchema,
+    mask_expression: &::core::option::Option<MaskExpression>,
+) -> Result<DFSchema> {
+    match mask_expression {
         Some(MaskExpression { select, .. }) => match &select.as_ref() {
             Some(projection) => {
                 let column_indices: Vec<usize> = projection
@@ -254,27 +403,23 @@ pub fn extract_projection(
                     .iter()
                     .map(|item| item.field as usize)
                     .collect();
-                match t {
-                    LogicalPlan::TableScan(mut scan) => {
-                        let fields = column_indices
-                            .iter()
-                            .map(|i| scan.projected_schema.qualified_field(*i))
-                            .map(|(qualifier, field)| {
-                                (qualifier.cloned(), Arc::new(field.clone()))
-                            })
-                            .collect();
-                        scan.projection = Some(column_indices);
-                        scan.projected_schema = DFSchemaRef::new(
-                            DFSchema::new_with_metadata(fields, HashMap::new())?,
-                        );
-                        Ok(LogicalPlan::TableScan(scan))
-                    }
-                    _ => plan_err!("unexpected plan for table"),
-                }
+
+                let fields = column_indices
+                    .iter()
+                    .map(|i| schema.qualified_field(*i))
+                    .map(|(qualifier, field)| {
+                        (qualifier.cloned(), Arc::new(field.clone()))
+                    })
+                    .collect();
+
+                Ok(DFSchema::new_with_metadata(
+                    fields,
+                    schema.metadata().clone(),
+                )?)
             }
-            _ => Ok(t),
+            None => Ok(schema),
         },
-        _ => Ok(t),
+        None => Ok(schema),
     }
 }
 
@@ -285,11 +430,11 @@ pub fn extract_projection(
 fn rename_expressions(
     exprs: impl IntoIterator<Item = Expr>,
     input_schema: &DFSchema,
-    new_schema: &DFSchema,
+    new_schema_fields: &[Arc<Field>],
 ) -> Result<Vec<Expr>> {
     exprs
         .into_iter()
-        .zip(new_schema.fields())
+        .zip(new_schema_fields)
         .map(|(old_expr, new_field)| {
             // Check if type (i.e. nested struct field names) match, use Cast to rename if needed
             let new_expr = if &old_expr.get_type(input_schema)? != new_field.data_type() {
@@ -310,6 +455,68 @@ fn rename_expressions(
         .collect()
 }
 
+fn rename_field(
+    field: &Field,
+    dfs_names: &Vec<String>,
+    unnamed_field_suffix: usize, // If Substrait doesn't provide a name, we'll use this "c{unnamed_field_suffix}"
+    name_idx: &mut usize,        // Index into dfs_names
+    rename_self: bool, // Some fields (e.g. list items) don't have names in Substrait and this will be false to keep old name
+) -> Result<Field> {
+    let name = if rename_self {
+        next_struct_field_name(unnamed_field_suffix, dfs_names, name_idx)?
+    } else {
+        field.name().to_string()
+    };
+    match field.data_type() {
+        DataType::Struct(children) => {
+            let children = children
+                .iter()
+                .enumerate()
+                .map(|(child_idx, f)| {
+                    rename_field(
+                        f.as_ref(),
+                        dfs_names,
+                        child_idx,
+                        name_idx,
+                        /*rename_self=*/ true,
+                    )
+                })
+                .collect::<Result<_>>()?;
+            Ok(field
+                .to_owned()
+                .with_name(name)
+                .with_data_type(DataType::Struct(children)))
+        }
+        DataType::List(inner) => {
+            let renamed_inner = rename_field(
+                inner.as_ref(),
+                dfs_names,
+                0,
+                name_idx,
+                /*rename_self=*/ false,
+            )?;
+            Ok(field
+                .to_owned()
+                .with_data_type(DataType::List(FieldRef::new(renamed_inner)))
+                .with_name(name))
+        }
+        DataType::LargeList(inner) => {
+            let renamed_inner = rename_field(
+                inner.as_ref(),
+                dfs_names,
+                0,
+                name_idx,
+                /*rename_self= */ false,
+            )?;
+            Ok(field
+                .to_owned()
+                .with_data_type(DataType::LargeList(FieldRef::new(renamed_inner)))
+                .with_name(name))
+        }
+        _ => Ok(field.to_owned().with_name(name)),
+    }
+}
+
 /// Produce a version of the given schema with names matching the given list of names.
 /// Substrait doesn't deal with column (incl. nested struct field) names within the schema,
 /// but it does give us the list of expected names at the end of the plan, so we use this
@@ -318,59 +525,20 @@ fn make_renamed_schema(
     schema: &DFSchemaRef,
     dfs_names: &Vec<String>,
 ) -> Result<DFSchema> {
-    fn rename_inner_fields(
-        dtype: &DataType,
-        dfs_names: &Vec<String>,
-        name_idx: &mut usize,
-    ) -> Result<DataType> {
-        match dtype {
-            DataType::Struct(fields) => {
-                let fields = fields
-                    .iter()
-                    .map(|f| {
-                        let name = next_struct_field_name(0, dfs_names, name_idx)?;
-                        Ok((**f).to_owned().with_name(name).with_data_type(
-                            rename_inner_fields(f.data_type(), dfs_names, name_idx)?,
-                        ))
-                    })
-                    .collect::<Result<_>>()?;
-                Ok(DataType::Struct(fields))
-            }
-            DataType::List(inner) => Ok(DataType::List(FieldRef::new(
-                (**inner).to_owned().with_data_type(rename_inner_fields(
-                    inner.data_type(),
-                    dfs_names,
-                    name_idx,
-                )?),
-            ))),
-            DataType::LargeList(inner) => Ok(DataType::LargeList(FieldRef::new(
-                (**inner).to_owned().with_data_type(rename_inner_fields(
-                    inner.data_type(),
-                    dfs_names,
-                    name_idx,
-                )?),
-            ))),
-            _ => Ok(dtype.to_owned()),
-        }
-    }
-
     let mut name_idx = 0;
 
     let (qualifiers, fields): (_, Vec<Field>) = schema
         .iter()
-        .map(|(q, f)| {
-            let name = next_struct_field_name(0, dfs_names, &mut name_idx)?;
-            Ok((
-                q.cloned(),
-                (**f)
-                    .to_owned()
-                    .with_name(name)
-                    .with_data_type(rename_inner_fields(
-                        f.data_type(),
-                        dfs_names,
-                        &mut name_idx,
-                    )?),
-            ))
+        .enumerate()
+        .map(|(field_idx, (q, f))| {
+            let renamed_f = rename_field(
+                f.as_ref(),
+                dfs_names,
+                field_idx,
+                &mut name_idx,
+                /*rename_self=*/ true,
+            )?;
+            Ok((q.cloned(), renamed_f))
         })
         .collect::<Result<Vec<_>>>()?
         .into_iter()
@@ -390,48 +558,58 @@ fn make_renamed_schema(
 }
 
 /// Convert Substrait Rel to DataFusion DataFrame
+#[allow(deprecated)]
 #[async_recursion]
 pub async fn from_substrait_rel(
     ctx: &SessionContext,
     rel: &Rel,
     extensions: &Extensions,
 ) -> Result<LogicalPlan> {
-    match &rel.rel_type {
+    let plan: Result<LogicalPlan> = match &rel.rel_type {
         Some(RelType::Project(p)) => {
             if let Some(input) = p.input.as_ref() {
                 let mut input = LogicalPlanBuilder::from(
                     from_substrait_rel(ctx, input, extensions).await?,
                 );
-                let mut names: HashSet<String> = HashSet::new();
-                let mut exprs: Vec<Expr> = vec![];
-                for e in &p.expressions {
-                    let x =
-                        from_substrait_rex(ctx, e, input.clone().schema(), extensions)
+                let original_schema = input.schema().clone();
+
+                // Ensure that all expressions have a unique display name, so that
+                // validate_unique_names does not fail when constructing the project.
+                let mut name_tracker = NameTracker::new();
+
+                // By default, a Substrait Project emits all inputs fields followed by all expressions.
+                // We build the explicit expressions first, and then the input expressions to avoid
+                // adding aliases to the explicit expressions (as part of ensuring unique names).
+                //
+                // This is helpful for plan visualization and tests, because when DataFusion produces
+                // Substrait Projects it adds an output mapping that excludes all input columns
+                // leaving only explicit expressions.
+
+                let mut explicit_exprs: Vec<Expr> = vec![];
+                for expr in &p.expressions {
+                    let e =
+                        from_substrait_rex(ctx, expr, input.clone().schema(), extensions)
                             .await?;
                     // if the expression is WindowFunction, wrap in a Window relation
-                    if let Expr::WindowFunction(_) = &x {
+                    if let Expr::WindowFunction(_) = &e {
                         // Adding the same expression here and in the project below
                         // works because the project's builder uses columnize_expr(..)
                         // to transform it into a column reference
-                        input = input.window(vec![x.clone()])?
+                        input = input.window(vec![e.clone()])?
                     }
-                    // Ensure the expression has a unique display name, so that project's
-                    // validate_unique_names doesn't fail
-                    let name = x.schema_name().to_string();
-                    let mut new_name = name.clone();
-                    let mut i = 0;
-                    while names.contains(&new_name) {
-                        new_name = format!("{}__temp__{}", name, i);
-                        i += 1;
-                    }
-                    if new_name != name {
-                        exprs.push(x.alias(new_name.clone()));
-                    } else {
-                        exprs.push(x);
-                    }
-                    names.insert(new_name);
+                    explicit_exprs.push(name_tracker.get_uniquely_named_expr(e)?);
                 }
-                input.project(exprs)?.build()
+
+                let mut final_exprs: Vec<Expr> = vec![];
+                for index in 0..original_schema.fields().len() {
+                    let e = Expr::Column(Column::from(
+                        original_schema.qualified_field(index),
+                    ));
+                    final_exprs.push(name_tracker.get_uniquely_named_expr(e)?);
+                }
+                final_exprs.append(&mut explicit_exprs);
+
+                input.project(final_exprs)?.build()
             } else {
                 not_impl_err!("Projection without an input is not supported")
             }
@@ -459,8 +637,8 @@ pub async fn from_substrait_rel(
                     from_substrait_rel(ctx, input, extensions).await?,
                 );
                 let offset = fetch.offset as usize;
-                // Since protobuf can't directly distinguish `None` vs `0` `None` is encoded as `MAX`
-                let count = if fetch.count as usize == usize::MAX {
+                // -1 means that ALL records should be returned
+                let count = if fetch.count == -1 {
                     None
                 } else {
                     Some(fetch.count as usize)
@@ -488,39 +666,48 @@ pub async fn from_substrait_rel(
                 let input = LogicalPlanBuilder::from(
                     from_substrait_rel(ctx, input, extensions).await?,
                 );
-                let mut group_expr = vec![];
-                let mut aggr_expr = vec![];
+                let mut ref_group_exprs = vec![];
+
+                for e in &agg.grouping_expressions {
+                    let x =
+                        from_substrait_rex(ctx, e, input.schema(), extensions).await?;
+                    ref_group_exprs.push(x);
+                }
+
+                let mut group_exprs = vec![];
+                let mut aggr_exprs = vec![];
 
                 match agg.groupings.len() {
                     1 => {
-                        for e in &agg.groupings[0].grouping_expressions {
-                            let x =
-                                from_substrait_rex(ctx, e, input.schema(), extensions)
-                                    .await?;
-                            group_expr.push(x);
-                        }
+                        group_exprs.extend_from_slice(
+                            &from_substrait_grouping(
+                                ctx,
+                                &agg.groupings[0],
+                                &ref_group_exprs,
+                                input.schema(),
+                                extensions,
+                            )
+                            .await?,
+                        );
                     }
                     _ => {
                         let mut grouping_sets = vec![];
                         for grouping in &agg.groupings {
-                            let mut grouping_set = vec![];
-                            for e in &grouping.grouping_expressions {
-                                let x = from_substrait_rex(
-                                    ctx,
-                                    e,
-                                    input.schema(),
-                                    extensions,
-                                )
-                                .await?;
-                                grouping_set.push(x);
-                            }
+                            let grouping_set = from_substrait_grouping(
+                                ctx,
+                                grouping,
+                                &ref_group_exprs,
+                                input.schema(),
+                                extensions,
+                            )
+                            .await?;
                             grouping_sets.push(grouping_set);
                         }
                         // Single-element grouping expression of type Expr::GroupingSet.
                         // Note that GroupingSet::Rollup would become GroupingSet::GroupingSets, when
                         // parsed by the producer and consumer, since Substrait does not have a type dedicated
                         // to ROLLUP. Only vector of Groupings (grouping sets) is available.
-                        group_expr.push(Expr::GroupingSet(GroupingSet::GroupingSets(
+                        group_exprs.push(Expr::GroupingSet(GroupingSet::GroupingSets(
                             grouping_sets,
                         )));
                     }
@@ -549,14 +736,27 @@ pub async fn from_substrait_rel(
                                 }
                                 _ => false,
                             };
+                            let order_by = if !f.sorts.is_empty() {
+                                Some(
+                                    from_substrait_sorts(
+                                        ctx,
+                                        &f.sorts,
+                                        input.schema(),
+                                        extensions,
+                                    )
+                                    .await?,
+                                )
+                            } else {
+                                None
+                            };
+
                             from_substrait_agg_func(
                                 ctx,
                                 f,
                                 input.schema(),
                                 extensions,
                                 filter,
-                                // TODO: Add parsing of order_by also
-                                None,
+                                order_by,
                                 distinct,
                             )
                             .await
@@ -565,9 +765,9 @@ pub async fn from_substrait_rel(
                             "Aggregate without aggregate function is not supported"
                         ),
                     };
-                    aggr_expr.push(agg_func?.as_ref().clone());
+                    aggr_exprs.push(agg_func?.as_ref().clone());
                 }
-                input.aggregate(group_expr, aggr_expr)?.build()
+                input.aggregate(group_exprs, aggr_exprs)?.build()
             } else {
                 not_impl_err!("Aggregate without an input is not valid")
             }
@@ -616,7 +816,17 @@ pub async fn from_substrait_rel(
                     )?
                     .build()
                 }
-                None => plan_err!("JoinRel without join condition is not allowed"),
+                None => {
+                    let on: Vec<String> = vec![];
+                    left.join_detailed(
+                        right.build()?,
+                        join_type,
+                        (on.clone(), on),
+                        None,
+                        false,
+                    )?
+                    .build()
+                }
             }
         }
         Some(RelType::Cross(cross)) => {
@@ -630,44 +840,61 @@ pub async fn from_substrait_rel(
             let (left, right) = requalify_sides_if_needed(left, right)?;
             left.cross_join(right.build()?)?.build()
         }
-        Some(RelType::Read(read)) => match &read.as_ref().read_type {
-            Some(ReadType::NamedTable(nt)) => {
-                let table_reference = match nt.names.len() {
-                    0 => {
-                        return plan_err!("No table name found in NamedTable");
-                    }
-                    1 => TableReference::Bare {
-                        table: nt.names[0].clone().into(),
-                    },
-                    2 => TableReference::Partial {
-                        schema: nt.names[0].clone().into(),
-                        table: nt.names[1].clone().into(),
-                    },
-                    _ => TableReference::Full {
-                        catalog: nt.names[0].clone().into(),
-                        schema: nt.names[1].clone().into(),
-                        table: nt.names[2].clone().into(),
-                    },
-                };
-                let t = ctx.table(table_reference).await?;
-                let t = t.into_optimized_plan()?;
-                extract_projection(t, &read.projection)
+        Some(RelType::Read(read)) => {
+            fn read_with_schema(
+                df: DataFrame,
+                schema: DFSchema,
+                projection: &Option<MaskExpression>,
+            ) -> Result<LogicalPlan> {
+                ensure_schema_compatability(df.schema().to_owned(), schema.clone())?;
+
+                let schema = apply_masking(schema, projection)?;
+
+                apply_projection(df, schema)
             }
-            Some(ReadType::VirtualTable(vt)) => {
-                let base_schema = read.base_schema.as_ref().ok_or_else(|| {
-                    substrait_datafusion_err!("No base schema provided for Virtual Table")
-                })?;
 
-                let schema = from_substrait_named_struct(base_schema, extensions)?;
+            let named_struct = read.base_schema.as_ref().ok_or_else(|| {
+                substrait_datafusion_err!("No base schema provided for Read Relation")
+            })?;
 
-                if vt.values.is_empty() {
-                    return Ok(LogicalPlan::EmptyRelation(EmptyRelation {
-                        produce_one_row: false,
-                        schema,
-                    }));
+            let substrait_schema = from_substrait_named_struct(named_struct, extensions)?;
+
+            match &read.as_ref().read_type {
+                Some(ReadType::NamedTable(nt)) => {
+                    let table_reference = match nt.names.len() {
+                        0 => {
+                            return plan_err!("No table name found in NamedTable");
+                        }
+                        1 => TableReference::Bare {
+                            table: nt.names[0].clone().into(),
+                        },
+                        2 => TableReference::Partial {
+                            schema: nt.names[0].clone().into(),
+                            table: nt.names[1].clone().into(),
+                        },
+                        _ => TableReference::Full {
+                            catalog: nt.names[0].clone().into(),
+                            schema: nt.names[1].clone().into(),
+                            table: nt.names[2].clone().into(),
+                        },
+                    };
+
+                    let t = ctx.table(table_reference.clone()).await?;
+
+                    let substrait_schema =
+                        substrait_schema.replace_qualifier(table_reference);
+
+                    read_with_schema(t, substrait_schema, &read.projection)
                 }
+                Some(ReadType::VirtualTable(vt)) => {
+                    if vt.values.is_empty() {
+                        return Ok(LogicalPlan::EmptyRelation(EmptyRelation {
+                            produce_one_row: false,
+                            schema: DFSchemaRef::new(substrait_schema),
+                        }));
+                    }
 
-                let values = vt
+                    let values = vt
                     .values
                     .iter()
                     .map(|row| {
@@ -680,79 +907,108 @@ pub async fn from_substrait_rel(
                                 Ok(Expr::Literal(from_substrait_literal(
                                     lit,
                                     extensions,
-                                    &base_schema.names,
+                                    &named_struct.names,
                                     &mut name_idx,
                                 )?))
                             })
                             .collect::<Result<_>>()?;
-                        if name_idx != base_schema.names.len() {
+                        if name_idx != named_struct.names.len() {
                             return substrait_err!(
                                 "Names list must match exactly to nested schema, but found {} uses for {} names",
                                 name_idx,
-                                base_schema.names.len()
+                                named_struct.names.len()
                             );
                         }
                         Ok(lits)
                     })
                     .collect::<Result<_>>()?;
 
-                Ok(LogicalPlan::Values(Values { schema, values }))
-            }
-            Some(ReadType::LocalFiles(lf)) => {
-                fn extract_filename(name: &str) -> Option<String> {
-                    let corrected_url =
-                        if name.starts_with("file://") && !name.starts_with("file:///") {
+                    Ok(LogicalPlan::Values(Values {
+                        schema: DFSchemaRef::new(substrait_schema),
+                        values,
+                    }))
+                }
+                Some(ReadType::LocalFiles(lf)) => {
+                    fn extract_filename(name: &str) -> Option<String> {
+                        let corrected_url = if name.starts_with("file://")
+                            && !name.starts_with("file:///")
+                        {
                             name.replacen("file://", "file:///", 1)
                         } else {
                             name.to_string()
                         };
 
-                    Url::parse(&corrected_url).ok().and_then(|url| {
-                        let path = url.path();
-                        std::path::Path::new(path)
-                            .file_name()
-                            .map(|filename| filename.to_string_lossy().to_string())
-                    })
-                }
+                        Url::parse(&corrected_url).ok().and_then(|url| {
+                            let path = url.path();
+                            std::path::Path::new(path)
+                                .file_name()
+                                .map(|filename| filename.to_string_lossy().to_string())
+                        })
+                    }
 
-                // we could use the file name to check the original table provider
-                // TODO: currently does not support multiple local files
-                let filename: Option<String> =
-                    lf.items.first().and_then(|x| match x.path_type.as_ref() {
-                        Some(UriFile(name)) => extract_filename(name),
-                        _ => None,
-                    });
+                    // we could use the file name to check the original table provider
+                    // TODO: currently does not support multiple local files
+                    let filename: Option<String> =
+                        lf.items.first().and_then(|x| match x.path_type.as_ref() {
+                            Some(UriFile(name)) => extract_filename(name),
+                            _ => None,
+                        });
 
-                if lf.items.len() > 1 || filename.is_none() {
-                    return not_impl_err!("Only single file reads are supported");
+                    if lf.items.len() > 1 || filename.is_none() {
+                        return not_impl_err!("Only single file reads are supported");
+                    }
+                    let name = filename.unwrap();
+                    // directly use unwrap here since we could determine it is a valid one
+                    let table_reference = TableReference::Bare { table: name.into() };
+                    let t = ctx.table(table_reference.clone()).await?;
+
+                    let substrait_schema =
+                        substrait_schema.replace_qualifier(table_reference);
+
+                    read_with_schema(t, substrait_schema, &read.projection)
                 }
-                let name = filename.unwrap();
-                // directly use unwrap here since we could determine it is a valid one
-                let table_reference = TableReference::Bare { table: name.into() };
-                let t = ctx.table(table_reference).await?;
-                let t = t.into_optimized_plan()?;
-                extract_projection(t, &read.projection)
+                _ => {
+                    not_impl_err!("Unsupported ReadType: {:?}", &read.as_ref().read_type)
+                }
             }
-            _ => not_impl_err!("Unsupported ReadType: {:?}", &read.as_ref().read_type),
-        },
+        }
         Some(RelType::Set(set)) => match set_rel::SetOp::try_from(set.op) {
-            Ok(set_op) => match set_op {
-                set_rel::SetOp::UnionAll => {
-                    if !set.inputs.is_empty() {
-                        let mut union_builder = Ok(LogicalPlanBuilder::from(
-                            from_substrait_rel(ctx, &set.inputs[0], extensions).await?,
-                        ));
-                        for input in &set.inputs[1..] {
-                            union_builder = union_builder?
-                                .union(from_substrait_rel(ctx, input, extensions).await?);
+            Ok(set_op) => {
+                if set.inputs.len() < 2 {
+                    substrait_err!("Set operation requires at least two inputs")
+                } else {
+                    match set_op {
+                        set_rel::SetOp::UnionAll => {
+                            union_rels(&set.inputs, ctx, extensions, true).await
                         }
-                        union_builder?.build()
-                    } else {
-                        not_impl_err!("Union relation requires at least one input")
+                        set_rel::SetOp::UnionDistinct => {
+                            union_rels(&set.inputs, ctx, extensions, false).await
+                        }
+                        set_rel::SetOp::IntersectionPrimary => {
+                            LogicalPlanBuilder::intersect(
+                                from_substrait_rel(ctx, &set.inputs[0], extensions)
+                                    .await?,
+                                union_rels(&set.inputs[1..], ctx, extensions, true)
+                                    .await?,
+                                false,
+                            )
+                        }
+                        set_rel::SetOp::IntersectionMultiset => {
+                            intersect_rels(&set.inputs, ctx, extensions, false).await
+                        }
+                        set_rel::SetOp::IntersectionMultisetAll => {
+                            intersect_rels(&set.inputs, ctx, extensions, true).await
+                        }
+                        set_rel::SetOp::MinusPrimary => {
+                            except_rels(&set.inputs, ctx, extensions, false).await
+                        }
+                        set_rel::SetOp::MinusPrimaryAll => {
+                            except_rels(&set.inputs, ctx, extensions, true).await
+                        }
+                        _ => not_impl_err!("Unsupported set operator: {set_op:?}"),
                     }
                 }
-                _ => not_impl_err!("Unsupported set operator: {set_op:?}"),
-            },
+            }
             Err(e) => not_impl_err!("Invalid set operation type {}: {e}", set.op),
         },
         Some(RelType::ExtensionLeaf(extension)) => {
@@ -839,7 +1095,251 @@ pub async fn from_substrait_rel(
             }))
         }
         _ => not_impl_err!("Unsupported RelType: {:?}", rel.rel_type),
+    };
+    apply_emit_kind(retrieve_rel_common(rel), plan?)
+}
+
+fn retrieve_rel_common(rel: &Rel) -> Option<&RelCommon> {
+    match rel.rel_type.as_ref() {
+        None => None,
+        Some(rt) => match rt {
+            RelType::Read(r) => r.common.as_ref(),
+            RelType::Filter(f) => f.common.as_ref(),
+            RelType::Fetch(f) => f.common.as_ref(),
+            RelType::Aggregate(a) => a.common.as_ref(),
+            RelType::Sort(s) => s.common.as_ref(),
+            RelType::Join(j) => j.common.as_ref(),
+            RelType::Project(p) => p.common.as_ref(),
+            RelType::Set(s) => s.common.as_ref(),
+            RelType::ExtensionSingle(e) => e.common.as_ref(),
+            RelType::ExtensionMulti(e) => e.common.as_ref(),
+            RelType::ExtensionLeaf(e) => e.common.as_ref(),
+            RelType::Cross(c) => c.common.as_ref(),
+            RelType::Reference(_) => None,
+            RelType::Write(w) => w.common.as_ref(),
+            RelType::Ddl(d) => d.common.as_ref(),
+            RelType::HashJoin(j) => j.common.as_ref(),
+            RelType::MergeJoin(j) => j.common.as_ref(),
+            RelType::NestedLoopJoin(j) => j.common.as_ref(),
+            RelType::Window(w) => w.common.as_ref(),
+            RelType::Exchange(e) => e.common.as_ref(),
+            RelType::Expand(e) => e.common.as_ref(),
+        },
     }
+}
+
+fn retrieve_emit_kind(rel_common: Option<&RelCommon>) -> EmitKind {
+    // the default EmitKind is Direct if it is not set explicitly
+    let default = EmitKind::Direct(rel_common::Direct {});
+    rel_common
+        .and_then(|rc| rc.emit_kind.as_ref())
+        .map_or(default, |ek| ek.clone())
+}
+
+fn contains_volatile_expr(proj: &Projection) -> bool {
+    proj.expr.iter().any(|e| e.is_volatile())
+}
+
+fn apply_emit_kind(
+    rel_common: Option<&RelCommon>,
+    plan: LogicalPlan,
+) -> Result<LogicalPlan> {
+    match retrieve_emit_kind(rel_common) {
+        EmitKind::Direct(_) => Ok(plan),
+        EmitKind::Emit(Emit { output_mapping }) => {
+            // It is valid to reference the same field multiple times in the Emit
+            // In this case, we need to provide unique names to avoid collisions
+            let mut name_tracker = NameTracker::new();
+            match plan {
+                // To avoid adding a projection on top of a projection, we apply special case
+                // handling to flatten Substrait Emits. This is only applicable if none of the
+                // expressions in the projection are volatile. This is to avoid issues like
+                // converting a single call of the random() function into multiple calls due to
+                // duplicate fields in the output_mapping.
+                LogicalPlan::Projection(proj) if !contains_volatile_expr(&proj) => {
+                    let mut exprs: Vec<Expr> = vec![];
+                    for field in output_mapping {
+                        let expr = proj.expr
+                            .get(field as usize)
+                            .ok_or_else(|| substrait_datafusion_err!(
+                                  "Emit output field {} cannot be resolved in input schema {}",
+                                  field, proj.input.schema().clone()
+                                ))?;
+                        exprs.push(name_tracker.get_uniquely_named_expr(expr.clone())?);
+                    }
+
+                    let input = Arc::unwrap_or_clone(proj.input);
+                    project(input, exprs)
+                }
+                // Otherwise we just handle the output_mapping as a projection
+                _ => {
+                    let input_schema = plan.schema();
+
+                    let mut exprs: Vec<Expr> = vec![];
+                    for index in output_mapping.into_iter() {
+                        let column = Expr::Column(Column::from(
+                            input_schema.qualified_field(index as usize),
+                        ));
+                        let expr = name_tracker.get_uniquely_named_expr(column)?;
+                        exprs.push(expr);
+                    }
+
+                    project(plan, exprs)
+                }
+            }
+        }
+    }
+}
+
+struct NameTracker {
+    seen_names: HashSet<String>,
+}
+
+enum NameTrackerStatus {
+    NeverSeen,
+    SeenBefore,
+}
+
+impl NameTracker {
+    fn new() -> Self {
+        NameTracker {
+            seen_names: HashSet::default(),
+        }
+    }
+    fn get_unique_name(&mut self, name: String) -> (String, NameTrackerStatus) {
+        match self.seen_names.insert(name.clone()) {
+            true => (name, NameTrackerStatus::NeverSeen),
+            false => {
+                let mut counter = 0;
+                loop {
+                    let candidate_name = format!("{}__temp__{}", name, counter);
+                    if self.seen_names.insert(candidate_name.clone()) {
+                        return (candidate_name, NameTrackerStatus::SeenBefore);
+                    }
+                    counter += 1;
+                }
+            }
+        }
+    }
+
+    fn get_uniquely_named_expr(&mut self, expr: Expr) -> Result<Expr> {
+        match self.get_unique_name(expr.name_for_alias()?) {
+            (_, NameTrackerStatus::NeverSeen) => Ok(expr),
+            (name, NameTrackerStatus::SeenBefore) => Ok(expr.alias(name)),
+        }
+    }
+}
+
+/// Ensures that the given Substrait schema is compatible with the schema as given by DataFusion
+///
+/// This means:
+/// 1. All fields present in the Substrait schema are present in the DataFusion schema. The
+///    DataFusion schema may have MORE fields, but not the other way around.
+/// 2. All fields are compatible. See [`ensure_field_compatability`] for details
+fn ensure_schema_compatability(
+    table_schema: DFSchema,
+    substrait_schema: DFSchema,
+) -> Result<()> {
+    substrait_schema
+        .strip_qualifiers()
+        .fields()
+        .iter()
+        .try_for_each(|substrait_field| {
+            let df_field =
+                table_schema.field_with_unqualified_name(substrait_field.name())?;
+            ensure_field_compatability(df_field, substrait_field)
+        })
+}
+
+/// This function returns a DataFrame with fields adjusted if necessary in the event that the
+/// Substrait schema is a subset of the DataFusion schema.
+fn apply_projection(table: DataFrame, substrait_schema: DFSchema) -> Result<LogicalPlan> {
+    let df_schema = table.schema().to_owned();
+
+    let t = table.into_unoptimized_plan();
+
+    if df_schema.logically_equivalent_names_and_types(&substrait_schema) {
+        return Ok(t);
+    }
+
+    match t {
+        LogicalPlan::TableScan(mut scan) => {
+            let column_indices: Vec<usize> = substrait_schema
+                .strip_qualifiers()
+                .fields()
+                .iter()
+                .map(|substrait_field| {
+                    Ok(df_schema
+                        .index_of_column_by_name(None, substrait_field.name().as_str())
+                        .unwrap())
+                })
+                .collect::<Result<_>>()?;
+
+            let fields = column_indices
+                .iter()
+                .map(|i| df_schema.qualified_field(*i))
+                .map(|(qualifier, field)| (qualifier.cloned(), Arc::new(field.clone())))
+                .collect();
+
+            scan.projected_schema = DFSchemaRef::new(DFSchema::new_with_metadata(
+                fields,
+                df_schema.metadata().clone(),
+            )?);
+            scan.projection = Some(column_indices);
+
+            Ok(LogicalPlan::TableScan(scan))
+        }
+        _ => plan_err!("DataFrame passed to apply_projection must be a TableScan"),
+    }
+}
+
+/// Ensures that the given Substrait field is compatible with the given DataFusion field
+///
+/// A field is compatible between Substrait and DataFusion if:
+/// 1. They have logically equivalent types.
+/// 2. They have the same nullability OR the Substrait field is nullable and the DataFusion fields
+///    is not nullable.
+///
+/// If a Substrait field is not nullable, the Substrait plan may be built around assuming it is not
+/// nullable. As such if DataFusion has that field as nullable the plan should be rejected.
+fn ensure_field_compatability(
+    datafusion_field: &Field,
+    substrait_field: &Field,
+) -> Result<()> {
+    if !DFSchema::datatype_is_logically_equal(
+        datafusion_field.data_type(),
+        substrait_field.data_type(),
+    ) {
+        return substrait_err!(
+            "Field '{}' in Substrait schema has a different type ({}) than the corresponding field in the table schema ({}).",
+            substrait_field.name(),
+            substrait_field.data_type(),
+            datafusion_field.data_type()
+        );
+    }
+
+    if !compatible_nullabilities(
+        datafusion_field.is_nullable(),
+        substrait_field.is_nullable(),
+    ) {
+        // TODO: from_substrait_struct_type needs to be updated to set the nullability correctly. It defaults to true for now.
+        return substrait_err!(
+            "Field '{}' is nullable in the DataFusion schema but not nullable in the Substrait schema.",
+            substrait_field.name()
+        );
+    }
+    Ok(())
+}
+
+/// Returns true if the DataFusion and Substrait nullabilities are compatible, false otherwise
+fn compatible_nullabilities(
+    datafusion_nullability: bool,
+    substrait_nullability: bool,
+) -> bool {
+    // DataFusion and Substrait have the same nullability
+    (datafusion_nullability == substrait_nullability)
+    // DataFusion is not nullable and Substrait is nullable
+     || (!datafusion_nullability && substrait_nullability)
 }
 
 /// (Re)qualify the sides of a join if needed, i.e. if the columns from one side would otherwise
@@ -877,8 +1377,9 @@ fn from_substrait_jointype(join_type: i32) -> Result<JoinType> {
             join_rel::JoinType::Left => Ok(JoinType::Left),
             join_rel::JoinType::Right => Ok(JoinType::Right),
             join_rel::JoinType::Outer => Ok(JoinType::Full),
-            join_rel::JoinType::Anti => Ok(JoinType::LeftAnti),
-            join_rel::JoinType::Semi => Ok(JoinType::LeftSemi),
+            join_rel::JoinType::LeftAnti => Ok(JoinType::LeftAnti),
+            join_rel::JoinType::LeftSemi => Ok(JoinType::LeftSemi),
+            join_rel::JoinType::LeftMark => Ok(JoinType::LeftMark),
             _ => plan_err!("unsupported join type {substrait_join_type:?}"),
         }
     } else {
@@ -892,8 +1393,8 @@ pub async fn from_substrait_sorts(
     substrait_sorts: &Vec<SortField>,
     input_schema: &DFSchema,
     extensions: &Extensions,
-) -> Result<Vec<Expr>> {
-    let mut sorts: Vec<Expr> = vec![];
+) -> Result<Vec<Sort>> {
+    let mut sorts: Vec<Sort> = vec![];
     for s in substrait_sorts {
         let expr =
             from_substrait_rex(ctx, s.expr.as_ref().unwrap(), input_schema, extensions)
@@ -927,11 +1428,11 @@ pub async fn from_substrait_sorts(
             None => not_impl_err!("Sort without sort kind is invalid"),
         };
         let (asc, nulls_first) = asc_nullfirst.unwrap();
-        sorts.push(Expr::Sort(Sort {
-            expr: Box::new(expr),
+        sorts.push(Sort {
+            expr,
             asc,
             nulls_first,
-        }));
+        });
     }
     Ok(sorts)
 }
@@ -978,7 +1479,7 @@ pub async fn from_substrait_agg_func(
     input_schema: &DFSchema,
     extensions: &Extensions,
     filter: Option<Box<Expr>>,
-    order_by: Option<Vec<Expr>>,
+    order_by: Option<Vec<SortExpr>>,
     distinct: bool,
 ) -> Result<Arc<Expr>> {
     let args =
@@ -1369,23 +1870,51 @@ fn from_substrait_type(
             },
             r#type::Kind::Fp32(_) => Ok(DataType::Float32),
             r#type::Kind::Fp64(_) => Ok(DataType::Float64),
-            r#type::Kind::Timestamp(ts) => match ts.type_variation_reference {
-                TIMESTAMP_SECOND_TYPE_VARIATION_REF => {
-                    Ok(DataType::Timestamp(TimeUnit::Second, None))
+            r#type::Kind::Timestamp(ts) => {
+                // Kept for backwards compatibility, new plans should use PrecisionTimestamp(Tz) instead
+                #[allow(deprecated)]
+                match ts.type_variation_reference {
+                    TIMESTAMP_SECOND_TYPE_VARIATION_REF => {
+                        Ok(DataType::Timestamp(TimeUnit::Second, None))
+                    }
+                    TIMESTAMP_MILLI_TYPE_VARIATION_REF => {
+                        Ok(DataType::Timestamp(TimeUnit::Millisecond, None))
+                    }
+                    TIMESTAMP_MICRO_TYPE_VARIATION_REF => {
+                        Ok(DataType::Timestamp(TimeUnit::Microsecond, None))
+                    }
+                    TIMESTAMP_NANO_TYPE_VARIATION_REF => {
+                        Ok(DataType::Timestamp(TimeUnit::Nanosecond, None))
+                    }
+                    v => not_impl_err!(
+                        "Unsupported Substrait type variation {v} of type {s_kind:?}"
+                    ),
                 }
-                TIMESTAMP_MILLI_TYPE_VARIATION_REF => {
-                    Ok(DataType::Timestamp(TimeUnit::Millisecond, None))
-                }
-                TIMESTAMP_MICRO_TYPE_VARIATION_REF => {
-                    Ok(DataType::Timestamp(TimeUnit::Microsecond, None))
-                }
-                TIMESTAMP_NANO_TYPE_VARIATION_REF => {
-                    Ok(DataType::Timestamp(TimeUnit::Nanosecond, None))
-                }
-                v => not_impl_err!(
-                    "Unsupported Substrait type variation {v} of type {s_kind:?}"
-                ),
-            },
+            }
+            r#type::Kind::PrecisionTimestamp(pts) => {
+                let unit = match pts.precision {
+                    0 => Ok(TimeUnit::Second),
+                    3 => Ok(TimeUnit::Millisecond),
+                    6 => Ok(TimeUnit::Microsecond),
+                    9 => Ok(TimeUnit::Nanosecond),
+                    p => not_impl_err!(
+                        "Unsupported Substrait precision {p} for PrecisionTimestamp"
+                    ),
+                }?;
+                Ok(DataType::Timestamp(unit, None))
+            }
+            r#type::Kind::PrecisionTimestampTz(pts) => {
+                let unit = match pts.precision {
+                    0 => Ok(TimeUnit::Second),
+                    3 => Ok(TimeUnit::Millisecond),
+                    6 => Ok(TimeUnit::Microsecond),
+                    9 => Ok(TimeUnit::Nanosecond),
+                    p => not_impl_err!(
+                        "Unsupported Substrait precision {p} for PrecisionTimestampTz"
+                    ),
+                }?;
+                Ok(DataType::Timestamp(unit, Some(DEFAULT_TIMEZONE.into())))
+            }
             r#type::Kind::Date(date) => match date.type_variation_reference {
                 DATE_32_TYPE_VARIATION_REF => Ok(DataType::Date32),
                 DATE_64_TYPE_VARIATION_REF => Ok(DataType::Date64),
@@ -1396,6 +1925,7 @@ fn from_substrait_type(
             r#type::Kind::Binary(binary) => match binary.type_variation_reference {
                 DEFAULT_CONTAINER_TYPE_VARIATION_REF => Ok(DataType::Binary),
                 LARGE_CONTAINER_TYPE_VARIATION_REF => Ok(DataType::LargeBinary),
+                VIEW_CONTAINER_TYPE_VARIATION_REF => Ok(DataType::BinaryView),
                 v => not_impl_err!(
                     "Unsupported Substrait type variation {v} of type {s_kind:?}"
                 ),
@@ -1406,6 +1936,7 @@ fn from_substrait_type(
             r#type::Kind::String(string) => match string.type_variation_reference {
                 DEFAULT_CONTAINER_TYPE_VARIATION_REF => Ok(DataType::Utf8),
                 LARGE_CONTAINER_TYPE_VARIATION_REF => Ok(DataType::LargeUtf8),
+                VIEW_CONTAINER_TYPE_VARIATION_REF => Ok(DataType::Utf8View),
                 v => not_impl_err!(
                     "Unsupported Substrait type variation {v} of type {s_kind:?}"
                 ),
@@ -1465,25 +1996,18 @@ fn from_substrait_type(
                     "Unsupported Substrait type variation {v} of type {s_kind:?}"
                 ),
             },
-            r#type::Kind::IntervalYear(i) => match i.type_variation_reference {
-                DEFAULT_TYPE_VARIATION_REF => {
-                    Ok(DataType::Interval(IntervalUnit::YearMonth))
-                }
-                v => not_impl_err!(
-                    "Unsupported Substrait type variation {v} of type {s_kind:?}"
-                ),
-            },
-            r#type::Kind::IntervalDay(i) => match i.type_variation_reference {
-                DEFAULT_TYPE_VARIATION_REF => {
-                    Ok(DataType::Interval(IntervalUnit::DayTime))
-                }
-                v => not_impl_err!(
-                    "Unsupported Substrait type variation {v} of type {s_kind:?}"
-                ),
-            },
+            r#type::Kind::IntervalYear(_) => {
+                Ok(DataType::Interval(IntervalUnit::YearMonth))
+            }
+            r#type::Kind::IntervalDay(_) => Ok(DataType::Interval(IntervalUnit::DayTime)),
+            r#type::Kind::IntervalCompound(_) => {
+                Ok(DataType::Interval(IntervalUnit::MonthDayNano))
+            }
             r#type::Kind::UserDefined(u) => {
                 if let Some(name) = extensions.types.get(&u.type_reference) {
+                    #[allow(deprecated)]
                     match name.as_ref() {
+                        // Kept for backwards compatibility, producers should use IntervalCompound instead
                         INTERVAL_MONTH_DAY_NANO_TYPE_NAME => Ok(DataType::Interval(IntervalUnit::MonthDayNano)),
                             _ => not_impl_err!(
                                 "Unsupported Substrait user defined type with ref {} and variation {}",
@@ -1492,18 +2016,17 @@ fn from_substrait_type(
                             ),
                     }
                 } else {
-                    // Kept for backwards compatibility, new plans should include the extension instead
                     #[allow(deprecated)]
                     match u.type_reference {
-                        // Kept for backwards compatibility, use IntervalYear instead
+                        // Kept for backwards compatibility, producers should use IntervalYear instead
                         INTERVAL_YEAR_MONTH_TYPE_REF => {
                             Ok(DataType::Interval(IntervalUnit::YearMonth))
                         }
-                        // Kept for backwards compatibility, use IntervalDay instead
+                        // Kept for backwards compatibility, producers should use IntervalDay instead
                         INTERVAL_DAY_TIME_TYPE_REF => {
                             Ok(DataType::Interval(IntervalUnit::DayTime))
                         }
-                        // Not supported yet by Substrait
+                        // Kept for backwards compatibility, producers should use IntervalCompound instead
                         INTERVAL_MONTH_DAY_NANO_TYPE_REF => {
                             Ok(DataType::Interval(IntervalUnit::MonthDayNano))
                         }
@@ -1545,14 +2068,14 @@ fn from_substrait_struct_type(
 }
 
 fn next_struct_field_name(
-    i: usize,
+    column_idx: usize,
     dfs_names: &[String],
     name_idx: &mut usize,
 ) -> Result<String> {
     if dfs_names.is_empty() {
         // If names are not given, create dummy names
         // c0, c1, ... align with e.g. SqlToRel::create_named_struct
-        Ok(format!("c{i}"))
+        Ok(format!("c{column_idx}"))
     } else {
         let name = dfs_names.get(*name_idx).cloned().ok_or_else(|| {
             substrait_datafusion_err!("Named schema must contain names for all fields")
@@ -1562,10 +2085,11 @@ fn next_struct_field_name(
     }
 }
 
-fn from_substrait_named_struct(
+/// Convert Substrait NamedStruct to DataFusion DFSchemaRef
+pub fn from_substrait_named_struct(
     base_schema: &NamedStruct,
     extensions: &Extensions,
-) -> Result<DFSchemaRef> {
+) -> Result<DFSchema> {
     let mut name_idx = 0;
     let fields = from_substrait_struct_type(
         base_schema.r#struct.as_ref().ok_or_else(|| {
@@ -1577,12 +2101,12 @@ fn from_substrait_named_struct(
     );
     if name_idx != base_schema.names.len() {
         return substrait_err!(
-                                "Names list must match exactly to nested schema, but found {} uses for {} names",
-                                name_idx,
-                                base_schema.names.len()
-                            );
+            "Names list must match exactly to nested schema, but found {} uses for {} names",
+            name_idx,
+            base_schema.names.len()
+        );
     }
-    Ok(DFSchemaRef::new(DFSchema::try_from(Schema::new(fields?))?))
+    DFSchema::try_from(Schema::new(fields?))
 }
 
 fn from_substrait_bound(
@@ -1676,27 +2200,66 @@ fn from_substrait_literal(
         },
         Some(LiteralType::Fp32(f)) => ScalarValue::Float32(Some(*f)),
         Some(LiteralType::Fp64(f)) => ScalarValue::Float64(Some(*f)),
-        Some(LiteralType::Timestamp(t)) => match lit.type_variation_reference {
-            TIMESTAMP_SECOND_TYPE_VARIATION_REF => {
-                ScalarValue::TimestampSecond(Some(*t), None)
+        Some(LiteralType::Timestamp(t)) => {
+            // Kept for backwards compatibility, new plans should use PrecisionTimestamp(Tz) instead
+            #[allow(deprecated)]
+            match lit.type_variation_reference {
+                TIMESTAMP_SECOND_TYPE_VARIATION_REF => {
+                    ScalarValue::TimestampSecond(Some(*t), None)
+                }
+                TIMESTAMP_MILLI_TYPE_VARIATION_REF => {
+                    ScalarValue::TimestampMillisecond(Some(*t), None)
+                }
+                TIMESTAMP_MICRO_TYPE_VARIATION_REF => {
+                    ScalarValue::TimestampMicrosecond(Some(*t), None)
+                }
+                TIMESTAMP_NANO_TYPE_VARIATION_REF => {
+                    ScalarValue::TimestampNanosecond(Some(*t), None)
+                }
+                others => {
+                    return substrait_err!("Unknown type variation reference {others}");
+                }
             }
-            TIMESTAMP_MILLI_TYPE_VARIATION_REF => {
-                ScalarValue::TimestampMillisecond(Some(*t), None)
+        }
+        Some(LiteralType::PrecisionTimestamp(pt)) => match pt.precision {
+            0 => ScalarValue::TimestampSecond(Some(pt.value), None),
+            3 => ScalarValue::TimestampMillisecond(Some(pt.value), None),
+            6 => ScalarValue::TimestampMicrosecond(Some(pt.value), None),
+            9 => ScalarValue::TimestampNanosecond(Some(pt.value), None),
+            p => {
+                return not_impl_err!(
+                    "Unsupported Substrait precision {p} for PrecisionTimestamp"
+                );
             }
-            TIMESTAMP_MICRO_TYPE_VARIATION_REF => {
-                ScalarValue::TimestampMicrosecond(Some(*t), None)
-            }
-            TIMESTAMP_NANO_TYPE_VARIATION_REF => {
-                ScalarValue::TimestampNanosecond(Some(*t), None)
-            }
-            others => {
-                return substrait_err!("Unknown type variation reference {others}");
+        },
+        Some(LiteralType::PrecisionTimestampTz(pt)) => match pt.precision {
+            0 => ScalarValue::TimestampSecond(
+                Some(pt.value),
+                Some(DEFAULT_TIMEZONE.into()),
+            ),
+            3 => ScalarValue::TimestampMillisecond(
+                Some(pt.value),
+                Some(DEFAULT_TIMEZONE.into()),
+            ),
+            6 => ScalarValue::TimestampMicrosecond(
+                Some(pt.value),
+                Some(DEFAULT_TIMEZONE.into()),
+            ),
+            9 => ScalarValue::TimestampNanosecond(
+                Some(pt.value),
+                Some(DEFAULT_TIMEZONE.into()),
+            ),
+            p => {
+                return not_impl_err!(
+                    "Unsupported Substrait precision {p} for PrecisionTimestamp"
+                );
             }
         },
         Some(LiteralType::Date(d)) => ScalarValue::Date32(Some(*d)),
         Some(LiteralType::String(s)) => match lit.type_variation_reference {
             DEFAULT_CONTAINER_TYPE_VARIATION_REF => ScalarValue::Utf8(Some(s.clone())),
             LARGE_CONTAINER_TYPE_VARIATION_REF => ScalarValue::LargeUtf8(Some(s.clone())),
+            VIEW_CONTAINER_TYPE_VARIATION_REF => ScalarValue::Utf8View(Some(s.clone())),
             others => {
                 return substrait_err!("Unknown type variation reference {others}");
             }
@@ -1706,6 +2269,7 @@ fn from_substrait_literal(
             LARGE_CONTAINER_TYPE_VARIATION_REF => {
                 ScalarValue::LargeBinary(Some(b.clone()))
             }
+            VIEW_CONTAINER_TYPE_VARIATION_REF => ScalarValue::BinaryView(Some(b.clone())),
             others => {
                 return substrait_err!("Unknown type variation reference {others}");
             }
@@ -1725,11 +2289,7 @@ fn from_substrait_literal(
             let s = d.scale.try_into().map_err(|e| {
                 substrait_datafusion_err!("Failed to parse decimal scale: {e}")
             })?;
-            ScalarValue::Decimal128(
-                Some(std::primitive::i128::from_le_bytes(value)),
-                p,
-                s,
-            )
+            ScalarValue::Decimal128(Some(i128::from_le_bytes(value)), p, s)
         }
         Some(LiteralType::List(l)) => {
             // Each element should start the name index from the same value, then we increase it
@@ -1881,14 +2441,63 @@ fn from_substrait_literal(
         Some(LiteralType::IntervalDayToSecond(IntervalDayToSecond {
             days,
             seconds,
-            microseconds,
+            subseconds,
+            precision_mode,
         })) => {
-            // DF only supports millisecond precision, so we lose the micros here
-            ScalarValue::new_interval_dt(*days, (seconds * 1000) + (microseconds / 1000))
+            use interval_day_to_second::PrecisionMode;
+            // DF only supports millisecond precision, so for any more granular type we lose precision
+            let milliseconds = match precision_mode {
+                Some(PrecisionMode::Microseconds(ms)) => ms / 1000,
+                None =>
+                    if *subseconds != 0 {
+                        return substrait_err!("Cannot set subseconds field of IntervalDayToSecond without setting precision");
+                    } else {
+                        0_i32
+                    }
+                Some(PrecisionMode::Precision(0)) => *subseconds as i32 * 1000,
+                Some(PrecisionMode::Precision(3)) => *subseconds as i32,
+                Some(PrecisionMode::Precision(6)) => (subseconds / 1000) as i32,
+                Some(PrecisionMode::Precision(9)) => (subseconds / 1000 / 1000) as i32,
+                _ => {
+                    return not_impl_err!(
+                    "Unsupported Substrait interval day to second precision mode: {precision_mode:?}")
+                }
+            };
+
+            ScalarValue::new_interval_dt(*days, (seconds * 1000) + milliseconds)
         }
         Some(LiteralType::IntervalYearToMonth(IntervalYearToMonth { years, months })) => {
             ScalarValue::new_interval_ym(*years, *months)
         }
+        Some(LiteralType::IntervalCompound(IntervalCompound {
+            interval_year_to_month,
+            interval_day_to_second,
+        })) => match (interval_year_to_month, interval_day_to_second) {
+            (
+                Some(IntervalYearToMonth { years, months }),
+                Some(IntervalDayToSecond {
+                    days,
+                    seconds,
+                    subseconds,
+                    precision_mode:
+                        Some(interval_day_to_second::PrecisionMode::Precision(p)),
+                }),
+            ) => {
+                if *p < 0 || *p > 9 {
+                    return plan_err!(
+                        "Unsupported Substrait interval day to second precision: {}",
+                        p
+                    );
+                }
+                let nanos = *subseconds * i64::pow(10, (9 - p) as u32);
+                ScalarValue::new_interval_mdn(
+                    *years * 12 + months,
+                    *days,
+                    *seconds as i64 * NANOSECONDS + nanos,
+                )
+            }
+            _ => return plan_err!("Substrait compound interval missing components"),
+        },
         Some(LiteralType::FixedChar(c)) => ScalarValue::Utf8(Some(c.clone())),
         Some(LiteralType::UserDefined(user_defined)) => {
             // Helper function to prevent duplicating this code - can be inlined once the non-extension path is removed
@@ -1919,6 +2528,8 @@ fn from_substrait_literal(
 
             if let Some(name) = extensions.types.get(&user_defined.type_reference) {
                 match name.as_ref() {
+                    // Kept for backwards compatibility - producers should use IntervalCompound instead
+                    #[allow(deprecated)]
                     INTERVAL_MONTH_DAY_NANO_TYPE_NAME => {
                         interval_month_day_nano(user_defined)?
                     }
@@ -1931,10 +2542,9 @@ fn from_substrait_literal(
                     }
                 }
             } else {
-                // Kept for backwards compatibility - new plans should include extension instead
                 #[allow(deprecated)]
                 match user_defined.type_reference {
-                    // Kept for backwards compatibility, use IntervalYearToMonth instead
+                    // Kept for backwards compatibility, producers should useIntervalYearToMonth instead
                     INTERVAL_YEAR_MONTH_TYPE_REF => {
                         let Some(Val::Value(raw_val)) = user_defined.val.as_ref() else {
                             return substrait_err!("Interval year month value is empty");
@@ -1949,7 +2559,7 @@ fn from_substrait_literal(
                             value_slice,
                         )))
                     }
-                    // Kept for backwards compatibility, use IntervalDayToSecond instead
+                    // Kept for backwards compatibility, producers should useIntervalDayToSecond instead
                     INTERVAL_DAY_TIME_TYPE_REF => {
                         let Some(Val::Value(raw_val)) = user_defined.val.as_ref() else {
                             return substrait_err!("Interval day time value is empty");
@@ -1969,6 +2579,7 @@ fn from_substrait_literal(
                             milliseconds,
                         }))
                     }
+                    // Kept for backwards compatibility, producers should useIntervalCompound instead
                     INTERVAL_MONTH_DAY_NANO_TYPE_REF => {
                         interval_month_day_nano(user_defined)?
                     }
@@ -2026,21 +2637,55 @@ fn from_substrait_null(
             },
             r#type::Kind::Fp32(_) => Ok(ScalarValue::Float32(None)),
             r#type::Kind::Fp64(_) => Ok(ScalarValue::Float64(None)),
-            r#type::Kind::Timestamp(ts) => match ts.type_variation_reference {
-                TIMESTAMP_SECOND_TYPE_VARIATION_REF => {
-                    Ok(ScalarValue::TimestampSecond(None, None))
+            r#type::Kind::Timestamp(ts) => {
+                // Kept for backwards compatibility, new plans should use PrecisionTimestamp(Tz) instead
+                #[allow(deprecated)]
+                match ts.type_variation_reference {
+                    TIMESTAMP_SECOND_TYPE_VARIATION_REF => {
+                        Ok(ScalarValue::TimestampSecond(None, None))
+                    }
+                    TIMESTAMP_MILLI_TYPE_VARIATION_REF => {
+                        Ok(ScalarValue::TimestampMillisecond(None, None))
+                    }
+                    TIMESTAMP_MICRO_TYPE_VARIATION_REF => {
+                        Ok(ScalarValue::TimestampMicrosecond(None, None))
+                    }
+                    TIMESTAMP_NANO_TYPE_VARIATION_REF => {
+                        Ok(ScalarValue::TimestampNanosecond(None, None))
+                    }
+                    v => not_impl_err!(
+                        "Unsupported Substrait type variation {v} of type {kind:?}"
+                    ),
                 }
-                TIMESTAMP_MILLI_TYPE_VARIATION_REF => {
-                    Ok(ScalarValue::TimestampMillisecond(None, None))
-                }
-                TIMESTAMP_MICRO_TYPE_VARIATION_REF => {
-                    Ok(ScalarValue::TimestampMicrosecond(None, None))
-                }
-                TIMESTAMP_NANO_TYPE_VARIATION_REF => {
-                    Ok(ScalarValue::TimestampNanosecond(None, None))
-                }
-                v => not_impl_err!(
-                    "Unsupported Substrait type variation {v} of type {kind:?}"
+            }
+            r#type::Kind::PrecisionTimestamp(pts) => match pts.precision {
+                0 => Ok(ScalarValue::TimestampSecond(None, None)),
+                3 => Ok(ScalarValue::TimestampMillisecond(None, None)),
+                6 => Ok(ScalarValue::TimestampMicrosecond(None, None)),
+                9 => Ok(ScalarValue::TimestampNanosecond(None, None)),
+                p => not_impl_err!(
+                    "Unsupported Substrait precision {p} for PrecisionTimestamp"
+                ),
+            },
+            r#type::Kind::PrecisionTimestampTz(pts) => match pts.precision {
+                0 => Ok(ScalarValue::TimestampSecond(
+                    None,
+                    Some(DEFAULT_TIMEZONE.into()),
+                )),
+                3 => Ok(ScalarValue::TimestampMillisecond(
+                    None,
+                    Some(DEFAULT_TIMEZONE.into()),
+                )),
+                6 => Ok(ScalarValue::TimestampMicrosecond(
+                    None,
+                    Some(DEFAULT_TIMEZONE.into()),
+                )),
+                9 => Ok(ScalarValue::TimestampNanosecond(
+                    None,
+                    Some(DEFAULT_TIMEZONE.into()),
+                )),
+                p => not_impl_err!(
+                    "Unsupported Substrait precision {p} for PrecisionTimestamp"
                 ),
             },
             r#type::Kind::Date(date) => match date.type_variation_reference {
@@ -2127,6 +2772,29 @@ fn from_substrait_null(
     }
 }
 
+#[allow(deprecated)]
+async fn from_substrait_grouping(
+    ctx: &SessionContext,
+    grouping: &Grouping,
+    expressions: &[Expr],
+    input_schema: &DFSchemaRef,
+    extensions: &Extensions,
+) -> Result<Vec<Expr>> {
+    let mut group_exprs = vec![];
+    if !grouping.grouping_expressions.is_empty() {
+        for e in &grouping.grouping_expressions {
+            let expr = from_substrait_rex(ctx, e, input_schema, extensions).await?;
+            group_exprs.push(expr);
+        }
+        return Ok(group_exprs);
+    }
+    for idx in &grouping.expression_references {
+        let e = &expressions[*idx as usize];
+        group_exprs.push(e.clone());
+    }
+    Ok(group_exprs)
+}
+
 fn from_substrait_field_reference(
     field_ref: &FieldReference,
     input_schema: &DFSchema,
@@ -2159,7 +2827,7 @@ impl BuiltinExprBuilder {
         match name {
             "not" | "like" | "ilike" | "is_null" | "is_not_null" | "is_true"
             | "is_false" | "is_not_true" | "is_not_false" | "is_unknown"
-            | "is_not_unknown" | "negative" => Some(Self {
+            | "is_not_unknown" | "negative" | "negate" => Some(Self {
                 expr_name: name.to_string(),
             }),
             _ => None,
@@ -2180,8 +2848,9 @@ impl BuiltinExprBuilder {
             "ilike" => {
                 Self::build_like_expr(ctx, true, f, input_schema, extensions).await
             }
-            "not" | "negative" | "is_null" | "is_not_null" | "is_true" | "is_false"
-            | "is_not_true" | "is_not_false" | "is_unknown" | "is_not_unknown" => {
+            "not" | "negative" | "negate" | "is_null" | "is_not_null" | "is_true"
+            | "is_false" | "is_not_true" | "is_not_false" | "is_unknown"
+            | "is_not_unknown" => {
                 Self::build_unary_expr(ctx, &self.expr_name, f, input_schema, extensions)
                     .await
             }
@@ -2210,7 +2879,7 @@ impl BuiltinExprBuilder {
 
         let expr = match fn_name {
             "not" => Expr::Not(arg),
-            "negative" => Expr::Negative(arg),
+            "negative" | "negate" => Expr::Negative(arg),
             "is_null" => Expr::IsNull(arg),
             "is_not_null" => Expr::IsNotNull(arg),
             "is_true" => Expr::IsTrue(arg),
@@ -2281,5 +2950,54 @@ impl BuiltinExprBuilder {
             escape_char,
             case_insensitive,
         }))
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use crate::extensions::Extensions;
+    use crate::logical_plan::consumer::from_substrait_literal_without_names;
+    use arrow_buffer::IntervalMonthDayNano;
+    use datafusion::error::Result;
+    use datafusion::scalar::ScalarValue;
+    use substrait::proto::expression::literal::{
+        interval_day_to_second, IntervalCompound, IntervalDayToSecond,
+        IntervalYearToMonth, LiteralType,
+    };
+    use substrait::proto::expression::Literal;
+
+    #[test]
+    fn interval_compound_different_precision() -> Result<()> {
+        // DF producer (and thus roundtrip) always uses precision = 9,
+        // this test exists to test with some other value.
+        let substrait = Literal {
+            nullable: false,
+            type_variation_reference: 0,
+            literal_type: Some(LiteralType::IntervalCompound(IntervalCompound {
+                interval_year_to_month: Some(IntervalYearToMonth {
+                    years: 1,
+                    months: 2,
+                }),
+                interval_day_to_second: Some(IntervalDayToSecond {
+                    days: 3,
+                    seconds: 4,
+                    subseconds: 5,
+                    precision_mode: Some(
+                        interval_day_to_second::PrecisionMode::Precision(6),
+                    ),
+                }),
+            })),
+        };
+
+        assert_eq!(
+            from_substrait_literal_without_names(&substrait, &Extensions::default())?,
+            ScalarValue::IntervalMonthDayNano(Some(IntervalMonthDayNano {
+                months: 14,
+                days: 3,
+                nanoseconds: 4_000_005_000
+            }))
+        );
+
+        Ok(())
     }
 }

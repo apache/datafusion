@@ -18,6 +18,7 @@
 //! This module defines the interface for logical nodes
 use crate::{Expr, LogicalPlan};
 use datafusion_common::{DFSchema, DFSchemaRef, Result};
+use std::cmp::Ordering;
 use std::hash::{Hash, Hasher};
 use std::{any::Any, collections::HashSet, fmt, sync::Arc};
 
@@ -193,6 +194,17 @@ pub trait UserDefinedLogicalNode: fmt::Debug + Send + Sync {
     /// Note: [`UserDefinedLogicalNode`] is not constrained by [`Eq`]
     /// directly because it must remain object safe.
     fn dyn_eq(&self, other: &dyn UserDefinedLogicalNode) -> bool;
+    fn dyn_ord(&self, other: &dyn UserDefinedLogicalNode) -> Option<Ordering>;
+
+    /// Returns `true` if a limit can be safely pushed down through this
+    /// `UserDefinedLogicalNode` node.
+    ///
+    /// If this method returns `true`, and the query plan contains a limit at
+    /// the output of this node, DataFusion will push the limit to the input
+    /// of this node.
+    fn supports_limit_pushdown(&self) -> bool {
+        false
+    }
 }
 
 impl Hash for dyn UserDefinedLogicalNode {
@@ -201,9 +213,15 @@ impl Hash for dyn UserDefinedLogicalNode {
     }
 }
 
-impl std::cmp::PartialEq for dyn UserDefinedLogicalNode {
+impl PartialEq for dyn UserDefinedLogicalNode {
     fn eq(&self, other: &Self) -> bool {
         self.dyn_eq(other)
+    }
+}
+
+impl PartialOrd for dyn UserDefinedLogicalNode {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        self.dyn_ord(other)
     }
 }
 
@@ -212,10 +230,10 @@ impl Eq for dyn UserDefinedLogicalNode {}
 /// This trait facilitates implementation of the [`UserDefinedLogicalNode`].
 ///
 /// See the example in
-/// [user_defined_plan.rs](../../tests/user_defined_plan.rs) for an
-/// example of how to use this extension API.
+/// [user_defined_plan.rs](https://github.com/apache/datafusion/blob/main/datafusion/core/tests/user_defined/user_defined_plan.rs)
+/// file for an example of how to use this extension API.
 pub trait UserDefinedLogicalNodeCore:
-    fmt::Debug + Eq + Hash + Sized + Send + Sync + 'static
+    fmt::Debug + Eq + PartialOrd + Hash + Sized + Send + Sync + 'static
 {
     /// Return the plan's name.
     fn name(&self) -> &str;
@@ -287,6 +305,16 @@ pub trait UserDefinedLogicalNodeCore:
     ) -> Option<Vec<Vec<usize>>> {
         None
     }
+
+    /// Returns `true` if a limit can be safely pushed down through this
+    /// `UserDefinedLogicalNode` node.
+    ///
+    /// If this method returns `true`, and the query plan contains a limit at
+    /// the output of this node, DataFusion will push the limit to the input
+    /// of this node.
+    fn supports_limit_pushdown(&self) -> bool {
+        false // Disallow limit push-down by default
+    }
 }
 
 /// Automatically derive UserDefinedLogicalNode to `UserDefinedLogicalNode`
@@ -345,6 +373,17 @@ impl<T: UserDefinedLogicalNodeCore> UserDefinedLogicalNode for T {
             Some(o) => self == o,
             None => false,
         }
+    }
+
+    fn dyn_ord(&self, other: &dyn UserDefinedLogicalNode) -> Option<Ordering> {
+        other
+            .as_any()
+            .downcast_ref::<Self>()
+            .and_then(|other| self.partial_cmp(other))
+    }
+
+    fn supports_limit_pushdown(&self) -> bool {
+        self.supports_limit_pushdown()
     }
 }
 

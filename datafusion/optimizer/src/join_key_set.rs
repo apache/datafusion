@@ -107,7 +107,7 @@ impl JoinKeySet {
     }
 
     /// Inserts any join keys that are common to both `s1` and `s2` into self
-    pub fn insert_intersection(&mut self, s1: JoinKeySet, s2: JoinKeySet) {
+    pub fn insert_intersection(&mut self, s1: &JoinKeySet, s2: &JoinKeySet) {
         // note can't use inner.intersection as we need to consider both (l, r)
         // and (r, l) in equality
         for (left, right) in s1.inner.iter() {
@@ -234,7 +234,7 @@ mod test {
         let mut set = JoinKeySet::new();
         // put something in there already
         set.insert(&col("x"), &col("y"));
-        set.insert_intersection(set1, set2);
+        set.insert_intersection(&set1, &set2);
 
         assert_contents(
             &set,

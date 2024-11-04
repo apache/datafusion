@@ -43,20 +43,10 @@ DataFusion. If you can not do what you want with the existing APIs, we would
 welcome you working with us to add new APIs to enable your use case, as
 described in the next section.
 
-## `datafusion-contrib`
+Please see the [Extensions] section to find out more about existing DataFusion
+extensions and how to contribute your extension to the community.
 
-While DataFusions comes with enough features "out of the box" to quickly start
-with a working system, it can't include everything useful feature (e.g.
-`TableProvider`s for all data formats). The [`datafusion-contrib`] project
-contains a collection of community maintained extensions that are not part of
-the core DataFusion project, and not under Apache Software Foundation governance
-but may be useful to others in the community. If you are interested adding a
-feature to DataFusion, a new extension in `datafusion-contrib` is likely a good
-place to start. Please [contact] us via github issue, slack, or Discord and
-we'll gladly set up a new repository for your extension.
-
-[`datafusion-contrib`]: https://github.com/datafusion-contrib
-[contact]: ../contributor-guide/communication.md
+[extensions]: ../library-user-guide/extensions.md
 
 ## Creating new Extension APIs
 

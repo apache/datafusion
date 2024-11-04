@@ -39,7 +39,7 @@ use std::fmt::Debug;
 ///   function])
 ///
 /// * convert its internal state to a vector of aggregate values via
-///   [`state`] and combine the state from multiple accumulators'
+///   [`state`] and combine the state from multiple accumulators
 ///   via [`merge_batch`], as part of efficient multi-phase grouping.
 ///
 /// [`GroupsAccumulator`]: crate::GroupsAccumulator
@@ -64,11 +64,11 @@ pub trait Accumulator: Send + Sync + Debug {
     /// For example, the `SUM` accumulator maintains a running sum,
     /// and `evaluate` will produce that running sum as its output.
     ///
-    /// After this call, the accumulator's internal state should be
-    /// equivalent to when it was first created.
+    /// This function should not be called twice, otherwise it will
+    /// result in potentially non-deterministic behavior.
     ///
     /// This function gets `&mut self` to allow for the accumulator to build
-    /// arrow compatible internal state that can be returned without copying
+    /// arrow-compatible internal state that can be returned without copying
     /// when possible (for example distinct strings)
     fn evaluate(&mut self) -> Result<ScalarValue>;
 
@@ -85,18 +85,18 @@ pub trait Accumulator: Send + Sync + Debug {
     /// Returns the intermediate state of the accumulator, consuming the
     /// intermediate state.
     ///
-    /// After this call, the accumulator's internal state should be
-    /// equivalent to when it was first created.
+    /// This function should not be called twice, otherwise it will
+    /// result in potentially non-deterministic behavior.
     ///
     /// This function gets `&mut self` to allow for the accumulator to build
-    /// arrow compatible internal state that can be returned without copying
+    /// arrow-compatible internal state that can be returned without copying
     /// when possible (for example distinct strings).
     ///
     /// Intermediate state is used for "multi-phase" grouping in
     /// DataFusion, where an aggregate is computed in parallel with
     /// multiple `Accumulator` instances, as described below:
     ///
-    /// # MultiPhase Grouping
+    /// # Multi-Phase Grouping
     ///
     /// ```text
     ///                               ▲
@@ -117,8 +117,8 @@ pub trait Accumulator: Send + Sync + Debug {
     /// ┌─────────────────────────┐      ┌─────────────────────────┐
     /// │        GroubyBy         │      │        GroubyBy         │
     /// │(AggregateMode::Partial) │      │(AggregateMode::Partial) │
-    /// └─────────────────────────┘      └────────────▲────────────┘
-    ///              ▲                                │
+    /// └─────────────────────────┘      └─────────────────────────┘
+    ///              ▲                                ▲
     ///              │                                │    update_batch() is called for
     ///              │                                │    each input RecordBatch
     ///         .─────────.                      .─────────.
@@ -140,9 +140,9 @@ pub trait Accumulator: Send + Sync + Debug {
     /// to be summed together)
     ///
     /// Some accumulators can return multiple values for their
-    /// intermediate states. For example average, tracks `sum` and
-    ///  `n`, and this function should return
-    /// a vector of two values, sum and n.
+    /// intermediate states. For example, the average accumulator
+    /// tracks `sum` and `n`, and this function should return a vector
+    /// of two values, sum and n.
     ///
     /// Note that [`ScalarValue::List`] can be used to pass multiple
     /// values if the number of intermediate values is not known at
@@ -185,15 +185,15 @@ pub trait Accumulator: Send + Sync + Debug {
     /// │(AggregateMode::Partial) │  │ (AggregateMode::Partial) │     the groups
     /// └─────────────────────────┘  └──────────────────────────┘
     ///              ▲                             ▲
-    ///              │                            ┌┘
-    ///              │                            │
-    ///         .─────────.                  .─────────.
-    ///      ,─'           '─.            ,─'           '─.
-    ///     ;      Input      :          ;      Input      :          1. Since input data is
-    ///     :   Partition 0   ;          :   Partition 1   ;          arbitrarily or RoundRobin
-    ///      ╲               ╱            ╲               ╱           distributed, each partition
-    ///       '─.         ,─'              '─.         ,─'            likely has all distinct
-    ///          `───────'                    `───────'
+    ///              │                             │
+    ///              │                             │
+    ///         .─────────.                   .─────────.
+    ///      ,─'           '─.             ,─'           '─.
+    ///     ;      Input      :           ;      Input      :         1. Since input data is
+    ///     :   Partition 0   ;           :   Partition 1   ;         arbitrarily or RoundRobin
+    ///      ╲               ╱             ╲               ╱          distributed, each partition
+    ///       '─.         ,─'               '─.         ,─'           likely has all distinct
+    ///          `───────'                     `───────'
     /// ```
     ///
     /// This structure is used so that the `AggregateMode::Partial` accumulators
@@ -204,7 +204,7 @@ pub trait Accumulator: Send + Sync + Debug {
     /// The final output is computed by repartitioning the result of
     /// [`Self::state`] from each Partial aggregate and `hash(group keys)` so
     /// that each distinct group key appears in exactly one of the
-    /// `AggregateMode::Final` GroupBy nodes. The output of the final nodes are
+    /// `AggregateMode::Final` GroupBy nodes. The outputs of the final nodes are
     /// then unioned together to produce the overall final output.
     ///
     /// Here is an example that shows the distribution of groups in the

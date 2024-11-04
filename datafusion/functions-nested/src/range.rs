@@ -18,21 +18,35 @@
 //! [`ScalarUDFImpl`] definitions for range and gen_series functions.
 
 use crate::utils::make_scalar_function;
-use arrow::array::{Array, ArrayRef, Date32Builder, Int64Array, ListArray, ListBuilder};
+use arrow::array::{Array, ArrayRef, Int64Array, ListArray, ListBuilder};
 use arrow::datatypes::{DataType, Field};
-use arrow_array::types::{Date32Type, IntervalMonthDayNanoType};
-use arrow_array::NullArray;
-use arrow_buffer::{BooleanBufferBuilder, NullBuffer, OffsetBuffer};
-use arrow_schema::DataType::{Date32, Int64, Interval, List};
-use arrow_schema::IntervalUnit::MonthDayNano;
-use datafusion_common::cast::{as_date32_array, as_int64_array, as_interval_mdn_array};
-use datafusion_common::{exec_err, not_impl_datafusion_err, Result};
-use datafusion_expr::{
-    ColumnarValue, ScalarUDFImpl, Signature, TypeSignature, Volatility,
+use arrow_array::builder::{Date32Builder, TimestampNanosecondBuilder};
+use arrow_array::temporal_conversions::as_datetime_with_timezone;
+use arrow_array::timezone::Tz;
+use arrow_array::types::{
+    Date32Type, IntervalMonthDayNanoType, TimestampNanosecondType as TSNT,
 };
+use arrow_array::{NullArray, TimestampNanosecondArray};
+use arrow_buffer::{BooleanBufferBuilder, NullBuffer, OffsetBuffer};
+use arrow_schema::DataType::*;
+use arrow_schema::IntervalUnit::MonthDayNano;
+use arrow_schema::TimeUnit::Nanosecond;
+use datafusion_common::cast::{
+    as_date32_array, as_int64_array, as_interval_mdn_array, as_timestamp_nanosecond_array,
+};
+use datafusion_common::{
+    exec_datafusion_err, exec_err, internal_err, not_impl_datafusion_err, Result,
+};
+use datafusion_expr::scalar_doc_sections::DOC_SECTION_ARRAY;
+use datafusion_expr::{
+    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+};
+use itertools::Itertools;
 use std::any::Any;
+use std::cmp::Ordering;
 use std::iter::from_fn;
-use std::sync::Arc;
+use std::str::FromStr;
+use std::sync::{Arc, OnceLock};
 
 make_udf_expr_and_func!(
     Range,
@@ -49,16 +63,7 @@ pub(super) struct Range {
 impl Range {
     pub fn new() -> Self {
         Self {
-            signature: Signature::one_of(
-                vec![
-                    TypeSignature::Exact(vec![Int64]),
-                    TypeSignature::Exact(vec![Int64, Int64]),
-                    TypeSignature::Exact(vec![Int64, Int64, Int64]),
-                    TypeSignature::Exact(vec![Date32, Date32, Interval(MonthDayNano)]),
-                    TypeSignature::Any(3),
-                ],
-                Volatility::Immutable,
-            ),
+            signature: Signature::user_defined(Volatility::Immutable),
             aliases: vec![],
         }
     }
@@ -75,9 +80,34 @@ impl ScalarUDFImpl for Range {
         &self.signature
     }
 
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        arg_types
+            .iter()
+            .map(|arg_type| match arg_type {
+                Null => Ok(Null),
+                Int8 => Ok(Int64),
+                Int16 => Ok(Int64),
+                Int32 => Ok(Int64),
+                Int64 => Ok(Int64),
+                UInt8 => Ok(Int64),
+                UInt16 => Ok(Int64),
+                UInt32 => Ok(Int64),
+                UInt64 => Ok(Int64),
+                Timestamp(_, tz) => Ok(Timestamp(Nanosecond, tz.clone())),
+                Date32 => Ok(Date32),
+                Date64 => Ok(Date32),
+                Utf8 => Ok(Date32),
+                LargeUtf8 => Ok(Date32),
+                Utf8View => Ok(Date32),
+                Interval(_) => Ok(Interval(MonthDayNano)),
+                _ => exec_err!("Unsupported DataType"),
+            })
+            .try_collect()
+    }
+
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        if arg_types.iter().any(|t| t.eq(&DataType::Null)) {
-            Ok(DataType::Null)
+        if arg_types.iter().any(|t| t.is_null()) {
+            Ok(Null)
         } else {
             Ok(List(Arc::new(Field::new(
                 "item",
@@ -88,14 +118,17 @@ impl ScalarUDFImpl for Range {
     }
 
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        if args.iter().any(|arg| arg.data_type() == DataType::Null) {
+        if args.iter().any(|arg| arg.data_type().is_null()) {
             return Ok(ColumnarValue::Array(Arc::new(NullArray::new(1))));
         }
         match args[0].data_type() {
             Int64 => make_scalar_function(|args| gen_range_inner(args, false))(args),
             Date32 => make_scalar_function(|args| gen_range_date(args, false))(args),
-            _ => {
-                exec_err!("unsupported type for range")
+            Timestamp(_, _) => {
+                make_scalar_function(|args| gen_range_timestamp(args, false))(args)
+            }
+            dt => {
+                exec_err!("unsupported type for RANGE. Expected Int64, Date32 or Timestamp, got: {dt}")
             }
         }
     }
@@ -103,6 +136,54 @@ impl ScalarUDFImpl for Range {
     fn aliases(&self) -> &[String] {
         &self.aliases
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_range_doc())
+    }
+}
+
+static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+
+fn get_range_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_ARRAY)
+            .with_description(
+                "Returns an Arrow array between start and stop with step. The range start..end contains all values with start <= x < end. It is empty if start >= end. Step cannot be 0.",
+            )
+            .with_syntax_example("range(start, stop, step)")
+            .with_sql_example(
+                r#"```sql
+> select range(2, 10, 3);
++-----------------------------------+
+| range(Int64(2),Int64(10),Int64(3))|
++-----------------------------------+
+| [2, 5, 8]                         |
++-----------------------------------+
+
+> select range(DATE '1992-09-01', DATE '1993-03-01', INTERVAL '1' MONTH);
++--------------------------------------------------------------+
+| range(DATE '1992-09-01', DATE '1993-03-01', INTERVAL '1' MONTH) |
++--------------------------------------------------------------+
+| [1992-09-01, 1992-10-01, 1992-11-01, 1992-12-01, 1993-01-01, 1993-02-01] |
++--------------------------------------------------------------+
+```"#,
+            )
+            .with_argument(
+                "start",
+                "Start of the range. Ints, timestamps, dates or string types that can be coerced to Date32 are supported.",
+            )
+            .with_argument(
+                "end",
+                "End of the range (not included). Type must be the same as start.",
+            )
+            .with_argument(
+                "step",
+                "Increase by step (cannot be 0). Steps less than a day are supported only for timestamp ranges.",
+            )
+            .build()
+            .unwrap()
+    })
 }
 
 make_udf_expr_and_func!(
@@ -120,16 +201,7 @@ pub(super) struct GenSeries {
 impl GenSeries {
     pub fn new() -> Self {
         Self {
-            signature: Signature::one_of(
-                vec![
-                    TypeSignature::Exact(vec![Int64]),
-                    TypeSignature::Exact(vec![Int64, Int64]),
-                    TypeSignature::Exact(vec![Int64, Int64, Int64]),
-                    TypeSignature::Exact(vec![Date32, Date32, Interval(MonthDayNano)]),
-                    TypeSignature::Any(3),
-                ],
-                Volatility::Immutable,
-            ),
+            signature: Signature::user_defined(Volatility::Immutable),
             aliases: vec![],
         }
     }
@@ -146,9 +218,34 @@ impl ScalarUDFImpl for GenSeries {
         &self.signature
     }
 
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        arg_types
+            .iter()
+            .map(|arg_type| match arg_type {
+                Null => Ok(Null),
+                Int8 => Ok(Int64),
+                Int16 => Ok(Int64),
+                Int32 => Ok(Int64),
+                Int64 => Ok(Int64),
+                UInt8 => Ok(Int64),
+                UInt16 => Ok(Int64),
+                UInt32 => Ok(Int64),
+                UInt64 => Ok(Int64),
+                Timestamp(_, tz) => Ok(Timestamp(Nanosecond, tz.clone())),
+                Date32 => Ok(Date32),
+                Date64 => Ok(Date32),
+                Utf8 => Ok(Date32),
+                LargeUtf8 => Ok(Date32),
+                Utf8View => Ok(Date32),
+                Interval(_) => Ok(Interval(MonthDayNano)),
+                _ => exec_err!("Unsupported DataType"),
+            })
+            .try_collect()
+    }
+
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        if arg_types.iter().any(|t| t.eq(&DataType::Null)) {
-            Ok(DataType::Null)
+        if arg_types.iter().any(|t| t.is_null()) {
+            Ok(Null)
         } else {
             Ok(List(Arc::new(Field::new(
                 "item",
@@ -159,15 +256,18 @@ impl ScalarUDFImpl for GenSeries {
     }
 
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        if args.iter().any(|arg| arg.data_type() == DataType::Null) {
+        if args.iter().any(|arg| arg.data_type().is_null()) {
             return Ok(ColumnarValue::Array(Arc::new(NullArray::new(1))));
         }
         match args[0].data_type() {
             Int64 => make_scalar_function(|args| gen_range_inner(args, true))(args),
             Date32 => make_scalar_function(|args| gen_range_date(args, true))(args),
+            Timestamp(_, _) => {
+                make_scalar_function(|args| gen_range_timestamp(args, true))(args)
+            }
             dt => {
                 exec_err!(
-                    "unsupported type for range. Expected Int64 or Date32, got: {}",
+                    "unsupported type for GENERATE_SERIES. Expected Int64, Date32 or Timestamp, got: {}",
                     dt
                 )
             }
@@ -177,6 +277,47 @@ impl ScalarUDFImpl for GenSeries {
     fn aliases(&self) -> &[String] {
         &self.aliases
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_generate_series_doc())
+    }
+}
+
+static GENERATE_SERIES_DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+
+fn get_generate_series_doc() -> &'static Documentation {
+    GENERATE_SERIES_DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_ARRAY)
+            .with_description(
+                "Similar to the range function, but it includes the upper bound.",
+            )
+            .with_syntax_example("generate_series(start, stop, step)")
+            .with_sql_example(
+                r#"```sql
+> select generate_series(1,3);
++------------------------------------+
+| generate_series(Int64(1),Int64(3)) |
++------------------------------------+
+| [1, 2, 3]                          |
++------------------------------------+
+```"#,
+            )
+            .with_argument(
+                "start",
+                "start of the series. Ints, timestamps, dates or string types that can be coerced to Date32 are supported.",
+            )
+            .with_argument(
+                "end",
+                "end of the series (included). Type must be the same as start.",
+            )
+            .with_argument(
+                "step",
+                "increase by step (can not be 0). Steps less than a day are supported only for timestamp ranges.",
+            )
+            .build()
+            .unwrap()
+    })
 }
 
 /// Generates an array of integers from start to stop with a given step.
@@ -303,7 +444,7 @@ fn gen_range_iter(
     }
 }
 
-fn gen_range_date(args: &[ArrayRef], include_upper: bool) -> Result<ArrayRef> {
+fn gen_range_date(args: &[ArrayRef], include_upper_bound: bool) -> Result<ArrayRef> {
     if args.len() != 3 {
         return exec_err!("arguments length does not match");
     }
@@ -341,7 +482,7 @@ fn gen_range_date(args: &[ArrayRef], include_upper: bool) -> Result<ArrayRef> {
         }
 
         let neg = months < 0 || days < 0;
-        if !include_upper {
+        if !include_upper_bound {
             stop = Date32Type::subtract_month_day_nano(stop, step);
         }
         let mut new_date = start;
@@ -362,4 +503,137 @@ fn gen_range_date(args: &[ArrayRef], include_upper: bool) -> Result<ArrayRef> {
     let arr = Arc::new(list_builder.finish());
 
     Ok(arr)
+}
+
+fn gen_range_timestamp(args: &[ArrayRef], include_upper_bound: bool) -> Result<ArrayRef> {
+    if args.len() != 3 {
+        return exec_err!(
+            "Arguments length must be 3 for {}",
+            if include_upper_bound {
+                "GENERATE_SERIES"
+            } else {
+                "RANGE"
+            }
+        );
+    }
+
+    // coerce_types fn should coerce all types to Timestamp(Nanosecond, tz)
+    let (start_arr, start_tz_opt) = cast_timestamp_arg(&args[0], include_upper_bound)?;
+    let (stop_arr, stop_tz_opt) = cast_timestamp_arg(&args[1], include_upper_bound)?;
+    let step_arr = as_interval_mdn_array(&args[2])?;
+    let start_tz = parse_tz(start_tz_opt)?;
+    let stop_tz = parse_tz(stop_tz_opt)?;
+
+    // values are timestamps
+    let values_builder = start_tz_opt
+        .clone()
+        .map_or_else(TimestampNanosecondBuilder::new, |start_tz_str| {
+            TimestampNanosecondBuilder::new().with_timezone(start_tz_str)
+        });
+    let mut list_builder = ListBuilder::new(values_builder);
+
+    for idx in 0..start_arr.len() {
+        if start_arr.is_null(idx) || stop_arr.is_null(idx) || step_arr.is_null(idx) {
+            list_builder.append_null();
+            continue;
+        }
+
+        let start = start_arr.value(idx);
+        let stop = stop_arr.value(idx);
+        let step = step_arr.value(idx);
+
+        let (months, days, ns) = IntervalMonthDayNanoType::to_parts(step);
+        if months == 0 && days == 0 && ns == 0 {
+            return exec_err!(
+                "Interval argument to {} must not be 0",
+                if include_upper_bound {
+                    "GENERATE_SERIES"
+                } else {
+                    "RANGE"
+                }
+            );
+        }
+
+        let neg = TSNT::add_month_day_nano(start, step, start_tz)
+            .ok_or(exec_datafusion_err!(
+                "Cannot generate timestamp range where start + step overflows"
+            ))?
+            .cmp(&start)
+            == Ordering::Less;
+
+        let stop_dt = as_datetime_with_timezone::<TSNT>(stop, stop_tz).ok_or(
+            exec_datafusion_err!(
+                "Cannot generate timestamp for stop: {}: {:?}",
+                stop,
+                stop_tz
+            ),
+        )?;
+
+        let mut current = start;
+        let mut current_dt = as_datetime_with_timezone::<TSNT>(current, start_tz).ok_or(
+            exec_datafusion_err!(
+                "Cannot generate timestamp for start: {}: {:?}",
+                current,
+                start_tz
+            ),
+        )?;
+
+        let values = from_fn(|| {
+            if (include_upper_bound
+                && ((neg && current_dt < stop_dt) || (!neg && current_dt > stop_dt)))
+                || (!include_upper_bound
+                    && ((neg && current_dt <= stop_dt)
+                        || (!neg && current_dt >= stop_dt)))
+            {
+                return None;
+            }
+
+            let prev_current = current;
+
+            if let Some(ts) = TSNT::add_month_day_nano(current, step, start_tz) {
+                current = ts;
+                current_dt = as_datetime_with_timezone::<TSNT>(current, start_tz)?;
+
+                Some(Some(prev_current))
+            } else {
+                // we failed to parse the timestamp here so terminate the series
+                None
+            }
+        });
+
+        list_builder.append_value(values);
+    }
+
+    let arr = Arc::new(list_builder.finish());
+
+    Ok(arr)
+}
+
+fn cast_timestamp_arg(
+    arg: &ArrayRef,
+    include_upper: bool,
+) -> Result<(&TimestampNanosecondArray, &Option<Arc<str>>)> {
+    match arg.data_type() {
+        Timestamp(Nanosecond, tz_opt) => {
+            Ok((as_timestamp_nanosecond_array(arg)?, tz_opt))
+        }
+        _ => {
+            internal_err!(
+                "Unexpected argument type for {} : {}",
+                if include_upper {
+                    "GENERATE_SERIES"
+                } else {
+                    "RANGE"
+                },
+                arg.data_type()
+            )
+        }
+    }
+}
+
+fn parse_tz(tz: &Option<Arc<str>>) -> Result<Tz> {
+    let tz = tz.as_ref().map_or_else(|| "+00", |s| s);
+
+    Tz::from_str(tz)
+        .map_err(|op| exec_datafusion_err!("failed to parse timezone {tz}: {:?}", op))
 }

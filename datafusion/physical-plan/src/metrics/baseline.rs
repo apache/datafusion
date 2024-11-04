@@ -56,7 +56,7 @@ pub struct BaselineMetrics {
 }
 
 impl BaselineMetrics {
-    /// Create a new BaselineMetric structure, and set  `start_time` to now
+    /// Create a new BaselineMetric structure, and set `start_time` to now
     pub fn new(metrics: &ExecutionPlanMetricsSet, partition: usize) -> Self {
         let start_time = MetricBuilder::new(metrics).start_timestamp(partition);
         start_time.record();

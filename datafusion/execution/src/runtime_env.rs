@@ -20,23 +20,28 @@
 
 use crate::{
     disk_manager::{DiskManager, DiskManagerConfig},
-    memory_pool::{GreedyMemoryPool, MemoryPool, UnboundedMemoryPool},
+    memory_pool::{
+        GreedyMemoryPool, MemoryPool, TrackConsumersPool, UnboundedMemoryPool,
+    },
     object_store::{DefaultObjectStoreRegistry, ObjectStoreRegistry},
 };
 
 use crate::cache::cache_manager::{CacheManager, CacheManagerConfig};
 use datafusion_common::{DataFusionError, Result};
 use object_store::ObjectStore;
-use std::fmt::{Debug, Formatter};
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::{
+    fmt::{Debug, Formatter},
+    num::NonZeroUsize,
+};
 use url::Url;
 
 #[derive(Clone)]
 /// Execution runtime environment that manages system resources such
 /// as memory, disk, cache and storage.
 ///
-/// A [`RuntimeEnv`] is created from a [`RuntimeConfig`] and has the
+/// A [`RuntimeEnv`] is created from a [`RuntimeEnvBuilder`] and has the
 /// following resource management functionality:
 ///
 /// * [`MemoryPool`]: Manage memory
@@ -61,8 +66,12 @@ impl Debug for RuntimeEnv {
 }
 
 impl RuntimeEnv {
-    /// Create env based on configuration
+    #[deprecated(note = "please use `try_new` instead")]
     pub fn new(config: RuntimeConfig) -> Result<Self> {
+        Self::try_new(config)
+    }
+    /// Create env based on configuration
+    pub fn try_new(config: RuntimeConfig) -> Result<Self> {
         let RuntimeConfig {
             memory_pool,
             disk_manager,
@@ -95,7 +104,7 @@ impl RuntimeEnv {
     /// # use std::sync::Arc;
     /// # use url::Url;
     /// # use datafusion_execution::runtime_env::RuntimeEnv;
-    /// # let runtime_env = RuntimeEnv::new(Default::default()).unwrap();
+    /// # let runtime_env = RuntimeEnv::try_new(Default::default()).unwrap();
     /// let url = Url::try_from("file://").unwrap();
     /// let object_store = object_store::local::LocalFileSystem::new();
     /// // register the object store with the runtime environment
@@ -110,7 +119,7 @@ impl RuntimeEnv {
     /// # use std::sync::Arc;
     /// # use url::Url;
     /// # use datafusion_execution::runtime_env::RuntimeEnv;
-    /// # let runtime_env = RuntimeEnv::new(Default::default()).unwrap();
+    /// # let runtime_env = RuntimeEnv::try_new(Default::default()).unwrap();
     /// # // use local store for example as http feature is not enabled
     /// # let http_store = object_store::local::LocalFileSystem::new();
     /// // create a new object store via object_store::http::HttpBuilder;
@@ -142,13 +151,17 @@ impl RuntimeEnv {
 
 impl Default for RuntimeEnv {
     fn default() -> Self {
-        RuntimeEnv::new(RuntimeConfig::new()).unwrap()
+        RuntimeEnvBuilder::new().build().unwrap()
     }
 }
 
+/// Please see: <https://github.com/apache/datafusion/issues/12156>
+/// This a type alias for backwards compatibility.
+pub type RuntimeConfig = RuntimeEnvBuilder;
+
 #[derive(Clone)]
 /// Execution runtime configuration
-pub struct RuntimeConfig {
+pub struct RuntimeEnvBuilder {
     /// DiskManager to manage temporary disk file usage
     pub disk_manager: DiskManagerConfig,
     /// [`MemoryPool`] from which to allocate memory
@@ -161,13 +174,13 @@ pub struct RuntimeConfig {
     pub object_store_registry: Arc<dyn ObjectStoreRegistry>,
 }
 
-impl Default for RuntimeConfig {
+impl Default for RuntimeEnvBuilder {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl RuntimeConfig {
+impl RuntimeEnvBuilder {
     /// New with default values
     pub fn new() -> Self {
         Self {
@@ -213,11 +226,33 @@ impl RuntimeConfig {
     /// Note DataFusion does not yet respect this limit in all cases.
     pub fn with_memory_limit(self, max_memory: usize, memory_fraction: f64) -> Self {
         let pool_size = (max_memory as f64 * memory_fraction) as usize;
-        self.with_memory_pool(Arc::new(GreedyMemoryPool::new(pool_size)))
+        self.with_memory_pool(Arc::new(TrackConsumersPool::new(
+            GreedyMemoryPool::new(pool_size),
+            NonZeroUsize::new(5).unwrap(),
+        )))
     }
 
     /// Use the specified path to create any needed temporary files
     pub fn with_temp_file_path(self, path: impl Into<PathBuf>) -> Self {
         self.with_disk_manager(DiskManagerConfig::new_specified(vec![path.into()]))
+    }
+
+    /// Build a RuntimeEnv
+    pub fn build(self) -> Result<RuntimeEnv> {
+        let memory_pool = self
+            .memory_pool
+            .unwrap_or_else(|| Arc::new(UnboundedMemoryPool::default()));
+
+        Ok(RuntimeEnv {
+            memory_pool,
+            disk_manager: DiskManager::try_new(self.disk_manager)?,
+            cache_manager: CacheManager::try_new(&self.cache_manager)?,
+            object_store_registry: self.object_store_registry,
+        })
+    }
+
+    /// Convenience method to create a new `Arc<RuntimeEnv>`
+    pub fn build_arc(self) -> Result<Arc<RuntimeEnv>> {
+        self.build().map(Arc::new)
     }
 }

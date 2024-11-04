@@ -50,7 +50,7 @@ impl TryFrom<&CsvOptions> for CsvWriterOptions {
 
     fn try_from(value: &CsvOptions) -> Result<Self> {
         let mut builder = WriterBuilder::default()
-            .with_header(value.has_header.unwrap_or(false))
+            .with_header(value.has_header.unwrap_or(true))
             .with_quote(value.quote)
             .with_delimiter(value.delimiter);
 

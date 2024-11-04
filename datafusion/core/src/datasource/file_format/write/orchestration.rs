@@ -298,8 +298,8 @@ pub(crate) async fn stateless_multipart_put(
         write_coordinator_task.join_unwind(),
         demux_task.join_unwind()
     );
-    r1?;
-    r2?;
+    r1.map_err(DataFusionError::ExecutionJoin)??;
+    r2.map_err(DataFusionError::ExecutionJoin)??;
 
     let total_count = rx_row_cnt.await.map_err(|_| {
         internal_datafusion_err!("Did not receive row count from write coordinator")

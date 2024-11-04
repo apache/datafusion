@@ -16,20 +16,21 @@
 // under the License.
 
 use std::any::Any;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use crate::utils::make_scalar_function;
 
-use arrow::array::{ArrayRef, Float32Array, Float64Array, Int32Array};
+use arrow::array::{ArrayRef, AsArray, PrimitiveArray};
 use arrow::compute::{cast_with_options, CastOptions};
-use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::{Float32, Float64, Int32};
-use datafusion_common::{
-    exec_datafusion_err, exec_err, DataFusionError, Result, ScalarValue,
-};
+use arrow::datatypes::{DataType, Float32Type, Float64Type, Int32Type};
+use datafusion_common::{exec_datafusion_err, exec_err, Result, ScalarValue};
+use datafusion_expr::scalar_doc_sections::DOC_SECTION_MATH;
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::TypeSignature::Exact;
-use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{
+    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+};
 
 #[derive(Debug)]
 pub struct RoundFunc {
@@ -97,6 +98,28 @@ impl ScalarUDFImpl for RoundFunc {
             Ok(SortProperties::Unordered)
         }
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_round_doc())
+    }
+}
+
+static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+
+fn get_round_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_MATH)
+            .with_description("Rounds a number to the nearest integer.")
+            .with_syntax_example("round(numeric_expression[, decimal_places])")
+            .with_standard_argument("numeric_expression", Some("Numeric"))
+            .with_argument(
+                "decimal_places",
+                "Optional. The number of decimal places to round to. Defaults to 0.",
+            )
+            .build()
+            .unwrap()
+    })
 }
 
 /// Round SQL function
@@ -115,7 +138,7 @@ pub fn round(args: &[ArrayRef]) -> Result<ArrayRef> {
     }
 
     match args[0].data_type() {
-        DataType::Float64 => match decimal_places {
+        Float64 => match decimal_places {
             ColumnarValue::Scalar(ScalarValue::Int64(Some(decimal_places))) => {
                 let decimal_places: i32 = decimal_places.try_into().map_err(|e| {
                     exec_datafusion_err!(
@@ -123,17 +146,13 @@ pub fn round(args: &[ArrayRef]) -> Result<ArrayRef> {
                     )
                 })?;
 
-                Ok(Arc::new(make_function_scalar_inputs!(
-                    &args[0],
-                    "value",
-                    Float64Array,
-                    {
-                        |value: f64| {
-                            (value * 10.0_f64.powi(decimal_places)).round()
-                                / 10.0_f64.powi(decimal_places)
-                        }
-                    }
-                )) as ArrayRef)
+                let result = args[0]
+                    .as_primitive::<Float64Type>()
+                    .unary::<_, Float64Type>(|value: f64| {
+                        (value * 10.0_f64.powi(decimal_places)).round()
+                            / 10.0_f64.powi(decimal_places)
+                    });
+                Ok(Arc::new(result) as _)
             }
             ColumnarValue::Array(decimal_places) => {
                 let options = CastOptions {
@@ -144,45 +163,38 @@ pub fn round(args: &[ArrayRef]) -> Result<ArrayRef> {
                     .map_err(|e| {
                         exec_datafusion_err!("Invalid values for decimal places: {e}")
                     })?;
-                Ok(Arc::new(make_function_inputs2!(
-                    &args[0],
+
+                let values = args[0].as_primitive::<Float64Type>();
+                let decimal_places = decimal_places.as_primitive::<Int32Type>();
+                let result = arrow::compute::binary::<_, _, _, Float64Type>(
+                    values,
                     decimal_places,
-                    "value",
-                    "decimal_places",
-                    Float64Array,
-                    Int32Array,
-                    {
-                        |value: f64, decimal_places: i32| {
-                            (value * 10.0_f64.powi(decimal_places)).round()
-                                / 10.0_f64.powi(decimal_places)
-                        }
-                    }
-                )) as ArrayRef)
+                    |value, decimal_places| {
+                        (value * 10.0_f64.powi(decimal_places)).round()
+                            / 10.0_f64.powi(decimal_places)
+                    },
+                )?;
+                Ok(Arc::new(result) as _)
             }
             _ => {
                 exec_err!("round function requires a scalar or array for decimal_places")
             }
         },
 
-        DataType::Float32 => match decimal_places {
+        Float32 => match decimal_places {
             ColumnarValue::Scalar(ScalarValue::Int64(Some(decimal_places))) => {
                 let decimal_places: i32 = decimal_places.try_into().map_err(|e| {
                     exec_datafusion_err!(
                         "Invalid value for decimal places: {decimal_places}: {e}"
                     )
                 })?;
-
-                Ok(Arc::new(make_function_scalar_inputs!(
-                    &args[0],
-                    "value",
-                    Float32Array,
-                    {
-                        |value: f32| {
-                            (value * 10.0_f32.powi(decimal_places)).round()
-                                / 10.0_f32.powi(decimal_places)
-                        }
-                    }
-                )) as ArrayRef)
+                let result = args[0]
+                    .as_primitive::<Float32Type>()
+                    .unary::<_, Float32Type>(|value: f32| {
+                        (value * 10.0_f32.powi(decimal_places)).round()
+                            / 10.0_f32.powi(decimal_places)
+                    });
+                Ok(Arc::new(result) as _)
             }
             ColumnarValue::Array(_) => {
                 let ColumnarValue::Array(decimal_places) =
@@ -193,20 +205,17 @@ pub fn round(args: &[ArrayRef]) -> Result<ArrayRef> {
                     panic!("Unexpected result of ColumnarValue::Array.cast")
                 };
 
-                Ok(Arc::new(make_function_inputs2!(
-                    &args[0],
+                let values = args[0].as_primitive::<Float32Type>();
+                let decimal_places = decimal_places.as_primitive::<Int32Type>();
+                let result: PrimitiveArray<Float32Type> = arrow::compute::binary(
+                    values,
                     decimal_places,
-                    "value",
-                    "decimal_places",
-                    Float32Array,
-                    Int32Array,
-                    {
-                        |value: f32, decimal_places: i32| {
-                            (value * 10.0_f32.powi(decimal_places)).round()
-                                / 10.0_f32.powi(decimal_places)
-                        }
-                    }
-                )) as ArrayRef)
+                    |value, decimal_places| {
+                        (value * 10.0_f32.powi(decimal_places)).round()
+                            / 10.0_f32.powi(decimal_places)
+                    },
+                )?;
+                Ok(Arc::new(result) as _)
             }
             _ => {
                 exec_err!("round function requires a scalar or array for decimal_places")

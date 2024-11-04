@@ -40,13 +40,14 @@ use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{internal_err, JoinSide, JoinType};
 use datafusion_expr::sort_properties::SortProperties;
 use datafusion_physical_expr::expressions::Column;
-use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
+use datafusion_physical_expr::PhysicalExpr;
+use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 
 /// The [`JoinSelection`] rule tries to modify a given plan so that it can
 /// accommodate infinite sources and optimize joins in the plan according to
 /// available statistical information, if there is any.
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct JoinSelection {}
 
 impl JoinSelection {
@@ -132,6 +133,9 @@ fn swap_join_type(join_type: JoinType) -> JoinType {
         JoinType::RightSemi => JoinType::LeftSemi,
         JoinType::LeftAnti => JoinType::RightAnti,
         JoinType::RightAnti => JoinType::LeftAnti,
+        JoinType::LeftMark => {
+            unreachable!("LeftMark join type does not support swapping")
+        }
     }
 }
 
@@ -140,20 +144,32 @@ fn swap_join_projection(
     left_schema_len: usize,
     right_schema_len: usize,
     projection: Option<&Vec<usize>>,
+    join_type: &JoinType,
 ) -> Option<Vec<usize>> {
-    projection.map(|p| {
-        p.iter()
-            .map(|i| {
-                // If the index is less than the left schema length, it is from the left schema, so we add the right schema length to it.
-                // Otherwise, it is from the right schema, so we subtract the left schema length from it.
-                if *i < left_schema_len {
-                    *i + right_schema_len
-                } else {
-                    *i - left_schema_len
-                }
-            })
-            .collect()
-    })
+    match join_type {
+        // For Anti/Semi join types, projection should remain unmodified,
+        // since these joins output schema remains the same after swap
+        JoinType::LeftAnti
+        | JoinType::LeftSemi
+        | JoinType::RightAnti
+        | JoinType::RightSemi => projection.cloned(),
+
+        _ => projection.map(|p| {
+            p.iter()
+                .map(|i| {
+                    // If the index is less than the left schema length, it is from
+                    // the left schema, so we add the right schema length to it.
+                    // Otherwise, it is from the right schema, so we subtract the left
+                    // schema length from it.
+                    if *i < left_schema_len {
+                        *i + right_schema_len
+                    } else {
+                        *i - left_schema_len
+                    }
+                })
+                .collect()
+        }),
+    }
 }
 
 /// This function swaps the inputs of the given join operator.
@@ -179,17 +195,20 @@ pub fn swap_hash_join(
             left.schema().fields().len(),
             right.schema().fields().len(),
             hash_join.projection.as_ref(),
+            hash_join.join_type(),
         ),
         partition_mode,
         hash_join.null_equals_null(),
     )?;
+    // In case of anti / semi joins or if there is embedded projection in HashJoinExec, output column order is preserved, no need to add projection again
     if matches!(
         hash_join.join_type(),
         JoinType::LeftSemi
             | JoinType::RightSemi
             | JoinType::LeftAnti
             | JoinType::RightAnti
-    ) {
+    ) || hash_join.projection.is_some()
+    {
         Ok(Arc::new(new_join))
     } else {
         // TODO avoid adding ProjectionExec again and again, only adding Final Projection
@@ -535,7 +554,7 @@ fn hash_join_convert_symmetric_subrule(
             // the function concludes that no specific order is required for the SymmetricHashJoinExec. This approach
             // ensures that the symmetric hash join operation only imposes ordering constraints when necessary,
             // based on the properties of the child nodes and the filter condition.
-            let determine_order = |side: JoinSide| -> Option<Vec<PhysicalSortExpr>> {
+            let determine_order = |side: JoinSide| -> Option<LexOrdering> {
                 hash_join
                     .filter()
                     .map(|filter| {
@@ -558,6 +577,7 @@ fn hash_join_convert_symmetric_subrule(
                                         hash_join.right().equivalence_properties(),
                                         hash_join.right().schema(),
                                     ),
+                                    JoinSide::None => return false,
                                 };
 
                                 let name = schema.field(*index).name();
@@ -573,8 +593,9 @@ fn hash_join_convert_symmetric_subrule(
                         match side {
                             JoinSide::Left => hash_join.left().output_ordering(),
                             JoinSide::Right => hash_join.right().output_ordering(),
+                            JoinSide::None => unreachable!(),
                         }
-                        .map(|p| p.to_vec())
+                        .map(|p| LexOrdering::new(p.to_vec()))
                     })
                     .flatten()
             };
@@ -704,7 +725,6 @@ fn apply_subrules(
 
 #[cfg(test)]
 mod tests_statistical {
-
     use super::*;
     use crate::{
         physical_plan::{displayable, ColumnStatistics, Statistics},
@@ -908,7 +928,7 @@ mod tests_statistical {
         );
 
         let optimized_join = JoinSelection::new()
-            .optimize(join.clone(), &ConfigOptions::new())
+            .optimize(join, &ConfigOptions::new())
             .unwrap();
 
         let swapping_projection = optimized_join
@@ -964,7 +984,7 @@ mod tests_statistical {
         );
 
         let optimized_join = JoinSelection::new()
-            .optimize(join.clone(), &ConfigOptions::new())
+            .optimize(join, &ConfigOptions::new())
             .unwrap();
 
         let swapped_join = optimized_join
@@ -1140,7 +1160,7 @@ mod tests_statistical {
         );
 
         let optimized_join = JoinSelection::new()
-            .optimize(join.clone(), &ConfigOptions::new())
+            .optimize(join, &ConfigOptions::new())
             .unwrap();
 
         let swapped_join = optimized_join
@@ -1180,7 +1200,7 @@ mod tests_statistical {
         );
 
         let optimized_join = JoinSelection::new()
-            .optimize(join.clone(), &ConfigOptions::new())
+            .optimize(join, &ConfigOptions::new())
             .unwrap();
 
         let swapping_projection = optimized_join
@@ -1287,6 +1307,65 @@ mod tests_statistical {
         );
     }
 
+    #[rstest(
+        join_type, projection, small_on_right,
+        case::inner(JoinType::Inner, vec![1], true),
+        case::left(JoinType::Left, vec![1], true),
+        case::right(JoinType::Right, vec![1], true),
+        case::full(JoinType::Full, vec![1], true),
+        case::left_anti(JoinType::LeftAnti, vec![0], false),
+        case::left_semi(JoinType::LeftSemi, vec![0], false),
+        case::right_anti(JoinType::RightAnti, vec![0], true),
+        case::right_semi(JoinType::RightSemi, vec![0], true),
+    )]
+    #[tokio::test]
+    async fn test_hash_join_swap_on_joins_with_projections(
+        join_type: JoinType,
+        projection: Vec<usize>,
+        small_on_right: bool,
+    ) -> Result<()> {
+        let (big, small) = create_big_and_small();
+
+        let left = if small_on_right { &big } else { &small };
+        let right = if small_on_right { &small } else { &big };
+
+        let left_on = if small_on_right {
+            "big_col"
+        } else {
+            "small_col"
+        };
+        let right_on = if small_on_right {
+            "small_col"
+        } else {
+            "big_col"
+        };
+
+        let join = Arc::new(HashJoinExec::try_new(
+            Arc::clone(left),
+            Arc::clone(right),
+            vec![(
+                Arc::new(Column::new_with_schema(left_on, &left.schema())?),
+                Arc::new(Column::new_with_schema(right_on, &right.schema())?),
+            )],
+            None,
+            &join_type,
+            Some(projection),
+            PartitionMode::Partitioned,
+            false,
+        )?);
+
+        let swapped = swap_hash_join(&join.clone(), PartitionMode::Partitioned)
+            .expect("swap_hash_join must support joins with projections");
+        let swapped_join = swapped.as_any().downcast_ref::<HashJoinExec>().expect(
+            "ProjectionExec won't be added above if HashJoinExec contains embedded projection",
+        );
+
+        assert_eq!(swapped_join.projection, Some(vec![0_usize]));
+        assert_eq!(swapped.schema().fields.len(), 1);
+        assert_eq!(swapped.schema().fields[0].name(), "small_col");
+        Ok(())
+    }
+
     #[tokio::test]
     async fn test_swap_reverting_projection() {
         let left_schema = Schema::new(vec![
@@ -1356,7 +1435,7 @@ mod tests_statistical {
             Arc::new(Column::new_with_schema("small_col", &small.schema()).unwrap()) as _,
         )];
         check_join_partition_mode(
-            big.clone(),
+            big,
             small.clone(),
             join_on,
             true,
@@ -1380,8 +1459,8 @@ mod tests_statistical {
             Arc::new(Column::new_with_schema("small_col", &small.schema()).unwrap()) as _,
         )];
         check_join_partition_mode(
-            empty.clone(),
-            small.clone(),
+            empty,
+            small,
             join_on,
             true,
             PartitionMode::CollectLeft,
@@ -1424,7 +1503,7 @@ mod tests_statistical {
             Arc::new(Column::new_with_schema("big_col", &big.schema()).unwrap()) as _,
         )];
         check_join_partition_mode(
-            bigger.clone(),
+            bigger,
             big.clone(),
             join_on,
             true,
@@ -1472,7 +1551,7 @@ mod tests_statistical {
         );
 
         let optimized_join = JoinSelection::new()
-            .optimize(join.clone(), &ConfigOptions::new())
+            .optimize(join, &ConfigOptions::new())
             .unwrap();
 
         if !is_swapped {
@@ -1913,8 +1992,7 @@ mod hash_join_tests {
             false,
         )?);
 
-        let optimized_join_plan =
-            hash_join_swap_subrule(join.clone(), &ConfigOptions::new())?;
+        let optimized_join_plan = hash_join_swap_subrule(join, &ConfigOptions::new())?;
 
         // If swap did happen
         let projection_added = optimized_join_plan.as_any().is::<ProjectionExec>();

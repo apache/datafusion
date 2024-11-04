@@ -29,7 +29,7 @@ use datafusion_expr::LogicalPlan;
 use std::sync::Arc;
 
 /// Analyzer rule that invokes [`FunctionRewrite`]s on expressions
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct ApplyFunctionRewrites {
     /// Expr --> Function writes to apply
     function_rewrites: Vec<Arc<dyn FunctionRewrite + Send + Sync>>,
@@ -48,7 +48,7 @@ impl ApplyFunctionRewrites {
     ) -> Result<Transformed<LogicalPlan>> {
         // get schema representing all available input fields. This is used for data type
         // resolution only, so order does not matter here
-        let mut schema = merge_schema(plan.inputs());
+        let mut schema = merge_schema(&plan.inputs());
 
         if let LogicalPlan::TableScan(ts) = &plan {
             let source_schema = DFSchema::try_from_qualified_schema(
@@ -61,7 +61,7 @@ impl ApplyFunctionRewrites {
         let name_preserver = NamePreserver::new(&plan);
 
         plan.map_expressions(|expr| {
-            let original_name = name_preserver.save(&expr)?;
+            let original_name = name_preserver.save(&expr);
 
             // recursively transform the expression, applying the rewrites at each step
             let transformed_expr = expr.transform_up(|expr| {
@@ -74,7 +74,7 @@ impl ApplyFunctionRewrites {
                 Ok(result)
             })?;
 
-            transformed_expr.map_data(|expr| original_name.restore(expr))
+            Ok(transformed_expr.update_data(|expr| original_name.restore(expr)))
         })
     }
 }

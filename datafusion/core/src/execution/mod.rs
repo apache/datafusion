@@ -19,6 +19,8 @@
 
 pub mod context;
 pub mod session_state;
+pub use session_state::{SessionState, SessionStateBuilder};
+
 mod session_state_defaults;
 
 pub use session_state_defaults::SessionStateDefaults;

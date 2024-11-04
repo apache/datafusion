@@ -17,8 +17,8 @@
 
 //! CteWorkTable implementation used for recursive queries
 
-use std::any::Any;
 use std::sync::Arc;
+use std::{any::Any, borrow::Cow};
 
 use arrow::datatypes::SchemaRef;
 use async_trait::async_trait;
@@ -36,6 +36,7 @@ use crate::datasource::{TableProvider, TableType};
 /// The temporary working table where the previous iteration of a recursive query is stored
 /// Naming is based on PostgreSQL's implementation.
 /// See here for more details: www.postgresql.org/docs/11/queries-with.html#id-1.5.6.12.5.4
+#[derive(Debug)]
 pub struct CteWorkTable {
     /// The name of the CTE work table
     // WIP, see https://github.com/apache/datafusion/issues/462
@@ -63,7 +64,7 @@ impl TableProvider for CteWorkTable {
         self
     }
 
-    fn get_logical_plan(&self) -> Option<&LogicalPlan> {
+    fn get_logical_plan(&self) -> Option<Cow<LogicalPlan>> {
         None
     }
 

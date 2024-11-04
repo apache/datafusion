@@ -17,7 +17,7 @@
 
 //! View data source which uses a LogicalPlan as it's input.
 
-use std::{any::Any, sync::Arc};
+use std::{any::Any, borrow::Cow, sync::Arc};
 
 use crate::{
     error::Result,
@@ -36,6 +36,7 @@ use datafusion_optimizer::Analyzer;
 use crate::datasource::{TableProvider, TableType};
 
 /// An implementation of `TableProvider` that uses another logical plan.
+#[derive(Debug)]
 pub struct ViewTable {
     /// LogicalPlan of the view
     logical_plan: LogicalPlan,
@@ -90,8 +91,8 @@ impl TableProvider for ViewTable {
         self
     }
 
-    fn get_logical_plan(&self) -> Option<&LogicalPlan> {
-        Some(&self.logical_plan)
+    fn get_logical_plan(&self) -> Option<Cow<LogicalPlan>> {
+        Some(Cow::Borrowed(&self.logical_plan))
     }
 
     fn schema(&self) -> SchemaRef {

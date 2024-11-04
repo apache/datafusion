@@ -109,7 +109,7 @@ async fn main() -> Result<()> {
         // expects two f64
         vec![DataType::Float64, DataType::Float64],
         // returns f64
-        Arc::new(DataType::Float64),
+        DataType::Float64,
         Volatility::Immutable,
         pow,
     );

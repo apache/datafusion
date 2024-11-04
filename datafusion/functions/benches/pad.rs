@@ -67,11 +67,11 @@ where
 fn create_args<O: OffsetSizeTrait>(
     size: usize,
     str_len: usize,
-    use_string_view: bool,
+    force_view_types: bool,
 ) -> Vec<ColumnarValue> {
     let length_array = Arc::new(create_primitive_array::<Int64Type>(size, 0.0, str_len));
 
-    if !use_string_view {
+    if !force_view_types {
         let string_array =
             Arc::new(create_string_array_with_len::<O>(size, 0.1, str_len));
         let fill_array = Arc::new(create_string_array_with_len::<O>(size, 0.1, str_len));
@@ -101,17 +101,26 @@ fn criterion_benchmark(c: &mut Criterion) {
 
         let args = create_args::<i32>(size, 32, false);
         group.bench_function(BenchmarkId::new("utf8 type", size), |b| {
-            b.iter(|| criterion::black_box(lpad().invoke(&args).unwrap()))
+            b.iter(|| {
+                #[allow(deprecated)] // TODO use invoke_batch
+                criterion::black_box(lpad().invoke(&args).unwrap())
+            })
         });
 
         let args = create_args::<i64>(size, 32, false);
         group.bench_function(BenchmarkId::new("largeutf8 type", size), |b| {
-            b.iter(|| criterion::black_box(lpad().invoke(&args).unwrap()))
+            b.iter(|| {
+                #[allow(deprecated)] // TODO use invoke_batch
+                criterion::black_box(lpad().invoke(&args).unwrap())
+            })
         });
 
         let args = create_args::<i32>(size, 32, true);
         group.bench_function(BenchmarkId::new("stringview type", size), |b| {
-            b.iter(|| criterion::black_box(lpad().invoke(&args).unwrap()))
+            b.iter(|| {
+                #[allow(deprecated)] // TODO use invoke_batch
+                criterion::black_box(lpad().invoke(&args).unwrap())
+            })
         });
 
         group.finish();
@@ -120,18 +129,28 @@ fn criterion_benchmark(c: &mut Criterion) {
 
         let args = create_args::<i32>(size, 32, false);
         group.bench_function(BenchmarkId::new("utf8 type", size), |b| {
-            b.iter(|| criterion::black_box(rpad().invoke(&args).unwrap()))
+            b.iter(|| {
+                #[allow(deprecated)] // TODO use invoke_batch
+                criterion::black_box(rpad().invoke(&args).unwrap())
+            })
         });
 
         let args = create_args::<i64>(size, 32, false);
         group.bench_function(BenchmarkId::new("largeutf8 type", size), |b| {
-            b.iter(|| criterion::black_box(rpad().invoke(&args).unwrap()))
+            b.iter(|| {
+                #[allow(deprecated)] // TODO use invoke_batch
+                criterion::black_box(rpad().invoke(&args).unwrap())
+            })
         });
-        //
-        // let args = create_args::<i32>(size, 32, true);
-        // group.bench_function(BenchmarkId::new("stringview type", size), |b| {
-        //     b.iter(|| criterion::black_box(rpad().invoke(&args).unwrap()))
-        // });
+
+        // rpad for stringview type
+        let args = create_args::<i32>(size, 32, true);
+        group.bench_function(BenchmarkId::new("stringview type", size), |b| {
+            b.iter(|| {
+                #[allow(deprecated)] // TODO use invoke_batch
+                criterion::black_box(rpad().invoke(&args).unwrap())
+            })
+        });
 
         group.finish();
     }

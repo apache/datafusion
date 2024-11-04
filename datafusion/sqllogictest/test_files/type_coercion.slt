@@ -50,6 +50,35 @@ select interval '1 month' - '2023-05-01'::date;
 query error DataFusion error: Error during planning: Cannot coerce arithmetic expression Interval\(MonthDayNano\) \- Timestamp\(Nanosecond, None\) to valid types
 SELECT interval '1 month' - '2023-05-01 12:30:00'::timestamp;
 
+# dictionary(int32, utf8) -> utf8
+query T
+select arrow_cast('foo', 'Dictionary(Int32, Utf8)') || arrow_cast('bar', 'Dictionary(Int32, Utf8)');
+----
+foobar
+
+# dictionary(int32, largeUtf8) -> largeUtf8
+query T
+select arrow_cast('foo', 'Dictionary(Int32, LargeUtf8)') || arrow_cast('bar', 'Dictionary(Int32, LargeUtf8)');
+----
+foobar
+
+####################################
+## Concat column dictionary test  ##
+####################################
+statement ok
+create table t as values (arrow_cast('foo', 'Dictionary(Int32, Utf8)'), arrow_cast('bar', 'Dictionary(Int32, Utf8)'));
+
+query T
+select column1 || column2 from t;
+----
+foobar
+
+statement ok
+DROP TABLE t
+
+#######################################
+## Concat column dictionary test end ##
+#######################################
 
 ####################################
 ## Test type coercion with UNIONs ##
@@ -74,11 +103,11 @@ CREATE TABLE orders(
 );
 
 # union_different_num_columns_error() / UNION
-query error Error during planning: Union schemas have different number of fields: query 1 has 1 fields whereas query 2 has 2 fields
+query error DataFusion error: Error during planning: UNION queries have different number of columns: left has 1 columns whereas right has 2 columns
 SELECT order_id FROM orders UNION SELECT customer_id, o_item_id FROM orders
 
 # union_different_num_columns_error() / UNION ALL
-query error Error during planning: Union schemas have different number of fields: query 1 has 1 fields whereas query 2 has 2 fields
+query error DataFusion error: Error during planning: UNION queries have different number of columns: left has 1 columns whereas right has 2 columns
 SELECT order_id FROM orders UNION ALL SELECT customer_id, o_item_id FROM orders
 
 # union_with_different_column_names()

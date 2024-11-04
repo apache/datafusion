@@ -17,3 +17,4 @@
 
 /// Run all tests that are found in the `cases` directory
 mod cases;
+mod utils;

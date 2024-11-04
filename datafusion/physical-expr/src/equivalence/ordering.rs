@@ -15,13 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::fmt::Display;
 use std::hash::Hash;
 use std::sync::Arc;
-
-use arrow_schema::SortOptions;
+use std::vec::IntoIter;
 
 use crate::equivalence::add_offset_to_expr;
-use crate::{LexOrdering, PhysicalExpr, PhysicalSortExpr};
+use crate::{LexOrdering, PhysicalExpr};
+use arrow_schema::SortOptions;
 
 /// An `OrderingEquivalenceClass` object keeps track of different alternative
 /// orderings than can describe a schema. For example, consider the following table:
@@ -36,7 +37,7 @@ use crate::{LexOrdering, PhysicalExpr, PhysicalSortExpr};
 ///
 /// Here, both `vec![a ASC, b ASC]` and `vec![c DESC, d ASC]` describe the table
 /// ordering. In this case, we say that these orderings are equivalent.
-#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+#[derive(Debug, Clone, Eq, PartialEq, Hash, Default)]
 pub struct OrderingEquivalenceClass {
     pub orderings: Vec<LexOrdering>,
 }
@@ -44,7 +45,7 @@ pub struct OrderingEquivalenceClass {
 impl OrderingEquivalenceClass {
     /// Creates new empty ordering equivalence class.
     pub fn empty() -> Self {
-        Self { orderings: vec![] }
+        Default::default()
     }
 
     /// Clears (empties) this ordering equivalence class.
@@ -104,6 +105,11 @@ impl OrderingEquivalenceClass {
         self.remove_redundant_entries();
     }
 
+    /// Adds a single ordering to the existing ordering equivalence class.
+    pub fn add_new_ordering(&mut self, ordering: LexOrdering) {
+        self.add_new_orderings([ordering]);
+    }
+
     /// Removes redundant orderings from this equivalence class. For instance,
     /// if we already have the ordering `[a ASC, b ASC, c DESC]`, then there is
     /// no need to keep ordering `[a ASC, b ASC]` in the state.
@@ -140,7 +146,12 @@ impl OrderingEquivalenceClass {
     /// Returns the concatenation of all the orderings. This enables merge
     /// operations to preserve all equivalent orderings simultaneously.
     pub fn output_ordering(&self) -> Option<LexOrdering> {
-        let output_ordering = self.orderings.iter().flatten().cloned().collect();
+        let output_ordering = self
+            .orderings
+            .iter()
+            .flat_map(|ordering| ordering.as_ref())
+            .cloned()
+            .collect();
         let output_ordering = collapse_lex_ordering(output_ordering);
         (!output_ordering.is_empty()).then_some(output_ordering)
     }
@@ -163,7 +174,7 @@ impl OrderingEquivalenceClass {
             for idx in 0..n_ordering {
                 // Calculate cross product index
                 let idx = outer_idx * n_ordering + idx;
-                self.orderings[idx].extend(ordering.iter().cloned());
+                self.orderings[idx].inner.extend(ordering.iter().cloned());
             }
         }
         self
@@ -173,7 +184,7 @@ impl OrderingEquivalenceClass {
     /// ordering equivalence class.
     pub fn add_offset(&mut self, offset: usize) {
         for ordering in self.orderings.iter_mut() {
-            for sort_expr in ordering {
+            for sort_expr in ordering.inner.iter_mut() {
                 sort_expr.expr = add_offset_to_expr(Arc::clone(&sort_expr.expr), offset);
             }
         }
@@ -192,14 +203,23 @@ impl OrderingEquivalenceClass {
     }
 }
 
+impl IntoIterator for OrderingEquivalenceClass {
+    type Item = LexOrdering;
+    type IntoIter = IntoIter<LexOrdering>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.orderings.into_iter()
+    }
+}
+
 /// This function constructs a duplicate-free `LexOrdering` by filtering out
 /// duplicate entries that have same physical expression inside. For example,
 /// `vec![a ASC, a DESC]` collapses to `vec![a ASC]`.
 pub fn collapse_lex_ordering(input: LexOrdering) -> LexOrdering {
-    let mut output = Vec::<PhysicalSortExpr>::new();
-    for item in input {
+    let mut output = LexOrdering::default();
+    for item in input.iter() {
         if !output.iter().any(|req| req.expr.eq(&item.expr)) {
-            output.push(item);
+            output.push(item.clone());
         }
     }
     output
@@ -219,14 +239,27 @@ fn resolve_overlap(orderings: &mut [LexOrdering], idx: usize, pre_idx: usize) ->
     false
 }
 
+impl Display for OrderingEquivalenceClass {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "[")?;
+        let mut iter = self.orderings.iter();
+        if let Some(ordering) = iter.next() {
+            write!(f, "[{}]", ordering)?;
+        }
+        for ordering in iter {
+            write!(f, ", [{}]", ordering)?;
+        }
+        write!(f, "]")?;
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
 
     use crate::equivalence::tests::{
-        convert_to_orderings, convert_to_sort_exprs, create_random_schema,
-        create_test_params, create_test_schema, generate_table_for_eq_properties,
-        is_table_same_after_sort,
+        convert_to_orderings, convert_to_sort_exprs, create_test_schema,
     };
     use crate::equivalence::{
         EquivalenceClass, EquivalenceGroup, EquivalenceProperties,
@@ -240,8 +273,7 @@ mod tests {
     use arrow_schema::SortOptions;
     use datafusion_common::{DFSchema, Result};
     use datafusion_expr::{Operator, ScalarUDF};
-
-    use itertools::Itertools;
+    use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
     #[test]
     fn test_ordering_satisfy() -> Result<()> {
@@ -249,11 +281,11 @@ mod tests {
             Field::new("a", DataType::Int64, true),
             Field::new("b", DataType::Int64, true),
         ]));
-        let crude = vec![PhysicalSortExpr {
+        let crude = LexOrdering::new(vec![PhysicalSortExpr {
             expr: Arc::new(Column::new("a", 0)),
             options: SortOptions::default(),
-        }];
-        let finer = vec![
+        }]);
+        let finer = LexOrdering::new(vec![
             PhysicalSortExpr {
                 expr: Arc::new(Column::new("a", 0)),
                 options: SortOptions::default(),
@@ -262,18 +294,18 @@ mod tests {
                 expr: Arc::new(Column::new("b", 1)),
                 options: SortOptions::default(),
             },
-        ];
+        ]);
         // finer ordering satisfies, crude ordering should return true
         let mut eq_properties_finer =
             EquivalenceProperties::new(Arc::clone(&input_schema));
         eq_properties_finer.oeq_class.push(finer.clone());
-        assert!(eq_properties_finer.ordering_satisfy(&crude));
+        assert!(eq_properties_finer.ordering_satisfy(crude.as_ref()));
 
         // Crude ordering doesn't satisfy finer ordering. should return false
         let mut eq_properties_crude =
             EquivalenceProperties::new(Arc::clone(&input_schema));
-        eq_properties_crude.oeq_class.push(crude.clone());
-        assert!(!eq_properties_crude.ordering_satisfy(&finer));
+        eq_properties_crude.oeq_class.push(crude);
+        assert!(!eq_properties_crude.ordering_satisfy(finer.as_ref()));
         Ok(())
     }
 
@@ -559,314 +591,15 @@ mod tests {
             let constants = constants
                 .into_iter()
                 .map(|expr| ConstExpr::from(expr).with_across_partitions(true));
-            eq_properties = eq_properties.add_constants(constants);
+            eq_properties = eq_properties.with_constants(constants);
 
             let reqs = convert_to_sort_exprs(&reqs);
             assert_eq!(
-                eq_properties.ordering_satisfy(&reqs),
+                eq_properties.ordering_satisfy(reqs.as_ref()),
                 expected,
                 "{}",
                 err_msg
             );
-        }
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_ordering_satisfy_with_equivalence() -> Result<()> {
-        // Schema satisfies following orderings:
-        // [a ASC], [d ASC, b ASC], [e DESC, f ASC, g ASC]
-        // and
-        // Column [a=c] (e.g they are aliases).
-        let (test_schema, eq_properties) = create_test_params()?;
-        let col_a = &col("a", &test_schema)?;
-        let col_b = &col("b", &test_schema)?;
-        let col_c = &col("c", &test_schema)?;
-        let col_d = &col("d", &test_schema)?;
-        let col_e = &col("e", &test_schema)?;
-        let col_f = &col("f", &test_schema)?;
-        let col_g = &col("g", &test_schema)?;
-        let option_asc = SortOptions {
-            descending: false,
-            nulls_first: false,
-        };
-        let option_desc = SortOptions {
-            descending: true,
-            nulls_first: true,
-        };
-        let table_data_with_properties =
-            generate_table_for_eq_properties(&eq_properties, 625, 5)?;
-
-        // First element in the tuple stores vector of requirement, second element is the expected return value for ordering_satisfy function
-        let requirements = vec![
-            // `a ASC NULLS LAST`, expects `ordering_satisfy` to be `true`, since existing ordering `a ASC NULLS LAST, b ASC NULLS LAST` satisfies it
-            (vec![(col_a, option_asc)], true),
-            (vec![(col_a, option_desc)], false),
-            // Test whether equivalence works as expected
-            (vec![(col_c, option_asc)], true),
-            (vec![(col_c, option_desc)], false),
-            // Test whether ordering equivalence works as expected
-            (vec![(col_d, option_asc)], true),
-            (vec![(col_d, option_asc), (col_b, option_asc)], true),
-            (vec![(col_d, option_desc), (col_b, option_asc)], false),
-            (
-                vec![
-                    (col_e, option_desc),
-                    (col_f, option_asc),
-                    (col_g, option_asc),
-                ],
-                true,
-            ),
-            (vec![(col_e, option_desc), (col_f, option_asc)], true),
-            (vec![(col_e, option_asc), (col_f, option_asc)], false),
-            (vec![(col_e, option_desc), (col_b, option_asc)], false),
-            (vec![(col_e, option_asc), (col_b, option_asc)], false),
-            (
-                vec![
-                    (col_d, option_asc),
-                    (col_b, option_asc),
-                    (col_d, option_asc),
-                    (col_b, option_asc),
-                ],
-                true,
-            ),
-            (
-                vec![
-                    (col_d, option_asc),
-                    (col_b, option_asc),
-                    (col_e, option_desc),
-                    (col_f, option_asc),
-                ],
-                true,
-            ),
-            (
-                vec![
-                    (col_d, option_asc),
-                    (col_b, option_asc),
-                    (col_e, option_desc),
-                    (col_b, option_asc),
-                ],
-                true,
-            ),
-            (
-                vec![
-                    (col_d, option_asc),
-                    (col_b, option_asc),
-                    (col_d, option_desc),
-                    (col_b, option_asc),
-                ],
-                true,
-            ),
-            (
-                vec![
-                    (col_d, option_asc),
-                    (col_b, option_asc),
-                    (col_e, option_asc),
-                    (col_f, option_asc),
-                ],
-                false,
-            ),
-            (
-                vec![
-                    (col_d, option_asc),
-                    (col_b, option_asc),
-                    (col_e, option_asc),
-                    (col_b, option_asc),
-                ],
-                false,
-            ),
-            (vec![(col_d, option_asc), (col_e, option_desc)], true),
-            (
-                vec![
-                    (col_d, option_asc),
-                    (col_c, option_asc),
-                    (col_b, option_asc),
-                ],
-                true,
-            ),
-            (
-                vec![
-                    (col_d, option_asc),
-                    (col_e, option_desc),
-                    (col_f, option_asc),
-                    (col_b, option_asc),
-                ],
-                true,
-            ),
-            (
-                vec![
-                    (col_d, option_asc),
-                    (col_e, option_desc),
-                    (col_c, option_asc),
-                    (col_b, option_asc),
-                ],
-                true,
-            ),
-            (
-                vec![
-                    (col_d, option_asc),
-                    (col_e, option_desc),
-                    (col_b, option_asc),
-                    (col_f, option_asc),
-                ],
-                true,
-            ),
-        ];
-
-        for (cols, expected) in requirements {
-            let err_msg = format!("Error in test case:{cols:?}");
-            let required = cols
-                .into_iter()
-                .map(|(expr, options)| PhysicalSortExpr {
-                    expr: Arc::clone(expr),
-                    options,
-                })
-                .collect::<Vec<_>>();
-
-            // Check expected result with experimental result.
-            assert_eq!(
-                is_table_same_after_sort(
-                    required.clone(),
-                    table_data_with_properties.clone()
-                )?,
-                expected
-            );
-            assert_eq!(
-                eq_properties.ordering_satisfy(&required),
-                expected,
-                "{err_msg}"
-            );
-        }
-        Ok(())
-    }
-
-    #[test]
-    fn test_ordering_satisfy_with_equivalence_random() -> Result<()> {
-        const N_RANDOM_SCHEMA: usize = 5;
-        const N_ELEMENTS: usize = 125;
-        const N_DISTINCT: usize = 5;
-        const SORT_OPTIONS: SortOptions = SortOptions {
-            descending: false,
-            nulls_first: false,
-        };
-
-        for seed in 0..N_RANDOM_SCHEMA {
-            // Create a random schema with random properties
-            let (test_schema, eq_properties) = create_random_schema(seed as u64)?;
-            // Generate a data that satisfies properties given
-            let table_data_with_properties =
-                generate_table_for_eq_properties(&eq_properties, N_ELEMENTS, N_DISTINCT)?;
-            let col_exprs = [
-                col("a", &test_schema)?,
-                col("b", &test_schema)?,
-                col("c", &test_schema)?,
-                col("d", &test_schema)?,
-                col("e", &test_schema)?,
-                col("f", &test_schema)?,
-            ];
-
-            for n_req in 0..=col_exprs.len() {
-                for exprs in col_exprs.iter().combinations(n_req) {
-                    let requirement = exprs
-                        .into_iter()
-                        .map(|expr| PhysicalSortExpr {
-                            expr: Arc::clone(expr),
-                            options: SORT_OPTIONS,
-                        })
-                        .collect::<Vec<_>>();
-                    let expected = is_table_same_after_sort(
-                        requirement.clone(),
-                        table_data_with_properties.clone(),
-                    )?;
-                    let err_msg = format!(
-                        "Error in test case requirement:{:?}, expected: {:?}, eq_properties.oeq_class: {:?}, eq_properties.eq_group: {:?}, eq_properties.constants: {:?}",
-                        requirement, expected, eq_properties.oeq_class, eq_properties.eq_group, eq_properties.constants
-                    );
-                    // Check whether ordering_satisfy API result and
-                    // experimental result matches.
-                    assert_eq!(
-                        eq_properties.ordering_satisfy(&requirement),
-                        expected,
-                        "{}",
-                        err_msg
-                    );
-                }
-            }
-        }
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_ordering_satisfy_with_equivalence_complex_random() -> Result<()> {
-        const N_RANDOM_SCHEMA: usize = 100;
-        const N_ELEMENTS: usize = 125;
-        const N_DISTINCT: usize = 5;
-        const SORT_OPTIONS: SortOptions = SortOptions {
-            descending: false,
-            nulls_first: false,
-        };
-
-        for seed in 0..N_RANDOM_SCHEMA {
-            // Create a random schema with random properties
-            let (test_schema, eq_properties) = create_random_schema(seed as u64)?;
-            // Generate a data that satisfies properties given
-            let table_data_with_properties =
-                generate_table_for_eq_properties(&eq_properties, N_ELEMENTS, N_DISTINCT)?;
-
-            let test_fun = ScalarUDF::new_from_impl(TestScalarUDF::new());
-            let floor_a = crate::udf::create_physical_expr(
-                &test_fun,
-                &[col("a", &test_schema)?],
-                &test_schema,
-                &[],
-                &DFSchema::empty(),
-            )?;
-            let a_plus_b = Arc::new(BinaryExpr::new(
-                col("a", &test_schema)?,
-                Operator::Plus,
-                col("b", &test_schema)?,
-            )) as Arc<dyn PhysicalExpr>;
-            let exprs = [
-                col("a", &test_schema)?,
-                col("b", &test_schema)?,
-                col("c", &test_schema)?,
-                col("d", &test_schema)?,
-                col("e", &test_schema)?,
-                col("f", &test_schema)?,
-                floor_a,
-                a_plus_b,
-            ];
-
-            for n_req in 0..=exprs.len() {
-                for exprs in exprs.iter().combinations(n_req) {
-                    let requirement = exprs
-                        .into_iter()
-                        .map(|expr| PhysicalSortExpr {
-                            expr: Arc::clone(expr),
-                            options: SORT_OPTIONS,
-                        })
-                        .collect::<Vec<_>>();
-                    let expected = is_table_same_after_sort(
-                        requirement.clone(),
-                        table_data_with_properties.clone(),
-                    )?;
-                    let err_msg = format!(
-                        "Error in test case requirement:{:?}, expected: {:?}, eq_properties.oeq_class: {:?}, eq_properties.eq_group: {:?}, eq_properties.constants: {:?}",
-                        requirement, expected, eq_properties.oeq_class, eq_properties.eq_group, eq_properties.constants
-                    );
-                    // Check whether ordering_satisfy API result and
-                    // experimental result matches.
-
-                    assert_eq!(
-                        eq_properties.ordering_satisfy(&requirement),
-                        (expected | false),
-                        "{}",
-                        err_msg
-                    );
-                }
-            }
         }
 
         Ok(())
@@ -922,7 +655,7 @@ mod tests {
                 format!("error in test reqs: {:?}, expected: {:?}", reqs, expected,);
             let reqs = convert_to_sort_exprs(&reqs);
             assert_eq!(
-                eq_properties.ordering_satisfy(&reqs),
+                eq_properties.ordering_satisfy(reqs.as_ref()),
                 expected,
                 "{}",
                 err_msg

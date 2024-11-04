@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::sync::Arc;
+
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use datafusion_common::{DFSchema, Result};
 use datafusion_expr::{LogicalPlan, LogicalPlanBuilder};
@@ -31,16 +33,21 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             rows,
         } = values;
 
-        // values should not be based on any other schema
-        let schema = DFSchema::empty();
+        let empty_schema = Arc::new(DFSchema::empty());
         let values = rows
             .into_iter()
             .map(|row| {
                 row.into_iter()
-                    .map(|v| self.sql_to_expr(v, &schema, planner_context))
+                    .map(|v| self.sql_to_expr(v, &empty_schema, planner_context))
                     .collect::<Result<Vec<_>>>()
             })
             .collect::<Result<Vec<_>>>()?;
-        LogicalPlanBuilder::values(values)?.build()
+
+        let schema = planner_context.table_schema().unwrap_or(empty_schema);
+        if schema.fields().is_empty() {
+            LogicalPlanBuilder::values(values)?.build()
+        } else {
+            LogicalPlanBuilder::values_with_schema(values, &schema)?.build()
+        }
     }
 }

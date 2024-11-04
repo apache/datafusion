@@ -178,6 +178,8 @@ impl PagePruningAccessPlanFilter {
 
         // track the total number of rows that should be skipped
         let mut total_skip = 0;
+        // track the total number of rows that should not be skipped
+        let mut total_select = 0;
 
         // for each row group specified in the access plan
         let row_group_indexes = access_plan.row_group_indexes();
@@ -242,8 +244,10 @@ impl PagePruningAccessPlanFilter {
             if let Some(overall_selection) = overall_selection {
                 if overall_selection.selects_any() {
                     let rows_skipped = rows_skipped(&overall_selection);
-                    trace!("Overall selection from predicate skipped {rows_skipped}: {overall_selection:?}");
+                    let rows_selected = rows_selected(&overall_selection);
+                    trace!("Overall selection from predicate skipped {rows_skipped}, selected {rows_selected}: {overall_selection:?}");
                     total_skip += rows_skipped;
+                    total_select += rows_selected;
                     access_plan.scan_selection(row_group_index, overall_selection)
                 } else {
                     // Selection skips all rows, so skip the entire row group
@@ -258,7 +262,8 @@ impl PagePruningAccessPlanFilter {
             }
         }
 
-        file_metrics.page_index_rows_filtered.add(total_skip);
+        file_metrics.page_index_rows_pruned.add(total_skip);
+        file_metrics.page_index_rows_matched.add(total_select);
         access_plan
     }
 
@@ -274,6 +279,14 @@ fn rows_skipped(selection: &RowSelection) -> usize {
     selection
         .iter()
         .fold(0, |acc, x| if x.skip { acc + x.row_count } else { acc })
+}
+
+/// returns the number of rows not skipped in the selection
+/// TODO should this be upstreamed to RowSelection?
+fn rows_selected(selection: &RowSelection) -> usize {
+    selection
+        .iter()
+        .fold(0, |acc, x| if x.skip { acc } else { acc + x.row_count })
 }
 
 fn update_selection(
@@ -392,13 +405,16 @@ impl<'a> PagesPruningStatistics<'a> {
             trace!("No page offsets for row group {row_group_index}, skipping");
             return None;
         };
-        let Some(page_offsets) = row_group_page_offsets.get(parquet_column_index) else {
+        let Some(offset_index_metadata) =
+            row_group_page_offsets.get(parquet_column_index)
+        else {
             trace!(
                 "No page offsets for column {:?} in row group {row_group_index}, skipping",
                 converter.arrow_field()
             );
             return None;
         };
+        let page_offsets = offset_index_metadata.page_locations();
 
         Some(Self {
             row_group_index,

@@ -19,7 +19,7 @@ use std::sync::Arc;
 
 use crate::scalar_function;
 use crate::{
-    expressions::{self, binary, like, Column, Literal},
+    expressions::{self, binary, like, similar_to, Column, Literal},
     PhysicalExpr,
 };
 
@@ -214,6 +214,22 @@ pub fn create_physical_expr(
                 physical_pattern,
                 input_schema,
             )
+        }
+        Expr::SimilarTo(Like {
+            negated,
+            expr,
+            pattern,
+            escape_char,
+            case_insensitive,
+        }) => {
+            if escape_char.is_some() {
+                return exec_err!("SIMILAR TO does not support escape_char yet");
+            }
+            let physical_expr =
+                create_physical_expr(expr, input_dfschema, execution_props)?;
+            let physical_pattern =
+                create_physical_expr(pattern, input_dfschema, execution_props)?;
+            similar_to(*negated, *case_insensitive, physical_expr, physical_pattern)
         }
         Expr::Case(case) => {
             let expr: Option<Arc<dyn PhysicalExpr>> = if let Some(e) = &case.expr {

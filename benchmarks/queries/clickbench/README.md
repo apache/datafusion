@@ -58,6 +58,77 @@ LIMIT 10;
 ```
 
 
+### Q3: What is the income distribution for users in specific regions
+
+**Question**: "What regions and social networks have the highest variance of parameter price?"
+
+**Important Query Properties**: STDDEV and VAR aggregation functions, GROUP BY multiple small ints
+
+```sql
+SELECT "SocialSourceNetworkID", "RegionID", COUNT(*), AVG("Age"), AVG("ParamPrice"), STDDEV("ParamPrice") as s, VAR("ParamPrice") 
+FROM 'hits.parquet' 
+GROUP BY "SocialSourceNetworkID", "RegionID"  
+HAVING s IS NOT NULL
+ORDER BY s DESC 
+LIMIT 10;
+```
+
+### Q4: Response start time distribution analysis (median)
+
+**Question**:  Find the WatchIDs with the highest median "ResponseStartTiming" without Java enabled
+
+**Important Query Properties**: MEDIAN, functions, high cardinality grouping that skips intermediate aggregation
+
+Note this query is somewhat synthetic as "WatchID" is almost unique (there are a few duplicates)
+
+```sql
+SELECT "ClientIP", "WatchID",  COUNT(*) c, MIN("ResponseStartTiming") tmin, MEDIAN("ResponseStartTiming") tmed, MAX("ResponseStartTiming") tmax
+FROM 'hits.parquet'
+WHERE "JavaEnable" = 0 -- filters to 32M of 100M rows
+GROUP BY  "ClientIP", "WatchID"
+HAVING c > 1
+ORDER BY tmed DESC
+LIMIT 10;
+```
+
+Results look like
+
++-------------+---------------------+---+------+------+------+
+| ClientIP    | WatchID             | c | tmin | tmed | tmax |
++-------------+---------------------+---+------+------+------+
+| 1611957945  | 6655575552203051303 | 2 | 0    | 0    | 0    |
+| -1402644643 | 8566928176839891583 | 2 | 0    | 0    | 0    |
++-------------+---------------------+---+------+------+------+
+
+
+### Q5: Response start time distribution analysis (p95)
+
+**Question**:  Find the WatchIDs with the highest p95 "ResponseStartTiming" without Java enabled
+
+**Important Query Properties**: APPROX_PERCENTILE_CONT, functions, high cardinality grouping that skips intermediate aggregation
+
+Note this query is somewhat synthetic as "WatchID" is almost unique (there are a few duplicates)
+
+```sql
+SELECT "ClientIP", "WatchID",  COUNT(*) c, MIN("ResponseStartTiming") tmin, APPROX_PERCENTILE_CONT("ResponseStartTiming", 0.95) tp95, MAX("ResponseStartTiming") tmax
+FROM 'hits.parquet'
+WHERE "JavaEnable" = 0 -- filters to 32M of 100M rows
+GROUP BY  "ClientIP", "WatchID"
+HAVING c > 1
+ORDER BY tp95 DESC
+LIMIT 10;
+```
+
+Results look like
+
++-------------+---------------------+---+------+------+------+
+| ClientIP    | WatchID             | c | tmin | tp95 | tmax |
++-------------+---------------------+---+------+------+------+
+| 1611957945  | 6655575552203051303 | 2 | 0    | 0    | 0    |
+| -1402644643 | 8566928176839891583 | 2 | 0    | 0    | 0    |
++-------------+---------------------+---+------+------+------+
+
+
 ## Data Notes
 
 Here are some interesting statistics about the data used in the queries

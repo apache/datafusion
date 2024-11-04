@@ -60,8 +60,8 @@ impl<R: 'static> SpawnedTask<R> {
     }
 
     /// Joins the task and unwinds the panic if it happens.
-    pub async fn join_unwind(self) -> R {
-        self.join().await.unwrap_or_else(|e| {
+    pub async fn join_unwind(self) -> Result<R, JoinError> {
+        self.join().await.map_err(|e| {
             // `JoinError` can be caused either by panic or cancellation. We have to handle panics:
             if e.is_panic() {
                 std::panic::resume_unwind(e.into_panic());
@@ -69,9 +69,53 @@ impl<R: 'static> SpawnedTask<R> {
                 // Cancellation may be caused by two reasons:
                 // 1. Abort is called, but since we consumed `self`, it's not our case (`JoinHandle` not accessible outside).
                 // 2. The runtime is shutting down.
-                // So we consider this branch as unreachable.
-                unreachable!("SpawnedTask was cancelled unexpectedly");
+                log::warn!("SpawnedTask was polled during shutdown");
+                e
             }
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use std::future::{pending, Pending};
+
+    use tokio::runtime::Runtime;
+
+    #[tokio::test]
+    async fn runtime_shutdown() {
+        let rt = Runtime::new().unwrap();
+        let task = rt
+            .spawn(async {
+                SpawnedTask::spawn(async {
+                    let fut: Pending<()> = pending();
+                    fut.await;
+                    unreachable!("should never return");
+                })
+            })
+            .await
+            .unwrap();
+
+        // caller shutdown their DF runtime (e.g. timeout, error in caller, etc)
+        rt.shutdown_background();
+
+        // race condition
+        // poll occurs during shutdown (buffered stream poll calls, etc)
+        assert!(matches!(
+            task.join_unwind().await,
+            Err(e) if e.is_cancelled()
+        ));
+    }
+
+    #[tokio::test]
+    #[should_panic(expected = "foo")]
+    async fn panic_resume() {
+        // this should panic w/o an `unwrap`
+        SpawnedTask::spawn(async { panic!("foo") })
+            .join_unwind()
+            .await
+            .ok();
     }
 }

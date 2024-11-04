@@ -50,7 +50,8 @@ datafusion-execution = { workspace = true }
 datafusion-expr = { workspace = true }
 datafusion-functions = { workspace = true }
 datafusion-functions-aggregate = { workspace = true }
-itertools = { version = "0.12", features = ["use_std"] }
+datafusion-physical-expr-common = { workspace = true }
+itertools = { workspace = true, features = ["use_std"] }
 log = { workspace = true }
 paste = "1.0.14"
 rand = "0.8.5"

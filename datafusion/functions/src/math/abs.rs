@@ -18,7 +18,7 @@
 //! math expressions
 
 use std::any::Any;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use arrow::array::{
     ArrayRef, Decimal128Array, Decimal256Array, Float32Array, Float64Array, Int16Array,
@@ -28,8 +28,11 @@ use arrow::datatypes::DataType;
 use arrow::error::ArrowError;
 use datafusion_common::{exec_err, not_impl_err, DataFusionError, Result};
 use datafusion_expr::interval_arithmetic::Interval;
+use datafusion_expr::scalar_doc_sections::DOC_SECTION_MATH;
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
-use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{
+    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+};
 
 type MathArrayFunction = fn(&Vec<ArrayRef>) -> Result<ArrayRef>;
 
@@ -184,4 +187,22 @@ impl ScalarUDFImpl for AbsFunc {
             Ok(SortProperties::Unordered)
         }
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_abs_doc())
+    }
+}
+
+static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+
+fn get_abs_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_MATH)
+            .with_description("Returns the absolute value of a number.")
+            .with_syntax_example("abs(numeric_expression)")
+            .with_standard_argument("numeric_expression", Some("Numeric"))
+            .build()
+            .unwrap()
+    })
 }

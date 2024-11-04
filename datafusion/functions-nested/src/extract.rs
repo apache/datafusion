@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! [`ScalarUDFImpl`] definitions for array_element, array_slice, array_pop_front and array_pop_back functions.
+//! [`ScalarUDFImpl`] definitions for array_element, array_slice, array_pop_front, array_pop_back, and array_any_value functions.
 
 use arrow::array::Array;
 use arrow::array::ArrayRef;
@@ -35,10 +35,13 @@ use datafusion_common::cast::as_list_array;
 use datafusion_common::{
     exec_err, internal_datafusion_err, plan_err, DataFusionError, Result,
 };
+use datafusion_expr::scalar_doc_sections::DOC_SECTION_ARRAY;
 use datafusion_expr::Expr;
-use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{
+    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+};
 use std::any::Any;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use crate::utils::make_scalar_function;
 
@@ -67,6 +70,14 @@ make_udf_expr_and_func!(
     array,
     "returns the array without the last element.",
     array_pop_back_udf
+);
+
+make_udf_expr_and_func!(
+    ArrayAnyValue,
+    array_any_value,
+    array,
+    "returns the first non-null element in the array.",
+    array_any_value_udf
 );
 
 #[derive(Debug)]
@@ -139,6 +150,43 @@ impl ScalarUDFImpl for ArrayElement {
     fn aliases(&self) -> &[String] {
         &self.aliases
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_array_element_doc())
+    }
+}
+
+static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+
+fn get_array_element_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_ARRAY)
+            .with_description(
+                "Extracts the element with the index n from the array.",
+            )
+            .with_syntax_example("array_element(array, index)")
+            .with_sql_example(
+                r#"```sql
+> select array_element([1, 2, 3, 4], 3);
++-----------------------------------------+
+| array_element(List([1,2,3,4]),Int64(3)) |
++-----------------------------------------+
+| 3                                       |
++-----------------------------------------+
+```"#,
+            )
+            .with_argument(
+                "array",
+                "Array expression. Can be a constant, column, or function, and any combination of array operators.",
+            )
+            .with_argument(
+                "index",
+                "Index to extract the element from the array.",
+            )
+            .build()
+            .unwrap()
+    })
 }
 
 /// array_element SQL function
@@ -306,6 +354,49 @@ impl ScalarUDFImpl for ArraySlice {
     fn aliases(&self) -> &[String] {
         &self.aliases
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_array_slice_doc())
+    }
+}
+
+fn get_array_slice_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_ARRAY)
+            .with_description(
+                "Returns a slice of the array based on 1-indexed start and end positions.",
+            )
+            .with_syntax_example("array_slice(array, begin, end)")
+            .with_sql_example(
+                r#"```sql
+> select array_slice([1, 2, 3, 4, 5, 6, 7, 8], 3, 6);
++--------------------------------------------------------+
+| array_slice(List([1,2,3,4,5,6,7,8]),Int64(3),Int64(6)) |
++--------------------------------------------------------+
+| [3, 4, 5, 6]                                           |
++--------------------------------------------------------+
+```"#,
+            )
+            .with_argument(
+                "array",
+                "Array expression. Can be a constant, column, or function, and any combination of array operators.",
+            )
+            .with_argument(
+                "begin",
+                "Index of the first element. If negative, it counts backward from the end of the array.",
+            )
+            .with_argument(
+                "end",
+                "Index of the last element. If negative, it counts backward from the end of the array.",
+            )
+            .with_argument(
+                "stride",
+                "Stride of the array slice. The default is 1.",
+            )
+            .build()
+            .unwrap()
+    })
 }
 
 /// array_slice SQL function
@@ -572,6 +663,37 @@ impl ScalarUDFImpl for ArrayPopFront {
     fn aliases(&self) -> &[String] {
         &self.aliases
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_array_pop_front_doc())
+    }
+}
+
+fn get_array_pop_front_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_ARRAY)
+            .with_description(
+                "Returns the array without the first element.",
+            )
+            .with_syntax_example("array_pop_front(array)")
+            .with_sql_example(
+                r#"```sql
+> select array_pop_front([1, 2, 3]);
++-------------------------------+
+| array_pop_front(List([1,2,3])) |
++-------------------------------+
+| [2, 3]                        |
++-------------------------------+
+```"#,
+            )
+            .with_argument(
+                "array",
+                "Array expression. Can be a constant, column, or function, and any combination of array operators.",
+            )
+            .build()
+            .unwrap()
+    })
 }
 
 /// array_pop_front SQL function
@@ -647,6 +769,37 @@ impl ScalarUDFImpl for ArrayPopBack {
     fn aliases(&self) -> &[String] {
         &self.aliases
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_array_pop_back_doc())
+    }
+}
+
+fn get_array_pop_back_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_ARRAY)
+            .with_description(
+                "Returns the array without the last element.",
+            )
+            .with_syntax_example("array_pop_back(array)")
+            .with_sql_example(
+                r#"```sql
+> select array_pop_back([1, 2, 3]);
++-------------------------------+
+| array_pop_back(List([1,2,3])) |
++-------------------------------+
+| [1, 2]                        |
++-------------------------------+
+```"#,
+            )
+            .with_argument(
+                "array",
+                "Array expression. Can be a constant, column, or function, and any combination of array operators.",
+            )
+            .build()
+            .unwrap()
+    })
 }
 
 /// array_pop_back SQL function
@@ -686,4 +839,147 @@ where
             .collect::<Vec<i64>>(),
     );
     general_array_slice::<O>(array, &from_array, &to_array, None)
+}
+
+#[derive(Debug)]
+pub(super) struct ArrayAnyValue {
+    signature: Signature,
+    aliases: Vec<String>,
+}
+
+impl ArrayAnyValue {
+    pub fn new() -> Self {
+        Self {
+            signature: Signature::array(Volatility::Immutable),
+            aliases: vec![String::from("list_any_value")],
+        }
+    }
+}
+
+impl ScalarUDFImpl for ArrayAnyValue {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+    fn name(&self) -> &str {
+        "array_any_value"
+    }
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+        match &arg_types[0] {
+            List(field)
+            | LargeList(field)
+            | FixedSizeList(field, _) => Ok(field.data_type().clone()),
+            _ => plan_err!(
+                "array_any_value can only accept List, LargeList or FixedSizeList as the argument"
+            ),
+        }
+    }
+
+    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+        make_scalar_function(array_any_value_inner)(args)
+    }
+    fn aliases(&self) -> &[String] {
+        &self.aliases
+    }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_array_any_value_doc())
+    }
+}
+
+fn get_array_any_value_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_ARRAY)
+            .with_description(
+                "Returns the first non-null element in the array.",
+            )
+            .with_syntax_example("array_any_value(array)")
+            .with_sql_example(
+                r#"```sql
+> select array_any_value([NULL, 1, 2, 3]);
++-------------------------------+
+| array_any_value(List([NULL,1,2,3])) |
++-------------------------------------+
+| 1                                   |
++-------------------------------------+
+```"#,
+            )
+            .with_argument(
+                "array",
+                "Array expression. Can be a constant, column, or function, and any combination of array operators.",
+            )
+            .build()
+            .unwrap()
+    })
+}
+
+fn array_any_value_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
+    if args.len() != 1 {
+        return exec_err!("array_any_value expects one argument");
+    }
+
+    match &args[0].data_type() {
+        List(_) => {
+            let array = as_list_array(&args[0])?;
+            general_array_any_value::<i32>(array)
+        }
+        LargeList(_) => {
+            let array = as_large_list_array(&args[0])?;
+            general_array_any_value::<i64>(array)
+        }
+        data_type => exec_err!("array_any_value does not support type: {:?}", data_type),
+    }
+}
+
+fn general_array_any_value<O: OffsetSizeTrait>(
+    array: &GenericListArray<O>,
+) -> Result<ArrayRef>
+where
+    i64: TryInto<O>,
+{
+    let values = array.values();
+    let original_data = values.to_data();
+    let capacity = Capacities::Array(array.len());
+
+    let mut mutable =
+        MutableArrayData::with_capacities(vec![&original_data], true, capacity);
+
+    for (row_index, offset_window) in array.offsets().windows(2).enumerate() {
+        let start = offset_window[0];
+        let end = offset_window[1];
+        let len = end - start;
+
+        // array is null
+        if len == O::usize_as(0) {
+            mutable.extend_nulls(1);
+            continue;
+        }
+
+        let row_value = array.value(row_index);
+        match row_value.nulls() {
+            Some(row_nulls_buffer) => {
+                // nulls are present in the array so try to take the first valid element
+                if let Some(first_non_null_index) =
+                    row_nulls_buffer.valid_indices().next()
+                {
+                    let index = start.as_usize() + first_non_null_index;
+                    mutable.extend(0, index, index + 1)
+                } else {
+                    // all the elements in the array are null
+                    mutable.extend_nulls(1);
+                }
+            }
+            None => {
+                // no nulls are present in the array so take the first element
+                let index = start.as_usize();
+                mutable.extend(0, index, index + 1);
+            }
+        }
+    }
+
+    let data = mutable.freeze();
+    Ok(arrow::array::make_array(data))
 }

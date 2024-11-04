@@ -23,6 +23,7 @@ use arrow::{
 };
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use datafusion::execution::session_state::SessionStateBuilder;
+use datafusion::physical_expr::LexRequirement;
 use datafusion::{
     datasource::{
         file_format::{
@@ -38,7 +39,7 @@ use datafusion::{
     prelude::SessionContext,
 };
 use datafusion_common::{GetExt, Statistics};
-use datafusion_physical_expr::{PhysicalExpr, PhysicalSortRequirement};
+use datafusion_physical_expr::PhysicalExpr;
 use object_store::{ObjectMeta, ObjectStore};
 use tempfile::tempdir;
 
@@ -73,10 +74,7 @@ impl FileFormat for TSVFileFormat {
         "tsv".to_string()
     }
 
-    fn get_ext_with_compression(
-        &self,
-        c: &FileCompressionType,
-    ) -> datafusion::error::Result<String> {
+    fn get_ext_with_compression(&self, c: &FileCompressionType) -> Result<String> {
         if c == &FileCompressionType::UNCOMPRESSED {
             Ok("tsv".to_string())
         } else {
@@ -123,7 +121,7 @@ impl FileFormat for TSVFileFormat {
         input: Arc<dyn ExecutionPlan>,
         state: &SessionState,
         conf: FileSinkConfig,
-        order_requirements: Option<Vec<PhysicalSortRequirement>>,
+        order_requirements: Option<LexRequirement>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         self.csv_file_format
             .create_writer_physical_plan(input, state, conf, order_requirements)
@@ -153,7 +151,7 @@ impl FileFormatFactory for TSVFileFactory {
         &self,
         state: &SessionState,
         format_options: &std::collections::HashMap<String, String>,
-    ) -> Result<std::sync::Arc<dyn FileFormat>> {
+    ) -> Result<Arc<dyn FileFormat>> {
         let mut new_options = format_options.clone();
         new_options.insert("format.delimiter".to_string(), "\t".to_string());
 
@@ -163,7 +161,7 @@ impl FileFormatFactory for TSVFileFactory {
         Ok(tsv_file_format)
     }
 
-    fn default(&self) -> std::sync::Arc<dyn FileFormat> {
+    fn default(&self) -> Arc<dyn FileFormat> {
         todo!()
     }
 

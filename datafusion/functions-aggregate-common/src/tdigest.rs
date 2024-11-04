@@ -35,6 +35,7 @@ use datafusion_common::cast::as_primitive_array;
 use datafusion_common::Result;
 use datafusion_common::ScalarValue;
 use std::cmp::Ordering;
+use std::mem::{size_of, size_of_val};
 
 pub const DEFAULT_MAX_SIZE: usize = 100;
 
@@ -205,8 +206,7 @@ impl TDigest {
 
     /// Size in bytes including `Self`.
     pub fn size(&self) -> usize {
-        std::mem::size_of_val(self)
-            + (std::mem::size_of::<Centroid>() * self.centroids.capacity())
+        size_of_val(self) + (size_of::<Centroid>() * self.centroids.capacity())
     }
 }
 
@@ -646,7 +646,9 @@ impl TDigest {
         let max = cast_scalar_f64!(&state[3]);
         let min = cast_scalar_f64!(&state[4]);
 
-        assert!(max.total_cmp(&min).is_ge());
+        if min.is_finite() && max.is_finite() {
+            assert!(max.total_cmp(&min).is_ge());
+        }
 
         Self {
             max_size,

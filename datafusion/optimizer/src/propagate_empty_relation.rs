@@ -22,7 +22,6 @@ use std::sync::Arc;
 use datafusion_common::tree_node::Transformed;
 use datafusion_common::JoinType;
 use datafusion_common::{plan_err, Result};
-use datafusion_expr::logical_plan::tree_node::unwrap_arc;
 use datafusion_expr::logical_plan::LogicalPlan;
 use datafusion_expr::{EmptyRelation, Projection, Union};
 
@@ -30,7 +29,7 @@ use crate::optimizer::ApplyOrder;
 use crate::{OptimizerConfig, OptimizerRule};
 
 /// Optimization rule that bottom-up to eliminate plan by propagating empty_relation.
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct PropagateEmptyRelation;
 
 impl PropagateEmptyRelation {
@@ -73,19 +72,6 @@ impl OptimizerRule for PropagateEmptyRelation {
                 }
                 Ok(Transformed::no(plan))
             }
-            LogicalPlan::CrossJoin(ref join) => {
-                let (left_empty, right_empty) = binary_plan_children_is_empty(&plan)?;
-                if left_empty || right_empty {
-                    return Ok(Transformed::yes(LogicalPlan::EmptyRelation(
-                        EmptyRelation {
-                            produce_one_row: false,
-                            schema: Arc::clone(plan.schema()),
-                        },
-                    )));
-                }
-                Ok(Transformed::no(LogicalPlan::CrossJoin(join.clone())))
-            }
-
             LogicalPlan::Join(ref join) => {
                 // TODO: For Join, more join type need to be careful:
                 // For LeftOut/Full Join, if the right side is empty, the Join can be eliminated with a Projection with left side
@@ -184,7 +170,7 @@ impl OptimizerRule for PropagateEmptyRelation {
                 } else if new_inputs.len() == 1 {
                     let mut new_inputs = new_inputs;
                     let input_plan = new_inputs.pop().unwrap(); // length checked
-                    let child = unwrap_arc(input_plan);
+                    let child = Arc::unwrap_or_clone(input_plan);
                     if child.schema().eq(plan.schema()) {
                         Ok(Transformed::yes(child))
                     } else {

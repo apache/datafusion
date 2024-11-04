@@ -12,6 +12,7 @@ impl serde::Serialize for AggLimit {
         let mut struct_ser = serializer.serialize_struct("datafusion.AggLimit", len)?;
         if self.limit != 0 {
             #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("limit", ToString::to_string(&self.limit).as_str())?;
         }
         struct_ser.end()
@@ -613,6 +614,7 @@ impl serde::Serialize for AggregateUdfExprNode {
         }
         if let Some(v) = self.fun_definition.as_ref() {
             #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("funDefinition", pbjson::private::base64::encode(&v).as_str())?;
         }
         struct_ser.end()
@@ -1659,14 +1661,7 @@ impl serde::Serialize for BuiltInWindowFunction {
         S: serde::Serializer,
     {
         let variant = match self {
-            Self::RowNumber => "ROW_NUMBER",
-            Self::Rank => "RANK",
-            Self::DenseRank => "DENSE_RANK",
-            Self::PercentRank => "PERCENT_RANK",
-            Self::CumeDist => "CUME_DIST",
-            Self::Ntile => "NTILE",
-            Self::Lag => "LAG",
-            Self::Lead => "LEAD",
+            Self::Unspecified => "UNSPECIFIED",
             Self::FirstValue => "FIRST_VALUE",
             Self::LastValue => "LAST_VALUE",
             Self::NthValue => "NTH_VALUE",
@@ -1681,14 +1676,7 @@ impl<'de> serde::Deserialize<'de> for BuiltInWindowFunction {
         D: serde::Deserializer<'de>,
     {
         const FIELDS: &[&str] = &[
-            "ROW_NUMBER",
-            "RANK",
-            "DENSE_RANK",
-            "PERCENT_RANK",
-            "CUME_DIST",
-            "NTILE",
-            "LAG",
-            "LEAD",
+            "UNSPECIFIED",
             "FIRST_VALUE",
             "LAST_VALUE",
             "NTH_VALUE",
@@ -1732,14 +1720,7 @@ impl<'de> serde::Deserialize<'de> for BuiltInWindowFunction {
                 E: serde::de::Error,
             {
                 match value {
-                    "ROW_NUMBER" => Ok(BuiltInWindowFunction::RowNumber),
-                    "RANK" => Ok(BuiltInWindowFunction::Rank),
-                    "DENSE_RANK" => Ok(BuiltInWindowFunction::DenseRank),
-                    "PERCENT_RANK" => Ok(BuiltInWindowFunction::PercentRank),
-                    "CUME_DIST" => Ok(BuiltInWindowFunction::CumeDist),
-                    "NTILE" => Ok(BuiltInWindowFunction::Ntile),
-                    "LAG" => Ok(BuiltInWindowFunction::Lag),
-                    "LEAD" => Ok(BuiltInWindowFunction::Lead),
+                    "UNSPECIFIED" => Ok(BuiltInWindowFunction::Unspecified),
                     "FIRST_VALUE" => Ok(BuiltInWindowFunction::FirstValue),
                     "LAST_VALUE" => Ok(BuiltInWindowFunction::LastValue),
                     "NTH_VALUE" => Ok(BuiltInWindowFunction::NthValue),
@@ -2000,12 +1981,18 @@ impl serde::Serialize for CoalesceBatchesExecNode {
         if self.target_batch_size != 0 {
             len += 1;
         }
+        if self.fetch.is_some() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion.CoalesceBatchesExecNode", len)?;
         if let Some(v) = self.input.as_ref() {
             struct_ser.serialize_field("input", v)?;
         }
         if self.target_batch_size != 0 {
             struct_ser.serialize_field("targetBatchSize", &self.target_batch_size)?;
+        }
+        if let Some(v) = self.fetch.as_ref() {
+            struct_ser.serialize_field("fetch", v)?;
         }
         struct_ser.end()
     }
@@ -2020,12 +2007,14 @@ impl<'de> serde::Deserialize<'de> for CoalesceBatchesExecNode {
             "input",
             "target_batch_size",
             "targetBatchSize",
+            "fetch",
         ];
 
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
             Input,
             TargetBatchSize,
+            Fetch,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -2049,6 +2038,7 @@ impl<'de> serde::Deserialize<'de> for CoalesceBatchesExecNode {
                         match value {
                             "input" => Ok(GeneratedField::Input),
                             "targetBatchSize" | "target_batch_size" => Ok(GeneratedField::TargetBatchSize),
+                            "fetch" => Ok(GeneratedField::Fetch),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -2070,6 +2060,7 @@ impl<'de> serde::Deserialize<'de> for CoalesceBatchesExecNode {
             {
                 let mut input__ = None;
                 let mut target_batch_size__ = None;
+                let mut fetch__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Input => {
@@ -2086,11 +2077,20 @@ impl<'de> serde::Deserialize<'de> for CoalesceBatchesExecNode {
                                 Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
                             ;
                         }
+                        GeneratedField::Fetch => {
+                            if fetch__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("fetch"));
+                            }
+                            fetch__ = 
+                                map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| x.0)
+                            ;
+                        }
                     }
                 }
                 Ok(CoalesceBatchesExecNode {
                     input: input__,
                     target_batch_size: target_batch_size__.unwrap_or_default(),
+                    fetch: fetch__,
                 })
             }
         }
@@ -2300,6 +2300,319 @@ impl<'de> serde::Deserialize<'de> for ColumnIndex {
         deserializer.deserialize_struct("datafusion.ColumnIndex", FIELDS, GeneratedVisitor)
     }
 }
+impl serde::Serialize for ColumnUnnestListItem {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.input_index != 0 {
+            len += 1;
+        }
+        if self.recursion.is_some() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("datafusion.ColumnUnnestListItem", len)?;
+        if self.input_index != 0 {
+            struct_ser.serialize_field("inputIndex", &self.input_index)?;
+        }
+        if let Some(v) = self.recursion.as_ref() {
+            struct_ser.serialize_field("recursion", v)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for ColumnUnnestListItem {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "input_index",
+            "inputIndex",
+            "recursion",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            InputIndex,
+            Recursion,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "inputIndex" | "input_index" => Ok(GeneratedField::InputIndex),
+                            "recursion" => Ok(GeneratedField::Recursion),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = ColumnUnnestListItem;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct datafusion.ColumnUnnestListItem")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<ColumnUnnestListItem, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut input_index__ = None;
+                let mut recursion__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::InputIndex => {
+                            if input_index__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("inputIndex"));
+                            }
+                            input_index__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::Recursion => {
+                            if recursion__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("recursion"));
+                            }
+                            recursion__ = map_.next_value()?;
+                        }
+                    }
+                }
+                Ok(ColumnUnnestListItem {
+                    input_index: input_index__.unwrap_or_default(),
+                    recursion: recursion__,
+                })
+            }
+        }
+        deserializer.deserialize_struct("datafusion.ColumnUnnestListItem", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for ColumnUnnestListRecursion {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.output_column.is_some() {
+            len += 1;
+        }
+        if self.depth != 0 {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("datafusion.ColumnUnnestListRecursion", len)?;
+        if let Some(v) = self.output_column.as_ref() {
+            struct_ser.serialize_field("outputColumn", v)?;
+        }
+        if self.depth != 0 {
+            struct_ser.serialize_field("depth", &self.depth)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for ColumnUnnestListRecursion {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "output_column",
+            "outputColumn",
+            "depth",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            OutputColumn,
+            Depth,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "outputColumn" | "output_column" => Ok(GeneratedField::OutputColumn),
+                            "depth" => Ok(GeneratedField::Depth),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = ColumnUnnestListRecursion;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct datafusion.ColumnUnnestListRecursion")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<ColumnUnnestListRecursion, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut output_column__ = None;
+                let mut depth__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::OutputColumn => {
+                            if output_column__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("outputColumn"));
+                            }
+                            output_column__ = map_.next_value()?;
+                        }
+                        GeneratedField::Depth => {
+                            if depth__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("depth"));
+                            }
+                            depth__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                    }
+                }
+                Ok(ColumnUnnestListRecursion {
+                    output_column: output_column__,
+                    depth: depth__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("datafusion.ColumnUnnestListRecursion", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for ColumnUnnestListRecursions {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if !self.recursions.is_empty() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("datafusion.ColumnUnnestListRecursions", len)?;
+        if !self.recursions.is_empty() {
+            struct_ser.serialize_field("recursions", &self.recursions)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for ColumnUnnestListRecursions {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "recursions",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Recursions,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "recursions" => Ok(GeneratedField::Recursions),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = ColumnUnnestListRecursions;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct datafusion.ColumnUnnestListRecursions")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<ColumnUnnestListRecursions, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut recursions__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Recursions => {
+                            if recursions__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("recursions"));
+                            }
+                            recursions__ = Some(map_.next_value()?);
+                        }
+                    }
+                }
+                Ok(ColumnUnnestListRecursions {
+                    recursions: recursions__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("datafusion.ColumnUnnestListRecursions", FIELDS, GeneratedVisitor)
+    }
+}
 impl serde::Serialize for CopyToNode {
     #[allow(deprecated)]
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
@@ -2329,6 +2642,7 @@ impl serde::Serialize for CopyToNode {
         }
         if !self.file_type.is_empty() {
             #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("fileType", pbjson::private::base64::encode(&self.file_type).as_str())?;
         }
         if !self.partition_by.is_empty() {
@@ -2728,6 +3042,9 @@ impl serde::Serialize for CreateExternalTableNode {
         if self.if_not_exists {
             len += 1;
         }
+        if self.temporary {
+            len += 1;
+        }
         if !self.definition.is_empty() {
             len += 1;
         }
@@ -2764,6 +3081,9 @@ impl serde::Serialize for CreateExternalTableNode {
         }
         if self.if_not_exists {
             struct_ser.serialize_field("ifNotExists", &self.if_not_exists)?;
+        }
+        if self.temporary {
+            struct_ser.serialize_field("temporary", &self.temporary)?;
         }
         if !self.definition.is_empty() {
             struct_ser.serialize_field("definition", &self.definition)?;
@@ -2802,6 +3122,7 @@ impl<'de> serde::Deserialize<'de> for CreateExternalTableNode {
             "tablePartitionCols",
             "if_not_exists",
             "ifNotExists",
+            "temporary",
             "definition",
             "order_exprs",
             "orderExprs",
@@ -2820,6 +3141,7 @@ impl<'de> serde::Deserialize<'de> for CreateExternalTableNode {
             Schema,
             TablePartitionCols,
             IfNotExists,
+            Temporary,
             Definition,
             OrderExprs,
             Unbounded,
@@ -2853,6 +3175,7 @@ impl<'de> serde::Deserialize<'de> for CreateExternalTableNode {
                             "schema" => Ok(GeneratedField::Schema),
                             "tablePartitionCols" | "table_partition_cols" => Ok(GeneratedField::TablePartitionCols),
                             "ifNotExists" | "if_not_exists" => Ok(GeneratedField::IfNotExists),
+                            "temporary" => Ok(GeneratedField::Temporary),
                             "definition" => Ok(GeneratedField::Definition),
                             "orderExprs" | "order_exprs" => Ok(GeneratedField::OrderExprs),
                             "unbounded" => Ok(GeneratedField::Unbounded),
@@ -2884,6 +3207,7 @@ impl<'de> serde::Deserialize<'de> for CreateExternalTableNode {
                 let mut schema__ = None;
                 let mut table_partition_cols__ = None;
                 let mut if_not_exists__ = None;
+                let mut temporary__ = None;
                 let mut definition__ = None;
                 let mut order_exprs__ = None;
                 let mut unbounded__ = None;
@@ -2927,6 +3251,12 @@ impl<'de> serde::Deserialize<'de> for CreateExternalTableNode {
                                 return Err(serde::de::Error::duplicate_field("ifNotExists"));
                             }
                             if_not_exists__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Temporary => {
+                            if temporary__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("temporary"));
+                            }
+                            temporary__ = Some(map_.next_value()?);
                         }
                         GeneratedField::Definition => {
                             if definition__.is_some() {
@@ -2977,6 +3307,7 @@ impl<'de> serde::Deserialize<'de> for CreateExternalTableNode {
                     schema: schema__,
                     table_partition_cols: table_partition_cols__.unwrap_or_default(),
                     if_not_exists: if_not_exists__.unwrap_or_default(),
+                    temporary: temporary__.unwrap_or_default(),
                     definition: definition__.unwrap_or_default(),
                     order_exprs: order_exprs__.unwrap_or_default(),
                     unbounded: unbounded__.unwrap_or_default(),
@@ -3006,6 +3337,9 @@ impl serde::Serialize for CreateViewNode {
         if self.or_replace {
             len += 1;
         }
+        if self.temporary {
+            len += 1;
+        }
         if !self.definition.is_empty() {
             len += 1;
         }
@@ -3018,6 +3352,9 @@ impl serde::Serialize for CreateViewNode {
         }
         if self.or_replace {
             struct_ser.serialize_field("orReplace", &self.or_replace)?;
+        }
+        if self.temporary {
+            struct_ser.serialize_field("temporary", &self.temporary)?;
         }
         if !self.definition.is_empty() {
             struct_ser.serialize_field("definition", &self.definition)?;
@@ -3036,6 +3373,7 @@ impl<'de> serde::Deserialize<'de> for CreateViewNode {
             "input",
             "or_replace",
             "orReplace",
+            "temporary",
             "definition",
         ];
 
@@ -3044,6 +3382,7 @@ impl<'de> serde::Deserialize<'de> for CreateViewNode {
             Name,
             Input,
             OrReplace,
+            Temporary,
             Definition,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
@@ -3069,6 +3408,7 @@ impl<'de> serde::Deserialize<'de> for CreateViewNode {
                             "name" => Ok(GeneratedField::Name),
                             "input" => Ok(GeneratedField::Input),
                             "orReplace" | "or_replace" => Ok(GeneratedField::OrReplace),
+                            "temporary" => Ok(GeneratedField::Temporary),
                             "definition" => Ok(GeneratedField::Definition),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
@@ -3092,6 +3432,7 @@ impl<'de> serde::Deserialize<'de> for CreateViewNode {
                 let mut name__ = None;
                 let mut input__ = None;
                 let mut or_replace__ = None;
+                let mut temporary__ = None;
                 let mut definition__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
@@ -3113,6 +3454,12 @@ impl<'de> serde::Deserialize<'de> for CreateViewNode {
                             }
                             or_replace__ = Some(map_.next_value()?);
                         }
+                        GeneratedField::Temporary => {
+                            if temporary__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("temporary"));
+                            }
+                            temporary__ = Some(map_.next_value()?);
+                        }
                         GeneratedField::Definition => {
                             if definition__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("definition"));
@@ -3125,6 +3472,7 @@ impl<'de> serde::Deserialize<'de> for CreateViewNode {
                     name: name__,
                     input: input__,
                     or_replace: or_replace__.unwrap_or_default(),
+                    temporary: temporary__.unwrap_or_default(),
                     definition: definition__.unwrap_or_default(),
                 })
             }
@@ -3934,6 +4282,7 @@ impl serde::Serialize for CustomTableScanNode {
         }
         if !self.custom_table_data.is_empty() {
             #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("customTableData", pbjson::private::base64::encode(&self.custom_table_data).as_str())?;
         }
         struct_ser.end()
@@ -5018,10 +5367,12 @@ impl serde::Serialize for FileRange {
         let mut struct_ser = serializer.serialize_struct("datafusion.FileRange", len)?;
         if self.start != 0 {
             #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("start", ToString::to_string(&self.start).as_str())?;
         }
         if self.end != 0 {
             #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("end", ToString::to_string(&self.end).as_str())?;
         }
         struct_ser.end()
@@ -5355,10 +5706,10 @@ impl serde::Serialize for FileSinkConfig {
         if !self.table_partition_cols.is_empty() {
             len += 1;
         }
-        if self.overwrite {
+        if self.keep_partition_by_columns {
             len += 1;
         }
-        if self.keep_partition_by_columns {
+        if self.insert_op != 0 {
             len += 1;
         }
         let mut struct_ser = serializer.serialize_struct("datafusion.FileSinkConfig", len)?;
@@ -5377,11 +5728,13 @@ impl serde::Serialize for FileSinkConfig {
         if !self.table_partition_cols.is_empty() {
             struct_ser.serialize_field("tablePartitionCols", &self.table_partition_cols)?;
         }
-        if self.overwrite {
-            struct_ser.serialize_field("overwrite", &self.overwrite)?;
-        }
         if self.keep_partition_by_columns {
             struct_ser.serialize_field("keepPartitionByColumns", &self.keep_partition_by_columns)?;
+        }
+        if self.insert_op != 0 {
+            let v = InsertOp::try_from(self.insert_op)
+                .map_err(|_| serde::ser::Error::custom(format!("Invalid variant {}", self.insert_op)))?;
+            struct_ser.serialize_field("insertOp", &v)?;
         }
         struct_ser.end()
     }
@@ -5403,9 +5756,10 @@ impl<'de> serde::Deserialize<'de> for FileSinkConfig {
             "outputSchema",
             "table_partition_cols",
             "tablePartitionCols",
-            "overwrite",
             "keep_partition_by_columns",
             "keepPartitionByColumns",
+            "insert_op",
+            "insertOp",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -5415,8 +5769,8 @@ impl<'de> serde::Deserialize<'de> for FileSinkConfig {
             TablePaths,
             OutputSchema,
             TablePartitionCols,
-            Overwrite,
             KeepPartitionByColumns,
+            InsertOp,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -5443,8 +5797,8 @@ impl<'de> serde::Deserialize<'de> for FileSinkConfig {
                             "tablePaths" | "table_paths" => Ok(GeneratedField::TablePaths),
                             "outputSchema" | "output_schema" => Ok(GeneratedField::OutputSchema),
                             "tablePartitionCols" | "table_partition_cols" => Ok(GeneratedField::TablePartitionCols),
-                            "overwrite" => Ok(GeneratedField::Overwrite),
                             "keepPartitionByColumns" | "keep_partition_by_columns" => Ok(GeneratedField::KeepPartitionByColumns),
+                            "insertOp" | "insert_op" => Ok(GeneratedField::InsertOp),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -5469,8 +5823,8 @@ impl<'de> serde::Deserialize<'de> for FileSinkConfig {
                 let mut table_paths__ = None;
                 let mut output_schema__ = None;
                 let mut table_partition_cols__ = None;
-                let mut overwrite__ = None;
                 let mut keep_partition_by_columns__ = None;
+                let mut insert_op__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::ObjectStoreUrl => {
@@ -5503,17 +5857,17 @@ impl<'de> serde::Deserialize<'de> for FileSinkConfig {
                             }
                             table_partition_cols__ = Some(map_.next_value()?);
                         }
-                        GeneratedField::Overwrite => {
-                            if overwrite__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("overwrite"));
-                            }
-                            overwrite__ = Some(map_.next_value()?);
-                        }
                         GeneratedField::KeepPartitionByColumns => {
                             if keep_partition_by_columns__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("keepPartitionByColumns"));
                             }
                             keep_partition_by_columns__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::InsertOp => {
+                            if insert_op__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("insertOp"));
+                            }
+                            insert_op__ = Some(map_.next_value::<InsertOp>()? as i32);
                         }
                     }
                 }
@@ -5523,8 +5877,8 @@ impl<'de> serde::Deserialize<'de> for FileSinkConfig {
                     table_paths: table_paths__.unwrap_or_default(),
                     output_schema: output_schema__,
                     table_partition_cols: table_partition_cols__.unwrap_or_default(),
-                    overwrite: overwrite__.unwrap_or_default(),
                     keep_partition_by_columns: keep_partition_by_columns__.unwrap_or_default(),
+                    insert_op: insert_op__.unwrap_or_default(),
                 })
             }
         }
@@ -5548,6 +5902,9 @@ impl serde::Serialize for FilterExecNode {
         if self.default_filter_selectivity != 0 {
             len += 1;
         }
+        if !self.projection.is_empty() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion.FilterExecNode", len)?;
         if let Some(v) = self.input.as_ref() {
             struct_ser.serialize_field("input", v)?;
@@ -5557,6 +5914,9 @@ impl serde::Serialize for FilterExecNode {
         }
         if self.default_filter_selectivity != 0 {
             struct_ser.serialize_field("defaultFilterSelectivity", &self.default_filter_selectivity)?;
+        }
+        if !self.projection.is_empty() {
+            struct_ser.serialize_field("projection", &self.projection)?;
         }
         struct_ser.end()
     }
@@ -5572,6 +5932,7 @@ impl<'de> serde::Deserialize<'de> for FilterExecNode {
             "expr",
             "default_filter_selectivity",
             "defaultFilterSelectivity",
+            "projection",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -5579,6 +5940,7 @@ impl<'de> serde::Deserialize<'de> for FilterExecNode {
             Input,
             Expr,
             DefaultFilterSelectivity,
+            Projection,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -5603,6 +5965,7 @@ impl<'de> serde::Deserialize<'de> for FilterExecNode {
                             "input" => Ok(GeneratedField::Input),
                             "expr" => Ok(GeneratedField::Expr),
                             "defaultFilterSelectivity" | "default_filter_selectivity" => Ok(GeneratedField::DefaultFilterSelectivity),
+                            "projection" => Ok(GeneratedField::Projection),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -5625,6 +5988,7 @@ impl<'de> serde::Deserialize<'de> for FilterExecNode {
                 let mut input__ = None;
                 let mut expr__ = None;
                 let mut default_filter_selectivity__ = None;
+                let mut projection__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Input => {
@@ -5647,12 +6011,22 @@ impl<'de> serde::Deserialize<'de> for FilterExecNode {
                                 Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
                             ;
                         }
+                        GeneratedField::Projection => {
+                            if projection__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("projection"));
+                            }
+                            projection__ = 
+                                Some(map_.next_value::<Vec<::pbjson::private::NumberDeserialize<_>>>()?
+                                    .into_iter().map(|x| x.0).collect())
+                            ;
+                        }
                     }
                 }
                 Ok(FilterExecNode {
                     input: input__,
                     expr: expr__,
                     default_filter_selectivity: default_filter_selectivity__.unwrap_or_default(),
+                    projection: projection__.unwrap_or_default(),
                 })
             }
         }
@@ -5903,6 +6277,7 @@ impl serde::Serialize for GlobalLimitExecNode {
         }
         if self.fetch != 0 {
             #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("fetch", ToString::to_string(&self.fetch).as_str())?;
         }
         struct_ser.end()
@@ -6338,6 +6713,7 @@ impl serde::Serialize for HashRepartition {
         }
         if self.partition_count != 0 {
             #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("partitionCount", ToString::to_string(&self.partition_count).as_str())?;
         }
         struct_ser.end()
@@ -6697,6 +7073,80 @@ impl<'de> serde::Deserialize<'de> for InListNode {
             }
         }
         deserializer.deserialize_struct("datafusion.InListNode", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for InsertOp {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let variant = match self {
+            Self::Append => "Append",
+            Self::Overwrite => "Overwrite",
+            Self::Replace => "Replace",
+        };
+        serializer.serialize_str(variant)
+    }
+}
+impl<'de> serde::Deserialize<'de> for InsertOp {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "Append",
+            "Overwrite",
+            "Replace",
+        ];
+
+        struct GeneratedVisitor;
+
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = InsertOp;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                write!(formatter, "expected one of: {:?}", &FIELDS)
+            }
+
+            fn visit_i64<E>(self, v: i64) -> std::result::Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                i32::try_from(v)
+                    .ok()
+                    .and_then(|x| x.try_into().ok())
+                    .ok_or_else(|| {
+                        serde::de::Error::invalid_value(serde::de::Unexpected::Signed(v), &self)
+                    })
+            }
+
+            fn visit_u64<E>(self, v: u64) -> std::result::Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                i32::try_from(v)
+                    .ok()
+                    .and_then(|x| x.try_into().ok())
+                    .ok_or_else(|| {
+                        serde::de::Error::invalid_value(serde::de::Unexpected::Unsigned(v), &self)
+                    })
+            }
+
+            fn visit_str<E>(self, value: &str) -> std::result::Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                match value {
+                    "Append" => Ok(InsertOp::Append),
+                    "Overwrite" => Ok(InsertOp::Overwrite),
+                    "Replace" => Ok(InsertOp::Replace),
+                    _ => Err(serde::de::Error::unknown_variant(value, FIELDS)),
+                }
+            }
+        }
+        deserializer.deserialize_any(GeneratedVisitor)
     }
 }
 impl serde::Serialize for InterleaveExecNode {
@@ -8390,10 +8840,12 @@ impl serde::Serialize for LimitNode {
         }
         if self.skip != 0 {
             #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("skip", ToString::to_string(&self.skip).as_str())?;
         }
         if self.fetch != 0 {
             #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("fetch", ToString::to_string(&self.fetch).as_str())?;
         }
         struct_ser.end()
@@ -8712,6 +9164,119 @@ impl<'de> serde::Deserialize<'de> for ListRange {
             }
         }
         deserializer.deserialize_struct("datafusion.ListRange", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for ListUnnest {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.index_in_input_schema != 0 {
+            len += 1;
+        }
+        if self.depth != 0 {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("datafusion.ListUnnest", len)?;
+        if self.index_in_input_schema != 0 {
+            struct_ser.serialize_field("indexInInputSchema", &self.index_in_input_schema)?;
+        }
+        if self.depth != 0 {
+            struct_ser.serialize_field("depth", &self.depth)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for ListUnnest {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "index_in_input_schema",
+            "indexInInputSchema",
+            "depth",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            IndexInInputSchema,
+            Depth,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "indexInInputSchema" | "index_in_input_schema" => Ok(GeneratedField::IndexInInputSchema),
+                            "depth" => Ok(GeneratedField::Depth),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = ListUnnest;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct datafusion.ListUnnest")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<ListUnnest, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut index_in_input_schema__ = None;
+                let mut depth__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::IndexInInputSchema => {
+                            if index_in_input_schema__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("indexInInputSchema"));
+                            }
+                            index_in_input_schema__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::Depth => {
+                            if depth__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("depth"));
+                            }
+                            depth__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                    }
+                }
+                Ok(ListUnnest {
+                    index_in_input_schema: index_in_input_schema__.unwrap_or_default(),
+                    depth: depth__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("datafusion.ListUnnest", FIELDS, GeneratedVisitor)
     }
 }
 impl serde::Serialize for ListingTableScanNode {
@@ -9272,9 +9837,6 @@ impl serde::Serialize for LogicalExprNode {
                 logical_expr_node::ExprType::Cast(v) => {
                     struct_ser.serialize_field("cast", v)?;
                 }
-                logical_expr_node::ExprType::Sort(v) => {
-                    struct_ser.serialize_field("sort", v)?;
-                }
                 logical_expr_node::ExprType::Negative(v) => {
                     struct_ser.serialize_field("negative", v)?;
                 }
@@ -9365,7 +9927,6 @@ impl<'de> serde::Deserialize<'de> for LogicalExprNode {
             "case_",
             "case",
             "cast",
-            "sort",
             "negative",
             "in_list",
             "inList",
@@ -9414,7 +9975,6 @@ impl<'de> serde::Deserialize<'de> for LogicalExprNode {
             Between,
             Case,
             Cast,
-            Sort,
             Negative,
             InList,
             Wildcard,
@@ -9467,7 +10027,6 @@ impl<'de> serde::Deserialize<'de> for LogicalExprNode {
                             "between" => Ok(GeneratedField::Between),
                             "case" | "case_" => Ok(GeneratedField::Case),
                             "cast" => Ok(GeneratedField::Cast),
-                            "sort" => Ok(GeneratedField::Sort),
                             "negative" => Ok(GeneratedField::Negative),
                             "inList" | "in_list" => Ok(GeneratedField::InList),
                             "wildcard" => Ok(GeneratedField::Wildcard),
@@ -9579,13 +10138,6 @@ impl<'de> serde::Deserialize<'de> for LogicalExprNode {
                                 return Err(serde::de::Error::duplicate_field("cast"));
                             }
                             expr_type__ = map_.next_value::<::std::option::Option<_>>()?.map(logical_expr_node::ExprType::Cast)
-;
-                        }
-                        GeneratedField::Sort => {
-                            if expr_type__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("sort"));
-                            }
-                            expr_type__ = map_.next_value::<::std::option::Option<_>>()?.map(logical_expr_node::ExprType::Sort)
 ;
                         }
                         GeneratedField::Negative => {
@@ -9854,6 +10406,7 @@ impl serde::Serialize for LogicalExtensionNode {
         let mut struct_ser = serializer.serialize_struct("datafusion.LogicalExtensionNode", len)?;
         if !self.node.is_empty() {
             #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("node", pbjson::private::base64::encode(&self.node).as_str())?;
         }
         if !self.inputs.is_empty() {
@@ -11976,14 +12529,17 @@ impl serde::Serialize for PartitionStats {
         let mut struct_ser = serializer.serialize_struct("datafusion.PartitionStats", len)?;
         if self.num_rows != 0 {
             #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("numRows", ToString::to_string(&self.num_rows).as_str())?;
         }
         if self.num_batches != 0 {
             #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("numBatches", ToString::to_string(&self.num_batches).as_str())?;
         }
         if self.num_bytes != 0 {
             #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("numBytes", ToString::to_string(&self.num_bytes).as_str())?;
         }
         if !self.column_stats.is_empty() {
@@ -12140,10 +12696,12 @@ impl serde::Serialize for PartitionedFile {
         }
         if self.size != 0 {
             #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("size", ToString::to_string(&self.size).as_str())?;
         }
         if self.last_modified_ns != 0 {
             #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("lastModifiedNs", ToString::to_string(&self.last_modified_ns).as_str())?;
         }
         if !self.partition_values.is_empty() {
@@ -12308,6 +12866,7 @@ impl serde::Serialize for Partitioning {
             match v {
                 partitioning::PartitionMethod::RoundRobin(v) => {
                     #[allow(clippy::needless_borrow)]
+                    #[allow(clippy::needless_borrows_for_generic_args)]
                     struct_ser.serialize_field("roundRobin", ToString::to_string(&v).as_str())?;
                 }
                 partitioning::PartitionMethod::Hash(v) => {
@@ -12315,6 +12874,7 @@ impl serde::Serialize for Partitioning {
                 }
                 partitioning::PartitionMethod::Unknown(v) => {
                     #[allow(clippy::needless_borrow)]
+                    #[allow(clippy::needless_borrows_for_generic_args)]
                     struct_ser.serialize_field("unknown", ToString::to_string(&v).as_str())?;
                 }
             }
@@ -12456,6 +13016,7 @@ impl serde::Serialize for PhysicalAggregateExprNode {
         }
         if let Some(v) = self.fun_definition.as_ref() {
             #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("funDefinition", pbjson::private::base64::encode(&v).as_str())?;
         }
         if let Some(v) = self.aggregate_function.as_ref() {
@@ -13638,6 +14199,7 @@ impl serde::Serialize for PhysicalExtensionExprNode {
         let mut struct_ser = serializer.serialize_struct("datafusion.PhysicalExtensionExprNode", len)?;
         if !self.expr.is_empty() {
             #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("expr", pbjson::private::base64::encode(&self.expr).as_str())?;
         }
         if !self.inputs.is_empty() {
@@ -13749,6 +14311,7 @@ impl serde::Serialize for PhysicalExtensionNode {
         let mut struct_ser = serializer.serialize_struct("datafusion.PhysicalExtensionNode", len)?;
         if !self.node.is_empty() {
             #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("node", pbjson::private::base64::encode(&self.node).as_str())?;
         }
         if !self.inputs.is_empty() {
@@ -13863,6 +14426,7 @@ impl serde::Serialize for PhysicalHashRepartition {
         }
         if self.partition_count != 0 {
             #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("partitionCount", ToString::to_string(&self.partition_count).as_str())?;
         }
         struct_ser.end()
@@ -14686,6 +15250,9 @@ impl serde::Serialize for PhysicalPlanNode {
                 physical_plan_node::PhysicalPlanType::ParquetSink(v) => {
                     struct_ser.serialize_field("parquetSink", v)?;
                 }
+                physical_plan_node::PhysicalPlanType::Unnest(v) => {
+                    struct_ser.serialize_field("unnest", v)?;
+                }
             }
         }
         struct_ser.end()
@@ -14741,6 +15308,7 @@ impl<'de> serde::Deserialize<'de> for PhysicalPlanNode {
             "csvSink",
             "parquet_sink",
             "parquetSink",
+            "unnest",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -14773,6 +15341,7 @@ impl<'de> serde::Deserialize<'de> for PhysicalPlanNode {
             PlaceholderRow,
             CsvSink,
             ParquetSink,
+            Unnest,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -14822,6 +15391,7 @@ impl<'de> serde::Deserialize<'de> for PhysicalPlanNode {
                             "placeholderRow" | "placeholder_row" => Ok(GeneratedField::PlaceholderRow),
                             "csvSink" | "csv_sink" => Ok(GeneratedField::CsvSink),
                             "parquetSink" | "parquet_sink" => Ok(GeneratedField::ParquetSink),
+                            "unnest" => Ok(GeneratedField::Unnest),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -15040,6 +15610,13 @@ impl<'de> serde::Deserialize<'de> for PhysicalPlanNode {
                             physical_plan_type__ = map_.next_value::<::std::option::Option<_>>()?.map(physical_plan_node::PhysicalPlanType::ParquetSink)
 ;
                         }
+                        GeneratedField::Unnest => {
+                            if physical_plan_type__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("unnest"));
+                            }
+                            physical_plan_type__ = map_.next_value::<::std::option::Option<_>>()?.map(physical_plan_node::PhysicalPlanType::Unnest)
+;
+                        }
                     }
                 }
                 Ok(PhysicalPlanNode {
@@ -15079,6 +15656,7 @@ impl serde::Serialize for PhysicalScalarUdfNode {
         }
         if let Some(v) = self.fun_definition.as_ref() {
             #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("funDefinition", pbjson::private::base64::encode(&v).as_str())?;
         }
         if let Some(v) = self.return_type.as_ref() {
@@ -15681,6 +16259,7 @@ impl serde::Serialize for PhysicalWindowExprNode {
         }
         if let Some(v) = self.fun_definition.as_ref() {
             #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("funDefinition", pbjson::private::base64::encode(&v).as_str())?;
         }
         if let Some(v) = self.window_function.as_ref() {
@@ -16765,6 +17344,135 @@ impl<'de> serde::Deserialize<'de> for ProjectionNode {
         deserializer.deserialize_struct("datafusion.ProjectionNode", FIELDS, GeneratedVisitor)
     }
 }
+impl serde::Serialize for RecursionUnnestOption {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.output_column.is_some() {
+            len += 1;
+        }
+        if self.input_column.is_some() {
+            len += 1;
+        }
+        if self.depth != 0 {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("datafusion.RecursionUnnestOption", len)?;
+        if let Some(v) = self.output_column.as_ref() {
+            struct_ser.serialize_field("outputColumn", v)?;
+        }
+        if let Some(v) = self.input_column.as_ref() {
+            struct_ser.serialize_field("inputColumn", v)?;
+        }
+        if self.depth != 0 {
+            struct_ser.serialize_field("depth", &self.depth)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for RecursionUnnestOption {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "output_column",
+            "outputColumn",
+            "input_column",
+            "inputColumn",
+            "depth",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            OutputColumn,
+            InputColumn,
+            Depth,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "outputColumn" | "output_column" => Ok(GeneratedField::OutputColumn),
+                            "inputColumn" | "input_column" => Ok(GeneratedField::InputColumn),
+                            "depth" => Ok(GeneratedField::Depth),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = RecursionUnnestOption;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct datafusion.RecursionUnnestOption")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<RecursionUnnestOption, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut output_column__ = None;
+                let mut input_column__ = None;
+                let mut depth__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::OutputColumn => {
+                            if output_column__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("outputColumn"));
+                            }
+                            output_column__ = map_.next_value()?;
+                        }
+                        GeneratedField::InputColumn => {
+                            if input_column__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("inputColumn"));
+                            }
+                            input_column__ = map_.next_value()?;
+                        }
+                        GeneratedField::Depth => {
+                            if depth__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("depth"));
+                            }
+                            depth__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                    }
+                }
+                Ok(RecursionUnnestOption {
+                    output_column: output_column__,
+                    input_column: input_column__,
+                    depth: depth__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("datafusion.RecursionUnnestOption", FIELDS, GeneratedVisitor)
+    }
+}
 impl serde::Serialize for RepartitionExecNode {
     #[allow(deprecated)]
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
@@ -16895,6 +17603,7 @@ impl serde::Serialize for RepartitionNode {
             match v {
                 repartition_node::PartitionMethod::RoundRobin(v) => {
                     #[allow(clippy::needless_borrow)]
+                    #[allow(clippy::needless_borrows_for_generic_args)]
                     struct_ser.serialize_field("roundRobin", ToString::to_string(&v).as_str())?;
                 }
                 repartition_node::PartitionMethod::Hash(v) => {
@@ -17117,6 +17826,7 @@ impl serde::Serialize for ScalarUdfExprNode {
         }
         if let Some(v) = self.fun_definition.as_ref() {
             #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("funDefinition", pbjson::private::base64::encode(&v).as_str())?;
         }
         struct_ser.end()
@@ -17685,6 +18395,7 @@ impl serde::Serialize for SortExecNode {
         }
         if self.fetch != 0 {
             #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("fetch", ToString::to_string(&self.fetch).as_str())?;
         }
         if self.preserve_partitioning {
@@ -17928,6 +18639,98 @@ impl<'de> serde::Deserialize<'de> for SortExprNode {
         deserializer.deserialize_struct("datafusion.SortExprNode", FIELDS, GeneratedVisitor)
     }
 }
+impl serde::Serialize for SortExprNodeCollection {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if !self.sort_expr_nodes.is_empty() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("datafusion.SortExprNodeCollection", len)?;
+        if !self.sort_expr_nodes.is_empty() {
+            struct_ser.serialize_field("sortExprNodes", &self.sort_expr_nodes)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for SortExprNodeCollection {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "sort_expr_nodes",
+            "sortExprNodes",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            SortExprNodes,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "sortExprNodes" | "sort_expr_nodes" => Ok(GeneratedField::SortExprNodes),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = SortExprNodeCollection;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct datafusion.SortExprNodeCollection")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<SortExprNodeCollection, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut sort_expr_nodes__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::SortExprNodes => {
+                            if sort_expr_nodes__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("sortExprNodes"));
+                            }
+                            sort_expr_nodes__ = Some(map_.next_value()?);
+                        }
+                    }
+                }
+                Ok(SortExprNodeCollection {
+                    sort_expr_nodes: sort_expr_nodes__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("datafusion.SortExprNodeCollection", FIELDS, GeneratedVisitor)
+    }
+}
 impl serde::Serialize for SortNode {
     #[allow(deprecated)]
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
@@ -17954,6 +18757,7 @@ impl serde::Serialize for SortNode {
         }
         if self.fetch != 0 {
             #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("fetch", ToString::to_string(&self.fetch).as_str())?;
         }
         struct_ser.end()
@@ -18082,6 +18886,7 @@ impl serde::Serialize for SortPreservingMergeExecNode {
         }
         if self.fetch != 0 {
             #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("fetch", ToString::to_string(&self.fetch).as_str())?;
         }
         struct_ser.end()
@@ -19212,6 +20017,170 @@ impl<'de> serde::Deserialize<'de> for Unnest {
         deserializer.deserialize_struct("datafusion.Unnest", FIELDS, GeneratedVisitor)
     }
 }
+impl serde::Serialize for UnnestExecNode {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.input.is_some() {
+            len += 1;
+        }
+        if self.schema.is_some() {
+            len += 1;
+        }
+        if !self.list_type_columns.is_empty() {
+            len += 1;
+        }
+        if !self.struct_type_columns.is_empty() {
+            len += 1;
+        }
+        if self.options.is_some() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("datafusion.UnnestExecNode", len)?;
+        if let Some(v) = self.input.as_ref() {
+            struct_ser.serialize_field("input", v)?;
+        }
+        if let Some(v) = self.schema.as_ref() {
+            struct_ser.serialize_field("schema", v)?;
+        }
+        if !self.list_type_columns.is_empty() {
+            struct_ser.serialize_field("listTypeColumns", &self.list_type_columns)?;
+        }
+        if !self.struct_type_columns.is_empty() {
+            struct_ser.serialize_field("structTypeColumns", &self.struct_type_columns.iter().map(ToString::to_string).collect::<Vec<_>>())?;
+        }
+        if let Some(v) = self.options.as_ref() {
+            struct_ser.serialize_field("options", v)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for UnnestExecNode {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "input",
+            "schema",
+            "list_type_columns",
+            "listTypeColumns",
+            "struct_type_columns",
+            "structTypeColumns",
+            "options",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Input,
+            Schema,
+            ListTypeColumns,
+            StructTypeColumns,
+            Options,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "input" => Ok(GeneratedField::Input),
+                            "schema" => Ok(GeneratedField::Schema),
+                            "listTypeColumns" | "list_type_columns" => Ok(GeneratedField::ListTypeColumns),
+                            "structTypeColumns" | "struct_type_columns" => Ok(GeneratedField::StructTypeColumns),
+                            "options" => Ok(GeneratedField::Options),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = UnnestExecNode;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct datafusion.UnnestExecNode")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<UnnestExecNode, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut input__ = None;
+                let mut schema__ = None;
+                let mut list_type_columns__ = None;
+                let mut struct_type_columns__ = None;
+                let mut options__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Input => {
+                            if input__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("input"));
+                            }
+                            input__ = map_.next_value()?;
+                        }
+                        GeneratedField::Schema => {
+                            if schema__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("schema"));
+                            }
+                            schema__ = map_.next_value()?;
+                        }
+                        GeneratedField::ListTypeColumns => {
+                            if list_type_columns__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("listTypeColumns"));
+                            }
+                            list_type_columns__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::StructTypeColumns => {
+                            if struct_type_columns__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("structTypeColumns"));
+                            }
+                            struct_type_columns__ = 
+                                Some(map_.next_value::<Vec<::pbjson::private::NumberDeserialize<_>>>()?
+                                    .into_iter().map(|x| x.0).collect())
+                            ;
+                        }
+                        GeneratedField::Options => {
+                            if options__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("options"));
+                            }
+                            options__ = map_.next_value()?;
+                        }
+                    }
+                }
+                Ok(UnnestExecNode {
+                    input: input__,
+                    schema: schema__,
+                    list_type_columns: list_type_columns__.unwrap_or_default(),
+                    struct_type_columns: struct_type_columns__.unwrap_or_default(),
+                    options: options__,
+                })
+            }
+        }
+        deserializer.deserialize_struct("datafusion.UnnestExecNode", FIELDS, GeneratedVisitor)
+    }
+}
 impl serde::Serialize for UnnestNode {
     #[allow(deprecated)]
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
@@ -19249,7 +20218,7 @@ impl serde::Serialize for UnnestNode {
             struct_ser.serialize_field("execColumns", &self.exec_columns)?;
         }
         if !self.list_type_columns.is_empty() {
-            struct_ser.serialize_field("listTypeColumns", &self.list_type_columns.iter().map(ToString::to_string).collect::<Vec<_>>())?;
+            struct_ser.serialize_field("listTypeColumns", &self.list_type_columns)?;
         }
         if !self.struct_type_columns.is_empty() {
             struct_ser.serialize_field("structTypeColumns", &self.struct_type_columns.iter().map(ToString::to_string).collect::<Vec<_>>())?;
@@ -19367,10 +20336,7 @@ impl<'de> serde::Deserialize<'de> for UnnestNode {
                             if list_type_columns__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("listTypeColumns"));
                             }
-                            list_type_columns__ = 
-                                Some(map_.next_value::<Vec<::pbjson::private::NumberDeserialize<_>>>()?
-                                    .into_iter().map(|x| x.0).collect())
-                            ;
+                            list_type_columns__ = Some(map_.next_value()?);
                         }
                         GeneratedField::StructTypeColumns => {
                             if struct_type_columns__.is_some() {
@@ -19429,9 +20395,15 @@ impl serde::Serialize for UnnestOptions {
         if self.preserve_nulls {
             len += 1;
         }
+        if !self.recursions.is_empty() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion.UnnestOptions", len)?;
         if self.preserve_nulls {
             struct_ser.serialize_field("preserveNulls", &self.preserve_nulls)?;
+        }
+        if !self.recursions.is_empty() {
+            struct_ser.serialize_field("recursions", &self.recursions)?;
         }
         struct_ser.end()
     }
@@ -19445,11 +20417,13 @@ impl<'de> serde::Deserialize<'de> for UnnestOptions {
         const FIELDS: &[&str] = &[
             "preserve_nulls",
             "preserveNulls",
+            "recursions",
         ];
 
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
             PreserveNulls,
+            Recursions,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -19472,6 +20446,7 @@ impl<'de> serde::Deserialize<'de> for UnnestOptions {
                     {
                         match value {
                             "preserveNulls" | "preserve_nulls" => Ok(GeneratedField::PreserveNulls),
+                            "recursions" => Ok(GeneratedField::Recursions),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -19492,6 +20467,7 @@ impl<'de> serde::Deserialize<'de> for UnnestOptions {
                     V: serde::de::MapAccess<'de>,
             {
                 let mut preserve_nulls__ = None;
+                let mut recursions__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::PreserveNulls => {
@@ -19500,10 +20476,17 @@ impl<'de> serde::Deserialize<'de> for UnnestOptions {
                             }
                             preserve_nulls__ = Some(map_.next_value()?);
                         }
+                        GeneratedField::Recursions => {
+                            if recursions__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("recursions"));
+                            }
+                            recursions__ = Some(map_.next_value()?);
+                        }
                     }
                 }
                 Ok(UnnestOptions {
                     preserve_nulls: preserve_nulls__.unwrap_or_default(),
+                    recursions: recursions__.unwrap_or_default(),
                 })
             }
         }
@@ -19527,6 +20510,7 @@ impl serde::Serialize for ValuesNode {
         let mut struct_ser = serializer.serialize_struct("datafusion.ValuesNode", len)?;
         if self.n_cols != 0 {
             #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("nCols", ToString::to_string(&self.n_cols).as_str())?;
         }
         if !self.values_list.is_empty() {
@@ -20168,7 +21152,7 @@ impl serde::Serialize for WindowExprNode {
     {
         use serde::ser::SerializeStruct;
         let mut len = 0;
-        if self.expr.is_some() {
+        if !self.exprs.is_empty() {
             len += 1;
         }
         if !self.partition_by.is_empty() {
@@ -20187,8 +21171,8 @@ impl serde::Serialize for WindowExprNode {
             len += 1;
         }
         let mut struct_ser = serializer.serialize_struct("datafusion.WindowExprNode", len)?;
-        if let Some(v) = self.expr.as_ref() {
-            struct_ser.serialize_field("expr", v)?;
+        if !self.exprs.is_empty() {
+            struct_ser.serialize_field("exprs", &self.exprs)?;
         }
         if !self.partition_by.is_empty() {
             struct_ser.serialize_field("partitionBy", &self.partition_by)?;
@@ -20201,6 +21185,7 @@ impl serde::Serialize for WindowExprNode {
         }
         if let Some(v) = self.fun_definition.as_ref() {
             #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("funDefinition", pbjson::private::base64::encode(&v).as_str())?;
         }
         if let Some(v) = self.window_function.as_ref() {
@@ -20228,7 +21213,7 @@ impl<'de> serde::Deserialize<'de> for WindowExprNode {
         D: serde::Deserializer<'de>,
     {
         const FIELDS: &[&str] = &[
-            "expr",
+            "exprs",
             "partition_by",
             "partitionBy",
             "order_by",
@@ -20245,7 +21230,7 @@ impl<'de> serde::Deserialize<'de> for WindowExprNode {
 
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
-            Expr,
+            Exprs,
             PartitionBy,
             OrderBy,
             WindowFrame,
@@ -20274,7 +21259,7 @@ impl<'de> serde::Deserialize<'de> for WindowExprNode {
                         E: serde::de::Error,
                     {
                         match value {
-                            "expr" => Ok(GeneratedField::Expr),
+                            "exprs" => Ok(GeneratedField::Exprs),
                             "partitionBy" | "partition_by" => Ok(GeneratedField::PartitionBy),
                             "orderBy" | "order_by" => Ok(GeneratedField::OrderBy),
                             "windowFrame" | "window_frame" => Ok(GeneratedField::WindowFrame),
@@ -20301,7 +21286,7 @@ impl<'de> serde::Deserialize<'de> for WindowExprNode {
                 where
                     V: serde::de::MapAccess<'de>,
             {
-                let mut expr__ = None;
+                let mut exprs__ = None;
                 let mut partition_by__ = None;
                 let mut order_by__ = None;
                 let mut window_frame__ = None;
@@ -20309,11 +21294,11 @@ impl<'de> serde::Deserialize<'de> for WindowExprNode {
                 let mut window_function__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
-                        GeneratedField::Expr => {
-                            if expr__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("expr"));
+                        GeneratedField::Exprs => {
+                            if exprs__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("exprs"));
                             }
-                            expr__ = map_.next_value()?;
+                            exprs__ = Some(map_.next_value()?);
                         }
                         GeneratedField::PartitionBy => {
                             if partition_by__.is_some() {
@@ -20362,7 +21347,7 @@ impl<'de> serde::Deserialize<'de> for WindowExprNode {
                     }
                 }
                 Ok(WindowExprNode {
-                    expr: expr__,
+                    exprs: exprs__.unwrap_or_default(),
                     partition_by: partition_by__.unwrap_or_default(),
                     order_by: order_by__.unwrap_or_default(),
                     window_frame: window_frame__,

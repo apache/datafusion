@@ -1,0 +1,158 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+
+##########
+# Tests for parquet filter pushdown (filtering on data in the
+# scan not just the metadata)
+##########
+
+# File1 has only columns a and b
+statement ok
+COPY  (
+  SELECT column1 as a, column2 as b
+  FROM ( VALUES ('foo', 1), ('bar', 2), ('foo', 3), ('baz', 50) )
+ )  TO 'test_files/scratch/parquet_filter_pushdown/parquet_table/1.parquet'
+STORED AS PARQUET;
+
+# File2 has only b
+statement ok
+COPY  (
+  SELECT column1 as b
+  FROM ( VALUES (10), (20), (30) )
+ )  TO 'test_files/scratch/parquet_filter_pushdown/parquet_table/2.parquet'
+STORED AS PARQUET;
+
+
+## Create table without filter pushdown
+## (pushdown setting is part of the table, but is copied from the session settings)
+
+# pushdown_filters (currently) defaults to false, but we set it here to be explicit
+statement ok
+set datafusion.execution.parquet.pushdown_filters = false;
+
+statement ok
+CREATE EXTERNAL TABLE t(a varchar, b int, c float) STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet_filter_pushdown/parquet_table/';
+
+## Create table with pushdown enabled (pushdown setting is part of the table)
+
+statement ok
+set datafusion.execution.parquet.pushdown_filters = true;
+
+## Create table without pushdown
+statement ok
+CREATE EXTERNAL TABLE t_pushdown(a varchar, b int, c float) STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet_filter_pushdown/parquet_table/';
+
+# restore defaults
+statement ok
+set datafusion.execution.parquet.pushdown_filters = false;
+
+# When filter pushdown is not enabled, ParquetExec only filters based on
+# metadata, so a FilterExec is required to filter the
+# output of the `ParquetExec`
+
+query T
+select a from t where b > 2 ORDER BY a;
+----
+baz
+foo
+NULL
+NULL
+NULL
+
+query TT
+EXPLAIN select a from t_pushdown where b > 2 ORDER BY a;
+----
+logical_plan
+01)Sort: t_pushdown.a ASC NULLS LAST
+02)--TableScan: t_pushdown projection=[a], full_filters=[t_pushdown.b > Int32(2)]
+physical_plan
+01)SortPreservingMergeExec: [a@0 ASC NULLS LAST]
+02)--SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[true]
+03)----ParquetExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_filter_pushdown/parquet_table/1.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_filter_pushdown/parquet_table/2.parquet]]}, projection=[a], predicate=b@1 > 2, pruning_predicate=CASE WHEN b_null_count@1 = b_row_count@2 THEN false ELSE b_max@0 > 2 END, required_guarantees=[]
+
+
+# When filter pushdown *is* enabled, ParquetExec can filter exactly,
+# not just metadata, so we expect to see no FilterExec
+query T
+select a from t_pushdown where b > 2 ORDER BY a;
+----
+baz
+foo
+NULL
+NULL
+NULL
+
+query TT
+EXPLAIN select a from t where b > 2 ORDER BY a;
+----
+logical_plan
+01)Sort: t.a ASC NULLS LAST
+02)--Projection: t.a
+03)----Filter: t.b > Int32(2)
+04)------TableScan: t projection=[a, b], partial_filters=[t.b > Int32(2)]
+physical_plan
+01)SortPreservingMergeExec: [a@0 ASC NULLS LAST]
+02)--SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[true]
+03)----CoalesceBatchesExec: target_batch_size=8192
+04)------FilterExec: b@1 > 2, projection=[a@0]
+05)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=2
+06)----------ParquetExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_filter_pushdown/parquet_table/1.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_filter_pushdown/parquet_table/2.parquet]]}, projection=[a, b], predicate=b@1 > 2, pruning_predicate=CASE WHEN b_null_count@1 = b_row_count@2 THEN false ELSE b_max@0 > 2 END, required_guarantees=[]
+
+# also test querying on columns that are not in all the files
+query T
+select a from t_pushdown where b > 2 AND a IS NOT NULL order by a;
+----
+baz
+foo
+
+query TT
+EXPLAIN select a from t_pushdown where b > 2 AND a IS NOT NULL order by a;
+----
+logical_plan
+01)Sort: t_pushdown.a ASC NULLS LAST
+02)--TableScan: t_pushdown projection=[a], full_filters=[t_pushdown.b > Int32(2), t_pushdown.a IS NOT NULL]
+physical_plan
+01)SortPreservingMergeExec: [a@0 ASC NULLS LAST]
+02)--SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[true]
+03)----ParquetExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_filter_pushdown/parquet_table/1.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_filter_pushdown/parquet_table/2.parquet]]}, projection=[a], predicate=b@1 > 2 AND a@0 IS NOT NULL, pruning_predicate=CASE WHEN b_null_count@1 = b_row_count@2 THEN false ELSE b_max@0 > 2 END AND a_null_count@4 != a_row_count@3, required_guarantees=[]
+
+
+query I
+select b from t_pushdown where a = 'bar' order by b;
+----
+2
+
+query TT
+EXPLAIN select b from t_pushdown where a = 'bar' order by b;
+----
+logical_plan
+01)Sort: t_pushdown.b ASC NULLS LAST
+02)--TableScan: t_pushdown projection=[b], full_filters=[t_pushdown.a = Utf8("bar")]
+physical_plan
+01)SortPreservingMergeExec: [b@0 ASC NULLS LAST]
+02)--SortExec: expr=[b@0 ASC NULLS LAST], preserve_partitioning=[true]
+03)----ParquetExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_filter_pushdown/parquet_table/1.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_filter_pushdown/parquet_table/2.parquet]]}, projection=[b], predicate=a@0 = bar, pruning_predicate=CASE WHEN a_null_count@2 = a_row_count@3 THEN false ELSE a_min@0 <= bar AND bar <= a_max@1 END, required_guarantees=[a in (bar)]
+
+## cleanup
+statement ok
+DROP TABLE t;
+
+statement ok
+DROP TABLE t_pushdown;

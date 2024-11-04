@@ -18,8 +18,8 @@
 //! Defines `Avg` & `Mean` aggregate & accumulators
 
 use arrow::array::{
-    self, Array, ArrayRef, ArrowNativeTypeOp, ArrowNumericType, ArrowPrimitiveType,
-    AsArray, BooleanArray, PrimitiveArray, PrimitiveBuilder, UInt64Array,
+    Array, ArrayRef, ArrowNativeTypeOp, ArrowNumericType, ArrowPrimitiveType, AsArray,
+    BooleanArray, PrimitiveArray, PrimitiveBuilder, UInt64Array,
 };
 
 use arrow::compute::sum;
@@ -28,12 +28,14 @@ use arrow::datatypes::{
     Float64Type, UInt64Type,
 };
 use datafusion_common::{exec_err, not_impl_err, Result, ScalarValue};
+use datafusion_expr::aggregate_doc_sections::DOC_SECTION_GENERAL;
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::type_coercion::aggregates::{avg_return_type, coerce_avg_type};
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::Volatility::Immutable;
 use datafusion_expr::{
-    Accumulator, AggregateUDFImpl, EmitTo, GroupsAccumulator, ReversedUDAF, Signature,
+    Accumulator, AggregateUDFImpl, Documentation, EmitTo, GroupsAccumulator,
+    ReversedUDAF, Signature,
 };
 
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::accumulate::NullState;
@@ -45,7 +47,8 @@ use datafusion_functions_aggregate_common::utils::DecimalAverager;
 use log::debug;
 use std::any::Any;
 use std::fmt::Debug;
-use std::sync::Arc;
+use std::mem::{size_of, size_of_val};
+use std::sync::{Arc, OnceLock};
 
 make_udaf_expr_and_func!(
     Avg,
@@ -235,6 +238,36 @@ impl AggregateUDFImpl for Avg {
         }
         coerce_avg_type(self.name(), arg_types)
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_avg_doc())
+    }
+}
+
+static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+
+fn get_avg_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_GENERAL)
+            .with_description(
+                "Returns the average of numeric values in the specified column.",
+            )
+            .with_syntax_example("avg(expression)")
+            .with_sql_example(
+                r#"```sql
+> SELECT avg(column_name) FROM table_name;
++---------------------------+
+| avg(column_name)           |
++---------------------------+
+| 42.75                      |
++---------------------------+
+```"#,
+            )
+            .with_standard_argument("expression", None)
+            .build()
+            .unwrap()
+    })
 }
 
 /// An accumulator to compute the average
@@ -262,7 +295,7 @@ impl Accumulator for AvgAccumulator {
     }
 
     fn size(&self) -> usize {
-        std::mem::size_of_val(self)
+        size_of_val(self)
     }
 
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
@@ -340,7 +373,7 @@ impl<T: DecimalType + ArrowNumericType + Debug> Accumulator for DecimalAvgAccumu
     }
 
     fn size(&self) -> usize {
-        std::mem::size_of_val(self)
+        size_of_val(self)
     }
 
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
@@ -439,7 +472,7 @@ where
         &mut self,
         values: &[ArrayRef],
         group_indices: &[usize],
-        opt_filter: Option<&array::BooleanArray>,
+        opt_filter: Option<&BooleanArray>,
         total_num_groups: usize,
     ) -> Result<()> {
         assert_eq!(values.len(), 1, "single argument to update_batch");
@@ -522,7 +555,7 @@ where
         &mut self,
         values: &[ArrayRef],
         group_indices: &[usize],
-        opt_filter: Option<&array::BooleanArray>,
+        opt_filter: Option<&BooleanArray>,
         total_num_groups: usize,
     ) -> Result<()> {
         assert_eq!(values.len(), 2, "two arguments to merge_batch");
@@ -582,7 +615,6 @@ where
     }
 
     fn size(&self) -> usize {
-        self.counts.capacity() * std::mem::size_of::<u64>()
-            + self.sums.capacity() * std::mem::size_of::<T>()
+        self.counts.capacity() * size_of::<u64>() + self.sums.capacity() * size_of::<T>()
     }
 }

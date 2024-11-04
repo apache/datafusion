@@ -32,14 +32,18 @@ use datafusion_common::{
     tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRewriter},
 };
 use datafusion_common::{internal_err, DFSchema, DataFusionError, Result, ScalarValue};
-use datafusion_expr::expr::{InList, InSubquery, WindowFunction};
 use datafusion_expr::simplify::ExprSimplifyResult;
 use datafusion_expr::{
     and, lit, or, BinaryExpr, Case, ColumnarValue, Expr, Like, Operator, Volatility,
     WindowFunctionDefinition,
 };
 use datafusion_expr::{expr::ScalarFunction, interval_arithmetic::NullableInterval};
+use datafusion_expr::{
+    expr::{InList, InSubquery, WindowFunction},
+    utils::{iter_conjunction, iter_conjunction_owned},
+};
 use datafusion_physical_expr::{create_physical_expr, execution_props::ExecutionProps};
+use indexmap::IndexSet;
 
 use crate::analyzer::type_coercion::TypeCoercionRewriter;
 use crate::simplify_expressions::guarantees::GuaranteeRewriter;
@@ -591,7 +595,6 @@ impl<'a> ConstEvaluator<'a> {
             | Expr::InSubquery(_)
             | Expr::ScalarSubquery(_)
             | Expr::WindowFunction { .. }
-            | Expr::Sort { .. }
             | Expr::GroupingSet(_)
             | Expr::Wildcard { .. }
             | Expr::Placeholder(_) => false,
@@ -731,7 +734,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 op: Eq,
                 right,
             }) if is_bool_lit(&left) && info.is_boolean_type(&right)? => {
-                Transformed::yes(match as_bool_lit(*left)? {
+                Transformed::yes(match as_bool_lit(&left)? {
                     Some(true) => *right,
                     Some(false) => Expr::Not(right),
                     None => lit_bool_null(),
@@ -745,7 +748,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 op: Eq,
                 right,
             }) if is_bool_lit(&right) && info.is_boolean_type(&left)? => {
-                Transformed::yes(match as_bool_lit(*right)? {
+                Transformed::yes(match as_bool_lit(&right)? {
                     Some(true) => *left,
                     Some(false) => Expr::Not(left),
                     None => lit_bool_null(),
@@ -762,7 +765,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 op: NotEq,
                 right,
             }) if is_bool_lit(&left) && info.is_boolean_type(&right)? => {
-                Transformed::yes(match as_bool_lit(*left)? {
+                Transformed::yes(match as_bool_lit(&left)? {
                     Some(true) => Expr::Not(right),
                     Some(false) => *right,
                     None => lit_bool_null(),
@@ -776,7 +779,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 op: NotEq,
                 right,
             }) if is_bool_lit(&right) && info.is_boolean_type(&left)? => {
-                Transformed::yes(match as_bool_lit(*right)? {
+                Transformed::yes(match as_bool_lit(&right)? {
                     Some(true) => Expr::Not(left),
                     Some(false) => *left,
                     None => lit_bool_null(),
@@ -839,21 +842,38 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 op: Or,
                 right,
             }) if expr_contains(&right, &left, Or) => Transformed::yes(*right),
-            // A OR (A AND B) --> A (if B not null)
+            // A OR (A AND B) --> A
             Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: Or,
                 right,
-            }) if !info.nullable(&right)? && is_op_with(And, &right, &left) => {
-                Transformed::yes(*left)
-            }
-            // (A AND B) OR A --> A (if B not null)
+            }) if is_op_with(And, &right, &left) => Transformed::yes(*left),
+            // (A AND B) OR A --> A
             Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: Or,
                 right,
-            }) if !info.nullable(&left)? && is_op_with(And, &left, &right) => {
-                Transformed::yes(*right)
+            }) if is_op_with(And, &left, &right) => Transformed::yes(*right),
+            // Eliminate common factors in conjunctions e.g
+            // (A AND B) OR (A AND C) -> A AND (B OR C)
+            Expr::BinaryExpr(BinaryExpr {
+                left,
+                op: Or,
+                right,
+            }) if has_common_conjunction(&left, &right) => {
+                let lhs: IndexSet<Expr> = iter_conjunction_owned(*left).collect();
+                let (common, rhs): (Vec<_>, Vec<_>) = iter_conjunction_owned(*right)
+                    .partition(|e| lhs.contains(e) && !e.is_volatile());
+
+                let new_rhs = rhs.into_iter().reduce(and);
+                let new_lhs = lhs.into_iter().filter(|e| !common.contains(e)).reduce(and);
+                let common_conjunction = common.into_iter().reduce(and).unwrap();
+
+                let new_expr = match (new_lhs, new_rhs) {
+                    (Some(lhs), Some(rhs)) => and(common_conjunction, or(lhs, rhs)),
+                    (_, _) => common_conjunction,
+                };
+                Transformed::yes(new_expr)
             }
 
             //
@@ -912,22 +932,18 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 op: And,
                 right,
             }) if expr_contains(&right, &left, And) => Transformed::yes(*right),
-            // A AND (A OR B) --> A (if B not null)
+            // A AND (A OR B) --> A
             Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: And,
                 right,
-            }) if !info.nullable(&right)? && is_op_with(Or, &right, &left) => {
-                Transformed::yes(*left)
-            }
-            // (A OR B) AND A --> A (if B not null)
+            }) if is_op_with(Or, &right, &left) => Transformed::yes(*left),
+            // (A OR B) AND A --> A
             Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: And,
                 right,
-            }) if !info.nullable(&left)? && is_op_with(Or, &left, &right) => {
-                Transformed::yes(*right)
-            }
+            }) if is_op_with(Or, &left, &right) => Transformed::yes(*right),
 
             //
             // Rules for Multiply
@@ -1029,7 +1045,9 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 && !info.get_data_type(&left)?.is_floating()
                 && is_one(&right) =>
             {
-                Transformed::yes(lit(0))
+                Transformed::yes(Expr::Literal(ScalarValue::new_zero(
+                    &info.get_data_type(&left)?,
+                )?))
             }
 
             //
@@ -1519,7 +1537,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
             // i.e. `a = 1 OR a = 2 OR a = 3` -> `a IN (1, 2, 3)`
             Expr::BinaryExpr(BinaryExpr {
                 left,
-                op: Operator::Or,
+                op: Or,
                 right,
             }) if are_inlist_and_eq(left.as_ref(), right.as_ref()) => {
                 let lhs = to_inlist(*left).unwrap();
@@ -1559,7 +1577,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
             //     8. `a in (1,2,3,4) AND a not in (5,6,7,8) -> a in (1,2,3,4)`
             Expr::BinaryExpr(BinaryExpr {
                 left,
-                op: Operator::And,
+                op: And,
                 right,
             }) if are_inlist_and_eq_and_match_neg(
                 left.as_ref(),
@@ -1570,7 +1588,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
             {
                 match (*left, *right) {
                     (Expr::InList(l1), Expr::InList(l2)) => {
-                        return inlist_intersection(l1, l2, false).map(Transformed::yes);
+                        return inlist_intersection(l1, &l2, false).map(Transformed::yes);
                     }
                     // Matched previously once
                     _ => unreachable!(),
@@ -1579,7 +1597,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
 
             Expr::BinaryExpr(BinaryExpr {
                 left,
-                op: Operator::And,
+                op: And,
                 right,
             }) if are_inlist_and_eq_and_match_neg(
                 left.as_ref(),
@@ -1599,7 +1617,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
 
             Expr::BinaryExpr(BinaryExpr {
                 left,
-                op: Operator::And,
+                op: And,
                 right,
             }) if are_inlist_and_eq_and_match_neg(
                 left.as_ref(),
@@ -1610,7 +1628,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
             {
                 match (*left, *right) {
                     (Expr::InList(l1), Expr::InList(l2)) => {
-                        return inlist_except(l1, l2).map(Transformed::yes);
+                        return inlist_except(l1, &l2).map(Transformed::yes);
                     }
                     // Matched previously once
                     _ => unreachable!(),
@@ -1619,7 +1637,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
 
             Expr::BinaryExpr(BinaryExpr {
                 left,
-                op: Operator::And,
+                op: And,
                 right,
             }) if are_inlist_and_eq_and_match_neg(
                 left.as_ref(),
@@ -1630,7 +1648,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
             {
                 match (*left, *right) {
                     (Expr::InList(l1), Expr::InList(l2)) => {
-                        return inlist_except(l2, l1).map(Transformed::yes);
+                        return inlist_except(l2, &l1).map(Transformed::yes);
                     }
                     // Matched previously once
                     _ => unreachable!(),
@@ -1639,7 +1657,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
 
             Expr::BinaryExpr(BinaryExpr {
                 left,
-                op: Operator::Or,
+                op: Or,
                 right,
             }) if are_inlist_and_eq_and_match_neg(
                 left.as_ref(),
@@ -1650,7 +1668,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
             {
                 match (*left, *right) {
                     (Expr::InList(l1), Expr::InList(l2)) => {
-                        return inlist_intersection(l1, l2, true).map(Transformed::yes);
+                        return inlist_intersection(l1, &l2, true).map(Transformed::yes);
                     }
                     // Matched previously once
                     _ => unreachable!(),
@@ -1661,6 +1679,11 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
             expr => Transformed::no(expr),
         })
     }
+}
+
+fn has_common_conjunction(lhs: &Expr, rhs: &Expr) -> bool {
+    let lhs_set: HashSet<&Expr> = iter_conjunction(lhs).collect();
+    iter_conjunction(rhs).any(|e| lhs_set.contains(&e) && !e.is_volatile())
 }
 
 // TODO: We might not need this after defer pattern for Box is stabilized. https://github.com/rust-lang/rust/issues/87121
@@ -1760,7 +1783,7 @@ fn inlist_union(mut l1: InList, l2: InList, negated: bool) -> Result<Expr> {
 
 /// Return the intersection of two inlist expressions
 /// maintaining the order of the elements in the two lists
-fn inlist_intersection(mut l1: InList, l2: InList, negated: bool) -> Result<Expr> {
+fn inlist_intersection(mut l1: InList, l2: &InList, negated: bool) -> Result<Expr> {
     let l2_items = l2.list.iter().collect::<HashSet<_>>();
 
     // remove all items from l1 that are not in l2
@@ -1776,7 +1799,7 @@ fn inlist_intersection(mut l1: InList, l2: InList, negated: bool) -> Result<Expr
 
 /// Return the all items in l1 that are not in l2
 /// maintaining the order of the elements in the two lists
-fn inlist_except(mut l1: InList, l2: InList) -> Result<Expr> {
+fn inlist_except(mut l1: InList, l2: &InList) -> Result<Expr> {
     let l2_items = l2.list.iter().collect::<HashSet<_>>();
 
     // keep only items from l1 that are not in l2
@@ -1790,6 +1813,8 @@ fn inlist_except(mut l1: InList, l2: InList) -> Result<Expr> {
 
 #[cfg(test)]
 mod tests {
+    use crate::simplify_expressions::SimplifyContext;
+    use crate::test::test_table_scan_with_name;
     use datafusion_common::{assert_contains, DFSchemaRef, ToDFSchema};
     use datafusion_expr::{
         function::{
@@ -1799,14 +1824,13 @@ mod tests {
         interval_arithmetic::Interval,
         *,
     };
+    use datafusion_functions_window_common::field::WindowUDFFieldArgs;
+    use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
     use std::{
         collections::HashMap,
         ops::{BitAnd, BitOr, BitXor},
         sync::Arc,
     };
-
-    use crate::simplify_expressions::SimplifyContext;
-    use crate::test::test_table_scan_with_name;
 
     use super::*;
 
@@ -2171,11 +2195,11 @@ mod tests {
 
     #[test]
     fn test_simplify_modulo_by_one_non_null() {
-        let expr = col("c2_non_null") % lit(1);
-        let expected = lit(0);
+        let expr = col("c3_non_null") % lit(1);
+        let expected = lit(0_i64);
         assert_eq!(simplify(expr), expected);
         let expr =
-            col("c2_non_null") % lit(ScalarValue::Decimal128(Some(10000000000), 31, 10));
+            col("c3_non_null") % lit(ScalarValue::Decimal128(Some(10000000000), 31, 10));
         assert_eq!(simplify(expr), expected);
     }
 
@@ -2609,15 +2633,11 @@ mod tests {
         // (c2 > 5) OR ((c1 < 6) AND (c2 > 5))
         let expr = or(l.clone(), r.clone());
 
-        // no rewrites if c1 can be null
-        let expected = expr.clone();
+        let expected = l.clone();
         assert_eq!(simplify(expr), expected);
 
         // ((c1 < 6) AND (c2 > 5)) OR (c2 > 5)
-        let expr = or(l, r);
-
-        // no rewrites if c1 can be null
-        let expected = expr.clone();
+        let expr = or(r, l);
         assert_eq!(simplify(expr), expected);
     }
 
@@ -2648,13 +2668,11 @@ mod tests {
         // (c2 > 5) AND ((c1 < 6) OR (c2 > 5)) --> c2 > 5
         let expr = and(l.clone(), r.clone());
 
-        // no rewrites if c1 can be null
-        let expected = expr.clone();
+        let expected = l.clone();
         assert_eq!(simplify(expr), expected);
 
         // ((c1 < 6) OR (c2 > 5)) AND (c2 > 5) --> c2 > 5
-        let expr = and(l, r);
-        let expected = expr.clone();
+        let expr = and(r, l);
         assert_eq!(simplify(expr), expected);
     }
 
@@ -3223,7 +3241,7 @@ mod tests {
                 )],
                 Some(Box::new(col("c2").eq(lit(true)))),
             )))),
-            col("c2").or(col("c2").not().and(col("c2"))) // #1716
+            col("c2")
         );
 
         // CASE WHEN ISNULL(c2) THEN true ELSE c2
@@ -3407,32 +3425,32 @@ mod tests {
         let expr = in_list(col("c1"), vec![lit(1), lit(2), lit(3), lit(4)], false).and(
             in_list(col("c1"), vec![lit(5), lit(6), lit(7), lit(8)], false),
         );
-        assert_eq!(simplify(expr.clone()), lit(false));
+        assert_eq!(simplify(expr), lit(false));
 
         // 2. c1 IN (1,2,3,4) AND c1 IN (4,5,6,7) -> c1 = 4
         let expr = in_list(col("c1"), vec![lit(1), lit(2), lit(3), lit(4)], false).and(
             in_list(col("c1"), vec![lit(4), lit(5), lit(6), lit(7)], false),
         );
-        assert_eq!(simplify(expr.clone()), col("c1").eq(lit(4)));
+        assert_eq!(simplify(expr), col("c1").eq(lit(4)));
 
         // 3. c1 NOT IN (1, 2, 3, 4) OR c1 NOT IN (5, 6, 7, 8) -> true
         let expr = in_list(col("c1"), vec![lit(1), lit(2), lit(3), lit(4)], true).or(
             in_list(col("c1"), vec![lit(5), lit(6), lit(7), lit(8)], true),
         );
-        assert_eq!(simplify(expr.clone()), lit(true));
+        assert_eq!(simplify(expr), lit(true));
 
         // 3.5 c1 NOT IN (1, 2, 3, 4) OR c1 NOT IN (4, 5, 6, 7) -> c1 != 4 (4 overlaps)
         let expr = in_list(col("c1"), vec![lit(1), lit(2), lit(3), lit(4)], true).or(
             in_list(col("c1"), vec![lit(4), lit(5), lit(6), lit(7)], true),
         );
-        assert_eq!(simplify(expr.clone()), col("c1").not_eq(lit(4)));
+        assert_eq!(simplify(expr), col("c1").not_eq(lit(4)));
 
         // 4. c1 NOT IN (1,2,3,4) AND c1 NOT IN (4,5,6,7) -> c1 NOT IN (1,2,3,4,5,6,7)
         let expr = in_list(col("c1"), vec![lit(1), lit(2), lit(3), lit(4)], true).and(
             in_list(col("c1"), vec![lit(4), lit(5), lit(6), lit(7)], true),
         );
         assert_eq!(
-            simplify(expr.clone()),
+            simplify(expr),
             in_list(
                 col("c1"),
                 vec![lit(1), lit(2), lit(3), lit(4), lit(5), lit(6), lit(7)],
@@ -3445,7 +3463,7 @@ mod tests {
             in_list(col("c1"), vec![lit(2), lit(3), lit(4), lit(5)], false),
         );
         assert_eq!(
-            simplify(expr.clone()),
+            simplify(expr),
             in_list(
                 col("c1"),
                 vec![lit(1), lit(2), lit(3), lit(4), lit(5)],
@@ -3459,7 +3477,7 @@ mod tests {
             vec![lit(1), lit(2), lit(3), lit(4), lit(5)],
             true,
         ));
-        assert_eq!(simplify(expr.clone()), lit(false));
+        assert_eq!(simplify(expr), lit(false));
 
         // 7. c1 NOT IN (1,2,3,4) AND c1 IN (1,2,3,4,5) -> c1 = 5
         let expr =
@@ -3468,14 +3486,14 @@ mod tests {
                 vec![lit(1), lit(2), lit(3), lit(4), lit(5)],
                 false,
             ));
-        assert_eq!(simplify(expr.clone()), col("c1").eq(lit(5)));
+        assert_eq!(simplify(expr), col("c1").eq(lit(5)));
 
         // 8. c1 IN (1,2,3,4) AND c1 NOT IN (5,6,7,8) -> c1 IN (1,2,3,4)
         let expr = in_list(col("c1"), vec![lit(1), lit(2), lit(3), lit(4)], false).and(
             in_list(col("c1"), vec![lit(5), lit(6), lit(7), lit(8)], true),
         );
         assert_eq!(
-            simplify(expr.clone()),
+            simplify(expr),
             in_list(col("c1"), vec![lit(1), lit(2), lit(3), lit(4)], false)
         );
 
@@ -3493,7 +3511,7 @@ mod tests {
         ))
         .and(in_list(col("c1"), vec![lit(3), lit(6)], false));
         assert_eq!(
-            simplify(expr.clone()),
+            simplify(expr),
             col("c1").eq(lit(3)).or(col("c1").eq(lit(6)))
         );
 
@@ -3507,7 +3525,7 @@ mod tests {
                 ))
                 .and(in_list(col("c1"), vec![lit(8), lit(9), lit(10)], false)),
         );
-        assert_eq!(simplify(expr.clone()), col("c1").eq(lit(8)));
+        assert_eq!(simplify(expr), col("c1").eq(lit(8)));
 
         // Contains non-InList expression
         // c1 NOT IN (1,2,3,4) OR c1 != 5 OR c1 NOT IN (6,7,8,9) -> c1 NOT IN (1,2,3,4) OR c1 != 5 OR c1 NOT IN (6,7,8,9)
@@ -3622,7 +3640,7 @@ mod tests {
         let expr_x = col("c3").gt(lit(3_i64));
         let expr_y = (col("c4") + lit(2_u32)).lt(lit(10_u32));
         let expr_z = col("c1").in_list(vec![lit("a"), lit("b")], true);
-        let expr = expr_x.clone().and(expr_y.clone().or(expr_z));
+        let expr = expr_x.clone().and(expr_y.or(expr_z));
 
         // All guaranteed null
         let guarantees = vec![
@@ -3698,7 +3716,7 @@ mod tests {
             col("c4"),
             NullableInterval::from(ScalarValue::UInt32(Some(3))),
         )];
-        let output = simplify_with_guarantee(expr.clone(), guarantees);
+        let output = simplify_with_guarantee(expr, guarantees);
         assert_eq!(&output, &expr_x);
     }
 
@@ -3755,11 +3773,52 @@ mod tests {
         assert_eq!(expr, expected);
         assert_eq!(num_iter, 2);
     }
+
+    fn boolean_test_schema() -> DFSchemaRef {
+        Schema::new(vec![
+            Field::new("A", DataType::Boolean, false),
+            Field::new("B", DataType::Boolean, false),
+            Field::new("C", DataType::Boolean, false),
+            Field::new("D", DataType::Boolean, false),
+        ])
+        .to_dfschema_ref()
+        .unwrap()
+    }
+
+    #[test]
+    fn simplify_common_factor_conjuction_in_disjunction() {
+        let props = ExecutionProps::new();
+        let schema = boolean_test_schema();
+        let simplifier =
+            ExprSimplifier::new(SimplifyContext::new(&props).with_schema(schema));
+
+        let a = || col("A");
+        let b = || col("B");
+        let c = || col("C");
+        let d = || col("D");
+
+        // (A AND B) OR (A AND C) -> A AND (B OR C)
+        let expr = a().and(b()).or(a().and(c()));
+        let expected = a().and(b().or(c()));
+
+        assert_eq!(expected, simplifier.simplify(expr).unwrap());
+
+        // (A AND B) OR (A AND C) OR (A AND D) -> A AND (B OR C OR D)
+        let expr = a().and(b()).or(a().and(c())).or(a().and(d()));
+        let expected = a().and(b().or(c()).or(d()));
+        assert_eq!(expected, simplifier.simplify(expr).unwrap());
+
+        // A OR (B AND C AND A) -> A
+        let expr = a().or(b().and(c().and(a())));
+        let expected = a();
+        assert_eq!(expected, simplifier.simplify(expr).unwrap());
+    }
+
     #[test]
     fn test_simplify_udaf() {
         let udaf = AggregateUDF::new_from_impl(SimplifyMockUdaf::new_with_simplify());
         let aggregate_function_expr =
-            Expr::AggregateFunction(datafusion_expr::expr::AggregateFunction::new_udf(
+            Expr::AggregateFunction(expr::AggregateFunction::new_udf(
                 udaf.into(),
                 vec![],
                 false,
@@ -3773,7 +3832,7 @@ mod tests {
 
         let udaf = AggregateUDF::new_from_impl(SimplifyMockUdaf::new_without_simplify());
         let aggregate_function_expr =
-            Expr::AggregateFunction(datafusion_expr::expr::AggregateFunction::new_udf(
+            Expr::AggregateFunction(expr::AggregateFunction::new_udf(
                 udaf.into(),
                 vec![],
                 false,
@@ -3823,7 +3882,7 @@ mod tests {
 
         fn accumulator(
             &self,
-            _acc_args: function::AccumulatorArgs,
+            _acc_args: AccumulatorArgs,
         ) -> Result<Box<dyn Accumulator>> {
             unimplemented!("not needed for tests")
         }
@@ -3853,9 +3912,8 @@ mod tests {
         let udwf = WindowFunctionDefinition::WindowUDF(
             WindowUDF::new_from_impl(SimplifyMockUdwf::new_with_simplify()).into(),
         );
-        let window_function_expr = Expr::WindowFunction(
-            datafusion_expr::expr::WindowFunction::new(udwf, vec![]),
-        );
+        let window_function_expr =
+            Expr::WindowFunction(WindowFunction::new(udwf, vec![]));
 
         let expected = col("result_column");
         assert_eq!(simplify(window_function_expr), expected);
@@ -3863,9 +3921,8 @@ mod tests {
         let udwf = WindowFunctionDefinition::WindowUDF(
             WindowUDF::new_from_impl(SimplifyMockUdwf::new_without_simplify()).into(),
         );
-        let window_function_expr = Expr::WindowFunction(
-            datafusion_expr::expr::WindowFunction::new(udwf, vec![]),
-        );
+        let window_function_expr =
+            Expr::WindowFunction(WindowFunction::new(udwf, vec![]));
 
         let expected = window_function_expr.clone();
         assert_eq!(simplify(window_function_expr), expected);
@@ -3902,10 +3959,6 @@ mod tests {
             unimplemented!()
         }
 
-        fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-            unimplemented!("not needed for tests")
-        }
-
         fn simplify(&self) -> Option<WindowFunctionSimplification> {
             if self.simplify {
                 Some(Box::new(|_, _| Ok(col("result_column"))))
@@ -3914,8 +3967,80 @@ mod tests {
             }
         }
 
-        fn partition_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>> {
+        fn partition_evaluator(
+            &self,
+            _partition_evaluator_args: PartitionEvaluatorArgs,
+        ) -> Result<Box<dyn PartitionEvaluator>> {
             unimplemented!("not needed for tests")
+        }
+
+        fn field(&self, _field_args: WindowUDFFieldArgs) -> Result<Field> {
+            unimplemented!("not needed for tests")
+        }
+    }
+    #[derive(Debug)]
+    struct VolatileUdf {
+        signature: Signature,
+    }
+
+    impl VolatileUdf {
+        pub fn new() -> Self {
+            Self {
+                signature: Signature::exact(vec![], Volatility::Volatile),
+            }
+        }
+    }
+    impl ScalarUDFImpl for VolatileUdf {
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+
+        fn name(&self) -> &str {
+            "VolatileUdf"
+        }
+
+        fn signature(&self) -> &Signature {
+            &self.signature
+        }
+
+        fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+            Ok(DataType::Int16)
+        }
+    }
+    #[test]
+    fn test_optimize_volatile_conditions() {
+        let fun = Arc::new(ScalarUDF::new_from_impl(VolatileUdf::new()));
+        let rand = Expr::ScalarFunction(ScalarFunction::new_udf(fun, vec![]));
+        {
+            let expr = rand
+                .clone()
+                .eq(lit(0))
+                .or(col("column1").eq(lit(2)).and(rand.clone().eq(lit(0))));
+
+            assert_eq!(simplify(expr.clone()), expr);
+        }
+
+        {
+            let expr = col("column1")
+                .eq(lit(2))
+                .or(col("column1").eq(lit(2)).and(rand.clone().eq(lit(0))));
+
+            assert_eq!(simplify(expr), col("column1").eq(lit(2)));
+        }
+
+        {
+            let expr = (col("column1").eq(lit(2)).and(rand.clone().eq(lit(0)))).or(col(
+                "column1",
+            )
+            .eq(lit(2))
+            .and(rand.clone().eq(lit(0))));
+
+            assert_eq!(
+                simplify(expr),
+                col("column1")
+                    .eq(lit(2))
+                    .and((rand.clone().eq(lit(0))).or(rand.clone().eq(lit(0))))
+            );
         }
     }
 }

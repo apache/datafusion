@@ -22,11 +22,9 @@ use std::ops::Range;
 use std::sync::Arc;
 
 use super::{BuiltInWindowFunctionExpr, WindowExpr};
-use crate::expressions::PhysicalSortExpr;
 use crate::window::window_expr::{get_orderby_values, WindowFn};
 use crate::window::{PartitionBatches, PartitionWindowAggStates, WindowState};
 use crate::{reverse_order_bys, EquivalenceProperties, PhysicalExpr};
-
 use arrow::array::{new_empty_array, ArrayRef};
 use arrow::compute::SortOptions;
 use arrow::datatypes::Field;
@@ -35,13 +33,14 @@ use datafusion_common::utils::evaluate_partition_ranges;
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::window_state::{WindowAggState, WindowFrameContext};
 use datafusion_expr::WindowFrame;
+use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexOrderingRef};
 
 /// A window expr that takes the form of a [`BuiltInWindowFunctionExpr`].
 #[derive(Debug)]
 pub struct BuiltInWindowExpr {
     expr: Arc<dyn BuiltInWindowFunctionExpr>,
     partition_by: Vec<Arc<dyn PhysicalExpr>>,
-    order_by: Vec<PhysicalSortExpr>,
+    order_by: LexOrdering,
     window_frame: Arc<WindowFrame>,
 }
 
@@ -50,13 +49,13 @@ impl BuiltInWindowExpr {
     pub fn new(
         expr: Arc<dyn BuiltInWindowFunctionExpr>,
         partition_by: &[Arc<dyn PhysicalExpr>],
-        order_by: &[PhysicalSortExpr],
+        order_by: LexOrderingRef,
         window_frame: Arc<WindowFrame>,
     ) -> Self {
         Self {
             expr,
             partition_by: partition_by.to_vec(),
-            order_by: order_by.to_vec(),
+            order_by: LexOrdering::from_ref(order_by),
             window_frame,
         }
     }
@@ -77,7 +76,8 @@ impl BuiltInWindowExpr {
         if let Some(fn_res_ordering) = self.expr.get_result_ordering(schema) {
             if self.partition_by.is_empty() {
                 // In the absence of a PARTITION BY, ordering of `self.expr` is global:
-                eq_properties.add_new_orderings([vec![fn_res_ordering]]);
+                eq_properties
+                    .add_new_orderings([LexOrdering::new(vec![fn_res_ordering])]);
             } else {
                 // If we have a PARTITION BY, built-in functions can not introduce
                 // a global ordering unless the existing ordering is compatible
@@ -118,8 +118,8 @@ impl WindowExpr for BuiltInWindowExpr {
         &self.partition_by
     }
 
-    fn order_by(&self) -> &[PhysicalSortExpr] {
-        &self.order_by
+    fn order_by(&self) -> LexOrderingRef {
+        self.order_by.as_ref()
     }
 
     fn evaluate(&self, batch: &RecordBatch) -> Result<ArrayRef> {
@@ -267,7 +267,7 @@ impl WindowExpr for BuiltInWindowExpr {
             Arc::new(BuiltInWindowExpr::new(
                 reverse_expr,
                 &self.partition_by.clone(),
-                &reverse_order_bys(&self.order_by),
+                reverse_order_bys(self.order_by.as_ref()).as_ref(),
                 Arc::new(self.window_frame.reverse()),
             )) as _
         })

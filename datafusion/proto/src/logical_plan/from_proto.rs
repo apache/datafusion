@@ -19,14 +19,14 @@ use std::sync::Arc;
 
 use datafusion::execution::registry::FunctionRegistry;
 use datafusion_common::{
-    exec_datafusion_err, internal_err, plan_datafusion_err, Result, ScalarValue,
-    TableReference, UnnestOptions,
+    exec_datafusion_err, internal_err, plan_datafusion_err, RecursionUnnestOption,
+    Result, ScalarValue, TableReference, UnnestOptions,
 };
-use datafusion_expr::expr::{Alias, Placeholder};
+use datafusion_expr::expr::{Alias, Placeholder, Sort};
 use datafusion_expr::expr::{Unnest, WildcardOptions};
 use datafusion_expr::ExprFunctionExt;
 use datafusion_expr::{
-    expr::{self, InList, Sort, WindowFunction},
+    expr::{self, InList, WindowFunction},
     logical_plan::{PlanType, StringifiedPlan},
     Between, BinaryExpr, BuiltInWindowFunction, Case, Cast, Expr, GroupingSet,
     GroupingSet::GroupingSets,
@@ -56,6 +56,15 @@ impl From<&protobuf::UnnestOptions> for UnnestOptions {
     fn from(opts: &protobuf::UnnestOptions) -> Self {
         Self {
             preserve_nulls: opts.preserve_nulls,
+            recursions: opts
+                .recursions
+                .iter()
+                .map(|r| RecursionUnnestOption {
+                    input_column: r.input_column.as_ref().unwrap().into(),
+                    output_column: r.output_column.as_ref().unwrap().into(),
+                    depth: r.depth as usize,
+                })
+                .collect::<Vec<_>>(),
         }
     }
 }
@@ -141,15 +150,8 @@ impl From<&protobuf::StringifiedPlan> for StringifiedPlan {
 impl From<protobuf::BuiltInWindowFunction> for BuiltInWindowFunction {
     fn from(built_in_function: protobuf::BuiltInWindowFunction) -> Self {
         match built_in_function {
-            protobuf::BuiltInWindowFunction::RowNumber => Self::RowNumber,
-            protobuf::BuiltInWindowFunction::Rank => Self::Rank,
-            protobuf::BuiltInWindowFunction::PercentRank => Self::PercentRank,
-            protobuf::BuiltInWindowFunction::DenseRank => Self::DenseRank,
-            protobuf::BuiltInWindowFunction::Lag => Self::Lag,
-            protobuf::BuiltInWindowFunction::Lead => Self::Lead,
+            protobuf::BuiltInWindowFunction::Unspecified => todo!(),
             protobuf::BuiltInWindowFunction::FirstValue => Self::FirstValue,
-            protobuf::BuiltInWindowFunction::CumeDist => Self::CumeDist,
-            protobuf::BuiltInWindowFunction::Ntile => Self::Ntile,
             protobuf::BuiltInWindowFunction::NthValue => Self::NthValue,
             protobuf::BuiltInWindowFunction::LastValue => Self::LastValue,
         }
@@ -211,6 +213,7 @@ impl From<protobuf::JoinType> for JoinType {
             protobuf::JoinType::Rightsemi => JoinType::RightSemi,
             protobuf::JoinType::Leftanti => JoinType::LeftAnti,
             protobuf::JoinType::Rightanti => JoinType::RightAnti,
+            protobuf::JoinType::Leftmark => JoinType::LeftMark,
         }
     }
 }
@@ -267,7 +270,7 @@ pub fn parse_expr(
                 .as_ref()
                 .ok_or_else(|| Error::required("window_function"))?;
             let partition_by = parse_exprs(&expr.partition_by, registry, codec)?;
-            let mut order_by = parse_exprs(&expr.order_by, registry, codec)?;
+            let mut order_by = parse_sorts(&expr.order_by, registry, codec)?;
             let window_frame = expr
                 .window_frame
                 .as_ref()
@@ -289,10 +292,7 @@ pub fn parse_expr(
                         .map_err(|_| Error::unknown("BuiltInWindowFunction", *i))?
                         .into();
 
-                    let args =
-                        parse_optional_expr(expr.expr.as_deref(), registry, codec)?
-                            .map(|e| vec![e])
-                            .unwrap_or_else(Vec::new);
+                    let args = parse_exprs(&expr.exprs, registry, codec)?;
 
                     Expr::WindowFunction(WindowFunction::new(
                         expr::WindowFunctionDefinition::BuiltInWindowFunction(
@@ -312,10 +312,7 @@ pub fn parse_expr(
                         None => registry.udaf(udaf_name)?,
                     };
 
-                    let args =
-                        parse_optional_expr(expr.expr.as_deref(), registry, codec)?
-                            .map(|e| vec![e])
-                            .unwrap_or_else(Vec::new);
+                    let args = parse_exprs(&expr.exprs, registry, codec)?;
                     Expr::WindowFunction(WindowFunction::new(
                         expr::WindowFunctionDefinition::AggregateUDF(udaf_function),
                         args,
@@ -332,10 +329,7 @@ pub fn parse_expr(
                         None => registry.udwf(udwf_name)?,
                     };
 
-                    let args =
-                        parse_optional_expr(expr.expr.as_deref(), registry, codec)?
-                            .map(|e| vec![e])
-                            .unwrap_or_else(Vec::new);
+                    let args = parse_exprs(&expr.exprs, registry, codec)?;
                     Expr::WindowFunction(WindowFunction::new(
                         expr::WindowFunctionDefinition::WindowUDF(udwf_function),
                         args,
@@ -524,16 +518,6 @@ pub fn parse_expr(
             let data_type = cast.arrow_type.as_ref().required("arrow_type")?;
             Ok(Expr::TryCast(TryCast::new(expr, data_type)))
         }
-        ExprType::Sort(sort) => Ok(Expr::Sort(Sort::new(
-            Box::new(parse_required_expr(
-                sort.expr.as_deref(),
-                registry,
-                "expr",
-                codec,
-            )?),
-            sort.asc,
-            sort.nulls_first,
-        ))),
         ExprType::Negative(negative) => Ok(Expr::Negative(Box::new(
             parse_required_expr(negative.expr.as_deref(), registry, "expr", codec)?,
         ))),
@@ -586,7 +570,10 @@ pub fn parse_expr(
                 parse_exprs(&pb.args, registry, codec)?,
                 pb.distinct,
                 parse_optional_expr(pb.filter.as_deref(), registry, codec)?.map(Box::new),
-                parse_vec_expr(&pb.order_by, registry, codec)?,
+                match pb.order_by.len() {
+                    0 => None,
+                    _ => Some(parse_sorts(&pb.order_by, registry, codec)?),
+                },
                 None,
             )))
         }
@@ -632,6 +619,32 @@ where
     Ok(res)
 }
 
+pub fn parse_sorts<'a, I>(
+    protos: I,
+    registry: &dyn FunctionRegistry,
+    codec: &dyn LogicalExtensionCodec,
+) -> Result<Vec<Sort>, Error>
+where
+    I: IntoIterator<Item = &'a protobuf::SortExprNode>,
+{
+    protos
+        .into_iter()
+        .map(|sort| parse_sort(sort, registry, codec))
+        .collect::<Result<Vec<Sort>, Error>>()
+}
+
+pub fn parse_sort(
+    sort: &protobuf::SortExprNode,
+    registry: &dyn FunctionRegistry,
+    codec: &dyn LogicalExtensionCodec,
+) -> Result<Sort, Error> {
+    Ok(Sort::new(
+        parse_required_expr(sort.expr.as_ref(), registry, "expr", codec)?,
+        sort.asc,
+        sort.nulls_first,
+    ))
+}
+
 /// Parse an optional escape_char for Like, ILike, SimilarTo
 fn parse_escape_char(s: &str) -> Result<Option<char>> {
     match s.len() {
@@ -674,16 +687,6 @@ pub fn from_proto_binary_op(op: &str) -> Result<Operator, Error> {
             "Unsupported binary operator '{other:?}'"
         ))),
     }
-}
-
-fn parse_vec_expr(
-    p: &[protobuf::LogicalExprNode],
-    registry: &dyn FunctionRegistry,
-    codec: &dyn LogicalExtensionCodec,
-) -> Result<Option<Vec<Expr>>, Error> {
-    let res = parse_exprs(p, registry, codec)?;
-    // Convert empty vector to None.
-    Ok((!res.is_empty()).then_some(res))
 }
 
 fn parse_optional_expr(

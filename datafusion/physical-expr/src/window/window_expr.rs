@@ -20,7 +20,7 @@ use std::fmt::Debug;
 use std::ops::Range;
 use std::sync::Arc;
 
-use crate::{LexOrderingRef, PhysicalExpr, PhysicalSortExpr};
+use crate::{LexOrderingRef, PhysicalExpr};
 
 use arrow::array::{new_empty_array, Array, ArrayRef};
 use arrow::compute::kernels::sort::SortColumn;
@@ -109,7 +109,7 @@ pub trait WindowExpr: Send + Sync + Debug {
     fn partition_by(&self) -> &[Arc<dyn PhysicalExpr>];
 
     /// Expressions that's from the window function's order by clause, empty if absent
-    fn order_by(&self) -> &[PhysicalSortExpr];
+    fn order_by(&self) -> LexOrderingRef;
 
     /// Get order by columns, empty if absent
     fn order_by_columns(&self, batch: &RecordBatch) -> Result<Vec<SortColumn>> {
@@ -528,25 +528,6 @@ pub(crate) fn get_orderby_values(order_by_columns: Vec<SortColumn>) -> Vec<Array
 pub enum WindowFn {
     Builtin(Box<dyn PartitionEvaluator>),
     Aggregate(Box<dyn Accumulator>),
-}
-
-/// State for the RANK(percent_rank, rank, dense_rank) built-in window function.
-#[derive(Debug, Clone, Default)]
-pub struct RankState {
-    /// The last values for rank as these values change, we increase n_rank
-    pub last_rank_data: Option<Vec<ScalarValue>>,
-    /// The index where last_rank_boundary is started
-    pub last_rank_boundary: usize,
-    /// Keep the number of entries in current rank
-    pub current_group_count: usize,
-    /// Rank number kept from the start
-    pub n_rank: usize,
-}
-
-/// State for the 'ROW_NUMBER' built-in window function.
-#[derive(Debug, Clone, Default)]
-pub struct NumRowsState {
-    pub n_rows: usize,
 }
 
 /// Tag to differentiate special use cases of the NTH_VALUE built-in window function.

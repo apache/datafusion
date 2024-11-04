@@ -190,7 +190,7 @@ impl Precision<ScalarValue> {
     }
 }
 
-impl<T: fmt::Debug + Clone + PartialEq + Eq + PartialOrd> Debug for Precision<T> {
+impl<T: Debug + Clone + PartialEq + Eq + PartialOrd> Debug for Precision<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Precision::Exact(inner) => write!(f, "Exact({:?})", inner),
@@ -200,7 +200,7 @@ impl<T: fmt::Debug + Clone + PartialEq + Eq + PartialOrd> Debug for Precision<T>
     }
 }
 
-impl<T: fmt::Debug + Clone + PartialEq + Eq + PartialOrd> Display for Precision<T> {
+impl<T: Debug + Clone + PartialEq + Eq + PartialOrd> Display for Precision<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Precision::Exact(inner) => write!(f, "Exact({:?})", inner),
@@ -255,6 +255,26 @@ impl Statistics {
             .into_iter()
             .map(|s| s.to_inexact())
             .collect();
+        self
+    }
+
+    /// Project the statistics to the given column indices.
+    ///
+    /// For example, if we had statistics for columns `{"a", "b", "c"}`,
+    /// projecting to `vec![2, 1]` would return statistics for columns `{"c",
+    /// "b"}`.
+    pub fn project(mut self, projection: Option<&Vec<usize>>) -> Self {
+        let Some(projection) = projection else {
+            return self;
+        };
+
+        // todo: it would be nice to avoid cloning column statistics if
+        // possible (e.g. if the projection did not contain duplicates)
+        self.column_statistics = projection
+            .iter()
+            .map(|&i| self.column_statistics[i].clone())
+            .collect();
+
         self
     }
 
@@ -341,7 +361,7 @@ fn check_num_rows(value: Option<usize>, is_exact: bool) -> Precision<usize> {
 }
 
 impl Display for Statistics {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         // string of column statistics
         let column_stats = self
             .column_statistics
@@ -557,6 +577,7 @@ mod tests {
         let precision: Precision<ScalarValue> =
             Precision::Exact(ScalarValue::Int64(Some(42)));
         // Clippy would complain about this if it were Copy
+        #[allow(clippy::redundant_clone)]
         let p2 = precision.clone();
         assert_eq!(precision, p2);
     }

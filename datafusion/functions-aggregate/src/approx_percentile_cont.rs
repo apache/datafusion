@@ -17,7 +17,8 @@
 
 use std::any::Any;
 use std::fmt::{Debug, Formatter};
-use std::sync::Arc;
+use std::mem::size_of_val;
+use std::sync::{Arc, OnceLock};
 
 use arrow::array::{Array, RecordBatch};
 use arrow::compute::{filter, is_not_null};
@@ -31,15 +32,16 @@ use arrow::{
 use arrow_schema::{Field, Schema};
 
 use datafusion_common::{
-    downcast_value, internal_err, not_impl_err, plan_err, DataFusionError, Result,
-    ScalarValue,
+    downcast_value, internal_err, not_impl_datafusion_err, not_impl_err, plan_err,
+    DataFusionError, Result, ScalarValue,
 };
+use datafusion_expr::aggregate_doc_sections::DOC_SECTION_APPROXIMATE;
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::type_coercion::aggregates::{INTEGERS, NUMERICS};
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{
-    Accumulator, AggregateUDFImpl, ColumnarValue, Expr, Signature, TypeSignature,
-    Volatility,
+    Accumulator, AggregateUDFImpl, ColumnarValue, Documentation, Expr, Signature,
+    TypeSignature, Volatility,
 };
 use datafusion_functions_aggregate_common::tdigest::{
     TDigest, TryIntoF64, DEFAULT_MAX_SIZE,
@@ -126,9 +128,9 @@ impl ApproxPercentileCont {
             | DataType::Float32
             | DataType::Float64) => {
                 if let Some(max_size) = tdigest_max_size {
-                    ApproxPercentileAccumulator::new_with_max_size(percentile, t.clone(), max_size)
+                    ApproxPercentileAccumulator::new_with_max_size(percentile, t, max_size)
                 }else{
-                    ApproxPercentileAccumulator::new(percentile, t.clone())
+                    ApproxPercentileAccumulator::new(percentile, t)
 
                 }
             }
@@ -154,7 +156,8 @@ fn get_scalar_value(expr: &Arc<dyn PhysicalExpr>) -> Result<ScalarValue> {
 }
 
 fn validate_input_percentile_expr(expr: &Arc<dyn PhysicalExpr>) -> Result<f64> {
-    let percentile = match get_scalar_value(expr)? {
+    let percentile = match get_scalar_value(expr)
+        .map_err(|_| not_impl_datafusion_err!("Percentile value for 'APPROX_PERCENTILE_CONT' must be a literal, got: {expr}"))? {
         ScalarValue::Float32(Some(value)) => {
             value as f64
         }
@@ -179,7 +182,8 @@ fn validate_input_percentile_expr(expr: &Arc<dyn PhysicalExpr>) -> Result<f64> {
 }
 
 fn validate_input_max_size_expr(expr: &Arc<dyn PhysicalExpr>) -> Result<usize> {
-    let max_size = match get_scalar_value(expr)? {
+    let max_size = match get_scalar_value(expr)
+        .map_err(|_| not_impl_datafusion_err!("Tdigest max_size value for 'APPROX_PERCENTILE_CONT' must be a literal, got: {expr}"))? {
         ScalarValue::UInt8(Some(q)) => q as usize,
         ScalarValue::UInt16(Some(q)) => q as usize,
         ScalarValue::UInt32(Some(q)) => q as usize,
@@ -193,7 +197,7 @@ fn validate_input_max_size_expr(expr: &Arc<dyn PhysicalExpr>) -> Result<usize> {
                 "Tdigest max_size value for 'APPROX_PERCENTILE_CONT' must be UInt > 0 literal (got data type {}).",
                 sv.data_type()
             )
-        }
+        },
     };
 
     Ok(max_size)
@@ -266,6 +270,36 @@ impl AggregateUDFImpl for ApproxPercentileCont {
         }
         Ok(arg_types[0].clone())
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_approx_percentile_cont_doc())
+    }
+}
+
+static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+
+fn get_approx_percentile_cont_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_APPROXIMATE)
+            .with_description(
+                "Returns the approximate percentile of input values using the t-digest algorithm.",
+            )
+            .with_syntax_example("approx_percentile_cont(expression, percentile, centroids)")
+            .with_sql_example(r#"```sql
+> SELECT approx_percentile_cont(column_name, 0.75, 100) FROM table_name;
++-------------------------------------------------+
+| approx_percentile_cont(column_name, 0.75, 100)  |
++-------------------------------------------------+
+| 65.0                                            |
++-------------------------------------------------+
+```"#)
+            .with_standard_argument("expression", None)
+            .with_argument("percentile", "Percentile to compute. Must be a float value between 0 and 1 (inclusive).")
+            .with_argument("centroids", "Number of centroids to use in the t-digest algorithm. _Default is 100_. A higher number results in more accurate approximation but requires more memory.")
+            .build()
+            .unwrap()
+    })
 }
 
 #[derive(Debug)]
@@ -453,14 +487,9 @@ impl Accumulator for ApproxPercentileAccumulator {
     }
 
     fn size(&self) -> usize {
-        std::mem::size_of_val(self) + self.digest.size()
-            - std::mem::size_of_val(&self.digest)
+        size_of_val(self) + self.digest.size() - size_of_val(&self.digest)
             + self.return_type.size()
-            - std::mem::size_of_val(&self.return_type)
-    }
-
-    fn supports_retract_batch(&self) -> bool {
-        true
+            - size_of_val(&self.return_type)
     }
 }
 

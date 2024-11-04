@@ -16,41 +16,34 @@
 // under the License.
 
 //! [`Max`] and [`MaxAccumulator`] accumulator for the `max` function
-//! [`Min`] and [`MinAccumulator`] accumulator for the `max` function
+//! [`Min`] and [`MinAccumulator`] accumulator for the `min` function
 
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+mod min_max_bytes;
 
 use arrow::array::{
     ArrayRef, BinaryArray, BinaryViewArray, BooleanArray, Date32Array, Date64Array,
-    Decimal128Array, Decimal256Array, Float32Array, Float64Array, Int16Array, Int32Array,
-    Int64Array, Int8Array, IntervalDayTimeArray, IntervalMonthDayNanoArray,
-    IntervalYearMonthArray, LargeBinaryArray, LargeStringArray, StringArray,
-    StringViewArray, Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray,
-    Time64NanosecondArray, TimestampMicrosecondArray, TimestampMillisecondArray,
-    TimestampNanosecondArray, TimestampSecondArray, UInt16Array, UInt32Array,
-    UInt64Array, UInt8Array,
+    Decimal128Array, Decimal256Array, Float16Array, Float32Array, Float64Array,
+    Int16Array, Int32Array, Int64Array, Int8Array, IntervalDayTimeArray,
+    IntervalMonthDayNanoArray, IntervalYearMonthArray, LargeBinaryArray,
+    LargeStringArray, StringArray, StringViewArray, Time32MillisecondArray,
+    Time32SecondArray, Time64MicrosecondArray, Time64NanosecondArray,
+    TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
+    TimestampSecondArray, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
 };
 use arrow::compute;
 use arrow::datatypes::{
-    DataType, Decimal128Type, Decimal256Type, Float32Type, Float64Type, Int16Type,
-    Int32Type, Int64Type, Int8Type, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
+    DataType, Decimal128Type, Decimal256Type, Float16Type, Float32Type, Float64Type,
+    Int16Type, Int32Type, Int64Type, Int8Type, UInt16Type, UInt32Type, UInt64Type,
+    UInt8Type,
 };
 use arrow_schema::IntervalUnit;
-use datafusion_common::{downcast_value, internal_err, DataFusionError, Result};
+use datafusion_common::stats::Precision;
+use datafusion_common::{
+    downcast_value, exec_err, internal_err, ColumnStatistics, DataFusionError, Result,
+};
+use datafusion_expr::aggregate_doc_sections::DOC_SECTION_GENERAL;
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::prim_op::PrimitiveGroupsAccumulator;
+use datafusion_physical_expr::expressions;
 use std::fmt::Debug;
 
 use arrow::datatypes::i256;
@@ -60,16 +53,26 @@ use arrow::datatypes::{
     TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
 };
 
+use crate::min_max::min_max_bytes::MinMaxBytesAccumulator;
 use datafusion_common::ScalarValue;
-use datafusion_expr::GroupsAccumulator;
 use datafusion_expr::{
-    function::AccumulatorArgs, Accumulator, AggregateUDFImpl, Signature, Volatility,
+    function::AccumulatorArgs, Accumulator, AggregateUDFImpl, Documentation, Signature,
+    Volatility,
 };
+use datafusion_expr::{GroupsAccumulator, StatisticsArgs};
+use half::f16;
+use std::mem::size_of_val;
 use std::ops::Deref;
+use std::sync::OnceLock;
 
 fn get_min_max_result_type(input_types: &[DataType]) -> Result<Vec<DataType>> {
     // make sure that the input types only has one element.
-    assert_eq!(input_types.len(), 1);
+    if input_types.len() != 1 {
+        return exec_err!(
+            "min/max was called with {} arguments. It requires only 1.",
+            input_types.len()
+        );
+    }
     // min and max support the dictionary data type
     // unpack the dictionary to get the value
     match &input_types[0] {
@@ -106,7 +109,7 @@ impl Default for Max {
 /// the specified [`ArrowPrimitiveType`].
 ///
 /// [`ArrowPrimitiveType`]: arrow::datatypes::ArrowPrimitiveType
-macro_rules! instantiate_max_accumulator {
+macro_rules! primitive_max_accumulator {
     ($DATA_TYPE:ident, $NATIVE:ident, $PRIMTYPE:ident) => {{
         Ok(Box::new(
             PrimitiveGroupsAccumulator::<$PRIMTYPE, _>::new($DATA_TYPE, |cur, new| {
@@ -125,7 +128,7 @@ macro_rules! instantiate_max_accumulator {
 ///
 ///
 /// [`ArrowPrimitiveType`]: arrow::datatypes::ArrowPrimitiveType
-macro_rules! instantiate_min_accumulator {
+macro_rules! primitive_min_accumulator {
     ($DATA_TYPE:ident, $NATIVE:ident, $PRIMTYPE:ident) => {{
         Ok(Box::new(
             PrimitiveGroupsAccumulator::<$PRIMTYPE, _>::new(&$DATA_TYPE, |cur, new| {
@@ -137,6 +140,54 @@ macro_rules! instantiate_min_accumulator {
             .with_starting_value($NATIVE::MAX),
         ))
     }};
+}
+
+trait FromColumnStatistics {
+    fn value_from_column_statistics(
+        &self,
+        stats: &ColumnStatistics,
+    ) -> Option<ScalarValue>;
+
+    fn value_from_statistics(
+        &self,
+        statistics_args: &StatisticsArgs,
+    ) -> Option<ScalarValue> {
+        if let Precision::Exact(num_rows) = &statistics_args.statistics.num_rows {
+            match *num_rows {
+                0 => return ScalarValue::try_from(statistics_args.return_type).ok(),
+                value if value > 0 => {
+                    let col_stats = &statistics_args.statistics.column_statistics;
+                    if statistics_args.exprs.len() == 1 {
+                        // TODO optimize with exprs other than Column
+                        if let Some(col_expr) = statistics_args.exprs[0]
+                            .as_any()
+                            .downcast_ref::<expressions::Column>()
+                        {
+                            return self.value_from_column_statistics(
+                                &col_stats[col_expr.index()],
+                            );
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        None
+    }
+}
+
+impl FromColumnStatistics for Max {
+    fn value_from_column_statistics(
+        &self,
+        col_stats: &ColumnStatistics,
+    ) -> Option<ScalarValue> {
+        if let Precision::Exact(ref val) = col_stats.max_value {
+            if !val.is_null() {
+                return Some(val.clone());
+            }
+        }
+        None
+    }
 }
 
 impl AggregateUDFImpl for Max {
@@ -175,6 +226,7 @@ impl AggregateUDFImpl for Max {
                 | UInt16
                 | UInt32
                 | UInt64
+                | Float16
                 | Float32
                 | Float64
                 | Decimal128(_, _)
@@ -184,6 +236,12 @@ impl AggregateUDFImpl for Max {
                 | Time32(_)
                 | Time64(_)
                 | Timestamp(_, _)
+                | Utf8
+                | LargeUtf8
+                | Utf8View
+                | Binary
+                | LargeBinary
+                | BinaryView
         )
     }
 
@@ -195,55 +253,58 @@ impl AggregateUDFImpl for Max {
         use TimeUnit::*;
         let data_type = args.return_type;
         match data_type {
-            Int8 => instantiate_max_accumulator!(data_type, i8, Int8Type),
-            Int16 => instantiate_max_accumulator!(data_type, i16, Int16Type),
-            Int32 => instantiate_max_accumulator!(data_type, i32, Int32Type),
-            Int64 => instantiate_max_accumulator!(data_type, i64, Int64Type),
-            UInt8 => instantiate_max_accumulator!(data_type, u8, UInt8Type),
-            UInt16 => instantiate_max_accumulator!(data_type, u16, UInt16Type),
-            UInt32 => instantiate_max_accumulator!(data_type, u32, UInt32Type),
-            UInt64 => instantiate_max_accumulator!(data_type, u64, UInt64Type),
+            Int8 => primitive_max_accumulator!(data_type, i8, Int8Type),
+            Int16 => primitive_max_accumulator!(data_type, i16, Int16Type),
+            Int32 => primitive_max_accumulator!(data_type, i32, Int32Type),
+            Int64 => primitive_max_accumulator!(data_type, i64, Int64Type),
+            UInt8 => primitive_max_accumulator!(data_type, u8, UInt8Type),
+            UInt16 => primitive_max_accumulator!(data_type, u16, UInt16Type),
+            UInt32 => primitive_max_accumulator!(data_type, u32, UInt32Type),
+            UInt64 => primitive_max_accumulator!(data_type, u64, UInt64Type),
+            Float16 => {
+                primitive_max_accumulator!(data_type, f16, Float16Type)
+            }
             Float32 => {
-                instantiate_max_accumulator!(data_type, f32, Float32Type)
+                primitive_max_accumulator!(data_type, f32, Float32Type)
             }
             Float64 => {
-                instantiate_max_accumulator!(data_type, f64, Float64Type)
+                primitive_max_accumulator!(data_type, f64, Float64Type)
             }
-            Date32 => instantiate_max_accumulator!(data_type, i32, Date32Type),
-            Date64 => instantiate_max_accumulator!(data_type, i64, Date64Type),
+            Date32 => primitive_max_accumulator!(data_type, i32, Date32Type),
+            Date64 => primitive_max_accumulator!(data_type, i64, Date64Type),
             Time32(Second) => {
-                instantiate_max_accumulator!(data_type, i32, Time32SecondType)
+                primitive_max_accumulator!(data_type, i32, Time32SecondType)
             }
             Time32(Millisecond) => {
-                instantiate_max_accumulator!(data_type, i32, Time32MillisecondType)
+                primitive_max_accumulator!(data_type, i32, Time32MillisecondType)
             }
             Time64(Microsecond) => {
-                instantiate_max_accumulator!(data_type, i64, Time64MicrosecondType)
+                primitive_max_accumulator!(data_type, i64, Time64MicrosecondType)
             }
             Time64(Nanosecond) => {
-                instantiate_max_accumulator!(data_type, i64, Time64NanosecondType)
+                primitive_max_accumulator!(data_type, i64, Time64NanosecondType)
             }
             Timestamp(Second, _) => {
-                instantiate_max_accumulator!(data_type, i64, TimestampSecondType)
+                primitive_max_accumulator!(data_type, i64, TimestampSecondType)
             }
             Timestamp(Millisecond, _) => {
-                instantiate_max_accumulator!(data_type, i64, TimestampMillisecondType)
+                primitive_max_accumulator!(data_type, i64, TimestampMillisecondType)
             }
             Timestamp(Microsecond, _) => {
-                instantiate_max_accumulator!(data_type, i64, TimestampMicrosecondType)
+                primitive_max_accumulator!(data_type, i64, TimestampMicrosecondType)
             }
             Timestamp(Nanosecond, _) => {
-                instantiate_max_accumulator!(data_type, i64, TimestampNanosecondType)
+                primitive_max_accumulator!(data_type, i64, TimestampNanosecondType)
             }
             Decimal128(_, _) => {
-                instantiate_max_accumulator!(data_type, i128, Decimal128Type)
+                primitive_max_accumulator!(data_type, i128, Decimal128Type)
             }
             Decimal256(_, _) => {
-                instantiate_max_accumulator!(data_type, i256, Decimal256Type)
+                primitive_max_accumulator!(data_type, i256, Decimal256Type)
             }
-
-            // It would be nice to have a fast implementation for Strings as well
-            // https://github.com/apache/datafusion/issues/6906
+            Utf8 | LargeUtf8 | Utf8View | Binary | LargeBinary | BinaryView => {
+                Ok(Box::new(MinMaxBytesAccumulator::new_max(data_type.clone())))
+            }
 
             // This is only reached if groups_accumulator_supported is out of sync
             _ => internal_err!("GroupsAccumulator not supported for max({})", data_type),
@@ -260,6 +321,7 @@ impl AggregateUDFImpl for Max {
     fn is_descending(&self) -> Option<bool> {
         Some(true)
     }
+
     fn order_sensitivity(&self) -> datafusion_expr::utils::AggregateOrderSensitivity {
         datafusion_expr::utils::AggregateOrderSensitivity::Insensitive
     }
@@ -270,6 +332,37 @@ impl AggregateUDFImpl for Max {
     fn reverse_expr(&self) -> datafusion_expr::ReversedUDAF {
         datafusion_expr::ReversedUDAF::Identical
     }
+    fn value_from_stats(&self, statistics_args: &StatisticsArgs) -> Option<ScalarValue> {
+        self.value_from_statistics(statistics_args)
+    }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_max_doc())
+    }
+}
+
+static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+
+fn get_max_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_GENERAL)
+            .with_description("Returns the maximum value in the specified column.")
+            .with_syntax_example("max(expression)")
+            .with_sql_example(
+                r#"```sql
+> SELECT max(column_name) FROM table_name;
++----------------------+
+| max(column_name)      |
++----------------------+
+| 150                  |
++----------------------+
+```"#,
+            )
+            .with_standard_argument("expression", None)
+            .build()
+            .unwrap()
+    })
 }
 
 // Statically-typed version of min/max(array) -> ScalarValue for string types
@@ -332,6 +425,9 @@ macro_rules! min_max_batch {
             }
             DataType::Float32 => {
                 typed_min_max_batch!($VALUES, Float32Array, Float32, $OP)
+            }
+            DataType::Float16 => {
+                typed_min_max_batch!($VALUES, Float16Array, Float16, $OP)
             }
             DataType::Int64 => typed_min_max_batch!($VALUES, Int64Array, Int64, $OP),
             DataType::Int32 => typed_min_max_batch!($VALUES, Int32Array, Int32, $OP),
@@ -617,6 +713,9 @@ macro_rules! min_max {
             (ScalarValue::Float32(lhs), ScalarValue::Float32(rhs)) => {
                 typed_min_max_float!(lhs, rhs, Float32, $OP)
             }
+            (ScalarValue::Float16(lhs), ScalarValue::Float16(rhs)) => {
+                typed_min_max_float!(lhs, rhs, Float16, $OP)
+            }
             (ScalarValue::UInt64(lhs), ScalarValue::UInt64(rhs)) => {
                 typed_min_max!(lhs, rhs, UInt64, $OP)
             }
@@ -826,7 +925,7 @@ impl Accumulator for MaxAccumulator {
     }
 
     fn size(&self) -> usize {
-        std::mem::size_of_val(self) - std::mem::size_of_val(&self.max) + self.max.size()
+        size_of_val(self) - size_of_val(&self.max) + self.max.size()
     }
 }
 
@@ -885,7 +984,7 @@ impl Accumulator for SlidingMaxAccumulator {
     }
 
     fn size(&self) -> usize {
-        std::mem::size_of_val(self) - std::mem::size_of_val(&self.max) + self.max.size()
+        size_of_val(self) - size_of_val(&self.max) + self.max.size()
     }
 }
 
@@ -905,6 +1004,20 @@ impl Min {
 impl Default for Min {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl FromColumnStatistics for Min {
+    fn value_from_column_statistics(
+        &self,
+        col_stats: &ColumnStatistics,
+    ) -> Option<ScalarValue> {
+        if let Precision::Exact(ref val) = col_stats.min_value {
+            if !val.is_null() {
+                return Some(val.clone());
+            }
+        }
+        None
     }
 }
 
@@ -944,6 +1057,7 @@ impl AggregateUDFImpl for Min {
                 | UInt16
                 | UInt32
                 | UInt64
+                | Float16
                 | Float32
                 | Float64
                 | Decimal128(_, _)
@@ -953,6 +1067,12 @@ impl AggregateUDFImpl for Min {
                 | Time32(_)
                 | Time64(_)
                 | Timestamp(_, _)
+                | Utf8
+                | LargeUtf8
+                | Utf8View
+                | Binary
+                | LargeBinary
+                | BinaryView
         )
     }
 
@@ -964,55 +1084,58 @@ impl AggregateUDFImpl for Min {
         use TimeUnit::*;
         let data_type = args.return_type;
         match data_type {
-            Int8 => instantiate_min_accumulator!(data_type, i8, Int8Type),
-            Int16 => instantiate_min_accumulator!(data_type, i16, Int16Type),
-            Int32 => instantiate_min_accumulator!(data_type, i32, Int32Type),
-            Int64 => instantiate_min_accumulator!(data_type, i64, Int64Type),
-            UInt8 => instantiate_min_accumulator!(data_type, u8, UInt8Type),
-            UInt16 => instantiate_min_accumulator!(data_type, u16, UInt16Type),
-            UInt32 => instantiate_min_accumulator!(data_type, u32, UInt32Type),
-            UInt64 => instantiate_min_accumulator!(data_type, u64, UInt64Type),
+            Int8 => primitive_min_accumulator!(data_type, i8, Int8Type),
+            Int16 => primitive_min_accumulator!(data_type, i16, Int16Type),
+            Int32 => primitive_min_accumulator!(data_type, i32, Int32Type),
+            Int64 => primitive_min_accumulator!(data_type, i64, Int64Type),
+            UInt8 => primitive_min_accumulator!(data_type, u8, UInt8Type),
+            UInt16 => primitive_min_accumulator!(data_type, u16, UInt16Type),
+            UInt32 => primitive_min_accumulator!(data_type, u32, UInt32Type),
+            UInt64 => primitive_min_accumulator!(data_type, u64, UInt64Type),
+            Float16 => {
+                primitive_min_accumulator!(data_type, f16, Float16Type)
+            }
             Float32 => {
-                instantiate_min_accumulator!(data_type, f32, Float32Type)
+                primitive_min_accumulator!(data_type, f32, Float32Type)
             }
             Float64 => {
-                instantiate_min_accumulator!(data_type, f64, Float64Type)
+                primitive_min_accumulator!(data_type, f64, Float64Type)
             }
-            Date32 => instantiate_min_accumulator!(data_type, i32, Date32Type),
-            Date64 => instantiate_min_accumulator!(data_type, i64, Date64Type),
+            Date32 => primitive_min_accumulator!(data_type, i32, Date32Type),
+            Date64 => primitive_min_accumulator!(data_type, i64, Date64Type),
             Time32(Second) => {
-                instantiate_min_accumulator!(data_type, i32, Time32SecondType)
+                primitive_min_accumulator!(data_type, i32, Time32SecondType)
             }
             Time32(Millisecond) => {
-                instantiate_min_accumulator!(data_type, i32, Time32MillisecondType)
+                primitive_min_accumulator!(data_type, i32, Time32MillisecondType)
             }
             Time64(Microsecond) => {
-                instantiate_min_accumulator!(data_type, i64, Time64MicrosecondType)
+                primitive_min_accumulator!(data_type, i64, Time64MicrosecondType)
             }
             Time64(Nanosecond) => {
-                instantiate_min_accumulator!(data_type, i64, Time64NanosecondType)
+                primitive_min_accumulator!(data_type, i64, Time64NanosecondType)
             }
             Timestamp(Second, _) => {
-                instantiate_min_accumulator!(data_type, i64, TimestampSecondType)
+                primitive_min_accumulator!(data_type, i64, TimestampSecondType)
             }
             Timestamp(Millisecond, _) => {
-                instantiate_min_accumulator!(data_type, i64, TimestampMillisecondType)
+                primitive_min_accumulator!(data_type, i64, TimestampMillisecondType)
             }
             Timestamp(Microsecond, _) => {
-                instantiate_min_accumulator!(data_type, i64, TimestampMicrosecondType)
+                primitive_min_accumulator!(data_type, i64, TimestampMicrosecondType)
             }
             Timestamp(Nanosecond, _) => {
-                instantiate_min_accumulator!(data_type, i64, TimestampNanosecondType)
+                primitive_min_accumulator!(data_type, i64, TimestampNanosecondType)
             }
             Decimal128(_, _) => {
-                instantiate_min_accumulator!(data_type, i128, Decimal128Type)
+                primitive_min_accumulator!(data_type, i128, Decimal128Type)
             }
             Decimal256(_, _) => {
-                instantiate_min_accumulator!(data_type, i256, Decimal256Type)
+                primitive_min_accumulator!(data_type, i256, Decimal256Type)
             }
-
-            // It would be nice to have a fast implementation for Strings as well
-            // https://github.com/apache/datafusion/issues/6906
+            Utf8 | LargeUtf8 | Utf8View | Binary | LargeBinary | BinaryView => {
+                Ok(Box::new(MinMaxBytesAccumulator::new_min(data_type.clone())))
+            }
 
             // This is only reached if groups_accumulator_supported is out of sync
             _ => internal_err!("GroupsAccumulator not supported for min({})", data_type),
@@ -1030,6 +1153,9 @@ impl AggregateUDFImpl for Min {
         Some(false)
     }
 
+    fn value_from_stats(&self, statistics_args: &StatisticsArgs) -> Option<ScalarValue> {
+        self.value_from_statistics(statistics_args)
+    }
     fn order_sensitivity(&self) -> datafusion_expr::utils::AggregateOrderSensitivity {
         datafusion_expr::utils::AggregateOrderSensitivity::Insensitive
     }
@@ -1041,7 +1167,34 @@ impl AggregateUDFImpl for Min {
     fn reverse_expr(&self) -> datafusion_expr::ReversedUDAF {
         datafusion_expr::ReversedUDAF::Identical
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_min_doc())
+    }
 }
+
+fn get_min_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_GENERAL)
+            .with_description("Returns the minimum value in the specified column.")
+            .with_syntax_example("min(expression)")
+            .with_sql_example(
+                r#"```sql
+> SELECT min(column_name) FROM table_name;
++----------------------+
+| min(column_name)      |
++----------------------+
+| 12                   |
++----------------------+
+```"#,
+            )
+            .with_standard_argument("expression", None)
+            .build()
+            .unwrap()
+    })
+}
+
 /// An accumulator to compute the minimum value
 #[derive(Debug)]
 pub struct MinAccumulator {
@@ -1080,7 +1233,7 @@ impl Accumulator for MinAccumulator {
     }
 
     fn size(&self) -> usize {
-        std::mem::size_of_val(self) - std::mem::size_of_val(&self.min) + self.min.size()
+        size_of_val(self) - size_of_val(&self.min) + self.min.size()
     }
 }
 
@@ -1143,30 +1296,28 @@ impl Accumulator for SlidingMinAccumulator {
     }
 
     fn size(&self) -> usize {
-        std::mem::size_of_val(self) - std::mem::size_of_val(&self.min) + self.min.size()
+        size_of_val(self) - size_of_val(&self.min) + self.min.size()
     }
 }
 
-//
-// Moving min and moving max
-// The implementation is taken from https://github.com/spebern/moving_min_max/blob/master/src/lib.rs.
-
-// Keep track of the minimum or maximum value in a sliding window.
-//
-// `moving min max` provides one data structure for keeping track of the
-// minimum value and one for keeping track of the maximum value in a sliding
-// window.
-//
-// Each element is stored with the current min/max. One stack to push and another one for pop. If pop stack is empty,
-// push to this stack all elements popped from first stack while updating their current min/max. Now pop from
-// the second stack (MovingMin/Max struct works as a queue). To find the minimum element of the queue,
-// look at the smallest/largest two elements of the individual stacks, then take the minimum of those two values.
-//
-// The complexity of the operations are
-// - O(1) for getting the minimum/maximum
-// - O(1) for push
-// - amortized O(1) for pop
-
+/// Keep track of the minimum value in a sliding window.
+///
+/// The implementation is taken from <https://github.com/spebern/moving_min_max/blob/master/src/lib.rs>
+///
+/// `moving min max` provides one data structure for keeping track of the
+/// minimum value and one for keeping track of the maximum value in a sliding
+/// window.
+///
+/// Each element is stored with the current min/max. One stack to push and another one for pop. If pop stack is empty,
+/// push to this stack all elements popped from first stack while updating their current min/max. Now pop from
+/// the second stack (MovingMin/Max struct works as a queue). To find the minimum element of the queue,
+/// look at the smallest/largest two elements of the individual stacks, then take the minimum of those two values.
+///
+/// The complexity of the operations are
+/// - O(1) for getting the minimum/maximum
+/// - O(1) for push
+/// - amortized O(1) for pop
+///
 /// ```
 /// # use datafusion_functions_aggregate::min_max::MovingMin;
 /// let mut moving_min = MovingMin::<i32>::new();
@@ -1282,6 +1433,11 @@ impl<T: Clone + PartialOrd> MovingMin<T> {
         self.len() == 0
     }
 }
+
+/// Keep track of the maximum value in a sliding window.
+///
+/// See [`MovingMin`] for more details.
+///
 /// ```
 /// # use datafusion_functions_aggregate::min_max::MovingMax;
 /// let mut moving_max = MovingMax::<i32>::new();

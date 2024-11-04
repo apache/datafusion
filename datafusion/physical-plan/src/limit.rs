@@ -34,11 +34,12 @@ use arrow::record_batch::RecordBatch;
 use datafusion_common::{internal_err, Result};
 use datafusion_execution::TaskContext;
 
+use crate::execution_plan::CardinalityEffect;
 use futures::stream::{Stream, StreamExt};
 use log::trace;
 
 /// Limit execution plan
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct GlobalLimitExec {
     /// Input execution plan
     input: Arc<dyn ExecutionPlan>,
@@ -336,6 +337,10 @@ impl ExecutionPlan for LocalLimitExec {
     fn supports_limit_pushdown(&self) -> bool {
         true
     }
+
+    fn cardinality_effect(&self) -> CardinalityEffect {
+        CardinalityEffect::LowerEqual
+    }
 }
 
 /// A Limit stream skips `skip` rows, and then fetch up to `fetch` rows.
@@ -393,7 +398,7 @@ impl LimitStream {
                     if batch.num_rows() > 0 {
                         break poll;
                     } else {
-                        // continue to poll input stream
+                        // Continue to poll input stream
                     }
                 }
                 Poll::Ready(Some(Err(_e))) => break poll,
@@ -403,12 +408,12 @@ impl LimitStream {
         }
     }
 
-    /// fetches from the batch
+    /// Fetches from the batch
     fn stream_limit(&mut self, batch: RecordBatch) -> Option<RecordBatch> {
         // records time on drop
         let _timer = self.baseline_metrics.elapsed_compute().timer();
         if self.fetch == 0 {
-            self.input = None; // clear input so it can be dropped early
+            self.input = None; // Clear input so it can be dropped early
             None
         } else if batch.num_rows() < self.fetch {
             //
@@ -417,7 +422,7 @@ impl LimitStream {
         } else if batch.num_rows() >= self.fetch {
             let batch_rows = self.fetch;
             self.fetch = 0;
-            self.input = None; // clear input so it can be dropped early
+            self.input = None; // Clear input so it can be dropped early
 
             // It is guaranteed that batch_rows is <= batch.num_rows
             Some(batch.slice(0, batch_rows))
@@ -448,7 +453,7 @@ impl Stream for LimitStream {
                     other => other,
                 })
             }
-            // input has been cleared
+            // Input has been cleared
             None => Poll::Ready(None),
         };
 
@@ -468,7 +473,7 @@ mod tests {
     use super::*;
     use crate::coalesce_partitions::CoalescePartitionsExec;
     use crate::common::collect;
-    use crate::{common, test};
+    use crate::test;
 
     use crate::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
     use arrow_array::RecordBatchOptions;
@@ -484,17 +489,17 @@ mod tests {
         let num_partitions = 4;
         let csv = test::scan_partitioned(num_partitions);
 
-        // input should have 4 partitions
+        // Input should have 4 partitions
         assert_eq!(csv.output_partitioning().partition_count(), num_partitions);
 
         let limit =
             GlobalLimitExec::new(Arc::new(CoalescePartitionsExec::new(csv)), 0, Some(7));
 
-        // the result should contain 4 batches (one per input partition)
+        // The result should contain 4 batches (one per input partition)
         let iter = limit.execute(0, task_ctx)?;
-        let batches = common::collect(iter).await?;
+        let batches = collect(iter).await?;
 
-        // there should be a total of 100 rows
+        // There should be a total of 100 rows
         let row_count: usize = batches.iter().map(|batch| batch.num_rows()).sum();
         assert_eq!(row_count, 7);
 
@@ -515,7 +520,7 @@ mod tests {
         let index = input.index();
         assert_eq!(index.value(), 0);
 
-        // limit of six needs to consume the entire first record batch
+        // Limit of six needs to consume the entire first record batch
         // (5 rows) and 1 row from the second (1 row)
         let baseline_metrics = BaselineMetrics::new(&ExecutionPlanMetricsSet::new(), 0);
         let limit_stream =
@@ -545,7 +550,7 @@ mod tests {
         let index = input.index();
         assert_eq!(index.value(), 0);
 
-        // limit of six needs to consume the entire first record batch
+        // Limit of six needs to consume the entire first record batch
         // (6 rows) and stop immediately
         let baseline_metrics = BaselineMetrics::new(&ExecutionPlanMetricsSet::new(), 0);
         let limit_stream =
@@ -575,7 +580,7 @@ mod tests {
         let index = input.index();
         assert_eq!(index.value(), 0);
 
-        // limit of six needs to consume the entire first record batch
+        // Limit of six needs to consume the entire first record batch
         // (6 rows) and stop immediately
         let baseline_metrics = BaselineMetrics::new(&ExecutionPlanMetricsSet::new(), 0);
         let limit_stream =
@@ -593,7 +598,7 @@ mod tests {
         Ok(())
     }
 
-    // test cases for "skip"
+    // Test cases for "skip"
     async fn skip_and_fetch(skip: usize, fetch: Option<usize>) -> Result<usize> {
         let task_ctx = Arc::new(TaskContext::default());
 
@@ -606,9 +611,9 @@ mod tests {
         let offset =
             GlobalLimitExec::new(Arc::new(CoalescePartitionsExec::new(csv)), skip, fetch);
 
-        // the result should contain 4 batches (one per input partition)
+        // The result should contain 4 batches (one per input partition)
         let iter = offset.execute(0, task_ctx)?;
-        let batches = common::collect(iter).await?;
+        let batches = collect(iter).await?;
         Ok(batches.iter().map(|batch| batch.num_rows()).sum())
     }
 
@@ -628,7 +633,7 @@ mod tests {
 
     #[tokio::test]
     async fn skip_3_fetch_none() -> Result<()> {
-        // there are total of 400 rows, we skipped 3 rows (offset = 3)
+        // There are total of 400 rows, we skipped 3 rows (offset = 3)
         let row_count = skip_and_fetch(3, None).await?;
         assert_eq!(row_count, 397);
         Ok(())
@@ -636,7 +641,7 @@ mod tests {
 
     #[tokio::test]
     async fn skip_3_fetch_10_stats() -> Result<()> {
-        // there are total of 100 rows, we skipped 3 rows (offset = 3)
+        // There are total of 100 rows, we skipped 3 rows (offset = 3)
         let row_count = skip_and_fetch(3, Some(10)).await?;
         assert_eq!(row_count, 10);
         Ok(())
@@ -651,7 +656,7 @@ mod tests {
 
     #[tokio::test]
     async fn skip_400_fetch_1() -> Result<()> {
-        // there are a total of 400 rows
+        // There are a total of 400 rows
         let row_count = skip_and_fetch(400, Some(1)).await?;
         assert_eq!(row_count, 0);
         Ok(())
@@ -659,7 +664,7 @@ mod tests {
 
     #[tokio::test]
     async fn skip_401_fetch_none() -> Result<()> {
-        // there are total of 400 rows, we skipped 401 rows (offset = 3)
+        // There are total of 400 rows, we skipped 401 rows (offset = 3)
         let row_count = skip_and_fetch(401, None).await?;
         assert_eq!(row_count, 0);
         Ok(())

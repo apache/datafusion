@@ -26,6 +26,7 @@ use super::{
 };
 
 use datafusion_common::config::TableParquetOptions;
+use datafusion_expr::dml::InsertOp;
 
 impl DataFrame {
     /// Execute the `DataFrame` and write the results to Parquet file(s).
@@ -57,10 +58,11 @@ impl DataFrame {
         options: DataFrameWriteOptions,
         writer_options: Option<TableParquetOptions>,
     ) -> Result<Vec<RecordBatch>, DataFusionError> {
-        if options.overwrite {
-            return Err(DataFusionError::NotImplemented(
-                "Overwrites are not implemented for DataFrame::write_parquet.".to_owned(),
-            ));
+        if options.insert_op != InsertOp::Append {
+            return Err(DataFusionError::NotImplemented(format!(
+                "{} is not implemented for DataFrame::write_parquet.",
+                options.insert_op
+            )));
         }
 
         let format = if let Some(parquet_opts) = writer_options {
@@ -190,7 +192,7 @@ mod tests {
         // This test verifies writing a parquet file with small rg size
         // relative to datafusion.execution.batch_size does not panic
         let ctx = SessionContext::new_with_config(SessionConfig::from_string_hash_map(
-            HashMap::from_iter(
+            &HashMap::from_iter(
                 [("datafusion.execution.batch_size", "10")]
                     .iter()
                     .map(|(s1, s2)| (s1.to_string(), s2.to_string())),

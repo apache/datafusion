@@ -16,16 +16,18 @@
 // under the License.
 
 use std::any::Any;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
-use arrow::array::{ArrayRef, Float32Array, Float64Array};
-use arrow::datatypes::DataType;
+use arrow::array::{ArrayRef, AsArray};
 use arrow::datatypes::DataType::{Float32, Float64};
+use arrow::datatypes::{DataType, Float32Type, Float64Type};
 
-use datafusion_common::{exec_err, DataFusionError, Result};
+use datafusion_common::{exec_err, Result};
+use datafusion_expr::scalar_doc_sections::DOC_SECTION_MATH;
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
-use datafusion_expr::ColumnarValue;
-use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{
+    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+};
 
 use crate::utils::make_scalar_function;
 
@@ -81,42 +83,60 @@ impl ScalarUDFImpl for SignumFunc {
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
         make_scalar_function(signum, vec![])(args)
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_signum_doc())
+    }
+}
+
+static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+
+fn get_signum_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_MATH)
+            .with_description(
+                r#"Returns the sign of a number.
+Negative numbers return `-1`.
+Zero and positive numbers return `1`."#,
+            )
+            .with_syntax_example("signum(numeric_expression)")
+            .with_standard_argument("numeric_expression", Some("Numeric"))
+            .build()
+            .unwrap()
+    })
 }
 
 /// signum SQL function
 pub fn signum(args: &[ArrayRef]) -> Result<ArrayRef> {
     match args[0].data_type() {
-        Float64 => Ok(Arc::new(make_function_scalar_inputs_return_type!(
-            &args[0],
-            "signum",
-            Float64Array,
-            Float64Array,
-            {
-                |x: f64| {
-                    if x == 0_f64 {
-                        0_f64
-                    } else {
-                        x.signum()
-                    }
-                }
-            }
-        )) as ArrayRef),
+        Float64 => Ok(Arc::new(
+            args[0]
+                .as_primitive::<Float64Type>()
+                .unary::<_, Float64Type>(
+                    |x: f64| {
+                        if x == 0_f64 {
+                            0_f64
+                        } else {
+                            x.signum()
+                        }
+                    },
+                ),
+        ) as ArrayRef),
 
-        Float32 => Ok(Arc::new(make_function_scalar_inputs_return_type!(
-            &args[0],
-            "signum",
-            Float32Array,
-            Float32Array,
-            {
-                |x: f32| {
-                    if x == 0_f32 {
-                        0_f32
-                    } else {
-                        x.signum()
-                    }
-                }
-            }
-        )) as ArrayRef),
+        Float32 => Ok(Arc::new(
+            args[0]
+                .as_primitive::<Float32Type>()
+                .unary::<_, Float32Type>(
+                    |x: f32| {
+                        if x == 0_f32 {
+                            0_f32
+                        } else {
+                            x.signum()
+                        }
+                    },
+                ),
+        ) as ArrayRef),
 
         other => exec_err!("Unsupported data type {other:?} for function signum"),
     }

@@ -76,9 +76,8 @@ query TT
 explain select * from aggregate_test_100 ORDER BY c13 desc limit 5;
 ----
 logical_plan
-01)Limit: skip=0, fetch=5
-02)--Sort: aggregate_test_100.c13 DESC NULLS FIRST, fetch=5
-03)----TableScan: aggregate_test_100 projection=[c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13]
+01)Sort: aggregate_test_100.c13 DESC NULLS FIRST, fetch=5
+02)--TableScan: aggregate_test_100 projection=[c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13]
 physical_plan
 01)SortExec: TopK(fetch=5), expr=[c13@12 DESC], preserve_partitioning=[false]
 02)--CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13], has_header=true
@@ -221,7 +220,7 @@ a 1 -5 12636 794623392 2909750622865366631 15 24022 2669374863 47766797847015095
 statement ok
 create table dict as select c1, c2, c3, c13, arrow_cast(c13, 'Dictionary(Int32, Utf8)') as c13_dict from aggregate_test_100;
 
-query TIIT?
+query TIITT
 select * from dict order by c13 desc limit 5;
 ----
 a 4 -38 ydkwycaISlYSlEq3TlkS2m15I2pcp8 ydkwycaISlYSlEq3TlkS2m15I2pcp8

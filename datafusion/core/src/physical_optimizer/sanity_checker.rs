@@ -33,6 +33,7 @@ use datafusion_physical_expr::intervals::utils::{check_support, is_datatype_supp
 use datafusion_physical_plan::joins::SymmetricHashJoinExec;
 use datafusion_physical_plan::{get_plan_string, ExecutionPlanProperties};
 
+use datafusion_physical_expr_common::sort_expr::format_physical_sort_requirement_list;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use itertools::izip;
 
@@ -41,7 +42,7 @@ use itertools::izip;
 ///    are not satisfied by their children.
 /// 2. Plans that use pipeline-breaking operators on infinite input(s),
 ///    it is impossible to execute such queries (they will never generate output nor finish)
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct SanityCheckPlan {}
 
 impl SanityCheckPlan {
@@ -120,32 +121,36 @@ pub fn check_plan_sanity(
 ) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
     check_finiteness_requirements(plan.clone(), optimizer_options)?;
 
-    for (child, child_sort_req, child_dist_req) in izip!(
-        plan.children().iter(),
+    for ((idx, child), sort_req, dist_req) in izip!(
+        plan.children().iter().enumerate(),
         plan.required_input_ordering().iter(),
         plan.required_input_distribution().iter()
     ) {
         let child_eq_props = child.equivalence_properties();
-        if let Some(child_sort_req) = child_sort_req {
-            if !child_eq_props.ordering_satisfy_requirement(child_sort_req) {
-                let child_plan_str = get_plan_string(child);
+        if let Some(sort_req) = sort_req {
+            if !child_eq_props.ordering_satisfy_requirement(sort_req) {
+                let plan_str = get_plan_string(&plan);
                 return plan_err!(
-                    "Child: {:?} does not satisfy parent order requirements: {:?}",
-                    child_plan_str,
-                    child_sort_req
+                    "Plan: {:?} does not satisfy order requirements: {}. Child-{} order: {}",
+                    plan_str,
+                    format_physical_sort_requirement_list(sort_req),
+                    idx,
+                    child_eq_props.oeq_class
                 );
             }
         }
 
         if !child
             .output_partitioning()
-            .satisfy(child_dist_req, child_eq_props)
+            .satisfy(dist_req, child_eq_props)
         {
-            let child_plan_str = get_plan_string(child);
+            let plan_str = get_plan_string(&plan);
             return plan_err!(
-                "Child: {:?} does not satisfy parent distribution requirements: {:?}",
-                child_plan_str,
-                child_dist_req
+                "Plan: {:?} does not satisfy distribution requirements: {}. Child-{} output partitioning: {}",
+                plan_str,
+                dist_req,
+                idx,
+                child.output_partitioning()
             );
         }
     }
@@ -437,7 +442,7 @@ mod tests {
         let sort = sort_exec(sort_exprs.clone(), source);
         let bw = bounded_window_exec("c9", sort_exprs, sort);
         assert_plan(bw.as_ref(), vec![
-            "BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow, is_causal: false }], mode=[Sorted]",
+            "BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow, is_causal: false }], mode=[Sorted]",
             "  SortExec: expr=[c9@0 ASC NULLS LAST], preserve_partitioning=[false]",
             "    MemoryExec: partitions=1, partition_sizes=[0]"
         ]);
@@ -460,7 +465,7 @@ mod tests {
         )];
         let bw = bounded_window_exec("c9", sort_exprs, source);
         assert_plan(bw.as_ref(), vec![
-            "BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow, is_causal: false }], mode=[Sorted]",
+            "BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow, is_causal: false }], mode=[Sorted]",
             "  MemoryExec: partitions=1, partition_sizes=[0]"
         ]);
         // Order requirement of the `BoundedWindowAggExec` is not satisfied. We expect to receive error during sanity check.

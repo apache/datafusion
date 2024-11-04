@@ -16,6 +16,7 @@
 // under the License.
 
 use std::any::Any;
+use std::fmt::Debug;
 use std::sync::Arc;
 
 pub use crate::schema::SchemaProvider;
@@ -34,7 +35,7 @@ use datafusion_common::Result;
 /// * [`CatalogProviderList`]: a collection of `CatalogProvider`s
 /// * [`CatalogProvider`]: a collection of `SchemaProvider`s (sometimes called a "database" in other systems)
 /// * [`SchemaProvider`]:  a collection of `TableProvider`s (often called a "schema" in other systems)
-/// * [`TableProvider]`:  individual tables
+/// * [`TableProvider`]:  individual tables
 ///
 /// # Implementing Catalogs
 ///
@@ -99,9 +100,9 @@ use datafusion_common::Result;
 /// [delta-rs]: https://github.com/delta-io/delta-rs
 /// [`UnityCatalogProvider`]: https://github.com/delta-io/delta-rs/blob/951436ecec476ce65b5ed3b58b50fb0846ca7b91/crates/deltalake-core/src/data_catalog/unity/datafusion.rs#L111-L123
 ///
-/// [`TableProvider]: crate::datasource::TableProvider
+/// [`TableProvider`]: crate::TableProvider
 
-pub trait CatalogProvider: Sync + Send {
+pub trait CatalogProvider: Debug + Sync + Send {
     /// Returns the catalog provider as [`Any`]
     /// so that it can be downcast to a specific implementation.
     fn as_any(&self) -> &dyn Any;
@@ -152,7 +153,7 @@ pub trait CatalogProvider: Sync + Send {
 ///
 /// Please see the documentation on `CatalogProvider` for details of
 /// implementing a custom catalog.
-pub trait CatalogProviderList: Sync + Send {
+pub trait CatalogProviderList: Debug + Sync + Send {
     /// Returns the catalog list as [`Any`]
     /// so that it can be downcast to a specific implementation.
     fn as_any(&self) -> &dyn Any;

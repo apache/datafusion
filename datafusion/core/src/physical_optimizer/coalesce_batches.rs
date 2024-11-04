@@ -34,7 +34,7 @@ use datafusion_physical_optimizer::PhysicalOptimizerRule;
 
 /// Optimizer rule that introduces CoalesceBatchesExec to avoid overhead with small batches that
 /// are produced by highly selective filters
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct CoalesceBatches {}
 
 impl CoalesceBatches {

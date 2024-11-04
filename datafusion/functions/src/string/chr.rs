@@ -16,7 +16,7 @@
 // under the License.
 
 use std::any::Any;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use arrow::array::ArrayRef;
 use arrow::array::StringArray;
@@ -24,12 +24,12 @@ use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::Int64;
 use arrow::datatypes::DataType::Utf8;
 
+use crate::utils::make_scalar_function;
 use datafusion_common::cast::as_int64_array;
 use datafusion_common::{exec_err, Result};
-use datafusion_expr::{ColumnarValue, Volatility};
+use datafusion_expr::scalar_doc_sections::DOC_SECTION_STRING;
+use datafusion_expr::{ColumnarValue, Documentation, Volatility};
 use datafusion_expr::{ScalarUDFImpl, Signature};
-
-use crate::utils::make_scalar_function;
 
 /// Returns the character with the given code. chr(0) is disallowed because text data types cannot store that character.
 /// chr(65) = 'A'
@@ -99,4 +99,35 @@ impl ScalarUDFImpl for ChrFunc {
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
         make_scalar_function(chr, vec![])(args)
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_chr_doc())
+    }
+}
+
+static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+
+fn get_chr_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_STRING)
+            .with_description(
+                "Returns the character with the specified ASCII or Unicode code value.",
+            )
+            .with_syntax_example("chr(expression)")
+            .with_sql_example(
+                r#"```sql
+> select chr(128640);
++--------------------+
+| chr(Int64(128640)) |
++--------------------+
+| 🚀                 |
++--------------------+ 
+```"#,
+            )
+            .with_standard_argument("expression", Some("String"))
+            .with_related_udf("ascii")
+            .build()
+            .unwrap()
+    })
 }

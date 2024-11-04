@@ -23,8 +23,9 @@ use std::sync::Arc;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{plan_datafusion_err, Result};
+use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
 use datafusion_physical_expr::{
-    reverse_order_bys, AggregateExpr, EquivalenceProperties, PhysicalSortRequirement,
+    reverse_order_bys, EquivalenceProperties, PhysicalSortRequirement,
 };
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_plan::aggregates::concat_slices;
@@ -47,7 +48,7 @@ use datafusion_physical_plan::{
 /// This rule analyzes aggregate expressions of type `Beneficial` to see whether
 /// their input ordering requirements are satisfied. If this is the case, the
 /// aggregators are modified to run in a more efficient mode.
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct OptimizeAggregateOrder {}
 
 impl OptimizeAggregateOrder {
@@ -117,7 +118,7 @@ impl PhysicalOptimizerRule for OptimizeAggregateOrder {
 ///
 /// # Parameters
 ///
-/// * `aggr_exprs` - A vector of `Arc<dyn AggregateExpr>` representing the
+/// * `aggr_exprs` - A vector of `AggregateFunctionExpr` representing the
 ///   aggregate expressions to be optimized.
 /// * `prefix_requirement` - An array slice representing the ordering
 ///   requirements preceding the aggregate expressions.
@@ -130,19 +131,19 @@ impl PhysicalOptimizerRule for OptimizeAggregateOrder {
 /// successfully. Any errors occurring during the conversion process are
 /// passed through.
 fn try_convert_aggregate_if_better(
-    aggr_exprs: Vec<Arc<dyn AggregateExpr>>,
+    aggr_exprs: Vec<Arc<AggregateFunctionExpr>>,
     prefix_requirement: &[PhysicalSortRequirement],
     eq_properties: &EquivalenceProperties,
-) -> Result<Vec<Arc<dyn AggregateExpr>>> {
+) -> Result<Vec<Arc<AggregateFunctionExpr>>> {
     aggr_exprs
         .into_iter()
         .map(|aggr_expr| {
-            let aggr_sort_exprs = aggr_expr.order_bys().unwrap_or(&[]);
+            let aggr_sort_exprs = &aggr_expr.order_bys().unwrap_or_default();
             let reverse_aggr_sort_exprs = reverse_order_bys(aggr_sort_exprs);
             let aggr_sort_reqs =
-                PhysicalSortRequirement::from_sort_exprs(aggr_sort_exprs);
+                PhysicalSortRequirement::from_sort_exprs(aggr_sort_exprs.iter());
             let reverse_aggr_req =
-                PhysicalSortRequirement::from_sort_exprs(&reverse_aggr_sort_exprs);
+                PhysicalSortRequirement::from_sort_exprs(&reverse_aggr_sort_exprs.inner);
 
             // If the aggregate expression benefits from input ordering, and
             // there is an actual ordering enabling this, try to update the
@@ -153,7 +154,7 @@ fn try_convert_aggregate_if_better(
                 let reqs = concat_slices(prefix_requirement, &aggr_sort_reqs);
                 if eq_properties.ordering_satisfy_requirement(&reqs) {
                     // Existing ordering satisfies the aggregator requirements:
-                    aggr_expr.with_beneficial_ordering(true)?
+                    aggr_expr.with_beneficial_ordering(true)?.map(Arc::new)
                 } else if eq_properties.ordering_satisfy_requirement(&concat_slices(
                     prefix_requirement,
                     &reverse_aggr_req,
@@ -162,12 +163,14 @@ fn try_convert_aggregate_if_better(
                     // given the existing ordering (if possible):
                     aggr_expr
                         .reverse_expr()
+                        .map(Arc::new)
                         .unwrap_or(aggr_expr)
                         .with_beneficial_ordering(true)?
+                        .map(Arc::new)
                 } else {
                     // There is no beneficial ordering present -- aggregation
                     // will still work albeit in a less efficient mode.
-                    aggr_expr.with_beneficial_ordering(false)?
+                    aggr_expr.with_beneficial_ordering(false)?.map(Arc::new)
                 }
                 .ok_or_else(|| {
                     plan_datafusion_err!(

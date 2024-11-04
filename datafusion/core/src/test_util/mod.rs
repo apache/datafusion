@@ -46,15 +46,13 @@ use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::TableReference;
 use datafusion_expr::utils::COUNT_STAR_EXPANSION;
-use datafusion_expr::{CreateExternalTable, Expr, TableType};
+use datafusion_expr::{CreateExternalTable, Expr, SortExpr, TableType};
 use datafusion_functions_aggregate::count::count_udaf;
-use datafusion_physical_expr::{
-    expressions, AggregateExpr, EquivalenceProperties, PhysicalExpr,
-};
+use datafusion_physical_expr::{expressions, EquivalenceProperties, PhysicalExpr};
 
 use async_trait::async_trait;
 use datafusion_catalog::Session;
-use datafusion_physical_expr_functions_aggregate::aggregate::AggregateExprBuilder;
+use datafusion_physical_expr::aggregate::{AggregateExprBuilder, AggregateFunctionExpr};
 use futures::Stream;
 use tempfile::TempDir;
 // backwards compatibility
@@ -176,6 +174,7 @@ pub fn populate_csv_partitions(
 }
 
 /// TableFactory for tests
+#[derive(Default, Debug)]
 pub struct TestTableFactory {}
 
 #[async_trait]
@@ -193,6 +192,7 @@ impl TableProviderFactory for TestTableFactory {
 }
 
 /// TableProvider for testing purposes
+#[derive(Debug)]
 pub struct TestTableProvider {
     /// URL of table files or folder
     pub url: String,
@@ -362,7 +362,7 @@ pub fn register_unbounded_file_with_ordering(
     schema: SchemaRef,
     file_path: &Path,
     table_name: &str,
-    file_sort_order: Vec<Vec<Expr>>,
+    file_sort_order: Vec<Vec<SortExpr>>,
 ) -> Result<()> {
     let source = FileStreamProvider::new_file(schema, file_path.into());
     let config = StreamConfig::new(Arc::new(source)).with_order(file_sort_order);
@@ -429,7 +429,7 @@ impl TestAggregate {
     }
 
     /// Return appropriate expr depending if COUNT is for col or table (*)
-    pub fn count_expr(&self, schema: &Schema) -> Arc<dyn AggregateExpr> {
+    pub fn count_expr(&self, schema: &Schema) -> AggregateFunctionExpr {
         AggregateExprBuilder::new(count_udaf(), vec![self.column()])
             .schema(Arc::new(schema.clone()))
             .alias(self.column_name())
