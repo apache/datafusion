@@ -4313,3 +4313,27 @@ physical_plan
 04)------HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(binary_col@0, binary_col@0)]
 05)--------MemoryExec: partitions=1, partition_sizes=[1]
 06)--------MemoryExec: partitions=1, partition_sizes=[1]
+
+# Test eliminate outer join
+query IIIIB
+SELECT * FROM t0 LEFT JOIN t1 ON t0.c1 = t1.c1 WHERE abs(t1.c2) <= 2;
+----
+2 2 2 2 true
+2 2 2 2 false
+
+query TT
+EXPLAIN SELECT * FROM t0 LEFT JOIN t1 ON t0.c1 = t1.c1 WHERE abs(t1.c2) <= 2;
+----
+logical_plan
+01)Inner Join: t0.c1 = t1.c1
+02)--TableScan: t0 projection=[c1, c2]
+03)--Filter: abs(t1.c2) <= UInt32(2)
+04)----TableScan: t1 projection=[c1, c2, c3]
+physical_plan
+01)ProjectionExec: expr=[c1@3 as c1, c2@4 as c2, c1@0 as c1, c2@1 as c2, c3@2 as c3]
+02)--CoalesceBatchesExec: target_batch_size=3
+03)----HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(c1@0, c1@0)]
+04)------CoalesceBatchesExec: target_batch_size=3
+05)--------FilterExec: abs(c2@1) <= 2
+06)----------MemoryExec: partitions=1, partition_sizes=[1]
+07)------MemoryExec: partitions=1, partition_sizes=[1]

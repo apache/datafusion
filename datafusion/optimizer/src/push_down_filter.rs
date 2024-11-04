@@ -27,7 +27,7 @@ use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
 };
 use datafusion_common::{
-    internal_err, plan_err, qualified_name, Column, DFSchema, Result,
+    internal_err, plan_err, qualified_name, Column, DFSchema, DFSchemaRef, Result,
 };
 use datafusion_expr::expr_rewriter::replace_col;
 use datafusion_expr::logical_plan::{Join, JoinType, LogicalPlan, TableScan, Union};
@@ -235,7 +235,7 @@ impl<'a> ColumnChecker<'a> {
 }
 
 /// Returns all columns in the schema
-fn schema_columns(schema: &DFSchema) -> HashSet<Column> {
+pub(crate) fn schema_columns(schema: &DFSchema) -> HashSet<Column> {
     schema
         .iter()
         .flat_map(|(qualifier, field)| {
@@ -574,8 +574,9 @@ fn infer_join_predicates(
         .collect::<Vec<_>>();
 
     let join_type = join.join_type;
+    let join_schema = Arc::clone(&join.schema);
 
-    let mut inferred_predicates = InferredPredicates::new(join_type);
+    let mut inferred_predicates = InferredPredicates::new(join_type, join_schema);
 
     infer_join_predicates_from_predicates(
         &join_col_keys,
@@ -603,13 +604,15 @@ fn infer_join_predicates(
 /// the left side, resulting in the wrong result.
 struct InferredPredicates {
     predicates: Vec<Expr>,
+    join_schema: DFSchemaRef,
     is_inner_join: bool,
 }
 
 impl InferredPredicates {
-    fn new(join_type: JoinType) -> Self {
+    fn new(join_type: JoinType, join_schema: DFSchemaRef) -> Self {
         Self {
             predicates: vec![],
+            join_schema,
             is_inner_join: matches!(join_type, JoinType::Inner),
         }
     }
@@ -622,6 +625,7 @@ impl InferredPredicates {
         if self.is_inner_join
             || matches!(
                 is_restrict_null_predicate(
+                    &self.join_schema,
                     predicate.clone(),
                     replace_map.keys().cloned()
                 ),
