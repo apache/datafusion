@@ -1478,11 +1478,17 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                         Transformed::yes(lit(!like_expr.negated))
                     } else if !pattern_str.contains(['%', '_'].as_ref()) {
                         // If the pattern does not contain any wildcards, we can simplify the like expression to an equality expression
-                        Transformed::yes(Expr::BinaryExpr(BinaryExpr {
-                            left: like_expr.expr.clone(),
-                            op: if like_expr.negated { NotEq } else { Eq },
-                            right: like_expr.pattern.clone(),
-                        }))
+                        if like_expr.escape_char.is_some() {
+                            // TODO: handle escape characters
+                            // These currently aren't anywhere else in DataFusion
+                            Transformed::no(expr)
+                        } else {
+                            Transformed::yes(Expr::BinaryExpr(BinaryExpr {
+                                left: like_expr.expr.clone(),
+                                op: if like_expr.negated { NotEq } else { Eq },
+                                right: like_expr.pattern.clone(),
+                            }))
+                        }
                     } else {
                         Transformed::no(expr)
                     }
@@ -3648,6 +3654,16 @@ mod tests {
         assert_eq!(simplify(expr), col("c1").like(lit("a_")));
         let expr = not_like(col("c1"), "a_");
         assert_eq!(simplify(expr), col("c1").not_like(lit("a_")));
+
+        // null pattern
+        let expr = Expr::Like(Like {
+            negated: false,
+            expr: Box::new(col("c1")),
+            pattern: Box::new(Expr::Literal(ScalarValue::Utf8(None))),
+            escape_char: None,
+            case_insensitive: false,
+        });
+        assert_eq!(simplify(expr.clone()), expr);
     }
 
     #[test]
