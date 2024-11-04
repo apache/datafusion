@@ -551,6 +551,14 @@ SELECT repeat(NULL, 4)
 NULL
 
 query T
+select repeat('-1.2', arrow_cast(3, 'Int32'));
+----
+-1.2-1.2-1.2
+
+query error DataFusion error: Error during planning: Error during planning: Coercion from \[Utf8, Float64\] to the signature
+select repeat('-1.2', 3.2);
+
+query T
 SELECT replace('abcdefabcdef', 'cd', 'XX')
 ----
 abXXefabXXef

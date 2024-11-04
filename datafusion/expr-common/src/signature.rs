@@ -347,7 +347,6 @@ impl Signature {
         }
     }
     /// Target coerce types in order
-    #[deprecated(since = "42.0.0", note = "Use String, Numeric")]
     pub fn coercible(target_types: Vec<LogicalTypeRef>, volatility: Volatility) -> Self {
         Self {
             type_signature: TypeSignature::Coercible(target_types),

@@ -23,7 +23,7 @@ use arrow::{
 };
 use datafusion_common::{
     exec_err, internal_datafusion_err, internal_err, plan_err,
-    types::NativeType,
+    types::{LogicalType, NativeType},
     utils::{coerced_fixed_size_list_to_list, list_ndims},
     Result,
 };
@@ -558,8 +558,42 @@ fn get_valid_types(
 
             vec![vec![valid_type; *number]]
         }
-        TypeSignature::Coercible(_target_types) => {
-            return plan_err!("Deprecated, use String, Numeric directly");
+        TypeSignature::Coercible(target_types) => {
+            function_length_check(current_types.len(), target_types.len())?;
+
+            // Aim to keep this logic as SIMPLE as possible!
+            // Make sure the corresponding test is covered
+            // If this function becomes COMPLEX, create another new signature!
+            fn can_cast_to(logical_type: &NativeType, target_type: &NativeType) -> bool {
+                if logical_type == target_type {
+                    return true;
+                }
+
+                if logical_type == &NativeType::Null {
+                    return true;
+                }
+
+                if target_type.is_integer() && logical_type.is_integer() {
+                    return true;
+                }
+
+                false
+            }
+
+            let mut new_types = Vec::with_capacity(current_types.len());
+            for (current_type, target_type) in
+                current_types.iter().zip(target_types.iter())
+            {
+                let logical_type: NativeType = current_type.into();
+                let target_logical_type = target_type.native();
+                if can_cast_to(&logical_type, target_logical_type) {
+                    let target_type =
+                        target_logical_type.default_cast_for(current_type)?;
+                    new_types.push(target_type);
+                }
+            }
+
+            vec![new_types]
         }
         TypeSignature::Uniform(number, valid_types) => valid_types
             .iter()
