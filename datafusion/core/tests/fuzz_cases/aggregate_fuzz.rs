@@ -186,7 +186,7 @@ fn baseline_config() -> DatasetGeneratorConfig {
         // begin decimal columns
         ColumnDescr::new("decimal128", {
             // Generate valid precision and scale for Decimal128 randomly.
-            let precision: u8 = rng.gen_range(0..=DECIMAL128_MAX_PRECISION);
+            let precision: u8 = rng.gen_range(1..=DECIMAL128_MAX_PRECISION);
             // It's safe to cast `precision` to i8 type directly.
             let scale: i8 = rng.gen_range(
                 i8::MIN..=std::cmp::min(precision as i8, DECIMAL128_MAX_SCALE),
@@ -195,7 +195,7 @@ fn baseline_config() -> DatasetGeneratorConfig {
         }),
         ColumnDescr::new("decimal256", {
             // Generate valid precision and scale for Decimal256 randomly.
-            let precision: u8 = rng.gen_range(0..=DECIMAL256_MAX_PRECISION);
+            let precision: u8 = rng.gen_range(1..=DECIMAL256_MAX_PRECISION);
             // It's safe to cast `precision` to i8 type directly.
             let scale: i8 = rng.gen_range(
                 i8::MIN..=std::cmp::min(precision as i8, DECIMAL256_MAX_SCALE),
