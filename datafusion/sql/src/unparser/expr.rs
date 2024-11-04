@@ -526,7 +526,11 @@ impl Unparser<'_> {
 
     fn col_to_sql(&self, col: &Column) -> Result<ast::Expr> {
         if let Some(table_ref) = &col.relation {
-            let mut id = table_ref.to_vec();
+            let mut id = if self.dialect.full_qualified_col(){
+                table_ref.to_vec()
+            } else {
+                vec![table_ref.table().to_string()]
+            };
             id.push(col.name.to_string());
             return Ok(ast::Expr::CompoundIdentifier(
                 id.iter()
@@ -1525,7 +1529,7 @@ mod tests {
                     name: "c".to_string(),
                 })
                 .gt(lit(4)),
-                r#"(a.b.c > 4)"#,
+                r#"(b.c > 4)"#,
             ),
             (
                 case(col("a"))
