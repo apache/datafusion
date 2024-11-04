@@ -125,6 +125,8 @@ pub enum TypeSignature {
     ArraySignature(ArrayFunctionSignature),
     /// Fixed number of arguments of numeric types.
     /// See [`NativeType::is_numeric`] to know which type is considered numeric
+    ///
+    /// [`NativeType::is_numeric`]: datafusion_common
     Numeric(usize),
     /// Fixed number of arguments of numeric types.
     /// See [`NativeType::is_numeric`] to know which type is considered numeric
@@ -132,6 +134,8 @@ pub enum TypeSignature {
     /// Example of functions In Postgres that support numeric string
     /// 1. Mathematical Functions, like `abs`
     /// 2. `to_timestamp`
+    ///
+    /// [`NativeType::is_numeric`]: datafusion_common
     NumericAndNumericString(usize),
     /// Fixed number of arguments of all the same string types.
     /// The precedence of type from high to low is Utf8View, LargeUtf8 and Utf8.
