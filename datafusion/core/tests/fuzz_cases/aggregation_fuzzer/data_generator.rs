@@ -18,10 +18,11 @@
 use std::sync::Arc;
 
 use arrow::datatypes::{
-    Date32Type, Date64Type, Float32Type, Float64Type, Int16Type, Int32Type, Int64Type,
-    Int8Type, IntervalDayTimeType, IntervalMonthDayNanoType, IntervalYearMonthType,
-    Time32MillisecondType, Time32SecondType, Time64MicrosecondType, Time64NanosecondType,
-    UInt16Type, UInt32Type, UInt64Type, UInt8Type,
+    Date32Type, Date64Type, Decimal128Type, Decimal256Type, Float32Type, Float64Type,
+    Int16Type, Int32Type, Int64Type, Int8Type, IntervalDayTimeType,
+    IntervalMonthDayNanoType, IntervalYearMonthType, Time32MillisecondType,
+    Time32SecondType, Time64MicrosecondType, Time64NanosecondType, UInt16Type,
+    UInt32Type, UInt64Type, UInt8Type,
 };
 use arrow_array::{ArrayRef, RecordBatch};
 use arrow_schema::{DataType, Field, IntervalUnit, Schema, TimeUnit};
@@ -239,7 +240,7 @@ macro_rules! generate_string_array {
 }
 
 macro_rules! generate_decimal_array {
-    ($SELF:ident, $NUM_ROWS:ident, $MAX_NUM_DISTINCT: expr, $BATCH_GEN_RNG:ident, $ARRAY_GEN_RNG:ident, $PRECISION: ident, $SCALE: ident, $NATIVE_TYPE: ident) => {{
+    ($SELF:ident, $NUM_ROWS:ident, $MAX_NUM_DISTINCT: expr, $BATCH_GEN_RNG:ident, $ARRAY_GEN_RNG:ident, $PRECISION: ident, $SCALE: ident, $ARROW_TYPE: ident) => {{
         let null_pct_idx = $BATCH_GEN_RNG.gen_range(0..$SELF.candidate_null_pcts.len());
         let null_pct = $SELF.candidate_null_pcts[null_pct_idx];
 
@@ -252,9 +253,7 @@ macro_rules! generate_decimal_array {
             rng: $ARRAY_GEN_RNG,
         };
 
-        paste::paste! {
-            generator.[< gen_data_ $NATIVE_TYPE >]()
-        }
+        generator.gen_data::<$ARROW_TYPE>()
     }};
 }
 
@@ -532,7 +531,7 @@ impl RecordBatchGenerator {
                     array_gen_rng,
                     precision,
                     scale,
-                    i128
+                    Decimal128Type
                 )
             }
             DataType::Decimal256(precision, scale) => {
@@ -544,7 +543,7 @@ impl RecordBatchGenerator {
                     array_gen_rng,
                     precision,
                     scale,
-                    i256
+                    Decimal256Type
                 )
             }
             DataType::Utf8 => {

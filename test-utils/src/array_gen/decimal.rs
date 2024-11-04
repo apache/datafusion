@@ -16,9 +16,11 @@
 // under the License.
 
 use arrow::array::{ArrayRef, PrimitiveArray, PrimitiveBuilder, UInt32Array};
-use arrow::datatypes::{i256, Decimal128Type, Decimal256Type};
+use arrow::datatypes::DecimalType;
 use rand::rngs::StdRng;
 use rand::Rng;
+
+use super::random_data::RandomNativeData;
 
 /// Randomly generate decimal arrays
 pub struct DecimalArrayGenerator {
@@ -36,57 +38,43 @@ pub struct DecimalArrayGenerator {
     pub rng: StdRng,
 }
 
-macro_rules! impl_gen_decimal_data {
-    ($NATIVE_TYPE:ident, $DECIMAL_TYPE:ident) => {
-        paste::paste! {
-            /// Create a Decimal128Array / Decimal256Array with random values.
-            pub fn [< gen_data_ $NATIVE_TYPE >](&mut self) -> ArrayRef {
-                // table of decimals from which to draw
-                let distinct_decimals : PrimitiveArray<$DECIMAL_TYPE> = {
-                    let mut decimal_builder = PrimitiveBuilder::<$DECIMAL_TYPE>::with_capacity(self.num_distinct_decimals);
-                    for _ in 0..self.num_distinct_decimals {
-                        decimal_builder.append_option(Some(
-                            [< random_ $NATIVE_TYPE >](&mut self.rng)
-                        ));
-                    }
-
-                    let decimal_array = decimal_builder
-                        .finish()
-                        .with_precision_and_scale(self.precision, self.scale)
-                        .unwrap();
-                    decimal_array
-                };
-
-                // pick num_decimals randomly from the distinct decimal table
-                let indicies: UInt32Array = (0..self.num_decimals)
-                    .map(|_| {
-                        if self.rng.gen::<f64>() < self.null_pct {
-                            None
-                        } else if self.num_distinct_decimals > 1 {
-                            let range = 1..(self.num_distinct_decimals as u32);
-                            Some(self.rng.gen_range(range))
-                        } else {
-                            Some(0)
-                        }
-                    })
-                    .collect();
-
-                let options = None;
-                arrow::compute::take(&distinct_decimals, &indicies, options).unwrap()
-            }
-        }
-    };
-}
-
 impl DecimalArrayGenerator {
-    impl_gen_decimal_data!(i128, Decimal128Type);
-    impl_gen_decimal_data!(i256, Decimal256Type);
-}
+    /// Create a Decimal128Array / Decimal256Array with random values.
+    pub fn gen_data<D>(&mut self) -> ArrayRef
+    where
+        D: DecimalType + RandomNativeData,
+    {
+        // table of decimals from which to draw
+        let distinct_decimals: PrimitiveArray<D> = {
+            let mut decimal_builder =
+                PrimitiveBuilder::<D>::with_capacity(self.num_distinct_decimals);
+            for _ in 0..self.num_distinct_decimals {
+                decimal_builder
+                    .append_option(Some(D::generate_random_native_data(&mut self.rng)));
+            }
 
-fn random_i128(rng: &mut StdRng) -> i128 {
-    rng.gen::<i128>()
-}
+            let decimal_array = decimal_builder
+                .finish()
+                .with_precision_and_scale(self.precision, self.scale)
+                .unwrap();
+            decimal_array
+        };
 
-fn random_i256(rng: &mut StdRng) -> i256 {
-    i256::from_parts(rng.gen::<u128>(), rng.gen::<i128>())
+        // pick num_decimals randomly from the distinct decimal table
+        let indicies: UInt32Array = (0..self.num_decimals)
+            .map(|_| {
+                if self.rng.gen::<f64>() < self.null_pct {
+                    None
+                } else if self.num_distinct_decimals > 1 {
+                    let range = 1..(self.num_distinct_decimals as u32);
+                    Some(self.rng.gen_range(range))
+                } else {
+                    Some(0)
+                }
+            })
+            .collect();
+
+        let options = None;
+        arrow::compute::take(&distinct_decimals, &indicies, options).unwrap()
+    }
 }

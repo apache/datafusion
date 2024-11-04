@@ -17,6 +17,7 @@
 
 mod decimal;
 mod primitive;
+mod random_data;
 mod string;
 
 pub use decimal::DecimalArrayGenerator;
