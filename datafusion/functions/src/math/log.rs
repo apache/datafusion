@@ -278,7 +278,7 @@ mod tests {
             ColumnarValue::Array(Arc::new(Int64Array::from(vec![5, 10, 15, 20]))),
         ];
 
-        let _ = LogFunc::new().invoke(&args);
+        let _ = LogFunc::new().invoke_batch(&args, 4);
     }
 
     #[test]
@@ -287,7 +287,7 @@ mod tests {
             ColumnarValue::Array(Arc::new(Int64Array::from(vec![10]))), // num
         ];
 
-        let result = LogFunc::new().invoke(&args);
+        let result = LogFunc::new().invoke_batch(&args, 1);
         result.expect_err("expected error");
     }
 
@@ -298,7 +298,7 @@ mod tests {
         ];
 
         let result = LogFunc::new()
-            .invoke(&args)
+            .invoke_batch(&args, 1)
             .expect("failed to initialize function log");
 
         match result {
@@ -322,7 +322,7 @@ mod tests {
         ];
 
         let result = LogFunc::new()
-            .invoke(&args)
+            .invoke_batch(&args, 1)
             .expect("failed to initialize function log");
 
         match result {
@@ -347,7 +347,7 @@ mod tests {
         ];
 
         let result = LogFunc::new()
-            .invoke(&args)
+            .invoke_batch(&args, 1)
             .expect("failed to initialize function log");
 
         match result {
@@ -372,7 +372,7 @@ mod tests {
         ];
 
         let result = LogFunc::new()
-            .invoke(&args)
+            .invoke_batch(&args, 1)
             .expect("failed to initialize function log");
 
         match result {
@@ -398,7 +398,7 @@ mod tests {
         ];
 
         let result = LogFunc::new()
-            .invoke(&args)
+            .invoke_batch(&args, 4)
             .expect("failed to initialize function log");
 
         match result {
@@ -427,7 +427,7 @@ mod tests {
         ];
 
         let result = LogFunc::new()
-            .invoke(&args)
+            .invoke_batch(&args, 4)
             .expect("failed to initialize function log");
 
         match result {
@@ -457,7 +457,7 @@ mod tests {
         ];
 
         let result = LogFunc::new()
-            .invoke(&args)
+            .invoke_batch(&args, 4)
             .expect("failed to initialize function log");
 
         match result {
@@ -487,7 +487,7 @@ mod tests {
         ];
 
         let result = LogFunc::new()
-            .invoke(&args)
+            .invoke_batch(&args, 4)
             .expect("failed to initialize function log");
 
         match result {

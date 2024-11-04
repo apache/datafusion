@@ -491,6 +491,7 @@ mod tests {
     use chrono::TimeDelta;
 
     #[test]
+    #[allow(deprecated)] // TODO migrate UDF invoke to invoke_batch
     fn test_date_bin() {
         let res = DateBinFunc::new().invoke(&[
             ColumnarValue::Scalar(ScalarValue::IntervalDayTime(Some(IntervalDayTime {
@@ -781,6 +782,7 @@ mod tests {
                     .map(|s| Some(string_to_timestamp_nanos(s).unwrap()))
                     .collect::<TimestampNanosecondArray>()
                     .with_timezone_opt(tz_opt.clone());
+                #[allow(deprecated)] // TODO migrate UDF invoke to invoke_batch
                 let result = DateBinFunc::new()
                     .invoke(&[
                         ColumnarValue::Scalar(ScalarValue::new_interval_dt(1, 0)),
