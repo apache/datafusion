@@ -57,6 +57,7 @@ struct JoinLeftData {
     reservation: MemoryReservation,
 }
 
+#[allow(rustdoc::private_intra_doc_links)]
 /// Cross Join Execution Plan
 ///
 /// This operator is used when there are no predicates between two tables and
