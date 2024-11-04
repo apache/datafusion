@@ -43,19 +43,19 @@ define_udwf_and_expr!(
     First,
     first_value,
     "returns the first value in the window frame",
-    NthValue::first_value
+    NthValue::first
 );
 define_udwf_and_expr!(
     Last,
     last_value,
     "returns the last value in the window frame",
-    NthValue::last_value
+    NthValue::last
 );
 define_udwf_and_expr!(
     NthValue,
     nth_value,
     "returns the nth value in the window frame",
-    NthValue::nth_value
+    NthValue::nth
 );
 
 /// Tag to differentiate special use cases of the NTH_VALUE built-in window function.
@@ -98,14 +98,14 @@ impl NthValue {
         }
     }
 
-    pub fn first_value() -> Self {
+    pub fn first() -> Self {
         Self::new(NthValueKind::First)
     }
 
-    pub fn last_value() -> Self {
+    pub fn last() -> Self {
         Self::new(NthValueKind::Last)
     }
-    pub fn nth_value() -> Self {
+    pub fn nth() -> Self {
         Self::new(NthValueKind::Nth)
     }
 }
@@ -447,7 +447,7 @@ mod tests {
     fn first_value() -> Result<()> {
         let expr = Arc::new(Column::new("c3", 0)) as Arc<dyn PhysicalExpr>;
         test_i32_result(
-            NthValue::first_value(),
+            NthValue::first(),
             PartitionEvaluatorArgs::new(&[expr], &[DataType::Int32], false, false),
             Int32Array::from(vec![1; 8]).iter().collect::<Int32Array>(),
         )
@@ -457,7 +457,7 @@ mod tests {
     fn last_value() -> Result<()> {
         let expr = Arc::new(Column::new("c3", 0)) as Arc<dyn PhysicalExpr>;
         test_i32_result(
-            NthValue::last_value(),
+            NthValue::last(),
             PartitionEvaluatorArgs::new(&[expr], &[DataType::Int32], false, false),
             Int32Array::from(vec![
                 Some(1),
@@ -479,7 +479,7 @@ mod tests {
             Arc::new(Literal::new(ScalarValue::Int32(Some(1)))) as Arc<dyn PhysicalExpr>;
 
         test_i32_result(
-            NthValue::nth_value(),
+            NthValue::nth(),
             PartitionEvaluatorArgs::new(
                 &[expr, n_value],
                 &[DataType::Int32],
@@ -498,7 +498,7 @@ mod tests {
             Arc::new(Literal::new(ScalarValue::Int32(Some(2)))) as Arc<dyn PhysicalExpr>;
 
         test_i32_result(
-            NthValue::nth_value(),
+            NthValue::nth(),
             PartitionEvaluatorArgs::new(
                 &[expr, n_value],
                 &[DataType::Int32],

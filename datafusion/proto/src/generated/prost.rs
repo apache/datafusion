@@ -1814,17 +1814,6 @@ pub struct PartitionStats {
 pub enum BuiltInWindowFunction {
     /// <https://protobuf.dev/programming-guides/dos-donts/#unspecified-enum>
     Unspecified = 0,
-    /// ROW_NUMBER = 0;
-    ///   RANK = 1;
-    ///   DENSE_RANK = 2;
-    ///   PERCENT_RANK = 3;
-    ///   CUME_DIST = 4;
-    ///   NTILE = 5;
-    /// LAG = 6;
-    /// LEAD = 7;
-    FirstValue = 8,
-    LastValue = 9,
-    NthValue = 10,
 }
 impl BuiltInWindowFunction {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -1834,18 +1823,12 @@ impl BuiltInWindowFunction {
     pub fn as_str_name(&self) -> &'static str {
         match self {
             Self::Unspecified => "UNSPECIFIED",
-            Self::FirstValue => "FIRST_VALUE",
-            Self::LastValue => "LAST_VALUE",
-            Self::NthValue => "NTH_VALUE",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
     pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
         match value {
             "UNSPECIFIED" => Some(Self::Unspecified),
-            "FIRST_VALUE" => Some(Self::FirstValue),
-            "LAST_VALUE" => Some(Self::LastValue),
-            "NTH_VALUE" => Some(Self::NthValue),
             _ => None,
         }
     }

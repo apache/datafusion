@@ -1662,9 +1662,6 @@ impl serde::Serialize for BuiltInWindowFunction {
     {
         let variant = match self {
             Self::Unspecified => "UNSPECIFIED",
-            Self::FirstValue => "FIRST_VALUE",
-            Self::LastValue => "LAST_VALUE",
-            Self::NthValue => "NTH_VALUE",
         };
         serializer.serialize_str(variant)
     }
@@ -1677,9 +1674,6 @@ impl<'de> serde::Deserialize<'de> for BuiltInWindowFunction {
     {
         const FIELDS: &[&str] = &[
             "UNSPECIFIED",
-            "FIRST_VALUE",
-            "LAST_VALUE",
-            "NTH_VALUE",
         ];
 
         struct GeneratedVisitor;
@@ -1721,9 +1715,6 @@ impl<'de> serde::Deserialize<'de> for BuiltInWindowFunction {
             {
                 match value {
                     "UNSPECIFIED" => Ok(BuiltInWindowFunction::Unspecified),
-                    "FIRST_VALUE" => Ok(BuiltInWindowFunction::FirstValue),
-                    "LAST_VALUE" => Ok(BuiltInWindowFunction::LastValue),
-                    "NTH_VALUE" => Ok(BuiltInWindowFunction::NthValue),
                     _ => Err(serde::de::Error::unknown_variant(value, FIELDS)),
                 }
             }

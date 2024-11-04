@@ -148,13 +148,8 @@ impl From<&protobuf::StringifiedPlan> for StringifiedPlan {
 }
 
 impl From<protobuf::BuiltInWindowFunction> for BuiltInWindowFunction {
-    fn from(built_in_function: protobuf::BuiltInWindowFunction) -> Self {
-        match built_in_function {
-            protobuf::BuiltInWindowFunction::Unspecified => todo!(),
-            protobuf::BuiltInWindowFunction::FirstValue => Self::FirstValue,
-            protobuf::BuiltInWindowFunction::NthValue => Self::NthValue,
-            protobuf::BuiltInWindowFunction::LastValue => Self::LastValue,
-        }
+    fn from(_built_in_function: protobuf::BuiltInWindowFunction) -> Self {
+        unreachable!()
     }
 }
 
@@ -287,6 +282,7 @@ pub fn parse_expr(
 
             // TODO: support proto for null treatment
             match window_function {
+                window_expr_node::WindowFunction::BuiltInFunction(_) => unreachable!(),
                 window_expr_node::WindowFunction::Udaf(udaf_name) => {
                     let udaf_function = match &expr.fun_definition {
                         Some(buf) => codec.try_decode_udaf(udaf_name, buf)?,
