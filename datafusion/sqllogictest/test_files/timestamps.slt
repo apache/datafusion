@@ -425,6 +425,41 @@ SELECT COUNT(*) FROM ts_data_secs where ts > from_unixtime(1599566400)
 ----
 2
 
+query P rowsort
+SELECT ts FROM ts_data_nanos;
+----
+2020-09-08T11:42:29.190855123
+2020-09-08T12:42:29.190855123
+2020-09-08T13:42:29.190855123
+
+query P rowsort
+SELECT CAST(ts AS timestamp(0)) FROM ts_data_nanos;
+----
+2020-09-08T11:42:29
+2020-09-08T12:42:29
+2020-09-08T13:42:29
+
+query P rowsort
+SELECT CAST(ts AS timestamp(3)) FROM ts_data_nanos;
+----
+2020-09-08T11:42:29.190
+2020-09-08T12:42:29.190
+2020-09-08T13:42:29.190
+
+query P rowsort
+SELECT CAST(ts AS timestamp(6)) FROM ts_data_nanos;
+----
+2020-09-08T11:42:29.190855
+2020-09-08T12:42:29.190855
+2020-09-08T13:42:29.190855
+
+query P rowsort
+SELECT CAST(ts AS timestamp(9)) FROM ts_data_nanos;
+----
+2020-09-08T11:42:29.190855123
+2020-09-08T12:42:29.190855123
+2020-09-08T13:42:29.190855123
+
 
 # count_distinct_timestamps
 query P rowsort
