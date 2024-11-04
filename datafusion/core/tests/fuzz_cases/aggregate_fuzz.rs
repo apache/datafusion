@@ -205,8 +205,7 @@ fn baseline_config() -> DatasetGeneratorConfig {
         // begin string columns
         ColumnDescr::new("utf8", DataType::Utf8),
         ColumnDescr::new("largeutf8", DataType::LargeUtf8),
-        // TODO add support for utf8view in data generator
-        // ColumnDescr::new("utf8view", DataType::Utf8View),
+        ColumnDescr::new("utf8view", DataType::Utf8View),
         // todo binary
         // low cardinality columns
         ColumnDescr::new("u8_low", DataType::UInt8).with_max_num_distinct(10),

@@ -18,11 +18,11 @@
 use std::sync::Arc;
 
 use arrow::datatypes::{
-    Date32Type, Date64Type, Decimal128Type, Decimal256Type, Float32Type, Float64Type,
-    Int16Type, Int32Type, Int64Type, Int8Type, IntervalDayTimeType,
-    IntervalMonthDayNanoType, IntervalYearMonthType, Time32MillisecondType,
-    Time32SecondType, Time64MicrosecondType, Time64NanosecondType, UInt16Type,
-    UInt32Type, UInt64Type, UInt8Type,
+    ByteArrayType, ByteViewType, Date32Type, Date64Type, Decimal128Type, Decimal256Type,
+    Float32Type, Float64Type, Int16Type, Int32Type, Int64Type, Int8Type,
+    IntervalDayTimeType, IntervalMonthDayNanoType, IntervalYearMonthType, LargeUtf8Type,
+    StringViewType, Time32MillisecondType, Time32SecondType, Time64MicrosecondType,
+    Time64NanosecondType, UInt16Type, UInt32Type, UInt64Type, UInt8Type, Utf8Type,
 };
 use arrow_array::{ArrayRef, RecordBatch};
 use arrow_schema::{DataType, Field, IntervalUnit, Schema, TimeUnit};
@@ -222,7 +222,7 @@ struct RecordBatchGenerator {
 }
 
 macro_rules! generate_string_array {
-    ($SELF:ident, $NUM_ROWS:ident, $MAX_NUM_DISTINCT:expr, $BATCH_GEN_RNG:ident, $ARRAY_GEN_RNG:ident, $OFFSET_TYPE:ty) => {{
+    ($SELF:ident, $NUM_ROWS:ident, $MAX_NUM_DISTINCT:expr, $BATCH_GEN_RNG:ident, $ARRAY_GEN_RNG:ident, $ARROW_TYPE: ident) => {{
         let null_pct_idx = $BATCH_GEN_RNG.gen_range(0..$SELF.candidate_null_pcts.len());
         let null_pct = $SELF.candidate_null_pcts[null_pct_idx];
         let max_len = $BATCH_GEN_RNG.gen_range(1..50);
@@ -235,7 +235,12 @@ macro_rules! generate_string_array {
             rng: $ARRAY_GEN_RNG,
         };
 
-        generator.gen_data::<$OFFSET_TYPE>()
+        match $ARROW_TYPE::DATA_TYPE {
+            DataType::Utf8 => generator.gen_data::<i32>(),
+            DataType::LargeUtf8 => generator.gen_data::<i64>(),
+            DataType::Utf8View => generator.gen_string_view(),
+            _ => unreachable!(),
+        }
     }};
 }
 
@@ -553,7 +558,7 @@ impl RecordBatchGenerator {
                     max_num_distinct,
                     batch_gen_rng,
                     array_gen_rng,
-                    i32
+                    Utf8Type
                 )
             }
             DataType::LargeUtf8 => {
@@ -563,7 +568,17 @@ impl RecordBatchGenerator {
                     max_num_distinct,
                     batch_gen_rng,
                     array_gen_rng,
-                    i64
+                    LargeUtf8Type
+                )
+            }
+            DataType::Utf8View => {
+                generate_string_array!(
+                    self,
+                    num_rows,
+                    max_num_distinct,
+                    batch_gen_rng,
+                    array_gen_rng,
+                    StringViewType
                 )
             }
             _ => {
