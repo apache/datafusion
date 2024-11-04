@@ -696,10 +696,7 @@ impl CustomDialectBuilder {
     }
 
     /// Customize the dialect to allow full qualified column names
-    pub fn with_full_qualified_col(
-        mut self,
-        full_qualified_col: bool,
-    ) -> Self {
+    pub fn with_full_qualified_col(mut self, full_qualified_col: bool) -> Self {
         self.full_qualified_col = full_qualified_col;
         self
     }

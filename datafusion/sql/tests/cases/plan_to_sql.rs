@@ -27,7 +27,10 @@ use datafusion_functions_aggregate::grouping::grouping_udaf;
 use datafusion_functions_nested::make_array::make_array_udf;
 use datafusion_functions_window::rank::rank_udwf;
 use datafusion_sql::planner::{ContextProvider, PlannerContext, SqlToRel};
-use datafusion_sql::unparser::dialect::{CustomDialectBuilder, DefaultDialect as UnparserDefaultDialect, DefaultDialect, Dialect as UnparserDialect, MySqlDialect as UnparserMySqlDialect, SqliteDialect};
+use datafusion_sql::unparser::dialect::{
+    CustomDialectBuilder, DefaultDialect as UnparserDefaultDialect, DefaultDialect,
+    Dialect as UnparserDialect, MySqlDialect as UnparserMySqlDialect, SqliteDialect,
+};
 use datafusion_sql::unparser::{expr_to_sql, plan_to_sql, Unparser};
 
 use crate::common::{MockContextProvider, MockSessionState};
@@ -562,7 +565,7 @@ Projection: unnest_placeholder(unnest_table.struct_col).field1, unnest_placehold
 
 #[test]
 fn test_table_references_in_plan_to_sql() {
-    fn test(table_name: &str, expected_sql: &str, dialect: &Box<impl UnparserDialect>) {
+    fn test(table_name: &str, expected_sql: &str, dialect: &impl UnparserDialect) {
         let schema = Schema::new(vec![
             Field::new("id", DataType::Utf8, false),
             Field::new("value", DataType::Utf8, false),
@@ -574,34 +577,32 @@ fn test_table_references_in_plan_to_sql() {
             .build()
             .unwrap();
 
-        let unparser = Unparser::new(dialect.as_ref());
+        let unparser = Unparser::new(dialect);
         let sql = unparser.plan_to_sql(&plan).unwrap();
 
         assert_eq!(sql.to_string(), expected_sql)
     }
 
-    let default_dialect = Box::new(DefaultDialect {});
-
     test(
         "catalog.schema.table",
         r#"SELECT "table".id, "table"."value" FROM "catalog"."schema"."table""#,
-        &default_dialect,
+        &DefaultDialect {},
     );
     test(
         "schema.table",
         r#"SELECT "table".id, "table"."value" FROM "schema"."table""#,
-        &default_dialect
+        &DefaultDialect {},
     );
     test(
         "table",
         r#"SELECT "table".id, "table"."value" FROM "table""#,
-        &default_dialect
+        &DefaultDialect {},
     );
 
-    let custom_dialect = Box::new(CustomDialectBuilder::default()
+    let custom_dialect = CustomDialectBuilder::default()
         .with_full_qualified_col(true)
         .with_identifier_quote_style('"')
-        .build());
+        .build();
 
     test(
         "catalog.schema.table",
@@ -611,12 +612,12 @@ fn test_table_references_in_plan_to_sql() {
     test(
         "schema.table",
         r#"SELECT "schema"."table"."id", "schema"."table"."value" FROM "schema"."table""#,
-        &custom_dialect
+        &custom_dialect,
     );
     test(
         "table",
         r#"SELECT "table"."id", "table"."value" FROM "table""#,
-        &custom_dialect
+        &custom_dialect,
     );
 }
 

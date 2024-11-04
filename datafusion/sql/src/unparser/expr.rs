@@ -527,7 +527,7 @@ impl Unparser<'_> {
 
     fn col_to_sql(&self, col: &Column) -> Result<ast::Expr> {
         if let Some(table_ref) = &col.relation {
-            let mut id = if self.dialect.full_qualified_col(){
+            let mut id = if self.dialect.full_qualified_col() {
                 table_ref.to_vec()
             } else {
                 vec![table_ref.table().to_string()]
@@ -1886,7 +1886,7 @@ mod tests {
                         name: "array_col".to_string(),
                     })),
                 }),
-                r#"UNNEST("schema"."table".array_col)"#,
+                r#"UNNEST("table".array_col)"#,
             ),
         ];
 
