@@ -317,7 +317,7 @@ pub struct HashJoinExec {
     join_schema: SchemaRef,
     /// Future that consumes left input and builds the hash table
     ///
-    /// This structure is *shared* across all output streams.
+    /// For CollectLeft partition mode, this structure is *shared* across all output streams.
     ///
     /// Each output stream waits on the `OnceAsync` to signal the completion of
     /// the hash table creation.
