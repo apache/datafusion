@@ -497,8 +497,20 @@ fn get_valid_types(
                 );
             }
 
-            let mut valid_type = current_types.first().unwrap().clone();
-            for t in current_types.iter().skip(1) {
+            let mut new_types = Vec::with_capacity(current_types.len());
+            for data_type in current_types.iter() {
+                let logical_data_type: NativeType = data_type.into();
+                if logical_data_type.is_numeric() {
+                    new_types.push(data_type.to_owned());
+                } else {
+                    return plan_err!(
+                        "The signature expected NativeType::Numeric but received {data_type}"
+                    );
+                }
+            }
+
+            let mut valid_type = new_types.first().unwrap().clone();
+            for t in new_types.iter().skip(1) {
                 if let Some(coerced_type) = binary_numeric_coercion(&valid_type, t) {
                     valid_type = coerced_type;
                 } else {

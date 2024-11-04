@@ -415,6 +415,7 @@ impl NativeType {
                 | Float16
                 | Float32
                 | Float64
+                | Decimal(_, _)
         )
     }
 
