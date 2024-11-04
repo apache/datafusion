@@ -118,21 +118,21 @@ Andrew
 ```
 
 To test trailing whitespace, project additional non-whitespace column on the
-right. For example, by selecting `'XX'` after the column of interest, the test
+right. For example, by selecting `'|'` after the column of interest, the test
 can distinguish between `Andrew` and `Andrew `:
 
 ```text
-#  Note two spaces between `Andrew` and `XX`
+# Note two spaces between `Andrew` and `|`
 query TT
-select substr('Andrew Lamb', 1, 7), 'XX';
+select substr('Andrew Lamb', 1, 7), '|'
 ----
-Andrew  XX
+Andrew  |
 
-# Note only one space between `Andrew` and `XX`
+# Note only one space between `Andrew` and `|`
 query TT
-select substr('Andrew Lamb', 1, 6), 'XX';
+select substr('Andrew Lamb', 1, 6), '|'
 ----
-Andrew XX
+Andrew |
 ```
 
 # Reference
