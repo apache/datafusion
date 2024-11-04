@@ -29,8 +29,7 @@ use std::sync::OnceLock;
 use std::{fmt::Debug, sync::Arc};
 
 use datafusion_common::{
-    downcast_value, not_impl_err, plan_err, types::logical_float64, DataFusionError,
-    Result, ScalarValue,
+    downcast_value, not_impl_err, plan_err, DataFusionError, Result, ScalarValue,
 };
 use datafusion_expr::aggregate_doc_sections::DOC_SECTION_GENERAL;
 use datafusion_expr::{
@@ -83,10 +82,7 @@ impl VarianceSample {
     pub fn new() -> Self {
         Self {
             aliases: vec![String::from("var_sample"), String::from("var_samp")],
-            signature: Signature::coercible(
-                vec![logical_float64()],
-                Volatility::Immutable,
-            ),
+            signature: Signature::numeric(1, Volatility::Immutable),
         }
     }
 }

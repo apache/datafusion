@@ -23,7 +23,7 @@ use arrow::{
 };
 use datafusion_common::{
     exec_err, internal_datafusion_err, internal_err, plan_err,
-    types::{LogicalType, NativeType},
+    types::NativeType,
     utils::{coerced_fixed_size_list_to_list, list_ndims},
     Result,
 };
@@ -402,10 +402,6 @@ fn get_valid_types(
             .map(|valid_type| current_types.iter().map(|_| valid_type.clone()).collect())
             .collect(),
         TypeSignature::String(number) => {
-            // TODO: we can switch to coercible after all the string functions support utf8view since it is choosen as the default string type.
-            //
-            // let data_types = get_valid_types(&TypeSignature::Coercible(vec![logical_string(); *number]), current_types)?.swap_remove(0);
-
             if *number < 1 {
                 return plan_err!(
                     "The signature expected at least one argument but received {}",
@@ -423,12 +419,11 @@ fn get_valid_types(
             let mut new_types = Vec::with_capacity(current_types.len());
             for data_type in current_types.iter() {
                 let logical_data_type: NativeType = data_type.into();
-                if logical_data_type.can_coerce_to(&NativeType::String) {
-                    if data_type.is_null() {
-                        new_types.push(DataType::Utf8);
-                    } else {
-                        new_types.push(data_type.to_owned());
-                    }
+                if logical_data_type == NativeType::String {
+                    new_types.push(data_type.to_owned());
+                } else if logical_data_type == NativeType::Null {
+                    // TODO: Switch to Utf8View if all the string functions supports Utf8View
+                    new_types.push(DataType::Utf8);
                 } else {
                     return plan_err!(
                         "The signature expected NativeType::String but received {data_type}"
@@ -526,7 +521,7 @@ fn get_valid_types(
 
             let logical_data_type: NativeType = valid_type.clone().into();
             // Fallback to default type if we don't know which type to coerced to
-            // f64 is choosen since most of the math function utilize Signature::numeric, 
+            // f64 is choosen since most of the math function utilize Signature::numeric,
             // and their default type is double precision
             if matches!(logical_data_type, NativeType::String | NativeType::Null) {
                 valid_type = DataType::Float64;
@@ -534,40 +529,8 @@ fn get_valid_types(
 
             vec![vec![valid_type; *number]]
         }
-        TypeSignature::Coercible(target_types) => {
-            if target_types.is_empty() {
-                return plan_err!(
-                    "The signature expected at least one argument but received {}",
-                    current_types.len()
-                );
-            }
-            if target_types.len() != current_types.len() {
-                return plan_err!(
-                    "The signature expected {} arguments but received {}",
-                    target_types.len(),
-                    current_types.len()
-                );
-            }
-
-            let mut new_types = Vec::with_capacity(current_types.len());
-            for (data_type, target_type) in current_types.iter().zip(target_types.iter())
-            {
-                let logical_data_type: NativeType = data_type.into();
-                if logical_data_type == *target_type.native() {
-                    new_types.push(data_type.to_owned());
-                } else if logical_data_type.can_coerce_to(target_type.native()) {
-                    let casted_type = target_type.default_cast_for(data_type)?;
-                    new_types.push(casted_type);
-                } else {
-                    return plan_err!(
-                        "The signature expected {:?} but received {:?}",
-                        target_type.native(),
-                        logical_data_type
-                    );
-                }
-            }
-
-            vec![new_types]
+        TypeSignature::Coercible(_target_types) => {
+            return plan_err!("Deprecated, use String, Numeric directly");
         }
         TypeSignature::Uniform(number, valid_types) => valid_types
             .iter()

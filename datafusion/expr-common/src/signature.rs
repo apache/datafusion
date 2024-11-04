@@ -124,7 +124,7 @@ pub enum TypeSignature {
     /// Specifies Signatures for array functions
     ArraySignature(ArrayFunctionSignature),
     /// Fixed number of arguments of numeric types.
-    /// See <https://docs.rs/arrow/latest/arrow/datatypes/enum.DataType.html#method.is_numeric> to know which type is considered numeric
+    /// See [`NativeType::is_numeric`] to know which type is considered numeric
     Numeric(usize),
     /// Fixed number of arguments of all the same string types.
     /// The precedence of type from high to low is Utf8View, LargeUtf8 and Utf8.
@@ -326,6 +326,7 @@ impl Signature {
         }
     }
     /// Target coerce types in order
+    #[deprecated(since = "42.0.0", note = "Use String, Numeric")]
     pub fn coercible(target_types: Vec<LogicalTypeRef>, volatility: Volatility) -> Self {
         Self {
             type_signature: TypeSignature::Coercible(target_types),
