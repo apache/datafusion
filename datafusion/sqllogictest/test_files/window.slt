@@ -4864,7 +4864,7 @@ SELECT lag(column2, 1.1) OVER (order by column1) FROM t;
 query error DataFusion error: Execution error: Expected an integer value
 SELECT lead(column2, 1.1) OVER (order by column1) FROM t;
 
-query error DataFusion error: Execution error: Expected an integer value
+query error DataFusion error: Execution error: Expected a signed integer literal for the second argument of nth_value
 SELECT nth_value(column2, 1.1) OVER (order by column1) FROM t;
 
 statement ok

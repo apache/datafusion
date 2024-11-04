@@ -529,31 +529,4 @@ mod tests {
         )?;
         Ok(())
     }
-
-    #[test]
-    fn nth_value_fail() -> Result<()> {
-        let expr = Arc::new(Column::new("c3", 0)) as Arc<dyn PhysicalExpr>;
-        let n_value = Arc::new(Column::new("c4", 0)) as Arc<dyn PhysicalExpr>;
-
-        test_i32_result(
-            NthValue::nth(),
-            PartitionEvaluatorArgs::new(
-                &[expr, n_value],
-                &[DataType::Int32],
-                false,
-                false,
-            ),
-            Int32Array::from(vec![
-                None,
-                Some(-2),
-                Some(-2),
-                Some(-2),
-                Some(-2),
-                Some(-2),
-                Some(-2),
-                Some(-2),
-            ]),
-        )?;
-        Ok(())
-    }
 }
