@@ -143,6 +143,18 @@ impl FunctionRegistry for TaskContext {
         self.scalar_functions.keys().cloned().collect()
     }
 
+    fn scalar_functions(&self) -> &HashMap<String, Arc<ScalarUDF>> {
+        &self.scalar_functions
+    }
+
+    fn aggregate_functions(&self) -> &HashMap<String, Arc<AggregateUDF>> {
+        &self.aggregate_functions
+    }
+
+    fn window_functions(&self) -> &HashMap<String, Arc<WindowUDF>> {
+        &self.window_functions
+    }
+
     fn udf(&self, name: &str) -> Result<Arc<ScalarUDF>> {
         let result = self.scalar_functions.get(name);
 

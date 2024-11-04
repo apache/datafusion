@@ -860,21 +860,6 @@ impl SessionState {
         self.catalog_list = catalog_list;
     }
 
-    /// Return reference to scalar_functions
-    pub fn scalar_functions(&self) -> &HashMap<String, Arc<ScalarUDF>> {
-        &self.scalar_functions
-    }
-
-    /// Return reference to aggregate_functions
-    pub fn aggregate_functions(&self) -> &HashMap<String, Arc<AggregateUDF>> {
-        &self.aggregate_functions
-    }
-
-    /// Return reference to window functions
-    pub fn window_functions(&self) -> &HashMap<String, Arc<WindowUDF>> {
-        &self.window_functions
-    }
-
     /// Return reference to table_functions
     pub fn table_functions(&self) -> &HashMap<String, Arc<TableFunction>> {
         &self.table_functions
@@ -1678,6 +1663,18 @@ impl<'a> ContextProvider for SessionContextProvider<'a> {
 impl FunctionRegistry for SessionState {
     fn udfs(&self) -> HashSet<String> {
         self.scalar_functions.keys().cloned().collect()
+    }
+
+    fn scalar_functions(&self) -> &HashMap<String, Arc<ScalarUDF>> {
+        &self.scalar_functions
+    }
+
+    fn aggregate_functions(&self) -> &HashMap<String, Arc<AggregateUDF>> {
+        &self.aggregate_functions
+    }
+
+    fn window_functions(&self) -> &HashMap<String, Arc<WindowUDF>> {
+        &self.window_functions
     }
 
     fn udf(&self, name: &str) -> datafusion_common::Result<Arc<ScalarUDF>> {

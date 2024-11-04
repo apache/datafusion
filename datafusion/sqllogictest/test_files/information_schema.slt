@@ -599,3 +599,6 @@ query TTTT
 SHOW CREATE TABLE abc;
 ----
 datafusion public abc CREATE EXTERNAL TABLE abc STORED AS CSV LOCATION ../../testing/data/csv/aggregate_test_100.csv
+
+statement ok
+SELECT * FROM information_schema.routines;

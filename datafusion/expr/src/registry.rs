@@ -27,8 +27,18 @@ use std::sync::Arc;
 
 /// A registry knows how to build logical expressions out of user-defined function' names
 pub trait FunctionRegistry {
+    #[deprecated(since = "42.2.0", note = "Use `scalar_functions` instead")]
     /// Set of all available udfs.
     fn udfs(&self) -> HashSet<String>;
+
+    /// Reference Map of all available scalar functions.
+    fn scalar_functions(&self) -> &HashMap<String, Arc<ScalarUDF>>;
+
+    /// Reference Map of all available aggregate functions.
+    fn aggregate_functions(&self) -> &HashMap<String, Arc<AggregateUDF>>;
+
+    /// Reference Map of all available window functions.
+    fn window_functions(&self) -> &HashMap<String, Arc<WindowUDF>>;
 
     /// Returns a reference to the user defined scalar function (udf) named
     /// `name`.
@@ -162,6 +172,19 @@ impl FunctionRegistry for MemoryFunctionRegistry {
     fn udfs(&self) -> HashSet<String> {
         self.udfs.keys().cloned().collect()
     }
+
+    fn scalar_functions(&self) -> &HashMap<String, Arc<ScalarUDF>> {
+        &self.udfs
+    }
+
+    fn aggregate_functions(&self) -> &HashMap<String, Arc<AggregateUDF>> {
+        &self.udafs
+    }
+
+    fn window_functions(&self) -> &HashMap<String, Arc<WindowUDF>> {
+        &self.udwfs
+    }
+
 
     fn udf(&self, name: &str) -> Result<Arc<ScalarUDF>> {
         self.udfs

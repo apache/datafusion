@@ -17,7 +17,7 @@
 
 //! [`SessionContext`] API for registering data sources and executing queries
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::sync::{Arc, Weak};
 
@@ -1494,6 +1494,18 @@ impl SessionContext {
 impl FunctionRegistry for SessionContext {
     fn udfs(&self) -> HashSet<String> {
         self.state.read().udfs()
+    }
+
+    fn scalar_functions(&self) -> &HashMap<String, Arc<ScalarUDF>> {
+        FunctionRegistry::scalar_functions(&self.state.read())
+    }
+
+    fn aggregate_functions(&self) -> &HashMap<String, Arc<AggregateUDF>> {
+        FunctionRegistry::aggregate_functions(&self.state.read())
+    }
+
+    fn window_functions(&self) -> &HashMap<String, Arc<WindowUDF>> {
+        FunctionRegistry::window_functions(&self.state.read())
     }
 
     fn udf(&self, name: &str) -> Result<Arc<ScalarUDF>> {

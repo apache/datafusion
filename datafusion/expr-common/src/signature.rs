@@ -243,6 +243,26 @@ impl TypeSignature {
             _ => false,
         }
     }
+
+    /// get all possible types for the given `TypeSignature`
+    pub fn get_possible_types(&self) -> Vec<Vec<DataType>> {
+        match self {
+            TypeSignature::Exact(types) => vec![types.clone()],
+            TypeSignature::OneOf(types) => types
+                .iter()
+                .flat_map(|type_sig| type_sig.get_possible_types())
+                .collect(),
+            TypeSignature::Uniform(_, _)
+            | TypeSignature::Coercible(_)
+            | TypeSignature::Any(_)
+            | TypeSignature::Variadic(_)
+            | TypeSignature::VariadicAny
+            | TypeSignature::UserDefined
+            | TypeSignature::ArraySignature(_)
+            | TypeSignature::Numeric(_)
+            | TypeSignature::String(_) => vec![],
+        }
+    }
 }
 
 /// Defines the supported argument types ([`TypeSignature`]) and [`Volatility`] for a function.
@@ -454,4 +474,40 @@ mod tests {
                 < TypeSignature::Exact(vec![DataType::Null])
         );
     }
+
+    #[test]
+    fn test_get_possible_types() {
+        let type_signature = TypeSignature::Exact(vec![DataType::Int32, DataType::Int64]);
+        let possible_types = type_signature.get_possible_types();
+        assert_eq!(possible_types, vec![vec![DataType::Int32, DataType::Int64]]);
+
+        let type_signature = TypeSignature::OneOf(vec![
+            TypeSignature::Exact(vec![DataType::Int32, DataType::Int64]),
+            TypeSignature::Exact(vec![DataType::Float32, DataType::Float64]),
+        ]);
+        let possible_types = type_signature.get_possible_types();
+        assert_eq!(
+            possible_types,
+            vec![
+                vec![DataType::Int32, DataType::Int64],
+                vec![DataType::Float32, DataType::Float64]
+            ]
+        );
+
+        let type_signature = TypeSignature::OneOf(vec![
+            TypeSignature::Exact(vec![DataType::Int32, DataType::Int64]),
+            TypeSignature::Exact(vec![DataType::Float32, DataType::Float64]),
+            TypeSignature::Exact(vec![DataType::Utf8]),
+        ]);
+        let possible_types = type_signature.get_possible_types();
+        assert_eq!(
+            possible_types,
+            vec![
+                vec![DataType::Int32, DataType::Int64],
+                vec![DataType::Float32, DataType::Float64],
+                vec![DataType::Utf8]
+            ]
+        );
+    }
+
 }
