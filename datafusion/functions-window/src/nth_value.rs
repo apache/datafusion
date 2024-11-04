@@ -201,15 +201,17 @@ impl WindowUDFImpl for NthValue {
             {
                 Some(Ok(n)) => {
                     if partition_evaluator_args.is_reversed() {
-                        Ok(-n)
+                        -n
                     } else {
-                        Ok(n)
+                        n
                     }
                 }
                 _ => {
-                    exec_err!("Expected an integer value")
+                    return exec_err!(
+                "Expected a signed integer literal for the second argument of nth_value"
+            )
                 }
-            }?;
+            };
 
         Ok(Box::new(NthValueEvaluator {
             state,
@@ -505,6 +507,33 @@ mod tests {
         let expr = Arc::new(Column::new("c3", 0)) as Arc<dyn PhysicalExpr>;
         let n_value =
             Arc::new(Literal::new(ScalarValue::Int32(Some(2)))) as Arc<dyn PhysicalExpr>;
+
+        test_i32_result(
+            NthValue::nth(),
+            PartitionEvaluatorArgs::new(
+                &[expr, n_value],
+                &[DataType::Int32],
+                false,
+                false,
+            ),
+            Int32Array::from(vec![
+                None,
+                Some(-2),
+                Some(-2),
+                Some(-2),
+                Some(-2),
+                Some(-2),
+                Some(-2),
+                Some(-2),
+            ]),
+        )?;
+        Ok(())
+    }
+
+    #[test]
+    fn nth_value_fail() -> Result<()> {
+        let expr = Arc::new(Column::new("c3", 0)) as Arc<dyn PhysicalExpr>;
+        let n_value = Arc::new(Column::new("c4", 0)) as Arc<dyn PhysicalExpr>;
 
         test_i32_result(
             NthValue::nth(),
