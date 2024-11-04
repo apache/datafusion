@@ -207,9 +207,8 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
 
     /// Scalarized intern
     ///
-    /// This is used only for `streaming aggregation`,
-    /// because it depends on the order between `input rows` and their corresponding
-    /// `group indices`.
+    /// This is used only for `streaming aggregation`, because `streaming aggregation`
+    /// depends on the order between `input rows` and their corresponding `group indices`.
     ///
     /// For example, assuming `input rows` in `cols` with 4 new rows
     /// (not equal to `exist rows` in `group_values`, and need to create
@@ -222,7 +221,7 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
     ///   row4
     /// ```
     ///
-    /// # In [`GroupValuesColumn`], their `group indices` will be
+    /// # In `scalarized_intern`, their `group indices` will be
     ///
     /// ```text
     ///   row1 --> 0
@@ -234,7 +233,7 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
     /// `Group indices` order agrees with their input order, and the `streaming aggregation`
     /// depends on this.
     ///
-    /// # However In [`VectorizedGroupValuesColumn`], their `group indices` will be
+    /// # However In `vectorized_intern`, their `group indices` will be
     ///
     /// ```text
     ///   row1 --> 2
@@ -376,12 +375,12 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
         //
         //   3. Perform `vectorized_equal_to` for `vectorized_equal_to_row_indices`
         //      and `vectorized_equal_to_group_indices`. If found some rows in input `cols`
-        //      not equal to `exist rows` in `group_values`, place them in `scalarized_indices`
-        //      and perform `scalarized_intern` for them similar as what in [`GroupValuesColumn`]
+        //      not equal to `exist rows` in `group_values`, place them in `remaining_row_indices`
+        //      and perform `scalarized_intern_remaining` for them similar as `scalarized_intern`
         //      after.
         //
-        //   4. Perform `scalarized_intern` for rows mentioned above, when we process like this
-        //      can see the comments of `scalarized_intern`.
+        //   4. Perform `scalarized_intern_remaining` for rows mentioned above, about in what situation
+        //      we will process this can see the comments of `scalarized_intern_remaining`.
         //
 
         // 1. Collect vectorized context by checking hash values of `cols` in `map`
@@ -394,7 +393,7 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
         self.vectorized_equal_to(cols, groups);
 
         // 4. Perform scalarized inter for remaining rows
-        // (about remaining rows, can see comments for `remaining_rows`)
+        // (about remaining rows, can see comments for `remaining_row_indices`)
         self.scalarized_intern_remaining(cols, &batch_hashes, groups);
 
         self.hashes_buffer = batch_hashes;
@@ -1020,7 +1019,7 @@ impl<const STREAMING: bool> GroupValues for GroupValuesColumn<STREAMING> {
         self.hashes_buffer.clear();
         self.hashes_buffer.shrink_to(count);
 
-        // Such structure is only used in `non-streaming` case
+        // Such structures are only used in `non-streaming` case
         if !STREAMING {
             self.group_index_lists.clear();
             self.emit_group_index_list_buffer.clear();
