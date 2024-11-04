@@ -693,6 +693,15 @@ impl SessionContext {
                 input,
                 data_types,
             }) => {
+                // The number of parameters must match the specified data types length.
+                let param_names = input.get_parameter_names()?;
+                if param_names.len() != data_types.len() {
+                    return plan_err!(
+                        "Prepare specifies {} data types but query has {} parameters",
+                        data_types.len(),
+                        param_names.len()
+                    );
+                }
                 self.state.write().store_prepared(name, data_types, input)?;
                 self.return_empty_dataframe()
             }
@@ -1102,7 +1111,7 @@ impl SessionContext {
             name, parameters, ..
         } = execute;
         let prepared = self.state.read().get_prepared(&name).ok_or_else(|| {
-            exec_datafusion_err!("Prepared statement '{}' not exists", name)
+            exec_datafusion_err!("Prepared statement '{}' does not exist", name)
         })?;
 
         // Only allow literals as parameters for now.

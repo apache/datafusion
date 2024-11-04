@@ -924,7 +924,7 @@ impl SessionState {
                 Ok(())
             }
             Entry::Occupied(e) => {
-                exec_err!("Prepared statement with name '{}' already exists", e.key())
+                exec_err!("Prepared statement '{}' already exists", e.key())
             }
         }
     }

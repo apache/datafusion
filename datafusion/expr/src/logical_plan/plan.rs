@@ -1437,6 +1437,22 @@ impl LogicalPlan {
         .map(|res| res.data)
     }
 
+    /// Walk the logical plan, find any `Placeholder` tokens, and return a set of their names.
+    pub fn get_parameter_names(&self) -> Result<HashSet<String>> {
+        let mut param_names = HashSet::new();
+        self.apply_with_subqueries(|plan| {
+            plan.apply_expressions(|expr| {
+                expr.apply(|expr| {
+                    if let Expr::Placeholder(Placeholder { id, .. }) = expr {
+                        param_names.insert(id.clone());
+                    }
+                    Ok(TreeNodeRecursion::Continue)
+                })
+            })
+        })
+        .map(|_| param_names)
+    }
+
     /// Walk the logical plan, find any `Placeholder` tokens, and return a map of their IDs and DataTypes
     pub fn get_parameter_types(
         &self,
