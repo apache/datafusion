@@ -719,10 +719,16 @@ impl ListingTable {
             builder.push(Field::new(part_col_name, part_col_type.clone(), false));
         }
 
+        let table_schema = Arc::new(
+            builder
+                .finish()
+                .with_metadata(file_schema.metadata().clone()),
+        );
+
         let table = Self {
             table_paths: config.table_paths,
             file_schema,
-            table_schema: Arc::new(builder.finish()),
+            table_schema,
             options,
             definition: None,
             collected_statistics: Arc::new(DefaultFileStatisticsCache::default()),
@@ -1277,13 +1283,16 @@ mod tests {
             // ok with one column
             (
                 vec![vec![col("string_col").sort(true, false)]],
-                Ok(vec![vec![PhysicalSortExpr {
-                    expr: physical_col("string_col", &schema).unwrap(),
-                    options: SortOptions {
-                        descending: false,
-                        nulls_first: false,
-                    },
-                }]])
+                Ok(vec![LexOrdering {
+                        inner: vec![PhysicalSortExpr {
+                            expr: physical_col("string_col", &schema).unwrap(),
+                            options: SortOptions {
+                                descending: false,
+                                nulls_first: false,
+                            },
+                        }],
+                    }
+                ])
             ),
             // ok with two columns, different options
             (
@@ -1291,15 +1300,17 @@ mod tests {
                     col("string_col").sort(true, false),
                     col("int_col").sort(false, true),
                 ]],
-                Ok(vec![vec![
-                    PhysicalSortExpr::new_default(physical_col("string_col", &schema).unwrap())
-                    .asc()
-                    .nulls_last(),
-
-                    PhysicalSortExpr::new_default(physical_col("int_col", &schema).unwrap())
-                    .desc()
-                    .nulls_first()
-                ]])
+                Ok(vec![LexOrdering {
+                        inner: vec![
+                            PhysicalSortExpr::new_default(physical_col("string_col", &schema).unwrap())
+                                        .asc()
+                                        .nulls_last(),
+                            PhysicalSortExpr::new_default(physical_col("int_col", &schema).unwrap())
+                                        .desc()
+                                        .nulls_first()
+                        ],
+                    }
+                ])
             ),
         ];
 

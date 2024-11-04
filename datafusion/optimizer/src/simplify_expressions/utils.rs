@@ -67,14 +67,19 @@ pub static POWS_OF_TEN: [i128; 38] = [
 
 /// returns true if `needle` is found in a chain of search_op
 /// expressions. Such as: (A AND B) AND C
-pub fn expr_contains(expr: &Expr, needle: &Expr, search_op: Operator) -> bool {
+fn expr_contains_inner(expr: &Expr, needle: &Expr, search_op: Operator) -> bool {
     match expr {
         Expr::BinaryExpr(BinaryExpr { left, op, right }) if *op == search_op => {
-            expr_contains(left, needle, search_op)
-                || expr_contains(right, needle, search_op)
+            expr_contains_inner(left, needle, search_op)
+                || expr_contains_inner(right, needle, search_op)
         }
         _ => expr == needle,
     }
+}
+
+/// check volatile calls and return if expr contains needle
+pub fn expr_contains(expr: &Expr, needle: &Expr, search_op: Operator) -> bool {
+    expr_contains_inner(expr, needle, search_op) && !needle.is_volatile()
 }
 
 /// Deletes all 'needles' or remains one 'needle' that are found in a chain of xor
@@ -206,7 +211,7 @@ pub fn is_false(expr: &Expr) -> bool {
 
 /// returns true if `haystack` looks like (needle OP X) or (X OP needle)
 pub fn is_op_with(target_op: Operator, haystack: &Expr, needle: &Expr) -> bool {
-    matches!(haystack, Expr::BinaryExpr(BinaryExpr { left, op, right }) if op == &target_op && (needle == left.as_ref() || needle == right.as_ref()))
+    matches!(haystack, Expr::BinaryExpr(BinaryExpr { left, op, right }) if op == &target_op && (needle == left.as_ref() || needle == right.as_ref()) && !needle.is_volatile())
 }
 
 /// returns true if `not_expr` is !`expr` (not)

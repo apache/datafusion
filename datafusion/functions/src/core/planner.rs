@@ -49,7 +49,7 @@ impl ExprPlanner for CoreFunctionPlanner {
         Ok(PlannerResult::Planned(Expr::ScalarFunction(
             ScalarFunction::new_udf(
                 if is_named_struct {
-                    crate::core::named_struct()
+                    named_struct()
                 } else {
                     crate::core::r#struct()
                 },

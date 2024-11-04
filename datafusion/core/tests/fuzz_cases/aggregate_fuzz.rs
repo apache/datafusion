@@ -39,14 +39,14 @@ use datafusion_physical_expr::PhysicalSortExpr;
 use datafusion_physical_plan::InputOrderMode;
 use test_utils::{add_empty_batches, StringBatchGenerator};
 
+use crate::fuzz_cases::aggregation_fuzzer::{
+    AggregationFuzzerBuilder, ColumnDescr, DatasetGeneratorConfig, QueryBuilder,
+};
+use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use hashbrown::HashMap;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use tokio::task::JoinSet;
-
-use crate::fuzz_cases::aggregation_fuzzer::{
-    AggregationFuzzerBuilder, ColumnDescr, DatasetGeneratorConfig, QueryBuilder,
-};
 
 // ========================================================================
 //  The new aggregation fuzz tests based on [`AggregationFuzzer`]
@@ -65,10 +65,6 @@ use crate::fuzz_cases::aggregation_fuzzer::{
 //
 // TODO: test other aggregate functions
 // - AVG (unstable given the wide range of inputs)
-//
-// TODO: specific test for ordering (ensure all group by columns are ordered)
-//  Currently the data is sorted by random columns, so there are almost no
-//  repeated runs. To improve coverage we should also sort by lower cardinality columns
 #[tokio::test(flavor = "multi_thread")]
 async fn test_min() {
     let data_gen_config = baseline_config();
@@ -79,7 +75,7 @@ async fn test_min() {
         .with_aggregate_function("min")
         // min works on all column types
         .with_aggregate_arguments(data_gen_config.all_columns())
-        .with_group_by_columns(data_gen_config.all_columns());
+        .set_group_by_columns(data_gen_config.all_columns());
 
     AggregationFuzzerBuilder::from(data_gen_config)
         .add_query_builder(query_builder)
@@ -98,7 +94,7 @@ async fn test_max() {
         .with_aggregate_function("max")
         // max works on all column types
         .with_aggregate_arguments(data_gen_config.all_columns())
-        .with_group_by_columns(data_gen_config.all_columns());
+        .set_group_by_columns(data_gen_config.all_columns());
 
     AggregationFuzzerBuilder::from(data_gen_config)
         .add_query_builder(query_builder)
@@ -118,7 +114,7 @@ async fn test_sum() {
         .with_distinct_aggregate_function("sum")
         // sum only works on numeric columns
         .with_aggregate_arguments(data_gen_config.numeric_columns())
-        .with_group_by_columns(data_gen_config.all_columns());
+        .set_group_by_columns(data_gen_config.all_columns());
 
     AggregationFuzzerBuilder::from(data_gen_config)
         .add_query_builder(query_builder)
@@ -138,7 +134,7 @@ async fn test_count() {
         .with_distinct_aggregate_function("count")
         // count work for all arguments
         .with_aggregate_arguments(data_gen_config.all_columns())
-        .with_group_by_columns(data_gen_config.all_columns());
+        .set_group_by_columns(data_gen_config.all_columns());
 
     AggregationFuzzerBuilder::from(data_gen_config)
         .add_query_builder(query_builder)
@@ -164,6 +160,8 @@ fn baseline_config() -> DatasetGeneratorConfig {
         ColumnDescr::new("u16", DataType::UInt16),
         ColumnDescr::new("u32", DataType::UInt32),
         ColumnDescr::new("u64", DataType::UInt64),
+        ColumnDescr::new("date32", DataType::Date32),
+        ColumnDescr::new("date64", DataType::Date64),
         // TODO: date/time columns
         // todo decimal columns
         // begin string columns
@@ -172,15 +170,21 @@ fn baseline_config() -> DatasetGeneratorConfig {
         // TODO add support for utf8view in data generator
         // ColumnDescr::new("utf8view", DataType::Utf8View),
         // todo binary
+        // low cardinality columns
+        ColumnDescr::new("u8_low", DataType::UInt8).with_max_num_distinct(10),
+        ColumnDescr::new("utf8_low", DataType::Utf8).with_max_num_distinct(10),
     ];
+
+    let min_num_rows = 512;
+    let max_num_rows = 1024;
 
     DatasetGeneratorConfig {
         columns,
-        rows_num_range: (512, 1024),
+        rows_num_range: (min_num_rows, max_num_rows),
         sort_keys_set: vec![
             // low cardinality to try and get many repeated runs
-            vec![String::from("u8")],
-            vec![String::from("utf8"), String::from("u8")],
+            vec![String::from("u8_low")],
+            vec![String::from("utf8_low"), String::from("u8_low")],
         ],
     }
 }
@@ -230,7 +234,7 @@ async fn run_aggregate_test(input1: Vec<RecordBatch>, group_by_columns: Vec<&str
     let schema = input1[0].schema();
     let session_config = SessionConfig::new().with_batch_size(50);
     let ctx = SessionContext::new_with_config(session_config);
-    let mut sort_keys = vec![];
+    let mut sort_keys = LexOrdering::default();
     for ordering_col in ["a", "b", "c"] {
         sort_keys.push(PhysicalSortExpr {
             expr: col(ordering_col, &schema).unwrap(),

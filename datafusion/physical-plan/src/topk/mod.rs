@@ -21,8 +21,10 @@ use arrow::{
     compute::interleave,
     row::{RowConverter, Rows, SortField},
 };
+use std::mem::size_of;
 use std::{cmp::Ordering, collections::BinaryHeap, sync::Arc};
 
+use crate::{stream::RecordBatchStreamAdapter, SendableRecordBatchStream};
 use arrow_array::{Array, ArrayRef, RecordBatch};
 use arrow_schema::SchemaRef;
 use datafusion_common::Result;
@@ -31,9 +33,8 @@ use datafusion_execution::{
     runtime_env::RuntimeEnv,
 };
 use datafusion_physical_expr::PhysicalSortExpr;
+use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use hashbrown::HashMap;
-
-use crate::{stream::RecordBatchStreamAdapter, SendableRecordBatchStream};
 
 use super::metrics::{BaselineMetrics, Count, ExecutionPlanMetricsSet, MetricBuilder};
 
@@ -100,7 +101,7 @@ impl TopK {
     pub fn try_new(
         partition_id: usize,
         schema: SchemaRef,
-        expr: Vec<PhysicalSortExpr>,
+        expr: LexOrdering,
         k: usize,
         batch_size: usize,
         runtime: Arc<RuntimeEnv>,
@@ -110,7 +111,7 @@ impl TopK {
         let reservation = MemoryConsumer::new(format!("TopK[{partition_id}]"))
             .register(&runtime.memory_pool);
 
-        let expr: Arc<[PhysicalSortExpr]> = expr.into();
+        let expr: Arc<[PhysicalSortExpr]> = expr.inner.into();
 
         let sort_fields: Vec<_> = expr
             .iter()
@@ -225,7 +226,7 @@ impl TopK {
 
     /// return the size of memory used by this operator, in bytes
     fn size(&self) -> usize {
-        std::mem::size_of::<Self>()
+        size_of::<Self>()
             + self.row_converter.size()
             + self.scratch_rows.size()
             + self.heap.size()
@@ -444,8 +445,8 @@ impl TopKHeap {
 
     /// return the size of memory used by this heap, in bytes
     fn size(&self) -> usize {
-        std::mem::size_of::<Self>()
-            + (self.inner.capacity() * std::mem::size_of::<TopKRow>())
+        size_of::<Self>()
+            + (self.inner.capacity() * size_of::<TopKRow>())
             + self.store.size()
             + self.owned_bytes
     }
@@ -636,9 +637,8 @@ impl RecordBatchStore {
     /// returns the size of memory used by this store, including all
     /// referenced `RecordBatch`es, in bytes
     pub fn size(&self) -> usize {
-        std::mem::size_of::<Self>()
-            + self.batches.capacity()
-                * (std::mem::size_of::<u32>() + std::mem::size_of::<RecordBatchEntry>())
+        size_of::<Self>()
+            + self.batches.capacity() * (size_of::<u32>() + size_of::<RecordBatchEntry>())
             + self.batches_size
     }
 }

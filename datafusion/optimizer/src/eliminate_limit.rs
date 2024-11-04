@@ -20,7 +20,7 @@ use crate::optimizer::ApplyOrder;
 use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::tree_node::Transformed;
 use datafusion_common::Result;
-use datafusion_expr::logical_plan::{EmptyRelation, LogicalPlan};
+use datafusion_expr::logical_plan::{EmptyRelation, FetchType, LogicalPlan, SkipType};
 use std::sync::Arc;
 
 /// Optimizer rule to replace `LIMIT 0` or `LIMIT` whose ancestor LIMIT's skip is
@@ -57,14 +57,16 @@ impl OptimizerRule for EliminateLimit {
         &self,
         plan: LogicalPlan,
         _config: &dyn OptimizerConfig,
-    ) -> Result<
-        datafusion_common::tree_node::Transformed<LogicalPlan>,
-        datafusion_common::DataFusionError,
-    > {
+    ) -> Result<Transformed<LogicalPlan>, datafusion_common::DataFusionError> {
         match plan {
             LogicalPlan::Limit(limit) => {
-                if let Some(fetch) = limit.fetch {
-                    if fetch == 0 {
+                // Only supports rewriting for literal fetch
+                let FetchType::Literal(fetch) = limit.get_fetch_type()? else {
+                    return Ok(Transformed::no(LogicalPlan::Limit(limit)));
+                };
+
+                if let Some(v) = fetch {
+                    if v == 0 {
                         return Ok(Transformed::yes(LogicalPlan::EmptyRelation(
                             EmptyRelation {
                                 produce_one_row: false,
@@ -72,11 +74,10 @@ impl OptimizerRule for EliminateLimit {
                             },
                         )));
                     }
-                } else if limit.skip == 0 {
-                    // input also can be Limit, so we should apply again.
-                    return Ok(self
-                        .rewrite(Arc::unwrap_or_clone(limit.input), _config)
-                        .unwrap());
+                } else if matches!(limit.get_skip_type()?, SkipType::Literal(0)) {
+                    // If fetch is `None` and skip is 0, then Limit takes no effect and
+                    // we can remove it. Its input also can be Limit, so we should apply again.
+                    return self.rewrite(Arc::unwrap_or_clone(limit.input), _config);
                 }
                 Ok(Transformed::no(LogicalPlan::Limit(limit)))
             }

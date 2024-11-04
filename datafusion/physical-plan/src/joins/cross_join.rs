@@ -49,8 +49,13 @@ use futures::{ready, Stream, StreamExt, TryStreamExt};
 /// Data of the left side
 type JoinLeftData = (RecordBatch, MemoryReservation);
 
+#[allow(rustdoc::private_intra_doc_links)]
 /// executes partitions in parallel and combines them into a set of
 /// partitions by combining all values from the left with all values on the right
+///
+/// Note that the `Clone` trait is not implemented for this struct due to the
+/// `left_fut` [`OnceAsync`], which is used to coordinate the loading of the
+/// left side with the processing in each output stream.
 #[derive(Debug)]
 pub struct CrossJoinExec {
     /// left (build) side which gets loaded in memory
@@ -418,7 +423,7 @@ impl<T: BatchTransformer + Unpin + Send> Stream for CrossJoinStream<T> {
     fn poll_next(
         mut self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Option<Self::Item>> {
+    ) -> Poll<Option<Self::Item>> {
         self.poll_next_impl(cx)
     }
 }
@@ -429,7 +434,7 @@ impl<T: BatchTransformer> CrossJoinStream<T> {
     fn poll_next_impl(
         &mut self,
         cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Option<Result<RecordBatch>>> {
+    ) -> Poll<Option<Result<RecordBatch>>> {
         loop {
             return match self.state {
                 CrossJoinStreamState::WaitBuildSide => {

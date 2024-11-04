@@ -759,6 +759,7 @@ impl From<JoinSide> for protobuf::JoinSide {
         match t {
             JoinSide::Left => protobuf::JoinSide::LeftSide,
             JoinSide::Right => protobuf::JoinSide::RightSide,
+            JoinSide::None => protobuf::JoinSide::None,
         }
     }
 }
@@ -831,6 +832,7 @@ impl TryFrom<&ParquetOptions> for protobuf::ParquetOptions {
             maximum_parallel_row_group_writers: value.maximum_parallel_row_group_writers as u64,
             maximum_buffered_record_batches_per_stream: value.maximum_buffered_record_batches_per_stream as u64,
             schema_force_view_types: value.schema_force_view_types,
+            binary_as_string: value.binary_as_string,
         })
     }
 }

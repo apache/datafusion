@@ -20,10 +20,10 @@ use std::collections::HashMap;
 use std::fmt;
 
 use crate::{
-    expr_vec_fmt, Aggregate, DescribeTable, Distinct, DistinctOn, DmlStatement, Expr,
-    Filter, Join, Limit, LogicalPlan, Partitioning, Prepare, Projection, RecursiveQuery,
-    Repartition, Sort, Subquery, SubqueryAlias, TableProviderFilterPushDown, TableScan,
-    Unnest, Values, Window,
+    expr_vec_fmt, Aggregate, DescribeTable, Distinct, DistinctOn, DmlStatement, Execute,
+    Expr, Filter, Join, Limit, LogicalPlan, Partitioning, Prepare, Projection,
+    RecursiveQuery, Repartition, Sort, Subquery, SubqueryAlias,
+    TableProviderFilterPushDown, TableScan, Unnest, Values, Window,
 };
 
 use crate::dml::CopyTo;
@@ -504,11 +504,6 @@ impl<'a, 'b> PgJsonVisitor<'a, 'b> {
                     "Filter": format!("{}", filter_expr)
                 })
             }
-            LogicalPlan::CrossJoin(_) => {
-                json!({
-                    "Node Type": "Cross Join"
-                })
-            }
             LogicalPlan::Repartition(Repartition {
                 partitioning_scheme,
                 ..
@@ -549,11 +544,13 @@ impl<'a, 'b> PgJsonVisitor<'a, 'b> {
                 let mut object = serde_json::json!(
                     {
                         "Node Type": "Limit",
-                        "Skip": skip,
                     }
                 );
+                if let Some(s) = skip {
+                    object["Skip"] = s.to_string().into()
+                };
                 if let Some(f) = fetch {
-                    object["Fetch"] = serde_json::Value::Number((*f).into());
+                    object["Fetch"] = f.to_string().into()
                 };
                 object
             }
@@ -627,6 +624,15 @@ impl<'a, 'b> PgJsonVisitor<'a, 'b> {
                     "Node Type": "Prepare",
                     "Name": name,
                     "Data Types": format!("{:?}", data_types)
+                })
+            }
+            LogicalPlan::Execute(Execute {
+                name, parameters, ..
+            }) => {
+                json!({
+                    "Node Type": "Execute",
+                    "Name": name,
+                    "Parameters": expr_vec_fmt!(parameters),
                 })
             }
             LogicalPlan::DescribeTable(DescribeTable { .. }) => {

@@ -54,34 +54,34 @@ impl ToCharFunc {
                 vec![
                     Exact(vec![Date32, Utf8]),
                     Exact(vec![Date64, Utf8]),
+                    Exact(vec![Time64(Nanosecond), Utf8]),
+                    Exact(vec![Time64(Microsecond), Utf8]),
                     Exact(vec![Time32(Millisecond), Utf8]),
                     Exact(vec![Time32(Second), Utf8]),
-                    Exact(vec![Time64(Microsecond), Utf8]),
-                    Exact(vec![Time64(Nanosecond), Utf8]),
-                    Exact(vec![Timestamp(Second, None), Utf8]),
-                    Exact(vec![
-                        Timestamp(Second, Some(TIMEZONE_WILDCARD.into())),
-                        Utf8,
-                    ]),
-                    Exact(vec![Timestamp(Millisecond, None), Utf8]),
-                    Exact(vec![
-                        Timestamp(Millisecond, Some(TIMEZONE_WILDCARD.into())),
-                        Utf8,
-                    ]),
-                    Exact(vec![Timestamp(Microsecond, None), Utf8]),
-                    Exact(vec![
-                        Timestamp(Microsecond, Some(TIMEZONE_WILDCARD.into())),
-                        Utf8,
-                    ]),
-                    Exact(vec![Timestamp(Nanosecond, None), Utf8]),
                     Exact(vec![
                         Timestamp(Nanosecond, Some(TIMEZONE_WILDCARD.into())),
                         Utf8,
                     ]),
-                    Exact(vec![Duration(Second), Utf8]),
-                    Exact(vec![Duration(Millisecond), Utf8]),
-                    Exact(vec![Duration(Microsecond), Utf8]),
+                    Exact(vec![Timestamp(Nanosecond, None), Utf8]),
+                    Exact(vec![
+                        Timestamp(Microsecond, Some(TIMEZONE_WILDCARD.into())),
+                        Utf8,
+                    ]),
+                    Exact(vec![Timestamp(Microsecond, None), Utf8]),
+                    Exact(vec![
+                        Timestamp(Millisecond, Some(TIMEZONE_WILDCARD.into())),
+                        Utf8,
+                    ]),
+                    Exact(vec![Timestamp(Millisecond, None), Utf8]),
+                    Exact(vec![
+                        Timestamp(Second, Some(TIMEZONE_WILDCARD.into())),
+                        Utf8,
+                    ]),
+                    Exact(vec![Timestamp(Second, None), Utf8]),
                     Exact(vec![Duration(Nanosecond), Utf8]),
+                    Exact(vec![Duration(Microsecond), Utf8]),
+                    Exact(vec![Duration(Millisecond), Utf8]),
+                    Exact(vec![Duration(Second), Utf8]),
                 ],
                 Volatility::Immutable,
             ),
@@ -222,10 +222,7 @@ fn _to_char_scalar(
         if is_scalar_expression {
             return Ok(ColumnarValue::Scalar(ScalarValue::Utf8(None)));
         } else {
-            return Ok(ColumnarValue::Array(new_null_array(
-                &DataType::Utf8,
-                array.len(),
-            )));
+            return Ok(ColumnarValue::Array(new_null_array(&Utf8, array.len())));
         }
     }
 

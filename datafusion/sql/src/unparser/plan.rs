@@ -26,8 +26,9 @@ use super::{
         subquery_alias_inner_query_and_columns, TableAliasRewriter,
     },
     utils::{
-        find_agg_node_within_select, find_window_nodes_within_select,
-        unproject_sort_expr, unproject_window_exprs,
+        find_agg_node_within_select, find_unnest_node_within_select,
+        find_window_nodes_within_select, try_transform_to_simple_table_scan_with_filters,
+        unproject_sort_expr, unproject_unnest_expr, unproject_window_exprs,
     },
     Unparser,
 };
@@ -38,8 +39,8 @@ use datafusion_common::{
     Column, DataFusionError, Result, TableReference,
 };
 use datafusion_expr::{
-    expr::Alias, Distinct, Expr, JoinConstraint, JoinType, LogicalPlan,
-    LogicalPlanBuilder, Projection, SortExpr, TableScan,
+    expr::Alias, BinaryExpr, Distinct, Expr, JoinConstraint, JoinType, LogicalPlan,
+    LogicalPlanBuilder, Operator, Projection, SortExpr, TableScan,
 };
 use sqlparser::ast::{self, Ident, SetExpr};
 use std::sync::Arc;
@@ -96,7 +97,6 @@ impl Unparser<'_> {
             | LogicalPlan::Aggregate(_)
             | LogicalPlan::Sort(_)
             | LogicalPlan::Join(_)
-            | LogicalPlan::CrossJoin(_)
             | LogicalPlan::Repartition(_)
             | LogicalPlan::Union(_)
             | LogicalPlan::TableScan(_)
@@ -112,6 +112,7 @@ impl Unparser<'_> {
             | LogicalPlan::Analyze(_)
             | LogicalPlan::Extension(_)
             | LogicalPlan::Prepare(_)
+            | LogicalPlan::Execute(_)
             | LogicalPlan::Ddl(_)
             | LogicalPlan::Copy(_)
             | LogicalPlan::DescribeTable(_)
@@ -174,15 +175,24 @@ impl Unparser<'_> {
         p: &Projection,
         select: &mut SelectBuilder,
     ) -> Result<()> {
+        let mut exprs = p.expr.clone();
+
+        // If an Unnest node is found within the select, find and unproject the unnest column
+        if let Some(unnest) = find_unnest_node_within_select(plan) {
+            exprs = exprs
+                .into_iter()
+                .map(|e| unproject_unnest_expr(e, unnest))
+                .collect::<Result<Vec<_>>>()?;
+        };
+
         match (
             find_agg_node_within_select(plan, true),
             find_window_nodes_within_select(plan, None, true),
         ) {
             (Some(agg), window) => {
                 let window_option = window.as_deref();
-                let items = p
-                    .expr
-                    .iter()
+                let items = exprs
+                    .into_iter()
                     .map(|proj_expr| {
                         let unproj = unproject_agg_exprs(proj_expr, agg, window_option)?;
                         self.select_item_to_sql(&unproj)
@@ -199,9 +209,8 @@ impl Unparser<'_> {
                 ));
             }
             (None, Some(window)) => {
-                let items = p
-                    .expr
-                    .iter()
+                let items = exprs
+                    .into_iter()
                     .map(|proj_expr| {
                         let unproj = unproject_window_exprs(proj_expr, &window)?;
                         self.select_item_to_sql(&unproj)
@@ -211,8 +220,7 @@ impl Unparser<'_> {
                 select.projection(items);
             }
             _ => {
-                let items = p
-                    .expr
+                let items = exprs
                     .iter()
                     .map(|e| self.select_item_to_sql(e))
                     .collect::<Result<Vec<_>>>()?;
@@ -319,7 +327,8 @@ impl Unparser<'_> {
                 if let Some(agg) =
                     find_agg_node_within_select(plan, select.already_projected())
                 {
-                    let unprojected = unproject_agg_exprs(&filter.predicate, agg, None)?;
+                    let unprojected =
+                        unproject_agg_exprs(filter.predicate.clone(), agg, None)?;
                     let filter_expr = self.expr_to_sql(&unprojected)?;
                     select.having(Some(filter_expr));
                 } else {
@@ -343,20 +352,16 @@ impl Unparser<'_> {
                         relation,
                     );
                 }
-
-                if let Some(fetch) = limit.fetch {
+                if let Some(fetch) = &limit.fetch {
                     let Some(query) = query.as_mut() else {
                         return internal_err!(
                             "Limit operator only valid in a statement context."
                         );
                     };
-                    query.limit(Some(ast::Expr::Value(ast::Value::Number(
-                        fetch.to_string(),
-                        false,
-                    ))));
+                    query.limit(Some(self.expr_to_sql(fetch)?));
                 }
 
-                if limit.skip > 0 {
+                if let Some(skip) = &limit.skip {
                     let Some(query) = query.as_mut() else {
                         return internal_err!(
                             "Offset operator only valid in a statement context."
@@ -364,10 +369,7 @@ impl Unparser<'_> {
                     };
                     query.offset(Some(ast::Offset {
                         rows: ast::OffsetRows::None,
-                        value: ast::Expr::Value(ast::Value::Number(
-                            limit.skip.to_string(),
-                            false,
-                        )),
+                        value: self.expr_to_sql(skip)?,
                     }));
                 }
 
@@ -467,22 +469,77 @@ impl Unparser<'_> {
                 self.select_to_sql_recursively(input, query, select, relation)
             }
             LogicalPlan::Join(join) => {
-                let join_constraint = self.join_constraint_to_sql(
-                    join.join_constraint,
-                    &join.on,
-                    join.filter.as_ref(),
-                )?;
+                let mut table_scan_filters = vec![];
 
-                let mut right_relation = RelationBuilder::default();
+                let left_plan =
+                    match try_transform_to_simple_table_scan_with_filters(&join.left)? {
+                        Some((plan, filters)) => {
+                            table_scan_filters.extend(filters);
+                            Arc::new(plan)
+                        }
+                        None => Arc::clone(&join.left),
+                    };
 
                 self.select_to_sql_recursively(
-                    join.left.as_ref(),
+                    left_plan.as_ref(),
                     query,
                     select,
                     relation,
                 )?;
+
+                let right_plan =
+                    match try_transform_to_simple_table_scan_with_filters(&join.right)? {
+                        Some((plan, filters)) => {
+                            table_scan_filters.extend(filters);
+                            Arc::new(plan)
+                        }
+                        None => Arc::clone(&join.right),
+                    };
+
+                let mut right_relation = RelationBuilder::default();
+
                 self.select_to_sql_recursively(
-                    join.right.as_ref(),
+                    right_plan.as_ref(),
+                    query,
+                    select,
+                    &mut right_relation,
+                )?;
+
+                let join_filters = if table_scan_filters.is_empty() {
+                    join.filter.clone()
+                } else {
+                    // Combine `table_scan_filters` into a single filter using `AND`
+                    let Some(combined_filters) =
+                        table_scan_filters.into_iter().reduce(|acc, filter| {
+                            Expr::BinaryExpr(BinaryExpr {
+                                left: Box::new(acc),
+                                op: Operator::And,
+                                right: Box::new(filter),
+                            })
+                        })
+                    else {
+                        return internal_err!("Failed to combine TableScan filters");
+                    };
+
+                    // Combine `join.filter` with `combined_filters` using `AND`
+                    match &join.filter {
+                        Some(filter) => Some(Expr::BinaryExpr(BinaryExpr {
+                            left: Box::new(filter.clone()),
+                            op: Operator::And,
+                            right: Box::new(combined_filters),
+                        })),
+                        None => Some(combined_filters),
+                    }
+                };
+
+                let join_constraint = self.join_constraint_to_sql(
+                    join.join_constraint,
+                    &join.on,
+                    join_filters.as_ref(),
+                )?;
+
+                self.select_to_sql_recursively(
+                    right_plan.as_ref(),
                     query,
                     select,
                     &mut right_relation,
@@ -496,44 +553,7 @@ impl Unparser<'_> {
                     relation,
                     global: false,
                     join_operator: self
-                        .join_operator_to_sql(join.join_type, join_constraint),
-                };
-                let mut from = select.pop_from().unwrap();
-                from.push_join(ast_join);
-                select.push_from(from);
-
-                Ok(())
-            }
-            LogicalPlan::CrossJoin(cross_join) => {
-                // Cross joins are the same as unconditional inner joins
-                let mut right_relation = RelationBuilder::default();
-
-                self.select_to_sql_recursively(
-                    cross_join.left.as_ref(),
-                    query,
-                    select,
-                    relation,
-                )?;
-                self.select_to_sql_recursively(
-                    cross_join.right.as_ref(),
-                    query,
-                    select,
-                    &mut right_relation,
-                )?;
-
-                let Ok(Some(relation)) = right_relation.build() else {
-                    return internal_err!("Failed to build right relation");
-                };
-
-                let ast_join = ast::Join {
-                    relation,
-                    global: false,
-                    join_operator: self.join_operator_to_sql(
-                        JoinType::Inner,
-                        ast::JoinConstraint::On(ast::Expr::Value(ast::Value::Boolean(
-                            true,
-                        ))),
-                    ),
+                        .join_operator_to_sql(join.join_type, join_constraint)?,
                 };
                 let mut from = select.pop_from().unwrap();
                 from.push_join(ast_join);
@@ -641,6 +661,28 @@ impl Unparser<'_> {
                 Ok(())
             }
             LogicalPlan::Extension(_) => not_impl_err!("Unsupported operator: {plan:?}"),
+            LogicalPlan::Unnest(unnest) => {
+                if !unnest.struct_type_columns.is_empty() {
+                    return internal_err!(
+                        "Struct type columns are not currently supported in UNNEST: {:?}",
+                        unnest.struct_type_columns
+                    );
+                }
+
+                // In the case of UNNEST, the Unnest node is followed by a duplicate Projection node that we should skip.
+                // Otherwise, there will be a duplicate SELECT clause.
+                // | Projection: table.col1, UNNEST(table.col2)
+                // |   Unnest: UNNEST(table.col2)
+                // |     Projection: table.col1, table.col2 AS UNNEST(table.col2)
+                // |       Filter: table.col3 = Int64(3)
+                // |         TableScan: table projection=None
+                if let LogicalPlan::Projection(p) = unnest.input.as_ref() {
+                    // continue with projection input
+                    self.select_to_sql_recursively(&p.input, query, select, relation)
+                } else {
+                    internal_err!("Unnest input is not a Projection: {unnest:?}")
+                }
+            }
             _ => not_impl_err!("Unsupported operator: {plan:?}"),
         }
     }
@@ -677,10 +719,10 @@ impl Unparser<'_> {
                 //
                 // Example:
                 //   select t1.c1 from t1 where t1.c1 > 1 -> select a.c1 from t1 as a where a.c1 > 1
-                if alias.is_some()
-                    && (table_scan.projection.is_some() || !table_scan.filters.is_empty())
-                {
-                    builder = builder.alias(alias.clone().unwrap())?;
+                if let Some(ref alias) = alias {
+                    if table_scan.projection.is_some() || !table_scan.filters.is_empty() {
+                        builder = builder.alias(alias.clone())?;
+                    }
                 }
 
                 if let Some(project_vec) = &table_scan.projection {
@@ -733,10 +775,10 @@ impl Unparser<'_> {
                 // So we will append the alias to this subquery.
                 // Example:
                 //   select * from t1 limit 10 -> (select * from t1 limit 10) as a
-                if alias.is_some()
-                    && (table_scan.projection.is_none() && table_scan.filters.is_empty())
-                {
-                    builder = builder.alias(alias.clone().unwrap())?;
+                if let Some(alias) = alias {
+                    if table_scan.projection.is_none() && table_scan.filters.is_empty() {
+                        builder = builder.alias(alias)?;
+                    }
                 }
 
                 Ok(Some(builder.build()?))
@@ -814,8 +856,8 @@ impl Unparser<'_> {
         &self,
         join_type: JoinType,
         constraint: ast::JoinConstraint,
-    ) -> ast::JoinOperator {
-        match join_type {
+    ) -> Result<ast::JoinOperator> {
+        Ok(match join_type {
             JoinType::Inner => ast::JoinOperator::Inner(constraint),
             JoinType::Left => ast::JoinOperator::LeftOuter(constraint),
             JoinType::Right => ast::JoinOperator::RightOuter(constraint),
@@ -824,7 +866,8 @@ impl Unparser<'_> {
             JoinType::LeftSemi => ast::JoinOperator::LeftSemi(constraint),
             JoinType::RightAnti => ast::JoinOperator::RightAnti(constraint),
             JoinType::RightSemi => ast::JoinOperator::RightSemi(constraint),
-        }
+            JoinType::LeftMark => unimplemented!("Unparsing of Left Mark join type"),
+        })
     }
 
     /// Convert the components of a USING clause to the USING AST. Returns

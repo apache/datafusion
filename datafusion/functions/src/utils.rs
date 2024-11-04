@@ -107,7 +107,7 @@ where
                 };
                 arg.clone().into_array(expansion_len)
             })
-            .collect::<datafusion_common::Result<Vec<_>>>()?;
+            .collect::<Result<Vec<_>>>()?;
 
         let result = (inner)(&args);
         if is_scalar {

@@ -40,9 +40,9 @@ use futures::StreamExt;
 /// discards the results, and then prints out an annotated plan with metrics
 #[derive(Debug, Clone)]
 pub struct AnalyzeExec {
-    /// control how much extra to print
+    /// Control how much extra to print
     verbose: bool,
-    /// if statistics should be displayed
+    /// If statistics should be displayed
     show_statistics: bool,
     /// The input plan (the plan being analyzed)
     pub(crate) input: Arc<dyn ExecutionPlan>,
@@ -69,12 +69,12 @@ impl AnalyzeExec {
         }
     }
 
-    /// access to verbose
+    /// Access to verbose
     pub fn verbose(&self) -> bool {
         self.verbose
     }
 
-    /// access to show_statistics
+    /// Access to show_statistics
     pub fn show_statistics(&self) -> bool {
         self.show_statistics
     }

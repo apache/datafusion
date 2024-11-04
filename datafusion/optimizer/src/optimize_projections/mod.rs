@@ -348,7 +348,8 @@ fn optimize_projections(
         | LogicalPlan::RecursiveQuery(_)
         | LogicalPlan::Statement(_)
         | LogicalPlan::Values(_)
-        | LogicalPlan::DescribeTable(_) => {
+        | LogicalPlan::DescribeTable(_)
+        | LogicalPlan::Execute(_) => {
             // These operators have no inputs, so stop the optimization process.
             return Ok(Transformed::no(plan));
         }
@@ -360,17 +361,6 @@ fn optimize_projections(
                 left_req_indices.with_plan_exprs(&plan, join.left.schema())?;
             let right_indices =
                 right_req_indices.with_plan_exprs(&plan, join.right.schema())?;
-            // Joins benefit from "small" input tables (lower memory usage).
-            // Therefore, each child benefits from projection:
-            vec![
-                left_indices.with_projection_beneficial(),
-                right_indices.with_projection_beneficial(),
-            ]
-        }
-        LogicalPlan::CrossJoin(cross_join) => {
-            let left_len = cross_join.left.schema().fields().len();
-            let (left_indices, right_indices) =
-                split_join_requirements(left_len, indices, &JoinType::Inner);
             // Joins benefit from "small" input tables (lower memory usage).
             // Therefore, each child benefits from projection:
             vec![
@@ -688,7 +678,11 @@ fn split_join_requirements(
 ) -> (RequiredIndicies, RequiredIndicies) {
     match join_type {
         // In these cases requirements are split between left/right children:
-        JoinType::Inner | JoinType::Left | JoinType::Right | JoinType::Full => {
+        JoinType::Inner
+        | JoinType::Left
+        | JoinType::Right
+        | JoinType::Full
+        | JoinType::LeftMark => {
             // Decrease right side indices by `left_len` so that they point to valid
             // positions within the right child:
             indices.split_off(left_len)

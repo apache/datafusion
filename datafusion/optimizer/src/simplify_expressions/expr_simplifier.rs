@@ -32,14 +32,18 @@ use datafusion_common::{
     tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRewriter},
 };
 use datafusion_common::{internal_err, DFSchema, DataFusionError, Result, ScalarValue};
-use datafusion_expr::expr::{InList, InSubquery, WindowFunction};
 use datafusion_expr::simplify::ExprSimplifyResult;
 use datafusion_expr::{
     and, lit, or, BinaryExpr, Case, ColumnarValue, Expr, Like, Operator, Volatility,
     WindowFunctionDefinition,
 };
 use datafusion_expr::{expr::ScalarFunction, interval_arithmetic::NullableInterval};
+use datafusion_expr::{
+    expr::{InList, InSubquery, WindowFunction},
+    utils::{iter_conjunction, iter_conjunction_owned},
+};
 use datafusion_physical_expr::{create_physical_expr, execution_props::ExecutionProps};
+use indexmap::IndexSet;
 
 use crate::analyzer::type_coercion::TypeCoercionRewriter;
 use crate::simplify_expressions::guarantees::GuaranteeRewriter;
@@ -850,6 +854,27 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 op: Or,
                 right,
             }) if is_op_with(And, &left, &right) => Transformed::yes(*right),
+            // Eliminate common factors in conjunctions e.g
+            // (A AND B) OR (A AND C) -> A AND (B OR C)
+            Expr::BinaryExpr(BinaryExpr {
+                left,
+                op: Or,
+                right,
+            }) if has_common_conjunction(&left, &right) => {
+                let lhs: IndexSet<Expr> = iter_conjunction_owned(*left).collect();
+                let (common, rhs): (Vec<_>, Vec<_>) = iter_conjunction_owned(*right)
+                    .partition(|e| lhs.contains(e) && !e.is_volatile());
+
+                let new_rhs = rhs.into_iter().reduce(and);
+                let new_lhs = lhs.into_iter().filter(|e| !common.contains(e)).reduce(and);
+                let common_conjunction = common.into_iter().reduce(and).unwrap();
+
+                let new_expr = match (new_lhs, new_rhs) {
+                    (Some(lhs), Some(rhs)) => and(common_conjunction, or(lhs, rhs)),
+                    (_, _) => common_conjunction,
+                };
+                Transformed::yes(new_expr)
+            }
 
             //
             // Rules for AND
@@ -1512,7 +1537,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
             // i.e. `a = 1 OR a = 2 OR a = 3` -> `a IN (1, 2, 3)`
             Expr::BinaryExpr(BinaryExpr {
                 left,
-                op: Operator::Or,
+                op: Or,
                 right,
             }) if are_inlist_and_eq(left.as_ref(), right.as_ref()) => {
                 let lhs = to_inlist(*left).unwrap();
@@ -1552,7 +1577,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
             //     8. `a in (1,2,3,4) AND a not in (5,6,7,8) -> a in (1,2,3,4)`
             Expr::BinaryExpr(BinaryExpr {
                 left,
-                op: Operator::And,
+                op: And,
                 right,
             }) if are_inlist_and_eq_and_match_neg(
                 left.as_ref(),
@@ -1572,7 +1597,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
 
             Expr::BinaryExpr(BinaryExpr {
                 left,
-                op: Operator::And,
+                op: And,
                 right,
             }) if are_inlist_and_eq_and_match_neg(
                 left.as_ref(),
@@ -1592,7 +1617,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
 
             Expr::BinaryExpr(BinaryExpr {
                 left,
-                op: Operator::And,
+                op: And,
                 right,
             }) if are_inlist_and_eq_and_match_neg(
                 left.as_ref(),
@@ -1612,7 +1637,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
 
             Expr::BinaryExpr(BinaryExpr {
                 left,
-                op: Operator::And,
+                op: And,
                 right,
             }) if are_inlist_and_eq_and_match_neg(
                 left.as_ref(),
@@ -1632,7 +1657,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
 
             Expr::BinaryExpr(BinaryExpr {
                 left,
-                op: Operator::Or,
+                op: Or,
                 right,
             }) if are_inlist_and_eq_and_match_neg(
                 left.as_ref(),
@@ -1654,6 +1679,11 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
             expr => Transformed::no(expr),
         })
     }
+}
+
+fn has_common_conjunction(lhs: &Expr, rhs: &Expr) -> bool {
+    let lhs_set: HashSet<&Expr> = iter_conjunction(lhs).collect();
+    iter_conjunction(rhs).any(|e| lhs_set.contains(&e) && !e.is_volatile())
 }
 
 // TODO: We might not need this after defer pattern for Box is stabilized. https://github.com/rust-lang/rust/issues/87121
@@ -3743,11 +3773,52 @@ mod tests {
         assert_eq!(expr, expected);
         assert_eq!(num_iter, 2);
     }
+
+    fn boolean_test_schema() -> DFSchemaRef {
+        Schema::new(vec![
+            Field::new("A", DataType::Boolean, false),
+            Field::new("B", DataType::Boolean, false),
+            Field::new("C", DataType::Boolean, false),
+            Field::new("D", DataType::Boolean, false),
+        ])
+        .to_dfschema_ref()
+        .unwrap()
+    }
+
+    #[test]
+    fn simplify_common_factor_conjuction_in_disjunction() {
+        let props = ExecutionProps::new();
+        let schema = boolean_test_schema();
+        let simplifier =
+            ExprSimplifier::new(SimplifyContext::new(&props).with_schema(schema));
+
+        let a = || col("A");
+        let b = || col("B");
+        let c = || col("C");
+        let d = || col("D");
+
+        // (A AND B) OR (A AND C) -> A AND (B OR C)
+        let expr = a().and(b()).or(a().and(c()));
+        let expected = a().and(b().or(c()));
+
+        assert_eq!(expected, simplifier.simplify(expr).unwrap());
+
+        // (A AND B) OR (A AND C) OR (A AND D) -> A AND (B OR C OR D)
+        let expr = a().and(b()).or(a().and(c())).or(a().and(d()));
+        let expected = a().and(b().or(c()).or(d()));
+        assert_eq!(expected, simplifier.simplify(expr).unwrap());
+
+        // A OR (B AND C AND A) -> A
+        let expr = a().or(b().and(c().and(a())));
+        let expected = a();
+        assert_eq!(expected, simplifier.simplify(expr).unwrap());
+    }
+
     #[test]
     fn test_simplify_udaf() {
         let udaf = AggregateUDF::new_from_impl(SimplifyMockUdaf::new_with_simplify());
         let aggregate_function_expr =
-            Expr::AggregateFunction(datafusion_expr::expr::AggregateFunction::new_udf(
+            Expr::AggregateFunction(expr::AggregateFunction::new_udf(
                 udaf.into(),
                 vec![],
                 false,
@@ -3761,7 +3832,7 @@ mod tests {
 
         let udaf = AggregateUDF::new_from_impl(SimplifyMockUdaf::new_without_simplify());
         let aggregate_function_expr =
-            Expr::AggregateFunction(datafusion_expr::expr::AggregateFunction::new_udf(
+            Expr::AggregateFunction(expr::AggregateFunction::new_udf(
                 udaf.into(),
                 vec![],
                 false,
@@ -3811,7 +3882,7 @@ mod tests {
 
         fn accumulator(
             &self,
-            _acc_args: function::AccumulatorArgs,
+            _acc_args: AccumulatorArgs,
         ) -> Result<Box<dyn Accumulator>> {
             unimplemented!("not needed for tests")
         }
@@ -3841,9 +3912,8 @@ mod tests {
         let udwf = WindowFunctionDefinition::WindowUDF(
             WindowUDF::new_from_impl(SimplifyMockUdwf::new_with_simplify()).into(),
         );
-        let window_function_expr = Expr::WindowFunction(
-            datafusion_expr::expr::WindowFunction::new(udwf, vec![]),
-        );
+        let window_function_expr =
+            Expr::WindowFunction(WindowFunction::new(udwf, vec![]));
 
         let expected = col("result_column");
         assert_eq!(simplify(window_function_expr), expected);
@@ -3851,9 +3921,8 @@ mod tests {
         let udwf = WindowFunctionDefinition::WindowUDF(
             WindowUDF::new_from_impl(SimplifyMockUdwf::new_without_simplify()).into(),
         );
-        let window_function_expr = Expr::WindowFunction(
-            datafusion_expr::expr::WindowFunction::new(udwf, vec![]),
-        );
+        let window_function_expr =
+            Expr::WindowFunction(WindowFunction::new(udwf, vec![]));
 
         let expected = window_function_expr.clone();
         assert_eq!(simplify(window_function_expr), expected);
@@ -3907,6 +3976,71 @@ mod tests {
 
         fn field(&self, _field_args: WindowUDFFieldArgs) -> Result<Field> {
             unimplemented!("not needed for tests")
+        }
+    }
+    #[derive(Debug)]
+    struct VolatileUdf {
+        signature: Signature,
+    }
+
+    impl VolatileUdf {
+        pub fn new() -> Self {
+            Self {
+                signature: Signature::exact(vec![], Volatility::Volatile),
+            }
+        }
+    }
+    impl ScalarUDFImpl for VolatileUdf {
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+
+        fn name(&self) -> &str {
+            "VolatileUdf"
+        }
+
+        fn signature(&self) -> &Signature {
+            &self.signature
+        }
+
+        fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+            Ok(DataType::Int16)
+        }
+    }
+    #[test]
+    fn test_optimize_volatile_conditions() {
+        let fun = Arc::new(ScalarUDF::new_from_impl(VolatileUdf::new()));
+        let rand = Expr::ScalarFunction(ScalarFunction::new_udf(fun, vec![]));
+        {
+            let expr = rand
+                .clone()
+                .eq(lit(0))
+                .or(col("column1").eq(lit(2)).and(rand.clone().eq(lit(0))));
+
+            assert_eq!(simplify(expr.clone()), expr);
+        }
+
+        {
+            let expr = col("column1")
+                .eq(lit(2))
+                .or(col("column1").eq(lit(2)).and(rand.clone().eq(lit(0))));
+
+            assert_eq!(simplify(expr), col("column1").eq(lit(2)));
+        }
+
+        {
+            let expr = (col("column1").eq(lit(2)).and(rand.clone().eq(lit(0)))).or(col(
+                "column1",
+            )
+            .eq(lit(2))
+            .and(rand.clone().eq(lit(0))));
+
+            assert_eq!(
+                simplify(expr),
+                col("column1")
+                    .eq(lit(2))
+                    .and((rand.clone().eq(lit(0))).or(rand.clone().eq(lit(0))))
+            );
         }
     }
 }

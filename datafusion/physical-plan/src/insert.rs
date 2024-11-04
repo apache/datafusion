@@ -79,6 +79,7 @@ pub type FileSinkExec = DataSinkExec;
 /// Execution plan for writing record batches to a [`DataSink`]
 ///
 /// Returns a single row with the number of values written
+#[derive(Clone)]
 pub struct DataSinkExec {
     /// Input plan that produces the record batches to be written.
     input: Arc<dyn ExecutionPlan>,
@@ -93,7 +94,7 @@ pub struct DataSinkExec {
     cache: PlanProperties,
 }
 
-impl fmt::Debug for DataSinkExec {
+impl Debug for DataSinkExec {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "DataSinkExec schema: {:?}", self.count_schema)
     }
@@ -148,11 +149,7 @@ impl DataSinkExec {
 }
 
 impl DisplayAs for DataSinkExec {
-    fn fmt_as(
-        &self,
-        t: DisplayFormatType,
-        f: &mut std::fmt::Formatter,
-    ) -> std::fmt::Result {
+    fn fmt_as(&self, t: DisplayFormatType, f: &mut fmt::Formatter) -> fmt::Result {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 write!(f, "DataSinkExec: sink=")?;
@@ -271,7 +268,7 @@ fn make_count_batch(count: u64) -> RecordBatch {
 }
 
 fn make_count_schema() -> SchemaRef {
-    // define a schema.
+    // Define a schema.
     Arc::new(Schema::new(vec![Field::new(
         "count",
         DataType::UInt64,
