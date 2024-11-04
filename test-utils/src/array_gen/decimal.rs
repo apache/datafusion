@@ -53,11 +53,10 @@ impl DecimalArrayGenerator {
                     .append_option(Some(D::generate_random_native_data(&mut self.rng)));
             }
 
-            let decimal_array = decimal_builder
+            decimal_builder
                 .finish()
                 .with_precision_and_scale(self.precision, self.scale)
-                .unwrap();
-            decimal_array
+                .unwrap()
         };
 
         // pick num_decimals randomly from the distinct decimal table
