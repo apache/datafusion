@@ -87,18 +87,6 @@ impl Debug for RuntimeEnv {
 }
 
 impl RuntimeEnv {
-    #[deprecated(since = "43.0.0", note = "please use `RuntimeEnvBuilder` instead")]
-    #[allow(deprecated)]
-    pub fn new(config: RuntimeConfig) -> Result<Self> {
-        Self::try_new(config)
-    }
-    /// Create env based on configuration
-    #[deprecated(since = "44.0.0", note = "please use `RuntimeEnvBuilder` instead")]
-    #[allow(deprecated)]
-    pub fn try_new(config: RuntimeConfig) -> Result<Self> {
-        config.build()
-    }
-
     /// Registers a custom `ObjectStore` to be used with a specific url.
     /// This allows DataFusion to create external tables from urls that do not have
     /// built in support such as `hdfs://namenode:port/...`.
@@ -162,15 +150,10 @@ impl Default for RuntimeEnv {
     }
 }
 
-/// Please see: <https://github.com/apache/datafusion/issues/12156>
-/// This a type alias for backwards compatibility.
-#[deprecated(since = "43.0.0", note = "please use `RuntimeEnvBuilder` instead")]
-pub type RuntimeConfig = RuntimeEnvBuilder;
-
-#[derive(Clone)]
 /// Execution runtime configuration builder.
 ///
 /// See example on [`RuntimeEnv`]
+#[derive(Clone)]
 pub struct RuntimeEnvBuilder {
     #[allow(deprecated)]
     /// DiskManager to manage temporary disk file usage

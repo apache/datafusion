@@ -21,12 +21,6 @@ mod standard;
 mod standard_window_function_expr;
 mod window_expr;
 
-#[deprecated(since = "44.0.0", note = "use StandardWindowExpr")]
-pub type BuiltInWindowExpr = StandardWindowExpr;
-
-#[deprecated(since = "44.0.0", note = "use StandardWindowFunctionExpr")]
-pub type BuiltInWindowFunctionExpr = dyn StandardWindowFunctionExpr;
-
 pub use aggregate::PlainAggregateWindowExpr;
 pub use sliding_aggregate::SlidingAggregateWindowExpr;
 pub use standard::StandardWindowExpr;

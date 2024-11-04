@@ -212,15 +212,6 @@ pub struct DocumentationBuilder {
 }
 
 impl DocumentationBuilder {
-    #[allow(clippy::new_without_default)]
-    #[deprecated(
-        since = "44.0.0",
-        note = "please use `DocumentationBuilder::new_with_details` instead"
-    )]
-    pub fn new() -> Self {
-        Self::new_with_details(DocSection::default(), "<no description>", "<no example>")
-    }
-
     /// Creates a new [`DocumentationBuilder`] with all required fields
     pub fn new_with_details(
         doc_section: DocSection,
