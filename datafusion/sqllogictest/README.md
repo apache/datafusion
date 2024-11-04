@@ -105,7 +105,7 @@ Assuming it looks good, check it in!
 ## Cookbook: Testing for whitespace
 
 The `sqllogictest` runner will automatically strip trailing whitespace, meaning
-it additional effort to verify that trailing whitespace is correctly produced
+it requires an additional effort to verify that trailing whitespace is correctly produced
 
 For example, the following test can't distinguish between `Andrew` and `Andrew `
 (with trailing space):
