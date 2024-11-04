@@ -16,8 +16,8 @@
 // under the License.
 
 use super::{
-    LogicalField, LogicalFieldRef, LogicalFields, LogicalType, LogicalTypeRef,
-    LogicalUnionFields, TypeSignature,
+    LogicalField, LogicalFieldRef, LogicalFields, LogicalType, LogicalUnionFields,
+    TypeSignature,
 };
 use crate::error::{Result, _internal_err};
 use arrow::compute::can_cast_types;
@@ -25,7 +25,6 @@ use arrow_schema::{
     DataType, Field, FieldRef, Fields, IntervalUnit, TimeUnit, UnionFields,
 };
 use std::sync::Arc;
-use std::sync::{Arc, OnceLock};
 
 /// Representation of a type that DataFusion can handle natively. It is a subset
 /// of the physical variants in Arrow's native [`DataType`].

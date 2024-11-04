@@ -23,7 +23,7 @@ use arrow::{
 };
 use datafusion_common::{
     exec_err, internal_datafusion_err, internal_err, plan_err,
-    types::{logical_string, NativeType},
+    types::NativeType,
     utils::{coerced_fixed_size_list_to_list, list_ndims},
     Result,
 };
