@@ -1077,9 +1077,7 @@ mod tests {
     use datafusion_common::utils::proxy::RawTableAllocExt;
     use datafusion_expr::EmitTo;
 
-    use crate::aggregates::group_values::{
-        column::GroupValuesColumn, GroupValues,
-    };
+    use crate::aggregates::group_values::{column::GroupValuesColumn, GroupValues};
 
     use super::GroupIndexView;
 
@@ -1151,8 +1149,7 @@ mod tests {
 
         let field = Field::new("item", DataType::Int32, true);
         let schema = Arc::new(Schema::new_with_metadata(vec![field], HashMap::new()));
-        let mut group_values =
-            GroupValuesColumn::<false>::try_new(schema).unwrap();
+        let mut group_values = GroupValuesColumn::<false>::try_new(schema).unwrap();
 
         // Insert group index views and check if success to insert
         insert_inline_group_index_view(&mut group_values, 0, 0);

@@ -150,13 +150,9 @@ pub fn new_group_values(
 
     if column::supported_schema(schema.as_ref()) {
         if matches!(group_ordering, GroupOrdering::None) {
-            Ok(Box::new(GroupValuesColumn::<false>::try_new(
-                schema,
-            )?))
+            Ok(Box::new(GroupValuesColumn::<false>::try_new(schema)?))
         } else {
-            Ok(Box::new(GroupValuesColumn::<true>::try_new(
-                schema,
-            )?))
+            Ok(Box::new(GroupValuesColumn::<true>::try_new(schema)?))
         }
     } else {
         Ok(Box::new(GroupValuesRows::try_new(schema)?))
