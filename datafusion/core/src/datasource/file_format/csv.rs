@@ -137,11 +137,11 @@ impl CsvFormat {
     /// Return a newline delimited stream from the specified file on
     /// Stream, decompressing if necessary
     /// Each returned `Bytes` has a whole number of newline delimited rows
-    async fn read_to_delimited_chunks(
+    async fn read_to_delimited_chunks<'a>(
         &self,
         store: &Arc<dyn ObjectStore>,
         object: &ObjectMeta,
-    ) -> BoxStream<'static, Result<Bytes>> {
+    ) -> BoxStream<'a, Result<Bytes>> {
         // stream to only read as many rows as needed into memory
         let stream = store
             .get(&object.location)
@@ -165,10 +165,10 @@ impl CsvFormat {
         stream.boxed()
     }
 
-    async fn read_to_delimited_chunks_from_stream(
+    async fn read_to_delimited_chunks_from_stream<'a>(
         &self,
-        stream: BoxStream<'static, Result<Bytes>>,
-    ) -> BoxStream<'static, Result<Bytes>> {
+        stream: BoxStream<'a, Result<Bytes>>,
+    ) -> BoxStream<'a, Result<Bytes>> {
         let file_compression_type: FileCompressionType = self.options.compression.into();
         let decoder = file_compression_type.convert_stream(stream);
         let steam = match decoder {
