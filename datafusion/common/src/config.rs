@@ -636,6 +636,10 @@ config_namespace! {
         /// then the output will be coerced to a non-view.
         /// Coerces `Utf8View` to `LargeUtf8`, and `BinaryView` to `LargeBinary`.
         pub expand_views_at_output: bool, default = false
+
+        /// When set to true, the `optimize_projections` rule will not attempt to move, add, or remove existing projections.
+        /// This flag helps maintain the original structure of the `LogicalPlan` when converting it back into SQL via the `unparser` module. It ensures the query layout remains simple and readable, relying on the underlying SQL engine to apply its own optimizations during execution.
+        pub optimize_projections_preserve_existing_projections: bool, default = false
     }
 }
 

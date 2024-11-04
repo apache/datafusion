@@ -882,6 +882,7 @@ fn test_table_scan_pushdown() -> Result<()> {
     let query_from_table_scan_with_projection = LogicalPlanBuilder::from(
         table_scan(Some("t1"), &schema, Some(vec![0, 1]))?.build()?,
     )
+    .project(vec![col("id"), col("age")])?
     .project(vec![wildcard()])?
     .build()?;
     let query_from_table_scan_with_projection =
