@@ -436,8 +436,6 @@ fn get_valid_types(
                 }
             }
 
-            let data_types = new_types;
-
             // Find the common string type for the given types
             fn find_common_type(
                 lhs_type: &DataType,
@@ -464,8 +462,8 @@ fn get_valid_types(
             }
 
             // Length checked above, safe to unwrap
-            let mut coerced_type = data_types.first().unwrap().to_owned();
-            for t in data_types.iter().skip(1) {
+            let mut coerced_type = new_types.first().unwrap().to_owned();
+            for t in new_types.iter().skip(1) {
                 coerced_type = find_common_type(&coerced_type, t)?;
             }
 
