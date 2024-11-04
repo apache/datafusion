@@ -29,7 +29,7 @@ use primitive::GroupValuesPrimitive;
 
 mod column;
 mod row;
-use column::VectorizedGroupValuesColumn;
+use column::GroupValuesColumn;
 use row::GroupValuesRows;
 
 mod bytes;
@@ -37,7 +37,7 @@ mod bytes_view;
 use bytes::GroupValuesByes;
 use datafusion_physical_expr::binary_map::OutputType;
 
-use crate::aggregates::{group_values::column::GroupValuesColumn, order::GroupOrdering};
+use crate::aggregates::order::GroupOrdering;
 
 mod group_column;
 mod null_builder;
@@ -150,9 +150,13 @@ pub fn new_group_values(
 
     if column::supported_schema(schema.as_ref()) {
         if matches!(group_ordering, GroupOrdering::None) {
-            Ok(Box::new(VectorizedGroupValuesColumn::try_new(schema)?))
+            Ok(Box::new(GroupValuesColumn::<false>::try_new(
+                schema,
+            )?))
         } else {
-            Ok(Box::new(GroupValuesColumn::try_new(schema)?))
+            Ok(Box::new(GroupValuesColumn::<true>::try_new(
+                schema,
+            )?))
         }
     } else {
         Ok(Box::new(GroupValuesRows::try_new(schema)?))
