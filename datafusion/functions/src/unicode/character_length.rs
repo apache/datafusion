@@ -128,7 +128,7 @@ fn character_length(args: &[ArrayRef]) -> Result<ArrayRef> {
             let string_array = args[0].as_string_view();
             character_length_general::<Int32Type, _>(string_array)
         }
-        _ => unreachable!(),
+        _ => unreachable!("CharacterLengthFunc"),
     }
 }
 

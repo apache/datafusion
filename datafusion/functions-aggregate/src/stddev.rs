@@ -25,6 +25,7 @@ use std::sync::{Arc, OnceLock};
 use arrow::array::Float64Array;
 use arrow::{array::ArrayRef, datatypes::DataType, datatypes::Field};
 
+use datafusion_common::types::logical_float64;
 use datafusion_common::{internal_err, not_impl_err, Result};
 use datafusion_common::{plan_err, ScalarValue};
 use datafusion_expr::aggregate_doc_sections::DOC_SECTION_STATISTICAL;
@@ -72,7 +73,7 @@ impl Stddev {
     pub fn new() -> Self {
         Self {
             signature: Signature::coercible(
-                vec![DataType::Float64],
+                vec![logical_float64()],
                 Volatility::Immutable,
             ),
             alias: vec!["stddev_samp".to_string()],

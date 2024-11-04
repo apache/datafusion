@@ -82,7 +82,7 @@ impl ScalarUDFImpl for OctetLengthFunc {
                 ScalarValue::Utf8View(v) => Ok(ColumnarValue::Scalar(
                     ScalarValue::Int32(v.as_ref().map(|x| x.len() as i32)),
                 )),
-                _ => unreachable!(),
+                _ => unreachable!("OctetLengthFunc"),
             },
         }
     }

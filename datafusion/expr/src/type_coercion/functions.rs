@@ -23,6 +23,7 @@ use arrow::{
 };
 use datafusion_common::{
     exec_err, internal_datafusion_err, internal_err, plan_err,
+    types::{logical_string, NativeType},
     utils::{coerced_fixed_size_list_to_list, list_ndims},
     Result,
 };
@@ -401,6 +402,10 @@ fn get_valid_types(
             .map(|valid_type| current_types.iter().map(|_| valid_type.clone()).collect())
             .collect(),
         TypeSignature::String(number) => {
+            // TODO: we can switch to coercible after all the string functions support utf8view since it is choosen as the default string type.
+            //
+            // let data_types = get_valid_types(&TypeSignature::Coercible(vec![logical_string(); *number]), current_types)?.swap_remove(0);
+
             if *number < 1 {
                 return plan_err!(
                     "The signature expected at least one argument but received {}",
@@ -415,20 +420,38 @@ fn get_valid_types(
                 );
             }
 
-            fn coercion_rule(
+            let mut new_types = Vec::with_capacity(current_types.len());
+            for data_type in current_types.iter() {
+                let logical_data_type: NativeType = data_type.into();
+
+                match logical_data_type {
+                    NativeType::String => {
+                        new_types.push(data_type.to_owned());
+                    }
+                    NativeType::Null => {
+                        new_types.push(DataType::Utf8);
+                    }
+                    _ => {
+                        return plan_err!(
+                            "The signature expected NativeType::String but received {data_type}"
+                        );
+                    }
+                }
+            }
+
+            let data_types = new_types;
+
+            // Find the common string type for the given types
+            fn find_common_type(
                 lhs_type: &DataType,
                 rhs_type: &DataType,
             ) -> Result<DataType> {
                 match (lhs_type, rhs_type) {
-                    (DataType::Null, DataType::Null) => Ok(DataType::Utf8),
-                    (DataType::Null, data_type) | (data_type, DataType::Null) => {
-                        coercion_rule(data_type, &DataType::Utf8)
-                    }
                     (DataType::Dictionary(_, lhs), DataType::Dictionary(_, rhs)) => {
-                        coercion_rule(lhs, rhs)
+                        find_common_type(lhs, rhs)
                     }
                     (DataType::Dictionary(_, v), other)
-                    | (other, DataType::Dictionary(_, v)) => coercion_rule(v, other),
+                    | (other, DataType::Dictionary(_, v)) => find_common_type(v, other),
                     _ => {
                         if let Some(coerced_type) = string_coercion(lhs_type, rhs_type) {
                             Ok(coerced_type)
@@ -444,15 +467,13 @@ fn get_valid_types(
             }
 
             // Length checked above, safe to unwrap
-            let mut coerced_type = current_types.first().unwrap().to_owned();
-            for t in current_types.iter().skip(1) {
-                coerced_type = coercion_rule(&coerced_type, t)?;
+            let mut coerced_type = data_types.first().unwrap().to_owned();
+            for t in data_types.iter().skip(1) {
+                coerced_type = find_common_type(&coerced_type, t)?;
             }
 
             fn base_type_or_default_type(data_type: &DataType) -> DataType {
-                if data_type.is_null() {
-                    DataType::Utf8
-                } else if let DataType::Dictionary(_, v) = data_type {
+                if let DataType::Dictionary(_, v) = data_type {
                     base_type_or_default_type(v)
                 } else {
                     data_type.to_owned()
@@ -506,14 +527,25 @@ fn get_valid_types(
                 );
             }
 
+            let mut new_types = Vec::with_capacity(current_types.len());
             for (data_type, target_type) in current_types.iter().zip(target_types.iter())
             {
-                if !can_cast_types(data_type, target_type) {
-                    return plan_err!("{data_type} is not coercible to {target_type}");
+                let logical_data_type: NativeType = data_type.into();
+                if logical_data_type == *target_type.native() {
+                    new_types.push(data_type.to_owned());
+                } else if logical_data_type.can_cast_to(target_type.native()) {
+                    let casted_type = target_type.default_cast_for(data_type)?;
+                    new_types.push(casted_type);
+                } else {
+                    return plan_err!(
+                        "The signature expected {:?} but received {:?}",
+                        target_type.native(),
+                        logical_data_type
+                    );
                 }
             }
 
-            vec![target_types.to_owned()]
+            vec![new_types]
         }
         TypeSignature::Uniform(number, valid_types) => valid_types
             .iter()

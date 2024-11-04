@@ -16,8 +16,8 @@
 // under the License.
 
 use super::{
-    LogicalField, LogicalFieldRef, LogicalFields, LogicalType, LogicalUnionFields,
-    TypeSignature,
+    LogicalField, LogicalFieldRef, LogicalFields, LogicalType, LogicalTypeRef,
+    LogicalUnionFields, TypeSignature,
 };
 use crate::error::{Result, _internal_err};
 use arrow::compute::can_cast_types;
@@ -25,6 +25,7 @@ use arrow_schema::{
     DataType, Field, FieldRef, Fields, IntervalUnit, TimeUnit, UnionFields,
 };
 use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 /// Representation of a type that DataFusion can handle natively. It is a subset
 /// of the physical variants in Arrow's native [`DataType`].
@@ -348,6 +349,12 @@ impl LogicalType for NativeType {
 // mapping solutions to provide backwards compatibility while transitioning from
 // the purely physical system to a logical / physical system.
 
+impl From<&DataType> for NativeType {
+    fn from(value: &DataType) -> Self {
+        value.clone().into()
+    }
+}
+
 impl From<DataType> for NativeType {
     fn from(value: DataType) -> Self {
         use NativeType::*;
@@ -392,8 +399,37 @@ impl From<DataType> for NativeType {
     }
 }
 
-impl From<&DataType> for NativeType {
-    fn from(value: &DataType) -> Self {
-        value.clone().into()
+impl NativeType {
+    #[inline]
+    pub fn is_numeric(&self) -> bool {
+        use NativeType::*;
+        matches!(
+            self,
+            UInt8
+                | UInt16
+                | UInt32
+                | UInt64
+                | Int8
+                | Int16
+                | Int32
+                | Int64
+                | Float16
+                | Float32
+                | Float64
+        )
+    }
+
+    /// This function is the NativeType version of `can_cast_types`.
+    /// It handles general coercion rules that are widely applicable.
+    /// Avoid adding specific coercion cases here.
+    /// Aim to keep this logic as SIMPLE as possible!
+    pub fn can_cast_to(&self, target_type: &Self) -> bool {
+        // In Postgres, most functions coerce numeric strings to numeric inputs,
+        // but they do not accept numeric inputs as strings.
+        if self.is_numeric() && target_type == &NativeType::String {
+            return false;
+        }
+
+        true
     }
 }

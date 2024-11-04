@@ -162,7 +162,7 @@ pub fn lpad<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
             length_array,
             &args[2],
         ),
-        (_, _) => unreachable!(),
+        (_, _) => unreachable!("lpad"),
     }
 }
 

@@ -186,7 +186,7 @@ impl ScalarUDFImpl for ConcatFunc {
                         }
                     };
                 }
-                _ => unreachable!(),
+                _ => unreachable!("concat"),
             }
         }
 

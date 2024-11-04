@@ -19,6 +19,7 @@
 //! and return types of functions in DataFusion.
 
 use arrow::datatypes::DataType;
+use datafusion_common::types::LogicalTypeRef;
 
 /// Constant that is used as a placeholder for any valid timezone.
 /// This is used where a function can accept a timestamp type with any
@@ -109,7 +110,7 @@ pub enum TypeSignature {
     /// For example, `Coercible(vec![DataType::Float64])` accepts
     /// arguments like `vec![DataType::Int32]` or `vec![DataType::Float32]`
     /// since i32 and f32 can be casted to f64
-    Coercible(Vec<DataType>),
+    Coercible(Vec<LogicalTypeRef>),
     /// Fixed number of arguments of arbitrary types
     /// If a function takes 0 argument, its `TypeSignature` should be `Any(0)`
     Any(usize),
@@ -201,7 +202,10 @@ impl TypeSignature {
             TypeSignature::Numeric(num) => {
                 vec![format!("Numeric({num})")]
             }
-            TypeSignature::Exact(types) | TypeSignature::Coercible(types) => {
+            TypeSignature::Coercible(types) => {
+                vec![Self::join_types(types, ", ")]
+            }
+            TypeSignature::Exact(types) => {
                 vec![Self::join_types(types, ", ")]
             }
             TypeSignature::Any(arg_count) => {
@@ -322,7 +326,7 @@ impl Signature {
         }
     }
     /// Target coerce types in order
-    pub fn coercible(target_types: Vec<DataType>, volatility: Volatility) -> Self {
+    pub fn coercible(target_types: Vec<LogicalTypeRef>, volatility: Volatility) -> Self {
         Self {
             type_signature: TypeSignature::Coercible(target_types),
             volatility,

@@ -164,7 +164,7 @@ impl ScalarUDFImpl for ConcatWsFunc {
                     ColumnarValueRef::NonNullableArray(string_array)
                 }
             }
-            _ => unreachable!(),
+            _ => unreachable!("concat ws"),
         };
 
         let mut columns = Vec::with_capacity(args.len() - 1);

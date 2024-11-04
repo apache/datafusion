@@ -107,7 +107,7 @@ mod tests {
         let args = vec![ColumnarValue::Array(input)];
         let result = match func.invoke(&args)? {
             ColumnarValue::Array(result) => result,
-            _ => unreachable!(),
+            _ => unreachable!("lower"),
         };
         assert_eq!(&expected, &result);
         Ok(())
