@@ -28,8 +28,8 @@ use crate::{Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder};
 
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_common::TableReference;
 use datafusion_common::{Column, DFSchema, Result};
+use datafusion_common::{ScalarValue, TableReference};
 
 mod order_by;
 pub use order_by::rewrite_sort_cols_by_aggs;
@@ -142,6 +142,23 @@ pub fn replace_col(expr: Expr, replace_map: &HashMap<&Column, &Column>) -> Resul
                 }
             } else {
                 Transformed::no(expr)
+            }
+        })
+    })
+    .data()
+}
+
+pub fn replace_expr_with_null(
+    expr: Expr,
+    replace_columns: &HashSet<&Column>,
+) -> Result<Expr> {
+    expr.transform(|expr| {
+        Ok({
+            match &expr {
+                Expr::Column(c) if replace_columns.contains(c) => {
+                    Transformed::yes(Expr::Literal(ScalarValue::Null))
+                }
+                _ => Transformed::no(expr),
             }
         })
     })

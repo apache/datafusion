@@ -16,14 +16,17 @@
 // under the License.
 
 //! [`EliminateOuterJoin`] converts `LEFT/RIGHT/FULL` joins to `INNER` joins
+
 use crate::{OptimizerConfig, OptimizerRule};
-use datafusion_common::{Column, DFSchema, Result};
-use datafusion_expr::logical_plan::{Join, JoinType, LogicalPlan};
-use datafusion_expr::{Expr, Filter, Operator};
+use datafusion_common::{Column, DFSchema, DFSchemaRef, Result};
+use datafusion_expr::logical_plan::{JoinType, LogicalPlan};
+use datafusion_expr::Expr;
+use std::collections::HashSet;
 
 use crate::optimizer::ApplyOrder;
+use crate::utils::is_restrict_null_predicate;
 use datafusion_common::tree_node::Transformed;
-use datafusion_expr::expr::{BinaryExpr, Cast, TryCast};
+use datafusion_expr::utils::split_conjunction_owned;
 use std::sync::Arc;
 
 ///
@@ -56,6 +59,138 @@ impl EliminateOuterJoin {
     pub fn new() -> Self {
         Self {}
     }
+
+    fn eliminate_outer_join(
+        &self,
+        plan: LogicalPlan,
+    ) -> Result<Transformed<LogicalPlan>> {
+        let LogicalPlan::Filter(mut filter) = plan else {
+            return Ok(Transformed::no(plan));
+        };
+
+        let mut join = match Arc::unwrap_or_clone(filter.input) {
+            LogicalPlan::Join(join) if join.join_type.is_outer() => join,
+            other_input => {
+                filter.input = Arc::new(other_input);
+                return Ok(Transformed::no(LogicalPlan::Filter(filter)));
+            }
+        };
+
+        let join_type = join.join_type;
+        let predicates = split_conjunction_owned(filter.predicate.clone());
+        let left_columns = schema_columns(join.left.schema());
+        let right_columns = schema_columns(join.right.schema());
+        let join_schema = &join.schema;
+
+        let new_join_type = match join_type {
+            JoinType::Left => {
+                eliminate_left_outer_join(predicates, &right_columns, join_schema)
+            }
+            JoinType::Right => {
+                eliminate_right_outer_join(predicates, &left_columns, join_schema)
+            }
+            JoinType::Full => eliminate_full_outer_join(
+                predicates,
+                &left_columns,
+                &right_columns,
+                join_schema,
+            ),
+            others => unreachable!("{}", others),
+        };
+
+        join.join_type = new_join_type;
+        filter.input = Arc::new(LogicalPlan::Join(join));
+
+        Ok(Transformed::yes(LogicalPlan::Filter(filter)))
+    }
+}
+
+fn eliminate_left_outer_join(
+    predicates: Vec<Expr>,
+    right_columns: &HashSet<Column>,
+    join_schema: &DFSchema,
+) -> JoinType {
+    for predicate in predicates {
+        let columns = predicate.column_refs();
+        if has_bound_filter(&predicate, &columns, right_columns, join_schema) {
+            return JoinType::Inner;
+        }
+    }
+    JoinType::Left
+}
+
+fn eliminate_right_outer_join(
+    predicates: Vec<Expr>,
+    left_columns: &HashSet<Column>,
+    join_schema: &DFSchema,
+) -> JoinType {
+    for predicate in predicates {
+        let columns = predicate.column_refs();
+        if has_bound_filter(&predicate, &columns, left_columns, join_schema) {
+            return JoinType::Inner;
+        }
+    }
+    JoinType::Right
+}
+
+fn eliminate_full_outer_join(
+    predicates: Vec<Expr>,
+    left_columns: &HashSet<Column>,
+    right_columns: &HashSet<Column>,
+    join_schema: &DFSchema,
+) -> JoinType {
+    let mut left_exist = false;
+    let mut right_exist = false;
+    for predicate in predicates {
+        let columns = predicate.column_refs();
+
+        if !left_exist
+            && has_bound_filter(&predicate, &columns, left_columns, join_schema)
+        {
+            left_exist = true;
+        }
+
+        if !right_exist
+            && has_bound_filter(&predicate, &columns, right_columns, join_schema)
+        {
+            right_exist = true;
+        }
+
+        if left_exist && right_exist {
+            break;
+        }
+    }
+
+    if left_exist && right_exist {
+        JoinType::Inner
+    } else if left_exist {
+        JoinType::Left
+    } else if right_exist {
+        JoinType::Right
+    } else {
+        JoinType::Full
+    }
+}
+
+fn has_bound_filter(
+    predicate: &Expr,
+    predicate_columns: &HashSet<&Column>,
+    child_schema_columns: &HashSet<Column>,
+    join_schema: &DFSchema,
+) -> bool {
+    let predicate_cloned = predicate.clone();
+    let cols = predicate_columns
+        .iter()
+        .filter(|col| child_schema_columns.contains(*col))
+        .cloned();
+    is_restrict_null_predicate(join_schema, predicate_cloned, cols).unwrap_or(false)
+}
+
+fn schema_columns(schema: &DFSchemaRef) -> HashSet<Column> {
+    schema
+        .iter()
+        .map(|(qualifier, field)| Column::new(qualifier.cloned(), field.name()))
+        .collect::<HashSet<_>>()
 }
 
 /// Attempt to eliminate outer joins.
@@ -77,227 +212,7 @@ impl OptimizerRule for EliminateOuterJoin {
         plan: LogicalPlan,
         _config: &dyn OptimizerConfig,
     ) -> Result<Transformed<LogicalPlan>> {
-        match plan {
-            LogicalPlan::Filter(mut filter) => match Arc::unwrap_or_clone(filter.input) {
-                LogicalPlan::Join(join) => {
-                    let mut non_nullable_cols: Vec<Column> = vec![];
-
-                    extract_non_nullable_columns(
-                        &filter.predicate,
-                        &mut non_nullable_cols,
-                        join.left.schema(),
-                        join.right.schema(),
-                        true,
-                    );
-
-                    let new_join_type = if join.join_type.is_outer() {
-                        let mut left_non_nullable = false;
-                        let mut right_non_nullable = false;
-                        for col in non_nullable_cols.iter() {
-                            if join.left.schema().has_column(col) {
-                                left_non_nullable = true;
-                            }
-                            if join.right.schema().has_column(col) {
-                                right_non_nullable = true;
-                            }
-                        }
-                        eliminate_outer(
-                            join.join_type,
-                            left_non_nullable,
-                            right_non_nullable,
-                        )
-                    } else {
-                        join.join_type
-                    };
-
-                    let new_join = Arc::new(LogicalPlan::Join(Join {
-                        left: join.left,
-                        right: join.right,
-                        join_type: new_join_type,
-                        join_constraint: join.join_constraint,
-                        on: join.on.clone(),
-                        filter: join.filter.clone(),
-                        schema: Arc::clone(&join.schema),
-                        null_equals_null: join.null_equals_null,
-                    }));
-                    Filter::try_new(filter.predicate, new_join)
-                        .map(|f| Transformed::yes(LogicalPlan::Filter(f)))
-                }
-                filter_input => {
-                    filter.input = Arc::new(filter_input);
-                    Ok(Transformed::no(LogicalPlan::Filter(filter)))
-                }
-            },
-            _ => Ok(Transformed::no(plan)),
-        }
-    }
-}
-
-pub fn eliminate_outer(
-    join_type: JoinType,
-    left_non_nullable: bool,
-    right_non_nullable: bool,
-) -> JoinType {
-    let mut new_join_type = join_type;
-    match join_type {
-        JoinType::Left => {
-            if right_non_nullable {
-                new_join_type = JoinType::Inner;
-            }
-        }
-        JoinType::Right => {
-            if left_non_nullable {
-                new_join_type = JoinType::Inner;
-            }
-        }
-        JoinType::Full => {
-            if left_non_nullable && right_non_nullable {
-                new_join_type = JoinType::Inner;
-            } else if left_non_nullable {
-                new_join_type = JoinType::Left;
-            } else if right_non_nullable {
-                new_join_type = JoinType::Right;
-            }
-        }
-        _ => {}
-    }
-    new_join_type
-}
-
-/// Recursively traverses expr, if expr returns false when
-/// any inputs are null, treats columns of both sides as non_nullable columns.
-///
-/// For and/or expr, extracts from all sub exprs and merges the columns.
-/// For or expr, if one of sub exprs returns true, discards all columns from or expr.
-/// For IS NOT NULL/NOT expr, always returns false for NULL input.
-///     extracts columns from these exprs.
-/// For all other exprs, fall through
-fn extract_non_nullable_columns(
-    expr: &Expr,
-    non_nullable_cols: &mut Vec<Column>,
-    left_schema: &Arc<DFSchema>,
-    right_schema: &Arc<DFSchema>,
-    top_level: bool,
-) {
-    match expr {
-        Expr::Column(col) => {
-            non_nullable_cols.push(col.clone());
-        }
-        Expr::BinaryExpr(BinaryExpr { left, op, right }) => match op {
-            // If one of the inputs are null for these operators, the results should be false.
-            Operator::Eq
-            | Operator::NotEq
-            | Operator::Lt
-            | Operator::LtEq
-            | Operator::Gt
-            | Operator::GtEq => {
-                extract_non_nullable_columns(
-                    left,
-                    non_nullable_cols,
-                    left_schema,
-                    right_schema,
-                    false,
-                );
-                extract_non_nullable_columns(
-                    right,
-                    non_nullable_cols,
-                    left_schema,
-                    right_schema,
-                    false,
-                )
-            }
-            Operator::And | Operator::Or => {
-                // treat And as Or if does not from top level, such as
-                // not (c1 < 10 and c2 > 100)
-                if top_level && *op == Operator::And {
-                    extract_non_nullable_columns(
-                        left,
-                        non_nullable_cols,
-                        left_schema,
-                        right_schema,
-                        top_level,
-                    );
-                    extract_non_nullable_columns(
-                        right,
-                        non_nullable_cols,
-                        left_schema,
-                        right_schema,
-                        top_level,
-                    );
-                    return;
-                }
-
-                let mut left_non_nullable_cols: Vec<Column> = vec![];
-                let mut right_non_nullable_cols: Vec<Column> = vec![];
-
-                extract_non_nullable_columns(
-                    left,
-                    &mut left_non_nullable_cols,
-                    left_schema,
-                    right_schema,
-                    top_level,
-                );
-                extract_non_nullable_columns(
-                    right,
-                    &mut right_non_nullable_cols,
-                    left_schema,
-                    right_schema,
-                    top_level,
-                );
-
-                // for query: select *** from a left join b where b.c1 ... or b.c2 ...
-                // this can be eliminated to inner join.
-                // for query: select *** from a left join b where a.c1 ... or b.c2 ...
-                // this can not be eliminated.
-                // If columns of relation exist in both sub exprs, any columns of this relation
-                // can be added to non nullable columns.
-                if !left_non_nullable_cols.is_empty()
-                    && !right_non_nullable_cols.is_empty()
-                {
-                    for left_col in &left_non_nullable_cols {
-                        for right_col in &right_non_nullable_cols {
-                            if (left_schema.has_column(left_col)
-                                && left_schema.has_column(right_col))
-                                || (right_schema.has_column(left_col)
-                                    && right_schema.has_column(right_col))
-                            {
-                                non_nullable_cols.push(left_col.clone());
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
-            _ => {}
-        },
-        Expr::Not(arg) => extract_non_nullable_columns(
-            arg,
-            non_nullable_cols,
-            left_schema,
-            right_schema,
-            false,
-        ),
-        Expr::IsNotNull(arg) => {
-            if !top_level {
-                return;
-            }
-            extract_non_nullable_columns(
-                arg,
-                non_nullable_cols,
-                left_schema,
-                right_schema,
-                false,
-            )
-        }
-        Expr::Cast(Cast { expr, data_type: _ })
-        | Expr::TryCast(TryCast { expr, data_type: _ }) => extract_non_nullable_columns(
-            expr,
-            non_nullable_cols,
-            left_schema,
-            right_schema,
-            false,
-        ),
-        _ => {}
+        self.eliminate_outer_join(plan)
     }
 }
 
@@ -306,11 +221,14 @@ mod tests {
     use super::*;
     use crate::test::*;
     use arrow::datatypes::DataType;
+    use datafusion_common::ScalarValue;
+    use datafusion_expr::expr::ScalarFunction;
     use datafusion_expr::{
         binary_expr, cast, col, lit,
         logical_plan::builder::LogicalPlanBuilder,
-        try_cast,
-        Operator::{And, Or},
+        try_cast, ColumnarValue,
+        Operator::{And, Gt, Or},
+        ScalarUDF, ScalarUDFImpl, Signature, Volatility,
     };
 
     fn assert_optimized_plan_equal(plan: LogicalPlan, expected: &str) -> Result<()> {
@@ -439,6 +357,216 @@ mod tests {
         let expected = "\
         Filter: CAST(t1.b AS Int64) > UInt32(10) AND TRY_CAST(t2.c AS Int64) < UInt32(20)\
         \n  Inner Join: t1.a = t2.a\
+        \n    TableScan: t1\
+        \n    TableScan: t2";
+        assert_optimized_plan_equal(plan, expected)
+    }
+
+    #[test]
+    fn eliminate_full_with_hybrid_filter() -> Result<()> {
+        let t1 = test_table_scan_with_name("t1")?;
+        let t2 = test_table_scan_with_name("t2")?;
+
+        // eliminate to inner join
+        let plan = LogicalPlanBuilder::from(t1)
+            .join(
+                t2,
+                JoinType::Full,
+                (vec![Column::from_name("a")], vec![Column::from_name("a")]),
+                None,
+            )?
+            .filter(binary_expr(col("t1.b"), Gt, col("t2.b")))?
+            .build()?;
+        let expected = "\
+        Filter: t1.b > t2.b\
+        \n  Inner Join: t1.a = t2.a\
+        \n    TableScan: t1\
+        \n    TableScan: t2";
+        assert_optimized_plan_equal(plan, expected)
+    }
+
+    #[derive(Debug)]
+    struct DoNothingUdf {
+        signature: Signature,
+    }
+
+    impl DoNothingUdf {
+        pub fn new() -> Self {
+            Self {
+                signature: Signature::any(1, Volatility::Immutable),
+            }
+        }
+    }
+
+    impl ScalarUDFImpl for DoNothingUdf {
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+
+        fn name(&self) -> &str {
+            "do_nothing"
+        }
+
+        fn signature(&self) -> &Signature {
+            &self.signature
+        }
+
+        fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+            Ok(arg_types[0].clone())
+        }
+
+        fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+            Ok(args[0].clone())
+        }
+    }
+
+    #[test]
+    fn eliminate_right_with_udf() -> Result<()> {
+        let t1 = test_table_scan_with_name("t1")?;
+        let t2 = test_table_scan_with_name("t2")?;
+        let fun = Arc::new(ScalarUDF::new_from_impl(DoNothingUdf::new()));
+
+        let plan = LogicalPlanBuilder::from(t1)
+            .join(
+                t2,
+                JoinType::Right,
+                (vec![Column::from_name("a")], vec![Column::from_name("a")]),
+                None,
+            )?
+            .filter(
+                Expr::ScalarFunction(ScalarFunction::new_udf(fun, vec![col("t1.b")]))
+                    .gt(lit(10u32)),
+            )?
+            .build()?;
+
+        let expected = "\
+        Filter: do_nothing(t1.b) > UInt32(10)\
+        \n  Inner Join: t1.a = t2.a\
+        \n    TableScan: t1\
+        \n    TableScan: t2";
+        assert_optimized_plan_equal(plan, expected)
+    }
+
+    #[derive(Debug)]
+    struct AlwaysNullUdf {
+        signature: Signature,
+    }
+
+    impl AlwaysNullUdf {
+        pub fn new() -> Self {
+            Self {
+                signature: Signature::any(1, Volatility::Immutable),
+            }
+        }
+    }
+
+    impl ScalarUDFImpl for AlwaysNullUdf {
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+
+        fn name(&self) -> &str {
+            "always_null"
+        }
+
+        fn signature(&self) -> &Signature {
+            &self.signature
+        }
+
+        fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+            Ok(DataType::Null)
+        }
+
+        fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+            Ok(match &args[0] {
+                ColumnarValue::Array(array) => {
+                    ColumnarValue::create_null_array(array.len())
+                }
+                ColumnarValue::Scalar(_) => ColumnarValue::Scalar(ScalarValue::Null),
+            })
+        }
+    }
+
+    #[test]
+    fn eliminate_right_with_null_udf() -> Result<()> {
+        let t1 = test_table_scan_with_name("t1")?;
+        let t2 = test_table_scan_with_name("t2")?;
+        let fun = Arc::new(ScalarUDF::new_from_impl(AlwaysNullUdf::new()));
+
+        let plan = LogicalPlanBuilder::from(t1)
+            .join(
+                t2,
+                JoinType::Right,
+                (vec![Column::from_name("a")], vec![Column::from_name("a")]),
+                None,
+            )?
+            .filter(
+                Expr::ScalarFunction(ScalarFunction::new_udf(fun, vec![col("t1.b")]))
+                    .is_null(),
+            )?
+            .build()?;
+
+        let expected = "\
+        Filter: always_null(t1.b) IS NULL\
+        \n  Right Join: t1.a = t2.a\
+        \n    TableScan: t1\
+        \n    TableScan: t2";
+        assert_optimized_plan_equal(plan, expected)
+    }
+
+    #[derive(Debug)]
+    struct VolatileUdf {
+        signature: Signature,
+    }
+
+    impl VolatileUdf {
+        pub fn new() -> Self {
+            Self {
+                signature: Signature::any(1, Volatility::Volatile),
+            }
+        }
+    }
+
+    impl ScalarUDFImpl for VolatileUdf {
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+
+        fn name(&self) -> &str {
+            "volatile_func"
+        }
+
+        fn signature(&self) -> &Signature {
+            &self.signature
+        }
+
+        fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+            Ok(DataType::Boolean)
+        }
+    }
+
+    #[test]
+    fn eliminate_right_with_volatile_udf() -> Result<()> {
+        let t1 = test_table_scan_with_name("t1")?;
+        let t2 = test_table_scan_with_name("t2")?;
+        let fun = Arc::new(ScalarUDF::new_from_impl(VolatileUdf::new()));
+
+        let plan = LogicalPlanBuilder::from(t1)
+            .join(
+                t2,
+                JoinType::Right,
+                (vec![Column::from_name("a")], vec![Column::from_name("a")]),
+                None,
+            )?
+            .filter(Expr::ScalarFunction(ScalarFunction::new_udf(
+                fun,
+                vec![col("t1.b")],
+            )))?
+            .build()?;
+
+        let expected = "\
+        Filter: volatile_func(t1.b)\
+        \n  Right Join: t1.a = t2.a\
         \n    TableScan: t1\
         \n    TableScan: t2";
         assert_optimized_plan_equal(plan, expected)

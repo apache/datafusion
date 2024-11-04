@@ -27,6 +27,10 @@ use arrow::{
     record_batch::RecordBatch,
 };
 
+use crate::analyzer::type_coercion::TypeCoercionRewriter;
+use crate::simplify_expressions::guarantees::GuaranteeRewriter;
+use crate::simplify_expressions::regex::simplify_regex_expr;
+use crate::simplify_expressions::SimplifyInfo;
 use datafusion_common::{
     cast::{as_large_list_array, as_list_array},
     tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRewriter},
@@ -44,11 +48,6 @@ use datafusion_expr::{
 };
 use datafusion_physical_expr::{create_physical_expr, execution_props::ExecutionProps};
 use indexmap::IndexSet;
-
-use crate::analyzer::type_coercion::TypeCoercionRewriter;
-use crate::simplify_expressions::guarantees::GuaranteeRewriter;
-use crate::simplify_expressions::regex::simplify_regex_expr;
-use crate::simplify_expressions::SimplifyInfo;
 
 use super::inlist_simplifier::ShortenInListSimplifier;
 use super::utils::*;
@@ -716,8 +715,8 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
     fn f_up(&mut self, expr: Expr) -> Result<Transformed<Expr>> {
         use datafusion_expr::Operator::{
             And, BitwiseAnd, BitwiseOr, BitwiseShiftLeft, BitwiseShiftRight, BitwiseXor,
-            Divide, Eq, Modulo, Multiply, NotEq, Or, RegexIMatch, RegexMatch,
-            RegexNotIMatch, RegexNotMatch,
+            Divide, Eq, Gt, GtEq, Lt, LtEq, Modulo, Multiply, NotEq, Or, RegexIMatch,
+            RegexMatch, RegexNotIMatch, RegexNotMatch,
         };
 
         let info = self.info;
@@ -754,6 +753,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                     None => lit_bool_null(),
                 })
             }
+
             // Rules for NotEq
             //
 
@@ -1675,10 +1675,32 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 }
             }
 
+            // null <op> A --> null,
+            Expr::BinaryExpr(BinaryExpr {
+                left,
+                op: Eq | NotEq | Gt | GtEq | Lt | LtEq,
+                right: _,
+            }) if always_null(&left, info) => Transformed::yes(lit_bool_null()),
+
+            // A <op> null --> null,
+            Expr::BinaryExpr(BinaryExpr {
+                left: _,
+                op: Eq | NotEq | Gt | GtEq | Lt | LtEq,
+                right,
+            }) if always_null(&right, info) => Transformed::yes(lit_bool_null()),
+
             // no additional rewrites possible
             expr => Transformed::no(expr),
         })
     }
+}
+
+fn always_null<S: SimplifyInfo>(expr: &Expr, info: &S) -> bool {
+    is_null(expr)
+        || info
+            .get_data_type(expr)
+            .map(|data_type| matches!(data_type, DataType::Null))
+            .unwrap_or(false)
 }
 
 fn has_common_conjunction(lhs: &Expr, rhs: &Expr) -> bool {

@@ -22,21 +22,20 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use crate::{OptimizerConfig, OptimizerRule};
 
 use crate::analyzer::type_coercion::TypeCoercionRewriter;
-use arrow::array::{new_null_array, Array, RecordBatch};
-use arrow::datatypes::{DataType, Field, Schema};
-use datafusion_common::cast::as_boolean_array;
+use arrow::datatypes::DataType;
 use datafusion_common::tree_node::{TransformedResult, TreeNode};
 use datafusion_common::{Column, DFSchema, Result, ScalarValue};
 use datafusion_expr::execution_props::ExecutionProps;
-use datafusion_expr::expr_rewriter::replace_col;
-use datafusion_expr::{logical_plan::LogicalPlan, ColumnarValue, Expr};
-use datafusion_physical_expr::create_physical_expr;
+use datafusion_expr::expr_rewriter::{replace_col, replace_expr_with_null};
+use datafusion_expr::{logical_plan::LogicalPlan, Expr, ExprSchemable};
 use log::{debug, trace};
 use std::sync::Arc;
 
+use crate::simplify_expressions::ExprSimplifier;
 /// Re-export of `NamesPreserver` for backwards compatibility,
 /// as it was initially placed here and then moved elsewhere.
 pub use datafusion_expr::expr_rewriter::NamePreserver;
+use datafusion_expr::simplify::SimplifyContext;
 
 /// Convenience rule for writing optimizers: recursively invoke
 /// optimize on plan's children and then return a node of the same
@@ -129,52 +128,32 @@ pub fn log_plan(description: &str, plan: &LogicalPlan) {
 /// `c0 > 8` return true;
 /// `c0 IS NULL` return false.
 pub fn is_restrict_null_predicate<'a>(
+    input_schema: &DFSchema,
     predicate: Expr,
-    join_cols_of_predicate: impl IntoIterator<Item = &'a Column>,
+    cols_of_predicate: impl IntoIterator<Item = &'a Column>,
 ) -> Result<bool> {
     if matches!(predicate, Expr::Column(_)) {
         return Ok(true);
     }
 
-    static DUMMY_COL_NAME: &str = "?";
-    let schema = Schema::new(vec![Field::new(DUMMY_COL_NAME, DataType::Null, true)]);
-    let input_schema = DFSchema::try_from(schema.clone())?;
-    let column = new_null_array(&DataType::Null, 1);
-    let input_batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![column])?;
     let execution_props = ExecutionProps::default();
-    let null_column = Column::from_name(DUMMY_COL_NAME);
+    let replace_columns = cols_of_predicate.into_iter().collect();
+    let replaced_predicate = replace_expr_with_null(predicate, &replace_columns)?;
+    let coerced_predicate = coerce(replaced_predicate, input_schema)?;
 
-    let join_cols_to_replace = join_cols_of_predicate
-        .into_iter()
-        .map(|column| (column, &null_column))
-        .collect::<HashMap<_, _>>();
+    let info = SimplifyContext::new(&execution_props)
+        .with_schema(Arc::new(input_schema.clone()));
+    let simplifier = ExprSimplifier::new(info).with_canonicalize(false);
+    let expr = simplifier.simplify(coerced_predicate)?;
 
-    let replaced_predicate = replace_col(predicate, &join_cols_to_replace)?;
-    let coerced_predicate = coerce(replaced_predicate, &input_schema)?;
-    let phys_expr =
-        create_physical_expr(&coerced_predicate, &input_schema, &execution_props)?;
+    let ret = match &expr {
+        Expr::Literal(scalar) if scalar.is_null() => true,
+        Expr::Literal(ScalarValue::Boolean(Some(b))) => !b,
+        _ if matches!(expr.get_type(input_schema)?, DataType::Null) => true,
+        _ => false,
+    };
 
-    let result_type = phys_expr.data_type(&schema)?;
-    if !matches!(&result_type, DataType::Boolean) {
-        return Ok(false);
-    }
-
-    // If result is single `true`, return false;
-    // If result is single `NULL` or `false`, return true;
-    Ok(match phys_expr.evaluate(&input_batch)? {
-        ColumnarValue::Array(array) => {
-            if array.len() == 1 {
-                let boolean_array = as_boolean_array(&array)?;
-                boolean_array.is_null(0) || !boolean_array.value(0)
-            } else {
-                false
-            }
-        }
-        ColumnarValue::Scalar(scalar) => matches!(
-            scalar,
-            ScalarValue::Boolean(None) | ScalarValue::Boolean(Some(false))
-        ),
-    })
+    Ok(ret)
 }
 
 fn coerce(expr: Expr, schema: &DFSchema) -> Result<Expr> {
@@ -185,6 +164,7 @@ fn coerce(expr: Expr, schema: &DFSchema) -> Result<Expr> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use arrow::datatypes::{Field, Schema};
     use datafusion_expr::{binary_expr, case, col, in_list, is_null, lit, Operator};
 
     #[test]
@@ -269,13 +249,24 @@ mod tests {
                 in_list(col("a"), vec![Expr::Literal(ScalarValue::Null)], true),
                 true,
             ),
+            // new
+            (col("a").gt(col("b")), true),
         ];
 
         let column_a = Column::from_name("a");
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::UInt64, true),
+        ]);
+        let df_schema = DFSchema::try_from(schema)?;
+
         for (predicate, expected) in test_cases {
             let join_cols_of_predicate = std::iter::once(&column_a);
-            let actual =
-                is_restrict_null_predicate(predicate.clone(), join_cols_of_predicate)?;
+            let actual = is_restrict_null_predicate(
+                &df_schema,
+                predicate.clone(),
+                join_cols_of_predicate,
+            )?;
             assert_eq!(actual, expected, "{}", predicate);
         }
 
