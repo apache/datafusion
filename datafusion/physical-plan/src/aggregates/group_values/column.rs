@@ -866,9 +866,7 @@ impl<const STREAMING: bool> GroupValues for GroupValuesColumn<STREAMING> {
                         v.push(Box::new(b) as _)
                     }
                     dt => {
-                        return not_impl_err!(
-                            "{dt} not supported in VectorizedGroupValuesColumn"
-                        )
+                        return not_impl_err!("{dt} not supported in GroupValuesColumn")
                     }
                 }
             }
@@ -923,49 +921,44 @@ impl<const STREAMING: bool> GroupValues for GroupValuesColumn<STREAMING> {
                     for bucket in self.map.iter() {
                         // In non-streaming case, we need to check if the `group index view`
                         // is `inlined` or `non-inlined`
-                        if !STREAMING {
-                            if bucket.as_ref().1.is_non_inlined() {
-                                // Non-inlined case
-                                // We take `group_index_list` from `old_group_index_lists`
+                        if !STREAMING && bucket.as_ref().1.is_non_inlined() {
+                            // Non-inlined case
+                            // We take `group_index_list` from `old_group_index_lists`
 
-                                // list_offset is incrementally
-                                self.emit_group_index_list_buffer.clear();
-                                let list_offset = bucket.as_ref().1.value() as usize;
-                                for group_index in
-                                    self.group_index_lists[list_offset].iter()
-                                {
-                                    if let Some(remaining) = group_index.checked_sub(n) {
-                                        self.emit_group_index_list_buffer.push(remaining);
-                                    }
+                            // list_offset is incrementally
+                            self.emit_group_index_list_buffer.clear();
+                            let list_offset = bucket.as_ref().1.value() as usize;
+                            for group_index in self.group_index_lists[list_offset].iter()
+                            {
+                                if let Some(remaining) = group_index.checked_sub(n) {
+                                    self.emit_group_index_list_buffer.push(remaining);
                                 }
-
-                                // The possible results:
-                                //   - `new_group_index_list` is empty, we should erase this bucket
-                                //   - only one value in `new_group_index_list`, switch the `view` to `inlined`
-                                //   - still multiple values in `new_group_index_list`, build and set the new `unlined view`
-                                if self.emit_group_index_list_buffer.is_empty() {
-                                    self.map.erase(bucket);
-                                } else if self.emit_group_index_list_buffer.len() == 1 {
-                                    let group_index = self
-                                        .emit_group_index_list_buffer
-                                        .first()
-                                        .unwrap();
-                                    bucket.as_mut().1 =
-                                        GroupIndexView::new_inlined(*group_index as u64);
-                                } else {
-                                    let group_index_list =
-                                        &mut self.group_index_lists[next_new_list_offset];
-                                    group_index_list.clear();
-                                    group_index_list
-                                        .extend(self.emit_group_index_list_buffer.iter());
-                                    bucket.as_mut().1 = GroupIndexView::new_non_inlined(
-                                        next_new_list_offset as u64,
-                                    );
-                                    next_new_list_offset += 1;
-                                }
-
-                                continue;
                             }
+
+                            // The possible results:
+                            //   - `new_group_index_list` is empty, we should erase this bucket
+                            //   - only one value in `new_group_index_list`, switch the `view` to `inlined`
+                            //   - still multiple values in `new_group_index_list`, build and set the new `unlined view`
+                            if self.emit_group_index_list_buffer.is_empty() {
+                                self.map.erase(bucket);
+                            } else if self.emit_group_index_list_buffer.len() == 1 {
+                                let group_index =
+                                    self.emit_group_index_list_buffer.first().unwrap();
+                                bucket.as_mut().1 =
+                                    GroupIndexView::new_inlined(*group_index as u64);
+                            } else {
+                                let group_index_list =
+                                    &mut self.group_index_lists[next_new_list_offset];
+                                group_index_list.clear();
+                                group_index_list
+                                    .extend(self.emit_group_index_list_buffer.iter());
+                                bucket.as_mut().1 = GroupIndexView::new_non_inlined(
+                                    next_new_list_offset as u64,
+                                );
+                                next_new_list_offset += 1;
+                            }
+
+                            continue;
                         }
 
                         // In `streaming case`, the `group index view` is ensured to be `inlined`
@@ -1028,8 +1021,7 @@ impl<const STREAMING: bool> GroupValues for GroupValuesColumn<STREAMING> {
     }
 }
 
-/// Returns true if [`GroupValuesColumn`] or [`VectorizedGroupValuesColumn`]
-/// supported for the specified schema
+/// Returns true if [`GroupValuesColumn`] supported for the specified schema
 pub fn supported_schema(schema: &Schema) -> bool {
     schema
         .fields()
@@ -1247,9 +1239,9 @@ mod tests {
         assert!(group_values.map.is_empty());
     }
 
-    /// Test data set for [`VectorizedGroupValuesColumn`]
+    /// Test data set for [`GroupValuesColumn::vectorized_intern`]
     ///
-    /// Define the test data and support loading them into test [`VectorizedGroupValuesColumn`]
+    /// Define the test data and support loading them into test [`GroupValuesColumn::vectorized_intern`]
     ///
     /// The covering situations:
     ///
