@@ -178,6 +178,7 @@ fn is_well_supported_signature(type_signature: &TypeSignature) -> bool {
         type_signature,
         TypeSignature::UserDefined
             | TypeSignature::Numeric(_)
+            | TypeSignature::NumericAndNumericString(_)
             | TypeSignature::String(_)
             | TypeSignature::Coercible(_)
             | TypeSignature::Any(_)
@@ -396,25 +397,29 @@ fn get_valid_types(
         }
     }
 
+    fn function_length_check(length: usize, expected_length: usize) -> Result<()> {
+        if length < 1 {
+            return plan_err!(
+                "The signature expected at least one argument but received {expected_length}"
+            );
+        }
+
+        if length != expected_length {
+            return plan_err!(
+                "The signature expected {length} arguments but received {expected_length}"
+            );
+        }
+
+        Ok(())
+    }
+
     let valid_types = match signature {
         TypeSignature::Variadic(valid_types) => valid_types
             .iter()
             .map(|valid_type| current_types.iter().map(|_| valid_type.clone()).collect())
             .collect(),
         TypeSignature::String(number) => {
-            if *number < 1 {
-                return plan_err!(
-                    "The signature expected at least one argument but received {}",
-                    current_types.len()
-                );
-            }
-            if *number != current_types.len() {
-                return plan_err!(
-                    "The signature expected {} arguments but received {}",
-                    number,
-                    current_types.len()
-                );
-            }
+            function_length_check(current_types.len(), *number)?;
 
             let mut new_types = Vec::with_capacity(current_types.len());
             for data_type in current_types.iter() {
@@ -474,20 +479,8 @@ fn get_valid_types(
 
             vec![vec![base_type_or_default_type(&coerced_type); *number]]
         }
-        TypeSignature::Numeric(number) => {
-            if *number < 1 {
-                return plan_err!(
-                    "The signature expected at least one argument but received {}",
-                    current_types.len()
-                );
-            }
-            if *number != current_types.len() {
-                return plan_err!(
-                    "The signature expected {} arguments but received {}",
-                    number,
-                    current_types.len()
-                );
-            }
+        TypeSignature::NumericAndNumericString(number) => {
+            function_length_check(current_types.len(), *number)?;
 
             // Find common numeric type amongs given types except string
             let mut valid_type = current_types.first().unwrap().to_owned();
@@ -524,6 +517,44 @@ fn get_valid_types(
             // f64 is choosen since most of the math function utilize Signature::numeric,
             // and their default type is double precision
             if matches!(logical_data_type, NativeType::String | NativeType::Null) {
+                valid_type = DataType::Float64;
+            }
+
+            vec![vec![valid_type; *number]]
+        }
+        TypeSignature::Numeric(number) => {
+            function_length_check(current_types.len(), *number)?;
+
+            // Find common numeric type amongs given types except string
+            let mut valid_type = current_types.first().unwrap().to_owned();
+            for t in current_types.iter().skip(1) {
+                let logical_data_type: NativeType = t.into();
+                if logical_data_type == NativeType::Null {
+                    continue;
+                }
+
+                if !logical_data_type.is_numeric() {
+                    return plan_err!(
+                        "The signature expected NativeType::Numeric but received {t}"
+                    );
+                }
+
+                if let Some(coerced_type) = binary_numeric_coercion(&valid_type, t) {
+                    valid_type = coerced_type;
+                } else {
+                    return plan_err!(
+                        "{} and {} are not coercible to a common numeric type",
+                        valid_type,
+                        t
+                    );
+                }
+            }
+
+            let logical_data_type: NativeType = valid_type.clone().into();
+            // Fallback to default type if we don't know which type to coerced to
+            // f64 is choosen since most of the math function utilize Signature::numeric,
+            // and their default type is double precision
+            if logical_data_type == NativeType::Null {
                 valid_type = DataType::Float64;
             }
 

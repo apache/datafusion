@@ -129,6 +129,11 @@ SELECT abs(1, 2);
 query error DataFusion error: Arrow error: Cast error: Cannot cast string 'foo' to value of Float64 type
 SELECT abs('foo');
 
+# abs: numeric string
+query R
+select abs('-1.2');
+----
+1.2
 
 statement ok
 CREATE TABLE test_nullable_integer(
