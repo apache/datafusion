@@ -27,7 +27,7 @@ use std::sync::OnceLock;
 
 use datafusion_common::arrow::array::ArrayRef;
 use datafusion_common::arrow::datatypes::{DataType, Field};
-use datafusion_common::{Result, ScalarValue};
+use datafusion_common::{exec_err, Result, ScalarValue};
 use datafusion_expr::window_doc_sections::DOC_SECTION_ANALYTICAL;
 use datafusion_expr::window_state::WindowAggState;
 use datafusion_expr::{
@@ -36,7 +36,6 @@ use datafusion_expr::{
 };
 use datafusion_functions_window_common::field;
 use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
-
 use field::WindowUDFFieldArgs;
 
 define_udwf_and_expr!(
@@ -188,20 +187,29 @@ impl WindowUDFImpl for NthValue {
             kind: self.kind,
         };
 
-        let n: i64 = if matches!(self.kind, NthValueKind::Nth) {
-            get_scalar_value_from_args(partition_evaluator_args.input_exprs(), 1)?
+        if !matches!(self.kind, NthValueKind::Nth) {
+            return Ok(Box::new(NthValueEvaluator {
+                state,
+                ignore_nulls: partition_evaluator_args.ignore_nulls(),
+                n: 0,
+            }));
+        }
+
+        let n =
+            match get_scalar_value_from_args(partition_evaluator_args.input_exprs(), 1)?
                 .map(get_signed_integer)
-                .map_or(Ok(0), |v| v)
-                .map(|val| {
+            {
+                Some(Ok(n)) => {
                     if partition_evaluator_args.is_reversed() {
-                        -val
+                        Ok(-n)
                     } else {
-                        val
+                        Ok(n)
                     }
-                })?
-        } else {
-            0
-        };
+                }
+                _ => {
+                    exec_err!("Expected an integer value")
+                }
+            }?;
 
         Ok(Box::new(NthValueEvaluator {
             state,
@@ -212,8 +220,9 @@ impl WindowUDFImpl for NthValue {
 
     fn field(&self, field_args: WindowUDFFieldArgs) -> Result<Field> {
         let nullable = true;
+        let return_type = field_args.input_types().first().unwrap_or(&DataType::Null);
 
-        Ok(Field::new(field_args.name(), DataType::UInt64, nullable))
+        Ok(Field::new(field_args.name(), return_type.clone(), nullable))
     }
 
     fn reverse_expr(&self) -> ReversedUDWF {
