@@ -56,6 +56,7 @@ use datafusion_physical_expr_common::sort_expr::LexRequirement;
 use futures::stream::BoxStream;
 use futures::{pin_mut, Stream, StreamExt, TryStreamExt};
 use object_store::{delimited::newline_delimited_stream, ObjectMeta, ObjectStore};
+use regex::Regex;
 
 #[derive(Default)]
 /// Factory struct used to create [CsvFormatFactory]
@@ -454,7 +455,9 @@ impl CsvFormat {
                             .has_header
                             .unwrap_or(state.config_options().catalog.has_header),
                 )
-                .with_delimiter(self.options.delimiter);
+                .with_delimiter(self.options.delimiter)
+                // Support literal NULL or empty string as null
+                .with_null_regex(Regex::new(r"^NULL$|^$").unwrap());
 
             if let Some(comment) = self.options.comment {
                 format = format.with_comment(comment);
@@ -759,8 +762,17 @@ mod tests {
         let state = session_ctx.state();
 
         let projection = None;
-        let exec =
-            get_exec(&state, "aggregate_test_100.csv", projection, None, true).await?;
+        let root = "./tests/data/csv";
+        let format = CsvFormat::default().with_has_header(true);
+        let exec = scan_format(
+            &state,
+            &format,
+            root,
+            "aggregate_test_100_with_nulls.csv",
+            projection,
+            None,
+        )
+        .await?;
 
         let x: Vec<String> = exec
             .schema()
@@ -782,7 +794,9 @@ mod tests {
                 "c10: Utf8",
                 "c11: Float64",
                 "c12: Float64",
-                "c13: Utf8"
+                "c13: Utf8",
+                "c14: Null",
+                "c15: Null"
             ],
             x
         );

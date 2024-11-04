@@ -127,6 +127,7 @@ parquet = { workspace = true, optional = true, default-features = true }
 paste = "1.0.15"
 pin-project-lite = "^0.2.7"
 rand = { workspace = true }
+regex = { workspace = true }
 sqlparser = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true }
