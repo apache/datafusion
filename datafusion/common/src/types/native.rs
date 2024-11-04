@@ -423,13 +423,21 @@ impl NativeType {
     /// It handles general coercion rules that are widely applicable.
     /// Avoid adding specific coercion cases here.
     /// Aim to keep this logic as SIMPLE as possible!
-    pub fn can_cast_to(&self, target_type: &Self) -> bool {
-        // In Postgres, most functions coerce numeric strings to numeric inputs,
-        // but they do not accept numeric inputs as strings.
-        if self.is_numeric() && target_type == &NativeType::String {
-            return false;
+    /// 
+    /// Ensure there is a corresponding test for this function.
+    pub fn can_coerce_to(&self, target_type: &Self) -> bool {
+        if self.eq(target_type) {
+            return true;
         }
 
-        true
+        if self.is_numeric() && target_type.is_numeric() {
+            return true;
+        }
+
+        if self.eq(&NativeType::Null) && target_type == &NativeType::String {
+            return true;
+        }
+
+        false
     }
 }

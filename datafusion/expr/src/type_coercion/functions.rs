@@ -23,7 +23,7 @@ use arrow::{
 };
 use datafusion_common::{
     exec_err, internal_datafusion_err, internal_err, plan_err,
-    types::NativeType,
+    types::{LogicalType, NativeType},
     utils::{coerced_fixed_size_list_to_list, list_ndims},
     Result,
 };
@@ -423,19 +423,16 @@ fn get_valid_types(
             let mut new_types = Vec::with_capacity(current_types.len());
             for data_type in current_types.iter() {
                 let logical_data_type: NativeType = data_type.into();
-
-                match logical_data_type {
-                    NativeType::String => {
+                if logical_data_type.can_coerce_to(&NativeType::String) {
+                    if data_type.is_null() {
+                        new_types.push(DataType::Utf8);
+                    } else {
                         new_types.push(data_type.to_owned());
                     }
-                    NativeType::Null => {
-                        new_types.push(DataType::Utf8);
-                    }
-                    _ => {
-                        return plan_err!(
-                            "The signature expected NativeType::String but received {data_type}"
-                        );
-                    }
+                } else {
+                    return plan_err!(
+                        "The signature expected NativeType::String but received {data_type}"
+                    );
                 }
             }
 
@@ -497,20 +494,25 @@ fn get_valid_types(
                 );
             }
 
-            let mut new_types = Vec::with_capacity(current_types.len());
-            for data_type in current_types.iter() {
-                let logical_data_type: NativeType = data_type.into();
-                if logical_data_type.is_numeric() {
-                    new_types.push(data_type.to_owned());
-                } else {
+            // Find common numeric type amongs given types except string
+            let mut valid_type = current_types.first().unwrap().to_owned();
+            for t in current_types.iter().skip(1) {
+                let logical_data_type: NativeType = t.into();
+                // Skip string, assume it is numeric string, let arrow::cast handle the actual casting logic
+                if logical_data_type == NativeType::String {
+                    continue;
+                }
+
+                if logical_data_type == NativeType::Null {
+                    continue;
+                }
+
+                if !logical_data_type.is_numeric() {
                     return plan_err!(
-                        "The signature expected NativeType::Numeric but received {data_type}"
+                        "The signature expected NativeType::Numeric but received {t}"
                     );
                 }
-            }
 
-            let mut valid_type = new_types.first().unwrap().clone();
-            for t in new_types.iter().skip(1) {
                 if let Some(coerced_type) = binary_numeric_coercion(&valid_type, t) {
                     valid_type = coerced_type;
                 } else {
@@ -520,6 +522,14 @@ fn get_valid_types(
                         t
                     );
                 }
+            }
+
+            let logical_data_type: NativeType = valid_type.clone().into();
+            // Fallback to default type if we don't know which type to coerced to
+            // f64 is choosen since most of the math function utilize Signature::numeric, 
+            // and their default type is double precision
+            if matches!(logical_data_type, NativeType::String | NativeType::Null) {
+                valid_type = DataType::Float64;
             }
 
             vec![vec![valid_type; *number]]
@@ -545,7 +555,7 @@ fn get_valid_types(
                 let logical_data_type: NativeType = data_type.into();
                 if logical_data_type == *target_type.native() {
                     new_types.push(data_type.to_owned());
-                } else if logical_data_type.can_cast_to(target_type.native()) {
+                } else if logical_data_type.can_coerce_to(target_type.native()) {
                     let casted_type = target_type.default_cast_for(data_type)?;
                     new_types.push(casted_type);
                 } else {

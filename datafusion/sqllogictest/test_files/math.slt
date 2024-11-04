@@ -126,7 +126,7 @@ statement error
 SELECT abs(1, 2);
 
 # abs: unsupported argument type
-query error DataFusion error: This feature is not implemented: Unsupported data type Utf8 for function abs
+query error DataFusion error: Arrow error: Cast error: Cannot cast string 'foo' to value of Float64 type
 SELECT abs('foo');
 
 
