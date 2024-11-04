@@ -558,7 +558,7 @@ mod tests {
 
     fn test_to_local_time_helper(input: ScalarValue, expected: ScalarValue) {
         let res = ToLocalTimeFunc::new()
-            .invoke(&[ColumnarValue::Scalar(input)])
+            .invoke_batch(&[ColumnarValue::Scalar(input)], 1)
             .unwrap();
         match res {
             ColumnarValue::Scalar(res) => {
@@ -616,8 +616,9 @@ mod tests {
                 .iter()
                 .map(|s| Some(string_to_timestamp_nanos(s).unwrap()))
                 .collect::<TimestampNanosecondArray>();
+            let batch_size = input.len();
             let result = ToLocalTimeFunc::new()
-                .invoke(&[ColumnarValue::Array(Arc::new(input))])
+                .invoke_batch(&[ColumnarValue::Array(Arc::new(input))], batch_size)
                 .unwrap();
             if let ColumnarValue::Array(result) = result {
                 assert_eq!(
