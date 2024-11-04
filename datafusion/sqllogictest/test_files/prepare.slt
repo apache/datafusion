@@ -170,6 +170,36 @@ EXECUTE my_plan9('Foo', 'Bar');
 1 Foo
 2 Bar
 
+
+# Test issue: https://github.com/apache/datafusion/issues/12294
+# prepare argument is in the LIMIT clause
+statement ok
+CREATE TABLE test(id INT, run_id TEXT) AS VALUES(1, 'foo'), (1, 'foo'), (3, 'bar');
+
+statement ok
+PREPARE get_N_rand_ints_from_last_run(INT) AS
+SELECT id
+FROM
+    "test"
+WHERE run_id = 'foo'
+ORDER BY random()
+LIMIT $1
+
+query I
+EXECUTE get_N_rand_ints_from_last_run(1);
+----
+1
+
+query I
+EXECUTE get_N_rand_ints_from_last_run(2);
+----
+1
+1
+
+statement ok
+DROP TABLE test;
+
+
 # test creating logical plan for EXECUTE statements
 query TT
 EXPLAIN EXECUTE my_plan;
