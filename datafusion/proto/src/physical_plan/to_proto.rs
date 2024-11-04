@@ -21,7 +21,7 @@ use std::sync::Arc;
 #[cfg(feature = "parquet")]
 use datafusion::datasource::file_format::parquet::ParquetSink;
 use datafusion::physical_expr::window::{NthValueKind, SlidingAggregateWindowExpr};
-use datafusion::physical_expr::{PhysicalSortExpr, ScalarFunctionExpr};
+use datafusion::physical_expr::{LexOrdering, PhysicalSortExpr, ScalarFunctionExpr};
 use datafusion::physical_plan::expressions::{
     BinaryExpr, CaseExpr, CastExpr, Column, InListExpr, IsNotNullExpr, IsNullExpr,
     Literal, NegativeExpr, NotExpr, NthValue, TryCastExpr,
@@ -52,7 +52,10 @@ pub fn serialize_physical_aggr_expr(
     codec: &dyn PhysicalExtensionCodec,
 ) -> Result<protobuf::PhysicalExprNode> {
     let expressions = serialize_physical_exprs(&aggr_expr.expressions(), codec)?;
-    let ordering_req = aggr_expr.order_bys().unwrap_or(&[]).to_vec();
+    let ordering_req = match aggr_expr.order_bys() {
+        Some(order) => LexOrdering::from_ref(order),
+        None => LexOrdering::default(),
+    };
     let ordering_req = serialize_physical_sort_exprs(ordering_req, codec)?;
 
     let name = aggr_expr.fun().name().to_string();

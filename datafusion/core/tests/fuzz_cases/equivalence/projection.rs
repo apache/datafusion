@@ -25,7 +25,7 @@ use datafusion_expr::{Operator, ScalarUDF};
 use datafusion_physical_expr::equivalence::ProjectionMapping;
 use datafusion_physical_expr::expressions::{col, BinaryExpr};
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
-use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
+use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 use itertools::Itertools;
 use std::sync::Arc;
 
@@ -173,7 +173,7 @@ fn ordering_satisfy_after_projection_random() -> Result<()> {
                                 expr: Arc::clone(expr),
                                 options: SORT_OPTIONS,
                             })
-                            .collect::<Vec<_>>();
+                            .collect::<LexOrdering>();
                         let expected = is_table_same_after_sort(
                             requirement.clone(),
                             projected_batch.clone(),
@@ -185,7 +185,7 @@ fn ordering_satisfy_after_projection_random() -> Result<()> {
                         // Check whether ordering_satisfy API result and
                         // experimental result matches.
                         assert_eq!(
-                            projected_eq.ordering_satisfy(&requirement),
+                            projected_eq.ordering_satisfy(requirement.as_ref()),
                             expected,
                             "{}",
                             err_msg

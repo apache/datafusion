@@ -55,6 +55,7 @@ pub trait PartitionStream: Debug + Send + Sync {
 ///
 /// If your source can be represented as one or more [`PartitionStream`]s, you can
 /// use this struct to implement [`ExecutionPlan`].
+#[derive(Clone)]
 pub struct StreamingTableExec {
     partitions: Vec<Arc<dyn PartitionStream>>,
     projection: Option<Arc<[usize]>>,

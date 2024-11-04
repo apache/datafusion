@@ -165,7 +165,7 @@ logical_plan
 03)----TableScan: aggregate_test_100 projection=[c1, c2, c3]
 physical_plan
 01)ProjectionExec: expr=[c1@0 as c1, c2@1 as c2]
-02)--SortExec: expr=[c2@1 ASC NULLS LAST,c3@2 ASC NULLS LAST], preserve_partitioning=[false]
+02)--SortExec: expr=[c2@1 ASC NULLS LAST, c3@2 ASC NULLS LAST], preserve_partitioning=[false]
 03)----CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c2, c3], has_header=true
 
 query II
@@ -691,7 +691,7 @@ logical_plan
 01)Sort: t1.id DESC NULLS FIRST, t1.name ASC NULLS LAST
 02)--TableScan: t1 projection=[id, name]
 physical_plan
-01)SortExec: expr=[id@0 DESC,name@1 ASC NULLS LAST], preserve_partitioning=[false]
+01)SortExec: expr=[id@0 DESC, name@1 ASC NULLS LAST], preserve_partitioning=[false]
 02)--MemoryExec: partitions=1, partition_sizes=[1]
 
 query IT
@@ -710,7 +710,7 @@ logical_plan
 01)Sort: t1.id ASC NULLS LAST, t1.name ASC NULLS LAST
 02)--TableScan: t1 projection=[id, name]
 physical_plan
-01)SortExec: expr=[id@0 ASC NULLS LAST,name@1 ASC NULLS LAST], preserve_partitioning=[false]
+01)SortExec: expr=[id@0 ASC NULLS LAST, name@1 ASC NULLS LAST], preserve_partitioning=[false]
 02)--MemoryExec: partitions=1, partition_sizes=[1]
 
 
@@ -776,8 +776,8 @@ logical_plan
 13)------------Projection: column1 AS t
 14)--------------Values: (Int64(0)), (Int64(1))
 physical_plan
-01)SortPreservingMergeExec: [m@0 ASC NULLS LAST,t@1 ASC NULLS LAST]
-02)--SortExec: expr=[m@0 ASC NULLS LAST,t@1 ASC NULLS LAST], preserve_partitioning=[true]
+01)SortPreservingMergeExec: [m@0 ASC NULLS LAST, t@1 ASC NULLS LAST]
+02)--SortExec: expr=[m@0 ASC NULLS LAST, t@1 ASC NULLS LAST], preserve_partitioning=[true]
 03)----InterleaveExec
 04)------ProjectionExec: expr=[0 as m, t@0 as t]
 05)--------AggregateExec: mode=FinalPartitioned, gby=[t@0 as t], aggr=[]
@@ -1237,12 +1237,12 @@ logical_plan
 09)----------TableScan: ordered_table projection=[a0, b, c, d]
 physical_plan
 01)ProjectionExec: expr=[b@0 as b, c@1 as c, a@2 as a, a0@3 as a0]
-02)--SortPreservingMergeExec: [d@4 ASC NULLS LAST,c@1 ASC NULLS LAST,a@2 ASC NULLS LAST,a0@3 ASC NULLS LAST,b@0 ASC NULLS LAST], fetch=2
+02)--SortPreservingMergeExec: [d@4 ASC NULLS LAST, c@1 ASC NULLS LAST, a@2 ASC NULLS LAST, a0@3 ASC NULLS LAST, b@0 ASC NULLS LAST], fetch=2
 03)----UnionExec
-04)------SortExec: TopK(fetch=2), expr=[d@4 ASC NULLS LAST,c@1 ASC NULLS LAST,a@2 ASC NULLS LAST,b@0 ASC NULLS LAST], preserve_partitioning=[false]
+04)------SortExec: TopK(fetch=2), expr=[d@4 ASC NULLS LAST, c@1 ASC NULLS LAST, a@2 ASC NULLS LAST, b@0 ASC NULLS LAST], preserve_partitioning=[false]
 05)--------ProjectionExec: expr=[b@1 as b, c@2 as c, a@0 as a, NULL as a0, d@3 as d]
 06)----------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b, c, d], output_ordering=[c@2 ASC NULLS LAST], has_header=true
-07)------SortExec: TopK(fetch=2), expr=[d@4 ASC NULLS LAST,c@1 ASC NULLS LAST,a0@3 ASC NULLS LAST,b@0 ASC NULLS LAST], preserve_partitioning=[false]
+07)------SortExec: TopK(fetch=2), expr=[d@4 ASC NULLS LAST, c@1 ASC NULLS LAST, a0@3 ASC NULLS LAST, b@0 ASC NULLS LAST], preserve_partitioning=[false]
 08)--------ProjectionExec: expr=[b@1 as b, c@2 as c, NULL as a, a0@0 as a0, d@3 as d]
 09)----------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a0, b, c, d], output_ordering=[c@2 ASC NULLS LAST], has_header=true
 

@@ -23,11 +23,12 @@ use crate::sorts::{
     merge::SortPreservingMergeStream,
     stream::{FieldCursorStream, RowCursorStream},
 };
-use crate::{PhysicalSortExpr, SendableRecordBatchStream};
+use crate::SendableRecordBatchStream;
 use arrow::datatypes::{DataType, SchemaRef};
 use arrow_array::*;
 use datafusion_common::{internal_err, Result};
 use datafusion_execution::memory_pool::MemoryReservation;
+use datafusion_physical_expr_common::sort_expr::LexOrderingRef;
 
 macro_rules! primitive_merge_helper {
     ($t:ty, $($v:ident),+) => {
@@ -54,7 +55,7 @@ macro_rules! merge_helper {
 pub struct StreamingMergeBuilder<'a> {
     streams: Vec<SendableRecordBatchStream>,
     schema: Option<SchemaRef>,
-    expressions: &'a [PhysicalSortExpr],
+    expressions: LexOrderingRef<'a>,
     metrics: Option<BaselineMetrics>,
     batch_size: Option<usize>,
     fetch: Option<usize>,
@@ -80,7 +81,7 @@ impl<'a> StreamingMergeBuilder<'a> {
         self
     }
 
-    pub fn with_expressions(mut self, expressions: &'a [PhysicalSortExpr]) -> Self {
+    pub fn with_expressions(mut self, expressions: LexOrderingRef<'a>) -> Self {
         self.expressions = expressions;
         self
     }

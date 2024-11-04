@@ -22,6 +22,7 @@ use arrow_array::{ArrayRef, Int32Array, Int64Array, StringArray};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::expressions::col;
 use datafusion_physical_expr::PhysicalSortExpr;
+use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::memory::MemoryExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion_physical_plan::{collect, ExecutionPlan};
@@ -70,7 +71,7 @@ fn generate_spm_for_round_robin_tie_breaker(
     let partitiones = vec![rbs.clone(); partition_count];
 
     let schema = rb.schema();
-    let sort = vec![
+    let sort = LexOrdering::new(vec![
         PhysicalSortExpr {
             expr: col("b", &schema).unwrap(),
             options: Default::default(),
@@ -79,7 +80,7 @@ fn generate_spm_for_round_robin_tie_breaker(
             expr: col("c", &schema).unwrap(),
             options: Default::default(),
         },
-    ];
+    ]);
 
     let exec = MemoryExec::try_new(&partitiones, schema, None).unwrap();
     SortPreservingMergeExec::new(sort, Arc::new(exec))

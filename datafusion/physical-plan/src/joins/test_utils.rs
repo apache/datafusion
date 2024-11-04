@@ -101,8 +101,10 @@ pub async fn partitioned_sym_join_with_filter(
         filter,
         join_type,
         null_equals_null,
-        left.output_ordering().map(|p| p.to_vec()),
-        right.output_ordering().map(|p| p.to_vec()),
+        left.output_ordering().map(|p| LexOrdering::new(p.to_vec())),
+        right
+            .output_ordering()
+            .map(|p| LexOrdering::new(p.to_vec())),
         StreamJoinPartitionMode::Partitioned,
     )?;
 
