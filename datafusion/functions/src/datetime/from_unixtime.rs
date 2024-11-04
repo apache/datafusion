@@ -162,6 +162,7 @@ mod test {
     fn test_without_timezone() {
         let args = [ColumnarValue::Scalar(Int64(Some(1729900800)))];
 
+        #[allow(deprecated)] // TODO use invoke_batch
         let result = FromUnixtimeFunc::new().invoke(&args).unwrap();
 
         match result {
@@ -181,6 +182,7 @@ mod test {
             ))),
         ];
 
+        #[allow(deprecated)] // TODO use invoke_batch
         let result = FromUnixtimeFunc::new().invoke(&args).unwrap();
 
         match result {
