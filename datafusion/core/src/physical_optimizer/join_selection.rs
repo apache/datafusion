@@ -135,6 +135,9 @@ fn swap_join_type(join_type: JoinType) -> JoinType {
         JoinType::LeftMark => {
             unreachable!("LeftMark join type does not support swapping")
         }
+        JoinType::RightMark => {
+            unreachable!("RightMark join type does not support swapping")
+        }
     }
 }
 

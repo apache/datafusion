@@ -3865,6 +3865,7 @@ mod tests {
             JoinType::LeftAnti,
             JoinType::RightAnti,
             JoinType::LeftMark,
+            JoinType::RightMark,
         ];
 
         let default_partition_count = SessionConfig::new().target_partitions();
@@ -3898,7 +3899,8 @@ mod tests {
                 JoinType::Inner
                 | JoinType::Right
                 | JoinType::RightSemi
-                | JoinType::RightAnti => {
+                | JoinType::RightAnti
+                | JoinType::RightMark => {
                     let right_exprs: Vec<Arc<dyn PhysicalExpr>> = vec![
                         Arc::new(Column::new_with_schema("c2_c1", &join_schema)?),
                         Arc::new(Column::new_with_schema("c2_c2", &join_schema)?),

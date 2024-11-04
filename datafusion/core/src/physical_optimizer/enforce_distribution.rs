@@ -322,7 +322,7 @@ fn adjust_input_keys_ordering(
                         left.schema().fields().len(),
                     )
                     .unwrap_or_default(),
-                    JoinType::RightSemi | JoinType::RightAnti => {
+                    JoinType::RightSemi | JoinType::RightAnti | JoinType::RightMark => {
                         requirements.data.clone()
                     }
                     JoinType::Left
@@ -1963,6 +1963,7 @@ pub(crate) mod tests {
             JoinType::LeftMark,
             JoinType::RightSemi,
             JoinType::RightAnti,
+            JoinType::RightMark,
         ];
 
         // Join on (a == b1)
@@ -2036,7 +2037,7 @@ pub(crate) mod tests {
                     assert_optimized!(expected, top_join.clone(), true);
                     assert_optimized!(expected, top_join, false);
                 }
-                JoinType::RightSemi | JoinType::RightAnti => {}
+                JoinType::RightSemi | JoinType::RightAnti | JoinType::RightMark => {}
             }
 
             match join_type {
@@ -2101,7 +2102,7 @@ pub(crate) mod tests {
                     assert_optimized!(expected, top_join.clone(), true);
                     assert_optimized!(expected, top_join, false);
                 }
-                JoinType::LeftSemi | JoinType::LeftAnti | JoinType::LeftMark => {}
+                JoinType::LeftSemi | JoinType::LeftAnti | JoinType::LeftMark | JoinType::RightMark => {}
             }
         }
 

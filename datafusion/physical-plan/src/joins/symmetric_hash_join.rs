@@ -680,7 +680,7 @@ fn need_to_produce_result_in_final(build_side: JoinSide, join_type: JoinType) ->
     } else {
         matches!(
             join_type,
-            JoinType::Right | JoinType::RightAnti | JoinType::Full | JoinType::RightSemi
+            JoinType::Right | JoinType::RightAnti | JoinType::Full | JoinType::RightSemi | JoinType::RightMark
         )
     }
 }
@@ -724,6 +724,22 @@ where
                     visited_rows
                         .contains(&(idx + deleted_offset))
                         .then_some(R::Native::from_usize(0).unwrap())
+                })
+                .collect();
+            (build_indices, probe_indices)
+        }
+        (JoinSide::Right, JoinType::RightMark) => {
+            let probe_indices = (0..prune_length)
+                .map(R::Native::from_usize)
+                .collect::<PrimitiveArray<R>>();
+            let build_indices = (0..prune_length)
+                .map(|idx| {
+                    // For mark join we output a dummy index 0 to indicate the row had a match
+                    if visited_rows.contains(&(idx + deleted_offset)) {
+                        Some(L::Native::from_usize(0).unwrap())
+                    } else {
+                        None
+                    }
                 })
                 .collect();
             (build_indices, probe_indices)
@@ -893,6 +909,7 @@ pub(crate) fn join_with_probe_batch(
             | JoinType::LeftSemi
             | JoinType::LeftMark
             | JoinType::RightSemi
+            | JoinType::RightMark
     ) {
         Ok(None)
     } else {
@@ -1729,6 +1746,7 @@ mod tests {
             JoinType::LeftAnti,
             JoinType::LeftMark,
             JoinType::RightAnti,
+            JoinType::RightMark,
             JoinType::Full
         )]
         join_type: JoinType,
@@ -1814,6 +1832,7 @@ mod tests {
             JoinType::LeftAnti,
             JoinType::LeftMark,
             JoinType::RightAnti,
+            JoinType::RightMark,
             JoinType::Full
         )]
         join_type: JoinType,
@@ -1879,6 +1898,7 @@ mod tests {
             JoinType::LeftAnti,
             JoinType::LeftMark,
             JoinType::RightAnti,
+            JoinType::RightMark,
             JoinType::Full
         )]
         join_type: JoinType,
@@ -1931,6 +1951,7 @@ mod tests {
             JoinType::LeftAnti,
             JoinType::LeftMark,
             JoinType::RightAnti,
+            JoinType::RightMark,
             JoinType::Full
         )]
         join_type: JoinType,
@@ -1959,6 +1980,7 @@ mod tests {
             JoinType::LeftAnti,
             JoinType::LeftMark,
             JoinType::RightAnti,
+            JoinType::RightMark,
             JoinType::Full
         )]
         join_type: JoinType,
@@ -2325,6 +2347,7 @@ mod tests {
             JoinType::LeftAnti,
             JoinType::LeftMark,
             JoinType::RightAnti,
+            JoinType::RightMark,
             JoinType::Full
         )]
         join_type: JoinType,
@@ -2408,6 +2431,7 @@ mod tests {
             JoinType::LeftAnti,
             JoinType::LeftMark,
             JoinType::RightAnti,
+            JoinType::RightMark,
             JoinType::Full
         )]
         join_type: JoinType,
@@ -2483,6 +2507,7 @@ mod tests {
             JoinType::LeftAnti,
             JoinType::LeftMark,
             JoinType::RightAnti,
+            JoinType::RightMark,
             JoinType::Full
         )]
         join_type: JoinType,

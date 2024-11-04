@@ -44,7 +44,7 @@ pub enum JoinType {
     LeftAnti,
     /// Right Anti Join
     RightAnti,
-    /// Left Mark join
+    /// Left Mark Join
     ///
     /// Returns one record for each record from the left input. The output contains an additional
     /// column "mark" which is true if there is at least one match in the right input where the
@@ -58,6 +58,11 @@ pub enum JoinType {
     ///
     /// [1]: http://btw2017.informatik.uni-stuttgart.de/slidesandpapers/F1-10-37/paper_web.pdf
     LeftMark,
+    /// Righ Mark Join
+    ///
+    /// Same logic as the LeftMark Join above, however it returns a record for each record from the
+    /// right input.
+    RightMark,
 }
 
 impl JoinType {
@@ -78,6 +83,7 @@ impl Display for JoinType {
             JoinType::LeftAnti => "LeftAnti",
             JoinType::RightAnti => "RightAnti",
             JoinType::LeftMark => "LeftMark",
+            JoinType::RightMark => "RightMark",
         };
         write!(f, "{join_type}")
     }
@@ -98,6 +104,7 @@ impl FromStr for JoinType {
             "LEFTANTI" => Ok(JoinType::LeftAnti),
             "RIGHTANTI" => Ok(JoinType::RightAnti),
             "LEFTMARK" => Ok(JoinType::LeftMark),
+            "RIGHTMARK" => Ok(JoinType::RightMark),
             _ => _not_impl_err!("The join type {s} does not exist or is not implemented"),
         }
     }

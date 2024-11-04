@@ -173,7 +173,7 @@ impl SortMergeJoinExec {
         // When output schema contains only the right side, probe side is right.
         // Otherwise probe side is the left side.
         match join_type {
-            JoinType::Right | JoinType::RightSemi | JoinType::RightAnti => {
+            JoinType::Right | JoinType::RightSemi | JoinType::RightAnti | JoinType::RightMark => {
                 JoinSide::Right
             }
             JoinType::Inner
@@ -193,7 +193,7 @@ impl SortMergeJoinExec {
             | JoinType::LeftSemi
             | JoinType::LeftAnti
             | JoinType::LeftMark => vec![true, false],
-            JoinType::Right | JoinType::RightSemi | JoinType::RightAnti => {
+            JoinType::Right | JoinType::RightSemi | JoinType::RightAnti | JoinType::RightMark => {
                 vec![false, true]
             }
             _ => vec![false, false],

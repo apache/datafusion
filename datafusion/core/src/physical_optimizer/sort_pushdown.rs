@@ -427,7 +427,8 @@ fn expr_source_side(
         | JoinType::Left
         | JoinType::Right
         | JoinType::Full
-        | JoinType::LeftMark => {
+        | JoinType::LeftMark
+        | JoinType::RightMark => {
             let all_column_sides = required_exprs
                 .iter()
                 .filter_map(|r| {

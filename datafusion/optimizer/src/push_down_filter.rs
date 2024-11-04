@@ -162,11 +162,11 @@ pub(crate) fn lr_is_preserved(join_type: JoinType) -> (bool, bool) {
         JoinType::Right => (false, true),
         JoinType::Full => (false, false),
         // No columns from the right side of the join can be referenced in output
-        // predicates for semi/anti joins, so whether we specify t/f doesn't matter.
+        // predicates for semi/anti/mark joins, so whether we specify t/f doesn't matter.
         JoinType::LeftSemi | JoinType::LeftAnti | JoinType::LeftMark => (true, false),
         // No columns from the left side of the join can be referenced in output
-        // predicates for semi/anti joins, so whether we specify t/f doesn't matter.
-        JoinType::RightSemi | JoinType::RightAnti => (false, true),
+        // predicates for semi/anti/mark joins, so whether we specify t/f doesn't matter.
+        JoinType::RightSemi | JoinType::RightAnti | JoinType::RightMark => (false, true),
     }
 }
 
@@ -189,6 +189,7 @@ pub(crate) fn on_lr_is_preserved(join_type: JoinType) -> (bool, bool) {
         JoinType::LeftAnti => (false, true),
         JoinType::RightAnti => (true, false),
         JoinType::LeftMark => (false, true),
+        JoinType::RightMark => (true, false),
     }
 }
 
@@ -740,7 +741,7 @@ fn infer_join_predicates_from_on_filters(
                 inferred_predicates,
             )
         }
-        JoinType::Right | JoinType::RightSemi => {
+        JoinType::Right | JoinType::RightSemi | JoinType::RightMark => {
             infer_join_predicates_impl::<false, true>(
                 join_col_keys,
                 on_filters,

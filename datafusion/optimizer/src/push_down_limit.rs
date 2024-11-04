@@ -249,7 +249,7 @@ fn push_down_join(mut join: Join, limit: usize) -> Transformed<Join> {
         match join.join_type {
             Left | Right | Full | Inner => (Some(limit), Some(limit)),
             LeftAnti | LeftSemi | LeftMark => (Some(limit), None),
-            RightAnti | RightSemi => (None, Some(limit)),
+            RightAnti | RightSemi | RightMark => (None, Some(limit)),
         }
     } else {
         match join.join_type {

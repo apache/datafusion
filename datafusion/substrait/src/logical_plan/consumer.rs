@@ -1128,7 +1128,7 @@ fn retrieve_emit_kind(rel_common: Option<&RelCommon>) -> EmitKind {
 
 fn contains_volatile_expr(proj: &Projection) -> Result<bool> {
     for expr in proj.expr.iter() {
-        if expr.is_volatile()? {
+        if expr.is_volatile() {
             return Ok(true);
         }
     }
@@ -1375,6 +1375,7 @@ fn from_substrait_jointype(join_type: i32) -> Result<JoinType> {
             join_rel::JoinType::LeftAnti => Ok(JoinType::LeftAnti),
             join_rel::JoinType::LeftSemi => Ok(JoinType::LeftSemi),
             join_rel::JoinType::LeftMark => Ok(JoinType::LeftMark),
+            join_rel::JoinType::RightMark => Ok(JoinType::RightMark),
             _ => plan_err!("unsupported join type {substrait_join_type:?}"),
         }
     } else {
