@@ -1126,7 +1126,7 @@ impl SessionContext {
             .into_iter()
             .map(|e| match e {
                 Expr::Literal(scalar) => Ok(scalar),
-                _ => not_impl_err!("Unsupported data type for parameter: {}", e),
+                _ => not_impl_err!("Unsupported parameter type: {}", e),
             })
             .collect::<Result<_>>()?;
 
