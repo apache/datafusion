@@ -866,7 +866,7 @@ impl Unparser<'_> {
             JoinType::LeftSemi => ast::JoinOperator::LeftSemi(constraint),
             JoinType::RightAnti => ast::JoinOperator::RightAnti(constraint),
             JoinType::RightSemi => ast::JoinOperator::RightSemi(constraint),
-            JoinType::LeftMark | JoinType::RightMark => unimplemented!("Unparsing of Left Mark join type"),
+            JoinType::LeftMark | JoinType::RightMark => unimplemented!("Unparsing of mark join type"),
         })
     }
 
