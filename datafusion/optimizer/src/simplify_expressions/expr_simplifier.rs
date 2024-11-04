@@ -1474,9 +1474,11 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 if let Expr::Literal(ScalarValue::Utf8(Some(pattern_str))) =
                     like_expr.pattern.as_ref()
                 {
-                    if !pattern_str.contains(['%', '_'].as_ref()) && like_expr.escape_char.is_none() {
+                    if !pattern_str.contains(['%', '_'].as_ref())
+                        && like_expr.escape_char.is_none()
+                    {
                         // If the pattern does not contain any wildcards, we can simplify the like expression to an equality expression
-                    
+
                         // TODO: handle escape characters
                         // These currently aren't anywhere else in DataFusion
 
