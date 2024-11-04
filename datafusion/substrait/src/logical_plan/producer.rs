@@ -361,7 +361,7 @@ pub fn to_substrait_rel(
         }
         LogicalPlan::Aggregate(agg) => {
             let input = to_substrait_rel(agg.input.as_ref(), ctx, extensions)?;
-            let groupings = to_substrait_groupings(
+            let (grouping_expressions, groupings) = to_substrait_groupings(
                 ctx,
                 &agg.group_expr,
                 agg.input.schema(),
@@ -377,7 +377,7 @@ pub fn to_substrait_rel(
                 rel_type: Some(RelType::Aggregate(Box::new(AggregateRel {
                     common: None,
                     input: Some(input),
-                    grouping_expressions: vec![],
+                    grouping_expressions,
                     groupings,
                     measures,
                     advanced_extension: None,
@@ -774,14 +774,20 @@ pub fn parse_flat_grouping_exprs(
     exprs: &[Expr],
     schema: &DFSchemaRef,
     extensions: &mut Extensions,
+    ref_group_exprs: &mut Vec<Expression>,
 ) -> Result<Grouping> {
-    let grouping_expressions = exprs
-        .iter()
-        .map(|e| to_substrait_rex(ctx, e, schema, 0, extensions))
-        .collect::<Result<Vec<_>>>()?;
+    let mut expression_references = vec![];
+    let mut grouping_expressions = vec![];
+
+    for e in exprs {
+        let rex = to_substrait_rex(ctx, e, schema, 0, extensions)?;
+        grouping_expressions.push(rex.clone());
+        ref_group_exprs.push(rex);
+        expression_references.push((ref_group_exprs.len() - 1) as u32);
+    }
     Ok(Grouping {
         grouping_expressions,
-        expression_references: vec![],
+        expression_references,
     })
 }
 
@@ -790,8 +796,9 @@ pub fn to_substrait_groupings(
     exprs: &[Expr],
     schema: &DFSchemaRef,
     extensions: &mut Extensions,
-) -> Result<Vec<Grouping>> {
-    match exprs.len() {
+) -> Result<(Vec<Expression>, Vec<Grouping>)> {
+    let mut ref_group_exprs = vec![];
+    let groupings = match exprs.len() {
         1 => match &exprs[0] {
             Expr::GroupingSet(gs) => match gs {
                 GroupingSet::Cube(_) => Err(DataFusionError::NotImplemented(
@@ -799,7 +806,15 @@ pub fn to_substrait_groupings(
                 )),
                 GroupingSet::GroupingSets(sets) => Ok(sets
                     .iter()
-                    .map(|set| parse_flat_grouping_exprs(ctx, set, schema, extensions))
+                    .map(|set| {
+                        parse_flat_grouping_exprs(
+                            ctx,
+                            set,
+                            schema,
+                            extensions,
+                            &mut ref_group_exprs,
+                        )
+                    })
                     .collect::<Result<Vec<_>>>()?),
                 GroupingSet::Rollup(set) => {
                     let mut sets: Vec<Vec<Expr>> = vec![vec![]];
@@ -810,19 +825,34 @@ pub fn to_substrait_groupings(
                         .iter()
                         .rev()
                         .map(|set| {
-                            parse_flat_grouping_exprs(ctx, set, schema, extensions)
+                            parse_flat_grouping_exprs(
+                                ctx,
+                                set,
+                                schema,
+                                extensions,
+                                &mut ref_group_exprs,
+                            )
                         })
                         .collect::<Result<Vec<_>>>()?)
                 }
             },
             _ => Ok(vec![parse_flat_grouping_exprs(
-                ctx, exprs, schema, extensions,
+                ctx,
+                exprs,
+                schema,
+                extensions,
+                &mut ref_group_exprs,
             )?]),
         },
         _ => Ok(vec![parse_flat_grouping_exprs(
-            ctx, exprs, schema, extensions,
+            ctx,
+            exprs,
+            schema,
+            extensions,
+            &mut ref_group_exprs,
         )?]),
-    }
+    }?;
+    Ok((ref_group_exprs, groupings))
 }
 
 #[allow(deprecated)]

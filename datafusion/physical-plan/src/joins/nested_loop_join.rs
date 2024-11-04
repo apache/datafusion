@@ -105,6 +105,7 @@ impl JoinLeftData {
     }
 }
 
+#[allow(rustdoc::private_intra_doc_links)]
 /// NestedLoopJoinExec is build-probe join operator, whose main task is to
 /// perform joins without any equijoin conditions in `ON` clause.
 ///
@@ -140,6 +141,9 @@ impl JoinLeftData {
 /// "reports" about probe phase completion (which means that "visited" bitmap won't be
 /// updated anymore), and only the last thread, reporting about completion, will return output.
 ///
+/// Note that the `Clone` trait is not implemented for this struct due to the
+/// `left_fut` [`OnceAsync`], which is used to coordinate the loading of the
+/// left side with the processing in each output stream.
 #[derive(Debug)]
 pub struct NestedLoopJoinExec {
     /// left side
@@ -858,7 +862,7 @@ pub(crate) mod tests {
     use datafusion_expr::Operator;
     use datafusion_physical_expr::expressions::{BinaryExpr, Literal};
     use datafusion_physical_expr::{Partitioning, PhysicalExpr};
-    use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
+    use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 
     use rstest::rstest;
 
@@ -888,7 +892,7 @@ pub(crate) mod tests {
         let mut exec =
             MemoryExec::try_new(&[batches], Arc::clone(&schema), None).unwrap();
         if !sorted_column_names.is_empty() {
-            let mut sort_info = Vec::new();
+            let mut sort_info = LexOrdering::default();
             for name in sorted_column_names {
                 let index = schema.index_of(name).unwrap();
                 let sort_expr = PhysicalSortExpr {

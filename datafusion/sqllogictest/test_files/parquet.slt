@@ -89,8 +89,8 @@ logical_plan
 01)Sort: test_table.string_col ASC NULLS LAST, test_table.int_col ASC NULLS LAST
 02)--TableScan: test_table projection=[int_col, string_col]
 physical_plan
-01)SortPreservingMergeExec: [string_col@1 ASC NULLS LAST,int_col@0 ASC NULLS LAST]
-02)--SortExec: expr=[string_col@1 ASC NULLS LAST,int_col@0 ASC NULLS LAST], preserve_partitioning=[true]
+01)SortPreservingMergeExec: [string_col@1 ASC NULLS LAST, int_col@0 ASC NULLS LAST]
+02)--SortExec: expr=[string_col@1 ASC NULLS LAST, int_col@0 ASC NULLS LAST], preserve_partitioning=[true]
 03)----ParquetExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet/test_table/0.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet/test_table/1.parquet]]}, projection=[int_col, string_col]
 
 # Tear down test_table:
@@ -119,7 +119,7 @@ logical_plan
 01)Sort: test_table.string_col ASC NULLS LAST, test_table.int_col ASC NULLS LAST
 02)--TableScan: test_table projection=[int_col, string_col]
 physical_plan
-01)SortPreservingMergeExec: [string_col@1 ASC NULLS LAST,int_col@0 ASC NULLS LAST]
+01)SortPreservingMergeExec: [string_col@1 ASC NULLS LAST, int_col@0 ASC NULLS LAST]
 02)--ParquetExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet/test_table/0.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet/test_table/1.parquet]]}, projection=[int_col, string_col], output_ordering=[string_col@1 ASC NULLS LAST, int_col@0 ASC NULLS LAST]
 
 # Add another file to the directory underlying test_table
@@ -141,8 +141,8 @@ logical_plan
 01)Sort: test_table.string_col ASC NULLS LAST, test_table.int_col ASC NULLS LAST
 02)--TableScan: test_table projection=[int_col, string_col]
 physical_plan
-01)SortPreservingMergeExec: [string_col@1 ASC NULLS LAST,int_col@0 ASC NULLS LAST]
-02)--SortExec: expr=[string_col@1 ASC NULLS LAST,int_col@0 ASC NULLS LAST], preserve_partitioning=[true]
+01)SortPreservingMergeExec: [string_col@1 ASC NULLS LAST, int_col@0 ASC NULLS LAST]
+02)--SortExec: expr=[string_col@1 ASC NULLS LAST, int_col@0 ASC NULLS LAST], preserve_partitioning=[true]
 03)----ParquetExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet/test_table/0.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet/test_table/1.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet/test_table/2.parquet]]}, projection=[int_col, string_col]
 
 
@@ -549,3 +549,52 @@ FixedSizeBinary(16) 0166ce1d46129ad104fa4990c6057c91
 
 statement ok
 DROP TABLE test_non_utf8_binary;
+
+
+## Tests for https://github.com/apache/datafusion/issues/13186
+statement ok
+create table cpu (time timestamp, usage_idle float, usage_user float, cpu int);
+
+statement ok
+insert into cpu values ('1970-01-01 00:00:00', 1.0, 2.0, 3);
+
+# must put it into a parquet file to get statistics
+statement ok
+copy (select * from cpu) to 'test_files/scratch/parquet/cpu.parquet';
+
+# Run queries against parquet files
+statement ok
+create external table cpu_parquet
+stored as parquet
+location 'test_files/scratch/parquet/cpu.parquet';
+
+# Double filtering
+#
+# Expect 1 row for both queries
+query PI
+select time, rn
+from (
+  select time, row_number() OVER (ORDER BY usage_idle, time) as rn
+  from cpu
+  where cpu = 3
+) where rn > 0;
+----
+1970-01-01T00:00:00 1
+
+query PI
+select time, rn
+from (
+  select time, row_number() OVER (ORDER BY usage_idle, time) as rn
+  from cpu_parquet
+  where cpu = 3
+) where rn > 0;
+----
+1970-01-01T00:00:00 1
+
+
+# Clean up
+statement ok
+drop table cpu;
+
+statement ok
+drop table cpu_parquet;

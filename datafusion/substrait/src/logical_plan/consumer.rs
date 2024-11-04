@@ -33,6 +33,7 @@ use datafusion::logical_expr::{
     expr::find_df_window_func, Aggregate, BinaryExpr, Case, EmptyRelation, Expr,
     ExprSchemable, LogicalPlan, Operator, Projection, SortExpr, Values,
 };
+use substrait::proto::aggregate_rel::Grouping;
 use substrait::proto::expression::subquery::set_predicate::PredicateOp;
 use substrait::proto::expression_reference::ExprType;
 use url::Url;
@@ -665,39 +666,48 @@ pub async fn from_substrait_rel(
                 let input = LogicalPlanBuilder::from(
                     from_substrait_rel(ctx, input, extensions).await?,
                 );
-                let mut group_expr = vec![];
-                let mut aggr_expr = vec![];
+                let mut ref_group_exprs = vec![];
+
+                for e in &agg.grouping_expressions {
+                    let x =
+                        from_substrait_rex(ctx, e, input.schema(), extensions).await?;
+                    ref_group_exprs.push(x);
+                }
+
+                let mut group_exprs = vec![];
+                let mut aggr_exprs = vec![];
 
                 match agg.groupings.len() {
                     1 => {
-                        for e in &agg.groupings[0].grouping_expressions {
-                            let x =
-                                from_substrait_rex(ctx, e, input.schema(), extensions)
-                                    .await?;
-                            group_expr.push(x);
-                        }
+                        group_exprs.extend_from_slice(
+                            &from_substrait_grouping(
+                                ctx,
+                                &agg.groupings[0],
+                                &ref_group_exprs,
+                                input.schema(),
+                                extensions,
+                            )
+                            .await?,
+                        );
                     }
                     _ => {
                         let mut grouping_sets = vec![];
                         for grouping in &agg.groupings {
-                            let mut grouping_set = vec![];
-                            for e in &grouping.grouping_expressions {
-                                let x = from_substrait_rex(
-                                    ctx,
-                                    e,
-                                    input.schema(),
-                                    extensions,
-                                )
-                                .await?;
-                                grouping_set.push(x);
-                            }
+                            let grouping_set = from_substrait_grouping(
+                                ctx,
+                                grouping,
+                                &ref_group_exprs,
+                                input.schema(),
+                                extensions,
+                            )
+                            .await?;
                             grouping_sets.push(grouping_set);
                         }
                         // Single-element grouping expression of type Expr::GroupingSet.
                         // Note that GroupingSet::Rollup would become GroupingSet::GroupingSets, when
                         // parsed by the producer and consumer, since Substrait does not have a type dedicated
                         // to ROLLUP. Only vector of Groupings (grouping sets) is available.
-                        group_expr.push(Expr::GroupingSet(GroupingSet::GroupingSets(
+                        group_exprs.push(Expr::GroupingSet(GroupingSet::GroupingSets(
                             grouping_sets,
                         )));
                     }
@@ -755,9 +765,9 @@ pub async fn from_substrait_rel(
                             "Aggregate without aggregate function is not supported"
                         ),
                     };
-                    aggr_expr.push(agg_func?.as_ref().clone());
+                    aggr_exprs.push(agg_func?.as_ref().clone());
                 }
-                input.aggregate(group_expr, aggr_expr)?.build()
+                input.aggregate(group_exprs, aggr_exprs)?.build()
             } else {
                 not_impl_err!("Aggregate without an input is not valid")
             }
@@ -1126,13 +1136,8 @@ fn retrieve_emit_kind(rel_common: Option<&RelCommon>) -> EmitKind {
         .map_or(default, |ek| ek.clone())
 }
 
-fn contains_volatile_expr(proj: &Projection) -> Result<bool> {
-    for expr in proj.expr.iter() {
-        if expr.is_volatile() {
-            return Ok(true);
-        }
-    }
-    Ok(false)
+fn contains_volatile_expr(proj: &Projection) -> bool {
+    proj.expr.iter().any(|e| e.is_volatile())
 }
 
 fn apply_emit_kind(
@@ -1151,7 +1156,7 @@ fn apply_emit_kind(
                 // expressions in the projection are volatile. This is to avoid issues like
                 // converting a single call of the random() function into multiple calls due to
                 // duplicate fields in the output_mapping.
-                LogicalPlan::Projection(proj) if !contains_volatile_expr(&proj)? => {
+                LogicalPlan::Projection(proj) if !contains_volatile_expr(&proj) => {
                     let mut exprs: Vec<Expr> = vec![];
                     for field in output_mapping {
                         let expr = proj.expr
@@ -2766,6 +2771,29 @@ fn from_substrait_null(
     } else {
         not_impl_err!("Null type without kind is not supported")
     }
+}
+
+#[allow(deprecated)]
+async fn from_substrait_grouping(
+    ctx: &SessionContext,
+    grouping: &Grouping,
+    expressions: &[Expr],
+    input_schema: &DFSchemaRef,
+    extensions: &Extensions,
+) -> Result<Vec<Expr>> {
+    let mut group_exprs = vec![];
+    if !grouping.grouping_expressions.is_empty() {
+        for e in &grouping.grouping_expressions {
+            let expr = from_substrait_rex(ctx, e, input_schema, extensions).await?;
+            group_exprs.push(expr);
+        }
+        return Ok(group_exprs);
+    }
+    for idx in &grouping.expression_references {
+        let e = &expressions[*idx as usize];
+        group_exprs.push(e.clone());
+    }
+    Ok(group_exprs)
 }
 
 fn from_substrait_field_reference(
