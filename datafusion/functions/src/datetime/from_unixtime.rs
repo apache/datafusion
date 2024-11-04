@@ -85,7 +85,7 @@ impl ScalarUDFImpl for FromUnixtimeFunc {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        internal_err!("return_type should not be called")
+        internal_err!("call return_type_from_exprs instead")
     }
 
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
