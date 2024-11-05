@@ -98,7 +98,7 @@ pub fn create_window_expr(
     name: String,
     args: &[Arc<dyn PhysicalExpr>],
     partition_by: &[Arc<dyn PhysicalExpr>],
-    order_by: &[PhysicalSortExpr],
+    order_by: &LexOrdering,
     window_frame: Arc<WindowFrame>,
     input_schema: &Schema,
     ignore_nulls: bool,
@@ -139,7 +139,7 @@ pub fn create_window_expr(
 /// Creates an appropriate [`WindowExpr`] based on the window frame and
 fn window_expr_from_aggregate_expr(
     partition_by: &[Arc<dyn PhysicalExpr>],
-    order_by: &[PhysicalSortExpr],
+    order_by: &LexOrdering,
     window_frame: Arc<WindowFrame>,
     aggregate: Arc<AggregateFunctionExpr>,
 ) -> Arc<dyn WindowExpr> {
@@ -497,7 +497,7 @@ pub fn get_best_fitting_window(
 /// the mode this window operator should work in to accommodate the existing ordering.
 pub fn get_window_mode(
     partitionby_exprs: &[Arc<dyn PhysicalExpr>],
-    orderby_keys: &[PhysicalSortExpr],
+    orderby_keys: &LexOrdering,
     input: &Arc<dyn ExecutionPlan>,
 ) -> Option<(bool, InputOrderMode)> {
     let input_eqs = input.equivalence_properties().clone();
@@ -516,9 +516,9 @@ pub fn get_window_mode(
     // Treat partition by exprs as constant. During analysis of requirements are satisfied.
     let const_exprs = partitionby_exprs.iter().map(ConstExpr::from);
     let partition_by_eqs = input_eqs.with_constants(const_exprs);
-    let order_by_reqs = PhysicalSortRequirement::from_sort_exprs(orderby_keys);
+    let order_by_reqs = PhysicalSortRequirement::from_sort_exprs(orderby_keys.iter());
     let reverse_order_by_reqs =
-        PhysicalSortRequirement::from_sort_exprs(&reverse_order_bys(orderby_keys));
+        PhysicalSortRequirement::from_sort_exprs(reverse_order_bys(orderby_keys).iter());
     for (should_swap, order_by_reqs) in
         [(false, order_by_reqs), (true, reverse_order_by_reqs)]
     {
@@ -699,7 +699,7 @@ mod tests {
                 "count".to_owned(),
                 &[col("a", &schema)?],
                 &[],
-                &[],
+                &LexOrdering::default(),
                 Arc::new(WindowFrame::new(None)),
                 schema.as_ref(),
                 false,
@@ -896,7 +896,7 @@ mod tests {
                 partition_by_exprs.push(col(col_name, &test_schema)?);
             }
 
-            let mut order_by_exprs = vec![];
+            let mut order_by_exprs = LexOrdering::default();
             for col_name in order_by_params {
                 let expr = col(col_name, &test_schema)?;
                 // Give default ordering, this is same with input ordering direction
@@ -904,8 +904,11 @@ mod tests {
                 let options = SortOptions::default();
                 order_by_exprs.push(PhysicalSortExpr { expr, options });
             }
-            let res =
-                get_window_mode(&partition_by_exprs, &order_by_exprs, &exec_unbounded);
+            let res = get_window_mode(
+                &partition_by_exprs,
+                order_by_exprs.as_ref(),
+                &exec_unbounded,
+            );
             // Since reversibility is not important in this test. Convert Option<(bool, InputOrderMode)> to Option<InputOrderMode>
             let res = res.map(|(_, mode)| mode);
             assert_eq!(
@@ -1058,7 +1061,7 @@ mod tests {
                 partition_by_exprs.push(col(col_name, &test_schema)?);
             }
 
-            let mut order_by_exprs = vec![];
+            let mut order_by_exprs = LexOrdering::default();
             for (col_name, descending, nulls_first) in order_by_params {
                 let expr = col(col_name, &test_schema)?;
                 let options = SortOptions {
@@ -1069,7 +1072,7 @@ mod tests {
             }
 
             assert_eq!(
-                get_window_mode(&partition_by_exprs, &order_by_exprs, &exec_unbounded),
+                get_window_mode(&partition_by_exprs, order_by_exprs.as_ref(), &exec_unbounded),
                 *expected,
                 "Unexpected result for in unbounded test case#: {case_idx:?}, case: {test_case:?}"
             );

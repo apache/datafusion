@@ -636,7 +636,6 @@ mod tests {
     use arrow::array::{ArrayRef, Int64Array, StringBuilder};
     use arrow::datatypes::TimeUnit;
     use chrono::Utc;
-
     use datafusion_common::{assert_contains, DataFusionError, ScalarValue};
     use datafusion_expr::ScalarFunctionImplementation;
 
@@ -1011,7 +1010,7 @@ mod tests {
                 assert!(matches!(rt, Timestamp(_, Some(_))));
 
                 let res = udf
-                    .invoke(&[array.clone()])
+                    .invoke_batch(&[array.clone()], 1)
                     .expect("that to_timestamp parsed values without error");
                 let array = match res {
                     ColumnarValue::Array(res) => res,
@@ -1054,7 +1053,7 @@ mod tests {
                 assert!(matches!(rt, Timestamp(_, None)));
 
                 let res = udf
-                    .invoke(&[array.clone()])
+                    .invoke_batch(&[array.clone()], 1)
                     .expect("that to_timestamp parsed values without error");
                 let array = match res {
                     ColumnarValue::Array(res) => res,

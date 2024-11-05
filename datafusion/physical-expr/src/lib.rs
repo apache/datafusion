@@ -54,8 +54,7 @@ pub use physical_expr::{
 
 pub use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 pub use datafusion_physical_expr_common::sort_expr::{
-    LexOrdering, LexOrderingRef, LexRequirement, LexRequirementRef, PhysicalSortExpr,
-    PhysicalSortRequirement,
+    LexOrdering, LexRequirement, PhysicalSortExpr, PhysicalSortRequirement,
 };
 
 pub use planner::{create_physical_expr, create_physical_exprs};

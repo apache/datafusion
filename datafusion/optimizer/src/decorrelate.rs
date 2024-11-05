@@ -17,7 +17,7 @@
 
 //! [`PullUpCorrelatedExpr`] converts correlated subqueries to `Joins`
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::BTreeSet;
 use std::ops::Deref;
 use std::sync::Arc;
 
@@ -27,7 +27,7 @@ use crate::utils::collect_subquery_cols;
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion, TreeNodeRewriter,
 };
-use datafusion_common::{plan_err, Column, DFSchemaRef, Result, ScalarValue};
+use datafusion_common::{plan_err, Column, DFSchemaRef, HashMap, Result, ScalarValue};
 use datafusion_expr::expr::Alias;
 use datafusion_expr::simplify::SimplifyContext;
 use datafusion_expr::utils::{conjunction, find_join_exprs, split_conjunction};

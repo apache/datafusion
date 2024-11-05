@@ -43,8 +43,8 @@ use arrow::error::ArrowError;
 use arrow::ipc::reader::FileReader;
 use arrow_array::types::UInt64Type;
 use datafusion_common::{
-    exec_err, internal_err, not_impl_err, plan_err, DataFusionError, JoinSide, JoinType,
-    Result,
+    exec_err, internal_err, not_impl_err, plan_err, DataFusionError, HashSet, JoinSide,
+    JoinType, Result,
 };
 use datafusion_execution::disk_manager::RefCountedTempFile;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
@@ -52,9 +52,8 @@ use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::equivalence::join_equivalence_properties;
 use datafusion_physical_expr::{PhysicalExprRef, PhysicalSortRequirement};
-use datafusion_physical_expr_common::sort_expr::LexRequirement;
+use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};
 use futures::{Stream, StreamExt};
-use hashbrown::HashSet;
 
 use crate::expressions::PhysicalSortExpr;
 use crate::joins::utils::{
@@ -71,7 +70,7 @@ use crate::{
 
 /// join execution plan executes partitions in parallel and combines them into a set of
 /// partitions.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct SortMergeJoinExec {
     /// Left sorted joining execution plan
     pub left: Arc<dyn ExecutionPlan>,
@@ -88,9 +87,9 @@ pub struct SortMergeJoinExec {
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
     /// The left SortExpr
-    left_sort_exprs: Vec<PhysicalSortExpr>,
+    left_sort_exprs: LexOrdering,
     /// The right SortExpr
-    right_sort_exprs: Vec<PhysicalSortExpr>,
+    right_sort_exprs: LexOrdering,
     /// Sort options of join columns used in sorting left and right execution plans
     pub sort_options: Vec<SortOptions>,
     /// If null_equals_null is true, null == null else null != null
@@ -159,8 +158,8 @@ impl SortMergeJoinExec {
             join_type,
             schema,
             metrics: ExecutionPlanMetricsSet::new(),
-            left_sort_exprs,
-            right_sort_exprs,
+            left_sort_exprs: LexOrdering::new(left_sort_exprs),
+            right_sort_exprs: LexOrdering::new(right_sort_exprs),
             sort_options,
             null_equals_null,
             cache,
@@ -299,10 +298,10 @@ impl ExecutionPlan for SortMergeJoinExec {
     fn required_input_ordering(&self) -> Vec<Option<LexRequirement>> {
         vec![
             Some(PhysicalSortRequirement::from_sort_exprs(
-                &self.left_sort_exprs,
+                self.left_sort_exprs.iter(),
             )),
             Some(PhysicalSortRequirement::from_sort_exprs(
-                &self.right_sort_exprs,
+                self.right_sort_exprs.iter(),
             )),
         ]
     }

@@ -39,14 +39,14 @@ use datafusion_physical_expr::PhysicalSortExpr;
 use datafusion_physical_plan::InputOrderMode;
 use test_utils::{add_empty_batches, StringBatchGenerator};
 
-use hashbrown::HashMap;
-use rand::rngs::StdRng;
-use rand::{Rng, SeedableRng};
-use tokio::task::JoinSet;
-
 use crate::fuzz_cases::aggregation_fuzzer::{
     AggregationFuzzerBuilder, ColumnDescr, DatasetGeneratorConfig, QueryBuilder,
 };
+use datafusion_common::HashMap;
+use datafusion_physical_expr_common::sort_expr::LexOrdering;
+use rand::rngs::StdRng;
+use rand::{Rng, SeedableRng};
+use tokio::task::JoinSet;
 
 // ========================================================================
 //  The new aggregation fuzz tests based on [`AggregationFuzzer`]
@@ -234,7 +234,7 @@ async fn run_aggregate_test(input1: Vec<RecordBatch>, group_by_columns: Vec<&str
     let schema = input1[0].schema();
     let session_config = SessionConfig::new().with_batch_size(50);
     let ctx = SessionContext::new_with_config(session_config);
-    let mut sort_keys = vec![];
+    let mut sort_keys = LexOrdering::default();
     for ordering_col in ["a", "b", "c"] {
         sort_keys.push(PhysicalSortExpr {
             expr: col(ordering_col, &schema).unwrap(),

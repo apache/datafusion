@@ -135,7 +135,7 @@ impl AggregateUDFImpl for ArrayAgg {
         OrderSensitiveArrayAggAccumulator::try_new(
             &data_type,
             &ordering_dtypes,
-            acc_args.ordering_req.to_vec(),
+            acc_args.ordering_req.clone(),
             acc_args.is_reversed,
         )
         .map(|acc| Box::new(acc) as _)
@@ -511,7 +511,7 @@ impl Accumulator for OrderSensitiveArrayAggAccumulator {
 
 impl OrderSensitiveArrayAggAccumulator {
     fn evaluate_orderings(&self) -> Result<ScalarValue> {
-        let fields = ordering_fields(&self.ordering_req, &self.datatypes[1..]);
+        let fields = ordering_fields(self.ordering_req.as_ref(), &self.datatypes[1..]);
         let num_columns = fields.len();
         let struct_field = Fields::from(fields.clone());
 

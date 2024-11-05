@@ -36,6 +36,7 @@ use datafusion::physical_plan::{
     memory::MemoryExec,
 };
 use datafusion::prelude::SessionContext;
+use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
 // Initialise the operator using the provided record batches and the sort key
 // as inputs. All record batches must have the same schema.
@@ -52,7 +53,7 @@ fn sort_preserving_merge_operator(
             expr: col(name, &schema).unwrap(),
             options: Default::default(),
         })
-        .collect::<Vec<_>>();
+        .collect::<LexOrdering>();
 
     let exec = MemoryExec::try_new(
         &batches.into_iter().map(|rb| vec![rb]).collect::<Vec<_>>(),

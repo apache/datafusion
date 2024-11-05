@@ -15,9 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Defines the nested loop join plan, it supports all [`JoinType`].
-//! The nested loop join can execute in parallel by partitions and it is
-//! determined by the [`JoinType`].
+//! [`NestedLoopJoinExec`]: joins without equijoin (equality predicates).
 
 use std::any::Any;
 use std::fmt::Formatter;
@@ -105,6 +103,7 @@ impl JoinLeftData {
     }
 }
 
+#[allow(rustdoc::private_intra_doc_links)]
 /// NestedLoopJoinExec is build-probe join operator, whose main task is to
 /// perform joins without any equijoin conditions in `ON` clause.
 ///
@@ -140,6 +139,11 @@ impl JoinLeftData {
 /// "reports" about probe phase completion (which means that "visited" bitmap won't be
 /// updated anymore), and only the last thread, reporting about completion, will return output.
 ///
+/// # Clone / Shared State
+///
+/// Note this structure includes a [`OnceAsync`] that is used to coordinate the
+/// loading of the left side with the processing in each output stream.
+/// Therefore it can not be [`Clone`]
 #[derive(Debug)]
 pub struct NestedLoopJoinExec {
     /// left side
@@ -152,7 +156,12 @@ pub struct NestedLoopJoinExec {
     pub(crate) join_type: JoinType,
     /// The schema once the join is applied
     schema: SchemaRef,
-    /// Build-side data
+    /// Future that consumes left input and buffers it in memory
+    ///
+    /// This structure is *shared* across all output streams.
+    ///
+    /// Each output stream waits on the `OnceAsync` to signal the completion of
+    /// the hash table creation.
     inner_table: OnceAsync<JoinLeftData>,
     /// Information of index and left / right placement of columns
     column_indices: Vec<ColumnIndex>,
@@ -858,7 +867,7 @@ pub(crate) mod tests {
     use datafusion_expr::Operator;
     use datafusion_physical_expr::expressions::{BinaryExpr, Literal};
     use datafusion_physical_expr::{Partitioning, PhysicalExpr};
-    use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
+    use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 
     use rstest::rstest;
 
@@ -888,7 +897,7 @@ pub(crate) mod tests {
         let mut exec =
             MemoryExec::try_new(&[batches], Arc::clone(&schema), None).unwrap();
         if !sorted_column_names.is_empty() {
-            let mut sort_info = Vec::new();
+            let mut sort_info = LexOrdering::default();
             for name in sorted_column_names {
                 let index = schema.index_of(name).unwrap();
                 let sort_expr = PhysicalSortExpr {

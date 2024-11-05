@@ -16,7 +16,7 @@
 // under the License.
 
 use std::any::Any;
-use std::collections::{HashSet, VecDeque};
+use std::collections::VecDeque;
 use std::sync::{Arc, OnceLock};
 
 use arrow::array::ArrayData;
@@ -25,7 +25,7 @@ use arrow_buffer::{Buffer, ToByteSlice};
 use arrow_schema::{DataType, Field, SchemaBuilder};
 
 use datafusion_common::utils::{fixed_size_list_to_arrays, list_to_arrays};
-use datafusion_common::{exec_err, Result, ScalarValue};
+use datafusion_common::{exec_err, HashSet, Result, ScalarValue};
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::scalar_doc_sections::DOC_SECTION_MAP;
 use datafusion_expr::{
