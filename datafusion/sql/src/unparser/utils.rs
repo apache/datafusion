@@ -318,7 +318,9 @@ pub(crate) fn try_transform_to_simple_table_scan_with_filters(
                 plan_stack.push(alias.input.as_ref());
             }
             LogicalPlan::Filter(filter) => {
-                filters.push(filter.predicate.clone());
+                if !filters.contains(&filter.predicate) {
+                    filters.push(filter.predicate.clone());
+                }
                 plan_stack.push(filter.input.as_ref());
             }
             LogicalPlan::TableScan(table_scan) => {
@@ -344,7 +346,11 @@ pub(crate) fn try_transform_to_simple_table_scan_with_filters(
                     })
                     .collect::<Result<Vec<_>, DataFusionError>>()?;
 
-                filters.extend(table_scan_filters);
+                for table_scan_filter in table_scan_filters {
+                    if !filters.contains(&table_scan_filter) {
+                        filters.push(table_scan_filter);
+                    }
+                }
 
                 let mut builder = LogicalPlanBuilder::scan(
                     table_scan.table_name.clone(),
