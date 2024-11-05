@@ -53,6 +53,7 @@ use crate::variation_const::{
     TIMESTAMP_SECOND_TYPE_VARIATION_REF,
 };
 use datafusion::arrow::array::{new_empty_array, AsArray};
+use datafusion::catalog::Session;
 use datafusion::common::scalar::ScalarStructBuilder;
 use datafusion::dataframe::DataFrame;
 use datafusion::logical_expr::expr::InList;
@@ -97,7 +98,6 @@ use substrait::proto::{
     AggregateFunction, Expression, NamedStruct, Plan, Rel, Type,
 };
 use substrait::proto::{ExtendedExpression, FunctionArgument, SortField};
-use datafusion::catalog::Session;
 
 // Substrait PrecisionTimestampTz indicates that the timestamp is relative to UTC, which
 // is the same as the expectation for any non-empty timezone in DF, so any non-empty timezone
