@@ -146,12 +146,7 @@ impl OrderingEquivalenceClass {
     /// Returns the concatenation of all the orderings. This enables merge
     /// operations to preserve all equivalent orderings simultaneously.
     pub fn output_ordering(&self) -> Option<LexOrdering> {
-        let output_ordering = self
-            .orderings
-            .iter()
-            .flat_map(|ordering| ordering.as_ref())
-            .cloned()
-            .collect();
+        let output_ordering = self.orderings.iter().flatten().cloned().collect();
         let output_ordering = collapse_lex_ordering(output_ordering);
         (!output_ordering.is_empty()).then_some(output_ordering)
     }

@@ -749,14 +749,12 @@ impl ScalarUDFImpl for AliasedScalarUDFImpl {
         self.inner.return_type_from_exprs(args, schema, arg_types)
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        #[allow(deprecated)]
-        self.inner.invoke(args)
-    }
-
-    fn invoke_no_args(&self, number_rows: usize) -> Result<ColumnarValue> {
-        #[allow(deprecated)]
-        self.inner.invoke_no_args(number_rows)
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        number_rows: usize,
+    ) -> Result<ColumnarValue> {
+        self.inner.invoke_batch(args, number_rows)
     }
 
     fn simplify(

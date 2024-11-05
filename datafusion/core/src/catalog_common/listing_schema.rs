@@ -18,14 +18,16 @@
 //! [`ListingSchemaProvider`]: [`SchemaProvider`] that scans ObjectStores for tables automatically
 
 use std::any::Any;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use crate::catalog::{SchemaProvider, TableProvider, TableProviderFactory};
 use crate::execution::context::SessionState;
 
-use datafusion_common::{Constraints, DFSchema, DataFusionError, TableReference};
+use datafusion_common::{
+    Constraints, DFSchema, DataFusionError, HashMap, TableReference,
+};
 use datafusion_expr::CreateExternalTable;
 
 use async_trait::async_trait;

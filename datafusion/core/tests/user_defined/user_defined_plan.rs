@@ -97,7 +97,6 @@ use datafusion::{
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::ScalarValue;
-use datafusion_expr::tree_node::replace_sort_expression;
 use datafusion_expr::{FetchType, Projection, SortExpr};
 use datafusion_optimizer::optimizer::ApplyOrder;
 use datafusion_optimizer::AnalyzerRule;
@@ -440,7 +439,7 @@ impl UserDefinedLogicalNodeCore for TopKPlanNode {
         Ok(Self {
             k: self.k,
             input: inputs.swap_remove(0),
-            expr: replace_sort_expression(self.expr.clone(), exprs.swap_remove(0)),
+            expr: self.expr.with_expr(exprs.swap_remove(0)),
         })
     }
 

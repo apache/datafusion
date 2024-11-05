@@ -295,9 +295,11 @@ impl JoinLeftData {
 ///                       └───────────────┘     └───────────────┘
 /// ```
 ///
-/// Note that the `Clone` trait is not implemented for this struct due to the
-/// `left_fut` [`OnceAsync`], which is used to coordinate the loading of the
-/// left side with the processing in each output stream.
+/// # Clone / Shared State
+///
+/// Note this structure includes a [`OnceAsync`] that is used to coordinate the
+/// loading of the left side with the processing in each output stream.
+/// Therefore it can not be [`Clone`]
 #[derive(Debug)]
 pub struct HashJoinExec {
     /// left (build) side which gets hashed
@@ -314,6 +316,11 @@ pub struct HashJoinExec {
     /// if there is a projection, the schema isn't the same as the output schema.
     join_schema: SchemaRef,
     /// Future that consumes left input and builds the hash table
+    ///
+    /// For CollectLeft partition mode, this structure is *shared* across all output streams.
+    ///
+    /// Each output stream waits on the `OnceAsync` to signal the completion of
+    /// the hash table creation.
     left_fut: OnceAsync<JoinLeftData>,
     /// Shared the `RandomState` for the hashing algorithm
     random_state: RandomState,

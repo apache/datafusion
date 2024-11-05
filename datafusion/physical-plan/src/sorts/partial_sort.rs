@@ -72,7 +72,6 @@ use datafusion_common::Result;
 use datafusion_execution::{RecordBatchStream, TaskContext};
 use datafusion_physical_expr::LexOrdering;
 
-use datafusion_physical_expr_common::sort_expr::LexOrderingRef;
 use futures::{ready, Stream, StreamExt};
 use log::trace;
 
@@ -159,7 +158,7 @@ impl PartialSortExec {
     }
 
     /// Sort expressions
-    pub fn expr(&self) -> LexOrderingRef {
+    pub fn expr(&self) -> &LexOrdering {
         self.expr.as_ref()
     }
 
