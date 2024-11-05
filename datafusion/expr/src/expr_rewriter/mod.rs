@@ -17,19 +17,19 @@
 
 //! Expression rewriter
 
+use crate::expr::{Alias, Sort, Unnest};
+use crate::logical_plan::Projection;
+use crate::{Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder};
+use arrow::datatypes::DataType;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fmt::Debug;
 use std::sync::Arc;
 
-use crate::expr::{Alias, Sort, Unnest};
-use crate::logical_plan::Projection;
-use crate::{Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder};
-
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
+use datafusion_common::TableReference;
 use datafusion_common::{Column, DFSchema, Result};
-use datafusion_common::{ScalarValue, TableReference};
 
 mod order_by;
 pub use order_by::rewrite_sort_cols_by_aggs;
@@ -150,14 +150,17 @@ pub fn replace_col(expr: Expr, replace_map: &HashMap<&Column, &Column>) -> Resul
 
 pub fn replace_expr_with_null(
     expr: Expr,
-    replace_columns: &HashSet<&Column>,
+    replace_columns: &HashMap<&Column, &DataType>,
 ) -> Result<Expr> {
     expr.transform(|expr| {
         Ok({
             match &expr {
-                Expr::Column(c) if replace_columns.contains(c) => {
-                    Transformed::yes(Expr::Literal(ScalarValue::Null))
-                }
+                Expr::Column(c) => match replace_columns.get(c) {
+                    Some(data_type) => {
+                        Transformed::yes(Expr::Literal((*data_type).try_into()?))
+                    }
+                    None => Transformed::no(expr),
+                },
                 _ => Transformed::no(expr),
             }
         })
