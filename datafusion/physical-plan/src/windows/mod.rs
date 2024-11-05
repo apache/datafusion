@@ -168,14 +168,31 @@ fn create_udwf_window_expr(
         .map(|arg| arg.data_type(input_schema))
         .collect::<Result<_>>()?;
 
-    Ok(Arc::new(WindowUDFExpr {
+    let udwf_expr = Arc::new(WindowUDFExpr {
         fun: Arc::clone(fun),
         args: args.to_vec(),
         input_types,
         name,
         is_reversed: false,
         ignore_nulls,
-    }))
+    });
+
+    /// Early validation of input expressions
+    ///
+    /// We create a partition evaluator because in the user-defined window
+    /// implementation this is where code for parsing input expressions
+    /// exist. The benefits are:
+    /// - If any of the input expressions are invalid we catch them early
+    /// in the planning phase, rather than during execution.
+    /// - Maintains compatibility with built-in (now removed) window
+    /// functions validation behavior.
+    /// - Predictable and reliable error handling.
+    ///
+    /// See discussion here:
+    /// https://github.com/apache/datafusion/pull/13201#issuecomment-2454209975
+    let _ = udwf_expr.create_evaluator()?;
+
+    Ok(udwf_expr)
 }
 
 /// Implements [`BuiltInWindowFunctionExpr`] for [`WindowUDF`]
