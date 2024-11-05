@@ -18,11 +18,14 @@
 use std::sync::Arc;
 
 use arrow::datatypes::{
-    Date32Type, Date64Type, Float32Type, Float64Type, Int16Type, Int32Type, Int64Type,
-    Int8Type, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
+    ByteArrayType, ByteViewType, Date32Type, Date64Type, Decimal128Type, Decimal256Type,
+    Float32Type, Float64Type, Int16Type, Int32Type, Int64Type, Int8Type,
+    IntervalDayTimeType, IntervalMonthDayNanoType, IntervalYearMonthType, LargeUtf8Type,
+    StringViewType, Time32MillisecondType, Time32SecondType, Time64MicrosecondType,
+    Time64NanosecondType, UInt16Type, UInt32Type, UInt64Type, UInt8Type, Utf8Type,
 };
 use arrow_array::{ArrayRef, RecordBatch};
-use arrow_schema::{DataType, Field, Schema};
+use arrow_schema::{DataType, Field, IntervalUnit, Schema, TimeUnit};
 use datafusion_common::{arrow_datafusion_err, DataFusionError, Result};
 use datafusion_physical_expr::{expressions::col, PhysicalSortExpr};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
@@ -32,7 +35,7 @@ use rand::{
     thread_rng, Rng, SeedableRng,
 };
 use test_utils::{
-    array_gen::{PrimitiveArrayGenerator, StringArrayGenerator},
+    array_gen::{DecimalArrayGenerator, PrimitiveArrayGenerator, StringArrayGenerator},
     stagger_batch,
 };
 
@@ -219,7 +222,7 @@ struct RecordBatchGenerator {
 }
 
 macro_rules! generate_string_array {
-    ($SELF:ident, $NUM_ROWS:ident, $MAX_NUM_DISTINCT:expr, $BATCH_GEN_RNG:ident, $ARRAY_GEN_RNG:ident, $OFFSET_TYPE:ty) => {{
+    ($SELF:ident, $NUM_ROWS:ident, $MAX_NUM_DISTINCT:expr, $BATCH_GEN_RNG:ident, $ARRAY_GEN_RNG:ident, $ARROW_TYPE: ident) => {{
         let null_pct_idx = $BATCH_GEN_RNG.gen_range(0..$SELF.candidate_null_pcts.len());
         let null_pct = $SELF.candidate_null_pcts[null_pct_idx];
         let max_len = $BATCH_GEN_RNG.gen_range(1..50);
@@ -232,25 +235,47 @@ macro_rules! generate_string_array {
             rng: $ARRAY_GEN_RNG,
         };
 
-        generator.gen_data::<$OFFSET_TYPE>()
+        match $ARROW_TYPE::DATA_TYPE {
+            DataType::Utf8 => generator.gen_data::<i32>(),
+            DataType::LargeUtf8 => generator.gen_data::<i64>(),
+            DataType::Utf8View => generator.gen_string_view(),
+            _ => unreachable!(),
+        }
+    }};
+}
+
+macro_rules! generate_decimal_array {
+    ($SELF:ident, $NUM_ROWS:ident, $MAX_NUM_DISTINCT: expr, $BATCH_GEN_RNG:ident, $ARRAY_GEN_RNG:ident, $PRECISION: ident, $SCALE: ident, $ARROW_TYPE: ident) => {{
+        let null_pct_idx = $BATCH_GEN_RNG.gen_range(0..$SELF.candidate_null_pcts.len());
+        let null_pct = $SELF.candidate_null_pcts[null_pct_idx];
+
+        let mut generator = DecimalArrayGenerator {
+            precision: $PRECISION,
+            scale: $SCALE,
+            num_decimals: $NUM_ROWS,
+            num_distinct_decimals: $MAX_NUM_DISTINCT,
+            null_pct,
+            rng: $ARRAY_GEN_RNG,
+        };
+
+        generator.gen_data::<$ARROW_TYPE>()
     }};
 }
 
 macro_rules! generate_primitive_array {
-    ($SELF:ident, $NUM_ROWS:ident, $MAX_NUM_DISTINCT:expr, $BATCH_GEN_RNG:ident, $ARRAY_GEN_RNG:ident, $ARROW_TYPE:ident) => {
-        paste::paste! {{
-            let null_pct_idx = $BATCH_GEN_RNG.gen_range(0..$SELF.candidate_null_pcts.len());
-            let null_pct = $SELF.candidate_null_pcts[null_pct_idx];
+    ($SELF:ident, $NUM_ROWS:ident, $MAX_NUM_DISTINCT:expr, $BATCH_GEN_RNG:ident, $ARRAY_GEN_RNG:ident, $ARROW_TYPE:ident) => {{
+        let null_pct_idx = $BATCH_GEN_RNG.gen_range(0..$SELF.candidate_null_pcts.len());
+        let null_pct = $SELF.candidate_null_pcts[null_pct_idx];
 
-            let mut generator = PrimitiveArrayGenerator {
-                num_primitives: $NUM_ROWS,
-                num_distinct_primitives: $MAX_NUM_DISTINCT,
-                null_pct,
-                rng: $ARRAY_GEN_RNG,
-            };
+        let mut generator = PrimitiveArrayGenerator {
+            num_primitives: $NUM_ROWS,
+            num_distinct_primitives: $MAX_NUM_DISTINCT,
+            null_pct,
+            rng: $ARRAY_GEN_RNG,
+        };
 
-            generator.gen_data::<$ARROW_TYPE>()
-    }}}
+        generator.gen_data::<$ARROW_TYPE>()
+    }};
 }
 
 impl RecordBatchGenerator {
@@ -432,6 +457,100 @@ impl RecordBatchGenerator {
                     Date64Type
                 )
             }
+            DataType::Time32(TimeUnit::Second) => {
+                generate_primitive_array!(
+                    self,
+                    num_rows,
+                    max_num_distinct,
+                    batch_gen_rng,
+                    array_gen_rng,
+                    Time32SecondType
+                )
+            }
+            DataType::Time32(TimeUnit::Millisecond) => {
+                generate_primitive_array!(
+                    self,
+                    num_rows,
+                    max_num_distinct,
+                    batch_gen_rng,
+                    array_gen_rng,
+                    Time32MillisecondType
+                )
+            }
+            DataType::Time64(TimeUnit::Microsecond) => {
+                generate_primitive_array!(
+                    self,
+                    num_rows,
+                    max_num_distinct,
+                    batch_gen_rng,
+                    array_gen_rng,
+                    Time64MicrosecondType
+                )
+            }
+            DataType::Time64(TimeUnit::Nanosecond) => {
+                generate_primitive_array!(
+                    self,
+                    num_rows,
+                    max_num_distinct,
+                    batch_gen_rng,
+                    array_gen_rng,
+                    Time64NanosecondType
+                )
+            }
+            DataType::Interval(IntervalUnit::YearMonth) => {
+                generate_primitive_array!(
+                    self,
+                    num_rows,
+                    max_num_distinct,
+                    batch_gen_rng,
+                    array_gen_rng,
+                    IntervalYearMonthType
+                )
+            }
+            DataType::Interval(IntervalUnit::DayTime) => {
+                generate_primitive_array!(
+                    self,
+                    num_rows,
+                    max_num_distinct,
+                    batch_gen_rng,
+                    array_gen_rng,
+                    IntervalDayTimeType
+                )
+            }
+            DataType::Interval(IntervalUnit::MonthDayNano) => {
+                generate_primitive_array!(
+                    self,
+                    num_rows,
+                    max_num_distinct,
+                    batch_gen_rng,
+                    array_gen_rng,
+                    IntervalMonthDayNanoType
+                )
+            }
+            DataType::Decimal128(precision, scale) => {
+                generate_decimal_array!(
+                    self,
+                    num_rows,
+                    max_num_distinct,
+                    batch_gen_rng,
+                    array_gen_rng,
+                    precision,
+                    scale,
+                    Decimal128Type
+                )
+            }
+            DataType::Decimal256(precision, scale) => {
+                generate_decimal_array!(
+                    self,
+                    num_rows,
+                    max_num_distinct,
+                    batch_gen_rng,
+                    array_gen_rng,
+                    precision,
+                    scale,
+                    Decimal256Type
+                )
+            }
             DataType::Utf8 => {
                 generate_string_array!(
                     self,
@@ -439,7 +558,7 @@ impl RecordBatchGenerator {
                     max_num_distinct,
                     batch_gen_rng,
                     array_gen_rng,
-                    i32
+                    Utf8Type
                 )
             }
             DataType::LargeUtf8 => {
@@ -449,7 +568,17 @@ impl RecordBatchGenerator {
                     max_num_distinct,
                     batch_gen_rng,
                     array_gen_rng,
-                    i64
+                    LargeUtf8Type
+                )
+            }
+            DataType::Utf8View => {
+                generate_string_array!(
+                    self,
+                    num_rows,
+                    max_num_distinct,
+                    batch_gen_rng,
+                    array_gen_rng,
+                    StringViewType
                 )
             }
             _ => {
