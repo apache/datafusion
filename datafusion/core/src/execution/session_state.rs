@@ -860,6 +860,21 @@ impl SessionState {
         self.catalog_list = catalog_list;
     }
 
+    /// Return reference to scalar_functions
+    pub fn scalar_functions(&self) -> &HashMap<String, Arc<ScalarUDF>> {
+        &self.scalar_functions
+    }
+
+    /// Return reference to aggregate_functions
+    pub fn aggregate_functions(&self) -> &HashMap<String, Arc<AggregateUDF>> {
+        &self.aggregate_functions
+    }
+
+    /// Return reference to window functions
+    pub fn window_functions(&self) -> &HashMap<String, Arc<WindowUDF>> {
+        &self.window_functions
+    }
+
     /// Return reference to table_functions
     pub fn table_functions(&self) -> &HashMap<String, Arc<TableFunction>> {
         &self.table_functions

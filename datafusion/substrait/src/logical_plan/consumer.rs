@@ -55,7 +55,6 @@ use crate::variation_const::{
 };
 use datafusion::arrow::array::{new_empty_array, AsArray};
 use datafusion::arrow::temporal_conversions::NANOSECONDS;
-use datafusion::catalog::Session;
 use datafusion::common::scalar::ScalarStructBuilder;
 use datafusion::dataframe::DataFrame;
 use datafusion::logical_expr::builder::project;
