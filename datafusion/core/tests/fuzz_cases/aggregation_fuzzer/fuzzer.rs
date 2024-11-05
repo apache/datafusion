@@ -63,17 +63,35 @@ impl AggregationFuzzerBuilder {
     }
 
     /// Adds random SQL queries to the fuzzer along with the table name
-    pub fn add_query_builder(mut self, query_builder: QueryBuilder) -> Self {
-        const NUM_QUERIES: usize = 10;
+    ///
+    /// Adds
+    /// - 3 random queries
+    /// - 3 random queries for each group by selected from the sort keys
+    /// - 1 random query with no grouping
+    pub fn add_query_builder(mut self, mut query_builder: QueryBuilder) -> Self {
+        const NUM_QUERIES: usize = 3;
         for _ in 0..NUM_QUERIES {
-            self = self.add_sql(&query_builder.generate_query());
+            let sql = query_builder.generate_query();
+            self.candidate_sqls.push(Arc::from(sql));
         }
-        self.table_name(query_builder.table_name())
-    }
-
-    fn add_sql(mut self, sql: &str) -> Self {
+        // also add several queries limited to grouping on the group by columns only, if any
+        // So if the data is sorted on `a,b` only group by `a,b` or`a` or `b`
+        if let Some(data_gen_config) = &self.data_gen_config {
+            for sort_keys in &data_gen_config.sort_keys_set {
+                let group_by_columns = sort_keys.iter().map(|s| s.as_str());
+                query_builder = query_builder.set_group_by_columns(group_by_columns);
+                for _ in 0..NUM_QUERIES {
+                    let sql = query_builder.generate_query();
+                    self.candidate_sqls.push(Arc::from(sql));
+                }
+            }
+        }
+        // also add a query with no grouping
+        query_builder = query_builder.set_group_by_columns(vec![]);
+        let sql = query_builder.generate_query();
         self.candidate_sqls.push(Arc::from(sql));
-        self
+
+        self.table_name(query_builder.table_name())
     }
 
     pub fn table_name(mut self, table_name: &str) -> Self {
@@ -104,7 +122,7 @@ impl AggregationFuzzerBuilder {
     }
 }
 
-impl std::default::Default for AggregationFuzzerBuilder {
+impl Default for AggregationFuzzerBuilder {
     fn default() -> Self {
         Self::new()
     }
@@ -359,7 +377,7 @@ fn format_batches_with_limit(batches: &[RecordBatch]) -> impl std::fmt::Display 
 /// ```sql
 /// SELECT AGG(..) FROM table_name GROUP BY <group_by_columns>
 ///```
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct QueryBuilder {
     /// The name of the table to query
     table_name: String,
@@ -375,7 +393,7 @@ pub struct QueryBuilder {
 }
 impl QueryBuilder {
     pub fn new() -> Self {
-        std::default::Default::default()
+        Default::default()
     }
 
     /// return the table name if any
@@ -412,17 +430,16 @@ impl QueryBuilder {
         self
     }
 
-    /// Add a column to be used in the group bys
-    pub fn with_group_by_columns<'a>(
+    /// Set the columns to be used in the group bys clauses
+    pub fn set_group_by_columns<'a>(
         mut self,
         group_by: impl IntoIterator<Item = &'a str>,
     ) -> Self {
-        let group_by = group_by.into_iter().map(String::from);
-        self.group_by_columns.extend(group_by);
+        self.group_by_columns = group_by.into_iter().map(String::from).collect();
         self
     }
 
-    /// Add a column to be used as an argument in the aggregate functions
+    /// Add one or more columns to be used as an argument in the aggregate functions
     pub fn with_aggregate_arguments<'a>(
         mut self,
         arguments: impl IntoIterator<Item = &'a str>,
@@ -497,7 +514,9 @@ impl QueryBuilder {
 
         let mut already_used = HashSet::new();
         let mut group_by = vec![];
-        while group_by.len() < num_group_by {
+        while group_by.len() < num_group_by
+            && already_used.len() != self.group_by_columns.len()
+        {
             let idx = rng.gen_range(0..self.group_by_columns.len());
             if already_used.insert(idx) {
                 group_by.push(self.group_by_columns[idx].clone());

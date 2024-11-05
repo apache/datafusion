@@ -206,7 +206,7 @@ impl<'a, R: Read> AvroArrowArrayReader<'a, R> {
     fn build_primitive_array<T>(&self, rows: RecordSlice, col_name: &str) -> ArrayRef
     where
         T: ArrowNumericType + Resolver,
-        T::Native: num_traits::cast::NumCast,
+        T::Native: NumCast,
     {
         Arc::new(
             rows.iter()
@@ -354,7 +354,7 @@ impl<'a, R: Read> AvroArrowArrayReader<'a, R> {
                         let builder = builder
                             .as_any_mut()
                             .downcast_mut::<ListBuilder<StringBuilder>>()
-                            .ok_or_else(||ArrowError::SchemaError(
+                            .ok_or_else(||SchemaError(
                                 "Cast failed for ListBuilder<StringBuilder> during nested data parsing".to_string(),
                             ))?;
                         for val in vals {
@@ -369,7 +369,7 @@ impl<'a, R: Read> AvroArrowArrayReader<'a, R> {
                         builder.append(true);
                     }
                     DataType::Dictionary(_, _) => {
-                        let builder = builder.as_any_mut().downcast_mut::<ListBuilder<StringDictionaryBuilder<D>>>().ok_or_else(||ArrowError::SchemaError(
+                        let builder = builder.as_any_mut().downcast_mut::<ListBuilder<StringDictionaryBuilder<D>>>().ok_or_else(||SchemaError(
                             "Cast failed for ListBuilder<StringDictionaryBuilder> during nested data parsing".to_string(),
                         ))?;
                         for val in vals {
@@ -402,7 +402,7 @@ impl<'a, R: Read> AvroArrowArrayReader<'a, R> {
         col_name: &str,
     ) -> ArrowResult<ArrayRef>
     where
-        T::Native: num_traits::cast::NumCast,
+        T::Native: NumCast,
         T: ArrowPrimitiveType + ArrowDictionaryKeyType,
     {
         let mut builder: StringDictionaryBuilder<T> =
@@ -453,12 +453,10 @@ impl<'a, R: Read> AvroArrowArrayReader<'a, R> {
                 DataType::UInt64 => {
                     self.build_dictionary_array::<UInt64Type>(rows, col_name)
                 }
-                _ => Err(ArrowError::SchemaError(
-                    "unsupported dictionary key type".to_string(),
-                )),
+                _ => Err(SchemaError("unsupported dictionary key type".to_string())),
             }
         } else {
-            Err(ArrowError::SchemaError(
+            Err(SchemaError(
                 "dictionary types other than UTF-8 not yet supported".to_string(),
             ))
         }
@@ -532,7 +530,7 @@ impl<'a, R: Read> AvroArrowArrayReader<'a, R> {
             DataType::UInt32 => self.read_primitive_list_values::<UInt32Type>(rows),
             DataType::UInt64 => self.read_primitive_list_values::<UInt64Type>(rows),
             DataType::Float16 => {
-                return Err(ArrowError::SchemaError("Float16 not supported".to_string()))
+                return Err(SchemaError("Float16 not supported".to_string()))
             }
             DataType::Float32 => self.read_primitive_list_values::<Float32Type>(rows),
             DataType::Float64 => self.read_primitive_list_values::<Float64Type>(rows),
@@ -541,7 +539,7 @@ impl<'a, R: Read> AvroArrowArrayReader<'a, R> {
             | DataType::Date64
             | DataType::Time32(_)
             | DataType::Time64(_) => {
-                return Err(ArrowError::SchemaError(
+                return Err(SchemaError(
                     "Temporal types are not yet supported, see ARROW-4803".to_string(),
                 ))
             }
@@ -623,7 +621,7 @@ impl<'a, R: Read> AvroArrowArrayReader<'a, R> {
                     .unwrap()
             }
             datatype => {
-                return Err(ArrowError::SchemaError(format!(
+                return Err(SchemaError(format!(
                     "Nested list of {datatype:?} not supported"
                 )));
             }
@@ -737,7 +735,7 @@ impl<'a, R: Read> AvroArrowArrayReader<'a, R> {
                                 &field_path,
                             ),
                         t => {
-                            return Err(ArrowError::SchemaError(format!(
+                            return Err(SchemaError(format!(
                                 "TimeUnit {t:?} not supported with Time64"
                             )))
                         }
@@ -751,7 +749,7 @@ impl<'a, R: Read> AvroArrowArrayReader<'a, R> {
                                 &field_path,
                             ),
                         t => {
-                            return Err(ArrowError::SchemaError(format!(
+                            return Err(SchemaError(format!(
                                 "TimeUnit {t:?} not supported with Time32"
                             )))
                         }
@@ -854,7 +852,7 @@ impl<'a, R: Read> AvroArrowArrayReader<'a, R> {
                         make_array(data)
                     }
                     _ => {
-                        return Err(ArrowError::SchemaError(format!(
+                        return Err(SchemaError(format!(
                             "type {:?} not supported",
                             field.data_type()
                         )))
@@ -870,7 +868,7 @@ impl<'a, R: Read> AvroArrowArrayReader<'a, R> {
     fn read_primitive_list_values<T>(&self, rows: &[&Value]) -> ArrayData
     where
         T: ArrowPrimitiveType + ArrowNumericType,
-        T::Native: num_traits::cast::NumCast,
+        T::Native: NumCast,
     {
         let values = rows
             .iter()
@@ -970,7 +968,7 @@ fn resolve_u8(v: &Value) -> AvroResult<u8> {
         other => Err(AvroError::GetU8(other.into())),
     }?;
     if let Value::Int(n) = int {
-        if n >= 0 && n <= std::convert::From::from(u8::MAX) {
+        if n >= 0 && n <= From::from(u8::MAX) {
             return Ok(n as u8);
         }
     }
@@ -1048,7 +1046,7 @@ fn maybe_resolve_union(value: &Value) -> &Value {
 impl<N> Resolver for N
 where
     N: ArrowNumericType,
-    N::Native: num_traits::cast::NumCast,
+    N::Native: NumCast,
 {
     fn resolve(value: &Value) -> Option<Self::Native> {
         let value = maybe_resolve_union(value);

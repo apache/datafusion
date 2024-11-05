@@ -61,14 +61,14 @@ use datafusion_expr::{
     dml,
     logical_plan::{
         builder::project, Aggregate, CreateCatalog, CreateCatalogSchema,
-        CreateExternalTable, CreateView, CrossJoin, DdlStatement, Distinct,
-        EmptyRelation, Extension, Join, JoinConstraint, Limit, Prepare, Projection,
-        Repartition, Sort, SubqueryAlias, TableScan, Values, Window,
+        CreateExternalTable, CreateView, DdlStatement, Distinct, EmptyRelation,
+        Extension, Join, JoinConstraint, Prepare, Projection, Repartition, Sort,
+        SubqueryAlias, TableScan, Values, Window,
     },
     DistinctOn, DropView, Expr, LogicalPlan, LogicalPlanBuilder, ScalarUDF, SortExpr,
     WindowUDF,
 };
-use datafusion_expr::{AggregateUDF, ColumnUnnestList, Unnest};
+use datafusion_expr::{AggregateUDF, ColumnUnnestList, FetchType, SkipType, Unnest};
 
 use self::to_proto::{serialize_expr, serialize_exprs};
 use crate::logical_plan::to_proto::serialize_sorts;
@@ -281,6 +281,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                         .collect::<Result<Vec<_>, _>>()
                         .map_err(|e| e.into())
                 }?;
+
                 LogicalPlanBuilder::values(values)?.build()
             }
             LogicalPlanType::Projection(projection) => {
@@ -449,7 +450,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                 )?
                 .build()
             }
-            LogicalPlanType::CustomScan(scan) => {
+            CustomScan(scan) => {
                 let schema: Schema = convert_required!(scan.schema)?;
                 let schema = Arc::new(schema);
                 let mut projection = None;
@@ -843,13 +844,13 @@ impl AsLogicalPlan for LogicalPlanNode {
                     .prepare(prepare.name.clone(), data_types)?
                     .build()
             }
-            LogicalPlanType::DropView(dropview) => Ok(datafusion_expr::LogicalPlan::Ddl(
-                datafusion_expr::DdlStatement::DropView(DropView {
+            LogicalPlanType::DropView(dropview) => {
+                Ok(LogicalPlan::Ddl(DdlStatement::DropView(DropView {
                     name: from_table_reference(dropview.name.as_ref(), "DropView")?,
                     if_exists: dropview.if_exists,
                     schema: Arc::new(convert_required!(dropview.schema)?),
-                }),
-            )),
+                })))
+            }
             LogicalPlanType::CopyTo(copy) => {
                 let input: LogicalPlan =
                     into_logical_plan!(copy.input, ctx, extension_codec)?;
@@ -858,20 +859,18 @@ impl AsLogicalPlan for LogicalPlanNode {
                     extension_codec.try_decode_file_format(&copy.file_type, ctx)?,
                 );
 
-                Ok(datafusion_expr::LogicalPlan::Copy(
-                    datafusion_expr::dml::CopyTo {
-                        input: Arc::new(input),
-                        output_url: copy.output_url.clone(),
-                        partition_by: copy.partition_by.clone(),
-                        file_type,
-                        options: Default::default(),
-                    },
-                ))
+                Ok(LogicalPlan::Copy(dml::CopyTo {
+                    input: Arc::new(input),
+                    output_url: copy.output_url.clone(),
+                    partition_by: copy.partition_by.clone(),
+                    file_type,
+                    options: Default::default(),
+                }))
             }
             LogicalPlanType::Unnest(unnest) => {
                 let input: LogicalPlan =
                     into_logical_plan!(unnest.input, ctx, extension_codec)?;
-                Ok(datafusion_expr::LogicalPlan::Unnest(Unnest {
+                Ok(LogicalPlan::Unnest(Unnest {
                     input: Arc::new(input),
                     exec_columns: unnest.exec_columns.iter().map(|c| c.into()).collect(),
                     list_type_columns: unnest
@@ -925,7 +924,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                 } as u64;
                 let values_list =
                     serialize_exprs(values.iter().flatten(), extension_codec)?;
-                Ok(protobuf::LogicalPlanNode {
+                Ok(LogicalPlanNode {
                     logical_plan_type: Some(LogicalPlanType::Values(
                         protobuf::ValuesNode {
                             n_cols,
@@ -1017,7 +1016,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                         exprs_vec.push(expr_vec);
                     }
 
-                    Ok(protobuf::LogicalPlanNode {
+                    Ok(LogicalPlanNode {
                         logical_plan_type: Some(LogicalPlanType::ListingScan(
                             protobuf::ListingTableScanNode {
                                 file_format_type: Some(file_format_type),
@@ -1043,12 +1042,12 @@ impl AsLogicalPlan for LogicalPlanNode {
                         )),
                     })
                 } else if let Some(view_table) = source.downcast_ref::<ViewTable>() {
-                    Ok(protobuf::LogicalPlanNode {
+                    Ok(LogicalPlanNode {
                         logical_plan_type: Some(LogicalPlanType::ViewScan(Box::new(
                             protobuf::ViewTableScanNode {
                                 table_name: Some(table_name.clone().into()),
                                 input: Some(Box::new(
-                                    protobuf::LogicalPlanNode::try_from_logical_plan(
+                                    LogicalPlanNode::try_from_logical_plan(
                                         view_table.logical_plan(),
                                         extension_codec,
                                     )?,
@@ -1081,11 +1080,11 @@ impl AsLogicalPlan for LogicalPlanNode {
                 }
             }
             LogicalPlan::Projection(Projection { expr, input, .. }) => {
-                Ok(protobuf::LogicalPlanNode {
+                Ok(LogicalPlanNode {
                     logical_plan_type: Some(LogicalPlanType::Projection(Box::new(
                         protobuf::ProjectionNode {
                             input: Some(Box::new(
-                                protobuf::LogicalPlanNode::try_from_logical_plan(
+                                LogicalPlanNode::try_from_logical_plan(
                                     input.as_ref(),
                                     extension_codec,
                                 )?,
@@ -1097,12 +1096,11 @@ impl AsLogicalPlan for LogicalPlanNode {
                 })
             }
             LogicalPlan::Filter(filter) => {
-                let input: protobuf::LogicalPlanNode =
-                    protobuf::LogicalPlanNode::try_from_logical_plan(
-                        filter.input.as_ref(),
-                        extension_codec,
-                    )?;
-                Ok(protobuf::LogicalPlanNode {
+                let input: LogicalPlanNode = LogicalPlanNode::try_from_logical_plan(
+                    filter.input.as_ref(),
+                    extension_codec,
+                )?;
+                Ok(LogicalPlanNode {
                     logical_plan_type: Some(LogicalPlanType::Selection(Box::new(
                         protobuf::SelectionNode {
                             input: Some(Box::new(input)),
@@ -1115,12 +1113,11 @@ impl AsLogicalPlan for LogicalPlanNode {
                 })
             }
             LogicalPlan::Distinct(Distinct::All(input)) => {
-                let input: protobuf::LogicalPlanNode =
-                    protobuf::LogicalPlanNode::try_from_logical_plan(
-                        input.as_ref(),
-                        extension_codec,
-                    )?;
-                Ok(protobuf::LogicalPlanNode {
+                let input: LogicalPlanNode = LogicalPlanNode::try_from_logical_plan(
+                    input.as_ref(),
+                    extension_codec,
+                )?;
+                Ok(LogicalPlanNode {
                     logical_plan_type: Some(LogicalPlanType::Distinct(Box::new(
                         protobuf::DistinctNode {
                             input: Some(Box::new(input)),
@@ -1135,16 +1132,15 @@ impl AsLogicalPlan for LogicalPlanNode {
                 input,
                 ..
             })) => {
-                let input: protobuf::LogicalPlanNode =
-                    protobuf::LogicalPlanNode::try_from_logical_plan(
-                        input.as_ref(),
-                        extension_codec,
-                    )?;
+                let input: LogicalPlanNode = LogicalPlanNode::try_from_logical_plan(
+                    input.as_ref(),
+                    extension_codec,
+                )?;
                 let sort_expr = match sort_expr {
                     None => vec![],
                     Some(sort_expr) => serialize_sorts(sort_expr, extension_codec)?,
                 };
-                Ok(protobuf::LogicalPlanNode {
+                Ok(LogicalPlanNode {
                     logical_plan_type: Some(LogicalPlanType::DistinctOn(Box::new(
                         protobuf::DistinctOnNode {
                             on_expr: serialize_exprs(on_expr, extension_codec)?,
@@ -1158,12 +1154,11 @@ impl AsLogicalPlan for LogicalPlanNode {
             LogicalPlan::Window(Window {
                 input, window_expr, ..
             }) => {
-                let input: protobuf::LogicalPlanNode =
-                    protobuf::LogicalPlanNode::try_from_logical_plan(
-                        input.as_ref(),
-                        extension_codec,
-                    )?;
-                Ok(protobuf::LogicalPlanNode {
+                let input: LogicalPlanNode = LogicalPlanNode::try_from_logical_plan(
+                    input.as_ref(),
+                    extension_codec,
+                )?;
+                Ok(LogicalPlanNode {
                     logical_plan_type: Some(LogicalPlanType::Window(Box::new(
                         protobuf::WindowNode {
                             input: Some(Box::new(input)),
@@ -1178,12 +1173,11 @@ impl AsLogicalPlan for LogicalPlanNode {
                 input,
                 ..
             }) => {
-                let input: protobuf::LogicalPlanNode =
-                    protobuf::LogicalPlanNode::try_from_logical_plan(
-                        input.as_ref(),
-                        extension_codec,
-                    )?;
-                Ok(protobuf::LogicalPlanNode {
+                let input: LogicalPlanNode = LogicalPlanNode::try_from_logical_plan(
+                    input.as_ref(),
+                    extension_codec,
+                )?;
+                Ok(LogicalPlanNode {
                     logical_plan_type: Some(LogicalPlanType::Aggregate(Box::new(
                         protobuf::AggregateNode {
                             input: Some(Box::new(input)),
@@ -1203,16 +1197,14 @@ impl AsLogicalPlan for LogicalPlanNode {
                 null_equals_null,
                 ..
             }) => {
-                let left: protobuf::LogicalPlanNode =
-                    protobuf::LogicalPlanNode::try_from_logical_plan(
-                        left.as_ref(),
-                        extension_codec,
-                    )?;
-                let right: protobuf::LogicalPlanNode =
-                    protobuf::LogicalPlanNode::try_from_logical_plan(
-                        right.as_ref(),
-                        extension_codec,
-                    )?;
+                let left: LogicalPlanNode = LogicalPlanNode::try_from_logical_plan(
+                    left.as_ref(),
+                    extension_codec,
+                )?;
+                let right: LogicalPlanNode = LogicalPlanNode::try_from_logical_plan(
+                    right.as_ref(),
+                    extension_codec,
+                )?;
                 let (left_join_key, right_join_key) = on
                     .iter()
                     .map(|(l, r)| {
@@ -1231,7 +1223,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     .as_ref()
                     .map(|e| serialize_expr(e, extension_codec))
                     .map_or(Ok(None), |v| v.map(Some))?;
-                Ok(protobuf::LogicalPlanNode {
+                Ok(LogicalPlanNode {
                     logical_plan_type: Some(LogicalPlanType::Join(Box::new(
                         protobuf::JoinNode {
                             left: Some(Box::new(left)),
@@ -1250,12 +1242,11 @@ impl AsLogicalPlan for LogicalPlanNode {
                 not_impl_err!("LogicalPlan serde is not yet implemented for subqueries")
             }
             LogicalPlan::SubqueryAlias(SubqueryAlias { input, alias, .. }) => {
-                let input: protobuf::LogicalPlanNode =
-                    protobuf::LogicalPlanNode::try_from_logical_plan(
-                        input.as_ref(),
-                        extension_codec,
-                    )?;
-                Ok(protobuf::LogicalPlanNode {
+                let input: LogicalPlanNode = LogicalPlanNode::try_from_logical_plan(
+                    input.as_ref(),
+                    extension_codec,
+                )?;
+                Ok(LogicalPlanNode {
                     logical_plan_type: Some(LogicalPlanType::SubqueryAlias(Box::new(
                         protobuf::SubqueryAliasNode {
                             input: Some(Box::new(input)),
@@ -1264,31 +1255,40 @@ impl AsLogicalPlan for LogicalPlanNode {
                     ))),
                 })
             }
-            LogicalPlan::Limit(Limit { input, skip, fetch }) => {
-                let input: protobuf::LogicalPlanNode =
-                    protobuf::LogicalPlanNode::try_from_logical_plan(
-                        input.as_ref(),
-                        extension_codec,
-                    )?;
-                Ok(protobuf::LogicalPlanNode {
+            LogicalPlan::Limit(limit) => {
+                let input: LogicalPlanNode = LogicalPlanNode::try_from_logical_plan(
+                    limit.input.as_ref(),
+                    extension_codec,
+                )?;
+                let SkipType::Literal(skip) = limit.get_skip_type()? else {
+                    return Err(proto_error(
+                        "LogicalPlan::Limit only supports literal skip values",
+                    ));
+                };
+                let FetchType::Literal(fetch) = limit.get_fetch_type()? else {
+                    return Err(proto_error(
+                        "LogicalPlan::Limit only supports literal fetch values",
+                    ));
+                };
+
+                Ok(LogicalPlanNode {
                     logical_plan_type: Some(LogicalPlanType::Limit(Box::new(
                         protobuf::LimitNode {
                             input: Some(Box::new(input)),
-                            skip: *skip as i64,
+                            skip: skip as i64,
                             fetch: fetch.unwrap_or(i64::MAX as usize) as i64,
                         },
                     ))),
                 })
             }
             LogicalPlan::Sort(Sort { input, expr, fetch }) => {
-                let input: protobuf::LogicalPlanNode =
-                    protobuf::LogicalPlanNode::try_from_logical_plan(
-                        input.as_ref(),
-                        extension_codec,
-                    )?;
+                let input: LogicalPlanNode = LogicalPlanNode::try_from_logical_plan(
+                    input.as_ref(),
+                    extension_codec,
+                )?;
                 let sort_expr: Vec<protobuf::SortExprNode> =
                     serialize_sorts(expr, extension_codec)?;
-                Ok(protobuf::LogicalPlanNode {
+                Ok(LogicalPlanNode {
                     logical_plan_type: Some(LogicalPlanType::Sort(Box::new(
                         protobuf::SortNode {
                             input: Some(Box::new(input)),
@@ -1303,11 +1303,10 @@ impl AsLogicalPlan for LogicalPlanNode {
                 partitioning_scheme,
             }) => {
                 use datafusion::logical_expr::Partitioning;
-                let input: protobuf::LogicalPlanNode =
-                    protobuf::LogicalPlanNode::try_from_logical_plan(
-                        input.as_ref(),
-                        extension_codec,
-                    )?;
+                let input: LogicalPlanNode = LogicalPlanNode::try_from_logical_plan(
+                    input.as_ref(),
+                    extension_codec,
+                )?;
 
                 // Assumed common usize field was batch size
                 // Used u64 to avoid any nastyness involving large values, most data clusters are probably uniformly 64 bits any ways
@@ -1328,7 +1327,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     }
                 };
 
-                Ok(protobuf::LogicalPlanNode {
+                Ok(LogicalPlanNode {
                     logical_plan_type: Some(LogicalPlanType::Repartition(Box::new(
                         protobuf::RepartitionNode {
                             input: Some(Box::new(input)),
@@ -1339,7 +1338,7 @@ impl AsLogicalPlan for LogicalPlanNode {
             }
             LogicalPlan::EmptyRelation(EmptyRelation {
                 produce_one_row, ..
-            }) => Ok(protobuf::LogicalPlanNode {
+            }) => Ok(LogicalPlanNode {
                 logical_plan_type: Some(LogicalPlanType::EmptyRelation(
                     protobuf::EmptyRelationNode {
                         produce_one_row: *produce_one_row,
@@ -1378,7 +1377,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                         .insert(col_name.clone(), serialize_expr(expr, extension_codec)?);
                 }
 
-                Ok(protobuf::LogicalPlanNode {
+                Ok(LogicalPlanNode {
                     logical_plan_type: Some(LogicalPlanType::CreateExternalTable(
                         protobuf::CreateExternalTableNode {
                             name: Some(name.clone().into()),
@@ -1404,7 +1403,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                 or_replace,
                 definition,
                 temporary,
-            })) => Ok(protobuf::LogicalPlanNode {
+            })) => Ok(LogicalPlanNode {
                 logical_plan_type: Some(LogicalPlanType::CreateView(Box::new(
                     protobuf::CreateViewNode {
                         name: Some(name.clone().into()),
@@ -1424,7 +1423,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     if_not_exists,
                     schema: df_schema,
                 },
-            )) => Ok(protobuf::LogicalPlanNode {
+            )) => Ok(LogicalPlanNode {
                 logical_plan_type: Some(LogicalPlanType::CreateCatalogSchema(
                     protobuf::CreateCatalogSchemaNode {
                         schema_name: schema_name.clone(),
@@ -1437,7 +1436,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                 catalog_name,
                 if_not_exists,
                 schema: df_schema,
-            })) => Ok(protobuf::LogicalPlanNode {
+            })) => Ok(LogicalPlanNode {
                 logical_plan_type: Some(LogicalPlanType::CreateCatalog(
                     protobuf::CreateCatalogNode {
                         catalog_name: catalog_name.clone(),
@@ -1447,11 +1446,11 @@ impl AsLogicalPlan for LogicalPlanNode {
                 )),
             }),
             LogicalPlan::Analyze(a) => {
-                let input = protobuf::LogicalPlanNode::try_from_logical_plan(
+                let input = LogicalPlanNode::try_from_logical_plan(
                     a.input.as_ref(),
                     extension_codec,
                 )?;
-                Ok(protobuf::LogicalPlanNode {
+                Ok(LogicalPlanNode {
                     logical_plan_type: Some(LogicalPlanType::Analyze(Box::new(
                         protobuf::AnalyzeNode {
                             input: Some(Box::new(input)),
@@ -1461,11 +1460,11 @@ impl AsLogicalPlan for LogicalPlanNode {
                 })
             }
             LogicalPlan::Explain(a) => {
-                let input = protobuf::LogicalPlanNode::try_from_logical_plan(
+                let input = LogicalPlanNode::try_from_logical_plan(
                     a.plan.as_ref(),
                     extension_codec,
                 )?;
-                Ok(protobuf::LogicalPlanNode {
+                Ok(LogicalPlanNode {
                     logical_plan_type: Some(LogicalPlanType::Explain(Box::new(
                         protobuf::ExplainNode {
                             input: Some(Box::new(input)),
@@ -1478,35 +1477,12 @@ impl AsLogicalPlan for LogicalPlanNode {
                 let inputs: Vec<LogicalPlanNode> = union
                     .inputs
                     .iter()
-                    .map(|i| {
-                        protobuf::LogicalPlanNode::try_from_logical_plan(
-                            i,
-                            extension_codec,
-                        )
-                    })
+                    .map(|i| LogicalPlanNode::try_from_logical_plan(i, extension_codec))
                     .collect::<Result<_>>()?;
-                Ok(protobuf::LogicalPlanNode {
+                Ok(LogicalPlanNode {
                     logical_plan_type: Some(LogicalPlanType::Union(
                         protobuf::UnionNode { inputs },
                     )),
-                })
-            }
-            LogicalPlan::CrossJoin(CrossJoin { left, right, .. }) => {
-                let left = protobuf::LogicalPlanNode::try_from_logical_plan(
-                    left.as_ref(),
-                    extension_codec,
-                )?;
-                let right = protobuf::LogicalPlanNode::try_from_logical_plan(
-                    right.as_ref(),
-                    extension_codec,
-                )?;
-                Ok(protobuf::LogicalPlanNode {
-                    logical_plan_type: Some(LogicalPlanType::CrossJoin(Box::new(
-                        protobuf::CrossJoinNode {
-                            left: Some(Box::new(left)),
-                            right: Some(Box::new(right)),
-                        },
-                    ))),
                 })
             }
             LogicalPlan::Extension(extension) => {
@@ -1517,15 +1493,10 @@ impl AsLogicalPlan for LogicalPlanNode {
                     .node
                     .inputs()
                     .iter()
-                    .map(|i| {
-                        protobuf::LogicalPlanNode::try_from_logical_plan(
-                            i,
-                            extension_codec,
-                        )
-                    })
+                    .map(|i| LogicalPlanNode::try_from_logical_plan(i, extension_codec))
                     .collect::<Result<_>>()?;
 
-                Ok(protobuf::LogicalPlanNode {
+                Ok(LogicalPlanNode {
                     logical_plan_type: Some(LogicalPlanType::Extension(
                         LogicalExtensionNode { node: buf, inputs },
                     )),
@@ -1536,11 +1507,9 @@ impl AsLogicalPlan for LogicalPlanNode {
                 data_types,
                 input,
             }) => {
-                let input = protobuf::LogicalPlanNode::try_from_logical_plan(
-                    input,
-                    extension_codec,
-                )?;
-                Ok(protobuf::LogicalPlanNode {
+                let input =
+                    LogicalPlanNode::try_from_logical_plan(input, extension_codec)?;
+                Ok(LogicalPlanNode {
                     logical_plan_type: Some(LogicalPlanType::Prepare(Box::new(
                         protobuf::PrepareNode {
                             name: name.clone(),
@@ -1562,10 +1531,8 @@ impl AsLogicalPlan for LogicalPlanNode {
                 schema,
                 options,
             }) => {
-                let input = protobuf::LogicalPlanNode::try_from_logical_plan(
-                    input,
-                    extension_codec,
-                )?;
+                let input =
+                    LogicalPlanNode::try_from_logical_plan(input, extension_codec)?;
                 let proto_unnest_list_items = list_type_columns
                     .iter()
                     .map(|(index, ul)| ColumnUnnestListItem {
@@ -1576,7 +1543,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                         }),
                     })
                     .collect();
-                Ok(protobuf::LogicalPlanNode {
+                Ok(LogicalPlanNode {
                     logical_plan_type: Some(LogicalPlanType::Unnest(Box::new(
                         protobuf::UnnestNode {
                             input: Some(Box::new(input)),
@@ -1612,7 +1579,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                 name,
                 if_exists,
                 schema,
-            })) => Ok(protobuf::LogicalPlanNode {
+            })) => Ok(LogicalPlanNode {
                 logical_plan_type: Some(LogicalPlanType::DropView(
                     protobuf::DropViewNode {
                         name: Some(name.clone().into()),
@@ -1643,15 +1610,13 @@ impl AsLogicalPlan for LogicalPlanNode {
                 partition_by,
                 ..
             }) => {
-                let input = protobuf::LogicalPlanNode::try_from_logical_plan(
-                    input,
-                    extension_codec,
-                )?;
+                let input =
+                    LogicalPlanNode::try_from_logical_plan(input, extension_codec)?;
                 let mut buf = Vec::new();
                 extension_codec
                     .try_encode_file_format(&mut buf, file_type_to_format(file_type)?)?;
 
-                Ok(protobuf::LogicalPlanNode {
+                Ok(LogicalPlanNode {
                     logical_plan_type: Some(LogicalPlanType::CopyTo(Box::new(
                         protobuf::CopyToNode {
                             input: Some(Box::new(input)),
@@ -1667,6 +1632,9 @@ impl AsLogicalPlan for LogicalPlanNode {
             )),
             LogicalPlan::RecursiveQuery(_) => Err(proto_error(
                 "LogicalPlan serde is not yet implemented for RecursiveQuery",
+            )),
+            LogicalPlan::Execute(_) => Err(proto_error(
+                "LogicalPlan serde is not yet implemented for Execute",
             )),
         }
     }

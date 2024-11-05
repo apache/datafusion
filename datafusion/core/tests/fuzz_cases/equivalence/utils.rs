@@ -22,15 +22,11 @@ use std::any::Any;
 use std::cmp::Ordering;
 use std::sync::Arc;
 
-use arrow::compute::{lexsort_to_indices, SortColumn};
+use arrow::compute::{lexsort_to_indices, take_record_batch, SortColumn};
 use arrow::datatypes::{DataType, Field, Schema};
-use arrow_array::{
-    ArrayRef, Float32Array, Float64Array, PrimitiveArray, RecordBatch, UInt32Array,
-};
+use arrow_array::{ArrayRef, Float32Array, Float64Array, RecordBatch, UInt32Array};
 use arrow_schema::{SchemaRef, SortOptions};
-use datafusion_common::utils::{
-    compare_rows, get_record_batch_at_indices, get_row_at_idx,
-};
+use datafusion_common::utils::{compare_rows, get_row_at_idx};
 use datafusion_common::{exec_err, plan_datafusion_err, DataFusionError, Result};
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
@@ -227,7 +223,7 @@ fn add_equal_conditions_test() -> Result<()> {
 /// If the table remains the same after sorting with the added unique column, it indicates that the table was
 /// already sorted according to `required_ordering` to begin with.
 pub fn is_table_same_after_sort(
-    mut required_ordering: Vec<PhysicalSortExpr>,
+    mut required_ordering: LexOrdering,
     batch: RecordBatch,
 ) -> Result<bool> {
     // Clone the original schema and columns
@@ -448,7 +444,7 @@ pub fn generate_table_for_orderings(
 
     assert!(!orderings.is_empty());
     // Sort the inner vectors by their lengths (longest first)
-    orderings.sort_by_key(|v| std::cmp::Reverse(v.len()));
+    orderings.sort_by_key(|v| std::cmp::Reverse(v.inner.len()));
 
     let arrays = schema
         .fields
@@ -463,13 +459,13 @@ pub fn generate_table_for_orderings(
     let batch = RecordBatch::try_from_iter(arrays)?;
 
     // Sort batch according to first ordering expression
-    let sort_columns = get_sort_columns(&batch, &orderings[0])?;
+    let sort_columns = get_sort_columns(&batch, orderings[0].as_ref())?;
     let sort_indices = lexsort_to_indices(&sort_columns, None)?;
-    let mut batch = get_record_batch_at_indices(&batch, &sort_indices)?;
+    let mut batch = take_record_batch(&batch, &sort_indices)?;
 
     // prune out rows that is invalid according to remaining orderings.
     for ordering in orderings.iter().skip(1) {
-        let sort_columns = get_sort_columns(&batch, ordering)?;
+        let sort_columns = get_sort_columns(&batch, ordering.as_ref())?;
 
         // Collect sort options and values into separate vectors.
         let (sort_options, sort_col_values): (Vec<_>, Vec<_>) = sort_columns
@@ -490,10 +486,7 @@ pub fn generate_table_for_orderings(
             }
         }
         // Only keep valid rows, that satisfies given ordering relation.
-        batch = get_record_batch_at_indices(
-            &batch,
-            &PrimitiveArray::from_iter_values(keep_indices),
-        )?;
+        batch = take_record_batch(&batch, &UInt32Array::from_iter_values(keep_indices))?;
     }
 
     Ok(batch)
@@ -502,7 +495,7 @@ pub fn generate_table_for_orderings(
 // Convert each tuple to PhysicalSortExpr
 pub fn convert_to_sort_exprs(
     in_data: &[(&Arc<dyn PhysicalExpr>, SortOptions)],
-) -> Vec<PhysicalSortExpr> {
+) -> LexOrdering {
     in_data
         .iter()
         .map(|(expr, options)| PhysicalSortExpr {
@@ -515,7 +508,7 @@ pub fn convert_to_sort_exprs(
 // Convert each inner tuple to PhysicalSortExpr
 pub fn convert_to_orderings(
     orderings: &[Vec<(&Arc<dyn PhysicalExpr>, SortOptions)>],
-) -> Vec<Vec<PhysicalSortExpr>> {
+) -> Vec<LexOrdering> {
     orderings
         .iter()
         .map(|sort_exprs| convert_to_sort_exprs(sort_exprs))

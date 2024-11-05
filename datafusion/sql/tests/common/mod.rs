@@ -232,10 +232,7 @@ impl ContextProvider for MockContextProvider {
         &self.state.config_options
     }
 
-    fn get_file_type(
-        &self,
-        _ext: &str,
-    ) -> Result<Arc<dyn datafusion_common::file_options::file_type::FileType>> {
+    fn get_file_type(&self, _ext: &str) -> Result<Arc<dyn FileType>> {
         Ok(Arc::new(MockCsvType {}))
     }
 
@@ -275,7 +272,7 @@ impl EmptyTable {
 }
 
 impl TableSource for EmptyTable {
-    fn as_any(&self) -> &dyn std::any::Any {
+    fn as_any(&self) -> &dyn Any {
         self
     }
 

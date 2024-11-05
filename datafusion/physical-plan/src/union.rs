@@ -85,7 +85,7 @@ use tokio::macros::support::thread_rng_n;
 ///                  │Input 1          │  │Input 2           │
 ///                  └─────────────────┘  └──────────────────┘
 /// ```
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct UnionExec {
     /// Input execution plan
     inputs: Vec<Arc<dyn ExecutionPlan>>,
@@ -298,7 +298,7 @@ impl ExecutionPlan for UnionExec {
 /// |         |-----------------+
 /// +---------+
 /// ```
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct InterleaveExec {
     /// Input execution plan
     inputs: Vec<Arc<dyn ExecutionPlan>>,
@@ -468,35 +468,41 @@ pub fn can_interleave<T: Borrow<Arc<dyn ExecutionPlan>>>(
 }
 
 fn union_schema(inputs: &[Arc<dyn ExecutionPlan>]) -> SchemaRef {
-    let fields: Vec<Field> = (0..inputs[0].schema().fields().len())
+    let first_schema = inputs[0].schema();
+
+    let fields = (0..first_schema.fields().len())
         .map(|i| {
             inputs
                 .iter()
-                .filter_map(|input| {
-                    if input.schema().fields().len() > i {
-                        let field = input.schema().field(i).clone();
-                        let right_hand_metdata = inputs
-                            .get(1)
-                            .map(|right_input| {
-                                right_input.schema().field(i).metadata().clone()
-                            })
-                            .unwrap_or_default();
-                        let mut metadata = field.metadata().clone();
-                        metadata.extend(right_hand_metdata);
-                        Some(field.with_metadata(metadata))
-                    } else {
-                        None
-                    }
+                .enumerate()
+                .map(|(input_idx, input)| {
+                    let field = input.schema().field(i).clone();
+                    let mut metadata = field.metadata().clone();
+
+                    let other_metadatas = inputs
+                        .iter()
+                        .enumerate()
+                        .filter(|(other_idx, _)| *other_idx != input_idx)
+                        .flat_map(|(_, other_input)| {
+                            other_input.schema().field(i).metadata().clone().into_iter()
+                        });
+
+                    metadata.extend(other_metadatas);
+                    field.with_metadata(metadata)
                 })
-                .find_or_first(|f| f.is_nullable())
+                .find_or_first(Field::is_nullable)
+                // We can unwrap this because if inputs was empty, this would've already panic'ed when we
+                // indexed into inputs[0].
                 .unwrap()
         })
+        .collect::<Vec<_>>();
+
+    let all_metadata_merged = inputs
+        .iter()
+        .flat_map(|i| i.schema().metadata().clone().into_iter())
         .collect();
 
-    Arc::new(Schema::new_with_metadata(
-        fields,
-        inputs[0].schema().metadata().clone(),
-    ))
+    Arc::new(Schema::new_with_metadata(fields, all_metadata_merged))
 }
 
 /// CombinedRecordBatchStream can be used to combine a Vec of SendableRecordBatchStreams into one
@@ -601,6 +607,7 @@ mod tests {
     use datafusion_common::ScalarValue;
     use datafusion_physical_expr::expressions::col;
     use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
+    use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
     // Generate a schema which consists of 7 columns (a, b, c, d, e, f, g)
     fn create_test_schema() -> Result<SchemaRef> {
@@ -619,14 +626,14 @@ mod tests {
     // Convert each tuple to PhysicalSortExpr
     fn convert_to_sort_exprs(
         in_data: &[(&Arc<dyn PhysicalExpr>, SortOptions)],
-    ) -> Vec<PhysicalSortExpr> {
+    ) -> LexOrdering {
         in_data
             .iter()
             .map(|(expr, options)| PhysicalSortExpr {
                 expr: Arc::clone(*expr),
                 options: *options,
             })
-            .collect::<Vec<_>>()
+            .collect::<LexOrdering>()
     }
 
     #[tokio::test]

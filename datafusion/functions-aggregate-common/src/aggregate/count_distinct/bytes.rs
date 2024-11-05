@@ -25,6 +25,7 @@ use datafusion_expr_common::accumulator::Accumulator;
 use datafusion_physical_expr_common::binary_map::{ArrowBytesSet, OutputType};
 use datafusion_physical_expr_common::binary_view_map::ArrowBytesViewSet;
 use std::fmt::Debug;
+use std::mem::size_of_val;
 use std::sync::Arc;
 
 /// Specialized implementation of
@@ -86,7 +87,7 @@ impl<O: OffsetSizeTrait> Accumulator for BytesDistinctCountAccumulator<O> {
     }
 
     fn size(&self) -> usize {
-        std::mem::size_of_val(self) + self.0.size()
+        size_of_val(self) + self.0.size()
     }
 }
 
@@ -146,6 +147,6 @@ impl Accumulator for BytesViewDistinctCountAccumulator {
     }
 
     fn size(&self) -> usize {
-        std::mem::size_of_val(self) + self.0.size()
+        size_of_val(self) + self.0.size()
     }
 }

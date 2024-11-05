@@ -127,8 +127,6 @@ impl From<&BuiltInWindowFunction> for protobuf::BuiltInWindowFunction {
             BuiltInWindowFunction::FirstValue => Self::FirstValue,
             BuiltInWindowFunction::LastValue => Self::LastValue,
             BuiltInWindowFunction::NthValue => Self::NthValue,
-            BuiltInWindowFunction::Ntile => Self::Ntile,
-            BuiltInWindowFunction::CumeDist => Self::CumeDist,
         }
     }
 }
@@ -687,6 +685,7 @@ impl From<JoinType> for protobuf::JoinType {
             JoinType::RightSemi => protobuf::JoinType::Rightsemi,
             JoinType::LeftAnti => protobuf::JoinType::Leftanti,
             JoinType::RightAnti => protobuf::JoinType::Rightanti,
+            JoinType::LeftMark => protobuf::JoinType::Leftmark,
         }
     }
 }

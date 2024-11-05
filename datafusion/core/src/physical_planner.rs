@@ -29,13 +29,12 @@ use crate::error::{DataFusionError, Result};
 use crate::execution::context::{ExecutionProps, SessionState};
 use crate::logical_expr::utils::generate_sort_key;
 use crate::logical_expr::{
-    Aggregate, EmptyRelation, Join, Projection, Sort, TableScan, Unnest, Window,
+    Aggregate, EmptyRelation, Join, Projection, Sort, TableScan, Unnest, Values, Window,
 };
 use crate::logical_expr::{
     Expr, LogicalPlan, Partitioning as LogicalPartitioning, PlanType, Repartition,
     UserDefinedLogicalNode,
 };
-use crate::logical_expr::{Limit, Values};
 use crate::physical_expr::{create_physical_expr, create_physical_exprs};
 use crate::physical_plan::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
 use crate::physical_plan::analyze::AnalyzeExec;
@@ -78,8 +77,8 @@ use datafusion_expr::expr::{
 use datafusion_expr::expr_rewriter::unnormalize_cols;
 use datafusion_expr::logical_plan::builder::wrap_projection_for_join_if_necessary;
 use datafusion_expr::{
-    DescribeTable, DmlStatement, Extension, Filter, JoinType, RecursiveQuery, SortExpr,
-    StringifiedPlan, WindowFrame, WindowFrameBound, WriteOp,
+    DescribeTable, DmlStatement, Extension, FetchType, Filter, JoinType, RecursiveQuery,
+    SkipType, SortExpr, StringifiedPlan, WindowFrame, WindowFrameBound, WriteOp,
 };
 use datafusion_physical_expr::aggregate::{AggregateExprBuilder, AggregateFunctionExpr};
 use datafusion_physical_expr::expressions::Literal;
@@ -650,14 +649,16 @@ impl DefaultPhysicalPlanner {
                 aggr_expr,
                 ..
             }) => {
+                let options = session_state.config().options();
                 // Initially need to perform the aggregate and then merge the partitions
                 let input_exec = children.one()?;
                 let physical_input_schema = input_exec.schema();
                 let logical_input_schema = input.as_ref().schema();
-                let physical_input_schema_from_logical: Arc<Schema> =
-                    logical_input_schema.as_ref().clone().into();
+                let physical_input_schema_from_logical = logical_input_schema.inner();
 
-                if physical_input_schema != physical_input_schema_from_logical {
+                if &physical_input_schema != physical_input_schema_from_logical
+                    && !options.execution.skip_physical_aggregate_schema_check
+                {
                     return internal_err!("Physical input schema should be the same as the one converted from logical input schema.");
                 }
 
@@ -796,8 +797,20 @@ impl DefaultPhysicalPlanner {
             }
             LogicalPlan::Subquery(_) => todo!(),
             LogicalPlan::SubqueryAlias(_) => children.one()?,
-            LogicalPlan::Limit(Limit { skip, fetch, .. }) => {
+            LogicalPlan::Limit(limit) => {
                 let input = children.one()?;
+                let SkipType::Literal(skip) = limit.get_skip_type()? else {
+                    return not_impl_err!(
+                        "Unsupported OFFSET expression: {:?}",
+                        limit.skip
+                    );
+                };
+                let FetchType::Literal(fetch) = limit.get_fetch_type()? else {
+                    return not_impl_err!(
+                        "Unsupported LIMIT expression: {:?}",
+                        limit.fetch
+                    );
+                };
 
                 // GlobalLimitExec requires a single partition for input
                 let input = if input.output_partitioning().partition_count() == 1 {
@@ -806,13 +819,13 @@ impl DefaultPhysicalPlanner {
                     // Apply a LocalLimitExec to each partition. The optimizer will also insert
                     // a CoalescePartitionsExec between the GlobalLimitExec and LocalLimitExec
                     if let Some(fetch) = fetch {
-                        Arc::new(LocalLimitExec::new(input, *fetch + skip))
+                        Arc::new(LocalLimitExec::new(input, fetch + skip))
                     } else {
                         input
                     }
                 };
 
-                Arc::new(GlobalLimitExec::new(input, *skip, *fetch))
+                Arc::new(GlobalLimitExec::new(input, skip, fetch))
             }
             LogicalPlan::Unnest(Unnest {
                 list_type_columns,
@@ -1014,14 +1027,21 @@ impl DefaultPhysicalPlanner {
                             })
                             .collect();
 
+                        let metadata: HashMap<_, _> = left_df_schema
+                            .metadata()
+                            .clone()
+                            .into_iter()
+                            .chain(right_df_schema.metadata().clone())
+                            .collect();
+
                         // Construct intermediate schemas used for filtering data and
                         // convert logical expression to physical according to filter schema
                         let filter_df_schema = DFSchema::new_with_metadata(
                             filter_df_fields,
-                            HashMap::new(),
+                            metadata.clone(),
                         )?;
                         let filter_schema =
-                            Schema::new_with_metadata(filter_fields, HashMap::new());
+                            Schema::new_with_metadata(filter_fields, metadata);
                         let filter_expr = create_physical_expr(
                             expr,
                             &filter_df_schema,
@@ -1116,10 +1136,6 @@ impl DefaultPhysicalPlanner {
                     join
                 }
             }
-            LogicalPlan::CrossJoin(_) => {
-                let [left, right] = children.two()?;
-                Arc::new(CrossJoinExec::new(left, right))
-            }
             LogicalPlan::RecursiveQuery(RecursiveQuery {
                 name, is_distinct, ..
             }) => {
@@ -1184,6 +1200,9 @@ impl DefaultPhysicalPlanner {
                 // handled at a higher level (so that the appropriate
                 // statement can be prepared)
                 return not_impl_err!("Unsupported logical plan: Prepare");
+            }
+            LogicalPlan::Execute(_) => {
+                return not_impl_err!("Unsupported logical plan: Execute");
             }
             LogicalPlan::Dml(dml) => {
                 // DataFusion is a read-only query engine, but also a library, so consumers may implement this
@@ -1502,7 +1521,7 @@ pub fn create_window_expr_with_name(
                 name,
                 &physical_args,
                 &partition_by,
-                &order_by,
+                order_by.as_ref(),
                 window_frame,
                 physical_schema,
                 ignore_nulls,
@@ -1531,7 +1550,7 @@ type AggregateExprWithOptionalArgs = (
     // The filter clause, if any
     Option<Arc<dyn PhysicalExpr>>,
     // Ordering requirements, if any
-    Option<Vec<PhysicalSortExpr>>,
+    Option<LexOrdering>,
 );
 
 /// Create an aggregate expression with a name from a logical expression
@@ -1581,12 +1600,12 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
                     None => None,
                 };
 
-                let ordering_reqs: Vec<PhysicalSortExpr> =
-                    physical_sort_exprs.clone().unwrap_or(vec![]);
+                let ordering_reqs: LexOrdering =
+                    physical_sort_exprs.clone().unwrap_or_default();
 
                 let agg_expr =
                     AggregateExprBuilder::new(func.to_owned(), physical_args.to_vec())
-                        .order_by(ordering_reqs.to_vec())
+                        .order_by(ordering_reqs)
                         .schema(Arc::new(physical_input_schema.to_owned()))
                         .alias(name)
                         .with_ignore_nulls(ignore_nulls)
@@ -1655,7 +1674,7 @@ pub fn create_physical_sort_exprs(
     exprs
         .iter()
         .map(|expr| create_physical_sort_expr(expr, input_dfschema, execution_props))
-        .collect::<Result<Vec<_>>>()
+        .collect::<Result<LexOrdering>>()
 }
 
 impl DefaultPhysicalPlanner {

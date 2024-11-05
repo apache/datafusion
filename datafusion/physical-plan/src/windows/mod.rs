@@ -21,15 +21,13 @@ use std::borrow::Borrow;
 use std::sync::Arc;
 
 use crate::{
-    expressions::{cume_dist, Literal, NthValue, Ntile, PhysicalSortExpr},
+    expressions::{Literal, NthValue, PhysicalSortExpr},
     ExecutionPlan, ExecutionPlanProperties, InputOrderMode, PhysicalExpr,
 };
 
 use arrow::datatypes::Schema;
 use arrow_schema::{DataType, Field, SchemaRef};
-use datafusion_common::{
-    exec_datafusion_err, exec_err, DataFusionError, Result, ScalarValue,
-};
+use datafusion_common::{exec_datafusion_err, exec_err, Result, ScalarValue};
 use datafusion_expr::{
     BuiltInWindowFunction, PartitionEvaluator, ReversedUDWF, WindowFrame,
     WindowFunctionDefinition, WindowUDF,
@@ -55,7 +53,7 @@ use datafusion_physical_expr::expressions::Column;
 pub use datafusion_physical_expr::window::{
     BuiltInWindowExpr, PlainAggregateWindowExpr, WindowExpr,
 };
-use datafusion_physical_expr_common::sort_expr::LexRequirement;
+use datafusion_physical_expr_common::sort_expr::{LexOrderingRef, LexRequirement};
 pub use window_agg_exec::WindowAggExec;
 
 /// Build field from window function and add it into schema
@@ -100,7 +98,7 @@ pub fn create_window_expr(
     name: String,
     args: &[Arc<dyn PhysicalExpr>],
     partition_by: &[Arc<dyn PhysicalExpr>],
-    order_by: &[PhysicalSortExpr],
+    order_by: LexOrderingRef,
     window_frame: Arc<WindowFrame>,
     input_schema: &Schema,
     ignore_nulls: bool,
@@ -141,7 +139,7 @@ pub fn create_window_expr(
 /// Creates an appropriate [`WindowExpr`] based on the window frame and
 fn window_expr_from_aggregate_expr(
     partition_by: &[Arc<dyn PhysicalExpr>],
-    order_by: &[PhysicalSortExpr],
+    order_by: LexOrderingRef,
     window_frame: Arc<WindowFrame>,
     aggregate: Arc<AggregateFunctionExpr>,
 ) -> Arc<dyn WindowExpr> {
@@ -165,25 +163,6 @@ fn window_expr_from_aggregate_expr(
     }
 }
 
-fn get_scalar_value_from_args(
-    args: &[Arc<dyn PhysicalExpr>],
-    index: usize,
-) -> Result<Option<ScalarValue>> {
-    Ok(if let Some(field) = args.get(index) {
-        let tmp = field
-            .as_any()
-            .downcast_ref::<Literal>()
-            .ok_or_else(|| DataFusionError::NotImplemented(
-                format!("There is only support Literal types for field at idx: {index} in Window Function"),
-            ))?
-            .value()
-            .clone();
-        Some(tmp)
-    } else {
-        None
-    })
-}
-
 fn get_signed_integer(value: ScalarValue) -> Result<i64> {
     if value.is_null() {
         return Ok(0);
@@ -194,18 +173,6 @@ fn get_signed_integer(value: ScalarValue) -> Result<i64> {
     }
 
     value.cast_to(&DataType::Int64)?.try_into()
-}
-
-fn get_unsigned_integer(value: ScalarValue) -> Result<u64> {
-    if value.is_null() {
-        return Ok(0);
-    }
-
-    if !value.data_type().is_integer() {
-        return exec_err!("Expected an integer value");
-    }
-
-    value.cast_to(&DataType::UInt64)?.try_into()
 }
 
 fn create_built_in_window_expr(
@@ -219,29 +186,6 @@ fn create_built_in_window_expr(
     let out_data_type: &DataType = input_schema.field_with_name(&name)?.data_type();
 
     Ok(match fun {
-        BuiltInWindowFunction::CumeDist => Arc::new(cume_dist(name, out_data_type)),
-        BuiltInWindowFunction::Ntile => {
-            let n = get_scalar_value_from_args(args, 0)?.ok_or_else(|| {
-                DataFusionError::Execution(
-                    "NTILE requires a positive integer".to_string(),
-                )
-            })?;
-
-            if n.is_null() {
-                return exec_err!("NTILE requires a positive integer, but finds NULL");
-            }
-
-            if n.is_unsigned() {
-                let n = get_unsigned_integer(n)?;
-                Arc::new(Ntile::new(name, n, out_data_type))
-            } else {
-                let n: i64 = get_signed_integer(n)?;
-                if n <= 0 {
-                    return exec_err!("NTILE requires a positive integer");
-                }
-                Arc::new(Ntile::new(name, n as u64, out_data_type))
-            }
-        }
         BuiltInWindowFunction::NthValue => {
             let arg = Arc::clone(&args[0]);
             let n = get_signed_integer(
@@ -553,7 +497,7 @@ pub fn get_best_fitting_window(
 /// the mode this window operator should work in to accommodate the existing ordering.
 pub fn get_window_mode(
     partitionby_exprs: &[Arc<dyn PhysicalExpr>],
-    orderby_keys: &[PhysicalSortExpr],
+    orderby_keys: LexOrderingRef,
     input: &Arc<dyn ExecutionPlan>,
 ) -> Option<(bool, InputOrderMode)> {
     let input_eqs = input.equivalence_properties().clone();
@@ -572,9 +516,9 @@ pub fn get_window_mode(
     // Treat partition by exprs as constant. During analysis of requirements are satisfied.
     let const_exprs = partitionby_exprs.iter().map(ConstExpr::from);
     let partition_by_eqs = input_eqs.with_constants(const_exprs);
-    let order_by_reqs = PhysicalSortRequirement::from_sort_exprs(orderby_keys);
+    let order_by_reqs = PhysicalSortRequirement::from_sort_exprs(orderby_keys.iter());
     let reverse_order_by_reqs =
-        PhysicalSortRequirement::from_sort_exprs(&reverse_order_bys(orderby_keys));
+        PhysicalSortRequirement::from_sort_exprs(reverse_order_bys(orderby_keys).iter());
     for (should_swap, order_by_reqs) in
         [(false, order_by_reqs), (true, reverse_order_by_reqs)]
     {
@@ -755,7 +699,7 @@ mod tests {
                 "count".to_owned(),
                 &[col("a", &schema)?],
                 &[],
-                &[],
+                LexOrderingRef::default(),
                 Arc::new(WindowFrame::new(None)),
                 schema.as_ref(),
                 false,
@@ -952,7 +896,7 @@ mod tests {
                 partition_by_exprs.push(col(col_name, &test_schema)?);
             }
 
-            let mut order_by_exprs = vec![];
+            let mut order_by_exprs = LexOrdering::default();
             for col_name in order_by_params {
                 let expr = col(col_name, &test_schema)?;
                 // Give default ordering, this is same with input ordering direction
@@ -960,8 +904,11 @@ mod tests {
                 let options = SortOptions::default();
                 order_by_exprs.push(PhysicalSortExpr { expr, options });
             }
-            let res =
-                get_window_mode(&partition_by_exprs, &order_by_exprs, &exec_unbounded);
+            let res = get_window_mode(
+                &partition_by_exprs,
+                order_by_exprs.as_ref(),
+                &exec_unbounded,
+            );
             // Since reversibility is not important in this test. Convert Option<(bool, InputOrderMode)> to Option<InputOrderMode>
             let res = res.map(|(_, mode)| mode);
             assert_eq!(
@@ -1114,7 +1061,7 @@ mod tests {
                 partition_by_exprs.push(col(col_name, &test_schema)?);
             }
 
-            let mut order_by_exprs = vec![];
+            let mut order_by_exprs = LexOrdering::default();
             for (col_name, descending, nulls_first) in order_by_params {
                 let expr = col(col_name, &test_schema)?;
                 let options = SortOptions {
@@ -1125,7 +1072,7 @@ mod tests {
             }
 
             assert_eq!(
-                get_window_mode(&partition_by_exprs, &order_by_exprs, &exec_unbounded),
+                get_window_mode(&partition_by_exprs, order_by_exprs.as_ref(), &exec_unbounded),
                 *expected,
                 "Unexpected result for in unbounded test case#: {case_idx:?}, case: {test_case:?}"
             );

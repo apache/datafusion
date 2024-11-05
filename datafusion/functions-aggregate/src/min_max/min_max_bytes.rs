@@ -22,6 +22,7 @@ use arrow_schema::DataType;
 use datafusion_common::{internal_err, Result};
 use datafusion_expr::{EmitTo, GroupsAccumulator};
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::nulls::apply_filter_as_nulls;
+use std::mem::size_of;
 use std::sync::Arc;
 
 /// Implements fast Min/Max [`GroupsAccumulator`] for "bytes" types ([`StringArray`],
@@ -509,7 +510,6 @@ impl MinMaxBytesState {
     }
 
     fn size(&self) -> usize {
-        self.total_data_bytes
-            + self.min_max.len() * std::mem::size_of::<Option<Vec<u8>>>()
+        self.total_data_bytes + self.min_max.len() * size_of::<Option<Vec<u8>>>()
     }
 }

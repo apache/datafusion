@@ -2139,9 +2139,9 @@ mod tests {
         fn create_physical_expr(
             &self,
             _expr: &Expr,
-            _input_dfschema: &crate::common::DFSchema,
+            _input_dfschema: &DFSchema,
             _session_state: &SessionState,
-        ) -> Result<Arc<dyn crate::physical_plan::PhysicalExpr>> {
+        ) -> Result<Arc<dyn PhysicalExpr>> {
             unimplemented!()
         }
     }

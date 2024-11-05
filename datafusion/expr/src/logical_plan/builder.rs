@@ -20,6 +20,7 @@
 use std::any::Any;
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
+use std::iter::once;
 use std::sync::Arc;
 
 use crate::dml::CopyTo;
@@ -40,21 +41,24 @@ use crate::utils::{
     find_valid_equijoin_key_pair, group_window_expr_by_sort_keys,
 };
 use crate::{
-    and, binary_expr, DmlStatement, Expr, ExprSchemable, Operator, RecursiveQuery,
+    and, binary_expr, lit, DmlStatement, Expr, ExprSchemable, Operator, RecursiveQuery,
     TableProviderFilterPushDown, TableSource, WriteOp,
 };
 
 use super::dml::InsertOp;
 use super::plan::ColumnUnnestList;
+use arrow::compute::can_cast_types;
 use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef};
 use datafusion_common::display::ToStringifiedPlan;
 use datafusion_common::file_options::file_type::FileType;
 use datafusion_common::{
-    get_target_functional_dependencies, internal_err, not_impl_err, plan_datafusion_err,
-    plan_err, Column, DFSchema, DFSchemaRef, DataFusionError, FunctionalDependencies,
-    Result, ScalarValue, TableReference, ToDFSchema, UnnestOptions,
+    exec_err, get_target_functional_dependencies, internal_err, not_impl_err,
+    plan_datafusion_err, plan_err, Column, DFSchema, DFSchemaRef, DataFusionError,
+    FunctionalDependencies, Result, ScalarValue, TableReference, ToDFSchema,
+    UnnestOptions,
 };
 use datafusion_expr_common::type_coercion::binary::type_union_resolution;
+use indexmap::IndexSet;
 
 /// Default table name for unnamed table
 pub const UNNAMED_TABLE: &str = "?table?";
@@ -172,12 +176,10 @@ impl LogicalPlanBuilder {
     /// `value`. See the [Postgres VALUES](https://www.postgresql.org/docs/current/queries-values.html)
     /// documentation for more details.
     ///
-    /// By default, it assigns the names column1, column2, etc. to the columns of a VALUES table.
-    /// The column names are not specified by the SQL standard and different database systems do it differently,
     /// so it's usually better to override the default names with a table alias list.
     ///
     /// If the values include params/binders such as $1, $2, $3, etc, then the `param_data_types` should be provided.
-    pub fn values(mut values: Vec<Vec<Expr>>) -> Result<Self> {
+    pub fn values(values: Vec<Vec<Expr>>) -> Result<Self> {
         if values.is_empty() {
             return plan_err!("Values list cannot be empty");
         }
@@ -196,16 +198,88 @@ impl LogicalPlanBuilder {
             }
         }
 
-        let empty_schema = DFSchema::empty();
+        // Infer from data itself
+        Self::infer_data(values)
+    }
+
+    /// Create a values list based relation, and the schema is inferred from data itself or table schema if provided, consuming
+    /// `value`. See the [Postgres VALUES](https://www.postgresql.org/docs/current/queries-values.html)
+    /// documentation for more details.
+    ///
+    /// By default, it assigns the names column1, column2, etc. to the columns of a VALUES table.
+    /// The column names are not specified by the SQL standard and different database systems do it differently,
+    /// so it's usually better to override the default names with a table alias list.
+    ///
+    /// If the values include params/binders such as $1, $2, $3, etc, then the `param_data_types` should be provided.
+    pub fn values_with_schema(
+        values: Vec<Vec<Expr>>,
+        schema: &DFSchemaRef,
+    ) -> Result<Self> {
+        if values.is_empty() {
+            return plan_err!("Values list cannot be empty");
+        }
+        let n_cols = values[0].len();
+        if n_cols == 0 {
+            return plan_err!("Values list cannot be zero length");
+        }
+        for (i, row) in values.iter().enumerate() {
+            if row.len() != n_cols {
+                return plan_err!(
+                    "Inconsistent data length across values list: got {} values in row {} but expected {}",
+                    row.len(),
+                    i,
+                    n_cols
+                );
+            }
+        }
+
+        // Check the type of value against the schema
+        Self::infer_values_from_schema(values, schema)
+    }
+
+    fn infer_values_from_schema(
+        values: Vec<Vec<Expr>>,
+        schema: &DFSchema,
+    ) -> Result<Self> {
+        let n_cols = values[0].len();
+        let mut field_types: Vec<DataType> = Vec::with_capacity(n_cols);
+        for j in 0..n_cols {
+            let field_type = schema.field(j).data_type();
+            for row in values.iter() {
+                let value = &row[j];
+                let data_type = value.get_type(schema)?;
+
+                if !data_type.equals_datatype(field_type) {
+                    if can_cast_types(&data_type, field_type) {
+                    } else {
+                        return exec_err!(
+                            "type mistmatch and can't cast to got {} and {}",
+                            data_type,
+                            field_type
+                        );
+                    }
+                }
+            }
+            field_types.push(field_type.to_owned());
+        }
+
+        Self::infer_inner(values, &field_types, schema)
+    }
+
+    fn infer_data(values: Vec<Vec<Expr>>) -> Result<Self> {
+        let n_cols = values[0].len();
+        let schema = DFSchema::empty();
+
         let mut field_types: Vec<DataType> = Vec::with_capacity(n_cols);
         for j in 0..n_cols {
             let mut common_type: Option<DataType> = None;
             for (i, row) in values.iter().enumerate() {
                 let value = &row[j];
-                let data_type = value.get_type(&empty_schema)?;
+                let data_type = value.get_type(&schema)?;
                 if data_type == DataType::Null {
                     continue;
                 }
+
                 if let Some(prev_type) = common_type {
                     // get common type of each column values.
                     let data_types = vec![prev_type.clone(), data_type.clone()];
@@ -221,14 +295,22 @@ impl LogicalPlanBuilder {
             // since the code loop skips NULL
             field_types.push(common_type.unwrap_or(DataType::Null));
         }
+
+        Self::infer_inner(values, &field_types, &schema)
+    }
+
+    fn infer_inner(
+        mut values: Vec<Vec<Expr>>,
+        field_types: &[DataType],
+        schema: &DFSchema,
+    ) -> Result<Self> {
         // wrap cast if data type is not same as common type.
         for row in &mut values {
             for (j, field_type) in field_types.iter().enumerate() {
                 if let Expr::Literal(ScalarValue::Null) = row[j] {
                     row[j] = Expr::Literal(ScalarValue::try_from(field_type)?);
                 } else {
-                    row[j] =
-                        std::mem::take(&mut row[j]).cast_to(field_type, &empty_schema)?;
+                    row[j] = std::mem::take(&mut row[j]).cast_to(field_type, schema)?;
                 }
             }
         }
@@ -243,6 +325,7 @@ impl LogicalPlanBuilder {
             .collect::<Vec<_>>();
         let dfschema = DFSchema::from_unqualified_fields(fields.into(), HashMap::new())?;
         let schema = DFSchemaRef::new(dfschema);
+
         Ok(Self::new(LogicalPlan::Values(Values { schema, values })))
     }
 
@@ -431,9 +514,22 @@ impl LogicalPlanBuilder {
     /// `fetch` - Maximum number of rows to fetch, after skipping `skip` rows,
     ///          if specified.
     pub fn limit(self, skip: usize, fetch: Option<usize>) -> Result<Self> {
+        let skip_expr = if skip == 0 {
+            None
+        } else {
+            Some(lit(skip as i64))
+        };
+        let fetch_expr = fetch.map(|f| lit(f as i64));
+        self.limit_by_expr(skip_expr, fetch_expr)
+    }
+
+    /// Limit the number of rows returned
+    ///
+    /// Similar to `limit` but uses expressions for `skip` and `fetch`
+    pub fn limit_by_expr(self, skip: Option<Expr>, fetch: Option<Expr>) -> Result<Self> {
         Ok(Self::new(LogicalPlan::Limit(Limit {
-            skip,
-            fetch,
+            skip: skip.map(Box::new),
+            fetch: fetch.map(Box::new),
             input: self.plan,
         })))
     }
@@ -473,7 +569,7 @@ impl LogicalPlanBuilder {
     /// See <https://github.com/apache/datafusion/issues/5065> for more details
     fn add_missing_columns(
         curr_plan: LogicalPlan,
-        missing_cols: &[Column],
+        missing_cols: &IndexSet<Column>,
         is_distinct: bool,
     ) -> Result<LogicalPlan> {
         match curr_plan {
@@ -518,7 +614,7 @@ impl LogicalPlanBuilder {
 
     fn ambiguous_distinct_check(
         missing_exprs: &[Expr],
-        missing_cols: &[Column],
+        missing_cols: &IndexSet<Column>,
         projection_exprs: &[Expr],
     ) -> Result<()> {
         if missing_exprs.is_empty() {
@@ -583,15 +679,16 @@ impl LogicalPlanBuilder {
         let schema = self.plan.schema();
 
         // Collect sort columns that are missing in the input plan's schema
-        let mut missing_cols: Vec<Column> = vec![];
+        let mut missing_cols: IndexSet<Column> = IndexSet::new();
         sorts.iter().try_for_each::<_, Result<()>>(|sort| {
             let columns = sort.expr.column_refs();
 
-            columns.into_iter().for_each(|c| {
-                if !schema.has_column(c) {
-                    missing_cols.push(c.clone());
-                }
-            });
+            missing_cols.extend(
+                columns
+                    .into_iter()
+                    .filter(|c| !schema.has_column(c))
+                    .cloned(),
+            );
 
             Ok(())
         })?;
@@ -1230,6 +1327,25 @@ pub fn change_redundant_column(fields: &Fields) -> Vec<Field> {
         })
         .collect()
 }
+
+fn mark_field(schema: &DFSchema) -> (Option<TableReference>, Arc<Field>) {
+    let mut table_references = schema
+        .iter()
+        .filter_map(|(qualifier, _)| qualifier)
+        .collect::<Vec<_>>();
+    table_references.dedup();
+    let table_reference = if table_references.len() == 1 {
+        table_references.pop().cloned()
+    } else {
+        None
+    };
+
+    (
+        table_reference,
+        Arc::new(Field::new("mark", DataType::Boolean, false)),
+    )
+}
+
 /// Creates a schema for a join operation.
 /// The fields from the left side are first
 pub fn build_join_schema(
@@ -1296,6 +1412,10 @@ pub fn build_join_schema(
                 .map(|(q, f)| (q.cloned(), Arc::clone(f)))
                 .collect()
         }
+        JoinType::LeftMark => left_fields
+            .map(|(q, f)| (q.cloned(), Arc::clone(f)))
+            .chain(once(mark_field(right)))
+            .collect(),
         JoinType::RightSemi | JoinType::RightAnti => {
             // Only use the right side for the schema
             right_fields
@@ -1308,8 +1428,12 @@ pub fn build_join_schema(
         join_type,
         left.fields().len(),
     );
-    let mut metadata = left.metadata().clone();
-    metadata.extend(right.metadata().clone());
+    let metadata = left
+        .metadata()
+        .clone()
+        .into_iter()
+        .chain(right.metadata().clone())
+        .collect();
     let dfschema = DFSchema::new_with_metadata(qualified_fields, metadata)?;
     dfschema.with_functional_dependencies(func_dependencies)
 }
@@ -1384,6 +1508,15 @@ pub fn validate_unique_names<'a>(
 /// [`TypeCoercionRewriter::coerce_union`]: https://docs.rs/datafusion-optimizer/latest/datafusion_optimizer/analyzer/type_coercion/struct.TypeCoercionRewriter.html#method.coerce_union
 /// [`coerce_union_schema`]: https://docs.rs/datafusion-optimizer/latest/datafusion_optimizer/analyzer/type_coercion/fn.coerce_union_schema.html
 pub fn union(left_plan: LogicalPlan, right_plan: LogicalPlan) -> Result<LogicalPlan> {
+    if left_plan.schema().fields().len() != right_plan.schema().fields().len() {
+        return plan_err!(
+            "UNION queries have different number of columns: \
+            left has {} columns whereas right has {} columns",
+            left_plan.schema().fields().len(),
+            right_plan.schema().fields().len()
+        );
+    }
+
     // Temporarily use the schema from the left input and later rely on the analyzer to
     // coerce the two schemas into a common one.
 
@@ -1571,7 +1704,7 @@ impl TableSource for LogicalTableSource {
     fn supports_filters_pushdown(
         &self,
         filters: &[&Expr],
-    ) -> Result<Vec<crate::TableProviderFilterPushDown>> {
+    ) -> Result<Vec<TableProviderFilterPushDown>> {
         Ok(vec![TableProviderFilterPushDown::Exact; filters.len()])
     }
 }

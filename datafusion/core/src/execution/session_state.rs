@@ -512,7 +512,7 @@ impl SessionState {
     /// [`catalog::resolve_table_references`]: crate::catalog_common::resolve_table_references
     pub fn resolve_table_references(
         &self,
-        statement: &datafusion_sql::parser::Statement,
+        statement: &Statement,
     ) -> datafusion_common::Result<Vec<TableReference>> {
         let enable_ident_normalization =
             self.config.options().sql_parser.enable_ident_normalization;
@@ -526,7 +526,7 @@ impl SessionState {
     /// Convert an AST Statement into a LogicalPlan
     pub async fn statement_to_plan(
         &self,
-        statement: datafusion_sql::parser::Statement,
+        statement: Statement,
     ) -> datafusion_common::Result<LogicalPlan> {
         let references = self.resolve_table_references(&statement)?;
 

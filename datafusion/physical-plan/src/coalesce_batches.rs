@@ -48,11 +48,11 @@ use futures::stream::{Stream, StreamExt};
 /// reaches the `fetch` value.
 ///
 /// See [`BatchCoalescer`] for more information
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct CoalesceBatchesExec {
     /// The input plan
     input: Arc<dyn ExecutionPlan>,
-    /// Minimum number of rows for coalesces batches
+    /// Minimum number of rows for coalescing batches
     target_batch_size: usize,
     /// Maximum number of rows to fetch, `None` means fetching all rows
     fetch: Option<usize>,
