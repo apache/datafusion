@@ -343,8 +343,13 @@ impl SessionConfig {
     /// It ensures the query layout remains simple and readable, relying on the underlying SQL engine to apply its own optimizations during execution.
     ///
     /// [optimize_projections_preserve_existing_projections]: datafusion_common::config::OptimizerOptions::optimize_projections_preserve_existing_projections
-    pub fn with_optimize_projections_preserve_existing_projections(mut self, enabled: bool) -> Self {
-        self.options.optimizer.optimize_projections_preserve_existing_projections = enabled;
+    pub fn with_optimize_projections_preserve_existing_projections(
+        mut self,
+        enabled: bool,
+    ) -> Self {
+        self.options
+            .optimizer
+            .optimize_projections_preserve_existing_projections = enabled;
         self
     }
 
