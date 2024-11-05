@@ -34,6 +34,14 @@ statement ok
 create table test_substr as
 select arrow_cast(col1, 'Utf8') as c1 from test_substr_base;
 
+query BBB
+SELECT
+    NULL LIKE '%',
+    '' LIKE '%',
+    'a' LIKE '%'
+----
+NULL true true
+
 # TODO: move it back to `string_query.slt.part` after fixing the issue
 # see detail: https://github.com/apache/datafusion/issues/12637
 # Test pattern with wildcard characters
