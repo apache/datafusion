@@ -47,6 +47,9 @@ members = [
     "datafusion/substrait",
     "datafusion/wasmtest",
     "datafusion-examples",
+    "datafusion-examples/examples/ffi/ffi_example_table_provider",
+    "datafusion-examples/examples/ffi/ffi_module_interface",
+    "datafusion-examples/examples/ffi/ffi_module_loader",
     "test-utils",
     "benchmarks",
 ]
