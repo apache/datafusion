@@ -764,10 +764,11 @@ impl From<Arc<WindowUDF>> for WindowFunctionDefinition {
 /// ```
 /// # use datafusion_expr::{Expr, BuiltInWindowFunction, col, ExprFunctionExt};
 /// # use datafusion_expr::expr::WindowFunction;
-/// use datafusion_expr::WindowFunctionDefinition::WindowUDF;
-/// // Create FIRST_VALUE(a) OVER (PARTITION BY b ORDER BY c)
+/// use datafusion_expr::test::function_stub::count_udaf;
+/// use datafusion_expr::WindowFunctionDefinition::{AggregateUDF};
+/// // Create COUNT(a) OVER (PARTITION BY b ORDER BY c)
 /// let expr = Expr::WindowFunction(
-///     WindowFunction::new(WindowUDF::, vec![col("a")])
+///     WindowFunction::new(AggregateUDF(count_udaf()), vec![col("a")])
 /// )
 ///   .partition_by(vec![col("b")])
 ///   .order_by(vec![col("b").sort(true, true)])
