@@ -821,3 +821,11 @@ query TT
 select '   ', '|'
 ----
     |
+
+query BBB
+SELECT
+    NULL LIKE '%',
+    '' LIKE '%',
+    'a' LIKE '%'
+----
+NULL true true

@@ -919,8 +919,6 @@ under_score
 percent
 (empty)
 
-# TODO: move it back to `string_query.slt.part` after fixing the issue
-# see detail: https://github.com/apache/datafusion/issues/12637
 query T
 SELECT ascii_1 FROM test_basic_operator WHERE ascii_1 NOT LIKE '%'
 ----
