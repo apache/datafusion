@@ -17,7 +17,7 @@
 
 //! Logical Expressions: [`Expr`]
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::fmt::{self, Display, Formatter, Write};
 use std::hash::{Hash, Hasher};
 use std::mem;
@@ -39,7 +39,7 @@ use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
 };
 use datafusion_common::{
-    plan_err, Column, DFSchema, Result, ScalarValue, TableReference,
+    plan_err, Column, DFSchema, HashMap, Result, ScalarValue, TableReference,
 };
 use datafusion_functions_window_common::field::WindowUDFFieldArgs;
 use sqlparser::ast::{

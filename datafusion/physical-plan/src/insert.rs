@@ -73,9 +73,6 @@ pub trait DataSink: DisplayAs + Debug + Send + Sync {
     ) -> Result<u64>;
 }
 
-#[deprecated(since = "38.0.0", note = "Use [`DataSinkExec`] instead")]
-pub type FileSinkExec = DataSinkExec;
-
 /// Execution plan for writing record batches to a [`DataSink`]
 ///
 /// Returns a single row with the number of values written

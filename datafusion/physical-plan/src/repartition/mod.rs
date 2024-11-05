@@ -37,6 +37,7 @@ use crate::repartition::distributor_channels::{
 use crate::sorts::streaming_merge::StreamingMergeBuilder;
 use crate::stream::RecordBatchStreamAdapter;
 use crate::{DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties, Statistics};
+use crate::execution_plan::CardinalityEffect;
 
 use arrow::compute::take_arrays;
 use arrow::datatypes::{SchemaRef, UInt32Type};
@@ -48,12 +49,11 @@ use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::memory_pool::MemoryConsumer;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{EquivalenceProperties, PhysicalExpr};
-
-use crate::execution_plan::CardinalityEffect;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
+
+use datafusion_common::HashMap;
 use futures::stream::Stream;
 use futures::{FutureExt, StreamExt, TryStreamExt};
-use hashbrown::HashMap;
 use log::trace;
 use parking_lot::Mutex;
 

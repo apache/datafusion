@@ -32,14 +32,12 @@ use crate::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 use datafusion_common::tree_node::{
     ConcreteTreeNode, Transformed, TreeNode, TreeNodeRecursion,
 };
-use datafusion_common::{plan_err, JoinSide, Result};
+use datafusion_common::{plan_err, HashSet, JoinSide, Result};
 use datafusion_expr::JoinType;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::utils::collect_columns;
 use datafusion_physical_expr::PhysicalSortRequirement;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};
-
-use hashbrown::HashSet;
 
 /// This is a "data class" we use within the [`EnforceSorting`] rule to push
 /// down [`SortExec`] in the plan. In some cases, we can reduce the total

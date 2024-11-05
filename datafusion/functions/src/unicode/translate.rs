@@ -22,7 +22,7 @@ use arrow::array::{
     ArrayAccessor, ArrayIter, ArrayRef, AsArray, GenericStringArray, OffsetSizeTrait,
 };
 use arrow::datatypes::DataType;
-use hashbrown::HashMap;
+use datafusion_common::HashMap;
 use unicode_segmentation::UnicodeSegmentation;
 
 use crate::utils::{make_scalar_function, utf8_to_str_type};

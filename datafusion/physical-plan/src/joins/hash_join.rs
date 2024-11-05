@@ -295,9 +295,11 @@ impl JoinLeftData {
 ///                       └───────────────┘     └───────────────┘
 /// ```
 ///
-/// Note that the `Clone` trait is not implemented for this struct due to the
-/// `left_fut` [`OnceAsync`], which is used to coordinate the loading of the
-/// left side with the processing in each output stream.
+/// # Clone / Shared State
+///
+/// Note this structure includes a [`OnceAsync`] that is used to coordinate the
+/// loading of the left side with the processing in each output stream.
+/// Therefore it can not be [`Clone`]
 #[derive(Debug)]
 pub struct HashJoinExec {
     /// left (build) side which gets hashed
@@ -314,6 +316,11 @@ pub struct HashJoinExec {
     /// if there is a projection, the schema isn't the same as the output schema.
     join_schema: SchemaRef,
     /// Future that consumes left input and builds the hash table
+    ///
+    /// For CollectLeft partition mode, this structure is *shared* across all output streams.
+    ///
+    /// Each output stream waits on the `OnceAsync` to signal the completion of
+    /// the hash table creation.
     left_fut: OnceAsync<JoinLeftData>,
     /// Shared the `RandomState` for the hashing algorithm
     random_state: RandomState,
@@ -785,7 +792,7 @@ impl ExecutionPlan for HashJoinExec {
         // TODO stats: it is not possible in general to know the output size of joins
         // There are some special cases though, for example:
         // - `A LEFT JOIN B ON A.col=B.col` with `COUNT_DISTINCT(B.col)=COUNT(B.col)`
-        let mut stats = estimate_join_statistics(
+        let stats = estimate_join_statistics(
             Arc::clone(&self.left),
             Arc::clone(&self.right),
             self.on.clone(),
@@ -793,16 +800,7 @@ impl ExecutionPlan for HashJoinExec {
             &self.join_schema,
         )?;
         // Project statistics if there is a projection
-        if let Some(projection) = &self.projection {
-            stats.column_statistics = stats
-                .column_statistics
-                .into_iter()
-                .enumerate()
-                .filter(|(i, _)| projection.contains(i))
-                .map(|(_, s)| s)
-                .collect();
-        }
-        Ok(stats)
+        Ok(stats.project(self.projection.as_ref()))
     }
 }
 

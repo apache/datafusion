@@ -454,7 +454,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             SQLDataType::Char(_)
             | SQLDataType::Text
             | SQLDataType::String(_) => Ok(DataType::Utf8),
-            SQLDataType::Timestamp(None, tz_info) => {
+            SQLDataType::Timestamp(precision, tz_info)
+            if precision.is_none() || [0, 3, 6, 9].contains(&precision.unwrap()) => {
                 let tz = if matches!(tz_info, TimezoneInfo::Tz)
                     || matches!(tz_info, TimezoneInfo::WithTimeZone)
                 {
@@ -466,7 +467,14 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     // Timestamp Without Time zone
                     None
                 };
-                Ok(DataType::Timestamp(TimeUnit::Nanosecond, tz.map(Into::into)))
+                let precision = match precision {
+                    Some(0) => TimeUnit::Second,
+                    Some(3) => TimeUnit::Millisecond,
+                    Some(6) => TimeUnit::Microsecond,
+                    None | Some(9) => TimeUnit::Nanosecond,
+                    _ => unreachable!(),
+                };
+                Ok(DataType::Timestamp(precision, tz.map(Into::into)))
             }
             SQLDataType::Date => Ok(DataType::Date32),
             SQLDataType::Time(None, tz_info) => {
@@ -535,8 +543,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             | SQLDataType::CharVarying(_)
             | SQLDataType::CharacterLargeObject(_)
             | SQLDataType::CharLargeObject(_)
-            // Precision is not supported
-            | SQLDataType::Timestamp(Some(_), _)
+            // Unsupported precision
+            | SQLDataType::Timestamp(_, _)
             // Precision is not supported
             | SQLDataType::Time(Some(_), _)
             | SQLDataType::Dec(_)

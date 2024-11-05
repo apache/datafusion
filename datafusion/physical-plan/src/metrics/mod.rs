@@ -28,7 +28,7 @@ use std::{
     sync::Arc,
 };
 
-use hashbrown::HashMap;
+use datafusion_common::HashMap;
 
 // public exports
 pub use baseline::{BaselineMetrics, RecordOutput};

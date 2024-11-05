@@ -46,16 +46,32 @@ use datafusion_physical_expr::equivalence::join_equivalence_properties;
 use async_trait::async_trait;
 use futures::{ready, Stream, StreamExt, TryStreamExt};
 
-/// Data of the left side
-type JoinLeftData = (RecordBatch, MemoryReservation);
+/// Data of the left side that is buffered into memory
+#[derive(Debug)]
+struct JoinLeftData {
+    /// Single RecordBatch with all rows from the left side
+    merged_batch: RecordBatch,
+    /// Track memory reservation for merged_batch. Relies on drop
+    /// semantics to release reservation when JoinLeftData is dropped.
+    #[allow(dead_code)]
+    reservation: MemoryReservation,
+}
 
 #[allow(rustdoc::private_intra_doc_links)]
-/// executes partitions in parallel and combines them into a set of
-/// partitions by combining all values from the left with all values on the right
+/// Cross Join Execution Plan
 ///
-/// Note that the `Clone` trait is not implemented for this struct due to the
-/// `left_fut` [`OnceAsync`], which is used to coordinate the loading of the
-/// left side with the processing in each output stream.
+/// This operator is used when there are no predicates between two tables and
+/// returns the Cartesian product of the two tables.
+///
+/// Buffers the left input into memory and then streams batches from each
+/// partition on the right input combining them with the buffered left input
+/// to generate the output.
+///
+/// # Clone / Shared State
+///
+/// Note this structure includes a [`OnceAsync`] that is used to coordinate the
+/// loading of the left side with the processing in each output stream.
+/// Therefore it can not be [`Clone`]
 #[derive(Debug)]
 pub struct CrossJoinExec {
     /// left (build) side which gets loaded in memory
@@ -64,10 +80,16 @@ pub struct CrossJoinExec {
     pub right: Arc<dyn ExecutionPlan>,
     /// The schema once the join is applied
     schema: SchemaRef,
-    /// Build-side data
+    /// Buffered copy of left (build) side in memory.
+    ///
+    /// This structure is *shared* across all output streams.
+    ///
+    /// Each output stream waits on the `OnceAsync` to signal the completion of
+    /// the left side loading.
     left_fut: OnceAsync<JoinLeftData>,
     /// Execution plan metrics
     metrics: ExecutionPlanMetricsSet,
+    /// Properties such as schema, equivalence properties, ordering, partitioning, etc.
     cache: PlanProperties,
 }
 
@@ -185,7 +207,10 @@ async fn load_left_input(
 
     let merged_batch = concat_batches(&left_schema, &batches)?;
 
-    Ok((merged_batch, reservation))
+    Ok(JoinLeftData {
+        merged_batch,
+        reservation,
+    })
 }
 
 impl DisplayAs for CrossJoinExec {
@@ -357,7 +382,7 @@ struct CrossJoinStream<T> {
     join_metrics: BuildProbeJoinMetrics,
     /// State of the stream
     state: CrossJoinStreamState,
-    /// Left data
+    /// Left data (copy of the entire buffered left side)
     left_data: RecordBatch,
     /// Batch transformer
     batch_transformer: T,
@@ -457,16 +482,17 @@ impl<T: BatchTransformer> CrossJoinStream<T> {
         cx: &mut std::task::Context<'_>,
     ) -> Poll<Result<StatefulStreamResult<Option<RecordBatch>>>> {
         let build_timer = self.join_metrics.build_time.timer();
-        let (left_data, _) = match ready!(self.left_fut.get(cx)) {
+        let left_data = match ready!(self.left_fut.get(cx)) {
             Ok(left_data) => left_data,
             Err(e) => return Poll::Ready(Err(e)),
         };
         build_timer.done();
 
+        let left_data = left_data.merged_batch.clone();
         let result = if left_data.num_rows() == 0 {
             StatefulStreamResult::Ready(None)
         } else {
-            self.left_data = left_data.clone();
+            self.left_data = left_data;
             self.state = CrossJoinStreamState::FetchProbeBatch;
             StatefulStreamResult::Continue
         };

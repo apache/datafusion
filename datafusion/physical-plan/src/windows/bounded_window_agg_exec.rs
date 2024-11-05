@@ -22,7 +22,7 @@
 
 use std::any::Any;
 use std::cmp::{min, Ordering};
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -51,7 +51,9 @@ use datafusion_common::stats::Precision;
 use datafusion_common::utils::{
     evaluate_partition_ranges, get_at_indices, get_row_at_idx,
 };
-use datafusion_common::{arrow_datafusion_err, exec_err, DataFusionError, Result};
+use datafusion_common::{
+    arrow_datafusion_err, exec_err, DataFusionError, HashMap, Result,
+};
 use datafusion_execution::TaskContext;
 use datafusion_expr::window_state::{PartitionBatchState, WindowAggState};
 use datafusion_expr::ColumnarValue;
