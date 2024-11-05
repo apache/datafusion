@@ -785,12 +785,19 @@ fn rewrite_projection_given_requirements(
 /// - `optimize_projections_preserve_existing_projections` optimizer config is false, and
 /// - input schema of the projection, output schema of the projection are same, and
 /// - all projection expressions are either Column or Literal
-fn is_projection_unnecessary(input: &LogicalPlan, proj_exprs: &[Expr]) -> Result<bool> {
-!config
+fn is_projection_unnecessary(
+    input: &LogicalPlan,
+    proj_exprs: &[Expr],
+    config: &dyn OptimizerConfig,
+) -> Result<bool> {
+    if config
         .options()
         .optimizer
         .optimize_projections_preserve_existing_projections
-        
+    {
+        return Ok(false);
+    }
+
     let proj_schema = projection_schema(input, proj_exprs)?;
     Ok(&proj_schema == input.schema() && proj_exprs.iter().all(is_expr_trivial))
 }
@@ -807,11 +814,12 @@ mod tests {
     use crate::optimize_projections::OptimizeProjections;
     use crate::optimizer::Optimizer;
     use crate::test::{
-        assert_fields_eq, assert_optimized_plan_eq, scan_empty, test_table_scan,
-        test_table_scan_fields, test_table_scan_with_name,
+        assert_fields_eq, assert_optimized_plan_eq, assert_optimized_plan_with_config_eq,
+        scan_empty, test_table_scan, test_table_scan_fields, test_table_scan_with_name,
     };
     use crate::{OptimizerContext, OptimizerRule};
     use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_common::config::ConfigOptions;
     use datafusion_common::{
         Column, DFSchema, DFSchemaRef, JoinType, Result, TableReference,
     };
@@ -1997,5 +2005,50 @@ mod tests {
         let optimized_plan =
             optimizer.optimize(plan, &OptimizerContext::new(), observe)?;
         Ok(optimized_plan)
+    }
+
+    #[test]
+    fn aggregate_filter_pushdown_preserve_projections() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let aggr_with_filter = count_udaf()
+            .call(vec![col("b")])
+            .filter(col("c").gt(lit(42)))
+            .build()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .aggregate(
+                vec![col("a")],
+                vec![count(col("b")), aggr_with_filter.alias("count2")],
+            )?
+            .project(vec![col("a"), col("count(test.b)"), col("count2")])?
+            .build()?;
+
+        let expected_default = "Aggregate: groupBy=[[test.a]], aggr=[[count(test.b), count(test.b) FILTER (WHERE test.c > Int32(42)) AS count2]]\
+        \n  TableScan: test projection=[a, b, c]";
+
+        let expected_preserve_projections = "Projection: test.a, count(test.b), count2\
+        \n  Aggregate: groupBy=[[test.a]], aggr=[[count(test.b), count(test.b) FILTER (WHERE test.c > Int32(42)) AS count2]]\
+        \n    TableScan: test projection=[a, b, c]";
+
+        let scenarios = [
+            (false, expected_default),
+            (true, expected_preserve_projections),
+        ];
+
+        for (preserve_projections, expected_plan) in scenarios.into_iter() {
+            let mut config = ConfigOptions::new();
+            config
+                .optimizer
+                .optimize_projections_preserve_existing_projections =
+                preserve_projections;
+            let optimizer_context = OptimizerContext::new_with_options(config);
+            assert_optimized_plan_with_config_eq(
+                Arc::new(OptimizeProjections::new()),
+                plan.clone(),
+                expected_plan,
+                &optimizer_context,
+            )?;
+        }
+
+        Ok(())
     }
 }

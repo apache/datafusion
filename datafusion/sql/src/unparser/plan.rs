@@ -278,9 +278,11 @@ impl Unparser<'_> {
     ) -> Result<()> {
         match plan {
             LogicalPlan::TableScan(scan) => {
-                if let Some(unparsed_table_scan) =
-                    Self::unparse_table_scan_pushdown(plan, None, select.already_projected())?
-                {
+                if let Some(unparsed_table_scan) = Self::unparse_table_scan_pushdown(
+                    plan,
+                    None,
+                    select.already_projected(),
+                )? {
                     return self.select_to_sql_recursively(
                         &unparsed_table_scan,
                         query,
@@ -568,7 +570,7 @@ impl Unparser<'_> {
                     plan,
                     Some(plan_alias.alias.clone()),
                     select.already_projected(),
-            )?;
+                )?;
                 // if the child plan is a TableScan with pushdown operations, we don't need to
                 // create an additional subquery for it
                 if !select.already_projected() && unparsed_table_scan.is_none() {
@@ -728,7 +730,7 @@ impl Unparser<'_> {
                 }
 
                 // Avoid creating a duplicate Projection node, which would result in an additional subquery if a projection already exists.
-                // For example, if the `optimize_projection` rule is applied, there will be a Projection node, and duplicate projection 
+                // For example, if the `optimize_projection` rule is applied, there will be a Projection node, and duplicate projection
                 // information included in the TableScan node.
                 if !already_projected {
                     if let Some(project_vec) = &table_scan.projection {

@@ -17,7 +17,7 @@
 
 use crate::analyzer::{Analyzer, AnalyzerRule};
 use crate::optimizer::Optimizer;
-use crate::{OptimizerContext, OptimizerRule};
+use crate::{OptimizerConfig, OptimizerContext, OptimizerRule};
 use arrow::datatypes::{DataType, Field, Schema};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{assert_contains, Result};
@@ -173,8 +173,17 @@ pub fn assert_optimized_plan_eq(
     // Apply the rule once
     let opt_context = OptimizerContext::new().with_max_passes(1);
 
+    assert_optimized_plan_with_config_eq(rule, plan, expected, &opt_context)
+}
+
+pub fn assert_optimized_plan_with_config_eq(
+    rule: Arc<dyn OptimizerRule + Send + Sync>,
+    plan: LogicalPlan,
+    expected: &str,
+    config: &dyn OptimizerConfig,
+) -> Result<()> {
     let optimizer = Optimizer::with_rules(vec![Arc::clone(&rule)]);
-    let optimized_plan = optimizer.optimize(plan, &opt_context, observe)?;
+    let optimized_plan = optimizer.optimize(plan, config, observe)?;
     let formatted_plan = format!("{optimized_plan}");
     assert_eq!(formatted_plan, expected);
 

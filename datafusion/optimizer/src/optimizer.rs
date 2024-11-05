@@ -145,6 +145,7 @@ pub struct OptimizerContext {
     /// Alias generator used to generate unique aliases for subqueries
     alias_generator: Arc<AliasGenerator>,
 
+    /// Configuration options for the optimizer
     options: ConfigOptions,
 }
 
@@ -154,6 +155,15 @@ impl OptimizerContext {
         let mut options = ConfigOptions::default();
         options.optimizer.filter_null_join_keys = true;
 
+        Self {
+            query_execution_start_time: Utc::now(),
+            alias_generator: Arc::new(AliasGenerator::new()),
+            options,
+        }
+    }
+
+    /// Create optimizer config with the given configuration options
+    pub fn new_with_options(options: ConfigOptions) -> Self {
         Self {
             query_execution_start_time: Utc::now(),
             alias_generator: Arc::new(AliasGenerator::new()),
