@@ -17,7 +17,7 @@
 
 //! IS NOT NULL expression
 
-use std::hash::Hash;
+use std::hash::{Hash, Hasher};
 use std::{any::Any, sync::Arc};
 
 use crate::PhysicalExpr;
@@ -25,6 +25,7 @@ use arrow::{
     datatypes::{DataType, Schema},
     record_batch::RecordBatch,
 };
+use datafusion_common::cse::HashNode;
 use datafusion_common::Result;
 use datafusion_common::ScalarValue;
 use datafusion_expr::ColumnarValue;
@@ -44,9 +45,13 @@ impl PartialEq for IsNotNullExpr {
 }
 
 impl Hash for IsNotNullExpr {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+    fn hash<H: Hasher>(&self, state: &mut H) {
         self.arg.hash(state);
     }
+}
+
+impl HashNode for IsNotNullExpr {
+    fn hash_node<H: Hasher>(&self, _state: &mut H) {}
 }
 
 impl IsNotNullExpr {

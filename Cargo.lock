@@ -1886,7 +1886,6 @@ dependencies = [
  "chrono",
  "half",
  "hashbrown 0.14.5",
- "indexmap 2.7.1",
  "libc",
  "log",
  "object_store",

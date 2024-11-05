@@ -19,12 +19,13 @@
 
 use std::any::Any;
 use std::fmt;
-use std::hash::Hash;
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use crate::PhysicalExpr;
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
+use datafusion_common::cse::HashNode;
 use datafusion_common::{cast::as_boolean_array, Result, ScalarValue};
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::ColumnarValue;
@@ -44,9 +45,13 @@ impl PartialEq for NotExpr {
 }
 
 impl Hash for NotExpr {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+    fn hash<H: Hasher>(&self, state: &mut H) {
         self.arg.hash(state);
     }
+}
+
+impl HashNode for NotExpr {
+    fn hash_node<H: Hasher>(&self, _state: &mut H) {}
 }
 
 impl NotExpr {

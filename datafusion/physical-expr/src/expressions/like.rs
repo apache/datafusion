@@ -15,12 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::hash::Hash;
+use std::hash::{Hash, Hasher};
 use std::{any::Any, sync::Arc};
 
 use crate::PhysicalExpr;
 use arrow::record_batch::RecordBatch;
 use arrow_schema::{DataType, Schema};
+use datafusion_common::cse::HashNode;
 use datafusion_common::{internal_err, Result};
 use datafusion_expr::ColumnarValue;
 use datafusion_physical_expr_common::datum::apply_cmp;
@@ -45,11 +46,18 @@ impl PartialEq for LikeExpr {
 }
 
 impl Hash for LikeExpr {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+    fn hash<H: Hasher>(&self, state: &mut H) {
         self.negated.hash(state);
         self.case_insensitive.hash(state);
         self.expr.hash(state);
         self.pattern.hash(state);
+    }
+}
+
+impl HashNode for LikeExpr {
+    fn hash_node<H: Hasher>(&self, state: &mut H) {
+        self.negated.hash(state);
+        self.case_insensitive.hash(state);
     }
 }
 

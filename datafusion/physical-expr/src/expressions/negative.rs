@@ -18,7 +18,7 @@
 //! Negation (-) expression
 
 use std::any::Any;
-use std::hash::Hash;
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use crate::PhysicalExpr;
@@ -28,6 +28,7 @@ use arrow::{
     datatypes::{DataType, Schema},
     record_batch::RecordBatch,
 };
+use datafusion_common::cse::HashNode;
 use datafusion_common::{plan_err, Result};
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::sort_properties::ExprProperties;
@@ -51,9 +52,13 @@ impl PartialEq for NegativeExpr {
 }
 
 impl Hash for NegativeExpr {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+    fn hash<H: Hasher>(&self, state: &mut H) {
         self.arg.hash(state);
     }
+}
+
+impl HashNode for NegativeExpr {
+    fn hash_node<H: Hasher>(&self, _state: &mut H) {}
 }
 
 impl NegativeExpr {

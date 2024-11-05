@@ -25,7 +25,6 @@ use crate::tree_node::{
     TreeNodeVisitor,
 };
 use crate::Result;
-use indexmap::IndexMap;
 use std::collections::HashMap;
 use std::hash::{BuildHasher, Hash, Hasher, RandomState};
 use std::marker::PhantomData;
@@ -59,6 +58,12 @@ pub trait Normalizeable {
     fn can_normalize(&self) -> bool;
 }
 
+impl<T: Normalizeable + ?Sized> Normalizeable for Arc<T> {
+    fn can_normalize(&self) -> bool {
+        (**self).can_normalize()
+    }
+}
+
 /// The `NormalizeEq` trait extends `Eq` and `Normalizeable` to provide a method for comparing
 /// normalized nodes in optimizations like Common Subexpression Elimination (CSE).
 ///
@@ -69,6 +74,12 @@ pub trait Normalizeable {
 /// internal representations.
 pub trait NormalizeEq: Eq + Normalizeable {
     fn normalize_eq(&self, other: &Self) -> bool;
+}
+
+impl<T: NormalizeEq + ?Sized> NormalizeEq for Arc<T> {
+    fn normalize_eq(&self, other: &Self) -> bool {
+        (**self).normalize_eq(other)
+    }
 }
 
 /// Identifier that represents a [`TreeNode`] tree.
@@ -161,11 +172,13 @@ enum NodeEvaluation {
 }
 
 /// A map that contains the evaluation stats of [`TreeNode`]s by their identifiers.
-type NodeStats<'n, N> = HashMap<Identifier<'n, N>, NodeEvaluation>;
+/// It also contains the position of [`TreeNode`]s in [`CommonNodes`] once a node is
+/// found to be common and got extracted.
+type NodeStats<'n, N> = HashMap<Identifier<'n, N>, (NodeEvaluation, Option<usize>)>;
 
-/// A map that contains the common [`TreeNode`]s and their alias by their identifiers,
-/// extracted during the second, rewriting traversal.
-type CommonNodes<'n, N> = IndexMap<Identifier<'n, N>, (N, String)>;
+/// A list that contains the common [`TreeNode`]s and their alias, extracted during the
+/// second, rewriting traversal.
+type CommonNodes<'n, N> = Vec<(N, String)>;
 
 type ChildrenList<N> = (Vec<N>, Vec<N>);
 
@@ -193,7 +206,7 @@ pub trait CSEController {
     fn generate_alias(&self) -> String;
 
     // Replaces a node to the generated alias.
-    fn rewrite(&mut self, node: &Self::Node, alias: &str) -> Self::Node;
+    fn rewrite(&mut self, node: &Self::Node, alias: &str, index: usize) -> Self::Node;
 
     // A helper method called on each node during top-down traversal during the second,
     // rewriting traversal of CSE.
@@ -394,7 +407,7 @@ where
             self.id_array[down_index].1 = Some(node_id);
             self.node_stats
                 .entry(node_id)
-                .and_modify(|evaluation| {
+                .and_modify(|(evaluation, _)| {
                     if *evaluation == NodeEvaluation::SurelyOnce
                         || *evaluation == NodeEvaluation::ConditionallyAtLeastOnce
                             && !self.conditional
@@ -404,11 +417,12 @@ where
                     }
                 })
                 .or_insert_with(|| {
-                    if self.conditional {
+                    let evaluation = if self.conditional {
                         NodeEvaluation::ConditionallyAtLeastOnce
                     } else {
                         NodeEvaluation::SurelyOnce
-                    }
+                    };
+                    (evaluation, None)
                 });
         }
         self.visit_stack
@@ -428,7 +442,7 @@ where
     C: CSEController<Node = N>,
 {
     /// statistics of [`TreeNode`]s
-    node_stats: &'a NodeStats<'n, N>,
+    node_stats: &'a mut NodeStats<'n, N>,
 
     /// cache to speed up second traversal
     id_array: &'a IdArray<'n, N>,
@@ -458,7 +472,7 @@ where
 
         // Handle nodes with identifiers only
         if let Some(node_id) = node_id {
-            let evaluation = self.node_stats.get(&node_id).unwrap();
+            let (evaluation, common_index) = self.node_stats.get_mut(&node_id).unwrap();
             if *evaluation == NodeEvaluation::Common {
                 // step index to skip all sub-node (which has smaller series number).
                 while self.down_index < self.id_array.len()
@@ -482,13 +496,15 @@ where
                 //
                 // This way, we can efficiently handle semantically equivalent expressions without
                 // incorrectly treating them as identical.
-                let rewritten = if let Some((_, alias)) = self.common_nodes.get(&node_id)
-                {
-                    self.controller.rewrite(&node, alias)
+                let rewritten = if let Some(index) = common_index {
+                    let (_, alias) = self.common_nodes.get(*index).unwrap();
+                    self.controller.rewrite(&node, alias, *index)
                 } else {
-                    let node_alias = self.controller.generate_alias();
-                    let rewritten = self.controller.rewrite(&node, &node_alias);
-                    self.common_nodes.insert(node_id, (node, node_alias));
+                    let index = self.common_nodes.len();
+                    let alias = self.controller.generate_alias();
+                    let rewritten = self.controller.rewrite(&node, &alias, index);
+                    *common_index = Some(index);
+                    self.common_nodes.push((node, alias));
                     rewritten
                 };
 
@@ -587,7 +603,7 @@ where
         &mut self,
         node: N,
         id_array: &IdArray<'n, N>,
-        node_stats: &NodeStats<'n, N>,
+        node_stats: &mut NodeStats<'n, N>,
         common_nodes: &mut CommonNodes<'n, N>,
     ) -> Result<N> {
         if id_array.is_empty() {
@@ -610,7 +626,7 @@ where
         &mut self,
         nodes_list: Vec<Vec<N>>,
         arrays_list: &[Vec<IdArray<'n, N>>],
-        node_stats: &NodeStats<'n, N>,
+        node_stats: &mut NodeStats<'n, N>,
         common_nodes: &mut CommonNodes<'n, N>,
     ) -> Result<Vec<Vec<N>>> {
         nodes_list
@@ -656,13 +672,13 @@ where
                 // nodes so we have to keep them intact.
                 nodes_list.clone(),
                 &id_arrays_list,
-                &node_stats,
+                &mut node_stats,
                 &mut common_nodes,
             )?;
             assert!(!common_nodes.is_empty());
 
             Ok(FoundCommonNodes::Yes {
-                common_nodes: common_nodes.into_values().collect(),
+                common_nodes,
                 new_nodes_list,
                 original_nodes_list: nodes_list,
             })
@@ -735,7 +751,12 @@ mod test {
             self.alias_generator.next(CSE_PREFIX)
         }
 
-        fn rewrite(&mut self, node: &Self::Node, alias: &str) -> Self::Node {
+        fn rewrite(
+            &mut self,
+            node: &Self::Node,
+            alias: &str,
+            _index: usize,
+        ) -> Self::Node {
             TestTreeNode::new_leaf(format!("alias({}, {})", node.data, alias))
         }
     }

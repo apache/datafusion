@@ -26,6 +26,7 @@ use arrow::array::BooleanArray;
 use arrow::compute::filter_record_batch;
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
+use datafusion_common::cse::{HashNode, NormalizeEq, Normalizeable};
 use datafusion_common::{internal_err, not_impl_err, Result};
 use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_expr_common::interval_arithmetic::Interval;
@@ -55,7 +56,9 @@ pub type PhysicalExprRef = Arc<dyn PhysicalExpr>;
 /// [`Expr`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/enum.Expr.html
 /// [`create_physical_expr`]: https://docs.rs/datafusion/latest/datafusion/physical_expr/fn.create_physical_expr.html
 /// [`Column`]: https://docs.rs/datafusion/latest/datafusion/physical_expr/expressions/struct.Column.html
-pub trait PhysicalExpr: Send + Sync + Display + Debug + DynEq + DynHash {
+pub trait PhysicalExpr:
+    Send + Sync + Display + Debug + DynEq + DynHash + DynHashNode
+{
     /// Returns the physical expression as [`Any`] so that it can be
     /// downcast to a specific implementation.
     fn as_any(&self) -> &dyn Any;
@@ -152,6 +155,10 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug + DynEq + DynHash {
     fn get_properties(&self, _children: &[ExprProperties]) -> Result<ExprProperties> {
         Ok(ExprProperties::new_unknown())
     }
+
+    fn is_volatile(&self) -> bool {
+        false
+    }
 }
 
 /// [`PhysicalExpr`] can't be constrained by [`Eq`] directly because it must remain object
@@ -162,7 +169,7 @@ pub trait DynEq {
 
 impl<T: Eq + Any> DynEq for T {
     fn dyn_eq(&self, other: &dyn Any) -> bool {
-        other.downcast_ref::<Self>() == Some(self)
+        other.downcast_ref::<Self>().is_some_and(|o| o == self)
     }
 }
 
@@ -191,6 +198,35 @@ impl<T: Hash + Any> DynHash for T {
 impl Hash for dyn PhysicalExpr {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.dyn_hash(state);
+    }
+}
+
+pub trait DynHashNode {
+    fn dyn_hash_node(&self, state: &mut dyn Hasher);
+}
+
+impl<T: HashNode + Any> DynHashNode for T {
+    fn dyn_hash_node(&self, mut state: &mut dyn Hasher) {
+        self.type_id().hash(&mut state);
+        self.hash_node(&mut state)
+    }
+}
+
+impl HashNode for dyn PhysicalExpr {
+    fn hash_node<H: Hasher>(&self, state: &mut H) {
+        self.dyn_hash_node(state);
+    }
+}
+
+impl Normalizeable for dyn PhysicalExpr {
+    fn can_normalize(&self) -> bool {
+        false
+    }
+}
+
+impl NormalizeEq for dyn PhysicalExpr {
+    fn normalize_eq(&self, other: &Self) -> bool {
+        self == other
     }
 }
 

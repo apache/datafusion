@@ -17,7 +17,7 @@
 
 use std::any::Any;
 use std::fmt;
-use std::hash::Hash;
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use crate::PhysicalExpr;
@@ -26,6 +26,7 @@ use arrow::compute::{cast_with_options, CastOptions};
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
 use compute::can_cast_types;
+use datafusion_common::cse::HashNode;
 use datafusion_common::format::DEFAULT_FORMAT_OPTIONS;
 use datafusion_common::{not_impl_err, Result, ScalarValue};
 use datafusion_expr::ColumnarValue;
@@ -47,8 +48,14 @@ impl PartialEq for TryCastExpr {
 }
 
 impl Hash for TryCastExpr {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+    fn hash<H: Hasher>(&self, state: &mut H) {
         self.expr.hash(state);
+        self.cast_type.hash(state);
+    }
+}
+
+impl HashNode for TryCastExpr {
+    fn hash_node<H: Hasher>(&self, state: &mut H) {
         self.cast_type.hash(state);
     }
 }
