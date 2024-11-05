@@ -186,7 +186,7 @@ fn pushdown_requirement_to_children(
                 .properties()
                 .output_ordering()
                 .cloned()
-                .unwrap_or(LexOrdering::default())
+                .unwrap_or(LexOrdering::default()),
         );
         if sort_exec
             .properties()
@@ -230,8 +230,7 @@ fn pushdown_requirement_to_children(
     } else if is_union(plan) {
         // UnionExec does not have real sort requirements for its input. Here we change the adjusted_request_ordering to UnionExec's output ordering and
         // propagate the sort requirements down to correct the unnecessary descendant SortExec under the UnionExec
-        let req = (!parent_required.is_empty())
-            .then(|| parent_required.clone());
+        let req = (!parent_required.is_empty()).then(|| parent_required.clone());
         Ok(Some(vec![req; plan.children().len()]))
     } else if let Some(smj) = plan.as_any().downcast_ref::<SortMergeJoinExec>() {
         // If the current plan is SortMergeJoinExec
