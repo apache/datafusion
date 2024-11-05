@@ -58,13 +58,9 @@ use itertools::Itertools;
 /// #  fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {todo!() }
 /// #  fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {todo!()}
 /// #  fn with_new_children(self: Arc<Self>, children: Vec<Arc<dyn PhysicalExpr>>) -> Result<Arc<dyn PhysicalExpr>> {todo!()}
-/// #  fn dyn_hash(&self, _state: &mut dyn Hasher) {todo!()}
 /// # }
 /// # impl Display for MyPhysicalExpr {
 /// #    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result { write!(f, "a") }
-/// # }
-/// # impl PartialEq<dyn Any> for MyPhysicalExpr {
-/// #    fn eq(&self, _other: &dyn Any) -> bool { true }
 /// # }
 /// # fn col(name: &str) -> Arc<dyn PhysicalExpr> { Arc::new(MyPhysicalExpr) }
 /// // Sort by a ASC

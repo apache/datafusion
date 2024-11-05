@@ -66,8 +66,7 @@ pub struct ConstExpr {
 
 impl PartialEq for ConstExpr {
     fn eq(&self, other: &Self) -> bool {
-        self.across_partitions == other.across_partitions
-            && self.expr.eq(other.expr.as_any())
+        self.across_partitions == other.across_partitions && self.expr.eq(&other.expr)
     }
 }
 
@@ -120,7 +119,7 @@ impl ConstExpr {
 
     /// Returns true if this constant expression is equal to the given expression
     pub fn eq_expr(&self, other: impl AsRef<dyn PhysicalExpr>) -> bool {
-        self.expr.eq(other.as_ref().as_any())
+        self.expr.as_ref() == other.as_ref()
     }
 
     /// Returns a [`Display`]able list of `ConstExpr`.
@@ -556,7 +555,7 @@ impl EquivalenceGroup {
                 new_classes.push((source, vec![Arc::clone(target)]));
             }
             if let Some((_, values)) =
-                new_classes.iter_mut().find(|(key, _)| key.eq(source))
+                new_classes.iter_mut().find(|(key, _)| *key == source)
             {
                 if !physical_exprs_contains(values, target) {
                     values.push(Arc::clone(target));
