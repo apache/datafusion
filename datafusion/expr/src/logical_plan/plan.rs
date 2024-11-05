@@ -56,7 +56,6 @@ use indexmap::IndexSet;
 
 // backwards compatibility
 use crate::display::PgJsonVisitor;
-use crate::tree_node::replace_sort_expressions;
 pub use datafusion_common::display::{PlanType, StringifiedPlan, ToStringifiedPlan};
 pub use datafusion_common::{JoinConstraint, JoinType};
 
@@ -866,7 +865,11 @@ impl LogicalPlan {
             }) => {
                 let input = self.only_input(inputs)?;
                 Ok(LogicalPlan::Sort(Sort {
-                    expr: replace_sort_expressions(sort_expr.clone(), expr),
+                    expr: expr
+                        .into_iter()
+                        .zip(sort_expr.iter())
+                        .map(|(expr, sort)| sort.with_expr(expr))
+                        .collect(),
                     input: Arc::new(input),
                     fetch: *fetch,
                 }))
