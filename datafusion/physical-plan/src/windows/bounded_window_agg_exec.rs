@@ -1188,7 +1188,6 @@ mod tests {
     };
     use datafusion_physical_expr::{LexOrdering, PhysicalExpr};
 
-    use datafusion_physical_expr_common::sort_expr::LexOrderingRef;
     use futures::future::Shared;
     use futures::{pin_mut, ready, FutureExt, Stream, StreamExt};
     use itertools::Itertools;
@@ -1555,7 +1554,7 @@ mod tests {
             Arc::new(BuiltInWindowExpr::new(
                 last_value_func,
                 &[],
-                LexOrderingRef::default(),
+                &LexOrdering::default(),
                 Arc::new(WindowFrame::new_bounds(
                     WindowFrameUnits::Rows,
                     WindowFrameBound::Preceding(ScalarValue::UInt64(None)),
@@ -1566,7 +1565,7 @@ mod tests {
             Arc::new(BuiltInWindowExpr::new(
                 nth_value_func1,
                 &[],
-                LexOrderingRef::default(),
+                &LexOrdering::default(),
                 Arc::new(WindowFrame::new_bounds(
                     WindowFrameUnits::Rows,
                     WindowFrameBound::Preceding(ScalarValue::UInt64(None)),
@@ -1577,7 +1576,7 @@ mod tests {
             Arc::new(BuiltInWindowExpr::new(
                 nth_value_func2,
                 &[],
-                LexOrderingRef::default(),
+                &LexOrdering::default(),
                 Arc::new(WindowFrame::new_bounds(
                     WindowFrameUnits::Rows,
                     WindowFrameBound::Preceding(ScalarValue::UInt64(None)),
