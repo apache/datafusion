@@ -953,45 +953,43 @@ NULL NULL NULL NULL NULL
 #Raphael datafusionДатаФусион false false false false
 #NULL NULL NULL NULL NULL NULL
 
-# TODO (https://github.com/apache/datafusion/issues/12637) uncomment additional test projections
-query TTBB
+query TTBBBB
 SELECT ascii_1, unicode_1,
       ascii_1 LIKE '%' AS ascii_1_like_percent,
-      unicode_1 LIKE '%' AS unicode_1_like_percent
-      -- ascii_1 LIKE '%%' AS ascii_1_like_percent_percent, -- TODO enable after fixing https://github.com/apache/datafusion/issues/12637
-      -- unicode_1 LIKE '%%' AS unicode_1_like_percent_percent -- TODO enable after fixing https://github.com/apache/datafusion/issues/12637
+      unicode_1 LIKE '%' AS unicode_1_like_percent,
+      ascii_1 LIKE '%%' AS ascii_1_like_percent_percent,
+      unicode_1 LIKE '%%' AS unicode_1_like_percent_percent
 FROM test_basic_operator
 ----
-Andrew datafusion📊🔥 true true
-Xiangpeng datafusion数据融合 true true
-Raphael datafusionДатаФусион true true
-under_score un iść core true true
-percent pan Tadeusz ma iść w kąt true true
-(empty) (empty) true true
-% (empty) true true
-_ (empty) true true
-NULL NULL NULL NULL
-NULL NULL NULL NULL
+Andrew datafusion📊🔥 true true true true
+Xiangpeng datafusion数据融合 true true true true
+Raphael datafusionДатаФусион true true true true
+under_score un iść core true true true true
+percent pan Tadeusz ma iść w kąt true true true true
+(empty) (empty) true true true true
+% (empty) true true true true
+_ (empty) true true true true
+NULL NULL NULL NULL NULL NULL
+NULL NULL NULL NULL NULL NULL
 
-# TODO (https://github.com/apache/datafusion/issues/12637) uncomment additional test projections
-query TTBB
+query TTBBBB
 SELECT ascii_1, unicode_1,
       ascii_1 NOT LIKE '%' AS ascii_1_not_like_percent,
-      unicode_1 NOT LIKE '%' AS unicode_1_not_like_percent
-      -- ascii_1 NOT LIKE '%%' AS ascii_1_not_like_percent_percent, -- TODO enable after fixing https://github.com/apache/datafusion/issues/12637
-      -- unicode_1 NOT LIKE '%%' AS unicode_1_not_like_percent_percent -- TODO enable after fixing https://github.com/apache/datafusion/issues/12637
+      unicode_1 NOT LIKE '%' AS unicode_1_not_like_percent,
+      ascii_1 NOT LIKE '%%' AS ascii_1_not_like_percent_percent,
+      unicode_1 NOT LIKE '%%' AS unicode_1_not_like_percent_percent
 FROM test_basic_operator
 ----
-Andrew datafusion📊🔥 false false
-Xiangpeng datafusion数据融合 false false
-Raphael datafusionДатаФусион false false
-under_score un iść core false false
-percent pan Tadeusz ma iść w kąt false false
-(empty) (empty) false false
-% (empty) false false
-_ (empty) false false
-NULL NULL NULL NULL
-NULL NULL NULL NULL
+Andrew datafusion📊🔥 false false false false
+Xiangpeng datafusion数据融合 false false false false
+Raphael datafusionДатаФусион false false false false
+under_score un iść core false false false false
+percent pan Tadeusz ma iść w kąt false false false false
+(empty) (empty) false false false false
+% (empty) false false false false
+_ (empty) false false false false
+NULL NULL NULL NULL NULL NULL
+NULL NULL NULL NULL NULL NULL
 
 query T
 SELECT ascii_1 FROM test_basic_operator WHERE ascii_1 LIKE '%'
