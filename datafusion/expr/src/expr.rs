@@ -629,6 +629,15 @@ impl Sort {
             nulls_first: !self.nulls_first,
         }
     }
+
+    /// Replaces the Sort expressions with `expr`
+    pub fn with_expr(&self, expr: Expr) -> Self {
+        Self {
+            expr,
+            asc: self.asc,
+            nulls_first: self.nulls_first,
+        }
+    }
 }
 
 impl Display for Sort {
