@@ -17,7 +17,6 @@
 
 //! [`Optimizer`] and [`OptimizerRule`]
 
-use std::collections::HashSet;
 use std::fmt::Debug;
 use std::sync::Arc;
 
@@ -29,7 +28,7 @@ use datafusion_common::alias::AliasGenerator;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::instant::Instant;
 use datafusion_common::tree_node::{Transformed, TreeNodeRewriter};
-use datafusion_common::{internal_err, DFSchema, DataFusionError, Result};
+use datafusion_common::{internal_err, DFSchema, DataFusionError, HashSet, Result};
 use datafusion_expr::logical_plan::LogicalPlan;
 
 use crate::common_subexpr_eliminate::CommonSubexprEliminate;

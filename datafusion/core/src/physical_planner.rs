@@ -1797,8 +1797,12 @@ impl DefaultPhysicalPlanner {
                             Err(e) => return Err(e),
                         }
                     }
-                    Err(e) => stringified_plans
-                        .push(StringifiedPlan::new(InitialPhysicalPlan, e.to_string())),
+                    Err(err) => {
+                        stringified_plans.push(StringifiedPlan::new(
+                            PhysicalPlanError,
+                            err.strip_backtrace(),
+                        ));
+                    }
                 }
             }
 

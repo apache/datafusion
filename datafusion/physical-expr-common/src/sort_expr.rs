@@ -22,7 +22,7 @@ use std::fmt;
 use std::fmt::{Display, Formatter};
 use std::hash::{Hash, Hasher};
 use std::ops::{Deref, Index, Range, RangeFrom, RangeTo};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::vec::IntoIter;
 
 use arrow::compute::kernels::sort::{SortColumn, SortOptions};
@@ -30,6 +30,7 @@ use arrow::datatypes::Schema;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::Result;
 use datafusion_expr_common::columnar_value::ColumnarValue;
+use itertools::Itertools;
 
 /// Represents Sort operation for a column in a RecordBatch
 ///
@@ -218,7 +219,7 @@ impl From<PhysicalSortRequirement> for PhysicalSortExpr {
     /// If options is `None`, the default sort options `ASC, NULLS LAST` is used.
     ///
     /// The default is picked to be consistent with
-    /// PostgreSQL: <https://www.postgresql.org/docs/current/queries-order.html>    
+    /// PostgreSQL: <https://www.postgresql.org/docs/current/queries-order.html>
     fn from(value: PhysicalSortRequirement) -> Self {
         let options = value.options.unwrap_or(SortOptions {
             descending: false,
@@ -309,13 +310,8 @@ impl PhysicalSortRequirement {
     pub fn from_sort_exprs<'a>(
         ordering: impl IntoIterator<Item = &'a PhysicalSortExpr>,
     ) -> LexRequirement {
-        LexRequirement::new(
-            ordering
-                .into_iter()
-                .cloned()
-                .map(PhysicalSortRequirement::from)
-                .collect(),
-        )
+        let ordering = ordering.into_iter().cloned().collect();
+        LexRequirement::from_lex_ordering(ordering)
     }
 
     /// Converts an iterator of [`PhysicalSortRequirement`] into a Vec
@@ -327,10 +323,8 @@ impl PhysicalSortRequirement {
     pub fn to_sort_exprs(
         requirements: impl IntoIterator<Item = PhysicalSortRequirement>,
     ) -> LexOrdering {
-        requirements
-            .into_iter()
-            .map(PhysicalSortExpr::from)
-            .collect()
+        let requirements = requirements.into_iter().collect();
+        LexOrdering::from_lex_requirement(requirements)
     }
 }
 
@@ -352,14 +346,23 @@ pub struct LexOrdering {
     pub inner: Vec<PhysicalSortExpr>,
 }
 
+impl AsRef<LexOrdering> for LexOrdering {
+    fn as_ref(&self) -> &LexOrdering {
+        self
+    }
+}
+
+static EMPTY_ORDER: OnceLock<LexOrdering> = OnceLock::new();
+
 impl LexOrdering {
     // Creates a new [`LexOrdering`] from a vector
     pub fn new(inner: Vec<PhysicalSortExpr>) -> Self {
         Self { inner }
     }
 
-    pub fn as_ref(&self) -> LexOrderingRef {
-        &self.inner
+    /// Return an empty LexOrdering (no expressions)
+    pub fn empty() -> &'static LexOrdering {
+        EMPTY_ORDER.get_or_init(LexOrdering::default)
     }
 
     pub fn capacity(&self) -> usize {
@@ -376,10 +379,6 @@ impl LexOrdering {
 
     pub fn extend<I: IntoIterator<Item = PhysicalSortExpr>>(&mut self, iter: I) {
         self.inner.extend(iter)
-    }
-
-    pub fn from_ref(lex_ordering_ref: LexOrderingRef) -> Self {
-        Self::new(lex_ordering_ref.to_vec())
     }
 
     pub fn is_empty(&self) -> bool {
@@ -408,6 +407,36 @@ impl LexOrdering {
 
     pub fn truncate(&mut self, len: usize) {
         self.inner.truncate(len)
+    }
+
+    /// Merge the contents of `other` into `self`, removing duplicates.
+    pub fn merge(mut self, other: LexOrdering) -> Self {
+        self.inner = self.inner.into_iter().chain(other).unique().collect();
+        self
+    }
+
+    /// Converts a `LexRequirement` into a `LexOrdering`.
+    ///
+    /// This function converts `PhysicalSortRequirement` to `PhysicalSortExpr`
+    /// for each entry in the input. If required ordering is None for an entry
+    /// default ordering `ASC, NULLS LAST` if given (see the `PhysicalSortExpr::from`).
+    pub fn from_lex_requirement(requirements: LexRequirement) -> LexOrdering {
+        requirements
+            .into_iter()
+            .map(PhysicalSortExpr::from)
+            .collect()
+    }
+}
+
+impl From<Vec<PhysicalSortExpr>> for LexOrdering {
+    fn from(value: Vec<PhysicalSortExpr>) -> Self {
+        Self::new(value)
+    }
+}
+
+impl From<LexRequirement> for LexOrdering {
+    fn from(value: LexRequirement) -> Self {
+        Self::from_lex_requirement(value)
     }
 }
 
@@ -489,6 +518,7 @@ impl IntoIterator for LexOrdering {
 
 ///`LexOrderingRef` is an alias for the type &`[PhysicalSortExpr]`, which represents
 /// a reference to a lexicographical ordering.
+#[deprecated(since = "43.0.0", note = "use &LexOrdering instead")]
 pub type LexOrderingRef<'a> = &'a [PhysicalSortExpr];
 
 ///`LexRequirement` is an struct containing a `Vec<PhysicalSortRequirement>`, which
@@ -513,6 +543,30 @@ impl LexRequirement {
 
     pub fn push(&mut self, physical_sort_requirement: PhysicalSortRequirement) {
         self.inner.push(physical_sort_requirement)
+    }
+
+    /// Create a new [`LexRequirement`] from a vector of [`PhysicalSortExpr`]s.
+    ///
+    /// Returns [`PhysicalSortRequirement`] that requires the exact
+    /// sort of the [`PhysicalSortExpr`]s in `ordering`
+    ///
+    /// This method takes `&'a PhysicalSortExpr` to make it easy to
+    /// use implementing [`ExecutionPlan::required_input_ordering`].
+    ///
+    /// [`ExecutionPlan::required_input_ordering`]: https://docs.rs/datafusion/latest/datafusion/physical_plan/trait.ExecutionPlan.html#method.required_input_ordering
+    pub fn from_lex_ordering(ordering: LexOrdering) -> Self {
+        Self::new(
+            ordering
+                .into_iter()
+                .map(PhysicalSortRequirement::from)
+                .collect(),
+        )
+    }
+}
+
+impl From<LexOrdering> for LexRequirement {
+    fn from(value: LexOrdering) -> Self {
+        Self::from_lex_ordering(value)
     }
 }
 
@@ -545,6 +599,16 @@ impl IntoIterator for LexRequirement {
     }
 }
 
+impl<'a> IntoIterator for &'a LexOrdering {
+    type Item = &'a PhysicalSortExpr;
+    type IntoIter = std::slice::Iter<'a, PhysicalSortExpr>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.inner.iter()
+    }
+}
+
 ///`LexRequirementRef` is an alias for the type &`[PhysicalSortRequirement]`, which
 /// represents a reference to a lexicographical ordering requirement.
+/// #[deprecated(since = "43.0.0", note = "use &LexRequirement instead")]
 pub type LexRequirementRef<'a> = &'a [PhysicalSortRequirement];

@@ -18,7 +18,6 @@
 //! Define a plan for unnesting values in columns that contain a list type.
 
 use std::cmp::{self, Ordering};
-use std::collections::HashMap;
 use std::{any::Any, sync::Arc};
 
 use super::metrics::{self, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
@@ -40,14 +39,13 @@ use arrow::record_batch::RecordBatch;
 use arrow_array::{Int64Array, Scalar, StructArray};
 use arrow_ord::cmp::lt;
 use datafusion_common::{
-    exec_datafusion_err, exec_err, internal_err, Result, UnnestOptions,
+    exec_datafusion_err, exec_err, internal_err, HashMap, HashSet, Result, UnnestOptions,
 };
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::EquivalenceProperties;
 
 use async_trait::async_trait;
 use futures::{Stream, StreamExt};
-use hashbrown::HashSet;
 use log::trace;
 
 /// Unnest the given columns (either with type struct or list)

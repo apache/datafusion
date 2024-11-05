@@ -63,7 +63,7 @@ use datafusion_physical_plan::metrics::MetricsSet;
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use hashbrown::HashMap;
+use datafusion_common::HashMap;
 use log::debug;
 use object_store::buffered::BufWriter;
 use parquet::arrow::arrow_writer::{
