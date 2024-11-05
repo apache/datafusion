@@ -19,19 +19,6 @@
 //!
 //! [Information Schema]: https://en.wikipedia.org/wiki/Information_schema
 
-use arrow::{
-    array::{StringBuilder, UInt64Builder},
-    datatypes::{DataType, Field, Schema, SchemaRef},
-    record_batch::RecordBatch,
-};
-use async_trait::async_trait;
-use datafusion_common::DataFusionError;
-use std::fmt::Debug;
-use std::{any::Any, sync::Arc};
-use std::collections::HashMap;
-use datafusion_expr::{AggregateUDF, ScalarUDF, WindowUDF};
-use datafusion_common::error::Result;
-use datafusion_expr::registry::FunctionRegistry;
 use crate::catalog::{CatalogProviderList, SchemaProvider, TableProvider};
 use crate::datasource::streaming::StreamingTable;
 use crate::execution::context::TaskContext;
@@ -42,6 +29,18 @@ use crate::{
     config::{ConfigEntry, ConfigOptions},
     physical_plan::streaming::PartitionStream,
 };
+use arrow::{
+    array::{StringBuilder, UInt64Builder},
+    datatypes::{DataType, Field, Schema, SchemaRef},
+    record_batch::RecordBatch,
+};
+use async_trait::async_trait;
+use datafusion_common::error::Result;
+use datafusion_common::DataFusionError;
+use datafusion_expr::{AggregateUDF, ScalarUDF, WindowUDF};
+use std::collections::{HashMap, HashSet};
+use std::fmt::Debug;
+use std::{any::Any, sync::Arc};
 
 pub(crate) const INFORMATION_SCHEMA: &str = "information_schema";
 pub(crate) const TABLES: &str = "tables";
@@ -220,14 +219,15 @@ impl InformationSchemaConfig {
         udwfs: &HashMap<String, Arc<WindowUDF>>,
         config_options: &ConfigOptions,
         builder: &mut InformationSchemaRoutinesBuilder,
-    ) -> Result<()>
-    {
+    ) -> Result<()> {
         let catalog_name = &config_options.catalog.default_catalog;
         let schema_name = &config_options.catalog.default_schema;
 
         for (name, udf) in udfs {
-            let combinations = get_udf_args_and_return_types(udf)?;
-            for (_, return_type) in combinations {
+            let return_types = get_udf_args_and_return_types(udf)?
+                .into_iter().map(|(_, return_type)| return_type)
+                .collect::<HashSet<_>>();
+            for return_type in return_types {
                 builder.add_routine(
                     &catalog_name,
                     &schema_name,
@@ -235,13 +235,16 @@ impl InformationSchemaConfig {
                     "FUNCTION",
                     return_type,
                     "SCALAR",
-                    udf.documentation().map(|d| d.description.to_string()))
+                    udf.documentation().map(|d| d.description.to_string()),
+                )
             }
         }
 
         for (name, udaf) in udafs {
-            let combinations = get_udaf_args_and_return_types(udaf)?;
-            for (_, return_type) in combinations {
+            let return_types = get_udaf_args_and_return_types(udaf)?
+                .into_iter().map(|(_, return_type)| return_type)
+                .collect::<HashSet<_>>();
+            for return_type in return_types {
                 builder.add_routine(
                     &catalog_name,
                     &schema_name,
@@ -249,13 +252,16 @@ impl InformationSchemaConfig {
                     "FUNCTION",
                     return_type,
                     "AGGREGATE",
-                    udaf.documentation().map(|d| d.description.to_string()))
+                    udaf.documentation().map(|d| d.description.to_string()),
+                )
             }
         }
 
         for (name, udwf) in udwfs {
-            let combinations = get_udwf_args_and_return_types(udwf)?;
-            for (_, return_type) in combinations {
+            let return_types = get_udwf_args_and_return_types(udwf)?
+                .into_iter().map(|(_, return_type)| return_type)
+                .collect::<HashSet<_>>();
+            for return_type in return_types {
                 builder.add_routine(
                     &catalog_name,
                     &schema_name,
@@ -263,7 +269,8 @@ impl InformationSchemaConfig {
                     "FUNCTION",
                     return_type,
                     "WINDOW",
-                    udwf.documentation().map(|d| d.description.to_string()))
+                    udwf.documentation().map(|d| d.description.to_string()),
+                )
             }
         }
         Ok(())
@@ -274,37 +281,70 @@ impl InformationSchemaConfig {
 /// returns a tuple of (arg_types, return_type)
 fn get_udf_args_and_return_types(
     udf: &Arc<ScalarUDF>,
-) -> Result<Vec<(Vec<&str>, Option<&str>)>> {
+) -> Result<Vec<(Vec<String>, Option<String>)>> {
     let signature = udf.signature();
     let arg_types = signature.type_signature.get_possible_types();
-    arg_types.into_iter().map(|arg_types| {
-        // only handle the function which implemented [`ScalarUDFImpl::return_type`] method
-        let return_type = udf.return_type(&arg_types).ok().map(|t| t.to_string());
-        (arg_types, return_type)
-    }).collect()
+    if arg_types.is_empty() {
+        Ok(vec![(vec![], None)])
+    } else {
+        Ok(arg_types
+            .into_iter()
+            .map(|arg_types| {
+                // only handle the function which implemented [`ScalarUDFImpl::return_type`] method
+                let return_type = udf.return_type(&arg_types).ok().map(|t| t.to_string());
+                let arg_types = arg_types
+                    .into_iter()
+                    .map(|t| t.to_string())
+                    .collect::<Vec<_>>();
+                (arg_types, return_type)
+            })
+            .collect::<Vec<_>>())
+    }
 }
 
 fn get_udaf_args_and_return_types(
     udaf: &Arc<AggregateUDF>,
-) -> Result<Vec<(Vec<&str>, Option<&str>)>> {
+) -> Result<Vec<(Vec<String>, Option<String>)>> {
     let signature = udaf.signature();
     let arg_types = signature.type_signature.get_possible_types();
-    arg_types.into_iter().map(|arg_types| {
-        // only handle the function which implemented [`ScalarUDFImpl::return_type`] method
-        let return_type = udaf.return_type(&arg_types).ok().map(|t| t.to_string());
-        (arg_types, return_type)
-    }).collect()
+    if arg_types.is_empty() {
+        Ok(vec![(vec![], None)])
+    } else {
+        Ok(arg_types
+            .into_iter()
+            .map(|arg_types| {
+                // only handle the function which implemented [`ScalarUDFImpl::return_type`] method
+                let return_type = udaf.return_type(&arg_types).ok().map(|t| t.to_string());
+                let arg_types = arg_types
+                    .into_iter()
+                    .map(|t| t.to_string())
+                    .collect::<Vec<_>>();
+                (arg_types, return_type)
+            })
+            .collect::<Vec<_>>())
+    }
 }
 
 fn get_udwf_args_and_return_types(
     udwf: &Arc<WindowUDF>,
-) -> Result<Vec<(Vec<&str>, Option<&str>)>> {
+) -> Result<Vec<(Vec<String>, Option<String>)>> {
     let signature = udwf.signature();
     let arg_types = signature.type_signature.get_possible_types();
-    arg_types.into_iter().map(|arg_types| {
-        // only handle the function which implemented [`ScalarUDFImpl::return_type`] method
-        (arg_types, None)
-    }).collect()
+    if arg_types.is_empty() {
+        Ok(vec![(vec![], None)])
+    } else {
+        Ok(arg_types
+            .into_iter()
+            .map(|arg_types| {
+                // only handle the function which implemented [`ScalarUDFImpl::return_type`] method
+                let arg_types = arg_types
+                    .into_iter()
+                    .map(|t| t.to_string())
+                    .collect::<Vec<_>>();
+                (arg_types, None)
+            })
+            .collect::<Vec<_>>())
+    }
 }
 
 #[async_trait]
@@ -934,9 +974,9 @@ impl InformationSchemaRoutines {
             Field::new("routine_schema", DataType::Utf8, false),
             Field::new("routine_name", DataType::Utf8, false),
             Field::new("routine_type", DataType::Utf8, false),
-            Field::new("data_type", DataType::Utf8, false),
+            Field::new("data_type", DataType::Utf8, true),
             Field::new("function_type", DataType::Utf8, true),
-            Field::new("help_text", DataType::Utf8, true),
+            Field::new("description", DataType::Utf8, true),
         ]));
 
         Self { schema, config }
@@ -947,6 +987,7 @@ impl InformationSchemaRoutines {
             schema: self.schema.clone(),
             specific_catalog: StringBuilder::new(),
             specific_schema: StringBuilder::new(),
+            specific_name: StringBuilder::new(),
             routine_catalog: StringBuilder::new(),
             routine_schema: StringBuilder::new(),
             routine_name: StringBuilder::new(),
@@ -962,6 +1003,7 @@ struct InformationSchemaRoutinesBuilder {
     schema: SchemaRef,
     specific_catalog: StringBuilder,
     specific_schema: StringBuilder,
+    specific_name: StringBuilder,
     routine_catalog: StringBuilder,
     routine_schema: StringBuilder,
     routine_name: StringBuilder,
@@ -984,6 +1026,7 @@ impl InformationSchemaRoutinesBuilder {
     ) {
         self.specific_catalog.append_value(catalog_name.as_ref());
         self.specific_schema.append_value(schema_name.as_ref());
+        self.specific_name.append_value(routine_name.as_ref());
         self.routine_catalog.append_value(catalog_name.as_ref());
         self.routine_schema.append_value(schema_name.as_ref());
         self.routine_name.append_value(routine_name.as_ref());
@@ -999,6 +1042,7 @@ impl InformationSchemaRoutinesBuilder {
             vec![
                 Arc::new(self.specific_catalog.finish()),
                 Arc::new(self.specific_schema.finish()),
+                Arc::new(self.specific_name.finish()),
                 Arc::new(self.routine_catalog.finish()),
                 Arc::new(self.routine_schema.finish()),
                 Arc::new(self.routine_name.finish()),
@@ -1023,11 +1067,13 @@ impl PartitionStream for InformationSchemaRoutines {
         Box::pin(RecordBatchStreamAdapter::new(
             self.schema.clone(),
             futures::stream::once(async move {
-                let udfs = ctx.scalar_functions();
-                let udafs = ctx.aggregate_functions();
-                let udwfs = ctx.window_functions();
-                let config_options = ctx.session_config().options();
-                config.make_routines(&udfs, &udafs, &udwfs, config_options, &mut builder)?;
+                config.make_routines(
+                    ctx.scalar_functions(),
+                    ctx.aggregate_functions(),
+                    ctx.window_functions(),
+                    ctx.session_config().options(),
+                    &mut builder,
+                )?;
                 Ok(builder.finish())
             }),
         ))

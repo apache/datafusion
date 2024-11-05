@@ -252,6 +252,7 @@ impl TypeSignature {
                 .iter()
                 .flat_map(|type_sig| type_sig.get_possible_types())
                 .collect(),
+            // TODO: Implement for other types
             TypeSignature::Uniform(_, _)
             | TypeSignature::Coercible(_)
             | TypeSignature::Any(_)
@@ -509,5 +510,4 @@ mod tests {
             ]
         );
     }
-
 }

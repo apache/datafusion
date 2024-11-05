@@ -15,11 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{
-    collections::{HashMap, HashSet},
-    sync::Arc,
-};
-
 use crate::{
     config::SessionConfig,
     memory_pool::MemoryPool,
@@ -29,6 +24,8 @@ use crate::{
 use datafusion_common::{plan_datafusion_err, DataFusionError, Result};
 use datafusion_expr::planner::ExprPlanner;
 use datafusion_expr::{AggregateUDF, ScalarUDF, WindowUDF};
+use std::collections::HashSet;
+use std::{collections::HashMap, sync::Arc};
 
 /// Task Execution Context
 ///
@@ -125,6 +122,18 @@ impl TaskContext {
         Arc::clone(&self.runtime)
     }
 
+    pub fn scalar_functions(&self) -> &HashMap<String, Arc<ScalarUDF>> {
+        &self.scalar_functions
+    }
+
+    pub fn aggregate_functions(&self) -> &HashMap<String, Arc<AggregateUDF>> {
+        &self.aggregate_functions
+    }
+
+    pub fn window_functions(&self) -> &HashMap<String, Arc<WindowUDF>> {
+        &self.window_functions
+    }
+
     /// Update the [`SessionConfig`]
     pub fn with_session_config(mut self, session_config: SessionConfig) -> Self {
         self.session_config = session_config;
@@ -141,18 +150,6 @@ impl TaskContext {
 impl FunctionRegistry for TaskContext {
     fn udfs(&self) -> HashSet<String> {
         self.scalar_functions.keys().cloned().collect()
-    }
-
-    fn scalar_functions(&self) -> &HashMap<String, Arc<ScalarUDF>> {
-        &self.scalar_functions
-    }
-
-    fn aggregate_functions(&self) -> &HashMap<String, Arc<AggregateUDF>> {
-        &self.aggregate_functions
-    }
-
-    fn window_functions(&self) -> &HashMap<String, Arc<WindowUDF>> {
-        &self.window_functions
     }
 
     fn udf(&self, name: &str) -> Result<Arc<ScalarUDF>> {
