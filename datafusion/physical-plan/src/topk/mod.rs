@@ -27,6 +27,7 @@ use std::{cmp::Ordering, collections::BinaryHeap, sync::Arc};
 use crate::{stream::RecordBatchStreamAdapter, SendableRecordBatchStream};
 use arrow_array::{Array, ArrayRef, RecordBatch};
 use arrow_schema::SchemaRef;
+use datafusion_common::HashMap;
 use datafusion_common::Result;
 use datafusion_execution::{
     memory_pool::{MemoryConsumer, MemoryReservation},
@@ -34,7 +35,6 @@ use datafusion_execution::{
 };
 use datafusion_physical_expr::PhysicalSortExpr;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
-use hashbrown::HashMap;
 
 use super::metrics::{BaselineMetrics, Count, ExecutionPlanMetricsSet, MetricBuilder};
 

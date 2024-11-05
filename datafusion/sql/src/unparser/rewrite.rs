@@ -15,15 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{
-    collections::{HashMap, HashSet},
-    sync::Arc,
-};
+use std::{collections::HashSet, sync::Arc};
 
 use arrow_schema::Schema;
 use datafusion_common::{
     tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRewriter},
-    Column, Result, TableReference,
+    Column, HashMap, Result, TableReference,
 };
 use datafusion_expr::{expr::Alias, tree_node::transform_sort_vec};
 use datafusion_expr::{Expr, LogicalPlan, Projection, Sort, SortExpr};

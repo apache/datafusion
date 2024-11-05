@@ -16,8 +16,8 @@
 // under the License.
 
 use crate::memory_pool::{MemoryConsumer, MemoryPool, MemoryReservation};
+use datafusion_common::HashMap;
 use datafusion_common::{resources_datafusion_err, DataFusionError, Result};
-use hashbrown::HashMap;
 use log::debug;
 use parking_lot::Mutex;
 use std::{

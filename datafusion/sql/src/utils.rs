@@ -17,7 +17,6 @@
 
 //! SQL Utility Functions
 
-use std::collections::HashMap;
 use std::vec;
 
 use arrow_schema::{
@@ -27,8 +26,8 @@ use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion, TreeNodeRewriter,
 };
 use datafusion_common::{
-    exec_err, internal_err, plan_err, Column, DFSchemaRef, DataFusionError, Result,
-    ScalarValue,
+    exec_err, internal_err, plan_err, Column, DFSchemaRef, DataFusionError, HashMap,
+    Result, ScalarValue,
 };
 use datafusion_expr::builder::get_struct_unnested_columns;
 use datafusion_expr::expr::{Alias, GroupingSet, Unnest, WindowFunction};
