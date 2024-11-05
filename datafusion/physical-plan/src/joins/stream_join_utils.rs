@@ -32,7 +32,7 @@ use arrow_buffer::{ArrowNativeType, BooleanBufferBuilder};
 use arrow_schema::{Schema, SchemaRef};
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{
-    arrow_datafusion_err, DataFusionError, JoinSide, Result, ScalarValue,
+    arrow_datafusion_err, DataFusionError, HashSet, JoinSide, Result, ScalarValue,
 };
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_physical_expr::expressions::Column;
@@ -42,7 +42,6 @@ use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
 
 use datafusion_physical_expr_common::sort_expr::LexOrderingRef;
 use hashbrown::raw::RawTable;
-use hashbrown::HashSet;
 
 /// Implementation of `JoinHashMapType` for `PruningJoinHashMap`.
 impl JoinHashMapType for PruningJoinHashMap {

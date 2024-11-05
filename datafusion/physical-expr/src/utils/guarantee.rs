@@ -20,9 +20,9 @@
 
 use crate::utils::split_disjunction;
 use crate::{split_conjunction, PhysicalExpr};
-use datafusion_common::{Column, ScalarValue};
+use datafusion_common::{Column, HashMap, ScalarValue};
 use datafusion_expr::Operator;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::fmt::{self, Display, Formatter};
 use std::sync::Arc;
 

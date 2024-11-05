@@ -17,11 +17,10 @@
 
 use arrow::array::StructArray;
 use arrow::datatypes::{DataType, Field, Fields};
-use datafusion_common::{exec_err, internal_err, Result, ScalarValue};
+use datafusion_common::{exec_err, internal_err, HashSet, Result, ScalarValue};
 use datafusion_expr::scalar_doc_sections::DOC_SECTION_STRUCT;
 use datafusion_expr::{ColumnarValue, Documentation, Expr, ExprSchemable};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
-use hashbrown::HashSet;
 use std::any::Any;
 use std::sync::{Arc, OnceLock};
 
