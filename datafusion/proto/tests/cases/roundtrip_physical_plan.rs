@@ -17,7 +17,6 @@
 
 use std::any::Any;
 use std::fmt::Display;
-use std::hash::Hasher;
 use std::ops::Deref;
 use std::sync::Arc;
 use std::vec;
@@ -749,23 +748,30 @@ fn roundtrip_parquet_exec_with_custom_predicate_expr() -> Result<()> {
         output_ordering: vec![],
     };
 
-    #[derive(Debug, Hash, Clone)]
+    #[derive(Debug, Clone, Eq)]
     struct CustomPredicateExpr {
         inner: Arc<dyn PhysicalExpr>,
     }
+
+    // Manually derive PartialEq and Hash to work around https://github.com/rust-lang/rust/issues/78808
+    impl PartialEq for CustomPredicateExpr {
+        fn eq(&self, other: &Self) -> bool {
+            self.inner.eq(&other.inner)
+        }
+    }
+
+    impl std::hash::Hash for CustomPredicateExpr {
+        fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+            self.inner.hash(state);
+        }
+    }
+
     impl Display for CustomPredicateExpr {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             write!(f, "CustomPredicateExpr")
         }
     }
-    impl PartialEq<dyn Any> for CustomPredicateExpr {
-        fn eq(&self, other: &dyn Any) -> bool {
-            other
-                .downcast_ref::<Self>()
-                .map(|x| self.inner.eq(&x.inner))
-                .unwrap_or(false)
-        }
-    }
+
     impl PhysicalExpr for CustomPredicateExpr {
         fn as_any(&self) -> &dyn Any {
             self
@@ -792,10 +798,6 @@ fn roundtrip_parquet_exec_with_custom_predicate_expr() -> Result<()> {
             _children: Vec<Arc<dyn PhysicalExpr>>,
         ) -> Result<Arc<dyn PhysicalExpr>> {
             todo!()
-        }
-
-        fn dyn_hash(&self, _state: &mut dyn Hasher) {
-            unreachable!()
         }
     }
 

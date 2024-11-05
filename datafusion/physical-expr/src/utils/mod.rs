@@ -525,7 +525,7 @@ pub(crate) mod tests {
         )
         .unwrap();
 
-        assert_eq!(actual.as_ref(), expected.as_any());
+        assert_eq!(actual.as_ref(), expected.as_ref());
     }
 
     #[test]
