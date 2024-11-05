@@ -51,7 +51,7 @@ use datafusion_physical_expr::equivalence::add_offset_to_expr;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::utils::{collect_columns, merge_vectors};
 use datafusion_physical_expr::{
-    LexOrdering, LexOrderingRef, PhysicalExpr, PhysicalExprRef, PhysicalSortExpr,
+    LexOrdering, PhysicalExpr, PhysicalExprRef, PhysicalSortExpr,
 };
 
 use futures::future::{BoxFuture, Shared};
@@ -469,7 +469,7 @@ fn replace_on_columns_of_right_ordering(
 }
 
 fn offset_ordering(
-    ordering: LexOrderingRef,
+    ordering: &LexOrdering,
     join_type: &JoinType,
     offset: usize,
 ) -> LexOrdering {
@@ -483,14 +483,14 @@ fn offset_ordering(
                 options: sort_expr.options,
             })
             .collect(),
-        _ => LexOrdering::from_ref(ordering),
+        _ => ordering.clone(),
     }
 }
 
 /// Calculate the output ordering of a given join operation.
 pub fn calculate_join_output_ordering(
-    left_ordering: LexOrderingRef,
-    right_ordering: LexOrderingRef,
+    left_ordering: &LexOrdering,
+    right_ordering: &LexOrdering,
     join_type: JoinType,
     on_columns: &[(PhysicalExprRef, PhysicalExprRef)],
     left_columns_len: usize,
@@ -503,7 +503,7 @@ pub fn calculate_join_output_ordering(
             if join_type == JoinType::Inner && probe_side == Some(JoinSide::Left) {
                 replace_on_columns_of_right_ordering(
                     on_columns,
-                    &mut LexOrdering::from_ref(right_ordering),
+                    &mut right_ordering.clone(),
                 )
                 .ok()?;
                 merge_vectors(
@@ -512,7 +512,7 @@ pub fn calculate_join_output_ordering(
                         .as_ref(),
                 )
             } else {
-                LexOrdering::from_ref(left_ordering)
+                left_ordering.clone()
             }
         }
         [false, true] => {
@@ -520,7 +520,7 @@ pub fn calculate_join_output_ordering(
             if join_type == JoinType::Inner && probe_side == Some(JoinSide::Right) {
                 replace_on_columns_of_right_ordering(
                     on_columns,
-                    &mut LexOrdering::from_ref(right_ordering),
+                    &mut right_ordering.clone(),
                 )
                 .ok()?;
                 merge_vectors(

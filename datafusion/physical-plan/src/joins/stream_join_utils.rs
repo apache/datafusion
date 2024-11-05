@@ -40,7 +40,7 @@ use datafusion_physical_expr::intervals::cp_solver::ExprIntervalGraph;
 use datafusion_physical_expr::utils::collect_columns;
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
 
-use datafusion_physical_expr_common::sort_expr::LexOrderingRef;
+use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use hashbrown::raw::RawTable;
 
 /// Implementation of `JoinHashMapType` for `PruningJoinHashMap`.
@@ -744,8 +744,8 @@ pub fn prepare_sorted_exprs(
     filter: &JoinFilter,
     left: &Arc<dyn ExecutionPlan>,
     right: &Arc<dyn ExecutionPlan>,
-    left_sort_exprs: LexOrderingRef,
-    right_sort_exprs: LexOrderingRef,
+    left_sort_exprs: &LexOrdering,
+    right_sort_exprs: &LexOrdering,
 ) -> Result<(SortedFilterExpr, SortedFilterExpr, ExprIntervalGraph)> {
     let err = || {
         datafusion_common::plan_datafusion_err!("Filter does not include the child order")
