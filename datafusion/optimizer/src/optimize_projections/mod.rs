@@ -678,21 +678,20 @@ fn split_join_requirements(
 ) -> (RequiredIndicies, RequiredIndicies) {
     match join_type {
         // In these cases requirements are split between left/right children:
-        JoinType::Inner
-        | JoinType::Left
-        | JoinType::Right
-        | JoinType::Full
-        | JoinType::LeftMark 
-        | JoinType::RightMark => {
+        JoinType::Inner | JoinType::Left | JoinType::Right | JoinType::Full => {
             // Decrease right side indices by `left_len` so that they point to valid
             // positions within the right child:
             indices.split_off(left_len)
         }
         // All requirements can be re-routed to left child directly.
-        JoinType::LeftAnti | JoinType::LeftSemi => (indices, RequiredIndicies::new()),
+        JoinType::LeftAnti | JoinType::LeftSemi | JoinType::LeftMark => {
+            (indices, RequiredIndicies::new())
+        }
         // All requirements can be re-routed to right side directly.
         // No need to change index, join schema is right child schema.
-        JoinType::RightSemi | JoinType::RightAnti => (RequiredIndicies::new(), indices),
+        JoinType::RightSemi | JoinType::RightAnti | JoinType::RightMark => {
+            (RequiredIndicies::new(), indices)
+        }
     }
 }
 

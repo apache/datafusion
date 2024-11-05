@@ -118,6 +118,8 @@ fn supports_swap(join_type: JoinType) -> bool {
             | JoinType::RightSemi
             | JoinType::LeftAnti
             | JoinType::RightAnti
+            | JoinType::LeftMark
+            | JoinType::RightMark
     )
 }
 
@@ -133,12 +135,8 @@ fn swap_join_type(join_type: JoinType) -> JoinType {
         JoinType::RightSemi => JoinType::LeftSemi,
         JoinType::LeftAnti => JoinType::RightAnti,
         JoinType::RightAnti => JoinType::LeftAnti,
-        JoinType::LeftMark => {
-            unreachable!("LeftMark join type does not support swapping")
-        }
-        JoinType::RightMark => {
-            unreachable!("RightMark join type does not support swapping")
-        }
+        JoinType::LeftMark => JoinType::RightMark,
+        JoinType::RightMark => JoinType::LeftMark,
     }
 }
 
@@ -155,7 +153,9 @@ fn swap_join_projection(
         JoinType::LeftAnti
         | JoinType::LeftSemi
         | JoinType::RightAnti
-        | JoinType::RightSemi => projection.cloned(),
+        | JoinType::RightSemi
+        | JoinType::LeftMark
+        | JoinType::RightMark => projection.cloned(),
 
         _ => projection.map(|p| {
             p.iter()
@@ -210,6 +210,8 @@ pub fn swap_hash_join(
             | JoinType::RightSemi
             | JoinType::LeftAnti
             | JoinType::RightAnti
+            | JoinType::LeftMark
+            | JoinType::RightMark
     ) || hash_join.projection.is_some()
     {
         Ok(Arc::new(new_join))

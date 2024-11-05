@@ -683,7 +683,11 @@ fn need_to_produce_result_in_final(build_side: JoinSide, join_type: JoinType) ->
     } else {
         matches!(
             join_type,
-            JoinType::Right | JoinType::RightAnti | JoinType::Full | JoinType::RightSemi | JoinType::RightMark
+            JoinType::Right
+                | JoinType::RightAnti
+                | JoinType::Full
+                | JoinType::RightSemi
+                | JoinType::RightMark
         )
     }
 }
@@ -717,7 +721,7 @@ where
 {
     // Store the result in a tuple
     let result = match (build_side, join_type) {
-        (JoinSide::Left, JoinType::LeftMark) => {
+        (JoinSide::Left, JoinType::LeftMark) | (JoinSide::Right, JoinType::RightMark) => {
             let build_indices = (0..prune_length)
                 .map(L::Native::from_usize)
                 .collect::<PrimitiveArray<L>>();
@@ -727,22 +731,6 @@ where
                     visited_rows
                         .contains(&(idx + deleted_offset))
                         .then_some(R::Native::from_usize(0).unwrap())
-                })
-                .collect();
-            (build_indices, probe_indices)
-        }
-        (JoinSide::Right, JoinType::RightMark) => {
-            let probe_indices = (0..prune_length)
-                .map(R::Native::from_usize)
-                .collect::<PrimitiveArray<R>>();
-            let build_indices = (0..prune_length)
-                .map(|idx| {
-                    // For mark join we output a dummy index 0 to indicate the row had a match
-                    if visited_rows.contains(&(idx + deleted_offset)) {
-                        Some(L::Native::from_usize(0).unwrap())
-                    } else {
-                        None
-                    }
                 })
                 .collect();
             (build_indices, probe_indices)

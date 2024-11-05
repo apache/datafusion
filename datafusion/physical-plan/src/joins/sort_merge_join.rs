@@ -173,9 +173,10 @@ impl SortMergeJoinExec {
         // When output schema contains only the right side, probe side is right.
         // Otherwise probe side is the left side.
         match join_type {
-            JoinType::Right | JoinType::RightSemi | JoinType::RightAnti | JoinType::RightMark => {
-                JoinSide::Right
-            }
+            JoinType::Right
+            | JoinType::RightSemi
+            | JoinType::RightAnti
+            | JoinType::RightMark => JoinSide::Right,
             JoinType::Inner
             | JoinType::Left
             | JoinType::Full
@@ -193,7 +194,10 @@ impl SortMergeJoinExec {
             | JoinType::LeftSemi
             | JoinType::LeftAnti
             | JoinType::LeftMark => vec![true, false],
-            JoinType::Right | JoinType::RightSemi | JoinType::RightAnti | JoinType::RightMark => {
+            JoinType::Right
+            | JoinType::RightSemi
+            | JoinType::RightAnti
+            | JoinType::RightMark => {
                 vec![false, true]
             }
             _ => vec![false, false],
@@ -1763,7 +1767,7 @@ impl SMJStream {
 
         if matches!(
             self.join_type,
-            JoinType::Left | JoinType::LeftMark | JoinType::Right
+            JoinType::Left | JoinType::LeftMark | JoinType::Right | JoinType::RightMark
         ) {
             let null_mask = compute::not(corrected_mask)?;
             let null_joined_batch = filter_record_batch(&record_batch, &null_mask)?;
@@ -1824,7 +1828,7 @@ fn create_unmatched_columns(
     schema: &SchemaRef,
     size: usize,
 ) -> Vec<ArrayRef> {
-    if matches!(join_type, JoinType::LeftMark) {
+    if matches!(join_type, JoinType::LeftMark | JoinType::RightMark) {
         vec![Arc::new(BooleanArray::from(vec![false; size])) as ArrayRef]
     } else {
         schema

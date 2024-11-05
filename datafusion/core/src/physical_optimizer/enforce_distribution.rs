@@ -2099,7 +2099,10 @@ pub(crate) mod tests {
                     assert_optimized!(expected, top_join.clone(), true);
                     assert_optimized!(expected, top_join, false);
                 }
-                JoinType::LeftSemi | JoinType::LeftAnti | JoinType::LeftMark | JoinType::RightMark => {}
+                JoinType::LeftSemi
+                | JoinType::LeftAnti
+                | JoinType::LeftMark
+                | JoinType::RightMark => {}
             }
         }
 

@@ -58,7 +58,7 @@ pub enum JoinType {
     ///
     /// [1]: http://btw2017.informatik.uni-stuttgart.de/slidesandpapers/F1-10-37/paper_web.pdf
     LeftMark,
-    /// Righ Mark Join
+    /// Right Mark Join
     ///
     /// Same logic as the LeftMark Join above, however it returns a record for each record from the
     /// right input.

@@ -904,9 +904,18 @@ fn estimate_join_cardinality(
             })
         }
 
-        JoinType::LeftMark | JoinType::RightMark => {
+        JoinType::LeftMark => {
             let num_rows = *left_stats.num_rows.get_value()?;
             let mut column_statistics = left_stats.column_statistics;
+            column_statistics.push(ColumnStatistics::new_unknown());
+            Some(PartialJoinStatistics {
+                num_rows,
+                column_statistics,
+            })
+        }
+        JoinType::RightMark => {
+            let num_rows = *right_stats.num_rows.get_value()?;
+            let mut column_statistics = right_stats.column_statistics;
             column_statistics.push(ColumnStatistics::new_unknown());
             Some(PartialJoinStatistics {
                 num_rows,
@@ -1323,7 +1332,7 @@ pub(crate) fn adjust_indices_by_join_type(
             Ok((left_indices, right_indices))
             // unmatched left row will be produced in the end of loop, and it has been set in the left visited bitmap
         }
-        JoinType::Right => {
+        JoinType::Right | JoinType::RightMark => {
             // combine the matched and unmatched right result together
             append_right_indices(
                 left_indices,
@@ -1348,7 +1357,9 @@ pub(crate) fn adjust_indices_by_join_type(
             // the left_indices will not be used later for the `right anti` join
             Ok((left_indices, right_indices))
         }
-        JoinType::LeftSemi | JoinType::LeftAnti | JoinType::LeftMark | JoinType::RightMark => {
+        JoinType::LeftSemi
+        | JoinType::LeftAnti
+        | JoinType::LeftMark => {
             // matched or unmatched left row will be produced in the end of loop
             // When visit the right batch, we can output the matched left row and don't need to wait the end of loop
             Ok((
@@ -1674,7 +1685,9 @@ pub(crate) fn symmetric_join_output_partitioning(
         JoinType::Left | JoinType::LeftSemi | JoinType::LeftAnti | JoinType::LeftMark => {
             left_partitioning.clone()
         }
-        JoinType::RightSemi | JoinType::RightAnti | JoinType::RightMark => right_partitioning.clone(),
+        JoinType::RightSemi | JoinType::RightAnti | JoinType::RightMark => {
+            right_partitioning.clone()
+        }
         JoinType::Inner | JoinType::Right => {
             adjust_right_output_partitioning(right_partitioning, left_columns_len)
         }
@@ -1695,7 +1708,9 @@ pub(crate) fn asymmetric_join_output_partitioning(
             right.output_partitioning(),
             left.schema().fields().len(),
         ),
-        JoinType::RightSemi | JoinType::RightAnti | JoinType::RightMark => right.output_partitioning().clone(),
+        JoinType::RightSemi | JoinType::RightAnti | JoinType::RightMark => {
+            right.output_partitioning().clone()
+        }
         JoinType::Left
         | JoinType::LeftSemi
         | JoinType::LeftAnti

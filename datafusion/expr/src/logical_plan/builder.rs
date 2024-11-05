@@ -1334,6 +1334,7 @@ fn mark_field(schema: &DFSchema) -> (Option<TableReference>, Arc<Field>) {
         .filter_map(|(qualifier, _)| qualifier)
         .collect::<Vec<_>>();
     table_references.dedup();
+    println!("MARKIN FIELDS");
     let table_reference = if table_references.len() == 1 {
         table_references.pop().cloned()
     } else {
@@ -1427,6 +1428,7 @@ pub fn build_join_schema(
             .chain(once(mark_field(left)))
             .collect(),
     };
+    // println!("{:?}", right_fields.);
     let func_dependencies = left.functional_dependencies().join(
         right.functional_dependencies(),
         join_type,

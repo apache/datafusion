@@ -365,7 +365,7 @@ impl HashJoinExec {
 
         let join_schema = Arc::new(join_schema);
 
-        //  check if the projection is valid
+        // Check if the projection is valid
         can_project(&join_schema, projection.as_ref())?;
 
         let cache = Self::compute_properties(
@@ -745,11 +745,11 @@ impl ExecutionPlan for HashJoinExec {
 
         let batch_size = context.session_config().batch_size();
 
-        // we have the batches and the hash map with their keys. We can how create a stream
+        // We have the batches and the hash map with their keys. We can how create a stream
         // over the right that uses this information to issue new batches.
         let right_stream = self.right.execute(partition, context)?;
 
-        // update column indices to reflect the projection
+        // Update column indices to reflect the projection
         let column_indices_after_projection = match &self.projection {
             Some(projection) => projection
                 .iter()
@@ -3177,94 +3177,93 @@ mod tests {
     }
 
     #[apply(batch_sizes)]
-#[tokio::test]
-async fn join_right_mark(batch_size: usize) -> Result<()> {
-    let task_ctx = prepare_task_ctx(batch_size);
-    let left = build_table(
-        ("a1", &vec![1, 2, 3]),
-        ("b1", &vec![4, 5, 7]), // 7 does not exist on the right
-        ("c1", &vec![7, 8, 9]),
-    );
-    let right = build_table(
-        ("a2", &vec![10, 20, 30]),
-        ("b1", &vec![4, 5, 6]), // 6 does not exist on the left
-        ("c2", &vec![70, 80, 90]),
-    );
-    let on = vec![(
-        Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
-        Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
-    )];
+    #[tokio::test]
+    async fn join_right_mark(batch_size: usize) -> Result<()> {
+        let task_ctx = prepare_task_ctx(batch_size);
+        let left = build_table(
+            ("a1", &vec![1, 2, 3]),
+            ("b1", &vec![4, 5, 7]), // 7 does not exist on the right
+            ("c1", &vec![7, 8, 9]),
+        );
+        let right = build_table(
+            ("a2", &vec![10, 20, 30]),
+            ("b1", &vec![4, 5, 6]), // 6 does not exist on the left
+            ("c2", &vec![70, 80, 90]),
+        );
+        let on = vec![(
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
+        )];
 
-    let (columns, batches) = join_collect(
-        Arc::clone(&left),
-        Arc::clone(&right),
-        on.clone(),
-        &JoinType::RightMark,
-        false,
-        task_ctx,
-    )
-    .await?;
-    assert_eq!(columns, vec!["a2", "b1", "c2", "mark"]);
+        let (columns, batches) = join_collect(
+            Arc::clone(&left),
+            Arc::clone(&right),
+            on.clone(),
+            &JoinType::RightMark,
+            false,
+            task_ctx,
+        )
+        .await?;
+        assert_eq!(columns, vec!["a2", "b1", "c2", "mark"]);
 
-    let expected = [
-        "+----+----+----+-------+",
-        "| a2 | b1 | c2 | mark  |",
-        "+----+----+----+-------+",
-        "| 10 | 4  | 70 | true  |",
-        "| 20 | 5  | 80 | true  |",
-        "| 30 | 6  | 90 | false |",
-        "+----+----+----+-------+",
-    ];
-    assert_batches_sorted_eq!(expected, &batches);
+        let expected = [
+            "+----+----+----+-------+",
+            "| a2 | b1 | c2 | mark  |",
+            "+----+----+----+-------+",
+            "| 10 | 4  | 70 | true  |",
+            "| 20 | 5  | 80 | true  |",
+            "| 30 | 6  | 90 | false |",
+            "+----+----+----+-------+",
+        ];
+        assert_batches_sorted_eq!(expected, &batches);
 
-    Ok(())
-}
+        Ok(())
+    }
 
-#[apply(batch_sizes)]
-#[tokio::test]
-async fn partitioned_join_right_mark(batch_size: usize) -> Result<()> {
-    let task_ctx = prepare_task_ctx(batch_size);
-    let left = build_table(
-        ("a1", &vec![1, 2, 3]),
-        ("b1", &vec![4, 5, 7]), // 7 does not exist on the right
-        ("c1", &vec![7, 8, 9]),
-    );
-    let right = build_table(
-        ("a2", &vec![10, 20, 30, 40]),
-        ("b1", &vec![4, 4, 5, 6]), // 6 does not exist on the left
-        ("c2", &vec![60, 70, 80, 90]),
-    );
-    let on = vec![(
-        Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
-        Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
-    )];
+    #[apply(batch_sizes)]
+    #[tokio::test]
+    async fn partitioned_join_right_mark(batch_size: usize) -> Result<()> {
+        let task_ctx = prepare_task_ctx(batch_size);
+        let left = build_table(
+            ("a1", &vec![1, 2, 3]),
+            ("b1", &vec![4, 5, 7]), // 7 does not exist on the right
+            ("c1", &vec![7, 8, 9]),
+        );
+        let right = build_table(
+            ("a2", &vec![10, 20, 30, 40]),
+            ("b1", &vec![4, 4, 5, 6]), // 6 does not exist on the left
+            ("c2", &vec![60, 70, 80, 90]),
+        );
+        let on = vec![(
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
+        )];
 
-    let (columns, batches) = partitioned_join_collect(
-        Arc::clone(&left),
-        Arc::clone(&right),
-        on.clone(),
-        &JoinType::RightMark,
-        false,
-        task_ctx,
-    )
-    .await?;
-    assert_eq!(columns, vec!["a2", "b1", "c2", "mark"]);
+        let (columns, batches) = partitioned_join_collect(
+            Arc::clone(&left),
+            Arc::clone(&right),
+            on.clone(),
+            &JoinType::RightMark,
+            false,
+            task_ctx,
+        )
+        .await?;
+        assert_eq!(columns, vec!["a2", "b1", "c2", "mark"]);
 
-    let expected = [
-        "+----+----+----+-------+",
-        "| a2 | b1 | c2 | mark  |",
-        "+----+----+----+-------+",
-        "| 10 | 4  | 60 | true  |",
-        "| 20 | 4  | 70 | true  |",
-        "| 30 | 5  | 80 | true  |",
-        "| 40 | 6  | 90 | false |",
-        "+----+----+----+-------+",
-    ];
-    assert_batches_sorted_eq!(expected, &batches);
+        let expected = [
+            "+----+----+----+-------+",
+            "| a2 | b2 | c2 | mark  |",
+            "+----+----+----+-------+",
+            "| 10 | 4  | 60 | true  |",
+            "| 20 | 4  | 70 | true  |",
+            "| 30 | 5  | 80 | true  |",
+            "| 40 | 6  | 90 | false |",
+            "+----+----+----+-------+",
+        ];
+        assert_batches_sorted_eq!(expected, &batches);
 
-    Ok(())
-}
-
+        Ok(())
+    }
 
     #[test]
     fn join_with_hash_collision() -> Result<()> {
