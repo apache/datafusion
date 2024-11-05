@@ -51,7 +51,7 @@ use datafusion_physical_expr::equivalence::add_offset_to_expr;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::utils::{collect_columns, merge_vectors};
 use datafusion_physical_expr::{
-    LexOrdering, LexOrderingRef, PhysicalExpr, PhysicalExprRef, PhysicalSortExpr,
+    LexOrdering, PhysicalExpr, PhysicalExprRef, PhysicalSortExpr,
 };
 
 use futures::future::{BoxFuture, Shared};
@@ -449,10 +449,10 @@ pub fn adjust_right_output_partitioning(
 /// the left column (zeroth index in the tuple) inside `right_ordering`.
 fn replace_on_columns_of_right_ordering(
     on_columns: &[(PhysicalExprRef, PhysicalExprRef)],
-    right_ordering: &mut [PhysicalSortExpr],
+    right_ordering: &mut LexOrdering,
 ) -> Result<()> {
     for (left_col, right_col) in on_columns {
-        for item in right_ordering.iter_mut() {
+        for item in right_ordering.inner.iter_mut() {
             let new_expr = Arc::clone(&item.expr)
                 .transform(|e| {
                     if e.eq(right_col) {
@@ -469,10 +469,10 @@ fn replace_on_columns_of_right_ordering(
 }
 
 fn offset_ordering(
-    ordering: LexOrderingRef,
+    ordering: &LexOrdering,
     join_type: &JoinType,
     offset: usize,
-) -> Vec<PhysicalSortExpr> {
+) -> LexOrdering {
     match join_type {
         // In the case below, right ordering should be offsetted with the left
         // side length, since we append the right table to the left table.
@@ -483,14 +483,14 @@ fn offset_ordering(
                 options: sort_expr.options,
             })
             .collect(),
-        _ => ordering.to_vec(),
+        _ => ordering.clone(),
     }
 }
 
 /// Calculate the output ordering of a given join operation.
 pub fn calculate_join_output_ordering(
-    left_ordering: LexOrderingRef,
-    right_ordering: LexOrderingRef,
+    left_ordering: &LexOrdering,
+    right_ordering: &LexOrdering,
     join_type: JoinType,
     on_columns: &[(PhysicalExprRef, PhysicalExprRef)],
     left_columns_len: usize,
@@ -503,15 +503,16 @@ pub fn calculate_join_output_ordering(
             if join_type == JoinType::Inner && probe_side == Some(JoinSide::Left) {
                 replace_on_columns_of_right_ordering(
                     on_columns,
-                    &mut right_ordering.to_vec(),
+                    &mut right_ordering.clone(),
                 )
                 .ok()?;
                 merge_vectors(
                     left_ordering,
-                    &offset_ordering(right_ordering, &join_type, left_columns_len),
+                    offset_ordering(right_ordering, &join_type, left_columns_len)
+                        .as_ref(),
                 )
             } else {
-                left_ordering.to_vec()
+                left_ordering.clone()
             }
         }
         [false, true] => {
@@ -519,11 +520,12 @@ pub fn calculate_join_output_ordering(
             if join_type == JoinType::Inner && probe_side == Some(JoinSide::Right) {
                 replace_on_columns_of_right_ordering(
                     on_columns,
-                    &mut right_ordering.to_vec(),
+                    &mut right_ordering.clone(),
                 )
                 .ok()?;
                 merge_vectors(
-                    &offset_ordering(right_ordering, &join_type, left_columns_len),
+                    offset_ordering(right_ordering, &join_type, left_columns_len)
+                        .as_ref(),
                     left_ordering,
                 )
             } else {
@@ -698,11 +700,19 @@ pub fn build_join_schema(
     (fields.finish().with_metadata(metadata), column_indices)
 }
 
-/// A [`OnceAsync`] can be used to run an async closure once, with subsequent calls
-/// to [`OnceAsync::once`] returning a [`OnceFut`] to the same asynchronous computation
+/// A [`OnceAsync`] runs an `async` closure once, where multiple calls to
+/// [`OnceAsync::once`] return a [`OnceFut`] that resolves to the result of the
+/// same computation.
 ///
-/// This is useful for joins where the results of one child are buffered in memory
-/// and shared across potentially multiple output partitions
+/// This is useful for joins where the results of one child are needed to proceed
+/// with multiple output stream
+///
+///
+/// For example, in a hash join, one input is buffered and shared across
+/// potentially multiple output partitions. Each output partition must wait for
+/// the hash table to be built before proceeding.
+///
+/// Each output partition waits on the same `OnceAsync` before proceeding.
 pub(crate) struct OnceAsync<T> {
     fut: Mutex<Option<OnceFut<T>>>,
 }
@@ -2600,7 +2610,7 @@ mod tests {
     #[test]
     fn test_calculate_join_output_ordering() -> Result<()> {
         let options = SortOptions::default();
-        let left_ordering = vec![
+        let left_ordering = LexOrdering::new(vec![
             PhysicalSortExpr {
                 expr: Arc::new(Column::new("a", 0)),
                 options,
@@ -2613,8 +2623,8 @@ mod tests {
                 expr: Arc::new(Column::new("d", 3)),
                 options,
             },
-        ];
-        let right_ordering = vec![
+        ]);
+        let right_ordering = LexOrdering::new(vec![
             PhysicalSortExpr {
                 expr: Arc::new(Column::new("z", 2)),
                 options,
@@ -2623,7 +2633,7 @@ mod tests {
                 expr: Arc::new(Column::new("y", 1)),
                 options,
             },
-        ];
+        ]);
         let join_type = JoinType::Inner;
         let on_columns = [(
             Arc::new(Column::new("b", 1)) as _,
@@ -2634,7 +2644,7 @@ mod tests {
         let probe_sides = [Some(JoinSide::Left), Some(JoinSide::Right)];
 
         let expected = [
-            Some(vec![
+            Some(LexOrdering::new(vec![
                 PhysicalSortExpr {
                     expr: Arc::new(Column::new("a", 0)),
                     options,
@@ -2655,8 +2665,8 @@ mod tests {
                     expr: Arc::new(Column::new("y", 6)),
                     options,
                 },
-            ]),
-            Some(vec![
+            ])),
+            Some(LexOrdering::new(vec![
                 PhysicalSortExpr {
                     expr: Arc::new(Column::new("z", 7)),
                     options,
@@ -2677,7 +2687,7 @@ mod tests {
                     expr: Arc::new(Column::new("d", 3)),
                     options,
                 },
-            ]),
+            ])),
         ];
 
         for (i, (maintains_input_order, probe_side)) in
@@ -2685,8 +2695,8 @@ mod tests {
         {
             assert_eq!(
                 calculate_join_output_ordering(
-                    &left_ordering,
-                    &right_ordering,
+                    left_ordering.as_ref(),
+                    right_ordering.as_ref(),
                     join_type,
                     &on_columns,
                     left_columns_len,

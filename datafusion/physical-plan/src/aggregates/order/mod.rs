@@ -19,7 +19,7 @@ use arrow_array::ArrayRef;
 use arrow_schema::Schema;
 use datafusion_common::Result;
 use datafusion_expr::EmitTo;
-use datafusion_physical_expr::PhysicalSortExpr;
+use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use std::mem::size_of;
 
 mod full;
@@ -45,7 +45,7 @@ impl GroupOrdering {
     pub fn try_new(
         input_schema: &Schema,
         mode: &InputOrderMode,
-        ordering: &[PhysicalSortExpr],
+        ordering: &LexOrdering,
     ) -> Result<Self> {
         match mode {
             InputOrderMode::Linear => Ok(GroupOrdering::None),

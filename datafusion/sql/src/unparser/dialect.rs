@@ -137,6 +137,14 @@ pub trait Dialect: Send + Sync {
     ) -> Result<Option<ast::Expr>> {
         Ok(None)
     }
+
+    /// Allow to unparse a qualified column with a full qualified name
+    /// (e.g. catalog_name.schema_name.table_name.column_name)
+    /// Otherwise, the column will be unparsed with only the table name and colum name
+    /// (e.g. table_name.column_name)
+    fn full_qualified_col(&self) -> bool {
+        false
+    }
 }
 
 /// `IntervalStyle` to use for unparsing
@@ -373,6 +381,7 @@ pub struct CustomDialect {
     date32_cast_dtype: ast::DataType,
     supports_column_alias_in_table_alias: bool,
     requires_derived_table_alias: bool,
+    full_qualified_col: bool,
 }
 
 impl Default for CustomDialect {
@@ -396,6 +405,7 @@ impl Default for CustomDialect {
             date32_cast_dtype: ast::DataType::Date,
             supports_column_alias_in_table_alias: true,
             requires_derived_table_alias: false,
+            full_qualified_col: false,
         }
     }
 }
@@ -488,6 +498,10 @@ impl Dialect for CustomDialect {
     fn requires_derived_table_alias(&self) -> bool {
         self.requires_derived_table_alias
     }
+
+    fn full_qualified_col(&self) -> bool {
+        self.full_qualified_col
+    }
 }
 
 /// `CustomDialectBuilder` to build `CustomDialect` using builder pattern
@@ -520,6 +534,7 @@ pub struct CustomDialectBuilder {
     date32_cast_dtype: ast::DataType,
     supports_column_alias_in_table_alias: bool,
     requires_derived_table_alias: bool,
+    full_qualified_col: bool,
 }
 
 impl Default for CustomDialectBuilder {
@@ -549,6 +564,7 @@ impl CustomDialectBuilder {
             date32_cast_dtype: ast::DataType::Date,
             supports_column_alias_in_table_alias: true,
             requires_derived_table_alias: false,
+            full_qualified_col: false,
         }
     }
 
@@ -570,6 +586,7 @@ impl CustomDialectBuilder {
             supports_column_alias_in_table_alias: self
                 .supports_column_alias_in_table_alias,
             requires_derived_table_alias: self.requires_derived_table_alias,
+            full_qualified_col: self.full_qualified_col,
         }
     }
 
@@ -675,6 +692,12 @@ impl CustomDialectBuilder {
         requires_derived_table_alias: bool,
     ) -> Self {
         self.requires_derived_table_alias = requires_derived_table_alias;
+        self
+    }
+
+    /// Customize the dialect to allow full qualified column names
+    pub fn with_full_qualified_col(mut self, full_qualified_col: bool) -> Self {
+        self.full_qualified_col = full_qualified_col;
         self
     }
 }

@@ -29,7 +29,7 @@ fn criterion_benchmark(c: &mut Criterion) {
     c.bench_function("random_1M_rows_batch_8192", |b| {
         b.iter(|| {
             for _ in 0..iterations {
-                black_box(random_func.invoke_no_args(8192).unwrap());
+                black_box(random_func.invoke_batch(&[], 8192).unwrap());
             }
         })
     });
@@ -39,7 +39,7 @@ fn criterion_benchmark(c: &mut Criterion) {
     c.bench_function("random_1M_rows_batch_128", |b| {
         b.iter(|| {
             for _ in 0..iterations_128 {
-                black_box(random_func.invoke_no_args(128).unwrap());
+                black_box(random_func.invoke_batch(&[], 128).unwrap());
             }
         })
     });

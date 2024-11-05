@@ -34,7 +34,7 @@ use arrow_array::{ArrayRef, DictionaryArray, RecordBatch, RecordBatchOptions};
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::stats::Precision;
 use datafusion_common::{exec_err, ColumnStatistics, DataFusionError, Statistics};
-use datafusion_physical_expr::{LexOrdering, PhysicalSortExpr};
+use datafusion_physical_expr::LexOrdering;
 
 use log::warn;
 
@@ -307,7 +307,7 @@ impl FileScanConfig {
     pub fn split_groups_by_statistics(
         table_schema: &SchemaRef,
         file_groups: &[Vec<PartitionedFile>],
-        sort_order: &[PhysicalSortExpr],
+        sort_order: &LexOrdering,
     ) -> Result<Vec<Vec<PartitionedFile>>> {
         let flattened_files = file_groups.iter().flatten().collect::<Vec<_>>();
         // First Fit:
@@ -1112,17 +1112,19 @@ mod tests {
                     ))))
                     .collect::<Vec<_>>(),
             ));
-            let sort_order = case
-                .sort
-                .into_iter()
-                .map(|expr| {
-                    crate::physical_planner::create_physical_sort_expr(
-                        &expr,
-                        &DFSchema::try_from(table_schema.as_ref().clone())?,
-                        &ExecutionProps::default(),
-                    )
-                })
-                .collect::<Result<Vec<_>>>()?;
+            let sort_order = LexOrdering {
+                inner: case
+                    .sort
+                    .into_iter()
+                    .map(|expr| {
+                        crate::physical_planner::create_physical_sort_expr(
+                            &expr,
+                            &DFSchema::try_from(table_schema.as_ref().clone())?,
+                            &ExecutionProps::default(),
+                        )
+                    })
+                    .collect::<Result<Vec<_>>>()?,
+            };
 
             let partitioned_files =
                 case.files.into_iter().map(From::from).collect::<Vec<_>>();

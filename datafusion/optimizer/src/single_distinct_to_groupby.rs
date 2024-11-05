@@ -22,7 +22,9 @@ use std::sync::Arc;
 use crate::optimizer::ApplyOrder;
 use crate::{OptimizerConfig, OptimizerRule};
 
-use datafusion_common::{internal_err, tree_node::Transformed, DataFusionError, Result};
+use datafusion_common::{
+    internal_err, tree_node::Transformed, DataFusionError, HashSet, Result,
+};
 use datafusion_expr::builder::project;
 use datafusion_expr::{
     col,
@@ -30,8 +32,6 @@ use datafusion_expr::{
     logical_plan::{Aggregate, LogicalPlan},
     Expr,
 };
-
-use hashbrown::HashSet;
 
 /// single distinct to group by optimizer rule
 ///  ```text

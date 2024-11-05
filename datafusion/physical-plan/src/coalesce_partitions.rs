@@ -36,7 +36,7 @@ use datafusion_execution::TaskContext;
 
 /// Merge execution plan executes partitions in parallel and combines them into a single
 /// partition. No guarantees are made about the order of the resulting partition.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct CoalescePartitionsExec {
     /// Input execution plan
     input: Arc<dyn ExecutionPlan>,

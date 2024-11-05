@@ -393,7 +393,7 @@ where
 #[cfg(test)]
 mod tests {
     use arrow::array::{BinaryViewArray, GenericByteViewArray, StringViewArray};
-    use hashbrown::HashMap;
+    use datafusion_common::HashMap;
 
     use super::*;
 

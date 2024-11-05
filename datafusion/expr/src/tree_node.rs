@@ -408,29 +408,9 @@ pub fn transform_sort_option_vec<F: FnMut(Expr) -> Result<Transformed<Expr>>>(
 /// Transforms an vector of sort expressions by applying the provided closure `f`.
 pub fn transform_sort_vec<F: FnMut(Expr) -> Result<Transformed<Expr>>>(
     sorts: Vec<Sort>,
-    mut f: &mut F,
+    f: &mut F,
 ) -> Result<Transformed<Vec<Sort>>> {
-    Ok(sorts
-        .iter()
-        .map(|sort| sort.expr.clone())
-        .map_until_stop_and_collect(&mut f)?
-        .update_data(|transformed_exprs| {
-            replace_sort_expressions(sorts, transformed_exprs)
-        }))
-}
-
-pub fn replace_sort_expressions(sorts: Vec<Sort>, new_expr: Vec<Expr>) -> Vec<Sort> {
-    assert_eq!(sorts.len(), new_expr.len());
-    sorts
-        .into_iter()
-        .zip(new_expr)
-        .map(|(sort, expr)| replace_sort_expression(sort, expr))
-        .collect()
-}
-
-pub fn replace_sort_expression(sort: Sort, new_expr: Expr) -> Sort {
-    Sort {
-        expr: new_expr,
-        ..sort
-    }
+    sorts.into_iter().map_until_stop_and_collect(|s| {
+        Ok(f(s.expr)?.update_data(|e| Sort { expr: e, ..s }))
+    })
 }

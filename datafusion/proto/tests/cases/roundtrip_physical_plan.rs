@@ -52,7 +52,7 @@ use datafusion::logical_expr::{create_udf, JoinType, Operator, Volatility};
 use datafusion::physical_expr::expressions::Literal;
 use datafusion::physical_expr::window::SlidingAggregateWindowExpr;
 use datafusion::physical_expr::{
-    LexRequirement, PhysicalSortRequirement, ScalarFunctionExpr,
+    LexOrdering, LexRequirement, PhysicalSortRequirement, ScalarFunctionExpr,
 };
 use datafusion::physical_plan::aggregates::{
     AggregateExec, AggregateMode, PhysicalGroupBy,
@@ -287,13 +287,15 @@ fn roundtrip_window() -> Result<()> {
             false,
         )),
         &[col("b", &schema)?],
-        &[PhysicalSortExpr {
-            expr: col("a", &schema)?,
-            options: SortOptions {
-                descending: false,
-                nulls_first: false,
-            },
-        }],
+        &LexOrdering{
+            inner: vec![PhysicalSortExpr {
+                expr: col("a", &schema)?,
+                options: SortOptions {
+                    descending: false,
+                    nulls_first: false,
+                },
+            }]
+        },
         Arc::new(window_frame),
     ));
 
@@ -307,7 +309,7 @@ fn roundtrip_window() -> Result<()> {
         .build()
         .map(Arc::new)?,
         &[],
-        &[],
+        &LexOrdering::default(),
         Arc::new(WindowFrame::new(None)),
     ));
 
@@ -327,7 +329,7 @@ fn roundtrip_window() -> Result<()> {
     let sliding_aggr_window_expr = Arc::new(SlidingAggregateWindowExpr::new(
         sum_expr,
         &[],
-        &[],
+        &LexOrdering::default(),
         Arc::new(window_frame),
     ));
 
@@ -459,13 +461,13 @@ fn rountrip_aggregate_with_sort() -> Result<()> {
 
     let groups: Vec<(Arc<dyn PhysicalExpr>, String)> =
         vec![(col("a", &schema)?, "unused".to_string())];
-    let sort_exprs = vec![PhysicalSortExpr {
+    let sort_exprs = LexOrdering::new(vec![PhysicalSortExpr {
         expr: col("b", &schema)?,
         options: SortOptions {
             descending: false,
             nulls_first: true,
         },
-    }];
+    }]);
 
     let aggregates =
         vec![
@@ -585,7 +587,7 @@ fn roundtrip_sort() -> Result<()> {
     let field_a = Field::new("a", DataType::Boolean, false);
     let field_b = Field::new("b", DataType::Int64, false);
     let schema = Arc::new(Schema::new(vec![field_a, field_b]));
-    let sort_exprs = vec![
+    let sort_exprs = LexOrdering::new(vec![
         PhysicalSortExpr {
             expr: col("a", &schema)?,
             options: SortOptions {
@@ -600,7 +602,7 @@ fn roundtrip_sort() -> Result<()> {
                 nulls_first: true,
             },
         },
-    ];
+    ]);
     roundtrip_test(Arc::new(SortExec::new(
         sort_exprs,
         Arc::new(EmptyExec::new(schema)),
@@ -612,7 +614,7 @@ fn roundtrip_sort_preserve_partitioning() -> Result<()> {
     let field_a = Field::new("a", DataType::Boolean, false);
     let field_b = Field::new("b", DataType::Int64, false);
     let schema = Arc::new(Schema::new(vec![field_a, field_b]));
-    let sort_exprs = vec![
+    let sort_exprs = LexOrdering::new(vec![
         PhysicalSortExpr {
             expr: col("a", &schema)?,
             options: SortOptions {
@@ -627,7 +629,7 @@ fn roundtrip_sort_preserve_partitioning() -> Result<()> {
                 nulls_first: true,
             },
         },
-    ];
+    ]);
 
     roundtrip_test(Arc::new(SortExec::new(
         sort_exprs.clone(),
@@ -1013,7 +1015,7 @@ fn roundtrip_scalar_udf_extension_codec() -> Result<()> {
         vec![Arc::new(PlainAggregateWindowExpr::new(
             aggr_expr.clone(),
             &[col("author", &schema)?],
-            &[],
+            &LexOrdering::default(),
             Arc::new(WindowFrame::new(None)),
         ))],
         filter,
@@ -1074,7 +1076,7 @@ fn roundtrip_aggregate_udf_extension_codec() -> Result<()> {
         vec![Arc::new(PlainAggregateWindowExpr::new(
             aggr_expr,
             &[col("author", &schema)?],
-            &[],
+            &LexOrdering::default(),
             Arc::new(WindowFrame::new(None)),
         ))],
         filter,
@@ -1298,17 +1300,17 @@ fn roundtrip_sym_hash_join() -> Result<()> {
         ] {
             for left_order in &[
                 None,
-                Some(vec![PhysicalSortExpr {
+                Some(LexOrdering::new(vec![PhysicalSortExpr {
                     expr: Arc::new(Column::new("col", schema_left.index_of("col")?)),
                     options: Default::default(),
-                }]),
+                }])),
             ] {
                 for right_order in &[
                     None,
-                    Some(vec![PhysicalSortExpr {
+                    Some(LexOrdering::new(vec![PhysicalSortExpr {
                         expr: Arc::new(Column::new("col", schema_right.index_of("col")?)),
                         options: Default::default(),
-                    }]),
+                    }])),
                 ] {
                     roundtrip_test(Arc::new(
                         datafusion::physical_plan::joins::SymmetricHashJoinExec::try_new(

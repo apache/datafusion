@@ -17,7 +17,7 @@
 
 //! Logical Expressions: [`Expr`]
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::fmt::{self, Display, Formatter, Write};
 use std::hash::{Hash, Hasher};
 use std::mem;
@@ -39,7 +39,7 @@ use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
 };
 use datafusion_common::{
-    plan_err, Column, DFSchema, Result, ScalarValue, TableReference,
+    plan_err, Column, DFSchema, HashMap, Result, ScalarValue, TableReference,
 };
 use datafusion_functions_window_common::field::WindowUDFFieldArgs;
 use sqlparser::ast::{
@@ -627,6 +627,15 @@ impl Sort {
             expr: self.expr.clone(),
             asc: !self.asc,
             nulls_first: !self.nulls_first,
+        }
+    }
+
+    /// Replaces the Sort expressions with `expr`
+    pub fn with_expr(&self, expr: Expr) -> Self {
+        Self {
+            expr,
+            asc: self.asc,
+            nulls_first: self.nulls_first,
         }
     }
 }
@@ -1574,8 +1583,13 @@ impl Expr {
 
     /// Returns true if the expression is volatile, i.e. whether it can return different
     /// results when evaluated multiple times with the same input.
-    pub fn is_volatile(&self) -> Result<bool> {
-        self.exists(|expr| Ok(expr.is_volatile_node()))
+    ///
+    /// For example the function call `RANDOM()` is volatile as each call will
+    /// return a different value.
+    ///
+    /// See [`Volatility`] for more information.
+    pub fn is_volatile(&self) -> bool {
+        self.exists(|expr| Ok(expr.is_volatile_node())).unwrap()
     }
 
     /// Recursively find all [`Expr::Placeholder`] expressions, and

@@ -37,7 +37,7 @@ use datafusion_expr::{
     ExprFunctionExt, Signature, SortExpr, TypeSignature, Volatility,
 };
 use datafusion_functions_aggregate_common::utils::get_sort_options;
-use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
+use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
 create_func!(FirstValue, first_value_udaf);
 
@@ -130,7 +130,7 @@ impl AggregateUDFImpl for FirstValue {
         FirstValueAccumulator::try_new(
             acc_args.return_type,
             &ordering_dtypes,
-            acc_args.ordering_req.to_vec(),
+            acc_args.ordering_req.clone(),
             acc_args.ignore_nulls,
         )
         .map(|acc| Box::new(acc.with_requirement_satisfied(requirement_satisfied)) as _)
@@ -315,7 +315,7 @@ impl Accumulator for FirstValueAccumulator {
                 if compare_rows(
                     &self.orderings,
                     orderings,
-                    &get_sort_options(&self.ordering_req),
+                    &get_sort_options(self.ordering_req.as_ref()),
                 )?
                 .is_gt()
                 {
@@ -333,8 +333,10 @@ impl Accumulator for FirstValueAccumulator {
         let flags = states[is_set_idx].as_boolean();
         let filtered_states = filter_states_according_to_is_set(states, flags)?;
         // 1..is_set_idx range corresponds to ordering section
-        let sort_cols =
-            convert_to_sort_cols(&filtered_states[1..is_set_idx], &self.ordering_req);
+        let sort_cols = convert_to_sort_cols(
+            &filtered_states[1..is_set_idx],
+            self.ordering_req.as_ref(),
+        );
 
         let ordered_states = if sort_cols.is_empty() {
             // When no ordering is given, use the existing state as is:
@@ -347,7 +349,7 @@ impl Accumulator for FirstValueAccumulator {
             let first_row = get_row_at_idx(&ordered_states, 0)?;
             // When collecting orderings, we exclude the is_set flag from the state.
             let first_ordering = &first_row[1..is_set_idx];
-            let sort_options = get_sort_options(&self.ordering_req);
+            let sort_options = get_sort_options(self.ordering_req.as_ref());
             // Either there is no existing value, or there is an earlier version in new data.
             if !self.is_set
                 || compare_rows(&self.orderings, first_ordering, &sort_options)?.is_gt()
@@ -453,7 +455,7 @@ impl AggregateUDFImpl for LastValue {
         LastValueAccumulator::try_new(
             acc_args.return_type,
             &ordering_dtypes,
-            acc_args.ordering_req.to_vec(),
+            acc_args.ordering_req.clone(),
             acc_args.ignore_nulls,
         )
         .map(|acc| Box::new(acc.with_requirement_satisfied(requirement_satisfied)) as _)
@@ -645,7 +647,7 @@ impl Accumulator for LastValueAccumulator {
             if compare_rows(
                 &self.orderings,
                 orderings,
-                &get_sort_options(&self.ordering_req),
+                &get_sort_options(self.ordering_req.as_ref()),
             )?
             .is_lt()
             {
@@ -663,8 +665,10 @@ impl Accumulator for LastValueAccumulator {
         let flags = states[is_set_idx].as_boolean();
         let filtered_states = filter_states_according_to_is_set(states, flags)?;
         // 1..is_set_idx range corresponds to ordering section
-        let sort_cols =
-            convert_to_sort_cols(&filtered_states[1..is_set_idx], &self.ordering_req);
+        let sort_cols = convert_to_sort_cols(
+            &filtered_states[1..is_set_idx],
+            self.ordering_req.as_ref(),
+        );
 
         let ordered_states = if sort_cols.is_empty() {
             // When no ordering is given, use existing state as is:
@@ -679,7 +683,7 @@ impl Accumulator for LastValueAccumulator {
             let last_row = get_row_at_idx(&ordered_states, last_idx)?;
             // When collecting orderings, we exclude the is_set flag from the state.
             let last_ordering = &last_row[1..is_set_idx];
-            let sort_options = get_sort_options(&self.ordering_req);
+            let sort_options = get_sort_options(self.ordering_req.as_ref());
             // Either there is no existing value, or there is a newer (latest)
             // version in the new data:
             if !self.is_set
@@ -719,10 +723,7 @@ fn filter_states_according_to_is_set(
 }
 
 /// Combines array refs and their corresponding orderings to construct `SortColumn`s.
-fn convert_to_sort_cols(
-    arrs: &[ArrayRef],
-    sort_exprs: &[PhysicalSortExpr],
-) -> Vec<SortColumn> {
+fn convert_to_sort_cols(arrs: &[ArrayRef], sort_exprs: &LexOrdering) -> Vec<SortColumn> {
     arrs.iter()
         .zip(sort_exprs.iter())
         .map(|(item, sort_expr)| SortColumn {
@@ -740,10 +741,18 @@ mod tests {
 
     #[test]
     fn test_first_last_value_value() -> Result<()> {
-        let mut first_accumulator =
-            FirstValueAccumulator::try_new(&DataType::Int64, &[], vec![], false)?;
-        let mut last_accumulator =
-            LastValueAccumulator::try_new(&DataType::Int64, &[], vec![], false)?;
+        let mut first_accumulator = FirstValueAccumulator::try_new(
+            &DataType::Int64,
+            &[],
+            LexOrdering::default(),
+            false,
+        )?;
+        let mut last_accumulator = LastValueAccumulator::try_new(
+            &DataType::Int64,
+            &[],
+            LexOrdering::default(),
+            false,
+        )?;
         // first value in the tuple is start of the range (inclusive),
         // second value in the tuple is end of the range (exclusive)
         let ranges: Vec<(i64, i64)> = vec![(0, 10), (1, 11), (2, 13)];
@@ -780,14 +789,22 @@ mod tests {
             .collect::<Vec<_>>();
 
         // FirstValueAccumulator
-        let mut first_accumulator =
-            FirstValueAccumulator::try_new(&DataType::Int64, &[], vec![], false)?;
+        let mut first_accumulator = FirstValueAccumulator::try_new(
+            &DataType::Int64,
+            &[],
+            LexOrdering::default(),
+            false,
+        )?;
 
         first_accumulator.update_batch(&[Arc::clone(&arrs[0])])?;
         let state1 = first_accumulator.state()?;
 
-        let mut first_accumulator =
-            FirstValueAccumulator::try_new(&DataType::Int64, &[], vec![], false)?;
+        let mut first_accumulator = FirstValueAccumulator::try_new(
+            &DataType::Int64,
+            &[],
+            LexOrdering::default(),
+            false,
+        )?;
         first_accumulator.update_batch(&[Arc::clone(&arrs[1])])?;
         let state2 = first_accumulator.state()?;
 
@@ -802,22 +819,34 @@ mod tests {
             ])?);
         }
 
-        let mut first_accumulator =
-            FirstValueAccumulator::try_new(&DataType::Int64, &[], vec![], false)?;
+        let mut first_accumulator = FirstValueAccumulator::try_new(
+            &DataType::Int64,
+            &[],
+            LexOrdering::default(),
+            false,
+        )?;
         first_accumulator.merge_batch(&states)?;
 
         let merged_state = first_accumulator.state()?;
         assert_eq!(merged_state.len(), state1.len());
 
         // LastValueAccumulator
-        let mut last_accumulator =
-            LastValueAccumulator::try_new(&DataType::Int64, &[], vec![], false)?;
+        let mut last_accumulator = LastValueAccumulator::try_new(
+            &DataType::Int64,
+            &[],
+            LexOrdering::default(),
+            false,
+        )?;
 
         last_accumulator.update_batch(&[Arc::clone(&arrs[0])])?;
         let state1 = last_accumulator.state()?;
 
-        let mut last_accumulator =
-            LastValueAccumulator::try_new(&DataType::Int64, &[], vec![], false)?;
+        let mut last_accumulator = LastValueAccumulator::try_new(
+            &DataType::Int64,
+            &[],
+            LexOrdering::default(),
+            false,
+        )?;
         last_accumulator.update_batch(&[Arc::clone(&arrs[1])])?;
         let state2 = last_accumulator.state()?;
 
@@ -832,8 +861,12 @@ mod tests {
             ])?);
         }
 
-        let mut last_accumulator =
-            LastValueAccumulator::try_new(&DataType::Int64, &[], vec![], false)?;
+        let mut last_accumulator = LastValueAccumulator::try_new(
+            &DataType::Int64,
+            &[],
+            LexOrdering::default(),
+            false,
+        )?;
         last_accumulator.merge_batch(&states)?;
 
         let merged_state = last_accumulator.state()?;

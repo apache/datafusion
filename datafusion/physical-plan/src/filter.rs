@@ -54,7 +54,7 @@ use log::trace;
 
 /// FilterExec evaluates a boolean predicate against all input batches to determine which rows to
 /// include in its output batches.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct FilterExec {
     /// The expression to filter on. This expression must evaluate to a boolean value.
     predicate: Arc<dyn PhysicalExpr>,
@@ -371,7 +371,12 @@ impl ExecutionPlan for FilterExec {
     /// The output statistics of a filtering operation can be estimated if the
     /// predicate's selectivity value can be determined for the incoming data.
     fn statistics(&self) -> Result<Statistics> {
-        Self::statistics_helper(&self.input, self.predicate(), self.default_selectivity)
+        let stats = Self::statistics_helper(
+            &self.input,
+            self.predicate(),
+            self.default_selectivity,
+        )?;
+        Ok(stats.project(self.projection.as_ref()))
     }
 
     fn cardinality_effect(&self) -> CardinalityEffect {

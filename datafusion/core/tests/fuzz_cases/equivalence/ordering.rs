@@ -25,7 +25,7 @@ use datafusion_common::{DFSchema, Result};
 use datafusion_expr::{Operator, ScalarUDF};
 use datafusion_physical_expr::expressions::{col, BinaryExpr};
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
-use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
+use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 use itertools::Itertools;
 use std::sync::Arc;
 
@@ -62,7 +62,7 @@ fn test_ordering_satisfy_with_equivalence_random() -> Result<()> {
                         expr: Arc::clone(expr),
                         options: SORT_OPTIONS,
                     })
-                    .collect::<Vec<_>>();
+                    .collect::<LexOrdering>();
                 let expected = is_table_same_after_sort(
                     requirement.clone(),
                     table_data_with_properties.clone(),
@@ -74,7 +74,7 @@ fn test_ordering_satisfy_with_equivalence_random() -> Result<()> {
                 // Check whether ordering_satisfy API result and
                 // experimental result matches.
                 assert_eq!(
-                    eq_properties.ordering_satisfy(&requirement),
+                    eq_properties.ordering_satisfy(requirement.as_ref()),
                     expected,
                     "{}",
                     err_msg
@@ -135,7 +135,7 @@ fn test_ordering_satisfy_with_equivalence_complex_random() -> Result<()> {
                         expr: Arc::clone(expr),
                         options: SORT_OPTIONS,
                     })
-                    .collect::<Vec<_>>();
+                    .collect::<LexOrdering>();
                 let expected = is_table_same_after_sort(
                     requirement.clone(),
                     table_data_with_properties.clone(),
@@ -148,7 +148,7 @@ fn test_ordering_satisfy_with_equivalence_complex_random() -> Result<()> {
                 // experimental result matches.
 
                 assert_eq!(
-                    eq_properties.ordering_satisfy(&requirement),
+                    eq_properties.ordering_satisfy(requirement.as_ref()),
                     (expected | false),
                     "{}",
                     err_msg
@@ -311,7 +311,7 @@ fn test_ordering_satisfy_with_equivalence() -> Result<()> {
                 expr: Arc::clone(expr),
                 options,
             })
-            .collect::<Vec<_>>();
+            .collect::<LexOrdering>();
 
         // Check expected result with experimental result.
         assert_eq!(
@@ -322,7 +322,7 @@ fn test_ordering_satisfy_with_equivalence() -> Result<()> {
             expected
         );
         assert_eq!(
-            eq_properties.ordering_satisfy(&required),
+            eq_properties.ordering_satisfy(required.as_ref()),
             expected,
             "{err_msg}"
         );

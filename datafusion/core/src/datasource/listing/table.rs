@@ -880,18 +880,18 @@ impl TableProvider for ListingTable {
             None => {} // no ordering required
         };
 
-        let filters = conjunction(filters.to_vec())
-            .map(|expr| -> Result<_> {
-                // NOTE: Use the table schema (NOT file schema) here because `expr` may contain references to partition columns.
+        let filters = match conjunction(filters.to_vec()) {
+            Some(expr) => {
                 let table_df_schema = self.table_schema.as_ref().clone().to_dfschema()?;
                 let filters = create_physical_expr(
                     &expr,
                     &table_df_schema,
                     state.execution_props(),
                 )?;
-                Ok(Some(filters))
-            })
-            .unwrap_or(Ok(None))?;
+                Some(filters)
+            }
+            None => None,
+        };
 
         let Some(object_store_url) =
             self.table_paths.first().map(ListingTableUrl::object_store)
@@ -1283,13 +1283,16 @@ mod tests {
             // ok with one column
             (
                 vec![vec![col("string_col").sort(true, false)]],
-                Ok(vec![vec![PhysicalSortExpr {
-                    expr: physical_col("string_col", &schema).unwrap(),
-                    options: SortOptions {
-                        descending: false,
-                        nulls_first: false,
-                    },
-                }]])
+                Ok(vec![LexOrdering {
+                        inner: vec![PhysicalSortExpr {
+                            expr: physical_col("string_col", &schema).unwrap(),
+                            options: SortOptions {
+                                descending: false,
+                                nulls_first: false,
+                            },
+                        }],
+                    }
+                ])
             ),
             // ok with two columns, different options
             (
@@ -1297,15 +1300,17 @@ mod tests {
                     col("string_col").sort(true, false),
                     col("int_col").sort(false, true),
                 ]],
-                Ok(vec![vec![
-                    PhysicalSortExpr::new_default(physical_col("string_col", &schema).unwrap())
-                    .asc()
-                    .nulls_last(),
-
-                    PhysicalSortExpr::new_default(physical_col("int_col", &schema).unwrap())
-                    .desc()
-                    .nulls_first()
-                ]])
+                Ok(vec![LexOrdering {
+                        inner: vec![
+                            PhysicalSortExpr::new_default(physical_col("string_col", &schema).unwrap())
+                                        .asc()
+                                        .nulls_last(),
+                            PhysicalSortExpr::new_default(physical_col("int_col", &schema).unwrap())
+                                        .desc()
+                                        .nulls_first()
+                        ],
+                    }
+                ])
             ),
         ];
 

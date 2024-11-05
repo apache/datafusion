@@ -25,7 +25,7 @@ use arrow_schema::SchemaRef;
 
 use datafusion_common::display::{GraphvizBuilder, PlanType, StringifiedPlan};
 use datafusion_expr::display_schema;
-use datafusion_physical_expr::{LexOrdering, PhysicalSortExpr};
+use datafusion_physical_expr::LexOrdering;
 
 use super::{accept, ExecutionPlan, ExecutionPlanVisitor};
 
@@ -459,23 +459,6 @@ impl<'a> fmt::Display for ProjectSchemaDisplay<'a> {
     }
 }
 
-/// A wrapper to customize output ordering display.
-#[derive(Debug)]
-pub struct OutputOrderingDisplay<'a>(pub &'a [PhysicalSortExpr]);
-
-impl<'a> fmt::Display for OutputOrderingDisplay<'a> {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        write!(f, "[")?;
-        for (i, e) in self.0.iter().enumerate() {
-            if i > 0 {
-                write!(f, ", ")?
-            }
-            write!(f, "{e}")?;
-        }
-        write!(f, "]")
-    }
-}
-
 pub fn display_orderings(f: &mut Formatter, orderings: &[LexOrdering]) -> fmt::Result {
     if let Some(ordering) = orderings.first() {
         if !ordering.is_empty() {
@@ -489,8 +472,8 @@ pub fn display_orderings(f: &mut Formatter, orderings: &[LexOrdering]) -> fmt::R
                 orderings.iter().enumerate().filter(|(_, o)| !o.is_empty())
             {
                 match idx {
-                    0 => write!(f, "{}", OutputOrderingDisplay(ordering))?,
-                    _ => write!(f, ", {}", OutputOrderingDisplay(ordering))?,
+                    0 => write!(f, "[{}]", ordering)?,
+                    _ => write!(f, ", [{}]", ordering)?,
                 }
             }
             let end = if orderings.len() == 1 { "" } else { "]" };

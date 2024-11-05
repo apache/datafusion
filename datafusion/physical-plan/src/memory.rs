@@ -22,7 +22,6 @@ use std::fmt;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use super::expressions::PhysicalSortExpr;
 use super::{
     common, DisplayAs, DisplayFormatType, ExecutionMode, ExecutionPlan, Partitioning,
     PlanProperties, RecordBatchStream, SendableRecordBatchStream, Statistics,
@@ -41,6 +40,7 @@ use datafusion_physical_expr::{EquivalenceProperties, LexOrdering};
 use futures::Stream;
 
 /// Execution plan for reading in-memory batches of data
+#[derive(Clone)]
 pub struct MemoryExec {
     /// The partitions to query
     partitions: Vec<Vec<RecordBatch>>,
@@ -79,10 +79,7 @@ impl DisplayAs for MemoryExec {
                     .sort_information
                     .first()
                     .map(|output_ordering| {
-                        format!(
-                            ", output_ordering={}",
-                            PhysicalSortExpr::format_list(output_ordering)
-                        )
+                        format!(", output_ordering={}", output_ordering)
                     })
                     .unwrap_or_default();
 
@@ -216,7 +213,7 @@ impl MemoryExec {
         let fields = self.schema.fields();
         let ambiguous_column = sort_information
             .iter()
-            .flatten()
+            .flat_map(|ordering| ordering.inner.clone())
             .flat_map(|expr| collect_columns(&expr.expr))
             .find(|col| {
                 fields
@@ -365,6 +362,7 @@ mod tests {
     use arrow_schema::{DataType, Field, Schema, SortOptions};
     use datafusion_physical_expr::expressions::col;
     use datafusion_physical_expr::PhysicalSortExpr;
+    use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
     #[test]
     fn test_memory_order_eq() -> datafusion_common::Result<()> {
@@ -373,7 +371,7 @@ mod tests {
             Field::new("b", DataType::Int64, false),
             Field::new("c", DataType::Int64, false),
         ]));
-        let sort1 = vec![
+        let sort1 = LexOrdering::new(vec![
             PhysicalSortExpr {
                 expr: col("a", &schema)?,
                 options: SortOptions::default(),
@@ -382,12 +380,12 @@ mod tests {
                 expr: col("b", &schema)?,
                 options: SortOptions::default(),
             },
-        ];
-        let sort2 = vec![PhysicalSortExpr {
+        ]);
+        let sort2 = LexOrdering::new(vec![PhysicalSortExpr {
             expr: col("c", &schema)?,
             options: SortOptions::default(),
-        }];
-        let mut expected_output_order = vec![];
+        }]);
+        let mut expected_output_order = LexOrdering::default();
         expected_output_order.extend(sort1.clone());
         expected_output_order.extend(sort2.clone());
 
@@ -396,8 +394,8 @@ mod tests {
             .try_with_sort_information(sort_information)?;
 
         assert_eq!(
-            mem_exec.properties().output_ordering().unwrap(),
-            expected_output_order
+            mem_exec.properties().output_ordering().unwrap().to_vec(),
+            expected_output_order.inner
         );
         let eq_properties = mem_exec.properties().equivalence_properties();
         assert!(eq_properties.oeq_class().contains(&sort1));
