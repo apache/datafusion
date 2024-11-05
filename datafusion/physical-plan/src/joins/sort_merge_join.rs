@@ -794,7 +794,7 @@ fn get_corrected_filter_mask(
             corrected_mask.extend(vec![Some(false); null_matched]);
             Some(corrected_mask.finish())
         }
-        JoinType::LeftMark => {
+        JoinType::LeftMark | JoinType::RightMark => {
             for i in 0..row_indices_length {
                 let last_index =
                     last_index_for_row(i, row_indices, batch_ids, row_indices_length);
