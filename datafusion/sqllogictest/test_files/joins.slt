@@ -4337,3 +4337,24 @@ physical_plan
 05)--------FilterExec: abs(c2@1) <= 2
 06)----------MemoryExec: partitions=1, partition_sizes=[1]
 07)------MemoryExec: partitions=1, partition_sizes=[1]
+
+statement ok
+set datafusion.explain.logical_plan_only = true;
+
+query TT
+EXPLAIN SELECT * FROM t0 LEFT JOIN t1 ON t0.c1 = t1.c1 WHERE t1.c2 <= 2;
+----
+logical_plan
+01)Inner Join: t0.c1 = t1.c1
+02)--TableScan: t0 projection=[c1, c2]
+03)--Filter: t1.c2 <= UInt32(2)
+04)----TableScan: t1 projection=[c1, c2, c3]
+
+query TT
+EXPLAIN SELECT * FROM t0 LEFT JOIN t1 ON t0.c1 = t1.c1 WHERE t1.c2 <= cast(2 AS INT UNSIGNED);
+----
+logical_plan
+01)Inner Join: t0.c1 = t1.c1
+02)--TableScan: t0 projection=[c1, c2]
+03)--Filter: t1.c2 <= UInt32(2)
+04)----TableScan: t1 projection=[c1, c2, c3]
