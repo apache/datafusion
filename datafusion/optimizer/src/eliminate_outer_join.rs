@@ -426,6 +426,7 @@ mod tests {
         let t2 = test_table_scan_with_name("t2")?;
         let fun = Arc::new(ScalarUDF::new_from_impl(DoNothingUdf::new()));
 
+        // eliminate to inner join
         let plan = LogicalPlanBuilder::from(t1)
             .join(
                 t2,
@@ -493,6 +494,7 @@ mod tests {
         let t2 = test_table_scan_with_name("t2")?;
         let fun = Arc::new(ScalarUDF::new_from_impl(AlwaysNullUdf::new()));
 
+        // could not eliminate to inner join
         let plan = LogicalPlanBuilder::from(t1)
             .join(
                 t2,
@@ -543,6 +545,10 @@ mod tests {
         fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
             Ok(DataType::Boolean)
         }
+
+        fn invoke(&self, _args: &[ColumnarValue]) -> Result<ColumnarValue> {
+            panic!()
+        }
     }
 
     #[test]
@@ -551,6 +557,7 @@ mod tests {
         let t2 = test_table_scan_with_name("t2")?;
         let fun = Arc::new(ScalarUDF::new_from_impl(VolatileUdf::new()));
 
+        // could not eliminate to inner join
         let plan = LogicalPlanBuilder::from(t1)
             .join(
                 t2,

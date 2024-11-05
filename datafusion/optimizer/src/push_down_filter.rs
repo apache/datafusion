@@ -622,17 +622,16 @@ impl InferredPredicates {
         predicate: Expr,
         replace_map: &HashMap<&Column, &Column>,
     ) -> Result<()> {
+        let inferred = replace_col(predicate, replace_map)?;
         if self.is_inner_join
-            || matches!(
-                is_restrict_null_predicate(
-                    &self.join_schema,
-                    predicate.clone(),
-                    replace_map.keys().cloned()
-                ),
-                Ok(true)
+            || is_restrict_null_predicate(
+                &self.join_schema,
+                inferred.clone(),
+                replace_map.values().cloned(),
             )
+            .unwrap_or(false)
         {
-            self.predicates.push(replace_col(predicate, replace_map)?);
+            self.predicates.push(inferred);
         }
 
         Ok(())
