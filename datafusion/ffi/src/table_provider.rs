@@ -54,6 +54,44 @@ use super::{
 use datafusion::error::Result;
 
 /// A stable struct for sharing [`TableProvider`] across FFI boundaries.
+///
+/// # Struct Layout
+///
+/// The following description applies to all structs provided in this crate.
+///
+/// Each of the exposed structs in this crate is provided with a variant prefixed
+/// with `Foreign`. This variant is designed to be used by the consumer of the
+/// foreign code. The `Foreign` structs should _never_ access the `private_data`
+/// fields. Instead they should only access the data returned through the function
+/// calls defined on the `FFI_` structs. The second purpose of the `Foreign`
+/// structs is to contain additional data that may be needed by the traits that
+/// are implemented on them. Some of these traits require borrowing data which
+/// can be far more convienent to be locally stored.
+///
+/// For example, we have a struct `FFI_TableProvider` to give access to the
+/// `TableProvider` functions like `table_type()` and `scan()`. If we write a
+/// library that wishes to expose it's `TableProvider`, then we can access the
+/// private data that contains the Arc reference to the `TableProvider` via
+/// `FFI_TableProvider`. This data is local to the library.
+///
+/// If we have a program that accesses a `TableProvider` via FFI, then it
+/// will use `ForeignTableProvider`. When using `ForeignTableProvider` we **must**
+/// not attempt to access the `private_data` field in `FFI_TableProvider`. If a
+/// user is testing locally, you may be able to successfully access this field, but
+/// it will only work if you are building against the exact same version of
+/// `DataFusion` for both libraries **and** the same compiler. It will not work
+/// in general.
+///
+/// It is worth noting that which library is the `local` and which is `foreign`
+/// depends on which interface we are considering. For example, suppose we have a
+/// Python library called `my_provider` that exposes a `TableProvider` called
+/// `MyProvider` via `FFI_TableProvider`. Within the library `my_provider` we can
+/// access the `private_data` via `FFI_TableProvider`. We connect this to
+/// `datafusion-python`, where we access it as a `ForeignTableProvider`. Now when
+/// we call `scan()` on this interface, we have to pass it a `FFI_SessionConfig`.
+/// The `SessionConfig` is local to `datafusion-python` and **not** `my_provider`.
+/// It is important to be careful when expanding these functions to be certain which
+/// side of the interface each object refers to.
 #[repr(C)]
 #[derive(Debug, StableAbi)]
 #[allow(non_camel_case_types)]
