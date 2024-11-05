@@ -165,7 +165,7 @@ pub fn is_restrict_null_predicate<'a>(
 mod tests {
     use super::*;
     use arrow::datatypes::{Field, Schema};
-    use datafusion_expr::{binary_expr, case, col, in_list, lit, Operator};
+    use datafusion_expr::{binary_expr, case, cast, col, in_list, lit, Operator};
 
     #[test]
     fn expr_is_restrict_null_predicate() -> Result<()> {
@@ -278,6 +278,27 @@ mod tests {
                     Operator::Minus,
                     lit(10u64),
                 )),
+                false,
+            ),
+            // CAST(a AS Int64) + Int64(10) > b - UInt64(10)
+            // can be simplified
+            (
+                binary_expr(cast(col("a"), DataType::Int64), Operator::Plus, lit(10i64))
+                    .gt(binary_expr(col("b"), Operator::Minus, lit(10u64))),
+                true,
+            ),
+            // a + CAST(Int64(10) AS UInt32) > b - UInt64(10)
+            // can not be simplified
+            (
+                binary_expr(col("a"), Operator::Plus, cast(lit(10i64), DataType::UInt32))
+                    .gt(binary_expr(col("b"), Operator::Minus, lit(10u64))),
+                false,
+            ),
+            // a + CAST(UInt16(10) AS UInt32) > b - UInt64(10)
+            // can not be simplified
+            (
+                binary_expr(col("a"), Operator::Plus, cast(lit(10u16), DataType::UInt32))
+                    .gt(binary_expr(col("b"), Operator::Minus, lit(10u64))),
                 false,
             ),
         ];
