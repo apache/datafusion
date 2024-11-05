@@ -53,11 +53,6 @@ if [ "$#" -ne 2 ]; then
     exit
 fi
 
-if [[ -z "${GH_TOKEN}" ]]; then
-    echo "Please set personal github token through GH_TOKEN environment variable"
-    exit
-fi
-
 version=$1
 rc=$2
 tag="${version}-rc${rc}"
