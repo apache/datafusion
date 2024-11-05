@@ -27,7 +27,7 @@ use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
 use datafusion_physical_expr::{
     reverse_order_bys, EquivalenceProperties, PhysicalSortRequirement,
 };
-use datafusion_physical_expr_common::sort_expr::LexRequirement;
+use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_plan::aggregates::concat_slices;
 use datafusion_physical_plan::windows::get_ordered_partition_by_indices;
@@ -139,9 +139,9 @@ fn try_convert_aggregate_if_better(
     aggr_exprs
         .into_iter()
         .map(|aggr_expr| {
-            let aggr_sort_exprs = aggr_expr.order_bys().unwrap_or_default();
+            let aggr_sort_exprs = aggr_expr.order_bys().unwrap_or(LexOrdering::empty());
             let reverse_aggr_sort_exprs = reverse_order_bys(aggr_sort_exprs);
-            let aggr_sort_reqs = LexRequirement::from(aggr_sort_exprs);
+            let aggr_sort_reqs = LexRequirement::from(aggr_sort_exprs.clone());
             let reverse_aggr_req = LexRequirement::from(reverse_aggr_sort_exprs);
 
             // If the aggregate expression benefits from input ordering, and
@@ -150,14 +150,20 @@ fn try_convert_aggregate_if_better(
             // Otherwise, leave it as is.
             if aggr_expr.order_sensitivity().is_beneficial() && !aggr_sort_reqs.is_empty()
             {
-                let reqs = concat_slices(prefix_requirement, &aggr_sort_reqs);
+                let reqs = LexRequirement {
+                    inner: concat_slices(prefix_requirement, &aggr_sort_reqs),
+                };
+
+                let prefix_requirement = LexRequirement {
+                    inner: prefix_requirement.to_vec(),
+                };
+
                 if eq_properties.ordering_satisfy_requirement(&reqs) {
                     // Existing ordering satisfies the aggregator requirements:
                     aggr_expr.with_beneficial_ordering(true)?.map(Arc::new)
-                } else if eq_properties.ordering_satisfy_requirement(&concat_slices(
-                    prefix_requirement,
-                    &reverse_aggr_req,
-                )) {
+                } else if eq_properties.ordering_satisfy_requirement(&LexRequirement {
+                    inner: concat_slices(&prefix_requirement, &reverse_aggr_req),
+                }) {
                     // Converting to reverse enables more efficient execution
                     // given the existing ordering (if possible):
                     aggr_expr

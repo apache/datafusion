@@ -21,9 +21,8 @@ use std::sync::Arc;
 use super::{add_offset_to_expr, collapse_lex_req, ProjectionMapping};
 use crate::{
     expressions::Column, physical_expr::deduplicate_physical_exprs,
-    physical_exprs_bag_equal, physical_exprs_contains, LexOrdering, LexOrderingRef,
-    LexRequirement, LexRequirementRef, PhysicalExpr, PhysicalExprRef, PhysicalSortExpr,
-    PhysicalSortRequirement,
+    physical_exprs_bag_equal, physical_exprs_contains, LexOrdering, LexRequirement,
+    PhysicalExpr, PhysicalExprRef, PhysicalSortExpr, PhysicalSortRequirement,
 };
 
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
@@ -475,9 +474,9 @@ impl EquivalenceGroup {
     /// This function applies the `normalize_sort_expr` function for all sort
     /// expressions in `sort_exprs` and returns the corresponding normalized
     /// sort expressions.
-    pub fn normalize_sort_exprs(&self, sort_exprs: LexOrderingRef) -> LexOrdering {
+    pub fn normalize_sort_exprs(&self, sort_exprs: &LexOrdering) -> LexOrdering {
         // Convert sort expressions to sort requirements:
-        let sort_reqs = LexRequirement::from(sort_exprs);
+        let sort_reqs = LexRequirement::from(sort_exprs.clone());
         // Normalize the requirements:
         let normalized_sort_reqs = self.normalize_sort_requirements(&sort_reqs);
         // Convert sort requirements back to sort expressions:
@@ -489,7 +488,7 @@ impl EquivalenceGroup {
     /// sort requirements.
     pub fn normalize_sort_requirements(
         &self,
-        sort_reqs: LexRequirementRef,
+        sort_reqs: &LexRequirement,
     ) -> LexRequirement {
         collapse_lex_req(LexRequirement::new(
             sort_reqs

@@ -53,7 +53,7 @@ use datafusion_physical_expr::expressions::Column;
 pub use datafusion_physical_expr::window::{
     BuiltInWindowExpr, PlainAggregateWindowExpr, WindowExpr,
 };
-use datafusion_physical_expr_common::sort_expr::{LexOrderingRef, LexRequirement};
+use datafusion_physical_expr_common::sort_expr::LexRequirement;
 pub use window_agg_exec::WindowAggExec;
 
 /// Build field from window function and add it into schema
@@ -98,7 +98,7 @@ pub fn create_window_expr(
     name: String,
     args: &[Arc<dyn PhysicalExpr>],
     partition_by: &[Arc<dyn PhysicalExpr>],
-    order_by: LexOrderingRef,
+    order_by: &LexOrdering,
     window_frame: Arc<WindowFrame>,
     input_schema: &Schema,
     ignore_nulls: bool,
@@ -139,7 +139,7 @@ pub fn create_window_expr(
 /// Creates an appropriate [`WindowExpr`] based on the window frame and
 fn window_expr_from_aggregate_expr(
     partition_by: &[Arc<dyn PhysicalExpr>],
-    order_by: LexOrderingRef,
+    order_by: &LexOrdering,
     window_frame: Arc<WindowFrame>,
     aggregate: Arc<AggregateFunctionExpr>,
 ) -> Arc<dyn WindowExpr> {
@@ -497,7 +497,7 @@ pub fn get_best_fitting_window(
 /// the mode this window operator should work in to accommodate the existing ordering.
 pub fn get_window_mode(
     partitionby_exprs: &[Arc<dyn PhysicalExpr>],
-    orderby_keys: LexOrderingRef,
+    orderby_keys: &LexOrdering,
     input: &Arc<dyn ExecutionPlan>,
 ) -> Option<(bool, InputOrderMode)> {
     let input_eqs = input.equivalence_properties().clone();
@@ -516,7 +516,7 @@ pub fn get_window_mode(
     // Treat partition by exprs as constant. During analysis of requirements are satisfied.
     let const_exprs = partitionby_exprs.iter().map(ConstExpr::from);
     let partition_by_eqs = input_eqs.with_constants(const_exprs);
-    let order_by_reqs = LexRequirement::from(orderby_keys);
+    let order_by_reqs = LexRequirement::from(orderby_keys.clone());
     let reverse_order_by_reqs = LexRequirement::from(reverse_order_bys(orderby_keys));
     for (should_swap, order_by_reqs) in
         [(false, order_by_reqs), (true, reverse_order_by_reqs)]
@@ -698,7 +698,7 @@ mod tests {
                 "count".to_owned(),
                 &[col("a", &schema)?],
                 &[],
-                LexOrderingRef::default(),
+                &LexOrdering::default(),
                 Arc::new(WindowFrame::new(None)),
                 schema.as_ref(),
                 false,

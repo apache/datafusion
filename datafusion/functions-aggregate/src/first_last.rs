@@ -37,7 +37,7 @@ use datafusion_expr::{
     ExprFunctionExt, Signature, SortExpr, TypeSignature, Volatility,
 };
 use datafusion_functions_aggregate_common::utils::get_sort_options;
-use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexOrderingRef};
+use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
 create_func!(FirstValue, first_value_udaf);
 
@@ -130,7 +130,7 @@ impl AggregateUDFImpl for FirstValue {
         FirstValueAccumulator::try_new(
             acc_args.return_type,
             &ordering_dtypes,
-            LexOrdering::from_ref(acc_args.ordering_req),
+            acc_args.ordering_req.clone(),
             acc_args.ignore_nulls,
         )
         .map(|acc| Box::new(acc.with_requirement_satisfied(requirement_satisfied)) as _)
@@ -455,7 +455,7 @@ impl AggregateUDFImpl for LastValue {
         LastValueAccumulator::try_new(
             acc_args.return_type,
             &ordering_dtypes,
-            LexOrdering::from_ref(acc_args.ordering_req),
+            acc_args.ordering_req.clone(),
             acc_args.ignore_nulls,
         )
         .map(|acc| Box::new(acc.with_requirement_satisfied(requirement_satisfied)) as _)
@@ -723,10 +723,7 @@ fn filter_states_according_to_is_set(
 }
 
 /// Combines array refs and their corresponding orderings to construct `SortColumn`s.
-fn convert_to_sort_cols(
-    arrs: &[ArrayRef],
-    sort_exprs: LexOrderingRef,
-) -> Vec<SortColumn> {
+fn convert_to_sort_cols(arrs: &[ArrayRef], sort_exprs: &LexOrdering) -> Vec<SortColumn> {
     arrs.iter()
         .zip(sort_exprs.iter())
         .map(|(item, sort_expr)| SortColumn {

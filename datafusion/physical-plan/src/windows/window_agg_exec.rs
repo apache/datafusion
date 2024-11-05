@@ -46,7 +46,7 @@ use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};
 use futures::{ready, Stream, StreamExt};
 
 /// Window execution plan
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct WindowAggExec {
     /// Input plan
     pub(crate) input: Arc<dyn ExecutionPlan>,

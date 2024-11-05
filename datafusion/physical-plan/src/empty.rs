@@ -35,7 +35,7 @@ use datafusion_physical_expr::EquivalenceProperties;
 use log::trace;
 
 /// Execution plan for empty relation with produce_one_row=false
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct EmptyExec {
     /// The schema for the produced row
     schema: SchemaRef,

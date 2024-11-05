@@ -19,7 +19,7 @@
 
 mod required_indices;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use crate::optimizer::ApplyOrder;
@@ -27,7 +27,7 @@ use crate::{OptimizerConfig, OptimizerRule};
 
 use datafusion_common::{
     get_required_group_by_exprs_indices, internal_datafusion_err, internal_err, Column,
-    JoinType, Result,
+    HashMap, JoinType, Result,
 };
 use datafusion_expr::expr::Alias;
 use datafusion_expr::Unnest;

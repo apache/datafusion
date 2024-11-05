@@ -33,9 +33,7 @@ use datafusion_common::{internal_err, Result};
 use datafusion_execution::memory_pool::MemoryConsumer;
 use datafusion_execution::TaskContext;
 
-use datafusion_physical_expr_common::sort_expr::{
-    LexOrdering, LexOrderingRef, LexRequirement,
-};
+use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};
 use log::{debug, trace};
 
 /// Sort preserving merge execution plan
@@ -70,7 +68,7 @@ use log::{debug, trace};
 ///
 /// If any of the input partitions return an error, the error is propagated to
 /// the output and inputs are not polled again.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct SortPreservingMergeExec {
     /// Input plan
     input: Arc<dyn ExecutionPlan>,
@@ -121,8 +119,8 @@ impl SortPreservingMergeExec {
     }
 
     /// Sort expressions
-    pub fn expr(&self) -> LexOrderingRef {
-        &self.expr
+    pub fn expr(&self) -> &LexOrdering {
+        self.expr.as_ref()
     }
 
     /// Fetch

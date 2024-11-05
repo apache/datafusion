@@ -30,9 +30,8 @@ use crate::equivalence::{
 };
 use crate::expressions::{with_new_schema, CastExpr, Column, Literal};
 use crate::{
-    physical_exprs_contains, ConstExpr, LexOrdering, LexOrderingRef, LexRequirement,
-    LexRequirementRef, PhysicalExpr, PhysicalExprRef, PhysicalSortExpr,
-    PhysicalSortRequirement,
+    physical_exprs_contains, ConstExpr, LexOrdering, LexRequirement, PhysicalExpr,
+    PhysicalExprRef, PhysicalSortExpr, PhysicalSortRequirement,
 };
 
 use arrow_schema::{SchemaRef, SortOptions};
@@ -197,7 +196,7 @@ impl EquivalenceProperties {
         OrderingEquivalenceClass::new(
             self.oeq_class
                 .iter()
-                .map(|ordering| self.normalize_sort_exprs(ordering.as_ref()))
+                .map(|ordering| self.normalize_sort_exprs(ordering))
                 .collect(),
         )
     }
@@ -408,9 +407,9 @@ impl EquivalenceProperties {
     /// function would return `vec![a ASC, c ASC]`. Internally, it would first
     /// normalize to `vec![a ASC, c ASC, a ASC]` and end up with the final result
     /// after deduplication.
-    fn normalize_sort_exprs(&self, sort_exprs: LexOrderingRef) -> LexOrdering {
+    fn normalize_sort_exprs(&self, sort_exprs: &LexOrdering) -> LexOrdering {
         // Convert sort expressions to sort requirements:
-        let sort_reqs = LexRequirement::from(sort_exprs);
+        let sort_reqs = LexRequirement::from(sort_exprs.clone());
         // Normalize the requirements:
         let normalized_sort_reqs = self.normalize_sort_requirements(&sort_reqs);
         // Convert sort requirements back to sort expressions:
@@ -430,10 +429,7 @@ impl EquivalenceProperties {
     /// function would return `vec![a ASC, c ASC]`. Internally, it would first
     /// normalize to `vec![a ASC, c ASC, a ASC]` and end up with the final result
     /// after deduplication.
-    fn normalize_sort_requirements(
-        &self,
-        sort_reqs: LexRequirementRef,
-    ) -> LexRequirement {
+    fn normalize_sort_requirements(&self, sort_reqs: &LexRequirement) -> LexRequirement {
         let normalized_sort_reqs = self.eq_group.normalize_sort_requirements(sort_reqs);
         let mut constant_exprs = vec![];
         constant_exprs.extend(
@@ -456,15 +452,15 @@ impl EquivalenceProperties {
 
     /// Checks whether the given ordering is satisfied by any of the existing
     /// orderings.
-    pub fn ordering_satisfy(&self, given: LexOrderingRef) -> bool {
+    pub fn ordering_satisfy(&self, given: &LexOrdering) -> bool {
         // Convert the given sort expressions to sort requirements:
-        let sort_requirements = LexRequirement::from(given);
+        let sort_requirements = LexRequirement::from(given.clone());
         self.ordering_satisfy_requirement(&sort_requirements)
     }
 
     /// Checks whether the given sort requirements are satisfied by any of the
     /// existing orderings.
-    pub fn ordering_satisfy_requirement(&self, reqs: LexRequirementRef) -> bool {
+    pub fn ordering_satisfy_requirement(&self, reqs: &LexRequirement) -> bool {
         let mut eq_properties = self.clone();
         // First, standardize the given requirement:
         let normalized_reqs = eq_properties.normalize_sort_requirements(reqs);
@@ -525,8 +521,8 @@ impl EquivalenceProperties {
     /// than the `reference` sort requirements.
     pub fn requirements_compatible(
         &self,
-        given: LexRequirementRef,
-        reference: LexRequirementRef,
+        given: &LexRequirement,
+        reference: &LexRequirement,
     ) -> bool {
         let normalized_given = self.normalize_sort_requirements(given);
         let normalized_reference = self.normalize_sort_requirements(reference);
@@ -548,12 +544,12 @@ impl EquivalenceProperties {
     /// the latter.
     pub fn get_finer_ordering(
         &self,
-        lhs: LexOrderingRef,
-        rhs: LexOrderingRef,
+        lhs: &LexOrdering,
+        rhs: &LexOrdering,
     ) -> Option<LexOrdering> {
         // Convert the given sort expressions to sort requirements:
-        let lhs = LexRequirement::from(lhs);
-        let rhs = LexRequirement::from(rhs);
+        let lhs = LexRequirement::from(lhs.clone());
+        let rhs = LexRequirement::from(rhs.clone());
         let finer = self.get_finer_requirement(&lhs, &rhs);
         // Convert the chosen sort requirements back to sort expressions:
         finer.map(LexOrdering::from)
@@ -569,8 +565,8 @@ impl EquivalenceProperties {
     /// is the latter.
     pub fn get_finer_requirement(
         &self,
-        req1: LexRequirementRef,
-        req2: LexRequirementRef,
+        req1: &LexRequirement,
+        req2: &LexRequirement,
     ) -> Option<LexRequirement> {
         let mut lhs = self.normalize_sort_requirements(req1);
         let mut rhs = self.normalize_sort_requirements(req2);
@@ -606,7 +602,7 @@ impl EquivalenceProperties {
     pub fn substitute_ordering_component(
         &self,
         mapping: &ProjectionMapping,
-        sort_expr: LexOrderingRef,
+        sort_expr: &LexOrdering,
     ) -> Result<Vec<LexOrdering>> {
         let new_orderings = sort_expr
             .iter()
@@ -656,7 +652,7 @@ impl EquivalenceProperties {
         let orderings = &self.oeq_class.orderings;
         let new_order = orderings
             .iter()
-            .map(|order| self.substitute_ordering_component(mapping, order.as_ref()))
+            .map(|order| self.substitute_ordering_component(mapping, order))
             .collect::<Result<Vec<_>>>()?;
         let new_order = new_order.into_iter().flatten().collect();
         self.oeq_class = OrderingEquivalenceClass::new(new_order);

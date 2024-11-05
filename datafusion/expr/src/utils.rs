@@ -18,7 +18,7 @@
 //! Expression utilities
 
 use std::cmp::Ordering;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::ops::Deref;
 use std::sync::Arc;
 
@@ -36,7 +36,7 @@ use datafusion_common::tree_node::{
 use datafusion_common::utils::get_at_indices;
 use datafusion_common::{
     internal_err, plan_datafusion_err, plan_err, Column, DFSchema, DFSchemaRef,
-    DataFusionError, Result, TableReference,
+    DataFusionError, HashMap, Result, TableReference,
 };
 
 use indexmap::IndexSet;

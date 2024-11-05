@@ -98,12 +98,12 @@ impl ScalarUDFImpl for MakeArray {
         }
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         make_scalar_function(make_array_inner)(args)
-    }
-
-    fn invoke_no_args(&self, _number_rows: usize) -> Result<ColumnarValue> {
-        make_scalar_function(make_array_inner)(&[])
     }
 
     fn aliases(&self) -> &[String] {

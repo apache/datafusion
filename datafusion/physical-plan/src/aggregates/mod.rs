@@ -344,7 +344,7 @@ impl From<StreamType> for SendableRecordBatchStream {
 }
 
 /// Hash aggregate execution plan
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct AggregateExec {
     /// Aggregation mode (full, partial)
     mode: AggregateMode,
@@ -940,7 +940,7 @@ fn get_aggregate_expr_req(
         return LexOrdering::default();
     }
 
-    let mut req = LexOrdering::from_ref(aggr_expr.order_bys().unwrap_or_default());
+    let mut req = aggr_expr.order_bys().cloned().unwrap_or_default();
 
     // In non-first stage modes, we accumulate data (using `merge_batch`) from
     // different partitions (i.e. merge partial results). During this merge, we
@@ -983,7 +983,7 @@ fn finer_ordering(
     agg_mode: &AggregateMode,
 ) -> Option<LexOrdering> {
     let aggr_req = get_aggregate_expr_req(aggr_expr, group_by, agg_mode);
-    eq_properties.get_finer_ordering(existing_req.as_ref(), aggr_req.as_ref())
+    eq_properties.get_finer_ordering(existing_req, aggr_req.as_ref())
 }
 
 /// Concatenates the given slices.

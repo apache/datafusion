@@ -17,7 +17,6 @@
 
 //! Helper functions for the table implementation
 
-use std::collections::HashMap;
 use std::mem;
 use std::sync::Arc;
 
@@ -25,7 +24,7 @@ use super::ListingTableUrl;
 use super::PartitionedFile;
 use crate::execution::context::SessionState;
 use datafusion_common::internal_err;
-use datafusion_common::{Result, ScalarValue};
+use datafusion_common::{HashMap, Result, ScalarValue};
 use datafusion_expr::{BinaryExpr, Operator};
 
 use arrow::{

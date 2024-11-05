@@ -256,13 +256,13 @@ fn require_top_ordering_helper(
         // Therefore; we check the sort expression field of the SortExec to assign the requirements.
         let req_ordering = sort_exec.expr();
         let req_dist = sort_exec.required_input_distribution()[0].clone();
-        let reqs = LexRequirement::from(req_ordering);
+        let reqs = LexRequirement::from(req_ordering.clone());
         Ok((
             Arc::new(OutputRequirementExec::new(plan, Some(reqs), req_dist)) as _,
             true,
         ))
     } else if let Some(spm) = plan.as_any().downcast_ref::<SortPreservingMergeExec>() {
-        let reqs = LexRequirement::from(spm.expr());
+        let reqs = LexRequirement::from(spm.expr().clone());
         Ok((
             Arc::new(OutputRequirementExec::new(
                 plan,
