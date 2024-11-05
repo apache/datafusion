@@ -97,6 +97,7 @@ use substrait::proto::{
     AggregateFunction, Expression, NamedStruct, Plan, Rel, Type,
 };
 use substrait::proto::{ExtendedExpression, FunctionArgument, SortField};
+use datafusion::catalog::Session;
 
 // Substrait PrecisionTimestampTz indicates that the timestamp is relative to UTC, which
 // is the same as the expectation for any non-empty timezone in DF, so any non-empty timezone

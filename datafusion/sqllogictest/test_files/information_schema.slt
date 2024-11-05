@@ -614,16 +614,21 @@ select routine_name, data_type, function_type from information_schema.routines w
 string_agg LargeUtf8 AGGREGATE
 
 # test every function type are included in the result
-query TTTTTTTTTT
+query TTTTTTTBTTT rowsort
 select * from information_schema.routines where routine_name = 'date_trunc' OR routine_name = 'string_agg' OR routine_name = 'rank';
 ----
-datafusion public date_trunc datafusion public date_trunc FUNCTION Timestamp(Second, None) SCALAR Truncates a timestamp value to a specified precision.
-datafusion public date_trunc datafusion public date_trunc FUNCTION Timestamp(Millisecond, Some("+TZ")) SCALAR Truncates a timestamp value to a specified precision.
-datafusion public date_trunc datafusion public date_trunc FUNCTION Timestamp(Millisecond, None) SCALAR Truncates a timestamp value to a specified precision.
-datafusion public date_trunc datafusion public date_trunc FUNCTION Timestamp(Second, Some("+TZ")) SCALAR Truncates a timestamp value to a specified precision.
-datafusion public date_trunc datafusion public date_trunc FUNCTION Timestamp(Microsecond, Some("+TZ")) SCALAR Truncates a timestamp value to a specified precision.
-datafusion public date_trunc datafusion public date_trunc FUNCTION Timestamp(Microsecond, None) SCALAR Truncates a timestamp value to a specified precision.
-datafusion public date_trunc datafusion public date_trunc FUNCTION Timestamp(Nanosecond, Some("+TZ")) SCALAR Truncates a timestamp value to a specified precision.
-datafusion public date_trunc datafusion public date_trunc FUNCTION Timestamp(Nanosecond, None) SCALAR Truncates a timestamp value to a specified precision.
-datafusion public string_agg datafusion public string_agg FUNCTION LargeUtf8 AGGREGATE Concatenates the values of string expressions and places separator values between them.
-datafusion public rank datafusion public rank FUNCTION NULL WINDOW Returns the rank of the current row within its partition, allowing gaps between ranks. This function provides a ranking similar to `row_number`, but skips ranks for identical values.
+datafusion public date_trunc datafusion public date_trunc FUNCTION true Timestamp(Microsecond, None) SCALAR Truncates a timestamp value to a specified precision.
+datafusion public date_trunc datafusion public date_trunc FUNCTION true Timestamp(Microsecond, Some("+TZ")) SCALAR Truncates a timestamp value to a specified precision.
+datafusion public date_trunc datafusion public date_trunc FUNCTION true Timestamp(Millisecond, None) SCALAR Truncates a timestamp value to a specified precision.
+datafusion public date_trunc datafusion public date_trunc FUNCTION true Timestamp(Millisecond, Some("+TZ")) SCALAR Truncates a timestamp value to a specified precision.
+datafusion public date_trunc datafusion public date_trunc FUNCTION true Timestamp(Nanosecond, None) SCALAR Truncates a timestamp value to a specified precision.
+datafusion public date_trunc datafusion public date_trunc FUNCTION true Timestamp(Nanosecond, Some("+TZ")) SCALAR Truncates a timestamp value to a specified precision.
+datafusion public date_trunc datafusion public date_trunc FUNCTION true Timestamp(Second, None) SCALAR Truncates a timestamp value to a specified precision.
+datafusion public date_trunc datafusion public date_trunc FUNCTION true Timestamp(Second, Some("+TZ")) SCALAR Truncates a timestamp value to a specified precision.
+datafusion public rank datafusion public rank FUNCTION true NULL WINDOW Returns the rank of the current row within its partition, allowing gaps between ranks. This function provides a ranking similar to `row_number`, but skips ranks for identical values.
+datafusion public string_agg datafusion public string_agg FUNCTION true LargeUtf8 AGGREGATE Concatenates the values of string expressions and places separator values between them.
+
+query B
+select is_deterministic from information_schema.routines where routine_name = 'now';
+----
+false

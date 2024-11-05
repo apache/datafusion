@@ -22,7 +22,7 @@
 use crate::catalog::{CatalogProviderList, SchemaProvider, TableProvider};
 use crate::datasource::streaming::StreamingTable;
 use crate::execution::context::TaskContext;
-use crate::logical_expr::TableType;
+use crate::logical_expr::{TableType, Volatility};
 use crate::physical_plan::stream::RecordBatchStreamAdapter;
 use crate::physical_plan::SendableRecordBatchStream;
 use crate::{
@@ -34,10 +34,11 @@ use arrow::{
     datatypes::{DataType, Field, Schema, SchemaRef},
     record_batch::RecordBatch,
 };
+use arrow_array::builder::BooleanBuilder;
 use async_trait::async_trait;
 use datafusion_common::error::Result;
 use datafusion_common::DataFusionError;
-use datafusion_expr::{AggregateUDF, ScalarUDF, WindowUDF};
+use datafusion_expr::{AggregateUDF, ScalarUDF, Signature, WindowUDF};
 use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::{any::Any, sync::Arc};
@@ -225,14 +226,16 @@ impl InformationSchemaConfig {
 
         for (name, udf) in udfs {
             let return_types = get_udf_args_and_return_types(udf)?
-                .into_iter().map(|(_, return_type)| return_type)
+                .into_iter()
+                .map(|(_, return_type)| return_type)
                 .collect::<HashSet<_>>();
             for return_type in return_types {
                 builder.add_routine(
-                    &catalog_name,
-                    &schema_name,
+                    catalog_name,
+                    schema_name,
                     name,
                     "FUNCTION",
+                    Self::is_deterministic(udf.signature()),
                     return_type,
                     "SCALAR",
                     udf.documentation().map(|d| d.description.to_string()),
@@ -242,14 +245,16 @@ impl InformationSchemaConfig {
 
         for (name, udaf) in udafs {
             let return_types = get_udaf_args_and_return_types(udaf)?
-                .into_iter().map(|(_, return_type)| return_type)
+                .into_iter()
+                .map(|(_, return_type)| return_type)
                 .collect::<HashSet<_>>();
             for return_type in return_types {
                 builder.add_routine(
-                    &catalog_name,
-                    &schema_name,
+                    catalog_name,
+                    schema_name,
                     name,
                     "FUNCTION",
+                    Self::is_deterministic(udaf.signature()),
                     return_type,
                     "AGGREGATE",
                     udaf.documentation().map(|d| d.description.to_string()),
@@ -259,14 +264,16 @@ impl InformationSchemaConfig {
 
         for (name, udwf) in udwfs {
             let return_types = get_udwf_args_and_return_types(udwf)?
-                .into_iter().map(|(_, return_type)| return_type)
+                .into_iter()
+                .map(|(_, return_type)| return_type)
                 .collect::<HashSet<_>>();
             for return_type in return_types {
                 builder.add_routine(
-                    &catalog_name,
-                    &schema_name,
+                    catalog_name,
+                    schema_name,
                     name,
                     "FUNCTION",
+                    Self::is_deterministic(udwf.signature()),
                     return_type,
                     "WINDOW",
                     udwf.documentation().map(|d| d.description.to_string()),
@@ -274,6 +281,10 @@ impl InformationSchemaConfig {
             }
         }
         Ok(())
+    }
+
+    fn is_deterministic(signature: &Signature) -> bool {
+        signature.volatility == Volatility::Immutable
     }
 }
 
@@ -314,7 +325,8 @@ fn get_udaf_args_and_return_types(
             .into_iter()
             .map(|arg_types| {
                 // only handle the function which implemented [`ScalarUDFImpl::return_type`] method
-                let return_type = udaf.return_type(&arg_types).ok().map(|t| t.to_string());
+                let return_type =
+                    udaf.return_type(&arg_types).ok().map(|t| t.to_string());
                 let arg_types = arg_types
                     .into_iter()
                     .map(|t| t.to_string())
@@ -974,6 +986,7 @@ impl InformationSchemaRoutines {
             Field::new("routine_schema", DataType::Utf8, false),
             Field::new("routine_name", DataType::Utf8, false),
             Field::new("routine_type", DataType::Utf8, false),
+            Field::new("is_deterministic", DataType::Boolean, true),
             Field::new("data_type", DataType::Utf8, true),
             Field::new("function_type", DataType::Utf8, true),
             Field::new("description", DataType::Utf8, true),
@@ -992,6 +1005,7 @@ impl InformationSchemaRoutines {
             routine_schema: StringBuilder::new(),
             routine_name: StringBuilder::new(),
             routine_type: StringBuilder::new(),
+            is_deterministic: BooleanBuilder::new(),
             data_type: StringBuilder::new(),
             function_type: StringBuilder::new(),
             description: StringBuilder::new(),
@@ -1008,18 +1022,21 @@ struct InformationSchemaRoutinesBuilder {
     routine_schema: StringBuilder,
     routine_name: StringBuilder,
     routine_type: StringBuilder,
+    is_deterministic: BooleanBuilder,
     data_type: StringBuilder,
     function_type: StringBuilder,
     description: StringBuilder,
 }
 
 impl InformationSchemaRoutinesBuilder {
+    #[allow(clippy::too_many_arguments)]
     fn add_routine(
         &mut self,
         catalog_name: impl AsRef<str>,
         schema_name: impl AsRef<str>,
         routine_name: impl AsRef<str>,
         routine_type: impl AsRef<str>,
+        is_deterministic: bool,
         data_type: Option<impl AsRef<str>>,
         function_type: impl AsRef<str>,
         description: Option<impl AsRef<str>>,
@@ -1031,6 +1048,7 @@ impl InformationSchemaRoutinesBuilder {
         self.routine_schema.append_value(schema_name.as_ref());
         self.routine_name.append_value(routine_name.as_ref());
         self.routine_type.append_value(routine_type.as_ref());
+        self.is_deterministic.append_value(is_deterministic);
         self.data_type.append_option(data_type.as_ref());
         self.function_type.append_value(function_type.as_ref());
         self.description.append_option(description);
@@ -1047,6 +1065,7 @@ impl InformationSchemaRoutinesBuilder {
                 Arc::new(self.routine_schema.finish()),
                 Arc::new(self.routine_name.finish()),
                 Arc::new(self.routine_type.finish()),
+                Arc::new(self.is_deterministic.finish()),
                 Arc::new(self.data_type.finish()),
                 Arc::new(self.function_type.finish()),
                 Arc::new(self.description.finish()),
