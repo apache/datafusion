@@ -3633,7 +3633,7 @@ mod tests {
 
     #[test]
     fn test_like_and_ilke() {
-        // test non-null values
+        // LIKE '%'
         let expr = like(col("c1"), "%");
         assert_eq!(simplify(expr), if_not_null(col("c1"), true));
 
@@ -3646,7 +3646,7 @@ mod tests {
         let expr = not_ilike(col("c1"), "%");
         assert_eq!(simplify(expr), if_not_null(col("c1"), false));
 
-        // test null values
+        // null_constant LIKE '%'
         let null = lit(ScalarValue::Utf8(None));
         let expr = like(null.clone(), "%");
         assert_eq!(simplify(expr), lit_bool_null());
