@@ -29,6 +29,7 @@ use prost::Message;
 use std::any::Any;
 use std::collections::HashMap;
 use std::fmt::{self, Debug, Formatter};
+use std::mem::size_of_val;
 use std::sync::Arc;
 use std::vec;
 
