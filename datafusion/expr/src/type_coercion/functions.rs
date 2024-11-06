@@ -506,7 +506,7 @@ fn get_valid_types(
 
             let logical_data_type: NativeType = valid_type.clone().into();
             // Fallback to default type if we don't know which type to coerced to
-            // f64 is choosen since most of the math function utilize Signature::numeric,
+            // f64 is chosen since most of the math functions utilize Signature::numeric,
             // and their default type is double precision
             if logical_data_type == NativeType::Null {
                 valid_type = DataType::Float64;
