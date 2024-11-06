@@ -151,6 +151,7 @@ impl TestParquetFile {
                     range: None,
                     statistics: None,
                     extensions: None,
+                    metadata_size_hint: None,
                 });
 
         let df_schema = self.schema.clone().to_dfschema_ref()?;
