@@ -98,6 +98,12 @@ impl fmt::Debug for dyn LogicalType {
     }
 }
 
+impl std::fmt::Display for dyn LogicalType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{self:?}")
+    }
+}
+
 impl PartialEq for dyn LogicalType {
     fn eq(&self, other: &Self) -> bool {
         self.signature().eq(&other.signature())

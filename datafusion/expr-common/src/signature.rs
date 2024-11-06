@@ -19,6 +19,7 @@
 //! and return types of functions in DataFusion.
 
 use arrow::datatypes::DataType;
+use datafusion_common::types::LogicalTypeRef;
 
 /// Constant that is used as a placeholder for any valid timezone.
 /// This is used where a function can accept a timestamp type with any
@@ -106,10 +107,10 @@ pub enum TypeSignature {
     /// Exact number of arguments of an exact type
     Exact(Vec<DataType>),
     /// The number of arguments that can be coerced to in order
-    /// For example, `Coercible(vec![DataType::Float64])` accepts
+    /// For example, `Coercible(vec![logical_float64()])` accepts
     /// arguments like `vec![DataType::Int32]` or `vec![DataType::Float32]`
     /// since i32 and f32 can be casted to f64
-    Coercible(Vec<DataType>),
+    Coercible(Vec<LogicalTypeRef>),
     /// Fixed number of arguments of arbitrary types
     /// If a function takes 0 argument, its `TypeSignature` should be `Any(0)`
     Any(usize),
@@ -123,7 +124,9 @@ pub enum TypeSignature {
     /// Specifies Signatures for array functions
     ArraySignature(ArrayFunctionSignature),
     /// Fixed number of arguments of numeric types.
-    /// See <https://docs.rs/arrow/latest/arrow/datatypes/enum.DataType.html#method.is_numeric> to know which type is considered numeric
+    /// See [`NativeType::is_numeric`] to know which type is considered numeric
+    ///
+    /// [`NativeType::is_numeric`]: datafusion_common
     Numeric(usize),
     /// Fixed number of arguments of all the same string types.
     /// The precedence of type from high to low is Utf8View, LargeUtf8 and Utf8.
@@ -201,7 +204,10 @@ impl TypeSignature {
             TypeSignature::Numeric(num) => {
                 vec![format!("Numeric({num})")]
             }
-            TypeSignature::Exact(types) | TypeSignature::Coercible(types) => {
+            TypeSignature::Coercible(types) => {
+                vec![Self::join_types(types, ", ")]
+            }
+            TypeSignature::Exact(types) => {
                 vec![Self::join_types(types, ", ")]
             }
             TypeSignature::Any(arg_count) => {
@@ -322,7 +328,7 @@ impl Signature {
         }
     }
     /// Target coerce types in order
-    pub fn coercible(target_types: Vec<DataType>, volatility: Volatility) -> Self {
+    pub fn coercible(target_types: Vec<LogicalTypeRef>, volatility: Volatility) -> Self {
         Self {
             type_signature: TypeSignature::Coercible(target_types),
             volatility,

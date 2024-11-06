@@ -108,7 +108,7 @@ mod tests {
         #[allow(deprecated)] // TODO migrate UDF invoke to invoke_batch
         let result = match func.invoke(&args)? {
             ColumnarValue::Array(result) => result,
-            _ => unreachable!(),
+            _ => unreachable!("upper"),
         };
         assert_eq!(&expected, &result);
         Ok(())
