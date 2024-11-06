@@ -120,10 +120,18 @@ from aggregate_test_100
 order by c9
 
 # WindowFunction with BuiltInWindowFunction wrong signature
-statement error Coercion
+statement error
 select
 c9,
 nth_value(c5, 2, 3) over (order by c9) as nv1
+from aggregate_test_100
+order by c9
+----
+DataFusion error: Error during planning: Error during planning: Coercion from [Int32, Int64, Int64] to the signature OneOf([Any(0), Any(1), Any(2)]) failed. No function matches the given name and argument types 'nth_value(Int32, Int64, Int64)'. You might need to add explicit type casts.
+	Candidate functions:
+	nth_value()
+	nth_value(Any)
+	nth_value(Any, Any)
 from aggregate_test_100
 order by c9
 
