@@ -1773,6 +1773,14 @@ impl<'n, 'a> TreeNodeVisitor<'n> for BadPlanVisitor<'a> {
             LogicalPlan::Statement(stmt) if !self.options.allow_statements => {
                 plan_err!("Statement not supported: {}", stmt.name())
             }
+            // TODO: Implement PREPARE as a LogicalPlan::Statement
+            LogicalPlan::Prepare(_) if !self.options.allow_statements => {
+                plan_err!("Statement not supported: PREPARE")
+            }
+            // TODO: Implement EXECUTE as a LogicalPlan::Statement
+            LogicalPlan::Execute(_) if !self.options.allow_statements => {
+                plan_err!("Statement not supported: EXECUTE")
+            }
             _ => Ok(TreeNodeRecursion::Continue),
         }
     }
