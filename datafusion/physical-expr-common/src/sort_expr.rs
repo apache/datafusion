@@ -296,26 +296,14 @@ impl PhysicalSortRequirement {
             })
     }
 
-    /// Returns [`PhysicalSortRequirement`] that requires the exact
-    /// sort of the [`PhysicalSortExpr`]s in `ordering`
-    ///
-    /// This method takes `&'a PhysicalSortExpr` to make it easy to
-    /// use implementing [`ExecutionPlan::required_input_ordering`].
-    ///
-    /// [`ExecutionPlan::required_input_ordering`]: https://docs.rs/datafusion/latest/datafusion/physical_plan/trait.ExecutionPlan.html#method.required_input_ordering
+    #[deprecated(since = "43.0.0", note = "use  LexRequirement::from_lex_ordering")]
     pub fn from_sort_exprs<'a>(
         ordering: impl IntoIterator<Item = &'a PhysicalSortExpr>,
     ) -> LexRequirement {
         let ordering = ordering.into_iter().cloned().collect();
         LexRequirement::from_lex_ordering(ordering)
     }
-
-    /// Converts an iterator of [`PhysicalSortRequirement`] into a Vec
-    /// of [`PhysicalSortExpr`]s.
-    ///
-    /// This function converts `PhysicalSortRequirement` to `PhysicalSortExpr`
-    /// for each entry in the input. If required ordering is None for an entry
-    /// default ordering `ASC, NULLS LAST` if given (see the `PhysicalSortExpr::from`).
+    #[deprecated(since = "43.0.0", note = "use  LexOrdering::from_lex_requirement")]
     pub fn to_sort_exprs(
         requirements: impl IntoIterator<Item = PhysicalSortRequirement>,
     ) -> LexOrdering {
@@ -416,8 +404,8 @@ impl LexOrdering {
     /// This function converts `PhysicalSortRequirement` to `PhysicalSortExpr`
     /// for each entry in the input. If required ordering is None for an entry
     /// default ordering `ASC, NULLS LAST` if given (see the `PhysicalSortExpr::from`).
-    pub fn from_lex_requirement(requirements: LexRequirement) -> LexOrdering {
-        requirements
+    pub fn from_lex_requirement(requirement: LexRequirement) -> LexOrdering {
+        requirement
             .into_iter()
             .map(PhysicalSortExpr::from)
             .collect()
@@ -541,15 +529,10 @@ impl LexRequirement {
         self.inner.push(physical_sort_requirement)
     }
 
-    /// Create a new [`LexRequirement`] from a vector of [`PhysicalSortExpr`]s.
+    /// Create a new [`LexRequirement`] from a [`LexOrdering`]
     ///
-    /// Returns [`PhysicalSortRequirement`] that requires the exact
+    /// Returns [`LexRequirement`] that requires the exact
     /// sort of the [`PhysicalSortExpr`]s in `ordering`
-    ///
-    /// This method takes `&'a PhysicalSortExpr` to make it easy to
-    /// use implementing [`ExecutionPlan::required_input_ordering`].
-    ///
-    /// [`ExecutionPlan::required_input_ordering`]: https://docs.rs/datafusion/latest/datafusion/physical_plan/trait.ExecutionPlan.html#method.required_input_ordering
     pub fn from_lex_ordering(ordering: LexOrdering) -> Self {
         Self::new(
             ordering

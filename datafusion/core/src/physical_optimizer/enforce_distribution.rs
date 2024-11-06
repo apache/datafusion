@@ -1423,7 +1423,6 @@ pub(crate) mod tests {
     use datafusion_physical_expr::expressions::{BinaryExpr, Literal};
     use datafusion_physical_expr::{
         expressions::binary, expressions::lit, LexOrdering, PhysicalSortExpr,
-        PhysicalSortRequirement,
     };
     use datafusion_physical_expr_common::sort_expr::LexRequirement;
     use datafusion_physical_plan::PlanProperties;
@@ -1496,9 +1495,7 @@ pub(crate) mod tests {
             if self.expr.is_empty() {
                 vec![None]
             } else {
-                vec![Some(PhysicalSortRequirement::from_sort_exprs(
-                    self.expr.iter(),
-                ))]
+                vec![Some(LexRequirement::from(self.expr.clone()))]
             }
         }
 

@@ -94,7 +94,8 @@ fn pushdown_sorts_helper(
     if is_sort(plan) {
         let required_ordering = plan
             .output_ordering()
-            .map(PhysicalSortRequirement::from_sort_exprs)
+            .cloned()
+            .map(LexRequirement::from)
             .unwrap_or_default();
         if !satisfy_parent {
             // Make sure this `SortExec` satisfies parent requirements:
@@ -180,11 +181,12 @@ fn pushdown_requirement_to_children(
             RequirementsCompatibility::NonCompatible => Ok(None),
         }
     } else if let Some(sort_exec) = plan.as_any().downcast_ref::<SortExec>() {
-        let sort_req = PhysicalSortRequirement::from_sort_exprs(
+        let sort_req = LexRequirement::from(
             sort_exec
                 .properties()
                 .output_ordering()
-                .unwrap_or(&LexOrdering::default()),
+                .cloned()
+                .unwrap_or(LexOrdering::default()),
         );
         if sort_exec
             .properties()
@@ -205,10 +207,11 @@ fn pushdown_requirement_to_children(
             .iter()
             .all(|maintain| *maintain)
     {
-        let output_req = PhysicalSortRequirement::from_sort_exprs(
+        let output_req = LexRequirement::from(
             plan.properties()
                 .output_ordering()
-                .unwrap_or(&LexOrdering::default()),
+                .cloned()
+                .unwrap_or(LexOrdering::default()),
         );
         // Push down through operator with fetch when:
         // - requirement is aligned with output ordering
@@ -227,14 +230,12 @@ fn pushdown_requirement_to_children(
     } else if is_union(plan) {
         // UnionExec does not have real sort requirements for its input. Here we change the adjusted_request_ordering to UnionExec's output ordering and
         // propagate the sort requirements down to correct the unnecessary descendant SortExec under the UnionExec
-        let req = (!parent_required.is_empty())
-            .then(|| LexRequirement::new(parent_required.to_vec()));
+        let req = (!parent_required.is_empty()).then(|| parent_required.clone());
         Ok(Some(vec![req; plan.children().len()]))
     } else if let Some(smj) = plan.as_any().downcast_ref::<SortMergeJoinExec>() {
         // If the current plan is SortMergeJoinExec
         let left_columns_len = smj.left().schema().fields().len();
-        let parent_required_expr =
-            PhysicalSortRequirement::to_sort_exprs(parent_required.iter().cloned());
+        let parent_required_expr = LexOrdering::from(parent_required.clone());
         match expr_source_side(
             parent_required_expr.as_ref(),
             smj.join_type(),
@@ -251,8 +252,7 @@ fn pushdown_requirement_to_children(
                     smj.schema().fields.len() - smj.right().schema().fields.len();
                 let new_right_required =
                     shift_right_required(parent_required, right_offset)?;
-                let new_right_required_expr =
-                    PhysicalSortRequirement::to_sort_exprs(new_right_required);
+                let new_right_required_expr = LexOrdering::from(new_right_required);
                 try_pushdown_requirements_to_join(
                     smj,
                     parent_required,
@@ -278,8 +278,7 @@ fn pushdown_requirement_to_children(
         // Pushing down is not beneficial
         Ok(None)
     } else if is_sort_preserving_merge(plan) {
-        let new_ordering =
-            PhysicalSortRequirement::to_sort_exprs(parent_required.to_vec());
+        let new_ordering = LexOrdering::from(parent_required.clone());
         let mut spm_eqs = plan.equivalence_properties().clone();
         // Sort preserving merge will have new ordering, one requirement above is pushed down to its below.
         spm_eqs = spm_eqs.with_reorder(new_ordering);
@@ -412,7 +411,7 @@ fn try_pushdown_requirements_to_join(
     let should_pushdown = smj_eqs.ordering_satisfy_requirement(parent_required);
     Ok(should_pushdown.then(|| {
         let mut required_input_ordering = smj.required_input_ordering();
-        let new_req = Some(PhysicalSortRequirement::from_sort_exprs(sort_expr));
+        let new_req = Some(LexRequirement::from(sort_expr.clone()));
         match push_side {
             JoinSide::Left => {
                 required_input_ordering[0] = new_req;
