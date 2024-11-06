@@ -35,7 +35,7 @@ use datafusion::datasource::physical_plan::{AvroExec, CsvExec};
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::execution::FunctionRegistry;
 use datafusion::physical_expr::aggregate::AggregateFunctionExpr;
-use datafusion::physical_expr::{LexOrdering, PhysicalExprRef, PhysicalSortRequirement};
+use datafusion::physical_expr::{LexOrdering, LexRequirement, PhysicalExprRef};
 use datafusion::physical_plan::aggregates::AggregateMode;
 use datafusion::physical_plan::aggregates::{AggregateExec, PhysicalGroupBy};
 use datafusion::physical_plan::analyze::AnalyzeExec;
@@ -1037,7 +1037,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                             &sink_schema,
                             extension_codec,
                         )
-                        .map(|item| PhysicalSortRequirement::from_sort_exprs(&item.inner))
+                        .map(LexRequirement::from)
                     })
                     .transpose()?;
                 Ok(Arc::new(DataSinkExec::new(
@@ -1067,7 +1067,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                             &sink_schema,
                             extension_codec,
                         )
-                        .map(|item| PhysicalSortRequirement::from_sort_exprs(&item.inner))
+                        .map(LexRequirement::from)
                     })
                     .transpose()?;
                 Ok(Arc::new(DataSinkExec::new(
@@ -1104,9 +1104,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                                 &sink_schema,
                                 extension_codec,
                             )
-                            .map(|item| {
-                                PhysicalSortRequirement::from_sort_exprs(&item.inner)
-                            })
+                            .map(LexRequirement::from)
                         })
                         .transpose()?;
                     Ok(Arc::new(DataSinkExec::new(

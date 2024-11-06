@@ -409,11 +409,11 @@ impl EquivalenceProperties {
     /// after deduplication.
     fn normalize_sort_exprs(&self, sort_exprs: &LexOrdering) -> LexOrdering {
         // Convert sort expressions to sort requirements:
-        let sort_reqs = PhysicalSortRequirement::from_sort_exprs(sort_exprs.iter());
+        let sort_reqs = LexRequirement::from(sort_exprs.clone());
         // Normalize the requirements:
         let normalized_sort_reqs = self.normalize_sort_requirements(&sort_reqs);
         // Convert sort requirements back to sort expressions:
-        PhysicalSortRequirement::to_sort_exprs(normalized_sort_reqs)
+        LexOrdering::from(normalized_sort_reqs)
     }
 
     /// Normalizes the given sort requirements (i.e. `sort_reqs`) using the
@@ -454,7 +454,7 @@ impl EquivalenceProperties {
     /// orderings.
     pub fn ordering_satisfy(&self, given: &LexOrdering) -> bool {
         // Convert the given sort expressions to sort requirements:
-        let sort_requirements = PhysicalSortRequirement::from_sort_exprs(given.iter());
+        let sort_requirements = LexRequirement::from(given.clone());
         self.ordering_satisfy_requirement(&sort_requirements)
     }
 
@@ -548,11 +548,11 @@ impl EquivalenceProperties {
         rhs: &LexOrdering,
     ) -> Option<LexOrdering> {
         // Convert the given sort expressions to sort requirements:
-        let lhs = PhysicalSortRequirement::from_sort_exprs(lhs);
-        let rhs = PhysicalSortRequirement::from_sort_exprs(rhs);
+        let lhs = LexRequirement::from(lhs.clone());
+        let rhs = LexRequirement::from(rhs.clone());
         let finer = self.get_finer_requirement(&lhs, &rhs);
         // Convert the chosen sort requirements back to sort expressions:
-        finer.map(PhysicalSortRequirement::to_sort_exprs)
+        finer.map(LexOrdering::from)
     }
 
     /// Returns the finer ordering among the requirements `lhs` and `rhs`,
