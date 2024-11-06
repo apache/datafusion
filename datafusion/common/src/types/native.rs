@@ -24,7 +24,7 @@ use arrow::compute::can_cast_types;
 use arrow_schema::{
     DataType, Field, FieldRef, Fields, IntervalUnit, TimeUnit, UnionFields,
 };
-use std::sync::Arc;
+use std::{fmt::Display, sync::Arc};
 
 /// Representation of a type that DataFusion can handle natively. It is a subset
 /// of the physical variants in Arrow's native [`DataType`].
@@ -181,6 +181,12 @@ pub enum NativeType {
     /// child fields may be respectively "entries", "key", and "value", but this is
     /// not enforced.
     Map(LogicalFieldRef),
+}
+
+impl Display for NativeType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "NativeType::{self:?}")
+    }
 }
 
 impl LogicalType for NativeType {

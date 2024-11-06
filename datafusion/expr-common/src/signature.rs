@@ -107,7 +107,7 @@ pub enum TypeSignature {
     /// Exact number of arguments of an exact type
     Exact(Vec<DataType>),
     /// The number of arguments that can be coerced to in order
-    /// For example, `Coercible(vec![DataType::Float64])` accepts
+    /// For example, `Coercible(vec![logical_float64()])` accepts
     /// arguments like `vec![DataType::Int32]` or `vec![DataType::Float32]`
     /// since i32 and f32 can be casted to f64
     Coercible(Vec<LogicalTypeRef>),

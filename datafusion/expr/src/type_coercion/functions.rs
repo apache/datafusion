@@ -430,7 +430,7 @@ fn get_valid_types(
                     new_types.push(DataType::Utf8);
                 } else {
                     return plan_err!(
-                        "The signature expected NativeType::String but received {data_type}"
+                        "The signature expected NativeType::String but received {logical_data_type}"
                     );
                 }
             }
@@ -489,7 +489,7 @@ fn get_valid_types(
 
                 if !logical_data_type.is_numeric() {
                     return plan_err!(
-                        "The signature expected NativeType::Numeric but received {t}"
+                        "The signature expected NativeType::Numeric but received {logical_data_type}"
                     );
                 }
 
