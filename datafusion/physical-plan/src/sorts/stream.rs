@@ -24,7 +24,7 @@ use arrow::record_batch::RecordBatch;
 use arrow::row::{RowConverter, SortField};
 use datafusion_common::Result;
 use datafusion_execution::memory_pool::MemoryReservation;
-use datafusion_physical_expr_common::sort_expr::LexOrderingRef;
+use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use futures::stream::{Fuse, StreamExt};
 use std::marker::PhantomData;
 use std::sync::Arc;
@@ -93,7 +93,7 @@ pub struct RowCursorStream {
 impl RowCursorStream {
     pub fn try_new(
         schema: &Schema,
-        expressions: LexOrderingRef,
+        expressions: &LexOrdering,
         streams: Vec<SendableRecordBatchStream>,
         reservation: MemoryReservation,
     ) -> Result<Self> {

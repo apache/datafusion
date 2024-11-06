@@ -338,6 +338,10 @@ impl GroupsAccumulator for MinMaxBytesAccumulator {
 /// This is a heuristic to avoid allocating too many small buffers
 fn capacity_to_view_block_size(data_capacity: usize) -> u32 {
     let max_block_size = 2 * 1024 * 1024;
+    // Avoid block size equal to zero when calling `with_fixed_block_size()`.
+    if data_capacity == 0 {
+        return 1;
+    }
     if let Ok(block_size) = u32::try_from(data_capacity) {
         block_size.min(max_block_size)
     } else {

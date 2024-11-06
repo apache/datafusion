@@ -16,7 +16,6 @@
 // under the License.
 
 use std::any::Any;
-use std::collections::HashMap;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::Arc;
 
@@ -39,7 +38,8 @@ use datafusion_common::cast::{as_float64_array, as_int32_array};
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{
     assert_batches_eq, assert_batches_sorted_eq, assert_contains, exec_err, internal_err,
-    not_impl_err, plan_err, DFSchema, DataFusionError, ExprSchema, Result, ScalarValue,
+    not_impl_err, plan_err, DFSchema, DataFusionError, ExprSchema, HashMap, Result,
+    ScalarValue,
 };
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
 use datafusion_expr::{
@@ -209,11 +209,11 @@ impl ScalarUDFImpl for Simple0ArgsScalarUDF {
         Ok(self.return_type.clone())
     }
 
-    fn invoke(&self, _args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        not_impl_err!("{} function does not accept arguments", self.name())
-    }
-
-    fn invoke_no_args(&self, _number_rows: usize) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        _args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         Ok(ColumnarValue::Scalar(ScalarValue::Int32(Some(100))))
     }
 }

@@ -724,6 +724,7 @@ mod tests {
                 .map(|s| Some(string_to_timestamp_nanos(s).unwrap()))
                 .collect::<TimestampNanosecondArray>()
                 .with_timezone_opt(tz_opt.clone());
+            #[allow(deprecated)] // TODO migrate UDF invoke to invoke_batch
             let result = DateTruncFunc::new()
                 .invoke(&[
                     ColumnarValue::Scalar(ScalarValue::from("day")),
@@ -882,6 +883,7 @@ mod tests {
                 .map(|s| Some(string_to_timestamp_nanos(s).unwrap()))
                 .collect::<TimestampNanosecondArray>()
                 .with_timezone_opt(tz_opt.clone());
+            #[allow(deprecated)] // TODO migrate UDF invoke to invoke_batch
             let result = DateTruncFunc::new()
                 .invoke(&[
                     ColumnarValue::Scalar(ScalarValue::from("hour")),

@@ -655,6 +655,7 @@ message PlanType {
     datafusion_common.EmptyMessage FinalPhysicalPlan = 6;
     datafusion_common.EmptyMessage FinalPhysicalPlanWithStats = 10;
     datafusion_common.EmptyMessage FinalPhysicalPlanWithSchema = 12;
+    datafusion_common.EmptyMessage PhysicalPlanError = 13;
   }
 }
 

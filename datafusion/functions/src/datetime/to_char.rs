@@ -384,6 +384,7 @@ mod tests {
         ];
 
         for (value, format, expected) in scalar_data {
+            #[allow(deprecated)] // TODO migrate UDF invoke to invoke_batch
             let result = ToCharFunc::new()
                 .invoke(&[ColumnarValue::Scalar(value), ColumnarValue::Scalar(format)])
                 .expect("that to_char parsed values without error");
@@ -458,6 +459,7 @@ mod tests {
         ];
 
         for (value, format, expected) in scalar_array_data {
+            #[allow(deprecated)] // TODO migrate UDF invoke to invoke_batch
             let result = ToCharFunc::new()
                 .invoke(&[
                     ColumnarValue::Scalar(value),
@@ -583,6 +585,7 @@ mod tests {
         ];
 
         for (value, format, expected) in array_scalar_data {
+            #[allow(deprecated)] // TODO migrate UDF invoke to invoke_batch
             let result = ToCharFunc::new()
                 .invoke(&[
                     ColumnarValue::Array(value as ArrayRef),
@@ -599,6 +602,7 @@ mod tests {
         }
 
         for (value, format, expected) in array_array_data {
+            #[allow(deprecated)] // TODO migrate UDF invoke to invoke_batch
             let result = ToCharFunc::new()
                 .invoke(&[
                     ColumnarValue::Array(value),
@@ -619,6 +623,7 @@ mod tests {
         //
 
         // invalid number of arguments
+        #[allow(deprecated)] // TODO migrate UDF invoke to invoke_batch
         let result = ToCharFunc::new()
             .invoke(&[ColumnarValue::Scalar(ScalarValue::Int32(Some(1)))]);
         assert_eq!(
@@ -627,6 +632,7 @@ mod tests {
         );
 
         // invalid type
+        #[allow(deprecated)] // TODO migrate UDF invoke to invoke_batch
         let result = ToCharFunc::new().invoke(&[
             ColumnarValue::Scalar(ScalarValue::Int32(Some(1))),
             ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),

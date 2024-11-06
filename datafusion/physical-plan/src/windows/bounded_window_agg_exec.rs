@@ -22,7 +22,7 @@
 
 use std::any::Any;
 use std::cmp::{min, Ordering};
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -51,7 +51,9 @@ use datafusion_common::stats::Precision;
 use datafusion_common::utils::{
     evaluate_partition_ranges, get_at_indices, get_row_at_idx,
 };
-use datafusion_common::{arrow_datafusion_err, exec_err, DataFusionError, Result};
+use datafusion_common::{
+    arrow_datafusion_err, exec_err, DataFusionError, HashMap, Result,
+};
 use datafusion_execution::TaskContext;
 use datafusion_expr::window_state::{PartitionBatchState, WindowAggState};
 use datafusion_expr::ColumnarValue;
@@ -1186,7 +1188,6 @@ mod tests {
     };
     use datafusion_physical_expr::{LexOrdering, PhysicalExpr};
 
-    use datafusion_physical_expr_common::sort_expr::LexOrderingRef;
     use futures::future::Shared;
     use futures::{pin_mut, ready, FutureExt, Stream, StreamExt};
     use itertools::Itertools;
@@ -1553,7 +1554,7 @@ mod tests {
             Arc::new(BuiltInWindowExpr::new(
                 last_value_func,
                 &[],
-                LexOrderingRef::default(),
+                &LexOrdering::default(),
                 Arc::new(WindowFrame::new_bounds(
                     WindowFrameUnits::Rows,
                     WindowFrameBound::Preceding(ScalarValue::UInt64(None)),
@@ -1564,7 +1565,7 @@ mod tests {
             Arc::new(BuiltInWindowExpr::new(
                 nth_value_func1,
                 &[],
-                LexOrderingRef::default(),
+                &LexOrdering::default(),
                 Arc::new(WindowFrame::new_bounds(
                     WindowFrameUnits::Rows,
                     WindowFrameBound::Preceding(ScalarValue::UInt64(None)),
@@ -1575,7 +1576,7 @@ mod tests {
             Arc::new(BuiltInWindowExpr::new(
                 nth_value_func2,
                 &[],
-                LexOrderingRef::default(),
+                &LexOrdering::default(),
                 Arc::new(WindowFrame::new_bounds(
                     WindowFrameUnits::Rows,
                     WindowFrameBound::Preceding(ScalarValue::UInt64(None)),

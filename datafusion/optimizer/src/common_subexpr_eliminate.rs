@@ -34,8 +34,7 @@ use datafusion_expr::expr::{Alias, ScalarFunction};
 use datafusion_expr::logical_plan::{
     Aggregate, Filter, LogicalPlan, Projection, Sort, Window,
 };
-use datafusion_expr::tree_node::replace_sort_expressions;
-use datafusion_expr::{col, BinaryExpr, Case, Expr, Operator};
+use datafusion_expr::{col, BinaryExpr, Case, Expr, Operator, SortExpr};
 
 const CSE_PREFIX: &str = "__common_expr";
 
@@ -91,6 +90,7 @@ impl CommonSubexprEliminate {
                     .map(LogicalPlan::Projection)
             })
     }
+
     fn try_optimize_sort(
         &self,
         sort: Sort,
@@ -98,12 +98,23 @@ impl CommonSubexprEliminate {
     ) -> Result<Transformed<LogicalPlan>> {
         let Sort { expr, input, fetch } = sort;
         let input = Arc::unwrap_or_clone(input);
-        let sort_expressions = expr.iter().map(|sort| sort.expr.clone()).collect();
+        let (sort_expressions, sort_params): (Vec<_>, Vec<(_, _)>) = expr
+            .into_iter()
+            .map(|sort| (sort.expr, (sort.asc, sort.nulls_first)))
+            .unzip();
         let new_sort = self
             .try_unary_plan(sort_expressions, input, config)?
             .update_data(|(new_expr, new_input)| {
                 LogicalPlan::Sort(Sort {
-                    expr: replace_sort_expressions(expr, new_expr),
+                    expr: new_expr
+                        .into_iter()
+                        .zip(sort_params)
+                        .map(|(expr, (asc, nulls_first))| SortExpr {
+                            expr,
+                            asc,
+                            nulls_first,
+                        })
+                        .collect(),
                     input: Arc::new(new_input),
                     fetch,
                 })

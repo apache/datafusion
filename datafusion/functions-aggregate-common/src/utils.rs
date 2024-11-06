@@ -30,7 +30,7 @@ use arrow::{
 };
 use datafusion_common::{exec_err, DataFusionError, Result};
 use datafusion_expr_common::accumulator::Accumulator;
-use datafusion_physical_expr_common::sort_expr::LexOrderingRef;
+use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
 /// Convert scalar values from an accumulator into arrays.
 pub fn get_accum_scalar_values_as_arrays(
@@ -88,7 +88,7 @@ pub fn adjust_output_array(data_type: &DataType, array: ArrayRef) -> Result<Arra
 
 /// Construct corresponding fields for lexicographical ordering requirement expression
 pub fn ordering_fields(
-    ordering_req: LexOrderingRef,
+    ordering_req: &LexOrdering,
     // Data type of each expression in the ordering requirement
     data_types: &[DataType],
 ) -> Vec<Field> {
@@ -107,7 +107,7 @@ pub fn ordering_fields(
 }
 
 /// Selects the sort option attribute from all the given `PhysicalSortExpr`s.
-pub fn get_sort_options(ordering_req: LexOrderingRef) -> Vec<SortOptions> {
+pub fn get_sort_options(ordering_req: &LexOrdering) -> Vec<SortOptions> {
     ordering_req.iter().map(|item| item.options).collect()
 }
 

@@ -238,15 +238,6 @@ pub trait TreeNode: Sized {
         transform_down_impl(self, &mut f)
     }
 
-    /// Same as [`Self::transform_down`] but with a mutable closure.
-    #[deprecated(since = "38.0.0", note = "Use `transform_down` instead")]
-    fn transform_down_mut<F: FnMut(Self) -> Result<Transformed<Self>>>(
-        self,
-        f: &mut F,
-    ) -> Result<Transformed<Self>> {
-        self.transform_down(f)
-    }
-
     /// Recursively rewrite the node using `f` in a bottom-up (post-order)
     /// fashion.
     ///
@@ -269,15 +260,6 @@ pub trait TreeNode: Sized {
         }
 
         transform_up_impl(self, &mut f)
-    }
-
-    /// Same as [`Self::transform_up`] but with a mutable closure.
-    #[deprecated(since = "38.0.0", note = "Use `transform_up` instead")]
-    fn transform_up_mut<F: FnMut(Self) -> Result<Transformed<Self>>>(
-        self,
-        f: &mut F,
-    ) -> Result<Transformed<Self>> {
-        self.transform_up(f)
     }
 
     /// Transforms the node using `f_down` while traversing the tree top-down
