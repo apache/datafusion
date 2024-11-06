@@ -241,6 +241,7 @@ impl SelectBuilder {
     pub fn build(&self) -> Result<ast::Select, BuilderError> {
         Ok(ast::Select {
             distinct: self.distinct.clone(),
+            top_before_distinct: false,
             top: self.top.clone(),
             projection: self.projection.clone(),
             into: self.into.clone(),
