@@ -873,6 +873,56 @@ NULL NULL NULL NULL NULL
 #Raphael datafusionДатаФусион false false false false
 #NULL NULL NULL NULL NULL NULL
 
+# TODO (https://github.com/apache/datafusion/issues/12637) uncomment additional test projections
+query TTBB
+SELECT ascii_1, unicode_1,
+      ascii_1 LIKE '%' AS ascii_1_like_percent,
+      unicode_1 LIKE '%' AS unicode_1_like_percent
+      -- ascii_1 LIKE '%%' AS ascii_1_like_percent_percent, -- TODO enable after fixing https://github.com/apache/datafusion/issues/12637
+      -- unicode_1 LIKE '%%' AS unicode_1_like_percent_percent -- TODO enable after fixing https://github.com/apache/datafusion/issues/12637
+FROM test_basic_operator
+----
+Andrew datafusion📊🔥 true true
+Xiangpeng datafusion数据融合 true true
+Raphael datafusionДатаФусион true true
+under_score un iść core true true
+percent pan Tadeusz ma iść w kąt true true
+(empty) (empty) true true
+NULL NULL NULL NULL
+NULL NULL NULL NULL
+
+# TODO (https://github.com/apache/datafusion/issues/12637) uncomment additional test projections
+query TTBB
+SELECT ascii_1, unicode_1,
+      ascii_1 NOT LIKE '%' AS ascii_1_not_like_percent,
+      unicode_1 NOT LIKE '%' AS unicode_1_not_like_percent
+      -- ascii_1 NOT LIKE '%%' AS ascii_1_not_like_percent_percent, -- TODO enable after fixing https://github.com/apache/datafusion/issues/12637
+      -- unicode_1 NOT LIKE '%%' AS unicode_1_not_like_percent_percent -- TODO enable after fixing https://github.com/apache/datafusion/issues/12637
+FROM test_basic_operator
+----
+Andrew datafusion📊🔥 false false
+Xiangpeng datafusion数据融合 false false
+Raphael datafusionДатаФусион false false
+under_score un iść core false false
+percent pan Tadeusz ma iść w kąt false false
+(empty) (empty) false false
+NULL NULL NULL NULL
+NULL NULL NULL NULL
+
+query T
+SELECT ascii_1 FROM test_basic_operator WHERE ascii_1 LIKE '%'
+----
+Andrew
+Xiangpeng
+Raphael
+under_score
+percent
+(empty)
+
+query T
+SELECT ascii_1 FROM test_basic_operator WHERE ascii_1 NOT LIKE '%'
+----
+
 # Test pattern without wildcard characters
 query TTBBBB
 select ascii_1, unicode_1,

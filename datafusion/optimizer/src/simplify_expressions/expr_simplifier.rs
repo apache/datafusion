@@ -1476,13 +1476,28 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 negated,
                 escape_char: _,
                 case_insensitive: _,
-            }) if !is_null(&expr)
-                && matches!(
-                    pattern.as_ref(),
-                    Expr::Literal(ScalarValue::Utf8(Some(pattern_str))) if pattern_str == "%"
-                ) =>
+            }) if matches!(
+                pattern.as_ref(),
+                Expr::Literal(ScalarValue::Utf8(Some(pattern_str))) if pattern_str == "%"
+            ) || matches!(
+                pattern.as_ref(),
+                Expr::Literal(ScalarValue::LargeUtf8(Some(pattern_str))) if pattern_str == "%"
+            ) || matches!(
+                pattern.as_ref(),
+                Expr::Literal(ScalarValue::Utf8View(Some(pattern_str))) if pattern_str == "%"
+            ) =>
             {
-                Transformed::yes(lit(!negated))
+                // exp LIKE '%' is
+                //   - when exp is not NULL, it's true
+                //   - when exp is NULL, it's NULL
+                // exp NOT LIKE '%' is
+                //   - when exp is not NULL, it's false
+                //   - when exp is NULL, it's NULL
+                Transformed::yes(Expr::Case(Case {
+                    expr: Some(Box::new(Expr::IsNotNull(expr))),
+                    when_then_expr: vec![(Box::new(lit(true)), Box::new(lit(!negated)))],
+                    else_expr: None,
+                }))
             }
 
             // a is not null/unknown --> true (if a is not nullable)
@@ -2777,10 +2792,22 @@ mod tests {
         assert_no_change(regex_match(col("c1"), lit("f_o")));
 
         // empty cases
-        assert_change(regex_match(col("c1"), lit("")), lit(true));
-        assert_change(regex_not_match(col("c1"), lit("")), lit(false));
-        assert_change(regex_imatch(col("c1"), lit("")), lit(true));
-        assert_change(regex_not_imatch(col("c1"), lit("")), lit(false));
+        assert_change(
+            regex_match(col("c1"), lit("")),
+            if_not_null(col("c1"), true),
+        );
+        assert_change(
+            regex_not_match(col("c1"), lit("")),
+            if_not_null(col("c1"), false),
+        );
+        assert_change(
+            regex_imatch(col("c1"), lit("")),
+            if_not_null(col("c1"), true),
+        );
+        assert_change(
+            regex_not_imatch(col("c1"), lit("")),
+            if_not_null(col("c1"), false),
+        );
 
         // single character
         assert_change(regex_match(col("c1"), lit("x")), like(col("c1"), "%x%"));
@@ -3606,20 +3633,20 @@ mod tests {
 
     #[test]
     fn test_like_and_ilke() {
-        // test non-null values
+        // LIKE '%'
         let expr = like(col("c1"), "%");
-        assert_eq!(simplify(expr), lit(true));
+        assert_eq!(simplify(expr), if_not_null(col("c1"), true));
 
         let expr = not_like(col("c1"), "%");
-        assert_eq!(simplify(expr), lit(false));
+        assert_eq!(simplify(expr), if_not_null(col("c1"), false));
 
         let expr = ilike(col("c1"), "%");
-        assert_eq!(simplify(expr), lit(true));
+        assert_eq!(simplify(expr), if_not_null(col("c1"), true));
 
         let expr = not_ilike(col("c1"), "%");
-        assert_eq!(simplify(expr), lit(false));
+        assert_eq!(simplify(expr), if_not_null(col("c1"), false));
 
-        // test null values
+        // null_constant LIKE '%'
         let null = lit(ScalarValue::Utf8(None));
         let expr = like(null.clone(), "%");
         assert_eq!(simplify(expr), lit_bool_null());
@@ -4042,5 +4069,13 @@ mod tests {
                     .and((rand.clone().eq(lit(0))).or(rand.clone().eq(lit(0))))
             );
         }
+    }
+
+    fn if_not_null(expr: Expr, then: bool) -> Expr {
+        Expr::Case(Case {
+            expr: Some(expr.is_not_null().into()),
+            when_then_expr: vec![(lit(true).into(), lit(then).into())],
+            else_expr: None,
+        })
     }
 }
