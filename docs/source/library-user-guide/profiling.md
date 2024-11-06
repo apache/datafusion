@@ -47,7 +47,7 @@ Example: Flamegraph for `datafusion-cli` executing `q28.sql`. Note this
 must be run as root on Mac OSx to access DTrace.
 
 ```shell
-sudo flamegraph -- datafusion-cli -f q28.sq
+sudo flamegraph -- datafusion-cli -f q28.sql
 ```
 
 You can also invoke the flamegraph tool with `cargo` to profile a specific test or benchmark.
