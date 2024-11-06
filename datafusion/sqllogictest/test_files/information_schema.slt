@@ -233,6 +233,7 @@ datafusion.optimizer.filter_null_join_keys false
 datafusion.optimizer.hash_join_single_partition_threshold 1048576
 datafusion.optimizer.hash_join_single_partition_threshold_rows 131072
 datafusion.optimizer.max_passes 3
+datafusion.optimizer.optimize_projections_preserve_existing_projections false
 datafusion.optimizer.prefer_existing_sort false
 datafusion.optimizer.prefer_existing_union false
 datafusion.optimizer.prefer_hash_join true
@@ -326,6 +327,7 @@ datafusion.optimizer.filter_null_join_keys false When set to true, the optimizer
 datafusion.optimizer.hash_join_single_partition_threshold 1048576 The maximum estimated size in bytes for one input side of a HashJoin will be collected into a single partition
 datafusion.optimizer.hash_join_single_partition_threshold_rows 131072 The maximum estimated size in rows for one input side of a HashJoin will be collected into a single partition
 datafusion.optimizer.max_passes 3 Number of times that the optimizer will attempt to optimize the plan
+datafusion.optimizer.optimize_projections_preserve_existing_projections false When set to true, the `optimize_projections` rule will not attempt to move, add, or remove existing projections. This flag helps maintain the original structure of the `LogicalPlan` when converting it back into SQL via the `unparser` module. It ensures the query layout remains simple and readable, relying on the underlying SQL engine to apply its own optimizations during execution.
 datafusion.optimizer.prefer_existing_sort false When true, DataFusion will opportunistically remove sorts when the data is already sorted, (i.e. setting `preserve_order` to true on `RepartitionExec`  and using `SortPreservingMergeExec`) When false, DataFusion will maximize plan parallelism using `RepartitionExec` even if this requires subsequently resorting data using a `SortExec`.
 datafusion.optimizer.prefer_existing_union false When set to true, the optimizer will not attempt to convert Union to Interleave
 datafusion.optimizer.prefer_hash_join true When set to true, the physical plan optimizer will prefer HashJoin over SortMergeJoin. HashJoin can work more efficiently than SortMergeJoin but consumes more memory
