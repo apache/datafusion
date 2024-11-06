@@ -1648,7 +1648,7 @@ config_namespace! {
         /// The default behaviour depends on the `datafusion.catalog.newlines_in_values` setting.
         pub newlines_in_values: Option<bool>, default = None
         pub compression: CompressionTypeVariant, default = CompressionTypeVariant::UNCOMPRESSED
-        pub schema_infer_max_rec: usize, default = 100
+        pub schema_infer_max_rec: Option<usize>, default = None
         pub date_format: Option<String>, default = None
         pub datetime_format: Option<String>, default = None
         pub timestamp_format: Option<String>, default = None
@@ -1673,7 +1673,7 @@ impl CsvOptions {
     /// Set a limit in terms of records to scan to infer the schema
     /// - default to `DEFAULT_SCHEMA_INFER_MAX_RECORD`
     pub fn with_schema_infer_max_rec(mut self, max_rec: usize) -> Self {
-        self.schema_infer_max_rec = max_rec;
+        self.schema_infer_max_rec = Some(max_rec);
         self
     }
 
@@ -1773,7 +1773,7 @@ config_namespace! {
     /// Options controlling JSON format
     pub struct JsonOptions {
         pub compression: CompressionTypeVariant, default = CompressionTypeVariant::UNCOMPRESSED
-        pub schema_infer_max_rec: usize, default = 100
+        pub schema_infer_max_rec: Option<usize>, default = None
     }
 }
 

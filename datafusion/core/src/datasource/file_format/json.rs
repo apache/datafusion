@@ -25,7 +25,9 @@ use std::io::BufReader;
 use std::sync::Arc;
 
 use super::write::orchestration::stateless_multipart_put;
-use super::{FileFormat, FileFormatFactory, FileScanConfig};
+use super::{
+    FileFormat, FileFormatFactory, FileScanConfig, DEFAULT_SCHEMA_INFER_MAX_RECORD,
+};
 use crate::datasource::file_format::file_compression_type::FileCompressionType;
 use crate::datasource::file_format::write::BatchSerializer;
 use crate::datasource::physical_plan::FileGroupDisplay;
@@ -147,7 +149,7 @@ impl JsonFormat {
     /// Set a limit in terms of records to scan to infer the schema
     /// - defaults to `DEFAULT_SCHEMA_INFER_MAX_RECORD`
     pub fn with_schema_infer_max_rec(mut self, max_rec: usize) -> Self {
-        self.options.schema_infer_max_rec = max_rec;
+        self.options.schema_infer_max_rec = Some(max_rec);
         self
     }
 
@@ -187,7 +189,10 @@ impl FileFormat for JsonFormat {
         objects: &[ObjectMeta],
     ) -> Result<SchemaRef> {
         let mut schemas = Vec::new();
-        let mut records_to_read = self.options.schema_infer_max_rec;
+        let mut records_to_read = self
+            .options
+            .schema_infer_max_rec
+            .unwrap_or(DEFAULT_SCHEMA_INFER_MAX_RECORD);
         let file_compression_type = FileCompressionType::from(self.options.compression);
         for object in objects {
             let mut take_while = || {
