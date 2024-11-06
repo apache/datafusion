@@ -117,7 +117,7 @@ impl Default for AbsFunc {
 impl AbsFunc {
     pub fn new() -> Self {
         Self {
-            signature: Signature::any(1, Volatility::Immutable),
+            signature: Signature::numeric(1, Volatility::Immutable),
         }
     }
 }
