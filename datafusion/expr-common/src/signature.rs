@@ -128,15 +128,6 @@ pub enum TypeSignature {
     ///
     /// [`NativeType::is_numeric`]: datafusion_common
     Numeric(usize),
-    /// Fixed number of arguments of numeric types.
-    /// See [`NativeType::is_numeric`] to know which type is considered numeric
-    /// This signature accepts numeric string
-    /// Example of functions In Postgres that support numeric string
-    /// 1. Mathematical Functions, like `abs`
-    /// 2. `to_timestamp`
-    ///
-    /// [`NativeType::is_numeric`]: datafusion_common
-    NumericAndNumericString(usize),
     /// Fixed number of arguments of all the same string types.
     /// The precedence of type from high to low is Utf8View, LargeUtf8 and Utf8.
     /// Null is considerd as `Utf8` by default
@@ -212,9 +203,6 @@ impl TypeSignature {
             }
             TypeSignature::Numeric(num) => {
                 vec![format!("Numeric({num})")]
-            }
-            TypeSignature::NumericAndNumericString(num) => {
-                vec![format!("NumericAndNumericString({num})")]
             }
             TypeSignature::Coercible(types) => {
                 vec![Self::join_types(types, ", ")]
@@ -302,13 +290,6 @@ impl Signature {
     pub fn numeric(arg_count: usize, volatility: Volatility) -> Self {
         Self {
             type_signature: TypeSignature::Numeric(arg_count),
-            volatility,
-        }
-    }
-
-    pub fn numeric_and_numeric_string(arg_count: usize, volatility: Volatility) -> Self {
-        Self {
-            type_signature: TypeSignature::NumericAndNumericString(arg_count),
             volatility,
         }
     }

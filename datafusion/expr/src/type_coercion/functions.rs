@@ -178,7 +178,6 @@ fn is_well_supported_signature(type_signature: &TypeSignature) -> bool {
         type_signature,
         TypeSignature::UserDefined
             | TypeSignature::Numeric(_)
-            | TypeSignature::NumericAndNumericString(_)
             | TypeSignature::String(_)
             | TypeSignature::Coercible(_)
             | TypeSignature::Any(_)
@@ -476,49 +475,6 @@ fn get_valid_types(
             }
 
             vec![vec![base_type_or_default_type(&coerced_type); *number]]
-        }
-        TypeSignature::NumericAndNumericString(number) => {
-            function_length_check(current_types.len(), *number)?;
-
-            // Find common numeric type amongs given types except string
-            let mut valid_type = current_types.first().unwrap().to_owned();
-            for t in current_types.iter().skip(1) {
-                let logical_data_type: NativeType = t.into();
-                // Skip string, assume it is numeric string, let arrow::cast handle the actual casting logic
-                if logical_data_type == NativeType::String {
-                    continue;
-                }
-
-                if logical_data_type == NativeType::Null {
-                    continue;
-                }
-
-                if !logical_data_type.is_numeric() {
-                    return plan_err!(
-                        "The signature expected NativeType::Numeric but received {t}"
-                    );
-                }
-
-                if let Some(coerced_type) = binary_numeric_coercion(&valid_type, t) {
-                    valid_type = coerced_type;
-                } else {
-                    return plan_err!(
-                        "{} and {} are not coercible to a common numeric type",
-                        valid_type,
-                        t
-                    );
-                }
-            }
-
-            let logical_data_type: NativeType = valid_type.clone().into();
-            // Fallback to default type if we don't know which type to coerced to
-            // f64 is choosen since most of the math function utilize Signature::numeric,
-            // and their default type is double precision
-            if matches!(logical_data_type, NativeType::String | NativeType::Null) {
-                valid_type = DataType::Float64;
-            }
-
-            vec![vec![valid_type; *number]]
         }
         TypeSignature::Numeric(number) => {
             function_length_check(current_types.len(), *number)?;
