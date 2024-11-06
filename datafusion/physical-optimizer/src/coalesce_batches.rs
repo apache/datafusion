@@ -18,19 +18,20 @@
 //! CoalesceBatches optimizer that groups batches together rows
 //! in bigger batches to avoid overhead with small batches
 
+use crate::PhysicalOptimizerRule;
+
 use std::sync::Arc;
 
-use crate::{
-    config::ConfigOptions,
-    error::Result,
-    physical_plan::{
-        coalesce_batches::CoalesceBatchesExec, filter::FilterExec, joins::HashJoinExec,
-        repartition::RepartitionExec, Partitioning,
-    },
-};
+use datafusion_common::config::ConfigOptions;
+use datafusion_common::error::Result;
+use datafusion_physical_expr::Partitioning;
+use datafusion_physical_plan::coalesce_batches::CoalesceBatchesExec;
+use datafusion_physical_plan::filter::FilterExec;
+use datafusion_physical_plan::joins::HashJoinExec;
+use datafusion_physical_plan::repartition::RepartitionExec;
+use datafusion_physical_plan::ExecutionPlan;
 
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_physical_optimizer::PhysicalOptimizerRule;
 
 /// Optimizer rule that introduces CoalesceBatchesExec to avoid overhead with small batches that
 /// are produced by highly selective filters
@@ -46,9 +47,9 @@ impl CoalesceBatches {
 impl PhysicalOptimizerRule for CoalesceBatches {
     fn optimize(
         &self,
-        plan: Arc<dyn crate::physical_plan::ExecutionPlan>,
+        plan: Arc<dyn ExecutionPlan>,
         config: &ConfigOptions,
-    ) -> Result<Arc<dyn crate::physical_plan::ExecutionPlan>> {
+    ) -> Result<Arc<dyn ExecutionPlan>> {
         if !config.execution.coalesce_batches {
             return Ok(plan);
         }

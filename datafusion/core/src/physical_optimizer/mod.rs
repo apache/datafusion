@@ -21,7 +21,7 @@
 //! "Repartition" or "Sortedness"
 //!
 //! [`ExecutionPlan`]: crate::physical_plan::ExecutionPlan
-pub mod coalesce_batches;
+
 pub mod enforce_distribution;
 pub mod enforce_sorting;
 pub mod join_selection;
