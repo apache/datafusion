@@ -1213,7 +1213,7 @@ impl LogicalPlanBuilder {
     ///
     /// `filter` contains any other other filter expression to apply during the
     /// join. Note that `equi_exprs` predicates are evaluated more efficiently
-    /// than the filter expressions, so are preferred.
+    /// than the filter expressions, so they are preferred.
     pub fn join_with_expr_keys(
         self,
         right: LogicalPlan,
