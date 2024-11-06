@@ -57,7 +57,7 @@ impl CsvOptionsProto {
                 escape: options.escape.map_or(vec![], |v| vec![v]),
                 double_quote: options.double_quote.map_or(vec![], |v| vec![v as u8]),
                 compression: options.compression as i32,
-                schema_infer_max_rec: options.schema_infer_max_rec as u64,
+                schema_infer_max_rec: options.schema_infer_max_rec.map(|v| v as u64),
                 date_format: options.date_format.clone().unwrap_or_default(),
                 datetime_format: options.datetime_format.clone().unwrap_or_default(),
                 timestamp_format: options.timestamp_format.clone().unwrap_or_default(),
@@ -110,7 +110,7 @@ impl From<&CsvOptionsProto> for CsvOptions {
                 3 => CompressionTypeVariant::ZSTD,
                 _ => CompressionTypeVariant::UNCOMPRESSED,
             },
-            schema_infer_max_rec: proto.schema_infer_max_rec as usize,
+            schema_infer_max_rec: proto.schema_infer_max_rec.map(|v| v as usize),
             date_format: if proto.date_format.is_empty() {
                 None
             } else {
@@ -239,7 +239,7 @@ impl JsonOptionsProto {
         if let Some(options) = &factory.options {
             JsonOptionsProto {
                 compression: options.compression as i32,
-                schema_infer_max_rec: options.schema_infer_max_rec as u64,
+                schema_infer_max_rec: options.schema_infer_max_rec.map(|v| v as u64),
             }
         } else {
             JsonOptionsProto::default()
@@ -257,7 +257,7 @@ impl From<&JsonOptionsProto> for JsonOptions {
                 3 => CompressionTypeVariant::ZSTD,
                 _ => CompressionTypeVariant::UNCOMPRESSED,
             },
-            schema_infer_max_rec: proto.schema_infer_max_rec as usize,
+            schema_infer_max_rec: proto.schema_infer_max_rec.map(|v| v as usize),
         }
     }
 }
