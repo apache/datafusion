@@ -141,7 +141,7 @@ pub enum CopyToSource {
     /// `COPY <table> TO ...`
     Relation(ObjectName),
     /// COPY (...query...) TO ...
-    Query(Query),
+    Query(Box<Query>),
 }
 
 impl fmt::Display for CopyToSource {
@@ -1444,7 +1444,7 @@ mod tests {
         };
 
         let query = if let SQLStatement::Query(query) = statement {
-            *query
+            query
         } else {
             panic!("Expected query, got {statement:?}");
         };

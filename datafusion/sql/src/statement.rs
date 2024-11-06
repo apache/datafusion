@@ -152,6 +152,10 @@ fn calc_inline_constraints_from_columns(columns: &[ColumnDef]) -> Vec<TableConst
                 | ast::ColumnOption::OnUpdate(_)
                 | ast::ColumnOption::Materialized(_)
                 | ast::ColumnOption::Ephemeral(_)
+                | ast::ColumnOption::Identity(_)
+                | ast::ColumnOption::OnConflict(_)
+                | ast::ColumnOption::Policy(_)
+                | ast::ColumnOption::Tags(_)
                 | ast::ColumnOption::Alias(_) => {}
             }
         }
@@ -672,6 +676,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 full,
                 db_name,
                 filter,
+                // specifies IN/FROM, both of which DataFusion trets the same
+                // so ignored
+                clause: _,
             } => self.show_tables_to_plan(extended, full, db_name, filter),
 
             Statement::ShowColumns {
@@ -1103,7 +1110,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 (plan, input_schema, Some(table_ref))
             }
             CopyToSource::Query(query) => {
-                let plan = self.query_to_plan(query, &mut PlannerContext::new())?;
+                let plan = self.query_to_plan(*query, &mut PlannerContext::new())?;
                 let input_schema = Arc::clone(plan.schema());
                 (plan, input_schema, None)
             }
