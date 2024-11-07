@@ -164,6 +164,19 @@ impl ScalarUDF {
         self.inner.signature()
     }
 
+    /// The datatype this function returns given the input argument types.
+    /// This function is used when the input arguments are [`DataType`]s.
+    ///
+    ///  # Notes
+    ///
+    /// If a function implement [`ScalarUDFImpl::return_type_from_exprs`],
+    /// its [`ScalarUDFImpl::return_type`] should raise an error.
+    ///
+    /// See [`ScalarUDFImpl::return_type`] for more details.
+    pub fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+        self.inner.return_type(arg_types)
+    }
+
     /// The datatype this function returns given the input argument input types.
     /// This function is used when the input arguments are [`Expr`]s.
     ///
