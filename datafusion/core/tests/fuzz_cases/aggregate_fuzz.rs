@@ -186,9 +186,6 @@ fn baseline_config() -> DatasetGeneratorConfig {
             "timestamp_ns",
             DataType::Timestamp(TimeUnit::Nanosecond, None),
         ),
-        ColumnDescr::new("binary", DataType::Binary),
-        ColumnDescr::new("large_binary", DataType::LargeBinary),
-        ColumnDescr::new("binaryview", DataType::BinaryView),
         ColumnDescr::new("float32", DataType::Float32),
         ColumnDescr::new("float64", DataType::Float64),
         ColumnDescr::new(
@@ -230,6 +227,9 @@ fn baseline_config() -> DatasetGeneratorConfig {
         // low cardinality columns
         ColumnDescr::new("u8_low", DataType::UInt8).with_max_num_distinct(10),
         ColumnDescr::new("utf8_low", DataType::Utf8).with_max_num_distinct(10),
+        ColumnDescr::new("binary", DataType::Binary),
+        ColumnDescr::new("large_binary", DataType::LargeBinary),
+        ColumnDescr::new("binaryview", DataType::BinaryView),
     ];
 
     let min_num_rows = 512;
