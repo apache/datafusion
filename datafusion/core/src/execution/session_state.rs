@@ -40,7 +40,7 @@ use datafusion_common::display::{PlanType, StringifiedPlan, ToStringifiedPlan};
 use datafusion_common::file_options::file_type::FileType;
 use datafusion_common::tree_node::TreeNode;
 use datafusion_common::{
-    config_err, not_impl_err, plan_datafusion_err, DFSchema, DataFusionError,
+    config_err, exec_err, not_impl_err, plan_datafusion_err, DFSchema, DataFusionError,
     ResolvedTableReference, TableReference,
 };
 use datafusion_execution::config::SessionConfig;
@@ -171,6 +171,9 @@ pub struct SessionState {
     /// It will be invoked on `CREATE FUNCTION` statements.
     /// thus, changing dialect o PostgreSql is required
     function_factory: Option<Arc<dyn FunctionFactory>>,
+    /// Cache logical plans of prepared statements for later execution.
+    /// Key is the prepared statement name.
+    prepared_plans: HashMap<String, Arc<PreparedPlan>>,
 }
 
 impl Debug for SessionState {
@@ -197,6 +200,7 @@ impl Debug for SessionState {
             .field("scalar_functions", &self.scalar_functions)
             .field("aggregate_functions", &self.aggregate_functions)
             .field("window_functions", &self.window_functions)
+            .field("prepared_plans", &self.prepared_plans)
             .finish()
     }
 }
@@ -906,6 +910,29 @@ impl SessionState {
         let udtf = self.table_functions.remove(name);
         Ok(udtf.map(|x| x.function().clone()))
     }
+
+    /// Store the logical plan and the parameter types of a prepared statement.
+    pub(crate) fn store_prepared(
+        &mut self,
+        name: String,
+        data_types: Vec<DataType>,
+        plan: Arc<LogicalPlan>,
+    ) -> datafusion_common::Result<()> {
+        match self.prepared_plans.entry(name) {
+            Entry::Vacant(e) => {
+                e.insert(Arc::new(PreparedPlan { data_types, plan }));
+                Ok(())
+            }
+            Entry::Occupied(e) => {
+                exec_err!("Prepared statement '{}' already exists", e.key())
+            }
+        }
+    }
+
+    /// Get the prepared plan with the given name.
+    pub(crate) fn get_prepared(&self, name: &str) -> Option<Arc<PreparedPlan>> {
+        self.prepared_plans.get(name).map(Arc::clone)
+    }
 }
 
 /// A builder to be used for building [`SessionState`]'s. Defaults will
@@ -1327,6 +1354,7 @@ impl SessionStateBuilder {
             table_factories: table_factories.unwrap_or_default(),
             runtime_env,
             function_factory,
+            prepared_plans: HashMap::new(),
         };
 
         if let Some(file_formats) = file_formats {
@@ -1874,6 +1902,14 @@ impl<'a> SimplifyInfo for SessionSimplifyProvider<'a> {
     fn get_data_type(&self, expr: &Expr) -> datafusion_common::Result<DataType> {
         expr.get_type(self.df_schema)
     }
+}
+
+#[derive(Debug)]
+pub(crate) struct PreparedPlan {
+    /// Data types of the parameters
+    pub(crate) data_types: Vec<DataType>,
+    /// The prepared logical plan
+    pub(crate) plan: Arc<LogicalPlan>,
 }
 
 #[cfg(test)]
