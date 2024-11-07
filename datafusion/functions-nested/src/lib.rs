@@ -47,6 +47,7 @@ pub mod map;
 pub mod map_extract;
 pub mod map_keys;
 pub mod map_values;
+pub mod pack;
 pub mod planner;
 pub mod position;
 pub mod range;
