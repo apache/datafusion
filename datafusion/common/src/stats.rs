@@ -49,7 +49,10 @@ impl<T: Debug + Clone + PartialEq + Eq + PartialOrd> Precision<T> {
     /// Otherwise, it returns `None`.
     pub fn get_value(&self) -> Option<&T> {
         match self {
-            Precision::Exact(value) | Precision::Inexact(value) | Precision::AtLeast(value) | Precision::AtMost(T) => Some(value),
+            Precision::Exact(value)
+            | Precision::Inexact(value)
+            | Precision::AtLeast(value)
+            | Precision::AtMost(T) => Some(value),
             Precision::Absent => None,
         }
     }
@@ -83,7 +86,6 @@ impl<T: Debug + Clone + PartialEq + Eq + PartialOrd> Precision<T> {
             Precision::Absent => None,
         }
     }
-
 
     /// Transform the value in this [`Precision`] object, if one exists, using
     /// the given function. Preserves the exactness state.
@@ -142,7 +144,6 @@ impl<T: Debug + Clone + PartialEq + Eq + PartialOrd> Precision<T> {
             (_, _) => Precision::Absent,
         }
     }
-
 
     /// Demotes the precision state from exact to inexact (if present).
     pub fn to_inexact(self) -> Self {
@@ -500,6 +501,16 @@ impl ColumnStatistics {
             min_value: Precision::Absent,
             distinct_count: Precision::Absent,
         }
+    }
+
+    /// return the minimum value this column can have, if known
+    pub fn min_value(&self) -> Option<&ScalarValue> {
+        self.min_value.get_value()
+    }
+
+    /// return the maximum value this column can have, if known
+    pub fn max_value(&self) -> Option<&ScalarValue> {
+        self.max_value.get_value()
     }
 
     /// If the exactness of a [`ColumnStatistics`] instance is lost, this
