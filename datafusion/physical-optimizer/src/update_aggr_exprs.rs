@@ -27,13 +27,14 @@ use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
 use datafusion_physical_expr::{
     reverse_order_bys, EquivalenceProperties, PhysicalSortRequirement,
 };
-use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};
-use datafusion_physical_optimizer::PhysicalOptimizerRule;
+use datafusion_physical_expr::{LexOrdering, LexRequirement};
 use datafusion_physical_plan::aggregates::concat_slices;
 use datafusion_physical_plan::windows::get_ordered_partition_by_indices;
 use datafusion_physical_plan::{
     aggregates::AggregateExec, ExecutionPlan, ExecutionPlanProperties,
 };
+
+use crate::PhysicalOptimizerRule;
 
 /// This optimizer rule checks ordering requirements of aggregate expressions.
 ///
@@ -60,6 +61,20 @@ impl OptimizeAggregateOrder {
 }
 
 impl PhysicalOptimizerRule for OptimizeAggregateOrder {
+    /// Applies the `OptimizeAggregateOrder` rule to the provided execution plan.
+    ///
+    /// This function traverses the execution plan tree, identifies `AggregateExec` nodes,
+    /// and optimizes their aggregate expressions based on existing input orderings.
+    /// If optimizations are applied, it returns a modified execution plan.
+    ///
+    /// # Arguments
+    ///
+    /// * `plan` - The root of the execution plan to optimize.
+    /// * `_config` - Configuration options (currently unused).
+    ///
+    /// # Returns
+    ///
+    /// A `Result` containing the potentially optimized execution plan or an error.
     fn optimize(
         &self,
         plan: Arc<dyn ExecutionPlan>,
@@ -85,7 +100,12 @@ impl PhysicalOptimizerRule for OptimizeAggregateOrder {
                 let requirement = indices
                     .iter()
                     .map(|&idx| {
-                        PhysicalSortRequirement::new(groupby_exprs[idx].clone(), None)
+                        PhysicalSortRequirement::new(
+                            Arc::<dyn datafusion_physical_plan::PhysicalExpr>::clone(
+                                &groupby_exprs[idx],
+                            ),
+                            None,
+                        )
                     })
                     .collect::<Vec<_>>();
 
