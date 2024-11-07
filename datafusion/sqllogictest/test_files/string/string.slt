@@ -51,6 +51,8 @@ Raphael datafusionДатаФусион false false false false
 under_score un iść core false false false false
 percent pan Tadeusz ma iść w kąt false false false false
 (empty) (empty) false false false false
+% (empty) false false false false
+_ (empty) false false false false
 NULL NULL NULL NULL NULL NULL
 NULL NULL NULL NULL NULL NULL
 
@@ -74,13 +76,19 @@ SELECT unicode_2, 'is LIKE', ascii_2 FROM test_basic_operator WHERE unicode_2 LI
 UNION ALL
 SELECT unicode_2, 'is NOT LIKE', ascii_2 FROM test_basic_operator WHERE unicode_2 NOT LIKE ascii_2
 ----
+% is LIKE \%
 (empty) is LIKE %
 (empty) is LIKE %
 (empty) is LIKE %
+(empty) is NOT LIKE \%
+(empty) is NOT LIKE \%
+(empty) is NOT LIKE \_
+(empty) is NOT LIKE \_
 Andrew is NOT LIKE X
 Pan Tadeusz ma frunąć stąd w kąt is NOT LIKE p%t
 Raphael is NOT LIKE R
 Xiangpeng is LIKE Xiangpeng
+_ is LIKE \_
 chrząszcz na łące w 東京都 is NOT LIKE un_____core
 datafusionДатаФусион is NOT LIKE R
 datafusion数据融合 is NOT LIKE Xiangpeng
@@ -105,12 +113,14 @@ SELECT
     (unicode_2 LIKE ascii_2) AS unicode_2_like_ascii_2
 FROM test_basic_operator
 ----
+% \% (empty) (empty) true true false false
 (empty) % (empty) (empty) true false true true
 Andrew X datafusion📊🔥 🔥 false false false false
 NULL % NULL NULL NULL NULL NULL NULL
 NULL R NULL 🔥 NULL NULL NULL false
 Raphael R datafusionДатаФусион аФус false false false false
 Xiangpeng Xiangpeng datafusion数据融合 datafusion数据融合 true true false false
+_ \_ (empty) (empty) true false false false
 percent p%t pan Tadeusz ma iść w kąt Pan Tadeusz ma frunąć stąd w kąt true false true false
 under_score un_____core un iść core chrząszcz na łące w 東京都 true false true false
 
@@ -129,13 +139,19 @@ SELECT unicode_2, 'is ILIKE', ascii_2 FROM test_basic_operator WHERE unicode_2 I
 UNION ALL
 SELECT unicode_2, 'is NOT ILIKE', ascii_2 FROM test_basic_operator WHERE unicode_2 NOT ILIKE ascii_2
 ----
+% is ILIKE \%
 (empty) is ILIKE %
 (empty) is ILIKE %
 (empty) is ILIKE %
+(empty) is NOT ILIKE \%
+(empty) is NOT ILIKE \%
+(empty) is NOT ILIKE \_
+(empty) is NOT ILIKE \_
 Andrew is NOT ILIKE X
 Pan Tadeusz ma frunąć stąd w kąt is ILIKE p%t
 Raphael is NOT ILIKE R
 Xiangpeng is ILIKE Xiangpeng
+_ is ILIKE \_
 chrząszcz na łące w 東京都 is NOT ILIKE un_____core
 datafusionДатаФусион is NOT ILIKE R
 datafusion数据融合 is NOT ILIKE Xiangpeng
@@ -160,12 +176,14 @@ SELECT
     (unicode_2 ILIKE ascii_2) AS unicode_2_ilike_ascii_2
 FROM test_basic_operator
 ----
+% \% (empty) (empty) true true false false
 (empty) % (empty) (empty) true false true true
 Andrew X datafusion📊🔥 🔥 false false false false
 NULL % NULL NULL NULL NULL NULL NULL
 NULL R NULL 🔥 NULL NULL NULL false
 Raphael R datafusionДатаФусион аФус false false false false
 Xiangpeng Xiangpeng datafusion数据融合 datafusion数据融合 true true false false
+_ \_ (empty) (empty) true false false false
 percent p%t pan Tadeusz ma iść w kąt Pan Tadeusz ma frunąć stąd w kąt true false true true
 under_score un_____core un iść core chrząszcz na łące w 東京都 true false true false
 
