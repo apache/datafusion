@@ -29,6 +29,7 @@ use prost::Message;
 use std::any::Any;
 use std::collections::HashMap;
 use std::fmt::{self, Debug, Formatter};
+use std::mem::size_of_val;
 use std::sync::Arc;
 use std::vec;
 
@@ -556,7 +557,7 @@ async fn roundtrip_logical_plan_copy_to_json() -> Result<()> {
 
     // Set specific JSON format options
     json_format.compression = CompressionTypeVariant::GZIP;
-    json_format.schema_infer_max_rec = 1000;
+    json_format.schema_infer_max_rec = Some(1000);
 
     let file_type = format_as_file_type(Arc::new(JsonFormatFactory::new_with_options(
         json_format.clone(),

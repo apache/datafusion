@@ -1074,9 +1074,7 @@ pub fn get_finer_aggregate_exprs_requirement(
         );
     }
 
-    Ok(PhysicalSortRequirement::from_sort_exprs(
-        requirement.inner.iter(),
-    ))
+    Ok(LexRequirement::from(requirement))
 }
 
 /// Returns physical expressions for arguments to evaluate against a batch.
@@ -2304,7 +2302,7 @@ mod tests {
             &eq_properties,
             &AggregateMode::Partial,
         )?;
-        let res = PhysicalSortRequirement::to_sort_exprs(res);
+        let res = LexOrdering::from(res);
         assert_eq!(res, common_requirement);
         Ok(())
     }

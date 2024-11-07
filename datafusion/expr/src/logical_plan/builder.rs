@@ -218,7 +218,7 @@ impl LogicalPlanBuilder {
         if values.is_empty() {
             return plan_err!("Values list cannot be empty");
         }
-        let n_cols = values[0].len();
+        let n_cols = schema.fields().len();
         if n_cols == 0 {
             return plan_err!("Values list cannot be zero length");
         }

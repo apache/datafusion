@@ -3351,3 +3351,10 @@ drop view t_utc;
 
 statement ok
 drop view t_europe;
+
+# TODO: In Postgres, '-1' is unknown type and interpreted to float8 so they don't fail on this query
+query error DataFusion error: Arrow error: Parser error: Error parsing timestamp from '\-1': timestamp must contain at least 10 characters
+select to_timestamp('-1');
+
+query error DataFusion error: Arrow error: Parser error: Error parsing timestamp from '\-1': timestamp must contain at least 10 characters
+select to_timestamp(arrow_cast('-1', 'Utf8'));

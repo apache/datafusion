@@ -27,7 +27,7 @@ use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
 use datafusion_physical_expr::{
     reverse_order_bys, EquivalenceProperties, PhysicalSortRequirement,
 };
-use datafusion_physical_expr_common::sort_expr::LexRequirement;
+use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_plan::aggregates::concat_slices;
 use datafusion_physical_plan::windows::get_ordered_partition_by_indices;
@@ -139,12 +139,10 @@ fn try_convert_aggregate_if_better(
     aggr_exprs
         .into_iter()
         .map(|aggr_expr| {
-            let aggr_sort_exprs = &aggr_expr.order_bys().cloned().unwrap_or_default();
+            let aggr_sort_exprs = aggr_expr.order_bys().unwrap_or(LexOrdering::empty());
             let reverse_aggr_sort_exprs = reverse_order_bys(aggr_sort_exprs);
-            let aggr_sort_reqs =
-                PhysicalSortRequirement::from_sort_exprs(aggr_sort_exprs.iter());
-            let reverse_aggr_req =
-                PhysicalSortRequirement::from_sort_exprs(&reverse_aggr_sort_exprs.inner);
+            let aggr_sort_reqs = LexRequirement::from(aggr_sort_exprs.clone());
+            let reverse_aggr_req = LexRequirement::from(reverse_aggr_sort_exprs);
 
             // If the aggregate expression benefits from input ordering, and
             // there is an actual ordering enabling this, try to update the

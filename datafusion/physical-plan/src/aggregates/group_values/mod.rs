@@ -37,6 +37,8 @@ mod bytes_view;
 use bytes::GroupValuesByes;
 use datafusion_physical_expr::binary_map::OutputType;
 
+use crate::aggregates::order::GroupOrdering;
+
 mod group_column;
 mod null_builder;
 
@@ -105,7 +107,10 @@ pub trait GroupValues: Send {
 }
 
 /// Return a specialized implementation of [`GroupValues`] for the given schema.
-pub fn new_group_values(schema: SchemaRef) -> Result<Box<dyn GroupValues>> {
+pub fn new_group_values(
+    schema: SchemaRef,
+    group_ordering: &GroupOrdering,
+) -> Result<Box<dyn GroupValues>> {
     if schema.fields.len() == 1 {
         let d = schema.fields[0].data_type();
 
@@ -143,8 +148,12 @@ pub fn new_group_values(schema: SchemaRef) -> Result<Box<dyn GroupValues>> {
         }
     }
 
-    if GroupValuesColumn::supported_schema(schema.as_ref()) {
-        Ok(Box::new(GroupValuesColumn::try_new(schema)?))
+    if column::supported_schema(schema.as_ref()) {
+        if matches!(group_ordering, GroupOrdering::None) {
+            Ok(Box::new(GroupValuesColumn::<false>::try_new(schema)?))
+        } else {
+            Ok(Box::new(GroupValuesColumn::<true>::try_new(schema)?))
+        }
     } else {
         Ok(Box::new(GroupValuesRows::try_new(schema)?))
     }

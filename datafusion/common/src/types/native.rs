@@ -24,7 +24,7 @@ use arrow::compute::can_cast_types;
 use arrow_schema::{
     DataType, Field, FieldRef, Fields, IntervalUnit, TimeUnit, UnionFields,
 };
-use std::sync::Arc;
+use std::{fmt::Display, sync::Arc};
 
 /// Representation of a type that DataFusion can handle natively. It is a subset
 /// of the physical variants in Arrow's native [`DataType`].
@@ -181,6 +181,12 @@ pub enum NativeType {
     /// child fields may be respectively "entries", "key", and "value", but this is
     /// not enforced.
     Map(LogicalFieldRef),
+}
+
+impl Display for NativeType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "NativeType::{self:?}")
+    }
 }
 
 impl LogicalType for NativeType {
@@ -348,6 +354,12 @@ impl LogicalType for NativeType {
 // mapping solutions to provide backwards compatibility while transitioning from
 // the purely physical system to a logical / physical system.
 
+impl From<&DataType> for NativeType {
+    fn from(value: &DataType) -> Self {
+        value.clone().into()
+    }
+}
+
 impl From<DataType> for NativeType {
     fn from(value: DataType) -> Self {
         use NativeType::*;
@@ -392,8 +404,33 @@ impl From<DataType> for NativeType {
     }
 }
 
-impl From<&DataType> for NativeType {
-    fn from(value: &DataType) -> Self {
-        value.clone().into()
+impl NativeType {
+    #[inline]
+    pub fn is_numeric(&self) -> bool {
+        use NativeType::*;
+        matches!(
+            self,
+            UInt8
+                | UInt16
+                | UInt32
+                | UInt64
+                | Int8
+                | Int16
+                | Int32
+                | Int64
+                | Float16
+                | Float32
+                | Float64
+                | Decimal(_, _)
+        )
+    }
+
+    #[inline]
+    pub fn is_integer(&self) -> bool {
+        use NativeType::*;
+        matches!(
+            self,
+            UInt8 | UInt16 | UInt32 | UInt64 | Int8 | Int16 | Int32 | Int64
+        )
     }
 }

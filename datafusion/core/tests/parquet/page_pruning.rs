@@ -64,6 +64,7 @@ async fn get_parquet_exec(state: &SessionState, filter: Expr) -> ParquetExec {
         range: None,
         statistics: None,
         extensions: None,
+        metadata_size_hint: None,
     };
 
     let df_schema = schema.clone().to_dfschema().unwrap();

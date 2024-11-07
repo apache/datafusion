@@ -572,9 +572,9 @@ pub struct CsvOptions {
     /// Compression type
     #[prost(enumeration = "CompressionTypeVariant", tag = "5")]
     pub compression: i32,
-    /// Max records for schema inference
-    #[prost(uint64, tag = "6")]
-    pub schema_infer_max_rec: u64,
+    /// Optional max records for schema inference
+    #[prost(uint64, optional, tag = "6")]
+    pub schema_infer_max_rec: ::core::option::Option<u64>,
     /// Optional date format
     #[prost(string, tag = "7")]
     pub date_format: ::prost::alloc::string::String,
@@ -612,9 +612,9 @@ pub struct JsonOptions {
     /// Compression type
     #[prost(enumeration = "CompressionTypeVariant", tag = "1")]
     pub compression: i32,
-    /// Max records for schema inference
-    #[prost(uint64, tag = "2")]
-    pub schema_infer_max_rec: u64,
+    /// Optional max records for schema inference
+    #[prost(uint64, optional, tag = "2")]
+    pub schema_infer_max_rec: ::core::option::Option<u64>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct TableParquetOptions {

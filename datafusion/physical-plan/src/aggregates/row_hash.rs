@@ -514,7 +514,7 @@ impl GroupedHashAggregateStream {
             ordering.as_ref(),
         )?;
 
-        let group_values = new_group_values(group_schema)?;
+        let group_values = new_group_values(group_schema, &group_ordering)?;
         timer.done();
 
         let exec_state = ExecutionState::ReadingInput;

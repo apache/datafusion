@@ -19,6 +19,7 @@
 //! user defined aggregate functions
 
 use std::hash::{DefaultHasher, Hash, Hasher};
+use std::mem::{size_of, size_of_val};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,

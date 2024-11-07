@@ -102,7 +102,7 @@ pub fn estimate_memory_size<T>(num_elements: usize, fixed_size: usize) -> Result
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashSet;
+    use std::{collections::HashSet, mem::size_of};
 
     use super::estimate_memory_size;
 

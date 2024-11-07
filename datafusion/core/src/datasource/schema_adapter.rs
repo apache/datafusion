@@ -493,6 +493,7 @@ mod tests {
             range: None,
             statistics: None,
             extensions: None,
+            metadata_size_hint: None,
         };
 
         let f1 = Field::new("id", DataType::Int32, true);
