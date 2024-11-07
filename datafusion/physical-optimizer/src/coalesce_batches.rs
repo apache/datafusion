@@ -25,11 +25,10 @@ use std::sync::Arc;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::error::Result;
 use datafusion_physical_expr::Partitioning;
-use datafusion_physical_plan::coalesce_batches::CoalesceBatchesExec;
-use datafusion_physical_plan::filter::FilterExec;
-use datafusion_physical_plan::joins::HashJoinExec;
-use datafusion_physical_plan::repartition::RepartitionExec;
-use datafusion_physical_plan::ExecutionPlan;
+use datafusion_physical_plan::{
+    coalesce_batches::CoalesceBatchesExec, filter::FilterExec, joins::HashJoinExec,
+    repartition::RepartitionExec, ExecutionPlan,
+};
 
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 
