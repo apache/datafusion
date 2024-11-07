@@ -25,6 +25,7 @@ use datafusion_common::{
     config::ConfigOptions, file_options::file_type::FileType, not_impl_err, DFSchema,
     Result, TableReference,
 };
+use sqlparser::ast;
 
 use crate::{AggregateUDF, Expr, GetFieldAccess, ScalarUDF, TableSource, WindowUDF};
 
@@ -205,6 +206,13 @@ pub trait ExprPlanner: Debug + Send + Sync {
     fn plan_any(&self, expr: RawBinaryExpr) -> Result<PlannerResult<RawBinaryExpr>> {
         Ok(PlannerResult::Original(expr))
     }
+
+    /// Plan SQL type to DataFusion data type
+    ///
+    /// Returns None if not possible
+    fn plan_data_type(&self, _sql_type: &ast::DataType) -> Result<Option<DataType>> {
+        Ok(None)
+    }
 }
 
 /// An operator with two arguments to plan
@@ -216,7 +224,7 @@ pub trait ExprPlanner: Debug + Send + Sync {
 /// custom expressions.
 #[derive(Debug, Clone)]
 pub struct RawBinaryExpr {
-    pub op: sqlparser::ast::BinaryOperator,
+    pub op: ast::BinaryOperator,
     pub left: Expr,
     pub right: Expr,
 }

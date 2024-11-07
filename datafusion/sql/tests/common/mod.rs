@@ -18,15 +18,16 @@
 use std::any::Any;
 #[cfg(test)]
 use std::collections::HashMap;
-use std::fmt::Display;
+use std::fmt::{Debug, Display};
 use std::{sync::Arc, vec};
 
 use arrow_schema::*;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::file_options::file_type::FileType;
-use datafusion_common::{plan_err, GetExt, Result, TableReference};
-use datafusion_expr::planner::ExprPlanner;
-use datafusion_expr::{AggregateUDF, ScalarUDF, TableSource, WindowUDF};
+use datafusion_common::{plan_err, DFSchema, GetExt, Result, TableReference};
+use datafusion_expr::planner::{ExprPlanner, PlannerResult};
+use datafusion_expr::{AggregateUDF, Expr, ScalarUDF, TableSource, WindowUDF};
+use datafusion_functions_nested::expr_fn::make_array;
 use datafusion_sql::planner::ContextProvider;
 
 struct MockCsvType {}
@@ -278,5 +279,37 @@ impl TableSource for EmptyTable {
 
     fn schema(&self) -> SchemaRef {
         Arc::clone(&self.table_schema)
+    }
+}
+
+#[derive(Debug)]
+pub struct CustomTypePlanner {}
+
+impl ExprPlanner for CustomTypePlanner {
+    fn plan_data_type(
+        &self,
+        sql_type: &sqlparser::ast::DataType,
+    ) -> Result<Option<DataType>> {
+        match sql_type {
+            sqlparser::ast::DataType::Datetime(precision) => {
+                let precision = match precision {
+                    Some(0) => TimeUnit::Second,
+                    Some(3) => TimeUnit::Millisecond,
+                    Some(6) => TimeUnit::Microsecond,
+                    None | Some(9) => TimeUnit::Nanosecond,
+                    _ => unreachable!(),
+                };
+                Ok(Some(DataType::Timestamp(precision, None)))
+            }
+            _ => Ok(None),
+        }
+    }
+
+    fn plan_array_literal(
+        &self,
+        exprs: Vec<Expr>,
+        _schema: &DFSchema,
+    ) -> Result<PlannerResult<Vec<Expr>>> {
+        Ok(PlannerResult::Planned(make_array(exprs)))
     }
 }

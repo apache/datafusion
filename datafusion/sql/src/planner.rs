@@ -401,6 +401,14 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     }
 
     pub(crate) fn convert_data_type(&self, sql_type: &SQLDataType) -> Result<DataType> {
+        // First check if any of the registered expr_planners can handle this type
+        for expr_planner in self.context_provider.get_expr_planners() {
+            if let Some(data_type) = expr_planner.plan_data_type(sql_type)? {
+                return Ok(data_type);
+            }
+        }
+
+        // If no expr_planner can handle this type, use the default conversion
         match sql_type {
             SQLDataType::Array(ArrayElemTypeDef::AngleBracket(inner_sql_type)) => {
                 // Arrays may be multi-dimensional.
