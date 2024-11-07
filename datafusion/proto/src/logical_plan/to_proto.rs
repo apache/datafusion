@@ -22,7 +22,7 @@
 use datafusion_common::{TableReference, UnnestOptions};
 use datafusion_expr::expr::{
     self, Alias, Between, BinaryExpr, Cast, GroupingSet, InList, Like, Placeholder,
-    ScalarFunction, Unnest,
+    ScalarFunction, Unnest, Wildcard,
 };
 use datafusion_expr::{
     logical_plan::PlanType, logical_plan::StringifiedPlan, Expr, JoinConstraint,
@@ -552,7 +552,7 @@ pub fn serialize_expr(
                 expr_type: Some(ExprType::InList(expr)),
             }
         }
-        Expr::Wildcard { qualifier, .. } => protobuf::LogicalExprNode {
+        Expr::Wildcard(Wildcard { qualifier, .. }) => protobuf::LogicalExprNode {
             expr_type: Some(ExprType::Wildcard(protobuf::Wildcard {
                 qualifier: qualifier.to_owned().map(|x| x.into()),
             })),

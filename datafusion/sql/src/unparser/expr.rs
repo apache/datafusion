@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion_expr::expr::Unnest;
+use datafusion_expr::expr::{Unnest, Wildcard};
 use sqlparser::ast::Value::SingleQuotedString;
 use sqlparser::ast::{
     self, Array, BinaryOperator, Expr as AstExpr, Function, Ident, Interval, ObjectName,
@@ -403,7 +403,7 @@ impl Unparser<'_> {
                 })
             }
             // TODO: unparsing wildcard addition options
-            Expr::Wildcard { qualifier, .. } => {
+            Expr::Wildcard(Wildcard { qualifier, .. }) => {
                 if let Some(qualifier) = qualifier {
                     let idents: Vec<Ident> =
                         qualifier.to_vec().into_iter().map(Ident::new).collect();
@@ -689,10 +689,10 @@ impl Unparser<'_> {
             .map(|e| {
                 if matches!(
                     e,
-                    Expr::Wildcard {
+                    Expr::Wildcard(Wildcard {
                         qualifier: None,
                         ..
-                    }
+                    })
                 ) {
                     Ok(ast::FunctionArg::Unnamed(ast::FunctionArgExpr::Wildcard))
                 } else {
@@ -1670,10 +1670,10 @@ mod tests {
     fn expr_to_sql_ok() -> Result<()> {
         let dummy_schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
         let dummy_logical_plan = table_scan(Some("t"), &dummy_schema, None)?
-            .project(vec![Expr::Wildcard {
+            .project(vec![Expr::Wildcard(Wildcard {
                 qualifier: None,
                 options: WildcardOptions::default(),
-            }])?
+            })])?
             .filter(col("a").eq(lit(1)))?
             .build()?;
 
@@ -1864,10 +1864,10 @@ mod tests {
             (sum(col("a")), r#"sum(a)"#),
             (
                 count_udaf()
-                    .call(vec![Expr::Wildcard {
+                    .call(vec![Expr::Wildcard(Wildcard {
                         qualifier: None,
                         options: WildcardOptions::default(),
-                    }])
+                    })])
                     .distinct()
                     .build()
                     .unwrap(),
@@ -1875,10 +1875,10 @@ mod tests {
             ),
             (
                 count_udaf()
-                    .call(vec![Expr::Wildcard {
+                    .call(vec![Expr::Wildcard(Wildcard {
                         qualifier: None,
                         options: WildcardOptions::default(),
-                    }])
+                    })])
                     .filter(lit(true))
                     .build()
                     .unwrap(),

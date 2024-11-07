@@ -22,7 +22,7 @@ use datafusion_common::{
     exec_datafusion_err, internal_err, plan_datafusion_err, RecursionUnnestOption,
     Result, ScalarValue, TableReference, UnnestOptions,
 };
-use datafusion_expr::expr::{Alias, Placeholder, Sort};
+use datafusion_expr::expr::{Alias, Placeholder, Sort, Wildcard};
 use datafusion_expr::expr::{Unnest, WildcardOptions};
 use datafusion_expr::ExprFunctionExt;
 use datafusion_expr::{
@@ -511,10 +511,10 @@ pub fn parse_expr(
         ))),
         ExprType::Wildcard(protobuf::Wildcard { qualifier }) => {
             let qualifier = qualifier.to_owned().map(|x| x.try_into()).transpose()?;
-            Ok(Expr::Wildcard {
+            Ok(Expr::Wildcard(Wildcard {
                 qualifier,
                 options: WildcardOptions::default(),
-            })
+            }))
         }
         ExprType::ScalarUdfExpr(protobuf::ScalarUdfExprNode {
             fun_name,

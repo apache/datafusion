@@ -30,8 +30,8 @@ use datafusion_common::{
     internal_datafusion_err, internal_err, not_impl_err, plan_err, DFSchema, Result,
     ScalarValue,
 };
-use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::expr::{InList, WildcardOptions};
+use datafusion_expr::expr::{ScalarFunction, Wildcard};
 use datafusion_expr::{
     lit, Between, BinaryExpr, Cast, Expr, ExprSchemable, GetFieldAccess, Like, Literal,
     Operator, TryCast,
@@ -565,14 +565,14 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 }
                 not_impl_err!("AnyOp not supported by ExprPlanner: {binary_expr:?}")
             }
-            SQLExpr::Wildcard => Ok(Expr::Wildcard {
+            SQLExpr::Wildcard => Ok(Expr::Wildcard(Wildcard {
                 qualifier: None,
                 options: WildcardOptions::default(),
-            }),
-            SQLExpr::QualifiedWildcard(object_name) => Ok(Expr::Wildcard {
+            })),
+            SQLExpr::QualifiedWildcard(object_name) => Ok(Expr::Wildcard(Wildcard {
                 qualifier: Some(self.object_name_to_table_reference(object_name)?),
                 options: WildcardOptions::default(),
-            }),
+            })),
             SQLExpr::Tuple(values) => self.parse_tuple(schema, planner_context, values),
             _ => not_impl_err!("Unsupported ast node in sqltorel: {sql:?}"),
         }

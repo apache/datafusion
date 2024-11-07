@@ -22,7 +22,7 @@ use std::collections::HashSet;
 use std::ops::Deref;
 use std::sync::Arc;
 
-use crate::expr::{Alias, Sort, WildcardOptions, WindowFunction};
+use crate::expr::{Alias, Sort, Wildcard, WildcardOptions, WindowFunction};
 use crate::expr_rewriter::strip_outer_reference;
 use crate::{
     and, BinaryExpr, Expr, ExprSchemable, Filter, GroupingSet, LogicalPlan, Operator,
@@ -703,7 +703,7 @@ pub fn exprlist_to_fields<'a>(
     let result = exprs
         .into_iter()
         .map(|e| match e {
-            Expr::Wildcard { qualifier, options } => match qualifier {
+            Expr::Wildcard(Wildcard { qualifier, options }) => match qualifier {
                 None => {
                     let excluded: Vec<String> = get_excluded_columns(
                         options.exclude.as_ref(),
@@ -802,10 +802,10 @@ pub fn exprlist_len(
     exprs
         .iter()
         .map(|e| match e {
-            Expr::Wildcard {
+            Expr::Wildcard(Wildcard {
                 qualifier: None,
                 options,
-            } => {
+            }) => {
                 let excluded = get_excluded_columns(
                     options.exclude.as_ref(),
                     options.except.as_ref(),
@@ -819,10 +819,10 @@ pub fn exprlist_len(
                         .len(),
                 )
             }
-            Expr::Wildcard {
+            Expr::Wildcard(Wildcard {
                 qualifier: Some(qualifier),
                 options,
-            } => {
+            }) => {
                 let related_wildcard_schema = wildcard_schema.as_ref().map_or_else(
                     || Ok(Arc::clone(schema)),
                     |schema| {

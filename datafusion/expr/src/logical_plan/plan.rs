@@ -26,7 +26,7 @@ use std::sync::{Arc, OnceLock};
 use super::dml::CopyTo;
 use super::DdlStatement;
 use crate::builder::{change_redundant_column, unnest_with_options};
-use crate::expr::{Placeholder, Sort as SortExpr, WindowFunction};
+use crate::expr::{Placeholder, Sort as SortExpr, Wildcard, WindowFunction};
 use crate::expr_rewriter::{
     create_col_from_scalar_expr, normalize_cols, normalize_sorts, NamePreserver,
 };
@@ -3187,12 +3187,12 @@ fn calc_func_dependencies_for_project(
     let proj_indices = exprs
         .iter()
         .map(|expr| match expr {
-            Expr::Wildcard { qualifier, options } => {
+            Expr::Wildcard(Wildcard { qualifier, options }) => {
                 let wildcard_fields = exprlist_to_fields(
-                    vec![&Expr::Wildcard {
+                    vec![&Expr::Wildcard(Wildcard {
                         qualifier: qualifier.clone(),
                         options: options.clone(),
-                    }],
+                    })],
                     input,
                 )?;
                 Ok::<_, DataFusionError>(

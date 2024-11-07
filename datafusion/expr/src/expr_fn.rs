@@ -19,7 +19,7 @@
 
 use crate::expr::{
     AggregateFunction, BinaryExpr, Cast, Exists, GroupingSet, InList, InSubquery,
-    Placeholder, TryCast, Unnest, WildcardOptions, WindowFunction,
+    Placeholder, TryCast, Unnest, Wildcard, WildcardOptions, WindowFunction,
 };
 use crate::function::{
     AccumulatorArgs, AccumulatorFactoryFunction, PartitionEvaluatorFactory,
@@ -121,18 +121,18 @@ pub fn placeholder(id: impl Into<String>) -> Expr {
 /// assert_eq!(p.to_string(), "*")
 /// ```
 pub fn wildcard() -> Expr {
-    Expr::Wildcard {
+    Expr::Wildcard(Wildcard {
         qualifier: None,
         options: WildcardOptions::default(),
-    }
+    })
 }
 
 /// Create an '*' [`Expr::Wildcard`] expression with the wildcard options
 pub fn wildcard_with_options(options: WildcardOptions) -> Expr {
-    Expr::Wildcard {
+    Expr::Wildcard(Wildcard {
         qualifier: None,
         options,
-    }
+    })
 }
 
 /// Create an 't.*' [`Expr::Wildcard`] expression that matches all columns from a specific table
@@ -146,10 +146,10 @@ pub fn wildcard_with_options(options: WildcardOptions) -> Expr {
 /// assert_eq!(p.to_string(), "t.*")
 /// ```
 pub fn qualified_wildcard(qualifier: impl Into<TableReference>) -> Expr {
-    Expr::Wildcard {
+    Expr::Wildcard(Wildcard {
         qualifier: Some(qualifier.into()),
         options: WildcardOptions::default(),
-    }
+    })
 }
 
 /// Create an 't.*' [`Expr::Wildcard`] expression with the wildcard options
@@ -157,10 +157,10 @@ pub fn qualified_wildcard_with_options(
     qualifier: impl Into<TableReference>,
     options: WildcardOptions,
 ) -> Expr {
-    Expr::Wildcard {
+    Expr::Wildcard(Wildcard {
         qualifier: Some(qualifier.into()),
         options,
-    }
+    })
 }
 
 /// Return a new expression `left <op> right`

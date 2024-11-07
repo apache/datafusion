@@ -22,7 +22,7 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult};
 use datafusion_common::{Column, Result};
 use datafusion_expr::builder::validate_unique_names;
-use datafusion_expr::expr::PlannedReplaceSelectItem;
+use datafusion_expr::expr::{PlannedReplaceSelectItem, Wildcard};
 use datafusion_expr::utils::{
     expand_qualified_wildcard, expand_wildcard, find_base_plan,
 };
@@ -89,7 +89,7 @@ fn expand_exprlist(input: &LogicalPlan, expr: Vec<Expr>) -> Result<Vec<Expr>> {
     let input = find_base_plan(input);
     for e in expr {
         match e {
-            Expr::Wildcard { qualifier, options } => {
+            Expr::Wildcard(Wildcard { qualifier, options }) => {
                 if let Some(qualifier) = qualifier {
                     let expanded = expand_qualified_wildcard(
                         &qualifier,

@@ -22,7 +22,7 @@ use datafusion_common::{
     internal_datafusion_err, internal_err, not_impl_err, plan_datafusion_err, plan_err,
     DFSchema, Dependency, Result,
 };
-use datafusion_expr::expr::WildcardOptions;
+use datafusion_expr::expr::{Wildcard, WildcardOptions};
 use datafusion_expr::expr::{ScalarFunction, Unnest};
 use datafusion_expr::planner::PlannerResult;
 use datafusion_expr::{
@@ -413,17 +413,19 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 name: _,
                 arg: FunctionArgExpr::Wildcard,
                 operator: _,
-            } => Ok(Expr::Wildcard {
+            } => Ok(Expr::Wildcard(Wildcard {
                 qualifier: None,
                 options: WildcardOptions::default(),
-            }),
+            })),
             FunctionArg::Unnamed(FunctionArgExpr::Expr(arg)) => {
                 self.sql_expr_to_logical_expr(arg, schema, planner_context)
             }
-            FunctionArg::Unnamed(FunctionArgExpr::Wildcard) => Ok(Expr::Wildcard {
-                qualifier: None,
-                options: WildcardOptions::default(),
-            }),
+            FunctionArg::Unnamed(FunctionArgExpr::Wildcard) => {
+                Ok(Expr::Wildcard(Wildcard {
+                    qualifier: None,
+                    options: WildcardOptions::default(),
+                }))
+            }
             FunctionArg::Unnamed(FunctionArgExpr::QualifiedWildcard(object_name)) => {
                 let qualifier = self.object_name_to_table_reference(object_name)?;
                 // Sanity check on qualifier with schema
@@ -431,10 +433,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 if qualified_indices.is_empty() {
                     return plan_err!("Invalid qualifier {qualifier}");
                 }
-                Ok(Expr::Wildcard {
+                Ok(Expr::Wildcard(Wildcard {
                     qualifier: Some(qualifier),
                     options: WildcardOptions::default(),
-                })
+                }))
             }
             _ => not_impl_err!("Unsupported qualified wildcard argument: {sql:?}"),
         }

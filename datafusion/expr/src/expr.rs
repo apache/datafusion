@@ -311,10 +311,7 @@ pub enum Expr {
     ///
     /// This expr has to be resolved to a list of columns before translating logical
     /// plan into physical plan.
-    Wildcard {
-        qualifier: Option<TableReference>,
-        options: WildcardOptions,
-    },
+    Wildcard(Wildcard),
     /// List of grouping set expressions. Only valid in the context of an aggregate
     /// GROUP BY expression list
     GroupingSet(GroupingSet),
@@ -365,6 +362,13 @@ impl<'a> TreeNodeContainer<'a, Self> for Expr {
     ) -> Result<Transformed<Self>> {
         f(self)
     }
+}
+
+/// Wildcard expression.
+#[derive(Clone, PartialEq, Eq, PartialOrd, Hash, Debug)]
+pub struct Wildcard {
+    pub qualifier: Option<TableReference>,
+    pub options: WildcardOptions,
 }
 
 /// UNNEST expression.
@@ -1797,9 +1801,9 @@ impl HashNode for Expr {
             Expr::ScalarSubquery(subquery) => {
                 subquery.hash(state);
             }
-            Expr::Wildcard { qualifier, options } => {
-                qualifier.hash(state);
-                options.hash(state);
+            Expr::Wildcard(wildcard) => {
+                wildcard.hash(state);
+                wildcard.hash(state);
             }
             Expr::GroupingSet(grouping_set) => {
                 mem::discriminant(grouping_set).hash(state);
@@ -2321,7 +2325,7 @@ impl Display for Expr {
                     write!(f, "{expr} IN ([{}])", expr_vec_fmt!(list))
                 }
             }
-            Expr::Wildcard { qualifier, options } => match qualifier {
+            Expr::Wildcard(Wildcard { qualifier, options }) => match qualifier {
                 Some(qualifier) => write!(f, "{qualifier}.*{options}"),
                 None => write!(f, "*{options}"),
             },
