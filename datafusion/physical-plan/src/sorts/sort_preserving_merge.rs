@@ -252,18 +252,23 @@ impl ExecutionPlan for SortPreservingMergeExec {
             MemoryConsumer::new(format!("SortPreservingMergeExec[{partition}]"))
                 .register(&context.runtime_env().memory_pool);
 
-        let statistics = MinMaxStatistics::new_from_statistics(
-            &self.expr,
-            &self.schema(),
-            &self.input.statistics_by_partition()?,
-        )?;
-
         // Organize the input partitions into chains,
         // where elements of each chain are input partitions that are
         // non-overlapping, and each chain is ordered by their min/max statistics.
-        // Then concatenate each chain into a single stream.
-        let mut streams = statistics
-            .first_fit()
+        let stream_packing = match MinMaxStatistics::new_from_statistics(
+            &self.expr,
+            &self.schema(),
+            &self.input.statistics_by_partition()?,
+        ) {
+            Ok(statistics) => statistics.first_fit(),
+            Err(e) => {
+                log::debug!("error analyzing statistics for plan: {e}\nfalling back to full sort-merge");
+                (0..input_partitions).map(|i| vec![i]).collect()
+            }
+        };
+
+        // Concatenate each chain into a single stream.
+        let mut streams = stream_packing
             .into_iter()
             .map(|chain| {
                 let streams = chain
@@ -271,7 +276,6 @@ impl ExecutionPlan for SortPreservingMergeExec {
                     .map(|i| self.input.execute(i, Arc::clone(&context)))
                     .collect::<Result<Vec<_>>>()?;
 
-                // Concatenate the chain into a single stream
                 Ok(Box::pin(RecordBatchStreamAdapter::new(
                     self.input.schema(),
                     futures::stream::iter(streams).flatten(),
