@@ -777,7 +777,7 @@ impl LogicalPlanBuilder {
         self.join_detailed(right, join_type, join_keys, filter, false)
     }
 
-    /// Apply a join with using the specified expressions.
+    /// Apply a join using the specified expressions.
     ///
     /// Note that DataFusion automatically optimizes joins, including
     /// identifying and optimizing equality predicates.
@@ -1200,12 +1200,20 @@ impl LogicalPlanBuilder {
         Ok(Arc::unwrap_or_clone(self.plan))
     }
 
-    /// Apply a join with the expression on constraint.
+    /// Apply a join with both explicit equijoin and non equijoin predicates.
     ///
-    /// equi_exprs are "equijoin" predicates expressions on the existing and right inputs, respectively.
+    /// Note this is a low level API that requires identifying specific
+    /// predicate types. Most users should use  [`join_on`](Self::join_on) that
+    /// automatically identifies predicates appropriately.
     ///
-    /// filter: any other filter expression to apply during the join. equi_exprs predicates are likely
-    /// to be evaluated more quickly than the filter expressions
+    /// `equi_exprs` defines equijoin predicates, of the form `l = r)` for each
+    /// `(l, r)` tuple. `l`, the first element of the tuple, must only refer
+    /// to columns from the existing input. `r`, the second element of the tuple,
+    /// must only refer to columns from the right input.
+    ///
+    /// `filter` contains any other other filter expression to apply during the
+    /// join. Note that `equi_exprs` predicates are evaluated more efficiently
+    /// than the filter expressions, so they are preferred.
     pub fn join_with_expr_keys(
         self,
         right: LogicalPlan,
