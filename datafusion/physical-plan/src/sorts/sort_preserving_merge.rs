@@ -24,6 +24,8 @@ use crate::common::spawn_buffered;
 use crate::limit::LimitStream;
 use crate::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use crate::sorts::streaming_merge::StreamingMergeBuilder;
+use crate::statistics::MinMaxStatistics;
+use crate::stream::RecordBatchStreamAdapter;
 use crate::{
     DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, ExecutionPlanProperties,
     Partitioning, PlanProperties, SendableRecordBatchStream, Statistics,
@@ -34,6 +36,7 @@ use datafusion_execution::memory_pool::MemoryConsumer;
 use datafusion_execution::TaskContext;
 
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};
+use futures::StreamExt;
 use log::{debug, trace};
 
 /// Sort preserving merge execution plan
@@ -249,16 +252,42 @@ impl ExecutionPlan for SortPreservingMergeExec {
             MemoryConsumer::new(format!("SortPreservingMergeExec[{partition}]"))
                 .register(&context.runtime_env().memory_pool);
 
-        match input_partitions {
+        let statistics = MinMaxStatistics::new_from_statistics(
+            &self.expr,
+            &self.schema(),
+            &self.input.statistics_by_partition()?,
+        )?;
+
+        // Organize the input partitions into chains,
+        // where elements of each chain are input partitions that are
+        // non-overlapping, and each chain is ordered by their min/max statistics.
+        // Then concatenate each chain into a single stream.
+        let mut streams = statistics
+            .first_fit()
+            .into_iter()
+            .map(|chain| {
+                let streams = chain
+                    .into_iter()
+                    .map(|i| self.input.execute(i, Arc::clone(&context)))
+                    .collect::<Result<Vec<_>>>()?;
+
+                // Concatenate the chain into a single stream
+                Ok(Box::pin(RecordBatchStreamAdapter::new(
+                    self.input.schema(),
+                    futures::stream::iter(streams).flatten(),
+                )) as SendableRecordBatchStream)
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        match streams.len() {
             0 => internal_err!(
                 "SortPreservingMergeExec requires at least one input partition"
             ),
             1 => match self.fetch {
                 Some(fetch) => {
-                    let stream = self.input.execute(0, context)?;
                     debug!("Done getting stream for SortPreservingMergeExec::execute with 1 input with {fetch}");
                     Ok(Box::pin(LimitStream::new(
-                        stream,
+                        streams.remove(0),
                         0,
                         Some(fetch),
                         BaselineMetrics::new(&self.metrics, partition),
@@ -271,12 +300,9 @@ impl ExecutionPlan for SortPreservingMergeExec {
                 }
             },
             _ => {
-                let receivers = (0..input_partitions)
-                    .map(|partition| {
-                        let stream =
-                            self.input.execute(partition, Arc::clone(&context))?;
-                        Ok(spawn_buffered(stream, 1))
-                    })
+                let receivers = streams
+                    .into_iter()
+                    .map(|stream| Ok(spawn_buffered(stream, 1)))
                     .collect::<Result<_>>()?;
 
                 debug!("Done setting up sender-receiver for SortPreservingMergeExec::execute");

@@ -23,7 +23,7 @@ use std::{
     sync::Arc, vec,
 };
 
-use super::{get_projected_output_ordering, statistics::MinMaxStatistics};
+use super::{get_projected_output_ordering, min_max_statistics_from_files};
 use crate::datasource::{listing::PartitionedFile, object_store::ObjectStoreUrl};
 use crate::{error::Result, scalar::ScalarValue};
 
@@ -310,22 +310,12 @@ impl FileScanConfig {
         sort_order: &LexOrdering,
     ) -> Result<Vec<Vec<PartitionedFile>>> {
         let flattened_files = file_groups.iter().flatten().collect::<Vec<_>>();
-        // First Fit:
-        // * Choose the first file group that a file can be placed into.
-        // * If it fits into no existing file groups, create a new one.
-        //
-        // By sorting files by min values and then applying first-fit bin packing,
-        // we can produce the smallest number of file groups such that
-        // files within a group are in order and non-overlapping.
-        //
-        // Source: Applied Combinatorics (Keller and Trotter), Chapter 6.8
-        // https://www.appliedcombinatorics.org/book/s_posets_dilworth-intord.html
 
         if flattened_files.is_empty() {
             return Ok(vec![]);
         }
 
-        let statistics = MinMaxStatistics::new_from_files(
+        let statistics = min_max_statistics_from_files(
             sort_order,
             table_schema,
             None,
@@ -335,24 +325,7 @@ impl FileScanConfig {
             e.context("construct min/max statistics for split_groups_by_statistics")
         })?;
 
-        let indices_sorted_by_min = statistics.min_values_sorted();
-        let mut file_groups_indices: Vec<Vec<usize>> = vec![];
-
-        for (idx, min) in indices_sorted_by_min {
-            let file_group_to_insert = file_groups_indices.iter_mut().find(|group| {
-                // If our file is non-overlapping and comes _after_ the last file,
-                // it fits in this file group.
-                min > statistics.max(
-                    *group
-                        .last()
-                        .expect("groups should be nonempty at construction"),
-                )
-            });
-            match file_group_to_insert {
-                Some(group) => group.push(idx),
-                None => file_groups_indices.push(vec![idx]),
-            }
-        }
+        let file_groups_indices = statistics.first_fit();
 
         // Assemble indices back into groups of PartitionedFiles
         Ok(file_groups_indices
