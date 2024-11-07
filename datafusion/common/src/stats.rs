@@ -31,6 +31,14 @@ pub enum Precision<T: Debug + Clone + PartialEq + Eq + PartialOrd> {
     Exact(T),
     /// The value is not known exactly, but is likely close to this value
     Inexact(T),
+    /// The value is know to be at most (inclusive) of this value.
+    ///
+    /// The actual value may be smaller, but it is never greater.
+    AtMost(T),
+    /// The value is known to be at least (inclusive) of this value.
+    ///
+    /// The actual value may be greater but it is never smaller.
+    AtLeast(T),
     /// Nothing is known about the value
     #[default]
     Absent,
@@ -41,10 +49,41 @@ impl<T: Debug + Clone + PartialEq + Eq + PartialOrd> Precision<T> {
     /// Otherwise, it returns `None`.
     pub fn get_value(&self) -> Option<&T> {
         match self {
-            Precision::Exact(value) | Precision::Inexact(value) => Some(value),
+            Precision::Exact(value) | Precision::Inexact(value) | Precision::AtLeast(value) | Precision::AtMost(T) => Some(value),
             Precision::Absent => None,
         }
     }
+
+    /// Returns the minimum possible value.
+    ///
+    /// # Return Value
+    /// - `Some(value)`: actual value is at least `value` and may be greater.
+    ///    It will never be less than the returned value.
+    ///
+    /// - `None`:  means the minimum value is unknown.
+    pub fn min_value(&self) -> Option<&T> {
+        match self {
+            Precision::Exact(value) | Precision::AtLeast(value) => Some(value),
+            Precision::Inexact(_) | Precision::AtMost(_) => None,
+            Precision::Absent => None,
+        }
+    }
+
+    /// Returns the maximum possible value.
+    ///
+    /// # Return Value
+    /// - `Some(value)`: actual value is at most `value` and may be less.
+    ///    It will never be greater than the returned value.
+    ///
+    /// - `None`:  means the maximum value is unknown.
+    pub fn max_value(&self) -> Option<&T> {
+        match self {
+            Precision::Exact(value) | Precision::AtMost(value) => Some(value),
+            Precision::Inexact(_) | Precision::AtLeast(_) => None,
+            Precision::Absent => None,
+        }
+    }
+
 
     /// Transform the value in this [`Precision`] object, if one exists, using
     /// the given function. Preserves the exactness state.
@@ -103,6 +142,7 @@ impl<T: Debug + Clone + PartialEq + Eq + PartialOrd> Precision<T> {
             (_, _) => Precision::Absent,
         }
     }
+
 
     /// Demotes the precision state from exact to inexact (if present).
     pub fn to_inexact(self) -> Self {
