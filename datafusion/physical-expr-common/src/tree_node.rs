@@ -62,11 +62,7 @@ impl<T> ExprContext<T> {
     }
 
     pub fn update_expr_from_children(mut self) -> Result<Self> {
-        let children_expr = self
-            .children
-            .iter()
-            .map(|c| Arc::<dyn PhysicalExpr>::clone(&c.expr))
-            .collect();
+        let children_expr = self.children.iter().map(|c| Arc::clone(&c.expr)).collect();
         self.expr = with_new_children_if_necessary(self.expr, children_expr)?;
         Ok(self)
     }

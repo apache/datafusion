@@ -349,14 +349,10 @@ where
         let batch_hashes = &mut self.hashes_buffer;
         batch_hashes.clear();
         batch_hashes.resize(values.len(), 0);
-        create_hashes(
-            &[Arc::<dyn Array>::clone(values)],
-            &self.random_state,
-            batch_hashes,
-        )
-        // hash is supported for all types and create_hashes only
-        // returns errors for unsupported types
-        .unwrap();
+        create_hashes(&[Arc::clone(values)], &self.random_state, batch_hashes)
+            // hash is supported for all types and create_hashes only
+            // returns errors for unsupported types
+            .unwrap();
 
         // step 2: insert each value into the set, if not already present
         let values = values.as_bytes::<B>();
