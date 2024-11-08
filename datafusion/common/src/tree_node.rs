@@ -925,31 +925,9 @@ impl<T> TransformedResult<T> for Result<Transformed<T>> {
     }
 }
 
-/// A node trait which makes all tree traversal iterative and not recursive.
-pub trait RecursiveNode: Sized {
-    /// Read-only access to children
-    fn children(&self) -> Vec<&Self>;
-
-    /// Detaches children from the parent node (if possible).
-    /// Unlike [`ConcreteTreeNode`] it doesn't possible that the value will actually be removed from the parent
-    fn take_children(self) -> (Self, Vec<Self>);
-
-    /// Replaces children with the given one
-    fn with_new_children(self, children: Vec<Self>) -> Result<Self>;
-}
-
-impl<T: RecursiveNode> Transformed<T> {
-    fn children(mut self) -> (Self, Vec<T>) {
-        let (data, children) = self.data.take_children();
-        self.data = data;
-
-        (self, children)
-    }
-}
-
 /// Helper trait for implementing [`TreeNode`] that have children stored as
 /// `Arc`s. If some trait object, such as `dyn T`, implements this trait,
-/// its related `Arc<dyn T>` will automatically implement [`TreeNode`].
+/// its related `Arc<dyn T>` will automatically implement [`TreeNode`] and [`ConcreteTreeNode`].
 pub trait DynTreeNode {
     /// Returns all children of the specified `TreeNode`.
     fn arc_children(&self) -> Vec<&Arc<Self>>;
@@ -959,6 +937,23 @@ pub trait DynTreeNode {
         self: Arc<Self>,
         new_children: Vec<Arc<Self>>,
     ) -> Result<Arc<Self>>;
+}
+
+/// Note that this implementation doesn't actually take children from DynTreeNode, since they are stored
+/// inside shared references, but instead produces new links to them
+impl<T: DynTreeNode + ?Sized> ConcreteTreeNode for Arc<T> {
+    fn children(&self) -> Vec<&Self> {
+        self.arc_children()
+    }
+
+    fn take_children(self) -> (Self, Vec<Self>) {
+        let children = self.children().into_iter().cloned().collect();
+        (self, children)
+    }
+
+    fn with_new_children(self, children: Vec<Self>) -> Result<Self> {
+        self.with_new_arc_children(children)
+    }
 }
 
 /// Adapter from the old function-based rewriter to the new Transformer one
@@ -1003,23 +998,16 @@ impl<
     }
 }
 
-/// Note that this implementation won't actually take children, but instead clone a reference
-impl<T: DynTreeNode + ?Sized> RecursiveNode for Arc<T> {
-    fn children(&self) -> Vec<&Self> {
-        self.arc_children()
-    }
+impl<T: ConcreteTreeNode> Transformed<T> {
+    fn children(mut self) -> (Self, Vec<T>) {
+        let (data, children) = self.data.take_children();
+        self.data = data;
 
-    fn take_children(self) -> (Self, Vec<Self>) {
-        let children = self.arc_children().into_iter().cloned().collect();
         (self, children)
-    }
-
-    fn with_new_children(self, children: Vec<Self>) -> Result<Self> {
-        self.with_new_arc_children(children)
     }
 }
 
-impl<T: RecursiveNode> TreeNode for T {
+impl<T: ConcreteTreeNode> TreeNode for T {
     fn apply_children<'n, F: FnMut(&'n Self) -> Result<TreeNodeRecursion>>(
         &'n self,
         f: F,
@@ -1259,7 +1247,7 @@ enum VisitingState<'a, T> {
 /// involving payloads, by enforcing rules for detaching and reattaching child nodes.
 pub trait ConcreteTreeNode: Sized {
     /// Provides read-only access to child nodes.
-    fn children(&self) -> &[Self];
+    fn children(&self) -> Vec<&Self>;
 
     /// Detaches the node from its children, returning the node itself and its detached children.
     fn take_children(self) -> (Self, Vec<Self>);
@@ -1268,30 +1256,15 @@ pub trait ConcreteTreeNode: Sized {
     fn with_new_children(self, children: Vec<Self>) -> Result<Self>;
 }
 
-impl<T: ConcreteTreeNode> RecursiveNode for T {
-    fn children(&self) -> Vec<&Self> {
-        self.children().iter().collect()
-    }
-
-    fn take_children(self) -> (Self, Vec<Self>) {
-        self.take_children()
-    }
-
-    fn with_new_children(self, children: Vec<Self>) -> Result<Self> {
-        self.with_new_children(children)
-    }
-}
-
 #[cfg(test)]
 pub(crate) mod tests {
     use crate::tree_node::{
-        DynTreeNode, Transformed, TreeNode, TreeNodeIterator, TreeNodeRecursion,
-        TreeNodeRewriter, TreeNodeVisitor,
+        Transformed, TreeNode, TreeNodeIterator, TreeNodeRecursion, TreeNodeRewriter,
+        TreeNodeVisitor,
     };
     use crate::Result;
     use std::collections::HashMap;
     use std::fmt::Display;
-    use std::sync::Arc;
 
     macro_rules! visit_test {
         ($NAME:ident, $F_DOWN:expr, $F_UP:expr, $EXPECTED_VISITS:expr) => {
@@ -2523,81 +2496,6 @@ pub(crate) mod tests {
         node_tests!(TestTreeNode);
     }
 
-    mod test_dyn_tree_node {
-        use super::*;
-
-        #[derive(Debug, Eq, Hash, PartialEq, Clone)]
-        pub struct DynTestNode<T> {
-            pub(crate) data: Arc<T>,
-            pub(crate) children: Vec<Arc<DynTestNode<T>>>,
-        }
-
-        impl<T: PartialEq> TestTree<T> for Arc<DynTestNode<T>> {
-            fn new_with_children(children: Vec<Self>, data: T) -> Self
-            where
-                Self: Sized,
-            {
-                Arc::new(DynTestNode {
-                    data: Arc::new(data),
-                    children,
-                })
-            }
-
-            fn new_leaf(data: T) -> Self {
-                Arc::new(DynTestNode {
-                    data: Arc::new(data),
-                    children: vec![],
-                })
-            }
-
-            fn is_leaf(&self) -> bool {
-                self.children.is_empty()
-            }
-
-            fn eq_data(&self, other: &T) -> bool {
-                self.data.as_ref().eq(other)
-            }
-
-            fn with_children_from(data: T, other: Self) -> Self {
-                Self::new_with_children(other.children.clone(), data)
-            }
-        }
-
-        impl<T> DynTreeNode for DynTestNode<T> {
-            fn arc_children(&self) -> Vec<&Arc<Self>> {
-                self.children.iter().collect()
-            }
-
-            fn with_new_arc_children(
-                self: Arc<Self>,
-                new_children: Vec<Arc<Self>>,
-            ) -> Result<Arc<Self>> {
-                Ok(Arc::new(Self {
-                    children: new_children,
-                    data: Arc::clone(&self.data),
-                }))
-            }
-        }
-
-        type ArcTestNode<T> = Arc<DynTestNode<T>>;
-
-        node_tests!(ArcTestNode);
-
-        #[test]
-        fn test_large_visit() {
-            let mut item = ArcTestNode::new_leaf("initial".to_string());
-            for i in 0..3000 {
-                item =
-                    ArcTestNode::new_with_children(vec![item], format!("parent-{}", i));
-            }
-
-            let mut visitor =
-                TestVisitor::new(Box::new(visit_continue), Box::new(visit_continue));
-
-            item.visit(&mut visitor).unwrap();
-        }
-    }
-
     mod test_concrete_tree_node {
         use super::*;
         use crate::tree_node::ConcreteTreeNode;
@@ -2606,8 +2504,8 @@ pub(crate) mod tests {
         test_node!(ConcreteTestTreeNode);
 
         impl<T: PartialEq> ConcreteTreeNode for ConcreteTestTreeNode<T> {
-            fn children(&self) -> &[Self] {
-                self.children.as_slice()
+            fn children(&self) -> Vec<&Self> {
+                self.children.iter().collect()
             }
 
             fn take_children(mut self) -> (Self, Vec<Self>) {
