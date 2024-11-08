@@ -1172,8 +1172,8 @@ impl LogicalPlan {
     /// Replaces placeholder param values (like `$1`, `$2`) in [`LogicalPlan`]
     /// with the specified `param_values`.
     ///
-    /// [`LogicalPlan::Prepare`] are
-    /// converted to their inner logical plan for execution.
+    /// [`Prepare`] statements are converted to
+    /// their inner logical plan for execution.
     ///
     /// # Example
     /// ```

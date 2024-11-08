@@ -33,7 +33,7 @@ static STATEMENT_EMPTY_SCHEMA: OnceLock<DFSchemaRef> = OnceLock::new();
 /// # Transactions:
 ///
 /// While DataFusion does not offer support transactions, it provides
-/// [`LogicalPlan`](crate::LogicalPlan) support to assist building
+/// [`LogicalPlan`](LogicalPlan) support to assist building
 /// database systems using DataFusion
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
 pub enum Statement {
