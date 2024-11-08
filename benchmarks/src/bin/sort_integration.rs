@@ -85,15 +85,17 @@ impl SortConfig {
     /// - Sort key with different cardinality
     /// - Different number of sort keys
     /// - Different number of payload columns (thin: 1 additional column other
-    /// than sort keys; wide: all columns except sort keys)
+    ///   than sort keys; wide: all columns except sort keys)
     ///
     /// DataSet is `lineitem` table in TPCH dataset (16 columns, 6M rows for
     /// scale factor 1.0, cardinality is counted from SF1 dataset)
+    ///
     /// Key Columns:
     /// - Column `l_linenumber`, type: `INTEGER`, cardinality: 7
     /// - Column `l_suppkey`, type: `BIGINT`, cardinality: 10k
     /// - Column `l_orderkey`, type: `BIGINT`, cardinality: 1.5M
     /// - Column `l_comment`, type: `VARCHAR`, cardinality: 4.5M (len is ~26 chars)
+    ///
     /// Payload Columns:
     /// - Thin variant: `l_partkey` column with `BIGINT` type (1 column)
     /// - Wide variant: all columns except for possible key columns (12 columns)
