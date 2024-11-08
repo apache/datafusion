@@ -186,7 +186,7 @@ impl ScalarUDFImpl for ConcatFunc {
                         }
                     };
                 }
-                _ => unreachable!(),
+                _ => unreachable!("concat"),
             }
         }
 
@@ -408,6 +408,7 @@ mod tests {
         ])));
         let args = &[c0, c1, c2];
 
+        #[allow(deprecated)] // TODO migrate UDF invoke to invoke_batch
         let result = ConcatFunc::new().invoke(args)?;
         let expected =
             Arc::new(StringArray::from(vec!["foo,x", "bar,", "baz,z"])) as ArrayRef;

@@ -44,7 +44,7 @@ use crate::protobuf::{
         AnalyzedLogicalPlan, FinalAnalyzedLogicalPlan, FinalLogicalPlan,
         FinalPhysicalPlan, FinalPhysicalPlanWithStats, InitialLogicalPlan,
         InitialPhysicalPlan, InitialPhysicalPlanWithStats, OptimizedLogicalPlan,
-        OptimizedPhysicalPlan,
+        OptimizedPhysicalPlan, PhysicalPlanError,
     },
     AnalyzedLogicalPlanType, CubeNode, GroupingSetNode, OptimizedLogicalPlanType,
     OptimizedPhysicalPlanType, PlaceholderNode, RollupNode,
@@ -141,6 +141,7 @@ impl From<&protobuf::StringifiedPlan> for StringifiedPlan {
                 FinalPhysicalPlan(_) => PlanType::FinalPhysicalPlan,
                 FinalPhysicalPlanWithStats(_) => PlanType::FinalPhysicalPlanWithStats,
                 FinalPhysicalPlanWithSchema(_) => PlanType::FinalPhysicalPlanWithSchema,
+                PhysicalPlanError(_) => PlanType::PhysicalPlanError,
             },
             plan: Arc::new(stringified_plan.plan.clone()),
         }

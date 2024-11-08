@@ -43,18 +43,17 @@ use arrow::error::ArrowError;
 use arrow::ipc::reader::FileReader;
 use arrow_array::types::UInt64Type;
 use datafusion_common::{
-    exec_err, internal_err, not_impl_err, plan_err, DataFusionError, JoinSide, JoinType,
-    Result,
+    exec_err, internal_err, not_impl_err, plan_err, DataFusionError, HashSet, JoinSide,
+    JoinType, Result,
 };
 use datafusion_execution::disk_manager::RefCountedTempFile;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::equivalence::join_equivalence_properties;
-use datafusion_physical_expr::{PhysicalExprRef, PhysicalSortRequirement};
+use datafusion_physical_expr::PhysicalExprRef;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};
 use futures::{Stream, StreamExt};
-use hashbrown::HashSet;
 
 use crate::expressions::PhysicalSortExpr;
 use crate::joins::utils::{
@@ -298,12 +297,8 @@ impl ExecutionPlan for SortMergeJoinExec {
 
     fn required_input_ordering(&self) -> Vec<Option<LexRequirement>> {
         vec![
-            Some(PhysicalSortRequirement::from_sort_exprs(
-                self.left_sort_exprs.iter(),
-            )),
-            Some(PhysicalSortRequirement::from_sort_exprs(
-                self.right_sort_exprs.iter(),
-            )),
+            Some(LexRequirement::from(self.left_sort_exprs.clone())),
+            Some(LexRequirement::from(self.right_sort_exprs.clone())),
         ]
     }
 

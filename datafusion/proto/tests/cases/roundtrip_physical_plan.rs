@@ -17,7 +17,6 @@
 
 use std::any::Any;
 use std::fmt::Display;
-use std::hash::Hasher;
 use std::ops::Deref;
 use std::sync::Arc;
 use std::vec;
@@ -52,8 +51,7 @@ use datafusion::logical_expr::{create_udf, JoinType, Operator, Volatility};
 use datafusion::physical_expr::expressions::Literal;
 use datafusion::physical_expr::window::SlidingAggregateWindowExpr;
 use datafusion::physical_expr::{
-    LexOrdering, LexOrderingRef, LexRequirement, PhysicalSortRequirement,
-    ScalarFunctionExpr,
+    LexOrdering, LexRequirement, PhysicalSortRequirement, ScalarFunctionExpr,
 };
 use datafusion::physical_plan::aggregates::{
     AggregateExec, AggregateMode, PhysicalGroupBy,
@@ -61,7 +59,8 @@ use datafusion::physical_plan::aggregates::{
 use datafusion::physical_plan::analyze::AnalyzeExec;
 use datafusion::physical_plan::empty::EmptyExec;
 use datafusion::physical_plan::expressions::{
-    binary, cast, col, in_list, like, lit, BinaryExpr, Column, NotExpr, PhysicalSortExpr,
+    binary, cast, col, in_list, like, lit, BinaryExpr, Column, NotExpr, NthValue,
+    PhysicalSortExpr,
 };
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::insert::DataSinkExec;
@@ -75,7 +74,9 @@ use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::union::{InterleaveExec, UnionExec};
 use datafusion::physical_plan::unnest::{ListUnnest, UnnestExec};
-use datafusion::physical_plan::windows::{PlainAggregateWindowExpr, WindowAggExec};
+use datafusion::physical_plan::windows::{
+    BuiltInWindowExpr, PlainAggregateWindowExpr, WindowAggExec,
+};
 use datafusion::physical_plan::{ExecutionPlan, Partitioning, PhysicalExpr, Statistics};
 use datafusion::prelude::SessionContext;
 use datafusion::scalar::ScalarValue;
@@ -271,6 +272,32 @@ fn roundtrip_window() -> Result<()> {
     let field_b = Field::new("b", DataType::Int64, false);
     let schema = Arc::new(Schema::new(vec![field_a, field_b]));
 
+    let window_frame = WindowFrame::new_bounds(
+        datafusion_expr::WindowFrameUnits::Range,
+        WindowFrameBound::Preceding(ScalarValue::Int64(None)),
+        WindowFrameBound::CurrentRow,
+    );
+
+    let builtin_window_expr = Arc::new(BuiltInWindowExpr::new(
+        Arc::new(NthValue::first(
+            "FIRST_VALUE(a) PARTITION BY [b] ORDER BY [a ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW",
+            col("a", &schema)?,
+            DataType::Int64,
+            false,
+        )),
+        &[col("b", &schema)?],
+        &LexOrdering{
+            inner: vec![PhysicalSortExpr {
+                expr: col("a", &schema)?,
+                options: SortOptions {
+                    descending: false,
+                    nulls_first: false,
+                },
+            }]
+        },
+        Arc::new(window_frame),
+    ));
+
     let plain_aggr_window_expr = Arc::new(PlainAggregateWindowExpr::new(
         AggregateExprBuilder::new(
             avg_udaf(),
@@ -281,7 +308,7 @@ fn roundtrip_window() -> Result<()> {
         .build()
         .map(Arc::new)?,
         &[],
-        LexOrderingRef::default(),
+        &LexOrdering::default(),
         Arc::new(WindowFrame::new(None)),
     ));
 
@@ -301,14 +328,18 @@ fn roundtrip_window() -> Result<()> {
     let sliding_aggr_window_expr = Arc::new(SlidingAggregateWindowExpr::new(
         sum_expr,
         &[],
-        LexOrderingRef::default(),
+        &LexOrdering::default(),
         Arc::new(window_frame),
     ));
 
     let input = Arc::new(EmptyExec::new(schema.clone()));
 
     roundtrip_test(Arc::new(WindowAggExec::try_new(
-        vec![plain_aggr_window_expr, sliding_aggr_window_expr],
+        vec![
+            builtin_window_expr,
+            plain_aggr_window_expr,
+            sliding_aggr_window_expr,
+        ],
         input,
         vec![col("b", &schema)?],
     )?))
@@ -717,23 +748,30 @@ fn roundtrip_parquet_exec_with_custom_predicate_expr() -> Result<()> {
         output_ordering: vec![],
     };
 
-    #[derive(Debug, Hash, Clone)]
+    #[derive(Debug, Clone, Eq)]
     struct CustomPredicateExpr {
         inner: Arc<dyn PhysicalExpr>,
     }
+
+    // Manually derive PartialEq and Hash to work around https://github.com/rust-lang/rust/issues/78808
+    impl PartialEq for CustomPredicateExpr {
+        fn eq(&self, other: &Self) -> bool {
+            self.inner.eq(&other.inner)
+        }
+    }
+
+    impl std::hash::Hash for CustomPredicateExpr {
+        fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+            self.inner.hash(state);
+        }
+    }
+
     impl Display for CustomPredicateExpr {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             write!(f, "CustomPredicateExpr")
         }
     }
-    impl PartialEq<dyn Any> for CustomPredicateExpr {
-        fn eq(&self, other: &dyn Any) -> bool {
-            other
-                .downcast_ref::<Self>()
-                .map(|x| self.inner.eq(&x.inner))
-                .unwrap_or(false)
-        }
-    }
+
     impl PhysicalExpr for CustomPredicateExpr {
         fn as_any(&self) -> &dyn Any {
             self
@@ -760,10 +798,6 @@ fn roundtrip_parquet_exec_with_custom_predicate_expr() -> Result<()> {
             _children: Vec<Arc<dyn PhysicalExpr>>,
         ) -> Result<Arc<dyn PhysicalExpr>> {
             todo!()
-        }
-
-        fn dyn_hash(&self, _state: &mut dyn Hasher) {
-            unreachable!()
         }
     }
 
@@ -983,7 +1017,7 @@ fn roundtrip_scalar_udf_extension_codec() -> Result<()> {
         vec![Arc::new(PlainAggregateWindowExpr::new(
             aggr_expr.clone(),
             &[col("author", &schema)?],
-            LexOrderingRef::default(),
+            &LexOrdering::default(),
             Arc::new(WindowFrame::new(None)),
         ))],
         filter,
@@ -1044,7 +1078,7 @@ fn roundtrip_aggregate_udf_extension_codec() -> Result<()> {
         vec![Arc::new(PlainAggregateWindowExpr::new(
             aggr_expr,
             &[col("author", &schema)?],
-            LexOrderingRef::default(),
+            &LexOrdering::default(),
             Arc::new(WindowFrame::new(None)),
         ))],
         filter,

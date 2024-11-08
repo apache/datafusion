@@ -30,71 +30,188 @@ select * from person;
 # Error due to syntax and semantic violation
 
 # Syntax error: no name specified after the keyword prepare
-statement error
+statement error DataFusion error: SQL error: ParserError
 PREPARE AS SELECT id, age  FROM person WHERE age = $foo;
 
 # param following a non-number, $foo, not supported
-statement error
+statement error Invalid placeholder, not a number: \$foo
 PREPARE my_plan(INT) AS SELECT id, age  FROM person WHERE age = $foo;
 
 # not specify table hence cannot specify columns
-statement error
+statement error Schema error: No field named id
 PREPARE my_plan(INT) AS SELECT id + $1;
 
 # not specify data types for all params
-statement error
+statement error Prepare specifies 1 data types but query has 2 parameters
 PREPARE my_plan(INT) AS SELECT 1 + $1 + $2;
 
+# sepecify too many data types for params
+statement error Prepare specifies 2 data types but query has 1 parameters
+PREPARE my_plan(INT, INT) AS SELECT 1 + $1;
+
 # cannot use IS param
-statement error
+statement error SQL error: ParserError
 PREPARE my_plan(INT) AS SELECT id, age  FROM person WHERE age is $1;
 
+# TODO: allow prepare without specifying data types
+statement error Placeholder type could not be resolved
+PREPARE my_plan AS SELECT $1;
+
 # #######################
-# TODO: all the errors below should work ok after we store the prepare logical plan somewhere
-statement error
+# Test prepare and execute statements
+
+# execute a non-existing plan
+statement error Prepared statement \'my_plan\' does not exist
+EXECUTE my_plan('Foo', 'Bar');
+
+statement ok
 PREPARE my_plan(STRING, STRING) AS SELECT * FROM (VALUES(1, $1), (2, $2)) AS t (num, letter);
 
-statement error
+query IT
+EXECUTE my_plan('Foo', 'Bar');
+----
+1 Foo
+2 Bar
+
+# duplicate prepare statement
+statement error Prepared statement \'my_plan\' already exists
+PREPARE my_plan(STRING, STRING) AS SELECT * FROM (VALUES(1, $1), (2, $2)) AS t (num, letter);
+
+statement error Prepare specifies 1 data types but query has 0 parameters
 PREPARE my_plan(INT) AS SELECT id, age  FROM person WHERE age = 10;
 
-statement error
-PREPARE my_plan AS SELECT id, age  FROM person WHERE age = 10;
+# prepare statement has no params
+statement ok
+PREPARE my_plan2 AS SELECT id, age FROM person WHERE age = 20;
 
-statement error
-PREPARE my_plan(INT) AS SELECT $1;
+query II
+EXECUTE my_plan2;
+----
+1 20
 
-statement error
-PREPARE my_plan(INT) AS SELECT 1 + $1;
+statement ok
+PREPARE my_plan3(INT) AS SELECT $1;
 
-statement error
-PREPARE my_plan(INT, DOUBLE) AS SELECT 1 + $1 + $2;
+query I
+EXECUTE my_plan3(10);
+----
+10
 
-statement error
-PREPARE my_plan(INT) AS SELECT id, age  FROM person WHERE age = $1;
+statement ok
+PREPARE my_plan4(INT) AS SELECT 1 + $1;
 
-statement error
-PREPARE my_plan(INT, STRING, DOUBLE, INT, DOUBLE, STRING) AS SELECT id, age, $6 FROM person WHERE age IN ($1, $4) AND salary > $3 and salary < $5 OR first_name < $2";
+query I
+EXECUTE my_plan4(10);
+----
+11
 
-statement error
-PREPARE my_plan(INT, DOUBLE, DOUBLE, DOUBLE) AS SELECT id, SUM(age) FROM person WHERE salary > $2 GROUP BY id HAVING sum(age) < $1 AND SUM(age) > 10 OR SUM(age) in ($3, $4);
+statement ok
+PREPARE my_plan5(INT, DOUBLE) AS SELECT 1 + $1 + $2;
 
-statement error
-PREPARE my_plan(STRING, STRING) AS SELECT * FROM (VALUES(1, $1), (2, $2)) AS t (num, letter);
+query R
+EXECUTE my_plan5(10, 20.5);
+----
+31.5
+
+statement ok
+PREPARE my_plan6(INT) AS SELECT id, age FROM person WHERE age = $1;
+
+query II
+EXECUTE my_plan6(20);
+----
+1 20
+
+# EXECUTE param is a different type but compatible
+query II
+EXECUTE my_plan6('20');
+----
+1 20
+
+query II
+EXECUTE my_plan6(20.0);
+----
+1 20
+
+# invalid execute param
+statement error Cast error: Cannot cast string 'foo' to value of Int32 type
+EXECUTE my_plan6('foo');
+
+# TODO: support non-literal expressions
+statement error Unsupported parameter type
+EXECUTE my_plan6(10 + 20);
+
+statement ok
+PREPARE my_plan7(INT, STRING, DOUBLE, INT, DOUBLE, STRING)
+    AS
+SELECT id, age, $6 FROM person WHERE age IN ($1, $4) AND salary > $3 and salary < $5 OR first_name < $2;
+
+query IIT
+EXECUTE my_plan7(10, 'jane', 99999.45, 20, 200000.45, 'foo');
+----
+1 20 foo
+
+statement ok
+PREPARE my_plan8(INT, DOUBLE, DOUBLE, DOUBLE)
+    AS
+SELECT id, SUM(age) FROM person WHERE salary > $2 GROUP BY id
+    HAVING sum(age) < $1 AND SUM(age) > 10 OR SUM(age) in ($3, $4);
+
+query II
+EXECUTE my_plan8(100000, 99999.45, 100000.45, 200000.45);
+----
+1 20
+
+statement ok
+PREPARE my_plan9(STRING, STRING) AS SELECT * FROM (VALUES(1, $1), (2, $2)) AS t (num, letter);
+
+query IT
+EXECUTE my_plan9('Foo', 'Bar');
+----
+1 Foo
+2 Bar
+
+
+# Test issue: https://github.com/apache/datafusion/issues/12294
+# prepare argument is in the LIMIT clause
+statement ok
+CREATE TABLE test(id INT, run_id TEXT) AS VALUES(1, 'foo'), (1, 'foo'), (3, 'bar');
+
+statement ok
+PREPARE get_N_rand_ints_from_last_run(INT) AS
+SELECT id
+FROM
+    "test"
+WHERE run_id = 'foo'
+ORDER BY random()
+LIMIT $1
+
+query I
+EXECUTE get_N_rand_ints_from_last_run(1);
+----
+1
+
+query I
+EXECUTE get_N_rand_ints_from_last_run(2);
+----
+1
+1
+
+statement ok
+DROP TABLE test;
+
 
 # test creating logical plan for EXECUTE statements
 query TT
 EXPLAIN EXECUTE my_plan;
 ----
 logical_plan Execute: my_plan params=[]
+physical_plan_error This feature is not implemented: Unsupported logical plan: Execute
 
 query TT
 EXPLAIN EXECUTE my_plan(10*2 + 1, 'Foo');
 ----
 logical_plan Execute: my_plan params=[Int64(21), Utf8("Foo")]
+physical_plan_error This feature is not implemented: Unsupported logical plan: Execute
 
 query error DataFusion error: Schema error: No field named a\.
 EXPLAIN EXECUTE my_plan(a);
-
-# TODO: support EXECUTE queries
-query error DataFusion error: This feature is not implemented: Unsupported logical plan: Execute
-EXECUTE my_plan;

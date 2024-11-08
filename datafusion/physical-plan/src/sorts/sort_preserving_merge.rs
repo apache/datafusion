@@ -32,11 +32,8 @@ use crate::{
 use datafusion_common::{internal_err, Result};
 use datafusion_execution::memory_pool::MemoryConsumer;
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::PhysicalSortRequirement;
 
-use datafusion_physical_expr_common::sort_expr::{
-    LexOrdering, LexOrderingRef, LexRequirement,
-};
+use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};
 use log::{debug, trace};
 
 /// Sort preserving merge execution plan
@@ -122,8 +119,8 @@ impl SortPreservingMergeExec {
     }
 
     /// Sort expressions
-    pub fn expr(&self) -> LexOrderingRef {
-        &self.expr
+    pub fn expr(&self) -> &LexOrdering {
+        self.expr.as_ref()
     }
 
     /// Fetch
@@ -205,9 +202,7 @@ impl ExecutionPlan for SortPreservingMergeExec {
     }
 
     fn required_input_ordering(&self) -> Vec<Option<LexRequirement>> {
-        vec![Some(PhysicalSortRequirement::from_sort_exprs(
-            self.expr.iter(),
-        ))]
+        vec![Some(LexRequirement::from(self.expr.clone()))]
     }
 
     fn maintains_input_order(&self) -> Vec<bool> {

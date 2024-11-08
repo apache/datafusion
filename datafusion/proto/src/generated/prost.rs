@@ -888,7 +888,7 @@ pub struct OptimizedPhysicalPlanType {
 pub struct PlanType {
     #[prost(
         oneof = "plan_type::PlanTypeEnum",
-        tags = "1, 7, 8, 2, 3, 4, 9, 11, 5, 6, 10, 12"
+        tags = "1, 7, 8, 2, 3, 4, 9, 11, 5, 6, 10, 12, 13"
     )]
     pub plan_type_enum: ::core::option::Option<plan_type::PlanTypeEnum>,
 }
@@ -920,6 +920,8 @@ pub mod plan_type {
         FinalPhysicalPlanWithStats(super::super::datafusion_common::EmptyMessage),
         #[prost(message, tag = "12")]
         FinalPhysicalPlanWithSchema(super::super::datafusion_common::EmptyMessage),
+        #[prost(message, tag = "13")]
+        PhysicalPlanError(super::super::datafusion_common::EmptyMessage),
     }
 }
 #[derive(Clone, PartialEq, ::prost::Message)]

@@ -254,7 +254,7 @@ mod tests {
         let format = listing_table.options().format.clone();
         let csv_format = format.as_any().downcast_ref::<CsvFormat>().unwrap();
         let csv_options = csv_format.options().clone();
-        assert_eq!(csv_options.schema_infer_max_rec, 1000);
+        assert_eq!(csv_options.schema_infer_max_rec, Some(1000));
         let listing_options = listing_table.options();
         assert_eq!(".tbl", listing_options.file_extension);
     }

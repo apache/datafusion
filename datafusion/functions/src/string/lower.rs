@@ -105,9 +105,10 @@ mod tests {
     fn to_lower(input: ArrayRef, expected: ArrayRef) -> Result<()> {
         let func = LowerFunc::new();
         let args = vec![ColumnarValue::Array(input)];
+        #[allow(deprecated)] // TODO migrate UDF invoke to invoke_batch
         let result = match func.invoke(&args)? {
             ColumnarValue::Array(result) => result,
-            _ => unreachable!(),
+            _ => unreachable!("lower"),
         };
         assert_eq!(&expected, &result);
         Ok(())

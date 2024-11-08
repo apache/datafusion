@@ -4082,6 +4082,7 @@ logical_plan
 02)--Projection: multiple_ordered_table_with_pk.a, multiple_ordered_table_with_pk.b, sum(multiple_ordered_table_with_pk.d) AS sum1
 03)----Aggregate: groupBy=[[multiple_ordered_table_with_pk.c, multiple_ordered_table_with_pk.a, multiple_ordered_table_with_pk.b]], aggr=[[sum(CAST(multiple_ordered_table_with_pk.d AS Int64))]]
 04)------TableScan: multiple_ordered_table_with_pk projection=[a, b, c, d]
+physical_plan_error This feature is not implemented: Physical plan does not support DistributeBy partitioning
 
 # union with aggregate
 query TT

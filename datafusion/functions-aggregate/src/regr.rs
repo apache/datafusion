@@ -24,8 +24,10 @@ use arrow::{
     datatypes::DataType,
     datatypes::Field,
 };
-use datafusion_common::{downcast_value, plan_err, unwrap_or_internal_err, ScalarValue};
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{
+    downcast_value, plan_err, unwrap_or_internal_err, DataFusionError, HashMap, Result,
+    ScalarValue,
+};
 use datafusion_expr::aggregate_doc_sections::DOC_SECTION_STATISTICAL;
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::type_coercion::aggregates::NUMERICS;
@@ -34,7 +36,6 @@ use datafusion_expr::{
     Accumulator, AggregateUDFImpl, Documentation, Signature, Volatility,
 };
 use std::any::Any;
-use std::collections::HashMap;
 use std::fmt::Debug;
 use std::mem::size_of_val;
 use std::sync::OnceLock;

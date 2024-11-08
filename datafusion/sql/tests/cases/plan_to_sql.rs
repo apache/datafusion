@@ -28,8 +28,8 @@ use datafusion_functions_nested::make_array::make_array_udf;
 use datafusion_functions_window::rank::rank_udwf;
 use datafusion_sql::planner::{ContextProvider, PlannerContext, SqlToRel};
 use datafusion_sql::unparser::dialect::{
-    DefaultDialect as UnparserDefaultDialect, Dialect as UnparserDialect,
-    MySqlDialect as UnparserMySqlDialect, SqliteDialect,
+    CustomDialectBuilder, DefaultDialect as UnparserDefaultDialect, DefaultDialect,
+    Dialect as UnparserDialect, MySqlDialect as UnparserMySqlDialect, SqliteDialect,
 };
 use datafusion_sql::unparser::{expr_to_sql, plan_to_sql, Unparser};
 
@@ -565,7 +565,7 @@ Projection: unnest_placeholder(unnest_table.struct_col).field1, unnest_placehold
 
 #[test]
 fn test_table_references_in_plan_to_sql() {
-    fn test(table_name: &str, expected_sql: &str) {
+    fn test(table_name: &str, expected_sql: &str, dialect: &impl UnparserDialect) {
         let schema = Schema::new(vec![
             Field::new("id", DataType::Utf8, false),
             Field::new("value", DataType::Utf8, false),
@@ -576,22 +576,48 @@ fn test_table_references_in_plan_to_sql() {
             .unwrap()
             .build()
             .unwrap();
-        let sql = plan_to_sql(&plan).unwrap();
+
+        let unparser = Unparser::new(dialect);
+        let sql = unparser.plan_to_sql(&plan).unwrap();
 
         assert_eq!(sql.to_string(), expected_sql)
     }
 
     test(
         "catalog.schema.table",
-        r#"SELECT "catalog"."schema"."table".id, "catalog"."schema"."table"."value" FROM "catalog"."schema"."table""#,
+        r#"SELECT "table".id, "table"."value" FROM "catalog"."schema"."table""#,
+        &DefaultDialect {},
     );
     test(
         "schema.table",
-        r#"SELECT "schema"."table".id, "schema"."table"."value" FROM "schema"."table""#,
+        r#"SELECT "table".id, "table"."value" FROM "schema"."table""#,
+        &DefaultDialect {},
     );
     test(
         "table",
         r#"SELECT "table".id, "table"."value" FROM "table""#,
+        &DefaultDialect {},
+    );
+
+    let custom_dialect = CustomDialectBuilder::default()
+        .with_full_qualified_col(true)
+        .with_identifier_quote_style('"')
+        .build();
+
+    test(
+        "catalog.schema.table",
+        r#"SELECT "catalog"."schema"."table"."id", "catalog"."schema"."table"."value" FROM "catalog"."schema"."table""#,
+        &custom_dialect,
+    );
+    test(
+        "schema.table",
+        r#"SELECT "schema"."table"."id", "schema"."table"."value" FROM "schema"."table""#,
+        &custom_dialect,
+    );
+    test(
+        "table",
+        r#"SELECT "table"."id", "table"."value" FROM "table""#,
+        &custom_dialect,
     );
 }
 

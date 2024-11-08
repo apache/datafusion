@@ -15,6 +15,15 @@
 # specific language governing permissions and limitations
 # under the License.
 
+# a backslash in a string literal is not a special character
+query T
+VALUES ('\'), ('\\'), ('\\\'), ('\\\\')
+----
+\
+\\
+\\\
+\\\\
+
 query T
 SELECT substr('alphabet', -3)
 ----
@@ -821,3 +830,796 @@ query TT
 select '   ', '|'
 ----
     |
+
+query BBB
+SELECT
+    NULL LIKE '%',
+    '' LIKE '%',
+    'a' LIKE '%'
+----
+NULL true true
+
+# \ is an implicit escape character
+query BBBB
+SELECT
+    'a' LIKE '\%',
+    '\a' LIKE '\%',
+    '%' LIKE '\%',
+    '\%' LIKE '\%'
+----
+false false true false
+
+# \ is an implicit escape character
+query BBBBBB
+SELECT
+    'a' LIKE '\_',
+    '\a' LIKE '\_',
+    '_' LIKE '\_',
+    '\_' LIKE '\_',
+    'abc' LIKE 'a_c',
+    'abc' LIKE 'a\_c'
+----
+false false true false true false
+
+# \ as an explicit escape character is currently not supported
+query error DataFusion error: Execution error: LIKE does not support escape_char
+SELECT
+    'a' LIKE '\%' ESCAPE '\',
+    '\a' LIKE '\%' ESCAPE '\',
+    '%' LIKE '\%' ESCAPE '\',
+    '\%' LIKE '\%' ESCAPE '\'
+
+# \ as an explicit escape character is currently not supported
+query error DataFusion error: Execution error: LIKE does not support escape_char
+SELECT
+    'a' LIKE '\_' ESCAPE '\',
+    '\a' LIKE '\_' ESCAPE '\',
+    '_' LIKE '\_' ESCAPE '\',
+    '\_' LIKE '\_' ESCAPE '\',
+    'abc' LIKE 'a_c' ESCAPE '\',
+    'abc' LIKE 'a\_c' ESCAPE '\'
+
+# a LIKE pattern containing escape can never match an empty string
+query BBBBB
+SELECT
+    '' LIKE '\',
+    '' LIKE '\\',
+    '' LIKE '\_',
+    '' LIKE '\%',
+    '' LIKE '\a'
+----
+false false false false false
+
+# escape before non-wildcard matches the escape itself
+query BBBBBBB
+SELECT
+    'a' LIKE '\a',
+    '\a' LIKE '\a',
+    '\a' LIKE '\b',
+    '\' LIKE '\',
+    '\\' LIKE '\',
+    '\' LIKE '\\',
+    '\\' LIKE '\\'
+----
+false true false true false false true
+
+# if "%%" in the pattern was simplified to "%", the pattern semantics would change
+query BBBBB
+SELECT
+    '%' LIKE '\%%',
+    '%%' LIKE '\%%',
+    '\%%' LIKE '\%%',
+    '%abc' LIKE '\%%',
+    '\%abc' LIKE '\%%'
+----
+true true false true false
+
+statement ok
+create table inputs AS SELECT * FROM (VALUES ('%'), ('%%'), ('\%%'), ('%abc'), ('\%abc')) t(a);
+
+# if "%%" in the pattern was simplified to "%", the pattern semantics would change
+# same as above query, but with data coming from a table, so that constant folding cannot kick in, but expression simplification can
+query TB
+SELECT a, a LIKE '\%%' FROM inputs
+----
+% true
+%% true
+\%% false
+%abc true
+\%abc false
+
+statement ok
+drop table inputs;
+
+# constant folding and expression simplification cannot kick in
+query TTB
+WITH data(a) AS (VALUES
+    (NULL), (''),
+    ('\'), ('\\'), ('\\\'), ('\\\\'),
+    ('a'), ('\a'), ('\\a'),
+    ('%'), ('\%'), ('\\%'),
+    ('%%'), ('\%%'), ('\\%%'),
+    ('_'), ('\_'), ('\\_'),
+    ('__'), ('\__'), ('\\__'),
+    ('abc'), ('a_c'), ('a\_c'),
+    ('%abc'), ('\%abc')
+)
+SELECT l.a, r.a, l.a LIKE r.a
+FROM data l CROSS JOIN data r
+----
+NULL NULL NULL
+NULL (empty) NULL
+NULL \ NULL
+NULL \\ NULL
+NULL \\\ NULL
+NULL \\\\ NULL
+NULL a NULL
+NULL \a NULL
+NULL \\a NULL
+NULL % NULL
+NULL \% NULL
+NULL \\% NULL
+NULL %% NULL
+NULL \%% NULL
+NULL \\%% NULL
+NULL _ NULL
+NULL \_ NULL
+NULL \\_ NULL
+NULL __ NULL
+NULL \__ NULL
+NULL \\__ NULL
+NULL abc NULL
+NULL a_c NULL
+NULL a\_c NULL
+NULL %abc NULL
+NULL \%abc NULL
+(empty) NULL NULL
+(empty) (empty) true
+(empty) \ false
+(empty) \\ false
+(empty) \\\ false
+(empty) \\\\ false
+(empty) a false
+(empty) \a false
+(empty) \\a false
+(empty) % true
+(empty) \% false
+(empty) \\% false
+(empty) %% true
+(empty) \%% false
+(empty) \\%% false
+(empty) _ false
+(empty) \_ false
+(empty) \\_ false
+(empty) __ false
+(empty) \__ false
+(empty) \\__ false
+(empty) abc false
+(empty) a_c false
+(empty) a\_c false
+(empty) %abc false
+(empty) \%abc false
+\ NULL NULL
+\ (empty) false
+\ \ true
+\ \\ false
+\ \\\ false
+\ \\\\ false
+\ a false
+\ \a false
+\ \\a false
+\ % true
+\ \% false
+\ \\% false
+\ %% true
+\ \%% false
+\ \\%% false
+\ _ true
+\ \_ false
+\ \\_ false
+\ __ false
+\ \__ false
+\ \\__ false
+\ abc false
+\ a_c false
+\ a\_c false
+\ %abc false
+\ \%abc false
+\\ NULL NULL
+\\ (empty) false
+\\ \ false
+\\ \\ true
+\\ \\\ false
+\\ \\\\ false
+\\ a false
+\\ \a false
+\\ \\a false
+\\ % true
+\\ \% false
+\\ \\% false
+\\ %% true
+\\ \%% false
+\\ \\%% false
+\\ _ false
+\\ \_ false
+\\ \\_ false
+\\ __ true
+\\ \__ false
+\\ \\__ false
+\\ abc false
+\\ a_c false
+\\ a\_c false
+\\ %abc false
+\\ \%abc false
+\\\ NULL NULL
+\\\ (empty) false
+\\\ \ false
+\\\ \\ false
+\\\ \\\ true
+\\\ \\\\ false
+\\\ a false
+\\\ \a false
+\\\ \\a false
+\\\ % true
+\\\ \% false
+\\\ \\% false
+\\\ %% true
+\\\ \%% false
+\\\ \\%% false
+\\\ _ false
+\\\ \_ false
+\\\ \\_ false
+\\\ __ false
+\\\ \__ false
+\\\ \\__ false
+\\\ abc false
+\\\ a_c false
+\\\ a\_c false
+\\\ %abc false
+\\\ \%abc false
+\\\\ NULL NULL
+\\\\ (empty) false
+\\\\ \ false
+\\\\ \\ false
+\\\\ \\\ false
+\\\\ \\\\ true
+\\\\ a false
+\\\\ \a false
+\\\\ \\a false
+\\\\ % true
+\\\\ \% false
+\\\\ \\% false
+\\\\ %% true
+\\\\ \%% false
+\\\\ \\%% false
+\\\\ _ false
+\\\\ \_ false
+\\\\ \\_ false
+\\\\ __ false
+\\\\ \__ false
+\\\\ \\__ false
+\\\\ abc false
+\\\\ a_c false
+\\\\ a\_c false
+\\\\ %abc false
+\\\\ \%abc false
+a NULL NULL
+a (empty) false
+a \ false
+a \\ false
+a \\\ false
+a \\\\ false
+a a true
+a \a false
+a \\a false
+a % true
+a \% false
+a \\% false
+a %% true
+a \%% false
+a \\%% false
+a _ true
+a \_ false
+a \\_ false
+a __ false
+a \__ false
+a \\__ false
+a abc false
+a a_c false
+a a\_c false
+a %abc false
+a \%abc false
+\a NULL NULL
+\a (empty) false
+\a \ false
+\a \\ false
+\a \\\ false
+\a \\\\ false
+\a a false
+\a \a true
+\a \\a false
+\a % true
+\a \% false
+\a \\% false
+\a %% true
+\a \%% false
+\a \\%% false
+\a _ false
+\a \_ false
+\a \\_ false
+\a __ true
+\a \__ false
+\a \\__ false
+\a abc false
+\a a_c false
+\a a\_c false
+\a %abc false
+\a \%abc false
+\\a NULL NULL
+\\a (empty) false
+\\a \ false
+\\a \\ false
+\\a \\\ false
+\\a \\\\ false
+\\a a false
+\\a \a false
+\\a \\a true
+\\a % true
+\\a \% false
+\\a \\% false
+\\a %% true
+\\a \%% false
+\\a \\%% false
+\\a _ false
+\\a \_ false
+\\a \\_ false
+\\a __ false
+\\a \__ false
+\\a \\__ false
+\\a abc false
+\\a a_c false
+\\a a\_c false
+\\a %abc false
+\\a \%abc false
+% NULL NULL
+% (empty) false
+% \ false
+% \\ false
+% \\\ false
+% \\\\ false
+% a false
+% \a false
+% \\a false
+% % true
+% \% true
+% \\% false
+% %% true
+% \%% true
+% \\%% false
+% _ true
+% \_ false
+% \\_ false
+% __ false
+% \__ false
+% \\__ false
+% abc false
+% a_c false
+% a\_c false
+% %abc false
+% \%abc false
+\% NULL NULL
+\% (empty) false
+\% \ false
+\% \\ false
+\% \\\ false
+\% \\\\ false
+\% a false
+\% \a false
+\% \\a false
+\% % true
+\% \% false
+\% \\% true
+\% %% true
+\% \%% false
+\% \\%% true
+\% _ false
+\% \_ false
+\% \\_ false
+\% __ true
+\% \__ false
+\% \\__ false
+\% abc false
+\% a_c false
+\% a\_c false
+\% %abc false
+\% \%abc false
+\\% NULL NULL
+\\% (empty) false
+\\% \ false
+\\% \\ false
+\\% \\\ false
+\\% \\\\ false
+\\% a false
+\\% \a false
+\\% \\a false
+\\% % true
+\\% \% false
+\\% \\% false
+\\% %% true
+\\% \%% false
+\\% \\%% false
+\\% _ false
+\\% \_ false
+\\% \\_ false
+\\% __ false
+\\% \__ false
+\\% \\__ false
+\\% abc false
+\\% a_c false
+\\% a\_c false
+\\% %abc false
+\\% \%abc false
+%% NULL NULL
+%% (empty) false
+%% \ false
+%% \\ false
+%% \\\ false
+%% \\\\ false
+%% a false
+%% \a false
+%% \\a false
+%% % true
+%% \% false
+%% \\% false
+%% %% true
+%% \%% true
+%% \\%% false
+%% _ false
+%% \_ false
+%% \\_ false
+%% __ true
+%% \__ false
+%% \\__ false
+%% abc false
+%% a_c false
+%% a\_c false
+%% %abc false
+%% \%abc false
+\%% NULL NULL
+\%% (empty) false
+\%% \ false
+\%% \\ false
+\%% \\\ false
+\%% \\\\ false
+\%% a false
+\%% \a false
+\%% \\a false
+\%% % true
+\%% \% false
+\%% \\% false
+\%% %% true
+\%% \%% false
+\%% \\%% true
+\%% _ false
+\%% \_ false
+\%% \\_ false
+\%% __ false
+\%% \__ false
+\%% \\__ false
+\%% abc false
+\%% a_c false
+\%% a\_c false
+\%% %abc false
+\%% \%abc false
+\\%% NULL NULL
+\\%% (empty) false
+\\%% \ false
+\\%% \\ false
+\\%% \\\ false
+\\%% \\\\ false
+\\%% a false
+\\%% \a false
+\\%% \\a false
+\\%% % true
+\\%% \% false
+\\%% \\% false
+\\%% %% true
+\\%% \%% false
+\\%% \\%% false
+\\%% _ false
+\\%% \_ false
+\\%% \\_ false
+\\%% __ false
+\\%% \__ false
+\\%% \\__ false
+\\%% abc false
+\\%% a_c false
+\\%% a\_c false
+\\%% %abc false
+\\%% \%abc false
+_ NULL NULL
+_ (empty) false
+_ \ false
+_ \\ false
+_ \\\ false
+_ \\\\ false
+_ a false
+_ \a false
+_ \\a false
+_ % true
+_ \% false
+_ \\% false
+_ %% true
+_ \%% false
+_ \\%% false
+_ _ true
+_ \_ true
+_ \\_ false
+_ __ false
+_ \__ false
+_ \\__ false
+_ abc false
+_ a_c false
+_ a\_c false
+_ %abc false
+_ \%abc false
+\_ NULL NULL
+\_ (empty) false
+\_ \ false
+\_ \\ false
+\_ \\\ false
+\_ \\\\ false
+\_ a false
+\_ \a false
+\_ \\a false
+\_ % true
+\_ \% false
+\_ \\% false
+\_ %% true
+\_ \%% false
+\_ \\%% false
+\_ _ false
+\_ \_ false
+\_ \\_ true
+\_ __ true
+\_ \__ false
+\_ \\__ false
+\_ abc false
+\_ a_c false
+\_ a\_c false
+\_ %abc false
+\_ \%abc false
+\\_ NULL NULL
+\\_ (empty) false
+\\_ \ false
+\\_ \\ false
+\\_ \\\ false
+\\_ \\\\ false
+\\_ a false
+\\_ \a false
+\\_ \\a false
+\\_ % true
+\\_ \% false
+\\_ \\% false
+\\_ %% true
+\\_ \%% false
+\\_ \\%% false
+\\_ _ false
+\\_ \_ false
+\\_ \\_ false
+\\_ __ false
+\\_ \__ false
+\\_ \\__ false
+\\_ abc false
+\\_ a_c false
+\\_ a\_c false
+\\_ %abc false
+\\_ \%abc false
+__ NULL NULL
+__ (empty) false
+__ \ false
+__ \\ false
+__ \\\ false
+__ \\\\ false
+__ a false
+__ \a false
+__ \\a false
+__ % true
+__ \% false
+__ \\% false
+__ %% true
+__ \%% false
+__ \\%% false
+__ _ false
+__ \_ false
+__ \\_ false
+__ __ true
+__ \__ true
+__ \\__ false
+__ abc false
+__ a_c false
+__ a\_c false
+__ %abc false
+__ \%abc false
+\__ NULL NULL
+\__ (empty) false
+\__ \ false
+\__ \\ false
+\__ \\\ false
+\__ \\\\ false
+\__ a false
+\__ \a false
+\__ \\a false
+\__ % true
+\__ \% false
+\__ \\% false
+\__ %% true
+\__ \%% false
+\__ \\%% false
+\__ _ false
+\__ \_ false
+\__ \\_ false
+\__ __ false
+\__ \__ false
+\__ \\__ true
+\__ abc false
+\__ a_c false
+\__ a\_c false
+\__ %abc false
+\__ \%abc false
+\\__ NULL NULL
+\\__ (empty) false
+\\__ \ false
+\\__ \\ false
+\\__ \\\ false
+\\__ \\\\ false
+\\__ a false
+\\__ \a false
+\\__ \\a false
+\\__ % true
+\\__ \% false
+\\__ \\% false
+\\__ %% true
+\\__ \%% false
+\\__ \\%% false
+\\__ _ false
+\\__ \_ false
+\\__ \\_ false
+\\__ __ false
+\\__ \__ false
+\\__ \\__ false
+\\__ abc false
+\\__ a_c false
+\\__ a\_c false
+\\__ %abc false
+\\__ \%abc false
+abc NULL NULL
+abc (empty) false
+abc \ false
+abc \\ false
+abc \\\ false
+abc \\\\ false
+abc a false
+abc \a false
+abc \\a false
+abc % true
+abc \% false
+abc \\% false
+abc %% true
+abc \%% false
+abc \\%% false
+abc _ false
+abc \_ false
+abc \\_ false
+abc __ false
+abc \__ false
+abc \\__ false
+abc abc true
+abc a_c true
+abc a\_c false
+abc %abc true
+abc \%abc false
+a_c NULL NULL
+a_c (empty) false
+a_c \ false
+a_c \\ false
+a_c \\\ false
+a_c \\\\ false
+a_c a false
+a_c \a false
+a_c \\a false
+a_c % true
+a_c \% false
+a_c \\% false
+a_c %% true
+a_c \%% false
+a_c \\%% false
+a_c _ false
+a_c \_ false
+a_c \\_ false
+a_c __ false
+a_c \__ false
+a_c \\__ false
+a_c abc false
+a_c a_c true
+a_c a\_c true
+a_c %abc false
+a_c \%abc false
+a\_c NULL NULL
+a\_c (empty) false
+a\_c \ false
+a\_c \\ false
+a\_c \\\ false
+a\_c \\\\ false
+a\_c a false
+a\_c \a false
+a\_c \\a false
+a\_c % true
+a\_c \% false
+a\_c \\% false
+a\_c %% true
+a\_c \%% false
+a\_c \\%% false
+a\_c _ false
+a\_c \_ false
+a\_c \\_ false
+a\_c __ false
+a\_c \__ false
+a\_c \\__ false
+a\_c abc false
+a\_c a_c false
+a\_c a\_c false
+a\_c %abc false
+a\_c \%abc false
+%abc NULL NULL
+%abc (empty) false
+%abc \ false
+%abc \\ false
+%abc \\\ false
+%abc \\\\ false
+%abc a false
+%abc \a false
+%abc \\a false
+%abc % true
+%abc \% false
+%abc \\% false
+%abc %% true
+%abc \%% true
+%abc \\%% false
+%abc _ false
+%abc \_ false
+%abc \\_ false
+%abc __ false
+%abc \__ false
+%abc \\__ false
+%abc abc false
+%abc a_c false
+%abc a\_c false
+%abc %abc true
+%abc \%abc true
+\%abc NULL NULL
+\%abc (empty) false
+\%abc \ false
+\%abc \\ false
+\%abc \\\ false
+\%abc \\\\ false
+\%abc a false
+\%abc \a false
+\%abc \\a false
+\%abc % true
+\%abc \% false
+\%abc \\% false
+\%abc %% true
+\%abc \%% false
+\%abc \\%% true
+\%abc _ false
+\%abc \_ false
+\%abc \\_ false
+\%abc __ false
+\%abc \__ false
+\%abc \\__ false
+\%abc abc false
+\%abc a_c false
+\%abc a\_c false
+\%abc %abc true
+\%abc \%abc false

@@ -42,7 +42,8 @@ use crate::{
     logical_expr::{
         CreateCatalog, CreateCatalogSchema, CreateExternalTable, CreateFunction,
         CreateMemoryTable, CreateView, DropCatalogSchema, DropFunction, DropTable,
-        DropView, LogicalPlan, LogicalPlanBuilder, SetVariable, TableType, UNNAMED_TABLE,
+        DropView, Execute, LogicalPlan, LogicalPlanBuilder, Prepare, SetVariable,
+        TableType, UNNAMED_TABLE,
     },
     physical_expr::PhysicalExpr,
     physical_plan::ExecutionPlan,
@@ -54,9 +55,9 @@ use arrow::record_batch::RecordBatch;
 use arrow_schema::Schema;
 use datafusion_common::{
     config::{ConfigExtension, TableOptions},
-    exec_err, not_impl_err, plan_datafusion_err, plan_err,
+    exec_datafusion_err, exec_err, not_impl_err, plan_datafusion_err, plan_err,
     tree_node::{TreeNodeRecursion, TreeNodeVisitor},
-    DFSchema, SchemaReference, TableReference,
+    DFSchema, ParamValues, ScalarValue, SchemaReference, TableReference,
 };
 use datafusion_execution::registry::SerializerRegistry;
 use datafusion_expr::{
@@ -687,7 +688,31 @@ impl SessionContext {
             LogicalPlan::Statement(Statement::SetVariable(stmt)) => {
                 self.set_variable(stmt).await
             }
-
+            LogicalPlan::Prepare(Prepare {
+                name,
+                input,
+                data_types,
+            }) => {
+                // The number of parameters must match the specified data types length.
+                if !data_types.is_empty() {
+                    let param_names = input.get_parameter_names()?;
+                    if param_names.len() != data_types.len() {
+                        return plan_err!(
+                            "Prepare specifies {} data types but query has {} parameters",
+                            data_types.len(),
+                            param_names.len()
+                        );
+                    }
+                }
+                // Store the unoptimized plan into the session state. Although storing the
+                // optimized plan or the physical plan would be more efficient, doing so is
+                // not currently feasible. This is because `now()` would be optimized to a
+                // constant value, causing each EXECUTE to yield the same result, which is
+                // incorrect behavior.
+                self.state.write().store_prepared(name, data_types, input)?;
+                self.return_empty_dataframe()
+            }
+            LogicalPlan::Execute(execute) => self.execute_prepared(execute),
             plan => Ok(DataFrame::new(self.state(), plan)),
         }
     }
@@ -1086,6 +1111,49 @@ impl SessionContext {
         } else {
             self.return_empty_dataframe()
         }
+    }
+
+    fn execute_prepared(&self, execute: Execute) -> Result<DataFrame> {
+        let Execute {
+            name, parameters, ..
+        } = execute;
+        let prepared = self.state.read().get_prepared(&name).ok_or_else(|| {
+            exec_datafusion_err!("Prepared statement '{}' does not exist", name)
+        })?;
+
+        // Only allow literals as parameters for now.
+        let mut params: Vec<ScalarValue> = parameters
+            .into_iter()
+            .map(|e| match e {
+                Expr::Literal(scalar) => Ok(scalar),
+                _ => not_impl_err!("Unsupported parameter type: {}", e),
+            })
+            .collect::<Result<_>>()?;
+
+        // If the prepared statement provides data types, cast the params to those types.
+        if !prepared.data_types.is_empty() {
+            if params.len() != prepared.data_types.len() {
+                return exec_err!(
+                    "Prepared statement '{}' expects {} parameters, but {} provided",
+                    name,
+                    prepared.data_types.len(),
+                    params.len()
+                );
+            }
+            params = params
+                .into_iter()
+                .zip(prepared.data_types.iter())
+                .map(|(e, dt)| e.cast_to(dt))
+                .collect::<Result<_>>()?;
+        }
+
+        let params = ParamValues::List(params);
+        let plan = prepared
+            .plan
+            .as_ref()
+            .clone()
+            .replace_params_with_values(&params)?;
+        Ok(DataFrame::new(self.state(), plan))
     }
 
     /// Registers a variable provider within this context.
@@ -1704,6 +1772,14 @@ impl<'n, 'a> TreeNodeVisitor<'n> for BadPlanVisitor<'a> {
             }
             LogicalPlan::Statement(stmt) if !self.options.allow_statements => {
                 plan_err!("Statement not supported: {}", stmt.name())
+            }
+            // TODO: Implement PREPARE as a LogicalPlan::Statement
+            LogicalPlan::Prepare(_) if !self.options.allow_statements => {
+                plan_err!("Statement not supported: PREPARE")
+            }
+            // TODO: Implement EXECUTE as a LogicalPlan::Statement
+            LogicalPlan::Execute(_) if !self.options.allow_statements => {
+                plan_err!("Statement not supported: EXECUTE")
             }
             _ => Ok(TreeNodeRecursion::Continue),
         }

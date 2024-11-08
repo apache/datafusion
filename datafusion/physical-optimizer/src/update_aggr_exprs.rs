@@ -27,12 +27,14 @@ use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
 use datafusion_physical_expr::{
     reverse_order_bys, EquivalenceProperties, PhysicalSortRequirement,
 };
-use datafusion_physical_optimizer::PhysicalOptimizerRule;
+use datafusion_physical_expr::{LexOrdering, LexRequirement};
 use datafusion_physical_plan::aggregates::concat_slices;
 use datafusion_physical_plan::windows::get_ordered_partition_by_indices;
 use datafusion_physical_plan::{
     aggregates::AggregateExec, ExecutionPlan, ExecutionPlanProperties,
 };
+
+use crate::PhysicalOptimizerRule;
 
 /// This optimizer rule checks ordering requirements of aggregate expressions.
 ///
@@ -59,6 +61,20 @@ impl OptimizeAggregateOrder {
 }
 
 impl PhysicalOptimizerRule for OptimizeAggregateOrder {
+    /// Applies the `OptimizeAggregateOrder` rule to the provided execution plan.
+    ///
+    /// This function traverses the execution plan tree, identifies `AggregateExec` nodes,
+    /// and optimizes their aggregate expressions based on existing input orderings.
+    /// If optimizations are applied, it returns a modified execution plan.
+    ///
+    /// # Arguments
+    ///
+    /// * `plan` - The root of the execution plan to optimize.
+    /// * `_config` - Configuration options (currently unused).
+    ///
+    /// # Returns
+    ///
+    /// A `Result` containing the potentially optimized execution plan or an error.
     fn optimize(
         &self,
         plan: Arc<dyn ExecutionPlan>,
@@ -84,7 +100,12 @@ impl PhysicalOptimizerRule for OptimizeAggregateOrder {
                 let requirement = indices
                     .iter()
                     .map(|&idx| {
-                        PhysicalSortRequirement::new(groupby_exprs[idx].clone(), None)
+                        PhysicalSortRequirement::new(
+                            Arc::<dyn datafusion_physical_plan::PhysicalExpr>::clone(
+                                &groupby_exprs[idx],
+                            ),
+                            None,
+                        )
                     })
                     .collect::<Vec<_>>();
 
@@ -138,12 +159,10 @@ fn try_convert_aggregate_if_better(
     aggr_exprs
         .into_iter()
         .map(|aggr_expr| {
-            let aggr_sort_exprs = &aggr_expr.order_bys().unwrap_or_default();
+            let aggr_sort_exprs = aggr_expr.order_bys().unwrap_or(LexOrdering::empty());
             let reverse_aggr_sort_exprs = reverse_order_bys(aggr_sort_exprs);
-            let aggr_sort_reqs =
-                PhysicalSortRequirement::from_sort_exprs(aggr_sort_exprs.iter());
-            let reverse_aggr_req =
-                PhysicalSortRequirement::from_sort_exprs(&reverse_aggr_sort_exprs.inner);
+            let aggr_sort_reqs = LexRequirement::from(aggr_sort_exprs.clone());
+            let reverse_aggr_req = LexRequirement::from(reverse_aggr_sort_exprs);
 
             // If the aggregate expression benefits from input ordering, and
             // there is an actual ordering enabling this, try to update the
@@ -151,14 +170,20 @@ fn try_convert_aggregate_if_better(
             // Otherwise, leave it as is.
             if aggr_expr.order_sensitivity().is_beneficial() && !aggr_sort_reqs.is_empty()
             {
-                let reqs = concat_slices(prefix_requirement, &aggr_sort_reqs);
+                let reqs = LexRequirement {
+                    inner: concat_slices(prefix_requirement, &aggr_sort_reqs),
+                };
+
+                let prefix_requirement = LexRequirement {
+                    inner: prefix_requirement.to_vec(),
+                };
+
                 if eq_properties.ordering_satisfy_requirement(&reqs) {
                     // Existing ordering satisfies the aggregator requirements:
                     aggr_expr.with_beneficial_ordering(true)?.map(Arc::new)
-                } else if eq_properties.ordering_satisfy_requirement(&concat_slices(
-                    prefix_requirement,
-                    &reverse_aggr_req,
-                )) {
+                } else if eq_properties.ordering_satisfy_requirement(&LexRequirement {
+                    inner: concat_slices(&prefix_requirement, &reverse_aggr_req),
+                }) {
                     // Converting to reverse enables more efficient execution
                     // given the existing ordering (if possible):
                     aggr_expr

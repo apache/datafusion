@@ -880,18 +880,18 @@ impl TableProvider for ListingTable {
             None => {} // no ordering required
         };
 
-        let filters = conjunction(filters.to_vec())
-            .map(|expr| -> Result<_> {
-                // NOTE: Use the table schema (NOT file schema) here because `expr` may contain references to partition columns.
+        let filters = match conjunction(filters.to_vec()) {
+            Some(expr) => {
                 let table_df_schema = self.table_schema.as_ref().clone().to_dfschema()?;
                 let filters = create_physical_expr(
                     &expr,
                     &table_df_schema,
                     state.execution_props(),
                 )?;
-                Ok(Some(filters))
-            })
-            .unwrap_or(Ok(None))?;
+                Some(filters)
+            }
+            None => None,
+        };
 
         let Some(object_store_url) =
             self.table_paths.first().map(ListingTableUrl::object_store)

@@ -28,7 +28,7 @@ use arrow::datatypes::{DataType, SchemaRef};
 use arrow_array::*;
 use datafusion_common::{internal_err, Result};
 use datafusion_execution::memory_pool::MemoryReservation;
-use datafusion_physical_expr_common::sort_expr::LexOrderingRef;
+use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
 macro_rules! primitive_merge_helper {
     ($t:ty, $($v:ident),+) => {
@@ -51,16 +51,30 @@ macro_rules! merge_helper {
     }};
 }
 
-#[derive(Default)]
 pub struct StreamingMergeBuilder<'a> {
     streams: Vec<SendableRecordBatchStream>,
     schema: Option<SchemaRef>,
-    expressions: LexOrderingRef<'a>,
+    expressions: &'a LexOrdering,
     metrics: Option<BaselineMetrics>,
     batch_size: Option<usize>,
     fetch: Option<usize>,
     reservation: Option<MemoryReservation>,
     enable_round_robin_tie_breaker: bool,
+}
+
+impl<'a> Default for StreamingMergeBuilder<'a> {
+    fn default() -> Self {
+        Self {
+            streams: vec![],
+            schema: None,
+            expressions: LexOrdering::empty(),
+            metrics: None,
+            batch_size: None,
+            fetch: None,
+            reservation: None,
+            enable_round_robin_tie_breaker: false,
+        }
+    }
 }
 
 impl<'a> StreamingMergeBuilder<'a> {
@@ -81,7 +95,7 @@ impl<'a> StreamingMergeBuilder<'a> {
         self
     }
 
-    pub fn with_expressions(mut self, expressions: LexOrderingRef<'a>) -> Self {
+    pub fn with_expressions(mut self, expressions: &'a LexOrdering) -> Self {
         self.expressions = expressions;
         self
     }

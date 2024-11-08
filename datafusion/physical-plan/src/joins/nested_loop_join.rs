@@ -15,9 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Defines the nested loop join plan, it supports all [`JoinType`].
-//! The nested loop join can execute in parallel by partitions and it is
-//! determined by the [`JoinType`].
+//! [`NestedLoopJoinExec`]: joins without equijoin (equality predicates).
 
 use std::any::Any;
 use std::fmt::Formatter;
@@ -141,9 +139,11 @@ impl JoinLeftData {
 /// "reports" about probe phase completion (which means that "visited" bitmap won't be
 /// updated anymore), and only the last thread, reporting about completion, will return output.
 ///
-/// Note that the `Clone` trait is not implemented for this struct due to the
-/// `left_fut` [`OnceAsync`], which is used to coordinate the loading of the
-/// left side with the processing in each output stream.
+/// # Clone / Shared State
+///
+/// Note this structure includes a [`OnceAsync`] that is used to coordinate the
+/// loading of the left side with the processing in each output stream.
+/// Therefore it can not be [`Clone`]
 #[derive(Debug)]
 pub struct NestedLoopJoinExec {
     /// left side
@@ -156,7 +156,12 @@ pub struct NestedLoopJoinExec {
     pub(crate) join_type: JoinType,
     /// The schema once the join is applied
     schema: SchemaRef,
-    /// Build-side data
+    /// Future that consumes left input and buffers it in memory
+    ///
+    /// This structure is *shared* across all output streams.
+    ///
+    /// Each output stream waits on the `OnceAsync` to signal the completion of
+    /// the hash table creation.
     inner_table: OnceAsync<JoinLeftData>,
     /// Information of index and left / right placement of columns
     column_indices: Vec<ColumnIndex>,

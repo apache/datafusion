@@ -105,9 +105,10 @@ mod tests {
     fn to_upper(input: ArrayRef, expected: ArrayRef) -> Result<()> {
         let func = UpperFunc::new();
         let args = vec![ColumnarValue::Array(input)];
+        #[allow(deprecated)] // TODO migrate UDF invoke to invoke_batch
         let result = match func.invoke(&args)? {
             ColumnarValue::Array(result) => result,
-            _ => unreachable!(),
+            _ => unreachable!("upper"),
         };
         assert_eq!(&expected, &result);
         Ok(())

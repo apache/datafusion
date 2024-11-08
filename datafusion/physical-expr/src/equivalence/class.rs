@@ -21,9 +21,8 @@ use std::sync::Arc;
 use super::{add_offset_to_expr, collapse_lex_req, ProjectionMapping};
 use crate::{
     expressions::Column, physical_expr::deduplicate_physical_exprs,
-    physical_exprs_bag_equal, physical_exprs_contains, LexOrdering, LexOrderingRef,
-    LexRequirement, LexRequirementRef, PhysicalExpr, PhysicalExprRef, PhysicalSortExpr,
-    PhysicalSortRequirement,
+    physical_exprs_bag_equal, physical_exprs_contains, LexOrdering, LexRequirement,
+    PhysicalExpr, PhysicalExprRef, PhysicalSortExpr, PhysicalSortRequirement,
 };
 
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
@@ -67,8 +66,7 @@ pub struct ConstExpr {
 
 impl PartialEq for ConstExpr {
     fn eq(&self, other: &Self) -> bool {
-        self.across_partitions == other.across_partitions
-            && self.expr.eq(other.expr.as_any())
+        self.across_partitions == other.across_partitions && self.expr.eq(&other.expr)
     }
 }
 
@@ -121,7 +119,7 @@ impl ConstExpr {
 
     /// Returns true if this constant expression is equal to the given expression
     pub fn eq_expr(&self, other: impl AsRef<dyn PhysicalExpr>) -> bool {
-        self.expr.eq(other.as_ref().as_any())
+        self.expr.as_ref() == other.as_ref()
     }
 
     /// Returns a [`Display`]able list of `ConstExpr`.
@@ -475,13 +473,13 @@ impl EquivalenceGroup {
     /// This function applies the `normalize_sort_expr` function for all sort
     /// expressions in `sort_exprs` and returns the corresponding normalized
     /// sort expressions.
-    pub fn normalize_sort_exprs(&self, sort_exprs: LexOrderingRef) -> LexOrdering {
+    pub fn normalize_sort_exprs(&self, sort_exprs: &LexOrdering) -> LexOrdering {
         // Convert sort expressions to sort requirements:
-        let sort_reqs = PhysicalSortRequirement::from_sort_exprs(sort_exprs.iter());
+        let sort_reqs = LexRequirement::from(sort_exprs.clone());
         // Normalize the requirements:
         let normalized_sort_reqs = self.normalize_sort_requirements(&sort_reqs);
         // Convert sort requirements back to sort expressions:
-        PhysicalSortRequirement::to_sort_exprs(normalized_sort_reqs.inner)
+        LexOrdering::from(normalized_sort_reqs)
     }
 
     /// This function applies the `normalize_sort_requirement` function for all
@@ -489,7 +487,7 @@ impl EquivalenceGroup {
     /// sort requirements.
     pub fn normalize_sort_requirements(
         &self,
-        sort_reqs: LexRequirementRef,
+        sort_reqs: &LexRequirement,
     ) -> LexRequirement {
         collapse_lex_req(LexRequirement::new(
             sort_reqs
@@ -557,7 +555,7 @@ impl EquivalenceGroup {
                 new_classes.push((source, vec![Arc::clone(target)]));
             }
             if let Some((_, values)) =
-                new_classes.iter_mut().find(|(key, _)| key.eq(source))
+                new_classes.iter_mut().find(|(key, _)| *key == source)
             {
                 if !physical_exprs_contains(values, target) {
                     values.push(Arc::clone(target));

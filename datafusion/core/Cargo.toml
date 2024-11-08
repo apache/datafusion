@@ -157,7 +157,6 @@ rstest = { workspace = true }
 rust_decimal = { version = "1.27.0", features = ["tokio-pg"] }
 serde_json = { workspace = true }
 test-utils = { path = "../../test-utils" }
-thiserror = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "parking_lot", "fs"] }
 tokio-postgres = "0.7.7"
 

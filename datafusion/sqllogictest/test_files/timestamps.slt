@@ -308,6 +308,29 @@ SELECT from_unixtime(ts / 1000000000) FROM ts_data LIMIT 3;
 2020-09-08T12:42:29
 2020-09-08T11:42:29
 
+# from_unixtime single
+
+query P
+SELECT from_unixtime(1599572549190855123 / 1000000000, 'America/New_York');
+----
+2020-09-08T09:42:29-04:00
+
+# from_unixtime with timezone
+query P
+SELECT from_unixtime(ts / 1000000000, 'Asia/Istanbul') FROM ts_data LIMIT 3;
+----
+2020-09-08T16:42:29+03:00
+2020-09-08T15:42:29+03:00
+2020-09-08T14:42:29+03:00
+
+# from_unixtime with utc timezone
+query P
+SELECT from_unixtime(ts / 1000000000, 'UTC') FROM ts_data LIMIT 3;
+----
+2020-09-08T13:42:29Z
+2020-09-08T12:42:29Z
+2020-09-08T11:42:29Z
+
 # to_timestamp
 
 query I
@@ -401,6 +424,41 @@ query I
 SELECT COUNT(*) FROM ts_data_secs where ts > from_unixtime(1599566400)
 ----
 2
+
+query P rowsort
+SELECT ts FROM ts_data_nanos;
+----
+2020-09-08T11:42:29.190855123
+2020-09-08T12:42:29.190855123
+2020-09-08T13:42:29.190855123
+
+query P rowsort
+SELECT CAST(ts AS timestamp(0)) FROM ts_data_nanos;
+----
+2020-09-08T11:42:29
+2020-09-08T12:42:29
+2020-09-08T13:42:29
+
+query P rowsort
+SELECT CAST(ts AS timestamp(3)) FROM ts_data_nanos;
+----
+2020-09-08T11:42:29.190
+2020-09-08T12:42:29.190
+2020-09-08T13:42:29.190
+
+query P rowsort
+SELECT CAST(ts AS timestamp(6)) FROM ts_data_nanos;
+----
+2020-09-08T11:42:29.190855
+2020-09-08T12:42:29.190855
+2020-09-08T13:42:29.190855
+
+query P rowsort
+SELECT CAST(ts AS timestamp(9)) FROM ts_data_nanos;
+----
+2020-09-08T11:42:29.190855123
+2020-09-08T12:42:29.190855123
+2020-09-08T13:42:29.190855123
 
 
 # count_distinct_timestamps
@@ -3293,3 +3351,10 @@ drop view t_utc;
 
 statement ok
 drop view t_europe;
+
+# TODO: In Postgres, '-1' is unknown type and interpreted to float8 so they don't fail on this query
+query error DataFusion error: Arrow error: Parser error: Error parsing timestamp from '\-1': timestamp must contain at least 10 characters
+select to_timestamp('-1');
+
+query error DataFusion error: Arrow error: Parser error: Error parsing timestamp from '\-1': timestamp must contain at least 10 characters
+select to_timestamp(arrow_cast('-1', 'Utf8'));
