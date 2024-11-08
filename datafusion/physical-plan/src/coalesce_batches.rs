@@ -48,7 +48,7 @@ use futures::stream::{Stream, StreamExt};
 /// reaches the `fetch` value.
 ///
 /// See [`BatchCoalescer`] for more information
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct CoalesceBatchesExec {
     /// The input plan
     input: Arc<dyn ExecutionPlan>,

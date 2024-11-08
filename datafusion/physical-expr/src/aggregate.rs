@@ -45,7 +45,7 @@ use datafusion_functions_aggregate_common::accumulator::AccumulatorArgs;
 use datafusion_functions_aggregate_common::accumulator::StateFieldsArgs;
 use datafusion_functions_aggregate_common::order::AggregateOrderSensitivity;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
-use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexOrderingRef};
+use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_expr_common::utils::reverse_order_bys;
 
 use datafusion_expr_common::groups_accumulator::GroupsAccumulator;
@@ -292,7 +292,7 @@ impl AggregateFunctionExpr {
     /// Order by requirements for the aggregate function
     /// By default it is `None` (there is no requirement)
     /// Order-sensitive aggregators, such as `FIRST_VALUE(x ORDER BY y)` should implement this
-    pub fn order_bys(&self) -> Option<LexOrderingRef> {
+    pub fn order_bys(&self) -> Option<&LexOrdering> {
         if self.ordering_req.is_empty() {
             return None;
         }
@@ -490,7 +490,10 @@ impl AggregateFunctionExpr {
     /// These expressions are  (1)function arguments, (2) order by expressions.
     pub fn all_expressions(&self) -> AggregatePhysicalExpressions {
         let args = self.expressions();
-        let order_bys = self.order_bys().unwrap_or_default();
+        let order_bys = self
+            .order_bys()
+            .cloned()
+            .unwrap_or_else(LexOrdering::default);
         let order_by_exprs = order_bys
             .iter()
             .map(|sort_expr| Arc::clone(&sort_expr.expr))

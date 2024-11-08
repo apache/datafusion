@@ -414,7 +414,7 @@ message CsvOptions {
   bytes quote = 3; // Quote character as a byte
   bytes escape = 4; // Optional escape character as a byte
   CompressionTypeVariant compression = 5; // Compression type
-  uint64 schema_infer_max_rec = 6; // Max records for schema inference
+  optional uint64 schema_infer_max_rec = 6; // Optional max records for schema inference
   string date_format = 7; // Optional date format
   string datetime_format = 8; // Optional datetime format
   string timestamp_format = 9; // Optional timestamp format
@@ -430,7 +430,7 @@ message CsvOptions {
 // Options controlling CSV format
 message JsonOptions {
   CompressionTypeVariant compression = 1; // Compression type
-  uint64 schema_infer_max_rec = 2; // Max records for schema inference
+  optional uint64 schema_infer_max_rec = 2; // Optional max records for schema inference
 }
 
 message TableParquetOptions {

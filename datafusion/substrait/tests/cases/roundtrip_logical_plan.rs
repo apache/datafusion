@@ -23,6 +23,7 @@ use datafusion_substrait::logical_plan::{
     consumer::from_substrait_plan, producer::to_substrait_plan,
 };
 use std::cmp::Ordering;
+use std::mem::size_of_val;
 
 use datafusion::arrow::datatypes::{DataType, Field, IntervalUnit, Schema, TimeUnit};
 use datafusion::common::{not_impl_err, plan_err, DFSchema, DFSchemaRef};
@@ -656,6 +657,19 @@ async fn simple_intersect() -> Result<()> {
 async fn aggregate_wo_projection_consume() -> Result<()> {
     let proto_plan =
         read_json("tests/testdata/test_plans/aggregate_no_project.substrait.json");
+
+    assert_expected_plan_substrait(
+        proto_plan,
+        "Aggregate: groupBy=[[data.a]], aggr=[[count(data.a) AS countA]]\
+        \n  TableScan: data projection=[a]",
+    )
+    .await
+}
+
+#[tokio::test]
+async fn aggregate_wo_projection_group_expression_ref_consume() -> Result<()> {
+    let proto_plan =
+        read_json("tests/testdata/test_plans/aggregate_no_project_group_expression_ref.substrait.json");
 
     assert_expected_plan_substrait(
         proto_plan,

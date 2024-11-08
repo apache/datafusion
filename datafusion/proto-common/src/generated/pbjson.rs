@@ -1512,7 +1512,7 @@ impl serde::Serialize for CsvOptions {
         if self.compression != 0 {
             len += 1;
         }
-        if self.schema_infer_max_rec != 0 {
+        if self.schema_infer_max_rec.is_some() {
             len += 1;
         }
         if !self.date_format.is_empty() {
@@ -1571,10 +1571,10 @@ impl serde::Serialize for CsvOptions {
                 .map_err(|_| serde::ser::Error::custom(format!("Invalid variant {}", self.compression)))?;
             struct_ser.serialize_field("compression", &v)?;
         }
-        if self.schema_infer_max_rec != 0 {
+        if let Some(v) = self.schema_infer_max_rec.as_ref() {
             #[allow(clippy::needless_borrow)]
             #[allow(clippy::needless_borrows_for_generic_args)]
-            struct_ser.serialize_field("schemaInferMaxRec", ToString::to_string(&self.schema_infer_max_rec).as_str())?;
+            struct_ser.serialize_field("schemaInferMaxRec", ToString::to_string(&v).as_str())?;
         }
         if !self.date_format.is_empty() {
             struct_ser.serialize_field("dateFormat", &self.date_format)?;
@@ -1787,7 +1787,7 @@ impl<'de> serde::Deserialize<'de> for CsvOptions {
                                 return Err(serde::de::Error::duplicate_field("schemaInferMaxRec"));
                             }
                             schema_infer_max_rec__ = 
-                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                                map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| x.0)
                             ;
                         }
                         GeneratedField::DateFormat => {
@@ -1866,7 +1866,7 @@ impl<'de> serde::Deserialize<'de> for CsvOptions {
                     quote: quote__.unwrap_or_default(),
                     escape: escape__.unwrap_or_default(),
                     compression: compression__.unwrap_or_default(),
-                    schema_infer_max_rec: schema_infer_max_rec__.unwrap_or_default(),
+                    schema_infer_max_rec: schema_infer_max_rec__,
                     date_format: date_format__.unwrap_or_default(),
                     datetime_format: datetime_format__.unwrap_or_default(),
                     timestamp_format: timestamp_format__.unwrap_or_default(),
@@ -3929,7 +3929,7 @@ impl serde::Serialize for JsonOptions {
         if self.compression != 0 {
             len += 1;
         }
-        if self.schema_infer_max_rec != 0 {
+        if self.schema_infer_max_rec.is_some() {
             len += 1;
         }
         let mut struct_ser = serializer.serialize_struct("datafusion_common.JsonOptions", len)?;
@@ -3938,10 +3938,10 @@ impl serde::Serialize for JsonOptions {
                 .map_err(|_| serde::ser::Error::custom(format!("Invalid variant {}", self.compression)))?;
             struct_ser.serialize_field("compression", &v)?;
         }
-        if self.schema_infer_max_rec != 0 {
+        if let Some(v) = self.schema_infer_max_rec.as_ref() {
             #[allow(clippy::needless_borrow)]
             #[allow(clippy::needless_borrows_for_generic_args)]
-            struct_ser.serialize_field("schemaInferMaxRec", ToString::to_string(&self.schema_infer_max_rec).as_str())?;
+            struct_ser.serialize_field("schemaInferMaxRec", ToString::to_string(&v).as_str())?;
         }
         struct_ser.end()
     }
@@ -4019,14 +4019,14 @@ impl<'de> serde::Deserialize<'de> for JsonOptions {
                                 return Err(serde::de::Error::duplicate_field("schemaInferMaxRec"));
                             }
                             schema_infer_max_rec__ = 
-                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                                map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| x.0)
                             ;
                         }
                     }
                 }
                 Ok(JsonOptions {
                     compression: compression__.unwrap_or_default(),
-                    schema_infer_max_rec: schema_infer_max_rec__.unwrap_or_default(),
+                    schema_infer_max_rec: schema_infer_max_rec__,
                 })
             }
         }

@@ -23,7 +23,7 @@ use std::fmt::{self, Debug};
 use std::sync::Arc;
 
 use super::write::orchestration::stateless_multipart_put;
-use super::{FileFormat, FileFormatFactory};
+use super::{FileFormat, FileFormatFactory, DEFAULT_SCHEMA_INFER_MAX_RECORD};
 use crate::datasource::file_format::file_compression_type::FileCompressionType;
 use crate::datasource::file_format::write::BatchSerializer;
 use crate::datasource::physical_plan::{
@@ -137,11 +137,11 @@ impl CsvFormat {
     /// Return a newline delimited stream from the specified file on
     /// Stream, decompressing if necessary
     /// Each returned `Bytes` has a whole number of newline delimited rows
-    async fn read_to_delimited_chunks(
+    async fn read_to_delimited_chunks<'a>(
         &self,
         store: &Arc<dyn ObjectStore>,
         object: &ObjectMeta,
-    ) -> BoxStream<'static, Result<Bytes>> {
+    ) -> BoxStream<'a, Result<Bytes>> {
         // stream to only read as many rows as needed into memory
         let stream = store
             .get(&object.location)
@@ -165,10 +165,10 @@ impl CsvFormat {
         stream.boxed()
     }
 
-    async fn read_to_delimited_chunks_from_stream(
+    async fn read_to_delimited_chunks_from_stream<'a>(
         &self,
-        stream: BoxStream<'static, Result<Bytes>>,
-    ) -> BoxStream<'static, Result<Bytes>> {
+        stream: BoxStream<'a, Result<Bytes>>,
+    ) -> BoxStream<'a, Result<Bytes>> {
         let file_compression_type: FileCompressionType = self.options.compression.into();
         let decoder = file_compression_type.convert_stream(stream);
         let steam = match decoder {
@@ -204,7 +204,7 @@ impl CsvFormat {
     /// Set a limit in terms of records to scan to infer the schema
     /// - default to `DEFAULT_SCHEMA_INFER_MAX_RECORD`
     pub fn with_schema_infer_max_rec(mut self, max_rec: usize) -> Self {
-        self.options.schema_infer_max_rec = max_rec;
+        self.options.schema_infer_max_rec = Some(max_rec);
         self
     }
 
@@ -319,7 +319,10 @@ impl FileFormat for CsvFormat {
     ) -> Result<SchemaRef> {
         let mut schemas = vec![];
 
-        let mut records_to_read = self.options.schema_infer_max_rec;
+        let mut records_to_read = self
+            .options
+            .schema_infer_max_rec
+            .unwrap_or(DEFAULT_SCHEMA_INFER_MAX_RECORD);
 
         for object in objects {
             let stream = self.read_to_delimited_chunks(store, object).await;
@@ -454,7 +457,12 @@ impl CsvFormat {
                             .has_header
                             .unwrap_or(state.config_options().catalog.has_header),
                 )
-                .with_delimiter(self.options.delimiter);
+                .with_delimiter(self.options.delimiter)
+                .with_quote(self.options.quote);
+
+            if let Some(escape) = self.options.escape {
+                format = format.with_escape(escape);
+            }
 
             if let Some(comment) = self.options.comment {
                 format = format.with_comment(comment);
@@ -867,6 +875,55 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn test_infer_schema_escape_chars() -> Result<()> {
+        let session_ctx = SessionContext::new();
+        let state = session_ctx.state();
+        let variable_object_store = Arc::new(VariableStream::new(
+            Bytes::from(
+                r#"c1,c2,c3,c4
+0.3,"Here, is a comma\"",third,3
+0.31,"double quotes are ok, "" quote",third again,9
+0.314,abc,xyz,27"#,
+            ),
+            1,
+        ));
+        let object_meta = ObjectMeta {
+            location: Path::parse("/")?,
+            last_modified: DateTime::default(),
+            size: usize::MAX,
+            e_tag: None,
+            version: None,
+        };
+
+        let num_rows_to_read = 3;
+        let csv_format = CsvFormat::default()
+            .with_has_header(true)
+            .with_schema_infer_max_rec(num_rows_to_read)
+            .with_quote(b'"')
+            .with_escape(Some(b'\\'));
+
+        let inferred_schema = csv_format
+            .infer_schema(
+                &state,
+                &(variable_object_store.clone() as Arc<dyn ObjectStore>),
+                &[object_meta],
+            )
+            .await?;
+
+        let actual_fields: Vec<_> = inferred_schema
+            .fields()
+            .iter()
+            .map(|f| format!("{}: {:?}", f.name(), f.data_type()))
+            .collect();
+
+        assert_eq!(
+            vec!["c1: Float64", "c2: Utf8", "c3: Utf8", "c4: Int64",],
+            actual_fields
+        );
+        Ok(())
+    }
+
     #[rstest(
         file_compression_type,
         case(FileCompressionType::UNCOMPRESSED),
@@ -891,7 +948,10 @@ mod tests {
         let integration = LocalFileSystem::new_with_prefix(arrow_test_data()).unwrap();
         let path = Path::from("csv/aggregate_test_100.csv");
         let csv = CsvFormat::default().with_has_header(true);
-        let records_to_read = csv.options().schema_infer_max_rec;
+        let records_to_read = csv
+            .options()
+            .schema_infer_max_rec
+            .unwrap_or(DEFAULT_SCHEMA_INFER_MAX_RECORD);
         let store = Arc::new(integration) as Arc<dyn ObjectStore>;
         let original_stream = store.get(&path).await?;
 

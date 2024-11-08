@@ -295,6 +295,7 @@ impl<F: FileOpener> FileStream<F> {
             object_meta: part_file.object_meta,
             range: part_file.range,
             extensions: part_file.extensions,
+            metadata_size_hint: part_file.metadata_size_hint,
         };
 
         Some(

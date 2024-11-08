@@ -132,7 +132,6 @@ impl ExecutionPlan for ExplainExec {
         if 0 != partition {
             return internal_err!("ExplainExec invalid partition {partition}");
         }
-
         let mut type_builder =
             StringBuilder::with_capacity(self.stringified_plans.len(), 1024);
         let mut plan_builder =

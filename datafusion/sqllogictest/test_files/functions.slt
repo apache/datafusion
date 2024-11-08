@@ -735,3 +735,24 @@ query B
 select contains('', '');
 ----
 true
+
+
+## Demonstrate how to test for trailing whitespace
+
+# Note no trailing whitespace
+query T
+select substr('Andrew Lamb', 1, 7)
+----
+Andrew
+
+# Note two spaces between `Andrew` and `|`
+query TT
+select substr('Andrew Lamb', 1, 7), '|'
+----
+Andrew  |
+
+# Note only one space between `Andrew` and `|`
+query TT
+select substr('Andrew Lamb', 1, 6), '|'
+----
+Andrew |

@@ -13,8 +13,7 @@
 // "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
-// under the License.language governing permissions and
-// limitations under the License.
+// under the License.
 
 use std::sync::Arc;
 
@@ -53,7 +52,7 @@ pub fn serialize_physical_aggr_expr(
 ) -> Result<protobuf::PhysicalExprNode> {
     let expressions = serialize_physical_exprs(&aggr_expr.expressions(), codec)?;
     let ordering_req = match aggr_expr.order_bys() {
-        Some(order) => LexOrdering::from_ref(order),
+        Some(order) => order.clone(),
         None => LexOrdering::default(),
     };
     let ordering_req = serialize_physical_sort_exprs(ordering_req, codec)?;

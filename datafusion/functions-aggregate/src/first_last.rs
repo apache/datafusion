@@ -33,11 +33,11 @@ use datafusion_expr::aggregate_doc_sections::DOC_SECTION_GENERAL;
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::{format_state_name, AggregateOrderSensitivity};
 use datafusion_expr::{
-    Accumulator, AggregateUDFImpl, ArrayFunctionSignature, Documentation, Expr,
-    ExprFunctionExt, Signature, SortExpr, TypeSignature, Volatility,
+    Accumulator, AggregateUDFImpl, Documentation, Expr, ExprFunctionExt, Signature,
+    SortExpr, Volatility,
 };
 use datafusion_functions_aggregate_common::utils::get_sort_options;
-use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexOrderingRef};
+use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
 create_func!(FirstValue, first_value_udaf);
 
@@ -79,15 +79,7 @@ impl Default for FirstValue {
 impl FirstValue {
     pub fn new() -> Self {
         Self {
-            signature: Signature::one_of(
-                vec![
-                    // TODO: we can introduce more strict signature that only numeric of array types are allowed
-                    TypeSignature::ArraySignature(ArrayFunctionSignature::Array),
-                    TypeSignature::Numeric(1),
-                    TypeSignature::Uniform(1, vec![DataType::Utf8]),
-                ],
-                Volatility::Immutable,
-            ),
+            signature: Signature::any(1, Volatility::Immutable),
             requirement_satisfied: false,
         }
     }
@@ -130,7 +122,7 @@ impl AggregateUDFImpl for FirstValue {
         FirstValueAccumulator::try_new(
             acc_args.return_type,
             &ordering_dtypes,
-            LexOrdering::from_ref(acc_args.ordering_req),
+            acc_args.ordering_req.clone(),
             acc_args.ignore_nulls,
         )
         .map(|acc| Box::new(acc.with_requirement_satisfied(requirement_satisfied)) as _)
@@ -406,15 +398,7 @@ impl Default for LastValue {
 impl LastValue {
     pub fn new() -> Self {
         Self {
-            signature: Signature::one_of(
-                vec![
-                    // TODO: we can introduce more strict signature that only numeric of array types are allowed
-                    TypeSignature::ArraySignature(ArrayFunctionSignature::Array),
-                    TypeSignature::Numeric(1),
-                    TypeSignature::Uniform(1, vec![DataType::Utf8]),
-                ],
-                Volatility::Immutable,
-            ),
+            signature: Signature::any(1, Volatility::Immutable),
             requirement_satisfied: false,
         }
     }
@@ -455,7 +439,7 @@ impl AggregateUDFImpl for LastValue {
         LastValueAccumulator::try_new(
             acc_args.return_type,
             &ordering_dtypes,
-            LexOrdering::from_ref(acc_args.ordering_req),
+            acc_args.ordering_req.clone(),
             acc_args.ignore_nulls,
         )
         .map(|acc| Box::new(acc.with_requirement_satisfied(requirement_satisfied)) as _)
@@ -723,10 +707,7 @@ fn filter_states_according_to_is_set(
 }
 
 /// Combines array refs and their corresponding orderings to construct `SortColumn`s.
-fn convert_to_sort_cols(
-    arrs: &[ArrayRef],
-    sort_exprs: LexOrderingRef,
-) -> Vec<SortColumn> {
+fn convert_to_sort_cols(arrs: &[ArrayRef], sort_exprs: &LexOrdering) -> Vec<SortColumn> {
     arrs.iter()
         .zip(sort_exprs.iter())
         .map(|(item, sort_expr)| SortColumn {

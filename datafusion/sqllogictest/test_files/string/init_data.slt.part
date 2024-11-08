@@ -23,6 +23,8 @@ create table test_source as values
   ('under_score', 'un_____core', 'un iść core', 'chrząszcz na łące w 東京都'),
   ('percent', 'p%t', 'pan Tadeusz ma iść w kąt', 'Pan Tadeusz ma frunąć stąd w kąt'),
   ('', '%', '', ''),
+  ('%', '\%', '', ''),
+  ('_', '\_', '', ''),
   (NULL, '%', NULL, NULL),
   (NULL, 'R', NULL, '🔥');
 

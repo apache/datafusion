@@ -61,8 +61,8 @@ use crate::physical_plan::{Distribution, ExecutionPlan, InputOrderMode};
 
 use datafusion_common::plan_err;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_physical_expr::{Partitioning, PhysicalSortRequirement};
-use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexOrderingRef};
+use datafusion_physical_expr::Partitioning;
+use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion_physical_plan::repartition::RepartitionExec;
@@ -221,12 +221,12 @@ fn replace_with_partial_sort(
         // here we're trying to find the common prefix for sorted columns that is required for the
         // sort and already satisfied by the given ordering
         let child_eq_properties = child.equivalence_properties();
-        let sort_req = PhysicalSortRequirement::from_sort_exprs(sort_plan.expr());
+        let sort_req = LexRequirement::from(sort_plan.expr().clone());
 
         let mut common_prefix_length = 0;
-        while child_eq_properties
-            .ordering_satisfy_requirement(&sort_req[0..common_prefix_length + 1])
-        {
+        while child_eq_properties.ordering_satisfy_requirement(&LexRequirement {
+            inner: sort_req[0..common_prefix_length + 1].to_vec(),
+        }) {
             common_prefix_length += 1;
         }
         if common_prefix_length > 0 {
@@ -275,8 +275,8 @@ fn parallelize_sorts(
     {
         // Take the initial sort expressions and requirements
         let (sort_exprs, fetch) = get_sort_exprs(&requirements.plan)?;
-        let sort_reqs = PhysicalSortRequirement::from_sort_exprs(sort_exprs);
-        let sort_exprs = LexOrdering::new(sort_exprs.to_vec());
+        let sort_reqs = LexRequirement::from(sort_exprs.clone());
+        let sort_exprs = sort_exprs.clone();
 
         // If there is a connection between a `CoalescePartitionsExec` and a
         // global sort that satisfy the requirements (i.e. intermediate
@@ -392,7 +392,10 @@ fn analyze_immediate_sort_removal(
         let sort_input = sort_exec.input();
         // If this sort is unnecessary, we should remove it:
         if sort_input.equivalence_properties().ordering_satisfy(
-            sort_exec.properties().output_ordering().unwrap_or_default(),
+            sort_exec
+                .properties()
+                .output_ordering()
+                .unwrap_or(LexOrdering::empty()),
         ) {
             node.plan = if !sort_exec.preserve_partitioning()
                 && sort_input.output_partitioning().partition_count() > 1
@@ -632,10 +635,10 @@ fn remove_corresponding_sort_from_sub_plan(
     Ok(node)
 }
 
-/// Converts an [ExecutionPlan] trait object to a [LexOrderingRef] when possible.
+/// Converts an [ExecutionPlan] trait object to a [LexOrdering] reference when possible.
 fn get_sort_exprs(
     sort_any: &Arc<dyn ExecutionPlan>,
-) -> Result<(LexOrderingRef, Option<usize>)> {
+) -> Result<(&LexOrdering, Option<usize>)> {
     if let Some(sort_exec) = sort_any.as_any().downcast_ref::<SortExec>() {
         Ok((sort_exec.expr(), sort_exec.fetch()))
     } else if let Some(spm) = sort_any.as_any().downcast_ref::<SortPreservingMergeExec>()

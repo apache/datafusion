@@ -113,6 +113,30 @@ async fn unsupported_statement_returns_error() {
     ctx.sql_with_options(sql, options).await.unwrap();
 }
 
+// Disallow PREPARE and EXECUTE statements if `allow_statements` is false
+#[tokio::test]
+async fn disable_prepare_and_execute_statement() {
+    let ctx = SessionContext::new();
+
+    let prepare_sql = "PREPARE plan(INT) AS SELECT $1";
+    let execute_sql = "EXECUTE plan(1)";
+    let options = SQLOptions::new().with_allow_statements(false);
+    let df = ctx.sql_with_options(prepare_sql, options).await;
+    assert_eq!(
+        df.unwrap_err().strip_backtrace(),
+        "Error during planning: Statement not supported: PREPARE"
+    );
+    let df = ctx.sql_with_options(execute_sql, options).await;
+    assert_eq!(
+        df.unwrap_err().strip_backtrace(),
+        "Error during planning: Statement not supported: EXECUTE"
+    );
+
+    let options = options.with_allow_statements(true);
+    ctx.sql_with_options(prepare_sql, options).await.unwrap();
+    ctx.sql_with_options(execute_sql, options).await.unwrap();
+}
+
 #[tokio::test]
 async fn empty_statement_returns_error() {
     let ctx = SessionContext::new();
