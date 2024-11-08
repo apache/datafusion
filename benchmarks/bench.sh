@@ -175,6 +175,10 @@ main() {
                     # same data as for tpch
                     data_tpch "1"
                     ;;
+                sort_integration)
+                    # same data as for tpch
+                    data_tpch "1"
+                    ;;
                 *)
                     echo "Error: unknown benchmark '$BENCHMARK' for data generation"
                     usage
@@ -251,6 +255,9 @@ main() {
                     ;;
                 external_aggr)
                     run_external_aggr
+                    ;;
+                sort_integration)
+                    run_sort_integration
                     ;;
                 *)
                     echo "Error: unknown benchmark '$BENCHMARK' for run"
@@ -547,6 +554,16 @@ run_external_aggr() {
     # CPU cores, we set a constant number of partitions to prevent this 
     # benchmark to fail on some machines.
     $CARGO_COMMAND --bin external_aggr -- benchmark --partitions 4 --iterations 5 --path "${TPCH_DIR}" -o "${RESULTS_FILE}"
+}
+
+# Runs the sort integration benchmark
+run_sort_integration() {
+    TPCH_DIR="${DATA_DIR}/tpch_sf1"
+    RESULTS_FILE="${RESULTS_DIR}/sort_integration.json"
+    echo "RESULTS_FILE: ${RESULTS_FILE}"
+    echo "Running sort integration benchmark..."
+
+    $CARGO_COMMAND --bin sort_integration -- benchmark --iterations 5 --path "${TPCH_DIR}" -o "${RESULTS_FILE}"
 }
 
 

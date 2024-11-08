@@ -330,6 +330,30 @@ steps.
 The tests sort the entire dataset using several different sort
 orders.
 
+## Sort Integration
+
+Test performance of end-to-end sort SQL queries. (While the `Sort` benchmark focuses on a single sort executor, this benchmark tests how sorting is executed across multiple CPU cores by benchmarking sorting the whole relational table.)
+
+Sort integration benchmark runs whole table sort queries on TPCH `lineitem` table, with different characteristics. For example, different number of sort keys, different sort key cardinality, different number of payload columns, etc.
+
+See [`sort_integration.rs`](src/bin/sort_integration.rs) for more details.
+
+### Sort Integration Benchmark Example Runs
+1. Run all queries with default setting:
+```bash
+ cargo run --release --bin sort_integration -- benchmark -p '....../datafusion/benchmarks/data/tpch_sf1' -o '/tmp/sort_integration.json'
+```
+
+2. Run a specific query:
+```bash
+ cargo run --release --bin sort_integration -- benchmark -p '....../datafusion/benchmarks/data/tpch_sf1' -o '/tmp/sort_integration.json' --query 2
+```
+
+3. Run all queries with `bench.sh` script:
+```bash
+./bench.sh run sort_integration
+```
+
 ## IMDB
 
 Run Join Order Benchmark (JOB) on IMDB dataset.
