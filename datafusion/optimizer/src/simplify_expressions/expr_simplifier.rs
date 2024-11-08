@@ -2867,13 +2867,13 @@ mod tests {
         // single character
         assert_change(
             regex_match(col("c1"), lit("x")),
-            like(col("c1"), lit("%x%")),
+            col("c1").like(lit("%x%")),
         );
 
         // single word
         assert_change(
             regex_match(col("c1"), lit("foo")),
-            like(col("c1"), lit("%foo%")),
+            col("c1").like(lit("%foo%")),
         );
 
         // regular expressions that match an exact literal
@@ -2963,48 +2963,48 @@ mod tests {
         // regular expressions that match a partial literal
         assert_change(
             regex_match(col("c1"), lit("^foo")),
-            like(col("c1"), lit("foo%")),
+            col("c1").like(lit("foo%")),
         );
         assert_change(
             regex_match(col("c1"), lit("foo$")),
-            like(col("c1"), lit("%foo")),
+            col("c1").like(lit("%foo")),
         );
         assert_change(
             regex_match(col("c1"), lit("^foo|bar$")),
-            like(col("c1"), lit("foo%")).or(like(col("c1"), lit("%bar"))),
+            col("c1").like(lit("foo%")).or(col("c1").like(lit("%bar"))),
         );
 
         // OR-chain
         assert_change(
             regex_match(col("c1"), lit("foo|bar|baz")),
-            like(col("c1"), lit("%foo%"))
-                .or(like(col("c1"), lit("%bar%")))
-                .or(like(col("c1"), lit("%baz%"))),
+            col("c1").like(lit("%foo%"))
+                .or(col("c1").like(lit("%bar%")))
+                .or(col("c1").like(lit("%baz%"))),
         );
         assert_change(
             regex_match(col("c1"), lit("foo|x|baz")),
-            like(col("c1"), lit("%foo%"))
-                .or(like(col("c1"), lit("%x%")))
-                .or(like(col("c1"), lit("%baz%"))),
+            col("c1").like(lit("%foo%"))
+                .or(col("c1").like(lit("%x%")))
+                .or(col("c1").like(lit("%baz%"))),
         );
         assert_change(
             regex_not_match(col("c1"), lit("foo|bar|baz")),
-            not_like(col("c1"), lit("%foo%"))
-                .and(not_like(col("c1"), lit("%bar%")))
-                .and(not_like(col("c1"), lit("%baz%"))),
+            col("c1").not_like(lit("%foo%"))
+                .and(col("c1").not_like(lit("%bar%")))
+                .and(col("c1").not_like(lit("%baz%"))),
         );
         // both anchored expressions (translated to equality) and unanchored
         assert_change(
             regex_match(col("c1"), lit("foo|^x$|baz")),
-            like(col("c1"), lit("%foo%"))
+            col("c1").like(lit("%foo%"))
                 .or(col("c1").eq(lit("x")))
-                .or(like(col("c1"), lit("%baz%"))),
+                .or(col("c1").like(lit("%baz%"))),
         );
         assert_change(
             regex_not_match(col("c1"), lit("foo|^bar$|baz")),
-            not_like(col("c1"), lit("%foo%"))
+            col("c1").not_like(lit("%foo%"))
                 .and(col("c1").not_eq(lit("bar")))
-                .and(not_like(col("c1"), lit("%baz%"))),
+                .and(col("c1").not_like(lit("%baz%"))),
         );
         // Too many patterns (MAX_REGEX_ALTERNATIONS_EXPANSION)
         assert_no_change(regex_match(col("c1"), lit("foo|bar|baz|blarg|bozo|etc")));
@@ -3051,46 +3051,6 @@ mod tests {
             left: Box::new(left),
             op: Operator::RegexNotIMatch,
             right: Box::new(right),
-        })
-    }
-
-    fn like(expr: Expr, pattern: impl Into<Expr>) -> Expr {
-        Expr::Like(Like {
-            negated: false,
-            expr: Box::new(expr),
-            pattern: Box::new(pattern.into()),
-            escape_char: None,
-            case_insensitive: false,
-        })
-    }
-
-    fn not_like(expr: Expr, pattern: impl Into<Expr>) -> Expr {
-        Expr::Like(Like {
-            negated: true,
-            expr: Box::new(expr),
-            pattern: Box::new(pattern.into()),
-            escape_char: None,
-            case_insensitive: false,
-        })
-    }
-
-    fn ilike(expr: Expr, pattern: impl Into<Expr>) -> Expr {
-        Expr::Like(Like {
-            negated: false,
-            expr: Box::new(expr),
-            pattern: Box::new(pattern.into()),
-            escape_char: None,
-            case_insensitive: true,
-        })
-    }
-
-    fn not_ilike(expr: Expr, pattern: impl Into<Expr>) -> Expr {
-        Expr::Like(Like {
-            negated: true,
-            expr: Box::new(expr),
-            pattern: Box::new(pattern.into()),
-            escape_char: None,
-            case_insensitive: true,
         })
     }
 
@@ -3703,119 +3663,117 @@ mod tests {
         let null = lit(ScalarValue::Utf8(None));
 
         // expr [NOT] [I]LIKE NULL
-        let expr = like(col("c1"), null.clone());
+        let expr = col("c1").like(null.clone());
         assert_eq!(simplify(expr), lit_bool_null());
 
-        let expr = not_like(col("c1"), null.clone());
+        let expr = col("c1").not_like(null.clone());
         assert_eq!(simplify(expr), lit_bool_null());
 
-        let expr = ilike(col("c1"), null.clone());
+        let expr = col("c1").ilike(null.clone());
         assert_eq!(simplify(expr), lit_bool_null());
 
-        let expr = not_ilike(col("c1"), null.clone());
+        let expr = col("c1").not_ilike(null.clone());
         assert_eq!(simplify(expr), lit_bool_null());
 
         // expr [NOT] [I]LIKE '%'
-        let expr = like(col("c1"), lit("%"));
+        let expr = col("c1").like(lit("%"));
         assert_eq!(simplify(expr), if_not_null(col("c1"), true));
 
-        let expr = not_like(col("c1"), lit("%"));
+        let expr = col("c1").not_like(lit("%"));
         assert_eq!(simplify(expr), if_not_null(col("c1"), false));
 
-        let expr = ilike(col("c1"), lit("%"));
+        let expr = col("c1").ilike(lit("%"));
         assert_eq!(simplify(expr), if_not_null(col("c1"), true));
 
-        let expr = not_ilike(col("c1"), lit("%"));
+        let expr = col("c1").not_ilike(lit("%"));
         assert_eq!(simplify(expr), if_not_null(col("c1"), false));
 
         // expr [NOT] [I]LIKE '%%'
-        let expr = like(col("c1"), lit("%%"));
+        let expr = col("c1").like(lit("%%"));
         assert_eq!(simplify(expr), if_not_null(col("c1"), true));
 
-        let expr = not_like(col("c1"), lit("%%"));
+        let expr = col("c1").not_like(lit("%%"));
         assert_eq!(simplify(expr), if_not_null(col("c1"), false));
 
-        let expr = ilike(col("c1"), lit("%%"));
+        let expr = col("c1").ilike(lit("%%"));
         assert_eq!(simplify(expr), if_not_null(col("c1"), true));
 
-        let expr = not_ilike(col("c1"), lit("%%"));
+        let expr = col("c1").not_ilike(lit("%%"));
         assert_eq!(simplify(expr), if_not_null(col("c1"), false));
 
         // not_null_expr [NOT] [I]LIKE '%'
-        let expr = like(col("c1_non_null"), lit("%"));
+        let expr = col("c1_non_null").like(lit("%"));
         assert_eq!(simplify(expr), lit(true));
 
-        let expr = not_like(col("c1_non_null"), lit("%"));
+        let expr = col("c1_non_null").not_like(lit("%"));
         assert_eq!(simplify(expr), lit(false));
 
-        let expr = ilike(col("c1_non_null"), lit("%"));
+        let expr = col("c1_non_null").ilike(lit("%"));
         assert_eq!(simplify(expr), lit(true));
 
-        let expr = not_ilike(col("c1_non_null"), lit("%"));
+        let expr = col("c1_non_null").not_ilike(lit("%"));
         assert_eq!(simplify(expr), lit(false));
 
         // not_null_expr [NOT] [I]LIKE '%%'
-        let expr = like(col("c1_non_null"), lit("%%"));
+        let expr = col("c1_non_null").like(lit("%%"));
         assert_eq!(simplify(expr), lit(true));
 
-        let expr = not_like(col("c1_non_null"), lit("%%"));
+        let expr = col("c1_non_null").not_like(lit("%%"));
         assert_eq!(simplify(expr), lit(false));
 
-        let expr = ilike(col("c1_non_null"), lit("%%"));
+        let expr = col("c1_non_null").ilike(lit("%%"));
         assert_eq!(simplify(expr), lit(true));
 
-        let expr = not_ilike(col("c1_non_null"), lit("%%"));
+        let expr = col("c1_non_null").not_ilike(lit("%%"));
         assert_eq!(simplify(expr), lit(false));
 
         // null_constant [NOT] [I]LIKE '%'
-        let expr = like(null.clone(), lit("%"));
+        let expr = null.clone().like(lit("%"));
         assert_eq!(simplify(expr), lit_bool_null());
 
-        let expr = not_like(null.clone(), lit("%"));
+        let expr = null.clone().not_like(lit("%"));
         assert_eq!(simplify(expr), lit_bool_null());
 
-        let expr = ilike(null.clone(), lit("%"));
+        let expr = null.clone().ilike(lit("%"));
         assert_eq!(simplify(expr), lit_bool_null());
 
-        let expr = not_ilike(null, lit("%"));
+        let expr = null.clone().not_ilike(lit("%"));
         assert_eq!(simplify(expr), lit_bool_null());
 
         // null_constant [NOT] [I]LIKE '%%'
-        let null = lit(ScalarValue::Utf8(None));
-        let expr = like(null.clone(), lit("%%"));
+        let expr = null.clone().like(lit("%%"));
         assert_eq!(simplify(expr), lit_bool_null());
 
-        let expr = not_like(null.clone(), lit("%%"));
+        let expr = null.clone().not_like(lit("%%"));
         assert_eq!(simplify(expr), lit_bool_null());
 
-        let expr = ilike(null.clone(), lit("%%"));
+        let expr = null.clone().ilike(lit("%%"));
         assert_eq!(simplify(expr), lit_bool_null());
 
-        let expr = not_ilike(null, lit("%%"));
+        let expr = null.clone().not_ilike(lit("%%"));
         assert_eq!(simplify(expr), lit_bool_null());
 
         // null_constant [NOT] [I]LIKE 'a%'
-        let null = lit(ScalarValue::Utf8(None));
-        let expr = like(null.clone(), lit("a%"));
+        let expr = null.clone().like(lit("a%"));
         assert_eq!(simplify(expr), lit_bool_null());
 
-        let expr = not_like(null.clone(), lit("a%"));
+        let expr = null.clone().not_like(lit("a%"));
         assert_eq!(simplify(expr), lit_bool_null());
 
-        let expr = ilike(null.clone(), lit("a%"));
+        let expr = null.clone().ilike(lit("a%"));
         assert_eq!(simplify(expr), lit_bool_null());
 
-        let expr = not_ilike(null, lit("a%"));
+        let expr = null.clone().not_ilike(lit("a%"));
         assert_eq!(simplify(expr), lit_bool_null());
 
         // expr [NOT] [I]LIKE with pattern without wildcards
-        let expr = like(col("c1"), lit("a"));
+        let expr = col("c1").like(lit("a"));
         assert_eq!(simplify(expr), col("c1").eq(lit("a")));
-        let expr = not_like(col("c1"), lit("a"));
+        let expr = col("c1").not_like(lit("a"));
         assert_eq!(simplify(expr), col("c1").not_eq(lit("a")));
-        let expr = like(col("c1"), lit("a_"));
+        let expr = col("c1").like(lit("a_"));
         assert_eq!(simplify(expr), col("c1").like(lit("a_")));
-        let expr = not_like(col("c1"), lit("a_"));
+        let expr = col("c1").not_like(lit("a_"));
         assert_eq!(simplify(expr), col("c1").not_like(lit("a_")));
     }
 
