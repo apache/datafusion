@@ -1472,7 +1472,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
 
             // Rules for Like
             Expr::Like(like) => {
-                // `\` is implict escape, see https://github.com/apache/datafusion/issues/13291
+                // `\` is implicit escape, see https://github.com/apache/datafusion/issues/13291
                 let escape_char = like.escape_char.unwrap_or('\\');
                 match as_string_scalar(&like.pattern) {
                     Some((data_type, pattern_str)) => {
