@@ -68,7 +68,9 @@ use datafusion_expr::{
     DistinctOn, DropView, Expr, LogicalPlan, LogicalPlanBuilder, ScalarUDF, SortExpr,
     Statement, WindowUDF,
 };
-use datafusion_expr::{AggregateUDF, ColumnUnnestList, FetchType, SkipType, Unnest};
+use datafusion_expr::{
+    AggregateUDF, ColumnUnnestList, FetchType, RecursiveQuery, SkipType, Unnest,
+};
 
 use self::to_proto::{serialize_expr, serialize_exprs};
 use crate::logical_plan::to_proto::serialize_sorts;
@@ -905,6 +907,30 @@ impl AsLogicalPlan for LogicalPlanNode {
                     options: into_required!(unnest.options)?,
                 }))
             }
+            LogicalPlanType::RecursiveQuery(recursive_query_node) => {
+                let static_term = recursive_query_node
+                    .static_term
+                    .as_ref()
+                    .ok_or_else(|| DataFusionError::Internal(String::from(
+                        "Protobuf deserialization error, RecursiveQueryNode was missing required field static_term.",
+                    )))?
+                    .try_into_logical_plan(ctx, extension_codec)?;
+
+                let recursive_term = recursive_query_node
+                    .recursive_term
+                    .as_ref()
+                    .ok_or_else(|| DataFusionError::Internal(String::from(
+                        "Protobuf deserialization error, RecursiveQueryNode was missing required field recursive_term.",
+                    )))?
+                    .try_into_logical_plan(ctx, extension_codec)?;
+
+                Ok(LogicalPlan::RecursiveQuery(RecursiveQuery {
+                    name: recursive_query_node.name.clone(),
+                    static_term: Arc::new(static_term),
+                    recursive_term: Arc::new(recursive_term),
+                    is_distinct: recursive_query_node.is_distinct,
+                }))
+            }
         }
     }
 
@@ -1630,8 +1656,29 @@ impl AsLogicalPlan for LogicalPlanNode {
             LogicalPlan::DescribeTable(_) => Err(proto_error(
                 "LogicalPlan serde is not yet implemented for DescribeTable",
             )),
-            LogicalPlan::RecursiveQuery(_) => Err(proto_error(
-                "LogicalPlan serde is not yet implemented for RecursiveQuery",
+            LogicalPlan::RecursiveQuery(recursive) => {
+                let static_term = LogicalPlanNode::try_from_logical_plan(
+                    recursive.static_term.as_ref(),
+                    extension_codec,
+                )?;
+                let recursive_term = LogicalPlanNode::try_from_logical_plan(
+                    recursive.recursive_term.as_ref(),
+                    extension_codec,
+                )?;
+
+                Ok(LogicalPlanNode {
+                    logical_plan_type: Some(LogicalPlanType::RecursiveQuery(Box::new(
+                        protobuf::RecursiveQueryNode {
+                            name: recursive.name.clone(),
+                            static_term: Some(Box::new(static_term)),
+                            recursive_term: Some(Box::new(recursive_term)),
+                            is_distinct: recursive.is_distinct,
+                        },
+                    ))),
+                })
+            }
+            LogicalPlan::Execute(_) => Err(proto_error(
+                "LogicalPlan serde is not yet implemented for Execute",
             )),
         }
     }
