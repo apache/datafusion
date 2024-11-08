@@ -17,7 +17,7 @@
   under the License.
 -->
 
-# Profiling Datafusion Queries with Flamegraph
+# Profiling Cookbook
 
 The section contains examples how to perform CPU profiling for Apache DataFusion on different operating systems.
 
