@@ -1057,13 +1057,6 @@ impl LogicalPlan {
                     logical_optimization_succeeded: e.logical_optimization_succeeded,
                 }))
             }
-            LogicalPlan::TableScan(ts) => {
-                self.assert_no_inputs(inputs)?;
-                Ok(LogicalPlan::TableScan(TableScan {
-                    filters: expr,
-                    ..ts.clone()
-                }))
-            }
             LogicalPlan::Statement(Statement::Prepare(Prepare {
                 name,
                 data_types,
@@ -1083,6 +1076,13 @@ impl LogicalPlan {
                     name: name.clone(),
                     parameters: expr,
                 })))
+            }
+            LogicalPlan::TableScan(ts) => {
+                self.assert_no_inputs(inputs)?;
+                Ok(LogicalPlan::TableScan(TableScan {
+                    filters: expr,
+                    ..ts.clone()
+                }))
             }
             LogicalPlan::EmptyRelation(_)
             | LogicalPlan::Ddl(_)
