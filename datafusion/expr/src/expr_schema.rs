@@ -347,6 +347,7 @@ impl ExprSchemable for Expr {
         match self {
             Expr::Column(c) => Ok(schema.metadata(c)?.clone()),
             Expr::Alias(Alias { expr, .. }) => expr.metadata(schema),
+            Expr::Cast(Cast { expr, .. }) => expr.metadata(schema),
             _ => Ok(HashMap::new()),
         }
     }
