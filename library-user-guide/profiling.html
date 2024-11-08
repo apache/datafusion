@@ -504,13 +504,43 @@
 <nav id="bd-toc-nav">
     <ul class="visible nav section-nav flex-column">
  <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#building-a-flamegraph">
+   Building a flamegraph
+  </a>
+ </li>
+ <li class="toc-h2 nav-item toc-entry">
   <a class="reference internal nav-link" href="#macos">
    MacOS
   </a>
   <ul class="nav section-nav flex-column">
    <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#building-a-flamegraph">
-     Building a flamegraph
+    <a class="reference internal nav-link" href="#step-1-install-the-flamegraph-tool">
+     Step 1: Install the flamegraph Tool
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#step-2-prepare-your-environment">
+     Step 2: Prepare Your Environment
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#step-3-running-the-flamegraph-tool">
+     Step 3: Running the Flamegraph Tool
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#example-generating-a-flamegraph-for-a-specific-query">
+     Example: Generating a Flamegraph for a Specific Query
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#example-flamegraph-for-a-specific-test">
+     Example: Flamegraph for a specific test:
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#example-flamegraph-for-a-benchmark">
+     Example: Flamegraph for a benchmark
     </a>
    </li>
    <li class="toc-h3 nav-item toc-entry">
@@ -579,33 +609,52 @@
 <section id="profiling-cookbook">
 <h1>Profiling Cookbook<a class="headerlink" href="#profiling-cookbook" title="Link to this heading">¶</a></h1>
 <p>The section contains examples how to perform CPU profiling for Apache DataFusion on different operating systems.</p>
-<section id="macos">
-<h2>MacOS<a class="headerlink" href="#macos" title="Link to this heading">¶</a></h2>
 <section id="building-a-flamegraph">
-<h3>Building a flamegraph<a class="headerlink" href="#building-a-flamegraph" title="Link to this heading">¶</a></h3>
+<h2>Building a flamegraph<a class="headerlink" href="#building-a-flamegraph" title="Link to this heading">¶</a></h2>
 <p><a class="reference external" href="https://youtu.be/2z11xtYw_xs">Video: how to CPU profile DataFusion with a Flamegraph</a></p>
 <p>A flamegraph is a visual representation of which functions are being run
 You can create flamegraphs in many ways; The instructions below are for
 <a class="reference external" href="https://github.com/flamegraph-rs/flamegraph">cargo-flamegraph</a> which results
 in images such as this:</p>
 <p><img alt="Flamegraph" src="../_images/flamegraph.svg" /></p>
-<p>To create a flamegraph, you need to install the <code class="docutils literal notranslate"><span class="pre">flamegraph</span></code> tool:</p>
+</section>
+<section id="macos">
+<h2>MacOS<a class="headerlink" href="#macos" title="Link to this heading">¶</a></h2>
+<section id="step-1-install-the-flamegraph-tool">
+<h3>Step 1: Install the flamegraph Tool<a class="headerlink" href="#step-1-install-the-flamegraph-tool" title="Link to this heading">¶</a></h3>
+<p>To install flamegraph, run:</p>
 <div class="highlight-shell notranslate"><div class="highlight"><pre><span></span>cargo<span class="w"> </span>install<span class="w"> </span>flamegraph
 </pre></div>
 </div>
-<p>Then you can run the flamegraph tool with the <code class="docutils literal notranslate"><span class="pre">--</span></code> separator to pass arguments
-to the binary you want to profile.</p>
-<p>Example: Flamegraph for <code class="docutils literal notranslate"><span class="pre">datafusion-cli</span></code> executing <code class="docutils literal notranslate"><span class="pre">q28.sql</span></code>. Note this
-must be run as root on Mac OSx to access DTrace.</p>
-<div class="highlight-shell notranslate"><div class="highlight"><pre><span></span>sudo<span class="w"> </span>flamegraph<span class="w"> </span>--<span class="w"> </span>datafusion-cli<span class="w"> </span>-f<span class="w"> </span>q28.sql
+</section>
+<section id="step-2-prepare-your-environment">
+<h3>Step 2: Prepare Your Environment<a class="headerlink" href="#step-2-prepare-your-environment" title="Link to this heading">¶</a></h3>
+<p>Ensure that you’re in the directory containing the necessary data files for your DataFusion query. The flamegraph tool will profile the execution of your query against this data.</p>
+</section>
+<section id="step-3-running-the-flamegraph-tool">
+<h3>Step 3: Running the Flamegraph Tool<a class="headerlink" href="#step-3-running-the-flamegraph-tool" title="Link to this heading">¶</a></h3>
+<p>To generate a flamegraph, you’ll need to use the – separator to pass arguments to the binary you’re profiling. For datafusion-cli, you need to make sure to run the command with sudo permissions (especially on macOS, where DTrace requires elevated privileges).</p>
+<p>Here is a general example:</p>
+<div class="highlight-shell notranslate"><div class="highlight"><pre><span></span>sudo<span class="w"> </span>flamegraph<span class="w"> </span>--<span class="w"> </span>datafusion-cli<span class="w"> </span>-f<span class="w"> </span>&lt;path_to_sql_file/sql_file.sql&gt;
+</pre></div>
+</div>
+</section>
+<section id="example-generating-a-flamegraph-for-a-specific-query">
+<h3>Example: Generating a Flamegraph for a Specific Query<a class="headerlink" href="#example-generating-a-flamegraph-for-a-specific-query" title="Link to this heading">¶</a></h3>
+<p>Here is an example using <code class="docutils literal notranslate"><span class="pre">28.sql</span></code>:</p>
+<div class="highlight-shell notranslate"><div class="highlight"><pre><span></span>sudo<span class="w"> </span>flamegraph<span class="w"> </span>--<span class="w"> </span>datafusion-cli<span class="w"> </span>-f<span class="w"> </span><span class="m">28</span>.sql
 </pre></div>
 </div>
 <p>You can also invoke the flamegraph tool with <code class="docutils literal notranslate"><span class="pre">cargo</span></code> to profile a specific test or benchmark.</p>
-<p>Example: Flamegraph for a specific test:</p>
+</section>
+<section id="example-flamegraph-for-a-specific-test">
+<h3>Example: Flamegraph for a specific test:<a class="headerlink" href="#example-flamegraph-for-a-specific-test" title="Link to this heading">¶</a></h3>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">CARGO_PROFILE_RELEASE_DEBUG</span><span class="o">=</span><span class="nb">true</span><span class="w"> </span>cargo<span class="w"> </span>flamegraph<span class="w"> </span>--root<span class="w"> </span>--unit-test<span class="w"> </span>datafusion<span class="w">  </span>--<span class="w"> </span>dataframe::tests::test_array_agg
 </pre></div>
 </div>
-<p>Example: Flamegraph for a benchmark</p>
+</section>
+<section id="example-flamegraph-for-a-benchmark">
+<h3>Example: Flamegraph for a benchmark<a class="headerlink" href="#example-flamegraph-for-a-benchmark" title="Link to this heading">¶</a></h3>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">CARGO_PROFILE_RELEASE_DEBUG</span><span class="o">=</span><span class="nb">true</span><span class="w"> </span>cargo<span class="w"> </span>flamegraph<span class="w"> </span>--root<span class="w"> </span>--bench<span class="w"> </span>sql_planner<span class="w"> </span>--<span class="w"> </span>--bench
 </pre></div>
 </div>
