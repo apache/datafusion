@@ -1472,6 +1472,8 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
 
             // Rules for Like
             Expr::Like(like) => {
+                // `\` is implict escape, see https://github.com/apache/datafusion/issues/13291
+                let escape_char = like.escape_char.unwrap_or('\\');
                 match as_string_scalar(&like.pattern) {
                     Some((data_type, pattern_str)) => {
                         match pattern_str {
@@ -1498,10 +1500,11 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                                 })
                             }
                             Some(pattern_str)
-                                if pattern_str.contains("%%") &&
-                                // TODO support more complete unescaping
-                                (like.escape_char.is_none() || pattern_str.contains(like.escape_char.unwrap())) =>
+                                if pattern_str.contains("%%")
+                                    && !pattern_str.contains(escape_char) =>
                             {
+                                // Repeated occurrences of wildcard are redundant so remove them
+                                // exp LIKE '%%'  --> exp LIKE '%'
                                 let simplified_pattern = Regex::new("%%+")
                                     .unwrap()
                                     .replace_all(pattern_str, "%")
@@ -1515,8 +1518,8 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                                 }))
                             }
                             Some(pattern_str)
-                                if like.escape_char.is_none()
-                                    && !pattern_str.contains(['%', '_'].as_ref()) =>
+                                if !pattern_str
+                                    .contains(['%', '_', escape_char].as_ref()) =>
                             {
                                 // If the pattern does not contain any wildcards, we can simplify the like expression to an equality expression
                                 // TODO: handle escape characters
