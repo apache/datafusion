@@ -61,9 +61,9 @@ libc = "0.2.140"
 num_cpus = { workspace = true }
 object_store = { workspace = true, optional = true }
 parquet = { workspace = true, optional = true, default-features = true }
-recursive = { workspace = true }
 paste = "1.0.15"
 pyo3 = { version = "0.22.0", optional = true }
+recursive = { workspace = true }
 sqlparser = { workspace = true }
 tokio = { workspace = true }
 
