@@ -53,8 +53,7 @@ struct JoinLeftData {
     merged_batch: RecordBatch,
     /// Track memory reservation for merged_batch. Relies on drop
     /// semantics to release reservation when JoinLeftData is dropped.
-    #[allow(dead_code)]
-    reservation: MemoryReservation,
+    _reservation: MemoryReservation,
 }
 
 #[allow(rustdoc::private_intra_doc_links)]
@@ -209,7 +208,7 @@ async fn load_left_input(
 
     Ok(JoinLeftData {
         merged_batch,
-        reservation,
+        _reservation: reservation,
     })
 }
 

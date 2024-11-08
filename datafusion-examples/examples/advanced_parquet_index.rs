@@ -230,8 +230,7 @@ async fn main() -> Result<()> {
 #[derive(Debug)]
 pub struct IndexTableProvider {
     /// Where the file is stored (cleanup on drop)
-    #[allow(dead_code)]
-    tmpdir: TempDir,
+    _tmpdir: TempDir,
     /// The file that is being read.
     indexed_file: IndexedFile,
     /// The underlying object store
@@ -250,7 +249,7 @@ impl IndexTableProvider {
 
         Ok(Self {
             indexed_file,
-            tmpdir,
+            _tmpdir: tmpdir,
             object_store,
             use_row_selections: AtomicBool::new(false),
         })
