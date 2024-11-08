@@ -59,10 +59,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 self.select_into(plan, select_into)
             }
             other => {
-                // TODO: check why set_expr_to_plan or the functions it calls need so huge
+                // TODO: check why set_expr_to_plan or the functions it calls need bigger
                 //  minimum stack
-                recursive::set_minimum_stack_size(1024 * 1024);
+                let min_stack_size = recursive::get_minimum_stack_size();
+                recursive::set_minimum_stack_size(256 * 1024);
                 let plan = self.set_expr_to_plan(other, planner_context)?;
+                recursive::set_minimum_stack_size(min_stack_size);
                 let oby_exprs = to_order_by_exprs(query.order_by)?;
                 let order_by_rex = self.order_by_to_sort_expr(
                     oby_exprs,
