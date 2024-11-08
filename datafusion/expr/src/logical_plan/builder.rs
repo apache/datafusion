@@ -1228,25 +1228,24 @@ impl LogicalPlanBuilder {
         let join_key_pairs = equi_exprs
             .0
             .into_iter()
-            .zip(equi_exprs.1.into_iter())
+            .zip(equi_exprs.1)
             .map(|(l, r)| {
                 let left_key = l.into();
                 let right_key = r.into();
-
-                let mut left_using_columns = HashSet::new();
+                let mut left_using_columns  = HashSet::new();
                 expr_to_columns(&left_key, &mut left_using_columns)?;
                 let normalized_left_key = normalize_col_with_schemas_and_ambiguity_check(
                     left_key,
-                    &[&[self.plan.schema(), right.schema()]],
-                    &[left_using_columns],
+                    &[&[self.plan.schema()]],
+                    &[],
                 )?;
 
                 let mut right_using_columns = HashSet::new();
                 expr_to_columns(&right_key, &mut right_using_columns)?;
                 let normalized_right_key = normalize_col_with_schemas_and_ambiguity_check(
                     right_key,
-                    &[&[self.plan.schema(), right.schema()]],
-                    &[right_using_columns],
+                    &[&[right.schema()]],
+                    &[],
                 )?;
 
                 // find valid equijoin
