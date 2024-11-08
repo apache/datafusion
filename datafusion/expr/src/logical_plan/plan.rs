@@ -39,9 +39,9 @@ use crate::utils::{
     split_conjunction,
 };
 use crate::{
-    build_join_schema, expr_vec_fmt, BinaryExpr, CreateMemoryTable, CreateView, Expr,
-    ExprSchemable, LogicalPlanBuilder, Operator, TableProviderFilterPushDown,
-    TableSource, WindowFunctionDefinition,
+    build_join_schema, expr_vec_fmt, BinaryExpr, CreateMemoryTable, CreateView, Execute,
+    Expr, ExprSchemable, LogicalPlanBuilder, Operator, Prepare,
+    TableProviderFilterPushDown, TableSource, WindowFunctionDefinition,
 };
 
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
@@ -262,11 +262,6 @@ pub enum LogicalPlan {
     /// Remove duplicate rows from the input. This is used to
     /// implement SQL `SELECT DISTINCT ...`.
     Distinct(Distinct),
-    /// Prepare a statement and find any bind parameters
-    /// (e.g. `?`). This is used to implement SQL-prepared statements.
-    Prepare(Prepare),
-    /// Execute a prepared statement. This is used to implement SQL 'EXECUTE'.
-    Execute(Execute),
     /// Data Manipulation Language (DML): Insert / Update / Delete
     Dml(DmlStatement),
     /// Data Definition Language (DDL): CREATE / DROP TABLES / VIEWS / SCHEMAS
@@ -314,8 +309,6 @@ impl LogicalPlan {
             LogicalPlan::Statement(statement) => statement.schema(),
             LogicalPlan::Subquery(Subquery { subquery, .. }) => subquery.schema(),
             LogicalPlan::SubqueryAlias(SubqueryAlias { schema, .. }) => schema,
-            LogicalPlan::Prepare(Prepare { input, .. }) => input.schema(),
-            LogicalPlan::Execute(Execute { schema, .. }) => schema,
             LogicalPlan::Explain(explain) => &explain.schema,
             LogicalPlan::Analyze(analyze) => &analyze.schema,
             LogicalPlan::Extension(extension) => extension.node.schema(),
@@ -448,18 +441,16 @@ impl LogicalPlan {
             LogicalPlan::Copy(copy) => vec![&copy.input],
             LogicalPlan::Ddl(ddl) => ddl.inputs(),
             LogicalPlan::Unnest(Unnest { input, .. }) => vec![input],
-            LogicalPlan::Prepare(Prepare { input, .. }) => vec![input],
             LogicalPlan::RecursiveQuery(RecursiveQuery {
                 static_term,
                 recursive_term,
                 ..
             }) => vec![static_term, recursive_term],
+            LogicalPlan::Statement(stmt) => stmt.inputs(),
             // plans without inputs
             LogicalPlan::TableScan { .. }
-            | LogicalPlan::Statement { .. }
             | LogicalPlan::EmptyRelation { .. }
             | LogicalPlan::Values { .. }
-            | LogicalPlan::Execute { .. }
             | LogicalPlan::DescribeTable(_) => vec![],
         }
     }
@@ -562,8 +553,6 @@ impl LogicalPlan {
             }
             LogicalPlan::Subquery(_) => Ok(None),
             LogicalPlan::EmptyRelation(_)
-            | LogicalPlan::Prepare(_)
-            | LogicalPlan::Execute(_)
             | LogicalPlan::Statement(_)
             | LogicalPlan::Values(_)
             | LogicalPlan::Explain(_)
@@ -715,8 +704,6 @@ impl LogicalPlan {
             LogicalPlan::RecursiveQuery(_) => Ok(self),
             LogicalPlan::Analyze(_) => Ok(self),
             LogicalPlan::Explain(_) => Ok(self),
-            LogicalPlan::Prepare(_) => Ok(self),
-            LogicalPlan::Execute(_) => Ok(self),
             LogicalPlan::TableScan(_) => Ok(self),
             LogicalPlan::EmptyRelation(_) => Ok(self),
             LogicalPlan::Statement(_) => Ok(self),
@@ -1070,31 +1057,32 @@ impl LogicalPlan {
                     logical_optimization_succeeded: e.logical_optimization_succeeded,
                 }))
             }
-            LogicalPlan::Prepare(Prepare {
-                name, data_types, ..
-            }) => {
-                self.assert_no_expressions(expr)?;
-                let input = self.only_input(inputs)?;
-                Ok(LogicalPlan::Prepare(Prepare {
-                    name: name.clone(),
-                    data_types: data_types.clone(),
-                    input: Arc::new(input),
-                }))
-            }
-            LogicalPlan::Execute(Execute { name, schema, .. }) => {
-                self.assert_no_inputs(inputs)?;
-                Ok(LogicalPlan::Execute(Execute {
-                    name: name.clone(),
-                    schema: Arc::clone(schema),
-                    parameters: expr,
-                }))
-            }
             LogicalPlan::TableScan(ts) => {
                 self.assert_no_inputs(inputs)?;
                 Ok(LogicalPlan::TableScan(TableScan {
                     filters: expr,
                     ..ts.clone()
                 }))
+            }
+            LogicalPlan::Statement(Statement::Prepare(Prepare {
+                name,
+                data_types,
+                ..
+            })) => {
+                self.assert_no_expressions(expr)?;
+                let input = self.only_input(inputs)?;
+                Ok(LogicalPlan::Statement(Statement::Prepare(Prepare {
+                    name: name.clone(),
+                    data_types: data_types.clone(),
+                    input: Arc::new(input),
+                })))
+            }
+            LogicalPlan::Statement(Statement::Execute(Execute { name, .. })) => {
+                self.assert_no_inputs(inputs)?;
+                Ok(LogicalPlan::Statement(Statement::Execute(Execute {
+                    name: name.clone(),
+                    parameters: expr,
+                })))
             }
             LogicalPlan::EmptyRelation(_)
             | LogicalPlan::Ddl(_)
@@ -1242,13 +1230,17 @@ impl LogicalPlan {
         let plan_with_values = self.replace_params_with_values(&param_values)?;
 
         // unwrap Prepare
-        Ok(if let LogicalPlan::Prepare(prepare_lp) = plan_with_values {
-            param_values.verify(&prepare_lp.data_types)?;
-            // try and take ownership of the input if is not shared, clone otherwise
-            Arc::unwrap_or_clone(prepare_lp.input)
-        } else {
-            plan_with_values
-        })
+        Ok(
+            if let LogicalPlan::Statement(Statement::Prepare(prepare_lp)) =
+                plan_with_values
+            {
+                param_values.verify(&prepare_lp.data_types)?;
+                // try and take ownership of the input if is not shared, clone otherwise
+                Arc::unwrap_or_clone(prepare_lp.input)
+            } else {
+                plan_with_values
+            },
+        )
     }
 
     /// Returns the maximum number of rows that this plan can output, if known.
@@ -1346,8 +1338,6 @@ impl LogicalPlan {
             | LogicalPlan::Dml(_)
             | LogicalPlan::Copy(_)
             | LogicalPlan::DescribeTable(_)
-            | LogicalPlan::Prepare(_)
-            | LogicalPlan::Execute(_)
             | LogicalPlan::Statement(_)
             | LogicalPlan::Extension(_) => None,
         }
@@ -1962,14 +1952,6 @@ impl LogicalPlan {
                     LogicalPlan::Analyze { .. } => write!(f, "Analyze"),
                     LogicalPlan::Union(_) => write!(f, "Union"),
                     LogicalPlan::Extension(e) => e.node.fmt_for_explain(f),
-                    LogicalPlan::Prepare(Prepare {
-                        name, data_types, ..
-                    }) => {
-                        write!(f, "Prepare: {name:?} {data_types:?} ")
-                    }
-                    LogicalPlan::Execute(Execute { name, parameters, .. }) => {
-                        write!(f, "Execute: {} params=[{}]", name, expr_vec_fmt!(parameters))
-                    }
                     LogicalPlan::DescribeTable(DescribeTable { .. }) => {
                         write!(f, "DescribeTable")
                     }
@@ -2621,39 +2603,6 @@ pub struct Union {
 impl PartialOrd for Union {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         self.inputs.partial_cmp(&other.inputs)
-    }
-}
-
-/// Prepare a statement but do not execute it. Prepare statements can have 0 or more
-/// `Expr::Placeholder` expressions that are filled in during execution
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
-pub struct Prepare {
-    /// The name of the statement
-    pub name: String,
-    /// Data types of the parameters ([`Expr::Placeholder`])
-    pub data_types: Vec<DataType>,
-    /// The logical plan of the statements
-    pub input: Arc<LogicalPlan>,
-}
-
-/// Execute a prepared statement.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct Execute {
-    /// The name of the prepared statement to execute
-    pub name: String,
-    /// The execute parameters
-    pub parameters: Vec<Expr>,
-    /// Dummy schema
-    pub schema: DFSchemaRef,
-}
-
-// Comparison excludes the `schema` field.
-impl PartialOrd for Execute {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        match self.name.partial_cmp(&other.name) {
-            Some(Ordering::Equal) => self.parameters.partial_cmp(&other.parameters),
-            cmp => cmp,
-        }
     }
 }
 

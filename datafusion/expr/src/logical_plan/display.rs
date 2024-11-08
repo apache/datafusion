@@ -21,10 +21,10 @@ use std::collections::HashMap;
 use std::fmt;
 
 use crate::{
-    expr_vec_fmt, Aggregate, DescribeTable, Distinct, DistinctOn, DmlStatement, Execute,
-    Expr, Filter, Join, Limit, LogicalPlan, Partitioning, Prepare, Projection,
-    RecursiveQuery, Repartition, Sort, Subquery, SubqueryAlias,
-    TableProviderFilterPushDown, TableScan, Unnest, Values, Window,
+    expr_vec_fmt, Aggregate, DescribeTable, Distinct, DistinctOn, DmlStatement, Expr,
+    Filter, Join, Limit, LogicalPlan, Partitioning, Projection, RecursiveQuery,
+    Repartition, Sort, Subquery, SubqueryAlias, TableProviderFilterPushDown, TableScan,
+    Unnest, Values, Window,
 };
 
 use crate::dml::CopyTo;
@@ -616,24 +616,6 @@ impl<'a, 'b> PgJsonVisitor<'a, 'b> {
                 json!({
                     "Node Type": e.node.name(),
                     "Detail": format!("{:?}", e.node)
-                })
-            }
-            LogicalPlan::Prepare(Prepare {
-                name, data_types, ..
-            }) => {
-                json!({
-                    "Node Type": "Prepare",
-                    "Name": name,
-                    "Data Types": format!("{:?}", data_types)
-                })
-            }
-            LogicalPlan::Execute(Execute {
-                name, parameters, ..
-            }) => {
-                json!({
-                    "Node Type": "Execute",
-                    "Name": name,
-                    "Parameters": expr_vec_fmt!(parameters),
                 })
             }
             LogicalPlan::DescribeTable(DescribeTable { .. }) => {
