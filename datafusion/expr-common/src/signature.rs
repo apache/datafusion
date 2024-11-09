@@ -623,7 +623,8 @@ mod tests {
             possible_types,
             vec![
                 vec![DataType::Utf8, DataType::Utf8],
-                vec![DataType::LargeUtf8, DataType::LargeUtf8]
+                vec![DataType::LargeUtf8, DataType::LargeUtf8],
+                vec![DataType::Utf8View, DataType::Utf8View]
             ]
         );
     }
