@@ -262,7 +262,8 @@ impl TypeSignature {
                 .collect(),
             TypeSignature::Uniform(arg_count, types) => types
                 .iter()
-                .map(|data_type| vec![data_type.clone(); *arg_count])
+                .cloned()
+                .map(|data_type| vec![data_type; *arg_count])
                 .collect(),
             TypeSignature::Coercible(types) => types
                 .iter()
@@ -276,11 +277,13 @@ impl TypeSignature {
                 .collect(),
             TypeSignature::Numeric(arg_count) => NUMERICS
                 .iter()
-                .map(|numeric_type| vec![numeric_type.clone(); *arg_count])
+                .cloned()
+                .map(|numeric_type| vec![numeric_type; *arg_count])
                 .collect(),
             TypeSignature::String(arg_count) => STRINGS
                 .iter()
-                .map(|string_type| vec![string_type.clone(); *arg_count])
+                .cloned()
+                .map(|string_type| vec![string_type; *arg_count])
                 .collect(),
             // TODO: Implement for other types
             TypeSignature::Any(_)
