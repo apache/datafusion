@@ -42,7 +42,7 @@ use crate::utils::{
 };
 use crate::{
     and, binary_expr, lit, DmlStatement, Expr, ExprSchemable, Operator, RecursiveQuery,
-    TableProviderFilterPushDown, TableSource, WriteOp,
+    Statement, TableProviderFilterPushDown, TableSource, WriteOp,
 };
 
 use super::dml::InsertOp;
@@ -500,11 +500,13 @@ impl LogicalPlanBuilder {
 
     /// Make a builder for a prepare logical plan from the builder's plan
     pub fn prepare(self, name: String, data_types: Vec<DataType>) -> Result<Self> {
-        Ok(Self::new(LogicalPlan::Prepare(Prepare {
-            name,
-            data_types,
-            input: self.plan,
-        })))
+        Ok(Self::new(LogicalPlan::Statement(Statement::Prepare(
+            Prepare {
+                name,
+                data_types,
+                input: self.plan,
+            },
+        ))))
     }
 
     /// Limit the number of rows returned

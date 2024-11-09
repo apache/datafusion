@@ -688,11 +688,11 @@ impl SessionContext {
             LogicalPlan::Statement(Statement::SetVariable(stmt)) => {
                 self.set_variable(stmt).await
             }
-            LogicalPlan::Prepare(Prepare {
+            LogicalPlan::Statement(Statement::Prepare(Prepare {
                 name,
                 input,
                 data_types,
-            }) => {
+            })) => {
                 // The number of parameters must match the specified data types length.
                 if !data_types.is_empty() {
                     let param_names = input.get_parameter_names()?;
@@ -712,7 +712,9 @@ impl SessionContext {
                 self.state.write().store_prepared(name, data_types, input)?;
                 self.return_empty_dataframe()
             }
-            LogicalPlan::Execute(execute) => self.execute_prepared(execute),
+            LogicalPlan::Statement(Statement::Execute(execute)) => {
+                self.execute_prepared(execute)
+            }
             plan => Ok(DataFrame::new(self.state(), plan)),
         }
     }
@@ -1772,14 +1774,6 @@ impl<'n, 'a> TreeNodeVisitor<'n> for BadPlanVisitor<'a> {
             }
             LogicalPlan::Statement(stmt) if !self.options.allow_statements => {
                 plan_err!("Statement not supported: {}", stmt.name())
-            }
-            // TODO: Implement PREPARE as a LogicalPlan::Statement
-            LogicalPlan::Prepare(_) if !self.options.allow_statements => {
-                plan_err!("Statement not supported: PREPARE")
-            }
-            // TODO: Implement EXECUTE as a LogicalPlan::Statement
-            LogicalPlan::Execute(_) if !self.options.allow_statements => {
-                plan_err!("Statement not supported: EXECUTE")
             }
             _ => Ok(TreeNodeRecursion::Continue),
         }
