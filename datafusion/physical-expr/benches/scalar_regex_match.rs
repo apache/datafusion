@@ -42,6 +42,7 @@ fn make_record_batch(rows: usize, string_length: usize, schema: Schema) -> Recor
 }
 
 /// initialize benchmark data and pattern literals
+#[allow(clippy::type_complexity)]
 fn init_benchmark() -> (
     Vec<(usize, RecordBatch)>,
     Schema,
@@ -66,24 +67,24 @@ fn init_benchmark() -> (
     // some pattern literal
     let pattern_lit = vec![
         (
-            format!("email"),
+            "email".to_string(),
             lit(r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$"),
         ),
         (
-            format!("url"),
+            "url".to_string(),
             lit(r"^(https?|ftp)://[-a-zA-Z0-9+&@#/%?=~_|!:,.;]*[-a-zA-Z0-9+&@#/%=~_|]$"),
         ),
         (
-            format!("ip"),
+            "ip".to_string(),
             lit(
                 r"^((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$",
             ),
         ),
         (
-            format!("phone"),
+            "phone".to_string(),
             lit(r"^(\+\d{1,2}\s?)?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}$"),
         ),
-        (format!("zip_code"), lit(r"^\d{5}(?:[-\s]\d{4})?$")),
+        ("zip_code".to_string(), lit(r"^\d{5}(?:[-\s]\d{4})?$")),
     ];
     (batch_data, schema, string_col, pattern_lit)
 }
