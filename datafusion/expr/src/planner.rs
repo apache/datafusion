@@ -67,6 +67,11 @@ pub trait ContextProvider {
         &[]
     }
 
+    /// Getter for the data type planner
+    fn get_type_planner(&self) -> Option<Arc<dyn TypePlanner>> {
+        None
+    }
+
     /// Getter for a UDF description
     fn get_function_meta(&self, name: &str) -> Option<Arc<ScalarUDF>>;
     /// Getter for a UDAF description
@@ -206,13 +211,6 @@ pub trait ExprPlanner: Debug + Send + Sync {
     fn plan_any(&self, expr: RawBinaryExpr) -> Result<PlannerResult<RawBinaryExpr>> {
         Ok(PlannerResult::Original(expr))
     }
-
-    /// Plan SQL type to DataFusion data type
-    ///
-    /// Returns None if not possible
-    fn plan_data_type(&self, _sql_type: &ast::DataType) -> Result<Option<DataType>> {
-        Ok(None)
-    }
 }
 
 /// An operator with two arguments to plan
@@ -256,4 +254,14 @@ pub enum PlannerResult<T> {
     Planned(Expr),
     /// The raw expression could not be planned, and is returned unmodified
     Original(T),
+}
+
+/// This trait allows users to customize the behavior of the data type planning
+pub trait TypePlanner: Debug + Send + Sync {
+    /// Plan SQL type to DataFusion data type
+    ///
+    /// Returns None if not possible
+    fn plan_type(&self, _sql_type: &ast::DataType) -> Result<Option<DataType>> {
+        Ok(None)
+    }
 }

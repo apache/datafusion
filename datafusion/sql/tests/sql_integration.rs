@@ -41,7 +41,7 @@ use datafusion_sql::{
     planner::{ParserOptions, SqlToRel},
 };
 
-use crate::common::{CustomTypePlanner, MockSessionState};
+use crate::common::{CustomExprPlanner, CustomTypePlanner, MockSessionState};
 use datafusion_functions::core::planner::CoreFunctionPlanner;
 use datafusion_functions_aggregate::{
     approx_median::approx_median_udaf, count::count_udaf, min_max::max_udaf,
@@ -4520,7 +4520,8 @@ fn test_custom_type_plan() -> Result<()> {
         let dialect = &GenericDialect {};
         let state = MockSessionState::default()
             .with_scalar_function(make_array_udf())
-            .with_expr_planner(Arc::new(CustomTypePlanner {}));
+            .with_expr_planner(Arc::new(CustomExprPlanner {}))
+            .with_type_planner(Arc::new(CustomTypePlanner {}));
         let context = MockContextProvider { state };
         let planner = SqlToRel::new_with_options(&context, options);
         let result = DFParser::parse_sql_with_dialect(sql, dialect);

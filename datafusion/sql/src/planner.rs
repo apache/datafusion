@@ -402,8 +402,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
     pub(crate) fn convert_data_type(&self, sql_type: &SQLDataType) -> Result<DataType> {
         // First check if any of the registered expr_planners can handle this type
-        for expr_planner in self.context_provider.get_expr_planners() {
-            if let Some(data_type) = expr_planner.plan_data_type(sql_type)? {
+        if let Some(type_planner) = self.context_provider.get_type_planner() {
+            if let Some(data_type) = type_planner.plan_type(sql_type)? {
                 return Ok(data_type);
             }
         }
