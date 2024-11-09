@@ -1195,15 +1195,6 @@ impl DefaultPhysicalPlanner {
                 let name = statement.name();
                 return not_impl_err!("Unsupported logical plan: Statement({name})");
             }
-            LogicalPlan::Prepare(_) => {
-                // There is no default plan for "PREPARE" -- it must be
-                // handled at a higher level (so that the appropriate
-                // statement can be prepared)
-                return not_impl_err!("Unsupported logical plan: Prepare");
-            }
-            LogicalPlan::Execute(_) => {
-                return not_impl_err!("Unsupported logical plan: Execute");
-            }
             LogicalPlan::Dml(dml) => {
                 // DataFusion is a read-only query engine, but also a library, so consumers may implement this
                 return not_impl_err!("Unsupported logical plan: Dml({0})", dml.op);
