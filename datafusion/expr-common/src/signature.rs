@@ -318,7 +318,8 @@ fn get_data_types(native_type: &NativeType) -> Vec<DataType> {
         NativeType::String => {
             vec![DataType::Utf8, DataType::LargeUtf8, DataType::Utf8View]
         }
-        _ => unreachable!(),
+        // TODO: support other native types
+        _ => vec![],
     }
 }
 
