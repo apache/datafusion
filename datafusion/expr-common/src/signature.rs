@@ -272,7 +272,7 @@ impl TypeSignature {
             TypeSignature::Variadic(types) => types
                 .iter()
                 .cloned()
-                .map(|data_type| vec![data_type; types.len()])
+                .map(|data_type| vec![data_type])
                 .collect(),
             TypeSignature::Numeric(arg_count) => NUMERICS
                 .iter()
@@ -593,10 +593,7 @@ mod tests {
         let possible_types = type_signature.get_possible_types();
         assert_eq!(
             possible_types,
-            vec![
-                vec![DataType::Int32, DataType::Int32],
-                vec![DataType::Int64, DataType::Int64]
-            ]
+            vec![vec![DataType::Int32], vec![DataType::Int64]]
         );
 
         let type_signature = TypeSignature::Numeric(2);
