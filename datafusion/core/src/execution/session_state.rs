@@ -128,7 +128,7 @@ pub struct SessionState {
     analyzer: Analyzer,
     /// Provides support for customising the SQL planner, e.g. to add support for custom operators like `->>` or `?`
     expr_planners: Vec<Arc<dyn ExprPlanner>>,
-    /// Provides support for customising the type planning, e.g. to add support for planning custom SQL types
+    /// Provides support for customising the SQL type planning
     type_planner: Option<Arc<dyn TypePlanner>>,
     /// Responsible for optimizing a logical plan
     optimizer: Optimizer,
