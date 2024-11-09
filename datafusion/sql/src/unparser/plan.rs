@@ -125,6 +125,7 @@ impl Unparser<'_> {
         let body = self.select_to_sql_expr(plan, &mut query_builder)?;
 
         let query = query_builder.unwrap().body(Box::new(body)).build()?;
+
         Ok(ast::Statement::Query(Box::new(query)))
     }
 
