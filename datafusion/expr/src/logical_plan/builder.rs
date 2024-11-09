@@ -42,7 +42,7 @@ use crate::utils::{
 };
 use crate::{
     and, binary_expr, lit, DmlStatement, Expr, ExprSchemable, Operator, RecursiveQuery,
-    TableProviderFilterPushDown, TableSource, WriteOp,
+    Statement, TableProviderFilterPushDown, TableSource, WriteOp,
 };
 
 use super::dml::InsertOp;
@@ -500,11 +500,13 @@ impl LogicalPlanBuilder {
 
     /// Make a builder for a prepare logical plan from the builder's plan
     pub fn prepare(self, name: String, data_types: Vec<DataType>) -> Result<Self> {
-        Ok(Self::new(LogicalPlan::Prepare(Prepare {
-            name,
-            data_types,
-            input: self.plan,
-        })))
+        Ok(Self::new(LogicalPlan::Statement(Statement::Prepare(
+            Prepare {
+                name,
+                data_types,
+                input: self.plan,
+            },
+        ))))
     }
 
     /// Limit the number of rows returned
@@ -777,7 +779,7 @@ impl LogicalPlanBuilder {
         self.join_detailed(right, join_type, join_keys, filter, false)
     }
 
-    /// Apply a join with using the specified expressions.
+    /// Apply a join using the specified expressions.
     ///
     /// Note that DataFusion automatically optimizes joins, including
     /// identifying and optimizing equality predicates.
@@ -1200,12 +1202,20 @@ impl LogicalPlanBuilder {
         Ok(Arc::unwrap_or_clone(self.plan))
     }
 
-    /// Apply a join with the expression on constraint.
+    /// Apply a join with both explicit equijoin and non equijoin predicates.
     ///
-    /// equi_exprs are "equijoin" predicates expressions on the existing and right inputs, respectively.
+    /// Note this is a low level API that requires identifying specific
+    /// predicate types. Most users should use  [`join_on`](Self::join_on) that
+    /// automatically identifies predicates appropriately.
     ///
-    /// filter: any other filter expression to apply during the join. equi_exprs predicates are likely
-    /// to be evaluated more quickly than the filter expressions
+    /// `equi_exprs` defines equijoin predicates, of the form `l = r)` for each
+    /// `(l, r)` tuple. `l`, the first element of the tuple, must only refer
+    /// to columns from the existing input. `r`, the second element of the tuple,
+    /// must only refer to columns from the right input.
+    ///
+    /// `filter` contains any other other filter expression to apply during the
+    /// join. Note that `equi_exprs` predicates are evaluated more efficiently
+    /// than the filter expressions, so they are preferred.
     pub fn join_with_expr_keys(
         self,
         right: LogicalPlan,
@@ -1220,25 +1230,24 @@ impl LogicalPlanBuilder {
         let join_key_pairs = equi_exprs
             .0
             .into_iter()
-            .zip(equi_exprs.1.into_iter())
+            .zip(equi_exprs.1)
             .map(|(l, r)| {
                 let left_key = l.into();
                 let right_key = r.into();
-
-                let mut left_using_columns = HashSet::new();
+                let mut left_using_columns  = HashSet::new();
                 expr_to_columns(&left_key, &mut left_using_columns)?;
                 let normalized_left_key = normalize_col_with_schemas_and_ambiguity_check(
                     left_key,
-                    &[&[self.plan.schema(), right.schema()]],
-                    &[left_using_columns],
+                    &[&[self.plan.schema()]],
+                    &[],
                 )?;
 
                 let mut right_using_columns = HashSet::new();
                 expr_to_columns(&right_key, &mut right_using_columns)?;
                 let normalized_right_key = normalize_col_with_schemas_and_ambiguity_check(
                     right_key,
-                    &[&[self.plan.schema(), right.schema()]],
-                    &[right_using_columns],
+                    &[&[right.schema()]],
+                    &[],
                 )?;
 
                 // find valid equijoin

@@ -39,17 +39,17 @@ use test_utils::{
     stagger_batch,
 };
 
-/// Config for Data sets generator
+/// Config for Dataset generator
 ///
 /// # Parameters
 ///   - `columns`, you just need to define `column name`s and `column data type`s
-///     fot the test datasets, and then they will be randomly generated from generator
-///     when you can `generate` function
+///     for the test datasets, and then they will be randomly generated from the generator
+///     when you call `generate` function
 ///         
-///   - `rows_num_range`, the rows num of the datasets will be randomly generated
-///      among this range
+///   - `rows_num_range`, the number of rows in the datasets will be randomly generated
+///      within this range
 ///
-///   - `sort_keys`, if `sort_keys` are defined, when you can `generate`, the generator
+///   - `sort_keys`, if `sort_keys` are defined, when you call the `generate` function, the generator
 ///      will generate one `base dataset` firstly. Then the `base dataset` will be sorted
 ///      based on each `sort_key` respectively. And finally `len(sort_keys) + 1` datasets
 ///      will be returned
@@ -65,7 +65,7 @@ pub struct DatasetGeneratorConfig {
     /// Additional optional sort keys
     ///
     /// The generated datasets always include a non-sorted copy. For each
-    /// element in `sort_keys_set`, an additional datasets is created that
+    /// element in `sort_keys_set`, an additional dataset is created that
     /// is sorted by these values as well.
     pub sort_keys_set: Vec<Vec<String>>,
 }
@@ -93,15 +93,15 @@ impl DatasetGeneratorConfig {
 
 /// Dataset generator
 ///
-/// It will generate one random [`Dataset`]s when `generate` function is called.
+/// It will generate one random [`Dataset`] when `generate` function is called.
 ///
 /// The generation logic in `generate`:
 ///
 ///   - Randomly generate a base record from `batch_generator` firstly.
 ///     And `columns`, `rows_num_range` in `config`(detail can see `DataSetsGeneratorConfig`),
 ///     will be used in generation.
-///   
-///   - Sort the batch according to `sort_keys` in `config` to generator another
+///
+///   - Sort the batch according to `sort_keys` in `config` to generate another
 ///     `len(sort_keys)` sorted batches.
 ///   
 ///   - Split each batch to multiple batches which each sub-batch in has the randomly `rows num`,
@@ -600,8 +600,8 @@ mod test {
     fn test_generated_datasets() {
         // The test datasets generation config
         // We expect that after calling `generate`
-        //  - Generate 2 datasets
-        //  - They have 2 column "a" and "b",
+        //  - Generates two datasets
+        //  - They have two columns, "a" and "b",
         //    "a"'s type is `Utf8`, and "b"'s type is `UInt32`
         //  - One of them is unsorted, another is sorted by column "b"
         //  - Their rows num should be same and between [16, 32]
@@ -636,7 +636,7 @@ mod test {
         let batch = &datasets[1].batches[0];
         check_fields(batch);
 
-        // One batches should be sort by "b"
+        // One of the batches should be sorted by "b"
         let sorted_batches = &datasets[1].batches;
         let b_vals = sorted_batches.iter().flat_map(|batch| {
             let uint_array = batch
@@ -653,10 +653,10 @@ mod test {
             prev_b_val = b_val;
         }
 
-        // Two batches should be same after sorting
+        // Two batches should be the same after sorting
         check_equality_of_batches(&datasets[0].batches, &datasets[1].batches).unwrap();
 
-        // Rows num should between [16, 32]
+        // The number of rows should be between [16, 32]
         let rows_num0 = datasets[0]
             .batches
             .iter()

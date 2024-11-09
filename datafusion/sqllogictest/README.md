@@ -102,6 +102,39 @@ SELECT * from foo;
 
 Assuming it looks good, check it in!
 
+## Cookbook: Testing for whitespace
+
+The `sqllogictest` runner will automatically strip trailing whitespace, meaning
+it requires an additional effort to verify that trailing whitespace is correctly produced
+
+For example, the following test can't distinguish between `Andrew` and `Andrew `
+(with trailing space):
+
+```text
+query T
+select substr('Andrew Lamb', 1, 7)
+----
+Andrew
+```
+
+To test trailing whitespace, project additional non-whitespace column on the
+right. For example, by selecting `'|'` after the column of interest, the test
+can distinguish between `Andrew` and `Andrew `:
+
+```text
+# Note two spaces between `Andrew` and `|`
+query TT
+select substr('Andrew Lamb', 1, 7), '|'
+----
+Andrew  |
+
+# Note only one space between `Andrew` and `|`
+query TT
+select substr('Andrew Lamb', 1, 6), '|'
+----
+Andrew |
+```
+
 # Reference
 
 ## Running tests: Validation Mode

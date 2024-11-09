@@ -44,6 +44,8 @@ Raphael R datafusionДатаФусион аФус
 under_score un_____core un iść core chrząszcz na łące w 東京都
 percent p%t pan Tadeusz ma iść w kąt Pan Tadeusz ma frunąć stąd w kąt
 (empty) % (empty) (empty)
+% \% (empty) (empty)
+_ \_ (empty) (empty)
 NULL % NULL NULL
 NULL R NULL 🔥
 
@@ -64,6 +66,8 @@ Raphael datafusionДатаФусион false false false false
 under_score un iść core false false false false
 percent pan Tadeusz ma iść w kąt false false false false
 (empty) (empty) false false false false
+% (empty) false false false false
+_ (empty) false false false false
 NULL NULL NULL NULL NULL NULL
 NULL NULL NULL NULL NULL NULL
 

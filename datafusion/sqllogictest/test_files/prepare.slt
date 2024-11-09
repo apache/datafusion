@@ -199,19 +199,34 @@ EXECUTE get_N_rand_ints_from_last_run(2);
 statement ok
 DROP TABLE test;
 
+statement ok
+SET datafusion.explain.logical_plan_only=true;
+
+# OptimizeProjections rule works with PREPARE and pushes down the `id` projection to TableScan
+query TT
+EXPLAIN PREPARE my_plan(INT) AS SELECT id + $1 FROM person;
+----
+logical_plan
+01)Prepare: "my_plan" [Int32]
+02)--Projection: person.id + $1
+03)----TableScan: person projection=[id]
 
 # test creating logical plan for EXECUTE statements
 query TT
 EXPLAIN EXECUTE my_plan;
 ----
 logical_plan Execute: my_plan params=[]
-physical_plan_error This feature is not implemented: Unsupported logical plan: Execute
 
 query TT
 EXPLAIN EXECUTE my_plan(10*2 + 1, 'Foo');
 ----
 logical_plan Execute: my_plan params=[Int64(21), Utf8("Foo")]
-physical_plan_error This feature is not implemented: Unsupported logical plan: Execute
 
 query error DataFusion error: Schema error: No field named a\.
 EXPLAIN EXECUTE my_plan(a);
+
+statement ok
+SET datafusion.explain.logical_plan_only=false;
+
+statement ok
+DROP TABLE person;

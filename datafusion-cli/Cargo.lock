@@ -1482,6 +1482,7 @@ dependencies = [
  "itertools",
  "log",
  "paste",
+ "regex",
  "regex-syntax",
 ]
 

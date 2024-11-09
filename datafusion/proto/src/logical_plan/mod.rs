@@ -66,7 +66,7 @@ use datafusion_expr::{
         SubqueryAlias, TableScan, Values, Window,
     },
     DistinctOn, DropView, Expr, LogicalPlan, LogicalPlanBuilder, ScalarUDF, SortExpr,
-    WindowUDF,
+    Statement, WindowUDF,
 };
 use datafusion_expr::{AggregateUDF, ColumnUnnestList, FetchType, SkipType, Unnest};
 
@@ -1502,11 +1502,11 @@ impl AsLogicalPlan for LogicalPlanNode {
                     )),
                 })
             }
-            LogicalPlan::Prepare(Prepare {
+            LogicalPlan::Statement(Statement::Prepare(Prepare {
                 name,
                 data_types,
                 input,
-            }) => {
+            })) => {
                 let input =
                     LogicalPlanNode::try_from_logical_plan(input, extension_codec)?;
                 Ok(LogicalPlanNode {
@@ -1632,9 +1632,6 @@ impl AsLogicalPlan for LogicalPlanNode {
             )),
             LogicalPlan::RecursiveQuery(_) => Err(proto_error(
                 "LogicalPlan serde is not yet implemented for RecursiveQuery",
-            )),
-            LogicalPlan::Execute(_) => Err(proto_error(
-                "LogicalPlan serde is not yet implemented for Execute",
             )),
         }
     }
