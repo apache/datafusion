@@ -263,6 +263,7 @@ Verify that the Cargo.toml in the tarball contains the correct version
 (cd datafusion/expr-common && cargo publish)
 (cd datafusion/physical-expr-common && cargo publish)
 (cd datafusion/functions-aggregate-common && cargo publish)
+(cd datafusion/functions-window-common && cargo publish)
 (cd datafusion/expr && cargo publish)
 (cd datafusion/execution && cargo publish)
 (cd datafusion/physical-expr && cargo publish)
