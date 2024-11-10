@@ -19,7 +19,7 @@ use crate::utils::{parse_identifiers_normalized, quote_identifier};
 use std::sync::Arc;
 
 /// A fully resolved path to a table of the form "catalog.schema.table"
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ResolvedTableReference {
     /// The catalog (aka database) containing the table
     pub catalog: Arc<str>,

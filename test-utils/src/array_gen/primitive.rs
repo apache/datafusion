@@ -56,10 +56,13 @@ impl PrimitiveArrayGenerator {
             | DataType::Date64
             | DataType::Time32(_)
             | DataType::Time64(_)
-            | DataType::Interval(_) => (0..self.num_distinct_primitives)
+            | DataType::Interval(_)
+            | DataType::Binary
+            | DataType::LargeBinary
+            | DataType::BinaryView
+            | DataType::Timestamp(_, _) => (0..self.num_distinct_primitives)
                 .map(|_| Some(A::generate_random_native_data(&mut self.rng)))
                 .collect(),
-
             _ => {
                 let arrow_type = A::DATA_TYPE;
                 panic!("Unsupported arrow data type: {arrow_type}")

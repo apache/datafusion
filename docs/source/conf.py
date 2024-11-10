@@ -119,3 +119,9 @@ myst_heading_anchors = 3
 
 # enable nice rendering of checkboxes for the task lists
 myst_enable_extensions = ["colon_fence", "deflist", "tasklist"]
+
+# Some code blocks (sql) are not being highlighted correctly, due to the
+# presence of some special characters like: 🚀, å, {,... But this isn’t a major
+# issue for our documentation. So, suppress these warnings to keep our build
+# log cleaner.
+suppress_warnings = ['misc.highlighting_failure']

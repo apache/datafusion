@@ -93,6 +93,7 @@ select octet_length(column1_utf8view) from test;
 0
 NULL
 
+# TODO: Revisit this issue after upgrading to the arrow-rs version that includes apache/arrow-rs#6671.
 query error DataFusion error: Arrow error: Compute error: bit_length not supported for Utf8View
 select bit_length(column1_utf8view) from test;
 
@@ -391,12 +392,12 @@ drop table test_lowercase
 ## Ensure no casts for LIKE/ILIKE
 query TT
 EXPLAIN SELECT
-  column1_utf8view like 'foo' as "like",
-  column1_utf8view ilike 'foo' as "ilike"
+  column1_utf8view like '%foo%' as "like",
+  column1_utf8view ilike '%foo%' as "ilike"
 FROM test;
 ----
 logical_plan
-01)Projection: test.column1_utf8view LIKE Utf8View("foo") AS like, test.column1_utf8view ILIKE Utf8View("foo") AS ilike
+01)Projection: test.column1_utf8view LIKE Utf8View("%foo%") AS like, test.column1_utf8view ILIKE Utf8View("%foo%") AS ilike
 02)--TableScan: test projection=[column1_utf8view]
 
 

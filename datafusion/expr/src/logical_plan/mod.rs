@@ -36,14 +36,14 @@ pub use ddl::{
 pub use dml::{DmlStatement, WriteOp};
 pub use plan::{
     projection_schema, Aggregate, Analyze, ColumnUnnestList, DescribeTable, Distinct,
-    DistinctOn, EmptyRelation, Execute, Explain, Extension, FetchType, Filter, Join,
-    JoinConstraint, JoinType, Limit, LogicalPlan, Partitioning, PlanType, Prepare,
-    Projection, RecursiveQuery, Repartition, SkipType, Sort, StringifiedPlan, Subquery,
+    DistinctOn, EmptyRelation, Explain, Extension, FetchType, Filter, Join,
+    JoinConstraint, JoinType, Limit, LogicalPlan, Partitioning, PlanType, Projection,
+    RecursiveQuery, Repartition, SkipType, Sort, StringifiedPlan, Subquery,
     SubqueryAlias, TableScan, ToStringifiedPlan, Union, Unnest, Values, Window,
 };
 pub use statement::{
-    SetVariable, Statement, TransactionAccessMode, TransactionConclusion, TransactionEnd,
-    TransactionIsolationLevel, TransactionStart,
+    Deallocate, Execute, Prepare, SetVariable, Statement, TransactionAccessMode,
+    TransactionConclusion, TransactionEnd, TransactionIsolationLevel, TransactionStart,
 };
 
 pub use display::display_schema;

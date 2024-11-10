@@ -296,7 +296,7 @@ fn optimize_projections(
                 })
                 .collect::<Result<_>>()?
         }
-        LogicalPlan::Limit(_) | LogicalPlan::Prepare(_) => {
+        LogicalPlan::Limit(_) => {
             // Pass index requirements from the parent as well as column indices
             // that appear in this plan's expressions to its child. These operators
             // do not benefit from "small" inputs, so the projection_beneficial
@@ -312,6 +312,7 @@ fn optimize_projections(
         | LogicalPlan::Explain(_)
         | LogicalPlan::Analyze(_)
         | LogicalPlan::Subquery(_)
+        | LogicalPlan::Statement(_)
         | LogicalPlan::Distinct(Distinct::All(_)) => {
             // These plans require all their fields, and their children should
             // be treated as final plans -- otherwise, we may have schema a
@@ -347,10 +348,8 @@ fn optimize_projections(
         }
         LogicalPlan::EmptyRelation(_)
         | LogicalPlan::RecursiveQuery(_)
-        | LogicalPlan::Statement(_)
         | LogicalPlan::Values(_)
-        | LogicalPlan::DescribeTable(_)
-        | LogicalPlan::Execute(_) => {
+        | LogicalPlan::DescribeTable(_) => {
             // These operators have no inputs, so stop the optimization process.
             return Ok(Transformed::no(plan));
         }

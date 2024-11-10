@@ -1485,6 +1485,7 @@ dependencies = [
  "log",
  "paste",
  "recursive",
+ "regex",
  "regex-syntax",
 ]
 
