@@ -194,7 +194,7 @@ impl SessionStateDefaults {
             _ => return,
         };
         let schema =
-            ListingSchemaProvider::new(authority, path, factory.clone(), store, format);
+            ListingSchemaProvider::new(authority, path, Arc::clone(factory), store, format);
         let _ = default_catalog
             .register_schema("default", Arc::new(schema))
             .expect("Failed to register default schema");

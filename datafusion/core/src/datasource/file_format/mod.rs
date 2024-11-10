@@ -230,7 +230,7 @@ pub fn file_type_to_format(
         .as_any()
         .downcast_ref::<DefaultFileType>()
     {
-        Some(source) => Ok(source.file_format_factory.clone()),
+        Some(source) => Ok(Arc::clone(&source.file_format_factory)),
         _ => internal_err!("FileType was not DefaultFileType"),
     }
 }
@@ -255,7 +255,7 @@ pub fn transform_schema_to_view(schema: &Schema) -> Schema {
             DataType::Binary | DataType::LargeBinary => {
                 field_with_new_type(field, DataType::BinaryView)
             }
-            _ => field.clone(),
+            _ => Arc::clone(field),
         })
         .collect();
     Schema::new_with_metadata(transformed_fields, schema.metadata.clone())
@@ -297,7 +297,7 @@ pub(crate) fn coerce_file_schema_to_view_type(
                     Some(DataType::BinaryView),
                     DataType::Binary | DataType::LargeBinary,
                 ) => field_with_new_type(field, DataType::BinaryView),
-                _ => field.clone(),
+                _ => Arc::clone(field),
             },
         )
         .collect();
@@ -317,7 +317,7 @@ pub fn transform_binary_to_string(schema: &Schema) -> Schema {
             DataType::Binary => field_with_new_type(field, DataType::Utf8),
             DataType::LargeBinary => field_with_new_type(field, DataType::LargeUtf8),
             DataType::BinaryView => field_with_new_type(field, DataType::Utf8View),
-            _ => field.clone(),
+            _ => Arc::clone(field),
         })
         .collect();
     Schema::new_with_metadata(transformed_fields, schema.metadata.clone())
@@ -365,7 +365,7 @@ pub(crate) fn coerce_file_schema_to_string_type(
                     transform = true;
                     field_with_new_type(field, DataType::Utf8View)
                 }
-                _ => field.clone(),
+                _ => Arc::clone(field),
             },
         )
         .collect();

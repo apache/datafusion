@@ -571,9 +571,7 @@ fn handle_custom_pushdown(
             .iter()
             .map(|req| {
                 let child_schema = plan.children()[maintained_child_idx].schema();
-                let updated_columns = req
-                    .expr
-                    .clone()
+                let updated_columns = Arc::clone(&req.expr)
                     .transform_up(|expr| {
                         if let Some(col) = expr.as_any().downcast_ref::<Column>() {
                             let new_index = col.index() - sub_offset;

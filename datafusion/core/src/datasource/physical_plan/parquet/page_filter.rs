@@ -119,7 +119,7 @@ impl PagePruningAccessPlanFilter {
             .into_iter()
             .filter_map(|predicate| {
                 let pp =
-                    match PruningPredicate::try_new(predicate.clone(), schema.clone()) {
+                    match PruningPredicate::try_new(Arc::clone(predicate), Arc::clone(&schema)) {
                         Ok(pp) => pp,
                         Err(e) => {
                             debug!("Ignoring error creating page pruning predicate: {e}");

@@ -425,7 +425,7 @@ impl ParquetExecBuilder {
         let pruning_predicate = predicate
             .clone()
             .and_then(|predicate_expr| {
-                match PruningPredicate::try_new(predicate_expr, file_schema.clone()) {
+                match PruningPredicate::try_new(predicate_expr, Arc::clone(file_schema)) {
                     Ok(pruning_predicate) => Some(Arc::new(pruning_predicate)),
                     Err(e) => {
                         debug!("Could not create pruning predicate for: {e}");
@@ -439,7 +439,7 @@ impl ParquetExecBuilder {
         let page_pruning_predicate = predicate
             .as_ref()
             .map(|predicate_expr| {
-                PagePruningAccessPlanFilter::new(predicate_expr, file_schema.clone())
+                PagePruningAccessPlanFilter::new(predicate_expr, Arc::clone(file_schema))
             })
             .map(Arc::new);
 
@@ -807,7 +807,7 @@ impl ExecutionPlan for ParquetExec {
             predicate: self.predicate.clone(),
             pruning_predicate: self.pruning_predicate.clone(),
             page_pruning_predicate: self.page_pruning_predicate.clone(),
-            table_schema: self.base_config.file_schema.clone(),
+            table_schema: Arc::clone(&self.base_config.file_schema),
             metadata_size_hint: self.metadata_size_hint,
             metrics: self.metrics.clone(),
             parquet_file_reader_factory,
