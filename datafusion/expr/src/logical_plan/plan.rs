@@ -1413,9 +1413,15 @@ impl LogicalPlan {
             let schema = Arc::clone(plan.schema());
             let name_preserver = NamePreserver::new(&plan);
             plan.map_expressions(|e| {
-                let original_name = name_preserver.save(&e);
-                let transformed_expr =
-                    e.infer_placeholder_types(&schema)?.transform_up(|e| {
+                let (e, has_placeholder) = e.infer_placeholder_types(&schema)?;
+                if !has_placeholder {
+                    // Performance optimization:
+                    // avoid NamePreserver copy and second pass over expression
+                    // if no placeholders.
+                    Ok(Transformed::no(e))
+                } else {
+                    let original_name = name_preserver.save(&e);
+                    let transformed_expr = e.transform_up(|e| {
                         if let Expr::Placeholder(Placeholder { id, .. }) = e {
                             let value = param_values.get_placeholders_with_values(&id)?;
                             Ok(Transformed::yes(Expr::Literal(value)))
@@ -1423,8 +1429,9 @@ impl LogicalPlan {
                             Ok(Transformed::no(e))
                         }
                     })?;
-                // Preserve name to avoid breaking column references to this expression
-                Ok(transformed_expr.update_data(|expr| original_name.restore(expr)))
+                    // Preserve name to avoid breaking column references to this expression
+                    Ok(transformed_expr.update_data(|expr| original_name.restore(expr)))
+                }
             })
         })
         .map(|res| res.data)
