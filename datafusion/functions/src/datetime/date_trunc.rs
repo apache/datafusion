@@ -724,12 +724,14 @@ mod tests {
                 .map(|s| Some(string_to_timestamp_nanos(s).unwrap()))
                 .collect::<TimestampNanosecondArray>()
                 .with_timezone_opt(tz_opt.clone());
-            #[allow(deprecated)] // TODO migrate UDF invoke to invoke_batch
             let result = DateTruncFunc::new()
-                .invoke(&[
-                    ColumnarValue::Scalar(ScalarValue::from("day")),
-                    ColumnarValue::Array(Arc::new(input)),
-                ])
+                .invoke_batch(
+                    &[
+                        ColumnarValue::Scalar(ScalarValue::from("day")),
+                        ColumnarValue::Array(Arc::new(input)),
+                    ],
+                    0,
+                )
                 .unwrap();
             if let ColumnarValue::Array(result) = result {
                 assert_eq!(
@@ -883,12 +885,14 @@ mod tests {
                 .map(|s| Some(string_to_timestamp_nanos(s).unwrap()))
                 .collect::<TimestampNanosecondArray>()
                 .with_timezone_opt(tz_opt.clone());
-            #[allow(deprecated)] // TODO migrate UDF invoke to invoke_batch
             let result = DateTruncFunc::new()
-                .invoke(&[
-                    ColumnarValue::Scalar(ScalarValue::from("hour")),
-                    ColumnarValue::Array(Arc::new(input)),
-                ])
+                .invoke_batch(
+                    &[
+                        ColumnarValue::Scalar(ScalarValue::from("hour")),
+                        ColumnarValue::Array(Arc::new(input)),
+                    ],
+                    0,
+                )
                 .unwrap();
             if let ColumnarValue::Array(result) = result {
                 assert_eq!(

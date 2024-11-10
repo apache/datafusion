@@ -491,50 +491,67 @@ mod tests {
     use chrono::TimeDelta;
 
     #[test]
-    #[allow(deprecated)] // TODO migrate UDF invoke to invoke_batch
     fn test_date_bin() {
-        let res = DateBinFunc::new().invoke(&[
-            ColumnarValue::Scalar(ScalarValue::IntervalDayTime(Some(IntervalDayTime {
-                days: 0,
-                milliseconds: 1,
-            }))),
-            ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
-            ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
-        ]);
+        let res = DateBinFunc::new().invoke_batch(
+            &[
+                ColumnarValue::Scalar(ScalarValue::IntervalDayTime(Some(
+                    IntervalDayTime {
+                        days: 0,
+                        milliseconds: 1,
+                    },
+                ))),
+                ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
+                ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
+            ],
+            0,
+        );
         assert!(res.is_ok());
 
         let timestamps = Arc::new((1..6).map(Some).collect::<TimestampNanosecondArray>());
-        let res = DateBinFunc::new().invoke(&[
-            ColumnarValue::Scalar(ScalarValue::IntervalDayTime(Some(IntervalDayTime {
-                days: 0,
-                milliseconds: 1,
-            }))),
-            ColumnarValue::Array(timestamps),
-            ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
-        ]);
+        let res = DateBinFunc::new().invoke_batch(
+            &[
+                ColumnarValue::Scalar(ScalarValue::IntervalDayTime(Some(
+                    IntervalDayTime {
+                        days: 0,
+                        milliseconds: 1,
+                    },
+                ))),
+                ColumnarValue::Array(timestamps),
+                ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
+            ],
+            0,
+        );
         assert!(res.is_ok());
 
-        let res = DateBinFunc::new().invoke(&[
-            ColumnarValue::Scalar(ScalarValue::IntervalDayTime(Some(IntervalDayTime {
-                days: 0,
-                milliseconds: 1,
-            }))),
-            ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
-        ]);
+        let res = DateBinFunc::new().invoke_batch(
+            &[
+                ColumnarValue::Scalar(ScalarValue::IntervalDayTime(Some(
+                    IntervalDayTime {
+                        days: 0,
+                        milliseconds: 1,
+                    },
+                ))),
+                ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
+            ],
+            0,
+        );
         assert!(res.is_ok());
 
         // stride supports month-day-nano
-        let res = DateBinFunc::new().invoke(&[
-            ColumnarValue::Scalar(ScalarValue::IntervalMonthDayNano(Some(
-                IntervalMonthDayNano {
-                    months: 0,
-                    days: 0,
-                    nanoseconds: 1,
-                },
-            ))),
-            ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
-            ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
-        ]);
+        let res = DateBinFunc::new().invoke_batch(
+            &[
+                ColumnarValue::Scalar(ScalarValue::IntervalMonthDayNano(Some(
+                    IntervalMonthDayNano {
+                        months: 0,
+                        days: 0,
+                        nanoseconds: 1,
+                    },
+                ))),
+                ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
+                ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
+            ],
+            0,
+        );
         assert!(res.is_ok());
 
         //
@@ -542,99 +559,129 @@ mod tests {
         //
 
         // invalid number of arguments
-        let res = DateBinFunc::new().invoke(&[ColumnarValue::Scalar(
-            ScalarValue::IntervalDayTime(Some(IntervalDayTime {
-                days: 0,
-                milliseconds: 1,
-            })),
-        )]);
+        let res = DateBinFunc::new().invoke_batch(
+            &[ColumnarValue::Scalar(ScalarValue::IntervalDayTime(Some(
+                IntervalDayTime {
+                    days: 0,
+                    milliseconds: 1,
+                },
+            )))],
+            0,
+        );
         assert_eq!(
             res.err().unwrap().strip_backtrace(),
             "Execution error: DATE_BIN expected two or three arguments"
         );
 
         // stride: invalid type
-        let res = DateBinFunc::new().invoke(&[
-            ColumnarValue::Scalar(ScalarValue::IntervalYearMonth(Some(1))),
-            ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
-            ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
-        ]);
+        let res = DateBinFunc::new().invoke_batch(
+            &[
+                ColumnarValue::Scalar(ScalarValue::IntervalYearMonth(Some(1))),
+                ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
+                ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
+            ],
+            0,
+        );
         assert_eq!(
             res.err().unwrap().strip_backtrace(),
             "Execution error: DATE_BIN expects stride argument to be an INTERVAL but got Interval(YearMonth)"
         );
 
         // stride: invalid value
-        let res = DateBinFunc::new().invoke(&[
-            ColumnarValue::Scalar(ScalarValue::IntervalDayTime(Some(IntervalDayTime {
-                days: 0,
-                milliseconds: 0,
-            }))),
-            ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
-            ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
-        ]);
+        let res = DateBinFunc::new().invoke_batch(
+            &[
+                ColumnarValue::Scalar(ScalarValue::IntervalDayTime(Some(
+                    IntervalDayTime {
+                        days: 0,
+                        milliseconds: 0,
+                    },
+                ))),
+                ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
+                ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
+            ],
+            0,
+        );
         assert_eq!(
             res.err().unwrap().strip_backtrace(),
             "Execution error: DATE_BIN stride must be non-zero"
         );
 
         // stride: overflow of day-time interval
-        let res = DateBinFunc::new().invoke(&[
-            ColumnarValue::Scalar(ScalarValue::IntervalDayTime(Some(
-                IntervalDayTime::MAX,
-            ))),
-            ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
-            ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
-        ]);
+        let res = DateBinFunc::new().invoke_batch(
+            &[
+                ColumnarValue::Scalar(ScalarValue::IntervalDayTime(Some(
+                    IntervalDayTime::MAX,
+                ))),
+                ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
+                ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
+            ],
+            0,
+        );
         assert_eq!(
             res.err().unwrap().strip_backtrace(),
             "Execution error: DATE_BIN stride argument is too large"
         );
 
         // stride: overflow of month-day-nano interval
-        let res = DateBinFunc::new().invoke(&[
-            ColumnarValue::Scalar(ScalarValue::new_interval_mdn(0, i32::MAX, 1)),
-            ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
-            ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
-        ]);
+        let res = DateBinFunc::new().invoke_batch(
+            &[
+                ColumnarValue::Scalar(ScalarValue::new_interval_mdn(0, i32::MAX, 1)),
+                ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
+                ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
+            ],
+            0,
+        );
         assert_eq!(
             res.err().unwrap().strip_backtrace(),
             "Execution error: DATE_BIN stride argument is too large"
         );
 
         // stride: month intervals
-        let res = DateBinFunc::new().invoke(&[
-            ColumnarValue::Scalar(ScalarValue::new_interval_mdn(1, 1, 1)),
-            ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
-            ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
-        ]);
+        let res = DateBinFunc::new().invoke_batch(
+            &[
+                ColumnarValue::Scalar(ScalarValue::new_interval_mdn(1, 1, 1)),
+                ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
+                ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
+            ],
+            0,
+        );
         assert_eq!(
             res.err().unwrap().strip_backtrace(),
             "This feature is not implemented: DATE_BIN stride does not support combination of month, day and nanosecond intervals"
         );
 
         // origin: invalid type
-        let res = DateBinFunc::new().invoke(&[
-            ColumnarValue::Scalar(ScalarValue::IntervalDayTime(Some(IntervalDayTime {
-                days: 0,
-                milliseconds: 1,
-            }))),
-            ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
-            ColumnarValue::Scalar(ScalarValue::TimestampMicrosecond(Some(1), None)),
-        ]);
+        let res = DateBinFunc::new().invoke_batch(
+            &[
+                ColumnarValue::Scalar(ScalarValue::IntervalDayTime(Some(
+                    IntervalDayTime {
+                        days: 0,
+                        milliseconds: 1,
+                    },
+                ))),
+                ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
+                ColumnarValue::Scalar(ScalarValue::TimestampMicrosecond(Some(1), None)),
+            ],
+            0,
+        );
         assert_eq!(
             res.err().unwrap().strip_backtrace(),
             "Execution error: DATE_BIN expects origin argument to be a TIMESTAMP with nanosecond precision but got Timestamp(Microsecond, None)"
         );
 
-        let res = DateBinFunc::new().invoke(&[
-            ColumnarValue::Scalar(ScalarValue::IntervalDayTime(Some(IntervalDayTime {
-                days: 0,
-                milliseconds: 1,
-            }))),
-            ColumnarValue::Scalar(ScalarValue::TimestampMicrosecond(Some(1), None)),
-            ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
-        ]);
+        let res = DateBinFunc::new().invoke_batch(
+            &[
+                ColumnarValue::Scalar(ScalarValue::IntervalDayTime(Some(
+                    IntervalDayTime {
+                        days: 0,
+                        milliseconds: 1,
+                    },
+                ))),
+                ColumnarValue::Scalar(ScalarValue::TimestampMicrosecond(Some(1), None)),
+                ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
+            ],
+            0,
+        );
         assert!(res.is_ok());
 
         // unsupported array type for stride
@@ -648,11 +695,14 @@ mod tests {
                 })
                 .collect::<IntervalDayTimeArray>(),
         );
-        let res = DateBinFunc::new().invoke(&[
-            ColumnarValue::Array(intervals),
-            ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
-            ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
-        ]);
+        let res = DateBinFunc::new().invoke_batch(
+            &[
+                ColumnarValue::Array(intervals),
+                ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
+                ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
+            ],
+            0,
+        );
         assert_eq!(
             res.err().unwrap().strip_backtrace(),
             "This feature is not implemented: DATE_BIN only supports literal values for the stride argument, not arrays"
@@ -660,14 +710,19 @@ mod tests {
 
         // unsupported array type for origin
         let timestamps = Arc::new((1..6).map(Some).collect::<TimestampNanosecondArray>());
-        let res = DateBinFunc::new().invoke(&[
-            ColumnarValue::Scalar(ScalarValue::IntervalDayTime(Some(IntervalDayTime {
-                days: 0,
-                milliseconds: 1,
-            }))),
-            ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
-            ColumnarValue::Array(timestamps),
-        ]);
+        let res = DateBinFunc::new().invoke_batch(
+            &[
+                ColumnarValue::Scalar(ScalarValue::IntervalDayTime(Some(
+                    IntervalDayTime {
+                        days: 0,
+                        milliseconds: 1,
+                    },
+                ))),
+                ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
+                ColumnarValue::Array(timestamps),
+            ],
+            0,
+        );
         assert_eq!(
             res.err().unwrap().strip_backtrace(),
             "This feature is not implemented: DATE_BIN only supports literal values for the origin argument, not arrays"
@@ -782,16 +837,18 @@ mod tests {
                     .map(|s| Some(string_to_timestamp_nanos(s).unwrap()))
                     .collect::<TimestampNanosecondArray>()
                     .with_timezone_opt(tz_opt.clone());
-                #[allow(deprecated)] // TODO migrate UDF invoke to invoke_batch
                 let result = DateBinFunc::new()
-                    .invoke(&[
-                        ColumnarValue::Scalar(ScalarValue::new_interval_dt(1, 0)),
-                        ColumnarValue::Array(Arc::new(input)),
-                        ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(
-                            Some(string_to_timestamp_nanos(origin).unwrap()),
-                            tz_opt.clone(),
-                        )),
-                    ])
+                    .invoke_batch(
+                        &[
+                            ColumnarValue::Scalar(ScalarValue::new_interval_dt(1, 0)),
+                            ColumnarValue::Array(Arc::new(input)),
+                            ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(
+                                Some(string_to_timestamp_nanos(origin).unwrap()),
+                                tz_opt.clone(),
+                            )),
+                        ],
+                        0,
+                    )
                     .unwrap();
                 if let ColumnarValue::Array(result) = result {
                     assert_eq!(
