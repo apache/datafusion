@@ -527,21 +527,23 @@
     <a class="reference internal nav-link" href="#step-3-running-the-flamegraph-tool">
      Step 3: Running the Flamegraph Tool
     </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#example-generating-a-flamegraph-for-a-specific-query">
-     Example: Generating a Flamegraph for a Specific Query
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#example-flamegraph-for-a-specific-test">
-     Example: Flamegraph for a specific test:
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#example-flamegraph-for-a-benchmark">
-     Example: Flamegraph for a benchmark
-    </a>
+    <ul class="nav section-nav flex-column">
+     <li class="toc-h4 nav-item toc-entry">
+      <a class="reference internal nav-link" href="#example-generating-a-flamegraph-for-a-specific-query">
+       Example: Generating a Flamegraph for a Specific Query
+      </a>
+     </li>
+     <li class="toc-h4 nav-item toc-entry">
+      <a class="reference internal nav-link" href="#example-flamegraph-for-a-specific-test">
+       Example: Flamegraph for a specific test:
+      </a>
+     </li>
+     <li class="toc-h4 nav-item toc-entry">
+      <a class="reference internal nav-link" href="#example-flamegraph-for-a-benchmark">
+       Example: Flamegraph for a benchmark
+      </a>
+     </li>
+    </ul>
    </li>
    <li class="toc-h3 nav-item toc-entry">
     <a class="reference internal nav-link" href="#cpu-profiling-with-xcode-instruments">
@@ -638,9 +640,8 @@ in images such as this:</p>
 <div class="highlight-shell notranslate"><div class="highlight"><pre><span></span>sudo<span class="w"> </span>flamegraph<span class="w"> </span>--<span class="w"> </span>datafusion-cli<span class="w"> </span>-f<span class="w"> </span>&lt;path_to_sql_file/sql_file.sql&gt;
 </pre></div>
 </div>
-</section>
 <section id="example-generating-a-flamegraph-for-a-specific-query">
-<h3>Example: Generating a Flamegraph for a Specific Query<a class="headerlink" href="#example-generating-a-flamegraph-for-a-specific-query" title="Link to this heading">¶</a></h3>
+<h4>Example: Generating a Flamegraph for a Specific Query<a class="headerlink" href="#example-generating-a-flamegraph-for-a-specific-query" title="Link to this heading">¶</a></h4>
 <p>Here is an example using <code class="docutils literal notranslate"><span class="pre">28.sql</span></code>:</p>
 <div class="highlight-shell notranslate"><div class="highlight"><pre><span></span>sudo<span class="w"> </span>flamegraph<span class="w"> </span>--<span class="w"> </span>datafusion-cli<span class="w"> </span>-f<span class="w"> </span><span class="m">28</span>.sql
 </pre></div>
@@ -648,16 +649,17 @@ in images such as this:</p>
 <p>You can also invoke the flamegraph tool with <code class="docutils literal notranslate"><span class="pre">cargo</span></code> to profile a specific test or benchmark.</p>
 </section>
 <section id="example-flamegraph-for-a-specific-test">
-<h3>Example: Flamegraph for a specific test:<a class="headerlink" href="#example-flamegraph-for-a-specific-test" title="Link to this heading">¶</a></h3>
+<h4>Example: Flamegraph for a specific test:<a class="headerlink" href="#example-flamegraph-for-a-specific-test" title="Link to this heading">¶</a></h4>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">CARGO_PROFILE_RELEASE_DEBUG</span><span class="o">=</span><span class="nb">true</span><span class="w"> </span>cargo<span class="w"> </span>flamegraph<span class="w"> </span>--root<span class="w"> </span>--unit-test<span class="w"> </span>datafusion<span class="w">  </span>--<span class="w"> </span>dataframe::tests::test_array_agg
 </pre></div>
 </div>
 </section>
 <section id="example-flamegraph-for-a-benchmark">
-<h3>Example: Flamegraph for a benchmark<a class="headerlink" href="#example-flamegraph-for-a-benchmark" title="Link to this heading">¶</a></h3>
+<h4>Example: Flamegraph for a benchmark<a class="headerlink" href="#example-flamegraph-for-a-benchmark" title="Link to this heading">¶</a></h4>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">CARGO_PROFILE_RELEASE_DEBUG</span><span class="o">=</span><span class="nb">true</span><span class="w"> </span>cargo<span class="w"> </span>flamegraph<span class="w"> </span>--root<span class="w"> </span>--bench<span class="w"> </span>sql_planner<span class="w"> </span>--<span class="w"> </span>--bench
 </pre></div>
 </div>
+</section>
 </section>
 <section id="cpu-profiling-with-xcode-instruments">
 <h3>CPU profiling with XCode Instruments<a class="headerlink" href="#cpu-profiling-with-xcode-instruments" title="Link to this heading">¶</a></h3>
