@@ -195,7 +195,7 @@ impl ScalarUDFImpl for DecodeFunc {
         }
 
         match arg_types[0] {
-            DataType::Utf8 | DataType::Utf8View | DataType::Binary | DataType::Null => {
+            DataType::Utf8 | DataType::Binary | DataType::Null => {
                 Ok(vec![DataType::Binary, DataType::Utf8])
             }
             DataType::LargeUtf8 | DataType::LargeBinary => {
