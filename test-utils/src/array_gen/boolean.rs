@@ -62,8 +62,7 @@ impl BooleanArrayGenerator {
             .collect();
 
         let options = None;
-        let result = take(&distinct_booleans, &indices, options).unwrap();
 
-        result
+        take(&distinct_booleans, &indices, options).unwrap()
     }
 }
