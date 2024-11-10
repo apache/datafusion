@@ -93,6 +93,7 @@ select octet_length(column1_utf8view) from test;
 0
 NULL
 
+# TODO: Revisit this issue after upgrading to the arrow-rs version that includes apache/arrow-rs#6671.
 query error DataFusion error: Arrow error: Compute error: bit_length not supported for Utf8View
 select bit_length(column1_utf8view) from test;
 
