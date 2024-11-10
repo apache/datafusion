@@ -514,11 +514,11 @@ fn reorder_aggregate_keys(
                         new_group_by,
                         agg_exec.aggr_expr().to_vec(),
                         agg_exec.filter_expr().to_vec(),
-                        partial_agg.clone(),
+                        Arc::clone(&partial_agg) as _,
                         agg_exec.input_schema(),
                     )?);
 
-                    agg_node.plan = new_final_agg.clone();
+                    agg_node.plan = Arc::clone(&new_final_agg) as _;
                     agg_node.data.clear();
                     agg_node.children = vec![PlanWithKeyRequirements::new(
                         partial_agg as _,

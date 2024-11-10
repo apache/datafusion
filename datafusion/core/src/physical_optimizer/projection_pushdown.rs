@@ -603,7 +603,7 @@ fn try_embed_projection<Exec: EmbeddedProjection + 'static>(
     // Old projection may contain some alias or expression such as `a + 1` and `CAST('true' AS BOOLEAN)`, but our projection_exprs in hash join just contain column, so we need to create the new projection to keep the original projection.
     let new_projection = Arc::new(ProjectionExec::try_new(
         new_projection_exprs,
-        new_execution_plan.clone(),
+        Arc::clone(&new_execution_plan) as _,
     )?);
     if is_projection_removable(&new_projection) {
         Ok(Some(new_execution_plan))
