@@ -25,7 +25,7 @@ use arrow::array::types::{
     TimestampSecondType,
 };
 use arrow::array::{ArrayRef, PrimitiveArray};
-use arrow::datatypes::DataType::{Null, Timestamp, Utf8};
+use arrow::datatypes::DataType::{Null, Timestamp, Utf8, Utf8View};
 use arrow::datatypes::IntervalUnit::{DayTime, MonthDayNano};
 use arrow::datatypes::TimeUnit::{Microsecond, Millisecond, Nanosecond, Second};
 use arrow::datatypes::{DataType, TimeUnit};
@@ -122,7 +122,9 @@ impl ScalarUDFImpl for DateBinFunc {
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         match &arg_types[1] {
-            Timestamp(Nanosecond, None) | Utf8 | Null => Ok(Timestamp(Nanosecond, None)),
+            Timestamp(Nanosecond, None) | Utf8 | Utf8View | Null => {
+                Ok(Timestamp(Nanosecond, None))
+            }
             Timestamp(Nanosecond, tz_opt) => Ok(Timestamp(Nanosecond, tz_opt.clone())),
             Timestamp(Microsecond, tz_opt) => Ok(Timestamp(Microsecond, tz_opt.clone())),
             Timestamp(Millisecond, tz_opt) => Ok(Timestamp(Millisecond, tz_opt.clone())),

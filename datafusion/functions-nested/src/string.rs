@@ -20,8 +20,8 @@
 use arrow::array::{
     Array, ArrayRef, BooleanArray, Float32Array, Float64Array, GenericListArray,
     Int16Array, Int32Array, Int64Array, Int8Array, LargeStringArray, ListBuilder,
-    OffsetSizeTrait, StringArray, StringBuilder, UInt16Array, UInt32Array, UInt64Array,
-    UInt8Array,
+    OffsetSizeTrait, StringArray, StringBuilder, StringViewArray, UInt16Array,
+    UInt32Array, UInt64Array, UInt8Array,
 };
 use arrow::datatypes::{DataType, Field};
 use datafusion_expr::TypeSignature;
@@ -71,6 +71,7 @@ macro_rules! call_array_function {
         match $DATATYPE {
             DataType::Utf8 => array_function!(StringArray),
             DataType::LargeUtf8 => array_function!(LargeStringArray),
+            DataType::Utf8View => array_function!(StringViewArray),
             DataType::Boolean => array_function!(BooleanArray),
             DataType::Float32 => array_function!(Float32Array),
             DataType::Float64 => array_function!(Float64Array),
@@ -90,6 +91,7 @@ macro_rules! call_array_function {
             DataType::List(_) => array_function!(ListArray),
             DataType::Utf8 => array_function!(StringArray),
             DataType::LargeUtf8 => array_function!(LargeStringArray),
+            DataType::Utf8View => array_function!(StringViewArray),
             DataType::Boolean => array_function!(BooleanArray),
             DataType::Float32 => array_function!(Float32Array),
             DataType::Float64 => array_function!(Float64Array),
