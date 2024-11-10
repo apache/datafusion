@@ -49,6 +49,7 @@ Below is a checklist of what you need to do to add a new scalar function to Data
   - Run `./dev/update_function_docs.sh` to update docs
 
 [advanced_udf.rs]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/advanced_udaf.rs
+[datafusion/expr/src]: https://github.com/apache/datafusion/tree/main/datafusion/expr/src
 [sqllogictest/test_files]: https://github.com/apache/datafusion/tree/main/datafusion/sqllogictest/test_files
 
 ## How to add a new aggregate function
@@ -56,7 +57,7 @@ Below is a checklist of what you need to do to add a new scalar function to Data
 Below is a checklist of what you need to do to add a new aggregate function to DataFusion:
 
 - Add the actual implementation of an `Accumulator` and `AggregateExpr`:
-- In [datafusion/expr/src](../../../datafusion/expr/src/aggregate_function.rs), add:
+- In [datafusion/expr/src], add:
   - a new variant to `AggregateFunction`
   - a new entry to `FromStr` with the name of the function as called by SQL
   - a new line in `return_type` with the expected return type of the function, given an incoming type
