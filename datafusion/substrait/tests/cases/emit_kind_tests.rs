@@ -33,7 +33,7 @@ mod tests {
             "tests/testdata/test_plans/emit_kind/direct_on_project.substrait.json",
         );
         let ctx = add_plan_schemas_to_ctx(SessionContext::new(), &proto_plan)?;
-        let plan = from_substrait_plan(&ctx, &proto_plan).await?;
+        let plan = from_substrait_plan(&ctx.state_ref().read(), &proto_plan).await?;
 
         let plan_str = format!("{}", plan);
 
@@ -51,7 +51,7 @@ mod tests {
             "tests/testdata/test_plans/emit_kind/emit_on_filter.substrait.json",
         );
         let ctx = add_plan_schemas_to_ctx(SessionContext::new(), &proto_plan)?;
-        let plan = from_substrait_plan(&ctx, &proto_plan).await?;
+        let plan = from_substrait_plan(&ctx.state_ref().read(), &proto_plan).await?;
 
         let plan_str = format!("{}", plan);
 
@@ -91,8 +91,8 @@ mod tests {
              \n  TableScan: data"
         );
 
-        let proto = to_substrait_plan(&plan, &ctx)?;
-        let plan2 = from_substrait_plan(&ctx, &proto).await?;
+        let proto = to_substrait_plan(&plan, &ctx.state_ref().read())?;
+        let plan2 = from_substrait_plan(&ctx.state_ref().read(), &proto).await?;
         // note how the Projections are not flattened
         assert_eq!(
             format!("{}", plan2),
@@ -115,8 +115,8 @@ mod tests {
              \n  TableScan: data"
         );
 
-        let proto = to_substrait_plan(&plan, &ctx)?;
-        let plan2 = from_substrait_plan(&ctx, &proto).await?;
+        let proto = to_substrait_plan(&plan, &ctx.state_ref().read())?;
+        let plan2 = from_substrait_plan(&ctx.state_ref().read(), &proto).await?;
 
         let plan1str = format!("{plan}");
         let plan2str = format!("{plan2}");

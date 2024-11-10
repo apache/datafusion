@@ -16,6 +16,7 @@
 // under the License.
 
 use datafusion::config::ConfigOptions;
+use datafusion::execution::SessionState;
 use datafusion::optimizer::analyzer::expand_wildcard_rule::ExpandWildcardRule;
 use datafusion::optimizer::AnalyzerRule;
 use std::sync::Arc;
@@ -29,7 +30,7 @@ use datafusion::{
     arrow::datatypes::{DataType, TimeUnit},
     error::{DataFusionError, Result},
     logical_expr::{WindowFrame, WindowFrameBound},
-    prelude::{JoinType, SessionContext},
+    prelude::JoinType,
     scalar::ScalarValue,
 };
 
@@ -101,7 +102,7 @@ use substrait::{
 };
 
 /// Convert DataFusion LogicalPlan to Substrait Plan
-pub fn to_substrait_plan(plan: &LogicalPlan, ctx: &SessionContext) -> Result<Box<Plan>> {
+pub fn to_substrait_plan(plan: &LogicalPlan, ctx: &SessionState) -> Result<Box<Plan>> {
     let mut extensions = Extensions::default();
     // Parse relation nodes
     // Generate PlanRel(s)
@@ -144,7 +145,7 @@ pub fn to_substrait_plan(plan: &LogicalPlan, ctx: &SessionContext) -> Result<Box
 pub fn to_substrait_extended_expr(
     exprs: &[(&Expr, &Field)],
     schema: &DFSchemaRef,
-    ctx: &SessionContext,
+    ctx: &SessionState,
 ) -> Result<Box<ExtendedExpression>> {
     let mut extensions = Extensions::default();
 
@@ -183,7 +184,7 @@ pub fn to_substrait_extended_expr(
 #[allow(deprecated)]
 pub fn to_substrait_rel(
     plan: &LogicalPlan,
-    ctx: &SessionContext,
+    ctx: &SessionState,
     extensions: &mut Extensions,
 ) -> Result<Box<Rel>> {
     match plan {
@@ -586,7 +587,6 @@ pub fn to_substrait_rel(
         }
         LogicalPlan::Extension(extension_plan) => {
             let extension_bytes = ctx
-                .state()
                 .serializer_registry()
                 .serialize_logical_plan(extension_plan.node.as_ref())?;
             let detail = ProtoAny {
@@ -687,7 +687,7 @@ fn to_substrait_named_struct(schema: &DFSchemaRef) -> Result<NamedStruct> {
 }
 
 fn to_substrait_join_expr(
-    ctx: &SessionContext,
+    ctx: &SessionState,
     join_conditions: &Vec<(Expr, Expr)>,
     eq_op: Operator,
     left_schema: &DFSchemaRef,
@@ -770,7 +770,7 @@ pub fn operator_to_name(op: Operator) -> &'static str {
 
 #[allow(deprecated)]
 pub fn parse_flat_grouping_exprs(
-    ctx: &SessionContext,
+    ctx: &SessionState,
     exprs: &[Expr],
     schema: &DFSchemaRef,
     extensions: &mut Extensions,
@@ -792,7 +792,7 @@ pub fn parse_flat_grouping_exprs(
 }
 
 pub fn to_substrait_groupings(
-    ctx: &SessionContext,
+    ctx: &SessionState,
     exprs: &[Expr],
     schema: &DFSchemaRef,
     extensions: &mut Extensions,
@@ -857,7 +857,7 @@ pub fn to_substrait_groupings(
 
 #[allow(deprecated)]
 pub fn to_substrait_agg_measure(
-    ctx: &SessionContext,
+    ctx: &SessionState,
     expr: &Expr,
     schema: &DFSchemaRef,
     extensions: &mut Extensions,
@@ -908,7 +908,7 @@ pub fn to_substrait_agg_measure(
 
 /// Converts sort expression to corresponding substrait `SortField`
 fn to_substrait_sort_field(
-    ctx: &SessionContext,
+    ctx: &SessionState,
     sort: &Sort,
     schema: &DFSchemaRef,
     extensions: &mut Extensions,
@@ -977,7 +977,7 @@ pub fn make_binary_op_scalar_func(
 /// * `extensions` - Substrait extension info. Contains registered function information
 #[allow(deprecated)]
 pub fn to_substrait_rex(
-    ctx: &SessionContext,
+    ctx: &SessionState,
     expr: &Expr,
     schema: &DFSchemaRef,
     col_ref_offset: usize,
@@ -1674,7 +1674,7 @@ fn make_substrait_window_function(
 #[allow(deprecated)]
 #[allow(clippy::too_many_arguments)]
 fn make_substrait_like_expr(
-    ctx: &SessionContext,
+    ctx: &SessionState,
     ignore_case: bool,
     negated: bool,
     expr: &Expr,
@@ -2088,7 +2088,7 @@ fn to_substrait_literal_expr(
 
 /// Util to generate substrait [RexType::ScalarFunction] with one argument
 fn to_substrait_unary_scalar_fn(
-    ctx: &SessionContext,
+    ctx: &SessionState,
     fn_name: &str,
     arg: &Expr,
     schema: &DFSchemaRef,
@@ -2137,7 +2137,7 @@ fn try_to_substrait_field_reference(
 }
 
 fn substrait_sort_field(
-    ctx: &SessionContext,
+    ctx: &SessionState,
     sort: &Sort,
     schema: &DFSchemaRef,
     extensions: &mut Extensions,
@@ -2190,6 +2190,7 @@ mod test {
     use datafusion::arrow::datatypes::{Field, Fields, Schema};
     use datafusion::common::scalar::ScalarStructBuilder;
     use datafusion::common::DFSchema;
+    use datafusion::execution::SessionStateBuilder;
 
     #[test]
     fn round_trip_literals() -> Result<()> {
@@ -2433,7 +2434,7 @@ mod test {
 
     #[tokio::test]
     async fn extended_expressions() -> Result<()> {
-        let ctx = SessionContext::new();
+        let ctx = SessionStateBuilder::default().build();
 
         // One expression, empty input schema
         let expr = Expr::Literal(ScalarValue::Int32(Some(42)));
@@ -2485,7 +2486,7 @@ mod test {
 
     #[tokio::test]
     async fn invalid_extended_expression() {
-        let ctx = SessionContext::new();
+        let ctx = SessionStateBuilder::default().build();
 
         // Not ok if input schema is missing field referenced by expr
         let expr = Expr::Column("missing".into());

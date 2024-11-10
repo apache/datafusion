@@ -26,7 +26,8 @@ use datafusion::common::{
     not_impl_err, plan_datafusion_err, substrait_datafusion_err, substrait_err, DFSchema,
     DFSchemaRef,
 };
-use datafusion::execution::FunctionRegistry;
+use datafusion::datasource::provider_as_source;
+use datafusion::execution::{FunctionRegistry, SessionState};
 use datafusion::logical_expr::expr::{Exists, InSubquery, Sort};
 
 use datafusion::logical_expr::{
@@ -56,7 +57,6 @@ use crate::variation_const::{
 use datafusion::arrow::array::{new_empty_array, AsArray};
 use datafusion::arrow::temporal_conversions::NANOSECONDS;
 use datafusion::common::scalar::ScalarStructBuilder;
-use datafusion::dataframe::DataFrame;
 use datafusion::logical_expr::builder::project;
 use datafusion::logical_expr::expr::InList;
 use datafusion::logical_expr::{
@@ -66,9 +66,7 @@ use datafusion::logical_expr::{
 use datafusion::prelude::JoinType;
 use datafusion::sql::TableReference;
 use datafusion::{
-    error::Result,
-    logical_expr::utils::split_conjunction,
-    prelude::{Column, SessionContext},
+    error::Result, logical_expr::utils::split_conjunction, prelude::Column,
     scalar::ScalarValue,
 };
 use std::collections::HashSet;
@@ -203,7 +201,7 @@ fn split_eq_and_noneq_join_predicate_with_nulls_equality(
 
 async fn union_rels(
     rels: &[Rel],
-    ctx: &SessionContext,
+    ctx: &SessionState,
     extensions: &Extensions,
     is_all: bool,
 ) -> Result<LogicalPlan> {
@@ -224,7 +222,7 @@ async fn union_rels(
 
 async fn intersect_rels(
     rels: &[Rel],
-    ctx: &SessionContext,
+    ctx: &SessionState,
     extensions: &Extensions,
     is_all: bool,
 ) -> Result<LogicalPlan> {
@@ -243,7 +241,7 @@ async fn intersect_rels(
 
 async fn except_rels(
     rels: &[Rel],
-    ctx: &SessionContext,
+    ctx: &SessionState,
     extensions: &Extensions,
     is_all: bool,
 ) -> Result<LogicalPlan> {
@@ -261,10 +259,7 @@ async fn except_rels(
 }
 
 /// Convert Substrait Plan to DataFusion LogicalPlan
-pub async fn from_substrait_plan(
-    ctx: &SessionContext,
-    plan: &Plan,
-) -> Result<LogicalPlan> {
+pub async fn from_substrait_plan(ctx: &SessionState, plan: &Plan) -> Result<LogicalPlan> {
     // Register function extension
     let extensions = Extensions::try_from(&plan.extensions)?;
     if !extensions.type_variations.is_empty() {
@@ -341,7 +336,7 @@ pub struct ExprContainer {
 /// between systems.  This is often useful for scenarios like pushdown where filter
 /// expressions need to be sent to remote systems.
 pub async fn from_substrait_extended_expr(
-    ctx: &SessionContext,
+    ctx: &SessionState,
     extended_expr: &ExtendedExpression,
 ) -> Result<ExprContainer> {
     // Register function extension
@@ -561,7 +556,7 @@ fn make_renamed_schema(
 #[allow(deprecated)]
 #[async_recursion]
 pub async fn from_substrait_rel(
-    ctx: &SessionContext,
+    ctx: &SessionState,
     rel: &Rel,
     extensions: &Extensions,
 ) -> Result<LogicalPlan> {
@@ -841,16 +836,35 @@ pub async fn from_substrait_rel(
             left.cross_join(right.build()?)?.build()
         }
         Some(RelType::Read(read)) => {
-            fn read_with_schema(
-                df: DataFrame,
+            async fn read_with_schema(
+                ctx: &SessionState,
+                table_ref: TableReference,
                 schema: DFSchema,
                 projection: &Option<MaskExpression>,
             ) -> Result<LogicalPlan> {
-                ensure_schema_compatability(df.schema().to_owned(), schema.clone())?;
+                let schema = schema.replace_qualifier(table_ref.clone());
+
+                let plan = {
+                    let table = table_ref.table().to_string();
+                    let schema = ctx.schema_for_ref(table_ref.clone())?;
+                    let provider = match schema.table(&table).await? {
+                        Some(ref provider) => Arc::clone(provider),
+                        _ => return plan_err!("No table named '{table}'"),
+                    };
+
+                    LogicalPlanBuilder::scan(
+                        table_ref,
+                        provider_as_source(Arc::clone(&provider)),
+                        None,
+                    )?
+                    .build()?
+                };
+
+                ensure_schema_compatability(plan.schema(), schema.clone())?;
 
                 let schema = apply_masking(schema, projection)?;
 
-                apply_projection(df, schema)
+                apply_projection(plan, schema)
             }
 
             let named_struct = read.base_schema.as_ref().ok_or_else(|| {
@@ -879,12 +893,13 @@ pub async fn from_substrait_rel(
                         },
                     };
 
-                    let t = ctx.table(table_reference.clone()).await?;
-
-                    let substrait_schema =
-                        substrait_schema.replace_qualifier(table_reference);
-
-                    read_with_schema(t, substrait_schema, &read.projection)
+                    read_with_schema(
+                        &ctx,
+                        table_reference,
+                        substrait_schema,
+                        &read.projection,
+                    )
+                    .await
                 }
                 Some(ReadType::VirtualTable(vt)) => {
                     if vt.values.is_empty() {
@@ -960,12 +975,14 @@ pub async fn from_substrait_rel(
                     let name = filename.unwrap();
                     // directly use unwrap here since we could determine it is a valid one
                     let table_reference = TableReference::Bare { table: name.into() };
-                    let t = ctx.table(table_reference.clone()).await?;
 
-                    let substrait_schema =
-                        substrait_schema.replace_qualifier(table_reference);
-
-                    read_with_schema(t, substrait_schema, &read.projection)
+                    read_with_schema(
+                        &ctx,
+                        table_reference,
+                        substrait_schema,
+                        &read.projection,
+                    )
+                    .await
                 }
                 _ => {
                     not_impl_err!("Unsupported ReadType: {:?}", &read.as_ref().read_type)
@@ -1016,7 +1033,6 @@ pub async fn from_substrait_rel(
                 return substrait_err!("Unexpected empty detail in ExtensionLeafRel");
             };
             let plan = ctx
-                .state()
                 .serializer_registry()
                 .deserialize_logical_plan(&ext_detail.type_url, &ext_detail.value)?;
             Ok(LogicalPlan::Extension(Extension { node: plan }))
@@ -1026,7 +1042,6 @@ pub async fn from_substrait_rel(
                 return substrait_err!("Unexpected empty detail in ExtensionSingleRel");
             };
             let plan = ctx
-                .state()
                 .serializer_registry()
                 .deserialize_logical_plan(&ext_detail.type_url, &ext_detail.value)?;
             let Some(input_rel) = &extension.input else {
@@ -1044,7 +1059,6 @@ pub async fn from_substrait_rel(
                 return substrait_err!("Unexpected empty detail in ExtensionSingleRel");
             };
             let plan = ctx
-                .state()
                 .serializer_registry()
                 .deserialize_logical_plan(&ext_detail.type_url, &ext_detail.value)?;
             let mut inputs = Vec::with_capacity(extension.inputs.len());
@@ -1237,7 +1251,7 @@ impl NameTracker {
 ///    DataFusion schema may have MORE fields, but not the other way around.
 /// 2. All fields are compatible. See [`ensure_field_compatability`] for details
 fn ensure_schema_compatability(
-    table_schema: DFSchema,
+    table_schema: &DFSchema,
     substrait_schema: DFSchema,
 ) -> Result<()> {
     substrait_schema
@@ -1253,16 +1267,19 @@ fn ensure_schema_compatability(
 
 /// This function returns a DataFrame with fields adjusted if necessary in the event that the
 /// Substrait schema is a subset of the DataFusion schema.
-fn apply_projection(table: DataFrame, substrait_schema: DFSchema) -> Result<LogicalPlan> {
-    let df_schema = table.schema().to_owned();
-
-    let t = table.into_unoptimized_plan();
+fn apply_projection(
+    plan: LogicalPlan,
+    substrait_schema: DFSchema,
+) -> Result<LogicalPlan> {
+    let df_schema = plan.schema();
 
     if df_schema.logically_equivalent_names_and_types(&substrait_schema) {
-        return Ok(t);
+        return Ok(plan);
     }
 
-    match t {
+    let df_schema = df_schema.to_owned();
+
+    match plan {
         LogicalPlan::TableScan(mut scan) => {
             let column_indices: Vec<usize> = substrait_schema
                 .strip_qualifiers()
@@ -1389,7 +1406,7 @@ fn from_substrait_jointype(join_type: i32) -> Result<JoinType> {
 
 /// Convert Substrait Sorts to DataFusion Exprs
 pub async fn from_substrait_sorts(
-    ctx: &SessionContext,
+    ctx: &SessionState,
     substrait_sorts: &Vec<SortField>,
     input_schema: &DFSchema,
     extensions: &Extensions,
@@ -1439,7 +1456,7 @@ pub async fn from_substrait_sorts(
 
 /// Convert Substrait Expressions to DataFusion Exprs
 pub async fn from_substrait_rex_vec(
-    ctx: &SessionContext,
+    ctx: &SessionState,
     exprs: &Vec<Expression>,
     input_schema: &DFSchema,
     extensions: &Extensions,
@@ -1454,7 +1471,7 @@ pub async fn from_substrait_rex_vec(
 
 /// Convert Substrait FunctionArguments to DataFusion Exprs
 pub async fn from_substrait_func_args(
-    ctx: &SessionContext,
+    ctx: &SessionState,
     arguments: &Vec<FunctionArgument>,
     input_schema: &DFSchema,
     extensions: &Extensions,
@@ -1474,7 +1491,7 @@ pub async fn from_substrait_func_args(
 
 /// Convert Substrait AggregateFunction to DataFusion Expr
 pub async fn from_substrait_agg_func(
-    ctx: &SessionContext,
+    ctx: &SessionState,
     f: &AggregateFunction,
     input_schema: &DFSchema,
     extensions: &Extensions,
@@ -1517,7 +1534,7 @@ pub async fn from_substrait_agg_func(
 /// Convert Substrait Rex to DataFusion Expr
 #[async_recursion]
 pub async fn from_substrait_rex(
-    ctx: &SessionContext,
+    ctx: &SessionState,
     e: &Expression,
     input_schema: &DFSchema,
     extensions: &Extensions,
@@ -1614,7 +1631,7 @@ pub async fn from_substrait_rex(
 
             // try to first match the requested function into registered udfs, then built-in ops
             // and finally built-in expressions
-            if let Some(func) = ctx.state().scalar_functions().get(fn_name) {
+            if let Some(func) = ctx.scalar_functions().get(fn_name) {
                 Ok(Expr::ScalarFunction(expr::ScalarFunction::new_udf(
                     func.to_owned(),
                     args,
@@ -2774,7 +2791,7 @@ fn from_substrait_null(
 
 #[allow(deprecated)]
 async fn from_substrait_grouping(
-    ctx: &SessionContext,
+    ctx: &SessionState,
     grouping: &Grouping,
     expressions: &[Expr],
     input_schema: &DFSchemaRef,
@@ -2836,7 +2853,7 @@ impl BuiltinExprBuilder {
 
     pub async fn build(
         self,
-        ctx: &SessionContext,
+        ctx: &SessionState,
         f: &ScalarFunction,
         input_schema: &DFSchema,
         extensions: &Extensions,
@@ -2861,7 +2878,7 @@ impl BuiltinExprBuilder {
     }
 
     async fn build_unary_expr(
-        ctx: &SessionContext,
+        ctx: &SessionState,
         fn_name: &str,
         f: &ScalarFunction,
         input_schema: &DFSchema,
@@ -2895,7 +2912,7 @@ impl BuiltinExprBuilder {
     }
 
     async fn build_like_expr(
-        ctx: &SessionContext,
+        ctx: &SessionState,
         case_insensitive: bool,
         f: &ScalarFunction,
         input_schema: &DFSchema,

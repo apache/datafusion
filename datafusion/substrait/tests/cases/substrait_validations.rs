@@ -65,7 +65,7 @@ mod tests {
                 vec![("a", DataType::Int32, false), ("b", DataType::Int32, true)];
 
             let ctx = generate_context_with_table("DATA", df_schema)?;
-            let plan = from_substrait_plan(&ctx, &proto_plan).await?;
+            let plan = from_substrait_plan(&ctx.state_ref().read(), &proto_plan).await?;
 
             assert_eq!(
                 format!("{}", plan),
@@ -86,7 +86,7 @@ mod tests {
                 ("c", DataType::Int32, false),
             ];
             let ctx = generate_context_with_table("DATA", df_schema)?;
-            let plan = from_substrait_plan(&ctx, &proto_plan).await?;
+            let plan = from_substrait_plan(&ctx.state_ref().read(), &proto_plan).await?;
 
             assert_eq!(
                 format!("{}", plan),
@@ -109,7 +109,7 @@ mod tests {
                 ("b", DataType::Int32, false),
             ];
             let ctx = generate_context_with_table("DATA", df_schema)?;
-            let plan = from_substrait_plan(&ctx, &proto_plan).await?;
+            let plan = from_substrait_plan(&ctx.state_ref().read(), &proto_plan).await?;
 
             assert_eq!(
                 format!("{}", plan),
@@ -128,7 +128,7 @@ mod tests {
                 vec![("a", DataType::Int32, false), ("c", DataType::Int32, true)];
 
             let ctx = generate_context_with_table("DATA", df_schema)?;
-            let res = from_substrait_plan(&ctx, &proto_plan).await;
+            let res = from_substrait_plan(&ctx.state_ref().read(), &proto_plan).await;
             assert!(res.is_err());
             Ok(())
         }
@@ -140,7 +140,7 @@ mod tests {
 
             let ctx =
                 generate_context_with_table("DATA", vec![("a", DataType::Date32, true)])?;
-            let res = from_substrait_plan(&ctx, &proto_plan).await;
+            let res = from_substrait_plan(&ctx.state_ref().read(), &proto_plan).await;
             assert!(res.is_err());
             Ok(())
         }
