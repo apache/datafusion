@@ -19,11 +19,11 @@
 
 mod required_indices;
 
-use std::collections::HashSet;
-use std::sync::Arc;
-
 use crate::optimizer::ApplyOrder;
 use crate::{OptimizerConfig, OptimizerRule};
+use recursive::recursive;
+use std::collections::HashSet;
+use std::sync::Arc;
 
 use datafusion_common::{
     get_required_group_by_exprs_indices, internal_datafusion_err, internal_err, Column,
@@ -110,6 +110,7 @@ impl OptimizerRule for OptimizeProjections {
 ///   columns.
 /// - `Ok(None)`: Signal that the given logical plan did not require any change.
 /// - `Err(error)`: An error occurred during the optimization process.
+#[recursive]
 fn optimize_projections(
     plan: LogicalPlan,
     config: &dyn OptimizerConfig,

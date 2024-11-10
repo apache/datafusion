@@ -1539,6 +1539,7 @@ dependencies = [
  "datafusion-physical-expr",
  "datafusion-physical-plan",
  "itertools",
+ "recursive",
 ]
 
 [[package]]
