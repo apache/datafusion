@@ -269,6 +269,35 @@ fn roundtrip_window() -> Result<()> {
     let field_b = Field::new("b", DataType::Int64, false);
     let schema = Arc::new(Schema::new(vec![field_a, field_b]));
 
+    let _window_frame = WindowFrame::new_bounds(
+        datafusion_expr::WindowFrameUnits::Range,
+        WindowFrameBound::Preceding(ScalarValue::Int64(None)),
+        WindowFrameBound::CurrentRow,
+    );
+
+    // let udwf_window_expr = Expr::WindowFunction(WindowFunction::new(
+    //     WindowFunctionDefinition::WindowUDF(first_value_udwf()),
+
+    // let builtin_window_expr = Arc::new(BuiltInWindowExpr::new(
+    //     Arc::new(NthValue::first(
+    //         "FIRST_VALUE(a) PARTITION BY [b] ORDER BY [a ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW",
+    //         col("a", &schema)?,
+    //         DataType::Int64,
+    //         false,
+    //     )),
+    //     &[col("b", &schema)?],
+    //     &LexOrdering{
+    //         inner: vec![PhysicalSortExpr {
+    //             expr: col("a", &schema)?,
+    //             options: SortOptions {
+    //                 descending: false,
+    //                 nulls_first: false,
+    //             },
+    //         }]
+    //     },
+    //     Arc::new(window_frame),
+    // ));
+
     let plain_aggr_window_expr = Arc::new(PlainAggregateWindowExpr::new(
         AggregateExprBuilder::new(
             avg_udaf(),

@@ -136,6 +136,21 @@ from aggregate_test_100
 order by c9
 
 
+statement error DataFusion error: Error during planning: Invalid function 'nth_vlue'.\nDid you mean 'nth_value'?
+SELECT
+   NTH_VLUE(c4, 2) OVER()
+   FROM aggregate_test_100
+   ORDER BY c9
+   LIMIT 5;
+
+statement error DataFusion error: Error during planning: Invalid function 'frst_value'.\nDid you mean 'first_value'?
+SELECT
+   FRST_VALUE(c4, 2) OVER()
+   FROM aggregate_test_100
+   ORDER BY c9
+   LIMIT 5;
+
+
 query error DataFusion error: Arrow error: Cast error: Cannot cast string 'foo' to value of Int64 type
 create table foo as values (1), ('foo');
 

@@ -27,7 +27,7 @@ use std::sync::OnceLock;
 
 use datafusion_common::arrow::array::ArrayRef;
 use datafusion_common::arrow::datatypes::{DataType, Field};
-use datafusion_common::{exec_err, Result, ScalarValue};
+use datafusion_common::{exec_datafusion_err, exec_err, Result, ScalarValue};
 use datafusion_expr::window_doc_sections::DOC_SECTION_ANALYTICAL;
 use datafusion_expr::window_state::WindowAggState;
 use datafusion_expr::{
@@ -215,7 +215,11 @@ impl WindowUDFImpl for NthValue {
         }
 
         let n =
-            match get_scalar_value_from_args(partition_evaluator_args.input_exprs(), 1)?
+            match get_scalar_value_from_args(partition_evaluator_args.input_exprs(), 1)
+                .map_err(|_e| {
+                    exec_datafusion_err!(
+                "Expected a signed integer literal for the second argument of nth_value")
+                })?
                 .map(get_signed_integer)
             {
                 Some(Ok(n)) => {
