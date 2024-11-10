@@ -50,6 +50,7 @@ use datafusion_common::HashMap;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use rand::rngs::StdRng;
 use rand::{thread_rng, Rng, SeedableRng};
+use std::str;
 use tokio::task::JoinSet;
 
 // ========================================================================
@@ -171,6 +172,21 @@ fn baseline_config() -> DatasetGeneratorConfig {
         ColumnDescr::new("time32_ms", DataType::Time32(TimeUnit::Millisecond)),
         ColumnDescr::new("time64_us", DataType::Time64(TimeUnit::Microsecond)),
         ColumnDescr::new("time64_ns", DataType::Time64(TimeUnit::Nanosecond)),
+        ColumnDescr::new("timestamp_s", DataType::Timestamp(TimeUnit::Second, None)),
+        ColumnDescr::new(
+            "timestamp_ms",
+            DataType::Timestamp(TimeUnit::Millisecond, None),
+        ),
+        ColumnDescr::new(
+            "timestamp_us",
+            DataType::Timestamp(TimeUnit::Microsecond, None),
+        ),
+        ColumnDescr::new(
+            "timestamp_ns",
+            DataType::Timestamp(TimeUnit::Nanosecond, None),
+        ),
+        ColumnDescr::new("float32", DataType::Float32),
+        ColumnDescr::new("float64", DataType::Float64),
         ColumnDescr::new(
             "interval_year_month",
             DataType::Interval(IntervalUnit::YearMonth),
@@ -206,10 +222,12 @@ fn baseline_config() -> DatasetGeneratorConfig {
         ColumnDescr::new("utf8", DataType::Utf8),
         ColumnDescr::new("largeutf8", DataType::LargeUtf8),
         ColumnDescr::new("utf8view", DataType::Utf8View),
-        // todo binary
         // low cardinality columns
         ColumnDescr::new("u8_low", DataType::UInt8).with_max_num_distinct(10),
         ColumnDescr::new("utf8_low", DataType::Utf8).with_max_num_distinct(10),
+        ColumnDescr::new("binary", DataType::Binary),
+        ColumnDescr::new("large_binary", DataType::LargeBinary),
+        ColumnDescr::new("binaryview", DataType::BinaryView),
     ];
 
     let min_num_rows = 512;
