@@ -17,7 +17,6 @@
 
 // Make cheap clones clear: https://github.com/apache/datafusion/issues/11143
 #![deny(clippy::clone_on_ref_ptr)]
-
 #![warn(missing_docs, clippy::needless_borrow)]
 
 //! [DataFusion] is an extensible query engine written in Rust that

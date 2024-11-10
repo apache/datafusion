@@ -290,7 +290,8 @@ fn parallelize_sorts(
 
         requirements = add_sort_above_with_check(requirements, sort_reqs, fetch);
 
-        let spm = SortPreservingMergeExec::new(sort_exprs, Arc::clone(&requirements.plan));
+        let spm =
+            SortPreservingMergeExec::new(sort_exprs, Arc::clone(&requirements.plan));
         Ok(Transformed::yes(
             PlanWithCorrespondingCoalescePartitions::new(
                 Arc::new(spm.with_fetch(fetch)),
@@ -414,7 +415,11 @@ fn analyze_immediate_sort_removal(
                         .partition_count()
                         == 1
                     {
-                        Arc::new(GlobalLimitExec::new(Arc::clone(sort_input), 0, Some(fetch)))
+                        Arc::new(GlobalLimitExec::new(
+                            Arc::clone(sort_input),
+                            0,
+                            Some(fetch),
+                        ))
                     } else {
                         Arc::new(LocalLimitExec::new(Arc::clone(sort_input), fetch))
                     }

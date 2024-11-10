@@ -300,9 +300,9 @@ impl SessionState {
         let resolved_ref = self.resolve_table_ref(table_ref);
         if self.config.information_schema() && *resolved_ref.schema == *INFORMATION_SCHEMA
         {
-            return Ok(Arc::new(InformationSchemaProvider::new(
-                Arc::clone(&self.catalog_list),
-            )));
+            return Ok(Arc::new(InformationSchemaProvider::new(Arc::clone(
+                &self.catalog_list,
+            ))));
         }
 
         self.catalog_list
@@ -1749,7 +1749,8 @@ impl FunctionRegistry for SessionState {
         udf: Arc<ScalarUDF>,
     ) -> datafusion_common::Result<Option<Arc<ScalarUDF>>> {
         udf.aliases().iter().for_each(|alias| {
-            self.scalar_functions.insert(alias.clone(), Arc::clone(&udf));
+            self.scalar_functions
+                .insert(alias.clone(), Arc::clone(&udf));
         });
         Ok(self.scalar_functions.insert(udf.name().into(), udf))
     }
@@ -1759,7 +1760,8 @@ impl FunctionRegistry for SessionState {
         udaf: Arc<AggregateUDF>,
     ) -> datafusion_common::Result<Option<Arc<AggregateUDF>>> {
         udaf.aliases().iter().for_each(|alias| {
-            self.aggregate_functions.insert(alias.clone(), Arc::clone(&udaf));
+            self.aggregate_functions
+                .insert(alias.clone(), Arc::clone(&udaf));
         });
         Ok(self.aggregate_functions.insert(udaf.name().into(), udaf))
     }
@@ -1769,7 +1771,8 @@ impl FunctionRegistry for SessionState {
         udwf: Arc<WindowUDF>,
     ) -> datafusion_common::Result<Option<Arc<WindowUDF>>> {
         udwf.aliases().iter().for_each(|alias| {
-            self.window_functions.insert(alias.clone(), Arc::clone(&udwf));
+            self.window_functions
+                .insert(alias.clone(), Arc::clone(&udwf));
         });
         Ok(self.window_functions.insert(udwf.name().into(), udwf))
     }

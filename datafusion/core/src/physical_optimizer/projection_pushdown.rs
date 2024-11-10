@@ -1017,7 +1017,9 @@ fn update_expr(
             if sync_with_child {
                 state = RewriteState::RewrittenValid;
                 // Update the index of `column`:
-                Ok(Transformed::yes(Arc::clone(&projected_exprs[column.index()].0)))
+                Ok(Transformed::yes(Arc::clone(
+                    &projected_exprs[column.index()].0,
+                )))
             } else {
                 // default to invalid, in case we can't find the relevant column
                 state = RewriteState::RewrittenInvalid;

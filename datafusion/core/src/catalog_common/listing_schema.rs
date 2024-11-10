@@ -148,7 +148,8 @@ impl ListingSchemaProvider {
                         },
                     )
                     .await?;
-                let _ = self.register_table(table_name.to_string(), Arc::clone(&provider))?;
+                let _ =
+                    self.register_table(table_name.to_string(), Arc::clone(&provider))?;
             }
         }
         Ok(())

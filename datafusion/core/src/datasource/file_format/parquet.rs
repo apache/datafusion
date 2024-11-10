@@ -1057,15 +1057,23 @@ fn spawn_parquet_parallel_serialization_task(
             // function.
             loop {
                 if current_rg_rows + rb.num_rows() < max_row_group_rows {
-                    send_arrays_to_col_writers(&col_array_channels, &rb, Arc::clone(&schema))
-                        .await?;
+                    send_arrays_to_col_writers(
+                        &col_array_channels,
+                        &rb,
+                        Arc::clone(&schema),
+                    )
+                    .await?;
                     current_rg_rows += rb.num_rows();
                     break;
                 } else {
                     let rows_left = max_row_group_rows - current_rg_rows;
                     let a = rb.slice(0, rows_left);
-                    send_arrays_to_col_writers(&col_array_channels, &a, Arc::clone(&schema))
-                        .await?;
+                    send_arrays_to_col_writers(
+                        &col_array_channels,
+                        &a,
+                        Arc::clone(&schema),
+                    )
+                    .await?;
 
                     // Signal the parallel column writers that the RowGroup is done, join and finalize RowGroup
                     // on a separate task, so that we can immediately start on the next RG before waiting

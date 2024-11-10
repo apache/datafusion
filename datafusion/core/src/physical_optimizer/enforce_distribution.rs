@@ -844,8 +844,9 @@ fn add_roundrobin_on_top(
         // - Usage of order preserving variants is not desirable
         // (determined by flag `config.optimizer.prefer_existing_sort`)
         let partitioning = Partitioning::RoundRobinBatch(n_target);
-        let repartition = RepartitionExec::try_new(Arc::clone(&input.plan), partitioning)?
-            .with_preserve_order();
+        let repartition =
+            RepartitionExec::try_new(Arc::clone(&input.plan), partitioning)?
+                .with_preserve_order();
 
         let new_plan = Arc::new(repartition) as _;
 
@@ -902,8 +903,9 @@ fn add_hash_on_top(
         // - Usage of order preserving variants is not desirable (per the flag
         //   `config.optimizer.prefer_existing_sort`).
         let partitioning = dist.create_partitioning(n_target);
-        let repartition = RepartitionExec::try_new(Arc::clone(&input.plan), partitioning)?
-            .with_preserve_order();
+        let repartition =
+            RepartitionExec::try_new(Arc::clone(&input.plan), partitioning)?
+                .with_preserve_order();
         let plan = Arc::new(repartition) as _;
 
         return Ok(DistributionContext::new(plan, true, vec![input]));
@@ -1306,7 +1308,10 @@ fn ensure_distribution(
     )
     .collect::<Result<Vec<_>>>()?;
 
-    let children_plans = children.iter().map(|c| Arc::clone(&c.plan)).collect::<Vec<_>>();
+    let children_plans = children
+        .iter()
+        .map(|c| Arc::clone(&c.plan))
+        .collect::<Vec<_>>();
 
     plan = if plan.as_any().is::<UnionExec>()
         && !config.optimizer.prefer_existing_union

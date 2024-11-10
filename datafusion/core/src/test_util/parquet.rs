@@ -87,7 +87,8 @@ impl TestParquetFile {
         let first_batch = batches.next().expect("need at least one record batch");
         let schema = first_batch.schema();
 
-        let mut writer = ArrowWriter::try_new(file, Arc::clone(&schema), Some(props)).unwrap();
+        let mut writer =
+            ArrowWriter::try_new(file, Arc::clone(&schema), Some(props)).unwrap();
 
         writer.write(&first_batch).unwrap();
         let mut num_rows = first_batch.num_rows();

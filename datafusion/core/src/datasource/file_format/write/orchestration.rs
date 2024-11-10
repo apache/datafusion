@@ -279,7 +279,8 @@ pub(crate) async fn stateless_multipart_put(
     });
     while let Some((location, rb_stream)) = file_stream_rx.recv().await {
         let serializer = get_serializer();
-        let writer = create_writer(compression, &location, Arc::clone(&object_store)).await?;
+        let writer =
+            create_writer(compression, &location, Arc::clone(&object_store)).await?;
 
         tx_file_bundle
             .send((rb_stream, serializer, writer))
