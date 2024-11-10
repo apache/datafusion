@@ -31,31 +31,50 @@ use datafusion_common::{exec_err, Result, ScalarValue};
 use datafusion_expr::window_doc_sections::DOC_SECTION_ANALYTICAL;
 use datafusion_expr::window_state::WindowAggState;
 use datafusion_expr::{
-    Documentation, PartitionEvaluator, ReversedUDWF, Signature, TypeSignature,
+    Documentation, Literal, PartitionEvaluator, ReversedUDWF, Signature, TypeSignature,
     Volatility, WindowUDFImpl,
 };
 use datafusion_functions_window_common::field;
 use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
 use field::WindowUDFFieldArgs;
 
-define_udwf_and_expr!(
+get_or_init_udwf!(
     First,
     first_value,
     "returns the first value in the window frame",
     NthValue::first
 );
-define_udwf_and_expr!(
+get_or_init_udwf!(
     Last,
     last_value,
     "returns the last value in the window frame",
     NthValue::last
 );
-define_udwf_and_expr!(
+get_or_init_udwf!(
     NthValue,
     nth_value,
     "returns the nth value in the window frame",
     NthValue::nth
 );
+
+/// Create an expression to represent the `first_value` window function
+///
+pub fn first_value(arg: datafusion_expr::Expr) -> datafusion_expr::Expr {
+    first_value_udwf().call(vec![arg])
+}
+
+/// Create an expression to represent the `last_value` window function
+///
+pub fn last_value(arg: datafusion_expr::Expr) -> datafusion_expr::Expr {
+    last_value_udwf().call(vec![arg])
+}
+
+/// Create an expression to represent the `nth_value` window function
+///
+pub fn nth_value(arg: datafusion_expr::Expr, n: Option<i64>) -> datafusion_expr::Expr {
+    let n_lit = n.map(|v| v.lit()).unwrap_or(ScalarValue::Null.lit());
+    nth_value_udwf().call(vec![arg, n_lit])
+}
 
 /// Tag to differentiate special use cases of the NTH_VALUE built-in window function.
 #[derive(Debug, Copy, Clone)]

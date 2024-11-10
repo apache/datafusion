@@ -27,7 +27,10 @@ use crate::expr_fn::binary_expr;
 use crate::logical_plan::Subquery;
 use crate::utils::expr_to_columns;
 use crate::Volatility;
-use crate::{udaf, ExprSchemable, Operator, Signature, WindowFrame, WindowUDF};
+use crate::{
+    udaf, BuiltInWindowFunction, ExprSchemable, Operator, Signature, WindowFrame,
+    WindowUDF,
+};
 
 use arrow::datatypes::{DataType, FieldRef};
 use datafusion_common::cse::HashNode;
@@ -698,6 +701,9 @@ impl AggregateFunction {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
 /// Defines which implementation of an aggregate function DataFusion should call.
 pub enum WindowFunctionDefinition {
+    /// A built in aggregate function that leverages an aggregate function
+    /// A a built-in window function
+    BuiltInWindowFunction(BuiltInWindowFunction),
     /// A user defined aggregate function
     AggregateUDF(Arc<crate::AggregateUDF>),
     /// A user defined aggregate function
@@ -713,6 +719,9 @@ impl WindowFunctionDefinition {
         display_name: &str,
     ) -> Result<DataType> {
         match self {
+            WindowFunctionDefinition::BuiltInWindowFunction(fun) => {
+                fun.return_type(input_expr_types)
+            }
             WindowFunctionDefinition::AggregateUDF(fun) => {
                 fun.return_type(input_expr_types)
             }
@@ -725,6 +734,7 @@ impl WindowFunctionDefinition {
     /// The signatures supported by the function `fun`.
     pub fn signature(&self) -> Signature {
         match self {
+            WindowFunctionDefinition::BuiltInWindowFunction(fun) => fun.signature(),
             WindowFunctionDefinition::AggregateUDF(fun) => fun.signature().clone(),
             WindowFunctionDefinition::WindowUDF(fun) => fun.signature().clone(),
         }
@@ -733,6 +743,7 @@ impl WindowFunctionDefinition {
     /// Function's name for display
     pub fn name(&self) -> &str {
         match self {
+            WindowFunctionDefinition::BuiltInWindowFunction(fun) => fun.name(),
             WindowFunctionDefinition::WindowUDF(fun) => fun.name(),
             WindowFunctionDefinition::AggregateUDF(fun) => fun.name(),
         }
@@ -742,9 +753,16 @@ impl WindowFunctionDefinition {
 impl Display for WindowFunctionDefinition {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         match self {
+            WindowFunctionDefinition::BuiltInWindowFunction(fun) => Display::fmt(fun, f),
             WindowFunctionDefinition::AggregateUDF(fun) => Display::fmt(fun, f),
             WindowFunctionDefinition::WindowUDF(fun) => Display::fmt(fun, f),
         }
+    }
+}
+
+impl From<BuiltInWindowFunction> for WindowFunctionDefinition {
+    fn from(value: BuiltInWindowFunction) -> Self {
+        Self::BuiltInWindowFunction(value)
     }
 }
 
@@ -773,11 +791,9 @@ impl From<Arc<WindowUDF>> for WindowFunctionDefinition {
 /// ```
 /// # use datafusion_expr::{Expr, BuiltInWindowFunction, col, ExprFunctionExt};
 /// # use datafusion_expr::expr::WindowFunction;
-/// use datafusion_expr::test::function_stub::count_udaf;
-/// use datafusion_expr::WindowFunctionDefinition::{AggregateUDF};
-/// // Create COUNT(a) OVER (PARTITION BY b ORDER BY c)
+/// // Create FIRST_VALUE(a) OVER (PARTITION BY b ORDER BY c)
 /// let expr = Expr::WindowFunction(
-///     WindowFunction::new(AggregateUDF(count_udaf()), vec![col("a")])
+///     WindowFunction::new(BuiltInWindowFunction::FirstValue, vec![col("a")])
 /// )
 ///   .partition_by(vec![col("b")])
 ///   .order_by(vec![col("b").sort(true, true)])

@@ -46,6 +46,9 @@ use test_utils::add_empty_batches;
 use datafusion::functions_window::row_number::row_number_udwf;
 use datafusion_common::HashMap;
 use datafusion_functions_window::lead_lag::{lag_udwf, lead_udwf};
+use datafusion_functions_window::nth_value::{
+    first_value_udwf, last_value_udwf, nth_value_udwf,
+};
 use datafusion_functions_window::rank::{dense_rank_udwf, rank_udwf};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use rand::distributions::Alphanumeric;
@@ -414,6 +417,30 @@ fn get_random_function(
             ),
         );
     }
+    window_fn_map.insert(
+        "first_value",
+        (
+            WindowFunctionDefinition::WindowUDF(first_value_udwf()),
+            vec![arg.clone()],
+        ),
+    );
+    window_fn_map.insert(
+        "last_value",
+        (
+            WindowFunctionDefinition::WindowUDF(last_value_udwf()),
+            vec![arg.clone()],
+        ),
+    );
+    window_fn_map.insert(
+        "nth_value",
+        (
+            WindowFunctionDefinition::WindowUDF(nth_value_udwf()),
+            vec![
+                arg.clone(),
+                lit(ScalarValue::Int64(Some(rng.gen_range(1..10)))),
+            ],
+        ),
+    );
 
     let rand_fn_idx = rng.gen_range(0..window_fn_map.len());
     let fn_name = window_fn_map.keys().collect::<Vec<_>>()[rand_fn_idx];

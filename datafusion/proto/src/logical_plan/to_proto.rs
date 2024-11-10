@@ -306,6 +306,7 @@ pub fn serialize_expr(
             null_treatment: _,
         }) => {
             let (window_function, fun_definition) = match fun {
+                WindowFunctionDefinition::BuiltInWindowFunction(_fun) => unreachable!(),
                 WindowFunctionDefinition::AggregateUDF(aggr_udf) => {
                     let mut buf = Vec::new();
                     let _ = codec.try_encode_udaf(aggr_udf, &mut buf);

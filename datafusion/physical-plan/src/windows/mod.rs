@@ -103,6 +103,9 @@ pub fn create_window_expr(
     ignore_nulls: bool,
 ) -> Result<Arc<dyn WindowExpr>> {
     Ok(match fun {
+        WindowFunctionDefinition::BuiltInWindowFunction(_fun) => {
+            unreachable!()
+        }
         WindowFunctionDefinition::AggregateUDF(fun) => {
             let aggregate = AggregateExprBuilder::new(Arc::clone(fun), args.to_vec())
                 .schema(Arc::new(input_schema.clone()))
