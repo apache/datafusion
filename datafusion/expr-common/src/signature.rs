@@ -18,7 +18,7 @@
 //! Signature module contains foundational types that are used to represent signatures, types,
 //! and return types of functions in DataFusion.
 
-use crate::type_coercion::aggregates::{NUMERICS, STRINGS};
+use crate::type_coercion::aggregates::NUMERICS;
 use arrow::datatypes::DataType;
 use datafusion_common::types::{LogicalTypeRef, NativeType};
 use itertools::Itertools;
@@ -292,12 +292,13 @@ impl TypeSignature {
                 .cloned()
                 .map(|numeric_type| vec![numeric_type; *arg_count])
                 .collect(),
-            TypeSignature::String(arg_count) => STRINGS
-                .iter()
-                .cloned()
-                .map(|string_type| vec![string_type; *arg_count])
-                .collect(),
-            TypeSignature::Boolean(arg_count) => vec![vec![DataType::Boolean; *arg_count]],
+            TypeSignature::String(arg_count) => get_data_types(&NativeType::String)
+                .into_iter()
+                .map(|dt| vec![dt; *arg_count])
+                .collect::<Vec<_>>(),
+            TypeSignature::Boolean(arg_count) => {
+                vec![vec![DataType::Boolean; *arg_count]]
+            }
             // TODO: Implement for other types
             TypeSignature::Any(_)
             | TypeSignature::VariadicAny
