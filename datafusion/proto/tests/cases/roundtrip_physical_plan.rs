@@ -24,7 +24,7 @@ use std::vec;
 use arrow::array::RecordBatch;
 use arrow::csv::WriterBuilder;
 use arrow::datatypes::{Fields, TimeUnit};
-use datafusion::physical_expr::aggregate::{AggregateExprBuilder, AggregateFunctionExpr};
+use datafusion::physical_expr::aggregate::AggregateExprBuilder;
 use datafusion::physical_plan::coalesce_batches::CoalesceBatchesExec;
 use datafusion_expr::dml::InsertOp;
 use datafusion_functions_aggregate::approx_percentile_cont::approx_percentile_cont_udaf;
@@ -47,7 +47,7 @@ use datafusion::datasource::physical_plan::{
 };
 use datafusion::execution::FunctionRegistry;
 use datafusion::functions_aggregate::sum::sum_udaf;
-use datafusion::functions_window::nth_value::nth_value_udwf;
+use datafusion::functions_window::nth_value::first_value_udwf;
 use datafusion::logical_expr::{create_udf, JoinType, Operator, Volatility};
 use datafusion::physical_expr::expressions::Literal;
 use datafusion::physical_expr::window::{BuiltInWindowExpr, SlidingAggregateWindowExpr};
@@ -281,10 +281,16 @@ fn roundtrip_window() -> Result<()> {
         WindowFrameBound::CurrentRow,
     );
 
-    let nth_value_window =
-        create_udwf_window_expr(&nth_value_udwf(), &[col("a", &schema)?], schema.as_ref(),  "FIRST_VALUE(a) PARTITION BY [b] ORDER BY [a ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW".to_string(), false)?;
+    let first_value_window = create_udwf_window_expr(
+        &first_value_udwf(),
+        &[col("a", &schema)?],
+        schema.as_ref(),
+        "FIRST_VALUE(a) PARTITION BY [b] ORDER BY [a ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW".to_string(),
+        false,
+    )?;
+    //  "FIRST_VALUE(a) PARTITION BY [b] ORDER BY [a ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW",
     let builtin_window_expr = Arc::new(BuiltInWindowExpr::new(
-        nth_value_window,
+        first_value_window,
         &[col("b", &schema)?],
         &LexOrdering {
             inner: vec![PhysicalSortExpr {
