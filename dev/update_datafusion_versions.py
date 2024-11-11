@@ -32,6 +32,7 @@ crates = {
     'datafusion': 'datafusion/core/Cargo.toml',
     'datafusion-execution': 'datafusion/execution/Cargo.toml',
     'datafusion-expr': 'datafusion/expr/Cargo.toml',
+    'datafusion-ffi': 'datafusion/ffi/Cargo.toml',
     'datafusion-functions': 'datafusion/functions/Cargo.toml',
     'datafusion-functions-aggregate': 'datafusion/functions-aggregate/Cargo.toml',
     'datafusion-functions-nested': 'datafusion/functions-nested/Cargo.toml',

@@ -715,6 +715,12 @@ impl SessionContext {
             LogicalPlan::Statement(Statement::Execute(execute)) => {
                 self.execute_prepared(execute)
             }
+            LogicalPlan::Statement(Statement::Deallocate(deallocate)) => {
+                self.state
+                    .write()
+                    .remove_prepared(deallocate.name.as_str())?;
+                self.return_empty_dataframe()
+            }
             plan => Ok(DataFrame::new(self.state(), plan)),
         }
     }
