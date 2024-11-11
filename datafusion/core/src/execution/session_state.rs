@@ -540,8 +540,9 @@ impl SessionState {
         };
 
         for reference in references {
-            let resolved = &self.resolve_table_ref(reference);
-            if let Entry::Vacant(v) = provider.tables.entry(resolved.to_string()) {
+            let resolved = self.resolve_table_ref(reference);
+            if let Entry::Vacant(v) = provider.tables.entry(resolved) {
+                let resolved = v.key();
                 if let Ok(schema) = self.schema_for_ref(resolved.clone()) {
                     if let Some(table) = schema.table(&resolved.table).await? {
                         v.insert(provider_as_source(table));
@@ -932,6 +933,17 @@ impl SessionState {
     /// Get the prepared plan with the given name.
     pub(crate) fn get_prepared(&self, name: &str) -> Option<Arc<PreparedPlan>> {
         self.prepared_plans.get(name).map(Arc::clone)
+    }
+
+    /// Remove the prepared plan with the given name.
+    pub(crate) fn remove_prepared(
+        &mut self,
+        name: &str,
+    ) -> datafusion_common::Result<()> {
+        match self.prepared_plans.remove(name) {
+            Some(_) => Ok(()),
+            None => exec_err!("Prepared statement '{}' does not exist", name),
+        }
     }
 }
 
@@ -1599,7 +1611,7 @@ impl From<SessionState> for SessionStateBuilder {
 /// having a direct dependency on the [`SessionState`] struct (and core crate)
 struct SessionContextProvider<'a> {
     state: &'a SessionState,
-    tables: HashMap<String, Arc<dyn TableSource>>,
+    tables: HashMap<ResolvedTableReference, Arc<dyn TableSource>>,
 }
 
 impl<'a> ContextProvider for SessionContextProvider<'a> {
@@ -1611,7 +1623,7 @@ impl<'a> ContextProvider for SessionContextProvider<'a> {
         &self,
         name: TableReference,
     ) -> datafusion_common::Result<Arc<dyn TableSource>> {
-        let name = self.state.resolve_table_ref(name).to_string();
+        let name = self.state.resolve_table_ref(name);
         self.tables
             .get(&name)
             .cloned()

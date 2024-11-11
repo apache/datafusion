@@ -46,10 +46,10 @@ use datafusion_expr::utils::expr_to_columns;
 use datafusion_expr::{
     cast, col, Analyze, CreateCatalog, CreateCatalogSchema,
     CreateExternalTable as PlanCreateExternalTable, CreateFunction, CreateFunctionBody,
-    CreateIndex as PlanCreateIndex, CreateMemoryTable, CreateView, DescribeTable,
-    DmlStatement, DropCatalogSchema, DropFunction, DropTable, DropView, EmptyRelation,
-    Execute, Explain, Expr, ExprSchemable, Filter, LogicalPlan, LogicalPlanBuilder,
-    OperateFunctionArg, PlanType, Prepare, SetVariable, SortExpr,
+    CreateIndex as PlanCreateIndex, CreateMemoryTable, CreateView, Deallocate,
+    DescribeTable, DmlStatement, DropCatalogSchema, DropFunction, DropTable, DropView,
+    EmptyRelation, Execute, Explain, Expr, ExprSchemable, Filter, LogicalPlan,
+    LogicalPlanBuilder, OperateFunctionArg, PlanType, Prepare, SetVariable, SortExpr,
     Statement as PlanStatement, ToStringifiedPlan, TransactionAccessMode,
     TransactionConclusion, TransactionEnd, TransactionIsolationLevel, TransactionStart,
     Volatility, WriteOp,
@@ -636,11 +636,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     *statement,
                     &mut planner_context,
                 )?;
-                Ok(LogicalPlan::Prepare(Prepare {
+                Ok(LogicalPlan::Statement(PlanStatement::Prepare(Prepare {
                     name: ident_to_string(&name),
                     data_types,
                     input: Arc::new(plan),
-                }))
+                })))
             }
             Statement::Execute {
                 name,
@@ -660,12 +660,20 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     .map(|expr| self.sql_to_expr(expr, &empty_schema, planner_context))
                     .collect::<Result<Vec<Expr>>>()?;
 
-                Ok(LogicalPlan::Execute(Execute {
+                Ok(LogicalPlan::Statement(PlanStatement::Execute(Execute {
                     name: ident_to_string(&name),
                     parameters,
-                    schema: DFSchemaRef::new(empty_schema),
-                }))
+                })))
             }
+            Statement::Deallocate {
+                name,
+                // Similar to PostgreSQL, the PREPARE keyword is ignored
+                prepare: _,
+            } => Ok(LogicalPlan::Statement(PlanStatement::Deallocate(
+                Deallocate {
+                    name: ident_to_string(&name),
+                },
+            ))),
 
             Statement::ShowTables {
                 extended,
@@ -841,7 +849,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 let statement = PlanStatement::TransactionStart(TransactionStart {
                     access_mode,
                     isolation_level,
-                    schema: DFSchemaRef::new(DFSchema::empty()),
                 });
                 Ok(LogicalPlan::Statement(statement))
             }
@@ -849,7 +856,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 let statement = PlanStatement::TransactionEnd(TransactionEnd {
                     conclusion: TransactionConclusion::Commit,
                     chain,
-                    schema: DFSchemaRef::new(DFSchema::empty()),
                 });
                 Ok(LogicalPlan::Statement(statement))
             }
@@ -860,7 +866,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 let statement = PlanStatement::TransactionEnd(TransactionEnd {
                     conclusion: TransactionConclusion::Rollback,
                     chain,
-                    schema: DFSchemaRef::new(DFSchema::empty()),
                 });
                 Ok(LogicalPlan::Statement(statement))
             }
@@ -1535,7 +1540,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let statement = PlanStatement::SetVariable(SetVariable {
             variable: variable_lower,
             value: value_string,
-            schema: DFSchemaRef::new(DFSchema::empty()),
         });
 
         Ok(LogicalPlan::Statement(statement))

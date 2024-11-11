@@ -1623,3 +1623,44 @@ a\_c \%abc false
 \%abc a\_c false
 \%abc %abc true
 \%abc \%abc false
+
+# test utf8, largeutf8, utf8view, DictionaryString for bit_length
+query IIII
+SELECT
+  bit_length('Andrew'),
+  bit_length('datafusion数据融合'),
+  bit_length('💖'),
+  bit_length('josé')
+;
+----
+48 176 32 40
+
+query IIII
+SELECT
+  bit_length(arrow_cast('Andrew', 'LargeUtf8')),
+  bit_length(arrow_cast('datafusion数据融合', 'LargeUtf8')),
+  bit_length(arrow_cast('💖', 'LargeUtf8')),
+  bit_length(arrow_cast('josé', 'LargeUtf8'))
+;
+----
+48 176 32 40
+
+query IIII
+SELECT
+  bit_length(arrow_cast('Andrew', 'Utf8View')),
+  bit_length(arrow_cast('datafusion数据融合', 'Utf8View')),
+  bit_length(arrow_cast('💖', 'Utf8View')),
+  bit_length(arrow_cast('josé', 'Utf8View'))
+;
+----
+48 176 32 40
+
+query IIII
+SELECT
+  bit_length(arrow_cast('Andrew', 'Dictionary(Int32, Utf8)')),
+  bit_length(arrow_cast('datafusion数据融合', 'Dictionary(Int32, Utf8)')),
+  bit_length(arrow_cast('💖', 'Dictionary(Int32, Utf8)')),
+  bit_length(arrow_cast('josé', 'Dictionary(Int32, Utf8)'))
+;
+----
+48 176 32 40

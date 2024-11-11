@@ -33,7 +33,7 @@ use datafusion_expr::{
     logical_plan::{LogicalPlan, Prepare},
     test::function_stub::sum_udaf,
     ColumnarValue, CreateExternalTable, CreateIndex, DdlStatement, ScalarUDF,
-    ScalarUDFImpl, Signature, Volatility,
+    ScalarUDFImpl, Signature, Statement, Volatility,
 };
 use datafusion_functions::{string, unicode};
 use datafusion_sql::{
@@ -2710,7 +2710,9 @@ fn prepare_stmt_quick_test(
     assert_eq!(format!("{assert_plan}"), expected_plan);
 
     // verify data types
-    if let LogicalPlan::Prepare(Prepare { data_types, .. }) = assert_plan {
+    if let LogicalPlan::Statement(Statement::Prepare(Prepare { data_types, .. })) =
+        assert_plan
+    {
         let dt = format!("{data_types:?}");
         assert_eq!(dt, expected_data_types);
     }
