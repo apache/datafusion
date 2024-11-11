@@ -365,7 +365,7 @@ impl Statistics {
     }
 
     /// Attempt to merge these statistics.
-    /// Merging provides conservative estimates for null & distinct counts as well as num_rows,
+    /// Merging provides conservatively large estimates for null & distinct counts as well as num_rows,
     /// so those will be converted to inexact values.
     pub fn merge(&self, other: &Self) -> Self {
         Self {
@@ -493,7 +493,7 @@ impl ColumnStatistics {
     }
 
     /// Attempt to merge these statistics.
-    /// Merging provides conservative estimates for null & distinct counts,
+    /// Merging provides conservatively large estimates for null & distinct counts,
     /// so those will be converted to inexact values.
     pub fn merge(&self, other: &Self) -> Self {
         Self {
