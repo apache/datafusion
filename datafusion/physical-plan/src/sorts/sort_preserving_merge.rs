@@ -191,10 +191,10 @@ impl DisplayAs for SortPreservingMergeExec {
                         ", partition_groups=[{}]",
                         partition_groups
                             .iter()
-                            .map(|group| group
-                                .iter()
-                                .map(|index| index.to_string())
-                                .join(","))
+                            .map(|group| format!(
+                                "[{}]",
+                                group.iter().map(|index| index.to_string()).join(",")
+                            ))
                             .join(",")
                     )?;
                 }

@@ -69,7 +69,7 @@ logical_plan
 03)----TableScan: t projection=[a], full_filters=[t.partition = Int32(1)]
 04)----TableScan: t projection=[a], full_filters=[t.partition = Int32(2)]
 physical_plan
-01)SortPreservingMergeExec: [a@0 ASC NULLS LAST], partition_groups=[2,0,1]
+01)SortPreservingMergeExec: [a@0 ASC NULLS LAST], partition_groups=[[2,0],[1]]
 02)--UnionExec
 03)----ParquetExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/optimize_sort_preserving_merge/parquet_table/partition=1/1_1.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/optimize_sort_preserving_merge/parquet_table/partition=1/1_2.parquet]]}, projection=[a], output_ordering=[a@0 ASC NULLS LAST]
 04)----ParquetExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/optimize_sort_preserving_merge/parquet_table/partition=2/2_2.parquet]]}, projection=[a], output_ordering=[a@0 ASC NULLS LAST]
