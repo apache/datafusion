@@ -347,6 +347,7 @@ impl ExprSchemable for Expr {
         match self {
             Expr::Column(c) => Ok(schema.metadata(c)?.clone()),
             Expr::Alias(Alias { expr, .. }) => expr.metadata(schema),
+            Expr::Cast(Cast { expr, .. }) => expr.metadata(schema),
             _ => Ok(HashMap::new()),
         }
     }
@@ -681,13 +682,11 @@ mod tests {
             .with_data_type(DataType::Int32)
             .with_metadata(meta.clone());
 
-        // col and alias should be metadata-preserving
+        // col, alias, and cast should be metadata-preserving
         assert_eq!(meta, expr.metadata(&schema).unwrap());
         assert_eq!(meta, expr.clone().alias("bar").metadata(&schema).unwrap());
-
-        // cast should drop input metadata since the type has changed
         assert_eq!(
-            HashMap::new(),
+            meta,
             expr.clone()
                 .cast_to(&DataType::Int64, &schema)
                 .unwrap()
