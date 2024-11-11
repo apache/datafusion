@@ -25,7 +25,6 @@ use arrow::datatypes::{
 };
 use arrow::util::pretty::pretty_format_batches;
 use datafusion::datasource::file_format::json::JsonFormatFactory;
-use datafusion::datasource::MemTable;
 use datafusion_common::parsers::CompressionTypeVariant;
 use prost::Message;
 use std::any::Any;
@@ -2528,48 +2527,6 @@ fn roundtrip_window() {
 
 #[tokio::test]
 async fn roundtrip_recursive_query() {
-    #[derive(Debug)]
-    pub struct EmptyTableCodec;
-
-    impl LogicalExtensionCodec for EmptyTableCodec {
-        fn try_decode(
-            &self,
-            _buf: &[u8],
-            _inputs: &[LogicalPlan],
-            _ctx: &SessionContext,
-        ) -> Result<Extension, DataFusionError> {
-            not_impl_err!("No extension codec provided")
-        }
-
-        fn try_encode(
-            &self,
-            _node: &Extension,
-            _buf: &mut Vec<u8>,
-        ) -> Result<(), DataFusionError> {
-            not_impl_err!("No extension codec provided")
-        }
-
-        fn try_decode_table_provider(
-            &self,
-            _buf: &[u8],
-            _table_ref: &TableReference,
-            schema: SchemaRef,
-            _ctx: &SessionContext,
-        ) -> Result<Arc<dyn TableProvider>, DataFusionError> {
-            let table = MemTable::try_new(schema, vec![vec![]])?;
-            Ok(Arc::new(table))
-        }
-
-        fn try_encode_table_provider(
-            &self,
-            _table_ref: &TableReference,
-            _node: Arc<dyn TableProvider>,
-            _buf: &mut Vec<u8>,
-        ) -> Result<(), DataFusionError> {
-            Ok(())
-        }
-    }
-
     let query = "WITH RECURSIVE cte AS (
         SELECT 1 as n
         UNION ALL
@@ -2581,14 +2538,10 @@ async fn roundtrip_recursive_query() {
     let dataframe = ctx.sql(query).await.unwrap();
     let plan = dataframe.logical_plan().clone();
     let output = dataframe.collect().await.unwrap();
-    let extension_codec = EmptyTableCodec {};
-    let bytes =
-        logical_plan_to_bytes_with_extension_codec(&plan, &extension_codec).unwrap();
+    let bytes = logical_plan_to_bytes(&plan).unwrap();
 
     let ctx = SessionContext::new();
-    let logical_round_trip =
-        logical_plan_from_bytes_with_extension_codec(&bytes, &ctx, &extension_codec)
-            .unwrap();
+    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx).unwrap();
     assert_eq!(format!("{plan:?}"), format!("{logical_round_trip:?}"));
     let dataframe = ctx.execute_logical_plan(logical_round_trip).await.unwrap();
     let output_round_trip = dataframe.collect().await.unwrap();

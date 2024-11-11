@@ -21,8 +21,8 @@ use std::sync::Arc;
 
 use crate::protobuf::logical_plan_node::LogicalPlanType::CustomScan;
 use crate::protobuf::{
-    ColumnUnnestListItem, ColumnUnnestListRecursion, CustomTableScanNode,
-    SortExprNodeCollection,
+    ColumnUnnestListItem, ColumnUnnestListRecursion, CteWorkTableScanNode,
+    CustomTableScanNode, SortExprNodeCollection,
 };
 use crate::{
     convert_required, into_required,
@@ -34,6 +34,7 @@ use crate::{
 
 use crate::protobuf::{proto_error, ToProtoError};
 use arrow::datatypes::{DataType, Schema, SchemaRef};
+use datafusion::datasource::cte_worktable::CteWorkTable;
 #[cfg(feature = "parquet")]
 use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::file_format::{
@@ -931,6 +932,17 @@ impl AsLogicalPlan for LogicalPlanNode {
                     is_distinct: recursive_query_node.is_distinct,
                 }))
             }
+            LogicalPlanType::CteWorkTableScan(cte_work_table_scan_node) => {
+                let CteWorkTableScanNode { name, schema } = cte_work_table_scan_node;
+                let schema = convert_required!(*schema)?;
+                let cte_work_table = CteWorkTable::new(name.as_str(), Arc::new(schema));
+                LogicalPlanBuilder::scan(
+                    name.as_str(),
+                    provider_as_source(Arc::new(cte_work_table)),
+                    None,
+                )?
+                .build()
+            }
         }
     }
 
@@ -1086,6 +1098,20 @@ impl AsLogicalPlan for LogicalPlanNode {
                                     .unwrap_or_default(),
                             },
                         ))),
+                    })
+                } else if let Some(cte_work_table) = source.downcast_ref::<CteWorkTable>()
+                {
+                    let name = cte_work_table.name().to_string();
+                    let schema = cte_work_table.schema();
+                    let schema: protobuf::Schema = schema.as_ref().try_into()?;
+
+                    Ok(LogicalPlanNode {
+                        logical_plan_type: Some(LogicalPlanType::CteWorkTableScan(
+                            protobuf::CteWorkTableScanNode {
+                                name,
+                                schema: Some(schema),
+                            },
+                        )),
                     })
                 } else {
                     let mut bytes = vec![];

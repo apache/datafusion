@@ -60,6 +60,7 @@ message LogicalPlanNode {
     CopyToNode copy_to = 29;
     UnnestNode unnest = 30;
     RecursiveQueryNode recursive_query = 31;
+    CteWorkTableScanNode cte_work_table_scan = 32;
   }
 }
 
@@ -1256,4 +1257,9 @@ message RecursiveQueryNode {
   LogicalPlanNode static_term = 2;
   LogicalPlanNode recursive_term = 3;
   bool is_distinct = 4;
+}
+
+message CteWorkTableScanNode {
+    string name = 1;
+    datafusion_common.Schema schema = 2;
 }
