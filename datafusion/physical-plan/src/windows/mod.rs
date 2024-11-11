@@ -158,7 +158,7 @@ fn window_expr_from_aggregate_expr(
 }
 
 /// Creates a `BuiltInWindowFunctionExpr` suitable for a user defined window function
-fn create_udwf_window_expr(
+pub fn create_udwf_window_expr(
     fun: &Arc<WindowUDF>,
     args: &[Arc<dyn PhysicalExpr>],
     input_schema: &Schema,
