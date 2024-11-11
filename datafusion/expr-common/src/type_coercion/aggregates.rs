@@ -23,7 +23,8 @@ use arrow::datatypes::{
 
 use datafusion_common::{internal_err, plan_err, Result};
 
-pub static STRINGS: &[DataType] = &[DataType::Utf8, DataType::LargeUtf8];
+pub static STRINGS: &[DataType] =
+    &[DataType::Utf8, DataType::LargeUtf8, DataType::Utf8View];
 
 pub static SIGNED_INTEGERS: &[DataType] = &[
     DataType::Int8,

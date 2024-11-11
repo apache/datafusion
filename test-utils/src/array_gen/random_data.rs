@@ -21,8 +21,9 @@ use arrow::datatypes::{
     Float64Type, Int16Type, Int32Type, Int64Type, Int8Type, IntervalDayTime,
     IntervalDayTimeType, IntervalMonthDayNano, IntervalMonthDayNanoType,
     IntervalYearMonthType, Time32MillisecondType, Time32SecondType,
-    Time64MicrosecondType, Time64NanosecondType, UInt16Type, UInt32Type, UInt64Type,
-    UInt8Type,
+    Time64MicrosecondType, Time64NanosecondType, TimestampMicrosecondType,
+    TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType, UInt16Type,
+    UInt32Type, UInt64Type, UInt8Type,
 };
 use rand::distributions::Standard;
 use rand::prelude::Distribution;
@@ -66,6 +67,10 @@ basic_random_data!(Time64MicrosecondType);
 basic_random_data!(Time64NanosecondType);
 basic_random_data!(IntervalYearMonthType);
 basic_random_data!(Decimal128Type);
+basic_random_data!(TimestampSecondType);
+basic_random_data!(TimestampMillisecondType);
+basic_random_data!(TimestampMicrosecondType);
+basic_random_data!(TimestampNanosecondType);
 
 impl RandomNativeData for Date64Type {
     fn generate_random_native_data(rng: &mut StdRng) -> Self::Native {
