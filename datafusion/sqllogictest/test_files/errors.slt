@@ -119,7 +119,7 @@ regr_slope(c11, '2') over () as min1
 from aggregate_test_100
 order by c9
 
-# WindowFunction with BuiltInWindowFunction wrong signature
+# WindowFunction wrong signature
 statement error
 select
 c9,
@@ -132,10 +132,9 @@ DataFusion error: Error during planning: Error during planning: Coercion from [I
 	nth_value()
 	nth_value(Any)
 	nth_value(Any, Any)
-from aggregate_test_100
-order by c9
 
 
+# nth_value with wrong name
 statement error DataFusion error: Error during planning: Invalid function 'nth_vlue'.\nDid you mean 'nth_value'?
 SELECT
    NTH_VLUE(c4, 2) OVER()
@@ -143,6 +142,7 @@ SELECT
    ORDER BY c9
    LIMIT 5;
 
+# first_value with wrong name
 statement error DataFusion error: Error during planning: Invalid function 'frst_value'.\nDid you mean 'first_value'?
 SELECT
    FRST_VALUE(c4, 2) OVER()

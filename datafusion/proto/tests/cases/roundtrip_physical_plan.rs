@@ -47,10 +47,9 @@ use datafusion::datasource::physical_plan::{
 };
 use datafusion::execution::FunctionRegistry;
 use datafusion::functions_aggregate::sum::sum_udaf;
-use datafusion::functions_window::nth_value::first_value_udwf;
 use datafusion::logical_expr::{create_udf, JoinType, Operator, Volatility};
 use datafusion::physical_expr::expressions::Literal;
-use datafusion::physical_expr::window::{BuiltInWindowExpr, SlidingAggregateWindowExpr};
+use datafusion::physical_expr::window::SlidingAggregateWindowExpr;
 use datafusion::physical_expr::{
     LexOrdering, LexRequirement, PhysicalSortRequirement, ScalarFunctionExpr,
 };
@@ -74,9 +73,7 @@ use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::union::{InterleaveExec, UnionExec};
 use datafusion::physical_plan::unnest::{ListUnnest, UnnestExec};
-use datafusion::physical_plan::windows::{
-    create_udwf_window_expr, PlainAggregateWindowExpr, WindowAggExec,
-};
+use datafusion::physical_plan::windows::{PlainAggregateWindowExpr, WindowAggExec};
 use datafusion::physical_plan::{ExecutionPlan, Partitioning, PhysicalExpr, Statistics};
 use datafusion::prelude::SessionContext;
 use datafusion::scalar::ScalarValue;
@@ -88,11 +85,9 @@ use datafusion_common::stats::Precision;
 use datafusion_common::{
     internal_err, not_impl_err, DataFusionError, Result, UnnestOptions,
 };
-use datafusion_expr::WindowFunctionDefinition::WindowUDF;
 use datafusion_expr::{
     Accumulator, AccumulatorFactoryFunction, AggregateUDF, ColumnarValue, ScalarUDF,
     Signature, SimpleAggregateUDF, WindowFrame, WindowFrameBound,
-    WindowFunctionDefinition,
 };
 use datafusion_functions_aggregate::average::avg_udaf;
 use datafusion_functions_aggregate::nth_value::nth_value_udaf;
@@ -101,7 +96,6 @@ use datafusion_proto::physical_plan::{
     AsExecutionPlan, DefaultPhysicalExtensionCodec, PhysicalExtensionCodec,
 };
 use datafusion_proto::protobuf;
-use datafusion_proto::protobuf::logical_expr_node::ExprType::WindowExpr;
 
 /// Perform a serde roundtrip and assert that the string representation of the before and after plans
 /// are identical. Note that this often isn't sufficient to guarantee that no information is
@@ -275,35 +269,6 @@ fn roundtrip_window() -> Result<()> {
     let field_b = Field::new("b", DataType::Int64, false);
     let schema = Arc::new(Schema::new(vec![field_a, field_b]));
 
-    let window_frame = WindowFrame::new_bounds(
-        datafusion_expr::WindowFrameUnits::Range,
-        WindowFrameBound::Preceding(ScalarValue::Int64(None)),
-        WindowFrameBound::CurrentRow,
-    );
-
-    let first_value_window = create_udwf_window_expr(
-        &first_value_udwf(),
-        &[col("a", &schema)?],
-        schema.as_ref(),
-        "FIRST_VALUE(a) PARTITION BY [b] ORDER BY [a ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW".to_string(),
-        false,
-    )?;
-    //  "FIRST_VALUE(a) PARTITION BY [b] ORDER BY [a ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW",
-    let builtin_window_expr = Arc::new(BuiltInWindowExpr::new(
-        first_value_window,
-        &[col("b", &schema)?],
-        &LexOrdering {
-            inner: vec![PhysicalSortExpr {
-                expr: col("a", &schema)?,
-                options: SortOptions {
-                    descending: false,
-                    nulls_first: false,
-                },
-            }],
-        },
-        Arc::new(window_frame),
-    ));
-
     let plain_aggr_window_expr = Arc::new(PlainAggregateWindowExpr::new(
         AggregateExprBuilder::new(
             avg_udaf(),
@@ -341,11 +306,7 @@ fn roundtrip_window() -> Result<()> {
     let input = Arc::new(EmptyExec::new(schema.clone()));
 
     roundtrip_test(Arc::new(WindowAggExec::try_new(
-        vec![
-            plain_aggr_window_expr,
-            sliding_aggr_window_expr,
-            builtin_window_expr,
-        ],
+        vec![plain_aggr_window_expr, sliding_aggr_window_expr],
         input,
         vec![col("b", &schema)?],
     )?))

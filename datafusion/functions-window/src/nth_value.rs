@@ -71,9 +71,8 @@ pub fn last_value(arg: datafusion_expr::Expr) -> datafusion_expr::Expr {
 
 /// Create an expression to represent the `nth_value` window function
 ///
-pub fn nth_value(arg: datafusion_expr::Expr, n: Option<i64>) -> datafusion_expr::Expr {
-    let n_lit = n.map(|v| v.lit()).unwrap_or(ScalarValue::Null.lit());
-    nth_value_udwf().call(vec![arg, n_lit])
+pub fn nth_value(arg: datafusion_expr::Expr, n: i64) -> datafusion_expr::Expr {
+    nth_value_udwf().call(vec![arg, n.lit()])
 }
 
 /// Tag to differentiate special use cases of the NTH_VALUE built-in window function.
