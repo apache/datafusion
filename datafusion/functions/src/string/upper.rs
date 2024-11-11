@@ -104,8 +104,9 @@ mod tests {
 
     fn to_upper(input: ArrayRef, expected: ArrayRef) -> Result<()> {
         let func = UpperFunc::new();
+        let batch_size = input.len();
         let args = vec![ColumnarValue::Array(input)];
-        let result = match func.invoke_batch(&args, 0)? {
+        let result = match func.invoke_batch(&args, batch_size)? {
             ColumnarValue::Array(result) => result,
             _ => unreachable!("upper"),
         };

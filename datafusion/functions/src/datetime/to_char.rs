@@ -387,7 +387,7 @@ mod tests {
             let result = ToCharFunc::new()
                 .invoke_batch(
                     &[ColumnarValue::Scalar(value), ColumnarValue::Scalar(format)],
-                    0,
+                    1,
                 )
                 .expect("that to_char parsed values without error");
 
@@ -461,13 +461,14 @@ mod tests {
         ];
 
         for (value, format, expected) in scalar_array_data {
+            let batch_size = format.len();
             let result = ToCharFunc::new()
                 .invoke_batch(
                     &[
                         ColumnarValue::Scalar(value),
                         ColumnarValue::Array(Arc::new(format) as ArrayRef),
                     ],
-                    0,
+                    batch_size,
                 )
                 .expect("that to_char parsed values without error");
 
@@ -589,13 +590,14 @@ mod tests {
         ];
 
         for (value, format, expected) in array_scalar_data {
+            let batch_size = value.len();
             let result = ToCharFunc::new()
                 .invoke_batch(
                     &[
                         ColumnarValue::Array(value as ArrayRef),
                         ColumnarValue::Scalar(format),
                     ],
-                    0,
+                    batch_size,
                 )
                 .expect("that to_char parsed values without error");
 
@@ -608,13 +610,14 @@ mod tests {
         }
 
         for (value, format, expected) in array_array_data {
+            let batch_size = value.len();
             let result = ToCharFunc::new()
                 .invoke_batch(
                     &[
                         ColumnarValue::Array(value),
                         ColumnarValue::Array(Arc::new(format) as ArrayRef),
                     ],
-                    0,
+                    batch_size,
                 )
                 .expect("that to_char parsed values without error");
 
@@ -632,7 +635,7 @@ mod tests {
 
         // invalid number of arguments
         let result = ToCharFunc::new()
-            .invoke_batch(&[ColumnarValue::Scalar(ScalarValue::Int32(Some(1)))], 0);
+            .invoke_batch(&[ColumnarValue::Scalar(ScalarValue::Int32(Some(1)))], 1);
         assert_eq!(
             result.err().unwrap().strip_backtrace(),
             "Execution error: to_char function requires 2 arguments, got 1"
@@ -644,7 +647,7 @@ mod tests {
                 ColumnarValue::Scalar(ScalarValue::Int32(Some(1))),
                 ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
             ],
-            0,
+            1,
         );
         assert_eq!(
             result.err().unwrap().strip_backtrace(),

@@ -408,7 +408,7 @@ mod tests {
         ])));
         let args = &[c0, c1, c2];
 
-        let result = ConcatFunc::new().invoke_batch(args, 0)?;
+        let result = ConcatFunc::new().invoke_batch(args, 3)?;
         let expected =
             Arc::new(StringArray::from(vec!["foo,x", "bar,", "baz,z"])) as ArrayRef;
         match &result {

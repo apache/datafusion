@@ -480,7 +480,7 @@ mod tests {
 
     use crate::datetime::date_bin::{date_bin_nanos_interval, DateBinFunc};
     use arrow::array::types::TimestampNanosecondType;
-    use arrow::array::{IntervalDayTimeArray, TimestampNanosecondArray};
+    use arrow::array::{Array, IntervalDayTimeArray, TimestampNanosecondArray};
     use arrow::compute::kernels::cast_utils::string_to_timestamp_nanos;
     use arrow::datatypes::{DataType, TimeUnit};
 
@@ -503,11 +503,12 @@ mod tests {
                 ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
                 ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
             ],
-            0,
+            1,
         );
         assert!(res.is_ok());
 
         let timestamps = Arc::new((1..6).map(Some).collect::<TimestampNanosecondArray>());
+        let batch_size = timestamps.len();
         let res = DateBinFunc::new().invoke_batch(
             &[
                 ColumnarValue::Scalar(ScalarValue::IntervalDayTime(Some(
@@ -519,7 +520,7 @@ mod tests {
                 ColumnarValue::Array(timestamps),
                 ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
             ],
-            0,
+            batch_size,
         );
         assert!(res.is_ok());
 
@@ -533,7 +534,7 @@ mod tests {
                 ))),
                 ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
             ],
-            0,
+            1,
         );
         assert!(res.is_ok());
 
@@ -550,7 +551,7 @@ mod tests {
                 ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
                 ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
             ],
-            0,
+            1,
         );
         assert!(res.is_ok());
 
@@ -566,7 +567,7 @@ mod tests {
                     milliseconds: 1,
                 },
             )))],
-            0,
+            1,
         );
         assert_eq!(
             res.err().unwrap().strip_backtrace(),
@@ -580,7 +581,7 @@ mod tests {
                 ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
                 ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
             ],
-            0,
+            1,
         );
         assert_eq!(
             res.err().unwrap().strip_backtrace(),
@@ -599,7 +600,7 @@ mod tests {
                 ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
                 ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
             ],
-            0,
+            1,
         );
         assert_eq!(
             res.err().unwrap().strip_backtrace(),
@@ -615,7 +616,7 @@ mod tests {
                 ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
                 ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
             ],
-            0,
+            1,
         );
         assert_eq!(
             res.err().unwrap().strip_backtrace(),
@@ -629,7 +630,7 @@ mod tests {
                 ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
                 ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
             ],
-            0,
+            1,
         );
         assert_eq!(
             res.err().unwrap().strip_backtrace(),
@@ -643,7 +644,7 @@ mod tests {
                 ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
                 ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
             ],
-            0,
+            1,
         );
         assert_eq!(
             res.err().unwrap().strip_backtrace(),
@@ -662,7 +663,7 @@ mod tests {
                 ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
                 ColumnarValue::Scalar(ScalarValue::TimestampMicrosecond(Some(1), None)),
             ],
-            0,
+            1,
         );
         assert_eq!(
             res.err().unwrap().strip_backtrace(),
@@ -680,7 +681,7 @@ mod tests {
                 ColumnarValue::Scalar(ScalarValue::TimestampMicrosecond(Some(1), None)),
                 ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
             ],
-            0,
+            1,
         );
         assert!(res.is_ok());
 
@@ -695,13 +696,14 @@ mod tests {
                 })
                 .collect::<IntervalDayTimeArray>(),
         );
+        let batch_size = intervals.len();
         let res = DateBinFunc::new().invoke_batch(
             &[
                 ColumnarValue::Array(intervals),
                 ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
                 ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
             ],
-            0,
+            batch_size,
         );
         assert_eq!(
             res.err().unwrap().strip_backtrace(),
@@ -710,6 +712,7 @@ mod tests {
 
         // unsupported array type for origin
         let timestamps = Arc::new((1..6).map(Some).collect::<TimestampNanosecondArray>());
+        let batch_size = timestamps.len();
         let res = DateBinFunc::new().invoke_batch(
             &[
                 ColumnarValue::Scalar(ScalarValue::IntervalDayTime(Some(
@@ -721,7 +724,7 @@ mod tests {
                 ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
                 ColumnarValue::Array(timestamps),
             ],
-            0,
+            batch_size,
         );
         assert_eq!(
             res.err().unwrap().strip_backtrace(),
@@ -837,6 +840,7 @@ mod tests {
                     .map(|s| Some(string_to_timestamp_nanos(s).unwrap()))
                     .collect::<TimestampNanosecondArray>()
                     .with_timezone_opt(tz_opt.clone());
+                let batch_size = input.len();
                 let result = DateBinFunc::new()
                     .invoke_batch(
                         &[
@@ -847,7 +851,7 @@ mod tests {
                                 tz_opt.clone(),
                             )),
                         ],
-                        0,
+                        batch_size,
                     )
                     .unwrap();
                 if let ColumnarValue::Array(result) = result {

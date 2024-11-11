@@ -241,7 +241,7 @@ mod tests {
                     ColumnarValue::Scalar(ScalarValue::Int64(Some(1))),
                     ColumnarValue::Scalar(ScalarValue::UInt32(Some(14))),
                 ],
-                0,
+                1,
             )
             .expect("that make_date parsed values without error");
 
@@ -258,7 +258,7 @@ mod tests {
                     ColumnarValue::Scalar(ScalarValue::UInt64(Some(1))),
                     ColumnarValue::Scalar(ScalarValue::UInt32(Some(14))),
                 ],
-                0,
+                1,
             )
             .expect("that make_date parsed values without error");
 
@@ -275,7 +275,7 @@ mod tests {
                     ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some("1".to_string()))),
                     ColumnarValue::Scalar(ScalarValue::Utf8(Some("14".to_string()))),
                 ],
-                0,
+                1,
             )
             .expect("that make_date parsed values without error");
 
@@ -288,6 +288,7 @@ mod tests {
         let years = Arc::new((2021..2025).map(Some).collect::<Int64Array>());
         let months = Arc::new((1..5).map(Some).collect::<Int32Array>());
         let days = Arc::new((11..15).map(Some).collect::<UInt32Array>());
+        let batch_size = years.len();
         let res = MakeDateFunc::new()
             .invoke_batch(
                 &[
@@ -295,7 +296,7 @@ mod tests {
                     ColumnarValue::Array(months),
                     ColumnarValue::Array(days),
                 ],
-                0,
+                batch_size,
             )
             .expect("that make_date parsed values without error");
 
@@ -317,7 +318,7 @@ mod tests {
 
         // invalid number of arguments
         let res = MakeDateFunc::new()
-            .invoke_batch(&[ColumnarValue::Scalar(ScalarValue::Int32(Some(1)))], 0);
+            .invoke_batch(&[ColumnarValue::Scalar(ScalarValue::Int32(Some(1)))], 1);
         assert_eq!(
             res.err().unwrap().strip_backtrace(),
             "Execution error: make_date function requires 3 arguments, got 1"
@@ -330,7 +331,7 @@ mod tests {
                 ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
                 ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
             ],
-            0,
+            1,
         );
         assert_eq!(
             res.err().unwrap().strip_backtrace(),
@@ -344,7 +345,7 @@ mod tests {
                 ColumnarValue::Scalar(ScalarValue::UInt64(Some(u64::MAX))),
                 ColumnarValue::Scalar(ScalarValue::Int32(Some(22))),
             ],
-            0,
+            1,
         );
         assert_eq!(
             res.err().unwrap().strip_backtrace(),
@@ -358,7 +359,7 @@ mod tests {
                 ColumnarValue::Scalar(ScalarValue::Int32(Some(22))),
                 ColumnarValue::Scalar(ScalarValue::UInt32(Some(u32::MAX))),
             ],
-            0,
+            1,
         );
         assert_eq!(
             res.err().unwrap().strip_backtrace(),
