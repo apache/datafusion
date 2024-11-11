@@ -67,7 +67,7 @@ sqlparser = { workspace = true }
 tokio = { workspace = true }
 
 [target.'cfg(target_family = "wasm")'.dependencies]
-instant = { version = "0.1", features = ["wasm-bindgen"] }
+web-time = "1.1.0"
 
 [dev-dependencies]
 rand = { workspace = true }
