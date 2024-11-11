@@ -3092,7 +3092,6 @@ array_prepend(element, array)
 - **element**: Element to append to the array.
 - **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
 
-
 #### Example
 
 ```sql
