@@ -298,7 +298,7 @@ impl ExecutionPlan for SortPreservingMergeExec {
             .unwrap_or((0..input_partitions).map(|i| vec![i]).collect());
 
         // Concatenate each chain into a single stream.
-        let mut output_partitions = partition_groups
+        let mut streams_to_merge = partition_groups
             .into_iter()
             .map(|chain| {
                 let mut streams = chain
@@ -319,7 +319,7 @@ impl ExecutionPlan for SortPreservingMergeExec {
             })
             .collect::<Result<Vec<_>>>()?;
 
-        match output_partitions.len() {
+        match streams_to_merge.len() {
             0 => internal_err!(
                 "SortPreservingMergeExec requires at least one input partition"
             ),
@@ -327,7 +327,7 @@ impl ExecutionPlan for SortPreservingMergeExec {
                 Some(fetch) => {
                     debug!("Done getting stream for SortPreservingMergeExec::execute with 1 input with {fetch}");
                     Ok(Box::pin(LimitStream::new(
-                        output_partitions.remove(0),
+                        streams_to_merge.remove(0),
                         0,
                         Some(fetch),
                         BaselineMetrics::new(&self.metrics, partition),
@@ -335,11 +335,11 @@ impl ExecutionPlan for SortPreservingMergeExec {
                 }
                 None => {
                     debug!("Done getting stream for SortPreservingMergeExec::execute with 1 input without fetch");
-                    Ok(output_partitions.remove(0))
+                    Ok(streams_to_merge.remove(0))
                 }
             },
             _ => {
-                let receivers = output_partitions
+                let receivers = streams_to_merge
                     .into_iter()
                     .map(|stream| Ok(spawn_buffered(stream, 1)))
                     .collect::<Result<_>>()?;
