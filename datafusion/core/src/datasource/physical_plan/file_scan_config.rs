@@ -275,6 +275,7 @@ impl FileScanConfig {
                     .unwrap_or(Statistics::new_unknown(&self.file_schema));
 
                 for _ in 0..self.table_partition_cols.len() {
+                    // TODO provide accurate stat for partition column (#1186)
                     stats
                         .column_statistics
                         .push(ColumnStatistics::new_unknown())
