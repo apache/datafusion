@@ -17,7 +17,7 @@
 
 use arrow::datatypes::DataType;
 use datafusion_common::{exec_err, Result};
-use datafusion_expr::{ColumnarValue, Documentation};
+use datafusion_expr::{ColumnarValue, Documentation, TypeSignature};
 
 use arrow::compute::kernels::cmp::eq;
 use arrow::compute::kernels::nullif::nullif;
@@ -32,25 +32,6 @@ pub struct NullIfFunc {
     signature: Signature,
 }
 
-/// Currently supported types by the nullif function.
-/// The order of these types correspond to the order on which coercion applies
-/// This should thus be from least informative to most informative
-static SUPPORTED_NULLIF_TYPES: &[DataType] = &[
-    DataType::Boolean,
-    DataType::UInt8,
-    DataType::UInt16,
-    DataType::UInt32,
-    DataType::UInt64,
-    DataType::Int8,
-    DataType::Int16,
-    DataType::Int32,
-    DataType::Int64,
-    DataType::Float32,
-    DataType::Float64,
-    DataType::Utf8,
-    DataType::LargeUtf8,
-];
-
 impl Default for NullIfFunc {
     fn default() -> Self {
         Self::new()
@@ -60,9 +41,13 @@ impl Default for NullIfFunc {
 impl NullIfFunc {
     pub fn new() -> Self {
         Self {
-            signature: Signature::uniform(
-                2,
-                SUPPORTED_NULLIF_TYPES.to_vec(),
+            signature: Signature::one_of(
+                // Hack: String is at the beginning so the return type is String if both args are Nulls
+                vec![
+                    TypeSignature::String(2),
+                    TypeSignature::Numeric(2),
+                    TypeSignature::Boolean(2),
+                ],
                 Volatility::Immutable,
             ),
         }
@@ -82,14 +67,7 @@ impl ScalarUDFImpl for NullIfFunc {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        // NULLIF has two args and they might get coerced, get a preview of this
-        let coerced_types = datafusion_expr::type_coercion::functions::data_types(
-            arg_types,
-            &self.signature,
-        );
-        coerced_types
-            .map(|typs| typs[0].clone())
-            .map_err(|e| e.context("Failed to coerce arguments for NULLIF"))
+        Ok(arg_types[0].to_owned())
     }
 
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {

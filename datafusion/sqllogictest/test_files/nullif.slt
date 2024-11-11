@@ -97,7 +97,31 @@ SELECT NULLIF(1, 3);
 ----
 1
 
-query I
+query T
 SELECT NULLIF(NULL, NULL);
 ----
 NULL
+
+query R
+select nullif(1, 1.2);
+----
+1
+
+query R
+select nullif(1.0, 2);
+----
+1
+
+query error DataFusion error: Error during planning: Internal error: Failed to match any signature, errors: Error during planning: The signature expected NativeType::String but received NativeType::Int64
+select nullif(2, 'a');
+
+
+query T
+select nullif('2', '3');
+----
+2
+
+# TODO: support numeric string
+# This query success in Postgres and DuckDB
+query error DataFusion error: Error during planning: Internal error: Failed to match any signature, errors: Error during planning: The signature expected NativeType::String but received NativeType::Int64
+select nullif(2, '1');

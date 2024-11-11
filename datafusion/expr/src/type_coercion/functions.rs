@@ -180,6 +180,7 @@ fn is_well_supported_signature(type_signature: &TypeSignature) -> bool {
             | TypeSignature::Numeric(_)
             | TypeSignature::String(_)
             | TypeSignature::Coercible(_)
+            | TypeSignature::Boolean(_)
             | TypeSignature::Any(_)
     )
 }
@@ -193,13 +194,18 @@ fn try_coerce_types(
 
     // Well-supported signature that returns exact valid types.
     if !valid_types.is_empty() && is_well_supported_signature(type_signature) {
-        // exact valid types
-        assert_eq!(valid_types.len(), 1);
+        // There may be many valid types if valid signature is OneOf
+        // Otherwise, there should be only one valid type
+        if !type_signature.is_one_of() {
+            assert_eq!(valid_types.len(), 1);
+        }
+
         let valid_types = valid_types.swap_remove(0);
         if let Some(t) = maybe_data_types_without_coercion(&valid_types, current_types) {
             return Ok(t);
         }
     } else {
+        // TODO: Deprecate this branch after all signatures are well-supported (aka coercion are happend already)
         // Try and coerce the argument types to match the signature, returning the
         // coerced types from the first matching signature.
         for valid_types in valid_types {
@@ -475,6 +481,33 @@ fn get_valid_types(
             }
 
             vec![vec![base_type_or_default_type(&coerced_type); *number]]
+        }
+        TypeSignature::Boolean(number) => {
+            function_length_check(current_types.len(), *number)?;
+
+            // Find common boolean type amongs given types
+            let mut valid_type = current_types.first().unwrap().to_owned();
+            for t in current_types.iter().skip(1) {
+                let logical_data_type: NativeType = t.into();
+                if logical_data_type == NativeType::Null {
+                    continue;
+                }
+
+                if logical_data_type != NativeType::Boolean {
+                    return plan_err!(
+                        "The signature expected NativeType::Boolean but received {logical_data_type}"
+                    );
+                }
+
+                valid_type = t.to_owned();
+            }
+
+            let logical_data_type: NativeType = valid_type.clone().into();
+            if logical_data_type == NativeType::Null {
+                valid_type = DataType::Boolean;
+            }
+
+            vec![vec![valid_type; *number]]
         }
         TypeSignature::Numeric(number) => {
             function_length_check(current_types.len(), *number)?;

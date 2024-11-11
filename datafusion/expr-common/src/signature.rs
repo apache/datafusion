@@ -135,6 +135,15 @@ pub enum TypeSignature {
     /// Null is considerd as `Utf8` by default
     /// Dictionary with string value type is also handled.
     String(usize),
+    /// Fixed number of arguments of boolean types.
+    Boolean(usize),
+}
+
+impl TypeSignature {
+    #[inline]
+    pub fn is_one_of(&self) -> bool {
+        matches!(self, TypeSignature::OneOf(_))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
@@ -199,6 +208,9 @@ impl TypeSignature {
                     .take(*arg_count)
                     .collect::<Vec<String>>()
                     .join(", ")]
+            }
+            TypeSignature::Boolean(num) => {
+                vec![format!("Boolean({num})")]
             }
             TypeSignature::String(num) => {
                 vec![format!("String({num})")]
@@ -285,6 +297,7 @@ impl TypeSignature {
                 .cloned()
                 .map(|string_type| vec![string_type; *arg_count])
                 .collect(),
+            TypeSignature::Boolean(arg_count) => vec![vec![DataType::Boolean; *arg_count]],
             // TODO: Implement for other types
             TypeSignature::Any(_)
             | TypeSignature::VariadicAny
@@ -370,6 +383,14 @@ impl Signature {
     pub fn string(arg_count: usize, volatility: Volatility) -> Self {
         Self {
             type_signature: TypeSignature::String(arg_count),
+            volatility,
+        }
+    }
+
+    /// A specified number of boolean arguments
+    pub fn boolean(arg_count: usize, volatility: Volatility) -> Self {
+        Self {
+            type_signature: TypeSignature::Boolean(arg_count),
             volatility,
         }
     }
