@@ -59,8 +59,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 self.select_into(plan, select_into)
             }
             other => {
-                // TODO: check why set_expr_to_plan or the functions it calls need bigger
-                //  minimum stack
+                // The functions called from `set_expr_to_plan()` need more than 128KB
+                // stack in debug builds as investigated in:
+                // https://github.com/apache/datafusion/pull/13310#discussion_r1836813902
                 let min_stack_size = recursive::get_minimum_stack_size();
                 recursive::set_minimum_stack_size(256 * 1024);
                 let plan = self.set_expr_to_plan(other, planner_context)?;
