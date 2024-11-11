@@ -2589,9 +2589,10 @@ async fn roundtrip_recursive_query() {
     let logical_round_trip =
         logical_plan_from_bytes_with_extension_codec(&bytes, &ctx, &extension_codec)
             .unwrap();
-    let output_round_trip = ctx.sql(query).await.unwrap().collect().await.unwrap();
-
     assert_eq!(format!("{plan:?}"), format!("{logical_round_trip:?}"));
+    let dataframe = ctx.execute_logical_plan(logical_round_trip).await.unwrap();
+    let output_round_trip = dataframe.collect().await.unwrap();
+
     assert_eq!(
         format!("{}", pretty_format_batches(&output).unwrap()),
         format!("{}", pretty_format_batches(&output_round_trip).unwrap())
