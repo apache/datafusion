@@ -334,7 +334,10 @@ impl From<&DataType> for TypeCategory {
                 // therefore, it is categorized as a unknown type
                 if matches!(
                     data_type,
-                    DataType::Utf8 | DataType::LargeUtf8 | DataType::Null
+                    DataType::Utf8
+                        | DataType::Utf8View
+                        | DataType::LargeUtf8
+                        | DataType::Null
                 ) {
                     return TypeCategory::Unknown;
                 }
