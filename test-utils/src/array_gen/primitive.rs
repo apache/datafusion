@@ -106,7 +106,7 @@ impl PrimitiveArrayGenerator {
 
         // Allows for timezones + None
         let mut timezone_options: Vec<Option<&Tz>> = vec![None];
-        timezone_options.extend(TZ_VARIANTS.iter().map(|tz| Some(tz)));
+        timezone_options.extend(TZ_VARIANTS.iter().map(Some));
 
         let selected_option = timezone_options.choose(&mut rng).cloned().flatten(); // random timezone/None
 
