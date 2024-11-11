@@ -18,9 +18,11 @@
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use datafusion_common::{not_impl_err, Result};
 use datafusion_expr::{LogicalPlan, LogicalPlanBuilder};
+use recursive::recursive;
 use sqlparser::ast::{SetExpr, SetOperator, SetQuantifier};
 
 impl<'a, S: ContextProvider> SqlToRel<'a, S> {
+    #[recursive]
     pub(super) fn set_expr_to_plan(
         &self,
         set_expr: SetExpr,

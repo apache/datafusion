@@ -42,6 +42,7 @@ use crate::{
     LogicalPlan, Partitioning, Projection, RecursiveQuery, Repartition, Sort, Subquery,
     SubqueryAlias, TableScan, Union, Unnest, UserDefinedLogicalNode, Values, Window,
 };
+use recursive::recursive;
 use std::ops::Deref;
 use std::sync::Arc;
 
@@ -745,6 +746,7 @@ impl LogicalPlan {
 
     /// Visits a plan similarly to [`Self::visit`], including subqueries that
     /// may appear in expressions such as `IN (SELECT ...)`.
+    #[recursive]
     pub fn visit_with_subqueries<V: for<'n> TreeNodeVisitor<'n, Node = Self>>(
         &self,
         visitor: &mut V,
@@ -761,6 +763,7 @@ impl LogicalPlan {
     /// Similarly to [`Self::rewrite`], rewrites this node and its inputs using `f`,
     /// including subqueries that may appear in expressions such as `IN (SELECT
     /// ...)`.
+    #[recursive]
     pub fn rewrite_with_subqueries<R: TreeNodeRewriter<Node = Self>>(
         self,
         rewriter: &mut R,
@@ -779,6 +782,7 @@ impl LogicalPlan {
         &self,
         mut f: F,
     ) -> Result<TreeNodeRecursion> {
+        #[recursive]
         fn apply_with_subqueries_impl<
             F: FnMut(&LogicalPlan) -> Result<TreeNodeRecursion>,
         >(
@@ -814,6 +818,7 @@ impl LogicalPlan {
         self,
         mut f: F,
     ) -> Result<Transformed<Self>> {
+        #[recursive]
         fn transform_down_with_subqueries_impl<
             F: FnMut(LogicalPlan) -> Result<Transformed<LogicalPlan>>,
         >(
@@ -839,6 +844,7 @@ impl LogicalPlan {
         self,
         mut f: F,
     ) -> Result<Transformed<Self>> {
+        #[recursive]
         fn transform_up_with_subqueries_impl<
             F: FnMut(LogicalPlan) -> Result<Transformed<LogicalPlan>>,
         >(
@@ -866,6 +872,7 @@ impl LogicalPlan {
         mut f_down: FD,
         mut f_up: FU,
     ) -> Result<Transformed<Self>> {
+        #[recursive]
         fn transform_down_up_with_subqueries_impl<
             FD: FnMut(LogicalPlan) -> Result<Transformed<LogicalPlan>>,
             FU: FnMut(LogicalPlan) -> Result<Transformed<LogicalPlan>>,
