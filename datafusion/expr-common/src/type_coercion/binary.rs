@@ -1127,7 +1127,8 @@ fn regex_comparison_string_coercion(
 fn numeric_string_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
     use arrow::datatypes::DataType::*;
     match (lhs_type, rhs_type) {
-        (Utf8 | LargeUtf8, other_type) | (other_type, Utf8 | LargeUtf8)
+        (Utf8 | Utf8View | LargeUtf8, other_type)
+        | (other_type, Utf8 | Utf8View | LargeUtf8)
             if other_type.is_numeric() =>
         {
             Some(other_type.clone())
@@ -1487,6 +1488,92 @@ mod tests {
         assert_eq!(
             coerce_numeric_type_to_decimal(&DataType::Float64).unwrap(),
             DataType::Decimal128(30, 15)
+        );
+    }
+
+    #[test]
+    fn test_numeric_string_coercion_with_utf8view() {
+        assert_eq!(
+            numeric_string_coercion(&DataType::Utf8View, &DataType::Int8),
+            Some(DataType::Int8)
+        );
+        assert_eq!(
+            numeric_string_coercion(&DataType::Int8, &DataType::Utf8View),
+            Some(DataType::Int8)
+        );
+        assert_eq!(
+            numeric_string_coercion(&DataType::Utf8View, &DataType::Int16),
+            Some(DataType::Int16)
+        );
+        assert_eq!(
+            numeric_string_coercion(&DataType::Int16, &DataType::Utf8View),
+            Some(DataType::Int16)
+        );
+        assert_eq!(
+            numeric_string_coercion(&DataType::Utf8View, &DataType::Int32),
+            Some(DataType::Int32)
+        );
+        assert_eq!(
+            numeric_string_coercion(&DataType::Int32, &DataType::Utf8View),
+            Some(DataType::Int32)
+        );
+        assert_eq!(
+            numeric_string_coercion(&DataType::Utf8View, &DataType::Int64),
+            Some(DataType::Int64)
+        );
+        assert_eq!(
+            numeric_string_coercion(&DataType::Int64, &DataType::Utf8View),
+            Some(DataType::Int64)
+        );
+        assert_eq!(
+            numeric_string_coercion(&DataType::Utf8View, &DataType::Float32),
+            Some(DataType::Float32)
+        );
+        assert_eq!(
+            numeric_string_coercion(&DataType::Float32, &DataType::Utf8View),
+            Some(DataType::Float32)
+        );
+        assert_eq!(
+            numeric_string_coercion(&DataType::Utf8View, &DataType::Float64),
+            Some(DataType::Float64)
+        );
+        assert_eq!(
+            numeric_string_coercion(&DataType::Float64, &DataType::Utf8View),
+            Some(DataType::Float64)
+        );
+
+        // should return `None`, it doesn't match the expected `string` <=> `numeric`
+        assert_eq!(
+            numeric_string_coercion(&DataType::Utf8View, &DataType::LargeUtf8),
+            None
+        );
+        assert_eq!(
+            numeric_string_coercion(&DataType::LargeUtf8, &DataType::Utf8View),
+            None
+        );
+        assert_eq!(
+            numeric_string_coercion(&DataType::Utf8View, &DataType::Boolean),
+            None
+        );
+        assert_eq!(
+            numeric_string_coercion(&DataType::Boolean, &DataType::Utf8View),
+            None
+        );
+        assert_eq!(
+            numeric_string_coercion(&DataType::Utf8View, &DataType::Utf8),
+            None
+        );
+        assert_eq!(
+            numeric_string_coercion(&DataType::Utf8, &DataType::Utf8View),
+            None
+        );
+        assert_eq!(
+            numeric_string_coercion(&DataType::Utf8View, &DataType::Null),
+            None
+        );
+        assert_eq!(
+            numeric_string_coercion(&DataType::Null, &DataType::Utf8View),
+            None
         );
     }
 
