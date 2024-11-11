@@ -363,6 +363,25 @@ impl Statistics {
         self.total_byte_size = Precision::Absent;
         Ok(self)
     }
+
+    /// Attempt to merge these statistics.
+    /// Merging provides conservative estimates for null & distinct counts as well as num_rows,
+    /// so those will be converted to inexact values.
+    pub fn merge(&self, other: &Self) -> Self {
+        Self {
+            num_rows: self.num_rows.add(&other.num_rows).to_inexact(),
+            total_byte_size: self
+                .total_byte_size
+                .add(&other.total_byte_size)
+                .to_inexact(),
+            column_statistics: self
+                .column_statistics
+                .iter()
+                .zip(&other.column_statistics)
+                .map(|(a, b)| a.merge(b))
+                .collect::<Vec<_>>(),
+        }
+    }
 }
 
 /// Creates an estimate of the number of rows in the output using the given
@@ -471,6 +490,18 @@ impl ColumnStatistics {
         self.min_value = self.min_value.to_inexact();
         self.distinct_count = self.distinct_count.to_inexact();
         self
+    }
+
+    /// Attempt to merge these statistics.
+    /// Merging provides conservative estimates for null & distinct counts,
+    /// so those will be converted to inexact values.
+    pub fn merge(&self, other: &Self) -> Self {
+        Self {
+            null_count: self.null_count.add(&other.null_count).to_inexact(),
+            max_value: self.max_value.max(&other.max_value),
+            min_value: self.min_value.min(&other.min_value),
+            distinct_count: self.distinct_count.add(&other.distinct_count).to_inexact(),
+        }
     }
 }
 

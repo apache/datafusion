@@ -37,6 +37,7 @@ use datafusion_execution::TaskContext;
 
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};
 use futures::StreamExt;
+use itertools::Itertools;
 use log::{debug, trace};
 
 /// Sort preserving merge execution plan
@@ -85,12 +86,35 @@ pub struct SortPreservingMergeExec {
     cache: PlanProperties,
     /// Configuration parameter to enable round-robin selection of tied winners of loser tree.
     enable_round_robin_repartition: bool,
+    /// Grouping of partitions, such that partitions in a group will be executed sequentially.
+    /// If None, then every partition gets its own group.
+    partition_groups: Option<Vec<Vec<usize>>>,
 }
 
 impl SortPreservingMergeExec {
     /// Create a new sort execution plan
     pub fn new(expr: LexOrdering, input: Arc<dyn ExecutionPlan>) -> Self {
         let cache = Self::compute_properties(&input, expr.clone());
+
+        // Organize the input partitions into chains,
+        // where elements of each chain are input partitions that are
+        // non-overlapping, and each chain is ordered internally by their min/max statistics.
+        let partition_groups = input
+            .statistics_by_partition()
+            .and_then(|stats| {
+                MinMaxStatistics::new_from_statistics(&expr, &input.schema(), &stats)
+            })
+            .map(|min_max_stats| min_max_stats.first_fit())
+            .inspect_err(|e| {
+                log::debug!(
+                    "error analyzing statistics: {e}\n falling back to full sort-merge"
+                )
+            })
+            .ok()
+            .filter(|groups| {
+                groups.len() < input.properties().partitioning.partition_count()
+            });
+
         Self {
             input,
             expr,
@@ -98,6 +122,7 @@ impl SortPreservingMergeExec {
             fetch: None,
             cache,
             enable_round_robin_repartition: true,
+            partition_groups,
         }
     }
 
@@ -160,6 +185,20 @@ impl DisplayAs for SortPreservingMergeExec {
                     write!(f, ", fetch={fetch}")?;
                 };
 
+                if let Some(ref partition_groups) = self.partition_groups {
+                    write!(
+                        f,
+                        ", partition_groups=[{}]",
+                        partition_groups
+                            .iter()
+                            .map(|group| group
+                                .iter()
+                                .map(|index| index.to_string())
+                                .join(","))
+                            .join(",")
+                    )?;
+                }
+
                 Ok(())
             }
         }
@@ -193,6 +232,7 @@ impl ExecutionPlan for SortPreservingMergeExec {
             fetch: limit,
             cache: self.cache.clone(),
             enable_round_robin_repartition: true,
+            partition_groups: self.partition_groups.clone(),
         }))
     }
 
@@ -252,29 +292,25 @@ impl ExecutionPlan for SortPreservingMergeExec {
             MemoryConsumer::new(format!("SortPreservingMergeExec[{partition}]"))
                 .register(&context.runtime_env().memory_pool);
 
-        // Organize the input partitions into chains,
-        // where elements of each chain are input partitions that are
-        // non-overlapping, and each chain is ordered by their min/max statistics.
-        let stream_packing = match MinMaxStatistics::new_from_statistics(
-            &self.expr,
-            &self.schema(),
-            &self.input.statistics_by_partition()?,
-        ) {
-            Ok(statistics) => statistics.first_fit(),
-            Err(e) => {
-                log::debug!("error analyzing statistics for plan: {e}\nfalling back to full sort-merge");
-                (0..input_partitions).map(|i| vec![i]).collect()
-            }
-        };
+        let partition_groups = self
+            .partition_groups
+            .clone()
+            .unwrap_or((0..input_partitions).map(|i| vec![i]).collect());
 
         // Concatenate each chain into a single stream.
-        let mut streams = stream_packing
+        let mut output_partitions = partition_groups
             .into_iter()
             .map(|chain| {
-                let streams = chain
+                let mut streams = chain
                     .into_iter()
                     .map(|i| self.input.execute(i, Arc::clone(&context)))
                     .collect::<Result<Vec<_>>>()?;
+
+                // If there's only 1 input partition in this group,
+                // no need to concatenate anything.
+                if streams.len() == 1 {
+                    return Ok(streams.remove(0));
+                }
 
                 Ok(Box::pin(RecordBatchStreamAdapter::new(
                     self.input.schema(),
@@ -283,7 +319,7 @@ impl ExecutionPlan for SortPreservingMergeExec {
             })
             .collect::<Result<Vec<_>>>()?;
 
-        match streams.len() {
+        match output_partitions.len() {
             0 => internal_err!(
                 "SortPreservingMergeExec requires at least one input partition"
             ),
@@ -291,20 +327,19 @@ impl ExecutionPlan for SortPreservingMergeExec {
                 Some(fetch) => {
                     debug!("Done getting stream for SortPreservingMergeExec::execute with 1 input with {fetch}");
                     Ok(Box::pin(LimitStream::new(
-                        streams.remove(0),
+                        output_partitions.remove(0),
                         0,
                         Some(fetch),
                         BaselineMetrics::new(&self.metrics, partition),
                     )))
                 }
                 None => {
-                    let stream = self.input.execute(0, context);
                     debug!("Done getting stream for SortPreservingMergeExec::execute with 1 input without fetch");
-                    stream
+                    Ok(output_partitions.remove(0))
                 }
             },
             _ => {
-                let receivers = streams
+                let receivers = output_partitions
                     .into_iter()
                     .map(|stream| Ok(spawn_buffered(stream, 1)))
                     .collect::<Result<_>>()?;

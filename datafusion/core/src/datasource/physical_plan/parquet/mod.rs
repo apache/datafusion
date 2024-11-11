@@ -264,6 +264,7 @@ pub struct ParquetExec {
     /// Base configuration for this scan
     base_config: FileScanConfig,
     projected_statistics: Statistics,
+    projected_statistics_by_file_group: Vec<Statistics>,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
     /// Optional predicate for row filtering during parquet scan
@@ -446,6 +447,9 @@ impl ParquetExecBuilder {
         let (projected_schema, projected_statistics, projected_output_ordering) =
             base_config.project();
 
+        let projected_statistics_by_file_group =
+            base_config.projected_statistics_by_file_group();
+
         let cache = ParquetExec::compute_properties(
             projected_schema,
             &projected_output_ordering,
@@ -454,6 +458,7 @@ impl ParquetExecBuilder {
         ParquetExec {
             base_config,
             projected_statistics,
+            projected_statistics_by_file_group,
             metrics,
             predicate,
             pruning_predicate,
@@ -506,6 +511,7 @@ impl ParquetExec {
         let Self {
             base_config,
             projected_statistics: _,
+            projected_statistics_by_file_group: _,
             metrics: _,
             predicate,
             pruning_predicate: _,
@@ -843,6 +849,10 @@ impl ExecutionPlan for ParquetExec {
         Ok(stats)
     }
 
+    fn statistics_by_partition(&self) -> Result<Vec<Statistics>> {
+        Ok(self.projected_statistics_by_file_group.clone())
+    }
+
     fn fetch(&self) -> Option<usize> {
         self.base_config.limit
     }
@@ -853,6 +863,9 @@ impl ExecutionPlan for ParquetExec {
         Some(Arc::new(Self {
             base_config: new_config,
             projected_statistics: self.projected_statistics.clone(),
+            projected_statistics_by_file_group: self
+                .projected_statistics_by_file_group
+                .clone(),
             metrics: self.metrics.clone(),
             predicate: self.predicate.clone(),
             pruning_predicate: self.pruning_predicate.clone(),

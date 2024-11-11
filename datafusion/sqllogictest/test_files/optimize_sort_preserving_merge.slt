@@ -1,0 +1,89 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+##########
+## Optimize Sort Preserving Merge
+##########
+
+# Collect statistics
+statement ok
+set datafusion.execution.collect_statistics = true;
+
+statement ok
+set datafusion.optimizer.prefer_existing_sort = true;
+
+# Partition 1 has only columns a and b
+statement ok
+COPY  (
+  SELECT column1 as a, column2 as b
+  FROM ( VALUES ('foo', 1), ('qux', 3) )
+ )  TO 'test_files/scratch/optimize_sort_preserving_merge/parquet_table/partition=1/1_1.parquet'
+STORED AS PARQUET;
+
+# Add another file to this partition
+statement ok
+COPY  (
+  SELECT column1 as a, column2 as b
+  FROM ( VALUES ('foobar', 2), ('quux', 4) )
+ )  TO 'test_files/scratch/optimize_sort_preserving_merge/parquet_table/partition=1/1_2.parquet'
+STORED AS PARQUET;
+
+# Partition 2 has only a
+statement ok
+COPY  (
+  SELECT column1 as a
+  FROM ( VALUES  ('bar'), ('baz') )
+ )  TO 'test_files/scratch/optimize_sort_preserving_merge/parquet_table/partition=2/2_2.parquet'
+STORED AS PARQUET;
+
+statement ok
+CREATE EXTERNAL TABLE t(a varchar NOT NULL, b int, c float, partition int) STORED AS PARQUET
+PARTITIONED BY (partition)
+WITH ORDER (a)
+LOCATION 'test_files/scratch/optimize_sort_preserving_merge/parquet_table/';
+
+query TT
+EXPLAIN 
+select a from t WHERE partition = 1
+UNION all
+select a from t WHERE partition = 2
+ORDER BY a;
+----
+logical_plan
+01)Sort: t.a ASC NULLS LAST
+02)--Union
+03)----TableScan: t projection=[a], full_filters=[t.partition = Int32(1)]
+04)----TableScan: t projection=[a], full_filters=[t.partition = Int32(2)]
+physical_plan
+01)SortPreservingMergeExec: [a@0 ASC NULLS LAST], partition_groups=[2,0,1]
+02)--UnionExec
+03)----ParquetExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/optimize_sort_preserving_merge/parquet_table/partition=1/1_1.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/optimize_sort_preserving_merge/parquet_table/partition=1/1_2.parquet]]}, projection=[a], output_ordering=[a@0 ASC NULLS LAST]
+04)----ParquetExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/optimize_sort_preserving_merge/parquet_table/partition=2/2_2.parquet]]}, projection=[a], output_ordering=[a@0 ASC NULLS LAST]
+
+
+query T
+select a from t WHERE partition = 1
+UNION all
+select a from t WHERE partition = 2
+ORDER BY a;
+----
+bar
+baz
+foo
+foobar
+quux
+qux

@@ -260,6 +260,31 @@ impl FileScanConfig {
         (projected_schema, table_stats, projected_output_ordering)
     }
 
+    pub(crate) fn projected_statistics_by_file_group(&self) -> Vec<Statistics> {
+        self.file_groups
+            .iter()
+            .map(|group| {
+                let mut stats = group
+                    .iter()
+                    .map(|f| {
+                        f.statistics
+                            .clone()
+                            .unwrap_or(Statistics::new_unknown(&self.file_schema))
+                    })
+                    .reduce(|old, new| old.merge(&new))
+                    .unwrap_or(Statistics::new_unknown(&self.file_schema));
+
+                for _ in 0..self.table_partition_cols.len() {
+                    stats
+                        .column_statistics
+                        .push(ColumnStatistics::new_unknown())
+                }
+
+                stats.project(self.projection.as_ref())
+            })
+            .collect()
+    }
+
     #[cfg_attr(not(feature = "avro"), allow(unused))] // Only used by avro
     pub(crate) fn projected_file_column_names(&self) -> Option<Vec<String>> {
         self.projection.as_ref().map(|p| {
