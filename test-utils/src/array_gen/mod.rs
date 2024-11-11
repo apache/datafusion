@@ -15,8 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-mod boolean;
 mod binary;
+mod boolean;
 mod decimal;
 mod primitive;
 mod random_data;

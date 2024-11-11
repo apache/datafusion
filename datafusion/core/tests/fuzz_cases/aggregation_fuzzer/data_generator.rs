@@ -18,9 +18,9 @@
 use std::sync::Arc;
 
 use arrow::datatypes::{
-    BinaryType, BinaryViewType, BooleanType, ByteArrayType, ByteViewType, Date32Type, Date64Type,
-    Decimal128Type, Decimal256Type, Float32Type, Float64Type, Int16Type, Int32Type,
-    Int64Type, Int8Type, IntervalDayTimeType, IntervalMonthDayNanoType,
+    BinaryType, BinaryViewType, BooleanType, ByteArrayType, ByteViewType, Date32Type,
+    Date64Type, Decimal128Type, Decimal256Type, Float32Type, Float64Type, Int16Type,
+    Int32Type, Int64Type, Int8Type, IntervalDayTimeType, IntervalMonthDayNanoType,
     IntervalYearMonthType, LargeBinaryType, LargeUtf8Type, StringViewType,
     Time32MillisecondType, Time32SecondType, Time64MicrosecondType, Time64NanosecondType,
     TimestampMicrosecondType, TimestampMillisecondType, TimestampNanosecondType,
@@ -38,9 +38,8 @@ use rand::{
 };
 use test_utils::{
     array_gen::{
-        BooleanArrayGenerator,
-        BinaryArrayGenerator, DecimalArrayGenerator, PrimitiveArrayGenerator,
-        StringArrayGenerator,
+        BinaryArrayGenerator, BooleanArrayGenerator, DecimalArrayGenerator,
+        PrimitiveArrayGenerator, StringArrayGenerator,
     },
     stagger_batch,
 };
