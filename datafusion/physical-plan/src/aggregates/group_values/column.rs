@@ -17,10 +17,11 @@
 
 use std::mem::{self, size_of};
 
-use crate::aggregates::group_values::group_column::{
-    ByteGroupValueBuilder, ByteViewGroupValueBuilder, GroupColumn,
-    PrimitiveGroupValueBuilder,
-};
+use crate::aggregates::group_values::multi_column::byte::ByteGroupValueBuilder;
+use crate::aggregates::group_values::multi_column::byte_view::ByteViewGroupValueBuilder;
+use crate::aggregates::group_values::multi_column::primitive::PrimitiveGroupValueBuilder;
+use crate::aggregates::group_values::multi_column::GroupColumn;
+
 use crate::aggregates::group_values::GroupValues;
 use ahash::RandomState;
 use arrow::compute::cast;

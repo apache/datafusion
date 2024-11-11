@@ -39,7 +39,7 @@ use datafusion_physical_expr::binary_map::OutputType;
 
 use crate::aggregates::order::GroupOrdering;
 
-mod group_column;
+pub mod multi_column;
 mod null_builder;
 
 /// Stores the group values during hash aggregation.
