@@ -7647,22 +7647,22 @@ an error will be returned.</p></li>
 </section>
 <section id="array-prepend">
 <h3><code class="docutils literal notranslate"><span class="pre">array_prepend</span></code><a class="headerlink" href="#array-prepend" title="Link to this heading">¶</a></h3>
-<p>Appends an element to the end of an array.</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">array_append</span><span class="p">(</span><span class="n">array</span><span class="p">,</span> <span class="n">element</span><span class="p">)</span>
+<p>Prepends an element to the beginning of an array.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">array_prepend</span><span class="p">(</span><span class="n">element</span><span class="p">,</span> <span class="n">array</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id211">
 <h4>Arguments<a class="headerlink" href="#id211" title="Link to this heading">¶</a></h4>
 <ul class="simple">
-<li><p><strong>array</strong>: Array expression. Can be a constant, column, or function, and any combination of array operators.</p></li>
 <li><p><strong>element</strong>: Element to append to the array.</p></li>
+<li><p><strong>array</strong>: Array expression. Can be a constant, column, or function, and any combination of array operators.</p></li>
 </ul>
 </section>
 <section id="id212">
 <h4>Example<a class="headerlink" href="#id212" title="Link to this heading">¶</a></h4>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="n">array_append</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">],</span><span class="w"> </span><span class="mi">4</span><span class="p">);</span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="n">array_prepend</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="p">[</span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">]);</span>
 <span class="o">+</span><span class="c1">--------------------------------------+</span>
-<span class="o">|</span><span class="w"> </span><span class="n">array_append</span><span class="p">(</span><span class="n">List</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">3</span><span class="p">]),</span><span class="n">Int64</span><span class="p">(</span><span class="mi">4</span><span class="p">))</span><span class="w"> </span><span class="o">|</span>
+<span class="o">|</span><span class="w"> </span><span class="n">array_prepend</span><span class="p">(</span><span class="n">Int64</span><span class="p">(</span><span class="mi">1</span><span class="p">),</span><span class="w"> </span><span class="n">List</span><span class="p">([</span><span class="mi">2</span><span class="p">,</span><span class="mi">3</span><span class="p">,</span><span class="mi">4</span><span class="p">]))</span><span class="w"> </span><span class="o">|</span>
 <span class="o">+</span><span class="c1">--------------------------------------+</span>
 <span class="o">|</span><span class="w"> </span><span class="p">[</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">]</span><span class="w">                         </span><span class="o">|</span>
 <span class="o">+</span><span class="c1">--------------------------------------+</span>

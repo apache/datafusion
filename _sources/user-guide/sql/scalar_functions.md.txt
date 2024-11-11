@@ -3081,23 +3081,23 @@ array_position(array, element, index)
 
 ### `array_prepend`
 
-Appends an element to the end of an array.
+Prepends an element to the beginning of an array.
 
 ```
-array_append(array, element)
+array_prepend(element, array)
 ```
 
 #### Arguments
 
-- **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
 - **element**: Element to append to the array.
+- **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
 
 #### Example
 
 ```sql
-> select array_append([1, 2, 3], 4);
+> select array_prepend(1, [2, 3, 4]);
 +--------------------------------------+
-| array_append(List([1,2,3]),Int64(4)) |
+| array_prepend(Int64(1), List([2,3,4])) |
 +--------------------------------------+
 | [1, 2, 3, 4]                         |
 +--------------------------------------+
