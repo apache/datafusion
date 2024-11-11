@@ -27,6 +27,7 @@ workspace = true
 
 [dependencies]
 arrow = { workspace = true }
+chrono-tz = { workspace = true } 
 datafusion-common = { workspace = true, default-features = true }
 env_logger = { workspace = true }
 paste = "1.0.15"
