@@ -42,7 +42,7 @@ pub use plan::{
     SubqueryAlias, TableScan, ToStringifiedPlan, Union, Unnest, Values, Window,
 };
 pub use statement::{
-    Execute, Prepare, SetVariable, Statement, TransactionAccessMode,
+    Deallocate, Execute, Prepare, SetVariable, Statement, TransactionAccessMode,
     TransactionConclusion, TransactionEnd, TransactionIsolationLevel, TransactionStart,
 };
 

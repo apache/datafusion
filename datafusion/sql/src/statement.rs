@@ -46,10 +46,10 @@ use datafusion_expr::utils::expr_to_columns;
 use datafusion_expr::{
     cast, col, Analyze, CreateCatalog, CreateCatalogSchema,
     CreateExternalTable as PlanCreateExternalTable, CreateFunction, CreateFunctionBody,
-    CreateIndex as PlanCreateIndex, CreateMemoryTable, CreateView, DescribeTable,
-    DmlStatement, DropCatalogSchema, DropFunction, DropTable, DropView, EmptyRelation,
-    Execute, Explain, Expr, ExprSchemable, Filter, LogicalPlan, LogicalPlanBuilder,
-    OperateFunctionArg, PlanType, Prepare, SetVariable, SortExpr,
+    CreateIndex as PlanCreateIndex, CreateMemoryTable, CreateView, Deallocate,
+    DescribeTable, DmlStatement, DropCatalogSchema, DropFunction, DropTable, DropView,
+    EmptyRelation, Execute, Explain, Expr, ExprSchemable, Filter, LogicalPlan,
+    LogicalPlanBuilder, OperateFunctionArg, PlanType, Prepare, SetVariable, SortExpr,
     Statement as PlanStatement, ToStringifiedPlan, TransactionAccessMode,
     TransactionConclusion, TransactionEnd, TransactionIsolationLevel, TransactionStart,
     Volatility, WriteOp,
@@ -665,6 +665,15 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     parameters,
                 })))
             }
+            Statement::Deallocate {
+                name,
+                // Similar to PostgreSQL, the PREPARE keyword is ignored
+                prepare: _,
+            } => Ok(LogicalPlan::Statement(PlanStatement::Deallocate(
+                Deallocate {
+                    name: ident_to_string(&name),
+                },
+            ))),
 
             Statement::ShowTables {
                 extended,

@@ -15,11 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
+mod binary;
 mod decimal;
 mod primitive;
 mod random_data;
 mod string;
 
+pub use binary::BinaryArrayGenerator;
 pub use decimal::DecimalArrayGenerator;
 pub use primitive::PrimitiveArrayGenerator;
 pub use string::StringArrayGenerator;
