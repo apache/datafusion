@@ -62,7 +62,7 @@ impl CteWorkTable {
 
     /// The schema of the recursive term of the query
     pub fn schema(&self) -> SchemaRef {
-        self.table_schema.clone()
+        Arc::clone(&self.table_schema)
     }
 }
 
