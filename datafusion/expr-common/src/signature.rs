@@ -146,7 +146,7 @@ impl TypeSignature {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
+#[derive(Debug, Clone, Eq, PartialOrd, Hash)]
 pub enum TypeSignatureClass {
     Timestamp,
     Date,
@@ -157,6 +157,15 @@ pub enum TypeSignatureClass {
     // Numeric
     // Integer
     Native(LogicalTypeRef),
+}
+
+impl PartialEq for TypeSignatureClass {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Native(l0), Self::Native(r0)) => l0 == r0,
+            _ => core::mem::discriminant(self) == core::mem::discriminant(other),
+        }
+    }
 }
 
 impl Display for TypeSignatureClass {
