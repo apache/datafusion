@@ -172,6 +172,8 @@ fn baseline_config() -> DatasetGeneratorConfig {
         ColumnDescr::new("time32_ms", DataType::Time32(TimeUnit::Millisecond)),
         ColumnDescr::new("time64_us", DataType::Time64(TimeUnit::Microsecond)),
         ColumnDescr::new("time64_ns", DataType::Time64(TimeUnit::Nanosecond)),
+        // `None` is passed in here however when generating the array, it will generate
+        // random timezones.
         ColumnDescr::new("timestamp_s", DataType::Timestamp(TimeUnit::Second, None)),
         ColumnDescr::new(
             "timestamp_ms",
