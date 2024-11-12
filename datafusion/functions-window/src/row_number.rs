@@ -51,7 +51,7 @@ impl RowNumber {
     /// Create a new `row_number` function
     pub fn new() -> Self {
         Self {
-            signature: Signature::zero_arg(Volatility::Immutable),
+            signature: Signature::nullary(Volatility::Immutable),
         }
     }
 }

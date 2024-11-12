@@ -42,7 +42,7 @@ impl Default for RandomFunc {
 impl RandomFunc {
     pub fn new() -> Self {
         Self {
-            signature: Signature::zero_arg(Volatility::Volatile),
+            signature: Signature::nullary(Volatility::Volatile),
         }
     }
 }

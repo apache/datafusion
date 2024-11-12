@@ -49,7 +49,7 @@ pub struct CumeDist {
 impl CumeDist {
     pub fn new() -> Self {
         Self {
-            signature: Signature::zero_arg(Volatility::Immutable),
+            signature: Signature::nullary(Volatility::Immutable),
         }
     }
 }

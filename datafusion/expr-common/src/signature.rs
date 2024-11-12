@@ -412,7 +412,7 @@ impl Signature {
         }
     }
 
-    pub fn zero_arg(volatility: Volatility) -> Self {
+    pub fn nullary(volatility: Volatility) -> Self {
         Signature {
             type_signature: TypeSignature::NullAry,
             volatility,
