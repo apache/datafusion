@@ -1229,7 +1229,7 @@ impl InformationSchemaParameters {
 
     fn builder(&self) -> InformationSchemaParametersBuilder {
         InformationSchemaParametersBuilder {
-            schema: self.schema.clone(),
+            schema: Arc::clone(&self.schema),
             specific_catalog: StringBuilder::new(),
             specific_schema: StringBuilder::new(),
             specific_name: StringBuilder::new(),
@@ -1295,7 +1295,7 @@ impl InformationSchemaParametersBuilder {
 
     fn finish(&mut self) -> RecordBatch {
         RecordBatch::try_new(
-            self.schema.clone(),
+            Arc::clone(&self.schema),
             vec![
                 Arc::new(self.specific_catalog.finish()),
                 Arc::new(self.specific_schema.finish()),
@@ -1321,7 +1321,7 @@ impl PartitionStream for InformationSchemaParameters {
         let config = self.config.clone();
         let mut builder = self.builder();
         Box::pin(RecordBatchStreamAdapter::new(
-            self.schema.clone(),
+            Arc::clone(&self.schema),
             futures::stream::once(async move {
                 config.make_parameters(
                     ctx.scalar_functions(),
