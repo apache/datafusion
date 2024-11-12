@@ -193,7 +193,7 @@ impl TypeSignature {
     pub fn to_string_repr(&self) -> Vec<String> {
         match self {
             TypeSignature::NullAry => {
-                vec!["ZeroArg()".to_string()]
+                vec!["NullAry()".to_string()]
             }
             TypeSignature::Variadic(types) => {
                 vec![format!("{}, ..", Self::join_types(types, "/"))]
