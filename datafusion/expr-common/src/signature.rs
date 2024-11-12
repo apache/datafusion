@@ -146,7 +146,7 @@ impl TypeSignature {
     }
 }
 
-#[derive(Debug, Clone, Eq, PartialOrd, Hash)]
+#[derive(Debug, Clone, Eq, PartialOrd)]
 pub enum TypeSignatureClass {
     Timestamp,
     Date,
@@ -166,6 +166,12 @@ impl PartialEq for TypeSignatureClass {
             (Self::Native(l0), Self::Native(r0)) => l0 == r0,
             _ => core::mem::discriminant(self) == core::mem::discriminant(other),
         }
+    }
+}
+
+impl std::hash::Hash for TypeSignatureClass {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        core::mem::discriminant(self).hash(state);
     }
 }
 
