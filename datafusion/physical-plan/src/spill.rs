@@ -126,7 +126,7 @@ pub fn spill_record_batch_by_size(
 ///
 /// {xxxxxxxxxxxxxxxxxxx} <--- buffer
 ///       ^    ^  ^    ^
-/// 	  |    |  |    |
+///       |    |  |    |
 /// col1->{    }  |    |    
 /// col2--------->{    }
 ///
