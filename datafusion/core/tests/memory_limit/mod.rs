@@ -779,10 +779,7 @@ fn make_dict_batches() -> Vec<RecordBatch> {
 
 // How many bytes does the memory from dict_batches consume?
 fn batches_byte_size(batches: &[RecordBatch]) -> usize {
-    batches
-        .iter()
-        .map(|b| get_record_batch_memory_size(b))
-        .sum()
+    batches.iter().map(get_record_batch_memory_size).sum()
 }
 
 #[derive(Debug)]

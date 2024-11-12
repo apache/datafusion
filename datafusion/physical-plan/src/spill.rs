@@ -182,7 +182,7 @@ mod tests {
     use crate::spill::{spill_record_batch_by_size, spill_record_batches};
     use crate::test::build_table_i32;
     use arrow::array::{Float64Array, Int32Array};
-    use arrow::datatypes::{DataType, Field, Float64Type, Int32Type, Schema};
+    use arrow::datatypes::{DataType, Field, Int32Type, Schema};
     use arrow::record_batch::RecordBatch;
     use arrow_array::ListArray;
     use datafusion_common::Result;
@@ -319,16 +319,12 @@ mod tests {
         let schema = Arc::new(Schema::new(vec![
             Field::new(
                 "nested_int",
-                DataType::List(Arc::new(
-                    Field::new("item", DataType::Int32, true).into(),
-                )),
+                DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
                 false,
             ),
             Field::new(
                 "nested_int2",
-                DataType::List(Arc::new(
-                    Field::new("item", DataType::Int32, true).into(),
-                )),
+                DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
                 false,
             ),
         ]));
