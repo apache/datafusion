@@ -342,7 +342,7 @@ where
                     .map(|(value, flags)| {
                         let pattern =
                             compile_and_cache_regex(regex, flags, &mut regex_cache)?;
-                        count_matches(value, &pattern, start_scalar)
+                        count_matches(value, pattern, start_scalar)
                     })
                     .collect::<Result<Vec<i64>, ArrowError>>()?,
             )))
@@ -394,7 +394,7 @@ where
                     let pattern =
                         compile_and_cache_regex(regex, flags, &mut regex_cache)?;
 
-                    count_matches(value, &pattern, start)
+                    count_matches(value, pattern, start)
                 })
                 .collect::<Result<Vec<i64>, ArrowError>>()?,
             )))
@@ -423,7 +423,7 @@ where
                             flags_scalar,
                             &mut regex_cache,
                         )?;
-                        count_matches(value, &pattern, start_scalar)
+                        count_matches(value, pattern, start_scalar)
                     })
                     .collect::<Result<Vec<i64>, ArrowError>>()?,
             )))
@@ -457,7 +457,7 @@ where
                         let pattern =
                             compile_and_cache_regex(regex, flags, &mut regex_cache)?;
 
-                        count_matches(value, &pattern, start_scalar)
+                        count_matches(value, pattern, start_scalar)
                     })
                     .collect::<Result<Vec<i64>, ArrowError>>()?,
             )))
@@ -493,7 +493,7 @@ where
                             flags_scalar,
                             &mut regex_cache,
                         )?;
-                        count_matches(value, &pattern, start)
+                        count_matches(value, pattern, start)
                     })
                     .collect::<Result<Vec<i64>, ArrowError>>()?,
             )))
@@ -540,7 +540,7 @@ where
 
                     let pattern =
                         compile_and_cache_regex(regex, flags, &mut regex_cache)?;
-                    count_matches(value, &pattern, start)
+                    count_matches(value, pattern, start)
                 })
                 .collect::<Result<Vec<i64>, ArrowError>>()?,
             )))
