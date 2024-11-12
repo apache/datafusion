@@ -20,7 +20,7 @@ use arrow::compute::take;
 use rand::rngs::StdRng;
 use rand::Rng;
 
-/// Randomly generate decimal arrays
+/// Randomly generate boolean arrays
 pub struct BooleanArrayGenerator {
     pub num_booleans: usize,
     pub num_distinct_booleans: usize,
