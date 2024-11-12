@@ -36,12 +36,14 @@ use datafusion_common::cast::{
     as_timestamp_microsecond_array, as_timestamp_millisecond_array,
     as_timestamp_nanosecond_array, as_timestamp_second_array,
 };
+use datafusion_common::types::logical_string;
 use datafusion_common::{exec_err, Result, ScalarValue};
 use datafusion_expr::scalar_doc_sections::DOC_SECTION_DATETIME;
-use datafusion_expr::TypeSignature::Exact;
+use datafusion_expr::TypeSignature::{self, Exact};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility, TIMEZONE_WILDCARD,
 };
+use datafusion_expr_common::signature::TypeSignatureClass;
 
 #[derive(Debug)]
 pub struct DatePartFunc {
@@ -60,6 +62,8 @@ impl DatePartFunc {
         Self {
             signature: Signature::one_of(
                 vec![
+                    TypeSignature::Coercible(vec![TypeSignatureClass::Native(logical_string()), TypeSignatureClass::Timestamp]),
+
                     Exact(vec![Utf8, Timestamp(Nanosecond, None)]),
                     Exact(vec![Utf8View, Timestamp(Nanosecond, None)]),
                     Exact(vec![

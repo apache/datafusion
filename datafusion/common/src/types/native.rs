@@ -433,4 +433,12 @@ impl NativeType {
             UInt8 | UInt16 | UInt32 | UInt64 | Int8 | Int16 | Int32 | Int64
         )
     }
+
+    #[inline]
+    pub fn is_timestamp(&self) -> bool {
+        matches!(
+            self,
+            NativeType::Timestamp(_, _)
+        )
+    }
 }

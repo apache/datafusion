@@ -22,10 +22,7 @@ use arrow::{
     datatypes::{DataType, TimeUnit},
 };
 use datafusion_common::{
-    exec_err, internal_datafusion_err, internal_err, plan_err,
-    types::{LogicalType, NativeType},
-    utils::{coerced_fixed_size_list_to_list, list_ndims},
-    Result,
+    exec_err, internal_datafusion_err, internal_err, not_impl_err, plan_err, types::{LogicalType, NativeType}, utils::{coerced_fixed_size_list_to_list, list_ndims}, Result
 };
 use datafusion_expr_common::{
     signature::{
@@ -533,27 +530,32 @@ fn get_valid_types(
                     TypeSignatureClass::Native(native_type) => {
                         let target_type = native_type.native();
                         if &logical_type == target_type {
-                            return target_type.default_cast_for(current_type);
+                            return target_type.default_cast_for(current_type)
                         }
 
                         if logical_type == NativeType::Null {
-                            return target_type.default_cast_for(current_type);
+                            return target_type.default_cast_for(current_type)
                         }
 
                         if target_type.is_integer() && logical_type.is_integer() {
-                            return target_type.default_cast_for(current_type);
+                            return target_type.default_cast_for(current_type)
                         }
+
+                        internal_err!(
+                            "Expect {} but received {}",
+                            target_type_class,
+                            current_type
+                        )
+                    }
+                    TypeSignatureClass::Timestamp if logical_type.is_timestamp() => {
+                        NativeType::Timestamp(TimeUnit::Second, None).default_cast_for(current_type)
                     }
                     _ => {
-                        todo!("")
+                        not_impl_err!("{target_type_class}")
                     }
                 }
 
-                internal_err!(
-                    "Expect {} but received {}",
-                    target_type_class,
-                    current_type
-                )
+                
             }
 
             let mut new_types = Vec::with_capacity(current_types.len());
