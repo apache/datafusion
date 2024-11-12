@@ -34,7 +34,7 @@ use crate::{
 };
 
 use arrow::datatypes::{DataType, FieldRef};
-use datafusion_common::cse::{HashNode, NormalizeNode};
+use datafusion_common::cse::{HashNode, NormalizeEq, Normalizeable};
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
 };
@@ -1674,8 +1674,8 @@ impl Expr {
     }
 }
 
-impl NormalizeNode for Expr {
-    fn enable_normalized(&self) -> bool {
+impl Normalizeable for Expr {
+    fn can_normalize(&self) -> bool {
         #[allow(clippy::match_like_matches_macro)]
         match self {
             Expr::BinaryExpr(BinaryExpr {
@@ -1692,18 +1692,29 @@ impl NormalizeNode for Expr {
             _ => false,
         }
     }
+}
 
-    fn normalize(&self) -> Expr {
-        match self {
-            Expr::BinaryExpr(BinaryExpr {
-                ref left,
-                ref op,
-                ref right,
-            }) => {
-                let normalized_left = left.normalize();
-                let normalized_right = right.normalize();
-                let new_binary = if matches!(
-                    op,
+impl NormalizeEq for Expr {
+    fn normalize_eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (
+                Expr::BinaryExpr(BinaryExpr {
+                    left: self_left,
+                    op: self_op,
+                    right: self_right,
+                }),
+                Expr::BinaryExpr(BinaryExpr {
+                    left: other_left,
+                    op: other_op,
+                    right: other_right,
+                }),
+            ) => {
+                if self_op != other_op {
+                    return false;
+                }
+
+                if matches!(
+                    self_op,
                     Operator::Plus
                         | Operator::Multiply
                         | Operator::BitwiseAnd
@@ -1712,27 +1723,16 @@ impl NormalizeNode for Expr {
                         | Operator::Eq
                         | Operator::NotEq
                 ) {
-                    let (l_expr, r_expr) =
-                        if format!("{normalized_left}") < format!("{normalized_right}") {
-                            (normalized_left, normalized_right)
-                        } else {
-                            (normalized_right, normalized_left)
-                        };
-                    BinaryExpr {
-                        left: Box::new(l_expr),
-                        op: *op,
-                        right: Box::new(r_expr),
-                    }
+                    (self_left.normalize_eq(other_left)
+                        && self_right.normalize_eq(other_right))
+                        || (self_left.normalize_eq(other_right)
+                            && self_right.normalize_eq(other_left))
                 } else {
-                    BinaryExpr {
-                        left: Box::new(normalized_left),
-                        op: *op,
-                        right: Box::new(normalized_right),
-                    }
-                };
-                Expr::BinaryExpr(new_binary)
+                    self_left.normalize_eq(other_left)
+                        && self_right.normalize_eq(other_right)
+                }
             }
-            other => other.clone(),
+            (_, _) => self == other,
         }
     }
 }

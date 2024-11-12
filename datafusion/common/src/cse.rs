@@ -50,15 +50,25 @@ impl<T: HashNode + ?Sized> HashNode for Arc<T> {
     }
 }
 
-/// A trait that defines how to normalize a node.
+/// The `Normalizeable` trait defines a method to determine whether a node can be normalized.
 ///
-/// This trait is used to normalize nodes before comparing them for CSE. Normalization
-/// can be used to ensure that two nodes that are semantically equivalent are considered
-/// equal for CSE.
-/// For example：`a + b` and `b + a` are semantically equivalent.
-pub trait NormalizeNode: Eq {
-    fn normalize(&self) -> Self;
-    fn enable_normalized(&self) -> bool;
+/// Normalization is the process of converting a node into a canonical form that can be used
+/// to compare nodes for equality. This is useful in optimizations like Common Subexpression Elimination (CSE),
+/// where semantically equivalent nodes (e.g., `a + b` and `b + a`) should be treated as equal.
+pub trait Normalizeable {
+    fn can_normalize(&self) -> bool;
+}
+
+/// The `NormalizeEq` trait extends `Eq` and `Normalizeable` to provide a method for comparing
+/// normlized nodes in optimizations like Common Subexpression Elimination (CSE).
+///
+/// The `normalize_eq` method ensures that two nodes that are semantically equivalent (after normalization)
+/// are considered equal in CSE optimization, even if their original forms differ.
+///
+/// This trait allows for equality comparisons between nodes with equivalent semantics, regardless of their
+/// internal representations.
+pub trait NormalizeEq: Eq + Normalizeable {
+    fn normalize_eq(&self, other: &Self) -> bool;
 }
 
 /// Identifier that represents a [`TreeNode`] tree.
@@ -66,7 +76,7 @@ pub trait NormalizeNode: Eq {
 /// This identifier is designed to be efficient and  "hash", "accumulate", "equal" and
 /// "have no collision (as low as possible)"
 #[derive(Debug, Eq)]
-struct Identifier<'n, N: NormalizeNode> {
+struct Identifier<'n, N: NormalizeEq> {
     // Hash of `node` built up incrementally during the first, visiting traversal.
     // Its value is not necessarily equal to default hash of the node. E.g. it is not
     // equal to `expr.hash()` if the node is `Expr`.
@@ -74,28 +84,28 @@ struct Identifier<'n, N: NormalizeNode> {
     node: &'n N,
 }
 
-impl<N: NormalizeNode> Clone for Identifier<'_, N> {
+impl<N: NormalizeEq> Clone for Identifier<'_, N> {
     fn clone(&self) -> Self {
         *self
     }
 }
-impl<N: NormalizeNode> Copy for Identifier<'_, N> {}
+impl<N: NormalizeEq> Copy for Identifier<'_, N> {}
 
-impl<N: NormalizeNode> Hash for Identifier<'_, N> {
+impl<N: NormalizeEq> Hash for Identifier<'_, N> {
     fn hash<H: Hasher>(&self, state: &mut H) {
         state.write_u64(self.hash);
     }
 }
 
-impl<N: NormalizeNode> PartialEq for Identifier<'_, N> {
+impl<N: NormalizeEq> PartialEq for Identifier<'_, N> {
     fn eq(&self, other: &Self) -> bool {
-        self.node.normalize() == other.node.normalize()
+        self.node.normalize_eq(other.node)
     }
 }
 
 impl<'n, N> Identifier<'n, N>
 where
-    N: HashNode + NormalizeNode,
+    N: HashNode + NormalizeEq,
 {
     fn new(node: &'n N, random_state: &RandomState) -> Self {
         let mut hasher = random_state.build_hasher();
@@ -235,7 +245,7 @@ pub enum FoundCommonNodes<N> {
 /// because they should not be recognized as common subtree.
 struct CSEVisitor<'a, 'n, N, C>
 where
-    N: NormalizeNode,
+    N: NormalizeEq,
     C: CSEController<Node = N>,
 {
     /// statistics of [`TreeNode`]s
@@ -270,7 +280,7 @@ where
 /// Record item that used when traversing a [`TreeNode`] tree.
 enum VisitRecord<'n, N>
 where
-    N: NormalizeNode,
+    N: NormalizeEq,
 {
     /// Marks the beginning of [`TreeNode`]. It contains:
     /// - The post-order index assigned during the first, visiting traversal.
@@ -287,7 +297,7 @@ where
 
 impl<'n, N, C> CSEVisitor<'_, 'n, N, C>
 where
-    N: TreeNode + HashNode + NormalizeNode,
+    N: TreeNode + HashNode + NormalizeEq,
     C: CSEController<Node = N>,
 {
     /// Find the first `EnterMark` in the stack, and accumulates every `NodeItem` before
@@ -304,7 +314,7 @@ where
     ///   an extra traversal).
     fn pop_enter_mark(
         &mut self,
-        enable_normalize: bool,
+        can_normalize: bool,
     ) -> (usize, Option<Identifier<'n, N>>, bool) {
         let mut node_ids: Vec<Identifier<'n, N>> = vec![];
         let mut is_valid = true;
@@ -312,7 +322,7 @@ where
         while let Some(item) = self.visit_stack.pop() {
             match item {
                 VisitRecord::EnterMark(down_index) => {
-                    if enable_normalize {
+                    if can_normalize {
                         node_ids.sort_by_key(|i| i.hash);
                     }
                     let node_id = node_ids
@@ -332,7 +342,7 @@ where
 
 impl<'n, N, C> TreeNodeVisitor<'n> for CSEVisitor<'_, 'n, N, C>
 where
-    N: TreeNode + HashNode + NormalizeNode,
+    N: TreeNode + HashNode + NormalizeEq,
     C: CSEController<Node = N>,
 {
     type Node = N;
@@ -374,7 +384,7 @@ where
 
     fn f_up(&mut self, node: &'n Self::Node) -> Result<TreeNodeRecursion> {
         let (down_index, sub_node_id, sub_node_is_valid) =
-            self.pop_enter_mark(node.enable_normalized());
+            self.pop_enter_mark(node.can_normalize());
 
         let node_id = Identifier::new(node, self.random_state).combine(sub_node_id);
         let is_valid = C::is_valid(node) && sub_node_is_valid;
@@ -414,7 +424,7 @@ where
 /// replaced [`TreeNode`] tree.
 struct CSERewriter<'a, 'n, N, C>
 where
-    N: NormalizeNode,
+    N: NormalizeEq,
     C: CSEController<Node = N>,
 {
     /// statistics of [`TreeNode`]s
@@ -435,7 +445,7 @@ where
 
 impl<N, C> TreeNodeRewriter for CSERewriter<'_, '_, N, C>
 where
-    N: TreeNode + NormalizeNode,
+    N: TreeNode + NormalizeEq,
     C: CSEController<Node = N>,
 {
     type Node = N;
@@ -509,7 +519,7 @@ pub struct CSE<N, C: CSEController<Node = N>> {
 
 impl<N, C> CSE<N, C>
 where
-    N: TreeNode + HashNode + Clone + NormalizeNode,
+    N: TreeNode + HashNode + Clone + NormalizeEq,
     C: CSEController<Node = N>,
 {
     pub fn new(controller: C) -> Self {
@@ -668,7 +678,8 @@ where
 mod test {
     use crate::alias::AliasGenerator;
     use crate::cse::{
-        CSEController, HashNode, IdArray, Identifier, NodeStats, NormalizeNode, CSE,
+        CSEController, HashNode, IdArray, Identifier, NodeStats, NormalizeEq,
+        Normalizeable, CSE,
     };
     use crate::tree_node::tests::TestTreeNode;
     use crate::Result;
@@ -735,12 +746,15 @@ mod test {
         }
     }
 
-    impl NormalizeNode for TestTreeNode<String> {
-        fn normalize(&self) -> Self {
-            self.clone()
-        }
-        fn enable_normalized(&self) -> bool {
+    impl Normalizeable for TestTreeNode<String> {
+        fn can_normalize(&self) -> bool {
             false
+        }
+    }
+
+    impl NormalizeEq for TestTreeNode<String> {
+        fn normalize_eq(&self, other: &Self) -> bool {
+            self == other
         }
     }
 

@@ -1525,6 +1525,48 @@ mod test {
         Ok(())
     }
 
+    #[test]
+    fn test_normalize_complex_expression() -> Result<()> {
+        // case1: a + b * c <=> b * c + a
+        let table_scan = test_table_scan()?;
+        let expr = ((col("a") + col("b") * col("c")) - (col("b") * col("c") + col("a")))
+            .eq(lit(30));
+        let plan = LogicalPlanBuilder::from(table_scan).filter(expr)?.build()?;
+
+        let expected = "Projection: test.a, test.b, test.c\
+        \n  Filter: __common_expr_1 - __common_expr_1 = Int32(30)\
+        \n    Projection: test.a + test.b * test.c AS __common_expr_1, test.a, test.b, test.c\
+        \n      TableScan: test";
+        assert_optimized_plan_eq(expected, plan, None);
+
+        // ((c1 + c2 / c3) * c3 <=> c3 * (c2 / c3 + c1))
+        let table_scan = test_table_scan()?;
+        let expr = (((col("a") + col("b") / col("c")) * col("c"))
+            / (col("c") * (col("b") / col("c") + col("a")))
+            + col("a"))
+        .eq(lit(30));
+        let plan = LogicalPlanBuilder::from(table_scan).filter(expr)?.build()?;
+        let expected = "Projection: test.a, test.b, test.c\
+        \n  Filter: __common_expr_1 / __common_expr_1 + test.a = Int32(30)\
+        \n    Projection: (test.a + test.b / test.c) * test.c AS __common_expr_1, test.a, test.b, test.c\
+        \n      TableScan: test";
+        assert_optimized_plan_eq(expected, plan, None);
+
+        // c2 / (c1 + c3) <=> c2 / (c3 + c1)
+        let table_scan = test_table_scan()?;
+        let expr = ((col("b") / (col("a") + col("c")))
+            * (col("b") / (col("c") + col("a"))))
+        .eq(lit(30));
+        let plan = LogicalPlanBuilder::from(table_scan).filter(expr)?.build()?;
+        let expected = "Projection: test.a, test.b, test.c\
+        \n  Filter: __common_expr_1 * __common_expr_1 = Int32(30)\
+        \n    Projection: test.b / (test.a + test.c) AS __common_expr_1, test.a, test.b, test.c\
+        \n      TableScan: test";
+        assert_optimized_plan_eq(expected, plan, None);
+
+        Ok(())
+    }
+
     /// returns a "random" function that is marked volatile (aka each invocation
     /// returns a different value)
     ///
