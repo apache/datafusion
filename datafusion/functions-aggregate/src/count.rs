@@ -102,7 +102,7 @@ impl Count {
     pub fn new() -> Self {
         Self {
             signature: Signature::one_of(
-                vec![TypeSignature::VariadicAny, TypeSignature::ZeroArg],
+                vec![TypeSignature::VariadicAny, TypeSignature::NullAry],
                 Volatility::Immutable,
             ),
         }

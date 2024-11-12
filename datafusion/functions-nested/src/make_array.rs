@@ -63,7 +63,7 @@ impl MakeArray {
     pub fn new() -> Self {
         Self {
             signature: Signature::one_of(
-                vec![TypeSignature::ZeroArg, TypeSignature::UserDefined],
+                vec![TypeSignature::NullAry, TypeSignature::UserDefined],
                 Volatility::Immutable,
             ),
             aliases: vec![String::from("make_list")],

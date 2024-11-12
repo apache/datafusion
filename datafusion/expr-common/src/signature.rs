@@ -135,7 +135,7 @@ pub enum TypeSignature {
     /// Dictionary with string value type is also handled.
     String(usize),
     /// Zero argument
-    ZeroArg,
+    NullAry,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
@@ -192,7 +192,7 @@ impl std::fmt::Display for ArrayFunctionSignature {
 impl TypeSignature {
     pub fn to_string_repr(&self) -> Vec<String> {
         match self {
-            TypeSignature::ZeroArg => {
+            TypeSignature::NullAry => {
                 vec!["ZeroArg()".to_string()]
             }
             TypeSignature::Variadic(types) => {
@@ -248,7 +248,7 @@ impl TypeSignature {
     pub fn supports_zero_argument(&self) -> bool {
         match &self {
             TypeSignature::Exact(vec) => vec.is_empty(),
-            TypeSignature::ZeroArg => true,
+            TypeSignature::NullAry => true,
             TypeSignature::OneOf(types) => types
                 .iter()
                 .any(|type_sig| type_sig.supports_zero_argument()),
@@ -291,7 +291,7 @@ impl TypeSignature {
                 .collect(),
             // TODO: Implement for other types
             TypeSignature::Any(_)
-            | TypeSignature::ZeroArg
+            | TypeSignature::NullAry
             | TypeSignature::VariadicAny
             | TypeSignature::ArraySignature(_)
             | TypeSignature::UserDefined => vec![],
@@ -414,7 +414,7 @@ impl Signature {
 
     pub fn zero_arg(volatility: Volatility) -> Self {
         Signature {
-            type_signature: TypeSignature::ZeroArg,
+            type_signature: TypeSignature::NullAry,
             volatility,
         }
     }
@@ -491,10 +491,10 @@ mod tests {
             TypeSignature::Exact(vec![]),
             TypeSignature::OneOf(vec![
                 TypeSignature::Exact(vec![DataType::Int8]),
-                TypeSignature::ZeroArg,
+                TypeSignature::NullAry,
                 TypeSignature::Uniform(1, vec![DataType::Int8]),
             ]),
-            TypeSignature::ZeroArg,
+            TypeSignature::NullAry,
         ];
 
         for case in positive_cases {

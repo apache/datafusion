@@ -181,7 +181,7 @@ fn is_well_supported_signature(type_signature: &TypeSignature) -> bool {
             | TypeSignature::String(_)
             | TypeSignature::Coercible(_)
             | TypeSignature::Any(_)
-            | TypeSignature::ZeroArg
+            | TypeSignature::NullAry
     )
 }
 
@@ -618,7 +618,7 @@ fn get_valid_types(
                 }
             }
         },
-        TypeSignature::ZeroArg => {
+        TypeSignature::NullAry => {
             if !current_types.is_empty() {
                 return plan_err!(
                     "The function expected zero argument but received {}",
