@@ -102,8 +102,7 @@ impl Count {
     pub fn new() -> Self {
         Self {
             signature: Signature::one_of(
-                // TypeSignature::Any(0) is required to handle `Count()` with no args
-                vec![TypeSignature::VariadicAny, TypeSignature::Any(0)],
+                vec![TypeSignature::VariadicAny, TypeSignature::NullAry],
                 Volatility::Immutable,
             ),
         }

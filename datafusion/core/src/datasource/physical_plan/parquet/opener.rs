@@ -105,11 +105,11 @@ impl FileOpener for ParquetOpener {
             SchemaRef::from(self.table_schema.project(&self.projection)?);
         let schema_adapter = self
             .schema_adapter_factory
-            .create(projected_schema, self.table_schema.clone());
+            .create(projected_schema, Arc::clone(&self.table_schema));
         let predicate = self.predicate.clone();
         let pruning_predicate = self.pruning_predicate.clone();
         let page_pruning_predicate = self.page_pruning_predicate.clone();
-        let table_schema = self.table_schema.clone();
+        let table_schema = Arc::clone(&self.table_schema);
         let reorder_predicates = self.reorder_filters;
         let pushdown_filters = self.pushdown_filters;
         let enable_page_index = should_enable_page_index(

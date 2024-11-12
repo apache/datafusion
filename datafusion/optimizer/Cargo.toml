@@ -47,6 +47,7 @@ indexmap = { workspace = true }
 itertools = { workspace = true }
 log = { workspace = true }
 paste = "1.0.14"
+recursive = { workspace = true }
 regex = { workspace = true }
 regex-syntax = "0.8.0"
 

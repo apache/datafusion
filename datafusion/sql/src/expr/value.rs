@@ -133,8 +133,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         )))
     }
 
-    // IMPORTANT: Keep sql_array_literal's function body small to prevent stack overflow
-    // This function is recursively called, potentially leading to deep call stacks.
     pub(super) fn sql_array_literal(
         &self,
         elements: Vec<SQLExpr>,

@@ -508,7 +508,7 @@ impl SessionContext {
 
     /// Return the [RuntimeEnv] used to run queries with this `SessionContext`
     pub fn runtime_env(&self) -> Arc<RuntimeEnv> {
-        self.state.read().runtime_env().clone()
+        Arc::clone(self.state.read().runtime_env())
     }
 
     /// Returns an id that uniquely identifies this `SessionContext`.
@@ -714,6 +714,12 @@ impl SessionContext {
             }
             LogicalPlan::Statement(Statement::Execute(execute)) => {
                 self.execute_prepared(execute)
+            }
+            LogicalPlan::Statement(Statement::Deallocate(deallocate)) => {
+                self.state
+                    .write()
+                    .remove_prepared(deallocate.name.as_str())?;
+                self.return_empty_dataframe()
             }
             plan => Ok(DataFrame::new(self.state(), plan)),
         }
@@ -1539,7 +1545,7 @@ impl SessionContext {
 
     /// Get reference to [`SessionState`]
     pub fn state_ref(&self) -> Arc<RwLock<SessionState>> {
-        self.state.clone()
+        Arc::clone(&self.state)
     }
 
     /// Get weak reference to [`SessionState`]

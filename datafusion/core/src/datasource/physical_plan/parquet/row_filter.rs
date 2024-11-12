@@ -541,7 +541,7 @@ pub fn build_row_filter(
     let mut candidates: Vec<FilterCandidate> = predicates
         .into_iter()
         .map(|expr| {
-            FilterCandidateBuilder::new(expr.clone(), file_schema, table_schema)
+            FilterCandidateBuilder::new(Arc::clone(expr), file_schema, table_schema)
                 .build(metadata)
         })
         .collect::<Result<Vec<_>, _>>()?
