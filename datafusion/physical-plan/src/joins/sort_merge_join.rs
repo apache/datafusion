@@ -1763,14 +1763,14 @@ impl SMJStream {
         let mut out_indices = self.output_record_batches.row_indices.finish();
         let mut out_mask = self.output_record_batches.filter_mask.finish();
         let mut batch_ids = &self.output_record_batches.batch_ids;
-        let x = vec![0; record_batch.num_rows()];
+        let default_batch_ids = vec![0; record_batch.num_rows()];
 
         if out_indices.null_count() == out_indices.len()
             && out_indices.len() != record_batch.num_rows()
         {
             out_mask = BooleanArray::from(vec![None; record_batch.num_rows()]);
             out_indices = UInt64Array::from(vec![None; record_batch.num_rows()]);
-            batch_ids = &x;
+            batch_ids = &default_batch_ids;
         }
 
         if out_mask.is_empty() {
