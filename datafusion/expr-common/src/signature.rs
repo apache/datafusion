@@ -159,6 +159,7 @@ pub enum TypeSignatureClass {
     Native(LogicalTypeRef),
 }
 
+// TODO: MSRV issue: Default macro doesn't work in 1.79. Use default PartialEq macro after it is able to compile
 impl PartialEq for TypeSignatureClass {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
