@@ -1574,10 +1574,7 @@ mod tests {
             DataType::Utf8View
         );
 
-        assert_eq!(
-            get_wider_type(&DataType::Utf8View, &DataType::Int32).is_err(),
-            true
-        );
+        assert!(get_wider_type(&DataType::Utf8View, &DataType::Int32).is_err());
     }
 
     #[test]
