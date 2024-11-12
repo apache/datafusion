@@ -195,8 +195,10 @@ impl ScalarUDFImpl for ArrayPrepend {
     }
 }
 
+static DOCUMENTATION_PREPEND: OnceLock<Documentation> = OnceLock::new();
+
 fn get_array_prepend_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
+    DOCUMENTATION_PREPEND.get_or_init(|| {
         Documentation::builder()
             .with_doc_section(DOC_SECTION_ARRAY)
             .with_description(
