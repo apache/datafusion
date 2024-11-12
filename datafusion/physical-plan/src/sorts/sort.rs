@@ -31,7 +31,9 @@ use crate::metrics::{
     BaselineMetrics, Count, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet,
 };
 use crate::sorts::streaming_merge::StreamingMergeBuilder;
-use crate::spill::{read_spill_as_stream, spill_record_batches};
+use crate::spill::{
+    get_record_batch_memory_size, read_spill_as_stream, spill_record_batches,
+};
 use crate::stream::RecordBatchStreamAdapter;
 use crate::topk::TopK;
 use crate::{
@@ -286,10 +288,12 @@ impl ExternalSorter {
         }
         self.reserve_memory_for_merge()?;
 
-        let size = input.get_array_memory_size();
+        let size = get_record_batch_memory_size(&input);
+
         if self.reservation.try_grow(size).is_err() {
             let before = self.reservation.size();
             self.in_mem_sort().await?;
+
             // Sorting may have freed memory, especially if fetch is `Some`
             //
             // As such we check again, and if the memory usage has dropped by
@@ -426,7 +430,7 @@ impl ExternalSorter {
         let size: usize = self
             .in_mem_batches
             .iter()
-            .map(|x| x.get_array_memory_size())
+            .map(get_record_batch_memory_size)
             .sum();
 
         // Reserve headroom for next sort/merge
@@ -521,7 +525,8 @@ impl ExternalSorter {
             // Concatenate memory batches together and sort
             let batch = concat_batches(&self.schema, &self.in_mem_batches)?;
             self.in_mem_batches.clear();
-            self.reservation.try_resize(batch.get_array_memory_size())?;
+            self.reservation
+                .try_resize(get_record_batch_memory_size(&batch))?;
             let reservation = self.reservation.take();
             return self.sort_batch_stream(batch, metrics, reservation);
         }
@@ -530,7 +535,8 @@ impl ExternalSorter {
             .into_iter()
             .map(|batch| {
                 let metrics = self.metrics.baseline.intermediate();
-                let reservation = self.reservation.split(batch.get_array_memory_size());
+                let reservation =
+                    self.reservation.split(get_record_batch_memory_size(&batch));
                 let input = self.sort_batch_stream(batch, metrics, reservation)?;
                 Ok(spawn_buffered(input, 1))
             })
@@ -559,7 +565,7 @@ impl ExternalSorter {
         metrics: BaselineMetrics,
         reservation: MemoryReservation,
     ) -> Result<SendableRecordBatchStream> {
-        assert_eq!(batch.get_array_memory_size(), reservation.size());
+        assert_eq!(get_record_batch_memory_size(&batch), reservation.size());
         let schema = batch.schema();
 
         let fetch = self.fetch;
@@ -1185,9 +1191,9 @@ mod tests {
 
         assert_eq!(metrics.output_rows().unwrap(), 10000);
         assert!(metrics.elapsed_compute().unwrap() > 0);
-        assert_eq!(metrics.spill_count().unwrap(), 4);
-        assert_eq!(metrics.spilled_bytes().unwrap(), 38784);
-        assert_eq!(metrics.spilled_rows().unwrap(), 9600);
+        assert_eq!(metrics.spill_count().unwrap(), 3);
+        assert_eq!(metrics.spilled_bytes().unwrap(), 36000);
+        assert_eq!(metrics.spilled_rows().unwrap(), 9000);
 
         let columns = result[0].columns();
 
