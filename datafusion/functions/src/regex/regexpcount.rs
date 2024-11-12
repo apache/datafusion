@@ -30,7 +30,6 @@ use datafusion_expr::{
 };
 use itertools::izip;
 use regex::Regex;
-use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
 
@@ -549,19 +548,16 @@ where
     }
 }
 
-fn compile_and_cache_regex(
-    regex: &str,
-    flags: Option<&str>,
-    regex_cache: &mut HashMap<String, Regex>,
-) -> Result<Regex, ArrowError> {
-    match regex_cache.entry(regex.to_string()) {
-        Entry::Vacant(entry) => {
-            let compiled = compile_regex(regex, flags)?;
-            entry.insert(compiled.clone());
-            Ok(compiled)
-        }
-        Entry::Occupied(entry) => Ok(entry.get().to_owned()),
+fn compile_and_cache_regex<'a>(
+    regex: &'a str,
+    flags: Option<&'a str>,
+    regex_cache: &'a mut HashMap<String, Regex>,
+) -> Result<&'a Regex, ArrowError> {
+    if !regex_cache.contains_key(regex) {
+        let compiled = compile_regex(regex, flags)?;
+        regex_cache.insert(regex.to_string(), compiled);
     }
+    Ok(regex_cache.get(regex).unwrap())
 }
 
 fn compile_regex(regex: &str, flags: Option<&str>) -> Result<Regex, ArrowError> {
