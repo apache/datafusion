@@ -116,19 +116,19 @@ pub fn spill_record_batch_by_size(
 /// This function is used to estimate the physical memory usage of the `RecordBatch`. The implementation will add up all unique `Buffer`'s memory
 /// size, due to:
 /// - The data pointer inside `Buffer` are memory regions returned by global memory
-/// allocator, those regions can't have overlap.
+///   allocator, those regions can't have overlap.
 /// - The actual used range of `ArrayRef`s inside `RecordBatch` can have overlap
-/// or reuse the same `Buffer`. For example: taking a slice from `Array`.
+///   or reuse the same `Buffer`. For example: taking a slice from `Array`.
 ///
 /// Example:
 /// For a `RecordBatch` with two columns: `col1` and `col2`, two columns are pointing
 /// to a sub-region of the same buffer.
 ///
-/// [xxxxxxxxxxxxxxxxxxx] <--- buffer
+/// {xxxxxxxxxxxxxxxxxxx} <--- buffer
 ///       ^    ^  ^    ^
 /// 	  |    |  |    |
-/// col1->[    ]  |    |    
-/// col2--------->[    ]
+/// col1->{    }  |    |    
+/// col2--------->{    }
 ///
 /// In the above case, `get_record_batch_memory_size` will return the size of
 /// the buffer, instead of the sum of `col1` and `col2`'s actual memory size.
@@ -136,7 +136,7 @@ pub fn spill_record_batch_by_size(
 /// Note: Current `RecordBatch`.get_array_memory_size()` will double count the
 /// buffer memory size if multiple arrays within the batch are sharing the same
 /// `Buffer`. This method provides temporary fix until the issue is resolved:
-/// https://github.com/apache/arrow-rs/issues/6439
+/// <https://github.com/apache/arrow-rs/issues/6439>
 pub fn get_record_batch_memory_size(batch: &RecordBatch) -> usize {
     // Store pointers to `Buffer`'s start memory address (instead of actual
     // used data region's pointer represented by current `Array`)
