@@ -21,7 +21,9 @@
 use std::fmt::Display;
 
 use crate::type_coercion::aggregates::{NUMERICS, STRINGS};
-use arrow::datatypes::DataType;
+use arrow::
+    datatypes::{DataType, IntervalUnit, TimeUnit}
+;
 use datafusion_common::types::{LogicalTypeRef, NativeType};
 use itertools::Itertools;
 
@@ -139,11 +141,21 @@ pub enum TypeSignature {
     String(usize),
 }
 
+impl TypeSignature {
+    #[inline]
+    pub fn is_one_of(&self) -> bool {
+        matches!(self, TypeSignature::OneOf(_))
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
 pub enum TypeSignatureClass {
     Timestamp,
+    Date,
+    Time,
+    Interval,
+    Duration,
     // TODO:
-    // Interval
     // Numeric
     // Integer
     Native(LogicalTypeRef),
@@ -287,7 +299,21 @@ impl TypeSignature {
                 .iter()
                 .map(|logical_type| match logical_type {
                     TypeSignatureClass::Native(l) => get_data_types(l.native()),
-                    tsc => todo!("{tsc} not supported yet"),
+                    TypeSignatureClass::Timestamp => {
+                        vec![DataType::Timestamp(TimeUnit::Nanosecond, None)]
+                    }
+                    TypeSignatureClass::Date => {
+                        vec![DataType::Date64]
+                    }
+                    TypeSignatureClass::Time => {
+                        vec![DataType::Time64(TimeUnit::Nanosecond)]
+                    }
+                    TypeSignatureClass::Interval => {
+                        vec![DataType::Interval(IntervalUnit::DayTime)]
+                    }
+                    TypeSignatureClass::Duration => {
+                        vec![DataType::Duration(TimeUnit::Nanosecond)]
+                    }
                 })
                 .multi_cartesian_product()
                 .collect(),

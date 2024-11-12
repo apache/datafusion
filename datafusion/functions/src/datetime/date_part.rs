@@ -23,10 +23,8 @@ use arrow::array::{Array, ArrayRef, Float64Array};
 use arrow::compute::kernels::cast_utils::IntervalUnit;
 use arrow::compute::{binary, cast, date_part, DatePart};
 use arrow::datatypes::DataType::{
-    Date32, Date64, Duration, Float64, Interval, Time32, Time64, Timestamp, Utf8,
-    Utf8View,
+    Date32, Date64, Duration, Float64, Interval, Time32, Time64, Timestamp,
 };
-use arrow::datatypes::IntervalUnit::{DayTime, MonthDayNano, YearMonth};
 use arrow::datatypes::TimeUnit::{Microsecond, Millisecond, Nanosecond, Second};
 use arrow::datatypes::{DataType, TimeUnit};
 
@@ -39,9 +37,9 @@ use datafusion_common::cast::{
 use datafusion_common::types::logical_string;
 use datafusion_common::{exec_err, Result, ScalarValue};
 use datafusion_expr::scalar_doc_sections::DOC_SECTION_DATETIME;
-use datafusion_expr::TypeSignature::{self, Exact};
+use datafusion_expr::TypeSignature;
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility, TIMEZONE_WILDCARD,
+    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
 use datafusion_expr_common::signature::TypeSignatureClass;
 
@@ -62,74 +60,26 @@ impl DatePartFunc {
         Self {
             signature: Signature::one_of(
                 vec![
-                    TypeSignature::Coercible(vec![TypeSignatureClass::Native(logical_string()), TypeSignatureClass::Timestamp]),
-
-                    Exact(vec![Utf8, Timestamp(Nanosecond, None)]),
-                    Exact(vec![Utf8View, Timestamp(Nanosecond, None)]),
-                    Exact(vec![
-                        Utf8,
-                        Timestamp(Nanosecond, Some(TIMEZONE_WILDCARD.into())),
+                    TypeSignature::Coercible(vec![
+                        TypeSignatureClass::Native(logical_string()),
+                        TypeSignatureClass::Timestamp,
                     ]),
-                    Exact(vec![
-                        Utf8View,
-                        Timestamp(Nanosecond, Some(TIMEZONE_WILDCARD.into())),
+                    TypeSignature::Coercible(vec![
+                        TypeSignatureClass::Native(logical_string()),
+                        TypeSignatureClass::Date,
                     ]),
-                    Exact(vec![Utf8, Timestamp(Millisecond, None)]),
-                    Exact(vec![Utf8View, Timestamp(Millisecond, None)]),
-                    Exact(vec![
-                        Utf8,
-                        Timestamp(Millisecond, Some(TIMEZONE_WILDCARD.into())),
+                    TypeSignature::Coercible(vec![
+                        TypeSignatureClass::Native(logical_string()),
+                        TypeSignatureClass::Time,
                     ]),
-                    Exact(vec![
-                        Utf8View,
-                        Timestamp(Millisecond, Some(TIMEZONE_WILDCARD.into())),
+                    TypeSignature::Coercible(vec![
+                        TypeSignatureClass::Native(logical_string()),
+                        TypeSignatureClass::Interval,
                     ]),
-                    Exact(vec![Utf8, Timestamp(Microsecond, None)]),
-                    Exact(vec![Utf8View, Timestamp(Microsecond, None)]),
-                    Exact(vec![
-                        Utf8,
-                        Timestamp(Microsecond, Some(TIMEZONE_WILDCARD.into())),
+                    TypeSignature::Coercible(vec![
+                        TypeSignatureClass::Native(logical_string()),
+                        TypeSignatureClass::Duration,
                     ]),
-                    Exact(vec![
-                        Utf8View,
-                        Timestamp(Microsecond, Some(TIMEZONE_WILDCARD.into())),
-                    ]),
-                    Exact(vec![Utf8, Timestamp(Second, None)]),
-                    Exact(vec![Utf8View, Timestamp(Second, None)]),
-                    Exact(vec![
-                        Utf8,
-                        Timestamp(Second, Some(TIMEZONE_WILDCARD.into())),
-                    ]),
-                    Exact(vec![
-                        Utf8View,
-                        Timestamp(Second, Some(TIMEZONE_WILDCARD.into())),
-                    ]),
-                    Exact(vec![Utf8, Date64]),
-                    Exact(vec![Utf8View, Date64]),
-                    Exact(vec![Utf8, Date32]),
-                    Exact(vec![Utf8View, Date32]),
-                    Exact(vec![Utf8, Time32(Second)]),
-                    Exact(vec![Utf8View, Time32(Second)]),
-                    Exact(vec![Utf8, Time32(Millisecond)]),
-                    Exact(vec![Utf8View, Time32(Millisecond)]),
-                    Exact(vec![Utf8, Time64(Microsecond)]),
-                    Exact(vec![Utf8View, Time64(Microsecond)]),
-                    Exact(vec![Utf8, Time64(Nanosecond)]),
-                    Exact(vec![Utf8View, Time64(Nanosecond)]),
-                    Exact(vec![Utf8, Interval(YearMonth)]),
-                    Exact(vec![Utf8View, Interval(YearMonth)]),
-                    Exact(vec![Utf8, Interval(DayTime)]),
-                    Exact(vec![Utf8View, Interval(DayTime)]),
-                    Exact(vec![Utf8, Interval(MonthDayNano)]),
-                    Exact(vec![Utf8View, Interval(MonthDayNano)]),
-                    Exact(vec![Utf8, Duration(Second)]),
-                    Exact(vec![Utf8View, Duration(Second)]),
-                    Exact(vec![Utf8, Duration(Millisecond)]),
-                    Exact(vec![Utf8View, Duration(Millisecond)]),
-                    Exact(vec![Utf8, Duration(Microsecond)]),
-                    Exact(vec![Utf8View, Duration(Microsecond)]),
-                    Exact(vec![Utf8, Duration(Nanosecond)]),
-                    Exact(vec![Utf8View, Duration(Nanosecond)]),
                 ],
                 Volatility::Immutable,
             ),

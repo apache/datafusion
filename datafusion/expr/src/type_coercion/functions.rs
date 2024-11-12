@@ -22,7 +22,10 @@ use arrow::{
     datatypes::{DataType, TimeUnit},
 };
 use datafusion_common::{
-    exec_err, internal_datafusion_err, internal_err, not_impl_err, plan_err, types::{LogicalType, NativeType}, utils::{coerced_fixed_size_list_to_list, list_ndims}, Result
+    exec_err, internal_datafusion_err, internal_err, not_impl_err, plan_err,
+    types::{LogicalType, NativeType},
+    utils::{coerced_fixed_size_list_to_list, list_ndims},
+    Result,
 };
 use datafusion_expr_common::{
     signature::{
@@ -193,8 +196,12 @@ fn try_coerce_types(
 
     // Well-supported signature that returns exact valid types.
     if !valid_types.is_empty() && is_well_supported_signature(type_signature) {
-        // exact valid types
-        assert_eq!(valid_types.len(), 1);
+        // There may be many valid types if valid signature is OneOf
+        // Otherwise, there should be only one valid type
+        if !type_signature.is_one_of() {
+            assert_eq!(valid_types.len(), 1);
+        }
+
         let valid_types = valid_types.swap_remove(0);
         if let Some(t) = maybe_data_types_without_coercion(&valid_types, current_types) {
             return Ok(t);
@@ -530,15 +537,15 @@ fn get_valid_types(
                     TypeSignatureClass::Native(native_type) => {
                         let target_type = native_type.native();
                         if &logical_type == target_type {
-                            return target_type.default_cast_for(current_type)
+                            return target_type.default_cast_for(current_type);
                         }
 
                         if logical_type == NativeType::Null {
-                            return target_type.default_cast_for(current_type)
+                            return target_type.default_cast_for(current_type);
                         }
 
                         if target_type.is_integer() && logical_type.is_integer() {
-                            return target_type.default_cast_for(current_type)
+                            return target_type.default_cast_for(current_type);
                         }
 
                         internal_err!(
@@ -548,14 +555,24 @@ fn get_valid_types(
                         )
                     }
                     TypeSignatureClass::Timestamp if logical_type.is_timestamp() => {
-                        NativeType::Timestamp(TimeUnit::Second, None).default_cast_for(current_type)
+                        Ok(current_type.to_owned())
+                    }
+                    TypeSignatureClass::Date if logical_type.is_date() => {
+                        Ok(current_type.to_owned())
+                    }
+                    TypeSignatureClass::Time if logical_type.is_time() => {
+                        Ok(current_type.to_owned())
+                    }
+                    TypeSignatureClass::Interval if logical_type.is_interval() => {
+                        Ok(current_type.to_owned())
+                    }
+                    TypeSignatureClass::Duration if logical_type.is_duration() => {
+                        Ok(current_type.to_owned())
                     }
                     _ => {
-                        not_impl_err!("{target_type_class}")
+                        not_impl_err!("Got logical_type: {logical_type} with target_type_class: {target_type_class}")
                     }
                 }
-
-                
             }
 
             let mut new_types = Vec::with_capacity(current_types.len());

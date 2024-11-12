@@ -436,9 +436,26 @@ impl NativeType {
 
     #[inline]
     pub fn is_timestamp(&self) -> bool {
-        matches!(
-            self,
-            NativeType::Timestamp(_, _)
-        )
+        matches!(self, NativeType::Timestamp(_, _))
+    }
+
+    #[inline]
+    pub fn is_date(&self) -> bool {
+        matches!(self, NativeType::Date)
+    }
+
+    #[inline]
+    pub fn is_time(&self) -> bool {
+        matches!(self, NativeType::Time(_))
+    }
+
+    #[inline]
+    pub fn is_interval(&self) -> bool {
+        matches!(self, NativeType::Interval(_))
+    }
+
+    #[inline]
+    pub fn is_duration(&self) -> bool {
+        matches!(self, NativeType::Duration(_))
     }
 }

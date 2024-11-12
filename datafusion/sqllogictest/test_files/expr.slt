@@ -555,7 +555,7 @@ select repeat('-1.2', arrow_cast(3, 'Int32'));
 ----
 -1.2-1.2-1.2
 
-query error DataFusion error: Error during planning: Internal error: Expect Native\(LogicalType\(Native\(Int64\), Int64\)\) but received Float64
+query error DataFusion error: Error during planning: Internal error: Expect TypeSignatureClass::Native\(LogicalType\(Native\(Int64\), Int64\)\) but received Float64
 select repeat('-1.2', 3.2);
 
 query T
@@ -1096,23 +1096,27 @@ SELECT date_part('nanosecond', timestamp '2020-09-08T12:00:12.12345678+00:00')
 ----
 12123456780
 
-query R
+# Second argument should not be string, failed in postgres too.
+query error
 SELECT date_part('second', '2020-09-08T12:00:12.12345678+00:00')
+
+query R
+SELECT date_part('second', timestamp '2020-09-08T12:00:12.12345678+00:00')
 ----
 12.12345678
 
 query R
-SELECT date_part('millisecond', '2020-09-08T12:00:12.12345678+00:00')
+SELECT date_part('millisecond', timestamp '2020-09-08T12:00:12.12345678+00:00')
 ----
 12123.45678
 
 query R
-SELECT date_part('microsecond', '2020-09-08T12:00:12.12345678+00:00')
+SELECT date_part('microsecond', timestamp '2020-09-08T12:00:12.12345678+00:00')
 ----
 12123456.78
 
 query R
-SELECT date_part('nanosecond', '2020-09-08T12:00:12.12345678+00:00')
+SELECT date_part('nanosecond', timestamp '2020-09-08T12:00:12.12345678+00:00')
 ----
 12123456780
 
@@ -1357,13 +1361,17 @@ SELECT date_part('second', arrow_cast('23:32:50.123456789'::time, 'Time64(Nanose
 ----
 50.123456789
 
-query R
+# Second argument should not be string, failed in postgres too
+query error 
 select extract(second from '2024-08-09T12:13:14')
+
+query R
+select extract(second from timestamp '2024-08-09T12:13:14')
 ----
 14
 
 query R
-select extract(seconds from '2024-08-09T12:13:14')
+select extract(seconds from timestamp '2024-08-09T12:13:14')
 ----
 14
 
