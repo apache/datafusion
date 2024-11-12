@@ -5,7 +5,7 @@
 pub struct LogicalPlanNode {
     #[prost(
         oneof = "logical_plan_node::LogicalPlanType",
-        tags = "1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30"
+        tags = "1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32"
     )]
     pub logical_plan_type: ::core::option::Option<logical_plan_node::LogicalPlanType>,
 }
@@ -71,6 +71,10 @@ pub mod logical_plan_node {
         CopyTo(::prost::alloc::boxed::Box<super::CopyToNode>),
         #[prost(message, tag = "30")]
         Unnest(::prost::alloc::boxed::Box<super::UnnestNode>),
+        #[prost(message, tag = "31")]
+        RecursiveQuery(::prost::alloc::boxed::Box<super::RecursiveQueryNode>),
+        #[prost(message, tag = "32")]
+        CteWorkTableScan(super::CteWorkTableScanNode),
     }
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1810,6 +1814,26 @@ pub struct PartitionStats {
     pub num_bytes: i64,
     #[prost(message, repeated, tag = "4")]
     pub column_stats: ::prost::alloc::vec::Vec<super::datafusion_common::ColumnStats>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct RecursiveQueryNode {
+    #[prost(string, tag = "1")]
+    pub name: ::prost::alloc::string::String,
+    #[prost(message, optional, boxed, tag = "2")]
+    pub static_term: ::core::option::Option<::prost::alloc::boxed::Box<LogicalPlanNode>>,
+    #[prost(message, optional, boxed, tag = "3")]
+    pub recursive_term: ::core::option::Option<
+        ::prost::alloc::boxed::Box<LogicalPlanNode>,
+    >,
+    #[prost(bool, tag = "4")]
+    pub is_distinct: bool,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct CteWorkTableScanNode {
+    #[prost(string, tag = "1")]
+    pub name: ::prost::alloc::string::String,
+    #[prost(message, optional, tag = "2")]
+    pub schema: ::core::option::Option<super::datafusion_common::Schema>,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]

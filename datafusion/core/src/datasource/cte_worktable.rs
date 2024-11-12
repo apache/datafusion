@@ -39,8 +39,6 @@ use crate::datasource::{TableProvider, TableType};
 #[derive(Debug)]
 pub struct CteWorkTable {
     /// The name of the CTE work table
-    // WIP, see https://github.com/apache/datafusion/issues/462
-    #[allow(dead_code)]
     name: String,
     /// This schema must be shared across both the static and recursive terms of a recursive query
     table_schema: SchemaRef,
@@ -55,6 +53,16 @@ impl CteWorkTable {
             name: name.to_owned(),
             table_schema,
         }
+    }
+
+    /// The user-provided name of the CTE
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// The schema of the recursive term of the query
+    pub fn schema(&self) -> SchemaRef {
+        Arc::clone(&self.table_schema)
     }
 }
 
