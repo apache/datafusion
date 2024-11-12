@@ -25,9 +25,7 @@ use std::io::BufReader;
 use std::sync::Arc;
 
 use super::write::orchestration::stateless_multipart_put;
-use super::{
-    FileFormat, FileFormatFactory, FileScanConfig, DEFAULT_SCHEMA_INFER_MAX_RECORD,
-};
+use super::{Decoder, DecoderDeserializer, FileFormat, FileFormatFactory, FileScanConfig, DEFAULT_SCHEMA_INFER_MAX_RECORD};
 use crate::datasource::file_format::file_compression_type::FileCompressionType;
 use crate::datasource::file_format::write::BatchSerializer;
 use crate::datasource::physical_plan::FileGroupDisplay;
@@ -44,6 +42,7 @@ use arrow::datatypes::SchemaRef;
 use arrow::json;
 use arrow::json::reader::{infer_json_schema_from_iterator, ValueIter};
 use arrow_array::RecordBatch;
+use arrow_schema::ArrowError;
 use datafusion_common::config::{ConfigField, ConfigFileType, JsonOptions};
 use datafusion_common::file_options::json_writer::JsonWriterOptions;
 use datafusion_common::{not_impl_err, GetExt, DEFAULT_JSON_EXTENSION};
@@ -384,16 +383,53 @@ impl DataSink for JsonSink {
     }
 }
 
+#[derive(Debug)]
+pub(crate) struct JsonDecoder {
+    inner: json::reader::Decoder,
+}
+
+impl JsonDecoder {
+    pub(crate) fn new(decoder: json::reader::Decoder) -> Self {
+        Self { inner: decoder }
+    }
+}
+
+impl Decoder for JsonDecoder {
+    fn decode(&mut self, buf: &[u8]) -> Result<usize, ArrowError> {
+        self.inner.decode(buf)
+    }
+
+    fn flush(&mut self) -> Result<Option<RecordBatch>, ArrowError> {
+        self.inner.flush()
+    }
+
+    fn can_flush_early(&self) -> bool {
+        false
+    }
+}
+
+impl From<json::reader::Decoder> for DecoderDeserializer<JsonDecoder> {
+    fn from(decoder: json::reader::Decoder) -> Self {
+        DecoderDeserializer::new(JsonDecoder::new(decoder))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::test_util::scan_format;
     use super::*;
+    use crate::datasource::file_format::{
+        BatchDeserializer, DecoderDeserializer, DeserializerOutput,
+    };
     use crate::execution::options::NdJsonReadOptions;
     use crate::physical_plan::collect;
     use crate::prelude::{SessionConfig, SessionContext};
     use crate::test::object_store::local_unpartitioned_file;
 
+    use arrow::compute::concat_batches;
+    use arrow::json::ReaderBuilder;
     use arrow::util::pretty;
+    use arrow_schema::{DataType, Field};
     use datafusion_common::cast::as_int64_array;
     use datafusion_common::stats::Precision;
     use datafusion_common::{assert_batches_eq, internal_err};
@@ -611,5 +647,98 @@ mod tests {
         assert_eq!(1, actual_partitions);
 
         Ok(())
+    }
+
+    #[test]
+    fn test_json_deserializer_finish() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("c1", DataType::Int64, true),
+            Field::new("c2", DataType::Int64, true),
+            Field::new("c3", DataType::Int64, true),
+            Field::new("c4", DataType::Int64, true),
+            Field::new("c5", DataType::Int64, true),
+        ]));
+        let mut deserializer = json_deserializer(1, &schema)?;
+
+        deserializer.digest(r#"{ "c1": 1, "c2": 2, "c3": 3, "c4": 4, "c5": 5 }"#.into());
+        deserializer.digest(r#"{ "c1": 6, "c2": 7, "c3": 8, "c4": 9, "c5": 10 }"#.into());
+        deserializer
+            .digest(r#"{ "c1": 11, "c2": 12, "c3": 13, "c4": 14, "c5": 15 }"#.into());
+        deserializer.finish();
+
+        let mut all_batches = RecordBatch::new_empty(schema.clone());
+        for _ in 0..3 {
+            let output = deserializer.next()?;
+            let DeserializerOutput::RecordBatch(batch) = output else {
+                panic!("Expected RecordBatch, got {:?}", output);
+            };
+            all_batches = concat_batches(&schema, &[all_batches, batch])?
+        }
+        assert_eq!(deserializer.next()?, DeserializerOutput::InputExhausted);
+
+        let expected = [
+            "+----+----+----+----+----+",
+            "| c1 | c2 | c3 | c4 | c5 |",
+            "+----+----+----+----+----+",
+            "| 1  | 2  | 3  | 4  | 5  |",
+            "| 6  | 7  | 8  | 9  | 10 |",
+            "| 11 | 12 | 13 | 14 | 15 |",
+            "+----+----+----+----+----+",
+        ];
+
+        assert_batches_eq!(expected, &[all_batches]);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_json_deserializer_no_finish() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("c1", DataType::Int64, true),
+            Field::new("c2", DataType::Int64, true),
+            Field::new("c3", DataType::Int64, true),
+            Field::new("c4", DataType::Int64, true),
+            Field::new("c5", DataType::Int64, true),
+        ]));
+        let mut deserializer = json_deserializer(1, &schema)?;
+
+        deserializer.digest(r#"{ "c1": 1, "c2": 2, "c3": 3, "c4": 4, "c5": 5 }"#.into());
+        deserializer.digest(r#"{ "c1": 6, "c2": 7, "c3": 8, "c4": 9, "c5": 10 }"#.into());
+        deserializer
+            .digest(r#"{ "c1": 11, "c2": 12, "c3": 13, "c4": 14, "c5": 15 }"#.into());
+
+        let mut all_batches = RecordBatch::new_empty(schema.clone());
+        // We get RequiresMoreData after 2 batches because of how json::Decoder works
+        for _ in 0..2 {
+            let output = deserializer.next()?;
+            let DeserializerOutput::RecordBatch(batch) = output else {
+                panic!("Expected RecordBatch, got {:?}", output);
+            };
+            all_batches = concat_batches(&schema, &[all_batches, batch])?
+        }
+        assert_eq!(deserializer.next()?, DeserializerOutput::RequiresMoreData);
+
+        let expected = [
+            "+----+----+----+----+----+",
+            "| c1 | c2 | c3 | c4 | c5 |",
+            "+----+----+----+----+----+",
+            "| 1  | 2  | 3  | 4  | 5  |",
+            "| 6  | 7  | 8  | 9  | 10 |",
+            "+----+----+----+----+----+",
+        ];
+
+        assert_batches_eq!(expected, &[all_batches]);
+
+        Ok(())
+    }
+
+    fn json_deserializer(
+        batch_size: usize,
+        schema: &Arc<Schema>,
+    ) -> Result<impl BatchDeserializer<Bytes>> {
+        let decoder = ReaderBuilder::new(schema.clone())
+            .with_batch_size(batch_size)
+            .build_decoder()?;
+        Ok(DecoderDeserializer::new(JsonDecoder::new(decoder)))
     }
 }
