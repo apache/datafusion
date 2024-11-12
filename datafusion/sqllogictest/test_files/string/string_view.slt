@@ -934,6 +934,14 @@ logical_plan
 01)Projection: to_timestamp(test.column1_utf8view, Utf8("a,b,c,d")) AS c
 02)--TableScan: test projection=[column1_utf8view]
 
+## Ensure no casts for NVL
+query TT
+EXPLAIN SELECT NVL(column1_utf8view, 'a') as c2 FROM test;
+----
+logical_plan
+01)Projection: nvl(test.column1_utf8view, Utf8View("a")) AS c2
+02)--TableScan: test projection=[column1_utf8view]
+
 ## Ensure no casts for binary operators
 # `~` operator (regex match)
 query TT
