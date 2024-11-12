@@ -28,7 +28,10 @@ use datafusion_common::{
     Result,
 };
 use datafusion_expr_common::{
-    signature::{ArrayFunctionSignature, FIXED_SIZE_LIST_WILDCARD, TIMEZONE_WILDCARD},
+    signature::{
+        ArrayFunctionSignature, TypeSignatureClass, FIXED_SIZE_LIST_WILDCARD,
+        TIMEZONE_WILDCARD,
+    },
     type_coercion::binary::string_coercion,
 };
 use std::sync::Arc;
@@ -521,35 +524,44 @@ fn get_valid_types(
             // Make sure the corresponding test is covered
             // If this function becomes COMPLEX, create another new signature!
             fn can_coerce_to(
-                logical_type: &NativeType,
-                target_type: &NativeType,
-            ) -> bool {
-                if logical_type == target_type {
-                    return true;
+                current_type: &DataType,
+                target_type_class: &TypeSignatureClass,
+            ) -> Result<DataType> {
+                let logical_type: NativeType = current_type.into();
+
+                match target_type_class {
+                    TypeSignatureClass::Native(native_type) => {
+                        let target_type = native_type.native();
+                        if &logical_type == target_type {
+                            return target_type.default_cast_for(current_type);
+                        }
+
+                        if logical_type == NativeType::Null {
+                            return target_type.default_cast_for(current_type);
+                        }
+
+                        if target_type.is_integer() && logical_type.is_integer() {
+                            return target_type.default_cast_for(current_type);
+                        }
+                    }
+                    _ => {
+                        todo!("")
+                    }
                 }
 
-                if logical_type == &NativeType::Null {
-                    return true;
-                }
-
-                if target_type.is_integer() && logical_type.is_integer() {
-                    return true;
-                }
-
-                false
+                internal_err!(
+                    "Expect {} but received {}",
+                    target_type_class,
+                    current_type
+                )
             }
 
             let mut new_types = Vec::with_capacity(current_types.len());
-            for (current_type, target_type) in
+            for (current_type, target_type_class) in
                 current_types.iter().zip(target_types.iter())
             {
-                let logical_type: NativeType = current_type.into();
-                let target_logical_type = target_type.native();
-                if can_coerce_to(&logical_type, target_logical_type) {
-                    let target_type =
-                        target_logical_type.default_cast_for(current_type)?;
-                    new_types.push(target_type);
-                }
+                let target_type = can_coerce_to(current_type, target_type_class)?;
+                new_types.push(target_type);
             }
 
             vec![new_types]

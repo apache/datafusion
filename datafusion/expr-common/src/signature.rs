@@ -18,6 +18,8 @@
 //! Signature module contains foundational types that are used to represent signatures, types,
 //! and return types of functions in DataFusion.
 
+use std::fmt::Display;
+
 use crate::type_coercion::aggregates::{NUMERICS, STRINGS};
 use arrow::datatypes::DataType;
 use datafusion_common::types::{LogicalTypeRef, NativeType};
@@ -112,7 +114,7 @@ pub enum TypeSignature {
     /// For example, `Coercible(vec![logical_float64()])` accepts
     /// arguments like `vec![DataType::Int32]` or `vec![DataType::Float32]`
     /// since i32 and f32 can be casted to f64
-    Coercible(Vec<LogicalTypeRef>),
+    Coercible(Vec<TypeSignatureClass>),
     /// Fixed number of arguments of arbitrary types
     /// If a function takes 0 argument, its `TypeSignature` should be `Any(0)`
     Any(usize),
@@ -135,6 +137,22 @@ pub enum TypeSignature {
     /// Null is considerd as `Utf8` by default
     /// Dictionary with string value type is also handled.
     String(usize),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
+pub enum TypeSignatureClass {
+    Timestamp,
+    // TODO:
+    // Interval
+    // Numeric
+    // Integer
+    Native(LogicalTypeRef),
+}
+
+impl Display for TypeSignatureClass {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{self:?}")
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
@@ -163,7 +181,7 @@ pub enum ArrayFunctionSignature {
     MapArray,
 }
 
-impl std::fmt::Display for ArrayFunctionSignature {
+impl Display for ArrayFunctionSignature {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ArrayFunctionSignature::ArrayAndElement => {
@@ -232,7 +250,7 @@ impl TypeSignature {
     }
 
     /// Helper function to join types with specified delimiter.
-    pub fn join_types<T: std::fmt::Display>(types: &[T], delimiter: &str) -> String {
+    pub fn join_types<T: Display>(types: &[T], delimiter: &str) -> String {
         types
             .iter()
             .map(|t| t.to_string())
@@ -267,7 +285,10 @@ impl TypeSignature {
                 .collect(),
             TypeSignature::Coercible(types) => types
                 .iter()
-                .map(|logical_type| get_data_types(logical_type.native()))
+                .map(|logical_type| match logical_type {
+                    TypeSignatureClass::Native(l) => get_data_types(l.native()),
+                    tsc => todo!("{tsc} not supported yet"),
+                })
                 .multi_cartesian_product()
                 .collect(),
             TypeSignature::Variadic(types) => types
@@ -400,7 +421,10 @@ impl Signature {
         }
     }
     /// Target coerce types in order
-    pub fn coercible(target_types: Vec<LogicalTypeRef>, volatility: Volatility) -> Self {
+    pub fn coercible(
+        target_types: Vec<TypeSignatureClass>,
+        volatility: Volatility,
+    ) -> Self {
         Self {
             type_signature: TypeSignature::Coercible(target_types),
             volatility,
@@ -580,8 +604,10 @@ mod tests {
             ]
         );
 
-        let type_signature =
-            TypeSignature::Coercible(vec![logical_string(), logical_int64()]);
+        let type_signature = TypeSignature::Coercible(vec![
+            TypeSignatureClass::Native(logical_string()),
+            TypeSignatureClass::Native(logical_int64()),
+        ]);
         let possible_types = type_signature.get_possible_types();
         assert_eq!(
             possible_types,
