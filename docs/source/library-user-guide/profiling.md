@@ -21,7 +21,7 @@
 
 The section contains examples how to perform CPU profiling for Apache DataFusion on different operating systems.
 
-### Building a flamegraph
+## Building a flamegraph
 
 [Video: how to CPU profile DataFusion with a Flamegraph](https://youtu.be/2z11xtYw_xs)
 
@@ -34,7 +34,7 @@ in images such as this:
 
 ## MacOS
 
-#### Step 1: Install the flamegraph Tool
+### Step 1: Install the flamegraph Tool
 
 To install flamegraph, run:
 
@@ -42,11 +42,11 @@ To install flamegraph, run:
 cargo install flamegraph
 ```
 
-#### Step 2: Prepare Your Environment
+### Step 2: Prepare Your Environment
 
 Ensure that you're in the directory containing the necessary data files for your DataFusion query. The flamegraph tool will profile the execution of your query against this data.
 
-#### Step 3: Running the Flamegraph Tool
+### Step 3: Running the Flamegraph Tool
 
 To generate a flamegraph, you'll need to use the -- separator to pass arguments to the binary you're profiling. For datafusion-cli, you need to make sure to run the command with sudo permissions (especially on macOS, where DTrace requires elevated privileges).
 

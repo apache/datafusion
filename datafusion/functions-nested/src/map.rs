@@ -261,33 +261,34 @@ fn get_map_doc() -> &'static Documentation {
                         "map(key, value)\nmap(key: value)\nmake_map(['key1', 'key2'], ['value1', 'value2'])"
                     )
                     .with_sql_example(
-                        r#"```sql
-        -- Using map function
-        SELECT MAP('type', 'test');
-        ----
-        {type: test}
-        
-        SELECT MAP(['POST', 'HEAD', 'PATCH'], [41, 33, null]);
-        ----
-        {POST: 41, HEAD: 33, PATCH: }
-        
-        SELECT MAP([[1,2], [3,4]], ['a', 'b']);
-        ----
-        {[1, 2]: a, [3, 4]: b}
-        
-        SELECT MAP { 'a': 1, 'b': 2 };
-        ----
-        {a: 1, b: 2}
-        
-        -- Using make_map function
-        SELECT MAKE_MAP(['POST', 'HEAD'], [41, 33]);
-        ----
-        {POST: 41, HEAD: 33}
-        
-        SELECT MAKE_MAP(['key1', 'key2'], ['value1', null]);
-        ----
-        {key1: value1, key2: }
-        ```"#
+                        r#"
+```sql
+-- Using map function
+SELECT MAP('type', 'test');
+----
+{type: test}
+
+SELECT MAP(['POST', 'HEAD', 'PATCH'], [41, 33, null]);
+----
+{POST: 41, HEAD: 33, PATCH: }
+
+SELECT MAP([[1,2], [3,4]], ['a', 'b']);
+----
+{[1, 2]: a, [3, 4]: b}
+
+SELECT MAP { 'a': 1, 'b': 2 };
+----
+{a: 1, b: 2}
+
+-- Using make_map function
+SELECT MAKE_MAP(['POST', 'HEAD'], [41, 33]);
+----
+{POST: 41, HEAD: 33}
+
+SELECT MAKE_MAP(['key1', 'key2'], ['value1', null]);
+----
+{key1: value1, key2: }
+```"#,
                     )
                     .with_argument(
                         "key",

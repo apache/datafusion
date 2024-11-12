@@ -20,6 +20,7 @@ use arrow_schema::TimeUnit;
 use datafusion_expr::planner::{
     PlannerResult, RawBinaryExpr, RawDictionaryExpr, RawFieldAccessExpr,
 };
+use recursive::recursive;
 use sqlparser::ast::{
     BinaryOperator, CastFormat, CastKind, DataType as SQLDataType, DictionaryField,
     Expr as SQLExpr, MapEntry, StructField, Subscript, TrimWhereField, Value,
@@ -140,7 +141,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let mut expr = self.sql_expr_to_logical_expr(sql, schema, planner_context)?;
         expr = self.rewrite_partial_qualifier(expr, schema);
         self.validate_schema_satisfies_exprs(schema, &[expr.clone()])?;
-        let expr = expr.infer_placeholder_types(schema)?;
+        let (expr, _) = expr.infer_placeholder_types(schema)?;
         Ok(expr)
     }
 
@@ -168,16 +169,18 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
     /// Internal implementation. Use
     /// [`Self::sql_expr_to_logical_expr`] to plan exprs.
+    #[recursive]
     fn sql_expr_to_logical_expr_internal(
         &self,
         sql: SQLExpr,
         schema: &DFSchema,
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
-        // NOTE: This function is called recusively, so each match arm body should be as
-        //       small as possible to avoid stack overflows in debug builds. Follow the
-        //       common pattern of extracting into a separate function for non-trivial
-        //       arms. See https://github.com/apache/datafusion/pull/12384 for more context.
+        // NOTE: This function is called recursively, so each match arm body should be as
+        //       small as possible to decrease stack requirement.
+        //       Follow the common pattern of extracting into a separate function for
+        //       non-trivial arms. See https://github.com/apache/datafusion/pull/12384 for
+        //       more context.
         match sql {
             SQLExpr::Value(value) => {
                 self.parse_value(value, planner_context.prepare_param_data_types())
