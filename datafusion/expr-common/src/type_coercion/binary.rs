@@ -330,8 +330,7 @@ impl From<&DataType> for TypeCategory {
                     return TypeCategory::Array;
                 }
 
-                // String literal is possible to cast to many other types like numeric or datetime,
-                // therefore, it is categorized as a unknown type
+                // It is categorized as unknown type because the type will be resolved later on
                 if matches!(
                     data_type,
                     DataType::Utf8
