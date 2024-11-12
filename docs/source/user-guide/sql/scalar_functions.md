@@ -3089,18 +3089,18 @@ array_prepend(element, array)
 
 #### Arguments
 
-- **element**: Element to append to the array.
+- **element**: Element to prepend to the array.
 - **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
 
 #### Example
 
 ```sql
 > select array_prepend(1, [2, 3, 4]);
-+--------------------------------------+
-| array_prepend(Int64(1), List([2,3,4])) |
-+--------------------------------------+
-| [1, 2, 3, 4]                         |
-+--------------------------------------+
++---------------------------------------+
+| array_prepend(Int64(1),List([2,3,4])) |
++---------------------------------------+
+| [1, 2, 3, 4]                          |
++---------------------------------------+
 ```
 
 #### Aliases
