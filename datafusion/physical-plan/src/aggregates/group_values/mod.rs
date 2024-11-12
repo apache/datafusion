@@ -34,7 +34,7 @@ use row::GroupValuesRows;
 
 mod bytes;
 mod bytes_view;
-use bytes::GroupValuesByes;
+use bytes::GroupValuesBytes;
 use datafusion_physical_expr::binary_map::OutputType;
 
 use crate::aggregates::order::GroupOrdering;
@@ -127,19 +127,19 @@ pub fn new_group_values(
 
         match d {
             DataType::Utf8 => {
-                return Ok(Box::new(GroupValuesByes::<i32>::new(OutputType::Utf8)));
+                return Ok(Box::new(GroupValuesBytes::<i32>::new(OutputType::Utf8)));
             }
             DataType::LargeUtf8 => {
-                return Ok(Box::new(GroupValuesByes::<i64>::new(OutputType::Utf8)));
+                return Ok(Box::new(GroupValuesBytes::<i64>::new(OutputType::Utf8)));
             }
             DataType::Utf8View => {
                 return Ok(Box::new(GroupValuesBytesView::new(OutputType::Utf8View)));
             }
             DataType::Binary => {
-                return Ok(Box::new(GroupValuesByes::<i32>::new(OutputType::Binary)));
+                return Ok(Box::new(GroupValuesBytes::<i32>::new(OutputType::Binary)));
             }
             DataType::LargeBinary => {
-                return Ok(Box::new(GroupValuesByes::<i64>::new(OutputType::Binary)));
+                return Ok(Box::new(GroupValuesBytes::<i64>::new(OutputType::Binary)));
             }
             DataType::BinaryView => {
                 return Ok(Box::new(GroupValuesBytesView::new(OutputType::BinaryView)));

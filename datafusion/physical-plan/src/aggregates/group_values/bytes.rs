@@ -25,14 +25,14 @@ use std::mem::size_of;
 ///
 /// This specialization is significantly faster than using the more general
 /// purpose `Row`s format
-pub struct GroupValuesByes<O: OffsetSizeTrait> {
+pub struct GroupValuesBytes<O: OffsetSizeTrait> {
     /// Map string/binary values to group index
     map: ArrowBytesMap<O, usize>,
     /// The total number of groups so far (used to assign group_index)
     num_groups: usize,
 }
 
-impl<O: OffsetSizeTrait> GroupValuesByes<O> {
+impl<O: OffsetSizeTrait> GroupValuesBytes<O> {
     pub fn new(output_type: OutputType) -> Self {
         Self {
             map: ArrowBytesMap::new(output_type),
@@ -41,7 +41,7 @@ impl<O: OffsetSizeTrait> GroupValuesByes<O> {
     }
 }
 
-impl<O: OffsetSizeTrait> GroupValues for GroupValuesByes<O> {
+impl<O: OffsetSizeTrait> GroupValues for GroupValuesBytes<O> {
     fn intern(
         &mut self,
         cols: &[ArrayRef],
