@@ -841,7 +841,7 @@ pub fn get_wider_type(lhs: &DataType, rhs: &DataType) -> Result<DataType> {
         // Right Float is larger than left Float.
         (Float16, Float32 | Float64) | (Float32, Float64) |
         // Right String is larger than left String.
-        (Utf8, LargeUtf8) |
+        (Utf8 | Utf8View, LargeUtf8) |
         // Any right type is wider than a left hand side Null.
         (Null, _) => rhs.clone(),
         // Left UInt is larger than right UInt.
@@ -851,7 +851,7 @@ pub fn get_wider_type(lhs: &DataType, rhs: &DataType) -> Result<DataType> {
         // Left Float is larger than right Float.
         (Float32 | Float64, Float16) | (Float64, Float32) |
         // Left String is larger than right String.
-        (LargeUtf8, Utf8) |
+        (LargeUtf8, Utf8 | Utf8View) |
         // Any left type is wider than a right hand side Null.
         (_, Null) => lhs.clone(),
         (List(lhs_field), List(rhs_field)) => {
@@ -1172,16 +1172,22 @@ fn binary_to_string_coercion(
     match (lhs_type, rhs_type) {
         (Binary, Utf8) => Some(Utf8),
         (Binary, LargeUtf8) => Some(LargeUtf8),
+        (Binary, Utf8View) => Some(Utf8View),
         (BinaryView, Utf8) => Some(Utf8View),
         (BinaryView, LargeUtf8) => Some(LargeUtf8),
+        (BinaryView, Utf8View) => Some(Utf8View),
         (LargeBinary, Utf8) => Some(LargeUtf8),
         (LargeBinary, LargeUtf8) => Some(LargeUtf8),
+        (LargeBinary, Utf8View) => Some(Utf8View),
         (Utf8, Binary) => Some(Utf8),
         (Utf8, LargeBinary) => Some(LargeUtf8),
         (Utf8, BinaryView) => Some(Utf8View),
         (LargeUtf8, Binary) => Some(LargeUtf8),
         (LargeUtf8, LargeBinary) => Some(LargeUtf8),
         (LargeUtf8, BinaryView) => Some(LargeUtf8),
+        (Utf8View, Binary) => Some(Utf8),
+        (Utf8View, LargeBinary) => Some(LargeUtf8),
+        (Utf8View, BinaryView) => Some(Utf8View),
         _ => None,
     }
 }
