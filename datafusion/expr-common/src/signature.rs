@@ -21,9 +21,7 @@
 use std::fmt::Display;
 
 use crate::type_coercion::aggregates::{NUMERICS, STRINGS};
-use arrow::
-    datatypes::{DataType, IntervalUnit, TimeUnit}
-;
+use arrow::datatypes::{DataType, IntervalUnit, TimeUnit};
 use datafusion_common::types::{LogicalTypeRef, NativeType};
 use itertools::Itertools;
 
