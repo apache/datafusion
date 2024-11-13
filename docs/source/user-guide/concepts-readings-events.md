@@ -17,9 +17,9 @@
   under the License.
 -->
 
-# Content Library
+# Concepts, Readings, Events
 
-## 🧭Foundational Content
+## 🧭Background Concepts
 
 - **2024-06-13**: 2024 ACM SIGMOD International Conference on Management of Data: Apache Arrow DataFusion: A Fast, Embeddable, Modular Analytic Query Engine [Paper](https://dl.acm.org/doi/10.1145/3626246.3653368) [Talk](https://youtu.be/-DpKcPfnNms) [Slides](https://docs.google.com/presentation/d/1gqcxSNLGVwaqN0_yJtCbNm19-w5pqPuktII5_EDA6_k/edit#slide=id.p), [Recording](https://youtu.be/-DpKcPfnNms), [Paper](https://dl.acm.org/doi/10.1145/3626246.3653368)
 

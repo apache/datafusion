@@ -102,8 +102,8 @@ To get started, see
    :caption: User Guide
 
    user-guide/introduction
-   user-guide/content-library
    user-guide/example-usage
+   user-guide/concepts-readings-events
    user-guide/crate-configuration
    user-guide/cli/index
    user-guide/dataframe
