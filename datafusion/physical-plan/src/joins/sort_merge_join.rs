@@ -1586,7 +1586,7 @@ impl SortMergeJoinStream {
             } else if matches!(self.join_type, JoinType::LeftSemi | JoinType::LeftAnti) {
                 vec![]
             } else if let Some(buffered_idx) = chunk.buffered_batch_idx {
-                fetch_left_columns_by_idxs(
+                fetch_right_columns_by_idxs(
                     &self.buffered_data,
                     buffered_idx,
                     &right_indices,
@@ -1609,7 +1609,7 @@ impl SortMergeJoinStream {
                         self.join_type,
                         JoinType::LeftSemi | JoinType::LeftAnti | JoinType::LeftMark
                     ) {
-                        let right_cols = fetch_left_columns_by_idxs(
+                        let right_cols = fetch_right_columns_by_idxs(
                             &self.buffered_data,
                             chunk.buffered_batch_idx.unwrap(),
                             &right_indices,
@@ -1620,7 +1620,7 @@ impl SortMergeJoinStream {
                         get_filter_column(&self.filter, &left_columns, &right_columns)
                     }
                 } else {
-                    get_filter_column(&self.filter, &left_columns, &right_columns)
+                    get_filter_column(&self.filter, &right_columns, &left_columns)
                 }
             } else {
                 // This chunk is totally for null joined rows (outer join), we don't need to apply join filter.
@@ -1978,7 +1978,7 @@ fn produce_buffered_null_batch(
 
     // Take buffered (right) columns
     let right_columns =
-        fetch_left_columns_from_batch_by_idxs(buffered_batch, buffered_indices)?;
+        fetch_right_columns_from_batch_by_idxs(buffered_batch, buffered_indices)?;
 
     // Create null streamed (left) columns
     let mut left_columns = streamed_schema
@@ -1997,19 +1997,19 @@ fn produce_buffered_null_batch(
 
 /// Get `buffered_indices` rows for `buffered_data[buffered_batch_idx]` by specific column indices
 #[inline(always)]
-fn fetch_left_columns_by_idxs(
+fn fetch_right_columns_by_idxs(
     buffered_data: &BufferedData,
     buffered_batch_idx: usize,
     buffered_indices: &UInt64Array,
 ) -> Result<Vec<ArrayRef>> {
-    fetch_left_columns_from_batch_by_idxs(
+    fetch_right_columns_from_batch_by_idxs(
         &buffered_data.batches[buffered_batch_idx],
         buffered_indices,
     )
 }
 
 #[inline(always)]
-fn fetch_left_columns_from_batch_by_idxs(
+fn fetch_right_columns_from_batch_by_idxs(
     buffered_batch: &BufferedBatch,
     buffered_indices: &UInt64Array,
 ) -> Result<Vec<ArrayRef>> {
