@@ -650,6 +650,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 name,
                 parameters,
                 using,
+                // has_parentheses specifies the syntax, but the plan is the
+                // same no matter the synax used, so ignore it
+                has_parentheses: _,
             } => {
                 // `USING` is a MySQL-specific syntax and currently not supported.
                 if !using.is_empty() {
@@ -665,7 +668,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     .collect::<Result<Vec<Expr>>>()?;
 
                 Ok(LogicalPlan::Statement(PlanStatement::Execute(Execute {
-                    name: ident_to_string(&name),
+                    name: object_name_to_string(&name),
                     parameters,
                 })))
             }
