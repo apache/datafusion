@@ -337,7 +337,7 @@ fn expression_type_demo() -> Result<()> {
 /// 3. Using `TreeNodeRewriter::rewrite` based on `TypeCoercionRewriter`
 /// 4. Using `TreeNode::transform`
 ///
-/// Note, this list cannot be complete and there may have other methods to apply type coercion to expressions.
+/// Note, this list may not be complete and there may be other methods to apply type coercion to expressions.
 fn type_coercion_demo() -> Result<()> {
     // Creates a record batch for demo.
     let df_schema = DFSchema::from_unqualified_fields(
@@ -358,9 +358,7 @@ fn type_coercion_demo() -> Result<()> {
     let props = ExecutionProps::default();
     let physical_expr =
         datafusion_physical_expr::create_physical_expr(&expr, &df_schema, &props)?;
-    let Err(e) = physical_expr.evaluate(&batch) else {
-        unreachable!()
-    };
+    let e = physical_expr.evaluate(&batch).unwrap_err();
     assert!(e
         .find_root()
         .to_string()
@@ -394,7 +392,7 @@ fn type_coercion_demo() -> Result<()> {
     )?;
     assert!(physical_expr.evaluate(&batch).is_ok());
 
-    // 4. Type coercion with manual transformation.
+    // 4. Apply explict type coercion by manually rewriting the expression
     let coerced_expr = expr
         .transform(|e| {
             // Only type coerces binary expressions.
