@@ -361,7 +361,8 @@ impl TestFull {
 
 // Holds necessary data for these tests to reuse the same parquet file
 struct TestData {
-    // field is present as on drop the file is deleted
+    /// Pointer to temporary file storage. Keeping it in scope to prevent temporary folder
+    /// to be deleted prematurely
     _temp_file: NamedTempFile,
     schema: SchemaRef,
     file_name: String,

@@ -229,7 +229,8 @@ async fn main() -> Result<()> {
 /// `file1.parquet` contains values `0..1000`
 #[derive(Debug)]
 pub struct IndexTableProvider {
-    /// Where the file is stored (cleanup on drop)
+    /// Pointer to temporary file storage. Keeping it in scope to prevent temporary folder
+    /// to be deleted prematurely
     _tmpdir: TempDir,
     /// The file that is being read.
     indexed_file: IndexedFile,
