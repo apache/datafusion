@@ -70,6 +70,7 @@ tokio = { workspace = true }
 [dev-dependencies]
 criterion = { version = "0.5", features = ["async_futures"] }
 datafusion-functions-aggregate = { workspace = true }
+datafusion-functions-window = { workspace = true }
 rstest = { workspace = true }
 rstest_reuse = "0.7.0"
 tokio = { workspace = true, features = [

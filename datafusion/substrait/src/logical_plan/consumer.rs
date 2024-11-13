@@ -30,8 +30,8 @@ use datafusion::execution::FunctionRegistry;
 use datafusion::logical_expr::expr::{Exists, InSubquery, Sort};
 
 use datafusion::logical_expr::{
-    expr::find_df_window_func, Aggregate, BinaryExpr, Case, EmptyRelation, Expr,
-    ExprSchemable, LogicalPlan, Operator, Projection, SortExpr, Values,
+    Aggregate, BinaryExpr, Case, EmptyRelation, Expr, ExprSchemable, LogicalPlan,
+    Operator, Projection, SortExpr, Values,
 };
 use substrait::proto::aggregate_rel::Grouping;
 use substrait::proto::expression::subquery::set_predicate::PredicateOp;
@@ -1683,8 +1683,6 @@ pub async fn from_substrait_rex(
                 Ok(WindowFunctionDefinition::WindowUDF(udwf))
             } else if let Ok(udaf) = ctx.udaf(fn_name) {
                 Ok(WindowFunctionDefinition::AggregateUDF(udaf))
-            } else if let Some(fun) = find_df_window_func(fn_name) {
-                Ok(fun)
             } else {
                 not_impl_err!(
                     "Window function {} is not supported: function anchor = {:?}",

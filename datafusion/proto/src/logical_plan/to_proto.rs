@@ -25,9 +25,9 @@ use datafusion_expr::expr::{
     ScalarFunction, Unnest,
 };
 use datafusion_expr::{
-    logical_plan::PlanType, logical_plan::StringifiedPlan, BuiltInWindowFunction, Expr,
-    JoinConstraint, JoinType, SortExpr, TryCast, WindowFrame, WindowFrameBound,
-    WindowFrameUnits, WindowFunctionDefinition,
+    logical_plan::PlanType, logical_plan::StringifiedPlan, Expr, JoinConstraint,
+    JoinType, SortExpr, TryCast, WindowFrame, WindowFrameBound, WindowFrameUnits,
+    WindowFunctionDefinition,
 };
 
 use crate::protobuf::RecursionUnnestOption;
@@ -121,16 +121,6 @@ impl From<&StringifiedPlan> for protobuf::StringifiedPlan {
                 }),
             },
             plan: stringified_plan.plan.to_string(),
-        }
-    }
-}
-
-impl From<&BuiltInWindowFunction> for protobuf::BuiltInWindowFunction {
-    fn from(value: &BuiltInWindowFunction) -> Self {
-        match value {
-            BuiltInWindowFunction::FirstValue => Self::FirstValue,
-            BuiltInWindowFunction::LastValue => Self::LastValue,
-            BuiltInWindowFunction::NthValue => Self::NthValue,
         }
     }
 }
@@ -316,12 +306,7 @@ pub fn serialize_expr(
             null_treatment: _,
         }) => {
             let (window_function, fun_definition) = match fun {
-                WindowFunctionDefinition::BuiltInWindowFunction(fun) => (
-                    protobuf::window_expr_node::WindowFunction::BuiltInFunction(
-                        protobuf::BuiltInWindowFunction::from(fun).into(),
-                    ),
-                    None,
-                ),
+                WindowFunctionDefinition::BuiltInWindowFunction(_fun) => unreachable!(),
                 WindowFunctionDefinition::AggregateUDF(aggr_udf) => {
                     let mut buf = Vec::new();
                     let _ = codec.try_encode_udaf(aggr_udf, &mut buf);
