@@ -41,13 +41,14 @@ use datafusion_sql::{
     planner::{ParserOptions, SqlToRel},
 };
 
-use crate::common::MockSessionState;
+use crate::common::{CustomExprPlanner, CustomTypePlanner, MockSessionState};
 use datafusion_functions::core::planner::CoreFunctionPlanner;
 use datafusion_functions_aggregate::{
     approx_median::approx_median_udaf, count::count_udaf, min_max::max_udaf,
     min_max::min_udaf,
 };
 use datafusion_functions_aggregate::{average::avg_udaf, grouping::grouping_udaf};
+use datafusion_functions_nested::make_array::make_array_udf;
 use datafusion_functions_window::rank::rank_udwf;
 use rstest::rstest;
 use sqlparser::dialect::{Dialect, GenericDialect, HiveDialect, MySqlDialect};
@@ -4496,4 +4497,57 @@ fn test_no_functions_registered() {
         err.unwrap_err().to_string(),
         "Internal error: No functions registered with this context."
     );
+}
+
+#[test]
+fn test_custom_type_plan() -> Result<()> {
+    let sql = "SELECT DATETIME '2001-01-01 18:00:00'";
+
+    // test the default behavior
+    let options = ParserOptions::default();
+    let dialect = &GenericDialect {};
+    let state = MockSessionState::default();
+    let context = MockContextProvider { state };
+    let planner = SqlToRel::new_with_options(&context, options);
+    let result = DFParser::parse_sql_with_dialect(sql, dialect);
+    let mut ast = result.unwrap();
+    let err = planner.statement_to_plan(ast.pop_front().unwrap());
+    assert_contains!(
+        err.unwrap_err().to_string(),
+        "This feature is not implemented: Unsupported SQL type Datetime(None)"
+    );
+
+    fn plan_sql(sql: &str) -> LogicalPlan {
+        let options = ParserOptions::default();
+        let dialect = &GenericDialect {};
+        let state = MockSessionState::default()
+            .with_scalar_function(make_array_udf())
+            .with_expr_planner(Arc::new(CustomExprPlanner {}))
+            .with_type_planner(Arc::new(CustomTypePlanner {}));
+        let context = MockContextProvider { state };
+        let planner = SqlToRel::new_with_options(&context, options);
+        let result = DFParser::parse_sql_with_dialect(sql, dialect);
+        let mut ast = result.unwrap();
+        planner.statement_to_plan(ast.pop_front().unwrap()).unwrap()
+    }
+
+    let plan = plan_sql(sql);
+    let expected =
+        "Projection: CAST(Utf8(\"2001-01-01 18:00:00\") AS Timestamp(Nanosecond, None))\
+    \n  EmptyRelation";
+    assert_eq!(plan.to_string(), expected);
+
+    let plan = plan_sql("SELECT CAST(TIMESTAMP '2001-01-01 18:00:00' AS DATETIME)");
+    let expected = "Projection: CAST(CAST(Utf8(\"2001-01-01 18:00:00\") AS Timestamp(Nanosecond, None)) AS Timestamp(Nanosecond, None))\
+    \n  EmptyRelation";
+    assert_eq!(plan.to_string(), expected);
+
+    let plan = plan_sql(
+        "SELECT ARRAY[DATETIME '2001-01-01 18:00:00', DATETIME '2001-01-02 18:00:00']",
+    );
+    let expected = "Projection: make_array(CAST(Utf8(\"2001-01-01 18:00:00\") AS Timestamp(Nanosecond, None)), CAST(Utf8(\"2001-01-02 18:00:00\") AS Timestamp(Nanosecond, None)))\
+    \n  EmptyRelation";
+    assert_eq!(plan.to_string(), expected);
+
+    Ok(())
 }
