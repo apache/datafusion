@@ -49,6 +49,7 @@ use datafusion::functions_aggregate::expr_fn::{
 };
 use datafusion::functions_aggregate::min_max::max_udaf;
 use datafusion::functions_nested::map::map;
+use datafusion::functions_window;
 use datafusion::functions_window::expr_fn::{
     cume_dist, dense_rank, lag, lead, ntile, percent_rank, rank, row_number,
 };
@@ -912,6 +913,9 @@ async fn roundtrip_expr_api() -> Result<()> {
         count_distinct(lit(1)),
         first_value(lit(1), None),
         first_value(lit(1), Some(vec![lit(2).sort(true, true)])),
+        functions_window::nth_value::first_value(lit(1)),
+        functions_window::nth_value::last_value(lit(1)),
+        functions_window::nth_value::nth_value(lit(1), 1),
         avg(lit(1.5)),
         covar_samp(lit(1.5), lit(2.2)),
         covar_pop(lit(1.5), lit(2.2)),

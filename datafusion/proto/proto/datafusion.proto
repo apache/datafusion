@@ -517,9 +517,9 @@ enum BuiltInWindowFunction {
   //  NTILE = 5;
   // LAG = 6;
   // LEAD = 7;
-  FIRST_VALUE = 8;
-  LAST_VALUE = 9;
-  NTH_VALUE = 10;
+  // FIRST_VALUE = 8;
+  // LAST_VALUE = 9;
+  // NTH_VALUE = 10;
 }
 
 message WindowExprNode {
