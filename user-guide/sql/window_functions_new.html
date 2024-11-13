@@ -587,6 +587,22 @@
   </a>
   <ul class="nav section-nav flex-column">
    <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#first-value">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       first_value
+      </span>
+     </code>
+    </a>
+    <ul class="nav section-nav flex-column">
+     <li class="toc-h4 nav-item toc-entry">
+      <a class="reference internal nav-link" href="#id1">
+       Arguments
+      </a>
+     </li>
+    </ul>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
     <a class="reference internal nav-link" href="#lag">
      <code class="docutils literal notranslate">
       <span class="pre">
@@ -596,7 +612,23 @@
     </a>
     <ul class="nav section-nav flex-column">
      <li class="toc-h4 nav-item toc-entry">
-      <a class="reference internal nav-link" href="#id1">
+      <a class="reference internal nav-link" href="#id2">
+       Arguments
+      </a>
+     </li>
+    </ul>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#last-value">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       last_value
+      </span>
+     </code>
+    </a>
+    <ul class="nav section-nav flex-column">
+     <li class="toc-h4 nav-item toc-entry">
+      <a class="reference internal nav-link" href="#id3">
        Arguments
       </a>
      </li>
@@ -612,7 +644,23 @@
     </a>
     <ul class="nav section-nav flex-column">
      <li class="toc-h4 nav-item toc-entry">
-      <a class="reference internal nav-link" href="#id2">
+      <a class="reference internal nav-link" href="#id4">
+       Arguments
+      </a>
+     </li>
+    </ul>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#nth-value">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       nth_value
+      </span>
+     </code>
+    </a>
+    <ul class="nav section-nav flex-column">
+     <li class="toc-h4 nav-item toc-entry">
+      <a class="reference internal nav-link" href="#id5">
        Arguments
       </a>
      </li>
@@ -845,21 +893,50 @@ Instead, the rows retain their separate identities. Behind the scenes, the windo
 <section id="analytical-functions">
 <h2>Analytical Functions<a class="headerlink" href="#analytical-functions" title="Link to this heading">¶</a></h2>
 <ul class="simple">
+<li><p><a class="reference internal" href="#first-value">first_value</a></p></li>
 <li><p><a class="reference internal" href="#lag">lag</a></p></li>
+<li><p><a class="reference internal" href="#last-value">last_value</a></p></li>
 <li><p><a class="reference internal" href="#lead">lead</a></p></li>
+<li><p><a class="reference internal" href="#nth-value">nth_value</a></p></li>
 </ul>
-<section id="lag">
-<h3><code class="docutils literal notranslate"><span class="pre">lag</span></code><a class="headerlink" href="#lag" title="Link to this heading">¶</a></h3>
-<p>Returns value evaluated at the row that is offset rows before the current row within the partition; if there is no such row, instead return default (which must be of the same type as value).</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">lag</span><span class="p">(</span><span class="n">expression</span><span class="p">,</span> <span class="n">offset</span><span class="p">,</span> <span class="n">default</span><span class="p">)</span>
+<section id="first-value">
+<h3><code class="docutils literal notranslate"><span class="pre">first_value</span></code><a class="headerlink" href="#first-value" title="Link to this heading">¶</a></h3>
+<p>Returns value evaluated at the row that is the first row of the window frame.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">first_value</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id1">
 <h4>Arguments<a class="headerlink" href="#id1" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>expression</strong>: Expression to operate on</p></li>
+</ul>
+</section>
+</section>
+<section id="lag">
+<h3><code class="docutils literal notranslate"><span class="pre">lag</span></code><a class="headerlink" href="#lag" title="Link to this heading">¶</a></h3>
+<p>Returns value evaluated at the row that is offset rows before the current row within the partition; if there is no such row, instead return default (which must be of the same type as value).</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">lag</span><span class="p">(</span><span class="n">expression</span><span class="p">,</span> <span class="n">offset</span><span class="p">,</span> <span class="n">default</span><span class="p">)</span>
+</pre></div>
+</div>
+<section id="id2">
+<h4>Arguments<a class="headerlink" href="#id2" title="Link to this heading">¶</a></h4>
+<ul class="simple">
+<li><p><strong>expression</strong>: Expression to operate on</p></li>
 <li><p><strong>offset</strong>: Integer. Specifies how many rows back the value of expression should be retrieved. Defaults to 1.</p></li>
 <li><p><strong>default</strong>: The default value if the offset is not within the partition. Must be of the same type as expression.</p></li>
+</ul>
+</section>
+</section>
+<section id="last-value">
+<h3><code class="docutils literal notranslate"><span class="pre">last_value</span></code><a class="headerlink" href="#last-value" title="Link to this heading">¶</a></h3>
+<p>Returns value evaluated at the row that is the last row of the window frame.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">last_value</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
+</pre></div>
+</div>
+<section id="id3">
+<h4>Arguments<a class="headerlink" href="#id3" title="Link to this heading">¶</a></h4>
+<ul class="simple">
+<li><p><strong>expression</strong>: Expression to operate on</p></li>
 </ul>
 </section>
 </section>
@@ -869,12 +946,26 @@ Instead, the rows retain their separate identities. Behind the scenes, the windo
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">lead</span><span class="p">(</span><span class="n">expression</span><span class="p">,</span> <span class="n">offset</span><span class="p">,</span> <span class="n">default</span><span class="p">)</span>
 </pre></div>
 </div>
-<section id="id2">
-<h4>Arguments<a class="headerlink" href="#id2" title="Link to this heading">¶</a></h4>
+<section id="id4">
+<h4>Arguments<a class="headerlink" href="#id4" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>expression</strong>: Expression to operate on</p></li>
 <li><p><strong>offset</strong>: Integer. Specifies how many rows forward the value of expression should be retrieved. Defaults to 1.</p></li>
 <li><p><strong>default</strong>: The default value if the offset is not within the partition. Must be of the same type as expression.</p></li>
+</ul>
+</section>
+</section>
+<section id="nth-value">
+<h3><code class="docutils literal notranslate"><span class="pre">nth_value</span></code><a class="headerlink" href="#nth-value" title="Link to this heading">¶</a></h3>
+<p>Returns value evaluated at the row that is the nth row of the window frame (counting from 1); null if no such row.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">nth_value</span><span class="p">(</span><span class="n">expression</span><span class="p">,</span> <span class="n">n</span><span class="p">)</span>
+</pre></div>
+</div>
+<section id="id5">
+<h4>Arguments<a class="headerlink" href="#id5" title="Link to this heading">¶</a></h4>
+<ul class="simple">
+<li><p><strong>expression</strong>: The name the column of which nth value to retrieve</p></li>
+<li><p><strong>n</strong>: Integer. Specifies the n in nth</p></li>
 </ul>
 </section>
 </section>

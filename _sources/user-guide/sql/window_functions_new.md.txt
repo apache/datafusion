@@ -218,8 +218,23 @@ row_number()
 
 ## Analytical Functions
 
+- [first_value](#first_value)
 - [lag](#lag)
+- [last_value](#last_value)
 - [lead](#lead)
+- [nth_value](#nth_value)
+
+### `first_value`
+
+Returns value evaluated at the row that is the first row of the window frame.
+
+```
+first_value(expression)
+```
+
+#### Arguments
+
+- **expression**: Expression to operate on
 
 ### `lag`
 
@@ -235,6 +250,18 @@ lag(expression, offset, default)
 - **offset**: Integer. Specifies how many rows back the value of expression should be retrieved. Defaults to 1.
 - **default**: The default value if the offset is not within the partition. Must be of the same type as expression.
 
+### `last_value`
+
+Returns value evaluated at the row that is the last row of the window frame.
+
+```
+last_value(expression)
+```
+
+#### Arguments
+
+- **expression**: Expression to operate on
+
 ### `lead`
 
 Returns value evaluated at the row that is offset rows after the current row within the partition; if there is no such row, instead return default (which must be of the same type as value).
@@ -248,3 +275,16 @@ lead(expression, offset, default)
 - **expression**: Expression to operate on
 - **offset**: Integer. Specifies how many rows forward the value of expression should be retrieved. Defaults to 1.
 - **default**: The default value if the offset is not within the partition. Must be of the same type as expression.
+
+### `nth_value`
+
+Returns value evaluated at the row that is the nth row of the window frame (counting from 1); null if no such row.
+
+```
+nth_value(expression, n)
+```
+
+#### Arguments
+
+- **expression**: The name the column of which nth value to retrieve
+- **n**: Integer. Specifies the n in nth
