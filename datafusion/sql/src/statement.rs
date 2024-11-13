@@ -684,8 +684,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 full,
                 db_name,
                 filter,
-                // specifies IN/FROM, both of which DataFusion trets the same
-                // so ignored
+                // SHOW TABLES IN/FROM are equivalent, this field specifies which the user
+                // specified, but it doesn't affect the plan so ignore the field
                 clause: _,
             } => self.show_tables_to_plan(extended, full, db_name, filter),
 
