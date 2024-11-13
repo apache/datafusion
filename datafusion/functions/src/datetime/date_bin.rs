@@ -122,9 +122,7 @@ impl ScalarUDFImpl for DateBinFunc {
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         match &arg_types[1] {
-            Timestamp(Nanosecond, None) | Utf8 | Utf8View | Null => {
-                Ok(Timestamp(Nanosecond, None))
-            }
+            Timestamp(Nanosecond, None) | Utf8 | Null => Ok(Timestamp(Nanosecond, None)),
             Timestamp(Nanosecond, tz_opt) => Ok(Timestamp(Nanosecond, tz_opt.clone())),
             Timestamp(Microsecond, tz_opt) => Ok(Timestamp(Microsecond, tz_opt.clone())),
             Timestamp(Millisecond, tz_opt) => Ok(Timestamp(Millisecond, tz_opt.clone())),

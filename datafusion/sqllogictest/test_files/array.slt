@@ -3973,6 +3973,24 @@ ORDER BY column1;
 3 [bar] bar
 NULL [baz] baz
 
+# test utf8view against 
+statement ok
+CREATE TABLE table_utf8view AS VALUES
+  ('hello'),
+  ('world'),
+  ('jonathan'),
+  ('chen')
+  ;
+
+query T
+SELECT array_to_string(array_agg(column1), ',')
+FROM (
+  SELECT arrow_cast(column1, 'Utf8View') as column1
+  FROM table_utf8view
+);
+----
+hello,world,jonathan,chen
+
 statement ok
 drop table table1;
 
