@@ -42,7 +42,7 @@ impl Default for CurrentTimeFunc {
 impl CurrentTimeFunc {
     pub fn new() -> Self {
         Self {
-            signature: Signature::uniform(0, vec![], Volatility::Stable),
+            signature: Signature::nullary(Volatility::Stable),
         }
     }
 }
