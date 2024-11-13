@@ -853,7 +853,9 @@ impl Unparser<'_> {
         let inner_expr = self.expr_to_sql_inner(expr)?;
         match inner_expr {
             ast::Expr::Value(_) => match data_type {
-                DataType::Dictionary(_, _) | DataType::Binary => Ok(inner_expr),
+                DataType::Dictionary(_, _) | DataType::Binary | DataType::BinaryView => {
+                    Ok(inner_expr)
+                }
                 _ => Ok(ast::Expr::Cast {
                     kind: ast::CastKind::Cast,
                     expr: Box::new(inner_expr),
@@ -2180,6 +2182,13 @@ mod tests {
                     "blah".to_string(),
                 )))),
                 data_type: DataType::Binary,
+            }),
+            "'blah'",
+            Expr::Cast(Cast {
+                expr: Box::new(Expr::Literal(ScalarValue::Utf8(Some(
+                    "blah".to_string(),
+                )))),
+                data_type: DataType::BinaryView,
             }),
             "'blah'",
         )];
