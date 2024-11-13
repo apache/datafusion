@@ -24,17 +24,16 @@ use datafusion_common::Result;
 
 use datafusion_expr::EmitTo;
 
-mod multi_column;
-mod row;
-mod single_column;
-use datafusion_physical_expr::binary_map::OutputType;
-use multi_column::GroupValuesColumn;
-use row::GroupValuesRows;
+mod multi_group_by;
 
-pub(crate) use single_column::primitive::HashValue;
+mod single_group_by;
+use datafusion_physical_expr::binary_map::OutputType;
+use multi_group_by::{row::GroupValuesRows, GroupValuesColumn};
+
+pub(crate) use single_group_by::primitive::HashValue;
 
 use crate::aggregates::{
-    group_values::single_column::{
+    group_values::single_group_by::{
         bytes::GroupValuesByes, bytes_view::GroupValuesBytesView,
         primitive::GroupValuesPrimitive,
     },
@@ -149,7 +148,7 @@ pub fn new_group_values(
         }
     }
 
-    if multi_column::supported_schema(schema.as_ref()) {
+    if multi_group_by::supported_schema(schema.as_ref()) {
         if matches!(group_ordering, GroupOrdering::None) {
             Ok(Box::new(GroupValuesColumn::<false>::try_new(schema)?))
         } else {

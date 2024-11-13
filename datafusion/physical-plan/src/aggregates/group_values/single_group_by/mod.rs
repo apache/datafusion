@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! `GroupValues` implementations for single group by cases
+
 pub(crate) mod bytes;
 pub(crate) mod bytes_view;
 pub(crate) mod primitive;
