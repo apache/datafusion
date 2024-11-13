@@ -26,9 +26,11 @@ use datafusion_expr::EmitTo;
 
 mod multi_group_by;
 
+mod row;
 mod single_group_by;
 use datafusion_physical_expr::binary_map::OutputType;
-use multi_group_by::{row::GroupValuesRows, GroupValuesColumn};
+use multi_group_by::GroupValuesColumn;
+use row::GroupValuesRows;
 
 pub(crate) use single_group_by::primitive::HashValue;
 
@@ -107,6 +109,20 @@ pub trait GroupValues: Send {
 }
 
 /// Return a specialized implementation of [`GroupValues`] for the given schema.
+///
+/// [`GroupValues`] implementations choosing logic:
+///
+///   - If group by single column, and type of this column has
+///     the specific [`GroupValues`] implementation, such implementation
+///     will be chosen.
+///   
+///   - If group by multiple columns, and all column types have the specific
+///     [`GroupColumn`] implementations, [`GroupValuesColumn`] will be chosen.
+///
+///   - Otherwise, the general implementation [`GroupValuesRows`] will be chosen.
+///
+/// [`GroupColumn`]:  crate::aggregates::group_values::multi_group_by::GroupColumn
+///
 pub fn new_group_values(
     schema: SchemaRef,
     group_ordering: &GroupOrdering,

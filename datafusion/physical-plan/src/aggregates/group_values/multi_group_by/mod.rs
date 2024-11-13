@@ -20,7 +20,6 @@
 mod bytes;
 mod bytes_view;
 mod primitive;
-pub mod row;
 
 use std::mem::{self, size_of};
 
