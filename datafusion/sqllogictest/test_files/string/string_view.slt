@@ -954,6 +954,27 @@ logical_plan
 01)Projection: nullif(test.column1_utf8view, test.column1_utf8view) AS c
 02)--TableScan: test projection=[column1_utf8view]
 
+## Ensure no unexpected casts for string_to_array
+query TT
+EXPLAIN SELECT
+  string_to_array(column1_utf8view, ',') AS c
+FROM test;
+----
+logical_plan
+01)Projection: string_to_array(test.column1_utf8view, Utf8View(",")) AS c
+02)--TableScan: test projection=[column1_utf8view]
+
+## Ensure no unexpected casts for array_to_string
+query TT
+EXPLAIN SELECT
+  array_to_string(string_to_array(column1_utf8view, NULL), ',') AS c
+FROM test;
+----
+logical_plan
+01)Projection: array_to_string(string_to_array(test.column1_utf8view, Utf8View(NULL)), Utf8(",")) AS c
+02)--TableScan: test projection=[column1_utf8view]
+
+
 ## Ensure no casts for binary operators
 # `~` operator (regex match)
 query TT
