@@ -180,25 +180,7 @@ impl Unparser<'_> {
                 })
             }
             Expr::Cast(Cast { expr, data_type }) => {
-                let inner_expr = self.expr_to_sql_inner(expr)?;
-                match data_type {
-                    DataType::Dictionary(_, _) => match inner_expr {
-                        // Dictionary values don't need to be cast to other types when rewritten back to sql
-                        ast::Expr::Value(_) => Ok(inner_expr),
-                        _ => Ok(ast::Expr::Cast {
-                            kind: ast::CastKind::Cast,
-                            expr: Box::new(inner_expr),
-                            data_type: self.arrow_dtype_to_ast_dtype(data_type)?,
-                            format: None,
-                        }),
-                    },
-                    _ => Ok(ast::Expr::Cast {
-                        kind: ast::CastKind::Cast,
-                        expr: Box::new(inner_expr),
-                        data_type: self.arrow_dtype_to_ast_dtype(data_type)?,
-                        format: None,
-                    }),
-                }
+                Ok(self.cast_to_sql(expr, data_type)?)
             }
             Expr::Literal(value) => Ok(self.scalar_to_sql(value)?),
             Expr::Alias(Alias { expr, name: _, .. }) => self.expr_to_sql_inner(expr),
@@ -863,6 +845,29 @@ impl Unparser<'_> {
             data_type: ast::DataType::Time(None, TimezoneInfo::None),
             format: None,
         })
+    }
+
+    // Explicit type cast on ast::Expr::Value is not needed by underlying engine for certain types
+    // For example: CAST(Utf8("binary_value") AS Binary) and  CAST(Utf8("dictionary_value") AS Dictionary)
+    fn cast_to_sql(&self, expr: &Box<Expr>, data_type: &DataType) -> Result<ast::Expr> {
+        let inner_expr = self.expr_to_sql_inner(expr)?;
+        match inner_expr {
+            ast::Expr::Value(_) => match data_type {
+                DataType::Dictionary(_, _) | DataType::Binary => Ok(inner_expr),
+                _ => Ok(ast::Expr::Cast {
+                    kind: ast::CastKind::Cast,
+                    expr: Box::new(inner_expr),
+                    data_type: self.arrow_dtype_to_ast_dtype(data_type)?,
+                    format: None,
+                }),
+            },
+            _ => Ok(ast::Expr::Cast {
+                kind: ast::CastKind::Cast,
+                expr: Box::new(inner_expr),
+                data_type: self.arrow_dtype_to_ast_dtype(data_type)?,
+                format: None,
+            }),
+        }
     }
 
     /// DataFusion ScalarValues sometimes require a ast::Expr to construct.
@@ -2156,6 +2161,28 @@ mod tests {
                 "-2.989",
             ),
         ];
+        for (value, expected) in tests {
+            let dialect = CustomDialectBuilder::new().build();
+            let unparser = Unparser::new(&dialect);
+
+            let ast = unparser.expr_to_sql(&value).expect("to be unparsed");
+            let actual = format!("{ast}");
+
+            assert_eq!(actual, expected);
+        }
+    }
+
+    #[test]
+    fn test_cast_value_to_binary_expr() {
+        let tests = [(
+            Expr::Cast(Cast {
+                expr: Box::new(Expr::Literal(ScalarValue::Utf8(Some(
+                    "blah".to_string(),
+                )))),
+                data_type: DataType::Binary,
+            }),
+            "'blah'",
+        )];
         for (value, expected) in tests {
             let dialect = CustomDialectBuilder::new().build();
             let unparser = Unparser::new(&dialect);
