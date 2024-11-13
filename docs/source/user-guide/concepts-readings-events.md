@@ -19,19 +19,19 @@
 
 # Concepts, Readings, Events
 
-## 🧭Background Concepts
+## 🧭 Background Concepts
 
-- **2024-06-13**: 2024 ACM SIGMOD International Conference on Management of Data: Apache Arrow DataFusion: A Fast, Embeddable, Modular Analytic Query Engine [Paper](https://dl.acm.org/doi/10.1145/3626246.3653368) [Talk](https://youtu.be/-DpKcPfnNms) [Slides](https://docs.google.com/presentation/d/1gqcxSNLGVwaqN0_yJtCbNm19-w5pqPuktII5_EDA6_k/edit#slide=id.p), [Recording](https://youtu.be/-DpKcPfnNms), [Paper](https://dl.acm.org/doi/10.1145/3626246.3653368)
+- **2024-06-13**: [2024 ACM SIGMOD International Conference on Management of Data: Apache Arrow DataFusion: A Fast, Embeddable, Modular Analytic Query Engine](https://dl.acm.org/doi/10.1145/3626246.3653368) [Download](http://andrew.nerdnetworks.org/other/SIGMOD-2024-lamb.pdf) [Talk](https://youtu.be/-DpKcPfnNms) [Slides](https://docs.google.com/presentation/d/1gqcxSNLGVwaqN0_yJtCbNm19-w5pqPuktII5_EDA6_k/edit#slide=id.p), [Recording](https://youtu.be/-DpKcPfnNms)
 
-- **2024-06-07**: SIGMOD 2024 Practice: Apache Arrow DataFusion A Fast, Embeddable, Modular Analytic Query Engine [YouTube Video](https://www.youtube.com/watch?v=-DpKcPfnNms&t=5s)
+- **2024-06-07**: [Video: SIGMOD 2024 Practice: Apache Arrow DataFusion A Fast, Embeddable, Modular Analytic Query Engine](https://www.youtube.com/watch?v=-DpKcPfnNms&t=5s)
 
-- **2023-04-05**: DataFusion Architecture Part 3: Physical Plan and Execution [Slides](https://docs.google.com/presentation/d/1cA2WQJ2qg6tx6y4Wf8FH2WVSm9JQ5UgmBWATHdik0hg), [YouTube Video](https://youtu.be/2jkWU3_w6z0)
+- **2023-04-05**: [Video: DataFusion Architecture Part 3: Physical Plan and Execution](https://youtu.be/2jkWU3_w6z0) [Slides](https://docs.google.com/presentation/d/1cA2WQJ2qg6tx6y4Wf8FH2WVSm9JQ5UgmBWATHdik0hg)
 
-- **2023-04-04**: DataFusion Architecture Part 2: Logical Plans and Expressions [Slides](https://docs.google.com/presentation/d/1ypylM3-w60kVDW7Q6S99AHzvlBgciTdjsAfqNP85K30), [YouTube Video](https://youtu.be/EzZTLiSJnhY)
+- **2023-04-04**: [Video: DataFusion Architecture Part 2: Logical Plans and Expressions](https://youtu.be/EzZTLiSJnhY) [Slides](https://docs.google.com/presentation/d/1ypylM3-w60kVDW7Q6S99AHzvlBgciTdjsAfqNP85K30)
+  
+- **2023-03-31**: [Video: DataFusion Architecture Part 1: Query Engines](https://youtu.be/NVKujPxwSBA) [Slides](https://docs.google.com/presentation/d/1D3GDVas-8y0sA4c8EOgdCvEjVND4s2E7I6zfs67Y4j8)
 
-- **2023-03-31**: DataFusion Architecture Part 1: Query Engines [Slides](https://docs.google.com/presentation/d/1D3GDVas-8y0sA4c8EOgdCvEjVND4s2E7I6zfs67Y4j8), [YouTube Videoß](https://youtu.be/NVKujPxwSBA)
-
-- **2020-02-27**: How Query Engines Work [Online Book](https://andygrove.io/2020/02/how-query-engines-work/)
+- **2020-02-27**: [Online Book: How Query Engines Work](https://andygrove.io/2020/02/how-query-engines-work/)
 
 ## ✨ Good Reads
 
@@ -86,7 +86,7 @@ This is a list of DataFusion related blog posts, articles, and other resources. 
 
 - **2023-07-13** [Blog: Probabilistic Data Structures in Streaming: Count-Min Sketch](https://www.synnada.ai/blog/probabilistic-data-structures-in-streaming-count-min-sketch)
 
-- **2023-05-25** Video: D3L2: Discussing Rust, Ballista, Ray SQL, Data Fusion with Andy Grove](https://www.youtube.com/watch?v=NEL6DluUxgw)
+- **2023-05-25** [Video: D3L2: Discussing Rust, Ballista, Ray SQL, Data Fusion with Andy Grove](https://www.youtube.com/watch?v=NEL6DluUxgw)
 
 - **2023-02-20** [Blog: General Purpose Stream Joins via Pruning Symmetric Hash Joins](https://www.synnada.ai/blog/general-purpose-stream-joins-via-pruning-symmetric-hash-joins)
 
@@ -103,7 +103,7 @@ This is a list of DataFusion related blog posts, articles, and other resources. 
 - **2022-06-27** [DataBricks Data+AI Summit: DataFusion and Arrow](https://www.databricks.com/dataaisummit/session/datafusion-and-arrow-supercharge-your-data-analytical-tool-rusty-query-engine) [Slides](https://docs.google.com/presentation/d/1wLORMn23RD_sQ84W2w51s-Xysly5S8F5mGXzaeJ4QWY) | [Recording](https://www.databricks.com/dataaisummit/session/datafusion-and-arrow-supercharge-your-data-analytical-tool-rusty-query-engine)
 
 - **2022-05-23** [Video: Slides The Data Thread 2022: Apache Arrow and DataFusion](https://www.youtube.com/watch?v=rb61lVH2vYc)[Slides](https://docs.google.com/presentation/d/1Tkjfup5z_nsrBWIO7dXscEzC5toTQCXj0IsZeO3endc)
--
+
 - **2021-03-10** [Video: InfluxData Tech Talk: Query Engine Design and Rust-Based DataFusion in Apache Arrow](https://www.youtube.com/watch?v=K6eCAVEk4kU)[Slides](https://www.slideshare.net/influxdata/influxdb-iox-tech-talks-query-engine-design-and-the-rustbased-datafusion-in-apache-arrow-244161934)
 
 ## 📅 Release Notes & Updates
@@ -126,11 +126,9 @@ This is a list of DataFusion related blog posts, articles, and other resources. 
 
 - **2021-11-19** [DataFusion 6.0.0 Release](https://arrow.apache.org/blog/2021/11/19/datafusion-6.0.0/)
 
-- **2021-08-18**  
-  [DataFusion 5.0.0 Release](https://arrow.apache.org/blog/2021/08/18/datafusion-5.0.0/)
+- **2021-08-18** [DataFusion 5.0.0 Release](https://arrow.apache.org/blog/2021/08/18/datafusion-5.0.0/)
 
-- **2019-09-22**  
-  [DataFusion 0.15.0 Release Notes](https://andygrove.io/2019/09/datafusion-0.15.0-release-notes/)
+- **2019-09-22** [DataFusion 0.15.0 Release Notes](https://andygrove.io/2019/09/datafusion-0.15.0-release-notes/)
 
 # 🌎 Community Events
 
