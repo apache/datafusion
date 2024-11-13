@@ -23,7 +23,10 @@ use std::fmt::{self, Debug};
 use std::sync::Arc;
 
 use super::write::orchestration::stateless_multipart_put;
-use super::{Decoder, DecoderDeserializer, FileFormat, FileFormatFactory, DEFAULT_SCHEMA_INFER_MAX_RECORD};
+use super::{
+    Decoder, DecoderDeserializer, FileFormat, FileFormatFactory,
+    DEFAULT_SCHEMA_INFER_MAX_RECORD,
+};
 use crate::datasource::file_format::file_compression_type::FileCompressionType;
 use crate::datasource::file_format::write::BatchSerializer;
 use crate::datasource::physical_plan::{
