@@ -225,6 +225,7 @@ fn baseline_config() -> DatasetGeneratorConfig {
         // low cardinality columns
         ColumnDescr::new("u8_low", DataType::UInt8).with_max_num_distinct(10),
         ColumnDescr::new("utf8_low", DataType::Utf8).with_max_num_distinct(10),
+        ColumnDescr::new("bool", DataType::Boolean),
         ColumnDescr::new("binary", DataType::Binary),
         ColumnDescr::new("large_binary", DataType::LargeBinary),
         ColumnDescr::new("binaryview", DataType::BinaryView),

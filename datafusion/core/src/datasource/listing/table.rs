@@ -1137,14 +1137,14 @@ impl ListingTable {
                     .infer_stats(
                         ctx,
                         store,
-                        self.file_schema.clone(),
+                        Arc::clone(&self.file_schema),
                         &part_file.object_meta,
                     )
                     .await?;
                 let statistics = Arc::new(statistics);
                 self.collected_statistics.put_with_extra(
                     &part_file.object_meta.location,
-                    statistics.clone(),
+                    Arc::clone(&statistics),
                     &part_file.object_meta,
                 );
                 Ok(statistics)

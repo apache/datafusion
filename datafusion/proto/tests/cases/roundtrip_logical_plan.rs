@@ -23,6 +23,7 @@ use arrow::datatypes::{
     IntervalUnit, Schema, SchemaRef, TimeUnit, UnionFields, UnionMode,
     DECIMAL256_MAX_PRECISION,
 };
+use arrow::util::pretty::pretty_format_batches;
 use datafusion::datasource::file_format::json::JsonFormatFactory;
 use datafusion_common::parsers::CompressionTypeVariant;
 use prost::Message;
@@ -2526,4 +2527,31 @@ fn roundtrip_window() {
     roundtrip_expr_test(test_expr5, ctx.clone());
     roundtrip_expr_test(test_expr6, ctx.clone());
     roundtrip_expr_test(text_expr7, ctx);
+}
+
+#[tokio::test]
+async fn roundtrip_recursive_query() {
+    let query = "WITH RECURSIVE cte AS (
+        SELECT 1 as n
+        UNION ALL
+        SELECT n + 1 FROM cte WHERE n < 5
+        )
+        SELECT * FROM cte;";
+
+    let ctx = SessionContext::new();
+    let dataframe = ctx.sql(query).await.unwrap();
+    let plan = dataframe.logical_plan().clone();
+    let output = dataframe.collect().await.unwrap();
+    let bytes = logical_plan_to_bytes(&plan).unwrap();
+
+    let ctx = SessionContext::new();
+    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx).unwrap();
+    assert_eq!(format!("{plan:?}"), format!("{logical_round_trip:?}"));
+    let dataframe = ctx.execute_logical_plan(logical_round_trip).await.unwrap();
+    let output_round_trip = dataframe.collect().await.unwrap();
+
+    assert_eq!(
+        format!("{}", pretty_format_batches(&output).unwrap()),
+        format!("{}", pretty_format_batches(&output_round_trip).unwrap())
+    );
 }

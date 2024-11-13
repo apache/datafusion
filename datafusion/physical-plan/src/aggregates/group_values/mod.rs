@@ -27,9 +27,9 @@ pub(crate) mod primitive;
 use datafusion_expr::EmitTo;
 use primitive::GroupValuesPrimitive;
 
-mod column;
+mod multi_column;
 mod row;
-use column::GroupValuesColumn;
+use multi_column::GroupValuesColumn;
 use row::GroupValuesRows;
 
 mod bytes;
@@ -39,7 +39,6 @@ use datafusion_physical_expr::binary_map::OutputType;
 
 use crate::aggregates::order::GroupOrdering;
 
-mod group_column;
 mod null_builder;
 
 /// Stores the group values during hash aggregation.
@@ -148,7 +147,7 @@ pub fn new_group_values(
         }
     }
 
-    if column::supported_schema(schema.as_ref()) {
+    if multi_column::supported_schema(schema.as_ref()) {
         if matches!(group_ordering, GroupOrdering::None) {
             Ok(Box::new(GroupValuesColumn::<false>::try_new(schema)?))
         } else {

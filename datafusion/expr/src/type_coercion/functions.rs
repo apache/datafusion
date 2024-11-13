@@ -181,6 +181,7 @@ fn is_well_supported_signature(type_signature: &TypeSignature) -> bool {
             | TypeSignature::String(_)
             | TypeSignature::Coercible(_)
             | TypeSignature::Any(_)
+            | TypeSignature::NullAry
     )
 }
 
@@ -554,16 +555,27 @@ fn get_valid_types(
 
             vec![new_types]
         }
-        TypeSignature::Uniform(number, valid_types) => valid_types
-            .iter()
-            .map(|valid_type| (0..*number).map(|_| valid_type.clone()).collect())
-            .collect(),
+        TypeSignature::Uniform(number, valid_types) => {
+            if *number == 0 {
+                return plan_err!("The function expected at least one argument");
+            }
+
+            valid_types
+                .iter()
+                .map(|valid_type| (0..*number).map(|_| valid_type.clone()).collect())
+                .collect()
+        }
         TypeSignature::UserDefined => {
             return internal_err!(
             "User-defined signature should be handled by function-specific coerce_types."
         )
         }
         TypeSignature::VariadicAny => {
+            if current_types.is_empty() {
+                return plan_err!(
+                    "The function expected at least one argument but received 0"
+                );
+            }
             vec![current_types.to_vec()]
         }
         TypeSignature::Exact(valid_types) => vec![valid_types.clone()],
@@ -606,7 +618,22 @@ fn get_valid_types(
                 }
             }
         },
+        TypeSignature::NullAry => {
+            if !current_types.is_empty() {
+                return plan_err!(
+                    "The function expected zero argument but received {}",
+                    current_types.len()
+                );
+            }
+            vec![vec![]]
+        }
         TypeSignature::Any(number) => {
+            if current_types.is_empty() {
+                return plan_err!(
+                    "The function expected at least one argument but received 0"
+                );
+            }
+
             if current_types.len() != *number {
                 return plan_err!(
                     "The function expected {} arguments but received {}",
