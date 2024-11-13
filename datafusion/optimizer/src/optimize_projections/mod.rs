@@ -19,11 +19,11 @@
 
 mod required_indices;
 
-use std::collections::HashSet;
-use std::sync::Arc;
-
 use crate::optimizer::ApplyOrder;
 use crate::{OptimizerConfig, OptimizerRule};
+use recursive::recursive;
+use std::collections::HashSet;
+use std::sync::Arc;
 
 use datafusion_common::{
     get_required_group_by_exprs_indices, internal_datafusion_err, internal_err, Column,
@@ -110,6 +110,7 @@ impl OptimizerRule for OptimizeProjections {
 ///   columns.
 /// - `Ok(None)`: Signal that the given logical plan did not require any change.
 /// - `Err(error)`: An error occurred during the optimization process.
+#[recursive]
 fn optimize_projections(
     plan: LogicalPlan,
     config: &dyn OptimizerConfig,
@@ -295,7 +296,7 @@ fn optimize_projections(
                 })
                 .collect::<Result<_>>()?
         }
-        LogicalPlan::Limit(_) | LogicalPlan::Prepare(_) => {
+        LogicalPlan::Limit(_) => {
             // Pass index requirements from the parent as well as column indices
             // that appear in this plan's expressions to its child. These operators
             // do not benefit from "small" inputs, so the projection_beneficial
@@ -311,6 +312,7 @@ fn optimize_projections(
         | LogicalPlan::Explain(_)
         | LogicalPlan::Analyze(_)
         | LogicalPlan::Subquery(_)
+        | LogicalPlan::Statement(_)
         | LogicalPlan::Distinct(Distinct::All(_)) => {
             // These plans require all their fields, and their children should
             // be treated as final plans -- otherwise, we may have schema a
@@ -346,10 +348,8 @@ fn optimize_projections(
         }
         LogicalPlan::EmptyRelation(_)
         | LogicalPlan::RecursiveQuery(_)
-        | LogicalPlan::Statement(_)
         | LogicalPlan::Values(_)
-        | LogicalPlan::DescribeTable(_)
-        | LogicalPlan::Execute(_) => {
+        | LogicalPlan::DescribeTable(_) => {
             // These operators have no inputs, so stop the optimization process.
             return Ok(Transformed::no(plan));
         }

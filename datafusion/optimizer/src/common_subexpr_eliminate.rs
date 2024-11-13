@@ -22,6 +22,7 @@ use std::fmt::Debug;
 use std::sync::Arc;
 
 use crate::{OptimizerConfig, OptimizerRule};
+use recursive::recursive;
 
 use crate::optimizer::ApplyOrder;
 use crate::utils::NamePreserver;
@@ -531,6 +532,7 @@ impl OptimizerRule for CommonSubexprEliminate {
         None
     }
 
+    #[recursive]
     fn rewrite(
         &self,
         plan: LogicalPlan,
@@ -563,9 +565,7 @@ impl OptimizerRule for CommonSubexprEliminate {
             | LogicalPlan::Dml(_)
             | LogicalPlan::Copy(_)
             | LogicalPlan::Unnest(_)
-            | LogicalPlan::RecursiveQuery(_)
-            | LogicalPlan::Prepare(_)
-            | LogicalPlan::Execute(_) => {
+            | LogicalPlan::RecursiveQuery(_) => {
                 // This rule handles recursion itself in a `ApplyOrder::TopDown` like
                 // manner.
                 plan.map_children(|c| self.rewrite(c, config))?

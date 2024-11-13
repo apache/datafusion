@@ -508,7 +508,7 @@ impl SessionContext {
 
     /// Return the [RuntimeEnv] used to run queries with this `SessionContext`
     pub fn runtime_env(&self) -> Arc<RuntimeEnv> {
-        self.state.read().runtime_env().clone()
+        Arc::clone(self.state.read().runtime_env())
     }
 
     /// Returns an id that uniquely identifies this `SessionContext`.
@@ -688,11 +688,11 @@ impl SessionContext {
             LogicalPlan::Statement(Statement::SetVariable(stmt)) => {
                 self.set_variable(stmt).await
             }
-            LogicalPlan::Prepare(Prepare {
+            LogicalPlan::Statement(Statement::Prepare(Prepare {
                 name,
                 input,
                 data_types,
-            }) => {
+            })) => {
                 // The number of parameters must match the specified data types length.
                 if !data_types.is_empty() {
                     let param_names = input.get_parameter_names()?;
@@ -712,7 +712,15 @@ impl SessionContext {
                 self.state.write().store_prepared(name, data_types, input)?;
                 self.return_empty_dataframe()
             }
-            LogicalPlan::Execute(execute) => self.execute_prepared(execute),
+            LogicalPlan::Statement(Statement::Execute(execute)) => {
+                self.execute_prepared(execute)
+            }
+            LogicalPlan::Statement(Statement::Deallocate(deallocate)) => {
+                self.state
+                    .write()
+                    .remove_prepared(deallocate.name.as_str())?;
+                self.return_empty_dataframe()
+            }
             plan => Ok(DataFrame::new(self.state(), plan)),
         }
     }
@@ -1537,7 +1545,7 @@ impl SessionContext {
 
     /// Get reference to [`SessionState`]
     pub fn state_ref(&self) -> Arc<RwLock<SessionState>> {
-        self.state.clone()
+        Arc::clone(&self.state)
     }
 
     /// Get weak reference to [`SessionState`]
@@ -1773,14 +1781,6 @@ impl<'n, 'a> TreeNodeVisitor<'n> for BadPlanVisitor<'a> {
             LogicalPlan::Statement(stmt) if !self.options.allow_statements => {
                 plan_err!("Statement not supported: {}", stmt.name())
             }
-            // TODO: Implement PREPARE as a LogicalPlan::Statement
-            LogicalPlan::Prepare(_) if !self.options.allow_statements => {
-                plan_err!("Statement not supported: PREPARE")
-            }
-            // TODO: Implement EXECUTE as a LogicalPlan::Statement
-            LogicalPlan::Execute(_) if !self.options.allow_statements => {
-                plan_err!("Statement not supported: EXECUTE")
-            }
             _ => Ok(TreeNodeRecursion::Continue),
         }
     }
@@ -1788,15 +1788,15 @@ impl<'n, 'a> TreeNodeVisitor<'n> for BadPlanVisitor<'a> {
 
 #[cfg(test)]
 mod tests {
-    use std::env;
-    use std::path::PathBuf;
-
     use super::{super::options::CsvReadOptions, *};
     use crate::assert_batches_eq;
     use crate::execution::memory_pool::MemoryConsumer;
     use crate::execution::runtime_env::RuntimeEnvBuilder;
     use crate::test;
     use crate::test_util::{plan_and_collect, populate_csv_partitions};
+    use arrow_schema::{DataType, TimeUnit};
+    use std::env;
+    use std::path::PathBuf;
 
     use datafusion_common_runtime::SpawnedTask;
 
@@ -1804,6 +1804,8 @@ mod tests {
     use crate::execution::session_state::SessionStateBuilder;
     use crate::physical_planner::PhysicalPlanner;
     use async_trait::async_trait;
+    use datafusion_expr::planner::TypePlanner;
+    use sqlparser::ast;
     use tempfile::TempDir;
 
     #[tokio::test]
@@ -2200,6 +2202,29 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn custom_type_planner() -> Result<()> {
+        let state = SessionStateBuilder::new()
+            .with_default_features()
+            .with_type_planner(Arc::new(MyTypePlanner {}))
+            .build();
+        let ctx = SessionContext::new_with_state(state);
+        let result = ctx
+            .sql("SELECT DATETIME '2021-01-01 00:00:00'")
+            .await?
+            .collect()
+            .await?;
+        let expected = [
+            "+-----------------------------+",
+            "| Utf8(\"2021-01-01 00:00:00\") |",
+            "+-----------------------------+",
+            "| 2021-01-01T00:00:00         |",
+            "+-----------------------------+",
+        ];
+        assert_batches_eq!(expected, &result);
+        Ok(())
+    }
+
     struct MyPhysicalPlanner {}
 
     #[async_trait]
@@ -2259,5 +2284,26 @@ mod tests {
         .await?;
 
         Ok(ctx)
+    }
+
+    #[derive(Debug)]
+    struct MyTypePlanner {}
+
+    impl TypePlanner for MyTypePlanner {
+        fn plan_type(&self, sql_type: &ast::DataType) -> Result<Option<DataType>> {
+            match sql_type {
+                ast::DataType::Datetime(precision) => {
+                    let precision = match precision {
+                        Some(0) => TimeUnit::Second,
+                        Some(3) => TimeUnit::Millisecond,
+                        Some(6) => TimeUnit::Microsecond,
+                        None | Some(9) => TimeUnit::Nanosecond,
+                        _ => unreachable!(),
+                    };
+                    Ok(Some(DataType::Timestamp(precision, None)))
+                }
+                _ => Ok(None),
+            }
+        }
     }
 }

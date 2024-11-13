@@ -64,6 +64,10 @@ PREPARE my_plan AS SELECT $1;
 statement error Prepared statement \'my_plan\' does not exist
 EXECUTE my_plan('Foo', 'Bar');
 
+# deallocate a non-existing plan
+statement error Prepared statement \'my_plan\' does not exist
+DEALLOCATE my_plan;
+
 statement ok
 PREPARE my_plan(STRING, STRING) AS SELECT * FROM (VALUES(1, $1), (2, $2)) AS t (num, letter);
 
@@ -76,6 +80,28 @@ EXECUTE my_plan('Foo', 'Bar');
 # duplicate prepare statement
 statement error Prepared statement \'my_plan\' already exists
 PREPARE my_plan(STRING, STRING) AS SELECT * FROM (VALUES(1, $1), (2, $2)) AS t (num, letter);
+
+# deallocate a plan
+statement ok
+DEALLOCATE my_plan;
+
+# can't EXECUTE a deallocated plan
+statement error Prepared statement \'my_plan\' does not exist
+EXECUTE my_plan('Foo', 'Bar');
+
+# re-prepare a deallocated plan
+statement ok
+PREPARE my_plan(STRING, STRING) AS SELECT * FROM (VALUES(1, $1), (2, $2)) AS t (num, letter);
+
+query IT
+EXECUTE my_plan('Foo', 'Bar');
+----
+1 Foo
+2 Bar
+
+# deallocate with the PREPARE keyword
+statement ok
+DEALLOCATE PREPARE my_plan;
 
 statement error Prepare specifies 1 data types but query has 0 parameters
 PREPARE my_plan(INT) AS SELECT id, age  FROM person WHERE age = 10;
@@ -90,12 +116,18 @@ EXECUTE my_plan2;
 1 20
 
 statement ok
+DEALLOCATE my_plan2;
+
+statement ok
 PREPARE my_plan3(INT) AS SELECT $1;
 
 query I
 EXECUTE my_plan3(10);
 ----
 10
+
+statement ok
+DEALLOCATE my_plan3;
 
 statement ok
 PREPARE my_plan4(INT) AS SELECT 1 + $1;
@@ -106,12 +138,18 @@ EXECUTE my_plan4(10);
 11
 
 statement ok
+DEALLOCATE my_plan4;
+
+statement ok
 PREPARE my_plan5(INT, DOUBLE) AS SELECT 1 + $1 + $2;
 
 query R
 EXECUTE my_plan5(10, 20.5);
 ----
 31.5
+
+statement ok
+DEALLOCATE my_plan5;
 
 statement ok
 PREPARE my_plan6(INT) AS SELECT id, age FROM person WHERE age = $1;
@@ -141,6 +179,9 @@ statement error Unsupported parameter type
 EXECUTE my_plan6(10 + 20);
 
 statement ok
+DEALLOCATE my_plan6;
+
+statement ok
 PREPARE my_plan7(INT, STRING, DOUBLE, INT, DOUBLE, STRING)
     AS
 SELECT id, age, $6 FROM person WHERE age IN ($1, $4) AND salary > $3 and salary < $5 OR first_name < $2;
@@ -149,6 +190,9 @@ query IIT
 EXECUTE my_plan7(10, 'jane', 99999.45, 20, 200000.45, 'foo');
 ----
 1 20 foo
+
+statement ok
+DEALLOCATE my_plan7;
 
 statement ok
 PREPARE my_plan8(INT, DOUBLE, DOUBLE, DOUBLE)
@@ -162,6 +206,9 @@ EXECUTE my_plan8(100000, 99999.45, 100000.45, 200000.45);
 1 20
 
 statement ok
+DEALLOCATE my_plan8;
+
+statement ok
 PREPARE my_plan9(STRING, STRING) AS SELECT * FROM (VALUES(1, $1), (2, $2)) AS t (num, letter);
 
 query IT
@@ -170,6 +217,8 @@ EXECUTE my_plan9('Foo', 'Bar');
 1 Foo
 2 Bar
 
+statement ok
+DEALLOCATE my_plan9;
 
 # Test issue: https://github.com/apache/datafusion/issues/12294
 # prepare argument is in the LIMIT clause
@@ -197,21 +246,39 @@ EXECUTE get_N_rand_ints_from_last_run(2);
 1
 
 statement ok
+DEALLOCATE get_N_rand_ints_from_last_run;
+
+statement ok
 DROP TABLE test;
 
+statement ok
+SET datafusion.explain.logical_plan_only=true;
+
+# OptimizeProjections rule works with PREPARE and pushes down the `id` projection to TableScan
+query TT
+EXPLAIN PREPARE my_plan(INT) AS SELECT id + $1 FROM person;
+----
+logical_plan
+01)Prepare: "my_plan" [Int32]
+02)--Projection: person.id + $1
+03)----TableScan: person projection=[id]
 
 # test creating logical plan for EXECUTE statements
 query TT
 EXPLAIN EXECUTE my_plan;
 ----
 logical_plan Execute: my_plan params=[]
-physical_plan_error This feature is not implemented: Unsupported logical plan: Execute
 
 query TT
 EXPLAIN EXECUTE my_plan(10*2 + 1, 'Foo');
 ----
 logical_plan Execute: my_plan params=[Int64(21), Utf8("Foo")]
-physical_plan_error This feature is not implemented: Unsupported logical plan: Execute
 
 query error DataFusion error: Schema error: No field named a\.
 EXPLAIN EXECUTE my_plan(a);
+
+statement ok
+SET datafusion.explain.logical_plan_only=false;
+
+statement ok
+DROP TABLE person;

@@ -92,8 +92,7 @@ struct JoinLeftData {
     probe_threads_counter: AtomicUsize,
     /// Memory reservation that tracks memory used by `hash_map` hash table
     /// `batch`. Cleared on drop.
-    #[allow(dead_code)]
-    reservation: MemoryReservation,
+    _reservation: MemoryReservation,
 }
 
 impl JoinLeftData {
@@ -110,7 +109,7 @@ impl JoinLeftData {
             batch,
             visited_indices_bitmap,
             probe_threads_counter,
-            reservation,
+            _reservation: reservation,
         }
     }
 

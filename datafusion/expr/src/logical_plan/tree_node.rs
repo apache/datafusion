@@ -38,11 +38,11 @@
 //! * [`LogicalPlan::expressions`]: Return a copy of the plan's expressions
 use crate::{
     dml::CopyTo, Aggregate, Analyze, CreateMemoryTable, CreateView, DdlStatement,
-    Distinct, DistinctOn, DmlStatement, Execute, Explain, Expr, Extension, Filter, Join,
-    Limit, LogicalPlan, Partitioning, Prepare, Projection, RecursiveQuery, Repartition,
-    Sort, Subquery, SubqueryAlias, TableScan, Union, Unnest, UserDefinedLogicalNode,
-    Values, Window,
+    Distinct, DistinctOn, DmlStatement, Explain, Expr, Extension, Filter, Join, Limit,
+    LogicalPlan, Partitioning, Projection, RecursiveQuery, Repartition, Sort, Subquery,
+    SubqueryAlias, TableScan, Union, Unnest, UserDefinedLogicalNode, Values, Window,
 };
+use recursive::recursive;
 use std::ops::Deref;
 use std::sync::Arc;
 
@@ -329,17 +329,6 @@ impl TreeNode for LogicalPlan {
                     options,
                 })
             }),
-            LogicalPlan::Prepare(Prepare {
-                name,
-                data_types,
-                input,
-            }) => rewrite_arc(input, f)?.update_data(|input| {
-                LogicalPlan::Prepare(Prepare {
-                    name,
-                    data_types,
-                    input,
-                })
-            }),
             LogicalPlan::RecursiveQuery(RecursiveQuery {
                 name,
                 static_term,
@@ -358,19 +347,20 @@ impl TreeNode for LogicalPlan {
                     is_distinct,
                 })
             }),
+            LogicalPlan::Statement(stmt) => {
+                stmt.map_inputs(f)?.update_data(LogicalPlan::Statement)
+            }
             // plans without inputs
             LogicalPlan::TableScan { .. }
-            | LogicalPlan::Statement { .. }
             | LogicalPlan::EmptyRelation { .. }
             | LogicalPlan::Values { .. }
-            | LogicalPlan::Execute { .. }
             | LogicalPlan::DescribeTable(_) => Transformed::no(self),
         })
     }
 }
 
 /// Applies `f` to rewrite a `Arc<LogicalPlan>` without copying, if possible
-fn rewrite_arc<F: FnMut(LogicalPlan) -> Result<Transformed<LogicalPlan>>>(
+pub(super) fn rewrite_arc<F: FnMut(LogicalPlan) -> Result<Transformed<LogicalPlan>>>(
     plan: Arc<LogicalPlan>,
     mut f: F,
 ) -> Result<Transformed<Arc<LogicalPlan>>> {
@@ -506,15 +496,12 @@ impl LogicalPlan {
                 .chain(fetch.iter())
                 .map(|e| e.deref())
                 .apply_until_stop(f),
-            LogicalPlan::Execute(Execute { parameters, .. }) => {
-                parameters.iter().apply_until_stop(f)
-            }
+            LogicalPlan::Statement(stmt) => stmt.expression_iter().apply_until_stop(f),
             // plans without expressions
             LogicalPlan::EmptyRelation(_)
             | LogicalPlan::RecursiveQuery(_)
             | LogicalPlan::Subquery(_)
             | LogicalPlan::SubqueryAlias(_)
-            | LogicalPlan::Statement(_)
             | LogicalPlan::Analyze(_)
             | LogicalPlan::Explain(_)
             | LogicalPlan::Union(_)
@@ -522,8 +509,7 @@ impl LogicalPlan {
             | LogicalPlan::Dml(_)
             | LogicalPlan::Ddl(_)
             | LogicalPlan::Copy(_)
-            | LogicalPlan::DescribeTable(_)
-            | LogicalPlan::Prepare(_) => Ok(TreeNodeRecursion::Continue),
+            | LogicalPlan::DescribeTable(_) => Ok(TreeNodeRecursion::Continue),
         }
     }
 
@@ -738,27 +724,15 @@ impl LogicalPlan {
                     })
                 })
             }
-            LogicalPlan::Execute(Execute {
-                parameters,
-                name,
-                schema,
-            }) => parameters
-                .into_iter()
-                .map_until_stop_and_collect(f)?
-                .update_data(|parameters| {
-                    LogicalPlan::Execute(Execute {
-                        parameters,
-                        name,
-                        schema,
-                    })
-                }),
+            LogicalPlan::Statement(stmt) => {
+                stmt.map_expressions(f)?.update_data(LogicalPlan::Statement)
+            }
             // plans without expressions
             LogicalPlan::EmptyRelation(_)
             | LogicalPlan::Unnest(_)
             | LogicalPlan::RecursiveQuery(_)
             | LogicalPlan::Subquery(_)
             | LogicalPlan::SubqueryAlias(_)
-            | LogicalPlan::Statement(_)
             | LogicalPlan::Analyze(_)
             | LogicalPlan::Explain(_)
             | LogicalPlan::Union(_)
@@ -766,13 +740,13 @@ impl LogicalPlan {
             | LogicalPlan::Dml(_)
             | LogicalPlan::Ddl(_)
             | LogicalPlan::Copy(_)
-            | LogicalPlan::DescribeTable(_)
-            | LogicalPlan::Prepare(_) => Transformed::no(self),
+            | LogicalPlan::DescribeTable(_) => Transformed::no(self),
         })
     }
 
     /// Visits a plan similarly to [`Self::visit`], including subqueries that
     /// may appear in expressions such as `IN (SELECT ...)`.
+    #[recursive]
     pub fn visit_with_subqueries<V: for<'n> TreeNodeVisitor<'n, Node = Self>>(
         &self,
         visitor: &mut V,
@@ -789,6 +763,7 @@ impl LogicalPlan {
     /// Similarly to [`Self::rewrite`], rewrites this node and its inputs using `f`,
     /// including subqueries that may appear in expressions such as `IN (SELECT
     /// ...)`.
+    #[recursive]
     pub fn rewrite_with_subqueries<R: TreeNodeRewriter<Node = Self>>(
         self,
         rewriter: &mut R,
@@ -807,6 +782,7 @@ impl LogicalPlan {
         &self,
         mut f: F,
     ) -> Result<TreeNodeRecursion> {
+        #[recursive]
         fn apply_with_subqueries_impl<
             F: FnMut(&LogicalPlan) -> Result<TreeNodeRecursion>,
         >(
@@ -842,6 +818,7 @@ impl LogicalPlan {
         self,
         mut f: F,
     ) -> Result<Transformed<Self>> {
+        #[recursive]
         fn transform_down_with_subqueries_impl<
             F: FnMut(LogicalPlan) -> Result<Transformed<LogicalPlan>>,
         >(
@@ -867,6 +844,7 @@ impl LogicalPlan {
         self,
         mut f: F,
     ) -> Result<Transformed<Self>> {
+        #[recursive]
         fn transform_up_with_subqueries_impl<
             F: FnMut(LogicalPlan) -> Result<Transformed<LogicalPlan>>,
         >(
@@ -894,6 +872,7 @@ impl LogicalPlan {
         mut f_down: FD,
         mut f_up: FU,
     ) -> Result<Transformed<Self>> {
+        #[recursive]
         fn transform_down_up_with_subqueries_impl<
             FD: FnMut(LogicalPlan) -> Result<Transformed<LogicalPlan>>,
             FU: FnMut(LogicalPlan) -> Result<Transformed<LogicalPlan>>,

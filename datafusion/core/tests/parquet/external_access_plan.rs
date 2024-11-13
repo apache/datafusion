@@ -313,7 +313,7 @@ impl TestFull {
         } = self;
 
         let TestData {
-            temp_file: _,
+            _temp_file: _,
             schema,
             file_name,
             file_size,
@@ -361,9 +361,9 @@ impl TestFull {
 
 // Holds necessary data for these tests to reuse the same parquet file
 struct TestData {
-    // field is present as on drop the file is deleted
-    #[allow(dead_code)]
-    temp_file: NamedTempFile,
+    /// Pointer to temporary file storage. Keeping it in scope to prevent temporary folder
+    /// to be deleted prematurely
+    _temp_file: NamedTempFile,
     schema: SchemaRef,
     file_name: String,
     file_size: u64,
@@ -402,7 +402,7 @@ fn get_test_data() -> &'static TestData {
         let file_size = temp_file.path().metadata().unwrap().len();
 
         TestData {
-            temp_file,
+            _temp_file: temp_file,
             schema,
             file_name,
             file_size,

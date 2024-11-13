@@ -3081,26 +3081,26 @@ array_position(array, element, index)
 
 ### `array_prepend`
 
-Appends an element to the end of an array.
+Prepends an element to the beginning of an array.
 
 ```
-array_append(array, element)
+array_prepend(element, array)
 ```
 
 #### Arguments
 
+- **element**: Element to prepend to the array.
 - **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
-- **element**: Element to append to the array.
 
 #### Example
 
 ```sql
-> select array_append([1, 2, 3], 4);
-+--------------------------------------+
-| array_append(List([1,2,3]),Int64(4)) |
-+--------------------------------------+
-| [1, 2, 3, 4]                         |
-+--------------------------------------+
+> select array_prepend(1, [2, 3, 4]);
++---------------------------------------+
+| array_prepend(Int64(1),List([2,3,4])) |
++---------------------------------------+
+| [1, 2, 3, 4]                          |
++---------------------------------------+
 ```
 
 #### Aliases
@@ -3983,44 +3983,42 @@ make_map(['key1', 'key2'], ['value1', 'value2'])
 
 #### Example
 
-````sql
-        -- Using map function
-        SELECT MAP('type', 'test');
-        ----
-        {type: test}
+```sql
+-- Using map function
+SELECT MAP('type', 'test');
+----
+{type: test}
 
-        SELECT MAP(['POST', 'HEAD', 'PATCH'], [41, 33, null]);
-        ----
-        {POST: 41, HEAD: 33, PATCH: }
+SELECT MAP(['POST', 'HEAD', 'PATCH'], [41, 33, null]);
+----
+{POST: 41, HEAD: 33, PATCH: }
 
-        SELECT MAP([[1,2], [3,4]], ['a', 'b']);
-        ----
-        {[1, 2]: a, [3, 4]: b}
+SELECT MAP([[1,2], [3,4]], ['a', 'b']);
+----
+{[1, 2]: a, [3, 4]: b}
 
-        SELECT MAP { 'a': 1, 'b': 2 };
-        ----
-        {a: 1, b: 2}
+SELECT MAP { 'a': 1, 'b': 2 };
+----
+{a: 1, b: 2}
 
-        -- Using make_map function
-        SELECT MAKE_MAP(['POST', 'HEAD'], [41, 33]);
-        ----
-        {POST: 41, HEAD: 33}
+-- Using make_map function
+SELECT MAKE_MAP(['POST', 'HEAD'], [41, 33]);
+----
+{POST: 41, HEAD: 33}
 
-        SELECT MAKE_MAP(['key1', 'key2'], ['value1', null]);
-        ----
-        {key1: value1, key2: }
-        ```
-
+SELECT MAKE_MAP(['key1', 'key2'], ['value1', null]);
+----
+{key1: value1, key2: }
+```
 
 ### `map_extract`
 
 Returns a list containing the value for the given key or an empty list if the key is not present in the map.
 
-````
-
+```
 map_extract(map, key)
+```
 
-````
 #### Arguments
 
 - **map**: Map expression. Can be a constant, column, or function, and any combination of map operators.
@@ -4040,7 +4038,7 @@ SELECT map_extract(MAP {1: 'one', 2: 'two'}, 2);
 SELECT map_extract(MAP {'x': 10, 'y': NULL, 'z': 30}, 'y');
 ----
 []
-````
+```
 
 #### Aliases
 

@@ -39,6 +39,7 @@ SELECT * from information_schema.tables;
 ----
 datafusion information_schema columns VIEW
 datafusion information_schema df_settings VIEW
+datafusion information_schema parameters VIEW
 datafusion information_schema routines VIEW
 datafusion information_schema schemata VIEW
 datafusion information_schema tables VIEW
@@ -84,6 +85,7 @@ SELECT * from information_schema.tables;
 ----
 datafusion information_schema columns VIEW
 datafusion information_schema df_settings VIEW
+datafusion information_schema parameters VIEW
 datafusion information_schema routines VIEW
 datafusion information_schema schemata VIEW
 datafusion information_schema tables VIEW
@@ -99,6 +101,7 @@ SELECT * from information_schema.tables;
 ----
 datafusion information_schema columns VIEW
 datafusion information_schema df_settings VIEW
+datafusion information_schema parameters VIEW
 datafusion information_schema routines VIEW
 datafusion information_schema schemata VIEW
 datafusion information_schema tables VIEW
@@ -111,6 +114,7 @@ SELECT * from information_schema.tables WHERE tables.table_schema='information_s
 ----
 datafusion information_schema columns VIEW
 datafusion information_schema df_settings VIEW
+datafusion information_schema parameters VIEW
 datafusion information_schema routines VIEW
 datafusion information_schema schemata VIEW
 datafusion information_schema tables VIEW
@@ -121,6 +125,7 @@ SELECT * from information_schema.tables WHERE information_schema.tables.table_sc
 ----
 datafusion information_schema columns VIEW
 datafusion information_schema df_settings VIEW
+datafusion information_schema parameters VIEW
 datafusion information_schema routines VIEW
 datafusion information_schema schemata VIEW
 datafusion information_schema tables VIEW
@@ -131,6 +136,7 @@ SELECT * from information_schema.tables WHERE datafusion.information_schema.tabl
 ----
 datafusion information_schema columns VIEW
 datafusion information_schema df_settings VIEW
+datafusion information_schema parameters VIEW
 datafusion information_schema routines VIEW
 datafusion information_schema schemata VIEW
 datafusion information_schema tables VIEW
@@ -454,6 +460,7 @@ SHOW TABLES
 ----
 datafusion information_schema columns VIEW
 datafusion information_schema df_settings VIEW
+datafusion information_schema parameters VIEW
 datafusion information_schema routines VIEW
 datafusion information_schema schemata VIEW
 datafusion information_schema tables VIEW
@@ -636,3 +643,53 @@ query B
 select is_deterministic from information_schema.routines where routine_name = 'now';
 ----
 false
+
+# test every function type are included in the result
+query TTTITTTTB rowsort
+select * from information_schema.parameters where specific_name = 'date_trunc' OR specific_name = 'string_agg' OR specific_name = 'rank';
+----
+datafusion public date_trunc 1 IN precision Utf8 NULL false
+datafusion public date_trunc 1 IN precision Utf8View NULL false
+datafusion public date_trunc 1 OUT NULL Timestamp(Microsecond, None) NULL false
+datafusion public date_trunc 1 OUT NULL Timestamp(Microsecond, Some("+TZ")) NULL false
+datafusion public date_trunc 1 OUT NULL Timestamp(Millisecond, None) NULL false
+datafusion public date_trunc 1 OUT NULL Timestamp(Millisecond, Some("+TZ")) NULL false
+datafusion public date_trunc 1 OUT NULL Timestamp(Nanosecond, None) NULL false
+datafusion public date_trunc 1 OUT NULL Timestamp(Nanosecond, Some("+TZ")) NULL false
+datafusion public date_trunc 1 OUT NULL Timestamp(Second, None) NULL false
+datafusion public date_trunc 1 OUT NULL Timestamp(Second, Some("+TZ")) NULL false
+datafusion public date_trunc 2 IN expression Timestamp(Microsecond, None) NULL false
+datafusion public date_trunc 2 IN expression Timestamp(Microsecond, Some("+TZ")) NULL false
+datafusion public date_trunc 2 IN expression Timestamp(Millisecond, None) NULL false
+datafusion public date_trunc 2 IN expression Timestamp(Millisecond, Some("+TZ")) NULL false
+datafusion public date_trunc 2 IN expression Timestamp(Nanosecond, None) NULL false
+datafusion public date_trunc 2 IN expression Timestamp(Nanosecond, Some("+TZ")) NULL false
+datafusion public date_trunc 2 IN expression Timestamp(Second, None) NULL false
+datafusion public date_trunc 2 IN expression Timestamp(Second, Some("+TZ")) NULL false
+datafusion public string_agg 1 IN expression LargeUtf8 NULL false
+datafusion public string_agg 1 OUT NULL LargeUtf8 NULL false
+datafusion public string_agg 2 IN delimiter LargeUtf8 NULL false
+datafusion public string_agg 2 IN delimiter Null NULL false
+datafusion public string_agg 2 IN delimiter Utf8 NULL false
+
+# test variable length arguments
+query TTTB rowsort
+select specific_name, data_type, parameter_mode, is_variadic from information_schema.parameters where specific_name = 'concat';
+----
+concat LargeUtf8 IN true
+concat LargeUtf8 OUT false
+concat Utf8 IN true
+concat Utf8 OUT false
+concat Utf8View IN true
+concat Utf8View OUT false
+
+# test ceorcion signature
+query TTIT rowsort
+select specific_name, data_type, ordinal_position, parameter_mode from information_schema.parameters where specific_name = 'repeat';
+----
+repeat Int64 2 IN
+repeat LargeUtf8 1 IN
+repeat LargeUtf8 1 OUT
+repeat Utf8 1 IN
+repeat Utf8 1 OUT
+repeat Utf8View 1 IN

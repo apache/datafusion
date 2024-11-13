@@ -18,11 +18,13 @@
 use std::sync::Arc;
 
 use arrow::datatypes::{
-    ByteArrayType, ByteViewType, Date32Type, Date64Type, Decimal128Type, Decimal256Type,
-    Float32Type, Float64Type, Int16Type, Int32Type, Int64Type, Int8Type,
-    IntervalDayTimeType, IntervalMonthDayNanoType, IntervalYearMonthType, LargeUtf8Type,
-    StringViewType, Time32MillisecondType, Time32SecondType, Time64MicrosecondType,
-    Time64NanosecondType, UInt16Type, UInt32Type, UInt64Type, UInt8Type, Utf8Type,
+    BinaryType, BinaryViewType, BooleanType, ByteArrayType, ByteViewType, Date32Type,
+    Date64Type, Decimal128Type, Decimal256Type, Float32Type, Float64Type, Int16Type,
+    Int32Type, Int64Type, Int8Type, IntervalDayTimeType, IntervalMonthDayNanoType,
+    IntervalYearMonthType, LargeBinaryType, LargeUtf8Type, StringViewType,
+    Time32MillisecondType, Time32SecondType, Time64MicrosecondType, Time64NanosecondType,
+    TimestampMicrosecondType, TimestampMillisecondType, TimestampNanosecondType,
+    TimestampSecondType, UInt16Type, UInt32Type, UInt64Type, UInt8Type, Utf8Type,
 };
 use arrow_array::{ArrayRef, RecordBatch};
 use arrow_schema::{DataType, Field, IntervalUnit, Schema, TimeUnit};
@@ -35,7 +37,10 @@ use rand::{
     thread_rng, Rng, SeedableRng,
 };
 use test_utils::{
-    array_gen::{DecimalArrayGenerator, PrimitiveArrayGenerator, StringArrayGenerator},
+    array_gen::{
+        BinaryArrayGenerator, BooleanArrayGenerator, DecimalArrayGenerator,
+        PrimitiveArrayGenerator, StringArrayGenerator,
+    },
     stagger_batch,
 };
 
@@ -71,17 +76,19 @@ pub struct DatasetGeneratorConfig {
 }
 
 impl DatasetGeneratorConfig {
-    /// return a list of all column names
+    /// Return a list of all column names
     pub fn all_columns(&self) -> Vec<&str> {
         self.columns.iter().map(|d| d.name.as_str()).collect()
     }
 
-    /// return a list of column names that are "numeric"
+    /// Return a list of column names that are "numeric"
     pub fn numeric_columns(&self) -> Vec<&str> {
         self.columns
             .iter()
             .filter_map(|d| {
-                if d.column_type.is_numeric() {
+                if d.column_type.is_numeric()
+                    && !matches!(d.column_type, DataType::Float32 | DataType::Float64)
+                {
                     Some(d.name.as_str())
                 } else {
                     None
@@ -262,6 +269,26 @@ macro_rules! generate_decimal_array {
     }};
 }
 
+// Generating `BooleanArray` due to it being a special type in Arrow (bit-packed)
+macro_rules! generate_boolean_array {
+    ($SELF:ident, $NUM_ROWS:ident, $MAX_NUM_DISTINCT:expr, $BATCH_GEN_RNG:ident, $ARRAY_GEN_RNG:ident, $ARROW_TYPE: ident) => {{
+        // Select a null percentage from the candidate percentages
+        let null_pct_idx = $BATCH_GEN_RNG.gen_range(0..$SELF.candidate_null_pcts.len());
+        let null_pct = $SELF.candidate_null_pcts[null_pct_idx];
+
+        let num_distinct_booleans = if $MAX_NUM_DISTINCT >= 2 { 2 } else { 1 };
+
+        let mut generator = BooleanArrayGenerator {
+            num_booleans: $NUM_ROWS,
+            num_distinct_booleans,
+            null_pct,
+            rng: $ARRAY_GEN_RNG,
+        };
+
+        generator.gen_data::<$ARROW_TYPE>()
+    }};
+}
+
 macro_rules! generate_primitive_array {
     ($SELF:ident, $NUM_ROWS:ident, $MAX_NUM_DISTINCT:expr, $BATCH_GEN_RNG:ident, $ARRAY_GEN_RNG:ident, $ARROW_TYPE:ident) => {{
         let null_pct_idx = $BATCH_GEN_RNG.gen_range(0..$SELF.candidate_null_pcts.len());
@@ -275,6 +302,37 @@ macro_rules! generate_primitive_array {
         };
 
         generator.gen_data::<$ARROW_TYPE>()
+    }};
+}
+
+macro_rules! generate_binary_array {
+    (
+        $SELF:ident,
+        $NUM_ROWS:ident,
+        $MAX_NUM_DISTINCT:expr,
+        $BATCH_GEN_RNG:ident,
+        $ARRAY_GEN_RNG:ident,
+        $ARROW_TYPE:ident
+    ) => {{
+        let null_pct_idx = $BATCH_GEN_RNG.gen_range(0..$SELF.candidate_null_pcts.len());
+        let null_pct = $SELF.candidate_null_pcts[null_pct_idx];
+
+        let max_len = $BATCH_GEN_RNG.gen_range(1..100);
+
+        let mut generator = BinaryArrayGenerator {
+            max_len,
+            num_binaries: $NUM_ROWS,
+            num_distinct_binaries: $MAX_NUM_DISTINCT,
+            null_pct,
+            rng: $ARRAY_GEN_RNG,
+        };
+
+        match $ARROW_TYPE::DATA_TYPE {
+            DataType::Binary => generator.gen_data::<i32>(),
+            DataType::LargeBinary => generator.gen_data::<i64>(),
+            DataType::BinaryView => generator.gen_binary_view(),
+            _ => unreachable!(),
+        }
     }};
 }
 
@@ -527,6 +585,76 @@ impl RecordBatchGenerator {
                     IntervalMonthDayNanoType
                 )
             }
+            DataType::Timestamp(TimeUnit::Second, None) => {
+                generate_primitive_array!(
+                    self,
+                    num_rows,
+                    max_num_distinct,
+                    batch_gen_rng,
+                    array_gen_rng,
+                    TimestampSecondType
+                )
+            }
+            DataType::Timestamp(TimeUnit::Millisecond, None) => {
+                generate_primitive_array!(
+                    self,
+                    num_rows,
+                    max_num_distinct,
+                    batch_gen_rng,
+                    array_gen_rng,
+                    TimestampMillisecondType
+                )
+            }
+            DataType::Timestamp(TimeUnit::Microsecond, None) => {
+                generate_primitive_array!(
+                    self,
+                    num_rows,
+                    max_num_distinct,
+                    batch_gen_rng,
+                    array_gen_rng,
+                    TimestampMicrosecondType
+                )
+            }
+            DataType::Timestamp(TimeUnit::Nanosecond, None) => {
+                generate_primitive_array!(
+                    self,
+                    num_rows,
+                    max_num_distinct,
+                    batch_gen_rng,
+                    array_gen_rng,
+                    TimestampNanosecondType
+                )
+            }
+            DataType::Binary => {
+                generate_binary_array!(
+                    self,
+                    num_rows,
+                    max_num_distinct,
+                    batch_gen_rng,
+                    array_gen_rng,
+                    BinaryType
+                )
+            }
+            DataType::LargeBinary => {
+                generate_binary_array!(
+                    self,
+                    num_rows,
+                    max_num_distinct,
+                    batch_gen_rng,
+                    array_gen_rng,
+                    LargeBinaryType
+                )
+            }
+            DataType::BinaryView => {
+                generate_binary_array!(
+                    self,
+                    num_rows,
+                    max_num_distinct,
+                    batch_gen_rng,
+                    array_gen_rng,
+                    BinaryViewType
+                )
+            }
             DataType::Decimal128(precision, scale) => {
                 generate_decimal_array!(
                     self,
@@ -580,6 +708,16 @@ impl RecordBatchGenerator {
                     array_gen_rng,
                     StringViewType
                 )
+            }
+            DataType::Boolean => {
+                generate_boolean_array! {
+                    self,
+                    num_rows,
+                    max_num_distinct,
+                    batch_gen_rng,
+                    array_gen_rng,
+                    BooleanType
+                }
             }
             _ => {
                 panic!("Unsupported data generator type: {}", col.column_type)

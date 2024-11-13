@@ -124,12 +124,12 @@ async fn disable_prepare_and_execute_statement() {
     let df = ctx.sql_with_options(prepare_sql, options).await;
     assert_eq!(
         df.unwrap_err().strip_backtrace(),
-        "Error during planning: Statement not supported: PREPARE"
+        "Error during planning: Statement not supported: Prepare"
     );
     let df = ctx.sql_with_options(execute_sql, options).await;
     assert_eq!(
         df.unwrap_err().strip_backtrace(),
-        "Error during planning: Statement not supported: EXECUTE"
+        "Error during planning: Statement not supported: Execute"
     );
 
     let options = options.with_allow_statements(true);
