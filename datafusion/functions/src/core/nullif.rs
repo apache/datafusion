@@ -42,7 +42,7 @@ impl NullIfFunc {
     pub fn new() -> Self {
         Self {
             signature: Signature::one_of(
-                // Hack: String is at the beginning so the return type is String if both args are Nulls
+                // String is at the beginning so the return type is String if both args are Nulls
                 vec![
                     TypeSignature::String(2),
                     TypeSignature::Numeric(2),

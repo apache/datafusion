@@ -206,7 +206,7 @@ fn try_coerce_types(
             return Ok(t);
         }
     } else {
-        // TODO: Deprecate this branch after all signatures are well-supported (aka coercion are happend already)
+        // TODO: Deprecate this branch after all signatures are well-supported (aka coercion has happened already)
         // Try and coerce the argument types to match the signature, returning the
         // coerced types from the first matching signature.
         for valid_types in valid_types {
@@ -486,7 +486,7 @@ fn get_valid_types(
         TypeSignature::Boolean(number) => {
             function_length_check(current_types.len(), *number)?;
 
-            // Find common boolean type amongs given types
+            // Find common boolean type amongst the given types
             let mut valid_type = current_types.first().unwrap().to_owned();
             for t in current_types.iter().skip(1) {
                 let logical_data_type: NativeType = t.into();
