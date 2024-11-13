@@ -179,8 +179,6 @@ pub enum DeserializerOutput {
     RecordBatch(RecordBatch),
     /// The deserializer requires more data to make progress.
     RequiresMoreData,
-    /// The deserializer reached the limit.
-    LimitReached,
     /// The input data has been exhausted.
     InputExhausted,
 }
@@ -325,9 +323,7 @@ pub(crate) fn deserialize_stream<'a>(
 
         return match deserializer.next()? {
             DeserializerOutput::RecordBatch(rb) => Poll::Ready(Some(Ok(rb))),
-            DeserializerOutput::LimitReached | DeserializerOutput::InputExhausted => {
-                Poll::Ready(None)
-            }
+            DeserializerOutput::InputExhausted => Poll::Ready(None),
             DeserializerOutput::RequiresMoreData => continue,
         };
     })
