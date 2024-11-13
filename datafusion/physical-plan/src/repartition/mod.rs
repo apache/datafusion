@@ -623,7 +623,7 @@ impl ExecutionPlan for RepartitionExec {
                         Box::pin(PerPartitionStream {
                             schema: Arc::clone(&schema_captured),
                             receiver,
-                            drop_helper: Arc::clone(&abort_helper),
+                            _drop_helper: Arc::clone(&abort_helper),
                             reservation: Arc::clone(&reservation),
                         }) as SendableRecordBatchStream
                     })
@@ -651,7 +651,7 @@ impl ExecutionPlan for RepartitionExec {
                     num_input_partitions_processed: 0,
                     schema: input.schema(),
                     input: rx.swap_remove(0),
-                    drop_helper: abort_helper,
+                    _drop_helper: abort_helper,
                     reservation,
                 }) as SendableRecordBatchStream)
             }
@@ -906,8 +906,7 @@ struct RepartitionStream {
     input: DistributionReceiver<MaybeBatch>,
 
     /// Handle to ensure background tasks are killed when no longer needed.
-    #[allow(dead_code)]
-    drop_helper: Arc<Vec<SpawnedTask<()>>>,
+    _drop_helper: Arc<Vec<SpawnedTask<()>>>,
 
     /// Memory reservation.
     reservation: SharedMemoryReservation,
@@ -970,8 +969,7 @@ struct PerPartitionStream {
     receiver: DistributionReceiver<MaybeBatch>,
 
     /// Handle to ensure background tasks are killed when no longer needed.
-    #[allow(dead_code)]
-    drop_helper: Arc<Vec<SpawnedTask<()>>>,
+    _drop_helper: Arc<Vec<SpawnedTask<()>>>,
 
     /// Memory reservation.
     reservation: SharedMemoryReservation,
