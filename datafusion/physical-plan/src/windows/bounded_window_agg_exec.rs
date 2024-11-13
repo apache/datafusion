@@ -1160,12 +1160,12 @@ mod tests {
     use std::task::{Context, Poll};
     use std::time::Duration;
 
-    use crate::common::collect;
     use crate::expressions::PhysicalSortExpr;
-    use crate::memory::MemoryExec;
     use crate::projection::ProjectionExec;
     use crate::streaming::{PartitionStream, StreamingTableExec};
-    use crate::windows::{create_window_expr, BoundedWindowAggExec, InputOrderMode};
+    use crate::windows::{
+        create_udwf_window_expr, create_window_expr, BoundedWindowAggExec, InputOrderMode,
+    };
     use crate::{execute_stream, get_plan_string, ExecutionPlan};
 
     use arrow_array::builder::{Int64Builder, UInt64Builder};
@@ -1182,12 +1182,14 @@ mod tests {
         WindowFrame, WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition,
     };
     use datafusion_functions_aggregate::count::count_udaf;
-    use datafusion_physical_expr::expressions::{col, Column, NthValue};
-    use datafusion_physical_expr::window::{
-        BuiltInWindowExpr, BuiltInWindowFunctionExpr,
-    };
+    use datafusion_functions_window::nth_value::last_value_udwf;
+    use datafusion_functions_window::nth_value::nth_value_udwf;
+    use datafusion_physical_expr::expressions::{col, Column, Literal};
     use datafusion_physical_expr::{LexOrdering, PhysicalExpr};
 
+    use crate::common::collect;
+    use crate::memory::MemoryExec;
+    use datafusion_physical_expr::window::BuiltInWindowExpr;
     use futures::future::Shared;
     use futures::{pin_mut, ready, FutureExt, Stream, StreamExt};
     use itertools::Itertools;
@@ -1501,7 +1503,7 @@ mod tests {
         Ok(source)
     }
 
-    // Tests NTH_VALUE(negative index) with memoize feature.
+    // Tests NTH_VALUE(negative index) with memoize feature
     // To be able to trigger memoize feature for NTH_VALUE we need to
     // - feed BoundedWindowAggExec with batch stream data.
     // - Window frame should contain UNBOUNDED PRECEDING.
@@ -1525,30 +1527,39 @@ mod tests {
         )
         .map(|e| Arc::new(e) as Arc<dyn ExecutionPlan>)?;
         let col_a = col("a", &schema)?;
-        let nth_value_func1 = NthValue::nth(
-            "nth_value(-1)",
-            Arc::clone(&col_a),
-            DataType::Int32,
-            1,
+        let nth_value_func1 = create_udwf_window_expr(
+            &nth_value_udwf(),
+            &[
+                Arc::clone(&col_a),
+                Arc::new(Literal::new(ScalarValue::Int32(Some(1)))),
+            ],
+            &schema,
+            "nth_value(-1)".to_string(),
             false,
         )?
         .reverse_expr()
         .unwrap();
-        let nth_value_func2 = NthValue::nth(
-            "nth_value(-2)",
-            Arc::clone(&col_a),
-            DataType::Int32,
-            2,
+        let nth_value_func2 = create_udwf_window_expr(
+            &nth_value_udwf(),
+            &[
+                Arc::clone(&col_a),
+                Arc::new(Literal::new(ScalarValue::Int32(Some(2)))),
+            ],
+            &schema,
+            "nth_value(-2)".to_string(),
             false,
         )?
         .reverse_expr()
         .unwrap();
-        let last_value_func = Arc::new(NthValue::last(
-            "last",
-            Arc::clone(&col_a),
-            DataType::Int32,
+
+        let last_value_func = create_udwf_window_expr(
+            &last_value_udwf(),
+            &[Arc::clone(&col_a)],
+            &schema,
+            "last".to_string(),
             false,
-        )) as _;
+        )?;
+
         let window_exprs = vec![
             // LAST_VALUE(a)
             Arc::new(BuiltInWindowExpr::new(

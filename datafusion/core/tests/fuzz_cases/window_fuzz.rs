@@ -34,8 +34,7 @@ use datafusion_common::{Result, ScalarValue};
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_expr::type_coercion::functions::data_types_with_aggregate_udf;
 use datafusion_expr::{
-    BuiltInWindowFunction, WindowFrame, WindowFrameBound, WindowFrameUnits,
-    WindowFunctionDefinition,
+    WindowFrame, WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition,
 };
 use datafusion_functions_aggregate::count::count_udaf;
 use datafusion_functions_aggregate::min_max::{max_udaf, min_udaf};
@@ -47,6 +46,9 @@ use test_utils::add_empty_batches;
 use datafusion::functions_window::row_number::row_number_udwf;
 use datafusion_common::HashMap;
 use datafusion_functions_window::lead_lag::{lag_udwf, lead_udwf};
+use datafusion_functions_window::nth_value::{
+    first_value_udwf, last_value_udwf, nth_value_udwf,
+};
 use datafusion_functions_window::rank::{dense_rank_udwf, rank_udwf};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use rand::distributions::Alphanumeric;
@@ -418,27 +420,21 @@ fn get_random_function(
     window_fn_map.insert(
         "first_value",
         (
-            WindowFunctionDefinition::BuiltInWindowFunction(
-                BuiltInWindowFunction::FirstValue,
-            ),
+            WindowFunctionDefinition::WindowUDF(first_value_udwf()),
             vec![arg.clone()],
         ),
     );
     window_fn_map.insert(
         "last_value",
         (
-            WindowFunctionDefinition::BuiltInWindowFunction(
-                BuiltInWindowFunction::LastValue,
-            ),
+            WindowFunctionDefinition::WindowUDF(last_value_udwf()),
             vec![arg.clone()],
         ),
     );
     window_fn_map.insert(
         "nth_value",
         (
-            WindowFunctionDefinition::BuiltInWindowFunction(
-                BuiltInWindowFunction::NthValue,
-            ),
+            WindowFunctionDefinition::WindowUDF(nth_value_udwf()),
             vec![
                 arg.clone(),
                 lit(ScalarValue::Int64(Some(rng.gen_range(1..10)))),
