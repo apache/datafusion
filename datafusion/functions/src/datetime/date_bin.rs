@@ -25,7 +25,7 @@ use arrow::array::types::{
     TimestampSecondType,
 };
 use arrow::array::{ArrayRef, PrimitiveArray};
-use arrow::datatypes::DataType::{Null, Timestamp, Utf8, Utf8View};
+use arrow::datatypes::DataType::{Null, Timestamp, Utf8};
 use arrow::datatypes::IntervalUnit::{DayTime, MonthDayNano};
 use arrow::datatypes::TimeUnit::{Microsecond, Millisecond, Nanosecond, Second};
 use arrow::datatypes::{DataType, TimeUnit};
