@@ -20,7 +20,9 @@ use std::vec;
 
 use arrow_schema::*;
 use datafusion_common::{DFSchema, Result, TableReference};
-use datafusion_expr::test::function_stub::{count_udaf, max_udaf, min_udaf, sum_udaf};
+use datafusion_expr::test::function_stub::{
+    count_udaf, max_udaf, min_udaf, sum, sum_udaf,
+};
 use datafusion_expr::{col, lit, table_scan, wildcard, LogicalPlanBuilder};
 use datafusion_functions::unicode;
 use datafusion_functions_aggregate::grouping::grouping_udaf;
@@ -559,6 +561,32 @@ Projection: unnest_placeholder(unnest_table.struct_col).field1, unnest_placehold
       TableScan: unnest_table"#.trim_start();
 
     assert_eq!(plan.to_string(), expected);
+
+    Ok(())
+}
+
+#[test]
+fn test_aggregation_without_projection() -> Result<()> {
+    let schema = Schema::new(vec![
+        Field::new("name", DataType::Utf8, false),
+        Field::new("age", DataType::UInt8, false),
+    ]);
+
+    let plan = LogicalPlanBuilder::from(
+        table_scan(Some("users"), &schema, Some(vec![0, 1]))?.build()?,
+    )
+    .aggregate(vec![col("name")], vec![sum(col("age"))])?
+    .build()?;
+
+    let unparser = Unparser::default();
+    let statement = unparser.plan_to_sql(&plan)?;
+
+    let actual = &statement.to_string();
+
+    assert_eq!(
+        actual,
+        r#"SELECT sum(users.age), users."name" FROM (SELECT users."name", users.age FROM users) GROUP BY users."name""#
+    );
 
     Ok(())
 }
