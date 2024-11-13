@@ -410,15 +410,6 @@ fn type_coercion_demo() -> Result<()> {
                     e.op,
                     Box::new(coerced_right),
                 ))))
-            } else if let Expr::Column(ref col_expr) = *e.right {
-                let field = df_schema.field_with_name(None, col_expr.name())?;
-                let cast_to_type = field.data_type();
-                let coerced_left = e.left.cast_to(cast_to_type, &df_schema)?;
-                Ok(Transformed::yes(Expr::BinaryExpr(BinaryExpr::new(
-                    Box::new(coerced_left),
-                    e.op,
-                    e.right,
-                ))))
             } else {
                 Ok(Transformed::no(Expr::BinaryExpr(e)))
             }
