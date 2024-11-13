@@ -3443,13 +3443,14 @@ array_sort(array, desc, nulls_first)
 Converts each element to its text representation.
 
 ```
-array_to_string(array, delimiter)
+array_to_string(array, delimiter[, null_string])
 ```
 
 #### Arguments
 
 - **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
 - **delimiter**: Array element separator.
+- **null_string**: Optional. String to replace null values in the array. If not provided, nulls will be handled by default behavior.
 
 #### Example
 
@@ -3824,26 +3825,33 @@ range(start, stop, step)
 
 ### `string_to_array`
 
-Converts each element to its text representation.
+Splits a string into an array of substrings based on a delimiter. Any substrings matching the optional `null_str` argument are replaced with NULL.
 
 ```
-array_to_string(array, delimiter)
+string_to_array(str, delimiter[, null_str])
 ```
 
 #### Arguments
 
-- **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
-- **delimiter**: Array element separator.
+- **str**: String expression to split.
+- **delimiter**: Delimiter string to split on.
+- **null_str**: Substring values to be replaced with `NULL`.
 
 #### Example
 
 ```sql
-> select array_to_string([[1, 2, 3, 4], [5, 6, 7, 8]], ',');
-+----------------------------------------------------+
-| array_to_string(List([1,2,3,4,5,6,7,8]),Utf8(",")) |
-+----------------------------------------------------+
-| 1,2,3,4,5,6,7,8                                    |
-+----------------------------------------------------+
+> select string_to_array('abc##def', '##');
++-----------------------------------+
+| string_to_array(Utf8('abc##def'))  |
++-----------------------------------+
+| ['abc', 'def']                    |
++-----------------------------------+
+> select string_to_array('abc def', ' ', 'def');
++---------------------------------------------+
+| string_to_array(Utf8('abc def'), Utf8(' '), Utf8('def')) |
++---------------------------------------------+
+| ['abc', NULL]                               |
++---------------------------------------------+
 ```
 
 #### Aliases
