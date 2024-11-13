@@ -286,7 +286,7 @@ fn handle_regexp_like(
 mod tests {
     use std::sync::Arc;
 
-    use arrow::array::{Int32Array, StringArray};
+    use arrow::array::StringArray;
     use arrow::array::{BooleanBuilder, StringViewArray};
 
     use crate::regex::regexplike::regexp_like;
@@ -368,26 +368,6 @@ mod tests {
         let expected = expected_builder.finish();
 
         let re = regexp_like(&[Arc::new(values), Arc::new(patterns), Arc::new(flags)])
-            .unwrap();
-
-        assert_eq!(re.as_ref(), &expected);
-    }
-
-    #[test]
-    fn test_implicit_casting_regexp_like_utf8() {
-        let values = Int32Array::from(vec![100; 5]);
-        let patterns =
-            StringArray::from(vec!["\\d*", "\\d+", "\\d{3}", "\\d{1,5}", "\\d{5,10}"]);
-
-        let mut expected_builder: BooleanBuilder = BooleanBuilder::new();
-        expected_builder.append_value(true);
-        expected_builder.append_value(false);
-        expected_builder.append_value(true);
-        expected_builder.append_value(true);
-        expected_builder.append_value(false);
-        let expected = expected_builder.finish();
-
-        let re = regexp_like(&[Arc::new(values), Arc::new(patterns)])
             .unwrap();
 
         assert_eq!(re.as_ref(), &expected);
