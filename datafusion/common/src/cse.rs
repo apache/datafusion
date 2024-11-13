@@ -99,7 +99,7 @@ impl<N: NormalizeEq> Hash for Identifier<'_, N> {
 
 impl<N: NormalizeEq> PartialEq for Identifier<'_, N> {
     fn eq(&self, other: &Self) -> bool {
-        self.node.normalize_eq(other.node)
+        self.hash == other.hash && self.node.normalize_eq(other.node)
     }
 }
 
