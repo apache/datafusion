@@ -137,6 +137,8 @@ pub enum TypeSignature {
     /// Null is considerd as `Utf8` by default
     /// Dictionary with string value type is also handled.
     String(usize),
+    /// Zero argument
+    NullAry,
 }
 
 impl TypeSignature {
@@ -235,6 +237,9 @@ impl Display for ArrayFunctionSignature {
 impl TypeSignature {
     pub fn to_string_repr(&self) -> Vec<String> {
         match self {
+            TypeSignature::NullAry => {
+                vec!["NullAry()".to_string()]
+            }
             TypeSignature::Variadic(types) => {
                 vec![format!("{}, ..", Self::join_types(types, "/"))]
             }
@@ -288,7 +293,7 @@ impl TypeSignature {
     pub fn supports_zero_argument(&self) -> bool {
         match &self {
             TypeSignature::Exact(vec) => vec.is_empty(),
-            TypeSignature::Uniform(0, _) | TypeSignature::Any(0) => true,
+            TypeSignature::NullAry => true,
             TypeSignature::OneOf(types) => types
                 .iter()
                 .any(|type_sig| type_sig.supports_zero_argument()),
@@ -348,6 +353,7 @@ impl TypeSignature {
                 .collect(),
             // TODO: Implement for other types
             TypeSignature::Any(_)
+            | TypeSignature::NullAry
             | TypeSignature::VariadicAny
             | TypeSignature::ArraySignature(_)
             | TypeSignature::UserDefined => vec![],
@@ -471,6 +477,13 @@ impl Signature {
         }
     }
 
+    pub fn nullary(volatility: Volatility) -> Self {
+        Signature {
+            type_signature: TypeSignature::NullAry,
+            volatility,
+        }
+    }
+
     /// A specified number of arguments of any type
     pub fn any(arg_count: usize, volatility: Volatility) -> Self {
         Signature {
@@ -541,13 +554,12 @@ mod tests {
         // Testing `TypeSignature`s which supports 0 arg
         let positive_cases = vec![
             TypeSignature::Exact(vec![]),
-            TypeSignature::Uniform(0, vec![DataType::Float64]),
-            TypeSignature::Any(0),
             TypeSignature::OneOf(vec![
                 TypeSignature::Exact(vec![DataType::Int8]),
-                TypeSignature::Any(0),
+                TypeSignature::NullAry,
                 TypeSignature::Uniform(1, vec![DataType::Int8]),
             ]),
+            TypeSignature::NullAry,
         ];
 
         for case in positive_cases {

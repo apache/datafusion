@@ -74,7 +74,7 @@ impl Rank {
     pub fn new(name: String, rank_type: RankType) -> Self {
         Self {
             name,
-            signature: Signature::any(0, Volatility::Immutable),
+            signature: Signature::nullary(Volatility::Immutable),
             rank_type,
         }
     }
