@@ -1488,8 +1488,8 @@ mod tests {
     use datafusion_functions_window::row_number::row_number_udwf;
 
     use crate::unparser::dialect::{
-        CustomDialect, CustomDialectBuilder, DateFieldExtractStyle, Dialect,
-        PostgreSqlDialect,
+        CharacterLengthStyle, CustomDialect, CustomDialectBuilder, DateFieldExtractStyle,
+        Dialect, PostgreSqlDialect,
     };
 
     use super::*;
@@ -2005,6 +2005,33 @@ mod tests {
         }
 
         Ok(())
+    }
+
+    #[test]
+    fn test_character_length_scalar_to_expr() {
+        let tests = [
+            (CharacterLengthStyle::Length, "length(x)"),
+            (CharacterLengthStyle::CharacterLength, "character_length(x)"),
+        ];
+
+        for (style, expected) in tests {
+            let dialect = CustomDialectBuilder::new()
+                .with_character_length_style(style)
+                .build();
+            let unparser = Unparser::new(&dialect);
+
+            let expr = ScalarUDF::new_from_impl(
+                datafusion_functions::unicode::character_length::CharacterLengthFunc::new(
+                ),
+            )
+            .call(vec![col("x")]);
+
+            let ast = unparser.expr_to_sql(&expr).expect("to be unparsed");
+
+            let actual = format!("{ast}");
+
+            assert_eq!(actual, expected);
+        }
     }
 
     #[test]
