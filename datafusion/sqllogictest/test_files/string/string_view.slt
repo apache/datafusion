@@ -38,7 +38,7 @@ statement ok
 drop table test_source
 
 # TODO: Revisit this issue after upgrading to the arrow-rs version that includes apache/arrow-rs#6671.
-# see issue https://github.com/apache/datafusion/pull/13221
+# see issue https://github.com/apache/datafusion/issues/13329
 query error DataFusion error: Arrow error: Compute error: bit_length not supported for Utf8View
 select bit_length(ascii_1), bit_length(ascii_2), bit_length(unicode_1), bit_length(unicode_2) from test_basic_operator;
 

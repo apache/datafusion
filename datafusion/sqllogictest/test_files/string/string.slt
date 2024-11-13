@@ -188,7 +188,7 @@ percent p%t pan Tadeusz ma iść w kąt Pan Tadeusz ma frunąć stąd w kąt tru
 under_score un_____core un iść core chrząszcz na łące w 東京都 true false true false
 
 # TODO: move it back to `string_query.slt.part` after fixing the issue
-# see issue https://github.com/apache/datafusion/pull/13221
+# see issue https://github.com/apache/datafusion/issues/13329
 query IIII
 select bit_length(ascii_1), bit_length(ascii_2), bit_length(unicode_1), bit_length(unicode_2) from test_basic_operator;
 ----
