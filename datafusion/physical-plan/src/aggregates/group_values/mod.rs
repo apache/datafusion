@@ -20,24 +20,26 @@
 use arrow::record_batch::RecordBatch;
 use arrow_array::{downcast_primitive, ArrayRef};
 use arrow_schema::{DataType, SchemaRef};
-use bytes_view::GroupValuesBytesView;
 use datafusion_common::Result;
 
-pub(crate) mod primitive;
 use datafusion_expr::EmitTo;
-use primitive::GroupValuesPrimitive;
 
 mod multi_column;
 mod row;
+mod single_column;
+use datafusion_physical_expr::binary_map::OutputType;
 use multi_column::GroupValuesColumn;
 use row::GroupValuesRows;
 
-mod bytes;
-mod bytes_view;
-use bytes::GroupValuesByes;
-use datafusion_physical_expr::binary_map::OutputType;
+pub(crate) use single_column::primitive::HashValue;
 
-use crate::aggregates::order::GroupOrdering;
+use crate::aggregates::{
+    group_values::single_column::{
+        bytes::GroupValuesByes, bytes_view::GroupValuesBytesView,
+        primitive::GroupValuesPrimitive,
+    },
+    order::GroupOrdering,
+};
 
 mod null_builder;
 
