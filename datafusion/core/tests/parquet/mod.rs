@@ -100,10 +100,9 @@ enum Unit {
 /// table "t" registered, pointing at a parquet file made with
 /// `make_test_file`
 struct ContextWithParquet {
-    #[allow(dead_code)]
     /// temp file parquet data is written to. The file is cleaned up
     /// when dropped
-    file: NamedTempFile,
+    _file: NamedTempFile,
     provider: Arc<dyn TableProvider>,
     ctx: SessionContext,
 }
@@ -217,7 +216,7 @@ impl ContextWithParquet {
         ctx.register_table("t", provider.clone()).unwrap();
 
         Self {
-            file,
+            _file: file,
             provider,
             ctx,
         }
