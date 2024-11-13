@@ -125,3 +125,33 @@ select nullif('2', '3');
 # This query success in Postgres and DuckDB
 query error DataFusion error: Error during planning: Internal error: Failed to match any signature, errors: Error during planning: The signature expected NativeType::String but received NativeType::Int64
 select nullif(2, '1');
+
+query T
+SELECT NULLIF(arrow_cast('a', 'Utf8View'), 'a');
+----
+NULL
+
+query T
+SELECT NULLIF('a', arrow_cast('a', 'Utf8View'));
+----
+NULL
+
+query T
+SELECT NULLIF(arrow_cast('a', 'Utf8View'), 'b');
+----
+a
+
+query T
+SELECT NULLIF('a', arrow_cast('b', 'Utf8View'));
+----
+a
+
+query T
+SELECT NULLIF(null, arrow_cast('a', 'Utf8View'));
+----
+NULL
+
+query T
+SELECT NULLIF(arrow_cast('a', 'Utf8View'), null);
+----
+a
