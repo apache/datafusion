@@ -305,6 +305,7 @@ fn roundtrip_udwf() -> Result<()> {
         InputOrderMode::Sorted,
     )?))
 }
+
 #[test]
 fn roundtrip_window() -> Result<()> {
     let field_a = Field::new("a", DataType::Int64, false);
