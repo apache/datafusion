@@ -698,7 +698,7 @@ impl AggregateFunction {
 ///
 /// In SQL, you can use:
 /// - Actual window functions ([`WindowUDF`])
-/// - Noraml aggregate functions ([`AggregateUDF`])
+/// - Normal aggregate functions ([`AggregateUDF`])
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
 pub enum WindowFunctionDefinition {
     /// A user defined aggregate function
