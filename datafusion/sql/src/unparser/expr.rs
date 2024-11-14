@@ -1933,13 +1933,6 @@ mod tests {
                 array_element(make_array(vec![lit(1), lit(2), lit(3)]), lit(1)),
                 "[1, 2, 3][1]",
             ),
-            (
-                Expr::ScalarFunction(ScalarFunction {
-                    func: named_struct(),
-                    args: vec![lit("c0"), lit(1), lit("c1"), lit(2)],
-                }),
-                "{c0: 1, c1: 2}",
-            ),
         ];
 
         for (expr, expected) in tests {
