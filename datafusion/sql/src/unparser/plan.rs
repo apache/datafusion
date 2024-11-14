@@ -22,7 +22,7 @@ use super::{
     },
     rewrite::{
         inject_column_aliases_into_subquery, normalize_union_schema,
-        remove_dangling_expr, rewrite_plan_for_sort_on_non_projected_fields,
+        rewrite_plan_for_sort_on_non_projected_fields,
         subquery_alias_inner_query_and_columns, TableAliasRewriter,
     },
     utils::{
@@ -157,96 +157,13 @@ impl Unparser<'_> {
             )]);
         }
 
-        // Construct a list of all the identifiers present in query sources
-        let mut all_idents = Vec::new();
-        if let Some(source_alias) = relation_builder.get_alias() {
-            all_idents.push(source_alias);
-        } else if let Some(source_name) = relation_builder.get_name() {
-            let full_ident = source_name.to_string();
-            if let Some(name) = source_name.0.last() {
-                if full_ident != name.to_string() {
-                    // supports identifiers that contain the entire path, as well as just the end table leaf
-                    // like catalog.schema.table and table
-                    all_idents.push(name.to_string());
-                }
-            }
-            all_idents.push(full_ident);
-        }
-
         let mut twj = select_builder.pop_from().unwrap();
-        twj.get_joins()
-            .iter()
-            .for_each(|join| match &join.relation {
-                ast::TableFactor::Table { alias, name, .. } => {
-                    if let Some(alias) = alias {
-                        all_idents.push(alias.name.to_string());
-                    } else {
-                        let full_ident = name.to_string();
-                        if let Some(name) = name.0.last() {
-                            if full_ident != name.to_string() {
-                                // supports identifiers that contain the entire path, as well as just the end table leaf
-                                // like catalog.schema.table and table
-                                all_idents.push(name.to_string());
-                            }
-                        }
-                        all_idents.push(full_ident);
-                    }
-                }
-                ast::TableFactor::Derived {
-                    alias: Some(alias), ..
-                } => {
-                    all_idents.push(alias.name.to_string());
-                }
-                _ => {}
-            });
-
-        twj.relation(relation_builder);
+        twj.relation(relation_builder.clone());
         select_builder.push_from(twj);
 
-        // Ensure that the projection contains references to sources that actually exist
-        let mut projection = select_builder.get_projection();
-        projection.iter_mut().for_each(|select_item| {
-            if let ast::SelectItem::UnnamedExpr(expr) = select_item {
-                *expr = remove_dangling_expr(expr.clone(), &all_idents);
-            }
-        });
-
-        // replace dangling references in the selection
-        if let Some(expr) = select_builder.get_selection() {
-            select_builder.set_selection(Some(remove_dangling_expr(expr, &all_idents)));
-        }
-
-        // Check the order by as well
-        if let Some(query) = query.as_mut() {
-            let mut order_by = query.get_order_by();
-            order_by.iter_mut().for_each(|sort_item| {
-                sort_item.expr =
-                    remove_dangling_expr(sort_item.expr.clone(), &all_idents);
-            });
-
-            query.order_by(order_by);
-        }
-
-        // Order by could be a sort in the select builder
-        let mut sort = select_builder.get_sort_by();
-        sort.iter_mut().for_each(|sort_item| {
-            *sort_item = remove_dangling_expr(sort_item.clone(), &all_idents);
-        });
-
-        // check the group by as well
-        if let Some(ast::GroupByExpr::Expressions(mut group_by, modifiers)) =
-            select_builder.get_group_by()
-        {
-            group_by.iter_mut().for_each(|expr| {
-                *expr = remove_dangling_expr(expr.clone(), &all_idents);
-            });
-
-            select_builder.group_by(ast::GroupByExpr::Expressions(group_by, modifiers));
-        }
-
-        select_builder.projection(projection);
-
-        Ok(SetExpr::Select(Box::new(select_builder.build()?)))
+        Ok(SetExpr::Select(Box::new(
+            select_builder.build(query, &relation_builder)?,
+        )))
     }
 
     /// Reconstructs a SELECT SQL statement from a logical plan by unprojecting column expressions

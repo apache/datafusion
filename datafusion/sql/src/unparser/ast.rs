@@ -25,6 +25,8 @@ use core::fmt;
 
 use sqlparser::ast;
 
+use super::rewrite::remove_dangling_expr;
+
 #[derive(Clone)]
 pub(super) struct QueryBuilder {
     with: Option<ast::With>,
@@ -162,9 +164,6 @@ impl SelectBuilder {
         self.projection = value;
         self
     }
-    pub fn get_projection(&self) -> Vec<ast::SelectItem> {
-        self.projection.clone()
-    }
     pub fn already_projected(&self) -> bool {
         !self.projection.is_empty()
     }
@@ -212,19 +211,9 @@ impl SelectBuilder {
 
         self
     }
-    pub fn set_selection(&mut self, value: Option<ast::Expr>) -> &mut Self {
-        self.selection = value;
-        self
-    }
-    pub fn get_selection(&self) -> Option<ast::Expr> {
-        self.selection.clone()
-    }
     pub fn group_by(&mut self, value: ast::GroupByExpr) -> &mut Self {
         self.group_by = Some(value);
         self
-    }
-    pub fn get_group_by(&self) -> Option<ast::GroupByExpr> {
-        self.group_by.clone()
     }
     pub fn cluster_by(&mut self, value: Vec<ast::Expr>) -> &mut Self {
         self.cluster_by = value;
@@ -237,9 +226,6 @@ impl SelectBuilder {
     pub fn sort_by(&mut self, value: Vec<ast::Expr>) -> &mut Self {
         self.sort_by = value;
         self
-    }
-    pub fn get_sort_by(&self) -> Vec<ast::Expr> {
-        self.sort_by.clone()
     }
     pub fn having(&mut self, value: Option<ast::Expr>) -> &mut Self {
         self.having = value;
@@ -257,7 +243,106 @@ impl SelectBuilder {
         self.value_table_mode = value;
         self
     }
-    pub fn build(&self) -> Result<ast::Select, BuilderError> {
+    fn collect_valid_idents(&self, relation_builder: &RelationBuilder) -> Vec<String> {
+        let mut all_idents = Vec::new();
+        if let Some(source_alias) = relation_builder.get_alias() {
+            all_idents.push(source_alias);
+        } else if let Some(source_name) = relation_builder.get_name() {
+            let full_ident = source_name.to_string();
+            if let Some(name) = source_name.0.last() {
+                if full_ident != name.to_string() {
+                    // supports identifiers that contain the entire path, as well as just the end table leaf
+                    // like catalog.schema.table and table
+                    all_idents.push(name.to_string());
+                }
+            }
+            all_idents.push(full_ident);
+        }
+
+        if let Some(twg) = self.from.last() {
+            twg.get_joins()
+                .iter()
+                .for_each(|join| match &join.relation {
+                    ast::TableFactor::Table { alias, name, .. } => {
+                        if let Some(alias) = alias {
+                            all_idents.push(alias.name.to_string());
+                        } else {
+                            let full_ident = name.to_string();
+                            if let Some(name) = name.0.last() {
+                                if full_ident != name.to_string() {
+                                    // supports identifiers that contain the entire path, as well as just the end table leaf
+                                    // like catalog.schema.table and table
+                                    all_idents.push(name.to_string());
+                                }
+                            }
+                            all_idents.push(full_ident);
+                        }
+                    }
+                    ast::TableFactor::Derived {
+                        alias: Some(alias), ..
+                    } => {
+                        all_idents.push(alias.name.to_string());
+                    }
+                    _ => {}
+                });
+        }
+
+        all_idents
+    }
+
+    /// Remove any dangling table identifiers from the projection, selection, group by, order by and function arguments
+    /// This removes any references to tables that are not part of any from/source or join, as they would be invalid
+    fn remove_dangling_identifiers(
+        &mut self,
+        query: &mut Option<QueryBuilder>,
+        relation_builder: &RelationBuilder,
+    ) {
+        let all_idents = self.collect_valid_idents(relation_builder);
+
+        // Ensure that the projection contains references to sources that actually exist
+        self.projection.iter_mut().for_each(|select_item| {
+            if let ast::SelectItem::UnnamedExpr(expr) = select_item {
+                *expr = remove_dangling_expr(expr.clone(), &all_idents);
+            }
+        });
+
+        // replace dangling references in the selection
+        if let Some(expr) = self.selection.as_ref() {
+            self.selection = Some(remove_dangling_expr(expr.clone(), &all_idents));
+        }
+
+        // Check the order by as well
+        if let Some(query) = query.as_mut() {
+            let mut order_by = query.get_order_by();
+            order_by.iter_mut().for_each(|sort_item| {
+                sort_item.expr =
+                    remove_dangling_expr(sort_item.expr.clone(), &all_idents);
+            });
+
+            query.order_by(order_by);
+        }
+
+        // Order by could be a sort in the select builder
+        self.sort_by.iter_mut().for_each(|sort_item| {
+            *sort_item = remove_dangling_expr(sort_item.clone(), &all_idents);
+        });
+
+        // check the group by as well
+        if let Some(ast::GroupByExpr::Expressions(ref mut group_by, _)) =
+            self.group_by.as_mut()
+        {
+            group_by.iter_mut().for_each(|expr| {
+                *expr = remove_dangling_expr(expr.clone(), &all_idents);
+            });
+        }
+    }
+    pub fn build(
+        &mut self,
+        query: &mut Option<QueryBuilder>,
+        relation_builder: &RelationBuilder,
+    ) -> Result<ast::Select, BuilderError> {
+        self.remove_dangling_identifiers(query, relation_builder);
+
         Ok(ast::Select {
             distinct: self.distinct.clone(),
             top: self.top.clone(),
