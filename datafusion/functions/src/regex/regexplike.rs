@@ -80,7 +80,10 @@ Additional examples can be found [here](https://github.com/apache/datafusion/blo
 impl RegexpLikeFunc {
     pub fn new() -> Self {
         Self {
-            signature: Signature::string(2, Volatility::Immutable),
+            signature: Signature::one_of(
+                vec![TypeSignature::String(2), TypeSignature::String(3)],
+                Volatility::Immutable,
+            ),
         }
     }
 }
