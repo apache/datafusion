@@ -24,7 +24,7 @@ use datafusion_common::{
 };
 use datafusion_expr::{expr::Alias, tree_node::transform_sort_vec};
 use datafusion_expr::{Expr, LogicalPlan, Projection, Sort, SortExpr};
-use sqlparser::ast::{display_separated, Ident};
+use sqlparser::ast::{self, display_separated, Ident};
 
 /// Normalize the schema of a union plan to remove qualifiers from the schema fields and sort expressions.
 ///
@@ -388,6 +388,77 @@ pub fn remove_dangling_identifiers(
             // Reset the identifiers to only the last element, which is the column name
             *idents = vec![last.clone()];
         }
+    }
+}
+
+/// Handle removing dangling identifiers from an expression
+/// This function can call itself recursively to handle nested expressions
+/// Like binary ops or functions which contain nested expressions/arguments
+pub fn remove_dangling_expr(
+    expr: ast::Expr,
+    available_idents: &Vec<String>,
+) -> ast::Expr {
+    match expr {
+        ast::Expr::BinaryOp { left, op, right } => {
+            let left = remove_dangling_expr(*left, available_idents);
+            let right = remove_dangling_expr(*right, available_idents);
+            ast::Expr::BinaryOp {
+                left: Box::new(left),
+                op,
+                right: Box::new(right),
+            }
+        }
+        ast::Expr::Nested(expr) => {
+            let expr = remove_dangling_expr(*expr, available_idents);
+            ast::Expr::Nested(Box::new(expr))
+        }
+        ast::Expr::CompoundIdentifier(idents) => {
+            let mut idents = idents.clone();
+            remove_dangling_identifiers(&mut idents, available_idents);
+
+            if idents.len() > 1 {
+                ast::Expr::CompoundIdentifier(idents)
+            } else {
+                ast::Expr::Identifier(idents[0].clone())
+            }
+        }
+        ast::Expr::Function(ast::Function {
+            args,
+            name,
+            parameters,
+            filter,
+            null_treatment,
+            over,
+            within_group,
+        }) => {
+            let args = if let ast::FunctionArguments::List(mut args) = args {
+                args.args.iter_mut().for_each(|arg| match arg {
+                    ast::FunctionArg::Named {
+                        arg: ast::FunctionArgExpr::Expr(expr),
+                        ..
+                    }
+                    | ast::FunctionArg::Unnamed(ast::FunctionArgExpr::Expr(expr)) => {
+                        *expr = remove_dangling_expr(expr.clone(), available_idents);
+                    }
+                    _ => {}
+                });
+
+                ast::FunctionArguments::List(args)
+            } else {
+                args
+            };
+
+            ast::Expr::Function(ast::Function {
+                args,
+                name,
+                parameters,
+                filter,
+                null_treatment,
+                over,
+                within_group,
+            })
+        }
+        _ => expr,
     }
 }
 

@@ -22,7 +22,7 @@ use super::{
     },
     rewrite::{
         inject_column_aliases_into_subquery, normalize_union_schema,
-        remove_dangling_identifiers, rewrite_plan_for_sort_on_non_projected_fields,
+        remove_dangling_expr, rewrite_plan_for_sort_on_non_projected_fields,
         subquery_alias_inner_query_and_columns, TableAliasRewriter,
     },
     utils::{
@@ -162,7 +162,15 @@ impl Unparser<'_> {
         if let Some(source_alias) = relation_builder.get_alias() {
             all_idents.push(source_alias);
         } else if let Some(source_name) = relation_builder.get_name() {
-            all_idents.push(source_name);
+            let full_ident = source_name.to_string();
+            if let Some(name) = source_name.0.last() {
+                if full_ident != name.to_string() {
+                    // supports identifiers that contain the entire path, as well as just the end table leaf
+                    // like catalog.schema.table and table
+                    all_idents.push(name.to_string());
+                }
+            }
+            all_idents.push(full_ident);
         }
 
         let mut twj = select_builder.pop_from().unwrap();
@@ -173,7 +181,15 @@ impl Unparser<'_> {
                     if let Some(alias) = alias {
                         all_idents.push(alias.name.to_string());
                     } else {
-                        all_idents.push(name.to_string());
+                        let full_ident = name.to_string();
+                        if let Some(name) = name.0.last() {
+                            if full_ident != name.to_string() {
+                                // supports identifiers that contain the entire path, as well as just the end table leaf
+                                // like catalog.schema.table and table
+                                all_idents.push(name.to_string());
+                            }
+                        }
+                        all_idents.push(full_ident);
                     }
                 }
                 ast::TableFactor::Derived { alias, .. } => {
@@ -192,19 +208,23 @@ impl Unparser<'_> {
         projection
             .iter_mut()
             .for_each(|select_item| match select_item {
-                ast::SelectItem::UnnamedExpr(ast::Expr::CompoundIdentifier(idents)) => {
-                    remove_dangling_identifiers(idents, &all_idents);
+                ast::SelectItem::UnnamedExpr(expr) => {
+                    *expr = remove_dangling_expr(expr.clone(), &all_idents);
                 }
                 _ => {}
             });
+
+        // replace dangling references in the selection
+        if let Some(expr) = select_builder.get_selection() {
+            select_builder.set_selection(Some(remove_dangling_expr(expr, &all_idents)));
+        }
 
         // Check the order by as well
         if let Some(query) = query.as_mut() {
             let mut order_by = query.get_order_by();
             order_by.iter_mut().for_each(|sort_item| {
-                if let ast::Expr::CompoundIdentifier(idents) = &mut sort_item.expr {
-                    remove_dangling_identifiers(idents, &all_idents);
-                }
+                sort_item.expr =
+                    remove_dangling_expr(sort_item.expr.clone(), &all_idents);
             });
 
             query.order_by(order_by);
@@ -213,10 +233,19 @@ impl Unparser<'_> {
         // Order by could be a sort in the select builder
         let mut sort = select_builder.get_sort_by();
         sort.iter_mut().for_each(|sort_item| {
-            if let ast::Expr::CompoundIdentifier(idents) = sort_item {
-                remove_dangling_identifiers(idents, &all_idents);
-            }
+            *sort_item = remove_dangling_expr(sort_item.clone(), &all_idents);
         });
+
+        // check the group by as well
+        if let Some(ast::GroupByExpr::Expressions(mut group_by, modifiers)) =
+            select_builder.get_group_by()
+        {
+            group_by.iter_mut().for_each(|expr| {
+                *expr = remove_dangling_expr(expr.clone(), &all_idents);
+            });
+
+            select_builder.group_by(ast::GroupByExpr::Expressions(group_by, modifiers));
+        }
 
         select_builder.projection(projection);
 

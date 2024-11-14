@@ -212,9 +212,19 @@ impl SelectBuilder {
 
         self
     }
+    pub fn set_selection(&mut self, value: Option<ast::Expr>) -> &mut Self {
+        self.selection = value;
+        self
+    }
+    pub fn get_selection(&self) -> Option<ast::Expr> {
+        self.selection.clone()
+    }
     pub fn group_by(&mut self, value: ast::GroupByExpr) -> &mut Self {
         self.group_by = Some(value);
         self
+    }
+    pub fn get_group_by(&self) -> Option<ast::GroupByExpr> {
+        self.group_by.clone()
     }
     pub fn cluster_by(&mut self, value: Vec<ast::Expr>) -> &mut Self {
         self.cluster_by = value;
@@ -372,11 +382,9 @@ impl RelationBuilder {
     pub fn has_relation(&self) -> bool {
         self.relation.is_some()
     }
-    pub fn get_name(&self) -> Option<String> {
+    pub fn get_name(&self) -> Option<&ast::ObjectName> {
         match self.relation {
-            Some(TableFactorBuilder::Table(ref value)) => {
-                value.name.as_ref().map(|a| a.to_string())
-            }
+            Some(TableFactorBuilder::Table(ref value)) => value.name.as_ref(),
             _ => None,
         }
     }

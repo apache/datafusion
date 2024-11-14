@@ -363,6 +363,20 @@ fn roundtrip_statement_with_dialect() -> Result<()> {
             unparser_dialect: Box::new(UnparserDefaultDialect {}),
         },
         TestStatementWithDialect {
+            sql: "select j1_id from (select ta.j1_id from j1 ta) where j1_id > 1",
+            expected:
+                "SELECT j1_id FROM (SELECT ta.j1_id FROM j1 AS ta) WHERE (j1_id > 1)",
+            parser_dialect: Box::new(GenericDialect {}),
+            unparser_dialect: Box::new(UnparserDefaultDialect {}),
+        },
+        TestStatementWithDialect {
+            sql: "select j1_id from (select ta.j1_id from j1 ta) group by j1_id",
+            expected:
+                "SELECT j1_id FROM (SELECT ta.j1_id FROM j1 AS ta) GROUP BY j1_id",
+            parser_dialect: Box::new(GenericDialect {}),
+            unparser_dialect: Box::new(UnparserDefaultDialect {}),
+        },
+        TestStatementWithDialect {
             sql: "select j1_id from (select ta.j1_id from j1 ta) order by j1_id",
             expected:
                 "SELECT j1_id FROM (SELECT ta.j1_id FROM j1 AS ta) ORDER BY j1_id ASC NULLS LAST",
@@ -651,7 +665,7 @@ fn test_aggregation_without_projection() -> Result<()> {
 
     assert_eq!(
         actual,
-        r#"SELECT sum(users.age), users."name" FROM (SELECT users."name", users.age FROM users) GROUP BY users."name""#
+        r#"SELECT sum(age), "name" FROM (SELECT users."name", users.age FROM users) GROUP BY "name""#
     );
 
     Ok(())
