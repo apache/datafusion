@@ -53,8 +53,10 @@ impl RegexpMatchFunc {
                     // For example, given input `(Utf8View, Utf8)`, it first tries coercing to `(Utf8, Utf8)`.
                     // If that fails, it proceeds to `(LargeUtf8, Utf8)`.
                     // TODO: Native support Utf8View for regexp_match.
-                    TypeSignature::String(2),
-                    TypeSignature::String(3),
+                    TypeSignature::Exact(vec![Utf8, Utf8]),
+                    TypeSignature::Exact(vec![LargeUtf8, LargeUtf8]),
+                    TypeSignature::Exact(vec![Utf8, Utf8, Utf8]),
+                    TypeSignature::Exact(vec![LargeUtf8, LargeUtf8, LargeUtf8]),
                 ],
                 Volatility::Immutable,
             ),

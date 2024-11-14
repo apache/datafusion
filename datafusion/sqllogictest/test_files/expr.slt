@@ -510,6 +510,42 @@ SELECT ltrim(NULL, 'xyz')
 ----
 NULL
 
+# implicit casting with TypeSignature test
+query T
+SELECT ltrim(NULL, NULL)
+----
+NULL
+
+query T
+SELECT ltrim(12345, '1')
+----
+2345
+
+query T
+SELECT ltrim(10020, '0')
+----
+10020
+
+query T
+SELECT ltrim(12.345, '12')
+----
+.345
+
+query T
+SELECT ltrim(0.00123, '0.')
+----
+123
+
+query T
+SELECT ltrim(true, 't')
+----
+rue
+
+query T
+SELECT ltrim(false, 'f')
+----
+alse
+
 query I
 SELECT octet_length('')
 ----
