@@ -71,7 +71,6 @@ macro_rules! call_array_function {
         match $DATATYPE {
             DataType::Utf8 => array_function!(StringArray),
             DataType::LargeUtf8 => array_function!(LargeStringArray),
-            DataType::Utf8View => array_function!(StringViewArray),
             DataType::Boolean => array_function!(BooleanArray),
             DataType::Float32 => array_function!(Float32Array),
             DataType::Float64 => array_function!(Float64Array),
@@ -91,7 +90,6 @@ macro_rules! call_array_function {
             DataType::List(_) => array_function!(ListArray),
             DataType::Utf8 => array_function!(StringArray),
             DataType::LargeUtf8 => array_function!(LargeStringArray),
-            DataType::Utf8View => array_function!(StringViewArray),
             DataType::Boolean => array_function!(BooleanArray),
             DataType::Float32 => array_function!(Float32Array),
             DataType::Float64 => array_function!(Float64Array),
