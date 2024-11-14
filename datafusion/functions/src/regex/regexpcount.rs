@@ -557,11 +557,14 @@ fn compile_and_cache_regex<'strings, 'cache>(
 where
     'strings: 'cache,
 {
-    if let Entry::Vacant(e) = regex_cache.entry((regex, flags)) {
-        let compiled = compile_regex(regex, flags)?;
-        e.insert(compiled);
-    }
-    Ok(regex_cache.get(&(regex, flags)).unwrap())
+    let result = match regex_cache.entry((regex, flags)) {
+        Entry::Occupied(occupied_entry) => occupied_entry.into_mut(),
+        Entry::Vacant(vacant_entry) => {
+            let compiled = compile_regex(regex, flags)?;
+            vacant_entry.insert(compiled)
+        }
+    };
+    Ok(result)
 }
 
 fn compile_regex<'a>(
