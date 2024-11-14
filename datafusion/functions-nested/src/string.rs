@@ -171,16 +171,16 @@ impl ScalarUDFImpl for ArrayToString {
     }
 }
 
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+static DOCUMENTATION_ARRAY_TO_STRING: OnceLock<Documentation> = OnceLock::new();
 
 fn get_array_to_string_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
+    DOCUMENTATION_ARRAY_TO_STRING.get_or_init(|| {
         Documentation::builder()
             .with_doc_section(DOC_SECTION_ARRAY)
             .with_description(
                 "Converts each element to its text representation.",
             )
-            .with_syntax_example("array_to_string(array, delimiter)")
+            .with_syntax_example("array_to_string(array, delimiter[, null_string])")
             .with_sql_example(
                 r#"```sql
 > select array_to_string([[1, 2, 3, 4], [5, 6, 7, 8]], ',');
@@ -198,6 +198,10 @@ fn get_array_to_string_doc() -> &'static Documentation {
             .with_argument(
                 "delimiter",
                 "Array element separator.",
+            )
+            .with_argument(
+                "null_string",
+                "Optional. String to replace null values in the array. If not provided, nulls will be handled by default behavior.",
             )
             .build()
             .unwrap()
@@ -278,8 +282,10 @@ impl ScalarUDFImpl for StringToArray {
     }
 }
 
+static DOCUMENTATION_STRING_TO_ARRAY: OnceLock<Documentation> = OnceLock::new();
+
 fn get_string_to_array_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
+    DOCUMENTATION_STRING_TO_ARRAY.get_or_init(|| {
         Documentation::builder()
             .with_doc_section(DOC_SECTION_ARRAY)
             .with_description(

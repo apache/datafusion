@@ -17,7 +17,7 @@
 
 //! A wrapper around `hashbrown::RawTable` that allows entries to be tracked by index
 
-use crate::aggregates::group_values::primitive::HashValue;
+use crate::aggregates::group_values::HashValue;
 use crate::aggregates::topk::heap::Comparable;
 use ahash::RandomState;
 use arrow::datatypes::i256;

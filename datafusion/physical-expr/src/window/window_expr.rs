@@ -530,28 +530,6 @@ pub enum WindowFn {
     Aggregate(Box<dyn Accumulator>),
 }
 
-/// Tag to differentiate special use cases of the NTH_VALUE built-in window function.
-#[derive(Debug, Copy, Clone)]
-pub enum NthValueKind {
-    First,
-    Last,
-    Nth(i64),
-}
-
-#[derive(Debug, Clone)]
-pub struct NthValueState {
-    // In certain cases, we can finalize the result early. Consider this usage:
-    // ```
-    //  FIRST_VALUE(increasing_col) OVER window AS my_first_value
-    //  WINDOW (ORDER BY ts ASC ROWS BETWEEN UNBOUNDED PRECEDING AND 1 FOLLOWING) AS window
-    // ```
-    // The result will always be the first entry in the table. We can store such
-    // early-finalizing results and then just reuse them as necessary. This opens
-    // opportunities to prune our datasets.
-    pub finalized_result: Option<ScalarValue>,
-    pub kind: NthValueKind,
-}
-
 /// Key for IndexMap for each unique partition
 ///
 /// For instance, if window frame is `OVER(PARTITION BY a,b)`,

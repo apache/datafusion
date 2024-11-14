@@ -1946,12 +1946,12 @@ mod tests {
     use datafusion_common_runtime::SpawnedTask;
     use datafusion_expr::expr::WindowFunction;
     use datafusion_expr::{
-        cast, create_udf, lit, BuiltInWindowFunction, ExprFunctionExt,
-        ScalarFunctionImplementation, Volatility, WindowFrame, WindowFrameBound,
-        WindowFrameUnits, WindowFunctionDefinition,
+        cast, create_udf, lit, ExprFunctionExt, ScalarFunctionImplementation, Volatility,
+        WindowFrame, WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition,
     };
     use datafusion_functions_aggregate::expr_fn::{array_agg, count_distinct};
     use datafusion_functions_window::expr_fn::row_number;
+    use datafusion_functions_window::nth_value::first_value_udwf;
     use datafusion_physical_expr::expressions::Column;
     use datafusion_physical_plan::{get_plan_string, ExecutionPlanProperties};
     use sqlparser::ast::NullTreatment;
@@ -2177,9 +2177,7 @@ mod tests {
         // build plan using Table API
         let t = test_table().await?;
         let first_row = Expr::WindowFunction(WindowFunction::new(
-            WindowFunctionDefinition::BuiltInWindowFunction(
-                BuiltInWindowFunction::FirstValue,
-            ),
+            WindowFunctionDefinition::WindowUDF(first_value_udwf()),
             vec![col("aggregate_test_100.c1")],
         ))
         .partition_by(vec![col("aggregate_test_100.c2")])

@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::aggregates::group_values::multi_column::{nulls_equal_to, GroupColumn};
+use crate::aggregates::group_values::multi_group_by::{nulls_equal_to, GroupColumn};
 use crate::aggregates::group_values::null_builder::MaybeNullBufferBuilder;
 use arrow::array::{make_view, AsArray, ByteView};
 use arrow::buffer::ScalarBuffer;
@@ -544,7 +544,7 @@ impl<B: ByteViewType> GroupColumn for ByteViewGroupValueBuilder<B> {
 mod tests {
     use std::sync::Arc;
 
-    use crate::aggregates::group_values::multi_column::bytes_view::ByteViewGroupValueBuilder;
+    use crate::aggregates::group_values::multi_group_by::bytes_view::ByteViewGroupValueBuilder;
     use arrow::array::AsArray;
     use arrow::datatypes::StringViewType;
     use arrow_array::{ArrayRef, StringViewArray};

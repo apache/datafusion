@@ -15,12 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::{expr::WindowFunction, BuiltInWindowFunction, Expr, Literal};
+//! `GroupValues` implementations for single group by cases
 
-/// Create an expression to represent the `nth_value` window function
-pub fn nth_value(arg: Expr, n: i64) -> Expr {
-    Expr::WindowFunction(WindowFunction::new(
-        BuiltInWindowFunction::NthValue,
-        vec![arg, n.lit()],
-    ))
-}
+pub(crate) mod bytes;
+pub(crate) mod bytes_view;
+pub(crate) mod primitive;
