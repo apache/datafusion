@@ -408,16 +408,12 @@ impl Dialect for SqliteDialect {
     ) -> Result<Option<ast::Expr>> {
         match func_name {
             "date_part" => {
-                return date_part_to_sql(unparser, self.date_field_extract_style(), args);
+                date_part_to_sql(unparser, self.date_field_extract_style(), args)
             }
             "character_length" => {
-                return character_length_to_sql(
-                    unparser,
-                    self.character_length_style(),
-                    args,
-                );
+                character_length_to_sql(unparser, self.character_length_style(), args)
             }
-            _ => return Ok(None),
+            _ => Ok(None),
         }
     }
 }
@@ -553,16 +549,12 @@ impl Dialect for CustomDialect {
     ) -> Result<Option<ast::Expr>> {
         match func_name {
             "date_part" => {
-                return date_part_to_sql(unparser, self.date_field_extract_style(), args);
+                date_part_to_sql(unparser, self.date_field_extract_style(), args)
             }
             "character_length" => {
-                return character_length_to_sql(
-                    unparser,
-                    self.character_length_style(),
-                    args,
-                )
+                character_length_to_sql(unparser, self.character_length_style(), args)
             }
-            _ => return Ok(None),
+            _ => Ok(None),
         }
     }
 

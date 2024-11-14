@@ -459,7 +459,8 @@ pub(crate) fn character_length_to_sql(
         CharacterLengthStyle::Length => "length",
     };
 
-    return Ok(Some(
-        unparser.scalar_function_to_sql(func_name, character_length_args)?,
-    ));
+    Ok(Some(unparser.scalar_function_to_sql(
+        func_name,
+        character_length_args,
+    )?))
 }
