@@ -369,14 +369,6 @@ fn roundtrip_statement_with_dialect() -> Result<()> {
             parser_dialect: Box::new(GenericDialect {}),
             unparser_dialect: Box::new(UnparserDefaultDialect {}),
         },
-        // TODO: remove dangling identifiers from group by, filter, etc
-        // TestStatementWithDialect {
-        //     sql: "select j1_id from (select ta.j1_id from j1 ta) where j1_id = 1",
-        //     expected:
-        //         "SELECT j1_id FROM (SELECT ta.j1_id FROM j1 AS ta) WHERE (ta.j1_id = 1)",
-        //     parser_dialect: Box::new(GenericDialect {}),
-        //     unparser_dialect: Box::new(UnparserDefaultDialect {}),
-        // },
         TestStatementWithDialect {
             sql: "select j1_id from (select ta.j1_id from j1 ta) order by j1_id",
             expected:
