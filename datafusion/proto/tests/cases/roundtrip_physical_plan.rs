@@ -47,9 +47,10 @@ use datafusion::datasource::physical_plan::{
 };
 use datafusion::execution::FunctionRegistry;
 use datafusion::functions_aggregate::sum::sum_udaf;
+use datafusion::functions_window::row_number::row_number_udwf;
 use datafusion::logical_expr::{create_udf, JoinType, Operator, Volatility};
 use datafusion::physical_expr::expressions::Literal;
-use datafusion::physical_expr::window::SlidingAggregateWindowExpr;
+use datafusion::physical_expr::window::{BuiltInWindowExpr, SlidingAggregateWindowExpr};
 use datafusion::physical_expr::{
     LexOrdering, LexRequirement, PhysicalSortRequirement, ScalarFunctionExpr,
 };
@@ -73,8 +74,13 @@ use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::union::{InterleaveExec, UnionExec};
 use datafusion::physical_plan::unnest::{ListUnnest, UnnestExec};
-use datafusion::physical_plan::windows::{PlainAggregateWindowExpr, WindowAggExec};
-use datafusion::physical_plan::{ExecutionPlan, Partitioning, PhysicalExpr, Statistics};
+use datafusion::physical_plan::windows::{
+    create_udwf_window_expr, BoundedWindowAggExec, PlainAggregateWindowExpr,
+    WindowAggExec,
+};
+use datafusion::physical_plan::{
+    ExecutionPlan, InputOrderMode, Partitioning, PhysicalExpr, Statistics,
+};
 use datafusion::prelude::SessionContext;
 use datafusion::scalar::ScalarValue;
 use datafusion_common::config::TableParquetOptions;
@@ -263,6 +269,38 @@ fn roundtrip_nested_loop_join() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn roundtrip_built_in_window() -> Result<()> {
+    let field_a = Field::new("a", DataType::Int64, false);
+    let field_b = Field::new("b", DataType::Int64, false);
+    let schema = Arc::new(Schema::new(vec![field_a, field_b]));
+
+    let built_in_window_expr = Arc::new(BuiltInWindowExpr::new(
+        create_udwf_window_expr(
+            &row_number_udwf(),
+            &[],
+            &schema,
+            "row_number() PARTITION BY [a] ORDER BY [b] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW".to_string(),
+            false,
+        )?,
+        &[
+            col("a", &schema)?
+        ],
+        &LexOrdering::new(vec![
+            PhysicalSortExpr::new(col("b", &schema)?, SortOptions::new(true, true)),
+        ]),
+        Arc::new(WindowFrame::new(None)),
+    ));
+
+    let input = Arc::new(EmptyExec::new(schema.clone()));
+
+    roundtrip_test(Arc::new(BoundedWindowAggExec::try_new(
+        vec![built_in_window_expr],
+        input,
+        vec![col("a", &schema)?],
+        InputOrderMode::Sorted,
+    )?))
+}
 #[test]
 fn roundtrip_window() -> Result<()> {
     let field_a = Field::new("a", DataType::Int64, false);
