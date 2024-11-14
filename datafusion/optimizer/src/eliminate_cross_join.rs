@@ -16,9 +16,9 @@
 // under the License.
 
 //! [`EliminateCrossJoin`] converts `CROSS JOIN` to `INNER JOIN` if join predicates are available.
-use std::sync::Arc;
-
 use crate::{OptimizerConfig, OptimizerRule};
+use recursive::recursive;
+use std::sync::Arc;
 
 use crate::join_key_set::JoinKeySet;
 use datafusion_common::tree_node::{Transformed, TreeNode};
@@ -80,6 +80,7 @@ impl OptimizerRule for EliminateCrossJoin {
         true
     }
 
+    #[recursive]
     fn rewrite(
         &self,
         plan: LogicalPlan,

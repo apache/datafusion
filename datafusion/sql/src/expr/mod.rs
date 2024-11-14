@@ -20,6 +20,7 @@ use arrow_schema::TimeUnit;
 use datafusion_expr::planner::{
     PlannerResult, RawBinaryExpr, RawDictionaryExpr, RawFieldAccessExpr,
 };
+use recursive::recursive;
 use sqlparser::ast::{
     BinaryOperator, CastFormat, CastKind, DataType as SQLDataType, DictionaryField,
     Expr as SQLExpr, MapEntry, StructField, Subscript, TrimWhereField, Value,
@@ -168,16 +169,18 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
     /// Internal implementation. Use
     /// [`Self::sql_expr_to_logical_expr`] to plan exprs.
+    #[recursive]
     fn sql_expr_to_logical_expr_internal(
         &self,
         sql: SQLExpr,
         schema: &DFSchema,
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
-        // NOTE: This function is called recusively, so each match arm body should be as
-        //       small as possible to avoid stack overflows in debug builds. Follow the
-        //       common pattern of extracting into a separate function for non-trivial
-        //       arms. See https://github.com/apache/datafusion/pull/12384 for more context.
+        // NOTE: This function is called recursively, so each match arm body should be as
+        //       small as possible to decrease stack requirement.
+        //       Follow the common pattern of extracting into a separate function for
+        //       non-trivial arms. See https://github.com/apache/datafusion/pull/12384 for
+        //       more context.
         match sql {
             SQLExpr::Value(value) => {
                 self.parse_value(value, planner_context.prepare_param_data_types())
@@ -364,6 +367,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 expr,
                 pattern,
                 escape_char,
+                any,
             } => self.sql_like_to_expr(
                 negated,
                 *expr,
@@ -372,6 +376,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 schema,
                 planner_context,
                 false,
+                any,
             ),
 
             SQLExpr::ILike {
@@ -379,6 +384,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 expr,
                 pattern,
                 escape_char,
+                any,
             } => self.sql_like_to_expr(
                 negated,
                 *expr,
@@ -387,6 +393,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 schema,
                 planner_context,
                 true,
+                any,
             ),
 
             SQLExpr::SimilarTo {
@@ -529,6 +536,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 left,
                 compare_op,
                 right,
+                // ANY/SOME are equivalent, this field specifies which the user
+                // specified but it doesn't affect the plan so ignore the field
+                is_some: _,
             } => {
                 let mut binary_expr = RawBinaryExpr {
                     op: compare_op,
@@ -776,7 +786,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         schema: &DFSchema,
         planner_context: &mut PlannerContext,
         case_insensitive: bool,
+        any: bool,
     ) -> Result<Expr> {
+        if any {
+            return not_impl_err!("ANY in LIKE expression");
+        }
         let pattern = self.sql_expr_to_logical_expr(pattern, schema, planner_context)?;
         let pattern_type = pattern.get_type(schema)?;
         if pattern_type != DataType::Utf8 && pattern_type != DataType::Null {

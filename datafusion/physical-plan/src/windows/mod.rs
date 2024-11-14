@@ -21,16 +21,15 @@ use std::borrow::Borrow;
 use std::sync::Arc;
 
 use crate::{
-    expressions::{Literal, NthValue, PhysicalSortExpr},
-    ExecutionPlan, ExecutionPlanProperties, InputOrderMode, PhysicalExpr,
+    expressions::PhysicalSortExpr, ExecutionPlan, ExecutionPlanProperties,
+    InputOrderMode, PhysicalExpr,
 };
 
 use arrow::datatypes::Schema;
 use arrow_schema::{DataType, Field, SchemaRef};
-use datafusion_common::{exec_datafusion_err, exec_err, Result, ScalarValue};
+use datafusion_common::{exec_err, Result};
 use datafusion_expr::{
-    BuiltInWindowFunction, PartitionEvaluator, ReversedUDWF, WindowFrame,
-    WindowFunctionDefinition, WindowUDF,
+    PartitionEvaluator, ReversedUDWF, WindowFrame, WindowFunctionDefinition, WindowUDF,
 };
 use datafusion_physical_expr::aggregate::{AggregateExprBuilder, AggregateFunctionExpr};
 use datafusion_physical_expr::equivalence::collapse_lex_req;
@@ -104,13 +103,8 @@ pub fn create_window_expr(
     ignore_nulls: bool,
 ) -> Result<Arc<dyn WindowExpr>> {
     Ok(match fun {
-        WindowFunctionDefinition::BuiltInWindowFunction(fun) => {
-            Arc::new(BuiltInWindowExpr::new(
-                create_built_in_window_expr(fun, args, input_schema, name, ignore_nulls)?,
-                partition_by,
-                order_by,
-                window_frame,
-            ))
+        WindowFunctionDefinition::BuiltInWindowFunction(_fun) => {
+            unreachable!()
         }
         WindowFunctionDefinition::AggregateUDF(fun) => {
             let aggregate = AggregateExprBuilder::new(Arc::clone(fun), args.to_vec())
@@ -163,72 +157,8 @@ fn window_expr_from_aggregate_expr(
     }
 }
 
-fn get_signed_integer(value: ScalarValue) -> Result<i64> {
-    if value.is_null() {
-        return Ok(0);
-    }
-
-    if !value.data_type().is_integer() {
-        return exec_err!("Expected an integer value");
-    }
-
-    value.cast_to(&DataType::Int64)?.try_into()
-}
-
-fn create_built_in_window_expr(
-    fun: &BuiltInWindowFunction,
-    args: &[Arc<dyn PhysicalExpr>],
-    input_schema: &Schema,
-    name: String,
-    ignore_nulls: bool,
-) -> Result<Arc<dyn BuiltInWindowFunctionExpr>> {
-    // derive the output datatype from incoming schema
-    let out_data_type: &DataType = input_schema.field_with_name(&name)?.data_type();
-
-    Ok(match fun {
-        BuiltInWindowFunction::NthValue => {
-            let arg = Arc::clone(&args[0]);
-            let n = get_signed_integer(
-                args[1]
-                    .as_any()
-                    .downcast_ref::<Literal>()
-                    .ok_or_else(|| {
-                        exec_datafusion_err!("Expected a signed integer literal for the second argument of nth_value, got {}", args[1])
-                    })?
-                    .value()
-                    .clone(),
-            )?;
-            Arc::new(NthValue::nth(
-                name,
-                arg,
-                out_data_type.clone(),
-                n,
-                ignore_nulls,
-            )?)
-        }
-        BuiltInWindowFunction::FirstValue => {
-            let arg = Arc::clone(&args[0]);
-            Arc::new(NthValue::first(
-                name,
-                arg,
-                out_data_type.clone(),
-                ignore_nulls,
-            ))
-        }
-        BuiltInWindowFunction::LastValue => {
-            let arg = Arc::clone(&args[0]);
-            Arc::new(NthValue::last(
-                name,
-                arg,
-                out_data_type.clone(),
-                ignore_nulls,
-            ))
-        }
-    })
-}
-
 /// Creates a `BuiltInWindowFunctionExpr` suitable for a user defined window function
-fn create_udwf_window_expr(
+pub fn create_udwf_window_expr(
     fun: &Arc<WindowUDF>,
     args: &[Arc<dyn PhysicalExpr>],
     input_schema: &Schema,
@@ -241,14 +171,29 @@ fn create_udwf_window_expr(
         .map(|arg| arg.data_type(input_schema))
         .collect::<Result<_>>()?;
 
-    Ok(Arc::new(WindowUDFExpr {
+    let udwf_expr = Arc::new(WindowUDFExpr {
         fun: Arc::clone(fun),
         args: args.to_vec(),
         input_types,
         name,
         is_reversed: false,
         ignore_nulls,
-    }))
+    });
+
+    // Early validation of input expressions
+    // We create a partition evaluator because in the user-defined window
+    // implementation this is where code for parsing input expressions
+    // exist. The benefits are:
+    // - If any of the input expressions are invalid we catch them early
+    // in the planning phase, rather than during execution.
+    // - Maintains compatibility with built-in (now removed) window
+    // functions validation behavior.
+    // - Predictable and reliable error handling.
+    // See discussion here:
+    // https://github.com/apache/datafusion/pull/13201#issuecomment-2454209975
+    let _ = udwf_expr.create_evaluator()?;
+
+    Ok(udwf_expr)
 }
 
 /// Implements [`BuiltInWindowFunctionExpr`] for [`WindowUDF`]

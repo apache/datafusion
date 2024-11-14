@@ -20,26 +20,28 @@
 use arrow::record_batch::RecordBatch;
 use arrow_array::{downcast_primitive, ArrayRef};
 use arrow_schema::{DataType, SchemaRef};
-use bytes_view::GroupValuesBytesView;
 use datafusion_common::Result;
 
-pub(crate) mod primitive;
 use datafusion_expr::EmitTo;
-use primitive::GroupValuesPrimitive;
 
-mod column;
+pub(crate) mod multi_group_by;
+
 mod row;
-use column::GroupValuesColumn;
+mod single_group_by;
+use datafusion_physical_expr::binary_map::OutputType;
+use multi_group_by::GroupValuesColumn;
 use row::GroupValuesRows;
 
-mod bytes;
-mod bytes_view;
-use bytes::GroupValuesByes;
-use datafusion_physical_expr::binary_map::OutputType;
+pub(crate) use single_group_by::primitive::HashValue;
 
-use crate::aggregates::order::GroupOrdering;
+use crate::aggregates::{
+    group_values::single_group_by::{
+        bytes::GroupValuesByes, bytes_view::GroupValuesBytesView,
+        primitive::GroupValuesPrimitive,
+    },
+    order::GroupOrdering,
+};
 
-mod group_column;
 mod null_builder;
 
 /// Stores the group values during hash aggregation.
@@ -78,7 +80,7 @@ mod null_builder;
 /// Each distinct group in a hash aggregation is identified by a unique group id
 /// (usize) which is assigned by instances of this trait. Group ids are
 /// continuous without gaps, starting from 0.
-pub trait GroupValues: Send {
+pub(crate) trait GroupValues: Send {
     /// Calculates the group id for each input row of `cols`, assigning new
     /// group ids as necessary.
     ///
@@ -107,7 +109,21 @@ pub trait GroupValues: Send {
 }
 
 /// Return a specialized implementation of [`GroupValues`] for the given schema.
-pub fn new_group_values(
+///
+/// [`GroupValues`] implementations choosing logic:
+///
+///   - If group by single column, and type of this column has
+///     the specific [`GroupValues`] implementation, such implementation
+///     will be chosen.
+///   
+///   - If group by multiple columns, and all column types have the specific
+///     [`GroupColumn`] implementations, [`GroupValuesColumn`] will be chosen.
+///
+///   - Otherwise, the general implementation [`GroupValuesRows`] will be chosen.
+///
+/// [`GroupColumn`]:  crate::aggregates::group_values::multi_group_by::GroupColumn
+///
+pub(crate) fn new_group_values(
     schema: SchemaRef,
     group_ordering: &GroupOrdering,
 ) -> Result<Box<dyn GroupValues>> {
@@ -148,7 +164,7 @@ pub fn new_group_values(
         }
     }
 
-    if column::supported_schema(schema.as_ref()) {
+    if multi_group_by::supported_schema(schema.as_ref()) {
         if matches!(group_ordering, GroupOrdering::None) {
             Ok(Box::new(GroupValuesColumn::<false>::try_new(schema)?))
         } else {

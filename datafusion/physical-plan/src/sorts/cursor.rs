@@ -156,8 +156,7 @@ pub struct RowValues {
 
     /// Tracks for the memory used by in the `Rows` of this
     /// cursor. Freed on drop
-    #[allow(dead_code)]
-    reservation: MemoryReservation,
+    _reservation: MemoryReservation,
 }
 
 impl RowValues {
@@ -173,7 +172,10 @@ impl RowValues {
             "memory reservation mismatch"
         );
         assert!(rows.num_rows() > 0);
-        Self { rows, reservation }
+        Self {
+            rows,
+            _reservation: reservation,
+        }
     }
 }
 

@@ -59,6 +59,8 @@ message LogicalPlanNode {
     DistinctOnNode distinct_on = 28;
     CopyToNode copy_to = 29;
     UnnestNode unnest = 30;
+    RecursiveQueryNode recursive_query = 31;
+    CteWorkTableScanNode cte_work_table_scan = 32;
   }
 }
 
@@ -515,9 +517,9 @@ enum BuiltInWindowFunction {
   //  NTILE = 5;
   // LAG = 6;
   // LEAD = 7;
-  FIRST_VALUE = 8;
-  LAST_VALUE = 9;
-  NTH_VALUE = 10;
+  // FIRST_VALUE = 8;
+  // LAST_VALUE = 9;
+  // NTH_VALUE = 10;
 }
 
 message WindowExprNode {
@@ -1248,4 +1250,16 @@ message PartitionStats {
   int64 num_batches = 2;
   int64 num_bytes = 3;
   repeated datafusion_common.ColumnStats column_stats = 4;
+}
+
+message RecursiveQueryNode {
+  string name = 1;
+  LogicalPlanNode static_term = 2;
+  LogicalPlanNode recursive_term = 3;
+  bool is_distinct = 4;
+}
+
+message CteWorkTableScanNode {
+    string name = 1;
+    datafusion_common.Schema schema = 2;
 }

@@ -141,10 +141,11 @@ pbjson = { version = "0.7.0" }
 prost = "0.13.1"
 prost-derive = "0.13.1"
 rand = "0.8"
+recursive = "0.1.1"
 regex = "1.8"
 rstest = "0.23.0"
 serde_json = "1"
-sqlparser = { version = "0.51.0", features = ["visitor"] }
+sqlparser = { version = "0.52.0", features = ["visitor"] }
 tempfile = "3"
 tokio = { version = "1.36", features = ["macros", "rt", "sync"] }
 url = "2.2"

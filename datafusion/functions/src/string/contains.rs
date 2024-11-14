@@ -145,8 +145,7 @@ mod test {
             Some("yyy?()"),
         ])));
         let scalar = ColumnarValue::Scalar(ScalarValue::Utf8(Some("x?(".to_string())));
-        #[allow(deprecated)] // TODO migrate UDF invoke to invoke_batch
-        let actual = udf.invoke(&[array, scalar]).unwrap();
+        let actual = udf.invoke_batch(&[array, scalar], 2).unwrap();
         let expect = ColumnarValue::Array(Arc::new(BooleanArray::from(vec![
             Some(true),
             Some(false),

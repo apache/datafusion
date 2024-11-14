@@ -21,8 +21,8 @@ use std::sync::Arc;
 
 use crate::protobuf::logical_plan_node::LogicalPlanType::CustomScan;
 use crate::protobuf::{
-    ColumnUnnestListItem, ColumnUnnestListRecursion, CustomTableScanNode,
-    SortExprNodeCollection,
+    ColumnUnnestListItem, ColumnUnnestListRecursion, CteWorkTableScanNode,
+    CustomTableScanNode, SortExprNodeCollection,
 };
 use crate::{
     convert_required, into_required,
@@ -34,6 +34,7 @@ use crate::{
 
 use crate::protobuf::{proto_error, ToProtoError};
 use arrow::datatypes::{DataType, Schema, SchemaRef};
+use datafusion::datasource::cte_worktable::CteWorkTable;
 #[cfg(feature = "parquet")]
 use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::file_format::{
@@ -68,7 +69,9 @@ use datafusion_expr::{
     DistinctOn, DropView, Expr, LogicalPlan, LogicalPlanBuilder, ScalarUDF, SortExpr,
     Statement, WindowUDF,
 };
-use datafusion_expr::{AggregateUDF, ColumnUnnestList, FetchType, SkipType, Unnest};
+use datafusion_expr::{
+    AggregateUDF, ColumnUnnestList, FetchType, RecursiveQuery, SkipType, Unnest,
+};
 
 use self::to_proto::{serialize_expr, serialize_exprs};
 use crate::logical_plan::to_proto::serialize_sorts;
@@ -905,6 +908,41 @@ impl AsLogicalPlan for LogicalPlanNode {
                     options: into_required!(unnest.options)?,
                 }))
             }
+            LogicalPlanType::RecursiveQuery(recursive_query_node) => {
+                let static_term = recursive_query_node
+                    .static_term
+                    .as_ref()
+                    .ok_or_else(|| DataFusionError::Internal(String::from(
+                        "Protobuf deserialization error, RecursiveQueryNode was missing required field static_term.",
+                    )))?
+                    .try_into_logical_plan(ctx, extension_codec)?;
+
+                let recursive_term = recursive_query_node
+                    .recursive_term
+                    .as_ref()
+                    .ok_or_else(|| DataFusionError::Internal(String::from(
+                        "Protobuf deserialization error, RecursiveQueryNode was missing required field recursive_term.",
+                    )))?
+                    .try_into_logical_plan(ctx, extension_codec)?;
+
+                Ok(LogicalPlan::RecursiveQuery(RecursiveQuery {
+                    name: recursive_query_node.name.clone(),
+                    static_term: Arc::new(static_term),
+                    recursive_term: Arc::new(recursive_term),
+                    is_distinct: recursive_query_node.is_distinct,
+                }))
+            }
+            LogicalPlanType::CteWorkTableScan(cte_work_table_scan_node) => {
+                let CteWorkTableScanNode { name, schema } = cte_work_table_scan_node;
+                let schema = convert_required!(*schema)?;
+                let cte_work_table = CteWorkTable::new(name.as_str(), Arc::new(schema));
+                LogicalPlanBuilder::scan(
+                    name.as_str(),
+                    provider_as_source(Arc::new(cte_work_table)),
+                    None,
+                )?
+                .build()
+            }
         }
     }
 
@@ -1060,6 +1098,20 @@ impl AsLogicalPlan for LogicalPlanNode {
                                     .unwrap_or_default(),
                             },
                         ))),
+                    })
+                } else if let Some(cte_work_table) = source.downcast_ref::<CteWorkTable>()
+                {
+                    let name = cte_work_table.name().to_string();
+                    let schema = cte_work_table.schema();
+                    let schema: protobuf::Schema = schema.as_ref().try_into()?;
+
+                    Ok(LogicalPlanNode {
+                        logical_plan_type: Some(LogicalPlanType::CteWorkTableScan(
+                            protobuf::CteWorkTableScanNode {
+                                name,
+                                schema: Some(schema),
+                            },
+                        )),
                     })
                 } else {
                     let mut bytes = vec![];
@@ -1630,9 +1682,27 @@ impl AsLogicalPlan for LogicalPlanNode {
             LogicalPlan::DescribeTable(_) => Err(proto_error(
                 "LogicalPlan serde is not yet implemented for DescribeTable",
             )),
-            LogicalPlan::RecursiveQuery(_) => Err(proto_error(
-                "LogicalPlan serde is not yet implemented for RecursiveQuery",
-            )),
+            LogicalPlan::RecursiveQuery(recursive) => {
+                let static_term = LogicalPlanNode::try_from_logical_plan(
+                    recursive.static_term.as_ref(),
+                    extension_codec,
+                )?;
+                let recursive_term = LogicalPlanNode::try_from_logical_plan(
+                    recursive.recursive_term.as_ref(),
+                    extension_codec,
+                )?;
+
+                Ok(LogicalPlanNode {
+                    logical_plan_type: Some(LogicalPlanType::RecursiveQuery(Box::new(
+                        protobuf::RecursiveQueryNode {
+                            name: recursive.name.clone(),
+                            static_term: Some(Box::new(static_term)),
+                            recursive_term: Some(Box::new(recursive_term)),
+                            is_distinct: recursive.is_distinct,
+                        },
+                    ))),
+                })
+            }
         }
     }
 }

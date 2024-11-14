@@ -295,7 +295,7 @@ query error DataFusion error: Error during planning: unnest\(\) requires exactly
 select unnest();
 
 ## Unnest empty expression in from clause
-query error DataFusion error: SQL error: ParserError\("Expected: an expression:, found: \)"\)
+query error DataFusion error: SQL error: ParserError\("Expected: an expression, found: \)"\)
 select * from unnest();
 
 
