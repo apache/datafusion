@@ -257,31 +257,29 @@ impl SelectBuilder {
         }
 
         if let Some(twg) = self.from.last() {
-            twg.get_joins()
-                .iter()
-                .for_each(|join| match &join.relation {
-                    ast::TableFactor::Table { alias, name, .. } => {
-                        if let Some(alias) = alias {
-                            all_idents.push(alias.name.to_string());
-                        } else {
-                            let full_ident = name.to_string();
-                            if let Some(name) = name.0.last() {
-                                if full_ident != name.to_string() {
-                                    // supports identifiers that contain the entire path, as well as just the end table leaf
-                                    // like catalog.schema.table and table
-                                    all_idents.push(name.to_string());
-                                }
-                            }
-                            all_idents.push(full_ident);
-                        }
-                    }
-                    ast::TableFactor::Derived {
-                        alias: Some(alias), ..
-                    } => {
+            twg.joins.iter().for_each(|join| match &join.relation {
+                ast::TableFactor::Table { alias, name, .. } => {
+                    if let Some(alias) = alias {
                         all_idents.push(alias.name.to_string());
+                    } else {
+                        let full_ident = name.to_string();
+                        if let Some(name) = name.0.last() {
+                            if full_ident != name.to_string() {
+                                // supports identifiers that contain the entire path, as well as just the end table leaf
+                                // like catalog.schema.table and table
+                                all_idents.push(name.to_string());
+                            }
+                        }
+                        all_idents.push(full_ident);
                     }
-                    _ => {}
-                });
+                }
+                ast::TableFactor::Derived {
+                    alias: Some(alias), ..
+                } => {
+                    all_idents.push(alias.name.to_string());
+                }
+                _ => {}
+            });
         }
 
         all_idents
@@ -405,10 +403,6 @@ impl TableWithJoinsBuilder {
         self.relation = Some(value);
         self
     }
-    pub fn get_joins(&self) -> Vec<ast::Join> {
-        self.joins.clone()
-    }
-
     pub fn joins(&mut self, value: Vec<ast::Join>) -> &mut Self {
         self.joins = value;
         self
