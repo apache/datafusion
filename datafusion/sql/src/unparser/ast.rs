@@ -57,9 +57,6 @@ impl QueryBuilder {
         self.order_by = value;
         self
     }
-    pub fn get_order_by(&self) -> Vec<ast::OrderByExpr> {
-        self.order_by.clone()
-    }
     pub fn limit(&mut self, value: Option<ast::Expr>) -> &mut Self {
         self.limit = value;
         self
@@ -313,13 +310,10 @@ impl SelectBuilder {
 
         // Check the order by as well
         if let Some(query) = query.as_mut() {
-            let mut order_by = query.get_order_by();
-            order_by.iter_mut().for_each(|sort_item| {
+            query.order_by.iter_mut().for_each(|sort_item| {
                 sort_item.expr =
                     remove_dangling_expr(sort_item.expr.clone(), &all_idents);
             });
-
-            query.order_by(order_by);
         }
 
         // Order by could be a sort in the select builder
