@@ -1250,6 +1250,6 @@ fn test_unnest_to_sql() {
     sql_round_trip(
         GenericDialect {},
         r#"SELECT unnest(make_array(1, 2, 2, 5, NULL)) as u1"#,
-        r#"SELECT UNNEST(make_array(1, 2, 2, 5, NULL)) AS u1"#,
+        r#"SELECT UNNEST([1, 2, 2, 5, NULL]) AS u1"#,
     );
 }

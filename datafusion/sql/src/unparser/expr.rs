@@ -1519,7 +1519,6 @@ mod tests {
         Signature, Volatility, WindowFrame, WindowFunctionDefinition,
     };
     use datafusion_expr::{interval_month_day_nano_lit, ExprFunctionExt};
-    use datafusion_functions::core::named_struct;
     use datafusion_functions_aggregate::count::count_udaf;
     use datafusion_functions_aggregate::expr_fn::sum;
     use datafusion_functions_nested::expr_fn::{array_element, make_array};
