@@ -19,14 +19,14 @@ use std::sync::Arc;
 
 #[cfg(feature = "parquet")]
 use datafusion::datasource::file_format::parquet::ParquetSink;
-use datafusion::physical_expr::window::SlidingAggregateWindowExpr;
+use datafusion::physical_expr::window::{BuiltInWindowExpr, SlidingAggregateWindowExpr};
 use datafusion::physical_expr::{LexOrdering, PhysicalSortExpr, ScalarFunctionExpr};
 use datafusion::physical_plan::expressions::{
     BinaryExpr, CaseExpr, CastExpr, Column, InListExpr, IsNotNullExpr, IsNullExpr,
     Literal, NegativeExpr, NotExpr, TryCastExpr,
 };
 use datafusion::physical_plan::udaf::AggregateFunctionExpr;
-use datafusion::physical_plan::windows::PlainAggregateWindowExpr;
+use datafusion::physical_plan::windows::{PlainAggregateWindowExpr, WindowUDFExpr};
 use datafusion::physical_plan::{Partitioning, PhysicalExpr, WindowExpr};
 use datafusion::{
     datasource::{
@@ -120,6 +120,21 @@ pub fn serialize_physical_window_expr(
             window_frame,
             codec,
         )?
+    } else if let Some(built_in_window_expr) = expr.downcast_ref::<BuiltInWindowExpr>() {
+        if let Some(expr) = built_in_window_expr
+            .get_built_in_func_expr()
+            .as_any()
+            .downcast_ref::<WindowUDFExpr>()
+        {
+            (
+                physical_window_expr_node::WindowFunction::UserDefinedWindowFunction(
+                    expr.fun().name().to_string(),
+                ),
+                None,
+            )
+        } else {
+            return not_impl_err!("WindowExpr not supported: {window_expr:?}");
+        }
     } else {
         return not_impl_err!("WindowExpr not supported: {window_expr:?}");
     };
