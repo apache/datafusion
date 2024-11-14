@@ -868,6 +868,7 @@ message PhysicalWindowExprNode {
   oneof window_function {
     BuiltInWindowFunction built_in_function = 2;
     string user_defined_aggr_function = 3;
+    string user_defined_window_function = 10;
   }
   repeated PhysicalExprNode args = 4;
   repeated PhysicalExprNode partition_by = 5;

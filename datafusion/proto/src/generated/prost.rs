@@ -1267,7 +1267,7 @@ pub struct PhysicalWindowExprNode {
     pub name: ::prost::alloc::string::String,
     #[prost(bytes = "vec", optional, tag = "9")]
     pub fun_definition: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
-    #[prost(oneof = "physical_window_expr_node::WindowFunction", tags = "2, 3")]
+    #[prost(oneof = "physical_window_expr_node::WindowFunction", tags = "2, 3, 10")]
     pub window_function: ::core::option::Option<
         physical_window_expr_node::WindowFunction,
     >,
@@ -1280,6 +1280,8 @@ pub mod physical_window_expr_node {
         BuiltInFunction(i32),
         #[prost(string, tag = "3")]
         UserDefinedAggrFunction(::prost::alloc::string::String),
+        #[prost(string, tag = "10")]
+        UserDefinedWindowFunction(::prost::alloc::string::String),
     }
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
