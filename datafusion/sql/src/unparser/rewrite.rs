@@ -413,10 +413,12 @@ pub fn remove_dangling_expr(
             let mut idents = idents.clone();
             remove_dangling_identifiers(&mut idents, available_idents);
 
-            if idents.len() > 1 {
-                ast::Expr::CompoundIdentifier(idents)
-            } else {
+            if idents.len() == 0 {
+                unreachable!("Identifier must have at least one element");
+            } else if idents.len() == 1 {
                 ast::Expr::Identifier(idents[0].clone())
+            } else {
+                ast::Expr::CompoundIdentifier(idents)
             }
         }
         ast::Expr::Function(ast::Function {
