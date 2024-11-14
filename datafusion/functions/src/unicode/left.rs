@@ -30,9 +30,9 @@ use datafusion_common::cast::{
     as_generic_string_array, as_int64_array, as_string_view_array,
 };
 use datafusion_common::exec_err;
+use datafusion_common::types::{logical_int64, logical_string};
 use datafusion_common::Result;
 use datafusion_expr::scalar_doc_sections::DOC_SECTION_STRING;
-use datafusion_expr::TypeSignature::Exact;
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
@@ -50,14 +50,9 @@ impl Default for LeftFunc {
 
 impl LeftFunc {
     pub fn new() -> Self {
-        use DataType::*;
         Self {
-            signature: Signature::one_of(
-                vec![
-                    Exact(vec![Utf8View, Int64]),
-                    Exact(vec![Utf8, Int64]),
-                    Exact(vec![LargeUtf8, Int64]),
-                ],
+            signature: Signature::coercible(
+                vec![logical_string(), logical_int64()],
                 Volatility::Immutable,
             ),
         }

@@ -23,10 +23,11 @@ use arrow::array::{
 };
 use arrow::datatypes::DataType;
 use datafusion_common::cast::as_int64_array;
+use datafusion_common::types::{logical_int64, logical_string};
 use datafusion_common::DataFusionError;
 use datafusion_common::{exec_err, Result};
 use datafusion_expr::scalar_doc_sections::DOC_SECTION_STRING;
-use datafusion_expr::TypeSignature::Exact;
+use datafusion_expr::TypeSignature;
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
@@ -49,22 +50,15 @@ impl Default for RPadFunc {
 
 impl RPadFunc {
     pub fn new() -> Self {
-        use DataType::*;
         Self {
             signature: Signature::one_of(
                 vec![
-                    Exact(vec![Utf8View, Int64]),
-                    Exact(vec![Utf8View, Int64, Utf8View]),
-                    Exact(vec![Utf8View, Int64, Utf8]),
-                    Exact(vec![Utf8View, Int64, LargeUtf8]),
-                    Exact(vec![Utf8, Int64]),
-                    Exact(vec![Utf8, Int64, Utf8View]),
-                    Exact(vec![Utf8, Int64, Utf8]),
-                    Exact(vec![Utf8, Int64, LargeUtf8]),
-                    Exact(vec![LargeUtf8, Int64]),
-                    Exact(vec![LargeUtf8, Int64, Utf8View]),
-                    Exact(vec![LargeUtf8, Int64, Utf8]),
-                    Exact(vec![LargeUtf8, Int64, LargeUtf8]),
+                    TypeSignature::Coercible(vec![logical_string(), logical_int64()]),
+                    TypeSignature::Coercible(vec![
+                        logical_string(),
+                        logical_int64(),
+                        logical_string(),
+                    ]),
                 ],
                 Volatility::Immutable,
             ),
