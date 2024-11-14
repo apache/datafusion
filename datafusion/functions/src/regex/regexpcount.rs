@@ -30,7 +30,6 @@ use datafusion_expr::{
 };
 use itertools::izip;
 use regex::Regex;
-use std::borrow::Cow;
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
@@ -565,28 +564,21 @@ where
     Ok(regex_cache.get(&(regex, flags)).unwrap())
 }
 
-fn get_pattern<'a>(
+fn compile_regex<'a>(
     regex: &'a str,
     flags: Option<&'a str>,
-) -> Result<Cow<'a, str>, ArrowError> {
-    match flags {
-        None | Some("") => Ok(Cow::from(regex)),
+) -> Result<Regex, ArrowError> {
+    let pattern = match flags {
+        None | Some("") => regex.to_string(),
         Some(flags) => {
             if flags.contains("g") {
                 return Err(ArrowError::ComputeError(
                     "regexp_count() does not support global flag".to_string(),
                 ));
             }
-            Ok(Cow::from(format!("(?{}){}", flags, regex)))
+            format!("(?{}){}", flags, regex)
         }
-    }
-}
-
-fn compile_regex<'a>(
-    regex: &'a str,
-    flags: Option<&'a str>,
-) -> Result<Regex, ArrowError> {
-    let pattern = get_pattern(regex, flags)?;
+    };
     Regex::new(&pattern).map_err(|_| {
         ArrowError::ComputeError(format!(
             "Regular expression did not compile: {}",
