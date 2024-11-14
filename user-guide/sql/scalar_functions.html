@@ -8074,7 +8074,7 @@ an error will be returned.</p></li>
 <section id="array-to-string">
 <h3><code class="docutils literal notranslate"><span class="pre">array_to_string</span></code><a class="headerlink" href="#array-to-string" title="Link to this heading">¶</a></h3>
 <p>Converts each element to its text representation.</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">array_to_string</span><span class="p">(</span><span class="n">array</span><span class="p">,</span> <span class="n">delimiter</span><span class="p">)</span>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">array_to_string</span><span class="p">(</span><span class="n">array</span><span class="p">,</span> <span class="n">delimiter</span><span class="p">[,</span> <span class="n">null_string</span><span class="p">])</span>
 </pre></div>
 </div>
 <section id="id248">
@@ -8082,6 +8082,7 @@ an error will be returned.</p></li>
 <ul class="simple">
 <li><p><strong>array</strong>: Array expression. Can be a constant, column, or function, and any combination of array operators.</p></li>
 <li><p><strong>delimiter</strong>: Array element separator.</p></li>
+<li><p><strong>null_string</strong>: Optional. String to replace null values in the array. If not provided, nulls will be handled by default behavior.</p></li>
 </ul>
 </section>
 <section id="id249">
@@ -8473,25 +8474,32 @@ an error will be returned.</p></li>
 </section>
 <section id="string-to-array">
 <h3><code class="docutils literal notranslate"><span class="pre">string_to_array</span></code><a class="headerlink" href="#string-to-array" title="Link to this heading">¶</a></h3>
-<p>Converts each element to its text representation.</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">array_to_string</span><span class="p">(</span><span class="n">array</span><span class="p">,</span> <span class="n">delimiter</span><span class="p">)</span>
+<p>Splits a string into an array of substrings based on a delimiter. Any substrings matching the optional <code class="docutils literal notranslate"><span class="pre">null_str</span></code> argument are replaced with NULL.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">string_to_array</span><span class="p">(</span><span class="nb">str</span><span class="p">,</span> <span class="n">delimiter</span><span class="p">[,</span> <span class="n">null_str</span><span class="p">])</span>
 </pre></div>
 </div>
 <section id="id268">
 <h4>Arguments<a class="headerlink" href="#id268" title="Link to this heading">¶</a></h4>
 <ul class="simple">
-<li><p><strong>array</strong>: Array expression. Can be a constant, column, or function, and any combination of array operators.</p></li>
-<li><p><strong>delimiter</strong>: Array element separator.</p></li>
+<li><p><strong>str</strong>: String expression to split.</p></li>
+<li><p><strong>delimiter</strong>: Delimiter string to split on.</p></li>
+<li><p><strong>null_str</strong>: Substring values to be replaced with <code class="docutils literal notranslate"><span class="pre">NULL</span></code>.</p></li>
 </ul>
 </section>
 <section id="id269">
 <h4>Example<a class="headerlink" href="#id269" title="Link to this heading">¶</a></h4>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="n">array_to_string</span><span class="p">([[</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">],</span><span class="w"> </span><span class="p">[</span><span class="mi">5</span><span class="p">,</span><span class="w"> </span><span class="mi">6</span><span class="p">,</span><span class="w"> </span><span class="mi">7</span><span class="p">,</span><span class="w"> </span><span class="mi">8</span><span class="p">]],</span><span class="w"> </span><span class="s1">&#39;,&#39;</span><span class="p">);</span>
-<span class="o">+</span><span class="c1">----------------------------------------------------+</span>
-<span class="o">|</span><span class="w"> </span><span class="n">array_to_string</span><span class="p">(</span><span class="n">List</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">3</span><span class="p">,</span><span class="mi">4</span><span class="p">,</span><span class="mi">5</span><span class="p">,</span><span class="mi">6</span><span class="p">,</span><span class="mi">7</span><span class="p">,</span><span class="mi">8</span><span class="p">]),</span><span class="n">Utf8</span><span class="p">(</span><span class="ss">&quot;,&quot;</span><span class="p">))</span><span class="w"> </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">----------------------------------------------------+</span>
-<span class="o">|</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">3</span><span class="p">,</span><span class="mi">4</span><span class="p">,</span><span class="mi">5</span><span class="p">,</span><span class="mi">6</span><span class="p">,</span><span class="mi">7</span><span class="p">,</span><span class="mi">8</span><span class="w">                                    </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">----------------------------------------------------+</span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="n">string_to_array</span><span class="p">(</span><span class="s1">&#39;abc##def&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;##&#39;</span><span class="p">);</span>
+<span class="o">+</span><span class="c1">-----------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">string_to_array</span><span class="p">(</span><span class="n">Utf8</span><span class="p">(</span><span class="s1">&#39;abc##def&#39;</span><span class="p">))</span><span class="w">  </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">-----------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="p">[</span><span class="s1">&#39;abc&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;def&#39;</span><span class="p">]</span><span class="w">                    </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">-----------------------------------+</span>
+<span class="o">&gt;</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="n">string_to_array</span><span class="p">(</span><span class="s1">&#39;abc def&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39; &#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;def&#39;</span><span class="p">);</span>
+<span class="o">+</span><span class="c1">---------------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">string_to_array</span><span class="p">(</span><span class="n">Utf8</span><span class="p">(</span><span class="s1">&#39;abc def&#39;</span><span class="p">),</span><span class="w"> </span><span class="n">Utf8</span><span class="p">(</span><span class="s1">&#39; &#39;</span><span class="p">),</span><span class="w"> </span><span class="n">Utf8</span><span class="p">(</span><span class="s1">&#39;def&#39;</span><span class="p">))</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">---------------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="p">[</span><span class="s1">&#39;abc&#39;</span><span class="p">,</span><span class="w"> </span><span class="k">NULL</span><span class="p">]</span><span class="w">                               </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">---------------------------------------------+</span>
 </pre></div>
 </div>
 </section>
