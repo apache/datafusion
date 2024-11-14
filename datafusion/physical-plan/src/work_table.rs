@@ -36,14 +36,14 @@ use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
 
 /// A vector of record batches with a memory reservation.
 #[derive(Debug)]
-pub(super) struct ReservedBatches {
+pub struct ReservedBatches {
     batches: Vec<RecordBatch>,
     #[allow(dead_code)]
     reservation: MemoryReservation,
 }
 
 impl ReservedBatches {
-    pub(super) fn new(batches: Vec<RecordBatch>, reservation: MemoryReservation) -> Self {
+    pub fn new(batches: Vec<RecordBatch>, reservation: MemoryReservation) -> Self {
         ReservedBatches {
             batches,
             reservation,
@@ -55,13 +55,19 @@ impl ReservedBatches {
 /// See <https://wiki.postgresql.org/wiki/CTEReadme#How_Recursion_Works>
 /// This table serves as a mirror or buffer between each iteration of a recursive query.
 #[derive(Debug)]
-pub(super) struct WorkTable {
+pub struct WorkTable {
     batches: Mutex<Option<ReservedBatches>>,
+}
+
+impl Default for WorkTable {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl WorkTable {
     /// Create a new work table.
-    pub(super) fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             batches: Mutex::new(None),
         }
@@ -78,7 +84,7 @@ impl WorkTable {
     }
 
     /// Update the results of a recursive query iteration to the work table.
-    pub(super) fn update(&self, batches: ReservedBatches) {
+    pub fn update(&self, batches: ReservedBatches) {
         self.batches.lock().unwrap().replace(batches);
     }
 }
@@ -120,7 +126,7 @@ impl WorkTableExec {
         }
     }
 
-    pub(super) fn with_work_table(&self, work_table: Arc<WorkTable>) -> Self {
+    pub fn with_work_table(&self, work_table: Arc<WorkTable>) -> Self {
         Self {
             name: self.name.clone(),
             schema: Arc::clone(&self.schema),
