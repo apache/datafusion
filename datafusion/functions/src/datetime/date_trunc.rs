@@ -484,7 +484,7 @@ mod tests {
 
     use arrow::array::cast::as_primitive_array;
     use arrow::array::types::TimestampNanosecondType;
-    use arrow::array::TimestampNanosecondArray;
+    use arrow::array::{Array, TimestampNanosecondArray};
     use arrow::compute::kernels::cast_utils::string_to_timestamp_nanos;
     use arrow::datatypes::{DataType, TimeUnit};
     use datafusion_common::ScalarValue;
@@ -724,12 +724,15 @@ mod tests {
                 .map(|s| Some(string_to_timestamp_nanos(s).unwrap()))
                 .collect::<TimestampNanosecondArray>()
                 .with_timezone_opt(tz_opt.clone());
-            #[allow(deprecated)] // TODO migrate UDF invoke to invoke_batch
+            let batch_size = input.len();
             let result = DateTruncFunc::new()
-                .invoke(&[
-                    ColumnarValue::Scalar(ScalarValue::from("day")),
-                    ColumnarValue::Array(Arc::new(input)),
-                ])
+                .invoke_batch(
+                    &[
+                        ColumnarValue::Scalar(ScalarValue::from("day")),
+                        ColumnarValue::Array(Arc::new(input)),
+                    ],
+                    batch_size,
+                )
                 .unwrap();
             if let ColumnarValue::Array(result) = result {
                 assert_eq!(
@@ -883,12 +886,15 @@ mod tests {
                 .map(|s| Some(string_to_timestamp_nanos(s).unwrap()))
                 .collect::<TimestampNanosecondArray>()
                 .with_timezone_opt(tz_opt.clone());
-            #[allow(deprecated)] // TODO migrate UDF invoke to invoke_batch
+            let batch_size = input.len();
             let result = DateTruncFunc::new()
-                .invoke(&[
-                    ColumnarValue::Scalar(ScalarValue::from("hour")),
-                    ColumnarValue::Array(Arc::new(input)),
-                ])
+                .invoke_batch(
+                    &[
+                        ColumnarValue::Scalar(ScalarValue::from("hour")),
+                        ColumnarValue::Array(Arc::new(input)),
+                    ],
+                    batch_size,
+                )
                 .unwrap();
             if let ColumnarValue::Array(result) = result {
                 assert_eq!(

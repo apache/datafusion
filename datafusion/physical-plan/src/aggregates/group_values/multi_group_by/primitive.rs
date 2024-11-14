@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::aggregates::group_values::multi_column::{nulls_equal_to, GroupColumn};
+use crate::aggregates::group_values::multi_group_by::{nulls_equal_to, GroupColumn};
 use crate::aggregates::group_values::null_builder::MaybeNullBufferBuilder;
 use arrow::buffer::ScalarBuffer;
 use arrow_array::cast::AsArray;
@@ -208,7 +208,7 @@ impl<T: ArrowPrimitiveType, const NULLABLE: bool> GroupColumn
 mod tests {
     use std::sync::Arc;
 
-    use crate::aggregates::group_values::multi_column::primitive::PrimitiveGroupValueBuilder;
+    use crate::aggregates::group_values::multi_group_by::primitive::PrimitiveGroupValueBuilder;
     use arrow::datatypes::Int64Type;
     use arrow_array::{ArrayRef, Int64Array};
     use arrow_buffer::{BooleanBufferBuilder, NullBuffer};
