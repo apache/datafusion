@@ -188,7 +188,7 @@ impl MemoryExec {
         &self.projection
     }
 
-    /// show sizes
+    /// Show sizes
     pub fn show_sizes(&self) -> bool {
         self.show_sizes
     }
@@ -273,6 +273,7 @@ impl MemoryExec {
         Ok(self)
     }
 
+    /// Arc clone of ref to original schema
     pub fn original_schema(&self) -> SchemaRef {
         Arc::clone(&self.schema)
     }

@@ -112,17 +112,17 @@ impl RecursiveQueryExec {
         }
     }
 
-    /// Ref to the name
+    /// Ref to name
     pub fn name(&self) -> &str {
         &self.name
     }
 
-    /// Ref to the static term
+    /// Ref to static term
     pub fn static_term(&self) -> &Arc<dyn ExecutionPlan> {
         &self.static_term
     }
 
-    /// Ref to the recursive term
+    /// Ref to recursive term
     pub fn recursive_term(&self) -> &Arc<dyn ExecutionPlan> {
         &self.recursive_term
     }
@@ -132,7 +132,7 @@ impl RecursiveQueryExec {
         self.is_distinct
     }
 
-    /// Ref to the work table
+    /// Ref to work table
     pub fn work_table(&self) -> &Arc<WorkTable> {
         &self.work_table
     }

@@ -86,7 +86,7 @@ impl NdJsonExec {
         &self.base_config
     }
 
-    /// Ref to the file compression type
+    /// Ref to file compression type
     pub fn file_compression_type(&self) -> &FileCompressionType {
         &self.file_compression_type
     }
