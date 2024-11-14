@@ -22,7 +22,7 @@ use super::{
     },
     rewrite::{
         inject_column_aliases_into_subquery, normalize_union_schema,
-        rewrite_plan_for_sort_on_non_projected_fields,
+        remove_dangling_identifiers, rewrite_plan_for_sort_on_non_projected_fields,
         subquery_alias_inner_query_and_columns, TableAliasRewriter,
     },
     utils::{
@@ -157,9 +157,68 @@ impl Unparser<'_> {
             )]);
         }
 
+        // Construct a list of all the identifiers present in query sources
+        let mut all_idents = Vec::new();
+        if let Some(source_alias) = relation_builder.get_alias() {
+            all_idents.push(source_alias);
+        } else if let Some(source_name) = relation_builder.get_name() {
+            all_idents.push(source_name);
+        }
+
         let mut twj = select_builder.pop_from().unwrap();
+        twj.get_joins()
+            .iter()
+            .for_each(|join| match &join.relation {
+                ast::TableFactor::Table { alias, name, .. } => {
+                    if let Some(alias) = alias {
+                        all_idents.push(alias.name.to_string());
+                    } else {
+                        all_idents.push(name.to_string());
+                    }
+                }
+                ast::TableFactor::Derived { alias, .. } => {
+                    if let Some(alias) = alias {
+                        all_idents.push(alias.name.to_string());
+                    }
+                }
+                _ => {}
+            });
+
         twj.relation(relation_builder);
         select_builder.push_from(twj);
+
+        // Ensure that the projection contains references to sources that actually exist
+        let mut projection = select_builder.get_projection();
+        projection
+            .iter_mut()
+            .for_each(|select_item| match select_item {
+                ast::SelectItem::UnnamedExpr(ast::Expr::CompoundIdentifier(idents)) => {
+                    remove_dangling_identifiers(idents, &all_idents);
+                }
+                _ => {}
+            });
+
+        // Check the order by as well
+        if let Some(query) = query.as_mut() {
+            let mut order_by = query.get_order_by();
+            order_by.iter_mut().for_each(|sort_item| {
+                if let ast::Expr::CompoundIdentifier(idents) = &mut sort_item.expr {
+                    remove_dangling_identifiers(idents, &all_idents);
+                }
+            });
+
+            query.order_by(order_by);
+        }
+
+        // Order by could be a sort in the select builder
+        let mut sort = select_builder.get_sort_by();
+        sort.iter_mut().for_each(|sort_item| {
+            if let ast::Expr::CompoundIdentifier(idents) = sort_item {
+                remove_dangling_identifiers(idents, &all_idents);
+            }
+        });
+
+        select_builder.projection(projection);
 
         Ok(SetExpr::Select(Box::new(select_builder.build()?)))
     }

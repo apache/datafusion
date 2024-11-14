@@ -55,6 +55,9 @@ impl QueryBuilder {
         self.order_by = value;
         self
     }
+    pub fn get_order_by(&self) -> Vec<ast::OrderByExpr> {
+        self.order_by.clone()
+    }
     pub fn limit(&mut self, value: Option<ast::Expr>) -> &mut Self {
         self.limit = value;
         self
@@ -159,6 +162,9 @@ impl SelectBuilder {
         self.projection = value;
         self
     }
+    pub fn get_projection(&self) -> Vec<ast::SelectItem> {
+        self.projection.clone()
+    }
     pub fn already_projected(&self) -> bool {
         !self.projection.is_empty()
     }
@@ -221,6 +227,9 @@ impl SelectBuilder {
     pub fn sort_by(&mut self, value: Vec<ast::Expr>) -> &mut Self {
         self.sort_by = value;
         self
+    }
+    pub fn get_sort_by(&self) -> Vec<ast::Expr> {
+        self.sort_by.clone()
     }
     pub fn having(&mut self, value: Option<ast::Expr>) -> &mut Self {
         self.having = value;
@@ -307,6 +316,9 @@ impl TableWithJoinsBuilder {
         self.relation = Some(value);
         self
     }
+    pub fn get_joins(&self) -> Vec<ast::Join> {
+        self.joins.clone()
+    }
 
     pub fn joins(&mut self, value: Vec<ast::Join>) -> &mut Self {
         self.joins = value;
@@ -359,6 +371,25 @@ enum TableFactorBuilder {
 impl RelationBuilder {
     pub fn has_relation(&self) -> bool {
         self.relation.is_some()
+    }
+    pub fn get_name(&self) -> Option<String> {
+        match self.relation {
+            Some(TableFactorBuilder::Table(ref value)) => {
+                value.name.as_ref().map(|a| a.to_string())
+            }
+            _ => None,
+        }
+    }
+    pub fn get_alias(&self) -> Option<String> {
+        match self.relation {
+            Some(TableFactorBuilder::Table(ref value)) => {
+                value.alias.as_ref().map(|a| a.name.to_string())
+            }
+            Some(TableFactorBuilder::Derived(ref value)) => {
+                value.alias.as_ref().map(|a| a.name.to_string())
+            }
+            _ => None,
+        }
     }
     pub fn table(&mut self, value: TableRelationBuilder) -> &mut Self {
         self.relation = Some(TableFactorBuilder::Table(value));

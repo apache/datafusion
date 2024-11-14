@@ -346,6 +346,80 @@ fn roundtrip_statement_with_dialect() -> Result<()> {
             unparser_dialect: Box::new(UnparserDefaultDialect {}),
         },
         TestStatementWithDialect {
+            sql: "select j1_id from (select ta.j1_id from j1 ta)",
+            expected:
+                // This seems like desirable behavior, but is actually hiding an underlying issue
+                // The re-written identifier is `ta`.`j1_id`, because `reconstuct_select_statement` runs before the derived projection
+                // and for some reason, the derived table alias is pre-set to `ta` for the top-level projection
+                "SELECT `j1_id` FROM (SELECT `ta`.`j1_id` FROM `j1` AS `ta`) AS `derived_projection`",
+            parser_dialect: Box::new(MySqlDialect {}),
+            unparser_dialect: Box::new(UnparserMySqlDialect {}),
+        },
+        TestStatementWithDialect {
+            sql: "select j1_id from (select ta.j1_id from j1 ta)",
+            expected:
+                "SELECT j1_id FROM (SELECT ta.j1_id FROM j1 AS ta)",
+            parser_dialect: Box::new(GenericDialect {}),
+            unparser_dialect: Box::new(UnparserDefaultDialect {}),
+        },
+        TestStatementWithDialect {
+            sql: "select j1_id from (select ta.j1_id from j1 ta) order by j1_id",
+            expected:
+                "SELECT j1_id FROM (SELECT ta.j1_id FROM j1 AS ta) ORDER BY j1_id ASC NULLS LAST",
+            parser_dialect: Box::new(GenericDialect {}),
+            unparser_dialect: Box::new(UnparserDefaultDialect {}),
+        },
+        // TODO: remove dangling identifiers from group by, filter, etc
+        // TestStatementWithDialect {
+        //     sql: "select j1_id from (select ta.j1_id from j1 ta) where j1_id = 1",
+        //     expected:
+        //         "SELECT j1_id FROM (SELECT ta.j1_id FROM j1 AS ta) WHERE (ta.j1_id = 1)",
+        //     parser_dialect: Box::new(GenericDialect {}),
+        //     unparser_dialect: Box::new(UnparserDefaultDialect {}),
+        // },
+        TestStatementWithDialect {
+            sql: "select j1_id from (select ta.j1_id from j1 ta) order by j1_id",
+            expected:
+                "SELECT `j1_id` FROM (SELECT `ta`.`j1_id` FROM `j1` AS `ta`) AS `derived_projection` ORDER BY `j1_id` ASC",
+            parser_dialect: Box::new(MySqlDialect {}),
+            unparser_dialect: Box::new(UnparserMySqlDialect {}),
+        },
+        TestStatementWithDialect {
+            sql: "select j1_id from (select ta.j1_id from j1 ta) AS tbl1",
+            expected:
+                "SELECT tbl1.j1_id FROM (SELECT ta.j1_id FROM j1 AS ta) AS tbl1",
+            parser_dialect: Box::new(GenericDialect {}),
+            unparser_dialect: Box::new(UnparserDefaultDialect {}),
+        },
+        TestStatementWithDialect {
+            sql: "select j1_id, j2_id from (select ta.j1_id from j1 ta) AS tbl1, (select ta.j1_id as j2_id from j1 ta) as tbl2",
+            expected:
+                "SELECT tbl1.j1_id, tbl2.j2_id FROM (SELECT ta.j1_id FROM j1 AS ta) AS tbl1 JOIN (SELECT ta.j1_id AS j2_id FROM j1 AS ta) AS tbl2",
+            parser_dialect: Box::new(GenericDialect {}),
+            unparser_dialect: Box::new(UnparserDefaultDialect {}),
+        },
+        TestStatementWithDialect {
+            sql: "select j1_id, j2_id from (select ta.j1_id from j1 ta) AS tbl1, (select ta.j1_id as j2_id from j1 ta) as tbl2",
+            expected:
+                "SELECT `tbl1`.`j1_id`, `tbl2`.`j2_id` FROM (SELECT `ta`.`j1_id` FROM `j1` AS `ta`) AS `tbl1` JOIN (SELECT `ta`.`j1_id` AS `j2_id` FROM `j1` AS `ta`) AS `tbl2`",
+            parser_dialect: Box::new(MySqlDialect {}),
+            unparser_dialect: Box::new(UnparserMySqlDialect {}),
+        },
+        TestStatementWithDialect {
+            sql: "select j1_id, j2_id from (select ta.j1_id from j1 ta), (select ta.j1_id as j2_id from j1 ta)",
+            expected:
+                "SELECT `j1_id`, `j2_id` FROM (SELECT `ta`.`j1_id` FROM `j1` AS `ta`) AS `derived_projection` JOIN (SELECT `ta`.`j1_id` AS `j2_id` FROM `j1` AS `ta`) AS `derived_projection`",
+            parser_dialect: Box::new(MySqlDialect {}),
+            unparser_dialect: Box::new(UnparserMySqlDialect {}),
+        },
+        TestStatementWithDialect {
+            sql: "select j1_id, j2_id from (select ta.j1_id from j1 ta), (select ta.j1_id AS j2_id from j1 ta)",
+            expected:
+                "SELECT j1_id, j2_id FROM (SELECT ta.j1_id FROM j1 AS ta) JOIN (SELECT ta.j1_id AS j2_id FROM j1 AS ta)",
+            parser_dialect: Box::new(GenericDialect {}),
+            unparser_dialect: Box::new(UnparserDefaultDialect {}),
+        },
+        TestStatementWithDialect {
             sql: "
                 SELECT
                   j1_string,
