@@ -175,7 +175,7 @@ struct CustomUDWFEvaluator;
 impl PartitionEvaluator for CustomUDWFEvaluator {}
 
 #[derive(Clone, PartialEq, ::prost::Message)]
-pub struct CustomUDWFNode {
+pub(in crate::cases) struct CustomUDWFNode {
     #[prost(string, tag = "1")]
     pub payload: String,
 }
