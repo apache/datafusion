@@ -153,7 +153,7 @@ b 1 29 -18218 994303988 5983957848665088916 204 9489 3275293996 1485709125918647
 c 2 1 18109 2033001162 -6513304855495910254 25 43062 1491205016 5863949479783605708 0.110830784 0.929409733247 6WfVFBVGJSQb7FhA7E0lBwdvjfZnSW
 
 # can't distinct on *
-query error DataFusion error: SQL error: ParserError\("Expected: an expression:, found: \*"\)
+query error DataFusion error: SQL error: ParserError\("Expected: an expression, found: \*"\)
 SELECT DISTINCT ON (*) c1 FROM aggregate_test_100 ORDER BY c1 LIMIT 3;
 
 
