@@ -2176,22 +2176,26 @@ mod tests {
 
     #[test]
     fn test_cast_value_to_binary_expr() {
-        let tests = [(
-            Expr::Cast(Cast {
-                expr: Box::new(Expr::Literal(ScalarValue::Utf8(Some(
-                    "blah".to_string(),
-                )))),
-                data_type: DataType::Binary,
-            }),
-            "'blah'",
-            Expr::Cast(Cast {
-                expr: Box::new(Expr::Literal(ScalarValue::Utf8(Some(
-                    "blah".to_string(),
-                )))),
-                data_type: DataType::BinaryView,
-            }),
-            "'blah'",
-        )];
+        let tests = [
+            (
+                Expr::Cast(Cast {
+                    expr: Box::new(Expr::Literal(ScalarValue::Utf8(Some(
+                        "blah".to_string(),
+                    )))),
+                    data_type: DataType::Binary,
+                }),
+                "'blah'",
+            ),
+            (
+                Expr::Cast(Cast {
+                    expr: Box::new(Expr::Literal(ScalarValue::Utf8(Some(
+                        "blah".to_string(),
+                    )))),
+                    data_type: DataType::BinaryView,
+                }),
+                "'blah'",
+            ),
+        ];
         for (value, expected) in tests {
             let dialect = CustomDialectBuilder::new().build();
             let unparser = Unparser::new(&dialect);
