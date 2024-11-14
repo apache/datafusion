@@ -271,12 +271,12 @@ fn roundtrip_nested_loop_join() -> Result<()> {
 }
 
 #[test]
-fn roundtrip_built_in_window() -> Result<()> {
+fn roundtrip_udwf() -> Result<()> {
     let field_a = Field::new("a", DataType::Int64, false);
     let field_b = Field::new("b", DataType::Int64, false);
     let schema = Arc::new(Schema::new(vec![field_a, field_b]));
 
-    let built_in_window_expr = Arc::new(BuiltInWindowExpr::new(
+    let udwf_expr = Arc::new(BuiltInWindowExpr::new(
         create_udwf_window_expr(
             &row_number_udwf(),
             &[],
@@ -296,7 +296,7 @@ fn roundtrip_built_in_window() -> Result<()> {
     let input = Arc::new(EmptyExec::new(schema.clone()));
 
     roundtrip_test(Arc::new(BoundedWindowAggExec::try_new(
-        vec![built_in_window_expr],
+        vec![udwf_expr],
         input,
         vec![col("a", &schema)?],
         InputOrderMode::Sorted,
@@ -315,8 +315,14 @@ fn roundtrip_window() -> Result<()> {
     );
 
     let nth_value_window =
-        create_udwf_window_expr(&nth_value_udwf(), &[col("a", &schema)?, lit(2)], schema.as_ref(),  "NTH_VALUE(a,2) PARTITION BY [b] ORDER BY [a ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW".to_string(), false)?;
-    let builtin_window_expr = Arc::new(BuiltInWindowExpr::new(
+        create_udwf_window_expr(
+            &nth_value_udwf(),
+            &[col("a", &schema)?,
+                lit(2)], schema.as_ref(),
+            "NTH_VALUE(a, 2) PARTITION BY [b] ORDER BY [a ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW".to_string(),
+            false,
+        )?;
+    let udwf_expr = Arc::new(BuiltInWindowExpr::new(
         nth_value_window,
         &[col("b", &schema)?],
         &LexOrdering {
@@ -368,11 +374,7 @@ fn roundtrip_window() -> Result<()> {
     let input = Arc::new(EmptyExec::new(schema.clone()));
 
     roundtrip_test(Arc::new(WindowAggExec::try_new(
-        vec![
-            plain_aggr_window_expr,
-            sliding_aggr_window_expr,
-            builtin_window_expr,
-        ],
+        vec![plain_aggr_window_expr, sliding_aggr_window_expr, udwf_expr],
         input,
         vec![col("b", &schema)?],
     )?))
