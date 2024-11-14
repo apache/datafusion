@@ -424,15 +424,24 @@ fn get_valid_types(
             let mut new_types = Vec::with_capacity(current_types.len());
             for data_type in current_types.iter() {
                 let logical_data_type: NativeType = data_type.into();
-                if logical_data_type == NativeType::String {
-                    new_types.push(data_type.to_owned());
-                } else if logical_data_type == NativeType::Null {
-                    // TODO: Switch to Utf8View if all the string functions supports Utf8View
-                    new_types.push(DataType::Utf8);
-                } else {
-                    return plan_err!(
-                        "The signature expected NativeType::String but received {logical_data_type}"
-                    );
+                match logical_data_type {
+                    NativeType::String => {
+                        new_types.push(data_type.to_owned());
+                    }
+                    // Allow implicit casting
+                    NativeType::Null
+                    | NativeType::Int32
+                    | NativeType::Int64
+                    | NativeType::Float32
+                    | NativeType::Float64
+                    | NativeType::Boolean => {
+                        new_types.push(DataType::Utf8);
+                    }
+                    _ => {
+                        return plan_err!(
+                            "The signature expected NativeType::String but received {logical_data_type}"
+                        );
+                    }
                 }
             }
 
