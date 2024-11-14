@@ -20,8 +20,8 @@
 use arrow::array::{
     Array, ArrayRef, BooleanArray, Float32Array, Float64Array, GenericListArray,
     Int16Array, Int32Array, Int64Array, Int8Array, LargeStringArray, ListBuilder,
-    OffsetSizeTrait, StringArray, StringBuilder, StringViewArray, UInt16Array,
-    UInt32Array, UInt64Array, UInt8Array,
+    OffsetSizeTrait, StringArray, StringBuilder, UInt16Array, UInt32Array, UInt64Array,
+    UInt8Array,
 };
 use arrow::datatypes::{DataType, Field};
 use datafusion_expr::TypeSignature;
