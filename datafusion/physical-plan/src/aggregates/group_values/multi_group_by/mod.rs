@@ -15,13 +15,15 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! `GroupValues` implementations for multi group by cases
+
 mod bytes;
 mod bytes_view;
 mod primitive;
 
 use std::mem::{self, size_of};
 
-use crate::aggregates::group_values::multi_column::{
+use crate::aggregates::group_values::multi_group_by::{
     bytes::ByteGroupValueBuilder, bytes_view::ByteViewGroupValueBuilder,
     primitive::PrimitiveGroupValueBuilder,
 };
@@ -1138,7 +1140,9 @@ mod tests {
     use datafusion_common::utils::proxy::RawTableAllocExt;
     use datafusion_expr::EmitTo;
 
-    use crate::aggregates::group_values::{multi_column::GroupValuesColumn, GroupValues};
+    use crate::aggregates::group_values::{
+        multi_group_by::GroupValuesColumn, GroupValues,
+    };
 
     use super::GroupIndexView;
 
