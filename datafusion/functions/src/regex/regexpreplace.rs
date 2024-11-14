@@ -56,12 +56,7 @@ impl RegexpReplaceFunc {
         use DataType::*;
         Self {
             signature: Signature::one_of(
-                vec![
-                    TypeSignature::Exact(vec![Utf8, Utf8, Utf8]),
-                    TypeSignature::Exact(vec![Utf8View, Utf8, Utf8]),
-                    TypeSignature::Exact(vec![Utf8, Utf8, Utf8, Utf8]),
-                    TypeSignature::Exact(vec![Utf8View, Utf8, Utf8, Utf8]),
-                ],
+                vec![TypeSignature::String(3), TypeSignature::String(4)],
                 Volatility::Immutable,
             ),
         }
