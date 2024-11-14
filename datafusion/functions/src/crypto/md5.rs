@@ -42,7 +42,7 @@ impl Md5Func {
         Self {
             signature: Signature::uniform(
                 1,
-                vec![Utf8, LargeUtf8, Binary, LargeBinary],
+                vec![Utf8View, Utf8, LargeUtf8, Binary, LargeBinary],
                 Volatility::Immutable,
             ),
         }
@@ -65,7 +65,7 @@ impl ScalarUDFImpl for Md5Func {
         use DataType::*;
         Ok(match &arg_types[0] {
             LargeUtf8 | LargeBinary => LargeUtf8,
-            Utf8 | Binary => Utf8,
+            Utf8View | Utf8 | Binary => Utf8,
             Null => Null,
             Dictionary(_, t) => match **t {
                 LargeUtf8 | LargeBinary => LargeUtf8,

@@ -954,6 +954,66 @@ logical_plan
 01)Projection: nullif(test.column1_utf8view, test.column1_utf8view) AS c
 02)--TableScan: test projection=[column1_utf8view]
 
+## Ensure no casts for md5
+query TT
+EXPLAIN SELECT
+  md5(column1_utf8view) as c
+FROM test;
+----
+logical_plan
+01)Projection: md5(test.column1_utf8view) AS c
+02)--TableScan: test projection=[column1_utf8view]
+
+## Ensure no casts for sha224
+query TT
+EXPLAIN SELECT
+  sha224(column1_utf8view) as c
+FROM test;
+----
+logical_plan
+01)Projection: sha224(test.column1_utf8view) AS c
+02)--TableScan: test projection=[column1_utf8view]
+
+## Ensure no casts for sha256
+query TT
+EXPLAIN SELECT
+  sha256(column1_utf8view) as c
+FROM test;
+----
+logical_plan
+01)Projection: sha256(test.column1_utf8view) AS c
+02)--TableScan: test projection=[column1_utf8view]
+
+## Ensure no casts for sha384
+query TT
+EXPLAIN SELECT
+  sha384(column1_utf8view) as c
+FROM test;
+----
+logical_plan
+01)Projection: sha384(test.column1_utf8view) AS c
+02)--TableScan: test projection=[column1_utf8view]
+
+## Ensure no casts for sha512
+query TT
+EXPLAIN SELECT
+  sha512(column1_utf8view) as c
+FROM test;
+----
+logical_plan
+01)Projection: sha512(test.column1_utf8view) AS c
+02)--TableScan: test projection=[column1_utf8view]
+
+## Ensure no casts for digest
+query TT
+EXPLAIN SELECT
+  digest(column1_utf8view, 'md5') as c
+FROM test;
+----
+logical_plan
+01)Projection: digest(test.column1_utf8view, Utf8View("md5")) AS c
+02)--TableScan: test projection=[column1_utf8view]
+
 ## Ensure no casts for binary operators
 # `~` operator (regex match)
 query TT

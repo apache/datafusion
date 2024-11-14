@@ -2225,6 +2225,11 @@ SELECT digest('','blake3');
 ----
 af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262
 
+# vverify utf8view 
+query ?
+SELECT sha224(arrow_cast('tom', 'Utf8View'));
+----
+0bf6cb62649c42a9ae3876ab6f6d92ad36cb5414e495f8873292be4d
 
 query T
 SELECT substring('alphabet', 1)
