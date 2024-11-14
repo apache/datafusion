@@ -135,7 +135,9 @@ pub fn serialize_physical_window_expr(
                 (!buf.is_empty()).then_some(buf),
             )
         } else {
-            return not_impl_err!("WindowExpr not supported: {window_expr:?}");
+            return not_impl_err!(
+                "User-defined window function not supported: {window_expr:?}"
+            );
         }
     } else {
         return not_impl_err!("WindowExpr not supported: {window_expr:?}");
