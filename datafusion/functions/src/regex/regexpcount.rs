@@ -567,10 +567,7 @@ where
     Ok(result)
 }
 
-fn compile_regex<'a>(
-    regex: &'a str,
-    flags: Option<&'a str>,
-) -> Result<Regex, ArrowError> {
+fn compile_regex(regex: &str, flags: Option<&str>) -> Result<Regex, ArrowError> {
     let pattern = match flags {
         None | Some("") => regex.to_string(),
         Some(flags) => {
@@ -582,6 +579,7 @@ fn compile_regex<'a>(
             format!("(?{}){}", flags, regex)
         }
     };
+
     Regex::new(&pattern).map_err(|_| {
         ArrowError::ComputeError(format!(
             "Regular expression did not compile: {}",
