@@ -64,7 +64,7 @@ use datafusion::physical_plan::{
     ExecutionPlan, InputOrderMode, PhysicalExpr, WindowExpr,
 };
 use datafusion_common::{internal_err, not_impl_err, DataFusionError, Result};
-use datafusion_expr::{AggregateUDF, ScalarUDF};
+use datafusion_expr::{AggregateUDF, ScalarUDF, WindowUDF};
 
 use crate::common::{byte_to_string, str_to_byte};
 use crate::physical_plan::from_proto::{
@@ -2117,6 +2117,14 @@ pub trait PhysicalExtensionCodec: Debug + Send + Sync {
     }
 
     fn try_encode_udaf(&self, _node: &AggregateUDF, _buf: &mut Vec<u8>) -> Result<()> {
+        Ok(())
+    }
+
+    fn try_decode_udwf(&self, name: &str, _buf: &[u8]) -> Result<Arc<WindowUDF>> {
+        not_impl_err!("PhysicalExtensionCodec is not provided for window function {name}")
+    }
+
+    fn try_encode_udwf(&self, _node: &WindowUDF, _buf: &mut Vec<u8>) -> Result<()> {
         Ok(())
     }
 }

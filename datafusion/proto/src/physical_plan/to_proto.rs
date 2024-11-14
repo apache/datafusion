@@ -68,7 +68,7 @@ pub fn serialize_physical_aggr_expr(
                 ordering_req,
                 distinct: aggr_expr.is_distinct(),
                 ignore_nulls: aggr_expr.ignore_nulls(),
-                fun_definition: (!buf.is_empty()).then_some(buf)
+                fun_definition: (!buf.is_empty()).then_some(buf),
             },
         )),
     })
@@ -126,11 +126,13 @@ pub fn serialize_physical_window_expr(
             .as_any()
             .downcast_ref::<WindowUDFExpr>()
         {
+            let mut buf = Vec::new();
+            codec.try_encode_udwf(expr.fun(), &mut buf)?;
             (
                 physical_window_expr_node::WindowFunction::UserDefinedWindowFunction(
                     expr.fun().name().to_string(),
                 ),
-                None,
+                (!buf.is_empty()).then_some(buf),
             )
         } else {
             return not_impl_err!("WindowExpr not supported: {window_expr:?}");
