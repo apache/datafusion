@@ -72,7 +72,7 @@ pub struct RecursiveQueryExec {
 }
 
 impl RecursiveQueryExec {
-    /// Try to create a new RecursiveQueryExec
+    /// Create a new RecursiveQueryExec
     pub fn try_new(
         name: String,
         static_term: Arc<dyn ExecutionPlan>,
@@ -83,25 +83,8 @@ impl RecursiveQueryExec {
         let work_table = Arc::new(WorkTable::new());
         // Use the same work table for both the WorkTableExec and the recursive term
         let recursive_term = assign_work_table(recursive_term, Arc::clone(&work_table))?;
-        Ok(Self::new(
-            name,
-            static_term,
-            recursive_term,
-            is_distinct,
-            work_table,
-        ))
-    }
-
-    /// Create a new RecursiveQueryExec
-    pub fn new(
-        name: String,
-        static_term: Arc<dyn ExecutionPlan>,
-        recursive_term: Arc<dyn ExecutionPlan>,
-        is_distinct: bool,
-        work_table: Arc<WorkTable>,
-    ) -> Self {
         let cache = Self::compute_properties(static_term.schema());
-        RecursiveQueryExec {
+        Ok(RecursiveQueryExec {
             name,
             static_term,
             recursive_term,
@@ -109,7 +92,7 @@ impl RecursiveQueryExec {
             work_table,
             metrics: ExecutionPlanMetricsSet::new(),
             cache,
-        }
+        })
     }
 
     /// Ref to name
@@ -130,11 +113,6 @@ impl RecursiveQueryExec {
     /// is distinct
     pub fn is_distinct(&self) -> bool {
         self.is_distinct
-    }
-
-    /// Ref to work table
-    pub fn work_table(&self) -> &Arc<WorkTable> {
-        &self.work_table
     }
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
