@@ -47,6 +47,7 @@ use datafusion::datasource::physical_plan::{
 };
 use datafusion::execution::FunctionRegistry;
 use datafusion::functions_aggregate::sum::sum_udaf;
+use datafusion::functions_window::nth_value::nth_value_udwf;
 use datafusion::functions_window::row_number::row_number_udwf;
 use datafusion::logical_expr::{create_udf, JoinType, Operator, Volatility};
 use datafusion::physical_expr::expressions::Literal;
@@ -307,6 +308,29 @@ fn roundtrip_window() -> Result<()> {
     let field_b = Field::new("b", DataType::Int64, false);
     let schema = Arc::new(Schema::new(vec![field_a, field_b]));
 
+    let window_frame = WindowFrame::new_bounds(
+        datafusion_expr::WindowFrameUnits::Range,
+        WindowFrameBound::Preceding(ScalarValue::Int64(None)),
+        WindowFrameBound::CurrentRow,
+    );
+
+    let nth_value_window =
+        create_udwf_window_expr(&nth_value_udwf(), &[col("a", &schema)?, lit(2)], schema.as_ref(),  "NTH_VALUE(a,2) PARTITION BY [b] ORDER BY [a ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW".to_string(), false)?;
+    let builtin_window_expr = Arc::new(BuiltInWindowExpr::new(
+        nth_value_window,
+        &[col("b", &schema)?],
+        &LexOrdering {
+            inner: vec![PhysicalSortExpr {
+                expr: col("a", &schema)?,
+                options: SortOptions {
+                    descending: false,
+                    nulls_first: false,
+                },
+            }],
+        },
+        Arc::new(window_frame),
+    ));
+
     let plain_aggr_window_expr = Arc::new(PlainAggregateWindowExpr::new(
         AggregateExprBuilder::new(
             avg_udaf(),
@@ -344,7 +368,11 @@ fn roundtrip_window() -> Result<()> {
     let input = Arc::new(EmptyExec::new(schema.clone()));
 
     roundtrip_test(Arc::new(WindowAggExec::try_new(
-        vec![plain_aggr_window_expr, sliding_aggr_window_expr],
+        vec![
+            plain_aggr_window_expr,
+            sliding_aggr_window_expr,
+            builtin_window_expr,
+        ],
         input,
         vec![col("b", &schema)?],
     )?))
