@@ -192,10 +192,10 @@ impl Unparser<'_> {
                         all_idents.push(full_ident);
                     }
                 }
-                ast::TableFactor::Derived { alias, .. } => {
-                    if let Some(alias) = alias {
-                        all_idents.push(alias.name.to_string());
-                    }
+                ast::TableFactor::Derived {
+                    alias: Some(alias), ..
+                } => {
+                    all_idents.push(alias.name.to_string());
                 }
                 _ => {}
             });
@@ -205,14 +205,11 @@ impl Unparser<'_> {
 
         // Ensure that the projection contains references to sources that actually exist
         let mut projection = select_builder.get_projection();
-        projection
-            .iter_mut()
-            .for_each(|select_item| match select_item {
-                ast::SelectItem::UnnamedExpr(expr) => {
-                    *expr = remove_dangling_expr(expr.clone(), &all_idents);
-                }
-                _ => {}
-            });
+        projection.iter_mut().for_each(|select_item| {
+            if let ast::SelectItem::UnnamedExpr(expr) = select_item {
+                *expr = remove_dangling_expr(expr.clone(), &all_idents);
+            }
+        });
 
         // replace dangling references in the selection
         if let Some(expr) = select_builder.get_selection() {

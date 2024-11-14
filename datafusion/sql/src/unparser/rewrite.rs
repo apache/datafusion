@@ -366,10 +366,7 @@ impl TreeNodeRewriter for TableAliasRewriter<'_> {
 
 /// Takes an input list of identifiers and a list of identifiers that are available from relations or joins.
 /// Removes any table identifiers that are not present in the list of available identifiers, retains original column names.
-pub fn remove_dangling_identifiers(
-    idents: &mut Vec<Ident>,
-    available_idents: &Vec<String>,
-) -> () {
+pub fn remove_dangling_identifiers(idents: &mut Vec<Ident>, available_idents: &[String]) {
     if idents.len() > 1 {
         let ident_source = display_separated(
             &idents
