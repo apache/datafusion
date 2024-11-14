@@ -86,6 +86,11 @@ impl NdJsonExec {
         &self.base_config
     }
 
+    /// Ref to file compression type
+    pub fn file_compression_type(&self) -> &FileCompressionType {
+        &self.file_compression_type
+    }
+
     fn output_partitioning_helper(file_scan_config: &FileScanConfig) -> Partitioning {
         Partitioning::UnknownPartitioning(file_scan_config.file_groups.len())
     }

@@ -95,6 +95,26 @@ impl RecursiveQueryExec {
         })
     }
 
+    /// Ref to name
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Ref to static term
+    pub fn static_term(&self) -> &Arc<dyn ExecutionPlan> {
+        &self.static_term
+    }
+
+    /// Ref to recursive term
+    pub fn recursive_term(&self) -> &Arc<dyn ExecutionPlan> {
+        &self.recursive_term
+    }
+
+    /// is distinct
+    pub fn is_distinct(&self) -> bool {
+        self.is_distinct
+    }
+
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
     fn compute_properties(schema: SchemaRef) -> PlanProperties {
         let eq_properties = EquivalenceProperties::new(schema);
