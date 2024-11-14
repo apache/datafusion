@@ -849,7 +849,7 @@ impl Unparser<'_> {
 
     // Explicit type cast on ast::Expr::Value is not needed by underlying engine for certain types
     // For example: CAST(Utf8("binary_value") AS Binary) and  CAST(Utf8("dictionary_value") AS Dictionary)
-    fn cast_to_sql(&self, expr: &Box<Expr>, data_type: &DataType) -> Result<ast::Expr> {
+    fn cast_to_sql(&self, expr: &Expr, data_type: &DataType) -> Result<ast::Expr> {
         let inner_expr = self.expr_to_sql_inner(expr)?;
         match inner_expr {
             ast::Expr::Value(_) => match data_type {
