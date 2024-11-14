@@ -435,6 +435,7 @@ fn get_valid_types(
                     | NativeType::Float32
                     | NativeType::Float64
                     | NativeType::Boolean => {
+                        // TODO: Switch to Utf8View if all the string functions supports Utf8View
                         new_types.push(DataType::Utf8);
                     }
                     _ => {
