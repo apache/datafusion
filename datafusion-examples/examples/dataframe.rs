@@ -126,7 +126,7 @@ async fn read_memory(ctx: &SessionContext) -> Result<()> {
     let b: ArrayRef = Arc::new(Int32Array::from(vec![1, 10, 10, 100]));
     let batch = RecordBatch::try_from_iter(vec![("a", a), ("b", b)])?;
 
-    // declare a table in memory. In spark API, this corresponds to createDataFrame(...).
+    // declare a table in memory. In Apache Spark API, this corresponds to createDataFrame(...).
     ctx.register_batch("t", batch)?;
     let df = ctx.table("t").await?;
 
