@@ -34,7 +34,6 @@ mod partition_evaluator;
 mod table_source;
 mod udaf;
 mod udf;
-mod udf_docs;
 mod udwf;
 
 pub mod conditional_expressions;
