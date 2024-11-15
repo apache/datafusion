@@ -112,19 +112,38 @@ select nullif(1.0, 2);
 ----
 1
 
-query error DataFusion error: Error during planning: Internal error: Failed to match any signature, errors: Error during planning: The signature expected NativeType::String but received NativeType::Int64
+query error DataFusion error: Arrow error: Cast error: Cannot cast string 'a' to value of Int64 type
 select nullif(2, 'a');
-
 
 query T
 select nullif('2', '3');
 ----
 2
 
-# TODO: support numeric string
-# This query success in Postgres and DuckDB
-query error DataFusion error: Error during planning: Internal error: Failed to match any signature, errors: Error during planning: The signature expected NativeType::String but received NativeType::Int64
+query I
 select nullif(2, '1');
+----
+2
+
+query I
+select nullif('2', 2);
+----
+NULL
+
+query I
+select nullif('1', 2);
+----
+1
+
+statement ok
+create table t(a varchar, b int) as values ('1', 2), ('2', 2), ('3', 2);
+
+query I
+select nullif(a, b) from t;
+----
+1
+NULL
+3
 
 query T
 SELECT NULLIF(arrow_cast('a', 'Utf8View'), 'a');

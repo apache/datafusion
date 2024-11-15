@@ -113,6 +113,8 @@ pub enum TypeSignature {
     /// arguments like `vec![DataType::Int32]` or `vec![DataType::Float32]`
     /// since i32 and f32 can be casted to f64
     Coercible(Vec<LogicalTypeRef>),
+    /// The number of arguments that are comparable
+    Comparable(usize),
     /// Fixed number of arguments of arbitrary types, number should be larger than 0
     Any(usize),
     /// Matches exactly one of a list of [`TypeSignature`]s. Coercion is attempted to match
@@ -134,8 +136,6 @@ pub enum TypeSignature {
     /// Null is considerd as `Utf8` by default
     /// Dictionary with string value type is also handled.
     String(usize),
-    /// Fixed number of arguments of boolean types.
-    Boolean(usize),
     /// Zero argument
     NullAry,
 }
@@ -213,14 +213,14 @@ impl TypeSignature {
                     .collect::<Vec<String>>()
                     .join(", ")]
             }
-            TypeSignature::Boolean(num) => {
-                vec![format!("Boolean({num})")]
-            }
             TypeSignature::String(num) => {
                 vec![format!("String({num})")]
             }
             TypeSignature::Numeric(num) => {
                 vec![format!("Numeric({num})")]
+            }
+            TypeSignature::Comparable(num) => {
+                vec![format!("Comparable({num})")]
             }
             TypeSignature::Coercible(types) => {
                 vec![Self::join_types(types, ", ")]
@@ -300,11 +300,9 @@ impl TypeSignature {
                 .into_iter()
                 .map(|dt| vec![dt; *arg_count])
                 .collect::<Vec<_>>(),
-            TypeSignature::Boolean(arg_count) => {
-                vec![vec![DataType::Boolean; *arg_count]]
-            }
             // TODO: Implement for other types
             TypeSignature::Any(_)
+            | TypeSignature::Comparable(_)
             | TypeSignature::NullAry
             | TypeSignature::VariadicAny
             | TypeSignature::ArraySignature(_)
@@ -393,14 +391,6 @@ impl Signature {
         }
     }
 
-    /// A specified number of boolean arguments
-    pub fn boolean(arg_count: usize, volatility: Volatility) -> Self {
-        Self {
-            type_signature: TypeSignature::Boolean(arg_count),
-            volatility,
-        }
-    }
-
     /// An arbitrary number of arguments of any type.
     pub fn variadic_any(volatility: Volatility) -> Self {
         Self {
@@ -430,6 +420,14 @@ impl Signature {
     pub fn coercible(target_types: Vec<LogicalTypeRef>, volatility: Volatility) -> Self {
         Self {
             type_signature: TypeSignature::Coercible(target_types),
+            volatility,
+        }
+    }
+
+    /// Used for function that expects comparable data types, it will try to coerced all the types into single final one.
+    pub fn comparable(arg_count: usize, volatility: Volatility) -> Self {
+        Self {
+            type_signature: TypeSignature::Comparable(arg_count),
             volatility,
         }
     }

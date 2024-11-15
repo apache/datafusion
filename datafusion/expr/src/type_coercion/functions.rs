@@ -29,7 +29,7 @@ use datafusion_common::{
 };
 use datafusion_expr_common::{
     signature::{ArrayFunctionSignature, FIXED_SIZE_LIST_WILDCARD, TIMEZONE_WILDCARD},
-    type_coercion::binary::string_coercion,
+    type_coercion::binary::{comparison_coercion_numeric, string_coercion},
 };
 use std::sync::Arc;
 
@@ -180,9 +180,9 @@ fn is_well_supported_signature(type_signature: &TypeSignature) -> bool {
             | TypeSignature::Numeric(_)
             | TypeSignature::String(_)
             | TypeSignature::Coercible(_)
-            | TypeSignature::Boolean(_)
             | TypeSignature::Any(_)
             | TypeSignature::NullAry
+            | TypeSignature::Comparable(_)
     )
 }
 
@@ -483,33 +483,6 @@ fn get_valid_types(
 
             vec![vec![base_type_or_default_type(&coerced_type); *number]]
         }
-        TypeSignature::Boolean(number) => {
-            function_length_check(current_types.len(), *number)?;
-
-            // Find common boolean type amongst the given types
-            let mut valid_type = current_types.first().unwrap().to_owned();
-            for t in current_types.iter().skip(1) {
-                let logical_data_type: NativeType = t.into();
-                if logical_data_type == NativeType::Null {
-                    continue;
-                }
-
-                if logical_data_type != NativeType::Boolean {
-                    return plan_err!(
-                        "The signature expected NativeType::Boolean but received {logical_data_type}"
-                    );
-                }
-
-                valid_type = t.to_owned();
-            }
-
-            let logical_data_type: NativeType = valid_type.clone().into();
-            if logical_data_type == NativeType::Null {
-                valid_type = DataType::Boolean;
-            }
-
-            vec![vec![valid_type; *number]]
-        }
         TypeSignature::Numeric(number) => {
             function_length_check(current_types.len(), *number)?;
 
@@ -547,6 +520,23 @@ fn get_valid_types(
             }
 
             vec![vec![valid_type; *number]]
+        }
+        TypeSignature::Comparable(num) => {
+            function_length_check(current_types.len(), *num)?;
+            let mut target_type = current_types[0].to_owned();
+            for data_type in current_types.iter().skip(1) {
+                if let Some(dt) = comparison_coercion_numeric(&target_type, data_type) {
+                    target_type = dt;
+                } else {
+                    return plan_err!("{target_type} and {data_type} is not comparable");
+                }
+            }
+            // Convert null to String type.
+            if target_type.is_null() {
+                vec![vec![DataType::Utf8View; *num]]
+            } else {
+                vec![vec![target_type; *num]]
+            }
         }
         TypeSignature::Coercible(target_types) => {
             function_length_check(current_types.len(), target_types.len())?;

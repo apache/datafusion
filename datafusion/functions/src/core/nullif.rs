@@ -17,7 +17,7 @@
 
 use arrow::datatypes::DataType;
 use datafusion_common::{exec_err, Result};
-use datafusion_expr::{ColumnarValue, Documentation, TypeSignature};
+use datafusion_expr::{ColumnarValue, Documentation};
 
 use arrow::compute::kernels::cmp::eq;
 use arrow::compute::kernels::nullif::nullif;
@@ -41,15 +41,20 @@ impl Default for NullIfFunc {
 impl NullIfFunc {
     pub fn new() -> Self {
         Self {
-            signature: Signature::one_of(
-                // String is at the beginning so the return type is String if both args are Nulls
-                vec![
-                    TypeSignature::String(2),
-                    TypeSignature::Numeric(2),
-                    TypeSignature::Boolean(2),
-                ],
-                Volatility::Immutable,
-            ),
+            // Documentation mentioned in Postgres,
+            // The result has the same type as the first argument — but there is a subtlety.
+            // What is actually returned is the first argument of the implied = operator,
+            // and in some cases that will have been promoted to match the second argument's type.
+            // For example, NULLIF(1, 2.2) yields numeric, because there is no integer = numeric operator, only numeric = numeric
+            //
+            // We don't strictly follow Postgres or DuckDB for **simplicity**.
+            // In this function, we will coerce arguments to the same data type for comparison need. Unlike DuckDB
+            // we don't return the **original** first argument type but return the final coerced type.
+            //
+            // In Postgres, nullif('2', 2) returns Null but nullif('2::varchar', 2) returns error.
+            // While in DuckDB both query returns Null. We follow DuckDB in this case since I think they are equivalent thing and should
+            // have the same result as well.
+            signature: Signature::comparable(2, Volatility::Immutable),
         }
     }
 }
