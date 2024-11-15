@@ -979,8 +979,8 @@ async fn extension_logical_plan() -> Result<()> {
         }),
     });
 
-    let proto = to_substrait_plan(&ext_plan, &ctx.state_ref().read())?;
-    let plan2 = from_substrait_plan(&ctx.state_ref().read(), &proto).await?;
+    let proto = to_substrait_plan(&ext_plan, &ctx.state())?;
+    let plan2 = from_substrait_plan(&ctx.state(), &proto).await?;
 
     let plan1str = format!("{ext_plan}");
     let plan2str = format!("{plan2}");
@@ -1081,8 +1081,8 @@ async fn roundtrip_repartition_roundrobin() -> Result<()> {
         partitioning_scheme: Partitioning::RoundRobinBatch(8),
     });
 
-    let proto = to_substrait_plan(&plan, &ctx.state_ref().read())?;
-    let plan2 = from_substrait_plan(&ctx.state_ref().read(), &proto).await?;
+    let proto = to_substrait_plan(&plan, &ctx.state())?;
+    let plan2 = from_substrait_plan(&ctx.state(), &proto).await?;
     let plan2 = ctx.state().optimize(&plan2)?;
 
     assert_eq!(format!("{plan}"), format!("{plan2}"));
@@ -1098,8 +1098,8 @@ async fn roundtrip_repartition_hash() -> Result<()> {
         partitioning_scheme: Partitioning::Hash(vec![col("data.a")], 8),
     });
 
-    let proto = to_substrait_plan(&plan, &ctx.state_ref().read())?;
-    let plan2 = from_substrait_plan(&ctx.state_ref().read(), &proto).await?;
+    let proto = to_substrait_plan(&plan, &ctx.state())?;
+    let plan2 = from_substrait_plan(&ctx.state(), &proto).await?;
     let plan2 = ctx.state().optimize(&plan2)?;
 
     assert_eq!(format!("{plan}"), format!("{plan2}"));
@@ -1199,8 +1199,8 @@ async fn assert_expected_plan_unoptimized(
     let ctx = create_context().await?;
     let df = ctx.sql(sql).await?;
     let plan = df.into_unoptimized_plan();
-    let proto = to_substrait_plan(&plan, &ctx.state_ref().read())?;
-    let plan2 = from_substrait_plan(&ctx.state_ref().read(), &proto).await?;
+    let proto = to_substrait_plan(&plan, &ctx.state())?;
+    let plan2 = from_substrait_plan(&ctx.state(), &proto).await?;
 
     println!("{plan}");
     println!("{plan2}");
@@ -1225,8 +1225,8 @@ async fn assert_expected_plan(
     let ctx = create_context().await?;
     let df = ctx.sql(sql).await?;
     let plan = df.into_optimized_plan()?;
-    let proto = to_substrait_plan(&plan, &ctx.state_ref().read())?;
-    let plan2 = from_substrait_plan(&ctx.state_ref().read(), &proto).await?;
+    let proto = to_substrait_plan(&plan, &ctx.state())?;
+    let plan2 = from_substrait_plan(&ctx.state(), &proto).await?;
     let plan2 = ctx.state().optimize(&plan2)?;
 
     println!("{plan}");
@@ -1250,7 +1250,7 @@ async fn assert_expected_plan_substrait(
 ) -> Result<()> {
     let ctx = create_context().await?;
 
-    let plan = from_substrait_plan(&ctx.state_ref().read(), &substrait_plan).await?;
+    let plan = from_substrait_plan(&ctx.state(), &substrait_plan).await?;
 
     let plan = ctx.state().optimize(&plan)?;
 
@@ -1265,7 +1265,7 @@ async fn assert_substrait_sql(substrait_plan: Plan, sql: &str) -> Result<()> {
 
     let expected = ctx.sql(sql).await?.into_optimized_plan()?;
 
-    let plan = from_substrait_plan(&ctx.state_ref().read(), &substrait_plan).await?;
+    let plan = from_substrait_plan(&ctx.state(), &substrait_plan).await?;
 
     let plan = ctx.state().optimize(&plan)?;
 
@@ -1280,8 +1280,8 @@ async fn roundtrip_fill_na(sql: &str) -> Result<()> {
     let ctx = create_context().await?;
     let df = ctx.sql(sql).await?;
     let plan = df.into_optimized_plan()?;
-    let proto = to_substrait_plan(&plan, &ctx.state_ref().read())?;
-    let plan2 = from_substrait_plan(&ctx.state_ref().read(), &proto).await?;
+    let proto = to_substrait_plan(&plan, &ctx.state())?;
+    let plan2 = from_substrait_plan(&ctx.state(), &proto).await?;
     let plan2 = ctx.state().optimize(&plan2)?;
 
     // Format plan string and replace all None's with 0
@@ -1301,13 +1301,12 @@ async fn test_alias(sql_with_alias: &str, sql_no_alias: &str) -> Result<()> {
     let ctx = create_context().await?;
 
     let df_a = ctx.sql(sql_with_alias).await?;
-    let proto_a =
-        to_substrait_plan(&df_a.into_optimized_plan()?, &ctx.state_ref().read())?;
-    let plan_with_alias = from_substrait_plan(&ctx.state_ref().read(), &proto_a).await?;
+    let proto_a = to_substrait_plan(&df_a.into_optimized_plan()?, &ctx.state())?;
+    let plan_with_alias = from_substrait_plan(&ctx.state(), &proto_a).await?;
 
     let df = ctx.sql(sql_no_alias).await?;
-    let proto = to_substrait_plan(&df.into_optimized_plan()?, &ctx.state_ref().read())?;
-    let plan = from_substrait_plan(&ctx.state_ref().read(), &proto).await?;
+    let proto = to_substrait_plan(&df.into_optimized_plan()?, &ctx.state())?;
+    let plan = from_substrait_plan(&ctx.state(), &proto).await?;
 
     println!("{plan_with_alias}");
     println!("{plan}");
@@ -1324,8 +1323,8 @@ async fn roundtrip_logical_plan_with_ctx(
     plan: LogicalPlan,
     ctx: SessionContext,
 ) -> Result<Box<Plan>> {
-    let proto = to_substrait_plan(&plan, &ctx.state_ref().read())?;
-    let plan2 = from_substrait_plan(&ctx.state_ref().read(), &proto).await?;
+    let proto = to_substrait_plan(&plan, &ctx.state())?;
+    let plan2 = from_substrait_plan(&ctx.state(), &proto).await?;
     let plan2 = ctx.state().optimize(&plan2)?;
 
     println!("{plan}");

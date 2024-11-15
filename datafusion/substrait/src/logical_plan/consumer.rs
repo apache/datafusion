@@ -27,7 +27,6 @@ use datafusion::common::{
     DFSchemaRef,
 };
 use datafusion::datasource::provider_as_source;
-use datafusion::execution::{FunctionRegistry, SessionState};
 use datafusion::logical_expr::expr::{Exists, InSubquery, Sort};
 
 use datafusion::logical_expr::{
@@ -99,6 +98,8 @@ use substrait::proto::{
     AggregateFunction, Expression, NamedStruct, Plan, Rel, RelCommon, Type,
 };
 use substrait::proto::{ExtendedExpression, FunctionArgument, SortField};
+
+use super::context::Context;
 
 // Substrait PrecisionTimestampTz indicates that the timestamp is relative to UTC, which
 // is the same as the expectation for any non-empty timezone in DF, so any non-empty timezone
@@ -201,7 +202,7 @@ fn split_eq_and_noneq_join_predicate_with_nulls_equality(
 
 async fn union_rels(
     rels: &[Rel],
-    ctx: &SessionState,
+    ctx: &dyn Context,
     extensions: &Extensions,
     is_all: bool,
 ) -> Result<LogicalPlan> {
@@ -222,7 +223,7 @@ async fn union_rels(
 
 async fn intersect_rels(
     rels: &[Rel],
-    ctx: &SessionState,
+    ctx: &dyn Context,
     extensions: &Extensions,
     is_all: bool,
 ) -> Result<LogicalPlan> {
@@ -241,7 +242,7 @@ async fn intersect_rels(
 
 async fn except_rels(
     rels: &[Rel],
-    ctx: &SessionState,
+    ctx: &dyn Context,
     extensions: &Extensions,
     is_all: bool,
 ) -> Result<LogicalPlan> {
@@ -259,7 +260,7 @@ async fn except_rels(
 }
 
 /// Convert Substrait Plan to DataFusion LogicalPlan
-pub async fn from_substrait_plan(ctx: &SessionState, plan: &Plan) -> Result<LogicalPlan> {
+pub async fn from_substrait_plan(ctx: &dyn Context, plan: &Plan) -> Result<LogicalPlan> {
     // Register function extension
     let extensions = Extensions::try_from(&plan.extensions)?;
     if !extensions.type_variations.is_empty() {
@@ -336,7 +337,7 @@ pub struct ExprContainer {
 /// between systems.  This is often useful for scenarios like pushdown where filter
 /// expressions need to be sent to remote systems.
 pub async fn from_substrait_extended_expr(
-    ctx: &SessionState,
+    ctx: &dyn Context,
     extended_expr: &ExtendedExpression,
 ) -> Result<ExprContainer> {
     // Register function extension
@@ -556,7 +557,7 @@ fn make_renamed_schema(
 #[allow(deprecated)]
 #[async_recursion]
 pub async fn from_substrait_rel(
-    ctx: &SessionState,
+    ctx: &dyn Context,
     rel: &Rel,
     extensions: &Extensions,
 ) -> Result<LogicalPlan> {
@@ -837,7 +838,7 @@ pub async fn from_substrait_rel(
         }
         Some(RelType::Read(read)) => {
             async fn read_with_schema(
-                ctx: &SessionState,
+                ctx: &dyn Context,
                 table_ref: TableReference,
                 schema: DFSchema,
                 projection: &Option<MaskExpression>,
@@ -845,11 +846,9 @@ pub async fn from_substrait_rel(
                 let schema = schema.replace_qualifier(table_ref.clone());
 
                 let plan = {
-                    let table = table_ref.table().to_string();
-                    let schema = ctx.schema_for_ref(table_ref.clone())?;
-                    let provider = match schema.table(&table).await? {
+                    let provider = match ctx.table(&table_ref).await? {
                         Some(ref provider) => Arc::clone(provider),
-                        _ => return plan_err!("No table named '{table}'"),
+                        _ => return plan_err!("No table named '{table_ref}'"),
                     };
 
                     LogicalPlanBuilder::scan(
@@ -894,7 +893,7 @@ pub async fn from_substrait_rel(
                     };
 
                     read_with_schema(
-                        &ctx,
+                        ctx,
                         table_reference,
                         substrait_schema,
                         &read.projection,
@@ -977,7 +976,7 @@ pub async fn from_substrait_rel(
                     let table_reference = TableReference::Bare { table: name.into() };
 
                     read_with_schema(
-                        &ctx,
+                        ctx,
                         table_reference,
                         substrait_schema,
                         &read.projection,
@@ -1406,7 +1405,7 @@ fn from_substrait_jointype(join_type: i32) -> Result<JoinType> {
 
 /// Convert Substrait Sorts to DataFusion Exprs
 pub async fn from_substrait_sorts(
-    ctx: &SessionState,
+    ctx: &dyn Context,
     substrait_sorts: &Vec<SortField>,
     input_schema: &DFSchema,
     extensions: &Extensions,
@@ -1456,7 +1455,7 @@ pub async fn from_substrait_sorts(
 
 /// Convert Substrait Expressions to DataFusion Exprs
 pub async fn from_substrait_rex_vec(
-    ctx: &SessionState,
+    ctx: &dyn Context,
     exprs: &Vec<Expression>,
     input_schema: &DFSchema,
     extensions: &Extensions,
@@ -1471,7 +1470,7 @@ pub async fn from_substrait_rex_vec(
 
 /// Convert Substrait FunctionArguments to DataFusion Exprs
 pub async fn from_substrait_func_args(
-    ctx: &SessionState,
+    ctx: &dyn Context,
     arguments: &Vec<FunctionArgument>,
     input_schema: &DFSchema,
     extensions: &Extensions,
@@ -1491,7 +1490,7 @@ pub async fn from_substrait_func_args(
 
 /// Convert Substrait AggregateFunction to DataFusion Expr
 pub async fn from_substrait_agg_func(
-    ctx: &SessionState,
+    ctx: &dyn Context,
     f: &AggregateFunction,
     input_schema: &DFSchema,
     extensions: &Extensions,
@@ -1534,7 +1533,7 @@ pub async fn from_substrait_agg_func(
 /// Convert Substrait Rex to DataFusion Expr
 #[async_recursion]
 pub async fn from_substrait_rex(
-    ctx: &SessionState,
+    ctx: &dyn Context,
     e: &Expression,
     input_schema: &DFSchema,
     extensions: &Extensions,
@@ -1631,7 +1630,7 @@ pub async fn from_substrait_rex(
 
             // try to first match the requested function into registered udfs, then built-in ops
             // and finally built-in expressions
-            if let Some(func) = ctx.scalar_functions().get(fn_name) {
+            if let Ok(func) = ctx.udf(fn_name) {
                 Ok(Expr::ScalarFunction(expr::ScalarFunction::new_udf(
                     func.to_owned(),
                     args,
@@ -2789,7 +2788,7 @@ fn from_substrait_null(
 
 #[allow(deprecated)]
 async fn from_substrait_grouping(
-    ctx: &SessionState,
+    ctx: &dyn Context,
     grouping: &Grouping,
     expressions: &[Expr],
     input_schema: &DFSchemaRef,
@@ -2851,7 +2850,7 @@ impl BuiltinExprBuilder {
 
     pub async fn build(
         self,
-        ctx: &SessionState,
+        ctx: &dyn Context,
         f: &ScalarFunction,
         input_schema: &DFSchema,
         extensions: &Extensions,
@@ -2876,7 +2875,7 @@ impl BuiltinExprBuilder {
     }
 
     async fn build_unary_expr(
-        ctx: &SessionState,
+        ctx: &dyn Context,
         fn_name: &str,
         f: &ScalarFunction,
         input_schema: &DFSchema,
@@ -2910,7 +2909,7 @@ impl BuiltinExprBuilder {
     }
 
     async fn build_like_expr(
-        ctx: &SessionState,
+        ctx: &dyn Context,
         case_insensitive: bool,
         f: &ScalarFunction,
         input_schema: &DFSchema,

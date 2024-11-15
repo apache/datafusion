@@ -16,4 +16,5 @@
 // under the License.
 
 pub mod consumer;
+pub mod context;
 pub mod producer;
