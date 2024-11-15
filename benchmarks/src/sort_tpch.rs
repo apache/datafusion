@@ -16,16 +16,16 @@
 // under the License.
 
 //! This module provides integration benchmark for sort operation.
-//! It will run different sort SQL queries on parquet dataset.
+//! It will run different sort SQL queries on TPCH `lineitem` parquet dataset.
 //!
 //! Another `Sort` benchmark focus on single core execution. This benchmark
 //! runs end-to-end sort queries and test the performance on multiple CPU cores.
 
+use futures::StreamExt;
 use std::path::PathBuf;
 use std::sync::Arc;
 use structopt::StructOpt;
 
-use arrow::record_batch::RecordBatch;
 use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::listing::{
     ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl,
@@ -34,23 +34,15 @@ use datafusion::datasource::{MemTable, TableProvider};
 use datafusion::error::Result;
 use datafusion::execution::runtime_env::RuntimeConfig;
 use datafusion::physical_plan::display::DisplayableExecutionPlan;
-use datafusion::physical_plan::{collect, displayable};
+use datafusion::physical_plan::{displayable, execute_stream};
 use datafusion::prelude::*;
-use datafusion_benchmarks::util::{BenchmarkRun, CommonOpt};
 use datafusion_common::instant::Instant;
 use datafusion_common::DEFAULT_PARQUET_EXTENSION;
 
-#[derive(Debug, StructOpt)]
-#[structopt(
-    name = "datafusion-sort-integration",
-    about = "DataFusion sort integration benchmark"
-)]
-enum SortQueryOpt {
-    Benchmark(SortConfig),
-}
+use crate::util::{BenchmarkRun, CommonOpt};
 
 #[derive(Debug, StructOpt)]
-struct SortConfig {
+pub struct RunOpt {
     /// Common options
     #[structopt(flatten)]
     common: CommonOpt,
@@ -77,7 +69,7 @@ struct QueryResult {
     row_count: usize,
 }
 
-impl SortConfig {
+impl RunOpt {
     const SORT_TABLES: [&'static str; 1] = ["lineitem"];
 
     /// Sort queries with different characteristics:
@@ -211,13 +203,12 @@ impl SortConfig {
             let query_idx = query_id - 1; // 1-indexed -> 0-indexed
             let sql = Self::SORT_QUERIES[query_idx];
 
-            let result = self.execute_query(&ctx, sql).await?;
+            let row_count = self.execute_query(&ctx, sql).await?;
 
             let elapsed = start.elapsed(); //.as_secs_f64() * 1000.0;
             let ms = elapsed.as_secs_f64() * 1000.0;
             millis.push(ms);
 
-            let row_count = result.iter().map(|b| b.num_rows()).sum();
             println!(
                 "Q{query_id} iteration {i} took {ms:.1} ms and returned {row_count} rows"
             );
@@ -253,11 +244,7 @@ impl SortConfig {
         Ok(())
     }
 
-    async fn execute_query(
-        &self,
-        ctx: &SessionContext,
-        sql: &str,
-    ) -> Result<Vec<RecordBatch>> {
+    async fn execute_query(&self, ctx: &SessionContext, sql: &str) -> Result<usize> {
         let debug = self.common.debug;
         let plan = ctx.sql(sql).await?;
         let (state, plan) = plan.into_parts();
@@ -277,7 +264,14 @@ impl SortConfig {
                 displayable(physical_plan.as_ref()).indent(true)
             );
         }
-        let result = collect(physical_plan.clone(), state.task_ctx()).await?;
+
+        let mut row_count = 0;
+
+        let mut stream = execute_stream(physical_plan.clone(), state.task_ctx())?;
+        while let Some(batch) = stream.next().await {
+            row_count += batch.unwrap().num_rows();
+        }
+
         if debug {
             println!(
                 "=== Physical plan with metrics ===\n{}\n",
@@ -285,7 +279,8 @@ impl SortConfig {
                     .indent(true)
             );
         }
-        Ok(result)
+
+        Ok(row_count)
     }
 
     async fn get_table(
@@ -322,15 +317,4 @@ impl SortConfig {
     fn partitions(&self) -> usize {
         self.common.partitions.unwrap_or(num_cpus::get())
     }
-}
-
-#[tokio::main]
-pub async fn main() -> Result<()> {
-    env_logger::init();
-
-    match SortQueryOpt::from_args() {
-        SortQueryOpt::Benchmark(opt) => opt.run().await?,
-    }
-
-    Ok(())
 }
