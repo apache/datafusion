@@ -293,16 +293,23 @@ pub fn simplify_concat(args: Vec<Expr>) -> Result<ExprSimplifyResult> {
     let mut new_args = Vec::with_capacity(args.len());
     let mut contiguous_scalar = "".to_string();
 
-    let mut merged_type = DataType::Utf8;
+    let return_type = {
+        let data_types: Vec<_> = args
+            .iter()
+            .filter_map(|expr| match expr {
+                Expr::Literal(l) => Some(l.data_type()),
+                _ => None,
+            })
+            .collect();
+        ConcatFunc::new().return_type(&data_types)
+    }?;
+
     for arg in args.clone() {
         match arg {
             Expr::Literal(ScalarValue::Utf8(None)) => {}
             Expr::Literal(ScalarValue::LargeUtf8(None)) => {
-                if merged_type != DataType::Utf8View {
-                    merged_type = DataType::LargeUtf8;
-                }
             }
-            Expr::Literal(ScalarValue::Utf8View(None)) => { merged_type = DataType::Utf8View }
+            Expr::Literal(ScalarValue::Utf8View(None)) => { }
 
             // filter out `null` args
             // All literals have been converted to Utf8 or LargeUtf8 in type_coercion.
@@ -311,13 +318,9 @@ pub fn simplify_concat(args: Vec<Expr>) -> Result<ExprSimplifyResult> {
                 contiguous_scalar += &v;
             }
             Expr::Literal(ScalarValue::LargeUtf8(Some(v))) => {
-                if merged_type != DataType::Utf8View {
-                    merged_type = DataType::LargeUtf8;
-                }
                 contiguous_scalar += &v;
             }
             Expr::Literal(ScalarValue::Utf8View(Some(v))) => {
-                merged_type = DataType::Utf8View;
                 contiguous_scalar += &v;
             }
 
@@ -331,13 +334,12 @@ pub fn simplify_concat(args: Vec<Expr>) -> Result<ExprSimplifyResult> {
             // Then pushing this arg to the `new_args`.
             arg => {
                 if !contiguous_scalar.is_empty() {
-                    match merged_type {
+                    match return_type {
                         DataType::Utf8 => new_args.push(lit(contiguous_scalar)),
                         DataType::LargeUtf8 => new_args.push(lit(ScalarValue::LargeUtf8(Some(contiguous_scalar)))),
                         DataType::Utf8View => new_args.push(lit(ScalarValue::Utf8View(Some(contiguous_scalar)))),
                         _ => unreachable!(),
                     }
-                    merged_type = DataType::Utf8;
                     contiguous_scalar = "".to_string();
                 }
                 new_args.push(arg);
@@ -346,7 +348,7 @@ pub fn simplify_concat(args: Vec<Expr>) -> Result<ExprSimplifyResult> {
     }
 
     if !contiguous_scalar.is_empty() {
-        match merged_type {
+        match return_type {
             DataType::Utf8 => new_args.push(lit(contiguous_scalar)),
             DataType::LargeUtf8 => {
                 new_args.push(lit(ScalarValue::LargeUtf8(Some(contiguous_scalar))))
