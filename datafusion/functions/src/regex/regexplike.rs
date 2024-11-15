@@ -17,7 +17,7 @@
 
 //! Regex expressions
 
-use arrow::array::{Array, ArrayRef, AsArray, GenericStringArray, Int32Array};
+use arrow::array::{Array, ArrayRef, AsArray, GenericStringArray};
 use arrow::compute::kernels::regexp;
 use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::{LargeUtf8, Utf8, Utf8View};

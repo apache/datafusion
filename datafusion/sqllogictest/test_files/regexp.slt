@@ -174,16 +174,6 @@ select regexp_like('aaa-555', '.*-(\d*)');
 ----
 true
 
-query B
-select regexp_like(111, '\d*');
-----
-true
-
-query B
-select regexp_like(111, '\d{5,10}');
-----
-false
-
 #
 # regexp_match tests
 #
