@@ -152,9 +152,6 @@ impl From<protobuf::BuiltInWindowFunction> for BuiltInWindowFunction {
     fn from(built_in_function: protobuf::BuiltInWindowFunction) -> Self {
         match built_in_function {
             protobuf::BuiltInWindowFunction::Unspecified => todo!(),
-            protobuf::BuiltInWindowFunction::FirstValue => Self::FirstValue,
-            protobuf::BuiltInWindowFunction::NthValue => Self::NthValue,
-            protobuf::BuiltInWindowFunction::LastValue => Self::LastValue,
         }
     }
 }

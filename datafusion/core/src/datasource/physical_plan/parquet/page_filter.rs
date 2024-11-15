@@ -118,14 +118,16 @@ impl PagePruningAccessPlanFilter {
         let predicates = split_conjunction(expr)
             .into_iter()
             .filter_map(|predicate| {
-                let pp =
-                    match PruningPredicate::try_new(predicate.clone(), schema.clone()) {
-                        Ok(pp) => pp,
-                        Err(e) => {
-                            debug!("Ignoring error creating page pruning predicate: {e}");
-                            return None;
-                        }
-                    };
+                let pp = match PruningPredicate::try_new(
+                    Arc::clone(predicate),
+                    Arc::clone(&schema),
+                ) {
+                    Ok(pp) => pp,
+                    Err(e) => {
+                        debug!("Ignoring error creating page pruning predicate: {e}");
+                        return None;
+                    }
+                };
 
                 if pp.always_true() {
                     debug!("Ignoring always true page pruning predicate: {predicate}");

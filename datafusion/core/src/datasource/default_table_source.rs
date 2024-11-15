@@ -24,7 +24,7 @@ use crate::datasource::TableProvider;
 
 use arrow::datatypes::SchemaRef;
 use datafusion_common::{internal_err, Constraints};
-use datafusion_expr::{Expr, TableProviderFilterPushDown, TableSource};
+use datafusion_expr::{Expr, TableProviderFilterPushDown, TableSource, TableType};
 
 /// DataFusion default table source, wrapping TableProvider.
 ///
@@ -59,6 +59,11 @@ impl TableSource for DefaultTableSource {
     /// Get a reference to applicable constraints, if any exists.
     fn constraints(&self) -> Option<&Constraints> {
         self.table_provider.constraints()
+    }
+
+    /// Get the type of this table for metadata/catalog purposes.
+    fn table_type(&self) -> TableType {
+        self.table_provider.table_type()
     }
 
     /// Tests whether the table provider can make use of any or all filter expressions
@@ -96,7 +101,45 @@ pub fn source_as_provider(
         .as_any()
         .downcast_ref::<DefaultTableSource>()
     {
-        Some(source) => Ok(source.table_provider.clone()),
+        Some(source) => Ok(Arc::clone(&source.table_provider)),
         _ => internal_err!("TableSource was not DefaultTableSource"),
     }
+}
+
+#[test]
+fn preserves_table_type() {
+    use async_trait::async_trait;
+    use datafusion_common::DataFusionError;
+
+    #[derive(Debug)]
+    struct TestTempTable;
+
+    #[async_trait]
+    impl TableProvider for TestTempTable {
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+
+        fn table_type(&self) -> TableType {
+            TableType::Temporary
+        }
+
+        fn schema(&self) -> SchemaRef {
+            unimplemented!()
+        }
+
+        async fn scan(
+            &self,
+            _: &dyn datafusion_catalog::Session,
+            _: Option<&Vec<usize>>,
+            _: &[Expr],
+            _: Option<usize>,
+        ) -> Result<Arc<dyn datafusion_physical_plan::ExecutionPlan>, DataFusionError>
+        {
+            unimplemented!()
+        }
+    }
+
+    let table_source = DefaultTableSource::new(Arc::new(TestTempTable));
+    assert_eq!(table_source.table_type(), TableType::Temporary);
 }

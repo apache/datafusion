@@ -37,6 +37,11 @@ select arrow_cast(col1, 'Utf8View') as c1 from test_substr_base;
 statement ok
 drop table test_source
 
+# TODO: Revisit this issue after upgrading to the arrow-rs version that includes apache/arrow-rs#6671.
+# see issue https://github.com/apache/datafusion/issues/13329
+query error DataFusion error: Arrow error: Compute error: bit_length not supported for Utf8View
+select bit_length(ascii_1), bit_length(ascii_2), bit_length(unicode_1), bit_length(unicode_2) from test_basic_operator;
+
 #
 # common test for string-like functions and operators
 #
@@ -92,10 +97,6 @@ select octet_length(column1_utf8view) from test;
 7
 0
 NULL
-
-# TODO: Revisit this issue after upgrading to the arrow-rs version that includes apache/arrow-rs#6671.
-query error DataFusion error: Arrow error: Compute error: bit_length not supported for Utf8View
-select bit_length(column1_utf8view) from test;
 
 query T
 select btrim(column1_large_utf8) from test;
@@ -932,6 +933,26 @@ FROM test;
 ----
 logical_plan
 01)Projection: to_timestamp(test.column1_utf8view, Utf8("a,b,c,d")) AS c
+02)--TableScan: test projection=[column1_utf8view]
+
+## Ensure no casts for nullif
+query TT
+EXPLAIN SELECT
+  nullif(column1_utf8view, 'a') as c
+FROM test;
+----
+logical_plan
+01)Projection: nullif(test.column1_utf8view, Utf8View("a")) AS c
+02)--TableScan: test projection=[column1_utf8view]
+
+## Ensure no casts for nullif
+query TT
+EXPLAIN SELECT
+  nullif(column1_utf8view, column1_utf8view) as c
+FROM test;
+----
+logical_plan
+01)Projection: nullif(test.column1_utf8view, test.column1_utf8view) AS c
 02)--TableScan: test projection=[column1_utf8view]
 
 ## Ensure no casts for binary operators

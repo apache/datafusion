@@ -127,7 +127,7 @@ impl TableProviderFactory for ListingTableFactory {
             // See: https://github.com/apache/datafusion/issues/7317
             None => {
                 let schema = options.infer_schema(session_state, &table_path).await?;
-                let df_schema = schema.clone().to_dfschema()?;
+                let df_schema = Arc::clone(&schema).to_dfschema()?;
                 let column_refs: HashSet<_> = cmd
                     .order_exprs
                     .iter()

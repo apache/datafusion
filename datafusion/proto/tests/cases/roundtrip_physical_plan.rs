@@ -59,8 +59,7 @@ use datafusion::physical_plan::aggregates::{
 use datafusion::physical_plan::analyze::AnalyzeExec;
 use datafusion::physical_plan::empty::EmptyExec;
 use datafusion::physical_plan::expressions::{
-    binary, cast, col, in_list, like, lit, BinaryExpr, Column, NotExpr, NthValue,
-    PhysicalSortExpr,
+    binary, cast, col, in_list, like, lit, BinaryExpr, Column, NotExpr, PhysicalSortExpr,
 };
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::insert::DataSinkExec;
@@ -74,9 +73,7 @@ use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::union::{InterleaveExec, UnionExec};
 use datafusion::physical_plan::unnest::{ListUnnest, UnnestExec};
-use datafusion::physical_plan::windows::{
-    BuiltInWindowExpr, PlainAggregateWindowExpr, WindowAggExec,
-};
+use datafusion::physical_plan::windows::{PlainAggregateWindowExpr, WindowAggExec};
 use datafusion::physical_plan::{ExecutionPlan, Partitioning, PhysicalExpr, Statistics};
 use datafusion::prelude::SessionContext;
 use datafusion::scalar::ScalarValue;
@@ -272,32 +269,6 @@ fn roundtrip_window() -> Result<()> {
     let field_b = Field::new("b", DataType::Int64, false);
     let schema = Arc::new(Schema::new(vec![field_a, field_b]));
 
-    let window_frame = WindowFrame::new_bounds(
-        datafusion_expr::WindowFrameUnits::Range,
-        WindowFrameBound::Preceding(ScalarValue::Int64(None)),
-        WindowFrameBound::CurrentRow,
-    );
-
-    let builtin_window_expr = Arc::new(BuiltInWindowExpr::new(
-        Arc::new(NthValue::first(
-            "FIRST_VALUE(a) PARTITION BY [b] ORDER BY [a ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW",
-            col("a", &schema)?,
-            DataType::Int64,
-            false,
-        )),
-        &[col("b", &schema)?],
-        &LexOrdering{
-            inner: vec![PhysicalSortExpr {
-                expr: col("a", &schema)?,
-                options: SortOptions {
-                    descending: false,
-                    nulls_first: false,
-                },
-            }]
-        },
-        Arc::new(window_frame),
-    ));
-
     let plain_aggr_window_expr = Arc::new(PlainAggregateWindowExpr::new(
         AggregateExprBuilder::new(
             avg_udaf(),
@@ -335,11 +306,7 @@ fn roundtrip_window() -> Result<()> {
     let input = Arc::new(EmptyExec::new(schema.clone()));
 
     roundtrip_test(Arc::new(WindowAggExec::try_new(
-        vec![
-            builtin_window_expr,
-            plain_aggr_window_expr,
-            sliding_aggr_window_expr,
-        ],
+        vec![plain_aggr_window_expr, sliding_aggr_window_expr],
         input,
         vec![col("b", &schema)?],
     )?))

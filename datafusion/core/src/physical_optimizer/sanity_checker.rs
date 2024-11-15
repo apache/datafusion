@@ -119,7 +119,7 @@ pub fn check_plan_sanity(
     plan: Arc<dyn ExecutionPlan>,
     optimizer_options: &OptimizerOptions,
 ) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
-    check_finiteness_requirements(plan.clone(), optimizer_options)?;
+    check_finiteness_requirements(Arc::clone(&plan), optimizer_options)?;
 
     for ((idx, child), sort_req, dist_req) in izip!(
         plan.children().iter().enumerate(),

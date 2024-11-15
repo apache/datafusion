@@ -48,6 +48,9 @@ pub enum Statement {
     Prepare(Prepare),
     /// Execute a prepared statement. This is used to implement SQL 'EXECUTE'.
     Execute(Execute),
+    /// Deallocate a prepared statement.
+    /// This is used to implement SQL 'DEALLOCATE'.
+    Deallocate(Deallocate),
 }
 
 impl Statement {
@@ -65,6 +68,7 @@ impl Statement {
             Statement::SetVariable(_) => "SetVariable",
             Statement::Prepare(_) => "Prepare",
             Statement::Execute(_) => "Execute",
+            Statement::Deallocate(_) => "Deallocate",
         }
     }
 
@@ -167,6 +171,9 @@ impl Statement {
                             expr_vec_fmt!(parameters)
                         )
                     }
+                    Statement::Deallocate(Deallocate { name }) => {
+                        write!(f, "Deallocate: {}", name)
+                    }
                 }
             }
         }
@@ -244,4 +251,11 @@ pub struct Execute {
     pub name: String,
     /// The execute parameters
     pub parameters: Vec<Expr>,
+}
+
+/// Deallocate a prepared statement.
+#[derive(Debug, Clone, PartialEq, PartialOrd, Eq, Hash)]
+pub struct Deallocate {
+    /// The name of the prepared statement to deallocate
+    pub name: String,
 }

@@ -23,20 +23,16 @@ use datafusion_common::{
     DFSchema, Dependency, Result,
 };
 use datafusion_expr::expr::WildcardOptions;
+use datafusion_expr::expr::{ScalarFunction, Unnest};
 use datafusion_expr::planner::PlannerResult;
 use datafusion_expr::{
     expr, Expr, ExprFunctionExt, ExprSchemable, WindowFrame, WindowFunctionDefinition,
-};
-use datafusion_expr::{
-    expr::{ScalarFunction, Unnest},
-    BuiltInWindowFunction,
 };
 use sqlparser::ast::{
     DuplicateTreatment, Expr as SQLExpr, Function as SQLFunction, FunctionArg,
     FunctionArgExpr, FunctionArgumentClause, FunctionArgumentList, FunctionArguments,
     NullTreatment, ObjectName, OrderByExpr, WindowType,
 };
-use strum::IntoEnumIterator;
 
 /// Suggest a valid function based on an invalid input function name
 ///
@@ -52,7 +48,6 @@ pub fn suggest_valid_function(
         let mut funcs = Vec::new();
 
         funcs.extend(ctx.udaf_names());
-        funcs.extend(BuiltInWindowFunction::iter().map(|func| func.to_string()));
         funcs.extend(ctx.udwf_names());
 
         funcs
@@ -393,12 +388,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         }) {
             Ok(WindowFunctionDefinition::AggregateUDF(udaf.unwrap()))
         } else {
-            expr::find_df_window_func(name)
-                .or_else(|| {
-                    self.context_provider
-                        .get_window_meta(name)
-                        .map(WindowFunctionDefinition::WindowUDF)
-                })
+            self.context_provider
+                .get_window_meta(name)
+                .map(WindowFunctionDefinition::WindowUDF)
                 .ok_or_else(|| {
                     plan_datafusion_err!("There is no window function named {name}")
                 })
