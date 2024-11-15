@@ -119,7 +119,6 @@ If count is negative, everything to the right of the final delimiter (counting f
             .with_argument("delim", "The string to find in str to split str.")
             .with_argument("count", "The number of times to search for the delimiter. Can be either a positive or negative number.")
             .build()
-            .unwrap()
     })
 }
 

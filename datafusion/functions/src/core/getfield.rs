@@ -286,6 +286,5 @@ syntax such as `my_struct_col['field_name']` which results in a call to
                 "The field name in the map or struct to retrieve data for. Must evaluate to a string."
             )
             .build()
-            .unwrap()
     })
 }

@@ -115,6 +115,5 @@ The `now()` return value is determined at query time and will return the same ti
 "#)
             .with_syntax_example("now()")
             .build()
-            .unwrap()
     })
 }

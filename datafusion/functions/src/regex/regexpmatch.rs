@@ -148,7 +148,6 @@ Additional examples can be found [here](https://github.com/apache/datafusion/blo
   - **R**: enables CRLF mode: when multi-line mode is enabled, \r\n is used
   - **U**: swap the meaning of x* and x*?"#)
             .build()
-            .unwrap()
     })
 }
 

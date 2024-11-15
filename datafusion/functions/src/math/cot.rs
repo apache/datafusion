@@ -49,7 +49,6 @@ fn get_cot_doc() -> &'static Documentation {
             .with_syntax_example(r#"cot(numeric_expression)"#)
             .with_standard_argument("numeric_expression", Some("Numeric"))
             .build()
-            .unwrap()
     })
 }
 

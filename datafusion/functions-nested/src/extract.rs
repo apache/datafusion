@@ -185,7 +185,6 @@ fn get_array_element_doc() -> &'static Documentation {
                 "Index to extract the element from the array.",
             )
             .build()
-            .unwrap()
     })
 }
 
@@ -395,7 +394,6 @@ fn get_array_slice_doc() -> &'static Documentation {
                 "Stride of the array slice. The default is 1.",
             )
             .build()
-            .unwrap()
     })
 }
 
@@ -692,7 +690,6 @@ fn get_array_pop_front_doc() -> &'static Documentation {
                 "Array expression. Can be a constant, column, or function, and any combination of array operators.",
             )
             .build()
-            .unwrap()
     })
 }
 
@@ -798,7 +795,6 @@ fn get_array_pop_back_doc() -> &'static Documentation {
                 "Array expression. Can be a constant, column, or function, and any combination of array operators.",
             )
             .build()
-            .unwrap()
     })
 }
 
@@ -912,7 +908,6 @@ fn get_array_any_value_doc() -> &'static Documentation {
                 "Array expression. Can be a constant, column, or function, and any combination of array operators.",
             )
             .build()
-            .unwrap()
     })
 }
 

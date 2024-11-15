@@ -101,7 +101,6 @@ fn get_levenshtein_doc() -> &'static Documentation {
             .with_argument("str1", "String expression to compute Levenshtein distance with str2.")
             .with_argument("str2", "String expression to compute Levenshtein distance with str1.")
             .build()
-            .unwrap()
     })
 }
 

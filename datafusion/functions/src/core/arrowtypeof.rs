@@ -100,6 +100,5 @@ fn get_arrowtypeof_doc() -> &'static Documentation {
             )
             .with_argument("expression", "Expression to evaluate. The expression can be a constant, column, or function, and any combination of operators.")
             .build()
-            .unwrap()
     })
 }

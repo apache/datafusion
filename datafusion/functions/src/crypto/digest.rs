@@ -114,6 +114,5 @@ fn get_digest_doc() -> &'static Documentation {
 - blake3",
             )
             .build()
-            .unwrap()
     })
 }

@@ -90,7 +90,6 @@ fn get_ntile_doc() -> &'static Documentation {
             .with_syntax_example("ntile(expression)")
             .with_argument("expression","An integer describing the number groups the partition should be split into")
             .build()
-            .unwrap()
     })
 }
 

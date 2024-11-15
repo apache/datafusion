@@ -175,7 +175,6 @@ fn get_substr_doc() -> &'static Documentation {
             .with_argument("length", "Number of characters to extract. If not specified, returns the rest of the string after the start position.")
             .with_alternative_syntax("substring(str from start_pos for length)")
             .build()
-            .unwrap()
     })
 }
 

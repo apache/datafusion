@@ -16,8 +16,8 @@
 # under the License.
 
 [package]
-name = "datafusion-pre-macros"
-description = "Proc pre macros for DataFusion query engine"
+name = "datafusion-doc-gen"
+description = "Documentation module for DataFusion query engine"
 keywords = ["datafusion", "query", "sql"]
 version = { workspace = true }
 edition = { workspace = true }
@@ -31,5 +31,5 @@ rust-version = { workspace = true }
 workspace = true
 
 [lib]
-name = "datafusion_pre_macros"
+name = "datafusion_doc_gen"
 path = "src/lib.rs"

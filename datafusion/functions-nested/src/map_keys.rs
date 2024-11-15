@@ -114,7 +114,6 @@ SELECT map_keys(map([100, 5], [42, 43]));
                 "Map expression. Can be a constant, column, or function, and any combination of map operators."
             )
             .build()
-            .unwrap()
     })
 }
 

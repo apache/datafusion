@@ -126,7 +126,6 @@ fn get_trunc_doc() -> &'static Documentation {
   right of the decimal point. If `decimal_places` is a negative
   integer, replaces digits to the left of the decimal point with `0`."#)
             .build()
-            .unwrap()
     })
 }
 

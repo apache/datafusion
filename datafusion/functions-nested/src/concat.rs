@@ -128,7 +128,6 @@ fn get_array_append_doc() -> &'static Documentation {
                 "Element to append to the array.",
             )
             .build()
-            .unwrap()
     })
 }
 
@@ -224,7 +223,6 @@ fn get_array_prepend_doc() -> &'static Documentation {
                 "Array expression. Can be a constant, column, or function, and any combination of array operators.",
             )
             .build()
-            .unwrap()
     })
 }
 
@@ -342,7 +340,6 @@ fn get_array_concat_doc() -> &'static Documentation {
                 "Subsequent array column or literal array to concatenate.",
             )
             .build()
-            .unwrap()
     })
 }
 

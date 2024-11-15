@@ -116,7 +116,6 @@ fn get_array_remove_doc() -> &'static Documentation {
                 "Element to be removed from the array.",
             )
             .build()
-            .unwrap()
     })
 }
 
@@ -204,7 +203,6 @@ fn get_array_remove_n_doc() -> &'static Documentation {
                 "Number of first occurrences to remove.",
             )
             .build()
-            .unwrap()
     })
 }
 
@@ -288,7 +286,6 @@ fn get_array_remove_all_doc() -> &'static Documentation {
                 "Element to be removed from the array.",
             )
             .build()
-            .unwrap()
     })
 }
 

@@ -154,6 +154,5 @@ select struct(a as field_a, b) from t;
                 "expression1, expression_n",
                 "Expression to include in the output struct. Can be a constant, column, or function, any combination of arithmetic or string operators.")
             .build()
-            .unwrap()
     })
 }

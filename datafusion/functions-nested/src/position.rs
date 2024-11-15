@@ -134,7 +134,6 @@ fn get_array_position_doc() -> &'static Documentation {
                 "Index at which to start searching.",
             )
             .build()
-            .unwrap()
     })
 }
 
@@ -293,7 +292,6 @@ fn get_array_positions_doc() -> &'static Documentation {
                 "Element to search for positions in the array.",
             )
             .build()
-            .unwrap()
     })
 }
 

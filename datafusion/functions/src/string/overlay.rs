@@ -113,7 +113,6 @@ fn get_overlay_doc() -> &'static Documentation {
             .with_argument("pos", "The start position to start the replace in str.")
             .with_argument("count", "The count of characters to be replaced from start position of str. If not specified, will use substr length instead.")
             .build()
-            .unwrap()
     })
 }
 

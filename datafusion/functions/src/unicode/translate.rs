@@ -105,7 +105,6 @@ fn get_translate_doc() -> &'static Documentation {
             .with_argument("chars", "Characters to translate.")
             .with_argument("translation", "Translation characters. Translation characters replace only characters at the same position in the **chars** string.")
             .build()
-            .unwrap()
     })
 }
 

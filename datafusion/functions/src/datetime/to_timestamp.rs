@@ -226,7 +226,6 @@ Note: `to_timestamp` returns `Timestamp(Nanosecond)`. The supported range for in
 Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/to_timestamp.rs)
 "#)
             .build()
-            .unwrap()
     })
 }
 
@@ -314,7 +313,6 @@ fn get_to_timestamp_seconds_doc() -> &'static Documentation {
 Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/to_timestamp.rs)
 "#)
             .build()
-            .unwrap()
     })
 }
 
@@ -404,7 +402,6 @@ fn get_to_timestamp_millis_doc() -> &'static Documentation {
 Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/to_timestamp.rs)
 "#)
             .build()
-            .unwrap()
     })
 }
 
@@ -494,7 +491,6 @@ fn get_to_timestamp_micros_doc() -> &'static Documentation {
 Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/to_timestamp.rs)
 "#)
             .build()
-            .unwrap()
     })
 }
 
@@ -584,7 +580,6 @@ fn get_to_timestamp_nanos_doc() -> &'static Documentation {
 Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/to_timestamp.rs)
 "#)
             .build()
-            .unwrap()
     })
 }
 

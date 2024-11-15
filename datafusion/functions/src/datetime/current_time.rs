@@ -106,6 +106,5 @@ The `current_time()` return value is determined at query time and will return th
 "#)
             .with_syntax_example("current_time()")
             .build()
-            .unwrap()
     })
 }

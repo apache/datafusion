@@ -59,7 +59,6 @@ log(numeric_expression)"#)
             .with_standard_argument("base", Some("Base numeric"))
             .with_standard_argument("numeric_expression", Some("Numeric"))
             .build()
-            .unwrap()
     })
 }
 
@@ -108,11 +107,11 @@ impl ScalarUDFImpl for LogFunc {
         };
         match (num_sort_properties, base_sort_properties) {
             (first @ SortProperties::Ordered(num), SortProperties::Ordered(base))
-            if num.descending != base.descending
-                && num.nulls_first == base.nulls_first =>
-                {
-                    Ok(first)
-                }
+                if num.descending != base.descending
+                    && num.nulls_first == base.nulls_first =>
+            {
+                Ok(first)
+            }
             (
                 first @ (SortProperties::Ordered(_) | SortProperties::Singleton),
                 SortProperties::Singleton,
@@ -223,11 +222,11 @@ impl ScalarUDFImpl for LogFunc {
                 )?)))
             }
             Expr::ScalarFunction(ScalarFunction { func, mut args })
-            if is_pow(&func) && args.len() == 2 && base == args[0] =>
-                {
-                    let b = args.pop().unwrap(); // length checked above
-                    Ok(ExprSimplifyResult::Simplified(b))
-                }
+                if is_pow(&func) && args.len() == 2 && base == args[0] =>
+            {
+                let b = args.pop().unwrap(); // length checked above
+                Ok(ExprSimplifyResult::Simplified(b))
+            }
             number => {
                 if number == base {
                     Ok(ExprSimplifyResult::Simplified(lit(ScalarValue::new_one(

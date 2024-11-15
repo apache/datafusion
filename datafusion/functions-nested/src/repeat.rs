@@ -127,7 +127,6 @@ fn get_array_repeat_doc() -> &'static Documentation {
                 "Value of how many times to repeat the element.",
             )
             .build()
-            .unwrap()
     })
 }
 

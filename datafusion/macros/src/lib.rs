@@ -21,7 +21,7 @@ use quote::quote;
 use syn::{parse_macro_input, DeriveInput, LitStr};
 
 #[proc_macro_attribute]
-pub fn udf_doc(args: TokenStream, input: TokenStream) -> TokenStream {
+pub fn user_doc(args: TokenStream, input: TokenStream) -> TokenStream {
     let mut doc_section_include: Option<LitStr> = None;
     let mut doc_section_lbl: Option<LitStr> = None;
     let mut doc_section_desc: Option<LitStr> = None;
@@ -95,23 +95,23 @@ pub fn udf_doc(args: TokenStream, input: TokenStream) -> TokenStream {
 
     eprintln!("doc_section_include=cc{doc_section_include:?}cc");
     let doc_section_include: bool = doc_section_include.unwrap().value().parse().unwrap();
-    let doc_section_description = doc_section_desc.map(|desc| quote!{ Some(#desc)}).unwrap_or(quote!{ None });
-
+    let doc_section_description = doc_section_desc
+        .map(|desc| quote! { Some(#desc)})
+        .unwrap_or(quote! { None });
 
     let expanded = quote! {
         #input
 
-        use datafusion_pre_macros::DocumentationTest;
-        use datafusion_pre_macros::DocSectionTest;
-        use datafusion_pre_macros::DocumentationBuilderTest;
+        use datafusion_doc_gen::DocSection;
+        use datafusion_doc_gen::DocumentationBuilder;
 
-        static DOCUMENTATION_TEST: OnceLock<DocumentationTest> = OnceLock::new();
+        static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
         impl #name {
-                fn documentation_test(&self) -> Option<&DocumentationTest> {
-                    Some(DOCUMENTATION_TEST.get_or_init(|| {
-                        DocumentationTest::builder()
-                        .with_doc_section(DocSectionTest { include: #doc_section_include, label: #doc_section_lbl, description: #doc_section_description })
+                fn documentation_test(&self) -> Option<&Documentation> {
+                    Some(DOCUMENTATION.get_or_init(|| {
+                        Documentation::builder()
+                        .with_doc_section(DocSection { include: #doc_section_include, label: #doc_section_lbl, description: #doc_section_description })
                         .with_description(#description.to_string())
                         .with_syntax_example(#syntax_example.to_string())
                         .build()

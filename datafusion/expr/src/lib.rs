@@ -66,6 +66,7 @@ pub mod var_provider;
 pub mod window_frame;
 pub mod window_state;
 
+pub use datafusion_doc_gen::{DocSection, Documentation, DocumentationBuilder};
 pub use datafusion_expr_common::accumulator::Accumulator;
 pub use datafusion_expr_common::columnar_value::ColumnarValue;
 pub use datafusion_expr_common::groups_accumulator::{EmitTo, GroupsAccumulator};
@@ -92,7 +93,7 @@ pub use table_source::{TableProviderFilterPushDown, TableSource, TableType};
 pub use udaf::{
     aggregate_doc_sections, AggregateUDF, AggregateUDFImpl, ReversedUDAF, StatisticsArgs,
 };
-pub use udf::{scalar_doc_sections, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl};
+pub use udf::{scalar_doc_sections, ScalarUDF, ScalarUDFImpl};
 pub use udf_docs::{DocSection, Documentation, DocumentationBuilder};
 pub use udwf::{window_doc_sections, ReversedUDWF, WindowUDF, WindowUDFImpl};
 pub use window_frame::{WindowFrame, WindowFrameBound, WindowFrameUnits};

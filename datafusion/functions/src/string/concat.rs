@@ -285,7 +285,6 @@ fn get_concat_doc() -> &'static Documentation {
             .with_argument("str_n", "Subsequent string expressions to concatenate.")
             .with_related_udf("concat_ws")
             .build()
-            .unwrap()
     })
 }
 

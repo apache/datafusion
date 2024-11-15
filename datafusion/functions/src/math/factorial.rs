@@ -87,7 +87,6 @@ fn get_factorial_doc() -> &'static Documentation {
             .with_syntax_example("factorial(numeric_expression)")
             .with_standard_argument("numeric_expression", Some("Numeric"))
             .build()
-            .unwrap()
     })
 }
 

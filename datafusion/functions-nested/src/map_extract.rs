@@ -144,7 +144,6 @@ SELECT map_extract(MAP {'x': 10, 'y': NULL, 'z': 30}, 'y');
                 "Key to extract from the map. Can be a constant, column, or function, any combination of arithmetic or string operators, or a named expression of the previously listed.",
             )
             .build()
-            .unwrap()
     })
 }
 

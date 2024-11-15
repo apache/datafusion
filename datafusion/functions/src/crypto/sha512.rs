@@ -94,6 +94,5 @@ fn get_sha512_doc() -> &'static Documentation {
             )
             .with_argument("expression", "String")
             .build()
-            .unwrap()
     })
 }
