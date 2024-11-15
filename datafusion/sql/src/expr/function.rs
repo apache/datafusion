@@ -22,8 +22,8 @@ use datafusion_common::{
     internal_datafusion_err, internal_err, not_impl_err, plan_datafusion_err, plan_err,
     DFSchema, Dependency, Result,
 };
-use datafusion_expr::expr::{Wildcard, WildcardOptions};
 use datafusion_expr::expr::{ScalarFunction, Unnest};
+use datafusion_expr::expr::{Wildcard, WildcardOptions};
 use datafusion_expr::planner::PlannerResult;
 use datafusion_expr::{
     expr, Expr, ExprFunctionExt, ExprSchemable, WindowFrame, WindowFunctionDefinition,
@@ -235,7 +235,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         // User-defined function (UDF) should have precedence
         if let Some(fm) = self.context_provider.get_function_meta(&name) {
             let args = self.function_args_to_expr(args, schema, planner_context)?;
-            return Ok(Expr::ScalarFunction(ScalarFunction::new_udf(fm, args)));
+            return Ok(Expr::scalar_function(ScalarFunction::new_udf(fm, args)));
         }
 
         // Build Unnest expression
@@ -246,7 +246,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             }
             let expr = exprs.swap_remove(0);
             Self::check_unnest_arg(&expr, schema)?;
-            return Ok(Expr::Unnest(Unnest::new(expr)));
+            return Ok(Expr::unnest(Unnest::new(expr)));
         }
 
         if !order_by.is_empty() && is_function_window {
@@ -277,7 +277,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             let func_deps = schema.functional_dependencies();
             // Find whether ties are possible in the given ordering
             let is_ordering_strict = order_by.iter().find_map(|orderby_expr| {
-                if let Expr::Column(col) = &orderby_expr.expr {
+                if let Expr::Column(col, _) = &orderby_expr.expr {
                     let idx = schema.index_of_column(col).ok()?;
                     return if func_deps.iter().any(|dep| {
                         dep.source_indices == vec![idx] && dep.mode == Dependency::Single
@@ -310,7 +310,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             };
 
             if let Ok(fun) = self.find_window_func(&name) {
-                return Expr::WindowFunction(expr::WindowFunction::new(
+                return Expr::window_function(expr::WindowFunction::new(
                     fun,
                     self.function_args_to_expr(args, schema, planner_context)?,
                 ))
@@ -336,7 +336,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     .map(|e| self.sql_expr_to_logical_expr(*e, schema, planner_context))
                     .transpose()?
                     .map(Box::new);
-                return Ok(Expr::AggregateFunction(expr::AggregateFunction::new_udf(
+                return Ok(Expr::aggregate_function(expr::AggregateFunction::new_udf(
                     fm,
                     args,
                     distinct,
@@ -371,7 +371,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 internal_datafusion_err!("Unable to find expected '{fn_name}' function")
             })?;
         let args = vec![self.sql_expr_to_logical_expr(expr, schema, planner_context)?];
-        Ok(Expr::ScalarFunction(ScalarFunction::new_udf(fun, args)))
+        Ok(Expr::scalar_function(ScalarFunction::new_udf(fun, args)))
     }
 
     pub(super) fn find_window_func(
@@ -413,7 +413,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 name: _,
                 arg: FunctionArgExpr::Wildcard,
                 operator: _,
-            } => Ok(Expr::Wildcard(Wildcard {
+            } => Ok(Expr::wildcard(Wildcard {
                 qualifier: None,
                 options: WildcardOptions::default(),
             })),
@@ -421,7 +421,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 self.sql_expr_to_logical_expr(arg, schema, planner_context)
             }
             FunctionArg::Unnamed(FunctionArgExpr::Wildcard) => {
-                Ok(Expr::Wildcard(Wildcard {
+                Ok(Expr::wildcard(Wildcard {
                     qualifier: None,
                     options: WildcardOptions::default(),
                 }))
@@ -433,7 +433,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 if qualified_indices.is_empty() {
                     return plan_err!("Invalid qualifier {qualifier}");
                 }
-                Ok(Expr::Wildcard(Wildcard {
+                Ok(Expr::wildcard(Wildcard {
                     qualifier: Some(qualifier),
                     options: WildcardOptions::default(),
                 }))

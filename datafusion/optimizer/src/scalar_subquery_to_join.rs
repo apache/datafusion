@@ -18,6 +18,7 @@
 //! [`ScalarSubqueryToJoin`] rewriting scalar subquery filters to `JOIN`s
 
 use std::collections::{BTreeSet, HashMap};
+use std::ops::Not;
 use std::sync::Arc;
 
 use crate::decorrelate::{PullUpCorrelatedExpr, UN_MATCHED_ROW_INDICATOR};
@@ -79,11 +80,11 @@ impl OptimizerRule for ScalarSubqueryToJoin {
         config: &dyn OptimizerConfig,
     ) -> Result<Transformed<LogicalPlan>> {
         match plan {
-            LogicalPlan::Filter(filter) => {
+            LogicalPlan::Filter(filter, _) => {
                 // Optimization: skip the rest of the rule and its copies if
                 // there are no scalar subqueries
                 if !contains_scalar_subquery(&filter.predicate) {
-                    return Ok(Transformed::no(LogicalPlan::Filter(filter)));
+                    return Ok(Transformed::no(LogicalPlan::filter(filter)));
                 }
 
                 let (subqueries, mut rewrite_expr) = self.extract_subquery_exprs(
@@ -119,7 +120,7 @@ impl OptimizerRule for ScalarSubqueryToJoin {
                         cur_input = optimized_subquery;
                     } else {
                         // if we can't handle all of the subqueries then bail for now
-                        return Ok(Transformed::no(LogicalPlan::Filter(filter)));
+                        return Ok(Transformed::no(LogicalPlan::filter(filter)));
                     }
                 }
                 let new_plan = LogicalPlanBuilder::from(cur_input)
@@ -127,11 +128,11 @@ impl OptimizerRule for ScalarSubqueryToJoin {
                     .build()?;
                 Ok(Transformed::yes(new_plan))
             }
-            LogicalPlan::Projection(projection) => {
+            LogicalPlan::Projection(projection, _) => {
                 // Optimization: skip the rest of the rule and its copies if
                 // there are no scalar subqueries
                 if !projection.expr.iter().any(contains_scalar_subquery) {
-                    return Ok(Transformed::no(LogicalPlan::Projection(projection)));
+                    return Ok(Transformed::no(LogicalPlan::projection(projection)));
                 }
 
                 let mut all_subqueryies = vec![];
@@ -182,7 +183,7 @@ impl OptimizerRule for ScalarSubqueryToJoin {
                         }
                     } else {
                         // if we can't handle all of the subqueries then bail for now
-                        return Ok(Transformed::no(LogicalPlan::Projection(projection)));
+                        return Ok(Transformed::no(LogicalPlan::projection(projection)));
                     }
                 }
 
@@ -219,7 +220,7 @@ impl OptimizerRule for ScalarSubqueryToJoin {
 /// Returns true if the expression has a scalar subquery somewhere in it
 /// false otherwise
 fn contains_scalar_subquery(expr: &Expr) -> bool {
-    expr.exists(|expr| Ok(matches!(expr, Expr::ScalarSubquery(_))))
+    expr.exists(|expr| Ok(matches!(expr, Expr::ScalarSubquery(_, _))))
         .expect("Inner is always Ok")
 }
 
@@ -233,7 +234,7 @@ impl TreeNodeRewriter for ExtractScalarSubQuery<'_> {
 
     fn f_down(&mut self, expr: Expr) -> Result<Transformed<Expr>> {
         match expr {
-            Expr::ScalarSubquery(subquery) => {
+            Expr::ScalarSubquery(subquery, _) => {
                 let subqry_alias = self.alias_gen.next("__scalar_sq");
                 self.sub_query_info
                     .push((subquery.clone(), subqry_alias.clone()));
@@ -242,7 +243,7 @@ impl TreeNodeRewriter for ExtractScalarSubQuery<'_> {
                     .head_output_expr()?
                     .map_or(plan_err!("single expression required."), Ok)?;
                 Ok(Transformed::new(
-                    Expr::Column(create_col_from_scalar_expr(
+                    Expr::column(create_col_from_scalar_expr(
                         &scalar_expr,
                         subqry_alias,
                     )?),
@@ -324,10 +325,13 @@ fn build_join(
     // join our sub query into the main plan
     let new_plan = if join_filter_opt.is_none() {
         match filter_input {
-            LogicalPlan::EmptyRelation(EmptyRelation {
-                produce_one_row: true,
-                schema: _,
-            }) => sub_query_alias,
+            LogicalPlan::EmptyRelation(
+                EmptyRelation {
+                    produce_one_row: true,
+                    schema: _,
+                },
+                _,
+            ) => sub_query_alias,
             _ => {
                 // if not correlated, group down to 1 row and left join on that (preserving row count)
                 LogicalPlanBuilder::from(filter_input.clone())
@@ -345,34 +349,40 @@ fn build_join(
     if let Some(expr_map) = collected_count_expr_map {
         for (name, result) in expr_map {
             let computer_expr = if let Some(filter) = &pull_up.pull_up_having_expr {
-                Expr::Case(expr::Case {
+                Expr::case(expr::Case {
                     expr: None,
                     when_then_expr: vec![
                         (
-                            Box::new(Expr::IsNull(Box::new(Expr::Column(
-                                Column::new_unqualified(UN_MATCHED_ROW_INDICATOR),
-                            )))),
+                            Box::new(
+                                Expr::column(Column::new_unqualified(
+                                    UN_MATCHED_ROW_INDICATOR,
+                                ))
+                                .is_null(),
+                            ),
                             Box::new(result),
                         ),
                         (
-                            Box::new(Expr::Not(Box::new(filter.clone()))),
-                            Box::new(Expr::Literal(ScalarValue::Null)),
+                            Box::new(filter.clone().not()),
+                            Box::new(Expr::literal(ScalarValue::Null)),
                         ),
                     ],
-                    else_expr: Some(Box::new(Expr::Column(Column::new_unqualified(
+                    else_expr: Some(Box::new(Expr::column(Column::new_unqualified(
                         name.clone(),
                     )))),
                 })
             } else {
-                Expr::Case(expr::Case {
+                Expr::case(expr::Case {
                     expr: None,
                     when_then_expr: vec![(
-                        Box::new(Expr::IsNull(Box::new(Expr::Column(
-                            Column::new_unqualified(UN_MATCHED_ROW_INDICATOR),
-                        )))),
+                        Box::new(
+                            Expr::column(Column::new_unqualified(
+                                UN_MATCHED_ROW_INDICATOR,
+                            ))
+                            .is_null(),
+                        ),
                         Box::new(result),
                     )],
-                    else_expr: Some(Box::new(Expr::Column(Column::new_unqualified(
+                    else_expr: Some(Box::new(Expr::column(Column::new_unqualified(
                         name.clone(),
                     )))),
                 })
@@ -1038,7 +1048,7 @@ mod tests {
                 .build()?,
         );
 
-        let between_expr = Expr::Between(Between {
+        let between_expr = Expr::_between(Between {
             expr: Box::new(col("customer.c_custkey")),
             negated: false,
             low: Box::new(scalar_subquery(sq1)),
@@ -1087,7 +1097,7 @@ mod tests {
                 .build()?,
         );
 
-        let between_expr = Expr::Between(Between {
+        let between_expr = Expr::_between(Between {
             expr: Box::new(col("customer.c_custkey")),
             negated: false,
             low: Box::new(scalar_subquery(sq1)),

@@ -46,7 +46,7 @@ impl OptimizerRule for EliminateGroupByConstant {
         _config: &dyn OptimizerConfig,
     ) -> Result<Transformed<LogicalPlan>> {
         match plan {
-            LogicalPlan::Aggregate(aggregate) => {
+            LogicalPlan::Aggregate(aggregate, _) => {
                 let (const_group_expr, nonconst_group_expr): (Vec<_>, Vec<_>) = aggregate
                     .group_expr
                     .iter()
@@ -60,10 +60,10 @@ impl OptimizerRule for EliminateGroupByConstant {
                         && nonconst_group_expr.is_empty()
                         && aggregate.aggr_expr.is_empty())
                 {
-                    return Ok(Transformed::no(LogicalPlan::Aggregate(aggregate)));
+                    return Ok(Transformed::no(LogicalPlan::aggregate(aggregate)));
                 }
 
-                let simplified_aggregate = LogicalPlan::Aggregate(Aggregate::try_new(
+                let simplified_aggregate = LogicalPlan::aggregate(Aggregate::try_new(
                     aggregate.input,
                     nonconst_group_expr.into_iter().cloned().collect(),
                     aggregate.aggr_expr.clone(),
@@ -97,12 +97,12 @@ impl OptimizerRule for EliminateGroupByConstant {
 /// reiles on `SimplifyExpressions` result.
 fn is_constant_expression(expr: &Expr) -> bool {
     match expr {
-        Expr::Alias(e) => is_constant_expression(&e.expr),
-        Expr::BinaryExpr(e) => {
+        Expr::Alias(e, _) => is_constant_expression(&e.expr),
+        Expr::BinaryExpr(e, _) => {
             is_constant_expression(&e.left) && is_constant_expression(&e.right)
         }
-        Expr::Literal(_) => true,
-        Expr::ScalarFunction(e) => {
+        Expr::Literal(_, _) => true,
+        Expr::ScalarFunction(e, _) => {
             matches!(
                 e.func.signature().volatility,
                 Volatility::Immutable | Volatility::Stable
@@ -271,7 +271,7 @@ mod tests {
             Volatility::Immutable,
         ));
         let udf_expr =
-            Expr::ScalarFunction(ScalarFunction::new_udf(udf.into(), vec![lit(123u32)]));
+            Expr::scalar_function(ScalarFunction::new_udf(udf.into(), vec![lit(123u32)]));
         let scan = test_table_scan()?;
         let plan = LogicalPlanBuilder::from(scan)
             .aggregate(vec![udf_expr, col("a")], vec![count(col("c"))])?
@@ -296,7 +296,7 @@ mod tests {
             Volatility::Volatile,
         ));
         let udf_expr =
-            Expr::ScalarFunction(ScalarFunction::new_udf(udf.into(), vec![lit(123u32)]));
+            Expr::scalar_function(ScalarFunction::new_udf(udf.into(), vec![lit(123u32)]));
         let scan = test_table_scan()?;
         let plan = LogicalPlanBuilder::from(scan)
             .aggregate(vec![udf_expr, col("a")], vec![count(col("c"))])?

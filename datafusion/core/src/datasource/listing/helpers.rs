@@ -54,7 +54,7 @@ use object_store::{ObjectMeta, ObjectStore};
 pub fn expr_applicable_for_cols(col_names: &[&str], expr: &Expr) -> bool {
     let mut is_applicable = true;
     expr.apply(|expr| match expr {
-        Expr::Column(Column { ref name, .. }) => {
+        Expr::Column(Column { ref name, .. }, _) => {
             is_applicable &= col_names.contains(&name.as_str());
             if is_applicable {
                 Ok(TreeNodeRecursion::Jump)
@@ -62,34 +62,34 @@ pub fn expr_applicable_for_cols(col_names: &[&str], expr: &Expr) -> bool {
                 Ok(TreeNodeRecursion::Stop)
             }
         }
-        Expr::Literal(_)
-        | Expr::Alias(_)
-        | Expr::OuterReferenceColumn(_, _)
-        | Expr::ScalarVariable(_, _)
-        | Expr::Not(_)
-        | Expr::IsNotNull(_)
-        | Expr::IsNull(_)
-        | Expr::IsTrue(_)
-        | Expr::IsFalse(_)
-        | Expr::IsUnknown(_)
-        | Expr::IsNotTrue(_)
-        | Expr::IsNotFalse(_)
-        | Expr::IsNotUnknown(_)
-        | Expr::Negative(_)
-        | Expr::Cast(_)
-        | Expr::TryCast(_)
-        | Expr::BinaryExpr(_)
-        | Expr::Between(_)
-        | Expr::Like(_)
-        | Expr::SimilarTo(_)
-        | Expr::InList(_)
-        | Expr::Exists(_)
-        | Expr::InSubquery(_)
-        | Expr::ScalarSubquery(_)
-        | Expr::GroupingSet(_)
-        | Expr::Case(_) => Ok(TreeNodeRecursion::Continue),
+        Expr::Literal(_, _)
+        | Expr::Alias(_, _)
+        | Expr::OuterReferenceColumn(_, _, _)
+        | Expr::ScalarVariable(_, _, _)
+        | Expr::Not(_, _)
+        | Expr::IsNotNull(_, _)
+        | Expr::IsNull(_, _)
+        | Expr::IsTrue(_, _)
+        | Expr::IsFalse(_, _)
+        | Expr::IsUnknown(_, _)
+        | Expr::IsNotTrue(_, _)
+        | Expr::IsNotFalse(_, _)
+        | Expr::IsNotUnknown(_, _)
+        | Expr::Negative(_, _)
+        | Expr::Cast(_, _)
+        | Expr::TryCast(_, _)
+        | Expr::BinaryExpr(_, _)
+        | Expr::Between(_, _)
+        | Expr::Like(_, _)
+        | Expr::SimilarTo(_, _)
+        | Expr::InList(_, _)
+        | Expr::Exists(_, _)
+        | Expr::InSubquery(_, _)
+        | Expr::ScalarSubquery(_, _)
+        | Expr::GroupingSet(_, _)
+        | Expr::Case(_, _) => Ok(TreeNodeRecursion::Continue),
 
-        Expr::ScalarFunction(scalar_function) => {
+        Expr::ScalarFunction(scalar_function, _) => {
             match scalar_function.func.signature().volatility {
                 Volatility::Immutable => Ok(TreeNodeRecursion::Continue),
                 // TODO: Stable functions could be `applicable`, but that would require access to the context
@@ -108,7 +108,7 @@ pub fn expr_applicable_for_cols(col_names: &[&str], expr: &Expr) -> bool {
         | Expr::WindowFunction { .. }
         | Expr::Wildcard { .. }
         | Expr::Unnest { .. }
-        | Expr::Placeholder(_) => {
+        | Expr::Placeholder(_, _) => {
             is_applicable = false;
             Ok(TreeNodeRecursion::Stop)
         }
@@ -330,16 +330,19 @@ fn populate_partition_values<'a>(
     partition_values: &mut HashMap<&'a str, PartitionValue>,
     filter: &'a Expr,
 ) {
-    if let Expr::BinaryExpr(BinaryExpr {
-        ref left,
-        op,
-        ref right,
-    }) = filter
+    if let Expr::BinaryExpr(
+        BinaryExpr {
+            ref left,
+            op,
+            ref right,
+        },
+        _,
+    ) = filter
     {
         match op {
             Operator::Eq => match (left.as_ref(), right.as_ref()) {
-                (Expr::Column(Column { ref name, .. }), Expr::Literal(val))
-                | (Expr::Literal(val), Expr::Column(Column { ref name, .. })) => {
+                (Expr::Column(Column { ref name, .. }, _), Expr::Literal(val, _))
+                | (Expr::Literal(val, _), Expr::Column(Column { ref name, .. }, _)) => {
                     if partition_values
                         .insert(name, PartitionValue::Single(val.to_string()))
                         .is_some()
@@ -868,7 +871,7 @@ mod tests {
         assert_eq!(
             evaluate_partition_prefix(
                 partitions,
-                &[col("a").eq(Expr::Literal(ScalarValue::Date32(Some(3))))],
+                &[col("a").eq(Expr::literal(ScalarValue::Date32(Some(3))))],
             ),
             Some(Path::from("a=1970-01-04")),
         );
@@ -877,7 +880,7 @@ mod tests {
         assert_eq!(
             evaluate_partition_prefix(
                 partitions,
-                &[col("a").eq(Expr::Literal(ScalarValue::Date64(Some(
+                &[col("a").eq(Expr::literal(ScalarValue::Date64(Some(
                     4 * 24 * 60 * 60 * 1000
                 )))),],
             ),

@@ -72,7 +72,7 @@ impl ScalarUDFImpl for FromUnixtimeFunc {
         match arg_types.len() {
             1 => Ok(Timestamp(Second, None)),
             2 => match &args[1] {
-                    Expr::Literal(ScalarValue::Utf8(Some(tz))) => Ok(Timestamp(Second, Some(Arc::from(tz.to_string())))),
+                    Expr::Literal(ScalarValue::Utf8(Some(tz)), _) => Ok(Timestamp(Second, Some(Arc::from(tz.to_string())))),
                     _ => exec_err!(
                         "Second argument for `from_unixtime` must be non-null utf8, received {:?}",
                         arg_types[1]),

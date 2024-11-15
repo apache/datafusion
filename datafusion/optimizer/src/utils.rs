@@ -132,7 +132,7 @@ pub fn is_restrict_null_predicate<'a>(
     predicate: Expr,
     join_cols_of_predicate: impl IntoIterator<Item = &'a Column>,
 ) -> Result<bool> {
-    if matches!(predicate, Expr::Column(_)) {
+    if matches!(predicate, Expr::Column(_, _)) {
         return Ok(true);
     }
 
@@ -195,10 +195,10 @@ mod tests {
             // a IS NULL
             (is_null(col("a")), false),
             // a IS NOT NULL
-            (Expr::IsNotNull(Box::new(col("a"))), true),
+            (Expr::_is_not_null(Box::new(col("a"))), true),
             // a = NULL
             (
-                binary_expr(col("a"), Operator::Eq, Expr::Literal(ScalarValue::Null)),
+                binary_expr(col("a"), Operator::Eq, Expr::literal(ScalarValue::Null)),
                 true,
             ),
             // a > 8
@@ -261,12 +261,12 @@ mod tests {
             ),
             // a IN (NULL)
             (
-                in_list(col("a"), vec![Expr::Literal(ScalarValue::Null)], false),
+                in_list(col("a"), vec![Expr::literal(ScalarValue::Null)], false),
                 true,
             ),
             // a NOT IN (NULL)
             (
-                in_list(col("a"), vec![Expr::Literal(ScalarValue::Null)], true),
+                in_list(col("a"), vec![Expr::literal(ScalarValue::Null)], true),
                 true,
             ),
         ];

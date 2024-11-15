@@ -360,22 +360,25 @@ impl OptimizerRule for TopKOptimizerRule {
         // Note: this code simply looks for the pattern of a Limit followed by a
         // Sort and replaces it by a TopK node. It does not handle many
         // edge cases (e.g multiple sort columns, sort ASC / DESC), etc.
-        let LogicalPlan::Limit(ref limit) = plan else {
+        let LogicalPlan::Limit(ref limit, _) = plan else {
             return Ok(Transformed::no(plan));
         };
         let FetchType::Literal(Some(fetch)) = limit.get_fetch_type()? else {
             return Ok(Transformed::no(plan));
         };
 
-        if let LogicalPlan::Sort(Sort {
-            ref expr,
-            ref input,
-            ..
-        }) = limit.input.as_ref()
+        if let LogicalPlan::Sort(
+            Sort {
+                ref expr,
+                ref input,
+                ..
+            },
+            _,
+        ) = limit.input.as_ref()
         {
             if expr.len() == 1 {
                 // we found a sort with a single sort expr, replace with a a TopK
-                return Ok(Transformed::yes(LogicalPlan::Extension(Extension {
+                return Ok(Transformed::yes(LogicalPlan::extension(Extension {
                     node: Arc::new(TopKPlanNode {
                         k: fetch,
                         input: input.as_ref().clone(),
@@ -705,9 +708,9 @@ impl MyAnalyzerRule {
     fn analyze_plan(plan: LogicalPlan) -> Result<LogicalPlan> {
         plan.transform(|plan| {
             Ok(match plan {
-                LogicalPlan::Projection(projection) => {
+                LogicalPlan::Projection(projection, _) => {
                     let expr = Self::analyze_expr(projection.expr.clone())?;
-                    Transformed::yes(LogicalPlan::Projection(Projection::try_new(
+                    Transformed::yes(LogicalPlan::projection(Projection::try_new(
                         expr,
                         projection.input,
                     )?))
@@ -723,9 +726,9 @@ impl MyAnalyzerRule {
             .map(|e| {
                 e.transform(|e| {
                     Ok(match e {
-                        Expr::Literal(ScalarValue::Int64(i)) => {
+                        Expr::Literal(ScalarValue::Int64(i), _) => {
                             // transform to UInt64
-                            Transformed::yes(Expr::Literal(ScalarValue::UInt64(
+                            Transformed::yes(Expr::literal(ScalarValue::UInt64(
                                 i.map(|i| i as u64),
                             )))
                         }

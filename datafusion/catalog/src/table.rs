@@ -213,7 +213,7 @@ pub trait TableProvider: Debug + Sync + Send {
     ///         let support: Vec<_> = filters.iter().map(|expr| {
     ///           match expr {
     ///             // This example only supports a between expr with a single column named "c1".
-    ///             Expr::Between(between_expr) => {
+    ///             Expr::Between(between_expr, _) => {
     ///                 between_expr.expr
     ///                 .try_as_col()
     ///                 .map(|column| {

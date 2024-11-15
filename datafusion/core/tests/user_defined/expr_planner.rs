@@ -25,7 +25,6 @@ use datafusion::logical_expr::Operator;
 use datafusion::prelude::*;
 use datafusion::sql::sqlparser::ast::BinaryOperator;
 use datafusion_common::ScalarValue;
-use datafusion_expr::expr::Alias;
 use datafusion_expr::planner::{ExprPlanner, PlannerResult, RawBinaryExpr};
 use datafusion_expr::BinaryExpr;
 
@@ -40,26 +39,23 @@ impl ExprPlanner for MyCustomPlanner {
     ) -> Result<PlannerResult<RawBinaryExpr>> {
         match &expr.op {
             BinaryOperator::Arrow => {
-                Ok(PlannerResult::Planned(Expr::BinaryExpr(BinaryExpr {
+                Ok(PlannerResult::Planned(Expr::binary_expr(BinaryExpr {
                     left: Box::new(expr.left.clone()),
                     right: Box::new(expr.right.clone()),
                     op: Operator::StringConcat,
                 })))
             }
             BinaryOperator::LongArrow => {
-                Ok(PlannerResult::Planned(Expr::BinaryExpr(BinaryExpr {
+                Ok(PlannerResult::Planned(Expr::binary_expr(BinaryExpr {
                     left: Box::new(expr.left.clone()),
                     right: Box::new(expr.right.clone()),
                     op: Operator::Plus,
                 })))
             }
-            BinaryOperator::Question => {
-                Ok(PlannerResult::Planned(Expr::Alias(Alias::new(
-                    Expr::Literal(ScalarValue::Boolean(Some(true))),
-                    None::<&str>,
-                    format!("{} ? {}", expr.left, expr.right),
-                ))))
-            }
+            BinaryOperator::Question => Ok(PlannerResult::Planned(
+                Expr::literal(ScalarValue::Boolean(Some(true)))
+                    .alias(format!("{} ? {}", expr.left, expr.right)),
+            )),
             _ => Ok(PlannerResult::Original(expr)),
         }
     }

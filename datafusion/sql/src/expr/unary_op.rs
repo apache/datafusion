@@ -32,7 +32,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
         match op {
-            UnaryOperator::Not => Ok(Expr::Not(Box::new(
+            UnaryOperator::Not => Ok(Expr::_not(Box::new(
                 self.sql_expr_to_logical_expr(expr, schema, planner_context)?,
             ))),
             UnaryOperator::Plus => {
@@ -59,7 +59,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                         self.sql_interval_to_expr(true, interval)
                     }
                     // Not a literal, apply negative operator on expression
-                    _ => Ok(Expr::Negative(Box::new(self.sql_expr_to_logical_expr(
+                    _ => Ok(Expr::negative(Box::new(self.sql_expr_to_logical_expr(
                         expr,
                         schema,
                         planner_context,

@@ -67,16 +67,19 @@ impl OptimizerRule for ExtractEquijoinPredicate {
         _config: &dyn OptimizerConfig,
     ) -> Result<Transformed<LogicalPlan>> {
         match plan {
-            LogicalPlan::Join(Join {
-                left,
-                right,
-                mut on,
-                filter: Some(expr),
-                join_type,
-                join_constraint,
-                schema,
-                null_equals_null,
-            }) => {
+            LogicalPlan::Join(
+                Join {
+                    left,
+                    right,
+                    mut on,
+                    filter: Some(expr),
+                    join_type,
+                    join_constraint,
+                    schema,
+                    null_equals_null,
+                },
+                _,
+            ) => {
                 let left_schema = left.schema();
                 let right_schema = right.schema();
                 let (equijoin_predicates, non_equijoin_expr) =
@@ -84,7 +87,7 @@ impl OptimizerRule for ExtractEquijoinPredicate {
 
                 if !equijoin_predicates.is_empty() {
                     on.extend(equijoin_predicates);
-                    Ok(Transformed::yes(LogicalPlan::Join(Join {
+                    Ok(Transformed::yes(LogicalPlan::join(Join {
                         left,
                         right,
                         on,
@@ -95,7 +98,7 @@ impl OptimizerRule for ExtractEquijoinPredicate {
                         null_equals_null,
                     })))
                 } else {
-                    Ok(Transformed::no(LogicalPlan::Join(Join {
+                    Ok(Transformed::no(LogicalPlan::join(Join {
                         left,
                         right,
                         on,
@@ -123,11 +126,14 @@ fn split_eq_and_noneq_join_predicate(
     let mut accum_filters: Vec<Expr> = vec![];
     for expr in exprs {
         match expr {
-            Expr::BinaryExpr(BinaryExpr {
-                ref left,
-                op: Operator::Eq,
-                ref right,
-            }) => {
+            Expr::BinaryExpr(
+                BinaryExpr {
+                    ref left,
+                    op: Operator::Eq,
+                    ref right,
+                },
+                _,
+            ) => {
                 let join_key_pair =
                     find_valid_equijoin_key_pair(left, right, left_schema, right_schema)?;
 

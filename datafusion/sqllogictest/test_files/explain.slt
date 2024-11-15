@@ -429,7 +429,7 @@ logical_plan
 04)------Aggregate: groupBy=[[]], aggr=[[count(Int64(1)) AS count(*)]]
 05)--------TableScan: t2
 06)--TableScan: t1 projection=[a]
-physical_plan_error This feature is not implemented: Physical plan does not support logical expression Exists(Exists { subquery: <subquery>, negated: false })
+physical_plan_error This feature is not implemented: Physical plan does not support logical expression Exists(Exists { subquery: <subquery>, negated: false }, LogicalPlanStats)
 
 statement ok
 drop table t1;

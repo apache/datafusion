@@ -180,7 +180,7 @@ async fn test_count_wildcard_on_window() -> Result<()> {
     let df_results = ctx
         .table("t1")
         .await?
-        .select(vec![Expr::WindowFunction(expr::WindowFunction::new(
+        .select(vec![Expr::window_function(expr::WindowFunction::new(
             WindowFunctionDefinition::AggregateUDF(count_udaf()),
             vec![wildcard()],
         ))
@@ -589,7 +589,7 @@ async fn select_with_alias_overwrite() -> Result<()> {
 
 #[tokio::test]
 async fn test_grouping_sets() -> Result<()> {
-    let grouping_set_expr = Expr::GroupingSet(GroupingSet::GroupingSets(vec![
+    let grouping_set_expr = Expr::grouping_set(GroupingSet::GroupingSets(vec![
         vec![col("a")],
         vec![col("b")],
         vec![col("a"), col("b")],
@@ -631,7 +631,7 @@ async fn test_grouping_sets() -> Result<()> {
 async fn test_grouping_sets_count() -> Result<()> {
     let ctx = SessionContext::new();
 
-    let grouping_set_expr = Expr::GroupingSet(GroupingSet::GroupingSets(vec![
+    let grouping_set_expr = Expr::grouping_set(GroupingSet::GroupingSets(vec![
         vec![col("c1")],
         vec![col("c2")],
     ]));
@@ -671,7 +671,7 @@ async fn test_grouping_sets_count() -> Result<()> {
 async fn test_grouping_set_array_agg_with_overflow() -> Result<()> {
     let ctx = SessionContext::new();
 
-    let grouping_set_expr = Expr::GroupingSet(GroupingSet::GroupingSets(vec![
+    let grouping_set_expr = Expr::grouping_set(GroupingSet::GroupingSets(vec![
         vec![col("c1")],
         vec![col("c2")],
         vec![col("c1"), col("c2")],
@@ -1629,7 +1629,7 @@ async fn consecutive_projection_same_schema() -> Result<()> {
 
     // Add `t` column full of nulls
     let df = df
-        .with_column("t", cast(Expr::Literal(ScalarValue::Null), DataType::Int32))
+        .with_column("t", cast(Expr::literal(ScalarValue::Null), DataType::Int32))
         .unwrap();
     df.clone().show().await.unwrap();
 

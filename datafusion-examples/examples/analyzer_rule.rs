@@ -175,7 +175,7 @@ impl AnalyzerRule for RowLevelAccessControl {
 }
 
 fn is_employee_table_scan(plan: &LogicalPlan) -> bool {
-    if let LogicalPlan::TableScan(scan) = plan {
+    if let LogicalPlan::TableScan(scan, _) = plan {
         scan.table_name.table() == "employee"
     } else {
         false

@@ -62,13 +62,13 @@ use std::sync::Arc;
 /// assert_ne!(c1, c3);
 /// ```
 pub fn col(ident: impl Into<Column>) -> Expr {
-    Expr::Column(ident.into())
+    Expr::column(ident.into())
 }
 
 /// Create an out reference column which hold a reference that has been resolved to a field
 /// outside of the current plan.
 pub fn out_ref_col(dt: DataType, ident: impl Into<Column>) -> Expr {
-    Expr::OuterReferenceColumn(dt, ident.into())
+    Expr::outer_reference_column(dt, ident.into())
 }
 
 /// Create an unqualified column expression from the provided name, without normalizing
@@ -90,7 +90,7 @@ pub fn out_ref_col(dt: DataType, ident: impl Into<Column>) -> Expr {
 /// assert_ne!(c4, c5);
 /// ```
 pub fn ident(name: impl Into<String>) -> Expr {
-    Expr::Column(Column::from_name(name))
+    Expr::column(Column::from_name(name))
 }
 
 /// Create placeholder value that will be filled in (such as `$1`)
@@ -105,7 +105,7 @@ pub fn ident(name: impl Into<String>) -> Expr {
 /// assert_eq!(p.to_string(), "$0")
 /// ```
 pub fn placeholder(id: impl Into<String>) -> Expr {
-    Expr::Placeholder(Placeholder {
+    Expr::placeholder(Placeholder {
         id: id.into(),
         data_type: None,
     })
@@ -121,7 +121,7 @@ pub fn placeholder(id: impl Into<String>) -> Expr {
 /// assert_eq!(p.to_string(), "*")
 /// ```
 pub fn wildcard() -> Expr {
-    Expr::Wildcard(Wildcard {
+    Expr::wildcard(Wildcard {
         qualifier: None,
         options: WildcardOptions::default(),
     })
@@ -129,7 +129,7 @@ pub fn wildcard() -> Expr {
 
 /// Create an '*' [`Expr::Wildcard`] expression with the wildcard options
 pub fn wildcard_with_options(options: WildcardOptions) -> Expr {
-    Expr::Wildcard(Wildcard {
+    Expr::wildcard(Wildcard {
         qualifier: None,
         options,
     })
@@ -146,7 +146,7 @@ pub fn wildcard_with_options(options: WildcardOptions) -> Expr {
 /// assert_eq!(p.to_string(), "t.*")
 /// ```
 pub fn qualified_wildcard(qualifier: impl Into<TableReference>) -> Expr {
-    Expr::Wildcard(Wildcard {
+    Expr::wildcard(Wildcard {
         qualifier: Some(qualifier.into()),
         options: WildcardOptions::default(),
     })
@@ -157,7 +157,7 @@ pub fn qualified_wildcard_with_options(
     qualifier: impl Into<TableReference>,
     options: WildcardOptions,
 ) -> Expr {
-    Expr::Wildcard(Wildcard {
+    Expr::wildcard(Wildcard {
         qualifier: Some(qualifier.into()),
         options,
     })
@@ -165,12 +165,12 @@ pub fn qualified_wildcard_with_options(
 
 /// Return a new expression `left <op> right`
 pub fn binary_expr(left: Expr, op: Operator, right: Expr) -> Expr {
-    Expr::BinaryExpr(BinaryExpr::new(Box::new(left), op, Box::new(right)))
+    Expr::binary_expr(BinaryExpr::new(Box::new(left), op, Box::new(right)))
 }
 
 /// Return a new expression with a logical AND
 pub fn and(left: Expr, right: Expr) -> Expr {
-    Expr::BinaryExpr(BinaryExpr::new(
+    Expr::binary_expr(BinaryExpr::new(
         Box::new(left),
         Operator::And,
         Box::new(right),
@@ -179,7 +179,7 @@ pub fn and(left: Expr, right: Expr) -> Expr {
 
 /// Return a new expression with a logical OR
 pub fn or(left: Expr, right: Expr) -> Expr {
-    Expr::BinaryExpr(BinaryExpr::new(
+    Expr::binary_expr(BinaryExpr::new(
         Box::new(left),
         Operator::Or,
         Box::new(right),
@@ -193,7 +193,7 @@ pub fn not(expr: Expr) -> Expr {
 
 /// Return a new expression with bitwise AND
 pub fn bitwise_and(left: Expr, right: Expr) -> Expr {
-    Expr::BinaryExpr(BinaryExpr::new(
+    Expr::binary_expr(BinaryExpr::new(
         Box::new(left),
         Operator::BitwiseAnd,
         Box::new(right),
@@ -202,7 +202,7 @@ pub fn bitwise_and(left: Expr, right: Expr) -> Expr {
 
 /// Return a new expression with bitwise OR
 pub fn bitwise_or(left: Expr, right: Expr) -> Expr {
-    Expr::BinaryExpr(BinaryExpr::new(
+    Expr::binary_expr(BinaryExpr::new(
         Box::new(left),
         Operator::BitwiseOr,
         Box::new(right),
@@ -211,7 +211,7 @@ pub fn bitwise_or(left: Expr, right: Expr) -> Expr {
 
 /// Return a new expression with bitwise XOR
 pub fn bitwise_xor(left: Expr, right: Expr) -> Expr {
-    Expr::BinaryExpr(BinaryExpr::new(
+    Expr::binary_expr(BinaryExpr::new(
         Box::new(left),
         Operator::BitwiseXor,
         Box::new(right),
@@ -220,7 +220,7 @@ pub fn bitwise_xor(left: Expr, right: Expr) -> Expr {
 
 /// Return a new expression with bitwise SHIFT RIGHT
 pub fn bitwise_shift_right(left: Expr, right: Expr) -> Expr {
-    Expr::BinaryExpr(BinaryExpr::new(
+    Expr::binary_expr(BinaryExpr::new(
         Box::new(left),
         Operator::BitwiseShiftRight,
         Box::new(right),
@@ -229,7 +229,7 @@ pub fn bitwise_shift_right(left: Expr, right: Expr) -> Expr {
 
 /// Return a new expression with bitwise SHIFT LEFT
 pub fn bitwise_shift_left(left: Expr, right: Expr) -> Expr {
-    Expr::BinaryExpr(BinaryExpr::new(
+    Expr::binary_expr(BinaryExpr::new(
         Box::new(left),
         Operator::BitwiseShiftLeft,
         Box::new(right),
@@ -238,13 +238,13 @@ pub fn bitwise_shift_left(left: Expr, right: Expr) -> Expr {
 
 /// Create an in_list expression
 pub fn in_list(expr: Expr, list: Vec<Expr>, negated: bool) -> Expr {
-    Expr::InList(InList::new(Box::new(expr), list, negated))
+    Expr::_in_list(InList::new(Box::new(expr), list, negated))
 }
 
 /// Create an EXISTS subquery expression
 pub fn exists(subquery: Arc<LogicalPlan>) -> Expr {
     let outer_ref_columns = subquery.all_out_ref_exprs();
-    Expr::Exists(Exists {
+    Expr::exists(Exists {
         subquery: Subquery {
             subquery,
             outer_ref_columns,
@@ -256,7 +256,7 @@ pub fn exists(subquery: Arc<LogicalPlan>) -> Expr {
 /// Create a NOT EXISTS subquery expression
 pub fn not_exists(subquery: Arc<LogicalPlan>) -> Expr {
     let outer_ref_columns = subquery.all_out_ref_exprs();
-    Expr::Exists(Exists {
+    Expr::exists(Exists {
         subquery: Subquery {
             subquery,
             outer_ref_columns,
@@ -268,7 +268,7 @@ pub fn not_exists(subquery: Arc<LogicalPlan>) -> Expr {
 /// Create an IN subquery expression
 pub fn in_subquery(expr: Expr, subquery: Arc<LogicalPlan>) -> Expr {
     let outer_ref_columns = subquery.all_out_ref_exprs();
-    Expr::InSubquery(InSubquery::new(
+    Expr::in_subquery(InSubquery::new(
         Box::new(expr),
         Subquery {
             subquery,
@@ -281,7 +281,7 @@ pub fn in_subquery(expr: Expr, subquery: Arc<LogicalPlan>) -> Expr {
 /// Create a NOT IN subquery expression
 pub fn not_in_subquery(expr: Expr, subquery: Arc<LogicalPlan>) -> Expr {
     let outer_ref_columns = subquery.all_out_ref_exprs();
-    Expr::InSubquery(InSubquery::new(
+    Expr::in_subquery(InSubquery::new(
         Box::new(expr),
         Subquery {
             subquery,
@@ -294,7 +294,7 @@ pub fn not_in_subquery(expr: Expr, subquery: Arc<LogicalPlan>) -> Expr {
 /// Create a scalar subquery expression
 pub fn scalar_subquery(subquery: Arc<LogicalPlan>) -> Expr {
     let outer_ref_columns = subquery.all_out_ref_exprs();
-    Expr::ScalarSubquery(Subquery {
+    Expr::scalar_subquery(Subquery {
         subquery,
         outer_ref_columns,
     })
@@ -302,62 +302,62 @@ pub fn scalar_subquery(subquery: Arc<LogicalPlan>) -> Expr {
 
 /// Create a grouping set
 pub fn grouping_set(exprs: Vec<Vec<Expr>>) -> Expr {
-    Expr::GroupingSet(GroupingSet::GroupingSets(exprs))
+    Expr::grouping_set(GroupingSet::GroupingSets(exprs))
 }
 
 /// Create a grouping set for all combination of `exprs`
 pub fn cube(exprs: Vec<Expr>) -> Expr {
-    Expr::GroupingSet(GroupingSet::Cube(exprs))
+    Expr::grouping_set(GroupingSet::Cube(exprs))
 }
 
 /// Create a grouping set for rollup
 pub fn rollup(exprs: Vec<Expr>) -> Expr {
-    Expr::GroupingSet(GroupingSet::Rollup(exprs))
+    Expr::grouping_set(GroupingSet::Rollup(exprs))
 }
 
 /// Create a cast expression
 pub fn cast(expr: Expr, data_type: DataType) -> Expr {
-    Expr::Cast(Cast::new(Box::new(expr), data_type))
+    Expr::cast(Cast::new(Box::new(expr), data_type))
 }
 
 /// Create a try cast expression
 pub fn try_cast(expr: Expr, data_type: DataType) -> Expr {
-    Expr::TryCast(TryCast::new(Box::new(expr), data_type))
+    Expr::try_cast(TryCast::new(Box::new(expr), data_type))
 }
 
 /// Create is null expression
 pub fn is_null(expr: Expr) -> Expr {
-    Expr::IsNull(Box::new(expr))
+    Expr::_is_null(Box::new(expr))
 }
 
 /// Create is true expression
 pub fn is_true(expr: Expr) -> Expr {
-    Expr::IsTrue(Box::new(expr))
+    Expr::_is_true(Box::new(expr))
 }
 
 /// Create is not true expression
 pub fn is_not_true(expr: Expr) -> Expr {
-    Expr::IsNotTrue(Box::new(expr))
+    Expr::_is_not_true(Box::new(expr))
 }
 
 /// Create is false expression
 pub fn is_false(expr: Expr) -> Expr {
-    Expr::IsFalse(Box::new(expr))
+    Expr::_is_false(Box::new(expr))
 }
 
 /// Create is not false expression
 pub fn is_not_false(expr: Expr) -> Expr {
-    Expr::IsNotFalse(Box::new(expr))
+    Expr::_is_not_false(Box::new(expr))
 }
 
 /// Create is unknown expression
 pub fn is_unknown(expr: Expr) -> Expr {
-    Expr::IsUnknown(Box::new(expr))
+    Expr::_is_unknown(Box::new(expr))
 }
 
 /// Create is not unknown expression
 pub fn is_not_unknown(expr: Expr) -> Expr {
-    Expr::IsNotUnknown(Box::new(expr))
+    Expr::_is_not_unknown(Box::new(expr))
 }
 
 /// Create a CASE WHEN statement with literal WHEN expressions for comparison to the base expression.
@@ -372,7 +372,7 @@ pub fn when(when: Expr, then: Expr) -> CaseBuilder {
 
 /// Create a Unnest expression
 pub fn unnest(expr: Expr) -> Expr {
-    Expr::Unnest(Unnest {
+    Expr::unnest(Unnest {
         expr: Box::new(expr),
     })
 }
@@ -697,17 +697,17 @@ impl WindowUDFImpl for SimpleWindowUDF {
 
 pub fn interval_year_month_lit(value: &str) -> Expr {
     let interval = parse_interval_year_month(value).ok();
-    Expr::Literal(ScalarValue::IntervalYearMonth(interval))
+    Expr::literal(ScalarValue::IntervalYearMonth(interval))
 }
 
 pub fn interval_datetime_lit(value: &str) -> Expr {
     let interval = parse_interval_day_time(value).ok();
-    Expr::Literal(ScalarValue::IntervalDayTime(interval))
+    Expr::literal(ScalarValue::IntervalDayTime(interval))
 }
 
 pub fn interval_month_day_nano_lit(value: &str) -> Expr {
     let interval = parse_interval_month_day_nano(value).ok();
-    Expr::Literal(ScalarValue::IntervalMonthDayNano(interval))
+    Expr::literal(ScalarValue::IntervalMonthDayNano(interval))
 }
 
 /// Extensions for configuring [`Expr::AggregateFunction`] or [`Expr::WindowFunction`]
@@ -832,7 +832,7 @@ impl ExprFuncBuilder {
                 udaf.filter = filter.map(Box::new);
                 udaf.distinct = distinct;
                 udaf.null_treatment = null_treatment;
-                Expr::AggregateFunction(udaf)
+                Expr::aggregate_function(udaf)
             }
             ExprFuncKind::Window(mut udwf) => {
                 let has_order_by = order_by.as_ref().map(|o| !o.is_empty());
@@ -841,7 +841,7 @@ impl ExprFuncBuilder {
                 udwf.window_frame =
                     window_frame.unwrap_or(WindowFrame::new(has_order_by));
                 udwf.null_treatment = null_treatment;
-                Expr::WindowFunction(udwf)
+                Expr::window_function(udwf)
             }
         };
 
@@ -891,10 +891,10 @@ impl ExprFunctionExt for ExprFuncBuilder {
 impl ExprFunctionExt for Expr {
     fn order_by(self, order_by: Vec<Sort>) -> ExprFuncBuilder {
         let mut builder = match self {
-            Expr::AggregateFunction(udaf) => {
+            Expr::AggregateFunction(udaf, _) => {
                 ExprFuncBuilder::new(Some(ExprFuncKind::Aggregate(udaf)))
             }
-            Expr::WindowFunction(udwf) => {
+            Expr::WindowFunction(udwf, _) => {
                 ExprFuncBuilder::new(Some(ExprFuncKind::Window(udwf)))
             }
             _ => ExprFuncBuilder::new(None),
@@ -906,7 +906,7 @@ impl ExprFunctionExt for Expr {
     }
     fn filter(self, filter: Expr) -> ExprFuncBuilder {
         match self {
-            Expr::AggregateFunction(udaf) => {
+            Expr::AggregateFunction(udaf, _) => {
                 let mut builder =
                     ExprFuncBuilder::new(Some(ExprFuncKind::Aggregate(udaf)));
                 builder.filter = Some(filter);
@@ -917,7 +917,7 @@ impl ExprFunctionExt for Expr {
     }
     fn distinct(self) -> ExprFuncBuilder {
         match self {
-            Expr::AggregateFunction(udaf) => {
+            Expr::AggregateFunction(udaf, _) => {
                 let mut builder =
                     ExprFuncBuilder::new(Some(ExprFuncKind::Aggregate(udaf)));
                 builder.distinct = true;
@@ -931,10 +931,10 @@ impl ExprFunctionExt for Expr {
         null_treatment: impl Into<Option<NullTreatment>>,
     ) -> ExprFuncBuilder {
         let mut builder = match self {
-            Expr::AggregateFunction(udaf) => {
+            Expr::AggregateFunction(udaf, _) => {
                 ExprFuncBuilder::new(Some(ExprFuncKind::Aggregate(udaf)))
             }
-            Expr::WindowFunction(udwf) => {
+            Expr::WindowFunction(udwf, _) => {
                 ExprFuncBuilder::new(Some(ExprFuncKind::Window(udwf)))
             }
             _ => ExprFuncBuilder::new(None),
@@ -947,7 +947,7 @@ impl ExprFunctionExt for Expr {
 
     fn partition_by(self, partition_by: Vec<Expr>) -> ExprFuncBuilder {
         match self {
-            Expr::WindowFunction(udwf) => {
+            Expr::WindowFunction(udwf, _) => {
                 let mut builder = ExprFuncBuilder::new(Some(ExprFuncKind::Window(udwf)));
                 builder.partition_by = Some(partition_by);
                 builder
@@ -958,7 +958,7 @@ impl ExprFunctionExt for Expr {
 
     fn window_frame(self, window_frame: WindowFrame) -> ExprFuncBuilder {
         match self {
-            Expr::WindowFunction(udwf) => {
+            Expr::WindowFunction(udwf, _) => {
                 let mut builder = ExprFuncBuilder::new(Some(ExprFuncKind::Window(udwf)));
                 builder.window_frame = Some(window_frame);
                 builder

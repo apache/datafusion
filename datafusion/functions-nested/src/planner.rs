@@ -111,14 +111,14 @@ impl ExprPlanner for NestedFunctionPlanner {
         let keys = make_array(keys.into_iter().map(|(_, e)| e).collect());
         let values = make_array(values.into_iter().map(|(_, e)| e).collect());
 
-        Ok(PlannerResult::Planned(Expr::ScalarFunction(
+        Ok(PlannerResult::Planned(Expr::scalar_function(
             ScalarFunction::new_udf(map_udf(), vec![keys, values]),
         )))
     }
 
     fn plan_any(&self, expr: RawBinaryExpr) -> Result<PlannerResult<RawBinaryExpr>> {
         if expr.op == sqlparser::ast::BinaryOperator::Eq {
-            Ok(PlannerResult::Planned(Expr::ScalarFunction(
+            Ok(PlannerResult::Planned(Expr::scalar_function(
                 ScalarFunction::new_udf(
                     array_has_udf(),
                     // left and right are reversed here so `needle=any(haystack)` -> `array_has(haystack, needle)`
@@ -150,8 +150,8 @@ impl ExprPlanner for FieldAccessPlanner {
             GetFieldAccess::ListIndex { key: index } => {
                 match expr {
                     // Special case for array_agg(expr)[index] to NTH_VALUE(expr, index)
-                    Expr::AggregateFunction(agg_func) if is_array_agg(&agg_func) => {
-                        Ok(PlannerResult::Planned(Expr::AggregateFunction(
+                    Expr::AggregateFunction(agg_func, _) if is_array_agg(&agg_func) => {
+                        Ok(PlannerResult::Planned(Expr::aggregate_function(
                             datafusion_expr::expr::AggregateFunction::new_udf(
                                 nth_value_udaf(),
                                 agg_func

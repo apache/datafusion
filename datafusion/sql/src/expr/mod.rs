@@ -124,7 +124,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         }
 
         let RawBinaryExpr { op, left, right } = binary_expr;
-        Ok(Expr::BinaryExpr(BinaryExpr::new(
+        Ok(Expr::binary_expr(BinaryExpr::new(
             Box::new(left),
             self.parse_sql_binary_op(op)?,
             Box::new(right),
@@ -148,7 +148,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     /// Rewrite aliases which are not-complete (e.g. ones that only include only table qualifier in a schema.table qualified relation)
     fn rewrite_partial_qualifier(&self, expr: Expr, schema: &DFSchema) -> Expr {
         match expr {
-            Expr::Column(col) => match &col.relation {
+            Expr::Column(col, _) => match &col.relation {
                 Some(q) => {
                     match schema.iter().find(|(qualifier, field)| match qualifier {
                         Some(field_q) => {
@@ -158,10 +158,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                         _ => false,
                     }) {
                         Some((qualifier, df_field)) => Expr::from((qualifier, df_field)),
-                        None => Expr::Column(col),
+                        None => Expr::column(col),
                     }
                 }
-                None => Expr::Column(col),
+                None => Expr::column(col),
             },
             _ => expr,
         }
@@ -187,7 +187,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             }
             SQLExpr::Extract { field, expr, .. } => {
                 let mut extract_args = vec![
-                    Expr::Literal(ScalarValue::from(format!("{field}"))),
+                    Expr::literal(ScalarValue::from(format!("{field}"))),
                     self.sql_expr_to_logical_expr(*expr, schema, planner_context)?,
                 ];
 
@@ -253,7 +253,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     return not_impl_err!("CAST with format is not supported: {format}");
                 }
 
-                Ok(Expr::TryCast(TryCast::new(
+                Ok(Expr::try_cast(TryCast::new(
                     Box::new(self.sql_expr_to_logical_expr(
                         *expr,
                         schema,
@@ -263,21 +263,21 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 )))
             }
 
-            SQLExpr::TypedString { data_type, value } => Ok(Expr::Cast(Cast::new(
+            SQLExpr::TypedString { data_type, value } => Ok(Expr::cast(Cast::new(
                 Box::new(lit(value)),
                 self.convert_data_type(&data_type)?,
             ))),
 
-            SQLExpr::IsNull(expr) => Ok(Expr::IsNull(Box::new(
+            SQLExpr::IsNull(expr) => Ok(Expr::_is_null(Box::new(
                 self.sql_expr_to_logical_expr(*expr, schema, planner_context)?,
             ))),
 
-            SQLExpr::IsNotNull(expr) => Ok(Expr::IsNotNull(Box::new(
+            SQLExpr::IsNotNull(expr) => Ok(Expr::_is_not_null(Box::new(
                 self.sql_expr_to_logical_expr(*expr, schema, planner_context)?,
             ))),
 
             SQLExpr::IsDistinctFrom(left, right) => {
-                Ok(Expr::BinaryExpr(BinaryExpr::new(
+                Ok(Expr::binary_expr(BinaryExpr::new(
                     Box::new(self.sql_expr_to_logical_expr(
                         *left,
                         schema,
@@ -293,7 +293,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             }
 
             SQLExpr::IsNotDistinctFrom(left, right) => {
-                Ok(Expr::BinaryExpr(BinaryExpr::new(
+                Ok(Expr::binary_expr(BinaryExpr::new(
                     Box::new(self.sql_expr_to_logical_expr(
                         *left,
                         schema,
@@ -308,27 +308,27 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 )))
             }
 
-            SQLExpr::IsTrue(expr) => Ok(Expr::IsTrue(Box::new(
+            SQLExpr::IsTrue(expr) => Ok(Expr::_is_true(Box::new(
                 self.sql_expr_to_logical_expr(*expr, schema, planner_context)?,
             ))),
 
-            SQLExpr::IsFalse(expr) => Ok(Expr::IsFalse(Box::new(
+            SQLExpr::IsFalse(expr) => Ok(Expr::_is_false(Box::new(
                 self.sql_expr_to_logical_expr(*expr, schema, planner_context)?,
             ))),
 
-            SQLExpr::IsNotTrue(expr) => Ok(Expr::IsNotTrue(Box::new(
+            SQLExpr::IsNotTrue(expr) => Ok(Expr::_is_not_true(Box::new(
                 self.sql_expr_to_logical_expr(*expr, schema, planner_context)?,
             ))),
 
-            SQLExpr::IsNotFalse(expr) => Ok(Expr::IsNotFalse(Box::new(
+            SQLExpr::IsNotFalse(expr) => Ok(Expr::_is_not_false(Box::new(
                 self.sql_expr_to_logical_expr(*expr, schema, planner_context)?,
             ))),
 
-            SQLExpr::IsUnknown(expr) => Ok(Expr::IsUnknown(Box::new(
+            SQLExpr::IsUnknown(expr) => Ok(Expr::_is_unknown(Box::new(
                 self.sql_expr_to_logical_expr(*expr, schema, planner_context)?,
             ))),
 
-            SQLExpr::IsNotUnknown(expr) => Ok(Expr::IsNotUnknown(Box::new(
+            SQLExpr::IsNotUnknown(expr) => Ok(Expr::_is_not_unknown(Box::new(
                 self.sql_expr_to_logical_expr(*expr, schema, planner_context)?,
             ))),
 
@@ -341,7 +341,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 negated,
                 low,
                 high,
-            } => Ok(Expr::Between(Between::new(
+            } => Ok(Expr::_between(Between::new(
                 Box::new(self.sql_expr_to_logical_expr(
                     *expr,
                     schema,
@@ -509,7 +509,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             SQLExpr::AtTimeZone {
                 timestamp,
                 time_zone,
-            } => Ok(Expr::Cast(Cast::new(
+            } => Ok(Expr::cast(Cast::new(
                 Box::new(self.sql_expr_to_logical_expr_internal(
                     *timestamp,
                     schema,
@@ -565,11 +565,11 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 }
                 not_impl_err!("AnyOp not supported by ExprPlanner: {binary_expr:?}")
             }
-            SQLExpr::Wildcard => Ok(Expr::Wildcard(Wildcard {
+            SQLExpr::Wildcard => Ok(Expr::wildcard(Wildcard {
                 qualifier: None,
                 options: WildcardOptions::default(),
             })),
-            SQLExpr::QualifiedWildcard(object_name) => Ok(Expr::Wildcard(Wildcard {
+            SQLExpr::QualifiedWildcard(object_name) => Ok(Expr::wildcard(Wildcard {
                 qualifier: Some(self.object_name_to_table_reference(object_name)?),
                 options: WildcardOptions::default(),
             })),
@@ -769,7 +769,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             .map(|e| self.sql_expr_to_logical_expr(e, schema, planner_context))
             .collect::<Result<Vec<_>>>()?;
 
-        Ok(Expr::InList(InList::new(
+        Ok(Expr::_in_list(InList::new(
             Box::new(self.sql_expr_to_logical_expr(expr, schema, planner_context)?),
             list_expr,
             negated,
@@ -804,7 +804,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         } else {
             None
         };
-        Ok(Expr::Like(Like::new(
+        Ok(Expr::_like(Like::new(
             negated,
             Box::new(self.sql_expr_to_logical_expr(expr, schema, planner_context)?),
             Box::new(pattern),
@@ -835,7 +835,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         } else {
             None
         };
-        Ok(Expr::SimilarTo(Like::new(
+        Ok(Expr::similar_to(Like::new(
             negated,
             Box::new(self.sql_expr_to_logical_expr(expr, schema, planner_context)?),
             Box::new(pattern),
@@ -891,7 +891,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 internal_datafusion_err!("Unable to find expected '{fun_name}' function")
             })?;
 
-        Ok(Expr::ScalarFunction(ScalarFunction::new_udf(fun, args)))
+        Ok(Expr::scalar_function(ScalarFunction::new_udf(fun, args)))
     }
 
     fn sql_overlay_to_expr(
@@ -946,7 +946,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             DataType::Timestamp(TimeUnit::Nanosecond, tz)
                 if expr.get_type(schema)? == DataType::Int64 =>
             {
-                Expr::Cast(Cast::new(
+                Expr::cast(Cast::new(
                     Box::new(expr),
                     DataType::Timestamp(TimeUnit::Second, tz.clone()),
                 ))
@@ -954,7 +954,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             _ => expr,
         };
 
-        Ok(Expr::Cast(Cast::new(Box::new(expr), dt)))
+        Ok(Expr::cast(Cast::new(Box::new(expr), dt)))
     }
 
     fn sql_subscript_to_expr(

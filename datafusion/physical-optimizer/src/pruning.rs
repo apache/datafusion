@@ -2549,7 +2549,7 @@ mod tests {
             Field::new("c2", DataType::Int32, false),
         ]);
         // test c1 in(1, 2, 3)
-        let expr = Expr::InList(InList::new(
+        let expr = Expr::_in_list(InList::new(
             Box::new(col("c1")),
             vec![lit(1), lit(2), lit(3)],
             false,
@@ -2580,7 +2580,7 @@ mod tests {
             Field::new("c2", DataType::Int32, false),
         ]);
         // test c1 in()
-        let expr = Expr::InList(InList::new(Box::new(col("c1")), vec![], false));
+        let expr = Expr::_in_list(InList::new(Box::new(col("c1")), vec![], false));
         let expected_expr = "true";
         let predicate_expr =
             test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
@@ -2596,7 +2596,7 @@ mod tests {
             Field::new("c2", DataType::Int32, false),
         ]);
         // test c1 not in(1, 2, 3)
-        let expr = Expr::InList(InList::new(
+        let expr = Expr::_in_list(InList::new(
             Box::new(col("c1")),
             vec![lit(1), lit(2), lit(3)],
             true,
@@ -2747,7 +2747,7 @@ mod tests {
     fn row_group_predicate_cast_list() -> Result<()> {
         let schema = Schema::new(vec![Field::new("c1", DataType::Int32, false)]);
         // test cast(c1 as int64) in int64(1, 2, 3)
-        let expr = Expr::InList(InList::new(
+        let expr = Expr::_in_list(InList::new(
             Box::new(cast(col("c1"), DataType::Int64)),
             vec![
                 lit(ScalarValue::Int64(Some(1))),
@@ -2772,7 +2772,7 @@ mod tests {
             test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
         assert_eq!(predicate_expr.to_string(), expected_expr);
 
-        let expr = Expr::InList(InList::new(
+        let expr = Expr::_in_list(InList::new(
             Box::new(cast(col("c1"), DataType::Int64)),
             vec![
                 lit(ScalarValue::Int64(Some(1))),
@@ -3107,7 +3107,7 @@ mod tests {
 
         // -i < 0
         prune_with_expr(
-            Expr::Negative(Box::new(col("i"))).lt(lit(0)),
+            Expr::negative(Box::new(col("i"))).lt(lit(0)),
             &schema,
             &statistics,
             expected_ret,
@@ -3136,7 +3136,7 @@ mod tests {
 
         prune_with_expr(
             // -i >= 0
-            Expr::Negative(Box::new(col("i"))).gt_eq(lit(0)),
+            Expr::negative(Box::new(col("i"))).gt_eq(lit(0)),
             &schema,
             &statistics,
             expected_ret,
@@ -3173,7 +3173,7 @@ mod tests {
 
         prune_with_expr(
             // cast(-i as utf8) >= 0
-            cast(Expr::Negative(Box::new(col("i"))), DataType::Utf8).gt_eq(lit("0")),
+            cast(Expr::negative(Box::new(col("i"))), DataType::Utf8).gt_eq(lit("0")),
             &schema,
             &statistics,
             expected_ret,
@@ -3181,7 +3181,7 @@ mod tests {
 
         prune_with_expr(
             // try_cast(-i as utf8) >= 0
-            try_cast(Expr::Negative(Box::new(col("i"))), DataType::Utf8).gt_eq(lit("0")),
+            try_cast(Expr::negative(Box::new(col("i"))), DataType::Utf8).gt_eq(lit("0")),
             &schema,
             &statistics,
             expected_ret,
@@ -3281,7 +3281,7 @@ mod tests {
 
         prune_with_expr(
             // -i < 1
-            Expr::Negative(Box::new(col("i"))).lt(lit(1)),
+            Expr::negative(Box::new(col("i"))).lt(lit(1)),
             &schema,
             &statistics,
             expected_ret,
@@ -3431,7 +3431,7 @@ mod tests {
 
         prune_with_expr(
             // `-cast(i as int64) < 0` convert to `cast(i as int64) > -0`
-            Expr::Negative(Box::new(cast(col("i"), DataType::Int64)))
+            Expr::negative(Box::new(cast(col("i"), DataType::Int64)))
                 .lt(lit(ScalarValue::Int64(Some(0)))),
             &schema,
             &statistics,

@@ -57,7 +57,7 @@ fn analyze_internal(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
             // Match only on scans without filter / projection / fetch
             // Views and DataFrames won't have those added
             // during the early stage of planning.
-            LogicalPlan::TableScan(table_scan) if table_scan.filters.is_empty() => {
+            LogicalPlan::TableScan(table_scan, _) if table_scan.filters.is_empty() => {
                 if let Some(sub_plan) = table_scan.source.get_logical_plan() {
                     let sub_plan = sub_plan.into_owned();
                     let projection_exprs =
@@ -71,7 +71,7 @@ fn analyze_internal(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
                         .build()
                         .map(Transformed::yes)
                 } else {
-                    Ok(Transformed::no(LogicalPlan::TableScan(table_scan)))
+                    Ok(Transformed::no(LogicalPlan::table_scan(table_scan)))
                 }
             }
             _ => Ok(Transformed::no(plan)),
@@ -88,12 +88,12 @@ fn generate_projection_expr(
     let mut exprs = vec![];
     if let Some(projection) = projection {
         for i in projection {
-            exprs.push(Expr::Column(Column::from(
+            exprs.push(Expr::column(Column::from(
                 sub_plan.schema().qualified_field(*i),
             )));
         }
     } else {
-        exprs.push(Expr::Wildcard(Wildcard {
+        exprs.push(Expr::wildcard(Wildcard {
             qualifier: None,
             options: WildcardOptions::default(),
         }));

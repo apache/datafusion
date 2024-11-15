@@ -169,7 +169,7 @@ impl ScalarFunctionWrapper {
     fn replacement(expr: &Expr, args: &[Expr]) -> Result<Expr> {
         let result = expr.clone().transform(|e| {
             let r = match e {
-                Expr::Placeholder(placeholder) => {
+                Expr::Placeholder(placeholder, _) => {
                     let placeholder_position =
                         Self::parse_placeholder_identifier(&placeholder.id)?;
                     if placeholder_position < args.len() {

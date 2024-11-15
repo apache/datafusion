@@ -55,21 +55,21 @@ impl OptimizerRule for EliminateNestedUnion {
         _config: &dyn OptimizerConfig,
     ) -> Result<Transformed<LogicalPlan>> {
         match plan {
-            LogicalPlan::Union(Union { inputs, schema }) => {
+            LogicalPlan::Union(Union { inputs, schema }, _) => {
                 let inputs = inputs
                     .into_iter()
                     .flat_map(extract_plans_from_union)
                     .map(|plan| coerce_plan_expr_for_schema(plan, &schema))
                     .collect::<Result<Vec<_>>>()?;
 
-                Ok(Transformed::yes(LogicalPlan::Union(Union {
+                Ok(Transformed::yes(LogicalPlan::union(Union {
                     inputs: inputs.into_iter().map(Arc::new).collect_vec(),
                     schema,
                 })))
             }
-            LogicalPlan::Distinct(Distinct::All(nested_plan)) => {
+            LogicalPlan::Distinct(Distinct::All(nested_plan), _) => {
                 match Arc::unwrap_or_clone(nested_plan) {
-                    LogicalPlan::Union(Union { inputs, schema }) => {
+                    LogicalPlan::Union(Union { inputs, schema }, _) => {
                         let inputs = inputs
                             .into_iter()
                             .map(extract_plan_from_distinct)
@@ -77,14 +77,14 @@ impl OptimizerRule for EliminateNestedUnion {
                             .map(|plan| coerce_plan_expr_for_schema(plan, &schema))
                             .collect::<Result<Vec<_>>>()?;
 
-                        Ok(Transformed::yes(LogicalPlan::Distinct(Distinct::All(
-                            Arc::new(LogicalPlan::Union(Union {
+                        Ok(Transformed::yes(LogicalPlan::distinct(Distinct::All(
+                            Arc::new(LogicalPlan::union(Union {
                                 inputs: inputs.into_iter().map(Arc::new).collect_vec(),
                                 schema: Arc::clone(&schema),
                             })),
                         ))))
                     }
-                    nested_plan => Ok(Transformed::no(LogicalPlan::Distinct(
+                    nested_plan => Ok(Transformed::no(LogicalPlan::distinct(
                         Distinct::All(Arc::new(nested_plan)),
                     ))),
                 }
@@ -96,7 +96,7 @@ impl OptimizerRule for EliminateNestedUnion {
 
 fn extract_plans_from_union(plan: Arc<LogicalPlan>) -> Vec<LogicalPlan> {
     match Arc::unwrap_or_clone(plan) {
-        LogicalPlan::Union(Union { inputs, .. }) => inputs
+        LogicalPlan::Union(Union { inputs, .. }, _) => inputs
             .into_iter()
             .map(Arc::unwrap_or_clone)
             .collect::<Vec<_>>(),
@@ -106,7 +106,7 @@ fn extract_plans_from_union(plan: Arc<LogicalPlan>) -> Vec<LogicalPlan> {
 
 fn extract_plan_from_distinct(plan: Arc<LogicalPlan>) -> Arc<LogicalPlan> {
     match Arc::unwrap_or_clone(plan) {
-        LogicalPlan::Distinct(Distinct::All(plan)) => plan,
+        LogicalPlan::Distinct(Distinct::All(plan), _) => plan,
         plan => Arc::new(plan),
     }
 }

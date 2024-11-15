@@ -145,7 +145,7 @@ impl MyOptimizerRule {
         expr.transform_up(|expr| {
             // Closure called for each sub tree
             match expr {
-                Expr::BinaryExpr(binary_expr) if is_binary_eq(&binary_expr) => {
+                Expr::BinaryExpr(binary_expr, _) if is_binary_eq(&binary_expr) => {
                     // destruture the expression
                     let BinaryExpr { left, op: _, right } = binary_expr;
                     // rewrite to `my_eq(left, right)`
@@ -171,7 +171,7 @@ fn is_binary_eq(binary_expr: &BinaryExpr) -> bool {
 
 /// Return true if the expression is a literal or column reference
 fn is_lit_or_col(expr: &Expr) -> bool {
-    matches!(expr, Expr::Column(_) | Expr::Literal(_))
+    matches!(expr, Expr::Column(_, _) | Expr::Literal(_, _))
 }
 
 /// A simple user defined filter function

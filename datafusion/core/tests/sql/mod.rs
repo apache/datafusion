@@ -327,11 +327,14 @@ async fn nyc() -> Result<()> {
     let optimized_plan = dataframe.into_optimized_plan().unwrap();
 
     match &optimized_plan {
-        LogicalPlan::Aggregate(Aggregate { input, .. }) => match input.as_ref() {
-            LogicalPlan::TableScan(TableScan {
-                ref projected_schema,
-                ..
-            }) => {
+        LogicalPlan::Aggregate(Aggregate { input, .. }, _) => match input.as_ref() {
+            LogicalPlan::TableScan(
+                TableScan {
+                    ref projected_schema,
+                    ..
+                },
+                _,
+            ) => {
                 assert_eq!(2, projected_schema.fields().len());
                 assert_eq!(projected_schema.field(0).name(), "passenger_count");
                 assert_eq!(projected_schema.field(1).name(), "fare_amount");

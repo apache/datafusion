@@ -38,7 +38,7 @@ use crate::make_array::make_array;
 pub fn map(keys: Vec<Expr>, values: Vec<Expr>) -> Expr {
     let keys = make_array(keys);
     let values = make_array(values);
-    Expr::ScalarFunction(ScalarFunction::new_udf(map_udf(), vec![keys, values]))
+    Expr::scalar_function(ScalarFunction::new_udf(map_udf(), vec![keys, values]))
 }
 
 create_func!(MapFunc, map_udf);

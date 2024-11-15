@@ -38,11 +38,14 @@ impl TreeNodeRewriter for ShortenInListSimplifier {
     fn f_up(&mut self, expr: Expr) -> Result<Transformed<Expr>> {
         // if expr is a single column reference:
         // expr IN (A, B, ...) --> (expr = A) OR (expr = B) OR (expr = C)
-        if let Expr::InList(InList {
-            expr,
-            list,
-            negated,
-        }) = expr.clone()
+        if let Expr::InList(
+            InList {
+                expr,
+                list,
+                negated,
+            },
+            _,
+        ) = expr.clone()
         {
             if !list.is_empty()
                 && (

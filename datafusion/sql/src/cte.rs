@@ -193,7 +193,7 @@ fn has_work_table_reference(
 ) -> bool {
     let mut has_reference = false;
     plan.apply(|node| {
-        if let LogicalPlan::TableScan(scan) = node {
+        if let LogicalPlan::TableScan(scan, _) = node {
             if Arc::ptr_eq(&scan.source, work_table_source) {
                 has_reference = true;
                 return Ok(TreeNodeRecursion::Stop);

@@ -90,7 +90,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                         );
                     }
 
-                    Expr::Column(Column::from(
+                    Expr::column(Column::from(
                         input_schema.qualified_field(field_index - 1),
                     ))
                 }

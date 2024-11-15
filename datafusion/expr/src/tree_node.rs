@@ -23,6 +23,7 @@ use crate::expr::{
 };
 use crate::{Expr, ExprFunctionExt};
 
+use crate::logical_plan::tree_node::LogicalPlanStats;
 use datafusion_common::tree_node::{
     Transformed, TreeNode, TreeNodeContainer, TreeNodeRecursion, TreeNodeRefContainer,
 };
@@ -43,61 +44,61 @@ impl TreeNode for Expr {
         f: F,
     ) -> Result<TreeNodeRecursion> {
         match self {
-            Expr::Alias(Alias { expr, .. })
-            | Expr::Unnest(Unnest { expr })
-            | Expr::Not(expr)
-            | Expr::IsNotNull(expr)
-            | Expr::IsTrue(expr)
-            | Expr::IsFalse(expr)
-            | Expr::IsUnknown(expr)
-            | Expr::IsNotTrue(expr)
-            | Expr::IsNotFalse(expr)
-            | Expr::IsNotUnknown(expr)
-            | Expr::IsNull(expr)
-            | Expr::Negative(expr)
-            | Expr::Cast(Cast { expr, .. })
-            | Expr::TryCast(TryCast { expr, .. })
-            | Expr::InSubquery(InSubquery { expr, .. }) => expr.apply_elements(f),
-            Expr::GroupingSet(GroupingSet::Rollup(exprs))
-            | Expr::GroupingSet(GroupingSet::Cube(exprs)) => exprs.apply_elements(f),
-            Expr::ScalarFunction(ScalarFunction { args, .. }) => {
+            Expr::Alias(Alias { expr, .. }, _)
+            | Expr::Unnest(Unnest { expr }, _)
+            | Expr::Not(expr, _)
+            | Expr::IsNotNull(expr, _)
+            | Expr::IsTrue(expr, _)
+            | Expr::IsFalse(expr, _)
+            | Expr::IsUnknown(expr, _)
+            | Expr::IsNotTrue(expr, _)
+            | Expr::IsNotFalse(expr, _)
+            | Expr::IsNotUnknown(expr, _)
+            | Expr::IsNull(expr, _)
+            | Expr::Negative(expr, _)
+            | Expr::Cast(Cast { expr, .. }, _)
+            | Expr::TryCast(TryCast { expr, .. }, _)
+            | Expr::InSubquery(InSubquery { expr, .. }, _) => expr.apply_elements(f),
+            Expr::GroupingSet(GroupingSet::Rollup(exprs), _)
+            | Expr::GroupingSet(GroupingSet::Cube(exprs), _) => exprs.apply_elements(f),
+            Expr::ScalarFunction(ScalarFunction { args, .. }, _) => {
                 args.apply_elements(f)
             }
-            Expr::GroupingSet(GroupingSet::GroupingSets(lists_of_exprs)) => {
+            Expr::GroupingSet(GroupingSet::GroupingSets(lists_of_exprs), _) => {
                 lists_of_exprs.apply_elements(f)
             }
-            Expr::Column(_)
+            Expr::Column(_, _)
             // Treat OuterReferenceColumn as a leaf expression
-            | Expr::OuterReferenceColumn(_, _)
-            | Expr::ScalarVariable(_, _)
-            | Expr::Literal(_)
+            | Expr::OuterReferenceColumn(_, _, _)
+            | Expr::ScalarVariable(_, _, _)
+            | Expr::Literal(_, _)
             | Expr::Exists { .. }
-            | Expr::ScalarSubquery(_)
+            | Expr::ScalarSubquery(_, _)
             | Expr::Wildcard { .. }
-            | Expr::Placeholder(_) => Ok(TreeNodeRecursion::Continue),
-            Expr::BinaryExpr(BinaryExpr { left, right, .. }) => {
+            | Expr::Placeholder(_, _) => Ok(TreeNodeRecursion::Continue),
+            Expr::BinaryExpr(BinaryExpr { left, right, .. }, _) => {
                 (left, right).apply_ref_elements(f)
             }
-            Expr::Like(Like { expr, pattern, .. })
-            | Expr::SimilarTo(Like { expr, pattern, .. }) => {
+            Expr::Like(Like { expr, pattern, .. }, _)
+            | Expr::SimilarTo(Like { expr, pattern, .. }, _) => {
                 (expr, pattern).apply_ref_elements(f)
             }
             Expr::Between(Between {
                               expr, low, high, ..
-                          }) => (expr, low, high).apply_ref_elements(f),
-            Expr::Case(Case { expr, when_then_expr, else_expr }) =>
+                          }, _) => (expr, low, high).apply_ref_elements(f),
+            Expr::Case(Case { expr, when_then_expr, else_expr }, _) =>
                 (expr, when_then_expr, else_expr).apply_ref_elements(f),
-            Expr::AggregateFunction(AggregateFunction { args, filter, order_by, .. }) =>
+            Expr::AggregateFunction(AggregateFunction { args, filter, order_by, .. }, _) =>
                 (args, filter, order_by).apply_ref_elements(f),
             Expr::WindowFunction(WindowFunction {
                                      args,
                                      partition_by,
                                      order_by,
                                      ..
-                                 }) => {
+                                 }, _) => {
                 (args, partition_by, order_by).apply_ref_elements(f)
             }
-            Expr::InList(InList { expr, list, .. }) => {
+            Expr::InList(InList { expr, list, .. }, _) => {
                 (expr, list).apply_ref_elements(f)
             }
         }
@@ -112,45 +113,54 @@ impl TreeNode for Expr {
         mut f: F,
     ) -> Result<Transformed<Self>> {
         Ok(match self {
-            Expr::Column(_)
+            Expr::Column(_, _)
             | Expr::Wildcard { .. }
-            | Expr::Placeholder(Placeholder { .. })
-            | Expr::OuterReferenceColumn(_, _)
+            | Expr::Placeholder(Placeholder { .. }, _)
+            | Expr::OuterReferenceColumn(_, _, _)
             | Expr::Exists { .. }
-            | Expr::ScalarSubquery(_)
-            | Expr::ScalarVariable(_, _)
-            | Expr::Literal(_) => Transformed::no(self),
-            Expr::Unnest(Unnest { expr, .. }) => expr
+            | Expr::ScalarSubquery(_, _)
+            | Expr::ScalarVariable(_, _, _)
+            | Expr::Literal(_, _) => Transformed::no(self),
+            Expr::Unnest(Unnest { expr, .. }, _) => expr
                 .map_elements(f)?
-                .update_data(|expr| Expr::Unnest(Unnest { expr })),
-            Expr::Alias(Alias {
-                expr,
-                relation,
-                name,
-            }) => f(*expr)?.update_data(|e| e.alias_qualified(relation, name)),
-            Expr::InSubquery(InSubquery {
-                expr,
-                subquery,
-                negated,
-            }) => expr.map_elements(f)?.update_data(|be| {
-                Expr::InSubquery(InSubquery::new(be, subquery, negated))
+                .update_data(|expr| Expr::unnest(Unnest { expr })),
+            Expr::Alias(
+                Alias {
+                    expr,
+                    relation,
+                    name,
+                },
+                _,
+            ) => f(*expr)?.update_data(|e| e.alias_qualified(relation, name)),
+            Expr::InSubquery(
+                InSubquery {
+                    expr,
+                    subquery,
+                    negated,
+                },
+                _,
+            ) => expr.map_elements(f)?.update_data(|be| {
+                Expr::in_subquery(InSubquery::new(be, subquery, negated))
             }),
-            Expr::BinaryExpr(BinaryExpr { left, op, right }) => (left, right)
+            Expr::BinaryExpr(BinaryExpr { left, op, right }, _) => (left, right)
                 .map_elements(f)?
                 .update_data(|(new_left, new_right)| {
-                    Expr::BinaryExpr(BinaryExpr::new(new_left, op, new_right))
+                    Expr::binary_expr(BinaryExpr::new(new_left, op, new_right))
                 }),
-            Expr::Like(Like {
-                negated,
-                expr,
-                pattern,
-                escape_char,
-                case_insensitive,
-            }) => {
+            Expr::Like(
+                Like {
+                    negated,
+                    expr,
+                    pattern,
+                    escape_char,
+                    case_insensitive,
+                },
+                _,
+            ) => {
                 (expr, pattern)
                     .map_elements(f)?
                     .update_data(|(new_expr, new_pattern)| {
-                        Expr::Like(Like::new(
+                        Expr::_like(Like::new(
                             negated,
                             new_expr,
                             new_pattern,
@@ -159,17 +169,20 @@ impl TreeNode for Expr {
                         ))
                     })
             }
-            Expr::SimilarTo(Like {
-                negated,
-                expr,
-                pattern,
-                escape_char,
-                case_insensitive,
-            }) => {
+            Expr::SimilarTo(
+                Like {
+                    negated,
+                    expr,
+                    pattern,
+                    escape_char,
+                    case_insensitive,
+                },
+                _,
+            ) => {
                 (expr, pattern)
                     .map_elements(f)?
                     .update_data(|(new_expr, new_pattern)| {
-                        Expr::SimilarTo(Like::new(
+                        Expr::similar_to(Like::new(
                             negated,
                             new_expr,
                             new_pattern,
@@ -178,60 +191,77 @@ impl TreeNode for Expr {
                         ))
                     })
             }
-            Expr::Not(expr) => expr.map_elements(f)?.update_data(Expr::Not),
-            Expr::IsNotNull(expr) => expr.map_elements(f)?.update_data(Expr::IsNotNull),
-            Expr::IsNull(expr) => expr.map_elements(f)?.update_data(Expr::IsNull),
-            Expr::IsTrue(expr) => expr.map_elements(f)?.update_data(Expr::IsTrue),
-            Expr::IsFalse(expr) => expr.map_elements(f)?.update_data(Expr::IsFalse),
-            Expr::IsUnknown(expr) => expr.map_elements(f)?.update_data(Expr::IsUnknown),
-            Expr::IsNotTrue(expr) => expr.map_elements(f)?.update_data(Expr::IsNotTrue),
-            Expr::IsNotFalse(expr) => expr.map_elements(f)?.update_data(Expr::IsNotFalse),
-            Expr::IsNotUnknown(expr) => {
-                expr.map_elements(f)?.update_data(Expr::IsNotUnknown)
+            Expr::Not(expr, _) => expr.map_elements(f)?.update_data(Expr::_not),
+            Expr::IsNotNull(expr, _) => {
+                expr.map_elements(f)?.update_data(Expr::_is_not_null)
             }
-            Expr::Negative(expr) => expr.map_elements(f)?.update_data(Expr::Negative),
-            Expr::Between(Between {
-                expr,
-                negated,
-                low,
-                high,
-            }) => (expr, low, high).map_elements(f)?.update_data(
+            Expr::IsNull(expr, _) => expr.map_elements(f)?.update_data(Expr::_is_null),
+            Expr::IsTrue(expr, _) => expr.map_elements(f)?.update_data(Expr::_is_true),
+            Expr::IsFalse(expr, _) => expr.map_elements(f)?.update_data(Expr::_is_false),
+            Expr::IsUnknown(expr, _) => {
+                expr.map_elements(f)?.update_data(Expr::_is_unknown)
+            }
+            Expr::IsNotTrue(expr, _) => {
+                expr.map_elements(f)?.update_data(Expr::_is_not_true)
+            }
+            Expr::IsNotFalse(expr, _) => {
+                expr.map_elements(f)?.update_data(Expr::_is_not_false)
+            }
+            Expr::IsNotUnknown(expr, _) => {
+                expr.map_elements(f)?.update_data(Expr::_is_not_unknown)
+            }
+            Expr::Negative(expr, _) => expr.map_elements(f)?.update_data(Expr::negative),
+            Expr::Between(
+                Between {
+                    expr,
+                    negated,
+                    low,
+                    high,
+                },
+                _,
+            ) => (expr, low, high).map_elements(f)?.update_data(
                 |(new_expr, new_low, new_high)| {
-                    Expr::Between(Between::new(new_expr, negated, new_low, new_high))
+                    Expr::_between(Between::new(new_expr, negated, new_low, new_high))
                 },
             ),
-            Expr::Case(Case {
-                expr,
-                when_then_expr,
-                else_expr,
-            }) => (expr, when_then_expr, else_expr)
+            Expr::Case(
+                Case {
+                    expr,
+                    when_then_expr,
+                    else_expr,
+                },
+                _,
+            ) => (expr, when_then_expr, else_expr)
                 .map_elements(f)?
                 .update_data(|(new_expr, new_when_then_expr, new_else_expr)| {
-                    Expr::Case(Case::new(new_expr, new_when_then_expr, new_else_expr))
+                    Expr::case(Case::new(new_expr, new_when_then_expr, new_else_expr))
                 }),
-            Expr::Cast(Cast { expr, data_type }) => expr
+            Expr::Cast(Cast { expr, data_type }, _) => expr
                 .map_elements(f)?
-                .update_data(|be| Expr::Cast(Cast::new(be, data_type))),
-            Expr::TryCast(TryCast { expr, data_type }) => expr
+                .update_data(|be| Expr::cast(Cast::new(be, data_type))),
+            Expr::TryCast(TryCast { expr, data_type }, _) => expr
                 .map_elements(f)?
-                .update_data(|be| Expr::TryCast(TryCast::new(be, data_type))),
-            Expr::ScalarFunction(ScalarFunction { func, args }) => {
+                .update_data(|be| Expr::try_cast(TryCast::new(be, data_type))),
+            Expr::ScalarFunction(ScalarFunction { func, args }, _) => {
                 args.map_elements(f)?.map_data(|new_args| {
-                    Ok(Expr::ScalarFunction(ScalarFunction::new_udf(
+                    Ok(Expr::scalar_function(ScalarFunction::new_udf(
                         func, new_args,
                     )))
                 })?
             }
-            Expr::WindowFunction(WindowFunction {
-                args,
-                fun,
-                partition_by,
-                order_by,
-                window_frame,
-                null_treatment,
-            }) => (args, partition_by, order_by).map_elements(f)?.update_data(
+            Expr::WindowFunction(
+                WindowFunction {
+                    args,
+                    fun,
+                    partition_by,
+                    order_by,
+                    window_frame,
+                    null_treatment,
+                },
+                _,
+            ) => (args, partition_by, order_by).map_elements(f)?.update_data(
                 |(new_args, new_partition_by, new_order_by)| {
-                    Expr::WindowFunction(WindowFunction::new(fun, new_args))
+                    Expr::window_function(WindowFunction::new(fun, new_args))
                         .partition_by(new_partition_by)
                         .order_by(new_order_by)
                         .window_frame(window_frame)
@@ -240,16 +270,19 @@ impl TreeNode for Expr {
                         .unwrap()
                 },
             ),
-            Expr::AggregateFunction(AggregateFunction {
-                args,
-                func,
-                distinct,
-                filter,
-                order_by,
-                null_treatment,
-            }) => (args, filter, order_by).map_elements(f)?.map_data(
+            Expr::AggregateFunction(
+                AggregateFunction {
+                    args,
+                    func,
+                    distinct,
+                    filter,
+                    order_by,
+                    null_treatment,
+                },
+                _,
+            ) => (args, filter, order_by).map_elements(f)?.map_data(
                 |(new_args, new_filter, new_order_by)| {
-                    Ok(Expr::AggregateFunction(AggregateFunction::new_udf(
+                    Ok(Expr::aggregate_function(AggregateFunction::new_udf(
                         func,
                         new_args,
                         distinct,
@@ -259,28 +292,69 @@ impl TreeNode for Expr {
                     )))
                 },
             )?,
-            Expr::GroupingSet(grouping_set) => match grouping_set {
-                GroupingSet::Rollup(exprs) => exprs
-                    .map_elements(f)?
-                    .update_data(|ve| Expr::GroupingSet(GroupingSet::Rollup(ve))),
-                GroupingSet::Cube(exprs) => exprs
-                    .map_elements(f)?
-                    .update_data(|ve| Expr::GroupingSet(GroupingSet::Cube(ve))),
+            Expr::GroupingSet(grouping_set, _) => match grouping_set {
+                GroupingSet::Rollup(exprs) => {
+                    exprs.map_elements(f)?.update_data(GroupingSet::Rollup)
+                }
+                GroupingSet::Cube(exprs) => {
+                    exprs.map_elements(f)?.update_data(GroupingSet::Cube)
+                }
                 GroupingSet::GroupingSets(lists_of_exprs) => lists_of_exprs
                     .map_elements(f)?
-                    .update_data(|new_lists_of_exprs| {
-                        Expr::GroupingSet(GroupingSet::GroupingSets(new_lists_of_exprs))
-                    }),
-            },
-            Expr::InList(InList {
-                expr,
-                list,
-                negated,
-            }) => (expr, list)
+                    .update_data(GroupingSet::GroupingSets),
+            }
+            .update_data(Expr::grouping_set),
+            Expr::InList(
+                InList {
+                    expr,
+                    list,
+                    negated,
+                },
+                _,
+            ) => (expr, list)
                 .map_elements(f)?
                 .update_data(|(new_expr, new_list)| {
-                    Expr::InList(InList::new(new_expr, new_list, negated))
+                    Expr::_in_list(InList::new(new_expr, new_list, negated))
                 }),
         })
+    }
+}
+impl Expr {
+    pub fn stats(&self) -> LogicalPlanStats {
+        match self {
+            Expr::Alias(_, stats) => *stats,
+            Expr::Column(_, stats) => *stats,
+            Expr::ScalarVariable(_, _, stats) => *stats,
+            Expr::Literal(_, stats) => *stats,
+            Expr::BinaryExpr(_, stats) => *stats,
+            Expr::Like(_, stats) => *stats,
+            Expr::SimilarTo(_, stats) => *stats,
+            Expr::Not(_, stats) => *stats,
+            Expr::IsNotNull(_, stats) => *stats,
+            Expr::IsNull(_, stats) => *stats,
+            Expr::IsTrue(_, stats) => *stats,
+            Expr::IsFalse(_, stats) => *stats,
+            Expr::IsUnknown(_, stats) => *stats,
+            Expr::IsNotTrue(_, stats) => *stats,
+            Expr::IsNotFalse(_, stats) => *stats,
+            Expr::IsNotUnknown(_, stats) => *stats,
+            Expr::Negative(_, stats) => *stats,
+            Expr::Between(_, stats) => *stats,
+            Expr::Case(_, stats) => *stats,
+            Expr::Cast(_, stats) => *stats,
+            Expr::TryCast(_, stats) => *stats,
+            Expr::ScalarFunction(_, stats) => *stats,
+            Expr::AggregateFunction(_, stats) => *stats,
+            Expr::WindowFunction(_, stats) => *stats,
+            Expr::InList(_, stats) => *stats,
+            Expr::Exists(_, stats) => *stats,
+            Expr::InSubquery(_, stats) => *stats,
+            Expr::ScalarSubquery(_, stats) => *stats,
+            Expr::Wildcard(_, stats) => *stats,
+            Expr::GroupingSet(_, stats) => *stats,
+            Expr::Placeholder(_, stats) => *stats,
+            Expr::OuterReferenceColumn(_, _, stats) => *stats,
+            Expr::Unnest(_, stats) => *stats,
+        }
     }
 }

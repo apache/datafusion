@@ -30,7 +30,7 @@ use std::{
 /// Create a new user defined plan node, for testing
 pub fn new(input: LogicalPlan) -> LogicalPlan {
     let node = Arc::new(TestUserDefinedPlanNode { input });
-    LogicalPlan::Extension(Extension { node })
+    LogicalPlan::extension(Extension { node })
 }
 
 #[derive(PartialEq, Eq, PartialOrd, Hash)]

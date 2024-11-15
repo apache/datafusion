@@ -61,7 +61,7 @@ pub fn exprlist_to_columns(expr: &[Expr], accum: &mut HashSet<Column>) -> Result
 /// Count the number of distinct exprs in a list of group by expressions. If the
 /// first element is a `GroupingSet` expression then it must be the only expr.
 pub fn grouping_set_expr_count(group_expr: &[Expr]) -> Result<usize> {
-    if let Some(Expr::GroupingSet(grouping_set)) = group_expr.first() {
+    if let Some(Expr::GroupingSet(grouping_set, _)) = group_expr.first() {
         if group_expr.len() > 1 {
             return plan_err!(
                 "Invalid group by expressions, GroupingSet must be the only expression"
@@ -201,7 +201,7 @@ fn cross_join_grouping_sets<T: Clone>(
 pub fn enumerate_grouping_sets(group_expr: Vec<Expr>) -> Result<Vec<Expr>> {
     let has_grouping_set = group_expr
         .iter()
-        .any(|expr| matches!(expr, Expr::GroupingSet(_)));
+        .any(|expr| matches!(expr, Expr::GroupingSet(_, _)));
     if !has_grouping_set || group_expr.len() == 1 {
         return Ok(group_expr);
     }
@@ -210,17 +210,17 @@ pub fn enumerate_grouping_sets(group_expr: Vec<Expr>) -> Result<Vec<Expr>> {
         .iter()
         .map(|expr| {
             let exprs = match expr {
-                Expr::GroupingSet(GroupingSet::GroupingSets(grouping_sets)) => {
+                Expr::GroupingSet(GroupingSet::GroupingSets(grouping_sets), _) => {
                     check_grouping_sets_size_limit(grouping_sets.len())?;
                     grouping_sets.iter().map(|e| e.iter().collect()).collect()
                 }
-                Expr::GroupingSet(GroupingSet::Cube(group_exprs)) => {
+                Expr::GroupingSet(GroupingSet::Cube(group_exprs), _) => {
                     let grouping_sets = powerset(group_exprs)
                         .map_err(|e| plan_datafusion_err!("{}", e))?;
                     check_grouping_sets_size_limit(grouping_sets.len())?;
                     grouping_sets
                 }
-                Expr::GroupingSet(GroupingSet::Rollup(group_exprs)) => {
+                Expr::GroupingSet(GroupingSet::Rollup(group_exprs), _) => {
                     let size = group_exprs.len();
                     let slice = group_exprs.as_slice();
                     check_grouping_sets_size_limit(size * (size + 1) / 2 + 1)?;
@@ -247,7 +247,7 @@ pub fn enumerate_grouping_sets(group_expr: Vec<Expr>) -> Result<Vec<Expr>> {
         })
         .unwrap_or_default();
 
-    Ok(vec![Expr::GroupingSet(GroupingSet::GroupingSets(
+    Ok(vec![Expr::grouping_set(GroupingSet::GroupingSets(
         grouping_sets,
     ))])
 }
@@ -255,7 +255,7 @@ pub fn enumerate_grouping_sets(group_expr: Vec<Expr>) -> Result<Vec<Expr>> {
 /// Find all distinct exprs in a list of group by expressions. If the
 /// first element is a `GroupingSet` expression then it must be the only expr.
 pub fn grouping_set_to_exprlist(group_expr: &[Expr]) -> Result<Vec<&Expr>> {
-    if let Some(Expr::GroupingSet(grouping_set)) = group_expr.first() {
+    if let Some(Expr::GroupingSet(grouping_set, _)) = group_expr.first() {
         if group_expr.len() > 1 {
             return plan_err!(
                 "Invalid group by expressions, GroupingSet must be the only expression"
@@ -276,29 +276,29 @@ pub fn grouping_set_to_exprlist(group_expr: &[Expr]) -> Result<Vec<&Expr>> {
 pub fn expr_to_columns(expr: &Expr, accum: &mut HashSet<Column>) -> Result<()> {
     expr.apply(|expr| {
         match expr {
-            Expr::Column(qc) => {
+            Expr::Column(qc, _) => {
                 accum.insert(qc.clone());
             }
             // Use explicit pattern match instead of a default
             // implementation, so that in the future if someone adds
             // new Expr types, they will check here as well
-            Expr::Unnest(_)
-            | Expr::ScalarVariable(_, _)
-            | Expr::Alias(_)
-            | Expr::Literal(_)
+            Expr::Unnest(_, _)
+            | Expr::ScalarVariable(_, _, _)
+            | Expr::Alias(_, _)
+            | Expr::Literal(_, _)
             | Expr::BinaryExpr { .. }
             | Expr::Like { .. }
             | Expr::SimilarTo { .. }
-            | Expr::Not(_)
-            | Expr::IsNotNull(_)
-            | Expr::IsNull(_)
-            | Expr::IsTrue(_)
-            | Expr::IsFalse(_)
-            | Expr::IsUnknown(_)
-            | Expr::IsNotTrue(_)
-            | Expr::IsNotFalse(_)
-            | Expr::IsNotUnknown(_)
-            | Expr::Negative(_)
+            | Expr::Not(_, _)
+            | Expr::IsNotNull(_, _)
+            | Expr::IsNull(_, _)
+            | Expr::IsTrue(_, _)
+            | Expr::IsFalse(_, _)
+            | Expr::IsUnknown(_, _)
+            | Expr::IsNotTrue(_, _)
+            | Expr::IsNotFalse(_, _)
+            | Expr::IsNotUnknown(_, _)
+            | Expr::Negative(_, _)
             | Expr::Between { .. }
             | Expr::Case { .. }
             | Expr::Cast { .. }
@@ -306,13 +306,13 @@ pub fn expr_to_columns(expr: &Expr, accum: &mut HashSet<Column>) -> Result<()> {
             | Expr::ScalarFunction(..)
             | Expr::WindowFunction { .. }
             | Expr::AggregateFunction { .. }
-            | Expr::GroupingSet(_)
+            | Expr::GroupingSet(_, _)
             | Expr::InList { .. }
             | Expr::Exists { .. }
-            | Expr::InSubquery(_)
-            | Expr::ScalarSubquery(_)
+            | Expr::InSubquery(_, _)
+            | Expr::ScalarSubquery(_, _)
             | Expr::Wildcard { .. }
-            | Expr::Placeholder(_)
+            | Expr::Placeholder(_, _)
             | Expr::OuterReferenceColumn { .. } => {}
         }
         Ok(TreeNodeRecursion::Continue)
@@ -370,7 +370,7 @@ fn get_exprs_except_skipped(
             .iter()
             .filter_map(|c| {
                 if !columns_to_skip.contains(c) {
-                    Some(Expr::Column(c.clone()))
+                    Some(Expr::column(c.clone()))
                 } else {
                     None
                 }
@@ -582,7 +582,7 @@ pub fn group_window_expr_by_sort_keys(
 ) -> Result<Vec<(WindowSortKey, Vec<Expr>)>> {
     let mut result = vec![];
     window_expr.into_iter().try_for_each(|expr| match &expr {
-        Expr::WindowFunction( WindowFunction{ partition_by, order_by, .. }) => {
+        Expr::WindowFunction( WindowFunction{ partition_by, order_by, .. }, _) => {
             let sort_key = generate_sort_key(partition_by, order_by)?;
             if let Some((_, values)) = result.iter_mut().find(
                 |group: &&mut (WindowSortKey, Vec<Expr>)| matches!(group, (key, _) if *key == sort_key),
@@ -703,7 +703,7 @@ pub fn exprlist_to_fields<'a>(
     let result = exprs
         .into_iter()
         .map(|e| match e {
-            Expr::Wildcard(Wildcard { qualifier, options }) => match qualifier {
+            Expr::Wildcard(Wildcard { qualifier, options }, _) => match qualifier {
                 None => {
                     let excluded: Vec<String> = get_excluded_columns(
                         options.exclude.as_ref(),
@@ -769,18 +769,18 @@ pub fn exprlist_to_fields<'a>(
 /// If we expand a wildcard expression basing the intermediate plan, we could get some duplicate fields.
 pub fn find_base_plan(input: &LogicalPlan) -> &LogicalPlan {
     match input {
-        LogicalPlan::Window(window) => find_base_plan(&window.input),
-        LogicalPlan::Aggregate(agg) => find_base_plan(&agg.input),
+        LogicalPlan::Window(window, _) => find_base_plan(&window.input),
+        LogicalPlan::Aggregate(agg, _) => find_base_plan(&agg.input),
         // [SqlToRel::try_process_unnest] will convert Expr(Unnest(Expr)) to Projection/Unnest/Projection
         // We should expand the wildcard expression based on the input plan of the inner Projection.
-        LogicalPlan::Unnest(unnest) => {
-            if let LogicalPlan::Projection(projection) = unnest.input.deref() {
+        LogicalPlan::Unnest(unnest, _) => {
+            if let LogicalPlan::Projection(projection, _) = unnest.input.deref() {
                 find_base_plan(&projection.input)
             } else {
                 input
             }
         }
-        LogicalPlan::Filter(filter) => {
+        LogicalPlan::Filter(filter, _) => {
             if filter.having {
                 // If a filter is used for a having clause, its input plan is an aggregation.
                 // We should expand the wildcard expression based on the aggregation's input plan.
@@ -802,10 +802,13 @@ pub fn exprlist_len(
     exprs
         .iter()
         .map(|e| match e {
-            Expr::Wildcard(Wildcard {
-                qualifier: None,
-                options,
-            }) => {
+            Expr::Wildcard(
+                Wildcard {
+                    qualifier: None,
+                    options,
+                },
+                _,
+            ) => {
                 let excluded = get_excluded_columns(
                     options.exclude.as_ref(),
                     options.except.as_ref(),
@@ -819,10 +822,13 @@ pub fn exprlist_len(
                         .len(),
                 )
             }
-            Expr::Wildcard(Wildcard {
-                qualifier: Some(qualifier),
-                options,
-            }) => {
+            Expr::Wildcard(
+                Wildcard {
+                    qualifier: Some(qualifier),
+                    options,
+                },
+                _,
+            ) => {
                 let related_wildcard_schema = wildcard_schema.as_ref().map_or_else(
                     || Ok(Arc::clone(schema)),
                     |schema| {
@@ -886,7 +892,7 @@ pub fn columnize_expr(e: Expr, input: &LogicalPlan) -> Result<Expr> {
     let exprs_map: HashMap<&Expr, Column> = output_exprs.into_iter().collect();
     e.transform_down(|node: Expr| match exprs_map.get(&node) {
         Some(column) => Ok(Transformed::new(
-            Expr::Column(column.clone()),
+            Expr::column(column.clone()),
             true,
             TreeNodeRecursion::Jump,
         )),
@@ -901,14 +907,14 @@ pub fn find_column_exprs(exprs: &[Expr]) -> Vec<Expr> {
     exprs
         .iter()
         .flat_map(find_columns_referenced_by_expr)
-        .map(Expr::Column)
+        .map(Expr::column)
         .collect()
 }
 
 pub(crate) fn find_columns_referenced_by_expr(e: &Expr) -> Vec<Column> {
     let mut exprs = vec![];
     e.apply(|expr| {
-        if let Expr::Column(c) = expr {
+        if let Expr::Column(c, _) = expr {
             exprs.push(c.clone())
         }
         Ok(TreeNodeRecursion::Continue)
@@ -921,11 +927,11 @@ pub(crate) fn find_columns_referenced_by_expr(e: &Expr) -> Vec<Column> {
 /// Convert any `Expr` to an `Expr::Column`.
 pub fn expr_as_column_expr(expr: &Expr, plan: &LogicalPlan) -> Result<Expr> {
     match expr {
-        Expr::Column(col) => {
+        Expr::Column(col, _) => {
             let (qualifier, field) = plan.schema().qualified_field_from_column(col)?;
             Ok(Expr::from(Column::from((qualifier, field))))
         }
-        _ => Ok(Expr::Column(Column::from_name(
+        _ => Ok(Expr::column(Column::from_name(
             expr.schema_name().to_string(),
         ))),
     }
@@ -940,12 +946,12 @@ pub(crate) fn find_column_indexes_referenced_by_expr(
     let mut indexes = vec![];
     e.apply(|expr| {
         match expr {
-            Expr::Column(qc) => {
+            Expr::Column(qc, _) => {
                 if let Ok(idx) = schema.index_of_column(qc) {
                     indexes.push(idx);
                 }
             }
-            Expr::Literal(_) => {
+            Expr::Literal(_, _) => {
                 indexes.push(usize::MAX);
             }
             _ => {}
@@ -1096,15 +1102,18 @@ pub fn split_conjunction(expr: &Expr) -> Vec<&Expr> {
 
 fn split_conjunction_impl<'a>(expr: &'a Expr, mut exprs: Vec<&'a Expr>) -> Vec<&'a Expr> {
     match expr {
-        Expr::BinaryExpr(BinaryExpr {
-            right,
-            op: Operator::And,
-            left,
-        }) => {
+        Expr::BinaryExpr(
+            BinaryExpr {
+                right,
+                op: Operator::And,
+                left,
+            },
+            _,
+        ) => {
             let exprs = split_conjunction_impl(left, exprs);
             split_conjunction_impl(right, exprs)
         }
-        Expr::Alias(Alias { expr, .. }) => split_conjunction_impl(expr, exprs),
+        Expr::Alias(Alias { expr, .. }, _) => split_conjunction_impl(expr, exprs),
         other => {
             exprs.push(other);
             exprs
@@ -1120,15 +1129,18 @@ pub fn iter_conjunction(expr: &Expr) -> impl Iterator<Item = &Expr> {
     std::iter::from_fn(move || {
         while let Some(expr) = stack.pop() {
             match expr {
-                Expr::BinaryExpr(BinaryExpr {
-                    right,
-                    op: Operator::And,
-                    left,
-                }) => {
+                Expr::BinaryExpr(
+                    BinaryExpr {
+                        right,
+                        op: Operator::And,
+                        left,
+                    },
+                    _,
+                ) => {
                     stack.push(right);
                     stack.push(left);
                 }
-                Expr::Alias(Alias { expr, .. }) => stack.push(expr),
+                Expr::Alias(Alias { expr, .. }, _) => stack.push(expr),
                 other => return Some(other),
             }
         }
@@ -1144,15 +1156,18 @@ pub fn iter_conjunction_owned(expr: Expr) -> impl Iterator<Item = Expr> {
     std::iter::from_fn(move || {
         while let Some(expr) = stack.pop() {
             match expr {
-                Expr::BinaryExpr(BinaryExpr {
-                    right,
-                    op: Operator::And,
-                    left,
-                }) => {
+                Expr::BinaryExpr(
+                    BinaryExpr {
+                        right,
+                        op: Operator::And,
+                        left,
+                    },
+                    _,
+                ) => {
                     stack.push(*right);
                     stack.push(*left);
                 }
-                Expr::Alias(Alias { expr, .. }) => stack.push(*expr),
+                Expr::Alias(Alias { expr, .. }, _) => stack.push(*expr),
                 other => return Some(other),
             }
         }
@@ -1217,11 +1232,11 @@ fn split_binary_owned_impl(
     mut exprs: Vec<Expr>,
 ) -> Vec<Expr> {
     match expr {
-        Expr::BinaryExpr(BinaryExpr { right, op, left }) if op == operator => {
+        Expr::BinaryExpr(BinaryExpr { right, op, left }, _) if op == operator => {
             let exprs = split_binary_owned_impl(*left, operator, exprs);
             split_binary_owned_impl(*right, operator, exprs)
         }
-        Expr::Alias(Alias { expr, .. }) => {
+        Expr::Alias(Alias { expr, .. }, _) => {
             split_binary_owned_impl(*expr, operator, exprs)
         }
         other => {
@@ -1244,11 +1259,11 @@ fn split_binary_impl<'a>(
     mut exprs: Vec<&'a Expr>,
 ) -> Vec<&'a Expr> {
     match expr {
-        Expr::BinaryExpr(BinaryExpr { right, op, left }) if *op == operator => {
+        Expr::BinaryExpr(BinaryExpr { right, op, left }, _) if *op == operator => {
             let exprs = split_binary_impl(left, operator, exprs);
             split_binary_impl(right, operator, exprs)
         }
-        Expr::Alias(Alias { expr, .. }) => split_binary_impl(expr, operator, exprs),
+        Expr::Alias(Alias { expr, .. }, _) => split_binary_impl(expr, operator, exprs),
         other => {
             exprs.push(other);
             exprs
@@ -1331,7 +1346,7 @@ pub fn add_filter(plan: LogicalPlan, predicates: &[&Expr]) -> Result<LogicalPlan
             and(acc, (*predicate).to_owned())
         });
 
-    Ok(LogicalPlan::Filter(Filter::try_new(
+    Ok(LogicalPlan::filter(Filter::try_new(
         predicate,
         Arc::new(plan),
     )?))
@@ -1353,7 +1368,7 @@ pub fn find_join_exprs(exprs: Vec<&Expr>) -> Result<(Vec<Expr>, Vec<Expr>)> {
     for filter in exprs.into_iter() {
         // If the expression contains correlated predicates, add it to join filters
         if filter.contains_outer() {
-            if !matches!(filter, Expr::BinaryExpr(BinaryExpr{ left, op: Operator::Eq, right }) if left.eq(right))
+            if !matches!(filter, Expr::BinaryExpr(BinaryExpr{ left, op: Operator::Eq, right }, _) if left.eq(right))
             {
                 joins.push(strip_outer_reference((*filter).clone()));
             }
@@ -1422,19 +1437,19 @@ mod tests {
 
     #[test]
     fn test_group_window_expr_by_sort_keys_empty_window() -> Result<()> {
-        let max1 = Expr::WindowFunction(WindowFunction::new(
+        let max1 = Expr::window_function(WindowFunction::new(
             WindowFunctionDefinition::AggregateUDF(max_udaf()),
             vec![col("name")],
         ));
-        let max2 = Expr::WindowFunction(WindowFunction::new(
+        let max2 = Expr::window_function(WindowFunction::new(
             WindowFunctionDefinition::AggregateUDF(max_udaf()),
             vec![col("name")],
         ));
-        let min3 = Expr::WindowFunction(WindowFunction::new(
+        let min3 = Expr::window_function(WindowFunction::new(
             WindowFunctionDefinition::AggregateUDF(min_udaf()),
             vec![col("name")],
         ));
-        let sum4 = Expr::WindowFunction(WindowFunction::new(
+        let sum4 = Expr::window_function(WindowFunction::new(
             WindowFunctionDefinition::AggregateUDF(sum_udaf()),
             vec![col("age")],
         ));
@@ -1452,25 +1467,25 @@ mod tests {
         let age_asc = Sort::new(col("age"), true, true);
         let name_desc = Sort::new(col("name"), false, true);
         let created_at_desc = Sort::new(col("created_at"), false, true);
-        let max1 = Expr::WindowFunction(WindowFunction::new(
+        let max1 = Expr::window_function(WindowFunction::new(
             WindowFunctionDefinition::AggregateUDF(max_udaf()),
             vec![col("name")],
         ))
         .order_by(vec![age_asc.clone(), name_desc.clone()])
         .build()
         .unwrap();
-        let max2 = Expr::WindowFunction(WindowFunction::new(
+        let max2 = Expr::window_function(WindowFunction::new(
             WindowFunctionDefinition::AggregateUDF(max_udaf()),
             vec![col("name")],
         ));
-        let min3 = Expr::WindowFunction(WindowFunction::new(
+        let min3 = Expr::window_function(WindowFunction::new(
             WindowFunctionDefinition::AggregateUDF(min_udaf()),
             vec![col("name")],
         ))
         .order_by(vec![age_asc.clone(), name_desc.clone()])
         .build()
         .unwrap();
-        let sum4 = Expr::WindowFunction(WindowFunction::new(
+        let sum4 = Expr::window_function(WindowFunction::new(
             WindowFunctionDefinition::AggregateUDF(sum_udaf()),
             vec![col("age")],
         ))
@@ -1802,11 +1817,11 @@ mod tests {
     fn test_collect_expr() -> Result<()> {
         let mut accum: HashSet<Column> = HashSet::new();
         expr_to_columns(
-            &Expr::Cast(Cast::new(Box::new(col("a")), DataType::Float64)),
+            &Expr::cast(Cast::new(Box::new(col("a")), DataType::Float64)),
             &mut accum,
         )?;
         expr_to_columns(
-            &Expr::Cast(Cast::new(Box::new(col("a")), DataType::Float64)),
+            &Expr::cast(Cast::new(Box::new(col("a")), DataType::Float64)),
             &mut accum,
         )?;
         assert_eq!(1, accum.len());

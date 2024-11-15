@@ -495,7 +495,7 @@ mod tests {
     fn skip_failing_rule() {
         let opt = Optimizer::with_rules(vec![Arc::new(BadRule {})]);
         let config = OptimizerContext::new().with_skip_failing_rules(true);
-        let plan = LogicalPlan::EmptyRelation(EmptyRelation {
+        let plan = LogicalPlan::empty_relation(EmptyRelation {
             produce_one_row: false,
             schema: Arc::new(DFSchema::empty()),
         });
@@ -506,7 +506,7 @@ mod tests {
     fn no_skip_failing_rule() {
         let opt = Optimizer::with_rules(vec![Arc::new(BadRule {})]);
         let config = OptimizerContext::new().with_skip_failing_rules(false);
-        let plan = LogicalPlan::EmptyRelation(EmptyRelation {
+        let plan = LogicalPlan::empty_relation(EmptyRelation {
             produce_one_row: false,
             schema: Arc::new(DFSchema::empty()),
         });
@@ -522,7 +522,7 @@ mod tests {
     fn generate_different_schema() {
         let opt = Optimizer::with_rules(vec![Arc::new(GetTableScanRule {})]);
         let config = OptimizerContext::new().with_skip_failing_rules(false);
-        let plan = LogicalPlan::EmptyRelation(EmptyRelation {
+        let plan = LogicalPlan::empty_relation(EmptyRelation {
             produce_one_row: false,
             schema: Arc::new(DFSchema::empty()),
         });
@@ -555,7 +555,7 @@ mod tests {
     fn skip_generate_different_schema() {
         let opt = Optimizer::with_rules(vec![Arc::new(GetTableScanRule {})]);
         let config = OptimizerContext::new().with_skip_failing_rules(true);
-        let plan = LogicalPlan::EmptyRelation(EmptyRelation {
+        let plan = LogicalPlan::empty_relation(EmptyRelation {
             produce_one_row: false,
             schema: Arc::new(DFSchema::empty()),
         });
@@ -572,7 +572,7 @@ mod tests {
         let input = Arc::new(test_table_scan()?);
         let input_schema = Arc::clone(input.schema());
 
-        let plan = LogicalPlan::Projection(Projection::try_new_with_schema(
+        let plan = LogicalPlan::projection(Projection::try_new_with_schema(
             vec![col("a"), col("b"), col("c")],
             input,
             add_metadata_to_fields(input_schema.as_ref()),
@@ -739,7 +739,7 @@ mod tests {
             _config: &dyn OptimizerConfig,
         ) -> Result<Transformed<LogicalPlan>> {
             let projection = match plan {
-                LogicalPlan::Projection(p) if p.expr.len() >= 2 => p,
+                LogicalPlan::Projection(p, _) if p.expr.len() >= 2 => p,
                 _ => return Ok(Transformed::no(plan)),
             };
 
@@ -753,7 +753,7 @@ mod tests {
                 exprs.rotate_left(1);
             }
 
-            Ok(Transformed::yes(LogicalPlan::Projection(
+            Ok(Transformed::yes(LogicalPlan::projection(
                 Projection::try_new(exprs, Arc::clone(&projection.input))?,
             )))
         }

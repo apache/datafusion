@@ -54,6 +54,19 @@ use datafusion_common::tree_node::{
 };
 use datafusion_common::{internal_err, Result};
 
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Hash, Debug)]
+pub struct LogicalPlanStats {}
+
+impl LogicalPlanStats {
+    pub(crate) fn empty() -> Self {
+        Self {}
+    }
+
+    pub(crate) fn merge(self, _other: LogicalPlanStats) -> Self {
+        self
+    }
+}
+
 impl TreeNode for LogicalPlan {
     fn apply_children<'n, F: FnMut(&'n Self) -> Result<TreeNodeRecursion>>(
         &'n self,
@@ -75,75 +88,93 @@ impl TreeNode for LogicalPlan {
         f: F,
     ) -> Result<Transformed<Self>> {
         Ok(match self {
-            LogicalPlan::Projection(Projection {
-                expr,
-                input,
-                schema,
-            }) => input.map_elements(f)?.update_data(|input| {
-                LogicalPlan::Projection(Projection {
+            LogicalPlan::Projection(
+                Projection {
+                    expr,
+                    input,
+                    schema,
+                },
+                _,
+            ) => input.map_elements(f)?.update_data(|input| {
+                LogicalPlan::projection(Projection {
                     expr,
                     input,
                     schema,
                 })
             }),
-            LogicalPlan::Filter(Filter {
-                predicate,
-                input,
-                having,
-            }) => input.map_elements(f)?.update_data(|input| {
-                LogicalPlan::Filter(Filter {
+            LogicalPlan::Filter(
+                Filter {
+                    predicate,
+                    input,
+                    having,
+                },
+                _,
+            ) => input.map_elements(f)?.update_data(|input| {
+                LogicalPlan::filter(Filter {
                     predicate,
                     input,
                     having,
                 })
             }),
-            LogicalPlan::Repartition(Repartition {
-                input,
-                partitioning_scheme,
-            }) => input.map_elements(f)?.update_data(|input| {
-                LogicalPlan::Repartition(Repartition {
+            LogicalPlan::Repartition(
+                Repartition {
+                    input,
+                    partitioning_scheme,
+                },
+                _,
+            ) => input.map_elements(f)?.update_data(|input| {
+                LogicalPlan::repartition(Repartition {
                     input,
                     partitioning_scheme,
                 })
             }),
-            LogicalPlan::Window(Window {
-                input,
-                window_expr,
-                schema,
-            }) => input.map_elements(f)?.update_data(|input| {
-                LogicalPlan::Window(Window {
+            LogicalPlan::Window(
+                Window {
+                    input,
+                    window_expr,
+                    schema,
+                },
+                _,
+            ) => input.map_elements(f)?.update_data(|input| {
+                LogicalPlan::window(Window {
                     input,
                     window_expr,
                     schema,
                 })
             }),
-            LogicalPlan::Aggregate(Aggregate {
-                input,
-                group_expr,
-                aggr_expr,
-                schema,
-            }) => input.map_elements(f)?.update_data(|input| {
-                LogicalPlan::Aggregate(Aggregate {
+            LogicalPlan::Aggregate(
+                Aggregate {
+                    input,
+                    group_expr,
+                    aggr_expr,
+                    schema,
+                },
+                _,
+            ) => input.map_elements(f)?.update_data(|input| {
+                LogicalPlan::aggregate(Aggregate {
                     input,
                     group_expr,
                     aggr_expr,
                     schema,
                 })
             }),
-            LogicalPlan::Sort(Sort { expr, input, fetch }) => input
+            LogicalPlan::Sort(Sort { expr, input, fetch }, _) => input
                 .map_elements(f)?
-                .update_data(|input| LogicalPlan::Sort(Sort { expr, input, fetch })),
-            LogicalPlan::Join(Join {
-                left,
-                right,
-                on,
-                filter,
-                join_type,
-                join_constraint,
-                schema,
-                null_equals_null,
-            }) => (left, right).map_elements(f)?.update_data(|(left, right)| {
-                LogicalPlan::Join(Join {
+                .update_data(|input| LogicalPlan::sort(Sort { expr, input, fetch })),
+            LogicalPlan::Join(
+                Join {
+                    left,
+                    right,
+                    on,
+                    filter,
+                    join_type,
+                    join_constraint,
+                    schema,
+                    null_equals_null,
+                },
+                _,
+            ) => (left, right).map_elements(f)?.update_data(|(left, right)| {
+                LogicalPlan::join(Join {
                     left,
                     right,
                     on,
@@ -154,35 +185,43 @@ impl TreeNode for LogicalPlan {
                     null_equals_null,
                 })
             }),
-            LogicalPlan::Limit(Limit { skip, fetch, input }) => input
+            LogicalPlan::Limit(Limit { skip, fetch, input }, _) => input
                 .map_elements(f)?
-                .update_data(|input| LogicalPlan::Limit(Limit { skip, fetch, input })),
-            LogicalPlan::Subquery(Subquery {
-                subquery,
-                outer_ref_columns,
-            }) => subquery.map_elements(f)?.update_data(|subquery| {
-                LogicalPlan::Subquery(Subquery {
+                .update_data(|input| LogicalPlan::limit(Limit { skip, fetch, input })),
+            LogicalPlan::Subquery(
+                Subquery {
+                    subquery,
+                    outer_ref_columns,
+                },
+                _,
+            ) => subquery.map_elements(f)?.update_data(|subquery| {
+                LogicalPlan::subquery(Subquery {
                     subquery,
                     outer_ref_columns,
                 })
             }),
-            LogicalPlan::SubqueryAlias(SubqueryAlias {
-                input,
-                alias,
-                schema,
-            }) => input.map_elements(f)?.update_data(|input| {
-                LogicalPlan::SubqueryAlias(SubqueryAlias {
+            LogicalPlan::SubqueryAlias(
+                SubqueryAlias {
+                    input,
+                    alias,
+                    schema,
+                },
+                _,
+            ) => input.map_elements(f)?.update_data(|input| {
+                LogicalPlan::subquery_alias(SubqueryAlias {
                     input,
                     alias,
                     schema,
                 })
             }),
-            LogicalPlan::Extension(extension) => rewrite_extension_inputs(extension, f)?
-                .update_data(LogicalPlan::Extension),
-            LogicalPlan::Union(Union { inputs, schema }) => inputs
+            LogicalPlan::Extension(extension, _) => {
+                rewrite_extension_inputs(extension, f)?
+                    .update_data(LogicalPlan::extension)
+            }
+            LogicalPlan::Union(Union { inputs, schema }, _) => inputs
                 .map_elements(f)?
-                .update_data(|inputs| LogicalPlan::Union(Union { inputs, schema })),
-            LogicalPlan::Distinct(distinct) => match distinct {
+                .update_data(|inputs| LogicalPlan::union(Union { inputs, schema })),
+            LogicalPlan::Distinct(distinct, _) => match distinct {
                 Distinct::All(input) => input.map_elements(f)?.update_data(Distinct::All),
                 Distinct::On(DistinctOn {
                     on_expr,
@@ -200,15 +239,18 @@ impl TreeNode for LogicalPlan {
                     })
                 }),
             }
-            .update_data(LogicalPlan::Distinct),
-            LogicalPlan::Explain(Explain {
-                verbose,
-                plan,
-                stringified_plans,
-                schema,
-                logical_optimization_succeeded,
-            }) => plan.map_elements(f)?.update_data(|plan| {
-                LogicalPlan::Explain(Explain {
+            .update_data(LogicalPlan::distinct),
+            LogicalPlan::Explain(
+                Explain {
+                    verbose,
+                    plan,
+                    stringified_plans,
+                    schema,
+                    logical_optimization_succeeded,
+                },
+                _,
+            ) => plan.map_elements(f)?.update_data(|plan| {
+                LogicalPlan::explain(Explain {
                     verbose,
                     plan,
                     stringified_plans,
@@ -216,25 +258,31 @@ impl TreeNode for LogicalPlan {
                     logical_optimization_succeeded,
                 })
             }),
-            LogicalPlan::Analyze(Analyze {
-                verbose,
-                input,
-                schema,
-            }) => input.map_elements(f)?.update_data(|input| {
-                LogicalPlan::Analyze(Analyze {
+            LogicalPlan::Analyze(
+                Analyze {
+                    verbose,
+                    input,
+                    schema,
+                },
+                _,
+            ) => input.map_elements(f)?.update_data(|input| {
+                LogicalPlan::analyze(Analyze {
                     verbose,
                     input,
                     schema,
                 })
             }),
-            LogicalPlan::Dml(DmlStatement {
-                table_name,
-                table_schema,
-                op,
-                input,
-                output_schema,
-            }) => input.map_elements(f)?.update_data(|input| {
-                LogicalPlan::Dml(DmlStatement {
+            LogicalPlan::Dml(
+                DmlStatement {
+                    table_name,
+                    table_schema,
+                    op,
+                    input,
+                    output_schema,
+                },
+                _,
+            ) => input.map_elements(f)?.update_data(|input| {
+                LogicalPlan::dml(DmlStatement {
                     table_name,
                     table_schema,
                     op,
@@ -242,14 +290,17 @@ impl TreeNode for LogicalPlan {
                     output_schema,
                 })
             }),
-            LogicalPlan::Copy(CopyTo {
-                input,
-                output_url,
-                partition_by,
-                file_type,
-                options,
-            }) => input.map_elements(f)?.update_data(|input| {
-                LogicalPlan::Copy(CopyTo {
+            LogicalPlan::Copy(
+                CopyTo {
+                    input,
+                    output_url,
+                    partition_by,
+                    file_type,
+                    options,
+                },
+                _,
+            ) => input.map_elements(f)?.update_data(|input| {
+                LogicalPlan::copy(CopyTo {
                     input,
                     output_url,
                     partition_by,
@@ -257,7 +308,7 @@ impl TreeNode for LogicalPlan {
                     options,
                 })
             }),
-            LogicalPlan::Ddl(ddl) => {
+            LogicalPlan::Ddl(ddl, _) => {
                 match ddl {
                     DdlStatement::CreateMemoryTable(CreateMemoryTable {
                         name,
@@ -304,18 +355,21 @@ impl TreeNode for LogicalPlan {
                     | DdlStatement::CreateFunction(_)
                     | DdlStatement::DropFunction(_) => Transformed::no(ddl),
                 }
-                .update_data(LogicalPlan::Ddl)
+                .update_data(LogicalPlan::ddl)
             }
-            LogicalPlan::Unnest(Unnest {
-                input,
-                exec_columns: input_columns,
-                list_type_columns,
-                struct_type_columns,
-                dependency_indices,
-                schema,
-                options,
-            }) => input.map_elements(f)?.update_data(|input| {
-                LogicalPlan::Unnest(Unnest {
+            LogicalPlan::Unnest(
+                Unnest {
+                    input,
+                    exec_columns: input_columns,
+                    list_type_columns,
+                    struct_type_columns,
+                    dependency_indices,
+                    schema,
+                    options,
+                },
+                _,
+            ) => input.map_elements(f)?.update_data(|input| {
+                LogicalPlan::unnest(Unnest {
                     input,
                     exec_columns: input_columns,
                     dependency_indices,
@@ -325,14 +379,17 @@ impl TreeNode for LogicalPlan {
                     options,
                 })
             }),
-            LogicalPlan::RecursiveQuery(RecursiveQuery {
-                name,
-                static_term,
-                recursive_term,
-                is_distinct,
-            }) => (static_term, recursive_term).map_elements(f)?.update_data(
+            LogicalPlan::RecursiveQuery(
+                RecursiveQuery {
+                    name,
+                    static_term,
+                    recursive_term,
+                    is_distinct,
+                },
+                _,
+            ) => (static_term, recursive_term).map_elements(f)?.update_data(
                 |(static_term, recursive_term)| {
-                    LogicalPlan::RecursiveQuery(RecursiveQuery {
+                    LogicalPlan::recursive_query(RecursiveQuery {
                         name,
                         static_term,
                         recursive_term,
@@ -340,19 +397,19 @@ impl TreeNode for LogicalPlan {
                     })
                 },
             ),
-            LogicalPlan::Statement(stmt) => match stmt {
+            LogicalPlan::Statement(stmt, _) => match stmt {
                 Statement::Prepare(p) => p
                     .input
                     .map_elements(f)?
                     .update_data(|input| Statement::Prepare(Prepare { input, ..p })),
                 _ => Transformed::no(stmt),
             }
-            .update_data(LogicalPlan::Statement),
+            .update_data(LogicalPlan::statement),
             // plans without inputs
             LogicalPlan::TableScan { .. }
             | LogicalPlan::EmptyRelation { .. }
             | LogicalPlan::Values { .. }
-            | LogicalPlan::DescribeTable(_) => Transformed::no(self),
+            | LogicalPlan::DescribeTable(_, _) => Transformed::no(self),
         })
     }
 }
@@ -405,78 +462,87 @@ impl LogicalPlan {
         mut f: F,
     ) -> Result<TreeNodeRecursion> {
         match self {
-            LogicalPlan::Projection(Projection { expr, .. }) => expr.apply_elements(f),
-            LogicalPlan::Values(Values { values, .. }) => values.apply_elements(f),
-            LogicalPlan::Filter(Filter { predicate, .. }) => f(predicate),
-            LogicalPlan::Repartition(Repartition {
-                partitioning_scheme,
-                ..
-            }) => match partitioning_scheme {
+            LogicalPlan::Projection(Projection { expr, .. }, _) => expr.apply_elements(f),
+            LogicalPlan::Values(Values { values, .. }, _) => values.apply_elements(f),
+            LogicalPlan::Filter(Filter { predicate, .. }, _) => f(predicate),
+            LogicalPlan::Repartition(
+                Repartition {
+                    partitioning_scheme,
+                    ..
+                },
+                _,
+            ) => match partitioning_scheme {
                 Partitioning::Hash(expr, _) | Partitioning::DistributeBy(expr) => {
                     expr.apply_elements(f)
                 }
                 Partitioning::RoundRobinBatch(_) => Ok(TreeNodeRecursion::Continue),
             },
-            LogicalPlan::Window(Window { window_expr, .. }) => {
+            LogicalPlan::Window(Window { window_expr, .. }, _) => {
                 window_expr.apply_elements(f)
             }
-            LogicalPlan::Aggregate(Aggregate {
-                group_expr,
-                aggr_expr,
-                ..
-            }) => (group_expr, aggr_expr).apply_ref_elements(f),
+            LogicalPlan::Aggregate(
+                Aggregate {
+                    group_expr,
+                    aggr_expr,
+                    ..
+                },
+                _,
+            ) => (group_expr, aggr_expr).apply_ref_elements(f),
             // There are two part of expression for join, equijoin(on) and non-equijoin(filter).
             // 1. the first part is `on.len()` equijoin expressions, and the struct of each expr is `left-on = right-on`.
             // 2. the second part is non-equijoin(filter).
-            LogicalPlan::Join(Join { on, filter, .. }) => {
+            LogicalPlan::Join(Join { on, filter, .. }, _) => {
                 (on, filter).apply_ref_elements(f)
             }
-            LogicalPlan::Sort(Sort { expr, .. }) => expr.apply_elements(f),
-            LogicalPlan::Extension(extension) => {
+            LogicalPlan::Sort(Sort { expr, .. }, _) => expr.apply_elements(f),
+            LogicalPlan::Extension(extension, _) => {
                 // would be nice to avoid this copy -- maybe can
                 // update extension to just observer Exprs
                 extension.node.expressions().apply_elements(f)
             }
-            LogicalPlan::TableScan(TableScan { filters, .. }) => {
+            LogicalPlan::TableScan(TableScan { filters, .. }, _) => {
                 filters.apply_elements(f)
             }
-            LogicalPlan::Unnest(unnest) => {
+            LogicalPlan::Unnest(unnest, _) => {
                 let columns = unnest.exec_columns.clone();
 
                 let exprs = columns
                     .iter()
-                    .map(|c| Expr::Column(c.clone()))
+                    .map(|c| Expr::column(c.clone()))
                     .collect::<Vec<_>>();
                 exprs.apply_elements(f)
             }
-            LogicalPlan::Distinct(Distinct::On(DistinctOn {
-                on_expr,
-                select_expr,
-                sort_expr,
-                ..
-            })) => (on_expr, select_expr, sort_expr).apply_ref_elements(f),
-            LogicalPlan::Limit(Limit { skip, fetch, .. }) => {
+            LogicalPlan::Distinct(
+                Distinct::On(DistinctOn {
+                    on_expr,
+                    select_expr,
+                    sort_expr,
+                    ..
+                }),
+                _,
+            ) => (on_expr, select_expr, sort_expr).apply_ref_elements(f),
+            LogicalPlan::Limit(Limit { skip, fetch, .. }, _) => {
                 (skip, fetch).apply_ref_elements(f)
             }
-            LogicalPlan::Statement(stmt) => match stmt {
+            LogicalPlan::Statement(stmt, _) => match stmt {
                 Statement::Execute(Execute { parameters, .. }) => {
                     parameters.apply_elements(f)
                 }
                 _ => Ok(TreeNodeRecursion::Continue),
             },
             // plans without expressions
-            LogicalPlan::EmptyRelation(_)
-            | LogicalPlan::RecursiveQuery(_)
-            | LogicalPlan::Subquery(_)
-            | LogicalPlan::SubqueryAlias(_)
-            | LogicalPlan::Analyze(_)
-            | LogicalPlan::Explain(_)
-            | LogicalPlan::Union(_)
-            | LogicalPlan::Distinct(Distinct::All(_))
-            | LogicalPlan::Dml(_)
-            | LogicalPlan::Ddl(_)
-            | LogicalPlan::Copy(_)
-            | LogicalPlan::DescribeTable(_) => Ok(TreeNodeRecursion::Continue),
+            LogicalPlan::EmptyRelation(_, _)
+            | LogicalPlan::RecursiveQuery(_, _)
+            | LogicalPlan::Subquery(_, _)
+            | LogicalPlan::SubqueryAlias(_, _)
+            | LogicalPlan::Analyze(_, _)
+            | LogicalPlan::Explain(_, _)
+            | LogicalPlan::Union(_, _)
+            | LogicalPlan::Distinct(Distinct::All(_), _)
+            | LogicalPlan::Dml(_, _)
+            | LogicalPlan::Ddl(_, _)
+            | LogicalPlan::Copy(_, _)
+            | LogicalPlan::DescribeTable(_, _) => Ok(TreeNodeRecursion::Continue),
         }
     }
 
@@ -492,35 +558,44 @@ impl LogicalPlan {
         mut f: F,
     ) -> Result<Transformed<Self>> {
         Ok(match self {
-            LogicalPlan::Projection(Projection {
-                expr,
-                input,
-                schema,
-            }) => expr.map_elements(f)?.update_data(|expr| {
-                LogicalPlan::Projection(Projection {
+            LogicalPlan::Projection(
+                Projection {
+                    expr,
+                    input,
+                    schema,
+                },
+                _,
+            ) => expr.map_elements(f)?.update_data(|expr| {
+                LogicalPlan::projection(Projection {
                     expr,
                     input,
                     schema,
                 })
             }),
-            LogicalPlan::Values(Values { schema, values }) => values
+            LogicalPlan::Values(Values { schema, values }, _) => values
                 .map_elements(f)?
-                .update_data(|values| LogicalPlan::Values(Values { schema, values })),
-            LogicalPlan::Filter(Filter {
-                predicate,
-                input,
-                having,
-            }) => f(predicate)?.update_data(|predicate| {
-                LogicalPlan::Filter(Filter {
+                .update_data(|values| LogicalPlan::values(Values { schema, values })),
+            LogicalPlan::Filter(
+                Filter {
+                    predicate,
+                    input,
+                    having,
+                },
+                _,
+            ) => f(predicate)?.update_data(|predicate| {
+                LogicalPlan::filter(Filter {
                     predicate,
                     input,
                     having,
                 })
             }),
-            LogicalPlan::Repartition(Repartition {
-                input,
-                partitioning_scheme,
-            }) => match partitioning_scheme {
+            LogicalPlan::Repartition(
+                Repartition {
+                    input,
+                    partitioning_scheme,
+                },
+                _,
+            ) => match partitioning_scheme {
                 Partitioning::Hash(expr, usize) => expr
                     .map_elements(f)?
                     .update_data(|expr| Partitioning::Hash(expr, usize)),
@@ -530,30 +605,36 @@ impl LogicalPlan {
                 Partitioning::RoundRobinBatch(_) => Transformed::no(partitioning_scheme),
             }
             .update_data(|partitioning_scheme| {
-                LogicalPlan::Repartition(Repartition {
+                LogicalPlan::repartition(Repartition {
                     input,
                     partitioning_scheme,
                 })
             }),
-            LogicalPlan::Window(Window {
-                input,
-                window_expr,
-                schema,
-            }) => window_expr.map_elements(f)?.update_data(|window_expr| {
-                LogicalPlan::Window(Window {
+            LogicalPlan::Window(
+                Window {
+                    input,
+                    window_expr,
+                    schema,
+                },
+                _,
+            ) => window_expr.map_elements(f)?.update_data(|window_expr| {
+                LogicalPlan::window(Window {
                     input,
                     window_expr,
                     schema,
                 })
             }),
-            LogicalPlan::Aggregate(Aggregate {
-                input,
-                group_expr,
-                aggr_expr,
-                schema,
-            }) => (group_expr, aggr_expr).map_elements(f)?.update_data(
+            LogicalPlan::Aggregate(
+                Aggregate {
+                    input,
+                    group_expr,
+                    aggr_expr,
+                    schema,
+                },
+                _,
+            ) => (group_expr, aggr_expr).map_elements(f)?.update_data(
                 |(group_expr, aggr_expr)| {
-                    LogicalPlan::Aggregate(Aggregate {
+                    LogicalPlan::aggregate(Aggregate {
                         input,
                         group_expr,
                         aggr_expr,
@@ -565,17 +646,20 @@ impl LogicalPlan {
             // There are two part of expression for join, equijoin(on) and non-equijoin(filter).
             // 1. the first part is `on.len()` equijoin expressions, and the struct of each expr is `left-on = right-on`.
             // 2. the second part is non-equijoin(filter).
-            LogicalPlan::Join(Join {
-                left,
-                right,
-                on,
-                filter,
-                join_type,
-                join_constraint,
-                schema,
-                null_equals_null,
-            }) => (on, filter).map_elements(f)?.update_data(|(on, filter)| {
-                LogicalPlan::Join(Join {
+            LogicalPlan::Join(
+                Join {
+                    left,
+                    right,
+                    on,
+                    filter,
+                    join_type,
+                    join_constraint,
+                    schema,
+                    null_equals_null,
+                },
+                _,
+            ) => (on, filter).map_elements(f)?.update_data(|(on, filter)| {
+                LogicalPlan::join(Join {
                     left,
                     right,
                     on,
@@ -586,14 +670,14 @@ impl LogicalPlan {
                     null_equals_null,
                 })
             }),
-            LogicalPlan::Sort(Sort { expr, input, fetch }) => expr
+            LogicalPlan::Sort(Sort { expr, input, fetch }, _) => expr
                 .map_elements(f)?
-                .update_data(|expr| LogicalPlan::Sort(Sort { expr, input, fetch })),
-            LogicalPlan::Extension(Extension { node }) => {
+                .update_data(|expr| LogicalPlan::sort(Sort { expr, input, fetch })),
+            LogicalPlan::Extension(Extension { node }, _) => {
                 // would be nice to avoid this copy -- maybe can
                 // update extension to just observer Exprs
                 let exprs = node.expressions().map_elements(f)?;
-                let plan = LogicalPlan::Extension(Extension {
+                let plan = LogicalPlan::extension(Extension {
                     node: UserDefinedLogicalNode::with_exprs_and_inputs(
                         node.as_ref(),
                         exprs.data,
@@ -602,15 +686,18 @@ impl LogicalPlan {
                 });
                 Transformed::new(plan, exprs.transformed, exprs.tnr)
             }
-            LogicalPlan::TableScan(TableScan {
-                table_name,
-                source,
-                projection,
-                projected_schema,
-                filters,
-                fetch,
-            }) => filters.map_elements(f)?.update_data(|filters| {
-                LogicalPlan::TableScan(TableScan {
+            LogicalPlan::TableScan(
+                TableScan {
+                    table_name,
+                    source,
+                    projection,
+                    projected_schema,
+                    filters,
+                    fetch,
+                },
+                _,
+            ) => filters.map_elements(f)?.update_data(|filters| {
+                LogicalPlan::table_scan(TableScan {
                     table_name,
                     source,
                     projection,
@@ -619,16 +706,19 @@ impl LogicalPlan {
                     fetch,
                 })
             }),
-            LogicalPlan::Distinct(Distinct::On(DistinctOn {
-                on_expr,
-                select_expr,
-                sort_expr,
-                input,
-                schema,
-            })) => (on_expr, select_expr, sort_expr)
+            LogicalPlan::Distinct(
+                Distinct::On(DistinctOn {
+                    on_expr,
+                    select_expr,
+                    sort_expr,
+                    input,
+                    schema,
+                }),
+                _,
+            ) => (on_expr, select_expr, sort_expr)
                 .map_elements(f)?
                 .update_data(|(on_expr, select_expr, sort_expr)| {
-                    LogicalPlan::Distinct(Distinct::On(DistinctOn {
+                    LogicalPlan::distinct(Distinct::On(DistinctOn {
                         on_expr,
                         select_expr,
                         sort_expr,
@@ -636,12 +726,12 @@ impl LogicalPlan {
                         schema,
                     }))
                 }),
-            LogicalPlan::Limit(Limit { skip, fetch, input }) => {
+            LogicalPlan::Limit(Limit { skip, fetch, input }, _) => {
                 (skip, fetch).map_elements(f)?.update_data(|(skip, fetch)| {
-                    LogicalPlan::Limit(Limit { skip, fetch, input })
+                    LogicalPlan::limit(Limit { skip, fetch, input })
                 })
             }
-            LogicalPlan::Statement(stmt) => match stmt {
+            LogicalPlan::Statement(stmt, _) => match stmt {
                 Statement::Execute(e) => {
                     e.parameters.map_elements(f)?.update_data(|parameters| {
                         Statement::Execute(Execute { parameters, ..e })
@@ -649,21 +739,21 @@ impl LogicalPlan {
                 }
                 _ => Transformed::no(stmt),
             }
-            .update_data(LogicalPlan::Statement),
+            .update_data(LogicalPlan::statement),
             // plans without expressions
-            LogicalPlan::EmptyRelation(_)
-            | LogicalPlan::Unnest(_)
-            | LogicalPlan::RecursiveQuery(_)
-            | LogicalPlan::Subquery(_)
-            | LogicalPlan::SubqueryAlias(_)
-            | LogicalPlan::Analyze(_)
-            | LogicalPlan::Explain(_)
-            | LogicalPlan::Union(_)
-            | LogicalPlan::Distinct(Distinct::All(_))
-            | LogicalPlan::Dml(_)
-            | LogicalPlan::Ddl(_)
-            | LogicalPlan::Copy(_)
-            | LogicalPlan::DescribeTable(_) => Transformed::no(self),
+            LogicalPlan::EmptyRelation(_, _)
+            | LogicalPlan::Unnest(_, _)
+            | LogicalPlan::RecursiveQuery(_, _)
+            | LogicalPlan::Subquery(_, _)
+            | LogicalPlan::SubqueryAlias(_, _)
+            | LogicalPlan::Analyze(_, _)
+            | LogicalPlan::Explain(_, _)
+            | LogicalPlan::Union(_, _)
+            | LogicalPlan::Distinct(Distinct::All(_), _)
+            | LogicalPlan::Ddl(_, _)
+            | LogicalPlan::Dml(_, _)
+            | LogicalPlan::Copy(_, _)
+            | LogicalPlan::DescribeTable(_, _) => Transformed::no(self),
         })
     }
 
@@ -823,13 +913,13 @@ impl LogicalPlan {
     ) -> Result<TreeNodeRecursion> {
         self.apply_expressions(|expr| {
             expr.apply(|expr| match expr {
-                Expr::Exists(Exists { subquery, .. })
-                | Expr::InSubquery(InSubquery { subquery, .. })
-                | Expr::ScalarSubquery(subquery) => {
+                Expr::Exists(Exists { subquery, .. }, _)
+                | Expr::InSubquery(InSubquery { subquery, .. }, _)
+                | Expr::ScalarSubquery(subquery, _) => {
                     // use a synthetic plan so the collector sees a
                     // LogicalPlan::Subquery (even though it is
                     // actually a Subquery alias)
-                    f(&LogicalPlan::Subquery(subquery.clone()))
+                    f(&LogicalPlan::subquery(subquery.clone()))
                 }
                 _ => Ok(TreeNodeRecursion::Continue),
             })
@@ -846,35 +936,70 @@ impl LogicalPlan {
     ) -> Result<Transformed<Self>> {
         self.map_expressions(|expr| {
             expr.transform_down(|expr| match expr {
-                Expr::Exists(Exists { subquery, negated }) => {
-                    f(LogicalPlan::Subquery(subquery))?.map_data(|s| match s {
-                        LogicalPlan::Subquery(subquery) => {
-                            Ok(Expr::Exists(Exists { subquery, negated }))
+                Expr::Exists(Exists { subquery, negated }, _) => {
+                    f(LogicalPlan::subquery(subquery))?.map_data(|s| match s {
+                        LogicalPlan::Subquery(subquery, _) => {
+                            Ok(Expr::exists(Exists { subquery, negated }))
                         }
                         _ => internal_err!("Transformation should return Subquery"),
                     })
                 }
-                Expr::InSubquery(InSubquery {
-                    expr,
-                    subquery,
-                    negated,
-                }) => f(LogicalPlan::Subquery(subquery))?.map_data(|s| match s {
-                    LogicalPlan::Subquery(subquery) => Ok(Expr::InSubquery(InSubquery {
+                Expr::InSubquery(
+                    InSubquery {
                         expr,
                         subquery,
                         negated,
-                    })),
+                    },
+                    _,
+                ) => f(LogicalPlan::subquery(subquery))?.map_data(|s| match s {
+                    LogicalPlan::Subquery(subquery, _) => {
+                        Ok(Expr::in_subquery(InSubquery {
+                            expr,
+                            subquery,
+                            negated,
+                        }))
+                    }
                     _ => internal_err!("Transformation should return Subquery"),
                 }),
-                Expr::ScalarSubquery(subquery) => f(LogicalPlan::Subquery(subquery))?
+                Expr::ScalarSubquery(subquery, _) => f(LogicalPlan::subquery(subquery))?
                     .map_data(|s| match s {
-                        LogicalPlan::Subquery(subquery) => {
-                            Ok(Expr::ScalarSubquery(subquery))
+                        LogicalPlan::Subquery(subquery, _) => {
+                            Ok(Expr::scalar_subquery(subquery))
                         }
                         _ => internal_err!("Transformation should return Subquery"),
                     }),
                 _ => Ok(Transformed::no(expr)),
             })
         })
+    }
+
+    pub fn stats(&self) -> LogicalPlanStats {
+        match self {
+            LogicalPlan::Projection(_, stats) => *stats,
+            LogicalPlan::Filter(_, stats) => *stats,
+            LogicalPlan::Window(_, stats) => *stats,
+            LogicalPlan::Aggregate(_, stats) => *stats,
+            LogicalPlan::Sort(_, stats) => *stats,
+            LogicalPlan::Join(_, stats) => *stats,
+            LogicalPlan::Repartition(_, stats) => *stats,
+            LogicalPlan::Union(_, stats) => *stats,
+            LogicalPlan::TableScan(_, stats) => *stats,
+            LogicalPlan::EmptyRelation(_, stats) => *stats,
+            LogicalPlan::Subquery(_, stats) => *stats,
+            LogicalPlan::SubqueryAlias(_, stats) => *stats,
+            LogicalPlan::Limit(_, stats) => *stats,
+            LogicalPlan::Statement(_, stats) => *stats,
+            LogicalPlan::Values(_, stats) => *stats,
+            LogicalPlan::Explain(_, stats) => *stats,
+            LogicalPlan::Analyze(_, stats) => *stats,
+            LogicalPlan::Extension(_, stats) => *stats,
+            LogicalPlan::Distinct(_, stats) => *stats,
+            LogicalPlan::Dml(_, stats) => *stats,
+            LogicalPlan::Ddl(_, stats) => *stats,
+            LogicalPlan::Copy(_, stats) => *stats,
+            LogicalPlan::DescribeTable(_, stats) => *stats,
+            LogicalPlan::Unnest(_, stats) => *stats,
+            LogicalPlan::RecursiveQuery(_, stats) => *stats,
+        }
     }
 }

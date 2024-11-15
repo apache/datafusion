@@ -21,11 +21,11 @@ use std::fmt::{self, Debug, Display, Formatter};
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
+use crate::logical_plan::tree_node::LogicalPlanStats;
+use crate::LogicalPlan;
 use arrow::datatypes::{DataType, Field, Schema};
 use datafusion_common::file_options::file_type::FileType;
 use datafusion_common::{DFSchemaRef, TableReference};
-
-use crate::LogicalPlan;
 
 /// Operator that copies the contents of a database to file(s)
 #[derive(Clone)]
@@ -89,6 +89,12 @@ impl Hash for CopyTo {
     }
 }
 
+impl CopyTo {
+    pub(crate) fn stats(&self) -> LogicalPlanStats {
+        self.input.stats()
+    }
+}
+
 /// The operator that modifies the content of a database (adapted from
 /// substrait WriteRel)
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -127,6 +133,10 @@ impl DmlStatement {
     /// Return a descriptive name of this [`DmlStatement`]
     pub fn name(&self) -> &str {
         self.op.name()
+    }
+
+    pub(crate) fn stats(&self) -> LogicalPlanStats {
+        self.input.stats()
     }
 }
 

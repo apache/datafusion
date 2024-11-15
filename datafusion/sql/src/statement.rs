@@ -443,7 +443,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                             plan.schema(),
                         )?;
 
-                        Ok(LogicalPlan::Ddl(DdlStatement::CreateMemoryTable(
+                        Ok(LogicalPlan::ddl(DdlStatement::CreateMemoryTable(
                             CreateMemoryTable {
                                 name: self.object_name_to_table_reference(name)?,
                                 constraints,
@@ -461,12 +461,12 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                             produce_one_row: false,
                             schema,
                         };
-                        let plan = LogicalPlan::EmptyRelation(plan);
+                        let plan = LogicalPlan::empty_relation(plan);
                         let constraints = Self::new_constraint_from_table_constraints(
                             &all_constraints,
                             plan.schema(),
                         )?;
-                        Ok(LogicalPlan::Ddl(DdlStatement::CreateMemoryTable(
+                        Ok(LogicalPlan::ddl(DdlStatement::CreateMemoryTable(
                             CreateMemoryTable {
                                 name: self.object_name_to_table_reference(name)?,
                                 constraints,
@@ -530,7 +530,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 let mut plan = self.query_to_plan(*query, &mut PlannerContext::new())?;
                 plan = self.apply_expr_alias(plan, columns)?;
 
-                Ok(LogicalPlan::Ddl(DdlStatement::CreateView(CreateView {
+                Ok(LogicalPlan::ddl(DdlStatement::CreateView(CreateView {
                     name: self.object_name_to_table_reference(name)?,
                     input: Arc::new(plan),
                     or_replace,
@@ -547,7 +547,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             Statement::CreateSchema {
                 schema_name,
                 if_not_exists,
-            } => Ok(LogicalPlan::Ddl(DdlStatement::CreateCatalogSchema(
+            } => Ok(LogicalPlan::ddl(DdlStatement::CreateCatalogSchema(
                 CreateCatalogSchema {
                     schema_name: get_schema_name(&schema_name),
                     if_not_exists,
@@ -558,7 +558,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 db_name,
                 if_not_exists,
                 ..
-            } => Ok(LogicalPlan::Ddl(DdlStatement::CreateCatalog(
+            } => Ok(LogicalPlan::ddl(DdlStatement::CreateCatalog(
                 CreateCatalog {
                     catalog_name: object_name_to_string(&db_name),
                     if_not_exists,
@@ -587,14 +587,14 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
                 match object_type {
                     ObjectType::Table => {
-                        Ok(LogicalPlan::Ddl(DdlStatement::DropTable(DropTable {
+                        Ok(LogicalPlan::ddl(DdlStatement::DropTable(DropTable {
                             name,
                             if_exists,
                             schema: DFSchemaRef::new(DFSchema::empty()),
                         })))
                     }
                     ObjectType::View => {
-                        Ok(LogicalPlan::Ddl(DdlStatement::DropView(DropView {
+                        Ok(LogicalPlan::ddl(DdlStatement::DropView(DropView {
                             name,
                             if_exists,
                             schema: DFSchemaRef::new(DFSchema::empty()),
@@ -608,7 +608,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                                 Err(ParserError("Invalid schema specifier (has 3 parts)".to_string()))
                             }
                         }?;
-                        Ok(LogicalPlan::Ddl(DdlStatement::DropCatalogSchema(DropCatalogSchema {
+                        Ok(LogicalPlan::ddl(DdlStatement::DropCatalogSchema(DropCatalogSchema {
                             name,
                             if_exists,
                             cascade,
@@ -640,7 +640,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     *statement,
                     &mut planner_context,
                 )?;
-                Ok(LogicalPlan::Statement(PlanStatement::Prepare(Prepare {
+                Ok(LogicalPlan::statement(PlanStatement::Prepare(Prepare {
                     name: ident_to_string(&name),
                     data_types,
                     input: Arc::new(plan),
@@ -667,7 +667,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     .map(|expr| self.sql_to_expr(expr, &empty_schema, planner_context))
                     .collect::<Result<Vec<Expr>>>()?;
 
-                Ok(LogicalPlan::Statement(PlanStatement::Execute(Execute {
+                Ok(LogicalPlan::statement(PlanStatement::Execute(Execute {
                     name: object_name_to_string(&name),
                     parameters,
                 })))
@@ -676,7 +676,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 name,
                 // Similar to PostgreSQL, the PREPARE keyword is ignored
                 prepare: _,
-            } => Ok(LogicalPlan::Statement(PlanStatement::Deallocate(
+            } => Ok(LogicalPlan::statement(PlanStatement::Deallocate(
                 Deallocate {
                     name: ident_to_string(&name),
                 },
@@ -860,14 +860,14 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     access_mode,
                     isolation_level,
                 });
-                Ok(LogicalPlan::Statement(statement))
+                Ok(LogicalPlan::statement(statement))
             }
             Statement::Commit { chain } => {
                 let statement = PlanStatement::TransactionEnd(TransactionEnd {
                     conclusion: TransactionConclusion::Commit,
                     chain,
                 });
-                Ok(LogicalPlan::Statement(statement))
+                Ok(LogicalPlan::statement(statement))
             }
             Statement::Rollback { chain, savepoint } => {
                 if savepoint.is_some() {
@@ -877,7 +877,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     conclusion: TransactionConclusion::Rollback,
                     chain,
                 });
-                Ok(LogicalPlan::Statement(statement))
+                Ok(LogicalPlan::statement(statement))
             }
             Statement::CreateFunction {
                 or_replace,
@@ -971,7 +971,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     schema: DFSchemaRef::new(DFSchema::empty()),
                 });
 
-                Ok(LogicalPlan::Ddl(statement))
+                Ok(LogicalPlan::ddl(statement))
             }
             Statement::DropFunction {
                 if_exists,
@@ -992,7 +992,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                         name,
                         schema: DFSchemaRef::new(DFSchema::empty()),
                     });
-                    Ok(LogicalPlan::Ddl(statement))
+                    Ok(LogicalPlan::ddl(statement))
                 } else {
                     exec_err!("Function name not provided")
                 }
@@ -1021,7 +1021,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     false,
                     None,
                 )?;
-                Ok(LogicalPlan::Ddl(DdlStatement::CreateIndex(
+                Ok(LogicalPlan::ddl(DdlStatement::CreateIndex(
                     PlanCreateIndex {
                         name,
                         table,
@@ -1097,7 +1097,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
         let output_schema = DFSchema::try_from(LogicalPlan::describe_schema()).unwrap();
 
-        Ok(LogicalPlan::DescribeTable(DescribeTable {
+        Ok(LogicalPlan::describe_table(DescribeTable {
             schema,
             output_schema: Arc::new(output_schema),
         }))
@@ -1166,7 +1166,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             .map(|f| f.name().to_owned())
             .collect();
 
-        Ok(LogicalPlan::Copy(CopyTo {
+        Ok(LogicalPlan::copy(CopyTo {
             input: Arc::new(input),
             output_url: statement.target,
             file_type,
@@ -1288,7 +1288,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         let name = self.object_name_to_table_reference(name)?;
         let constraints =
             Self::new_constraint_from_table_constraints(&all_constraints, &df_schema)?;
-        Ok(LogicalPlan::Ddl(DdlStatement::CreateExternalTable(
+        Ok(LogicalPlan::ddl(DdlStatement::CreateExternalTable(
             PlanCreateExternalTable {
                 schema: df_schema,
                 name,
@@ -1416,7 +1416,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         statement: DFStatement,
     ) -> Result<LogicalPlan> {
         let plan = self.statement_to_plan(statement)?;
-        if matches!(plan, LogicalPlan::Explain(_)) {
+        if matches!(plan, LogicalPlan::Explain(_, _)) {
             return plan_err!("Nested EXPLAINs are not supported");
         }
         let plan = Arc::new(plan);
@@ -1424,7 +1424,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         let schema = schema.to_dfschema_ref()?;
 
         if analyze {
-            Ok(LogicalPlan::Analyze(Analyze {
+            Ok(LogicalPlan::analyze(Analyze {
                 verbose,
                 input: plan,
                 schema,
@@ -1432,7 +1432,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         } else {
             let stringified_plans =
                 vec![plan.to_stringified(PlanType::InitialLogicalPlan)];
-            Ok(LogicalPlan::Explain(Explain {
+            Ok(LogicalPlan::explain(Explain {
                 verbose,
                 plan,
                 stringified_plans,
@@ -1552,7 +1552,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             value: value_string,
         });
 
-        Ok(LogicalPlan::Statement(statement))
+        Ok(LogicalPlan::statement(statement))
     }
 
     fn delete_to_plan(
@@ -1586,11 +1586,11 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     &[&[&schema]],
                     &[using_columns],
                 )?;
-                LogicalPlan::Filter(Filter::try_new(filter_expr, Arc::new(scan))?)
+                LogicalPlan::filter(Filter::try_new(filter_expr, Arc::new(scan))?)
             }
         };
 
-        let plan = LogicalPlan::Dml(DmlStatement::new(
+        let plan = LogicalPlan::dml(DmlStatement::new(
             table_ref,
             schema.into(),
             WriteOp::Delete,
@@ -1660,7 +1660,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     &[&[scan.schema()]],
                     &[using_columns],
                 )?;
-                LogicalPlan::Filter(Filter::try_new(filter_expr, Arc::new(scan))?)
+                LogicalPlan::filter(Filter::try_new(filter_expr, Arc::new(scan))?)
             }
         };
 
@@ -1676,7 +1676,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                             &mut planner_context,
                         )?;
                         // Update placeholder's datatype to the type of the target column
-                        if let Expr::Placeholder(placeholder) = &mut expr {
+                        if let Expr::Placeholder(placeholder, _) = &mut expr {
                             placeholder.data_type = placeholder
                                 .data_type
                                 .take()
@@ -1688,12 +1688,12 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     None => {
                         // If the target table has an alias, use it to qualify the column name
                         if let Some(alias) = &table_alias {
-                            Expr::Column(Column::new(
+                            Expr::column(Column::new(
                                 Some(self.ident_normalizer.normalize(alias.name.clone())),
                                 field.name(),
                             ))
                         } else {
-                            Expr::Column(Column::from((qualifier, field)))
+                            Expr::column(Column::from((qualifier, field)))
                         }
                     }
                 };
@@ -1703,7 +1703,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
         let source = project(source, exprs)?;
 
-        let plan = LogicalPlan::Dml(DmlStatement::new(
+        let plan = LogicalPlan::dml(DmlStatement::new(
             table_name,
             table_schema,
             WriteOp::Update,
@@ -1803,7 +1803,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 let target_field = table_schema.field(i);
                 let expr = match value_index {
                     Some(v) => {
-                        Expr::Column(Column::from(source.schema().qualified_field(v)))
+                        Expr::column(Column::from(source.schema().qualified_field(v)))
                             .cast_to(target_field.data_type(), source.schema())?
                     }
                     // The value is not specified. Fill in the default value for the column.
@@ -1812,7 +1812,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                         .cloned()
                         .unwrap_or_else(|| {
                             // If there is no default for the column, then the default is NULL
-                            Expr::Literal(ScalarValue::Null)
+                            Expr::literal(ScalarValue::Null)
                         })
                         .cast_to(target_field.data_type(), &DFSchema::empty())?,
                 };
@@ -1828,7 +1828,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             (true, true) => plan_err!("Conflicting insert operations: `overwrite` and `replace_into` cannot both be true")?,
         };
 
-        let plan = LogicalPlan::Dml(DmlStatement::new(
+        let plan = LogicalPlan::dml(DmlStatement::new(
             table_name,
             Arc::new(table_schema),
             WriteOp::Insert(insert_op),

@@ -252,42 +252,42 @@ fn schema_columns(schema: &DFSchema) -> HashSet<Column> {
 fn can_evaluate_as_join_condition(predicate: &Expr) -> Result<bool> {
     let mut is_evaluate = true;
     predicate.apply(|expr| match expr {
-        Expr::Column(_)
-        | Expr::Literal(_)
-        | Expr::Placeholder(_)
-        | Expr::ScalarVariable(_, _) => Ok(TreeNodeRecursion::Jump),
+        Expr::Column(_, _)
+        | Expr::Literal(_, _)
+        | Expr::Placeholder(_, _)
+        | Expr::ScalarVariable(_, _, _) => Ok(TreeNodeRecursion::Jump),
         Expr::Exists { .. }
-        | Expr::InSubquery(_)
-        | Expr::ScalarSubquery(_)
-        | Expr::OuterReferenceColumn(_, _)
-        | Expr::Unnest(_) => {
+        | Expr::InSubquery(_, _)
+        | Expr::ScalarSubquery(_, _)
+        | Expr::OuterReferenceColumn(_, _, _)
+        | Expr::Unnest(_, _) => {
             is_evaluate = false;
             Ok(TreeNodeRecursion::Stop)
         }
-        Expr::Alias(_)
-        | Expr::BinaryExpr(_)
-        | Expr::Like(_)
-        | Expr::SimilarTo(_)
-        | Expr::Not(_)
-        | Expr::IsNotNull(_)
-        | Expr::IsNull(_)
-        | Expr::IsTrue(_)
-        | Expr::IsFalse(_)
-        | Expr::IsUnknown(_)
-        | Expr::IsNotTrue(_)
-        | Expr::IsNotFalse(_)
-        | Expr::IsNotUnknown(_)
-        | Expr::Negative(_)
-        | Expr::Between(_)
-        | Expr::Case(_)
-        | Expr::Cast(_)
-        | Expr::TryCast(_)
+        Expr::Alias(_, _)
+        | Expr::BinaryExpr(_, _)
+        | Expr::Like(_, _)
+        | Expr::SimilarTo(_, _)
+        | Expr::Not(_, _)
+        | Expr::IsNotNull(_, _)
+        | Expr::IsNull(_, _)
+        | Expr::IsTrue(_, _)
+        | Expr::IsFalse(_, _)
+        | Expr::IsUnknown(_, _)
+        | Expr::IsNotTrue(_, _)
+        | Expr::IsNotFalse(_, _)
+        | Expr::IsNotUnknown(_, _)
+        | Expr::Negative(_, _)
+        | Expr::Between(_, _)
+        | Expr::Case(_, _)
+        | Expr::Cast(_, _)
+        | Expr::TryCast(_, _)
         | Expr::InList { .. }
-        | Expr::ScalarFunction(_) => Ok(TreeNodeRecursion::Continue),
-        Expr::AggregateFunction(_)
-        | Expr::WindowFunction(_)
+        | Expr::ScalarFunction(_, _) => Ok(TreeNodeRecursion::Continue),
+        Expr::AggregateFunction(_, _)
+        | Expr::WindowFunction(_, _)
         | Expr::Wildcard { .. }
-        | Expr::GroupingSet(_) => internal_err!("Unsupported predicate type"),
+        | Expr::GroupingSet(_, _) => internal_err!("Unsupported predicate type"),
     })?;
     Ok(is_evaluate)
 }
@@ -333,11 +333,14 @@ fn extract_or_clauses_for_join<'a>(
 
     // new formed OR clauses and their column references
     filters.iter().filter_map(move |expr| {
-        if let Expr::BinaryExpr(BinaryExpr {
-            left,
-            op: Operator::Or,
-            right,
-        }) = expr
+        if let Expr::BinaryExpr(
+            BinaryExpr {
+                left,
+                op: Operator::Or,
+                right,
+            },
+            _,
+        ) = expr
         {
             let left_expr = extract_or_clause(left.as_ref(), &schema_columns);
             let right_expr = extract_or_clause(right.as_ref(), &schema_columns);
@@ -366,11 +369,14 @@ fn extract_or_clause(expr: &Expr, schema_columns: &HashSet<Column>) -> Option<Ex
     let mut predicate = None;
 
     match expr {
-        Expr::BinaryExpr(BinaryExpr {
-            left: l_expr,
-            op: Operator::Or,
-            right: r_expr,
-        }) => {
+        Expr::BinaryExpr(
+            BinaryExpr {
+                left: l_expr,
+                op: Operator::Or,
+                right: r_expr,
+            },
+            _,
+        ) => {
             let l_expr = extract_or_clause(l_expr, schema_columns);
             let r_expr = extract_or_clause(r_expr, schema_columns);
 
@@ -378,11 +384,14 @@ fn extract_or_clause(expr: &Expr, schema_columns: &HashSet<Column>) -> Option<Ex
                 predicate = Some(or(l_expr, r_expr));
             }
         }
-        Expr::BinaryExpr(BinaryExpr {
-            left: l_expr,
-            op: Operator::And,
-            right: r_expr,
-        }) => {
+        Expr::BinaryExpr(
+            BinaryExpr {
+                left: l_expr,
+                op: Operator::And,
+                right: r_expr,
+            },
+            _,
+        ) => {
             let l_expr = extract_or_clause(l_expr, schema_columns);
             let r_expr = extract_or_clause(r_expr, schema_columns);
 
@@ -498,11 +507,11 @@ fn push_down_all_join(
     }
 
     if let Some(predicate) = conjunction(left_push) {
-        join.left = Arc::new(LogicalPlan::Filter(Filter::try_new(predicate, join.left)?));
+        join.left = Arc::new(LogicalPlan::filter(Filter::try_new(predicate, join.left)?));
     }
     if let Some(predicate) = conjunction(right_push) {
         join.right =
-            Arc::new(LogicalPlan::Filter(Filter::try_new(predicate, join.right)?));
+            Arc::new(LogicalPlan::filter(Filter::try_new(predicate, join.right)?));
     }
 
     // Add any new join conditions as the non join predicates
@@ -510,9 +519,9 @@ fn push_down_all_join(
     join.filter = conjunction(join_conditions);
 
     // wrap the join on the filter whose predicates must be kept, if any
-    let plan = LogicalPlan::Join(join);
+    let plan = LogicalPlan::join(join);
     let plan = if let Some(predicate) = conjunction(keep_predicates) {
-        LogicalPlan::Filter(Filter::try_new(predicate, Arc::new(plan))?)
+        LogicalPlan::filter(Filter::try_new(predicate, Arc::new(plan))?)
     } else {
         plan
     };
@@ -541,7 +550,7 @@ fn push_down_join(
         && predicates.is_empty()
         && inferred_join_predicates.is_empty()
     {
-        return Ok(Transformed::no(LogicalPlan::Join(join)));
+        return Ok(Transformed::no(LogicalPlan::join(join)));
     }
 
     push_down_all_join(predicates, inferred_join_predicates, join, on_filters)
@@ -765,18 +774,18 @@ impl OptimizerRule for PushDownFilter {
         plan: LogicalPlan,
         _config: &dyn OptimizerConfig,
     ) -> Result<Transformed<LogicalPlan>> {
-        if let LogicalPlan::Join(join) = plan {
+        if let LogicalPlan::Join(join, _) = plan {
             return push_down_join(join, None);
         };
 
         let plan_schema = Arc::clone(plan.schema());
 
-        let LogicalPlan::Filter(mut filter) = plan else {
+        let LogicalPlan::Filter(mut filter, _) = plan else {
             return Ok(Transformed::no(plan));
         };
 
         match Arc::unwrap_or_clone(filter.input) {
-            LogicalPlan::Filter(child_filter) => {
+            LogicalPlan::Filter(child_filter, _) => {
                 let parents_predicates = split_conjunction_owned(filter.predicate);
 
                 // remove duplicated filters
@@ -792,31 +801,31 @@ impl OptimizerRule for PushDownFilter {
                 let Some(new_predicate) = conjunction(new_predicates) else {
                     return plan_err!("at least one expression exists");
                 };
-                let new_filter = LogicalPlan::Filter(Filter::try_new(
+                let new_filter = LogicalPlan::filter(Filter::try_new(
                     new_predicate,
                     child_filter.input,
                 )?);
                 self.rewrite(new_filter, _config)
             }
-            LogicalPlan::Repartition(repartition) => {
+            LogicalPlan::Repartition(repartition, _) => {
                 let new_filter =
                     Filter::try_new(filter.predicate, Arc::clone(&repartition.input))
-                        .map(LogicalPlan::Filter)?;
-                insert_below(LogicalPlan::Repartition(repartition), new_filter)
+                        .map(LogicalPlan::filter)?;
+                insert_below(LogicalPlan::repartition(repartition), new_filter)
             }
-            LogicalPlan::Distinct(distinct) => {
+            LogicalPlan::Distinct(distinct, _) => {
                 let new_filter =
                     Filter::try_new(filter.predicate, Arc::clone(distinct.input()))
-                        .map(LogicalPlan::Filter)?;
-                insert_below(LogicalPlan::Distinct(distinct), new_filter)
+                        .map(LogicalPlan::filter)?;
+                insert_below(LogicalPlan::distinct(distinct), new_filter)
             }
-            LogicalPlan::Sort(sort) => {
+            LogicalPlan::Sort(sort, _) => {
                 let new_filter =
                     Filter::try_new(filter.predicate, Arc::clone(&sort.input))
-                        .map(LogicalPlan::Filter)?;
-                insert_below(LogicalPlan::Sort(sort), new_filter)
+                        .map(LogicalPlan::filter)?;
+                insert_below(LogicalPlan::sort(sort), new_filter)
             }
-            LogicalPlan::SubqueryAlias(subquery_alias) => {
+            LogicalPlan::SubqueryAlias(subquery_alias, _) => {
                 let mut replace_map = HashMap::new();
                 for (i, (qualifier, field)) in
                     subquery_alias.input.schema().iter().enumerate()
@@ -825,18 +834,18 @@ impl OptimizerRule for PushDownFilter {
                         subquery_alias.schema.qualified_field(i);
                     replace_map.insert(
                         qualified_name(sub_qualifier, sub_field.name()),
-                        Expr::Column(Column::new(qualifier.cloned(), field.name())),
+                        Expr::column(Column::new(qualifier.cloned(), field.name())),
                     );
                 }
                 let new_predicate = replace_cols_by_name(filter.predicate, &replace_map)?;
 
-                let new_filter = LogicalPlan::Filter(Filter::try_new(
+                let new_filter = LogicalPlan::filter(Filter::try_new(
                     new_predicate,
                     Arc::clone(&subquery_alias.input),
                 )?);
-                insert_below(LogicalPlan::SubqueryAlias(subquery_alias), new_filter)
+                insert_below(LogicalPlan::subquery_alias(subquery_alias), new_filter)
             }
-            LogicalPlan::Projection(projection) => {
+            LogicalPlan::Projection(projection, _) => {
                 let predicates = split_conjunction_owned(filter.predicate.clone());
                 let (new_projection, keep_predicate) =
                     rewrite_projection(predicates, projection)?;
@@ -845,15 +854,15 @@ impl OptimizerRule for PushDownFilter {
                         None => Ok(new_projection),
                         Some(keep_predicate) => new_projection.map_data(|child_plan| {
                             Filter::try_new(keep_predicate, Arc::new(child_plan))
-                                .map(LogicalPlan::Filter)
+                                .map(LogicalPlan::filter)
                         }),
                     }
                 } else {
                     filter.input = Arc::new(new_projection.data);
-                    Ok(Transformed::no(LogicalPlan::Filter(filter)))
+                    Ok(Transformed::no(LogicalPlan::filter(filter)))
                 }
             }
-            LogicalPlan::Unnest(mut unnest) => {
+            LogicalPlan::Unnest(mut unnest, _) => {
                 let predicates = split_conjunction_owned(filter.predicate.clone());
                 let mut non_unnest_predicates = vec![];
                 let mut unnest_predicates = vec![];
@@ -874,8 +883,8 @@ impl OptimizerRule for PushDownFilter {
                 // Unnest predicates should not be pushed down.
                 // If no non-unnest predicates exist, early return
                 if non_unnest_predicates.is_empty() {
-                    filter.input = Arc::new(LogicalPlan::Unnest(unnest));
-                    return Ok(Transformed::no(LogicalPlan::Filter(filter)));
+                    filter.input = Arc::new(LogicalPlan::unnest(unnest));
+                    return Ok(Transformed::no(LogicalPlan::filter(filter)));
                 }
 
                 // Push down non-unnest filter predicate
@@ -888,7 +897,7 @@ impl OptimizerRule for PushDownFilter {
 
                 let unnest_input = std::mem::take(&mut unnest.input);
 
-                let filter_with_unnest_input = LogicalPlan::Filter(Filter::try_new(
+                let filter_with_unnest_input = LogicalPlan::filter(Filter::try_new(
                     conjunction(non_unnest_predicates).unwrap(), // Safe to unwrap since non_unnest_predicates is not empty.
                     unnest_input,
                 )?);
@@ -897,16 +906,16 @@ impl OptimizerRule for PushDownFilter {
                 // The new filter plan will go through another rewrite pass since the rule itself
                 // is applied recursively to all the child from top to down
                 let unnest_plan =
-                    insert_below(LogicalPlan::Unnest(unnest), filter_with_unnest_input)?;
+                    insert_below(LogicalPlan::unnest(unnest), filter_with_unnest_input)?;
 
                 match conjunction(unnest_predicates) {
                     None => Ok(unnest_plan),
-                    Some(predicate) => Ok(Transformed::yes(LogicalPlan::Filter(
+                    Some(predicate) => Ok(Transformed::yes(LogicalPlan::filter(
                         Filter::try_new(predicate, Arc::new(unnest_plan.data))?,
                     ))),
                 }
             }
-            LogicalPlan::Union(ref union) => {
+            LogicalPlan::Union(ref union, _) => {
                 let mut inputs = Vec::with_capacity(union.inputs.len());
                 for input in &union.inputs {
                     let mut replace_map = HashMap::new();
@@ -915,23 +924,23 @@ impl OptimizerRule for PushDownFilter {
                             union.schema.qualified_field(i);
                         replace_map.insert(
                             qualified_name(union_qualifier, union_field.name()),
-                            Expr::Column(Column::new(qualifier.cloned(), field.name())),
+                            Expr::column(Column::new(qualifier.cloned(), field.name())),
                         );
                     }
 
                     let push_predicate =
                         replace_cols_by_name(filter.predicate.clone(), &replace_map)?;
-                    inputs.push(Arc::new(LogicalPlan::Filter(Filter::try_new(
+                    inputs.push(Arc::new(LogicalPlan::filter(Filter::try_new(
                         push_predicate,
                         Arc::clone(input),
                     )?)))
                 }
-                Ok(Transformed::yes(LogicalPlan::Union(Union {
+                Ok(Transformed::yes(LogicalPlan::union(Union {
                     inputs,
                     schema: Arc::clone(&plan_schema),
                 })))
             }
-            LogicalPlan::Aggregate(agg) => {
+            LogicalPlan::Aggregate(agg, _) => {
                 // We can push down Predicate which in groupby_expr.
                 let group_expr_columns = agg
                     .group_expr
@@ -965,7 +974,7 @@ impl OptimizerRule for PushDownFilter {
                     .collect::<Result<Vec<_>>>()?;
 
                 let agg_input = Arc::clone(&agg.input);
-                Transformed::yes(LogicalPlan::Aggregate(agg))
+                Transformed::yes(LogicalPlan::aggregate(agg))
                     .transform_data(|new_plan| {
                         // If we have a filter to push, we push it down to the input of the aggregate
                         if let Some(predicate) = conjunction(replaced_push_predicates) {
@@ -985,8 +994,8 @@ impl OptimizerRule for PushDownFilter {
                         }
                     })
             }
-            LogicalPlan::Join(join) => push_down_join(join, Some(&filter.predicate)),
-            LogicalPlan::TableScan(scan) => {
+            LogicalPlan::Join(join, _) => push_down_join(join, Some(&filter.predicate)),
+            LogicalPlan::TableScan(scan, _) => {
                 let filter_predicates = split_conjunction(&filter.predicate);
 
                 let (volatile_filters, non_volatile_filters): (Vec<&Expr>, Vec<&Expr>) =
@@ -1030,7 +1039,7 @@ impl OptimizerRule for PushDownFilter {
                     .cloned()
                     .collect();
 
-                let new_scan = LogicalPlan::TableScan(TableScan {
+                let new_scan = LogicalPlan::table_scan(TableScan {
                     filters: new_scan_filters,
                     ..scan
                 });
@@ -1043,7 +1052,7 @@ impl OptimizerRule for PushDownFilter {
                     }
                 })
             }
-            LogicalPlan::Extension(extension_plan) => {
+            LogicalPlan::Extension(extension_plan, _) => {
                 let prevent_cols =
                     extension_plan.node.prevent_predicate_push_down_columns();
 
@@ -1064,8 +1073,8 @@ impl OptimizerRule for PushDownFilter {
 
                 // all predicates are kept, no changes needed
                 if predicate_push_or_keep.iter().all(|&x| !x) {
-                    filter.input = Arc::new(LogicalPlan::Extension(extension_plan));
-                    return Ok(Transformed::no(LogicalPlan::Filter(filter)));
+                    filter.input = Arc::new(LogicalPlan::extension(extension_plan));
+                    return Ok(Transformed::no(LogicalPlan::filter(filter)));
                 }
 
                 // going to push some predicates down, so split the predicates
@@ -1088,7 +1097,7 @@ impl OptimizerRule for PushDownFilter {
                         .inputs()
                         .into_iter()
                         .map(|child| {
-                            Ok(LogicalPlan::Filter(Filter::try_new(
+                            Ok(LogicalPlan::filter(Filter::try_new(
                                 predicate.clone(),
                                 Arc::new(child.clone()),
                             )?))
@@ -1097,12 +1106,12 @@ impl OptimizerRule for PushDownFilter {
                     None => extension_plan.node.inputs().into_iter().cloned().collect(),
                 };
                 // extension with new inputs.
-                let child_plan = LogicalPlan::Extension(extension_plan);
+                let child_plan = LogicalPlan::extension(extension_plan);
                 let new_extension =
                     child_plan.with_new_exprs(child_plan.expressions(), new_children)?;
 
                 let new_plan = match conjunction(keep_predicates) {
-                    Some(predicate) => LogicalPlan::Filter(Filter::try_new(
+                    Some(predicate) => LogicalPlan::filter(Filter::try_new(
                         predicate,
                         Arc::new(new_extension),
                     )?),
@@ -1112,7 +1121,7 @@ impl OptimizerRule for PushDownFilter {
             }
             child => {
                 filter.input = Arc::new(child);
-                Ok(Transformed::no(LogicalPlan::Filter(filter)))
+                Ok(Transformed::no(LogicalPlan::filter(filter)))
             }
         }
     }
@@ -1178,7 +1187,7 @@ fn rewrite_projection(
         Some(expr) => {
             // re-write all filters based on this projection
             // E.g. in `Filter: b\n  Projection: a > 1 as b`, we can swap them, but the filter must be "a > 1"
-            let new_filter = LogicalPlan::Filter(Filter::try_new(
+            let new_filter = LogicalPlan::filter(Filter::try_new(
                 replace_cols_by_name(expr, &non_volatile_map)?,
                 std::mem::take(&mut projection.input),
             )?);
@@ -1186,17 +1195,17 @@ fn rewrite_projection(
             projection.input = Arc::new(new_filter);
 
             Ok((
-                Transformed::yes(LogicalPlan::Projection(projection)),
+                Transformed::yes(LogicalPlan::projection(projection)),
                 conjunction(keep_predicates),
             ))
         }
-        None => Ok((Transformed::no(LogicalPlan::Projection(projection)), None)),
+        None => Ok((Transformed::no(LogicalPlan::projection(projection)), None)),
     }
 }
 
 /// Creates a new LogicalPlan::Filter node.
 pub fn make_filter(predicate: Expr, input: Arc<LogicalPlan>) -> Result<LogicalPlan> {
-    Filter::try_new(predicate, input).map(LogicalPlan::Filter)
+    Filter::try_new(predicate, input).map(LogicalPlan::filter)
 }
 
 /// Replace the existing child of the single input node with `new_child`.
@@ -1247,7 +1256,7 @@ pub fn replace_cols_by_name(
     replace_map: &HashMap<String, Expr>,
 ) -> Result<Expr> {
     e.transform_up(|expr| {
-        Ok(if let Expr::Column(c) = &expr {
+        Ok(if let Expr::Column(c, _) = &expr {
             match replace_map.get(&c.flat_name()) {
                 Some(new_c) => Transformed::yes(new_c.clone()),
                 None => Transformed::no(expr),
@@ -1263,7 +1272,7 @@ pub fn replace_cols_by_name(
 fn contain(e: &Expr, check_map: &HashMap<String, Expr>) -> bool {
     let mut is_contain = false;
     e.apply(|expr| {
-        Ok(if let Expr::Column(c) = &expr {
+        Ok(if let Expr::Column(c, _) = &expr {
             match check_map.get(&c.flat_name()) {
                 Some(_) => {
                     is_contain = true;
@@ -1458,7 +1467,7 @@ mod tests {
     }
 
     fn add(left: Expr, right: Expr) -> Expr {
-        Expr::BinaryExpr(BinaryExpr::new(
+        Expr::binary_expr(BinaryExpr::new(
             Box::new(left),
             Operator::Plus,
             Box::new(right),
@@ -1466,7 +1475,7 @@ mod tests {
     }
 
     fn multiply(left: Expr, right: Expr) -> Expr {
-        Expr::BinaryExpr(BinaryExpr::new(
+        Expr::binary_expr(BinaryExpr::new(
             Box::new(left),
             Operator::Multiply,
             Box::new(right),
@@ -1594,7 +1603,7 @@ mod tests {
     fn user_defined_plan() -> Result<()> {
         let table_scan = test_table_scan()?;
 
-        let custom_plan = LogicalPlan::Extension(Extension {
+        let custom_plan = LogicalPlan::extension(Extension {
             node: Arc::new(NoopPlan {
                 input: vec![table_scan.clone()],
                 schema: Arc::clone(table_scan.schema()),
@@ -1610,7 +1619,7 @@ mod tests {
             \n  TableScan: test, full_filters=[test.a = Int64(1)]";
         assert_optimized_plan_eq(plan, expected)?;
 
-        let custom_plan = LogicalPlan::Extension(Extension {
+        let custom_plan = LogicalPlan::extension(Extension {
             node: Arc::new(NoopPlan {
                 input: vec![table_scan.clone()],
                 schema: Arc::clone(table_scan.schema()),
@@ -1627,7 +1636,7 @@ mod tests {
             \n    TableScan: test, full_filters=[test.a = Int64(1)]";
         assert_optimized_plan_eq(plan, expected)?;
 
-        let custom_plan = LogicalPlan::Extension(Extension {
+        let custom_plan = LogicalPlan::extension(Extension {
             node: Arc::new(NoopPlan {
                 input: vec![table_scan.clone(), table_scan.clone()],
                 schema: Arc::clone(table_scan.schema()),
@@ -1644,7 +1653,7 @@ mod tests {
             \n  TableScan: test, full_filters=[test.a = Int64(1)]";
         assert_optimized_plan_eq(plan, expected)?;
 
-        let custom_plan = LogicalPlan::Extension(Extension {
+        let custom_plan = LogicalPlan::extension(Extension {
             node: Arc::new(NoopPlan {
                 input: vec![table_scan.clone(), table_scan.clone()],
                 schema: Arc::clone(table_scan.schema()),
@@ -2536,7 +2545,7 @@ mod tests {
     ) -> Result<LogicalPlanBuilder> {
         let test_provider = PushDownProvider { filter_support };
 
-        let table_scan = LogicalPlan::TableScan(TableScan {
+        let table_scan = LogicalPlan::table_scan(TableScan {
             table_name: "test".into(),
             filters,
             projected_schema: Arc::new(DFSchema::try_from(
@@ -3317,7 +3326,7 @@ Projection: a, b
         let fun = ScalarUDF::new_from_impl(TestScalarUDF {
             signature: Signature::exact(vec![], Volatility::Volatile),
         });
-        let expr = Expr::ScalarFunction(ScalarFunction::new_udf(Arc::new(fun), vec![]));
+        let expr = Expr::scalar_function(ScalarFunction::new_udf(Arc::new(fun), vec![]));
 
         let plan = LogicalPlanBuilder::from(table_scan)
             .aggregate(vec![col("a")], vec![sum(col("b"))])?
@@ -3351,7 +3360,7 @@ Projection: a, b
         let fun = ScalarUDF::new_from_impl(TestScalarUDF {
             signature: Signature::exact(vec![], Volatility::Volatile),
         });
-        let expr = Expr::ScalarFunction(ScalarFunction::new_udf(Arc::new(fun), vec![]));
+        let expr = Expr::scalar_function(ScalarFunction::new_udf(Arc::new(fun), vec![]));
         let left = LogicalPlanBuilder::from(table_scan).build()?;
         let right_table_scan = test_table_scan_with_name("test2")?;
         let right = LogicalPlanBuilder::from(right_table_scan).build()?;
@@ -3397,7 +3406,7 @@ Projection: a, b
         let fun = ScalarUDF::new_from_impl(TestScalarUDF {
             signature: Signature::exact(vec![], Volatility::Volatile),
         });
-        let expr = Expr::ScalarFunction(ScalarFunction::new_udf(Arc::new(fun), vec![]));
+        let expr = Expr::scalar_function(ScalarFunction::new_udf(Arc::new(fun), vec![]));
         let plan = LogicalPlanBuilder::from(table_scan)
             .project(vec![col("a"), col("b")])?
             .filter(expr.gt(lit(0.1)))?
@@ -3421,7 +3430,7 @@ Projection: a, b
         let fun = ScalarUDF::new_from_impl(TestScalarUDF {
             signature: Signature::exact(vec![], Volatility::Volatile),
         });
-        let expr = Expr::ScalarFunction(ScalarFunction::new_udf(Arc::new(fun), vec![]));
+        let expr = Expr::scalar_function(ScalarFunction::new_udf(Arc::new(fun), vec![]));
         let plan = LogicalPlanBuilder::from(table_scan)
             .project(vec![col("a"), col("b")])?
             .filter(
@@ -3448,7 +3457,7 @@ Projection: a, b
         let fun = ScalarUDF::new_from_impl(TestScalarUDF {
             signature: Signature::exact(vec![], Volatility::Volatile),
         });
-        let expr = Expr::ScalarFunction(ScalarFunction::new_udf(Arc::new(fun), vec![]));
+        let expr = Expr::scalar_function(ScalarFunction::new_udf(Arc::new(fun), vec![]));
         let plan = table_scan_with_pushdown_provider_builder(
             TableProviderFilterPushDown::Unsupported,
             vec![],

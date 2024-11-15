@@ -63,7 +63,7 @@ impl OptimizerRule for EliminateDuplicatedExpr {
         _config: &dyn OptimizerConfig,
     ) -> Result<Transformed<LogicalPlan>> {
         match plan {
-            LogicalPlan::Sort(sort) => {
+            LogicalPlan::Sort(sort, _) => {
                 let len = sort.expr.len();
                 let unique_exprs: Vec<_> = sort
                     .expr
@@ -80,13 +80,13 @@ impl OptimizerRule for EliminateDuplicatedExpr {
                     Transformed::no
                 };
 
-                Ok(transformed(LogicalPlan::Sort(Sort {
+                Ok(transformed(LogicalPlan::sort(Sort {
                     expr: unique_exprs,
                     input: sort.input,
                     fetch: sort.fetch,
                 })))
             }
-            LogicalPlan::Aggregate(agg) => {
+            LogicalPlan::Aggregate(agg, _) => {
                 let len = agg.group_expr.len();
 
                 let unique_exprs: Vec<Expr> = agg
@@ -103,7 +103,7 @@ impl OptimizerRule for EliminateDuplicatedExpr {
                 };
 
                 Aggregate::try_new(agg.input, unique_exprs, agg.aggr_expr)
-                    .map(|f| transformed(LogicalPlan::Aggregate(f)))
+                    .map(|f| transformed(LogicalPlan::aggregate(f)))
             }
             _ => Ok(Transformed::no(plan)),
         }

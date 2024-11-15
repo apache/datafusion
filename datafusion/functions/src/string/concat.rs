@@ -301,7 +301,7 @@ pub fn simplify_concat(args: Vec<Expr>) -> Result<ExprSimplifyResult> {
         let data_types: Vec<_> = args
             .iter()
             .filter_map(|expr| match expr {
-                Expr::Literal(l) => Some(l.data_type()),
+                Expr::Literal(l, _) => Some(l.data_type()),
                 _ => None,
             })
             .collect();
@@ -310,25 +310,25 @@ pub fn simplify_concat(args: Vec<Expr>) -> Result<ExprSimplifyResult> {
 
     for arg in args.clone() {
         match arg {
-            Expr::Literal(ScalarValue::Utf8(None)) => {}
-            Expr::Literal(ScalarValue::LargeUtf8(None)) => {
+            Expr::Literal(ScalarValue::Utf8(None), _) => {}
+            Expr::Literal(ScalarValue::LargeUtf8(None), _) => {
             }
-            Expr::Literal(ScalarValue::Utf8View(None)) => { }
+            Expr::Literal(ScalarValue::Utf8View(None), _) => { }
 
             // filter out `null` args
             // All literals have been converted to Utf8 or LargeUtf8 in type_coercion.
             // Concatenate it with the `contiguous_scalar`.
-            Expr::Literal(ScalarValue::Utf8(Some(v))) => {
+            Expr::Literal(ScalarValue::Utf8(Some(v)), _) => {
                 contiguous_scalar += &v;
             }
-            Expr::Literal(ScalarValue::LargeUtf8(Some(v))) => {
+            Expr::Literal(ScalarValue::LargeUtf8(Some(v)), _) => {
                 contiguous_scalar += &v;
             }
-            Expr::Literal(ScalarValue::Utf8View(Some(v))) => {
+            Expr::Literal(ScalarValue::Utf8View(Some(v)), _) => {
                 contiguous_scalar += &v;
             }
 
-            Expr::Literal(x) => {
+            Expr::Literal(x, _) => {
                 return internal_err!(
                     "The scalar {x} should be casted to string type during the type coercion."
                 )
@@ -365,7 +365,7 @@ pub fn simplify_concat(args: Vec<Expr>) -> Result<ExprSimplifyResult> {
     }
 
     if !args.eq(&new_args) {
-        Ok(ExprSimplifyResult::Simplified(Expr::ScalarFunction(
+        Ok(ExprSimplifyResult::Simplified(Expr::scalar_function(
             ScalarFunction {
                 func: concat(),
                 args: new_args,

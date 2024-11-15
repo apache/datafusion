@@ -123,8 +123,10 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
 
     fn f_down(&mut self, plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
         match plan {
-            LogicalPlan::Filter(_) => Ok(Transformed::no(plan)),
-            LogicalPlan::Union(_) | LogicalPlan::Sort(_) | LogicalPlan::Extension(_) => {
+            LogicalPlan::Filter(_, _) => Ok(Transformed::no(plan)),
+            LogicalPlan::Union(_, _)
+            | LogicalPlan::Sort(_, _)
+            | LogicalPlan::Extension(_, _) => {
                 let plan_hold_outer = !plan.all_out_ref_exprs().is_empty();
                 if plan_hold_outer {
                     // the unsupported case
@@ -134,7 +136,7 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                     Ok(Transformed::no(plan))
                 }
             }
-            LogicalPlan::Limit(_) => {
+            LogicalPlan::Limit(_, _) => {
                 let plan_hold_outer = !plan.all_out_ref_exprs().is_empty();
                 match (self.exists_sub_query, plan_hold_outer) {
                     (false, true) => {
@@ -157,7 +159,7 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
     fn f_up(&mut self, plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
         let subquery_schema = plan.schema();
         match &plan {
-            LogicalPlan::Filter(plan_filter) => {
+            LogicalPlan::Filter(plan_filter, _) => {
                 let subquery_filter_exprs = split_conjunction(&plan_filter.predicate);
                 self.can_pull_over_aggregation = self.can_pull_over_aggregation
                     && subquery_filter_exprs
@@ -224,7 +226,7 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                     }
                 }
             }
-            LogicalPlan::Projection(projection)
+            LogicalPlan::Projection(projection, _)
                 if self.in_predicate_opt.is_some() || !self.join_filters.is_empty() =>
             {
                 let mut local_correlated_cols = BTreeSet::new();
@@ -249,7 +251,7 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                     )?;
                     if !expr_result_map_for_count_bug.is_empty() {
                         // has count bug
-                        let un_matched_row = Expr::Column(Column::new_unqualified(
+                        let un_matched_row = Expr::column(Column::new_unqualified(
                             UN_MATCHED_ROW_INDICATOR.to_string(),
                         ));
                         // add the unmatched rows indicator to the Projection expressions
@@ -266,7 +268,7 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                 }
                 Ok(Transformed::yes(new_plan))
             }
-            LogicalPlan::Aggregate(aggregate)
+            LogicalPlan::Aggregate(aggregate, _)
                 if self.in_predicate_opt.is_some() || !self.join_filters.is_empty() =>
             {
                 // If the aggregation is from a distinct it will not change the result for
@@ -314,7 +316,7 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                 }
                 Ok(Transformed::yes(new_plan))
             }
-            LogicalPlan::SubqueryAlias(alias) => {
+            LogicalPlan::SubqueryAlias(alias, _) => {
                 let mut local_correlated_cols = BTreeSet::new();
                 collect_local_correlated_cols(
                     &plan,
@@ -336,7 +338,7 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                 }
                 Ok(Transformed::no(plan))
             }
-            LogicalPlan::Limit(limit) => {
+            LogicalPlan::Limit(limit, _) => {
                 let input_expr_map = self
                     .collected_count_expr_map
                     .get(limit.input.deref())
@@ -347,7 +349,7 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                     // Correlated exist subquery, remove the limit(so that correlated expressions can pull up)
                     (true, false) => Transformed::yes(match limit.get_fetch_type()? {
                         FetchType::Literal(Some(0)) => {
-                            LogicalPlan::EmptyRelation(EmptyRelation {
+                            LogicalPlan::empty_relation(EmptyRelation {
                                 produce_one_row: false,
                                 schema: Arc::clone(limit.input.schema()),
                             })
@@ -380,7 +382,7 @@ impl PullUpCorrelatedExpr {
             }
         }
         for col in correlated_subquery_cols.iter() {
-            let col_expr = Expr::Column(col.clone());
+            let col_expr = Expr::column(col.clone());
             if !missing_exprs.contains(&col_expr) {
                 missing_exprs.push(col_expr)
             }
@@ -391,9 +393,9 @@ impl PullUpCorrelatedExpr {
                 // add to missing_exprs if not already there
                 let contains = missing_exprs
                     .iter()
-                    .any(|expr| matches!(expr, Expr::Column(c) if c == col));
+                    .any(|expr| matches!(expr, Expr::Column(c, _) if c == col));
                 if !contains {
-                    missing_exprs.push(Expr::Column(col.clone()))
+                    missing_exprs.push(Expr::column(col.clone()))
                 }
             }
         }
@@ -402,22 +404,25 @@ impl PullUpCorrelatedExpr {
 }
 
 fn can_pullup_over_aggregation(expr: &Expr) -> bool {
-    if let Expr::BinaryExpr(BinaryExpr {
-        left,
-        op: Operator::Eq,
-        right,
-    }) = expr
+    if let Expr::BinaryExpr(
+        BinaryExpr {
+            left,
+            op: Operator::Eq,
+            right,
+        },
+        _,
+    ) = expr
     {
         match (left.deref(), right.deref()) {
-            (Expr::Column(_), right) => !right.any_column_refs(),
-            (left, Expr::Column(_)) => !left.any_column_refs(),
-            (Expr::Cast(Cast { expr, .. }), right)
-                if matches!(expr.deref(), Expr::Column(_)) =>
+            (Expr::Column(_, _), right) => !right.any_column_refs(),
+            (left, Expr::Column(_, _)) => !left.any_column_refs(),
+            (Expr::Cast(Cast { expr, .. }, _), right)
+                if matches!(expr.deref(), Expr::Column(_, _)) =>
             {
                 !right.any_column_refs()
             }
-            (left, Expr::Cast(Cast { expr, .. }))
-                if matches!(expr.deref(), Expr::Column(_)) =>
+            (left, Expr::Cast(Cast { expr, .. }, _))
+                if matches!(expr.deref(), Expr::Column(_, _)) =>
             {
                 !left.any_column_refs()
             }
@@ -438,7 +443,7 @@ fn collect_local_correlated_cols(
             local_cols.extend(cols.clone());
         }
         // SubqueryAlias is treated as the leaf node
-        if !matches!(child, LogicalPlan::SubqueryAlias(_)) {
+        if !matches!(child, LogicalPlan::SubqueryAlias(_, _)) {
             collect_local_correlated_cols(child, all_cols_map, local_cols);
         }
     }
@@ -454,7 +459,7 @@ fn remove_duplicated_filter(filters: Vec<Expr>, in_predicate: &Expr) -> Vec<Expr
 
             // ignore the binary order
             !match (filter, in_predicate) {
-                (Expr::BinaryExpr(a_expr), Expr::BinaryExpr(b_expr)) => {
+                (Expr::BinaryExpr(a_expr, _), Expr::BinaryExpr(b_expr, _)) => {
                     (a_expr.op == b_expr.op)
                         && (a_expr.left == b_expr.left && a_expr.right == b_expr.right)
                         || (a_expr.left == b_expr.right && a_expr.right == b_expr.left)
@@ -475,11 +480,11 @@ fn agg_exprs_evaluation_result_on_empty_batch(
             .clone()
             .transform_up(|expr| {
                 let new_expr = match expr {
-                    Expr::AggregateFunction(expr::AggregateFunction { func, .. }) => {
+                    Expr::AggregateFunction(expr::AggregateFunction { func, .. }, _) => {
                         if func.name() == "count" {
-                            Transformed::yes(Expr::Literal(ScalarValue::Int64(Some(0))))
+                            Transformed::yes(Expr::literal(ScalarValue::Int64(Some(0))))
                         } else {
-                            Transformed::yes(Expr::Literal(ScalarValue::Null))
+                            Transformed::yes(Expr::literal(ScalarValue::Null))
                         }
                     }
                     _ => Transformed::no(expr),
@@ -493,7 +498,7 @@ fn agg_exprs_evaluation_result_on_empty_batch(
         let info = SimplifyContext::new(&props).with_schema(Arc::clone(schema));
         let simplifier = ExprSimplifier::new(info);
         let result_expr = simplifier.simplify(result_expr)?;
-        if matches!(result_expr, Expr::Literal(ScalarValue::Int64(_))) {
+        if matches!(result_expr, Expr::Literal(ScalarValue::Int64(_), _)) {
             expr_result_map_for_count_bug
                 .insert(e.schema_name().to_string(), result_expr);
         }
@@ -511,7 +516,7 @@ fn proj_exprs_evaluation_result_on_empty_batch(
         let result_expr = expr
             .clone()
             .transform_up(|expr| {
-                if let Expr::Column(Column { name, .. }) = &expr {
+                if let Expr::Column(Column { name, .. }, _) = &expr {
                     if let Some(result_expr) =
                         input_expr_result_map_for_count_bug.get(name)
                     {
@@ -531,8 +536,8 @@ fn proj_exprs_evaluation_result_on_empty_batch(
             let simplifier = ExprSimplifier::new(info);
             let result_expr = simplifier.simplify(result_expr)?;
             let expr_name = match expr {
-                Expr::Alias(Alias { name, .. }) => name.to_string(),
-                Expr::Column(Column { relation: _, name }) => name.to_string(),
+                Expr::Alias(Alias { name, .. }, _) => name.to_string(),
+                Expr::Column(Column { relation: _, name }, _) => name.to_string(),
                 _ => expr.schema_name().to_string(),
             };
             expr_result_map_for_count_bug.insert(expr_name, result_expr);
@@ -550,7 +555,7 @@ fn filter_exprs_evaluation_result_on_empty_batch(
     let result_expr = filter_expr
         .clone()
         .transform_up(|expr| {
-            if let Expr::Column(Column { name, .. }) = &expr {
+            if let Expr::Column(Column { name, .. }, _) = &expr {
                 if let Some(result_expr) = input_expr_result_map_for_count_bug.get(name) {
                     Ok(Transformed::yes(result_expr.clone()))
                 } else {
@@ -569,10 +574,10 @@ fn filter_exprs_evaluation_result_on_empty_batch(
         let result_expr = simplifier.simplify(result_expr)?;
         match &result_expr {
             // evaluate to false or null on empty batch, no need to pull up
-            Expr::Literal(ScalarValue::Null)
-            | Expr::Literal(ScalarValue::Boolean(Some(false))) => None,
+            Expr::Literal(ScalarValue::Null, _)
+            | Expr::Literal(ScalarValue::Boolean(Some(false)), _) => None,
             // evaluate to true on empty batch, need to pull up the expr
-            Expr::Literal(ScalarValue::Boolean(Some(true))) => {
+            Expr::Literal(ScalarValue::Boolean(Some(true)), _) => {
                 for (name, exprs) in input_expr_result_map_for_count_bug {
                     expr_result_map_for_count_bug.insert(name.clone(), exprs.clone());
                 }
@@ -581,13 +586,13 @@ fn filter_exprs_evaluation_result_on_empty_batch(
             // can not evaluate statically
             _ => {
                 for input_expr in input_expr_result_map_for_count_bug.values() {
-                    let new_expr = Expr::Case(expr::Case {
+                    let new_expr = Expr::case(expr::Case {
                         expr: None,
                         when_then_expr: vec![(
                             Box::new(result_expr.clone()),
                             Box::new(input_expr.clone()),
                         )],
-                        else_expr: Some(Box::new(Expr::Literal(ScalarValue::Null))),
+                        else_expr: Some(Box::new(Expr::literal(ScalarValue::Null))),
                     });
                     let expr_key = new_expr.schema_name().to_string();
                     expr_result_map_for_count_bug.insert(expr_key, new_expr);

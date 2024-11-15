@@ -145,7 +145,7 @@ impl AggregateUDF {
     /// This utility allows using the UDAF without requiring access to
     /// the registry, such as with the DataFrame API.
     pub fn call(&self, args: Vec<Expr>) -> Expr {
-        Expr::AggregateFunction(AggregateFunction::new_udf(
+        Expr::aggregate_function(AggregateFunction::new_udf(
             Arc::new(self.clone()),
             args,
             false,

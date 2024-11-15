@@ -60,7 +60,7 @@ logical_plan
 06)----------Filter: outer_ref(t1.a) = t2.a
 07)------------TableScan: t2
 08)----TableScan: t1
-physical_plan_error This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+physical_plan_error This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>, LogicalPlanStats)
 
 # set from other table
 query TT

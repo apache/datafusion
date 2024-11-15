@@ -43,37 +43,37 @@ pub trait TimestampLiteral {
 
 impl Literal for &str {
     fn lit(&self) -> Expr {
-        Expr::Literal(ScalarValue::from(*self))
+        Expr::literal(ScalarValue::from(*self))
     }
 }
 
 impl Literal for String {
     fn lit(&self) -> Expr {
-        Expr::Literal(ScalarValue::from(self.as_ref()))
+        Expr::literal(ScalarValue::from(self.as_ref()))
     }
 }
 
 impl Literal for &String {
     fn lit(&self) -> Expr {
-        Expr::Literal(ScalarValue::from(self.as_ref()))
+        Expr::literal(ScalarValue::from(self.as_ref()))
     }
 }
 
 impl Literal for Vec<u8> {
     fn lit(&self) -> Expr {
-        Expr::Literal(ScalarValue::Binary(Some((*self).to_owned())))
+        Expr::literal(ScalarValue::Binary(Some((*self).to_owned())))
     }
 }
 
 impl Literal for &[u8] {
     fn lit(&self) -> Expr {
-        Expr::Literal(ScalarValue::Binary(Some((*self).to_owned())))
+        Expr::literal(ScalarValue::Binary(Some((*self).to_owned())))
     }
 }
 
 impl Literal for ScalarValue {
     fn lit(&self) -> Expr {
-        Expr::Literal(self.clone())
+        Expr::literal(self.clone())
     }
 }
 
@@ -82,7 +82,7 @@ macro_rules! make_literal {
         #[doc = $DOC]
         impl Literal for $TYPE {
             fn lit(&self) -> Expr {
-                Expr::Literal(ScalarValue::$SCALAR(Some(self.clone())))
+                Expr::literal(ScalarValue::$SCALAR(Some(self.clone())))
             }
         }
     };
@@ -93,7 +93,7 @@ macro_rules! make_nonzero_literal {
         #[doc = $DOC]
         impl Literal for $TYPE {
             fn lit(&self) -> Expr {
-                Expr::Literal(ScalarValue::$SCALAR(Some(self.get())))
+                Expr::literal(ScalarValue::$SCALAR(Some(self.get())))
             }
         }
     };
@@ -104,7 +104,7 @@ macro_rules! make_timestamp_literal {
         #[doc = $DOC]
         impl TimestampLiteral for $TYPE {
             fn lit_timestamp_nano(&self) -> Expr {
-                Expr::Literal(ScalarValue::TimestampNanosecond(
+                Expr::literal(ScalarValue::TimestampNanosecond(
                     Some((self.clone()).into()),
                     None,
                 ))

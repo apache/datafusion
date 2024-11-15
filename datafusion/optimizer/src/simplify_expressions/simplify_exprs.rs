@@ -81,7 +81,7 @@ impl SimplifyExpressions {
     ) -> Result<Transformed<LogicalPlan>> {
         let schema = if !plan.inputs().is_empty() {
             DFSchemaRef::new(merge_schema(&plan.inputs()))
-        } else if let LogicalPlan::TableScan(scan) = &plan {
+        } else if let LogicalPlan::TableScan(scan, _) = &plan {
             // When predicates are pushed into a table scan, there is no input
             // schema to resolve predicates against, so it must be handled specially
             //
@@ -114,7 +114,7 @@ impl SimplifyExpressions {
         // This is likely related to the fact that order of the columns must
         // match the order of the children. see
         // https://github.com/apache/datafusion/pull/8780 for more details
-        let simplifier = if let LogicalPlan::Join(_) = plan {
+        let simplifier = if let LogicalPlan::Join(_, _) = plan {
             simplifier.with_canonicalize(false)
         } else {
             simplifier
@@ -406,12 +406,12 @@ mod tests {
 
     #[test]
     fn test_simplify_optimized_plan_support_values() -> Result<()> {
-        let expr1 = Expr::BinaryExpr(BinaryExpr::new(
+        let expr1 = Expr::binary_expr(BinaryExpr::new(
             Box::new(lit(1)),
             Operator::Plus,
             Box::new(lit(2)),
         ));
-        let expr2 = Expr::BinaryExpr(BinaryExpr::new(
+        let expr2 = Expr::binary_expr(BinaryExpr::new(
             Box::new(lit(2)),
             Operator::Minus,
             Box::new(lit(1)),
@@ -439,7 +439,7 @@ mod tests {
     #[test]
     fn cast_expr() -> Result<()> {
         let table_scan = test_table_scan();
-        let proj = vec![Expr::Cast(Cast::new(Box::new(lit("0")), DataType::Int32))];
+        let proj = vec![Expr::cast(Cast::new(Box::new(lit("0")), DataType::Int32))];
         let plan = LogicalPlanBuilder::from(table_scan)
             .project(proj)?
             .build()?;

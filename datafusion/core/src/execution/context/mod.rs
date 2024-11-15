@@ -648,7 +648,7 @@ impl SessionContext {
     /// [`SQLOptions::verify_plan`].
     pub async fn execute_logical_plan(&self, plan: LogicalPlan) -> Result<DataFrame> {
         match plan {
-            LogicalPlan::Ddl(ddl) => {
+            LogicalPlan::Ddl(ddl, _) => {
                 // Box::pin avoids allocating the stack space within this function's frame
                 // for every one of these individual async functions, decreasing the risk of
                 // stack overflows.
@@ -681,18 +681,21 @@ impl SessionContext {
                     DdlStatement::DropFunction(cmd) => {
                         Box::pin(self.drop_function(cmd)).await
                     }
-                    ddl => Ok(DataFrame::new(self.state(), LogicalPlan::Ddl(ddl))),
+                    ddl => Ok(DataFrame::new(self.state(), LogicalPlan::ddl(ddl))),
                 }
             }
             // TODO what about the other statements (like TransactionStart and TransactionEnd)
-            LogicalPlan::Statement(Statement::SetVariable(stmt)) => {
+            LogicalPlan::Statement(Statement::SetVariable(stmt), _) => {
                 self.set_variable(stmt).await
             }
-            LogicalPlan::Statement(Statement::Prepare(Prepare {
-                name,
-                input,
-                data_types,
-            })) => {
+            LogicalPlan::Statement(
+                Statement::Prepare(Prepare {
+                    name,
+                    input,
+                    data_types,
+                }),
+                _,
+            ) => {
                 // The number of parameters must match the specified data types length.
                 if !data_types.is_empty() {
                     let param_names = input.get_parameter_names()?;
@@ -712,10 +715,10 @@ impl SessionContext {
                 self.state.write().store_prepared(name, data_types, input)?;
                 self.return_empty_dataframe()
             }
-            LogicalPlan::Statement(Statement::Execute(execute)) => {
+            LogicalPlan::Statement(Statement::Execute(execute), _) => {
                 self.execute_prepared(execute)
             }
-            LogicalPlan::Statement(Statement::Deallocate(deallocate)) => {
+            LogicalPlan::Statement(Statement::Deallocate(deallocate), _) => {
                 self.state
                     .write()
                     .remove_prepared(deallocate.name.as_str())?;
@@ -1133,7 +1136,7 @@ impl SessionContext {
         let mut params: Vec<ScalarValue> = parameters
             .into_iter()
             .map(|e| match e {
-                Expr::Literal(scalar) => Ok(scalar),
+                Expr::Literal(scalar, _) => Ok(scalar),
                 _ => not_impl_err!("Unsupported parameter type: {}", e),
             })
             .collect::<Result<_>>()?;
@@ -1769,16 +1772,16 @@ impl<'n> TreeNodeVisitor<'n> for BadPlanVisitor<'_> {
 
     fn f_down(&mut self, node: &'n Self::Node) -> Result<TreeNodeRecursion> {
         match node {
-            LogicalPlan::Ddl(ddl) if !self.options.allow_ddl => {
+            LogicalPlan::Ddl(ddl, _) if !self.options.allow_ddl => {
                 plan_err!("DDL not supported: {}", ddl.name())
             }
-            LogicalPlan::Dml(dml) if !self.options.allow_dml => {
+            LogicalPlan::Dml(dml, _) if !self.options.allow_dml => {
                 plan_err!("DML not supported: {}", dml.op)
             }
-            LogicalPlan::Copy(_) if !self.options.allow_dml => {
+            LogicalPlan::Copy(_, _) if !self.options.allow_dml => {
                 plan_err!("DML not supported: COPY")
             }
-            LogicalPlan::Statement(stmt) if !self.options.allow_statements => {
+            LogicalPlan::Statement(stmt, _) if !self.options.allow_statements => {
                 plan_err!("Statement not supported: {}", stmt.name())
             }
             _ => Ok(TreeNodeRecursion::Continue),

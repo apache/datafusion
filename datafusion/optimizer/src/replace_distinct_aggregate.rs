@@ -75,7 +75,7 @@ impl OptimizerRule for ReplaceDistinctWithAggregate {
         config: &dyn OptimizerConfig,
     ) -> Result<Transformed<LogicalPlan>> {
         match plan {
-            LogicalPlan::Distinct(Distinct::All(input)) => {
+            LogicalPlan::Distinct(Distinct::All(input), _) => {
                 let group_expr = expand_wildcard(input.schema(), &input, None)?;
 
                 let field_count = input.schema().fields().len();
@@ -93,20 +93,23 @@ impl OptimizerRule for ReplaceDistinctWithAggregate {
                 }
 
                 // Replace with aggregation:
-                let aggr_plan = LogicalPlan::Aggregate(Aggregate::try_new(
+                let aggr_plan = LogicalPlan::aggregate(Aggregate::try_new(
                     input,
                     group_expr,
                     vec![],
                 )?);
                 Ok(Transformed::yes(aggr_plan))
             }
-            LogicalPlan::Distinct(Distinct::On(DistinctOn {
-                select_expr,
-                on_expr,
-                sort_expr,
-                input,
-                schema,
-            })) => {
+            LogicalPlan::Distinct(
+                Distinct::On(DistinctOn {
+                    select_expr,
+                    on_expr,
+                    sort_expr,
+                    input,
+                    schema,
+                }),
+                _,
+            ) => {
                 let expr_cnt = on_expr.len();
 
                 // Construct the aggregation expression to be used to fetch the selected expressions.
@@ -129,7 +132,7 @@ impl OptimizerRule for ReplaceDistinctWithAggregate {
                 let group_expr = normalize_cols(on_expr, input.as_ref())?;
 
                 // Build the aggregation plan
-                let plan = LogicalPlan::Aggregate(Aggregate::try_new(
+                let plan = LogicalPlan::aggregate(Aggregate::try_new(
                     input, group_expr, aggr_expr,
                 )?);
                 // TODO use LogicalPlanBuilder directly rather than recreating the Aggregate

@@ -37,7 +37,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         let sub_plan = self.query_to_plan(subquery, planner_context)?;
         let outer_ref_columns = sub_plan.all_out_ref_exprs();
         planner_context.set_outer_query_schema(old_outer_query_schema);
-        Ok(Expr::Exists(Exists {
+        Ok(Expr::exists(Exists {
             subquery: Subquery {
                 subquery: Arc::new(sub_plan),
                 outer_ref_columns,
@@ -60,7 +60,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         let outer_ref_columns = sub_plan.all_out_ref_exprs();
         planner_context.set_outer_query_schema(old_outer_query_schema);
         let expr = Box::new(self.sql_to_expr(expr, input_schema, planner_context)?);
-        Ok(Expr::InSubquery(InSubquery::new(
+        Ok(Expr::in_subquery(InSubquery::new(
             expr,
             Subquery {
                 subquery: Arc::new(sub_plan),
@@ -81,7 +81,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         let sub_plan = self.query_to_plan(subquery, planner_context)?;
         let outer_ref_columns = sub_plan.all_out_ref_exprs();
         planner_context.set_outer_query_schema(old_outer_query_schema);
-        Ok(Expr::ScalarSubquery(Subquery {
+        Ok(Expr::scalar_subquery(Subquery {
             subquery: Arc::new(sub_plan),
             outer_ref_columns,
         }))

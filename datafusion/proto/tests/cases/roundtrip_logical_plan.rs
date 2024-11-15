@@ -133,7 +133,7 @@ async fn roundtrip_logical_plan() -> Result<()> {
     ctx.register_csv("t1", "tests/testdata/test.csv", CsvReadOptions::default())
         .await?;
     let scan = ctx.table("t1").await?.into_optimized_plan()?;
-    let topk_plan = LogicalPlan::Extension(Extension {
+    let topk_plan = LogicalPlan::extension(Extension {
         node: Arc::new(TopKPlanNode::new(3, scan, col("revenue"))),
     });
     let extension_codec = TopKExtensionCodec {};
@@ -380,7 +380,7 @@ async fn roundtrip_logical_plan_copy_to_sql_options() -> Result<()> {
     let input = create_csv_scan(&ctx).await?;
     let file_type = format_as_file_type(Arc::new(CsvFormatFactory::new()));
 
-    let plan = LogicalPlan::Copy(CopyTo {
+    let plan = LogicalPlan::copy(CopyTo {
         input: Arc::new(input),
         output_url: "test.csv".to_string(),
         partition_by: vec!["a".to_string(), "b".to_string(), "c".to_string()],
@@ -420,7 +420,7 @@ async fn roundtrip_logical_plan_copy_to_writer_options() -> Result<()> {
         ParquetFormatFactory::new_with_options(parquet_format),
     ));
 
-    let plan = LogicalPlan::Copy(CopyTo {
+    let plan = LogicalPlan::copy(CopyTo {
         input: Arc::new(input),
         output_url: "test.parquet".to_string(),
         file_type,
@@ -434,7 +434,7 @@ async fn roundtrip_logical_plan_copy_to_writer_options() -> Result<()> {
         logical_plan_from_bytes_with_extension_codec(&bytes, &ctx, &codec)?;
     assert_eq!(format!("{plan:?}"), format!("{logical_round_trip:?}"));
     match logical_round_trip {
-        LogicalPlan::Copy(copy_to) => {
+        LogicalPlan::Copy(copy_to, _) => {
             assert_eq!("test.parquet", copy_to.output_url);
             assert_eq!(vec!["a", "b", "c"], copy_to.partition_by);
             assert_eq!(copy_to.file_type.get_ext(), "parquet".to_string());
@@ -452,7 +452,7 @@ async fn roundtrip_logical_plan_copy_to_arrow() -> Result<()> {
 
     let file_type = format_as_file_type(Arc::new(ArrowFormatFactory::new()));
 
-    let plan = LogicalPlan::Copy(CopyTo {
+    let plan = LogicalPlan::copy(CopyTo {
         input: Arc::new(input),
         output_url: "test.arrow".to_string(),
         partition_by: vec!["a".to_string(), "b".to_string(), "c".to_string()],
@@ -467,7 +467,7 @@ async fn roundtrip_logical_plan_copy_to_arrow() -> Result<()> {
     assert_eq!(format!("{plan}"), format!("{logical_round_trip}"));
 
     match logical_round_trip {
-        LogicalPlan::Copy(copy_to) => {
+        LogicalPlan::Copy(copy_to, _) => {
             assert_eq!("test.arrow", copy_to.output_url);
             assert_eq!("arrow".to_string(), copy_to.file_type.get_ext());
             assert_eq!(vec!["a", "b", "c"], copy_to.partition_by);
@@ -499,7 +499,7 @@ async fn roundtrip_logical_plan_copy_to_csv() -> Result<()> {
         csv_format.clone(),
     )));
 
-    let plan = LogicalPlan::Copy(CopyTo {
+    let plan = LogicalPlan::copy(CopyTo {
         input: Arc::new(input),
         output_url: "test.csv".to_string(),
         partition_by: vec!["a".to_string(), "b".to_string(), "c".to_string()],
@@ -514,7 +514,7 @@ async fn roundtrip_logical_plan_copy_to_csv() -> Result<()> {
     assert_eq!(format!("{plan:?}"), format!("{logical_round_trip:?}"));
 
     match logical_round_trip {
-        LogicalPlan::Copy(copy_to) => {
+        LogicalPlan::Copy(copy_to, _) => {
             assert_eq!("test.csv", copy_to.output_url);
             assert_eq!("csv".to_string(), copy_to.file_type.get_ext());
             assert_eq!(vec!["a", "b", "c"], copy_to.partition_by);
@@ -565,7 +565,7 @@ async fn roundtrip_logical_plan_copy_to_json() -> Result<()> {
         json_format.clone(),
     )));
 
-    let plan = LogicalPlan::Copy(CopyTo {
+    let plan = LogicalPlan::copy(CopyTo {
         input: Arc::new(input),
         output_url: "test.json".to_string(),
         partition_by: vec!["a".to_string(), "b".to_string(), "c".to_string()],
@@ -581,7 +581,7 @@ async fn roundtrip_logical_plan_copy_to_json() -> Result<()> {
     assert_eq!(format!("{plan}"), format!("{logical_round_trip}"));
 
     match logical_round_trip {
-        LogicalPlan::Copy(copy_to) => {
+        LogicalPlan::Copy(copy_to, _) => {
             assert_eq!("test.json", copy_to.output_url);
             assert_eq!("json".to_string(), copy_to.file_type.get_ext());
             assert_eq!(vec!["a", "b", "c"], copy_to.partition_by);
@@ -637,7 +637,7 @@ async fn roundtrip_logical_plan_copy_to_parquet() -> Result<()> {
         ParquetFormatFactory::new_with_options(parquet_format.clone()),
     ));
 
-    let plan = LogicalPlan::Copy(CopyTo {
+    let plan = LogicalPlan::copy(CopyTo {
         input: Arc::new(input),
         output_url: "test.parquet".to_string(),
         partition_by: vec!["a".to_string(), "b".to_string(), "c".to_string()],
@@ -653,7 +653,7 @@ async fn roundtrip_logical_plan_copy_to_parquet() -> Result<()> {
     assert_eq!(format!("{plan}"), format!("{logical_round_trip}"));
 
     match logical_round_trip {
-        LogicalPlan::Copy(copy_to) => {
+        LogicalPlan::Copy(copy_to, _) => {
             assert_eq!("test.parquet", copy_to.output_url);
             assert_eq!("parquet".to_string(), copy_to.file_type.get_ext());
             assert_eq!(vec!["a", "b", "c"], copy_to.partition_by);
@@ -1902,7 +1902,7 @@ fn roundtrip_dfschema() {
 
 #[test]
 fn roundtrip_not() {
-    let test_expr = Expr::Not(Box::new(lit(1.0_f32)));
+    let test_expr = Expr::_not(Box::new(lit(1.0_f32)));
 
     let ctx = SessionContext::new();
     roundtrip_expr_test(test_expr, ctx);
@@ -1910,7 +1910,7 @@ fn roundtrip_not() {
 
 #[test]
 fn roundtrip_is_null() {
-    let test_expr = Expr::IsNull(Box::new(col("id")));
+    let test_expr = Expr::_is_null(Box::new(col("id")));
 
     let ctx = SessionContext::new();
     roundtrip_expr_test(test_expr, ctx);
@@ -1918,7 +1918,7 @@ fn roundtrip_is_null() {
 
 #[test]
 fn roundtrip_is_not_null() {
-    let test_expr = Expr::IsNotNull(Box::new(col("id")));
+    let test_expr = Expr::_is_not_null(Box::new(col("id")));
 
     let ctx = SessionContext::new();
     roundtrip_expr_test(test_expr, ctx);
@@ -1926,7 +1926,7 @@ fn roundtrip_is_not_null() {
 
 #[test]
 fn roundtrip_between() {
-    let test_expr = Expr::Between(Between::new(
+    let test_expr = Expr::_between(Between::new(
         Box::new(lit(1.0_f32)),
         true,
         Box::new(lit(2.0_f32)),
@@ -1940,7 +1940,7 @@ fn roundtrip_between() {
 #[test]
 fn roundtrip_binary_op() {
     fn test(op: Operator) {
-        let test_expr = Expr::BinaryExpr(BinaryExpr::new(
+        let test_expr = Expr::binary_expr(BinaryExpr::new(
             Box::new(lit(1.0_f32)),
             op,
             Box::new(lit(2.0_f32)),
@@ -1974,7 +1974,7 @@ fn roundtrip_binary_op() {
 
 #[test]
 fn roundtrip_case() {
-    let test_expr = Expr::Case(Case::new(
+    let test_expr = Expr::case(Case::new(
         Some(Box::new(lit(1.0_f32))),
         vec![(Box::new(lit(2.0_f32)), Box::new(lit(3.0_f32)))],
         Some(Box::new(lit(4.0_f32))),
@@ -1986,10 +1986,10 @@ fn roundtrip_case() {
 
 #[test]
 fn roundtrip_case_with_null() {
-    let test_expr = Expr::Case(Case::new(
+    let test_expr = Expr::case(Case::new(
         Some(Box::new(lit(1.0_f32))),
         vec![(Box::new(lit(2.0_f32)), Box::new(lit(3.0_f32)))],
-        Some(Box::new(Expr::Literal(ScalarValue::Null))),
+        Some(Box::new(Expr::literal(ScalarValue::Null))),
     ));
 
     let ctx = SessionContext::new();
@@ -1998,7 +1998,7 @@ fn roundtrip_case_with_null() {
 
 #[test]
 fn roundtrip_null_literal() {
-    let test_expr = Expr::Literal(ScalarValue::Null);
+    let test_expr = Expr::literal(ScalarValue::Null);
 
     let ctx = SessionContext::new();
     roundtrip_expr_test(test_expr, ctx);
@@ -2006,7 +2006,7 @@ fn roundtrip_null_literal() {
 
 #[test]
 fn roundtrip_cast() {
-    let test_expr = Expr::Cast(Cast::new(Box::new(lit(1.0_f32)), DataType::Boolean));
+    let test_expr = Expr::cast(Cast::new(Box::new(lit(1.0_f32)), DataType::Boolean));
 
     let ctx = SessionContext::new();
     roundtrip_expr_test(test_expr, ctx);
@@ -2015,13 +2015,13 @@ fn roundtrip_cast() {
 #[test]
 fn roundtrip_try_cast() {
     let test_expr =
-        Expr::TryCast(TryCast::new(Box::new(lit(1.0_f32)), DataType::Boolean));
+        Expr::try_cast(TryCast::new(Box::new(lit(1.0_f32)), DataType::Boolean));
 
     let ctx = SessionContext::new();
     roundtrip_expr_test(test_expr, ctx);
 
     let test_expr =
-        Expr::TryCast(TryCast::new(Box::new(lit("not a bool")), DataType::Boolean));
+        Expr::try_cast(TryCast::new(Box::new(lit("not a bool")), DataType::Boolean));
 
     let ctx = SessionContext::new();
     roundtrip_expr_test(test_expr, ctx);
@@ -2029,7 +2029,7 @@ fn roundtrip_try_cast() {
 
 #[test]
 fn roundtrip_negative() {
-    let test_expr = Expr::Negative(Box::new(lit(1.0_f32)));
+    let test_expr = Expr::negative(Box::new(lit(1.0_f32)));
 
     let ctx = SessionContext::new();
     roundtrip_expr_test(test_expr, ctx);
@@ -2037,7 +2037,7 @@ fn roundtrip_negative() {
 
 #[test]
 fn roundtrip_inlist() {
-    let test_expr = Expr::InList(InList::new(
+    let test_expr = Expr::_in_list(InList::new(
         Box::new(lit(1.0_f32)),
         vec![lit(2.0_f32)],
         true,
@@ -2049,7 +2049,7 @@ fn roundtrip_inlist() {
 
 #[test]
 fn roundtrip_unnest() {
-    let test_expr = Expr::Unnest(Unnest {
+    let test_expr = Expr::unnest(Unnest {
         expr: Box::new(col("col")),
     });
 
@@ -2059,7 +2059,7 @@ fn roundtrip_unnest() {
 
 #[test]
 fn roundtrip_wildcard() {
-    let test_expr = Expr::Wildcard(Wildcard {
+    let test_expr = Expr::wildcard(Wildcard {
         qualifier: None,
         options: WildcardOptions::default(),
     });
@@ -2070,7 +2070,7 @@ fn roundtrip_wildcard() {
 
 #[test]
 fn roundtrip_qualified_wildcard() {
-    let test_expr = Expr::Wildcard(Wildcard {
+    let test_expr = Expr::wildcard(Wildcard {
         qualifier: Some("foo".into()),
         options: WildcardOptions::default(),
     });
@@ -2082,7 +2082,7 @@ fn roundtrip_qualified_wildcard() {
 #[test]
 fn roundtrip_like() {
     fn like(negated: bool, escape_char: Option<char>) {
-        let test_expr = Expr::Like(Like::new(
+        let test_expr = Expr::_like(Like::new(
             negated,
             Box::new(col("col")),
             Box::new(lit("[0-9]+")),
@@ -2101,7 +2101,7 @@ fn roundtrip_like() {
 #[test]
 fn roundtrip_ilike() {
     fn ilike(negated: bool, escape_char: Option<char>) {
-        let test_expr = Expr::Like(Like::new(
+        let test_expr = Expr::_like(Like::new(
             negated,
             Box::new(col("col")),
             Box::new(lit("[0-9]+")),
@@ -2120,7 +2120,7 @@ fn roundtrip_ilike() {
 #[test]
 fn roundtrip_similar_to() {
     fn similar_to(negated: bool, escape_char: Option<char>) {
-        let test_expr = Expr::SimilarTo(Like::new(
+        let test_expr = Expr::similar_to(Like::new(
             negated,
             Box::new(col("col")),
             Box::new(lit("[0-9]+")),
@@ -2195,7 +2195,7 @@ fn roundtrip_aggregate_udf() {
         Arc::new(vec![DataType::Float64, DataType::UInt32]),
     );
 
-    let test_expr = Expr::AggregateFunction(expr::AggregateFunction::new_udf(
+    let test_expr = Expr::aggregate_function(expr::AggregateFunction::new_udf(
         Arc::new(dummy_agg.clone()),
         vec![lit(1.0_f64)],
         false,
@@ -2227,7 +2227,7 @@ fn roundtrip_scalar_udf() {
         scalar_fn,
     );
 
-    let test_expr = Expr::ScalarFunction(ScalarFunction::new_udf(
+    let test_expr = Expr::scalar_function(ScalarFunction::new_udf(
         Arc::new(udf.clone()),
         vec![lit("")],
     ));
@@ -2266,7 +2266,7 @@ fn roundtrip_aggregate_udf_extension_codec() {
 
 #[test]
 fn roundtrip_grouping_sets() {
-    let test_expr = Expr::GroupingSet(GroupingSet::GroupingSets(vec![
+    let test_expr = Expr::grouping_set(GroupingSet::GroupingSets(vec![
         vec![col("a")],
         vec![col("b")],
         vec![col("a"), col("b")],
@@ -2278,7 +2278,7 @@ fn roundtrip_grouping_sets() {
 
 #[test]
 fn roundtrip_rollup() {
-    let test_expr = Expr::GroupingSet(GroupingSet::Rollup(vec![col("a"), col("b")]));
+    let test_expr = Expr::grouping_set(GroupingSet::Rollup(vec![col("a"), col("b")]));
 
     let ctx = SessionContext::new();
     roundtrip_expr_test(test_expr, ctx);
@@ -2286,7 +2286,7 @@ fn roundtrip_rollup() {
 
 #[test]
 fn roundtrip_cube() {
-    let test_expr = Expr::GroupingSet(GroupingSet::Cube(vec![col("a"), col("b")]));
+    let test_expr = Expr::grouping_set(GroupingSet::Cube(vec![col("a"), col("b")]));
 
     let ctx = SessionContext::new();
     roundtrip_expr_test(test_expr, ctx);
@@ -2305,13 +2305,13 @@ fn roundtrip_substr() {
         .unwrap();
 
     // substr(string, position)
-    let test_expr = Expr::ScalarFunction(ScalarFunction::new_udf(
+    let test_expr = Expr::scalar_function(ScalarFunction::new_udf(
         fun.clone(),
         vec![col("col"), lit(1_i64)],
     ));
 
     // substr(string, position, count)
-    let test_expr_with_count = Expr::ScalarFunction(ScalarFunction::new_udf(
+    let test_expr_with_count = Expr::scalar_function(ScalarFunction::new_udf(
         fun,
         vec![col("col"), lit(1_i64), lit(1_i64)],
     ));
@@ -2324,7 +2324,7 @@ fn roundtrip_window() {
     let ctx = SessionContext::new();
 
     // 1. without window_frame
-    let test_expr1 = Expr::WindowFunction(expr::WindowFunction::new(
+    let test_expr1 = Expr::window_function(expr::WindowFunction::new(
         WindowFunctionDefinition::WindowUDF(rank_udwf()),
         vec![],
     ))
@@ -2335,7 +2335,7 @@ fn roundtrip_window() {
     .unwrap();
 
     // 2. with default window_frame
-    let test_expr2 = Expr::WindowFunction(expr::WindowFunction::new(
+    let test_expr2 = Expr::window_function(expr::WindowFunction::new(
         WindowFunctionDefinition::WindowUDF(rank_udwf()),
         vec![],
     ))
@@ -2352,7 +2352,7 @@ fn roundtrip_window() {
         WindowFrameBound::Following(ScalarValue::UInt64(Some(2))),
     );
 
-    let test_expr3 = Expr::WindowFunction(expr::WindowFunction::new(
+    let test_expr3 = Expr::window_function(expr::WindowFunction::new(
         WindowFunctionDefinition::WindowUDF(rank_udwf()),
         vec![],
     ))
@@ -2369,7 +2369,7 @@ fn roundtrip_window() {
         WindowFrameBound::Following(ScalarValue::UInt64(Some(2))),
     );
 
-    let test_expr4 = Expr::WindowFunction(expr::WindowFunction::new(
+    let test_expr4 = Expr::window_function(expr::WindowFunction::new(
         WindowFunctionDefinition::AggregateUDF(max_udaf()),
         vec![col("col1")],
     ))
@@ -2419,7 +2419,7 @@ fn roundtrip_window() {
         Arc::new(vec![DataType::Float64, DataType::UInt32]),
     );
 
-    let test_expr5 = Expr::WindowFunction(expr::WindowFunction::new(
+    let test_expr5 = Expr::window_function(expr::WindowFunction::new(
         WindowFunctionDefinition::AggregateUDF(Arc::new(dummy_agg.clone())),
         vec![col("col1")],
     ))
@@ -2500,7 +2500,7 @@ fn roundtrip_window() {
 
     let dummy_window_udf = WindowUDF::from(SimpleWindowUDF::new());
 
-    let test_expr6 = Expr::WindowFunction(expr::WindowFunction::new(
+    let test_expr6 = Expr::window_function(expr::WindowFunction::new(
         WindowFunctionDefinition::WindowUDF(Arc::new(dummy_window_udf.clone())),
         vec![col("col1")],
     ))
@@ -2510,7 +2510,7 @@ fn roundtrip_window() {
     .build()
     .unwrap();
 
-    let text_expr7 = Expr::WindowFunction(expr::WindowFunction::new(
+    let text_expr7 = Expr::window_function(expr::WindowFunction::new(
         WindowFunctionDefinition::AggregateUDF(avg_udaf()),
         vec![col("col1")],
     ))

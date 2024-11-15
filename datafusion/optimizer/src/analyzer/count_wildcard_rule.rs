@@ -72,17 +72,17 @@ fn analyze_internal(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
     plan.map_expressions(|expr| {
         let original_name = name_preserver.save(&expr);
         let transformed_expr = expr.transform_up(|expr| match expr {
-            Expr::WindowFunction(mut window_function)
+            Expr::WindowFunction(mut window_function, _)
                 if is_count_star_window_aggregate(&window_function) =>
             {
                 window_function.args = vec![lit(COUNT_STAR_EXPANSION)];
-                Ok(Transformed::yes(Expr::WindowFunction(window_function)))
+                Ok(Transformed::yes(Expr::window_function(window_function)))
             }
-            Expr::AggregateFunction(mut aggregate_function)
+            Expr::AggregateFunction(mut aggregate_function, _)
                 if is_count_star_aggregate(&aggregate_function) =>
             {
                 aggregate_function.args = vec![lit(COUNT_STAR_EXPANSION)];
-                Ok(Transformed::yes(Expr::AggregateFunction(
+                Ok(Transformed::yes(Expr::aggregate_function(
                     aggregate_function,
                 )))
             }
@@ -219,7 +219,7 @@ mod tests {
         let table_scan = test_table_scan()?;
 
         let plan = LogicalPlanBuilder::from(table_scan)
-            .window(vec![Expr::WindowFunction(WindowFunction::new(
+            .window(vec![Expr::window_function(WindowFunction::new(
                 WindowFunctionDefinition::AggregateUDF(count_udaf()),
                 vec![wildcard()],
             ))

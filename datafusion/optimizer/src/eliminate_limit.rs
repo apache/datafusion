@@ -59,15 +59,15 @@ impl OptimizerRule for EliminateLimit {
         _config: &dyn OptimizerConfig,
     ) -> Result<Transformed<LogicalPlan>, datafusion_common::DataFusionError> {
         match plan {
-            LogicalPlan::Limit(limit) => {
+            LogicalPlan::Limit(limit, _) => {
                 // Only supports rewriting for literal fetch
                 let FetchType::Literal(fetch) = limit.get_fetch_type()? else {
-                    return Ok(Transformed::no(LogicalPlan::Limit(limit)));
+                    return Ok(Transformed::no(LogicalPlan::limit(limit)));
                 };
 
                 if let Some(v) = fetch {
                     if v == 0 {
-                        return Ok(Transformed::yes(LogicalPlan::EmptyRelation(
+                        return Ok(Transformed::yes(LogicalPlan::empty_relation(
                             EmptyRelation {
                                 produce_one_row: false,
                                 schema: Arc::clone(limit.input.schema()),
@@ -79,7 +79,7 @@ impl OptimizerRule for EliminateLimit {
                     // we can remove it. Its input also can be Limit, so we should apply again.
                     return self.rewrite(Arc::unwrap_or_clone(limit.input), _config);
                 }
-                Ok(Transformed::no(LogicalPlan::Limit(limit)))
+                Ok(Transformed::no(LogicalPlan::limit(limit)))
             }
             _ => Ok(Transformed::no(plan)),
         }

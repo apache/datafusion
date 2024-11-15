@@ -193,7 +193,7 @@ pub fn to_substrait_rel(
     extensions: &mut Extensions,
 ) -> Result<Box<Rel>> {
     match plan {
-        LogicalPlan::TableScan(scan) => {
+        LogicalPlan::TableScan(scan, _) => {
             let projection = scan.projection.as_ref().map(|p| {
                 p.iter()
                     .map(|i| StructItem {
@@ -226,7 +226,7 @@ pub fn to_substrait_rel(
                 }))),
             }))
         }
-        LogicalPlan::EmptyRelation(e) => {
+        LogicalPlan::EmptyRelation(e, _) => {
             if e.produce_one_row {
                 return not_impl_err!(
                     "Producing a row from empty relation is unsupported"
@@ -247,7 +247,7 @@ pub fn to_substrait_rel(
                 }))),
             }))
         }
-        LogicalPlan::Values(v) => {
+        LogicalPlan::Values(v, _) => {
             let values = v
                 .values
                 .iter()
@@ -255,10 +255,10 @@ pub fn to_substrait_rel(
                     let fields = row
                         .iter()
                         .map(|v| match v {
-                            Expr::Literal(sv) => to_substrait_literal(sv, extensions),
-                            Expr::Alias(alias) => match alias.expr.as_ref() {
+                            Expr::Literal(sv, _) => to_substrait_literal(sv, extensions),
+                            Expr::Alias(alias, _) => match alias.expr.as_ref() {
                                 // The schema gives us the names, so we can skip aliases
-                                Expr::Literal(sv) => to_substrait_literal(sv, extensions),
+                                Expr::Literal(sv, _) => to_substrait_literal(sv, extensions),
                                 _ => Err(substrait_datafusion_err!(
                                     "Only literal types can be aliased in Virtual Tables, got: {}", alias.expr.variant_name()
                                 )),
@@ -286,7 +286,7 @@ pub fn to_substrait_rel(
                 }))),
             }))
         }
-        LogicalPlan::Projection(p) => {
+        LogicalPlan::Projection(p, _) => {
             let expressions = p
                 .expr
                 .iter()
@@ -312,7 +312,7 @@ pub fn to_substrait_rel(
                 }))),
             }))
         }
-        LogicalPlan::Filter(filter) => {
+        LogicalPlan::Filter(filter, _) => {
             let input = to_substrait_rel(filter.input.as_ref(), state, extensions)?;
             let filter_expr = to_substrait_rex(
                 state,
@@ -330,7 +330,7 @@ pub fn to_substrait_rel(
                 }))),
             }))
         }
-        LogicalPlan::Limit(limit) => {
+        LogicalPlan::Limit(limit, _) => {
             let input = to_substrait_rel(limit.input.as_ref(), state, extensions)?;
             let FetchType::Literal(fetch) = limit.get_fetch_type()? else {
                 return not_impl_err!("Non-literal limit fetch");
@@ -349,7 +349,7 @@ pub fn to_substrait_rel(
                 }))),
             }))
         }
-        LogicalPlan::Sort(sort) => {
+        LogicalPlan::Sort(sort, _) => {
             let input = to_substrait_rel(sort.input.as_ref(), state, extensions)?;
             let sort_fields = sort
                 .expr
@@ -365,7 +365,7 @@ pub fn to_substrait_rel(
                 }))),
             }))
         }
-        LogicalPlan::Aggregate(agg) => {
+        LogicalPlan::Aggregate(agg, _) => {
             let input = to_substrait_rel(agg.input.as_ref(), state, extensions)?;
             let (grouping_expressions, groupings) = to_substrait_groupings(
                 state,
@@ -392,7 +392,7 @@ pub fn to_substrait_rel(
                 }))),
             }))
         }
-        LogicalPlan::Distinct(Distinct::All(plan)) => {
+        LogicalPlan::Distinct(Distinct::All(plan), _) => {
             // Use Substrait's AggregateRel with empty measures to represent `select distinct`
             let input = to_substrait_rel(plan.as_ref(), state, extensions)?;
             // Get grouping keys from the input relation's number of output fields
@@ -414,7 +414,7 @@ pub fn to_substrait_rel(
                 }))),
             }))
         }
-        LogicalPlan::Join(join) => {
+        LogicalPlan::Join(join, _) => {
             let left = to_substrait_rel(join.left.as_ref(), state, extensions)?;
             let right = to_substrait_rel(join.right.as_ref(), state, extensions)?;
             let join_type = to_substrait_jointype(join.join_type);
@@ -484,12 +484,12 @@ pub fn to_substrait_rel(
                 }))),
             }))
         }
-        LogicalPlan::SubqueryAlias(alias) => {
+        LogicalPlan::SubqueryAlias(alias, _) => {
             // Do nothing if encounters SubqueryAlias
             // since there is no corresponding relation type in Substrait
             to_substrait_rel(alias.input.as_ref(), state, extensions)
         }
-        LogicalPlan::Union(union) => {
+        LogicalPlan::Union(union, _) => {
             let input_rels = union
                 .inputs
                 .iter()
@@ -507,7 +507,7 @@ pub fn to_substrait_rel(
                 })),
             }))
         }
-        LogicalPlan::Window(window) => {
+        LogicalPlan::Window(window, _) => {
             let input = to_substrait_rel(window.input.as_ref(), state, extensions)?;
 
             // create a field reference for each input field
@@ -546,7 +546,7 @@ pub fn to_substrait_rel(
                 rel_type: Some(RelType::Project(project_rel)),
             }))
         }
-        LogicalPlan::Repartition(repartition) => {
+        LogicalPlan::Repartition(repartition, _) => {
             let input = to_substrait_rel(repartition.input.as_ref(), state, extensions)?;
             let partition_count = match repartition.partitioning_scheme {
                 Partitioning::RoundRobinBatch(num) => num,
@@ -592,7 +592,7 @@ pub fn to_substrait_rel(
                 rel_type: Some(RelType::Exchange(Box::new(exchange_rel))),
             }))
         }
-        LogicalPlan::Extension(extension_plan) => {
+        LogicalPlan::Extension(extension_plan, _) => {
             let extension_bytes = state
                 .serializer_registry()
                 .serialize_logical_plan(extension_plan.node.as_ref())?;
@@ -807,7 +807,7 @@ pub fn to_substrait_groupings(
     let mut ref_group_exprs = vec![];
     let groupings = match exprs.len() {
         1 => match &exprs[0] {
-            Expr::GroupingSet(gs) => match gs {
+            Expr::GroupingSet(gs, _) => match gs {
                 GroupingSet::Cube(_) => Err(DataFusionError::NotImplemented(
                     "GroupingSet CUBE is not yet supported".to_string(),
                 )),
@@ -870,7 +870,7 @@ pub fn to_substrait_agg_measure(
     extensions: &mut Extensions,
 ) -> Result<Measure> {
     match expr {
-        Expr::AggregateFunction(expr::AggregateFunction { func, args, distinct, filter, order_by, null_treatment: _, }) => {
+        Expr::AggregateFunction(expr::AggregateFunction { func, args, distinct, filter, order_by, null_treatment: _, }, _) => {
                     let sorts = if let Some(order_by) = order_by {
                         order_by.iter().map(|expr| to_substrait_sort_field(state, expr, schema, extensions)).collect::<Result<Vec<_>>>()?
                     } else {
@@ -902,7 +902,7 @@ pub fn to_substrait_agg_measure(
                     })
 
         }
-        Expr::Alias(Alias{expr,..})=> {
+        Expr::Alias(Alias{expr,..}, _)=> {
             to_substrait_agg_measure(state, expr, schema, extensions)
         }
         _ => internal_err!(
@@ -991,11 +991,14 @@ pub fn to_substrait_rex(
     extensions: &mut Extensions,
 ) -> Result<Expression> {
     match expr {
-        Expr::InList(InList {
-            expr,
-            list,
-            negated,
-        }) => {
+        Expr::InList(
+            InList {
+                expr,
+                list,
+                negated,
+            },
+            _,
+        ) => {
             let substrait_list = list
                 .iter()
                 .map(|x| to_substrait_rex(state, x, schema, col_ref_offset, extensions))
@@ -1028,7 +1031,7 @@ pub fn to_substrait_rex(
                 Ok(substrait_or_list)
             }
         }
-        Expr::ScalarFunction(fun) => {
+        Expr::ScalarFunction(fun, _) => {
             let mut arguments: Vec<FunctionArgument> = vec![];
             for arg in &fun.args {
                 arguments.push(FunctionArgument {
@@ -1053,12 +1056,15 @@ pub fn to_substrait_rex(
                 })),
             })
         }
-        Expr::Between(Between {
-            expr,
-            negated,
-            low,
-            high,
-        }) => {
+        Expr::Between(
+            Between {
+                expr,
+                negated,
+                low,
+                high,
+            },
+            _,
+        ) => {
             if *negated {
                 // `expr NOT BETWEEN low AND high` can be translated into (expr < low OR high < expr)
                 let substrait_expr =
@@ -1117,21 +1123,24 @@ pub fn to_substrait_rex(
                 ))
             }
         }
-        Expr::Column(col) => {
+        Expr::Column(col, _) => {
             let index = schema.index_of_column(col)?;
             substrait_field_ref(index + col_ref_offset)
         }
-        Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
+        Expr::BinaryExpr(BinaryExpr { left, op, right }, _) => {
             let l = to_substrait_rex(state, left, schema, col_ref_offset, extensions)?;
             let r = to_substrait_rex(state, right, schema, col_ref_offset, extensions)?;
 
             Ok(make_binary_op_scalar_func(&l, &r, *op, extensions))
         }
-        Expr::Case(Case {
-            expr,
-            when_then_expr,
-            else_expr,
-        }) => {
+        Expr::Case(
+            Case {
+                expr,
+                when_then_expr,
+                else_expr,
+            },
+            _,
+        ) => {
             let mut ifs: Vec<IfClause> = vec![];
             // Parse base
             if let Some(e) = expr {
@@ -1183,7 +1192,7 @@ pub fn to_substrait_rex(
                 rex_type: Some(RexType::IfThen(Box::new(IfThen { ifs, r#else }))),
             })
         }
-        Expr::Cast(Cast { expr, data_type }) => Ok(Expression {
+        Expr::Cast(Cast { expr, data_type }, _) => Ok(Expression {
             rex_type: Some(RexType::Cast(Box::new(
                 substrait::proto::expression::Cast {
                     r#type: Some(to_substrait_type(data_type, true)?),
@@ -1198,7 +1207,7 @@ pub fn to_substrait_rex(
                 },
             ))),
         }),
-        Expr::TryCast(TryCast { expr, data_type }) => Ok(Expression {
+        Expr::TryCast(TryCast { expr, data_type }, _) => Ok(Expression {
             rex_type: Some(RexType::Cast(Box::new(
                 substrait::proto::expression::Cast {
                     r#type: Some(to_substrait_type(data_type, true)?),
@@ -1213,18 +1222,21 @@ pub fn to_substrait_rex(
                 },
             ))),
         }),
-        Expr::Literal(value) => to_substrait_literal_expr(value, extensions),
-        Expr::Alias(Alias { expr, .. }) => {
+        Expr::Literal(value, _) => to_substrait_literal_expr(value, extensions),
+        Expr::Alias(Alias { expr, .. }, _) => {
             to_substrait_rex(state, expr, schema, col_ref_offset, extensions)
         }
-        Expr::WindowFunction(WindowFunction {
-            fun,
-            args,
-            partition_by,
-            order_by,
-            window_frame,
-            null_treatment: _,
-        }) => {
+        Expr::WindowFunction(
+            WindowFunction {
+                fun,
+                args,
+                partition_by,
+                order_by,
+                window_frame,
+                null_treatment: _,
+            },
+            _,
+        ) => {
             // function reference
             let function_anchor = extensions.register_function(fun.to_string());
             // arguments
@@ -1262,13 +1274,16 @@ pub fn to_substrait_rex(
                 bound_type,
             ))
         }
-        Expr::Like(Like {
-            negated,
-            expr,
-            pattern,
-            escape_char,
-            case_insensitive,
-        }) => make_substrait_like_expr(
+        Expr::Like(
+            Like {
+                negated,
+                expr,
+                pattern,
+                escape_char,
+                case_insensitive,
+            },
+            _,
+        ) => make_substrait_like_expr(
             state,
             *case_insensitive,
             *negated,
@@ -1279,11 +1294,14 @@ pub fn to_substrait_rex(
             col_ref_offset,
             extensions,
         ),
-        Expr::InSubquery(InSubquery {
-            expr,
-            subquery,
-            negated,
-        }) => {
+        Expr::InSubquery(
+            InSubquery {
+                expr,
+                subquery,
+                negated,
+            },
+            _,
+        ) => {
             let substrait_expr =
                 to_substrait_rex(state, expr, schema, col_ref_offset, extensions)?;
 
@@ -1320,7 +1338,7 @@ pub fn to_substrait_rex(
                 Ok(substrait_subquery)
             }
         }
-        Expr::Not(arg) => to_substrait_unary_scalar_fn(
+        Expr::Not(arg, _) => to_substrait_unary_scalar_fn(
             state,
             "not",
             arg,
@@ -1328,7 +1346,7 @@ pub fn to_substrait_rex(
             col_ref_offset,
             extensions,
         ),
-        Expr::IsNull(arg) => to_substrait_unary_scalar_fn(
+        Expr::IsNull(arg, _) => to_substrait_unary_scalar_fn(
             state,
             "is_null",
             arg,
@@ -1336,7 +1354,7 @@ pub fn to_substrait_rex(
             col_ref_offset,
             extensions,
         ),
-        Expr::IsNotNull(arg) => to_substrait_unary_scalar_fn(
+        Expr::IsNotNull(arg, _) => to_substrait_unary_scalar_fn(
             state,
             "is_not_null",
             arg,
@@ -1344,7 +1362,7 @@ pub fn to_substrait_rex(
             col_ref_offset,
             extensions,
         ),
-        Expr::IsTrue(arg) => to_substrait_unary_scalar_fn(
+        Expr::IsTrue(arg, _) => to_substrait_unary_scalar_fn(
             state,
             "is_true",
             arg,
@@ -1352,7 +1370,7 @@ pub fn to_substrait_rex(
             col_ref_offset,
             extensions,
         ),
-        Expr::IsFalse(arg) => to_substrait_unary_scalar_fn(
+        Expr::IsFalse(arg, _) => to_substrait_unary_scalar_fn(
             state,
             "is_false",
             arg,
@@ -1360,7 +1378,7 @@ pub fn to_substrait_rex(
             col_ref_offset,
             extensions,
         ),
-        Expr::IsUnknown(arg) => to_substrait_unary_scalar_fn(
+        Expr::IsUnknown(arg, _) => to_substrait_unary_scalar_fn(
             state,
             "is_unknown",
             arg,
@@ -1368,7 +1386,7 @@ pub fn to_substrait_rex(
             col_ref_offset,
             extensions,
         ),
-        Expr::IsNotTrue(arg) => to_substrait_unary_scalar_fn(
+        Expr::IsNotTrue(arg, _) => to_substrait_unary_scalar_fn(
             state,
             "is_not_true",
             arg,
@@ -1376,7 +1394,7 @@ pub fn to_substrait_rex(
             col_ref_offset,
             extensions,
         ),
-        Expr::IsNotFalse(arg) => to_substrait_unary_scalar_fn(
+        Expr::IsNotFalse(arg, _) => to_substrait_unary_scalar_fn(
             state,
             "is_not_false",
             arg,
@@ -1384,7 +1402,7 @@ pub fn to_substrait_rex(
             col_ref_offset,
             extensions,
         ),
-        Expr::IsNotUnknown(arg) => to_substrait_unary_scalar_fn(
+        Expr::IsNotUnknown(arg, _) => to_substrait_unary_scalar_fn(
             state,
             "is_not_unknown",
             arg,
@@ -1392,7 +1410,7 @@ pub fn to_substrait_rex(
             col_ref_offset,
             extensions,
         ),
-        Expr::Negative(arg) => to_substrait_unary_scalar_fn(
+        Expr::Negative(arg, _) => to_substrait_unary_scalar_fn(
             state,
             "negate",
             arg,
@@ -2139,7 +2157,7 @@ fn try_to_substrait_field_reference(
     schema: &DFSchemaRef,
 ) -> Result<FieldReference> {
     match expr {
-        Expr::Column(col) => {
+        Expr::Column(col, _) => {
             let index = schema.index_of_column(col)?;
             Ok(FieldReference {
                 reference_type: Some(ReferenceType::DirectReference(ReferenceSegment {
@@ -2458,7 +2476,7 @@ mod test {
         let state = SessionStateBuilder::default().build();
 
         // One expression, empty input schema
-        let expr = Expr::Literal(ScalarValue::Int32(Some(42)));
+        let expr = Expr::literal(ScalarValue::Int32(Some(42)));
         let field = Field::new("out", DataType::Int32, false);
         let empty_schema = DFSchemaRef::new(DFSchema::empty());
         let substrait =
@@ -2473,8 +2491,8 @@ mod test {
         assert_eq!(rt_expr, &expr);
 
         // Multiple expressions, with column references
-        let expr1 = Expr::Column("c0".into());
-        let expr2 = Expr::Column("c1".into());
+        let expr1 = Expr::column("c0".into());
+        let expr2 = Expr::column("c1".into());
         let out1 = Field::new("out1", DataType::Int32, true);
         let out2 = Field::new("out2", DataType::Utf8, true);
         let input_schema = DFSchemaRef::new(DFSchema::try_from(Schema::new(vec![
@@ -2510,7 +2528,7 @@ mod test {
         let state = SessionStateBuilder::default().build();
 
         // Not ok if input schema is missing field referenced by expr
-        let expr = Expr::Column("missing".into());
+        let expr = Expr::column("missing".into());
         let field = Field::new("out", DataType::Int32, false);
         let empty_schema = DFSchemaRef::new(DFSchema::empty());
 

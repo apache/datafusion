@@ -67,7 +67,7 @@ impl ScalarUDFImpl for GetFieldFunc {
         }
 
         let name = match &args[1] {
-            Expr::Literal(name) => name,
+            Expr::Literal(name, _) => name,
             _ => {
                 return exec_err!(
                     "get_field function requires the argument field_name to be a string"
@@ -87,7 +87,7 @@ impl ScalarUDFImpl for GetFieldFunc {
         }
 
         let name = match &args[1] {
-            Expr::Literal(name) => name,
+            Expr::Literal(name, _) => name,
             _ => {
                 return exec_err!(
                     "get_field function requires the argument field_name to be a string"
@@ -120,7 +120,7 @@ impl ScalarUDFImpl for GetFieldFunc {
         }
 
         let name = match &args[1] {
-            Expr::Literal(name) => name,
+            Expr::Literal(name, _) => name,
             _ => {
                 return exec_err!(
                     "get_field function requires the argument field_name to be a string"

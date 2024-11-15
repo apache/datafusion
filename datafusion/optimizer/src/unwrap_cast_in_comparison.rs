@@ -101,7 +101,7 @@ impl OptimizerRule for UnwrapCastInComparison {
     ) -> Result<Transformed<LogicalPlan>> {
         let mut schema = merge_schema(&plan.inputs());
 
-        if let LogicalPlan::TableScan(ts) = &plan {
+        if let LogicalPlan::TableScan(ts, _) = &plan {
             let source_schema = DFSchema::try_from_qualified_schema(
                 ts.table_name.clone(),
                 &ts.source.schema(),
@@ -136,7 +136,7 @@ impl TreeNodeRewriter for UnwrapCastExprRewriter {
             // For case:
             // try_cast/cast(expr as data_type) op literal
             // literal op try_cast/cast(expr as data_type)
-            Expr::BinaryExpr(BinaryExpr { left, op, right })
+            Expr::BinaryExpr(BinaryExpr { left, op, right }, _)
                 if {
                     let Ok(left_type) = left.get_type(&self.schema) else {
                         return Ok(Transformed::no(expr));
@@ -151,13 +151,19 @@ impl TreeNodeRewriter for UnwrapCastExprRewriter {
             {
                 match (left.as_mut(), right.as_mut()) {
                     (
-                        Expr::Literal(left_lit_value),
-                        Expr::TryCast(TryCast {
-                            expr: right_expr, ..
-                        })
-                        | Expr::Cast(Cast {
-                            expr: right_expr, ..
-                        }),
+                        Expr::Literal(left_lit_value, _),
+                        Expr::TryCast(
+                            TryCast {
+                                expr: right_expr, ..
+                            },
+                            _,
+                        )
+                        | Expr::Cast(
+                            Cast {
+                                expr: right_expr, ..
+                            },
+                            _,
+                        ),
                     ) => {
                         // if the left_lit_value can be cast to the type of expr
                         // we need to unwrap the cast for cast/try_cast expr, and add cast to the literal
@@ -181,13 +187,19 @@ impl TreeNodeRewriter for UnwrapCastExprRewriter {
                         }
                     }
                     (
-                        Expr::TryCast(TryCast {
-                            expr: left_expr, ..
-                        })
-                        | Expr::Cast(Cast {
-                            expr: left_expr, ..
-                        }),
-                        Expr::Literal(right_lit_value),
+                        Expr::TryCast(
+                            TryCast {
+                                expr: left_expr, ..
+                            },
+                            _,
+                        )
+                        | Expr::Cast(
+                            Cast {
+                                expr: left_expr, ..
+                            },
+                            _,
+                        ),
+                        Expr::Literal(right_lit_value, _),
                     ) => {
                         // if the right_lit_value can be cast to the type of expr
                         // we need to unwrap the cast for cast/try_cast expr, and add cast to the literal
@@ -215,15 +227,24 @@ impl TreeNodeRewriter for UnwrapCastExprRewriter {
             }
             // For case:
             // try_cast/cast(expr as left_type) in (expr1,expr2,expr3)
-            Expr::InList(InList {
-                expr: left, list, ..
-            }) => {
-                let (Expr::TryCast(TryCast {
-                    expr: left_expr, ..
-                })
-                | Expr::Cast(Cast {
-                    expr: left_expr, ..
-                })) = left.as_mut()
+            Expr::InList(
+                InList {
+                    expr: left, list, ..
+                },
+                _,
+            ) => {
+                let (Expr::TryCast(
+                    TryCast {
+                        expr: left_expr, ..
+                    },
+                    _,
+                )
+                | Expr::Cast(
+                    Cast {
+                        expr: left_expr, ..
+                    },
+                    _,
+                )) = left.as_mut()
                 else {
                     return Ok(Transformed::no(expr));
                 };
@@ -244,7 +265,7 @@ impl TreeNodeRewriter for UnwrapCastExprRewriter {
                             )?;
                         }
                         match right {
-                            Expr::Literal(right_lit_value) => {
+                            Expr::Literal(right_lit_value, _) => {
                                 // if the right_lit_value can be casted to the type of internal_left_expr
                                 // we need to unwrap the cast for cast/try_cast expr, and add cast to the literal
                                 let Some(value) = try_cast_literal_to_type(right_lit_value, &expr_type) else {

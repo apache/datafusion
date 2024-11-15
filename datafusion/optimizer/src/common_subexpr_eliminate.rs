@@ -88,7 +88,7 @@ impl CommonSubexprEliminate {
         self.try_unary_plan(expr, input, config)?
             .map_data(|(new_expr, new_input)| {
                 Projection::try_new_with_schema(new_expr, Arc::new(new_input), schema)
-                    .map(LogicalPlan::Projection)
+                    .map(LogicalPlan::projection)
             })
     }
 
@@ -106,7 +106,7 @@ impl CommonSubexprEliminate {
         let new_sort = self
             .try_unary_plan(sort_expressions, input, config)?
             .update_data(|(new_expr, new_input)| {
-                LogicalPlan::Sort(Sort {
+                LogicalPlan::sort(Sort {
                     expr: new_expr
                         .into_iter()
                         .zip(sort_params)
@@ -138,7 +138,7 @@ impl CommonSubexprEliminate {
                 assert_eq!(new_expr.len(), 1); // passed in vec![predicate]
                 let new_predicate = new_expr.pop().unwrap();
                 Filter::try_new(new_predicate, Arc::new(new_input))
-                    .map(LogicalPlan::Filter)
+                    .map(LogicalPlan::filter)
             })
     }
 
@@ -213,7 +213,7 @@ impl CommonSubexprEliminate {
                             })
                             .collect::<Vec<_>>();
                         Window::try_new(new_window_expr, Arc::new(plan))
-                            .map(LogicalPlan::Window)
+                            .map(LogicalPlan::window)
                     },
                 )
             } else {
@@ -226,7 +226,7 @@ impl CommonSubexprEliminate {
                             Arc::new(plan),
                             schema,
                         )
-                        .map(LogicalPlan::Window)
+                        .map(LogicalPlan::window)
                     })
             }
         })
@@ -331,12 +331,12 @@ impl CommonSubexprEliminate {
                             rewritten_aggr_expr.into_iter().zip(new_aggr_expr)
                         {
                             if expr_rewritten == expr_orig {
-                                if let Expr::Alias(Alias { expr, name, .. }) =
+                                if let Expr::Alias(Alias { expr, name, .. }, _) =
                                     expr_rewritten
                                 {
                                     agg_exprs.push(expr.alias(&name));
                                     proj_exprs
-                                        .push(Expr::Column(Column::from_name(name)));
+                                        .push(Expr::column(Column::from_name(name)));
                                 } else {
                                     let expr_alias =
                                         config.alias_generator().next(CSE_PREFIX);
@@ -347,7 +347,7 @@ impl CommonSubexprEliminate {
 
                                     agg_exprs.push(expr_rewritten.alias(&expr_alias));
                                     proj_exprs.push(
-                                        Expr::Column(Column::from_name(expr_alias))
+                                        Expr::column(Column::from_name(expr_alias))
                                             .alias(out_name),
                                     );
                                 }
@@ -356,13 +356,13 @@ impl CommonSubexprEliminate {
                             }
                         }
 
-                        let agg = LogicalPlan::Aggregate(Aggregate::try_new(
+                        let agg = LogicalPlan::aggregate(Aggregate::try_new(
                             new_input,
                             new_group_expr,
                             agg_exprs,
                         )?);
                         Projection::try_new(proj_exprs, Arc::new(agg))
-                            .map(|p| Transformed::yes(LogicalPlan::Projection(p)))
+                            .map(|p| Transformed::yes(LogicalPlan::projection(p)))
                     }
 
                     // If there aren't any common aggregate sub-expressions, then just
@@ -399,7 +399,7 @@ impl CommonSubexprEliminate {
                             // Since `group_expr` may have changed, schema may also.
                             // Use `try_new()` method.
                             Aggregate::try_new(new_input, new_group_expr, new_aggr_expr)
-                                .map(LogicalPlan::Aggregate)
+                                .map(LogicalPlan::aggregate)
                                 .map(Transformed::no)
                         } else {
                             Aggregate::try_new_with_schema(
@@ -408,7 +408,7 @@ impl CommonSubexprEliminate {
                                 rewritten_aggr_expr,
                                 schema,
                             )
-                            .map(LogicalPlan::Aggregate)
+                            .map(LogicalPlan::aggregate)
                             .map(Transformed::no)
                         }
                     }
@@ -505,12 +505,15 @@ fn get_consecutive_window_exprs(
 ) -> (Vec<Vec<Expr>>, Vec<DFSchemaRef>, LogicalPlan) {
     let mut window_expr_list = vec![];
     let mut window_schemas = vec![];
-    let mut plan = LogicalPlan::Window(window);
-    while let LogicalPlan::Window(Window {
-        input,
-        window_expr,
-        schema,
-    }) = plan
+    let mut plan = LogicalPlan::window(window);
+    while let LogicalPlan::Window(
+        Window {
+            input,
+            window_expr,
+            schema,
+        },
+        _,
+    ) = plan
     {
         window_expr_list.push(window_expr);
         window_schemas.push(schema);
@@ -541,31 +544,31 @@ impl OptimizerRule for CommonSubexprEliminate {
         let original_schema = Arc::clone(plan.schema());
 
         let optimized_plan = match plan {
-            LogicalPlan::Projection(proj) => self.try_optimize_proj(proj, config)?,
-            LogicalPlan::Sort(sort) => self.try_optimize_sort(sort, config)?,
-            LogicalPlan::Filter(filter) => self.try_optimize_filter(filter, config)?,
-            LogicalPlan::Window(window) => self.try_optimize_window(window, config)?,
-            LogicalPlan::Aggregate(agg) => self.try_optimize_aggregate(agg, config)?,
-            LogicalPlan::Join(_)
-            | LogicalPlan::Repartition(_)
-            | LogicalPlan::Union(_)
-            | LogicalPlan::TableScan(_)
-            | LogicalPlan::Values(_)
-            | LogicalPlan::EmptyRelation(_)
-            | LogicalPlan::Subquery(_)
-            | LogicalPlan::SubqueryAlias(_)
-            | LogicalPlan::Limit(_)
-            | LogicalPlan::Ddl(_)
-            | LogicalPlan::Explain(_)
-            | LogicalPlan::Analyze(_)
-            | LogicalPlan::Statement(_)
-            | LogicalPlan::DescribeTable(_)
-            | LogicalPlan::Distinct(_)
-            | LogicalPlan::Extension(_)
-            | LogicalPlan::Dml(_)
-            | LogicalPlan::Copy(_)
-            | LogicalPlan::Unnest(_)
-            | LogicalPlan::RecursiveQuery(_) => {
+            LogicalPlan::Projection(proj, _) => self.try_optimize_proj(proj, config)?,
+            LogicalPlan::Sort(sort, _) => self.try_optimize_sort(sort, config)?,
+            LogicalPlan::Filter(filter, _) => self.try_optimize_filter(filter, config)?,
+            LogicalPlan::Window(window, _) => self.try_optimize_window(window, config)?,
+            LogicalPlan::Aggregate(agg, _) => self.try_optimize_aggregate(agg, config)?,
+            LogicalPlan::Join(_, _)
+            | LogicalPlan::Repartition(_, _)
+            | LogicalPlan::Union(_, _)
+            | LogicalPlan::TableScan(_, _)
+            | LogicalPlan::Values(_, _)
+            | LogicalPlan::EmptyRelation(_, _)
+            | LogicalPlan::Subquery(_, _)
+            | LogicalPlan::SubqueryAlias(_, _)
+            | LogicalPlan::Limit(_, _)
+            | LogicalPlan::Ddl(_, _)
+            | LogicalPlan::Explain(_, _)
+            | LogicalPlan::Analyze(_, _)
+            | LogicalPlan::Statement(_, _)
+            | LogicalPlan::DescribeTable(_, _)
+            | LogicalPlan::Distinct(_, _)
+            | LogicalPlan::Extension(_, _)
+            | LogicalPlan::Dml(_, _)
+            | LogicalPlan::Copy(_, _)
+            | LogicalPlan::Unnest(_, _)
+            | LogicalPlan::RecursiveQuery(_, _) => {
                 // This rule handles recursion itself in a `ApplyOrder::TopDown` like
                 // manner.
                 plan.map_children(|c| self.rewrite(c, config))?
@@ -631,7 +634,7 @@ impl CSEController for ExprCSEController<'_> {
             // In case of `ScalarFunction`s we don't know which children are surely
             // executed so start visiting all children conditionally and stop the
             // recursion with `TreeNodeRecursion::Jump`.
-            Expr::ScalarFunction(ScalarFunction { func, args })
+            Expr::ScalarFunction(ScalarFunction { func, args }, _)
                 if func.short_circuits() =>
             {
                 Some((vec![], args.iter().collect()))
@@ -639,20 +642,26 @@ impl CSEController for ExprCSEController<'_> {
 
             // In case of `And` and `Or` the first child is surely executed, but we
             // account subexpressions as conditional in the second.
-            Expr::BinaryExpr(BinaryExpr {
-                left,
-                op: Operator::And | Operator::Or,
-                right,
-            }) => Some((vec![left.as_ref()], vec![right.as_ref()])),
+            Expr::BinaryExpr(
+                BinaryExpr {
+                    left,
+                    op: Operator::And | Operator::Or,
+                    right,
+                },
+                _,
+            ) => Some((vec![left.as_ref()], vec![right.as_ref()])),
 
             // In case of `Case` the optional base expression and the first when
             // expressions are surely executed, but we account subexpressions as
             // conditional in the others.
-            Expr::Case(Case {
-                expr,
-                when_then_expr,
-                else_expr,
-            }) => Some((
+            Expr::Case(
+                Case {
+                    expr,
+                    when_then_expr,
+                    else_expr,
+                },
+                _,
+            ) => Some((
                 expr.iter()
                     .map(|e| e.as_ref())
                     .chain(when_then_expr.iter().take(1).map(|(when, _)| when.as_ref()))
@@ -711,12 +720,12 @@ impl CSEController for ExprCSEController<'_> {
     }
 
     fn rewrite_f_down(&mut self, node: &Expr) {
-        if matches!(node, Expr::Alias(_)) {
+        if matches!(node, Expr::Alias(_, _)) {
             self.alias_counter += 1;
         }
     }
     fn rewrite_f_up(&mut self, node: &Expr) {
-        if matches!(node, Expr::Alias(_)) {
+        if matches!(node, Expr::Alias(_, _)) {
             self.alias_counter -= 1
         }
     }
@@ -757,7 +766,7 @@ fn build_common_expr_project_plan(
         }
     }
 
-    Projection::try_new(project_exprs, Arc::new(input)).map(LogicalPlan::Projection)
+    Projection::try_new(project_exprs, Arc::new(input)).map(LogicalPlan::projection)
 }
 
 /// Build the projection plan to eliminate unnecessary columns produced by
@@ -770,20 +779,20 @@ fn build_recover_project_plan(
     input: LogicalPlan,
 ) -> Result<LogicalPlan> {
     let col_exprs = schema.iter().map(Expr::from).collect();
-    Projection::try_new(col_exprs, Arc::new(input)).map(LogicalPlan::Projection)
+    Projection::try_new(col_exprs, Arc::new(input)).map(LogicalPlan::projection)
 }
 
 fn extract_expressions(expr: &Expr, result: &mut Vec<Expr>) {
-    if let Expr::GroupingSet(groupings) = expr {
+    if let Expr::GroupingSet(groupings, _) = expr {
         for e in groupings.distinct_expr() {
             let (qualifier, field_name) = e.qualified_name();
             let col = Column::new(qualifier, field_name);
-            result.push(Expr::Column(col))
+            result.push(Expr::column(col))
         }
     } else {
         let (qualifier, field_name) = expr.qualified_name();
         let col = Column::new(qualifier, field_name);
-        result.push(Expr::Column(col));
+        result.push(Expr::column(col));
     }
 }
 
@@ -878,7 +887,7 @@ mod test {
         let return_type = DataType::UInt32;
         let accumulator: AccumulatorFactoryFunction = Arc::new(|_| unimplemented!());
         let udf_agg = |inner: Expr| {
-            Expr::AggregateFunction(datafusion_expr::expr::AggregateFunction::new_udf(
+            Expr::aggregate_function(datafusion_expr::expr::AggregateFunction::new_udf(
                 Arc::new(AggregateUDF::from(SimpleAggregateUDF::new_with_signature(
                     "my_agg",
                     Signature::exact(vec![DataType::UInt32], Volatility::Stable),
@@ -1004,7 +1013,7 @@ mod test {
         let schema = Schema::new(vec![Field::new("col.a", DataType::UInt32, false)]);
         let table_scan = table_scan(Some("table.test"), &schema, None)?.build()?;
 
-        let col_a = Expr::Column(Column::new(Some("table.test"), "col.a"));
+        let col_a = Expr::column(Column::new(Some("table.test"), "col.a"));
 
         let plan = LogicalPlanBuilder::from(table_scan)
             .aggregate(

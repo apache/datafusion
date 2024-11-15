@@ -19,12 +19,11 @@
 //!
 //! [`ExprSimplifier::with_guarantees()`]: crate::simplify_expressions::expr_simplifier::ExprSimplifier::with_guarantees
 
-use std::{borrow::Cow, collections::HashMap};
-
 use datafusion_common::tree_node::{Transformed, TreeNodeRewriter};
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::interval_arithmetic::{Interval, NullableInterval};
 use datafusion_expr::{expr::InList, lit, Between, BinaryExpr, Expr};
+use std::{borrow::Cow, collections::HashMap};
 
 /// Rewrite expressions to incorporate guarantees.
 ///
@@ -61,30 +60,29 @@ impl TreeNodeRewriter for GuaranteeRewriter<'_> {
     type Node = Expr;
 
     fn f_up(&mut self, expr: Expr) -> Result<Transformed<Expr>> {
-        if self.guarantees.is_empty() {
-            return Ok(Transformed::no(expr));
-        }
-
         match &expr {
-            Expr::IsNull(inner) => match self.guarantees.get(inner.as_ref()) {
+            Expr::IsNull(inner, _) => match self.guarantees.get(inner.as_ref()) {
                 Some(NullableInterval::Null { .. }) => Ok(Transformed::yes(lit(true))),
                 Some(NullableInterval::NotNull { .. }) => {
                     Ok(Transformed::yes(lit(false)))
                 }
                 _ => Ok(Transformed::no(expr)),
             },
-            Expr::IsNotNull(inner) => match self.guarantees.get(inner.as_ref()) {
+            Expr::IsNotNull(inner, _) => match self.guarantees.get(inner.as_ref()) {
                 Some(NullableInterval::Null { .. }) => Ok(Transformed::yes(lit(false))),
                 Some(NullableInterval::NotNull { .. }) => Ok(Transformed::yes(lit(true))),
                 _ => Ok(Transformed::no(expr)),
             },
-            Expr::Between(Between {
-                expr: inner,
-                negated,
-                low,
-                high,
-            }) => {
-                if let (Some(interval), Expr::Literal(low), Expr::Literal(high)) = (
+            Expr::Between(
+                Between {
+                    expr: inner,
+                    negated,
+                    low,
+                    high,
+                },
+                _,
+            ) => {
+                if let (Some(interval), Expr::Literal(low, _), Expr::Literal(high, _)) = (
                     self.guarantees.get(inner.as_ref()),
                     low.as_ref(),
                     high.as_ref(),
@@ -107,7 +105,7 @@ impl TreeNodeRewriter for GuaranteeRewriter<'_> {
                 }
             }
 
-            Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
+            Expr::BinaryExpr(BinaryExpr { left, op, right }, _) => {
                 // The left or right side of expression might either have a guarantee
                 // or be a literal. Either way, we can resolve them to a NullableInterval.
                 let left_interval = self
@@ -115,7 +113,7 @@ impl TreeNodeRewriter for GuaranteeRewriter<'_> {
                     .get(left.as_ref())
                     .map(|interval| Cow::Borrowed(*interval))
                     .or_else(|| {
-                        if let Expr::Literal(value) = left.as_ref() {
+                        if let Expr::Literal(value, _) = left.as_ref() {
                             Some(Cow::Owned(value.clone().into()))
                         } else {
                             None
@@ -126,7 +124,7 @@ impl TreeNodeRewriter for GuaranteeRewriter<'_> {
                     .get(right.as_ref())
                     .map(|interval| Cow::Borrowed(*interval))
                     .or_else(|| {
-                        if let Expr::Literal(value) = right.as_ref() {
+                        if let Expr::Literal(value, _) = right.as_ref() {
                             Some(Cow::Owned(value.clone().into()))
                         } else {
                             None
@@ -150,7 +148,7 @@ impl TreeNodeRewriter for GuaranteeRewriter<'_> {
             }
 
             // Columns (if interval is collapsed to a single value)
-            Expr::Column(_) => {
+            Expr::Column(_, _) => {
                 if let Some(interval) = self.guarantees.get(&expr) {
                     Ok(Transformed::yes(interval.single_value().map_or(expr, lit)))
                 } else {
@@ -158,17 +156,20 @@ impl TreeNodeRewriter for GuaranteeRewriter<'_> {
                 }
             }
 
-            Expr::InList(InList {
-                expr: inner,
-                list,
-                negated,
-            }) => {
+            Expr::InList(
+                InList {
+                    expr: inner,
+                    list,
+                    negated,
+                },
+                _,
+            ) => {
                 if let Some(interval) = self.guarantees.get(inner.as_ref()) {
                     // Can remove items from the list that don't match the guarantee
                     let new_list: Vec<Expr> = list
                         .iter()
                         .filter_map(|expr| {
-                            if let Expr::Literal(item) = expr {
+                            if let Expr::Literal(item, _) = expr {
                                 match interval
                                     .contains(NullableInterval::from(item.clone()))
                                 {
@@ -184,7 +185,7 @@ impl TreeNodeRewriter for GuaranteeRewriter<'_> {
                         })
                         .collect::<Result<_, DataFusionError>>()?;
 
-                    Ok(Transformed::yes(Expr::InList(InList {
+                    Ok(Transformed::yes(Expr::_in_list(InList {
                         expr: inner.clone(),
                         list: new_list,
                         negated: *negated,
@@ -301,7 +302,7 @@ mod tests {
                 true,
             ),
             (
-                Expr::BinaryExpr(BinaryExpr {
+                Expr::binary_expr(BinaryExpr {
                     left: Box::new(col("x")),
                     op: Operator::IsDistinctFrom,
                     right: Box::new(lit(ScalarValue::Null)),
@@ -309,7 +310,7 @@ mod tests {
                 true,
             ),
             (
-                Expr::BinaryExpr(BinaryExpr {
+                Expr::binary_expr(BinaryExpr {
                     left: Box::new(col("x")),
                     op: Operator::IsDistinctFrom,
                     right: Box::new(lit(ScalarValue::Date32(Some(17000)))),
@@ -360,7 +361,7 @@ mod tests {
         // (original_expr, expected_simplification)
         let simplified_cases = &[
             (
-                Expr::BinaryExpr(BinaryExpr {
+                Expr::binary_expr(BinaryExpr {
                     left: Box::new(col("x")),
                     op: Operator::IsDistinctFrom,
                     right: Box::new(lit("z")),
@@ -368,7 +369,7 @@ mod tests {
                 true,
             ),
             (
-                Expr::BinaryExpr(BinaryExpr {
+                Expr::binary_expr(BinaryExpr {
                     left: Box::new(col("x")),
                     op: Operator::IsNotDistinctFrom,
                     right: Box::new(lit("z")),
@@ -388,7 +389,7 @@ mod tests {
             col("x").not_eq(lit("a")),
             col("x").between(lit("a"), lit("z")),
             col("x").not_between(lit("a"), lit("z")),
-            Expr::BinaryExpr(BinaryExpr {
+            Expr::binary_expr(BinaryExpr {
                 left: Box::new(col("x")),
                 op: Operator::IsDistinctFrom,
                 right: Box::new(lit(ScalarValue::Null)),
@@ -417,7 +418,7 @@ mod tests {
             let mut rewriter = GuaranteeRewriter::new(guarantees.iter());
 
             let output = col("x").rewrite(&mut rewriter).data().unwrap();
-            assert_eq!(output, Expr::Literal(scalar.clone()));
+            assert_eq!(output, Expr::literal(scalar.clone()));
         }
     }
 
@@ -467,7 +468,7 @@ mod tests {
                 .collect();
             assert_eq!(
                 output,
-                Expr::InList(InList {
+                Expr::_in_list(InList {
                     expr: Box::new(col(*column_name)),
                     list: expected_list,
                     negated: *negated,

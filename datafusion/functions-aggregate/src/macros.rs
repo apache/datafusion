@@ -22,7 +22,7 @@ macro_rules! make_udaf_expr {
         pub fn $EXPR_FN(
             $($arg: datafusion_expr::Expr,)*
         ) -> datafusion_expr::Expr {
-            datafusion_expr::Expr::AggregateFunction(datafusion_expr::expr::AggregateFunction::new_udf(
+            datafusion_expr::Expr::aggregate_function(datafusion_expr::expr::AggregateFunction::new_udf(
                 $AGGREGATE_UDF_FN(),
                 vec![$($arg),*],
                 false,
@@ -45,7 +45,7 @@ macro_rules! make_udaf_expr_and_func {
         pub fn $EXPR_FN(
             args: Vec<datafusion_expr::Expr>,
         ) -> datafusion_expr::Expr {
-            datafusion_expr::Expr::AggregateFunction(datafusion_expr::expr::AggregateFunction::new_udf(
+            datafusion_expr::Expr::aggregate_function(datafusion_expr::expr::AggregateFunction::new_udf(
                 $AGGREGATE_UDF_FN(),
                 args,
                 false,

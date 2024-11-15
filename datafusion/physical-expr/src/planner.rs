@@ -111,15 +111,15 @@ pub fn create_physical_expr(
     let input_schema: &Schema = &input_dfschema.into();
 
     match e {
-        Expr::Alias(Alias { expr, .. }) => {
+        Expr::Alias(Alias { expr, .. }, _) => {
             Ok(create_physical_expr(expr, input_dfschema, execution_props)?)
         }
-        Expr::Column(c) => {
+        Expr::Column(c, _) => {
             let idx = input_dfschema.index_of_column(c)?;
             Ok(Arc::new(Column::new(&c.name, idx)))
         }
-        Expr::Literal(value) => Ok(Arc::new(Literal::new(value.clone()))),
-        Expr::ScalarVariable(_, variable_names) => {
+        Expr::Literal(value, _) => Ok(Arc::new(Literal::new(value.clone()))),
+        Expr::ScalarVariable(_, variable_names, _) => {
             if is_system_variables(variable_names) {
                 match execution_props.get_var_provider(VarType::System) {
                     Some(provider) => {
@@ -138,7 +138,7 @@ pub fn create_physical_expr(
                 }
             }
         }
-        Expr::IsTrue(expr) => {
+        Expr::IsTrue(expr, _) => {
             let binary_op = binary_expr(
                 expr.as_ref().clone(),
                 Operator::IsNotDistinctFrom,
@@ -146,12 +146,12 @@ pub fn create_physical_expr(
             );
             create_physical_expr(&binary_op, input_dfschema, execution_props)
         }
-        Expr::IsNotTrue(expr) => {
+        Expr::IsNotTrue(expr, _) => {
             let binary_op =
                 binary_expr(expr.as_ref().clone(), Operator::IsDistinctFrom, lit(true));
             create_physical_expr(&binary_op, input_dfschema, execution_props)
         }
-        Expr::IsFalse(expr) => {
+        Expr::IsFalse(expr, _) => {
             let binary_op = binary_expr(
                 expr.as_ref().clone(),
                 Operator::IsNotDistinctFrom,
@@ -159,28 +159,28 @@ pub fn create_physical_expr(
             );
             create_physical_expr(&binary_op, input_dfschema, execution_props)
         }
-        Expr::IsNotFalse(expr) => {
+        Expr::IsNotFalse(expr, _) => {
             let binary_op =
                 binary_expr(expr.as_ref().clone(), Operator::IsDistinctFrom, lit(false));
             create_physical_expr(&binary_op, input_dfschema, execution_props)
         }
-        Expr::IsUnknown(expr) => {
+        Expr::IsUnknown(expr, _) => {
             let binary_op = binary_expr(
                 expr.as_ref().clone(),
                 Operator::IsNotDistinctFrom,
-                Expr::Literal(ScalarValue::Boolean(None)),
+                Expr::literal(ScalarValue::Boolean(None)),
             );
             create_physical_expr(&binary_op, input_dfschema, execution_props)
         }
-        Expr::IsNotUnknown(expr) => {
+        Expr::IsNotUnknown(expr, _) => {
             let binary_op = binary_expr(
                 expr.as_ref().clone(),
                 Operator::IsDistinctFrom,
-                Expr::Literal(ScalarValue::Boolean(None)),
+                Expr::literal(ScalarValue::Boolean(None)),
             );
             create_physical_expr(&binary_op, input_dfschema, execution_props)
         }
-        Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
+        Expr::BinaryExpr(BinaryExpr { left, op, right }, _) => {
             // Create physical expressions for left and right operands
             let lhs = create_physical_expr(left, input_dfschema, execution_props)?;
             let rhs = create_physical_expr(right, input_dfschema, execution_props)?;
@@ -193,13 +193,16 @@ pub fn create_physical_expr(
             // planning.
             binary(lhs, *op, rhs, input_schema)
         }
-        Expr::Like(Like {
-            negated,
-            expr,
-            pattern,
-            escape_char,
-            case_insensitive,
-        }) => {
+        Expr::Like(
+            Like {
+                negated,
+                expr,
+                pattern,
+                escape_char,
+                case_insensitive,
+            },
+            _,
+        ) => {
             // `\` is the implicit escape, see https://github.com/apache/datafusion/issues/13291
             if escape_char.unwrap_or('\\') != '\\' {
                 return exec_err!(
@@ -218,13 +221,16 @@ pub fn create_physical_expr(
                 input_schema,
             )
         }
-        Expr::SimilarTo(Like {
-            negated,
-            expr,
-            pattern,
-            escape_char,
-            case_insensitive,
-        }) => {
+        Expr::SimilarTo(
+            Like {
+                negated,
+                expr,
+                pattern,
+                escape_char,
+                case_insensitive,
+            },
+            _,
+        ) => {
             if escape_char.is_some() {
                 return exec_err!("SIMILAR TO does not support escape_char yet");
             }
@@ -234,7 +240,7 @@ pub fn create_physical_expr(
                 create_physical_expr(pattern, input_dfschema, execution_props)?;
             similar_to(*negated, *case_insensitive, physical_expr, physical_pattern)
         }
-        Expr::Case(case) => {
+        Expr::Case(case, _) => {
             let expr: Option<Arc<dyn PhysicalExpr>> = if let Some(e) = &case.expr {
                 Some(create_physical_expr(
                     e.as_ref(),
@@ -271,34 +277,34 @@ pub fn create_physical_expr(
                 };
             Ok(expressions::case(expr, when_then_expr, else_expr)?)
         }
-        Expr::Cast(Cast { expr, data_type }) => expressions::cast(
+        Expr::Cast(Cast { expr, data_type }, _) => expressions::cast(
             create_physical_expr(expr, input_dfschema, execution_props)?,
             input_schema,
             data_type.clone(),
         ),
-        Expr::TryCast(TryCast { expr, data_type }) => expressions::try_cast(
+        Expr::TryCast(TryCast { expr, data_type }, _) => expressions::try_cast(
             create_physical_expr(expr, input_dfschema, execution_props)?,
             input_schema,
             data_type.clone(),
         ),
-        Expr::Not(expr) => {
+        Expr::Not(expr, _) => {
             expressions::not(create_physical_expr(expr, input_dfschema, execution_props)?)
         }
-        Expr::Negative(expr) => expressions::negative(
+        Expr::Negative(expr, _) => expressions::negative(
             create_physical_expr(expr, input_dfschema, execution_props)?,
             input_schema,
         ),
-        Expr::IsNull(expr) => expressions::is_null(create_physical_expr(
+        Expr::IsNull(expr, _) => expressions::is_null(create_physical_expr(
             expr,
             input_dfschema,
             execution_props,
         )?),
-        Expr::IsNotNull(expr) => expressions::is_not_null(create_physical_expr(
+        Expr::IsNotNull(expr, _) => expressions::is_not_null(create_physical_expr(
             expr,
             input_dfschema,
             execution_props,
         )?),
-        Expr::ScalarFunction(ScalarFunction { func, args }) => {
+        Expr::ScalarFunction(ScalarFunction { func, args }, _) => {
             let physical_args =
                 create_physical_exprs(args, input_dfschema, execution_props)?;
 
@@ -310,12 +316,15 @@ pub fn create_physical_expr(
                 input_dfschema,
             )
         }
-        Expr::Between(Between {
-            expr,
-            negated,
-            low,
-            high,
-        }) => {
+        Expr::Between(
+            Between {
+                expr,
+                negated,
+                low,
+                high,
+            },
+            _,
+        ) => {
             let value_expr = create_physical_expr(expr, input_dfschema, execution_props)?;
             let low_expr = create_physical_expr(low, input_dfschema, execution_props)?;
             let high_expr = create_physical_expr(high, input_dfschema, execution_props)?;
@@ -344,12 +353,15 @@ pub fn create_physical_expr(
                 binary_expr
             }
         }
-        Expr::InList(InList {
-            expr,
-            list,
-            negated,
-        }) => match expr.as_ref() {
-            Expr::Literal(ScalarValue::Utf8(None)) => {
+        Expr::InList(
+            InList {
+                expr,
+                list,
+                negated,
+            },
+            _,
+        ) => match expr.as_ref() {
+            Expr::Literal(ScalarValue::Utf8(None), _) => {
                 Ok(expressions::lit(ScalarValue::Boolean(None)))
             }
             _ => {

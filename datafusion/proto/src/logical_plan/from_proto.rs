@@ -22,7 +22,7 @@ use datafusion_common::{
     exec_datafusion_err, internal_err, plan_datafusion_err, RecursionUnnestOption,
     Result, ScalarValue, TableReference, UnnestOptions,
 };
-use datafusion_expr::expr::{Alias, Placeholder, Sort, Wildcard};
+use datafusion_expr::expr::{Placeholder, Sort, Wildcard};
 use datafusion_expr::expr::{Unnest, WildcardOptions};
 use datafusion_expr::ExprFunctionExt;
 use datafusion_expr::{
@@ -245,14 +245,18 @@ pub fn parse_expr(
             Ok(operands
                 .into_iter()
                 .reduce(|left, right| {
-                    Expr::BinaryExpr(BinaryExpr::new(Box::new(left), op, Box::new(right)))
+                    Expr::binary_expr(BinaryExpr::new(
+                        Box::new(left),
+                        op,
+                        Box::new(right),
+                    ))
                 })
                 .expect("Binary expression could not be reduced to a single expression."))
         }
-        ExprType::Column(column) => Ok(Expr::Column(column.into())),
+        ExprType::Column(column) => Ok(Expr::column(column.into())),
         ExprType::Literal(literal) => {
             let scalar_value: ScalarValue = literal.try_into()?;
-            Ok(Expr::Literal(scalar_value))
+            Ok(Expr::literal(scalar_value))
         }
         ExprType::WindowExpr(expr) => {
             let window_function = expr
@@ -284,7 +288,7 @@ pub fn parse_expr(
                     };
 
                     let args = parse_exprs(&expr.exprs, registry, codec)?;
-                    Expr::WindowFunction(WindowFunction::new(
+                    Expr::window_function(WindowFunction::new(
                         expr::WindowFunctionDefinition::AggregateUDF(udaf_function),
                         args,
                     ))
@@ -301,7 +305,7 @@ pub fn parse_expr(
                     };
 
                     let args = parse_exprs(&expr.exprs, registry, codec)?;
-                    Expr::WindowFunction(WindowFunction::new(
+                    Expr::window_function(WindowFunction::new(
                         expr::WindowFunctionDefinition::WindowUDF(udwf_function),
                         args,
                     ))
@@ -313,64 +317,59 @@ pub fn parse_expr(
                 }
             }
         }
-        ExprType::Alias(alias) => Ok(Expr::Alias(Alias::new(
-            parse_required_expr(alias.expr.as_deref(), registry, "expr", codec)?,
-            alias
-                .relation
-                .first()
-                .map(|r| TableReference::try_from(r.clone()))
-                .transpose()?,
-            alias.alias.clone(),
+        ExprType::Alias(alias) => {
+            Ok(
+                parse_required_expr(alias.expr.as_deref(), registry, "expr", codec)?
+                    .alias_qualified(
+                        alias
+                            .relation
+                            .first()
+                            .map(|r| TableReference::try_from(r.clone()))
+                            .transpose()?,
+                        alias.alias.clone(),
+                    ),
+            )
+        }
+        ExprType::IsNullExpr(is_null) => Ok(Expr::_is_null(Box::new(
+            parse_required_expr(is_null.expr.as_deref(), registry, "expr", codec)?,
         ))),
-        ExprType::IsNullExpr(is_null) => Ok(Expr::IsNull(Box::new(parse_required_expr(
-            is_null.expr.as_deref(),
-            registry,
-            "expr",
-            codec,
-        )?))),
-        ExprType::IsNotNullExpr(is_not_null) => Ok(Expr::IsNotNull(Box::new(
+        ExprType::IsNotNullExpr(is_not_null) => Ok(Expr::_is_not_null(Box::new(
             parse_required_expr(is_not_null.expr.as_deref(), registry, "expr", codec)?,
         ))),
-        ExprType::NotExpr(not) => Ok(Expr::Not(Box::new(parse_required_expr(
+        ExprType::NotExpr(not) => Ok(Expr::_not(Box::new(parse_required_expr(
             not.expr.as_deref(),
             registry,
             "expr",
             codec,
         )?))),
-        ExprType::IsTrue(msg) => Ok(Expr::IsTrue(Box::new(parse_required_expr(
+        ExprType::IsTrue(msg) => Ok(Expr::_is_true(Box::new(parse_required_expr(
             msg.expr.as_deref(),
             registry,
             "expr",
             codec,
         )?))),
-        ExprType::IsFalse(msg) => Ok(Expr::IsFalse(Box::new(parse_required_expr(
+        ExprType::IsFalse(msg) => Ok(Expr::_is_false(Box::new(parse_required_expr(
             msg.expr.as_deref(),
             registry,
             "expr",
             codec,
         )?))),
-        ExprType::IsUnknown(msg) => Ok(Expr::IsUnknown(Box::new(parse_required_expr(
+        ExprType::IsUnknown(msg) => Ok(Expr::_is_unknown(Box::new(parse_required_expr(
             msg.expr.as_deref(),
             registry,
             "expr",
             codec,
         )?))),
-        ExprType::IsNotTrue(msg) => Ok(Expr::IsNotTrue(Box::new(parse_required_expr(
-            msg.expr.as_deref(),
-            registry,
-            "expr",
-            codec,
-        )?))),
-        ExprType::IsNotFalse(msg) => Ok(Expr::IsNotFalse(Box::new(parse_required_expr(
-            msg.expr.as_deref(),
-            registry,
-            "expr",
-            codec,
-        )?))),
-        ExprType::IsNotUnknown(msg) => Ok(Expr::IsNotUnknown(Box::new(
+        ExprType::IsNotTrue(msg) => Ok(Expr::_is_not_true(Box::new(
             parse_required_expr(msg.expr.as_deref(), registry, "expr", codec)?,
         ))),
-        ExprType::Between(between) => Ok(Expr::Between(Between::new(
+        ExprType::IsNotFalse(msg) => Ok(Expr::_is_not_false(Box::new(
+            parse_required_expr(msg.expr.as_deref(), registry, "expr", codec)?,
+        ))),
+        ExprType::IsNotUnknown(msg) => Ok(Expr::_is_not_unknown(Box::new(
+            parse_required_expr(msg.expr.as_deref(), registry, "expr", codec)?,
+        ))),
+        ExprType::Between(between) => Ok(Expr::_between(Between::new(
             Box::new(parse_required_expr(
                 between.expr.as_deref(),
                 registry,
@@ -391,7 +390,7 @@ pub fn parse_expr(
                 codec,
             )?),
         ))),
-        ExprType::Like(like) => Ok(Expr::Like(Like::new(
+        ExprType::Like(like) => Ok(Expr::_like(Like::new(
             like.negated,
             Box::new(parse_required_expr(
                 like.expr.as_deref(),
@@ -408,7 +407,7 @@ pub fn parse_expr(
             parse_escape_char(&like.escape_char)?,
             false,
         ))),
-        ExprType::Ilike(like) => Ok(Expr::Like(Like::new(
+        ExprType::Ilike(like) => Ok(Expr::_like(Like::new(
             like.negated,
             Box::new(parse_required_expr(
                 like.expr.as_deref(),
@@ -425,7 +424,7 @@ pub fn parse_expr(
             parse_escape_char(&like.escape_char)?,
             true,
         ))),
-        ExprType::SimilarTo(like) => Ok(Expr::SimilarTo(Like::new(
+        ExprType::SimilarTo(like) => Ok(Expr::similar_to(Like::new(
             like.negated,
             Box::new(parse_required_expr(
                 like.expr.as_deref(),
@@ -462,7 +461,7 @@ pub fn parse_expr(
                     Ok((Box::new(when_expr), Box::new(then_expr)))
                 })
                 .collect::<Result<Vec<(Box<Expr>, Box<Expr>)>, Error>>()?;
-            Ok(Expr::Case(Case::new(
+            Ok(Expr::case(Case::new(
                 parse_optional_expr(case.expr.as_deref(), registry, codec)?.map(Box::new),
                 when_then_expr,
                 parse_optional_expr(case.else_expr.as_deref(), registry, codec)?
@@ -477,7 +476,7 @@ pub fn parse_expr(
                 codec,
             )?);
             let data_type = cast.arrow_type.as_ref().required("arrow_type")?;
-            Ok(Expr::Cast(Cast::new(expr, data_type)))
+            Ok(Expr::cast(Cast::new(expr, data_type)))
         }
         ExprType::TryCast(cast) => {
             let expr = Box::new(parse_required_expr(
@@ -487,9 +486,9 @@ pub fn parse_expr(
                 codec,
             )?);
             let data_type = cast.arrow_type.as_ref().required("arrow_type")?;
-            Ok(Expr::TryCast(TryCast::new(expr, data_type)))
+            Ok(Expr::try_cast(TryCast::new(expr, data_type)))
         }
-        ExprType::Negative(negative) => Ok(Expr::Negative(Box::new(
+        ExprType::Negative(negative) => Ok(Expr::negative(Box::new(
             parse_required_expr(negative.expr.as_deref(), registry, "expr", codec)?,
         ))),
         ExprType::Unnest(unnest) => {
@@ -497,9 +496,9 @@ pub fn parse_expr(
             if exprs.len() != 1 {
                 return Err(proto_error("Unnest must have exactly one expression"));
             }
-            Ok(Expr::Unnest(Unnest::new(exprs.swap_remove(0))))
+            Ok(Expr::unnest(Unnest::new(exprs.swap_remove(0))))
         }
-        ExprType::InList(in_list) => Ok(Expr::InList(InList::new(
+        ExprType::InList(in_list) => Ok(Expr::_in_list(InList::new(
             Box::new(parse_required_expr(
                 in_list.expr.as_deref(),
                 registry,
@@ -511,7 +510,7 @@ pub fn parse_expr(
         ))),
         ExprType::Wildcard(protobuf::Wildcard { qualifier }) => {
             let qualifier = qualifier.to_owned().map(|x| x.try_into()).transpose()?;
-            Ok(Expr::Wildcard(Wildcard {
+            Ok(Expr::wildcard(Wildcard {
                 qualifier,
                 options: WildcardOptions::default(),
             }))
@@ -525,7 +524,7 @@ pub fn parse_expr(
                 Some(buf) => codec.try_decode_udf(fun_name, buf)?,
                 None => registry.udf(fun_name.as_str())?,
             };
-            Ok(Expr::ScalarFunction(expr::ScalarFunction::new_udf(
+            Ok(Expr::scalar_function(expr::ScalarFunction::new_udf(
                 scalar_fn,
                 parse_exprs(args, registry, codec)?,
             )))
@@ -536,7 +535,7 @@ pub fn parse_expr(
                 None => registry.udaf(&pb.fun_name)?,
             };
 
-            Ok(Expr::AggregateFunction(expr::AggregateFunction::new_udf(
+            Ok(Expr::aggregate_function(expr::AggregateFunction::new_udf(
                 agg_fn,
                 parse_exprs(&pb.args, registry, codec)?,
                 pb.distinct,
@@ -550,21 +549,21 @@ pub fn parse_expr(
         }
 
         ExprType::GroupingSet(GroupingSetNode { expr }) => {
-            Ok(Expr::GroupingSet(GroupingSets(
+            Ok(Expr::grouping_set(GroupingSets(
                 expr.iter()
                     .map(|expr_list| parse_exprs(&expr_list.expr, registry, codec))
                     .collect::<Result<Vec<_>, Error>>()?,
             )))
         }
-        ExprType::Cube(CubeNode { expr }) => Ok(Expr::GroupingSet(GroupingSet::Cube(
+        ExprType::Cube(CubeNode { expr }) => Ok(Expr::grouping_set(GroupingSet::Cube(
             parse_exprs(expr, registry, codec)?,
         ))),
-        ExprType::Rollup(RollupNode { expr }) => Ok(Expr::GroupingSet(
+        ExprType::Rollup(RollupNode { expr }) => Ok(Expr::grouping_set(
             GroupingSet::Rollup(parse_exprs(expr, registry, codec)?),
         )),
         ExprType::Placeholder(PlaceholderNode { id, data_type }) => match data_type {
-            None => Ok(Expr::Placeholder(Placeholder::new(id.clone(), None))),
-            Some(data_type) => Ok(Expr::Placeholder(Placeholder::new(
+            None => Ok(Expr::placeholder(Placeholder::new(id.clone(), None))),
+            Some(data_type) => Ok(Expr::placeholder(Placeholder::new(
                 id.clone(),
                 Some(data_type.try_into()?),
             ))),

@@ -191,14 +191,17 @@ pub fn serialize_expr(
     use protobuf::logical_expr_node::ExprType;
 
     let expr_node = match expr {
-        Expr::Column(c) => protobuf::LogicalExprNode {
+        Expr::Column(c, _) => protobuf::LogicalExprNode {
             expr_type: Some(ExprType::Column(c.into())),
         },
-        Expr::Alias(Alias {
-            expr,
-            relation,
-            name,
-        }) => {
+        Expr::Alias(
+            Alias {
+                expr,
+                relation,
+                name,
+            },
+            _,
+        ) => {
             let alias = Box::new(protobuf::AliasNode {
                 expr: Some(Box::new(serialize_expr(expr.as_ref(), codec)?)),
                 relation: relation
@@ -211,22 +214,25 @@ pub fn serialize_expr(
                 expr_type: Some(ExprType::Alias(alias)),
             }
         }
-        Expr::Literal(value) => {
+        Expr::Literal(value, _) => {
             let pb_value: protobuf::ScalarValue = value.try_into()?;
             protobuf::LogicalExprNode {
                 expr_type: Some(ExprType::Literal(pb_value)),
             }
         }
-        Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
+        Expr::BinaryExpr(BinaryExpr { left, op, right }, _) => {
             // Try to linerize a nested binary expression tree of the same operator
             // into a flat vector of expressions.
             let mut exprs = vec![right.as_ref()];
             let mut current_expr = left.as_ref();
-            while let Expr::BinaryExpr(BinaryExpr {
-                left,
-                op: current_op,
-                right,
-            }) = current_expr
+            while let Expr::BinaryExpr(
+                BinaryExpr {
+                    left,
+                    op: current_op,
+                    right,
+                },
+                _,
+            ) = current_expr
             {
                 if current_op == op {
                     exprs.push(right.as_ref());
@@ -248,13 +254,16 @@ pub fn serialize_expr(
                 expr_type: Some(ExprType::BinaryExpr(binary_expr)),
             }
         }
-        Expr::Like(Like {
-            negated,
-            expr,
-            pattern,
-            escape_char,
-            case_insensitive,
-        }) => {
+        Expr::Like(
+            Like {
+                negated,
+                expr,
+                pattern,
+                escape_char,
+                case_insensitive,
+            },
+            _,
+        ) => {
             if *case_insensitive {
                 let pb = Box::new(protobuf::ILikeNode {
                     negated: *negated,
@@ -279,13 +288,16 @@ pub fn serialize_expr(
                 }
             }
         }
-        Expr::SimilarTo(Like {
-            negated,
-            expr,
-            pattern,
-            escape_char,
-            case_insensitive: _,
-        }) => {
+        Expr::SimilarTo(
+            Like {
+                negated,
+                expr,
+                pattern,
+                escape_char,
+                case_insensitive: _,
+            },
+            _,
+        ) => {
             let pb = Box::new(protobuf::SimilarToNode {
                 negated: *negated,
                 expr: Some(Box::new(serialize_expr(expr.as_ref(), codec)?)),
@@ -296,15 +308,18 @@ pub fn serialize_expr(
                 expr_type: Some(ExprType::SimilarTo(pb)),
             }
         }
-        Expr::WindowFunction(expr::WindowFunction {
-            ref fun,
-            ref args,
-            ref partition_by,
-            ref order_by,
-            ref window_frame,
-            // TODO: support null treatment in proto
-            null_treatment: _,
-        }) => {
+        Expr::WindowFunction(
+            expr::WindowFunction {
+                ref fun,
+                ref args,
+                ref partition_by,
+                ref order_by,
+                ref window_frame,
+                // TODO: support null treatment in proto
+                null_treatment: _,
+            },
+            _,
+        ) => {
             let (window_function, fun_definition) = match fun {
                 WindowFunctionDefinition::AggregateUDF(aggr_udf) => {
                     let mut buf = Vec::new();
@@ -344,14 +359,17 @@ pub fn serialize_expr(
                 expr_type: Some(ExprType::WindowExpr(window_expr)),
             }
         }
-        Expr::AggregateFunction(expr::AggregateFunction {
-            ref func,
-            ref args,
-            ref distinct,
-            ref filter,
-            ref order_by,
-            null_treatment: _,
-        }) => {
+        Expr::AggregateFunction(
+            expr::AggregateFunction {
+                ref func,
+                ref args,
+                ref distinct,
+                ref filter,
+                ref order_by,
+                null_treatment: _,
+            },
+            _,
+        ) => {
             let mut buf = Vec::new();
             let _ = codec.try_encode_udaf(func, &mut buf);
             protobuf::LogicalExprNode {
@@ -374,12 +392,12 @@ pub fn serialize_expr(
             }
         }
 
-        Expr::ScalarVariable(_, _) => {
+        Expr::ScalarVariable(_, _, _) => {
             return Err(Error::General(
                 "Proto serialization error: Scalar Variable not supported".to_string(),
             ))
         }
-        Expr::ScalarFunction(ScalarFunction { func, args }) => {
+        Expr::ScalarFunction(ScalarFunction { func, args }, _) => {
             let mut buf = Vec::new();
             let _ = codec.try_encode_udf(func, &mut buf);
             protobuf::LogicalExprNode {
@@ -390,7 +408,7 @@ pub fn serialize_expr(
                 })),
             }
         }
-        Expr::Not(expr) => {
+        Expr::Not(expr, _) => {
             let expr = Box::new(protobuf::Not {
                 expr: Some(Box::new(serialize_expr(expr.as_ref(), codec)?)),
             });
@@ -398,7 +416,7 @@ pub fn serialize_expr(
                 expr_type: Some(ExprType::NotExpr(expr)),
             }
         }
-        Expr::IsNull(expr) => {
+        Expr::IsNull(expr, _) => {
             let expr = Box::new(protobuf::IsNull {
                 expr: Some(Box::new(serialize_expr(expr.as_ref(), codec)?)),
             });
@@ -406,7 +424,7 @@ pub fn serialize_expr(
                 expr_type: Some(ExprType::IsNullExpr(expr)),
             }
         }
-        Expr::IsNotNull(expr) => {
+        Expr::IsNotNull(expr, _) => {
             let expr = Box::new(protobuf::IsNotNull {
                 expr: Some(Box::new(serialize_expr(expr.as_ref(), codec)?)),
             });
@@ -414,7 +432,7 @@ pub fn serialize_expr(
                 expr_type: Some(ExprType::IsNotNullExpr(expr)),
             }
         }
-        Expr::IsTrue(expr) => {
+        Expr::IsTrue(expr, _) => {
             let expr = Box::new(protobuf::IsTrue {
                 expr: Some(Box::new(serialize_expr(expr.as_ref(), codec)?)),
             });
@@ -422,7 +440,7 @@ pub fn serialize_expr(
                 expr_type: Some(ExprType::IsTrue(expr)),
             }
         }
-        Expr::IsFalse(expr) => {
+        Expr::IsFalse(expr, _) => {
             let expr = Box::new(protobuf::IsFalse {
                 expr: Some(Box::new(serialize_expr(expr.as_ref(), codec)?)),
             });
@@ -430,7 +448,7 @@ pub fn serialize_expr(
                 expr_type: Some(ExprType::IsFalse(expr)),
             }
         }
-        Expr::IsUnknown(expr) => {
+        Expr::IsUnknown(expr, _) => {
             let expr = Box::new(protobuf::IsUnknown {
                 expr: Some(Box::new(serialize_expr(expr.as_ref(), codec)?)),
             });
@@ -438,7 +456,7 @@ pub fn serialize_expr(
                 expr_type: Some(ExprType::IsUnknown(expr)),
             }
         }
-        Expr::IsNotTrue(expr) => {
+        Expr::IsNotTrue(expr, _) => {
             let expr = Box::new(protobuf::IsNotTrue {
                 expr: Some(Box::new(serialize_expr(expr.as_ref(), codec)?)),
             });
@@ -446,7 +464,7 @@ pub fn serialize_expr(
                 expr_type: Some(ExprType::IsNotTrue(expr)),
             }
         }
-        Expr::IsNotFalse(expr) => {
+        Expr::IsNotFalse(expr, _) => {
             let expr = Box::new(protobuf::IsNotFalse {
                 expr: Some(Box::new(serialize_expr(expr.as_ref(), codec)?)),
             });
@@ -454,7 +472,7 @@ pub fn serialize_expr(
                 expr_type: Some(ExprType::IsNotFalse(expr)),
             }
         }
-        Expr::IsNotUnknown(expr) => {
+        Expr::IsNotUnknown(expr, _) => {
             let expr = Box::new(protobuf::IsNotUnknown {
                 expr: Some(Box::new(serialize_expr(expr.as_ref(), codec)?)),
             });
@@ -462,12 +480,15 @@ pub fn serialize_expr(
                 expr_type: Some(ExprType::IsNotUnknown(expr)),
             }
         }
-        Expr::Between(Between {
-            expr,
-            negated,
-            low,
-            high,
-        }) => {
+        Expr::Between(
+            Between {
+                expr,
+                negated,
+                low,
+                high,
+            },
+            _,
+        ) => {
             let expr = Box::new(protobuf::BetweenNode {
                 expr: Some(Box::new(serialize_expr(expr.as_ref(), codec)?)),
                 negated: *negated,
@@ -478,7 +499,7 @@ pub fn serialize_expr(
                 expr_type: Some(ExprType::Between(expr)),
             }
         }
-        Expr::Case(case) => {
+        Expr::Case(case, _) => {
             let when_then_expr = case
                 .when_then_expr
                 .iter()
@@ -504,7 +525,7 @@ pub fn serialize_expr(
                 expr_type: Some(ExprType::Case(expr)),
             }
         }
-        Expr::Cast(Cast { expr, data_type }) => {
+        Expr::Cast(Cast { expr, data_type }, _) => {
             let expr = Box::new(protobuf::CastNode {
                 expr: Some(Box::new(serialize_expr(expr.as_ref(), codec)?)),
                 arrow_type: Some(data_type.try_into()?),
@@ -513,7 +534,7 @@ pub fn serialize_expr(
                 expr_type: Some(ExprType::Cast(expr)),
             }
         }
-        Expr::TryCast(TryCast { expr, data_type }) => {
+        Expr::TryCast(TryCast { expr, data_type }, _) => {
             let expr = Box::new(protobuf::TryCastNode {
                 expr: Some(Box::new(serialize_expr(expr.as_ref(), codec)?)),
                 arrow_type: Some(data_type.try_into()?),
@@ -522,7 +543,7 @@ pub fn serialize_expr(
                 expr_type: Some(ExprType::TryCast(expr)),
             }
         }
-        Expr::Negative(expr) => {
+        Expr::Negative(expr, _) => {
             let expr = Box::new(protobuf::NegativeNode {
                 expr: Some(Box::new(serialize_expr(expr.as_ref(), codec)?)),
             });
@@ -530,7 +551,7 @@ pub fn serialize_expr(
                 expr_type: Some(ExprType::Negative(expr)),
             }
         }
-        Expr::Unnest(Unnest { expr }) => {
+        Expr::Unnest(Unnest { expr }, _) => {
             let expr = protobuf::Unnest {
                 exprs: vec![serialize_expr(expr.as_ref(), codec)?],
             };
@@ -538,11 +559,14 @@ pub fn serialize_expr(
                 expr_type: Some(ExprType::Unnest(expr)),
             }
         }
-        Expr::InList(InList {
-            expr,
-            list,
-            negated,
-        }) => {
+        Expr::InList(
+            InList {
+                expr,
+                list,
+                negated,
+            },
+            _,
+        ) => {
             let expr = Box::new(protobuf::InListNode {
                 expr: Some(Box::new(serialize_expr(expr.as_ref(), codec)?)),
                 list: serialize_exprs(list, codec)?,
@@ -552,30 +576,30 @@ pub fn serialize_expr(
                 expr_type: Some(ExprType::InList(expr)),
             }
         }
-        Expr::Wildcard(Wildcard { qualifier, .. }) => protobuf::LogicalExprNode {
+        Expr::Wildcard(Wildcard { qualifier, .. }, _) => protobuf::LogicalExprNode {
             expr_type: Some(ExprType::Wildcard(protobuf::Wildcard {
                 qualifier: qualifier.to_owned().map(|x| x.into()),
             })),
         },
-        Expr::ScalarSubquery(_)
-        | Expr::InSubquery(_)
+        Expr::ScalarSubquery(_, _)
+        | Expr::InSubquery(_, _)
         | Expr::Exists { .. }
         | Expr::OuterReferenceColumn { .. } => {
             // we would need to add logical plan operators to datafusion.proto to support this
             // see discussion in https://github.com/apache/datafusion/issues/2565
             return Err(Error::General("Proto serialization error: Expr::ScalarSubquery(_) | Expr::InSubquery(_) | Expr::Exists { .. } | Exp:OuterReferenceColumn not supported".to_string()));
         }
-        Expr::GroupingSet(GroupingSet::Cube(exprs)) => protobuf::LogicalExprNode {
+        Expr::GroupingSet(GroupingSet::Cube(exprs), _) => protobuf::LogicalExprNode {
             expr_type: Some(ExprType::Cube(CubeNode {
                 expr: serialize_exprs(exprs, codec)?,
             })),
         },
-        Expr::GroupingSet(GroupingSet::Rollup(exprs)) => protobuf::LogicalExprNode {
+        Expr::GroupingSet(GroupingSet::Rollup(exprs), _) => protobuf::LogicalExprNode {
             expr_type: Some(ExprType::Rollup(RollupNode {
                 expr: serialize_exprs(exprs, codec)?,
             })),
         },
-        Expr::GroupingSet(GroupingSet::GroupingSets(exprs)) => {
+        Expr::GroupingSet(GroupingSet::GroupingSets(exprs), _) => {
             protobuf::LogicalExprNode {
                 expr_type: Some(ExprType::GroupingSet(GroupingSetNode {
                     expr: exprs
@@ -589,7 +613,7 @@ pub fn serialize_expr(
                 })),
             }
         }
-        Expr::Placeholder(Placeholder { id, data_type }) => {
+        Expr::Placeholder(Placeholder { id, data_type }, _) => {
             let data_type = match data_type {
                 Some(data_type) => Some(data_type.try_into()?),
                 None => None,

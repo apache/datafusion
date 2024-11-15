@@ -66,12 +66,12 @@ impl OptimizerRule for DecorrelatePredicateSubquery {
             })?
             .data;
 
-        let LogicalPlan::Filter(filter) = plan else {
+        let LogicalPlan::Filter(filter, _) = plan else {
             return Ok(Transformed::no(plan));
         };
 
         if !has_subquery(&filter.predicate) {
-            return Ok(Transformed::no(LogicalPlan::Filter(filter)));
+            return Ok(Transformed::no(LogicalPlan::filter(filter)));
         }
 
         let (with_subqueries, mut other_exprs): (Vec<_>, Vec<_>) =
@@ -111,7 +111,7 @@ impl OptimizerRule for DecorrelatePredicateSubquery {
         let expr = conjunction(other_exprs);
         if let Some(expr) = expr {
             let new_filter = Filter::try_new(expr, Arc::new(cur_input))?;
-            cur_input = LogicalPlan::Filter(new_filter);
+            cur_input = LogicalPlan::filter(new_filter);
         }
         Ok(Transformed::yes(cur_input))
     }
@@ -133,10 +133,13 @@ fn rewrite_inner_subqueries(
     let mut cur_input = outer;
     let alias = config.alias_generator();
     let expr_without_subqueries = expr.transform(|e| match e {
-        Expr::Exists(Exists {
-            subquery: Subquery { subquery, .. },
-            negated,
-        }) => match mark_join(&cur_input, Arc::clone(&subquery), None, negated, alias)? {
+        Expr::Exists(
+            Exists {
+                subquery: Subquery { subquery, .. },
+                negated,
+            },
+            _,
+        ) => match mark_join(&cur_input, Arc::clone(&subquery), None, negated, alias)? {
             Some((plan, exists_expr)) => {
                 cur_input = plan;
                 Ok(Transformed::yes(exists_expr))
@@ -144,11 +147,14 @@ fn rewrite_inner_subqueries(
             None if negated => Ok(Transformed::no(not_exists(subquery))),
             None => Ok(Transformed::no(exists(subquery))),
         },
-        Expr::InSubquery(InSubquery {
-            expr,
-            subquery: Subquery { subquery, .. },
-            negated,
-        }) => {
+        Expr::InSubquery(
+            InSubquery {
+                expr,
+                subquery: Subquery { subquery, .. },
+                negated,
+            },
+            _,
+        ) => {
             let in_predicate = subquery
                 .head_output_expr()?
                 .map_or(plan_err!("single expression required."), |output_expr| {
@@ -185,27 +191,33 @@ enum SubqueryPredicate {
 
 fn extract_subquery_info(expr: Expr) -> SubqueryPredicate {
     match expr {
-        Expr::Not(not_expr) => match *not_expr {
-            Expr::InSubquery(InSubquery {
-                expr,
-                subquery,
-                negated,
-            }) => SubqueryPredicate::Top(SubqueryInfo::new_with_in_expr(
+        Expr::Not(not_expr, _) => match *not_expr {
+            Expr::InSubquery(
+                InSubquery {
+                    expr,
+                    subquery,
+                    negated,
+                },
+                _,
+            ) => SubqueryPredicate::Top(SubqueryInfo::new_with_in_expr(
                 subquery, *expr, !negated,
             )),
-            Expr::Exists(Exists { subquery, negated }) => {
+            Expr::Exists(Exists { subquery, negated }, _) => {
                 SubqueryPredicate::Top(SubqueryInfo::new(subquery, !negated))
             }
             expr => SubqueryPredicate::Embedded(not(expr)),
         },
-        Expr::InSubquery(InSubquery {
-            expr,
-            subquery,
-            negated,
-        }) => SubqueryPredicate::Top(SubqueryInfo::new_with_in_expr(
+        Expr::InSubquery(
+            InSubquery {
+                expr,
+                subquery,
+                negated,
+            },
+            _,
+        ) => SubqueryPredicate::Top(SubqueryInfo::new_with_in_expr(
             subquery, *expr, negated,
         )),
-        Expr::Exists(Exists { subquery, negated }) => {
+        Expr::Exists(Exists { subquery, negated }, _) => {
             SubqueryPredicate::Top(SubqueryInfo::new(subquery, negated))
         }
         expr => SubqueryPredicate::Embedded(expr),
@@ -214,7 +226,7 @@ fn extract_subquery_info(expr: Expr) -> SubqueryPredicate {
 
 fn has_subquery(expr: &Expr) -> bool {
     expr.exists(|e| match e {
-        Expr::InSubquery(_) | Expr::Exists(_) => Ok(true),
+        Expr::InSubquery(_, _) | Expr::Exists(_, _) => Ok(true),
         _ => Ok(false),
     })
     .unwrap()
@@ -302,7 +314,7 @@ fn mark_join(
 ) -> Result<Option<(LogicalPlan, Expr)>> {
     let alias = alias_generator.next("__correlated_sq");
 
-    let exists_col = Expr::Column(Column::new(Some(alias.clone()), "mark"));
+    let exists_col = Expr::column(Column::new(Some(alias.clone()), "mark"));
     let exists_expr = if negated { !exists_col } else { exists_col };
 
     Ok(
@@ -345,27 +357,33 @@ fn build_join(
     if let Some(join_filter) = match (join_filter_opt, in_predicate_opt) {
         (
             Some(join_filter),
-            Some(Expr::BinaryExpr(BinaryExpr {
-                left,
-                op: Operator::Eq,
-                right,
-            })),
+            Some(Expr::BinaryExpr(
+                BinaryExpr {
+                    left,
+                    op: Operator::Eq,
+                    right,
+                },
+                _,
+            )),
         ) => {
             let right_col = create_col_from_scalar_expr(right.deref(), alias)?;
-            let in_predicate = Expr::eq(left.deref().clone(), Expr::Column(right_col));
+            let in_predicate = Expr::eq(left.deref().clone(), Expr::column(right_col));
             Some(in_predicate.and(join_filter))
         }
         (Some(join_filter), _) => Some(join_filter),
         (
             _,
-            Some(Expr::BinaryExpr(BinaryExpr {
-                left,
-                op: Operator::Eq,
-                right,
-            })),
+            Some(Expr::BinaryExpr(
+                BinaryExpr {
+                    left,
+                    op: Operator::Eq,
+                    right,
+                },
+                _,
+            )),
         ) => {
             let right_col = create_col_from_scalar_expr(right.deref(), alias)?;
-            let in_predicate = Expr::eq(left.deref().clone(), Expr::Column(right_col));
+            let in_predicate = Expr::eq(left.deref().clone(), Expr::column(right_col));
             Some(in_predicate)
         }
         _ => None,

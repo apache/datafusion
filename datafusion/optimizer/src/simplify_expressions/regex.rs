@@ -42,7 +42,7 @@ pub fn simplify_regex_expr(
 ) -> Result<Expr> {
     let mode = OperatorMode::new(&op);
 
-    if let Expr::Literal(ScalarValue::Utf8(Some(pattern))) = right.as_ref() {
+    if let Expr::Literal(ScalarValue::Utf8(Some(pattern)), _) = right.as_ref() {
         match regex_syntax::Parser::new().parse(pattern) {
             Ok(hir) => {
                 let kind = hir.kind();
@@ -67,7 +67,7 @@ pub fn simplify_regex_expr(
     }
 
     // Leave untouched if optimization didn't work
-    Ok(Expr::BinaryExpr(BinaryExpr { left, op, right }))
+    Ok(Expr::binary_expr(BinaryExpr { left, op, right }))
 }
 
 #[derive(Debug)]
@@ -100,12 +100,12 @@ impl OperatorMode {
         let like = Like {
             negated: self.not,
             expr,
-            pattern: Box::new(Expr::Literal(ScalarValue::from(pattern))),
+            pattern: Box::new(Expr::literal(ScalarValue::from(pattern))),
             escape_char: None,
             case_insensitive: self.i,
         };
 
-        Expr::Like(like)
+        Expr::_like(like)
     }
 
     /// Creates an [`Expr::BinaryExpr`] of "`left` = `right`" or "`left` != `right`".
@@ -115,7 +115,7 @@ impl OperatorMode {
         } else {
             Operator::Eq
         };
-        Expr::BinaryExpr(BinaryExpr { left, op, right })
+        Expr::binary_expr(BinaryExpr { left, op, right })
     }
 }
 

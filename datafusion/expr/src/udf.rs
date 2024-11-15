@@ -123,7 +123,7 @@ impl ScalarUDF {
     /// let expr = my_func.call(vec![col("a"), lit(12.3)]);
     /// ```
     pub fn call(&self, args: Vec<Expr>) -> Expr {
-        Expr::ScalarFunction(crate::expr::ScalarFunction::new_udf(
+        Expr::scalar_function(crate::expr::ScalarFunction::new_udf(
             Arc::new(self.clone()),
             args,
         ))

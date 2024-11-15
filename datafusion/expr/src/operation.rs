@@ -117,7 +117,7 @@ impl ops::Neg for Expr {
     type Output = Self;
 
     fn neg(self) -> Self::Output {
-        Expr::Negative(Box::new(self))
+        Expr::negative(Box::new(self))
     }
 }
 
@@ -127,33 +127,33 @@ impl Not for Expr {
 
     fn not(self) -> Self::Output {
         match self {
-            Expr::Like(Like {
-                negated,
-                expr,
-                pattern,
-                escape_char,
-                case_insensitive,
-            }) => Expr::Like(Like::new(
-                !negated,
-                expr,
-                pattern,
-                escape_char,
-                case_insensitive,
-            )),
-            Expr::SimilarTo(Like {
-                negated,
-                expr,
-                pattern,
-                escape_char,
-                case_insensitive,
-            }) => Expr::SimilarTo(Like::new(
-                !negated,
-                expr,
-                pattern,
-                escape_char,
-                case_insensitive,
-            )),
-            _ => Expr::Not(Box::new(self)),
+            Expr::Like(
+                Like {
+                    negated,
+                    expr,
+                    pattern,
+                    escape_char,
+                    case_insensitive,
+                },
+                stats,
+            ) => Expr::Like(
+                Like::new(!negated, expr, pattern, escape_char, case_insensitive),
+                stats,
+            ),
+            Expr::SimilarTo(
+                Like {
+                    negated,
+                    expr,
+                    pattern,
+                    escape_char,
+                    case_insensitive,
+                },
+                stats,
+            ) => Expr::SimilarTo(
+                Like::new(!negated, expr, pattern, escape_char, case_insensitive),
+                stats,
+            ),
+            _ => Expr::_not(Box::new(self)),
         }
     }
 }

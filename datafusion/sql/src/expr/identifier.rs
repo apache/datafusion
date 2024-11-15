@@ -44,7 +44,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 .ok_or_else(|| {
                     plan_datafusion_err!("variable {var_names:?} has no type information")
                 })?;
-            Ok(Expr::ScalarVariable(ty, var_names))
+            Ok(Expr::scalar_variable(ty, var_names))
         } else {
             // Don't use `col()` here because it will try to
             // interpret names with '.' as if they were
@@ -56,7 +56,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             if let Ok((qualifier, _)) =
                 schema.qualified_field_with_unqualified_name(normalize_ident.as_str())
             {
-                return Ok(Expr::Column(Column {
+                return Ok(Expr::column(Column {
                     relation: qualifier.filter(|q| q.table() != UNNAMED_TABLE).cloned(),
                     name: normalize_ident,
                 }));
@@ -68,7 +68,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     outer.qualified_field_with_unqualified_name(normalize_ident.as_str())
                 {
                     // Found an exact match on a qualified name in the outer plan schema, so this is an outer reference column
-                    return Ok(Expr::OuterReferenceColumn(
+                    return Ok(Expr::outer_reference_column(
                         field.data_type().clone(),
                         Column::from((qualifier, field)),
                     ));
@@ -76,7 +76,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             }
 
             // Default case
-            Ok(Expr::Column(Column {
+            Ok(Expr::column(Column {
                 relation: None,
                 name: normalize_ident,
             }))
@@ -106,7 +106,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                         "variable {var_names:?} has no type information"
                     ))
                 })?;
-            Ok(Expr::ScalarVariable(ty, var_names))
+            Ok(Expr::scalar_variable(ty, var_names))
         } else {
             let ids = ids
                 .into_iter()
@@ -136,7 +136,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 }
                 // Found matching field with no spare identifier(s)
                 Some((field, qualifier, _nested_names)) => {
-                    Ok(Expr::Column(Column::from((qualifier, field))))
+                    Ok(Expr::column(Column::from((qualifier, field))))
                 }
                 None => {
                     // Return default where use all identifiers to not have a nested field
@@ -161,7 +161,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                                 // Found matching field with no spare identifier(s)
                                 Some((field, qualifier, _nested_names)) => {
                                     // Found an exact match on a qualified name in the outer plan schema, so this is an outer reference column
-                                    Ok(Expr::OuterReferenceColumn(
+                                    Ok(Expr::outer_reference_column(
                                         field.data_type().clone(),
                                         Column::from((qualifier, field)),
                                     ))
@@ -172,14 +172,14 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                                     // safe unwrap as s can never be empty or exceed the bounds
                                     let (relation, column_name) =
                                         form_identifier(s).unwrap();
-                                    Ok(Expr::Column(Column::new(relation, column_name)))
+                                    Ok(Expr::column(Column::new(relation, column_name)))
                                 }
                             }
                         } else {
                             let s = &ids[0..ids.len()];
                             // Safe unwrap as s can never be empty or exceed the bounds
                             let (relation, column_name) = form_identifier(s).unwrap();
-                            Ok(Expr::Column(Column::new(relation, column_name)))
+                            Ok(Expr::column(Column::new(relation, column_name)))
                         }
                     }
                 }
@@ -223,7 +223,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             None
         };
 
-        Ok(Expr::Case(Case::new(
+        Ok(Expr::case(Case::new(
             expr,
             when_expr
                 .iter()

@@ -297,7 +297,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                 match projection.optional_alias.as_ref() {
                     Some(a) => match a {
                         protobuf::projection_node::OptionalAlias::Alias(alias) => {
-                            Ok(LogicalPlan::SubqueryAlias(SubqueryAlias::try_new(
+                            Ok(LogicalPlan::subquery_alias(SubqueryAlias::try_new(
                                 Arc::new(new_proj),
                                 alias.clone(),
                             )?))
@@ -567,7 +567,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     column_defaults.insert(col_name.clone(), expr);
                 }
 
-                Ok(LogicalPlan::Ddl(DdlStatement::CreateExternalTable(
+                Ok(LogicalPlan::ddl(DdlStatement::CreateExternalTable(
                     CreateExternalTable {
                         schema: pb_schema.try_into()?,
                         name: from_table_reference(
@@ -602,7 +602,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     None
                 };
 
-                Ok(LogicalPlan::Ddl(DdlStatement::CreateView(CreateView {
+                Ok(LogicalPlan::ddl(DdlStatement::CreateView(CreateView {
                     name: from_table_reference(create_view.name.as_ref(), "CreateView")?,
                     temporary: create_view.temporary,
                     input: Arc::new(plan),
@@ -617,7 +617,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     ))
                 })?;
 
-                Ok(LogicalPlan::Ddl(DdlStatement::CreateCatalogSchema(
+                Ok(LogicalPlan::ddl(DdlStatement::CreateCatalogSchema(
                     CreateCatalogSchema {
                         schema_name: create_catalog_schema.schema_name.clone(),
                         if_not_exists: create_catalog_schema.if_not_exists,
@@ -632,7 +632,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     ))
                 })?;
 
-                Ok(LogicalPlan::Ddl(DdlStatement::CreateCatalog(
+                Ok(LogicalPlan::ddl(DdlStatement::CreateCatalog(
                     CreateCatalog {
                         catalog_name: create_catalog.catalog_name.clone(),
                         if_not_exists: create_catalog.if_not_exists,
@@ -772,7 +772,7 @@ impl AsLogicalPlan for LogicalPlanNode {
 
                 let extension_node =
                     extension_codec.try_decode(node, &input_plans, ctx)?;
-                Ok(LogicalPlan::Extension(extension_node))
+                Ok(LogicalPlan::extension(extension_node))
             }
             LogicalPlanType::Distinct(distinct) => {
                 let input: LogicalPlan =
@@ -848,7 +848,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     .build()
             }
             LogicalPlanType::DropView(dropview) => {
-                Ok(LogicalPlan::Ddl(DdlStatement::DropView(DropView {
+                Ok(LogicalPlan::ddl(DdlStatement::DropView(DropView {
                     name: from_table_reference(dropview.name.as_ref(), "DropView")?,
                     if_exists: dropview.if_exists,
                     schema: Arc::new(convert_required!(dropview.schema)?),
@@ -862,7 +862,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     extension_codec.try_decode_file_format(&copy.file_type, ctx)?,
                 );
 
-                Ok(LogicalPlan::Copy(dml::CopyTo {
+                Ok(LogicalPlan::copy(dml::CopyTo {
                     input: Arc::new(input),
                     output_url: copy.output_url.clone(),
                     partition_by: copy.partition_by.clone(),
@@ -873,7 +873,7 @@ impl AsLogicalPlan for LogicalPlanNode {
             LogicalPlanType::Unnest(unnest) => {
                 let input: LogicalPlan =
                     into_logical_plan!(unnest.input, ctx, extension_codec)?;
-                Ok(LogicalPlan::Unnest(Unnest {
+                Ok(LogicalPlan::unnest(Unnest {
                     input: Arc::new(input),
                     exec_columns: unnest.exec_columns.iter().map(|c| c.into()).collect(),
                     list_type_columns: unnest
@@ -925,7 +925,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     )))?
                     .try_into_logical_plan(ctx, extension_codec)?;
 
-                Ok(LogicalPlan::RecursiveQuery(RecursiveQuery {
+                Ok(LogicalPlan::recursive_query(RecursiveQuery {
                     name: recursive_query_node.name.clone(),
                     static_term: Arc::new(static_term),
                     recursive_term: Arc::new(recursive_term),
@@ -954,7 +954,7 @@ impl AsLogicalPlan for LogicalPlanNode {
         Self: Sized,
     {
         match plan {
-            LogicalPlan::Values(Values { values, .. }) => {
+            LogicalPlan::Values(Values { values, .. }, _) => {
                 let n_cols = if values.is_empty() {
                     0
                 } else {
@@ -971,13 +971,16 @@ impl AsLogicalPlan for LogicalPlanNode {
                     )),
                 })
             }
-            LogicalPlan::TableScan(TableScan {
-                table_name,
-                source,
-                filters,
-                projection,
-                ..
-            }) => {
+            LogicalPlan::TableScan(
+                TableScan {
+                    table_name,
+                    source,
+                    filters,
+                    projection,
+                    ..
+                },
+                _,
+            ) => {
                 let provider = source_as_provider(source)?;
                 let schema = provider.schema();
                 let source = provider.as_any();
@@ -1131,7 +1134,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     Ok(node)
                 }
             }
-            LogicalPlan::Projection(Projection { expr, input, .. }) => {
+            LogicalPlan::Projection(Projection { expr, input, .. }, _) => {
                 Ok(LogicalPlanNode {
                     logical_plan_type: Some(LogicalPlanType::Projection(Box::new(
                         protobuf::ProjectionNode {
@@ -1147,7 +1150,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     ))),
                 })
             }
-            LogicalPlan::Filter(filter) => {
+            LogicalPlan::Filter(filter, _) => {
                 let input: LogicalPlanNode = LogicalPlanNode::try_from_logical_plan(
                     filter.input.as_ref(),
                     extension_codec,
@@ -1164,7 +1167,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     ))),
                 })
             }
-            LogicalPlan::Distinct(Distinct::All(input)) => {
+            LogicalPlan::Distinct(Distinct::All(input), _) => {
                 let input: LogicalPlanNode = LogicalPlanNode::try_from_logical_plan(
                     input.as_ref(),
                     extension_codec,
@@ -1177,13 +1180,16 @@ impl AsLogicalPlan for LogicalPlanNode {
                     ))),
                 })
             }
-            LogicalPlan::Distinct(Distinct::On(DistinctOn {
-                on_expr,
-                select_expr,
-                sort_expr,
-                input,
-                ..
-            })) => {
+            LogicalPlan::Distinct(
+                Distinct::On(DistinctOn {
+                    on_expr,
+                    select_expr,
+                    sort_expr,
+                    input,
+                    ..
+                }),
+                _,
+            ) => {
                 let input: LogicalPlanNode = LogicalPlanNode::try_from_logical_plan(
                     input.as_ref(),
                     extension_codec,
@@ -1203,9 +1209,12 @@ impl AsLogicalPlan for LogicalPlanNode {
                     ))),
                 })
             }
-            LogicalPlan::Window(Window {
-                input, window_expr, ..
-            }) => {
+            LogicalPlan::Window(
+                Window {
+                    input, window_expr, ..
+                },
+                _,
+            ) => {
                 let input: LogicalPlanNode = LogicalPlanNode::try_from_logical_plan(
                     input.as_ref(),
                     extension_codec,
@@ -1219,12 +1228,15 @@ impl AsLogicalPlan for LogicalPlanNode {
                     ))),
                 })
             }
-            LogicalPlan::Aggregate(Aggregate {
-                group_expr,
-                aggr_expr,
-                input,
-                ..
-            }) => {
+            LogicalPlan::Aggregate(
+                Aggregate {
+                    group_expr,
+                    aggr_expr,
+                    input,
+                    ..
+                },
+                _,
+            ) => {
                 let input: LogicalPlanNode = LogicalPlanNode::try_from_logical_plan(
                     input.as_ref(),
                     extension_codec,
@@ -1239,16 +1251,19 @@ impl AsLogicalPlan for LogicalPlanNode {
                     ))),
                 })
             }
-            LogicalPlan::Join(Join {
-                left,
-                right,
-                on,
-                filter,
-                join_type,
-                join_constraint,
-                null_equals_null,
-                ..
-            }) => {
+            LogicalPlan::Join(
+                Join {
+                    left,
+                    right,
+                    on,
+                    filter,
+                    join_type,
+                    join_constraint,
+                    null_equals_null,
+                    ..
+                },
+                _,
+            ) => {
                 let left: LogicalPlanNode = LogicalPlanNode::try_from_logical_plan(
                     left.as_ref(),
                     extension_codec,
@@ -1290,10 +1305,10 @@ impl AsLogicalPlan for LogicalPlanNode {
                     ))),
                 })
             }
-            LogicalPlan::Subquery(_) => {
+            LogicalPlan::Subquery(_, _) => {
                 not_impl_err!("LogicalPlan serde is not yet implemented for subqueries")
             }
-            LogicalPlan::SubqueryAlias(SubqueryAlias { input, alias, .. }) => {
+            LogicalPlan::SubqueryAlias(SubqueryAlias { input, alias, .. }, _) => {
                 let input: LogicalPlanNode = LogicalPlanNode::try_from_logical_plan(
                     input.as_ref(),
                     extension_codec,
@@ -1307,7 +1322,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     ))),
                 })
             }
-            LogicalPlan::Limit(limit) => {
+            LogicalPlan::Limit(limit, _) => {
                 let input: LogicalPlanNode = LogicalPlanNode::try_from_logical_plan(
                     limit.input.as_ref(),
                     extension_codec,
@@ -1333,7 +1348,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     ))),
                 })
             }
-            LogicalPlan::Sort(Sort { input, expr, fetch }) => {
+            LogicalPlan::Sort(Sort { input, expr, fetch }, _) => {
                 let input: LogicalPlanNode = LogicalPlanNode::try_from_logical_plan(
                     input.as_ref(),
                     extension_codec,
@@ -1350,10 +1365,13 @@ impl AsLogicalPlan for LogicalPlanNode {
                     ))),
                 })
             }
-            LogicalPlan::Repartition(Repartition {
-                input,
-                partitioning_scheme,
-            }) => {
+            LogicalPlan::Repartition(
+                Repartition {
+                    input,
+                    partitioning_scheme,
+                },
+                _,
+            ) => {
                 use datafusion::logical_expr::Partitioning;
                 let input: LogicalPlanNode = LogicalPlanNode::try_from_logical_plan(
                     input.as_ref(),
@@ -1388,17 +1406,20 @@ impl AsLogicalPlan for LogicalPlanNode {
                     ))),
                 })
             }
-            LogicalPlan::EmptyRelation(EmptyRelation {
-                produce_one_row, ..
-            }) => Ok(LogicalPlanNode {
+            LogicalPlan::EmptyRelation(
+                EmptyRelation {
+                    produce_one_row, ..
+                },
+                _,
+            ) => Ok(LogicalPlanNode {
                 logical_plan_type: Some(LogicalPlanType::EmptyRelation(
                     protobuf::EmptyRelationNode {
                         produce_one_row: *produce_one_row,
                     },
                 )),
             }),
-            LogicalPlan::Ddl(DdlStatement::CreateExternalTable(
-                CreateExternalTable {
+            LogicalPlan::Ddl(
+                DdlStatement::CreateExternalTable(CreateExternalTable {
                     name,
                     location,
                     file_type,
@@ -1412,8 +1433,9 @@ impl AsLogicalPlan for LogicalPlanNode {
                     constraints,
                     column_defaults,
                     temporary,
-                },
-            )) => {
+                }),
+                _,
+            ) => {
                 let mut converted_order_exprs: Vec<SortExprNodeCollection> = vec![];
                 for order in order_exprs {
                     let temp = SortExprNodeCollection {
@@ -1449,13 +1471,16 @@ impl AsLogicalPlan for LogicalPlanNode {
                     )),
                 })
             }
-            LogicalPlan::Ddl(DdlStatement::CreateView(CreateView {
-                name,
-                input,
-                or_replace,
-                definition,
-                temporary,
-            })) => Ok(LogicalPlanNode {
+            LogicalPlan::Ddl(
+                DdlStatement::CreateView(CreateView {
+                    name,
+                    input,
+                    or_replace,
+                    definition,
+                    temporary,
+                }),
+                _,
+            ) => Ok(LogicalPlanNode {
                 logical_plan_type: Some(LogicalPlanType::CreateView(Box::new(
                     protobuf::CreateViewNode {
                         name: Some(name.clone().into()),
@@ -1469,13 +1494,14 @@ impl AsLogicalPlan for LogicalPlanNode {
                     },
                 ))),
             }),
-            LogicalPlan::Ddl(DdlStatement::CreateCatalogSchema(
-                CreateCatalogSchema {
+            LogicalPlan::Ddl(
+                DdlStatement::CreateCatalogSchema(CreateCatalogSchema {
                     schema_name,
                     if_not_exists,
                     schema: df_schema,
-                },
-            )) => Ok(LogicalPlanNode {
+                }),
+                _,
+            ) => Ok(LogicalPlanNode {
                 logical_plan_type: Some(LogicalPlanType::CreateCatalogSchema(
                     protobuf::CreateCatalogSchemaNode {
                         schema_name: schema_name.clone(),
@@ -1484,11 +1510,14 @@ impl AsLogicalPlan for LogicalPlanNode {
                     },
                 )),
             }),
-            LogicalPlan::Ddl(DdlStatement::CreateCatalog(CreateCatalog {
-                catalog_name,
-                if_not_exists,
-                schema: df_schema,
-            })) => Ok(LogicalPlanNode {
+            LogicalPlan::Ddl(
+                DdlStatement::CreateCatalog(CreateCatalog {
+                    catalog_name,
+                    if_not_exists,
+                    schema: df_schema,
+                }),
+                _,
+            ) => Ok(LogicalPlanNode {
                 logical_plan_type: Some(LogicalPlanType::CreateCatalog(
                     protobuf::CreateCatalogNode {
                         catalog_name: catalog_name.clone(),
@@ -1497,7 +1526,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     },
                 )),
             }),
-            LogicalPlan::Analyze(a) => {
+            LogicalPlan::Analyze(a, _) => {
                 let input = LogicalPlanNode::try_from_logical_plan(
                     a.input.as_ref(),
                     extension_codec,
@@ -1511,7 +1540,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     ))),
                 })
             }
-            LogicalPlan::Explain(a) => {
+            LogicalPlan::Explain(a, _) => {
                 let input = LogicalPlanNode::try_from_logical_plan(
                     a.plan.as_ref(),
                     extension_codec,
@@ -1525,7 +1554,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     ))),
                 })
             }
-            LogicalPlan::Union(union) => {
+            LogicalPlan::Union(union, _) => {
                 let inputs: Vec<LogicalPlanNode> = union
                     .inputs
                     .iter()
@@ -1537,7 +1566,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     )),
                 })
             }
-            LogicalPlan::Extension(extension) => {
+            LogicalPlan::Extension(extension, _) => {
                 let mut buf: Vec<u8> = vec![];
                 extension_codec.try_encode(extension, &mut buf)?;
 
@@ -1554,11 +1583,14 @@ impl AsLogicalPlan for LogicalPlanNode {
                     )),
                 })
             }
-            LogicalPlan::Statement(Statement::Prepare(Prepare {
-                name,
-                data_types,
-                input,
-            })) => {
+            LogicalPlan::Statement(
+                Statement::Prepare(Prepare {
+                    name,
+                    data_types,
+                    input,
+                }),
+                _,
+            ) => {
                 let input =
                     LogicalPlanNode::try_from_logical_plan(input, extension_codec)?;
                 Ok(LogicalPlanNode {
@@ -1574,15 +1606,18 @@ impl AsLogicalPlan for LogicalPlanNode {
                     ))),
                 })
             }
-            LogicalPlan::Unnest(Unnest {
-                input,
-                exec_columns,
-                list_type_columns,
-                struct_type_columns,
-                dependency_indices,
-                schema,
-                options,
-            }) => {
+            LogicalPlan::Unnest(
+                Unnest {
+                    input,
+                    exec_columns,
+                    list_type_columns,
+                    struct_type_columns,
+                    dependency_indices,
+                    schema,
+                    options,
+                },
+                _,
+            ) => {
                 let input =
                     LogicalPlanNode::try_from_logical_plan(input, extension_codec)?;
                 let proto_unnest_list_items = list_type_columns
@@ -1618,20 +1653,23 @@ impl AsLogicalPlan for LogicalPlanNode {
                     ))),
                 })
             }
-            LogicalPlan::Ddl(DdlStatement::CreateMemoryTable(_)) => Err(proto_error(
+            LogicalPlan::Ddl(DdlStatement::CreateMemoryTable(_), _) => Err(proto_error(
                 "LogicalPlan serde is not yet implemented for CreateMemoryTable",
             )),
-            LogicalPlan::Ddl(DdlStatement::CreateIndex(_)) => Err(proto_error(
+            LogicalPlan::Ddl(DdlStatement::CreateIndex(_), _) => Err(proto_error(
                 "LogicalPlan serde is not yet implemented for CreateIndex",
             )),
-            LogicalPlan::Ddl(DdlStatement::DropTable(_)) => Err(proto_error(
+            LogicalPlan::Ddl(DdlStatement::DropTable(_), _) => Err(proto_error(
                 "LogicalPlan serde is not yet implemented for DropTable",
             )),
-            LogicalPlan::Ddl(DdlStatement::DropView(DropView {
-                name,
-                if_exists,
-                schema,
-            })) => Ok(LogicalPlanNode {
+            LogicalPlan::Ddl(
+                DdlStatement::DropView(DropView {
+                    name,
+                    if_exists,
+                    schema,
+                }),
+                _,
+            ) => Ok(LogicalPlanNode {
                 logical_plan_type: Some(LogicalPlanType::DropView(
                     protobuf::DropViewNode {
                         name: Some(name.clone().into()),
@@ -1640,28 +1678,31 @@ impl AsLogicalPlan for LogicalPlanNode {
                     },
                 )),
             }),
-            LogicalPlan::Ddl(DdlStatement::DropCatalogSchema(_)) => Err(proto_error(
+            LogicalPlan::Ddl(DdlStatement::DropCatalogSchema(_), _) => Err(proto_error(
                 "LogicalPlan serde is not yet implemented for DropCatalogSchema",
             )),
-            LogicalPlan::Ddl(DdlStatement::CreateFunction(_)) => Err(proto_error(
+            LogicalPlan::Ddl(DdlStatement::CreateFunction(_), _) => Err(proto_error(
                 "LogicalPlan serde is not yet implemented for CreateFunction",
             )),
-            LogicalPlan::Ddl(DdlStatement::DropFunction(_)) => Err(proto_error(
+            LogicalPlan::Ddl(DdlStatement::DropFunction(_), _) => Err(proto_error(
                 "LogicalPlan serde is not yet implemented for DropFunction",
             )),
-            LogicalPlan::Statement(_) => Err(proto_error(
+            LogicalPlan::Statement(_, _) => Err(proto_error(
                 "LogicalPlan serde is not yet implemented for Statement",
             )),
-            LogicalPlan::Dml(_) => Err(proto_error(
+            LogicalPlan::Dml(_, _) => Err(proto_error(
                 "LogicalPlan serde is not yet implemented for Dml",
             )),
-            LogicalPlan::Copy(dml::CopyTo {
-                input,
-                output_url,
-                file_type,
-                partition_by,
-                ..
-            }) => {
+            LogicalPlan::Copy(
+                dml::CopyTo {
+                    input,
+                    output_url,
+                    file_type,
+                    partition_by,
+                    ..
+                },
+                _,
+            ) => {
                 let input =
                     LogicalPlanNode::try_from_logical_plan(input, extension_codec)?;
                 let mut buf = Vec::new();
@@ -1679,10 +1720,10 @@ impl AsLogicalPlan for LogicalPlanNode {
                     ))),
                 })
             }
-            LogicalPlan::DescribeTable(_) => Err(proto_error(
+            LogicalPlan::DescribeTable(_, _) => Err(proto_error(
                 "LogicalPlan serde is not yet implemented for DescribeTable",
             )),
-            LogicalPlan::RecursiveQuery(recursive) => {
+            LogicalPlan::RecursiveQuery(recursive, _) => {
                 let static_term = LogicalPlanNode::try_from_logical_plan(
                     recursive.static_term.as_ref(),
                     extension_codec,

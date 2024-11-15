@@ -59,13 +59,16 @@ impl OptimizerRule for EliminateFilter {
         _config: &dyn OptimizerConfig,
     ) -> Result<Transformed<LogicalPlan>> {
         match plan {
-            LogicalPlan::Filter(Filter {
-                predicate: Expr::Literal(ScalarValue::Boolean(v)),
-                input,
-                ..
-            }) => match v {
+            LogicalPlan::Filter(
+                Filter {
+                    predicate: Expr::Literal(ScalarValue::Boolean(v), _),
+                    input,
+                    ..
+                },
+                _,
+            ) => match v {
                 Some(true) => Ok(Transformed::yes(Arc::unwrap_or_clone(input))),
-                Some(false) | None => Ok(Transformed::yes(LogicalPlan::EmptyRelation(
+                Some(false) | None => Ok(Transformed::yes(LogicalPlan::empty_relation(
                     EmptyRelation {
                         produce_one_row: false,
                         schema: Arc::clone(input.schema()),
@@ -111,7 +114,7 @@ mod tests {
 
     #[test]
     fn filter_null() -> Result<()> {
-        let filter_expr = Expr::Literal(ScalarValue::Boolean(None));
+        let filter_expr = Expr::literal(ScalarValue::Boolean(None));
 
         let table_scan = test_table_scan().unwrap();
         let plan = LogicalPlanBuilder::from(table_scan)

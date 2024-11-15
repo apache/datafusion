@@ -49,7 +49,7 @@ macro_rules! make_udf_expr_and_func {
             // "fluent expr_fn" style function
             #[doc = $DOC]
             pub fn $EXPR_FN($($arg: datafusion_expr::Expr),*) -> datafusion_expr::Expr {
-                datafusion_expr::Expr::ScalarFunction(datafusion_expr::expr::ScalarFunction::new_udf(
+                datafusion_expr::Expr::scalar_function(datafusion_expr::expr::ScalarFunction::new_udf(
                     $SCALAR_UDF_FN(),
                     vec![$($arg),*],
                 ))
@@ -62,7 +62,7 @@ macro_rules! make_udf_expr_and_func {
             // "fluent expr_fn" style function
             #[doc = $DOC]
             pub fn $EXPR_FN(arg: Vec<datafusion_expr::Expr>) -> datafusion_expr::Expr {
-                datafusion_expr::Expr::ScalarFunction(datafusion_expr::expr::ScalarFunction::new_udf(
+                datafusion_expr::Expr::scalar_function(datafusion_expr::expr::ScalarFunction::new_udf(
                     $SCALAR_UDF_FN(),
                     arg,
                 ))

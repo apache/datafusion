@@ -58,21 +58,21 @@ impl OptimizerRule for PropagateEmptyRelation {
         _config: &dyn OptimizerConfig,
     ) -> Result<Transformed<LogicalPlan>> {
         match plan {
-            LogicalPlan::EmptyRelation(_) => Ok(Transformed::no(plan)),
-            LogicalPlan::Projection(_)
-            | LogicalPlan::Filter(_)
-            | LogicalPlan::Window(_)
-            | LogicalPlan::Sort(_)
-            | LogicalPlan::SubqueryAlias(_)
-            | LogicalPlan::Repartition(_)
-            | LogicalPlan::Limit(_) => {
+            LogicalPlan::EmptyRelation(_, _) => Ok(Transformed::no(plan)),
+            LogicalPlan::Projection(_, _)
+            | LogicalPlan::Filter(_, _)
+            | LogicalPlan::Window(_, _)
+            | LogicalPlan::Sort(_, _)
+            | LogicalPlan::SubqueryAlias(_, _)
+            | LogicalPlan::Repartition(_, _)
+            | LogicalPlan::Limit(_, _) => {
                 let empty = empty_child(&plan)?;
                 if let Some(empty_plan) = empty {
                     return Ok(Transformed::yes(empty_plan));
                 }
                 Ok(Transformed::no(plan))
             }
-            LogicalPlan::Join(ref join) => {
+            LogicalPlan::Join(ref join, _) => {
                 // TODO: For Join, more join type need to be careful:
                 // For LeftOut/Full Join, if the right side is empty, the Join can be eliminated with a Projection with left side
                 // columns + right side columns replaced with null values.
@@ -83,43 +83,43 @@ impl OptimizerRule for PropagateEmptyRelation {
                 match join.join_type {
                     // For Full Join, only both sides are empty, the Join result is empty.
                     JoinType::Full if left_empty && right_empty => Ok(Transformed::yes(
-                        LogicalPlan::EmptyRelation(EmptyRelation {
+                        LogicalPlan::empty_relation(EmptyRelation {
                             produce_one_row: false,
                             schema: Arc::clone(&join.schema),
                         }),
                     )),
                     JoinType::Inner if left_empty || right_empty => Ok(Transformed::yes(
-                        LogicalPlan::EmptyRelation(EmptyRelation {
+                        LogicalPlan::empty_relation(EmptyRelation {
                             produce_one_row: false,
                             schema: Arc::clone(&join.schema),
                         }),
                     )),
                     JoinType::Left if left_empty => Ok(Transformed::yes(
-                        LogicalPlan::EmptyRelation(EmptyRelation {
+                        LogicalPlan::empty_relation(EmptyRelation {
                             produce_one_row: false,
                             schema: Arc::clone(&join.schema),
                         }),
                     )),
                     JoinType::Right if right_empty => Ok(Transformed::yes(
-                        LogicalPlan::EmptyRelation(EmptyRelation {
+                        LogicalPlan::empty_relation(EmptyRelation {
                             produce_one_row: false,
                             schema: Arc::clone(&join.schema),
                         }),
                     )),
                     JoinType::LeftSemi if left_empty || right_empty => Ok(
-                        Transformed::yes(LogicalPlan::EmptyRelation(EmptyRelation {
+                        Transformed::yes(LogicalPlan::empty_relation(EmptyRelation {
                             produce_one_row: false,
                             schema: Arc::clone(&join.schema),
                         })),
                     ),
                     JoinType::RightSemi if left_empty || right_empty => Ok(
-                        Transformed::yes(LogicalPlan::EmptyRelation(EmptyRelation {
+                        Transformed::yes(LogicalPlan::empty_relation(EmptyRelation {
                             produce_one_row: false,
                             schema: Arc::clone(&join.schema),
                         })),
                     ),
                     JoinType::LeftAnti if left_empty => Ok(Transformed::yes(
-                        LogicalPlan::EmptyRelation(EmptyRelation {
+                        LogicalPlan::empty_relation(EmptyRelation {
                             produce_one_row: false,
                             schema: Arc::clone(&join.schema),
                         }),
@@ -131,7 +131,7 @@ impl OptimizerRule for PropagateEmptyRelation {
                         Ok(Transformed::yes((*join.right).clone()))
                     }
                     JoinType::RightAnti if right_empty => Ok(Transformed::yes(
-                        LogicalPlan::EmptyRelation(EmptyRelation {
+                        LogicalPlan::empty_relation(EmptyRelation {
                             produce_one_row: false,
                             schema: Arc::clone(&join.schema),
                         }),
@@ -139,20 +139,20 @@ impl OptimizerRule for PropagateEmptyRelation {
                     _ => Ok(Transformed::no(plan)),
                 }
             }
-            LogicalPlan::Aggregate(ref agg) => {
+            LogicalPlan::Aggregate(ref agg, _) => {
                 if !agg.group_expr.is_empty() {
                     if let Some(empty_plan) = empty_child(&plan)? {
                         return Ok(Transformed::yes(empty_plan));
                     }
                 }
-                Ok(Transformed::no(LogicalPlan::Aggregate(agg.clone())))
+                Ok(Transformed::no(LogicalPlan::aggregate(agg.clone())))
             }
-            LogicalPlan::Union(ref union) => {
+            LogicalPlan::Union(ref union, _) => {
                 let new_inputs = union
                     .inputs
                     .iter()
                     .filter(|input| match &***input {
-                        LogicalPlan::EmptyRelation(empty) => empty.produce_one_row,
+                        LogicalPlan::EmptyRelation(empty, _) => empty.produce_one_row,
                         _ => true,
                     })
                     .cloned()
@@ -161,7 +161,7 @@ impl OptimizerRule for PropagateEmptyRelation {
                 if new_inputs.len() == union.inputs.len() {
                     Ok(Transformed::no(plan))
                 } else if new_inputs.is_empty() {
-                    Ok(Transformed::yes(LogicalPlan::EmptyRelation(
+                    Ok(Transformed::yes(LogicalPlan::empty_relation(
                         EmptyRelation {
                             produce_one_row: false,
                             schema: Arc::clone(plan.schema()),
@@ -174,7 +174,7 @@ impl OptimizerRule for PropagateEmptyRelation {
                     if child.schema().eq(plan.schema()) {
                         Ok(Transformed::yes(child))
                     } else {
-                        Ok(Transformed::yes(LogicalPlan::Projection(
+                        Ok(Transformed::yes(LogicalPlan::projection(
                             Projection::new_from_schema(
                                 Arc::new(child),
                                 Arc::clone(plan.schema()),
@@ -182,7 +182,7 @@ impl OptimizerRule for PropagateEmptyRelation {
                         )))
                     }
                 } else {
-                    Ok(Transformed::yes(LogicalPlan::Union(Union {
+                    Ok(Transformed::yes(LogicalPlan::union(Union {
                         inputs: new_inputs,
                         schema: Arc::clone(&union.schema),
                     })))
@@ -198,11 +198,11 @@ fn binary_plan_children_is_empty(plan: &LogicalPlan) -> Result<(bool, bool)> {
     match plan.inputs()[..] {
         [left, right] => {
             let left_empty = match left {
-                LogicalPlan::EmptyRelation(empty) => !empty.produce_one_row,
+                LogicalPlan::EmptyRelation(empty, _) => !empty.produce_one_row,
                 _ => false,
             };
             let right_empty = match right {
-                LogicalPlan::EmptyRelation(empty) => !empty.produce_one_row,
+                LogicalPlan::EmptyRelation(empty, _) => !empty.produce_one_row,
                 _ => false,
             };
             Ok((left_empty, right_empty))
@@ -214,9 +214,9 @@ fn binary_plan_children_is_empty(plan: &LogicalPlan) -> Result<(bool, bool)> {
 fn empty_child(plan: &LogicalPlan) -> Result<Option<LogicalPlan>> {
     match plan.inputs()[..] {
         [child] => match child {
-            LogicalPlan::EmptyRelation(empty) => {
+            LogicalPlan::EmptyRelation(empty, _) => {
                 if !empty.produce_one_row {
-                    Ok(Some(LogicalPlan::EmptyRelation(EmptyRelation {
+                    Ok(Some(LogicalPlan::empty_relation(EmptyRelation {
                         produce_one_row: false,
                         schema: Arc::clone(plan.schema()),
                     })))
@@ -564,7 +564,7 @@ mod tests {
 
         let fields = test_table_scan_fields();
 
-        let empty = LogicalPlan::EmptyRelation(EmptyRelation {
+        let empty = LogicalPlan::empty_relation(EmptyRelation {
             produce_one_row: false,
             schema: Arc::new(DFSchema::from_unqualified_fields(
                 fields.into(),

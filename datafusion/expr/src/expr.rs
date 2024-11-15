@@ -29,6 +29,7 @@ use crate::utils::expr_to_columns;
 use crate::Volatility;
 use crate::{udaf, ExprSchemable, Operator, Signature, WindowFrame, WindowUDF};
 
+use crate::logical_plan::tree_node::LogicalPlanStats;
 use arrow::datatypes::{DataType, FieldRef};
 use datafusion_common::cse::HashNode;
 use datafusion_common::tree_node::{
@@ -91,7 +92,7 @@ use sqlparser::ast::{
 /// # use datafusion_common::Column;
 /// # use datafusion_expr::{lit, col, Expr};
 /// let expr = col("c1");
-/// assert_eq!(expr, Expr::Column(Column::from_name("c1")));
+/// assert_eq!(expr, Expr::column(Column::from_name("c1")));
 /// ```
 ///
 /// [`Expr::Literal`] refer to literal, or constant, values. These are created
@@ -104,9 +105,9 @@ use sqlparser::ast::{
 /// # use datafusion_expr::{lit, col, Expr};
 /// // All literals are strongly typed in DataFusion. To make an `i64` 42:
 /// let expr = lit(42i64);
-/// assert_eq!(expr, Expr::Literal(ScalarValue::Int64(Some(42))));
+/// assert_eq!(expr, Expr::literal(ScalarValue::Int64(Some(42))));
 /// // To make a (typed) NULL:
-/// let expr = Expr::Literal(ScalarValue::Int64(None));
+/// let expr = Expr::literal(ScalarValue::Int64(None));
 /// // to make an (untyped) NULL (the optimizer will coerce this to the correct type):
 /// let expr = lit(ScalarValue::Null);
 /// ```
@@ -122,7 +123,7 @@ use sqlparser::ast::{
 /// // Use the `+` operator to add two columns together
 /// let expr = col("c1") + col("c2");
 /// assert!(matches!(expr, Expr::BinaryExpr { ..} ));
-/// if let Expr::BinaryExpr(binary_expr) = expr {
+/// if let Expr::BinaryExpr(binary_expr, _) = expr {
 ///   assert_eq!(*binary_expr.left, col("c1"));
 ///   assert_eq!(*binary_expr.right, col("c2"));
 ///   assert_eq!(binary_expr.op, Operator::Plus);
@@ -137,10 +138,10 @@ use sqlparser::ast::{
 /// # use datafusion_expr::{lit, col, Operator, Expr};
 /// let expr = col("c1").eq(lit(42_i32));
 /// assert!(matches!(expr, Expr::BinaryExpr { .. } ));
-/// if let Expr::BinaryExpr(binary_expr) = expr {
+/// if let Expr::BinaryExpr(binary_expr, _) = expr {
 ///   assert_eq!(*binary_expr.left, col("c1"));
 ///   let scalar = ScalarValue::Int32(Some(42));
-///   assert_eq!(*binary_expr.right, Expr::Literal(scalar));
+///   assert_eq!(*binary_expr.right, Expr::literal(scalar));
 ///   assert_eq!(binary_expr.op, Operator::Eq);
 /// }
 /// ```
@@ -186,7 +187,7 @@ use sqlparser::ast::{
 /// let mut scalars = HashSet::new();
 /// // apply recursively visits all nodes in the expression tree
 /// expr.apply(|e| {
-///    if let Expr::Literal(scalar) = e {
+///    if let Expr::Literal(scalar, _) = e {
 ///       scalars.insert(scalar);
 ///    }
 ///    // The return value controls whether to continue visiting the tree
@@ -208,7 +209,7 @@ use sqlparser::ast::{
 /// let expr = col("a").eq(lit(5)).and(col("b").eq(lit(6)));
 /// // rewrite all references to column "a" to the literal 42
 /// let rewritten = expr.transform(|e| {
-///   if let Expr::Column(c) = &e {
+///   if let Expr::Column(c, _) = &e {
 ///     if &c.name == "a" {
 ///       // return Transformed::yes to indicate the node was changed
 ///       return Ok(Transformed::yes(lit(42)))
@@ -224,41 +225,41 @@ use sqlparser::ast::{
 #[derive(Clone, PartialEq, Eq, PartialOrd, Hash, Debug)]
 pub enum Expr {
     /// An expression with a specific name.
-    Alias(Alias),
+    Alias(Alias, LogicalPlanStats),
     /// A named reference to a qualified field in a schema.
-    Column(Column),
+    Column(Column, LogicalPlanStats),
     /// A named reference to a variable in a registry.
-    ScalarVariable(DataType, Vec<String>),
+    ScalarVariable(DataType, Vec<String>, LogicalPlanStats),
     /// A constant value.
-    Literal(ScalarValue),
+    Literal(ScalarValue, LogicalPlanStats),
     /// A binary expression such as "age > 21"
-    BinaryExpr(BinaryExpr),
+    BinaryExpr(BinaryExpr, LogicalPlanStats),
     /// LIKE expression
-    Like(Like),
+    Like(Like, LogicalPlanStats),
     /// LIKE expression that uses regular expressions
-    SimilarTo(Like),
+    SimilarTo(Like, LogicalPlanStats),
     /// Negation of an expression. The expression's type must be a boolean to make sense.
-    Not(Box<Expr>),
+    Not(Box<Expr>, LogicalPlanStats),
     /// True if argument is not NULL, false otherwise. This expression itself is never NULL.
-    IsNotNull(Box<Expr>),
+    IsNotNull(Box<Expr>, LogicalPlanStats),
     /// True if argument is NULL, false otherwise. This expression itself is never NULL.
-    IsNull(Box<Expr>),
+    IsNull(Box<Expr>, LogicalPlanStats),
     /// True if argument is true, false otherwise. This expression itself is never NULL.
-    IsTrue(Box<Expr>),
+    IsTrue(Box<Expr>, LogicalPlanStats),
     /// True if argument is  false, false otherwise. This expression itself is never NULL.
-    IsFalse(Box<Expr>),
+    IsFalse(Box<Expr>, LogicalPlanStats),
     /// True if argument is NULL, false otherwise. This expression itself is never NULL.
-    IsUnknown(Box<Expr>),
+    IsUnknown(Box<Expr>, LogicalPlanStats),
     /// True if argument is FALSE or NULL, false otherwise. This expression itself is never NULL.
-    IsNotTrue(Box<Expr>),
+    IsNotTrue(Box<Expr>, LogicalPlanStats),
     /// True if argument is TRUE OR NULL, false otherwise. This expression itself is never NULL.
-    IsNotFalse(Box<Expr>),
+    IsNotFalse(Box<Expr>, LogicalPlanStats),
     /// True if argument is TRUE or FALSE, false otherwise. This expression itself is never NULL.
-    IsNotUnknown(Box<Expr>),
+    IsNotUnknown(Box<Expr>, LogicalPlanStats),
     /// arithmetic negation of an expression, the operand must be of a signed numeric data type
-    Negative(Box<Expr>),
+    Negative(Box<Expr>, LogicalPlanStats),
     /// Whether an expression is between a given range.
-    Between(Between),
+    Between(Between, LogicalPlanStats),
     /// The CASE expression is similar to a series of nested if/else and there are two forms that
     /// can be used. The first form consists of a series of boolean "when" expressions with
     /// corresponding "then" expressions, and an optional "else" expression.
@@ -280,61 +281,61 @@ pub enum Expr {
     ///     [ELSE result]
     /// END
     /// ```
-    Case(Case),
+    Case(Case, LogicalPlanStats),
     /// Casts the expression to a given type and will return a runtime error if the expression cannot be cast.
     /// This expression is guaranteed to have a fixed type.
-    Cast(Cast),
+    Cast(Cast, LogicalPlanStats),
     /// Casts the expression to a given type and will return a null value if the expression cannot be cast.
     /// This expression is guaranteed to have a fixed type.
-    TryCast(TryCast),
+    TryCast(TryCast, LogicalPlanStats),
     /// Represents the call of a scalar function with a set of arguments.
-    ScalarFunction(ScalarFunction),
+    ScalarFunction(ScalarFunction, LogicalPlanStats),
     /// Calls an aggregate function with arguments, and optional
     /// `ORDER BY`, `FILTER`, `DISTINCT` and `NULL TREATMENT`.
     ///
     /// See also [`ExprFunctionExt`] to set these fields.
     ///
     /// [`ExprFunctionExt`]: crate::expr_fn::ExprFunctionExt
-    AggregateFunction(AggregateFunction),
+    AggregateFunction(AggregateFunction, LogicalPlanStats),
     /// Represents the call of a window function with arguments.
-    WindowFunction(WindowFunction),
+    WindowFunction(WindowFunction, LogicalPlanStats),
     /// Returns whether the list contains the expr value.
-    InList(InList),
+    InList(InList, LogicalPlanStats),
     /// EXISTS subquery
-    Exists(Exists),
+    Exists(Exists, LogicalPlanStats),
     /// IN subquery
-    InSubquery(InSubquery),
+    InSubquery(InSubquery, LogicalPlanStats),
     /// Scalar subquery
-    ScalarSubquery(Subquery),
+    ScalarSubquery(Subquery, LogicalPlanStats),
     /// Represents a reference to all available fields in a specific schema,
     /// with an optional (schema) qualifier.
     ///
     /// This expr has to be resolved to a list of columns before translating logical
     /// plan into physical plan.
-    Wildcard(Wildcard),
+    Wildcard(Wildcard, LogicalPlanStats),
     /// List of grouping set expressions. Only valid in the context of an aggregate
     /// GROUP BY expression list
-    GroupingSet(GroupingSet),
+    GroupingSet(GroupingSet, LogicalPlanStats),
     /// A place holder for parameters in a prepared statement
     /// (e.g. `$foo` or `$1`)
-    Placeholder(Placeholder),
+    Placeholder(Placeholder, LogicalPlanStats),
     /// A place holder which hold a reference to a qualified field
     /// in the outer query, used for correlated sub queries.
-    OuterReferenceColumn(DataType, Column),
+    OuterReferenceColumn(DataType, Column, LogicalPlanStats),
     /// Unnest expression
-    Unnest(Unnest),
+    Unnest(Unnest, LogicalPlanStats),
 }
 
 impl Default for Expr {
     fn default() -> Self {
-        Expr::Literal(ScalarValue::Null)
+        Expr::literal(ScalarValue::Null)
     }
 }
 
 /// Create an [`Expr`] from a [`Column`]
 impl From<Column> for Expr {
     fn from(value: Column) -> Self {
-        Expr::Column(value)
+        Expr::column(value)
     }
 }
 
@@ -371,6 +372,12 @@ pub struct Wildcard {
     pub options: WildcardOptions,
 }
 
+impl Wildcard {
+    pub(crate) fn stats(&self) -> LogicalPlanStats {
+        self.options.stats()
+    }
+}
+
 /// UNNEST expression.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Hash, Debug)]
 pub struct Unnest {
@@ -388,6 +395,10 @@ impl Unnest {
     /// Create a new Unnest expression.
     pub fn new_boxed(boxed: Box<Expr>) -> Self {
         Self { expr: boxed }
+    }
+
+    pub(crate) fn stats(&self) -> LogicalPlanStats {
+        self.expr.stats()
     }
 }
 
@@ -412,6 +423,10 @@ impl Alias {
             name: name.into(),
         }
     }
+
+    pub(crate) fn stats(&self) -> LogicalPlanStats {
+        self.expr.stats()
+    }
 }
 
 /// Binary expression
@@ -430,6 +445,10 @@ impl BinaryExpr {
     pub fn new(left: Box<Expr>, op: Operator, right: Box<Expr>) -> Self {
         Self { left, op, right }
     }
+
+    pub(crate) fn stats(&self) -> LogicalPlanStats {
+        self.left.stats().merge(self.right.stats())
+    }
 }
 
 impl Display for BinaryExpr {
@@ -445,7 +464,7 @@ impl Display for BinaryExpr {
             precedence: u8,
         ) -> fmt::Result {
             match expr {
-                Expr::BinaryExpr(child) => {
+                Expr::BinaryExpr(child, _) => {
                     let p = child.op.precedence();
                     if p == 0 || p < precedence {
                         write!(f, "({child})")?;
@@ -489,6 +508,18 @@ impl Case {
             else_expr,
         }
     }
+
+    pub(crate) fn stats(&self) -> LogicalPlanStats {
+        self.expr
+            .iter()
+            .chain(
+                self.when_then_expr
+                    .iter()
+                    .flat_map(|(w, t)| vec![w, t])
+                    .chain(self.else_expr.iter()),
+            )
+            .fold(LogicalPlanStats::empty(), |s, e| s.merge(e.stats()))
+    }
 }
 
 /// LIKE expression
@@ -519,6 +550,10 @@ impl Like {
             case_insensitive,
         }
     }
+
+    pub(crate) fn stats(&self) -> LogicalPlanStats {
+        self.expr.stats().merge(self.pattern.stats())
+    }
 }
 
 /// BETWEEN expression
@@ -544,6 +579,13 @@ impl Between {
             high,
         }
     }
+
+    pub(crate) fn stats(&self) -> LogicalPlanStats {
+        self.expr
+            .stats()
+            .merge(self.low.stats())
+            .merge(self.high.stats())
+    }
 }
 
 /// ScalarFunction expression invokes a built-in scalar function
@@ -560,12 +602,16 @@ impl ScalarFunction {
     pub fn name(&self) -> &str {
         self.func.name()
     }
-}
 
-impl ScalarFunction {
     /// Create a new ScalarFunction expression with a user-defined function (UDF)
     pub fn new_udf(udf: Arc<crate::ScalarUDF>, args: Vec<Expr>) -> Self {
         Self { func: udf, args }
+    }
+
+    pub(crate) fn stats(&self) -> LogicalPlanStats {
+        self.args
+            .iter()
+            .fold(LogicalPlanStats::empty(), |s, e| s.merge(e.stats()))
     }
 }
 
@@ -598,6 +644,10 @@ impl Cast {
     pub fn new(expr: Box<Expr>, data_type: DataType) -> Self {
         Self { expr, data_type }
     }
+
+    pub(crate) fn stats(&self) -> LogicalPlanStats {
+        self.expr.stats()
+    }
 }
 
 /// TryCast Expression
@@ -613,6 +663,10 @@ impl TryCast {
     /// Create a new TryCast expression
     pub fn new(expr: Box<Expr>, data_type: DataType) -> Self {
         Self { expr, data_type }
+    }
+
+    pub(crate) fn stats(&self) -> LogicalPlanStats {
+        self.expr.stats()
     }
 }
 
@@ -730,6 +784,14 @@ impl AggregateFunction {
             null_treatment,
         }
     }
+
+    pub(crate) fn stats(&self) -> LogicalPlanStats {
+        self.args
+            .iter()
+            .chain(self.filter.iter().map(|e| e.as_ref()))
+            .chain(self.order_by.iter().flatten().map(|s| &s.expr))
+            .fold(LogicalPlanStats::empty(), |s, e| s.merge(e.stats()))
+    }
 }
 
 /// A function used as a SQL window function
@@ -842,6 +904,14 @@ impl WindowFunction {
             null_treatment: None,
         }
     }
+
+    pub(crate) fn stats(&self) -> LogicalPlanStats {
+        self.args
+            .iter()
+            .chain(self.partition_by.iter())
+            .chain(self.order_by.iter().map(|s| &s.expr))
+            .fold(LogicalPlanStats::empty(), |s, e| s.merge(e.stats()))
+    }
 }
 
 /// EXISTS expression
@@ -857,6 +927,10 @@ impl Exists {
     // Create a new Exists expression.
     pub fn new(subquery: Subquery, negated: bool) -> Self {
         Self { subquery, negated }
+    }
+
+    pub(crate) fn stats(&self) -> LogicalPlanStats {
+        self.subquery.stats()
     }
 }
 
@@ -912,6 +986,12 @@ impl InList {
             negated,
         }
     }
+
+    pub(crate) fn stats(&self) -> LogicalPlanStats {
+        self.list
+            .iter()
+            .fold(self.expr.stats(), |s, e| s.merge(e.stats()))
+    }
 }
 
 /// IN subquery
@@ -933,6 +1013,10 @@ impl InSubquery {
             subquery,
             negated,
         }
+    }
+
+    pub(crate) fn stats(&self) -> LogicalPlanStats {
+        self.expr.stats().merge(self.subquery.stats())
     }
 }
 
@@ -991,6 +1075,18 @@ impl GroupingSet {
             }
         }
     }
+
+    pub(crate) fn stats(&self) -> LogicalPlanStats {
+        match self {
+            GroupingSet::Rollup(exprs) | GroupingSet::Cube(exprs) => exprs
+                .iter()
+                .fold(LogicalPlanStats::empty(), |s, e| s.merge(e.stats())),
+            GroupingSet::GroupingSets(groups) => groups
+                .iter()
+                .flatten()
+                .fold(LogicalPlanStats::empty(), |s, e| s.merge(e.stats())),
+        }
+    }
 }
 
 /// Additional options for wildcards, e.g. Snowflake `EXCLUDE`/`RENAME` and Bigquery `EXCEPT`.
@@ -1025,6 +1121,13 @@ impl WildcardOptions {
             replace: Some(replace),
             rename: self.rename,
         }
+    }
+
+    pub(crate) fn stats(&self) -> LogicalPlanStats {
+        self.replace
+            .iter()
+            .flat_map(|prsi| prsi.planned_expressions.iter())
+            .fold(LogicalPlanStats::empty(), |s, e| s.merge(e.stats()))
     }
 }
 
@@ -1115,8 +1218,12 @@ impl Expr {
     /// output schema. We can use this qualified name to reference the field.
     pub fn qualified_name(&self) -> (Option<TableReference>, String) {
         match self {
-            Expr::Column(Column { relation, name }) => (relation.clone(), name.clone()),
-            Expr::Alias(Alias { relation, name, .. }) => (relation.clone(), name.clone()),
+            Expr::Column(Column { relation, name }, _) => {
+                (relation.clone(), name.clone())
+            }
+            Expr::Alias(Alias { relation, name, .. }, _) => {
+                (relation.clone(), name.clone())
+            }
             _ => (None, self.schema_name().to_string()),
         }
     }
@@ -1138,7 +1245,7 @@ impl Expr {
             Expr::Case { .. } => "Case",
             Expr::Cast { .. } => "Cast",
             Expr::Column(..) => "Column",
-            Expr::OuterReferenceColumn(_, _) => "Outer",
+            Expr::OuterReferenceColumn(_, _, _) => "Outer",
             Expr::Exists { .. } => "Exists",
             Expr::GroupingSet(..) => "GroupingSet",
             Expr::InList { .. } => "InList",
@@ -1156,7 +1263,7 @@ impl Expr {
             Expr::Literal(..) => "Literal",
             Expr::Negative(..) => "Negative",
             Expr::Not(..) => "Not",
-            Expr::Placeholder(_) => "Placeholder",
+            Expr::Placeholder { .. } => "Placeholder",
             Expr::ScalarFunction(..) => "ScalarFunction",
             Expr::ScalarSubquery { .. } => "ScalarSubquery",
             Expr::ScalarVariable(..) => "ScalarVariable",
@@ -1209,40 +1316,25 @@ impl Expr {
 
     /// Return `self LIKE other`
     pub fn like(self, other: Expr) -> Expr {
-        Expr::Like(Like::new(
-            false,
-            Box::new(self),
-            Box::new(other),
-            None,
-            false,
-        ))
+        let like = Like::new(false, Box::new(self), Box::new(other), None, false);
+        Expr::_like(like)
     }
 
     /// Return `self NOT LIKE other`
     pub fn not_like(self, other: Expr) -> Expr {
-        Expr::Like(Like::new(
-            true,
-            Box::new(self),
-            Box::new(other),
-            None,
-            false,
-        ))
+        let like = Like::new(true, Box::new(self), Box::new(other), None, false);
+        Expr::_like(like)
     }
 
     /// Return `self ILIKE other`
     pub fn ilike(self, other: Expr) -> Expr {
-        Expr::Like(Like::new(
-            false,
-            Box::new(self),
-            Box::new(other),
-            None,
-            true,
-        ))
+        let like = Like::new(false, Box::new(self), Box::new(other), None, true);
+        Expr::_like(like)
     }
 
     /// Return `self NOT ILIKE other`
     pub fn not_ilike(self, other: Expr) -> Expr {
-        Expr::Like(Like::new(true, Box::new(self), Box::new(other), None, true))
+        Expr::_like(Like::new(true, Box::new(self), Box::new(other), None, true))
     }
 
     /// Return the name to use for the specific Expr
@@ -1263,7 +1355,9 @@ impl Expr {
 
     /// Return `self AS name` alias expression
     pub fn alias(self, name: impl Into<String>) -> Expr {
-        Expr::Alias(Alias::new(self, None::<&str>, name.into()))
+        let alias = Alias::new(self, None::<&str>, name.into());
+        let stats = alias.stats();
+        Expr::Alias(alias, stats)
     }
 
     /// Return `self AS name` alias expression with a specific qualifier
@@ -1272,7 +1366,9 @@ impl Expr {
         relation: Option<impl Into<TableReference>>,
         name: impl Into<String>,
     ) -> Expr {
-        Expr::Alias(Alias::new(self, relation, name.into()))
+        let alias = Alias::new(self, relation, name.into());
+        let stats = alias.stats();
+        Expr::Alias(alias, stats)
     }
 
     /// Remove an alias from an expression if one exists.
@@ -1297,7 +1393,7 @@ impl Expr {
     /// ```
     pub fn unalias(self) -> Expr {
         match self {
-            Expr::Alias(alias) => *alias.expr,
+            Expr::Alias(alias, _) => *alias.expr,
             _ => self,
         }
     }
@@ -1328,7 +1424,9 @@ impl Expr {
                 // f_down: skip subqueries.  Check in f_down to avoid recursing into them
                 let recursion = if matches!(
                     expr,
-                    Expr::Exists { .. } | Expr::ScalarSubquery(_) | Expr::InSubquery(_)
+                    Expr::Exists { .. }
+                        | Expr::ScalarSubquery { .. }
+                        | Expr::InSubquery { .. }
                 ) {
                     // Subqueries could contain aliases so don't recurse into those
                     TreeNodeRecursion::Jump
@@ -1340,7 +1438,7 @@ impl Expr {
             |expr| {
                 // f_up: unalias on up so we can remove nested aliases like
                 // `(x as foo) as bar`
-                if let Expr::Alias(Alias { expr, .. }) = expr {
+                if let Expr::Alias(Alias { expr, .. }, _) = expr {
                     Ok(Transformed::yes(*expr))
                 } else {
                     Ok(Transformed::no(expr))
@@ -1354,17 +1452,17 @@ impl Expr {
     /// Return `self IN <list>` if `negated` is false, otherwise
     /// return `self NOT IN <list>`.a
     pub fn in_list(self, list: Vec<Expr>, negated: bool) -> Expr {
-        Expr::InList(InList::new(Box::new(self), list, negated))
+        Expr::_in_list(InList::new(Box::new(self), list, negated))
     }
 
     /// Return `IsNull(Box(self))
     pub fn is_null(self) -> Expr {
-        Expr::IsNull(Box::new(self))
+        Expr::_is_null(Box::new(self))
     }
 
     /// Return `IsNotNull(Box(self))
     pub fn is_not_null(self) -> Expr {
-        Expr::IsNotNull(Box::new(self))
+        Expr::_is_not_null(Box::new(self))
     }
 
     /// Create a sort configuration from an existing expression.
@@ -1379,37 +1477,37 @@ impl Expr {
 
     /// Return `IsTrue(Box(self))`
     pub fn is_true(self) -> Expr {
-        Expr::IsTrue(Box::new(self))
+        Expr::_is_true(Box::new(self))
     }
 
     /// Return `IsNotTrue(Box(self))`
     pub fn is_not_true(self) -> Expr {
-        Expr::IsNotTrue(Box::new(self))
+        Expr::_is_not_true(Box::new(self))
     }
 
     /// Return `IsFalse(Box(self))`
     pub fn is_false(self) -> Expr {
-        Expr::IsFalse(Box::new(self))
+        Expr::_is_false(Box::new(self))
     }
 
     /// Return `IsNotFalse(Box(self))`
     pub fn is_not_false(self) -> Expr {
-        Expr::IsNotFalse(Box::new(self))
+        Expr::_is_not_false(Box::new(self))
     }
 
     /// Return `IsUnknown(Box(self))`
     pub fn is_unknown(self) -> Expr {
-        Expr::IsUnknown(Box::new(self))
+        Expr::_is_unknown(Box::new(self))
     }
 
     /// Return `IsNotUnknown(Box(self))`
     pub fn is_not_unknown(self) -> Expr {
-        Expr::IsNotUnknown(Box::new(self))
+        Expr::_is_not_unknown(Box::new(self))
     }
 
     /// return `self BETWEEN low AND high`
     pub fn between(self, low: Expr, high: Expr) -> Expr {
-        Expr::Between(Between::new(
+        Expr::_between(Between::new(
             Box::new(self),
             false,
             Box::new(low),
@@ -1419,7 +1517,7 @@ impl Expr {
 
     /// Return `self NOT BETWEEN low AND high`
     pub fn not_between(self, low: Expr, high: Expr) -> Expr {
-        Expr::Between(Between::new(
+        Expr::_between(Between::new(
             Box::new(self),
             true,
             Box::new(low),
@@ -1430,7 +1528,7 @@ impl Expr {
     #[deprecated(since = "39.0.0", note = "use try_as_col instead")]
     pub fn try_into_col(&self) -> Result<Column> {
         match self {
-            Expr::Column(it) => Ok(it.clone()),
+            Expr::Column(it, _) => Ok(it.clone()),
             _ => plan_err!("Could not coerce '{self}' into Column!"),
         }
     }
@@ -1453,7 +1551,7 @@ impl Expr {
     /// assert_eq!(expr.try_as_col(), None);
     /// ```
     pub fn try_as_col(&self) -> Option<&Column> {
-        if let Expr::Column(it) = self {
+        if let Expr::Column(it, _) = self {
             Some(it)
         } else {
             None
@@ -1468,9 +1566,9 @@ impl Expr {
     /// or a `Cast` expression that wraps a `Column`.
     pub fn get_as_join_column(&self) -> Option<&Column> {
         match self {
-            Expr::Column(c) => Some(c),
-            Expr::Cast(Cast { expr, .. }) => match &**expr {
-                Expr::Column(c) => Some(c),
+            Expr::Column(c, _) => Some(c),
+            Expr::Cast(Cast { expr, .. }, _) => match &**expr {
+                Expr::Column(c, _) => Some(c),
                 _ => None,
             },
             _ => None,
@@ -1512,7 +1610,7 @@ impl Expr {
     /// See [`Self::column_refs`] for details
     pub fn add_column_refs<'a>(&'a self, set: &mut HashSet<&'a Column>) {
         self.apply(|expr| {
-            if let Expr::Column(col) = expr {
+            if let Expr::Column(col, _) = expr {
                 set.insert(col);
             }
             Ok(TreeNodeRecursion::Continue)
@@ -1547,7 +1645,7 @@ impl Expr {
     /// See [`Self::column_refs_counts`] for details
     pub fn add_column_ref_counts<'a>(&'a self, map: &mut HashMap<&'a Column, usize>) {
         self.apply(|expr| {
-            if let Expr::Column(col) = expr {
+            if let Expr::Column(col, _) = expr {
                 *map.entry(col).or_default() += 1;
             }
             Ok(TreeNodeRecursion::Continue)
@@ -1557,7 +1655,7 @@ impl Expr {
 
     /// Returns true if there are any column references in this Expr
     pub fn any_column_refs(&self) -> bool {
-        self.exists(|expr| Ok(matches!(expr, Expr::Column(_))))
+        self.exists(|expr| Ok(matches!(expr, Expr::Column(_, _))))
             .expect("exists closure is infallible")
     }
 
@@ -1573,7 +1671,7 @@ impl Expr {
     /// - `rand()` returns `true`,
     /// - `a + rand()` returns `false`
     pub fn is_volatile_node(&self) -> bool {
-        matches!(self, Expr::ScalarFunction(func) if func.func.signature().volatility == Volatility::Volatile)
+        matches!(self, Expr::ScalarFunction(func, _) if func.func.signature().volatility == Volatility::Volatile)
     }
 
     /// Returns true if the expression is volatile, i.e. whether it can return different
@@ -1600,21 +1698,24 @@ impl Expr {
         let mut has_placeholder = false;
         self.transform(|mut expr| {
             // Default to assuming the arguments are the same type
-            if let Expr::BinaryExpr(BinaryExpr { left, op: _, right }) = &mut expr {
+            if let Expr::BinaryExpr(BinaryExpr { left, op: _, right }, _) = &mut expr {
                 rewrite_placeholder(left.as_mut(), right.as_ref(), schema)?;
                 rewrite_placeholder(right.as_mut(), left.as_ref(), schema)?;
             };
-            if let Expr::Between(Between {
-                expr,
-                negated: _,
-                low,
-                high,
-            }) = &mut expr
+            if let Expr::Between(
+                Between {
+                    expr,
+                    negated: _,
+                    low,
+                    high,
+                },
+                _,
+            ) = &mut expr
             {
                 rewrite_placeholder(low.as_mut(), expr.as_ref(), schema)?;
                 rewrite_placeholder(high.as_mut(), expr.as_ref(), schema)?;
             }
-            if let Expr::Placeholder(_) = &expr {
+            if let Expr::Placeholder(_, _) = &expr {
                 has_placeholder = true;
             }
             Ok(Transformed::yes(expr))
@@ -1627,8 +1728,8 @@ impl Expr {
     /// and thus any side effects (like divide by zero) may not be encountered
     pub fn short_circuits(&self) -> bool {
         match self {
-            Expr::ScalarFunction(ScalarFunction { func, .. }) => func.short_circuits(),
-            Expr::BinaryExpr(BinaryExpr { op, .. }) => {
+            Expr::ScalarFunction(ScalarFunction { func, .. }, _) => func.short_circuits(),
+            Expr::BinaryExpr(BinaryExpr { op, .. }, _) => {
                 matches!(op, Operator::And | Operator::Or)
             }
             Expr::Case { .. } => true,
@@ -1654,11 +1755,11 @@ impl Expr {
             | Expr::IsUnknown(..)
             | Expr::Like(..)
             | Expr::ScalarSubquery(..)
-            | Expr::ScalarVariable(_, _)
+            | Expr::ScalarVariable(_, _, _)
             | Expr::SimilarTo(..)
             | Expr::Not(..)
             | Expr::Negative(..)
-            | Expr::OuterReferenceColumn(_, _)
+            | Expr::OuterReferenceColumn(_, _, _)
             | Expr::TryCast(..)
             | Expr::Unnest(..)
             | Expr::Wildcard { .. }
@@ -1666,6 +1767,166 @@ impl Expr {
             | Expr::Literal(..)
             | Expr::Placeholder(..) => false,
         }
+    }
+
+    pub fn wildcard(wildcard: Wildcard) -> Self {
+        let stats = wildcard.stats();
+        Expr::Wildcard(wildcard, stats)
+    }
+
+    pub fn binary_expr(binary_expr: BinaryExpr) -> Self {
+        let stats = binary_expr.stats();
+        Expr::BinaryExpr(binary_expr, stats)
+    }
+
+    pub fn similar_to(like: Like) -> Self {
+        let stats = like.stats();
+        Expr::SimilarTo(like, stats)
+    }
+
+    pub fn _like(like: Like) -> Self {
+        let stats = like.stats();
+        Expr::Like(like, stats)
+    }
+
+    pub fn unnest(unnest: Unnest) -> Self {
+        let stats = unnest.stats();
+        Expr::Unnest(unnest, stats)
+    }
+
+    pub fn in_subquery(in_subquery: InSubquery) -> Self {
+        let stats = in_subquery.stats();
+        Expr::InSubquery(in_subquery, stats)
+    }
+
+    pub fn scalar_subquery(subquery: Subquery) -> Self {
+        let stats = subquery.stats();
+        Expr::ScalarSubquery(subquery, stats)
+    }
+
+    pub fn _not(expr: Box<Expr>) -> Self {
+        let stats = expr.stats();
+        Expr::Not(expr, stats)
+    }
+
+    pub fn _is_not_null(expr: Box<Expr>) -> Self {
+        let stats = expr.stats();
+        Expr::IsNotNull(expr, stats)
+    }
+
+    pub fn _is_null(expr: Box<Expr>) -> Self {
+        let stats = expr.stats();
+        Expr::IsNull(expr, stats)
+    }
+
+    pub fn _is_true(expr: Box<Expr>) -> Self {
+        let stats = expr.stats();
+        Expr::IsTrue(expr, stats)
+    }
+
+    pub fn _is_false(expr: Box<Expr>) -> Self {
+        let stats = expr.stats();
+        Expr::IsFalse(expr, stats)
+    }
+
+    pub fn _is_unknown(expr: Box<Expr>) -> Self {
+        let stats = expr.stats();
+        Expr::IsUnknown(expr, stats)
+    }
+
+    pub fn _is_not_true(expr: Box<Expr>) -> Self {
+        let stats = expr.stats();
+        Expr::IsNotTrue(expr, stats)
+    }
+
+    pub fn _is_not_false(expr: Box<Expr>) -> Self {
+        let stats = expr.stats();
+        Expr::IsNotFalse(expr, stats)
+    }
+
+    pub fn _is_not_unknown(expr: Box<Expr>) -> Self {
+        let stats = expr.stats();
+        Expr::IsNotUnknown(expr, stats)
+    }
+
+    pub fn negative(expr: Box<Expr>) -> Self {
+        let stats = expr.stats();
+        Expr::Negative(expr, stats)
+    }
+
+    pub fn _between(between: Between) -> Self {
+        let stats = between.stats();
+        Expr::Between(between, stats)
+    }
+
+    pub fn case(case: Case) -> Self {
+        let stats = case.stats();
+        Expr::Case(case, stats)
+    }
+
+    pub fn cast(cast: Cast) -> Self {
+        let stats = cast.stats();
+        Expr::Cast(cast, stats)
+    }
+
+    pub fn try_cast(try_cast: TryCast) -> Self {
+        let stats = try_cast.stats();
+        Expr::TryCast(try_cast, stats)
+    }
+
+    pub fn scalar_function(scalar_function: ScalarFunction) -> Self {
+        let stats = scalar_function.stats();
+        Expr::ScalarFunction(scalar_function, stats)
+    }
+
+    pub fn window_function(window_function: WindowFunction) -> Self {
+        let stats = window_function.stats();
+        Expr::WindowFunction(window_function, stats)
+    }
+
+    pub fn aggregate_function(aggregate_function: AggregateFunction) -> Self {
+        let stats = aggregate_function.stats();
+        Expr::AggregateFunction(aggregate_function, stats)
+    }
+
+    pub fn grouping_set(grouping_set: GroupingSet) -> Self {
+        let stats = grouping_set.stats();
+        Expr::GroupingSet(grouping_set, stats)
+    }
+
+    pub fn _in_list(in_list: InList) -> Self {
+        let stats = in_list.stats();
+        Expr::InList(in_list, stats)
+    }
+
+    pub fn exists(exists: Exists) -> Self {
+        let stats = exists.stats();
+        Expr::Exists(exists, stats)
+    }
+
+    pub fn literal(scalar_value: ScalarValue) -> Self {
+        let stats = LogicalPlanStats::empty();
+        Expr::Literal(scalar_value, stats)
+    }
+
+    pub fn column(column: Column) -> Self {
+        let stats = LogicalPlanStats::empty();
+        Expr::Column(column, stats)
+    }
+
+    pub fn outer_reference_column(data_type: DataType, column: Column) -> Self {
+        let stats = LogicalPlanStats::empty();
+        Expr::OuterReferenceColumn(data_type, column, stats)
+    }
+
+    pub fn placeholder(placeholder: Placeholder) -> Self {
+        let stats = LogicalPlanStats::empty();
+        Expr::Placeholder(placeholder, stats)
+    }
+
+    pub fn scalar_variable(data_type: DataType, names: Vec<String>) -> Self {
+        let stats = LogicalPlanStats::empty();
+        Expr::ScalarVariable(data_type, names, stats)
     }
 }
 
@@ -1676,157 +1937,181 @@ impl HashNode for Expr {
     fn hash_node<H: Hasher>(&self, state: &mut H) {
         mem::discriminant(self).hash(state);
         match self {
-            Expr::Alias(Alias {
-                expr: _expr,
-                relation,
-                name,
-            }) => {
+            Expr::Alias(
+                Alias {
+                    expr: _,
+                    relation,
+                    name,
+                },
+                _,
+            ) => {
                 relation.hash(state);
                 name.hash(state);
             }
-            Expr::Column(column) => {
+            Expr::Column(column, _) => {
                 column.hash(state);
             }
-            Expr::ScalarVariable(data_type, name) => {
+            Expr::ScalarVariable(data_type, name, _) => {
                 data_type.hash(state);
                 name.hash(state);
             }
-            Expr::Literal(scalar_value) => {
+            Expr::Literal(scalar_value, _) => {
                 scalar_value.hash(state);
             }
-            Expr::BinaryExpr(BinaryExpr {
-                left: _left,
-                op,
-                right: _right,
-            }) => {
+            Expr::BinaryExpr(
+                BinaryExpr {
+                    left: _,
+                    op,
+                    right: _,
+                },
+                _,
+            ) => {
                 op.hash(state);
             }
-            Expr::Like(Like {
-                negated,
-                expr: _expr,
-                pattern: _pattern,
-                escape_char,
-                case_insensitive,
-            })
-            | Expr::SimilarTo(Like {
-                negated,
-                expr: _expr,
-                pattern: _pattern,
-                escape_char,
-                case_insensitive,
-            }) => {
+            Expr::Like(
+                Like {
+                    negated,
+                    expr: _,
+                    pattern: _,
+                    escape_char,
+                    case_insensitive,
+                },
+                _,
+            )
+            | Expr::SimilarTo(
+                Like {
+                    negated,
+                    expr: _,
+                    pattern: _,
+                    escape_char,
+                    case_insensitive,
+                },
+                _,
+            ) => {
                 negated.hash(state);
                 escape_char.hash(state);
                 case_insensitive.hash(state);
             }
-            Expr::Not(_expr)
-            | Expr::IsNotNull(_expr)
-            | Expr::IsNull(_expr)
-            | Expr::IsTrue(_expr)
-            | Expr::IsFalse(_expr)
-            | Expr::IsUnknown(_expr)
-            | Expr::IsNotTrue(_expr)
-            | Expr::IsNotFalse(_expr)
-            | Expr::IsNotUnknown(_expr)
-            | Expr::Negative(_expr) => {}
-            Expr::Between(Between {
-                expr: _expr,
-                negated,
-                low: _low,
-                high: _high,
-            }) => {
+            Expr::Not(_, _)
+            | Expr::IsNotNull(_, _)
+            | Expr::IsNull(_, _)
+            | Expr::IsTrue(_, _)
+            | Expr::IsFalse(_, _)
+            | Expr::IsUnknown(_, _)
+            | Expr::IsNotTrue(_, _)
+            | Expr::IsNotFalse(_, _)
+            | Expr::IsNotUnknown(_, _)
+            | Expr::Negative(_, _) => {}
+            Expr::Between(
+                Between {
+                    expr: _,
+                    negated,
+                    low: _,
+                    high: _,
+                },
+                _,
+            ) => {
                 negated.hash(state);
             }
-            Expr::Case(Case {
-                expr: _expr,
-                when_then_expr: _when_then_expr,
-                else_expr: _else_expr,
-            }) => {}
-            Expr::Cast(Cast {
-                expr: _expr,
-                data_type,
-            })
-            | Expr::TryCast(TryCast {
-                expr: _expr,
-                data_type,
-            }) => {
+            Expr::Case(
+                Case {
+                    expr: _,
+                    when_then_expr: _,
+                    else_expr: _,
+                },
+                _,
+            ) => {}
+            Expr::Cast(Cast { expr: _, data_type }, _)
+            | Expr::TryCast(TryCast { expr: _, data_type }, _) => {
                 data_type.hash(state);
             }
-            Expr::ScalarFunction(ScalarFunction { func, args: _args }) => {
+            Expr::ScalarFunction(ScalarFunction { func, args: _ }, _) => {
                 func.hash(state);
             }
-            Expr::AggregateFunction(AggregateFunction {
-                func,
-                args: _args,
-                distinct,
-                filter: _filter,
-                order_by: _order_by,
-                null_treatment,
-            }) => {
+            Expr::AggregateFunction(
+                AggregateFunction {
+                    func,
+                    args: _,
+                    distinct,
+                    filter: _,
+                    order_by: _,
+                    null_treatment,
+                },
+                _,
+            ) => {
                 func.hash(state);
                 distinct.hash(state);
                 null_treatment.hash(state);
             }
-            Expr::WindowFunction(WindowFunction {
-                fun,
-                args: _args,
-                partition_by: _partition_by,
-                order_by: _order_by,
-                window_frame,
-                null_treatment,
-            }) => {
+            Expr::WindowFunction(
+                WindowFunction {
+                    fun,
+                    args: _,
+                    partition_by: _,
+                    order_by: _,
+                    window_frame,
+                    null_treatment,
+                },
+                _,
+            ) => {
                 fun.hash(state);
                 window_frame.hash(state);
                 null_treatment.hash(state);
             }
-            Expr::InList(InList {
-                expr: _expr,
-                list: _list,
-                negated,
-            }) => {
+            Expr::InList(
+                InList {
+                    expr: _,
+                    list: _,
+                    negated,
+                },
+                _,
+            ) => {
                 negated.hash(state);
             }
-            Expr::Exists(Exists { subquery, negated }) => {
+            Expr::Exists(Exists { subquery, negated }, _) => {
                 subquery.hash(state);
                 negated.hash(state);
             }
-            Expr::InSubquery(InSubquery {
-                expr: _expr,
-                subquery,
-                negated,
-            }) => {
+            Expr::InSubquery(
+                InSubquery {
+                    expr: _,
+                    subquery,
+                    negated,
+                },
+                _,
+            ) => {
                 subquery.hash(state);
                 negated.hash(state);
             }
-            Expr::ScalarSubquery(subquery) => {
+            Expr::ScalarSubquery(subquery, _) => {
                 subquery.hash(state);
             }
-            Expr::Wildcard(wildcard) => {
+            Expr::Wildcard(wildcard, _) => {
                 wildcard.hash(state);
                 wildcard.hash(state);
             }
-            Expr::GroupingSet(grouping_set) => {
+            Expr::GroupingSet(grouping_set, _) => {
                 mem::discriminant(grouping_set).hash(state);
                 match grouping_set {
-                    GroupingSet::Rollup(_exprs) | GroupingSet::Cube(_exprs) => {}
-                    GroupingSet::GroupingSets(_exprs) => {}
+                    GroupingSet::Rollup(_) | GroupingSet::Cube(_) => {}
+                    GroupingSet::GroupingSets(_) => {}
                 }
             }
-            Expr::Placeholder(place_holder) => {
+            Expr::Placeholder(place_holder, _) => {
                 place_holder.hash(state);
             }
-            Expr::OuterReferenceColumn(data_type, column) => {
+            Expr::OuterReferenceColumn(data_type, column, _) => {
                 data_type.hash(state);
                 column.hash(state);
             }
-            Expr::Unnest(Unnest { expr: _expr }) => {}
+            Expr::Unnest(Unnest { expr: _ }, _) => {}
         };
     }
 }
 
 // Modifies expr if it is a placeholder with datatype of right
 fn rewrite_placeholder(expr: &mut Expr, other: &Expr, schema: &DFSchema) -> Result<()> {
-    if let Expr::Placeholder(Placeholder { id: _, data_type }) = expr {
+    if let Expr::Placeholder(Placeholder { id: _, data_type }, _) = expr {
         if data_type.is_none() {
             let other_dt = other.get_type(schema);
             match other_dt {
@@ -1860,21 +2145,24 @@ impl Display for SchemaDisplay<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self.0 {
             // The same as Display
-            Expr::Column(_)
-            | Expr::Literal(_)
+            Expr::Column(_, _)
+            | Expr::Literal(_, _)
             | Expr::ScalarVariable(..)
             | Expr::OuterReferenceColumn(..)
-            | Expr::Placeholder(_)
+            | Expr::Placeholder(_, _)
             | Expr::Wildcard { .. } => write!(f, "{}", self.0),
 
-            Expr::AggregateFunction(AggregateFunction {
-                func,
-                args,
-                distinct,
-                filter,
-                order_by,
-                null_treatment,
-            }) => {
+            Expr::AggregateFunction(
+                AggregateFunction {
+                    func,
+                    args,
+                    distinct,
+                    filter,
+                    order_by,
+                    null_treatment,
+                },
+                _,
+            ) => {
                 write!(
                     f,
                     "{}({}{})",
@@ -1898,13 +2186,16 @@ impl Display for SchemaDisplay<'_> {
                 Ok(())
             }
             // Expr is not shown since it is aliased
-            Expr::Alias(Alias { name, .. }) => write!(f, "{name}"),
-            Expr::Between(Between {
-                expr,
-                negated,
-                low,
-                high,
-            }) => {
+            Expr::Alias(Alias { name, .. }, _) => write!(f, "{name}"),
+            Expr::Between(
+                Between {
+                    expr,
+                    negated,
+                    low,
+                    high,
+                },
+                _,
+            ) => {
                 if *negated {
                     write!(
                         f,
@@ -1923,14 +2214,17 @@ impl Display for SchemaDisplay<'_> {
                     )
                 }
             }
-            Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
+            Expr::BinaryExpr(BinaryExpr { left, op, right }, _) => {
                 write!(f, "{} {op} {}", SchemaDisplay(left), SchemaDisplay(right),)
             }
-            Expr::Case(Case {
-                expr,
-                when_then_expr,
-                else_expr,
-            }) => {
+            Expr::Case(
+                Case {
+                    expr,
+                    when_then_expr,
+                    else_expr,
+                },
+                _,
+            ) => {
                 write!(f, "CASE ")?;
 
                 if let Some(e) = expr {
@@ -1953,14 +2247,17 @@ impl Display for SchemaDisplay<'_> {
                 write!(f, "END")
             }
             // Cast expr is not shown to be consistant with Postgres and Spark <https://github.com/apache/datafusion/pull/3222>
-            Expr::Cast(Cast { expr, .. }) | Expr::TryCast(TryCast { expr, .. }) => {
+            Expr::Cast(Cast { expr, .. }, _) | Expr::TryCast(TryCast { expr, .. }, _) => {
                 write!(f, "{}", SchemaDisplay(expr))
             }
-            Expr::InList(InList {
-                expr,
-                list,
-                negated,
-            }) => {
+            Expr::InList(
+                InList {
+                    expr,
+                    list,
+                    negated,
+                },
+                _,
+            ) => {
                 let inlist_name = schema_name_from_exprs(list)?;
 
                 if *negated {
@@ -1969,50 +2266,53 @@ impl Display for SchemaDisplay<'_> {
                     write!(f, "{} IN {}", SchemaDisplay(expr), inlist_name)
                 }
             }
-            Expr::Exists(Exists { negated: true, .. }) => write!(f, "NOT EXISTS"),
-            Expr::Exists(Exists { negated: false, .. }) => write!(f, "EXISTS"),
-            Expr::GroupingSet(GroupingSet::Cube(exprs)) => {
+            Expr::Exists(Exists { negated: true, .. }, _) => write!(f, "NOT EXISTS"),
+            Expr::Exists(Exists { negated: false, .. }, _) => write!(f, "EXISTS"),
+            Expr::GroupingSet(GroupingSet::Cube(exprs), _) => {
                 write!(f, "ROLLUP ({})", schema_name_from_exprs(exprs)?)
             }
-            Expr::GroupingSet(GroupingSet::GroupingSets(lists_of_exprs)) => {
+            Expr::GroupingSet(GroupingSet::GroupingSets(lists_of_exprs), _) => {
                 write!(f, "GROUPING SETS (")?;
                 for exprs in lists_of_exprs.iter() {
                     write!(f, "({})", schema_name_from_exprs(exprs)?)?;
                 }
                 write!(f, ")")
             }
-            Expr::GroupingSet(GroupingSet::Rollup(exprs)) => {
+            Expr::GroupingSet(GroupingSet::Rollup(exprs), _) => {
                 write!(f, "ROLLUP ({})", schema_name_from_exprs(exprs)?)
             }
-            Expr::IsNull(expr) => write!(f, "{} IS NULL", SchemaDisplay(expr)),
-            Expr::IsNotNull(expr) => {
+            Expr::IsNull(expr, _) => write!(f, "{} IS NULL", SchemaDisplay(expr)),
+            Expr::IsNotNull(expr, _) => {
                 write!(f, "{} IS NOT NULL", SchemaDisplay(expr))
             }
-            Expr::IsUnknown(expr) => {
+            Expr::IsUnknown(expr, _) => {
                 write!(f, "{} IS UNKNOWN", SchemaDisplay(expr))
             }
-            Expr::IsNotUnknown(expr) => {
+            Expr::IsNotUnknown(expr, _) => {
                 write!(f, "{} IS NOT UNKNOWN", SchemaDisplay(expr))
             }
-            Expr::InSubquery(InSubquery { negated: true, .. }) => {
+            Expr::InSubquery(InSubquery { negated: true, .. }, _) => {
                 write!(f, "NOT IN")
             }
-            Expr::InSubquery(InSubquery { negated: false, .. }) => write!(f, "IN"),
-            Expr::IsTrue(expr) => write!(f, "{} IS TRUE", SchemaDisplay(expr)),
-            Expr::IsFalse(expr) => write!(f, "{} IS FALSE", SchemaDisplay(expr)),
-            Expr::IsNotTrue(expr) => {
+            Expr::InSubquery(InSubquery { negated: false, .. }, _) => write!(f, "IN"),
+            Expr::IsTrue(expr, _) => write!(f, "{} IS TRUE", SchemaDisplay(expr)),
+            Expr::IsFalse(expr, _) => write!(f, "{} IS FALSE", SchemaDisplay(expr)),
+            Expr::IsNotTrue(expr, _) => {
                 write!(f, "{} IS NOT TRUE", SchemaDisplay(expr))
             }
-            Expr::IsNotFalse(expr) => {
+            Expr::IsNotFalse(expr, _) => {
                 write!(f, "{} IS NOT FALSE", SchemaDisplay(expr))
             }
-            Expr::Like(Like {
-                negated,
-                expr,
-                pattern,
-                escape_char,
-                case_insensitive,
-            }) => {
+            Expr::Like(
+                Like {
+                    negated,
+                    expr,
+                    pattern,
+                    escape_char,
+                    case_insensitive,
+                },
+                _,
+            ) => {
                 write!(
                     f,
                     "{} {}{} {}",
@@ -2028,12 +2328,12 @@ impl Display for SchemaDisplay<'_> {
 
                 Ok(())
             }
-            Expr::Negative(expr) => write!(f, "(- {})", SchemaDisplay(expr)),
-            Expr::Not(expr) => write!(f, "NOT {}", SchemaDisplay(expr)),
-            Expr::Unnest(Unnest { expr }) => {
+            Expr::Negative(expr, _) => write!(f, "(- {})", SchemaDisplay(expr)),
+            Expr::Not(expr, _) => write!(f, "NOT {}", SchemaDisplay(expr)),
+            Expr::Unnest(Unnest { expr }, _) => {
                 write!(f, "UNNEST({})", SchemaDisplay(expr))
             }
-            Expr::ScalarFunction(ScalarFunction { func, args }) => {
+            Expr::ScalarFunction(ScalarFunction { func, args }, _) => {
                 match func.schema_name(args) {
                     Ok(name) => {
                         write!(f, "{name}")
@@ -2043,16 +2343,19 @@ impl Display for SchemaDisplay<'_> {
                     }
                 }
             }
-            Expr::ScalarSubquery(Subquery { subquery, .. }) => {
+            Expr::ScalarSubquery(Subquery { subquery, .. }, _) => {
                 write!(f, "{}", subquery.schema().field(0).name())
             }
-            Expr::SimilarTo(Like {
-                negated,
-                expr,
-                pattern,
-                escape_char,
-                ..
-            }) => {
+            Expr::SimilarTo(
+                Like {
+                    negated,
+                    expr,
+                    pattern,
+                    escape_char,
+                    ..
+                },
+                _,
+            ) => {
                 write!(
                     f,
                     "{} {} {}",
@@ -2070,14 +2373,17 @@ impl Display for SchemaDisplay<'_> {
 
                 Ok(())
             }
-            Expr::WindowFunction(WindowFunction {
-                fun,
-                args,
-                partition_by,
-                order_by,
-                window_frame,
-                null_treatment,
-            }) => {
+            Expr::WindowFunction(
+                WindowFunction {
+                    fun,
+                    args,
+                    partition_by,
+                    order_by,
+                    window_frame,
+                    null_treatment,
+                },
+                _,
+            ) => {
                 write!(
                     f,
                     "{}({})",
@@ -2158,12 +2464,12 @@ pub fn schema_name_from_sorts(sorts: &[Sort]) -> Result<String, fmt::Error> {
 impl Display for Expr {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         match self {
-            Expr::Alias(Alias { expr, name, .. }) => write!(f, "{expr} AS {name}"),
-            Expr::Column(c) => write!(f, "{c}"),
-            Expr::OuterReferenceColumn(_, c) => write!(f, "outer_ref({c})"),
-            Expr::ScalarVariable(_, var_names) => write!(f, "{}", var_names.join(".")),
-            Expr::Literal(v) => write!(f, "{v:?}"),
-            Expr::Case(case) => {
+            Expr::Alias(Alias { expr, name, .. }, _) => write!(f, "{expr} AS {name}"),
+            Expr::Column(c, _) => write!(f, "{c}"),
+            Expr::OuterReferenceColumn(_, c, _) => write!(f, "outer_ref({c})"),
+            Expr::ScalarVariable(_, var_names, _) => write!(f, "{}", var_names.join(".")),
+            Expr::Literal(v, _) => write!(f, "{v:?}"),
+            Expr::Case(case, _) => {
                 write!(f, "CASE ")?;
                 if let Some(e) = &case.expr {
                     write!(f, "{e} ")?;
@@ -2176,57 +2482,72 @@ impl Display for Expr {
                 }
                 write!(f, "END")
             }
-            Expr::Cast(Cast { expr, data_type }) => {
+            Expr::Cast(Cast { expr, data_type }, _) => {
                 write!(f, "CAST({expr} AS {data_type:?})")
             }
-            Expr::TryCast(TryCast { expr, data_type }) => {
+            Expr::TryCast(TryCast { expr, data_type }, _) => {
                 write!(f, "TRY_CAST({expr} AS {data_type:?})")
             }
-            Expr::Not(expr) => write!(f, "NOT {expr}"),
-            Expr::Negative(expr) => write!(f, "(- {expr})"),
-            Expr::IsNull(expr) => write!(f, "{expr} IS NULL"),
-            Expr::IsNotNull(expr) => write!(f, "{expr} IS NOT NULL"),
-            Expr::IsTrue(expr) => write!(f, "{expr} IS TRUE"),
-            Expr::IsFalse(expr) => write!(f, "{expr} IS FALSE"),
-            Expr::IsUnknown(expr) => write!(f, "{expr} IS UNKNOWN"),
-            Expr::IsNotTrue(expr) => write!(f, "{expr} IS NOT TRUE"),
-            Expr::IsNotFalse(expr) => write!(f, "{expr} IS NOT FALSE"),
-            Expr::IsNotUnknown(expr) => write!(f, "{expr} IS NOT UNKNOWN"),
-            Expr::Exists(Exists {
-                subquery,
-                negated: true,
-            }) => write!(f, "NOT EXISTS ({subquery:?})"),
-            Expr::Exists(Exists {
-                subquery,
-                negated: false,
-            }) => write!(f, "EXISTS ({subquery:?})"),
-            Expr::InSubquery(InSubquery {
-                expr,
-                subquery,
-                negated: true,
-            }) => write!(f, "{expr} NOT IN ({subquery:?})"),
-            Expr::InSubquery(InSubquery {
-                expr,
-                subquery,
-                negated: false,
-            }) => write!(f, "{expr} IN ({subquery:?})"),
-            Expr::ScalarSubquery(subquery) => write!(f, "({subquery:?})"),
-            Expr::BinaryExpr(expr) => write!(f, "{expr}"),
-            Expr::ScalarFunction(fun) => {
+            Expr::Not(expr, _) => write!(f, "NOT {expr}"),
+            Expr::Negative(expr, _) => write!(f, "(- {expr})"),
+            Expr::IsNull(expr, _) => write!(f, "{expr} IS NULL"),
+            Expr::IsNotNull(expr, _) => write!(f, "{expr} IS NOT NULL"),
+            Expr::IsTrue(expr, _) => write!(f, "{expr} IS TRUE"),
+            Expr::IsFalse(expr, _) => write!(f, "{expr} IS FALSE"),
+            Expr::IsUnknown(expr, _) => write!(f, "{expr} IS UNKNOWN"),
+            Expr::IsNotTrue(expr, _) => write!(f, "{expr} IS NOT TRUE"),
+            Expr::IsNotFalse(expr, _) => write!(f, "{expr} IS NOT FALSE"),
+            Expr::IsNotUnknown(expr, _) => write!(f, "{expr} IS NOT UNKNOWN"),
+            Expr::Exists(
+                Exists {
+                    subquery,
+                    negated: true,
+                },
+                _,
+            ) => write!(f, "NOT EXISTS ({subquery:?})"),
+            Expr::Exists(
+                Exists {
+                    subquery,
+                    negated: false,
+                },
+                _,
+            ) => write!(f, "EXISTS ({subquery:?})"),
+            Expr::InSubquery(
+                InSubquery {
+                    expr,
+                    subquery,
+                    negated: true,
+                },
+                _,
+            ) => write!(f, "{expr} NOT IN ({subquery:?})"),
+            Expr::InSubquery(
+                InSubquery {
+                    expr,
+                    subquery,
+                    negated: false,
+                },
+                _,
+            ) => write!(f, "{expr} IN ({subquery:?})"),
+            Expr::ScalarSubquery(subquery, _) => write!(f, "({subquery:?})"),
+            Expr::BinaryExpr(expr, _) => write!(f, "{expr}"),
+            Expr::ScalarFunction(fun, _) => {
                 fmt_function(f, fun.name(), false, &fun.args, true)
             }
             // TODO: use udf's display_name, need to fix the seperator issue, <https://github.com/apache/datafusion/issues/10364>
             // Expr::ScalarFunction(ScalarFunction { func, args }) => {
             //     write!(f, "{}", func.display_name(args).unwrap())
             // }
-            Expr::WindowFunction(WindowFunction {
-                fun,
-                args,
-                partition_by,
-                order_by,
-                window_frame,
-                null_treatment,
-            }) => {
+            Expr::WindowFunction(
+                WindowFunction {
+                    fun,
+                    args,
+                    partition_by,
+                    order_by,
+                    window_frame,
+                    null_treatment,
+                },
+                _,
+            ) => {
                 fmt_function(f, &fun.to_string(), false, args, true)?;
 
                 if let Some(nt) = null_treatment {
@@ -2246,15 +2567,18 @@ impl Display for Expr {
                 )?;
                 Ok(())
             }
-            Expr::AggregateFunction(AggregateFunction {
-                func,
-                distinct,
-                ref args,
-                filter,
-                order_by,
-                null_treatment,
-                ..
-            }) => {
+            Expr::AggregateFunction(
+                AggregateFunction {
+                    func,
+                    distinct,
+                    ref args,
+                    filter,
+                    order_by,
+                    null_treatment,
+                    ..
+                },
+                _,
+            ) => {
                 fmt_function(f, func.name(), *distinct, args, true)?;
                 if let Some(nt) = null_treatment {
                     write!(f, " {}", nt)?;
@@ -2267,25 +2591,31 @@ impl Display for Expr {
                 }
                 Ok(())
             }
-            Expr::Between(Between {
-                expr,
-                negated,
-                low,
-                high,
-            }) => {
+            Expr::Between(
+                Between {
+                    expr,
+                    negated,
+                    low,
+                    high,
+                },
+                _,
+            ) => {
                 if *negated {
                     write!(f, "{expr} NOT BETWEEN {low} AND {high}")
                 } else {
                     write!(f, "{expr} BETWEEN {low} AND {high}")
                 }
             }
-            Expr::Like(Like {
-                negated,
-                expr,
-                pattern,
-                escape_char,
-                case_insensitive,
-            }) => {
+            Expr::Like(
+                Like {
+                    negated,
+                    expr,
+                    pattern,
+                    escape_char,
+                    case_insensitive,
+                },
+                _,
+            ) => {
                 write!(f, "{expr}")?;
                 let op_name = if *case_insensitive { "ILIKE" } else { "LIKE" };
                 if *negated {
@@ -2297,13 +2627,16 @@ impl Display for Expr {
                     write!(f, " {op_name} {pattern}")
                 }
             }
-            Expr::SimilarTo(Like {
-                negated,
-                expr,
-                pattern,
-                escape_char,
-                case_insensitive: _,
-            }) => {
+            Expr::SimilarTo(
+                Like {
+                    negated,
+                    expr,
+                    pattern,
+                    escape_char,
+                    case_insensitive: _,
+                },
+                _,
+            ) => {
                 write!(f, "{expr}")?;
                 if *negated {
                     write!(f, " NOT")?;
@@ -2314,22 +2647,25 @@ impl Display for Expr {
                     write!(f, " SIMILAR TO {pattern}")
                 }
             }
-            Expr::InList(InList {
-                expr,
-                list,
-                negated,
-            }) => {
+            Expr::InList(
+                InList {
+                    expr,
+                    list,
+                    negated,
+                },
+                _,
+            ) => {
                 if *negated {
                     write!(f, "{expr} NOT IN ([{}])", expr_vec_fmt!(list))
                 } else {
                     write!(f, "{expr} IN ([{}])", expr_vec_fmt!(list))
                 }
             }
-            Expr::Wildcard(Wildcard { qualifier, options }) => match qualifier {
+            Expr::Wildcard(Wildcard { qualifier, options }, _) => match qualifier {
                 Some(qualifier) => write!(f, "{qualifier}.*{options}"),
                 None => write!(f, "*{options}"),
             },
-            Expr::GroupingSet(grouping_sets) => match grouping_sets {
+            Expr::GroupingSet(grouping_sets, _) => match grouping_sets {
                 GroupingSet::Rollup(exprs) => {
                     // ROLLUP (c0, c1, c2)
                     write!(f, "ROLLUP ({})", expr_vec_fmt!(exprs))
@@ -2351,8 +2687,8 @@ impl Display for Expr {
                     )
                 }
             },
-            Expr::Placeholder(Placeholder { id, .. }) => write!(f, "{id}"),
-            Expr::Unnest(Unnest { expr }) => {
+            Expr::Placeholder(Placeholder { id, .. }, _) => write!(f, "{id}"),
+            Expr::Unnest(Unnest { expr }, _) => {
                 write!(f, "UNNEST({expr})")
             }
         }
@@ -2381,7 +2717,7 @@ fn fmt_function(
 /// The name of the column (field) that this `Expr` will produce in the physical plan.
 /// The difference from [Expr::schema_name] is that top-level columns are unqualified.
 pub fn physical_name(expr: &Expr) -> Result<String> {
-    if let Expr::Column(col) = expr {
+    if let Expr::Column(col, _) = expr {
         Ok(col.name.clone())
     } else {
         Ok(expr.schema_name().to_string())
@@ -2415,8 +2751,8 @@ mod test {
     #[test]
     #[allow(deprecated)]
     fn format_cast() -> Result<()> {
-        let expr = Expr::Cast(Cast {
-            expr: Box::new(Expr::Literal(ScalarValue::Float32(Some(1.23)))),
+        let expr = Expr::cast(Cast {
+            expr: Box::new(Expr::literal(ScalarValue::Float32(Some(1.23)))),
             data_type: DataType::Utf8,
         });
         let expected_canonical = "CAST(Float32(1.23) AS Utf8)";
@@ -2445,7 +2781,7 @@ mod test {
     fn test_collect_expr() -> Result<()> {
         // single column
         {
-            let expr = &Expr::Cast(Cast::new(Box::new(col("a")), DataType::Float64));
+            let expr = &Expr::cast(Cast::new(Box::new(col("a")), DataType::Float64));
             let columns = expr.column_refs();
             assert_eq!(1, columns.len());
             assert!(columns.contains(&Column::from_name("a")));

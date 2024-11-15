@@ -181,9 +181,9 @@ fn check_plan(plan: &LogicalPlan) -> Result<()> {
             // recursively look for subqueries
             expr.apply(|expr| {
                 match expr {
-                    Expr::Exists(Exists { subquery, .. })
-                    | Expr::InSubquery(InSubquery { subquery, .. })
-                    | Expr::ScalarSubquery(subquery) => {
+                    Expr::Exists(Exists { subquery, .. }, _)
+                    | Expr::InSubquery(InSubquery { subquery, .. }, _)
+                    | Expr::ScalarSubquery(subquery, _) => {
                         check_subquery_expr(plan, &subquery.subquery, expr)?;
                     }
                     _ => {}

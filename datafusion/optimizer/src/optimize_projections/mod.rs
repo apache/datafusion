@@ -119,12 +119,12 @@ fn optimize_projections(
     // Recursively rewrite any nodes that may be able to avoid computation given
     // their parents' required indices.
     match plan {
-        LogicalPlan::Projection(proj) => {
+        LogicalPlan::Projection(proj, _) => {
             return merge_consecutive_projections(proj)?.transform_data(|proj| {
                 rewrite_projection_given_requirements(proj, config, &indices)
             })
         }
-        LogicalPlan::Aggregate(aggregate) => {
+        LogicalPlan::Aggregate(aggregate, _) => {
             // Split parent requirements to GROUP BY and aggregate sections:
             let n_group_exprs = aggregate.group_expr_len()?;
             // Offset aggregate indices so that they point to valid indices at
@@ -200,10 +200,10 @@ fn optimize_projections(
                     new_group_bys,
                     new_aggr_expr,
                 )
-                .map(LogicalPlan::Aggregate)
+                .map(LogicalPlan::aggregate)
             });
         }
-        LogicalPlan::Window(window) => {
+        LogicalPlan::Window(window, _) => {
             let input_schema = Arc::clone(window.input.schema());
             // Split parent requirements to child and window expression sections:
             let n_input_fields = input_schema.fields().len();
@@ -238,12 +238,12 @@ fn optimize_projections(
                         add_projection_on_top_if_helpful(window_child, required_exprs)?
                             .data;
                     Window::try_new(new_window_expr, Arc::new(window_child))
-                        .map(LogicalPlan::Window)
+                        .map(LogicalPlan::window)
                         .map(Transformed::yes)
                 }
             });
         }
-        LogicalPlan::TableScan(table_scan) => {
+        LogicalPlan::TableScan(table_scan, _) => {
             let TableScan {
                 table_name,
                 source,
@@ -266,7 +266,7 @@ fn optimize_projections(
                 filters,
                 fetch,
             )
-            .map(LogicalPlan::TableScan)
+            .map(LogicalPlan::table_scan)
             .map(Transformed::yes);
         }
         // Other node types are handled below
@@ -276,12 +276,12 @@ fn optimize_projections(
     // For other plan node types, calculate indices for columns they use and
     // try to rewrite their children
     let mut child_required_indices: Vec<RequiredIndicies> = match &plan {
-        LogicalPlan::Sort(_)
-        | LogicalPlan::Filter(_)
-        | LogicalPlan::Repartition(_)
-        | LogicalPlan::Union(_)
-        | LogicalPlan::SubqueryAlias(_)
-        | LogicalPlan::Distinct(Distinct::On(_)) => {
+        LogicalPlan::Sort(_, _)
+        | LogicalPlan::Filter(_, _)
+        | LogicalPlan::Repartition(_, _)
+        | LogicalPlan::Union(_, _)
+        | LogicalPlan::SubqueryAlias(_, _)
+        | LogicalPlan::Distinct(Distinct::On(_), _) => {
             // Pass index requirements from the parent as well as column indices
             // that appear in this plan's expressions to its child. All these
             // operators benefit from "small" inputs, so the projection_beneficial
@@ -296,7 +296,7 @@ fn optimize_projections(
                 })
                 .collect::<Result<_>>()?
         }
-        LogicalPlan::Limit(_) => {
+        LogicalPlan::Limit(_, _) => {
             // Pass index requirements from the parent as well as column indices
             // that appear in this plan's expressions to its child. These operators
             // do not benefit from "small" inputs, so the projection_beneficial
@@ -306,14 +306,14 @@ fn optimize_projections(
                 .map(|input| indices.clone().with_plan_exprs(&plan, input.schema()))
                 .collect::<Result<_>>()?
         }
-        LogicalPlan::Copy(_)
-        | LogicalPlan::Ddl(_)
-        | LogicalPlan::Dml(_)
-        | LogicalPlan::Explain(_)
-        | LogicalPlan::Analyze(_)
-        | LogicalPlan::Subquery(_)
-        | LogicalPlan::Statement(_)
-        | LogicalPlan::Distinct(Distinct::All(_)) => {
+        LogicalPlan::Copy(_, _)
+        | LogicalPlan::Ddl(_, _)
+        | LogicalPlan::Dml(_, _)
+        | LogicalPlan::Explain(_, _)
+        | LogicalPlan::Analyze(_, _)
+        | LogicalPlan::Subquery(_, _)
+        | LogicalPlan::Statement(_, _)
+        | LogicalPlan::Distinct(Distinct::All(_), _) => {
             // These plans require all their fields, and their children should
             // be treated as final plans -- otherwise, we may have schema a
             // mismatch.
@@ -324,7 +324,7 @@ fn optimize_projections(
                 .map(RequiredIndicies::new_for_all_exprs)
                 .collect()
         }
-        LogicalPlan::Extension(extension) => {
+        LogicalPlan::Extension(extension, _) => {
             let Some(necessary_children_indices) =
                 extension.node.necessary_children_exprs(indices.indices())
             else {
@@ -346,14 +346,14 @@ fn optimize_projections(
                 })
                 .collect::<Result<Vec<_>>>()?
         }
-        LogicalPlan::EmptyRelation(_)
-        | LogicalPlan::RecursiveQuery(_)
-        | LogicalPlan::Values(_)
-        | LogicalPlan::DescribeTable(_) => {
+        LogicalPlan::EmptyRelation(_, _)
+        | LogicalPlan::RecursiveQuery(_, _)
+        | LogicalPlan::Values(_, _)
+        | LogicalPlan::DescribeTable(_, _) => {
             // These operators have no inputs, so stop the optimization process.
             return Ok(Transformed::no(plan));
         }
-        LogicalPlan::Join(join) => {
+        LogicalPlan::Join(join, _) => {
             let left_len = join.left.schema().fields().len();
             let (left_req_indices, right_req_indices) =
                 split_join_requirements(left_len, indices, &join.join_type);
@@ -369,17 +369,20 @@ fn optimize_projections(
             ]
         }
         // these nodes are explicitly rewritten in the match statement above
-        LogicalPlan::Projection(_)
-        | LogicalPlan::Aggregate(_)
-        | LogicalPlan::Window(_)
-        | LogicalPlan::TableScan(_) => {
+        LogicalPlan::Projection(_, _)
+        | LogicalPlan::Aggregate(_, _)
+        | LogicalPlan::Window(_, _)
+        | LogicalPlan::TableScan(_, _) => {
             return internal_err!(
                 "OptimizeProjection: should have handled in the match statement above"
             );
         }
-        LogicalPlan::Unnest(Unnest {
-            dependency_indices, ..
-        }) => {
+        LogicalPlan::Unnest(
+            Unnest {
+                dependency_indices, ..
+            },
+            _,
+        ) => {
             vec![RequiredIndicies::new_from_indices(
                 dependency_indices.clone(),
             )]
@@ -452,7 +455,7 @@ fn merge_consecutive_projections(proj: Projection) -> Result<Transformed<Project
         schema,
         ..
     } = proj;
-    let LogicalPlan::Projection(prev_projection) = input.as_ref() else {
+    let LogicalPlan::Projection(prev_projection, _) = input.as_ref() else {
         return Projection::try_new_with_schema(expr, input, schema).map(Transformed::no);
     };
 
@@ -475,7 +478,7 @@ fn merge_consecutive_projections(proj: Projection) -> Result<Transformed<Project
         return Projection::try_new_with_schema(expr, input, schema).map(Transformed::no);
     }
 
-    let LogicalPlan::Projection(prev_projection) = Arc::unwrap_or_clone(input) else {
+    let LogicalPlan::Projection(prev_projection, _) = Arc::unwrap_or_clone(input) else {
         // We know it is a `LogicalPlan::Projection` from check above
         unreachable!();
     };
@@ -489,12 +492,15 @@ fn merge_consecutive_projections(proj: Projection) -> Result<Transformed<Project
 
         // do not rewrite top level Aliases (rewriter will remove all aliases within exprs)
         match expr {
-            Expr::Alias(Alias {
-                expr,
-                relation,
-                name,
-            }) => rewrite_expr(*expr, &prev_projection).map(|result| {
-                result.update_data(|expr| Expr::Alias(Alias::new(expr, relation, name)))
+            Expr::Alias(
+                Alias {
+                    expr,
+                    relation,
+                    name,
+                },
+                _,
+            ) => rewrite_expr(*expr, &prev_projection).map(|result| {
+                result.update_data(|expr| expr.alias_qualified(relation, name))
             }),
             e => rewrite_expr(e, &prev_projection),
         }
@@ -513,7 +519,7 @@ fn merge_consecutive_projections(proj: Projection) -> Result<Transformed<Project
         Projection::try_new(new_exprs, prev_projection.input).map(Transformed::yes)
     } else {
         // not rewritten, so put the projection back together
-        let input = Arc::new(LogicalPlan::Projection(prev_projection));
+        let input = Arc::new(LogicalPlan::projection(prev_projection));
         Projection::try_new_with_schema(new_exprs.data, input, schema)
             .map(Transformed::no)
     }
@@ -521,7 +527,7 @@ fn merge_consecutive_projections(proj: Projection) -> Result<Transformed<Project
 
 // Check whether `expr` is trivial; i.e. it doesn't imply any computation.
 fn is_expr_trivial(expr: &Expr) -> bool {
-    matches!(expr, Expr::Column(_) | Expr::Literal(_))
+    matches!(expr, Expr::Column(_, _) | Expr::Literal(_, _))
 }
 
 /// Rewrites a projection expression using the projection before it (i.e. its input)
@@ -572,8 +578,8 @@ fn rewrite_expr(expr: Expr, input: &Projection) -> Result<Transformed<Expr>> {
     expr.transform_up(|expr| {
         match expr {
             //  remove any intermediate aliases
-            Expr::Alias(alias) => Ok(Transformed::yes(*alias.expr)),
-            Expr::Column(col) => {
+            Expr::Alias(alias, _) => Ok(Transformed::yes(*alias.expr)),
+            Expr::Column(col, _) => {
                 // Find index of column:
                 let idx = input.schema.index_of_column(&col)?;
                 // get the corresponding unaliased input expression
@@ -604,16 +610,16 @@ fn outer_columns<'a>(expr: &'a Expr, columns: &mut HashSet<&'a Column>) {
     // inspect_expr_pre doesn't handle subquery references, so find them explicitly
     expr.apply(|expr| {
         match expr {
-            Expr::OuterReferenceColumn(_, col) => {
+            Expr::OuterReferenceColumn(_, col, _) => {
                 columns.insert(col);
             }
-            Expr::ScalarSubquery(subquery) => {
+            Expr::ScalarSubquery(subquery, _) => {
                 outer_columns_helper_multi(&subquery.outer_ref_columns, columns);
             }
-            Expr::Exists(exists) => {
+            Expr::Exists(exists, _) => {
                 outer_columns_helper_multi(&exists.subquery.outer_ref_columns, columns);
             }
-            Expr::InSubquery(insubquery) => {
+            Expr::InSubquery(insubquery, _) => {
                 outer_columns_helper_multi(
                     &insubquery.subquery.outer_ref_columns,
                     columns,
@@ -721,7 +727,7 @@ fn add_projection_on_top_if_helpful(
         Ok(Transformed::no(plan))
     } else {
         Projection::try_new(project_exprs, Arc::new(plan))
-            .map(LogicalPlan::Projection)
+            .map(LogicalPlan::projection)
             .map(Transformed::yes)
     }
 }
@@ -763,7 +769,7 @@ fn rewrite_projection_given_requirements(
                 Ok(Transformed::yes(input))
             } else {
                 Projection::try_new(exprs_used, Arc::new(input))
-                    .map(LogicalPlan::Projection)
+                    .map(LogicalPlan::projection)
                     .map(Transformed::yes)
             }
         })
@@ -1208,7 +1214,7 @@ mod tests {
         let expr = Box::new(col("a"));
         let pattern = Box::new(lit("[0-9]"));
         let similar_to_expr =
-            Expr::SimilarTo(Like::new(false, expr, pattern, None, false));
+            Expr::similar_to(Like::new(false, expr, pattern, None, false));
         let plan = LogicalPlanBuilder::from(table_scan)
             .project(vec![similar_to_expr])?
             .build()?;
@@ -1276,7 +1282,7 @@ mod tests {
     #[test]
     fn test_user_defined_logical_plan_node() -> Result<()> {
         let table_scan = test_table_scan()?;
-        let custom_plan = LogicalPlan::Extension(Extension {
+        let custom_plan = LogicalPlan::extension(Extension {
             node: Arc::new(NoOpUserDefined::new(
                 Arc::clone(table_scan.schema()),
                 Arc::new(table_scan.clone()),
@@ -1299,8 +1305,8 @@ mod tests {
     #[test]
     fn test_user_defined_logical_plan_node2() -> Result<()> {
         let table_scan = test_table_scan()?;
-        let exprs = vec![Expr::Column(Column::from_qualified_name("b"))];
-        let custom_plan = LogicalPlan::Extension(Extension {
+        let exprs = vec![Expr::column(Column::from_qualified_name("b"))];
+        let custom_plan = LogicalPlan::extension(Extension {
             node: Arc::new(
                 NoOpUserDefined::new(
                     Arc::clone(table_scan.schema()),
@@ -1327,15 +1333,15 @@ mod tests {
     #[test]
     fn test_user_defined_logical_plan_node3() -> Result<()> {
         let table_scan = test_table_scan()?;
-        let left_expr = Expr::Column(Column::from_qualified_name("b"));
-        let right_expr = Expr::Column(Column::from_qualified_name("c"));
-        let binary_expr = Expr::BinaryExpr(BinaryExpr::new(
+        let left_expr = Expr::column(Column::from_qualified_name("b"));
+        let right_expr = Expr::column(Column::from_qualified_name("c"));
+        let binary_expr = Expr::binary_expr(BinaryExpr::new(
             Box::new(left_expr),
             Operator::Plus,
             Box::new(right_expr),
         ));
         let exprs = vec![binary_expr];
-        let custom_plan = LogicalPlan::Extension(Extension {
+        let custom_plan = LogicalPlan::extension(Extension {
             node: Arc::new(
                 NoOpUserDefined::new(
                     Arc::clone(table_scan.schema()),
@@ -1362,7 +1368,7 @@ mod tests {
     fn test_user_defined_logical_plan_node4() -> Result<()> {
         let left_table = test_table_scan_with_name("l")?;
         let right_table = test_table_scan_with_name("r")?;
-        let custom_plan = LogicalPlan::Extension(Extension {
+        let custom_plan = LogicalPlan::extension(Extension {
             node: Arc::new(UserDefinedCrossJoin::new(
                 Arc::new(left_table),
                 Arc::new(right_table),
@@ -1691,7 +1697,7 @@ mod tests {
         let table_scan = test_table_scan()?;
 
         let projection = LogicalPlanBuilder::from(table_scan)
-            .project(vec![Expr::Cast(Cast::new(
+            .project(vec![Expr::cast(Cast::new(
                 Box::new(col("c")),
                 DataType::Float64,
             ))])?
@@ -1731,7 +1737,7 @@ mod tests {
         // relation is `None`). PlanBuilder resolves the expressions
         let expr = vec![col("test.a"), col("test.b")];
         let plan =
-            LogicalPlan::Projection(Projection::try_new(expr, Arc::new(table_scan))?);
+            LogicalPlan::projection(Projection::try_new(expr, Arc::new(table_scan))?);
 
         assert_fields_eq(&plan, vec!["a", "b"]);
 
@@ -1942,7 +1948,7 @@ mod tests {
     fn test_window() -> Result<()> {
         let table_scan = test_table_scan()?;
 
-        let max1 = Expr::WindowFunction(expr::WindowFunction::new(
+        let max1 = Expr::window_function(expr::WindowFunction::new(
             WindowFunctionDefinition::AggregateUDF(max_udaf()),
             vec![col("test.a")],
         ))
@@ -1950,7 +1956,7 @@ mod tests {
         .build()
         .unwrap();
 
-        let max2 = Expr::WindowFunction(expr::WindowFunction::new(
+        let max2 = Expr::window_function(expr::WindowFunction::new(
             WindowFunctionDefinition::AggregateUDF(max_udaf()),
             vec![col("test.b")],
         ));

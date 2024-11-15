@@ -50,7 +50,7 @@ impl ApplyFunctionRewrites {
         // resolution only, so order does not matter here
         let mut schema = merge_schema(&plan.inputs());
 
-        if let LogicalPlan::TableScan(ts) = &plan {
+        if let LogicalPlan::TableScan(ts, _) = &plan {
             let source_schema = DFSchema::try_from_qualified_schema(
                 ts.table_name.clone(),
                 &ts.source.schema(),

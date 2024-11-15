@@ -50,7 +50,7 @@ impl OptimizerRule for EliminateOneUnion {
         _config: &dyn OptimizerConfig,
     ) -> Result<Transformed<LogicalPlan>> {
         match plan {
-            LogicalPlan::Union(Union { mut inputs, .. }) if inputs.len() == 1 => Ok(
+            LogicalPlan::Union(Union { mut inputs, .. }, _) if inputs.len() == 1 => Ok(
                 Transformed::yes(Arc::unwrap_or_clone(inputs.pop().unwrap())),
             ),
             _ => Ok(Transformed::no(plan)),
@@ -110,7 +110,7 @@ mod tests {
             &schema().to_dfschema()?,
         )?;
         let schema = Arc::clone(table_plan.schema());
-        let single_union_plan = LogicalPlan::Union(Union {
+        let single_union_plan = LogicalPlan::union(Union {
             inputs: vec![Arc::new(table_plan)],
             schema,
         });

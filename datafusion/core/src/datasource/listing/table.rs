@@ -1954,10 +1954,10 @@ mod tests {
             false,
         )]));
 
-        let filter_predicate = Expr::BinaryExpr(BinaryExpr::new(
-            Box::new(Expr::Column("column1".into())),
+        let filter_predicate = Expr::binary_expr(BinaryExpr::new(
+            Box::new(Expr::column("column1".into())),
             Operator::GtEq,
-            Box::new(Expr::Literal(ScalarValue::Int32(Some(0)))),
+            Box::new(Expr::literal(ScalarValue::Int32(Some(0)))),
         ));
 
         // Create a new batch of data to insert into the table

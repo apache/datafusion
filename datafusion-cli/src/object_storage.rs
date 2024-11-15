@@ -493,7 +493,7 @@ mod tests {
         let ctx = SessionContext::new();
         let mut plan = ctx.state().create_logical_plan(&sql).await?;
 
-        if let LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) = &mut plan {
+        if let LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd), _) = &mut plan {
             ctx.register_table_options_extension_from_scheme(scheme);
             let mut table_options = ctx.state().default_table_options();
             table_options.alter_with_string_hash_map(&cmd.options)?;
@@ -538,7 +538,7 @@ mod tests {
         let ctx = SessionContext::new();
         let mut plan = ctx.state().create_logical_plan(&sql).await?;
 
-        if let LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) = &mut plan {
+        if let LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd), _) = &mut plan {
             ctx.register_table_options_extension_from_scheme(scheme);
             let mut table_options = ctx.state().default_table_options();
             table_options.alter_with_string_hash_map(&cmd.options)?;
@@ -564,7 +564,7 @@ mod tests {
 
         let mut plan = ctx.state().create_logical_plan(&sql).await?;
 
-        if let LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) = &mut plan {
+        if let LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd), _) = &mut plan {
             ctx.register_table_options_extension_from_scheme(scheme);
             let mut table_options = ctx.state().default_table_options();
             table_options.alter_with_string_hash_map(&cmd.options)?;
@@ -592,7 +592,7 @@ mod tests {
         let ctx = SessionContext::new();
         let mut plan = ctx.state().create_logical_plan(&sql).await?;
 
-        if let LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) = &mut plan {
+        if let LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd), _) = &mut plan {
             ctx.register_table_options_extension_from_scheme(scheme);
             let mut table_options = ctx.state().default_table_options();
             table_options.alter_with_string_hash_map(&cmd.options)?;
@@ -629,7 +629,7 @@ mod tests {
         let ctx = SessionContext::new();
         let mut plan = ctx.state().create_logical_plan(&sql).await?;
 
-        if let LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) = &mut plan {
+        if let LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd), _) = &mut plan {
             ctx.register_table_options_extension_from_scheme(scheme);
             let mut table_options = ctx.state().default_table_options();
             table_options.alter_with_string_hash_map(&cmd.options)?;

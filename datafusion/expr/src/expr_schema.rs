@@ -103,19 +103,19 @@ impl ExprSchemable for Expr {
     #[recursive]
     fn get_type(&self, schema: &dyn ExprSchema) -> Result<DataType> {
         match self {
-            Expr::Alias(Alias { expr, name, .. }) => match &**expr {
-                Expr::Placeholder(Placeholder { data_type, .. }) => match &data_type {
+            Expr::Alias(Alias { expr, name, .. }, _) => match &**expr {
+                Expr::Placeholder(Placeholder { data_type, .. }, _) => match &data_type {
                     None => schema.data_type(&Column::from_name(name)).cloned(),
                     Some(dt) => Ok(dt.clone()),
                 },
                 _ => expr.get_type(schema),
             },
-            Expr::Negative(expr) => expr.get_type(schema),
-            Expr::Column(c) => Ok(schema.data_type(c)?.clone()),
-            Expr::OuterReferenceColumn(ty, _) => Ok(ty.clone()),
-            Expr::ScalarVariable(ty, _) => Ok(ty.clone()),
-            Expr::Literal(l) => Ok(l.data_type()),
-            Expr::Case(case) => {
+            Expr::Negative(expr, _) => expr.get_type(schema),
+            Expr::Column(c, _) => Ok(schema.data_type(c)?.clone()),
+            Expr::OuterReferenceColumn(ty, _, _) => Ok(ty.clone()),
+            Expr::ScalarVariable(ty, _, _) => Ok(ty.clone()),
+            Expr::Literal(l, _) => Ok(l.data_type()),
+            Expr::Case(case, _) => {
                 for (_, then_expr) in &case.when_then_expr {
                     let then_type = then_expr.get_type(schema)?;
                     if !then_type.is_null() {
@@ -126,9 +126,9 @@ impl ExprSchemable for Expr {
                     .as_ref()
                     .map_or(Ok(DataType::Null), |e| e.get_type(schema))
             }
-            Expr::Cast(Cast { data_type, .. })
-            | Expr::TryCast(TryCast { data_type, .. }) => Ok(data_type.clone()),
-            Expr::Unnest(Unnest { expr }) => {
+            Expr::Cast(Cast { data_type, .. }, _)
+            | Expr::TryCast(TryCast { data_type, .. }, _) => Ok(data_type.clone()),
+            Expr::Unnest(Unnest { expr }, _) => {
                 let arg_data_type = expr.get_type(schema)?;
                 // Unnest's output type is the inner type of the list
                 match arg_data_type {
@@ -146,7 +146,7 @@ impl ExprSchemable for Expr {
                     }
                 }
             }
-            Expr::ScalarFunction(ScalarFunction { func, args }) => {
+            Expr::ScalarFunction(ScalarFunction { func, args }, _) => {
                 let arg_data_types = args
                     .iter()
                     .map(|e| e.get_type(schema))
@@ -170,10 +170,10 @@ impl ExprSchemable for Expr {
                 // expressiveness of `TypeSignature`), then infer return type
                 Ok(func.return_type_from_exprs(args, schema, &new_data_types)?)
             }
-            Expr::WindowFunction(window_function) => self
+            Expr::WindowFunction(window_function, _) => self
                 .data_type_and_nullable_with_window_function(schema, window_function)
                 .map(|(return_type, _)| return_type),
-            Expr::AggregateFunction(AggregateFunction { func, args, .. }) => {
+            Expr::AggregateFunction(AggregateFunction { func, args, .. }, _) => {
                 let data_types = args
                     .iter()
                     .map(|e| e.get_type(schema))
@@ -192,29 +192,32 @@ impl ExprSchemable for Expr {
                     })?;
                 Ok(func.return_type(&new_types)?)
             }
-            Expr::Not(_)
-            | Expr::IsNull(_)
-            | Expr::Exists { .. }
-            | Expr::InSubquery(_)
+            Expr::Not(_, _)
+            | Expr::IsNull(_, _)
+            | Expr::Exists(_, _)
+            | Expr::InSubquery(_, _)
             | Expr::Between { .. }
             | Expr::InList { .. }
-            | Expr::IsNotNull(_)
-            | Expr::IsTrue(_)
-            | Expr::IsFalse(_)
-            | Expr::IsUnknown(_)
-            | Expr::IsNotTrue(_)
-            | Expr::IsNotFalse(_)
-            | Expr::IsNotUnknown(_) => Ok(DataType::Boolean),
-            Expr::ScalarSubquery(subquery) => {
+            | Expr::IsNotNull(_, _)
+            | Expr::IsTrue(_, _)
+            | Expr::IsFalse(_, _)
+            | Expr::IsUnknown(_, _)
+            | Expr::IsNotTrue(_, _)
+            | Expr::IsNotFalse(_, _)
+            | Expr::IsNotUnknown(_, _) => Ok(DataType::Boolean),
+            Expr::ScalarSubquery(subquery, _) => {
                 Ok(subquery.subquery.schema().field(0).data_type().clone())
             }
-            Expr::BinaryExpr(BinaryExpr {
-                ref left,
-                ref right,
-                ref op,
-            }) => get_result_type(&left.get_type(schema)?, op, &right.get_type(schema)?),
+            Expr::BinaryExpr(
+                BinaryExpr {
+                    ref left,
+                    ref right,
+                    ref op,
+                },
+                _,
+            ) => get_result_type(&left.get_type(schema)?, op, &right.get_type(schema)?),
             Expr::Like { .. } | Expr::SimilarTo { .. } => Ok(DataType::Boolean),
-            Expr::Placeholder(Placeholder { data_type, .. }) => {
+            Expr::Placeholder(Placeholder { data_type, .. }, _) => {
                 data_type.clone().ok_or_else(|| {
                     plan_datafusion_err!(
                         "Placeholder type could not be resolved. Make sure that the \
@@ -224,7 +227,7 @@ impl ExprSchemable for Expr {
                 })
             }
             Expr::Wildcard { .. } => Ok(DataType::Null),
-            Expr::GroupingSet(_) => {
+            Expr::GroupingSet(_, _) => {
                 // Grouping sets do not really have a type and do not appear in projections
                 Ok(DataType::Null)
             }
@@ -244,11 +247,11 @@ impl ExprSchemable for Expr {
     /// column that does not exist in the schema.
     fn nullable(&self, input_schema: &dyn ExprSchema) -> Result<bool> {
         match self {
-            Expr::Alias(Alias { expr, .. }) | Expr::Not(expr) | Expr::Negative(expr) => {
-                expr.nullable(input_schema)
-            }
+            Expr::Alias(Alias { expr, .. }, _)
+            | Expr::Not(expr, _)
+            | Expr::Negative(expr, _) => expr.nullable(input_schema),
 
-            Expr::InList(InList { expr, list, .. }) => {
+            Expr::InList(InList { expr, list, .. }, _) => {
                 // Avoid inspecting too many expressions.
                 const MAX_INSPECT_LIMIT: usize = 6;
                 // Stop if a nullable expression is found or an error occurs.
@@ -271,16 +274,19 @@ impl ExprSchemable for Expr {
                 })
             }
 
-            Expr::Between(Between {
-                expr, low, high, ..
-            }) => Ok(expr.nullable(input_schema)?
+            Expr::Between(
+                Between {
+                    expr, low, high, ..
+                },
+                _,
+            ) => Ok(expr.nullable(input_schema)?
                 || low.nullable(input_schema)?
                 || high.nullable(input_schema)?),
 
-            Expr::Column(c) => input_schema.nullable(c),
-            Expr::OuterReferenceColumn(_, _) => Ok(true),
-            Expr::Literal(value) => Ok(value.is_null()),
-            Expr::Case(case) => {
+            Expr::Column(c, _) => input_schema.nullable(c),
+            Expr::OuterReferenceColumn(_, _, _) => Ok(true),
+            Expr::Literal(value, _) => Ok(value.is_null()),
+            Expr::Case(case, _) => {
                 // This expression is nullable if any of the input expressions are nullable
                 let then_nullable = case
                     .when_then_expr
@@ -297,47 +303,50 @@ impl ExprSchemable for Expr {
                     Ok(true)
                 }
             }
-            Expr::Cast(Cast { expr, .. }) => expr.nullable(input_schema),
-            Expr::ScalarFunction(ScalarFunction { func, args }) => {
+            Expr::Cast(Cast { expr, .. }, _) => expr.nullable(input_schema),
+            Expr::ScalarFunction(ScalarFunction { func, args }, _) => {
                 Ok(func.is_nullable(args, input_schema))
             }
-            Expr::AggregateFunction(AggregateFunction { func, .. }) => {
+            Expr::AggregateFunction(AggregateFunction { func, .. }, _) => {
                 Ok(func.is_nullable())
             }
-            Expr::WindowFunction(window_function) => self
+            Expr::WindowFunction(window_function, _) => self
                 .data_type_and_nullable_with_window_function(
                     input_schema,
                     window_function,
                 )
                 .map(|(_, nullable)| nullable),
-            Expr::ScalarVariable(_, _)
+            Expr::ScalarVariable(_, _, _)
             | Expr::TryCast { .. }
-            | Expr::Unnest(_)
-            | Expr::Placeholder(_) => Ok(true),
-            Expr::IsNull(_)
-            | Expr::IsNotNull(_)
-            | Expr::IsTrue(_)
-            | Expr::IsFalse(_)
-            | Expr::IsUnknown(_)
-            | Expr::IsNotTrue(_)
-            | Expr::IsNotFalse(_)
-            | Expr::IsNotUnknown(_)
+            | Expr::Unnest(_, _)
+            | Expr::Placeholder(_, _) => Ok(true),
+            Expr::IsNull(_, _)
+            | Expr::IsNotNull(_, _)
+            | Expr::IsTrue(_, _)
+            | Expr::IsFalse(_, _)
+            | Expr::IsUnknown(_, _)
+            | Expr::IsNotTrue(_, _)
+            | Expr::IsNotFalse(_, _)
+            | Expr::IsNotUnknown(_, _)
             | Expr::Exists { .. } => Ok(false),
-            Expr::InSubquery(InSubquery { expr, .. }) => expr.nullable(input_schema),
-            Expr::ScalarSubquery(subquery) => {
+            Expr::InSubquery(InSubquery { expr, .. }, _) => expr.nullable(input_schema),
+            Expr::ScalarSubquery(subquery, _) => {
                 Ok(subquery.subquery.schema().field(0).is_nullable())
             }
-            Expr::BinaryExpr(BinaryExpr {
-                ref left,
-                ref right,
-                ..
-            }) => Ok(left.nullable(input_schema)? || right.nullable(input_schema)?),
-            Expr::Like(Like { expr, pattern, .. })
-            | Expr::SimilarTo(Like { expr, pattern, .. }) => {
+            Expr::BinaryExpr(
+                BinaryExpr {
+                    ref left,
+                    ref right,
+                    ..
+                },
+                _,
+            ) => Ok(left.nullable(input_schema)? || right.nullable(input_schema)?),
+            Expr::Like(Like { expr, pattern, .. }, _)
+            | Expr::SimilarTo(Like { expr, pattern, .. }, _) => {
                 Ok(expr.nullable(input_schema)? || pattern.nullable(input_schema)?)
             }
             Expr::Wildcard { .. } => Ok(false),
-            Expr::GroupingSet(_) => {
+            Expr::GroupingSet(_, _) => {
                 // Grouping sets do not really have the concept of nullable and do not appear
                 // in projections
                 Ok(true)
@@ -347,9 +356,9 @@ impl ExprSchemable for Expr {
 
     fn metadata(&self, schema: &dyn ExprSchema) -> Result<HashMap<String, String>> {
         match self {
-            Expr::Column(c) => Ok(schema.metadata(c)?.clone()),
-            Expr::Alias(Alias { expr, .. }) => expr.metadata(schema),
-            Expr::Cast(Cast { expr, .. }) => expr.metadata(schema),
+            Expr::Column(c, _) => Ok(schema.metadata(c)?.clone()),
+            Expr::Alias(Alias { expr, .. }, _) => expr.metadata(schema),
+            Expr::Cast(Cast { expr, .. }, _) => expr.metadata(schema),
             _ => Ok(HashMap::new()),
         }
     }
@@ -369,8 +378,8 @@ impl ExprSchemable for Expr {
         schema: &dyn ExprSchema,
     ) -> Result<(DataType, bool)> {
         match self {
-            Expr::Alias(Alias { expr, name, .. }) => match &**expr {
-                Expr::Placeholder(Placeholder { data_type, .. }) => match &data_type {
+            Expr::Alias(Alias { expr, name, .. }, _) => match &**expr {
+                Expr::Placeholder(Placeholder { data_type, .. }, _) => match &data_type {
                     None => schema
                         .data_type_and_nullable(&Column::from_name(name))
                         .map(|(d, n)| (d.clone(), n)),
@@ -378,36 +387,39 @@ impl ExprSchemable for Expr {
                 },
                 _ => expr.data_type_and_nullable(schema),
             },
-            Expr::Negative(expr) => expr.data_type_and_nullable(schema),
-            Expr::Column(c) => schema
+            Expr::Negative(expr, _) => expr.data_type_and_nullable(schema),
+            Expr::Column(c, _) => schema
                 .data_type_and_nullable(c)
                 .map(|(d, n)| (d.clone(), n)),
-            Expr::OuterReferenceColumn(ty, _) => Ok((ty.clone(), true)),
-            Expr::ScalarVariable(ty, _) => Ok((ty.clone(), true)),
-            Expr::Literal(l) => Ok((l.data_type(), l.is_null())),
-            Expr::IsNull(_)
-            | Expr::IsNotNull(_)
-            | Expr::IsTrue(_)
-            | Expr::IsFalse(_)
-            | Expr::IsUnknown(_)
-            | Expr::IsNotTrue(_)
-            | Expr::IsNotFalse(_)
-            | Expr::IsNotUnknown(_)
+            Expr::OuterReferenceColumn(ty, _, _) => Ok((ty.clone(), true)),
+            Expr::ScalarVariable(ty, _, _) => Ok((ty.clone(), true)),
+            Expr::Literal(l, _) => Ok((l.data_type(), l.is_null())),
+            Expr::IsNull(_, _)
+            | Expr::IsNotNull(_, _)
+            | Expr::IsTrue(_, _)
+            | Expr::IsFalse(_, _)
+            | Expr::IsUnknown(_, _)
+            | Expr::IsNotTrue(_, _)
+            | Expr::IsNotFalse(_, _)
+            | Expr::IsNotUnknown(_, _)
             | Expr::Exists { .. } => Ok((DataType::Boolean, false)),
-            Expr::ScalarSubquery(subquery) => Ok((
+            Expr::ScalarSubquery(subquery, _) => Ok((
                 subquery.subquery.schema().field(0).data_type().clone(),
                 subquery.subquery.schema().field(0).is_nullable(),
             )),
-            Expr::BinaryExpr(BinaryExpr {
-                ref left,
-                ref right,
-                ref op,
-            }) => {
+            Expr::BinaryExpr(
+                BinaryExpr {
+                    ref left,
+                    ref right,
+                    ref op,
+                },
+                _,
+            ) => {
                 let left = left.data_type_and_nullable(schema)?;
                 let right = right.data_type_and_nullable(schema)?;
                 Ok((get_result_type(&left.0, op, &right.0)?, left.1 || right.1))
             }
-            Expr::WindowFunction(window_function) => {
+            Expr::WindowFunction(window_function, _) => {
                 self.data_type_and_nullable_with_window_function(schema, window_function)
             }
             _ => Ok((self.get_type(schema)?, self.nullable(schema)?)),
@@ -448,10 +460,10 @@ impl ExprSchemable for Expr {
 
         if can_cast_types(&this_type, cast_to_type) {
             match self {
-                Expr::ScalarSubquery(subquery) => {
-                    Ok(Expr::ScalarSubquery(cast_subquery(subquery, cast_to_type)?))
-                }
-                _ => Ok(Expr::Cast(Cast::new(Box::new(self), cast_to_type.clone()))),
+                Expr::ScalarSubquery(subquery, _) => Ok(Expr::scalar_subquery(
+                    cast_subquery(subquery, cast_to_type)?,
+                )),
+                _ => Ok(Expr::cast(Cast::new(Box::new(self), cast_to_type.clone()))),
             }
         } else {
             plan_err!("Cannot automatically convert {this_type:?} to {cast_to_type:?}")
@@ -538,19 +550,19 @@ pub fn cast_subquery(subquery: Subquery, cast_to_type: &DataType) -> Result<Subq
 
     let plan = subquery.subquery.as_ref();
     let new_plan = match plan {
-        LogicalPlan::Projection(projection) => {
+        LogicalPlan::Projection(projection, _) => {
             let cast_expr = projection.expr[0]
                 .clone()
                 .cast_to(cast_to_type, projection.input.schema())?;
-            LogicalPlan::Projection(Projection::try_new(
+            LogicalPlan::projection(Projection::try_new(
                 vec![cast_expr],
                 Arc::clone(&projection.input),
             )?)
         }
         _ => {
-            let cast_expr = Expr::Column(Column::from(plan.schema().qualified_field(0)))
+            let cast_expr = Expr::column(Column::from(plan.schema().qualified_field(0)))
                 .cast_to(cast_to_type, subquery.subquery.schema())?;
-            LogicalPlan::Projection(Projection::try_new(
+            LogicalPlan::projection(Projection::try_new(
                 vec![cast_expr],
                 subquery.subquery,
             )?)

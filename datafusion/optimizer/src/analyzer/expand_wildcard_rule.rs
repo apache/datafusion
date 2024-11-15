@@ -53,25 +53,25 @@ impl AnalyzerRule for ExpandWildcardRule {
 
 fn expand_internal(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
     match plan {
-        LogicalPlan::Projection(Projection { expr, input, .. }) => {
+        LogicalPlan::Projection(Projection { expr, input, .. }, _) => {
             let projected_expr = expand_exprlist(&input, expr)?;
             validate_unique_names("Projections", projected_expr.iter())?;
             Ok(Transformed::yes(
                 Projection::try_new(projected_expr, Arc::clone(&input))
-                    .map(LogicalPlan::Projection)?,
+                    .map(LogicalPlan::projection)?,
             ))
         }
         // The schema of the plan should also be updated if the child plan is transformed.
-        LogicalPlan::SubqueryAlias(SubqueryAlias { input, alias, .. }) => {
+        LogicalPlan::SubqueryAlias(SubqueryAlias { input, alias, .. }, _) => {
             Ok(Transformed::yes(
-                SubqueryAlias::try_new(input, alias).map(LogicalPlan::SubqueryAlias)?,
+                SubqueryAlias::try_new(input, alias).map(LogicalPlan::subquery_alias)?,
             ))
         }
-        LogicalPlan::Distinct(Distinct::On(distinct_on)) => {
+        LogicalPlan::Distinct(Distinct::On(distinct_on), _) => {
             let projected_expr =
                 expand_exprlist(&distinct_on.input, distinct_on.select_expr)?;
             validate_unique_names("Distinct", projected_expr.iter())?;
-            Ok(Transformed::yes(LogicalPlan::Distinct(Distinct::On(
+            Ok(Transformed::yes(LogicalPlan::distinct(Distinct::On(
                 DistinctOn::try_new(
                     distinct_on.on_expr,
                     projected_expr,
@@ -89,7 +89,7 @@ fn expand_exprlist(input: &LogicalPlan, expr: Vec<Expr>) -> Result<Vec<Expr>> {
     let input = find_base_plan(input);
     for e in expr {
         match e {
-            Expr::Wildcard(Wildcard { qualifier, options }) => {
+            Expr::Wildcard(Wildcard { qualifier, options }, _) => {
                 if let Some(qualifier) = qualifier {
                     let expanded = expand_qualified_wildcard(
                         &qualifier,
@@ -120,10 +120,13 @@ fn expand_exprlist(input: &LogicalPlan, expr: Vec<Expr>) -> Result<Vec<Expr>> {
             // A workaround to handle the case when the column name is "*".
             // We transform the expression to a Expr::Column through [Column::from_name] in many places.
             // It would also convert the wildcard expression to a column expression with name "*".
-            Expr::Column(Column {
-                ref relation,
-                ref name,
-            }) => {
+            Expr::Column(
+                Column {
+                    ref relation,
+                    ref name,
+                },
+                _,
+            ) => {
                 if name.eq("*") {
                     if let Some(qualifier) = relation {
                         projected_expr.extend(expand_qualified_wildcard(
@@ -157,7 +160,7 @@ fn replace_columns(
     replace: &PlannedReplaceSelectItem,
 ) -> Result<Vec<Expr>> {
     for expr in exprs.iter_mut() {
-        if let Expr::Column(Column { name, .. }) = expr {
+        if let Expr::Column(Column { name, .. }, _) = expr {
             if let Some((_, new_expr)) = replace
                 .items()
                 .iter()

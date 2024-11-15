@@ -93,11 +93,14 @@ impl Unparser<'_> {
 
     fn expr_to_sql_inner(&self, expr: &Expr) -> Result<ast::Expr> {
         match expr {
-            Expr::InList(InList {
-                expr,
-                list,
-                negated,
-            }) => {
+            Expr::InList(
+                InList {
+                    expr,
+                    list,
+                    negated,
+                },
+                _,
+            ) => {
                 let list_expr = list
                     .iter()
                     .map(|e| self.expr_to_sql_inner(e))
@@ -108,7 +111,7 @@ impl Unparser<'_> {
                     negated: *negated,
                 })
             }
-            Expr::ScalarFunction(ScalarFunction { func, args }) => {
+            Expr::ScalarFunction(ScalarFunction { func, args }, _) => {
                 let func_name = func.name();
 
                 if let Some(expr) = self
@@ -120,12 +123,15 @@ impl Unparser<'_> {
 
                 self.scalar_function_to_sql(func_name, args)
             }
-            Expr::Between(Between {
-                expr,
-                negated,
-                low,
-                high,
-            }) => {
+            Expr::Between(
+                Between {
+                    expr,
+                    negated,
+                    low,
+                    high,
+                },
+                _,
+            ) => {
                 let sql_parser_expr = self.expr_to_sql_inner(expr)?;
                 let sql_low = self.expr_to_sql_inner(low)?;
                 let sql_high = self.expr_to_sql_inner(high)?;
@@ -136,19 +142,22 @@ impl Unparser<'_> {
                     sql_high,
                 ))))
             }
-            Expr::Column(col) => self.col_to_sql(col),
-            Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
+            Expr::Column(col, _) => self.col_to_sql(col),
+            Expr::BinaryExpr(BinaryExpr { left, op, right }, _) => {
                 let l = self.expr_to_sql_inner(left.as_ref())?;
                 let r = self.expr_to_sql_inner(right.as_ref())?;
                 let op = self.op_to_sql(op)?;
 
                 Ok(ast::Expr::Nested(Box::new(self.binary_op_to_sql(l, r, op))))
             }
-            Expr::Case(Case {
-                expr,
-                when_then_expr,
-                else_expr,
-            }) => {
+            Expr::Case(
+                Case {
+                    expr,
+                    when_then_expr,
+                    else_expr,
+                },
+                _,
+            ) => {
                 let conditions = when_then_expr
                     .iter()
                     .map(|(w, _)| self.expr_to_sql_inner(w))
@@ -179,19 +188,22 @@ impl Unparser<'_> {
                     else_result,
                 })
             }
-            Expr::Cast(Cast { expr, data_type }) => {
+            Expr::Cast(Cast { expr, data_type }, _) => {
                 Ok(self.cast_to_sql(expr, data_type)?)
             }
-            Expr::Literal(value) => Ok(self.scalar_to_sql(value)?),
-            Expr::Alias(Alias { expr, name: _, .. }) => self.expr_to_sql_inner(expr),
-            Expr::WindowFunction(WindowFunction {
-                fun,
-                args,
-                partition_by,
-                order_by,
-                window_frame,
-                null_treatment: _,
-            }) => {
+            Expr::Literal(value, _) => Ok(self.scalar_to_sql(value)?),
+            Expr::Alias(Alias { expr, name: _, .. }, _) => self.expr_to_sql_inner(expr),
+            Expr::WindowFunction(
+                WindowFunction {
+                    fun,
+                    args,
+                    partition_by,
+                    order_by,
+                    window_frame,
+                    null_treatment: _,
+                },
+                _,
+            ) => {
                 let func_name = fun.name();
 
                 let args = self.function_args_to_sql(args)?;
@@ -246,27 +258,33 @@ impl Unparser<'_> {
                     parameters: ast::FunctionArguments::None,
                 }))
             }
-            Expr::SimilarTo(Like {
-                negated,
-                expr,
-                pattern,
-                escape_char,
-                case_insensitive: _,
-            })
-            | Expr::Like(Like {
-                negated,
-                expr,
-                pattern,
-                escape_char,
-                case_insensitive: _,
-            }) => Ok(ast::Expr::Like {
+            Expr::SimilarTo(
+                Like {
+                    negated,
+                    expr,
+                    pattern,
+                    escape_char,
+                    case_insensitive: _,
+                },
+                _,
+            )
+            | Expr::Like(
+                Like {
+                    negated,
+                    expr,
+                    pattern,
+                    escape_char,
+                    case_insensitive: _,
+                },
+                _,
+            ) => Ok(ast::Expr::Like {
                 negated: *negated,
                 expr: Box::new(self.expr_to_sql_inner(expr)?),
                 pattern: Box::new(self.expr_to_sql_inner(pattern)?),
                 escape_char: escape_char.map(|c| c.to_string()),
                 any: false,
             }),
-            Expr::AggregateFunction(agg) => {
+            Expr::AggregateFunction(agg, _) => {
                 let func_name = agg.func.name();
 
                 let args = self.function_args_to_sql(&agg.args)?;
@@ -293,7 +311,7 @@ impl Unparser<'_> {
                     parameters: ast::FunctionArguments::None,
                 }))
             }
-            Expr::ScalarSubquery(subq) => {
+            Expr::ScalarSubquery(subq, _) => {
                 let sub_statement = self.plan_to_sql(subq.subquery.as_ref())?;
                 let sub_query = if let ast::Statement::Query(inner_query) = sub_statement
                 {
@@ -305,7 +323,7 @@ impl Unparser<'_> {
                 };
                 Ok(ast::Expr::Subquery(sub_query))
             }
-            Expr::InSubquery(insubq) => {
+            Expr::InSubquery(insubq, _) => {
                 let inexpr = Box::new(self.expr_to_sql_inner(insubq.expr.as_ref())?);
                 let sub_statement =
                     self.plan_to_sql(insubq.subquery.subquery.as_ref())?;
@@ -323,7 +341,7 @@ impl Unparser<'_> {
                     negated: insubq.negated,
                 })
             }
-            Expr::Exists(Exists { subquery, negated }) => {
+            Expr::Exists(Exists { subquery, negated }, _) => {
                 let sub_statement = self.plan_to_sql(subquery.subquery.as_ref())?;
                 let sub_query = if let ast::Statement::Query(inner_query) = sub_statement
                 {
@@ -338,45 +356,45 @@ impl Unparser<'_> {
                     negated: *negated,
                 })
             }
-            Expr::IsNull(expr) => {
+            Expr::IsNull(expr, _) => {
                 Ok(ast::Expr::IsNull(Box::new(self.expr_to_sql_inner(expr)?)))
             }
-            Expr::IsNotNull(expr) => Ok(ast::Expr::IsNotNull(Box::new(
+            Expr::IsNotNull(expr, _) => Ok(ast::Expr::IsNotNull(Box::new(
                 self.expr_to_sql_inner(expr)?,
             ))),
-            Expr::IsTrue(expr) => {
+            Expr::IsTrue(expr, _) => {
                 Ok(ast::Expr::IsTrue(Box::new(self.expr_to_sql_inner(expr)?)))
             }
-            Expr::IsNotTrue(expr) => Ok(ast::Expr::IsNotTrue(Box::new(
+            Expr::IsNotTrue(expr, _) => Ok(ast::Expr::IsNotTrue(Box::new(
                 self.expr_to_sql_inner(expr)?,
             ))),
-            Expr::IsFalse(expr) => {
+            Expr::IsFalse(expr, _) => {
                 Ok(ast::Expr::IsFalse(Box::new(self.expr_to_sql_inner(expr)?)))
             }
-            Expr::IsNotFalse(expr) => Ok(ast::Expr::IsNotFalse(Box::new(
+            Expr::IsNotFalse(expr, _) => Ok(ast::Expr::IsNotFalse(Box::new(
                 self.expr_to_sql_inner(expr)?,
             ))),
-            Expr::IsUnknown(expr) => Ok(ast::Expr::IsUnknown(Box::new(
+            Expr::IsUnknown(expr, _) => Ok(ast::Expr::IsUnknown(Box::new(
                 self.expr_to_sql_inner(expr)?,
             ))),
-            Expr::IsNotUnknown(expr) => Ok(ast::Expr::IsNotUnknown(Box::new(
+            Expr::IsNotUnknown(expr, _) => Ok(ast::Expr::IsNotUnknown(Box::new(
                 self.expr_to_sql_inner(expr)?,
             ))),
-            Expr::Not(expr) => {
+            Expr::Not(expr, _) => {
                 let sql_parser_expr = self.expr_to_sql_inner(expr)?;
                 Ok(AstExpr::UnaryOp {
                     op: UnaryOperator::Not,
                     expr: Box::new(sql_parser_expr),
                 })
             }
-            Expr::Negative(expr) => {
+            Expr::Negative(expr, _) => {
                 let sql_parser_expr = self.expr_to_sql_inner(expr)?;
                 Ok(AstExpr::UnaryOp {
                     op: UnaryOperator::Minus,
                     expr: Box::new(sql_parser_expr),
                 })
             }
-            Expr::ScalarVariable(_, ids) => {
+            Expr::ScalarVariable(_, ids, _) => {
                 if ids.is_empty() {
                     return internal_err!("Not a valid ScalarVariable");
                 }
@@ -393,7 +411,7 @@ impl Unparser<'_> {
                     )
                 })
             }
-            Expr::TryCast(TryCast { expr, data_type }) => {
+            Expr::TryCast(TryCast { expr, data_type }, _) => {
                 let inner_expr = self.expr_to_sql_inner(expr)?;
                 Ok(ast::Expr::Cast {
                     kind: ast::CastKind::TryCast,
@@ -403,7 +421,7 @@ impl Unparser<'_> {
                 })
             }
             // TODO: unparsing wildcard addition options
-            Expr::Wildcard(Wildcard { qualifier, .. }) => {
+            Expr::Wildcard(Wildcard { qualifier, .. }, _) => {
                 if let Some(qualifier) = qualifier {
                     let idents: Vec<Ident> =
                         qualifier.to_vec().into_iter().map(Ident::new).collect();
@@ -412,7 +430,7 @@ impl Unparser<'_> {
                     Ok(ast::Expr::Wildcard)
                 }
             }
-            Expr::GroupingSet(grouping_set) => match grouping_set {
+            Expr::GroupingSet(grouping_set, _) => match grouping_set {
                 GroupingSet::GroupingSets(grouping_sets) => {
                     let expr_ast_sets = grouping_sets
                         .iter()
@@ -446,11 +464,11 @@ impl Unparser<'_> {
                     Ok(ast::Expr::Rollup(expr_ast_sets))
                 }
             },
-            Expr::Placeholder(p) => {
+            Expr::Placeholder(p, _) => {
                 Ok(ast::Expr::Value(ast::Value::Placeholder(p.id.to_string())))
             }
-            Expr::OuterReferenceColumn(_, col) => self.col_to_sql(col),
-            Expr::Unnest(unnest) => self.unnest_to_sql(unnest),
+            Expr::OuterReferenceColumn(_, col, _) => self.col_to_sql(col),
+            Expr::Unnest(unnest, _) => self.unnest_to_sql(unnest),
         }
     }
 
@@ -526,7 +544,7 @@ impl Unparser<'_> {
             .chunks_exact(2)
             .map(|chunk| {
                 let key = match &chunk[0] {
-                    Expr::Literal(ScalarValue::Utf8(Some(s))) => self.new_ident_quoted_if_needs(s.to_string()),
+                    Expr::Literal(ScalarValue::Utf8(Some(s)), _) => self.new_ident_quoted_if_needs(s.to_string()),
                     _ => return internal_err!("named_struct expects even arguments to be strings, but received: {:?}", &chunk[0])
                 };
 
@@ -546,7 +564,7 @@ impl Unparser<'_> {
         }
 
         let mut id = match &args[0] {
-            Expr::Column(col) => match self.col_to_sql(col)? {
+            Expr::Column(col, _) => match self.col_to_sql(col)? {
                 ast::Expr::Identifier(ident) => vec![ident],
                 ast::Expr::CompoundIdentifier(idents) => idents,
                 other => return internal_err!("expected col_to_sql to return an Identifier or CompoundIdentifier, but received: {:?}", other),
@@ -555,7 +573,7 @@ impl Unparser<'_> {
         };
 
         let field = match &args[1] {
-            Expr::Literal(lit) => self.new_ident_quoted_if_needs(lit.to_string()),
+            Expr::Literal(lit, _) => self.new_ident_quoted_if_needs(lit.to_string()),
             _ => {
                 return internal_err!(
                 "get_field expects second argument to be a string, but received: {:?}",
@@ -689,10 +707,13 @@ impl Unparser<'_> {
             .map(|e| {
                 if matches!(
                     e,
-                    Expr::Wildcard(Wildcard {
-                        qualifier: None,
-                        ..
-                    })
+                    Expr::Wildcard(
+                        Wildcard {
+                            qualifier: None,
+                            ..
+                        },
+                        _
+                    )
                 ) {
                     Ok(ast::FunctionArg::Unnamed(ast::FunctionArgExpr::Wildcard))
                 } else {
@@ -1670,7 +1691,7 @@ mod tests {
     fn expr_to_sql_ok() -> Result<()> {
         let dummy_schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
         let dummy_logical_plan = table_scan(Some("t"), &dummy_schema, None)?
-            .project(vec![Expr::Wildcard(Wildcard {
+            .project(vec![Expr::wildcard(Wildcard {
                 qualifier: None,
                 options: WildcardOptions::default(),
             })])?
@@ -1680,7 +1701,7 @@ mod tests {
         let tests: Vec<(Expr, &str)> = vec![
             ((col("a") + col("b")).gt(lit(4)), r#"((a + b) > 4)"#),
             (
-                Expr::Column(Column {
+                Expr::column(Column {
                     relation: Some(TableReference::partial("a", "b")),
                     name: "c".to_string(),
                 })
@@ -1703,14 +1724,14 @@ mod tests {
                 r#"CASE WHEN a IS NOT NULL THEN true ELSE false END"#,
             ),
             (
-                Expr::Cast(Cast {
+                Expr::cast(Cast {
                     expr: Box::new(col("a")),
                     data_type: DataType::Date64,
                 }),
                 r#"CAST(a AS DATETIME)"#,
             ),
             (
-                Expr::Cast(Cast {
+                Expr::cast(Cast {
                     expr: Box::new(col("a")),
                     data_type: DataType::Timestamp(
                         TimeUnit::Nanosecond,
@@ -1720,14 +1741,14 @@ mod tests {
                 r#"CAST(a AS TIMESTAMP WITH TIME ZONE)"#,
             ),
             (
-                Expr::Cast(Cast {
+                Expr::cast(Cast {
                     expr: Box::new(col("a")),
                     data_type: DataType::Timestamp(TimeUnit::Millisecond, None),
                 }),
                 r#"CAST(a AS TIMESTAMP)"#,
             ),
             (
-                Expr::Cast(Cast {
+                Expr::cast(Cast {
                     expr: Box::new(col("a")),
                     data_type: DataType::UInt32,
                 }),
@@ -1758,7 +1779,7 @@ mod tests {
                 r#"dummy_udf(a, b) IS NOT NULL"#,
             ),
             (
-                Expr::Like(Like {
+                Expr::_like(Like {
                     negated: true,
                     expr: Box::new(col("a")),
                     pattern: Box::new(lit("foo")),
@@ -1768,7 +1789,7 @@ mod tests {
                 r#"a NOT LIKE 'foo' ESCAPE 'o'"#,
             ),
             (
-                Expr::SimilarTo(Like {
+                Expr::similar_to(Like {
                     negated: false,
                     expr: Box::new(col("a")),
                     pattern: Box::new(lit("foo")),
@@ -1778,93 +1799,93 @@ mod tests {
                 r#"a LIKE 'foo' ESCAPE 'o'"#,
             ),
             (
-                Expr::Literal(ScalarValue::Date64(Some(0))),
+                Expr::literal(ScalarValue::Date64(Some(0))),
                 r#"CAST('1970-01-01 00:00:00' AS DATETIME)"#,
             ),
             (
-                Expr::Literal(ScalarValue::Date64(Some(10000))),
+                Expr::literal(ScalarValue::Date64(Some(10000))),
                 r#"CAST('1970-01-01 00:00:10' AS DATETIME)"#,
             ),
             (
-                Expr::Literal(ScalarValue::Date64(Some(-10000))),
+                Expr::literal(ScalarValue::Date64(Some(-10000))),
                 r#"CAST('1969-12-31 23:59:50' AS DATETIME)"#,
             ),
             (
-                Expr::Literal(ScalarValue::Date32(Some(0))),
+                Expr::literal(ScalarValue::Date32(Some(0))),
                 r#"CAST('1970-01-01' AS DATE)"#,
             ),
             (
-                Expr::Literal(ScalarValue::Date32(Some(10))),
+                Expr::literal(ScalarValue::Date32(Some(10))),
                 r#"CAST('1970-01-11' AS DATE)"#,
             ),
             (
-                Expr::Literal(ScalarValue::Date32(Some(-1))),
+                Expr::literal(ScalarValue::Date32(Some(-1))),
                 r#"CAST('1969-12-31' AS DATE)"#,
             ),
             (
-                Expr::Literal(ScalarValue::TimestampSecond(Some(10001), None)),
+                Expr::literal(ScalarValue::TimestampSecond(Some(10001), None)),
                 r#"CAST('1970-01-01 02:46:41' AS TIMESTAMP)"#,
             ),
             (
-                Expr::Literal(ScalarValue::TimestampSecond(
+                Expr::literal(ScalarValue::TimestampSecond(
                     Some(10001),
                     Some("+08:00".into()),
                 )),
                 r#"CAST('1970-01-01 10:46:41 +08:00' AS TIMESTAMP)"#,
             ),
             (
-                Expr::Literal(ScalarValue::TimestampMillisecond(Some(10001), None)),
+                Expr::literal(ScalarValue::TimestampMillisecond(Some(10001), None)),
                 r#"CAST('1970-01-01 00:00:10.001' AS TIMESTAMP)"#,
             ),
             (
-                Expr::Literal(ScalarValue::TimestampMillisecond(
+                Expr::literal(ScalarValue::TimestampMillisecond(
                     Some(10001),
                     Some("+08:00".into()),
                 )),
                 r#"CAST('1970-01-01 08:00:10.001 +08:00' AS TIMESTAMP)"#,
             ),
             (
-                Expr::Literal(ScalarValue::TimestampMicrosecond(Some(10001), None)),
+                Expr::literal(ScalarValue::TimestampMicrosecond(Some(10001), None)),
                 r#"CAST('1970-01-01 00:00:00.010001' AS TIMESTAMP)"#,
             ),
             (
-                Expr::Literal(ScalarValue::TimestampMicrosecond(
+                Expr::literal(ScalarValue::TimestampMicrosecond(
                     Some(10001),
                     Some("+08:00".into()),
                 )),
                 r#"CAST('1970-01-01 08:00:00.010001 +08:00' AS TIMESTAMP)"#,
             ),
             (
-                Expr::Literal(ScalarValue::TimestampNanosecond(Some(10001), None)),
+                Expr::literal(ScalarValue::TimestampNanosecond(Some(10001), None)),
                 r#"CAST('1970-01-01 00:00:00.000010001' AS TIMESTAMP)"#,
             ),
             (
-                Expr::Literal(ScalarValue::TimestampNanosecond(
+                Expr::literal(ScalarValue::TimestampNanosecond(
                     Some(10001),
                     Some("+08:00".into()),
                 )),
                 r#"CAST('1970-01-01 08:00:00.000010001 +08:00' AS TIMESTAMP)"#,
             ),
             (
-                Expr::Literal(ScalarValue::Time32Second(Some(10001))),
+                Expr::literal(ScalarValue::Time32Second(Some(10001))),
                 r#"CAST('02:46:41' AS TIME)"#,
             ),
             (
-                Expr::Literal(ScalarValue::Time32Millisecond(Some(10001))),
+                Expr::literal(ScalarValue::Time32Millisecond(Some(10001))),
                 r#"CAST('00:00:10.001' AS TIME)"#,
             ),
             (
-                Expr::Literal(ScalarValue::Time64Microsecond(Some(10001))),
+                Expr::literal(ScalarValue::Time64Microsecond(Some(10001))),
                 r#"CAST('00:00:00.010001' AS TIME)"#,
             ),
             (
-                Expr::Literal(ScalarValue::Time64Nanosecond(Some(10001))),
+                Expr::literal(ScalarValue::Time64Nanosecond(Some(10001))),
                 r#"CAST('00:00:00.000010001' AS TIME)"#,
             ),
             (sum(col("a")), r#"sum(a)"#),
             (
                 count_udaf()
-                    .call(vec![Expr::Wildcard(Wildcard {
+                    .call(vec![Expr::wildcard(Wildcard {
                         qualifier: None,
                         options: WildcardOptions::default(),
                     })])
@@ -1875,7 +1896,7 @@ mod tests {
             ),
             (
                 count_udaf()
-                    .call(vec![Expr::Wildcard(Wildcard {
+                    .call(vec![Expr::wildcard(Wildcard {
                         qualifier: None,
                         options: WildcardOptions::default(),
                     })])
@@ -1885,7 +1906,7 @@ mod tests {
                 "count(*) FILTER (WHERE true)",
             ),
             (
-                Expr::WindowFunction(WindowFunction {
+                Expr::window_function(WindowFunction {
                     fun: WindowFunctionDefinition::WindowUDF(row_number_udwf()),
                     args: vec![col("col")],
                     partition_by: vec![],
@@ -1896,7 +1917,7 @@ mod tests {
                 r#"row_number(col) OVER (ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)"#,
             ),
             (
-                Expr::WindowFunction(WindowFunction {
+                Expr::window_function(WindowFunction {
                     fun: WindowFunctionDefinition::AggregateUDF(count_udaf()),
                     args: vec![wildcard()],
                     partition_by: vec![],
@@ -1945,7 +1966,7 @@ mod tests {
                 Expr::between(col("a"), lit(1), lit(7)),
                 r#"(a BETWEEN 1 AND 7)"#,
             ),
-            (Expr::Negative(Box::new(col("a"))), r#"-a"#),
+            (Expr::negative(Box::new(col("a"))), r#"-a"#),
             (
                 exists(Arc::new(dummy_logical_plan.clone())),
                 r#"EXISTS (SELECT * FROM t WHERE (t.a = 1))"#,
@@ -1963,11 +1984,11 @@ mod tests {
                 r#"TRY_CAST(a AS INTEGER UNSIGNED)"#,
             ),
             (
-                Expr::ScalarVariable(Int8, vec![String::from("@a")]),
+                Expr::scalar_variable(Int8, vec![String::from("@a")]),
                 r#"@a"#,
             ),
             (
-                Expr::ScalarVariable(
+                Expr::scalar_variable(
                     Int8,
                     vec![String::from("@root"), String::from("foo")],
                 ),
@@ -1993,7 +2014,7 @@ mod tests {
             (col("need quoted").eq(lit(1)), r#"("need quoted" = 1)"#),
             // See test_interval_scalar_to_expr for interval literals
             (
-                (col("a") + col("b")).gt(Expr::Literal(ScalarValue::Decimal128(
+                (col("a") + col("b")).gt(Expr::literal(ScalarValue::Decimal128(
                     Some(100123),
                     28,
                     3,
@@ -2001,7 +2022,7 @@ mod tests {
                 r#"((a + b) > 100.123)"#,
             ),
             (
-                (col("a") + col("b")).gt(Expr::Literal(ScalarValue::Decimal256(
+                (col("a") + col("b")).gt(Expr::literal(ScalarValue::Decimal256(
                     Some(100123.into()),
                     28,
                     3,
@@ -2009,15 +2030,15 @@ mod tests {
                 r#"((a + b) > 100.123)"#,
             ),
             (
-                Expr::Cast(Cast {
+                Expr::cast(Cast {
                     expr: Box::new(col("a")),
                     data_type: DataType::Decimal128(10, -2),
                 }),
                 r#"CAST(a AS DECIMAL(12,0))"#,
             ),
             (
-                Expr::Unnest(Unnest {
-                    expr: Box::new(Expr::Column(Column {
+                Expr::unnest(Unnest {
+                    expr: Box::new(Expr::column(Column {
                         relation: Some(TableReference::partial("schema", "table")),
                         name: "array_col".to_string(),
                     })),
@@ -2096,7 +2117,7 @@ mod tests {
                 .build();
             let unparser = Unparser::new(&dialect);
 
-            let expr = Expr::Cast(Cast {
+            let expr = Expr::cast(Cast {
                 expr: Box::new(col("a")),
                 data_type: DataType::Date64,
             });
@@ -2121,7 +2142,7 @@ mod tests {
                 .build();
             let unparser = Unparser::new(&dialect);
 
-            let expr = Expr::Cast(Cast {
+            let expr = Expr::cast(Cast {
                 expr: Box::new(col("a")),
                 data_type: DataType::Float64,
             });
@@ -2325,11 +2346,11 @@ mod tests {
     #[test]
     fn test_float_scalar_to_expr() {
         let tests = [
-            (Expr::Literal(ScalarValue::Float64(Some(3f64))), "3.0"),
-            (Expr::Literal(ScalarValue::Float64(Some(3.1f64))), "3.1"),
-            (Expr::Literal(ScalarValue::Float32(Some(-2f32))), "-2.0"),
+            (Expr::literal(ScalarValue::Float64(Some(3f64))), "3.0"),
+            (Expr::literal(ScalarValue::Float64(Some(3.1f64))), "3.1"),
+            (Expr::literal(ScalarValue::Float32(Some(-2f32))), "-2.0"),
             (
-                Expr::Literal(ScalarValue::Float32(Some(-2.989f32))),
+                Expr::literal(ScalarValue::Float32(Some(-2.989f32))),
                 "-2.989",
             ),
         ];
@@ -2348,8 +2369,8 @@ mod tests {
     fn test_cast_value_to_binary_expr() {
         let tests = [
             (
-                Expr::Cast(Cast {
-                    expr: Box::new(Expr::Literal(ScalarValue::Utf8(Some(
+                Expr::cast(Cast {
+                    expr: Box::new(Expr::literal(ScalarValue::Utf8(Some(
                         "blah".to_string(),
                     )))),
                     data_type: DataType::Binary,
@@ -2357,8 +2378,8 @@ mod tests {
                 "'blah'",
             ),
             (
-                Expr::Cast(Cast {
-                    expr: Box::new(Expr::Literal(ScalarValue::Utf8(Some(
+                Expr::cast(Cast {
+                    expr: Box::new(Expr::literal(ScalarValue::Utf8(Some(
                         "blah".to_string(),
                     )))),
                     data_type: DataType::BinaryView,
@@ -2393,7 +2414,7 @@ mod tests {
         ] {
             let unparser = Unparser::new(dialect);
 
-            let expr = Expr::Cast(Cast {
+            let expr = Expr::cast(Cast {
                 expr: Box::new(col("a")),
                 data_type,
             });
@@ -2452,7 +2473,7 @@ mod tests {
             let expr = ScalarUDF::new_from_impl(
                 datafusion_functions::datetime::date_part::DatePartFunc::new(),
             )
-            .call(vec![Expr::Literal(ScalarValue::new_utf8(unit)), col("x")]);
+            .call(vec![Expr::literal(ScalarValue::new_utf8(unit)), col("x")]);
 
             let ast = unparser.expr_to_sql(&expr)?;
             let actual = format!("{}", ast);
@@ -2476,7 +2497,7 @@ mod tests {
             [(default_dialect, "BIGINT"), (mysql_dialect, "SIGNED")]
         {
             let unparser = Unparser::new(&dialect);
-            let expr = Expr::Cast(Cast {
+            let expr = Expr::cast(Cast {
                 expr: Box::new(col("a")),
                 data_type: DataType::Int64,
             });
@@ -2504,7 +2525,7 @@ mod tests {
             [(default_dialect, "INTEGER"), (mysql_dialect, "SIGNED")]
         {
             let unparser = Unparser::new(&dialect);
-            let expr = Expr::Cast(Cast {
+            let expr = Expr::cast(Cast {
                 expr: Box::new(col("a")),
                 data_type: DataType::Int32,
             });
@@ -2543,7 +2564,7 @@ mod tests {
             (&mysql_dialect, &timestamp_with_tz, "DATETIME"),
         ] {
             let unparser = Unparser::new(dialect);
-            let expr = Expr::Cast(Cast {
+            let expr = Expr::cast(Cast {
                 expr: Box::new(col("a")),
                 data_type: data_type.clone(),
             });
@@ -2570,7 +2591,7 @@ mod tests {
         ] {
             let unparser = Unparser::new(dialect);
 
-            let expr = Expr::Cast(Cast {
+            let expr = Expr::cast(Cast {
                 expr: Box::new(col("a")),
                 data_type,
             });
@@ -2595,7 +2616,7 @@ mod tests {
             [(default_dialect, "(a / b)"), (duckdb_dialect, "(a // b)")]
         {
             let unparser = Unparser::new(&dialect);
-            let expr = Expr::BinaryExpr(BinaryExpr {
+            let expr = Expr::binary_expr(BinaryExpr {
                 left: Box::new(col("a")),
                 op: Operator::Divide,
                 right: Box::new(col("b")),
@@ -2613,8 +2634,8 @@ mod tests {
     #[test]
     fn test_cast_value_to_dict_expr() {
         let tests = [(
-            Expr::Cast(Cast {
-                expr: Box::new(Expr::Literal(ScalarValue::Utf8(Some(
+            Expr::cast(Cast {
+                expr: Box::new(Expr::literal(ScalarValue::Utf8(Some(
                     "variation".to_string(),
                 )))),
                 data_type: DataType::Dictionary(Box::new(Int8), Box::new(DataType::Utf8)),
@@ -2645,16 +2666,16 @@ mod tests {
             [(default_dialect, "DOUBLE"), (postgres_dialect, "NUMERIC")]
         {
             let unparser = Unparser::new(dialect.as_ref());
-            let expr = Expr::ScalarFunction(ScalarFunction {
+            let expr = Expr::scalar_function(ScalarFunction {
                 func: Arc::new(ScalarUDF::from(
                     datafusion_functions::math::round::RoundFunc::new(),
                 )),
                 args: vec![
-                    Expr::Cast(Cast {
+                    Expr::cast(Cast {
                         expr: Box::new(col("a")),
                         data_type: DataType::Float64,
                     }),
-                    Expr::Literal(ScalarValue::Int64(Some(2))),
+                    Expr::literal(ScalarValue::Int64(Some(2))),
                 ],
             });
             let ast = unparser.expr_to_sql(&expr)?;

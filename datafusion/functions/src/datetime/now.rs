@@ -89,7 +89,7 @@ impl ScalarUDFImpl for NowFunc {
             .execution_props()
             .query_execution_start_time
             .timestamp_nanos_opt();
-        Ok(ExprSimplifyResult::Simplified(Expr::Literal(
+        Ok(ExprSimplifyResult::Simplified(Expr::literal(
             ScalarValue::TimestampNanosecond(now_ts, Some("+00:00".into())),
         )))
     }

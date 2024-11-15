@@ -50,7 +50,7 @@ impl OptimizerRule for FilterNullJoinKeys {
             return Ok(Transformed::no(plan));
         }
         match plan {
-            LogicalPlan::Join(mut join)
+            LogicalPlan::Join(mut join, _)
                 if !join.on.is_empty() && !join.null_equals_null =>
             {
                 let (left_preserved, right_preserved) =
@@ -74,17 +74,17 @@ impl OptimizerRule for FilterNullJoinKeys {
 
                 if !left_filters.is_empty() {
                     let predicate = create_not_null_predicate(left_filters);
-                    join.left = Arc::new(LogicalPlan::Filter(Filter::try_new(
+                    join.left = Arc::new(LogicalPlan::filter(Filter::try_new(
                         predicate, join.left,
                     )?));
                 }
                 if !right_filters.is_empty() {
                     let predicate = create_not_null_predicate(right_filters);
-                    join.right = Arc::new(LogicalPlan::Filter(Filter::try_new(
+                    join.right = Arc::new(LogicalPlan::filter(Filter::try_new(
                         predicate, join.right,
                     )?));
                 }
-                Ok(Transformed::yes(LogicalPlan::Join(join)))
+                Ok(Transformed::yes(LogicalPlan::join(join)))
             }
             _ => Ok(Transformed::no(plan)),
         }
@@ -95,10 +95,7 @@ impl OptimizerRule for FilterNullJoinKeys {
 }
 
 fn create_not_null_predicate(filters: Vec<Expr>) -> Expr {
-    let not_null_exprs: Vec<Expr> = filters
-        .into_iter()
-        .map(|c| Expr::IsNotNull(Box::new(c)))
-        .collect();
+    let not_null_exprs: Vec<Expr> = filters.into_iter().map(Expr::is_not_null).collect();
 
     // directly unwrap since it should always have a value
     conjunction(not_null_exprs).unwrap()

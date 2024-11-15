@@ -66,14 +66,17 @@ fn is_single_distinct_agg(aggr_expr: &[Expr]) -> Result<bool> {
     let mut fields_set = HashSet::new();
     let mut aggregate_count = 0;
     for expr in aggr_expr {
-        if let Expr::AggregateFunction(AggregateFunction {
-            func,
-            distinct,
-            args,
-            filter,
-            order_by,
-            null_treatment: _,
-        }) = expr
+        if let Expr::AggregateFunction(
+            AggregateFunction {
+                func,
+                distinct,
+                args,
+                filter,
+                order_by,
+                null_treatment: _,
+            },
+            _,
+        ) = expr
         {
             if filter.is_some() || order_by.is_some() {
                 return Ok(false);
@@ -98,7 +101,7 @@ fn is_single_distinct_agg(aggr_expr: &[Expr]) -> Result<bool> {
 
 /// Check if the first expr is [Expr::GroupingSet].
 fn contains_grouping_set(expr: &[Expr]) -> bool {
-    matches!(expr.first(), Some(Expr::GroupingSet(_)))
+    matches!(expr.first(), Some(Expr::GroupingSet(_, _)))
 }
 
 impl OptimizerRule for SingleDistinctToGroupBy {
@@ -120,13 +123,16 @@ impl OptimizerRule for SingleDistinctToGroupBy {
         _config: &dyn OptimizerConfig,
     ) -> Result<Transformed<LogicalPlan>, DataFusionError> {
         match plan {
-            LogicalPlan::Aggregate(Aggregate {
-                input,
-                aggr_expr,
-                schema,
-                group_expr,
-                ..
-            }) if is_single_distinct_agg(&aggr_expr)?
+            LogicalPlan::Aggregate(
+                Aggregate {
+                    input,
+                    aggr_expr,
+                    schema,
+                    group_expr,
+                    ..
+                },
+                _,
+            ) if is_single_distinct_agg(&aggr_expr)?
                 && !contains_grouping_set(&group_expr) =>
             {
                 let group_size = group_expr.len();
@@ -138,7 +144,7 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                     .into_iter()
                     .enumerate()
                     .map(|(i, group_expr)| {
-                        if let Expr::Column(_) = group_expr {
+                        if let Expr::Column(_, _) = group_expr {
                             // For Column expressions we can use existing expression as is.
                             (group_expr.clone(), (group_expr, None))
                         } else {
@@ -182,7 +188,7 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                             mut args,
                             distinct,
                             ..
-                        }) => {
+                        }, _) => {
                             if distinct {
                                 if args.len() != 1 {
                                     return internal_err!("DISTINCT aggregate should have exactly one argument");
@@ -193,7 +199,7 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                                     inner_group_exprs
                                         .push(arg.alias(SINGLE_DISTINCT_ALIAS));
                                 }
-                                Ok(Expr::AggregateFunction(AggregateFunction::new_udf(
+                                Ok(Expr::aggregate_function(AggregateFunction::new_udf(
                                     func,
                                     vec![col(SINGLE_DISTINCT_ALIAS)],
                                     false, // intentional to remove distinct here
@@ -206,7 +212,7 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                                 index += 1;
                                 let alias_str = format!("alias{}", index);
                                 inner_aggr_exprs.push(
-                                    Expr::AggregateFunction(AggregateFunction::new_udf(
+                                    Expr::aggregate_function(AggregateFunction::new_udf(
                                         Arc::clone(&func),
                                         args,
                                         false,
@@ -216,7 +222,7 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                                     ))
                                     .alias(&alias_str),
                                 );
-                                Ok(Expr::AggregateFunction(AggregateFunction::new_udf(
+                                Ok(Expr::aggregate_function(AggregateFunction::new_udf(
                                     func,
                                     vec![col(&alias_str)],
                                     false,
@@ -231,7 +237,7 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                     .collect::<Result<Vec<_>>>()?;
 
                 // construct the inner AggrPlan
-                let inner_agg = LogicalPlan::Aggregate(Aggregate::try_new(
+                let inner_agg = LogicalPlan::aggregate(Aggregate::try_new(
                     input,
                     inner_group_exprs,
                     inner_aggr_exprs,
@@ -263,7 +269,7 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                     ))
                     .collect();
 
-                let outer_aggr = LogicalPlan::Aggregate(Aggregate::try_new(
+                let outer_aggr = LogicalPlan::aggregate(Aggregate::try_new(
                     Arc::new(inner_agg),
                     outer_group_exprs,
                     outer_aggr_exprs,
@@ -288,7 +294,7 @@ mod tests {
     use datafusion_functions_aggregate::sum::sum_udaf;
 
     fn max_distinct(expr: Expr) -> Expr {
-        Expr::AggregateFunction(AggregateFunction::new_udf(
+        Expr::aggregate_function(AggregateFunction::new_udf(
             max_udaf(),
             vec![expr],
             true,
@@ -345,7 +351,7 @@ mod tests {
     fn single_distinct_and_grouping_set() -> Result<()> {
         let table_scan = test_table_scan()?;
 
-        let grouping_set = Expr::GroupingSet(GroupingSet::GroupingSets(vec![
+        let grouping_set = Expr::grouping_set(GroupingSet::GroupingSets(vec![
             vec![col("a")],
             vec![col("b")],
         ]));
@@ -366,7 +372,8 @@ mod tests {
     fn single_distinct_and_cube() -> Result<()> {
         let table_scan = test_table_scan()?;
 
-        let grouping_set = Expr::GroupingSet(GroupingSet::Cube(vec![col("a"), col("b")]));
+        let grouping_set =
+            Expr::grouping_set(GroupingSet::Cube(vec![col("a"), col("b")]));
 
         let plan = LogicalPlanBuilder::from(table_scan)
             .aggregate(vec![grouping_set], vec![count_distinct(col("c"))])?
@@ -385,7 +392,7 @@ mod tests {
         let table_scan = test_table_scan()?;
 
         let grouping_set =
-            Expr::GroupingSet(GroupingSet::Rollup(vec![col("a"), col("b")]));
+            Expr::grouping_set(GroupingSet::Rollup(vec![col("a"), col("b")]));
 
         let plan = LogicalPlanBuilder::from(table_scan)
             .aggregate(vec![grouping_set], vec![count_distinct(col("c"))])?
@@ -569,7 +576,7 @@ mod tests {
         let table_scan = test_table_scan()?;
 
         // sum(a) FILTER (WHERE a > 5)
-        let expr = Expr::AggregateFunction(AggregateFunction::new_udf(
+        let expr = Expr::aggregate_function(AggregateFunction::new_udf(
             sum_udaf(),
             vec![col("a")],
             false,
@@ -612,7 +619,7 @@ mod tests {
         let table_scan = test_table_scan()?;
 
         // SUM(a ORDER BY a)
-        let expr = Expr::AggregateFunction(AggregateFunction::new_udf(
+        let expr = Expr::aggregate_function(AggregateFunction::new_udf(
             sum_udaf(),
             vec![col("a")],
             false,
