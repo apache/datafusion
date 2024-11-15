@@ -663,7 +663,7 @@ EXPLAIN SELECT
 FROM test;
 ----
 logical_plan
-01)Projection: lpad(test.column1_utf8view, Int64(12), Utf8View(" ")) AS c1
+01)Projection: lpad(test.column1_utf8view, Int64(12), Utf8(" ")) AS c1
 02)--TableScan: test projection=[column1_utf8view]
 
 query TT
@@ -672,7 +672,7 @@ EXPLAIN SELECT
 FROM test;
 ----
 logical_plan
-01)Projection: lpad(test.column1_utf8view, Int64(12), CAST(test.column2_large_utf8 AS Utf8View)) AS c1
+01)Projection: lpad(test.column1_utf8view, Int64(12), test.column2_large_utf8) AS c1
 02)--TableScan: test projection=[column2_large_utf8, column1_utf8view]
 
 query TT
@@ -826,7 +826,7 @@ EXPLAIN SELECT
 FROM test;
 ----
 logical_plan
-01)Projection: rpad(test.column1_utf8view, Int64(12), CAST(test.column2_large_utf8 AS Utf8View)) AS c1
+01)Projection: rpad(test.column1_utf8view, Int64(12), test.column2_large_utf8) AS c1
 02)--TableScan: test projection=[column2_large_utf8, column1_utf8view]
 
 query TT

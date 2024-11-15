@@ -44,7 +44,9 @@ pub fn data_types_with_scalar_udf(
     current_types: &[DataType],
     func: &ScalarUDF,
 ) -> Result<Vec<DataType>> {
+    println!("func - {:?}", func);
     let signature = func.signature();
+    println!("sig - {:?}", signature);
 
     if current_types.is_empty() {
         if signature.type_signature.supports_zero_argument() {
@@ -56,6 +58,7 @@ pub fn data_types_with_scalar_udf(
 
     let valid_types =
         get_valid_types_with_scalar_udf(&signature.type_signature, current_types, func)?;
+    println!("validT - {:?}", valid_types);
 
     if valid_types
         .iter()
@@ -544,11 +547,20 @@ fn get_valid_types(
             for (current_type, target_type) in
                 current_types.iter().zip(target_types.iter())
             {
+                println!("curT - {:?}", current_type);
+                println!("targetT - {:?}", target_type);
                 let logical_type: NativeType = current_type.into();
                 let target_logical_type = target_type.native();
+                println!("cur_logiT - {:?}", logical_type);
+                println!("target_logiT - {:?}", target_logical_type);
                 if can_coerce_to(&logical_type, target_logical_type) {
-                    let target_type =
-                        target_logical_type.default_cast_for(current_type)?;
+                    let target_type = if &logical_type == target_logical_type {
+                        current_type.clone()
+                    } else {
+                        target_logical_type.default_cast_for(current_type)?
+                    };
+                    // let target_type = target_logical_type.default_cast_for(current_type)?;
+                    println!("new targetT - {:?}", target_type);
                     new_types.push(target_type);
                 }
             }

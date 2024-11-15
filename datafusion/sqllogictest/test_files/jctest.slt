@@ -1,0 +1,4 @@
+query T
+SELECT left(arrow_cast('abcde', 'Dictionary(Int32, Utf8)'), -2)
+----
+abc
