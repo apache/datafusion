@@ -388,8 +388,8 @@
 //!
 //! While some recent research such as [Morsel-Driven Parallelism] describes challenges
 //! with the pull style Volcano execution model on NUMA architectures, in practice DataFusion achieves
-//! similar scalability as systems that use pull driven schedulers such as DuckDB.
-//! See the [DataFusion paper submitted to SIGMOD] for more details.
+//! similar scalability as systems that use push driven schedulers [such as DuckDB].
+//! See the [DataFusion paper in SIGMOD 2024] for more details.
 //!
 //! [`execute`]: physical_plan::ExecutionPlan::execute
 //! [`SendableRecordBatchStream`]: crate::physical_plan::SendableRecordBatchStream
@@ -403,7 +403,8 @@
 //! [`RepartitionExec`]: https://docs.rs/datafusion/latest/datafusion/physical_plan/repartition/struct.RepartitionExec.html
 //! [Volcano style]: https://w6113.github.io/files/papers/volcanoparallelism-89.pdf
 //! [Morsel-Driven Parallelism]: https://db.in.tum.de/~leis/papers/morsels.pdf
-//! [DataFusion paper submitted to SIGMOD]: https://github.com/apache/datafusion/files/13874720/DataFusion_Query_Engine___SIGMOD_2024.pdf
+//! [DataFusion paper in SIGMOD 2024]: https://github.com/apache/datafusion/files/15149988/DataFusion_Query_Engine___SIGMOD_2024-FINAL-mk4.pdf
+//! [such as DuckDB]: https://github.com/duckdb/duckdb/issues/1583
 //! [implementors of `ExecutionPlan`]: https://docs.rs/datafusion/latest/datafusion/physical_plan/trait.ExecutionPlan.html#implementors
 //!
 //! ## Streaming Execution
