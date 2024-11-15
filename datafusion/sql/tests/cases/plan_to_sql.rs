@@ -208,8 +208,8 @@ fn roundtrip_statement() -> Result<()> {
             .with_aggregate_function(count_udaf())
             .with_aggregate_function(max_udaf())
             .with_expr_planner(Arc::new(CoreFunctionPlanner::default()))
-            .with_expr_planner(Arc::new(NestedFunctionPlanner::default()))
-            .with_expr_planner(Arc::new(FieldAccessPlanner::default()));
+            .with_expr_planner(Arc::new(NestedFunctionPlanner))
+            .with_expr_planner(Arc::new(FieldAccessPlanner));
         let context = MockContextProvider { state };
         let sql_to_rel = SqlToRel::new(&context);
         let plan = sql_to_rel.sql_statement_to_plan(statement).unwrap();
