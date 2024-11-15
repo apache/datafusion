@@ -382,7 +382,7 @@
 //!
 //! Calling [`execute`] produces 1 or more partitions of data,
 //! as a [`SendableRecordBatchStream`], which implements a pull based execution
-//! API. Calling [`.next()`]`.await` will incrementally compute and return the next
+//! API. Calling [`next()`]`.await` will incrementally compute and return the next
 //! [`RecordBatch`]. Balanced parallelism is achieved using [Volcano style]
 //! "Exchange" operations implemented by [`RepartitionExec`].
 //!
