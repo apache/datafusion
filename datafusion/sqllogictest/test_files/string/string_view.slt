@@ -944,10 +944,11 @@ logical_plan
 02)--TableScan: test projection=[column1_utf8view]
 
 ## Ensure no casts for nullif
-query error DataFusion error: SQL error: ParserError\("Expected: an SQL statement, found: logical_plan"\)
+query TT
 EXPLAIN SELECT
   nullif(column1_utf8view, 'a') as c
 FROM test;
+----
 logical_plan
 01)Projection: nullif(test.column1_utf8view, Utf8View("a")) AS c
 02)--TableScan: test projection=[column1_utf8view]
