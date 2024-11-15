@@ -21,12 +21,6 @@
 //! Note: Most traits here need to be marked `Sync + Send` to be
 //! compliant with the `SendableRecordBatchStream` trait.
 
-use std::collections::VecDeque;
-use std::mem;
-use std::pin::Pin;
-use std::sync::Arc;
-use std::task::{Context, Poll};
-
 use crate::datasource::listing::PartitionedFile;
 use crate::datasource::physical_plan::file_scan_config::PartitionColumnProjector;
 use crate::datasource::physical_plan::{FileMeta, FileScanConfig};
@@ -35,6 +29,11 @@ use crate::physical_plan::metrics::{
     BaselineMetrics, Count, ExecutionPlanMetricsSet, MetricBuilder, Time,
 };
 use crate::physical_plan::RecordBatchStream;
+use std::collections::VecDeque;
+use std::mem;
+use std::pin::Pin;
+use std::sync::Arc;
+use std::task::{Context, Poll};
 
 use arrow::datatypes::SchemaRef;
 use arrow::error::ArrowError;
@@ -42,6 +41,7 @@ use arrow::record_batch::RecordBatch;
 use datafusion_common::instant::Instant;
 use datafusion_common::ScalarValue;
 
+use datafusion_physical_plan::joins::DynamicFilterInfo;
 use futures::future::BoxFuture;
 use futures::stream::BoxStream;
 use futures::{ready, FutureExt, Stream, StreamExt};
@@ -96,6 +96,8 @@ pub struct FileStream<F: FileOpener> {
     baseline_metrics: BaselineMetrics,
     /// Describes the behavior of the `FileStream` if file opening or scanning fails
     on_error: OnError,
+    /// dynamic filters
+    dynamic_filters: Option<Arc<DynamicFilterInfo>>,
 }
 
 /// Represents the state of the next `FileOpenFuture`. Since we need to poll
@@ -273,6 +275,7 @@ impl<F: FileOpener> FileStream<F> {
             file_stream_metrics: FileStreamMetrics::new(metrics, partition),
             baseline_metrics: BaselineMetrics::new(metrics, partition),
             on_error: OnError::Fail,
+            dynamic_filters: None,
         })
     }
 
@@ -282,6 +285,14 @@ impl<F: FileOpener> FileStream<F> {
     /// If `OnError:Fail` (default) the stream will fail and stop processing when an error occurs
     pub fn with_on_error(mut self, on_error: OnError) -> Self {
         self.on_error = on_error;
+        self
+    }
+    /// with dynamic filters
+    pub fn with_dynamic_filter(
+        mut self,
+        dynamic_filter: Option<Arc<DynamicFilterInfo>>,
+    ) -> Self {
+        self.dynamic_filters = dynamic_filter;
         self
     }
 
@@ -391,7 +402,11 @@ impl<F: FileOpener> FileStream<F> {
                         }
                     }
                     match ready!(reader.poll_next_unpin(cx)) {
-                        Some(Ok(batch)) => {
+                        Some(Ok(mut batch)) => {
+                            // if there is a ready dynamic filter, we just use it to filter
+                            if let Some(dynamic_filters) = &self.dynamic_filters {
+                                batch = dynamic_filters.filter_batch(&batch)?
+                            }
                             self.file_stream_metrics.time_scanning_until_data.stop();
                             self.file_stream_metrics.time_scanning_total.stop();
                             let result = self

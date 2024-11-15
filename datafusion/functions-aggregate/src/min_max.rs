@@ -889,7 +889,7 @@ macro_rules! min_max {
 }
 
 /// An accumulator to compute the maximum value
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct MaxAccumulator {
     max: ScalarValue,
 }
@@ -1196,7 +1196,7 @@ fn get_min_doc() -> &'static Documentation {
 }
 
 /// An accumulator to compute the minimum value
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct MinAccumulator {
     min: ScalarValue,
 }

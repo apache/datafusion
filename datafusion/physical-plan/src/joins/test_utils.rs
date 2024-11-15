@@ -153,6 +153,7 @@ pub async fn partitioned_hash_join_with_filter(
         None,
         PartitionMode::Partitioned,
         null_equals_null,
+        None,
     )?);
 
     let mut batches = vec![];

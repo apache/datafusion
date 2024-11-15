@@ -304,6 +304,7 @@ fn adjust_input_keys_ordering(
                         projection.clone(),
                         PartitionMode::Partitioned,
                         *null_equals_null,
+                        None,
                     )
                     .map(|e| Arc::new(e) as _)
                 };
@@ -632,6 +633,7 @@ pub(crate) fn reorder_join_keys_to_inputs(
                     projection.clone(),
                     PartitionMode::Partitioned,
                     *null_equals_null,
+                    None,
                 )?));
             }
         }
@@ -1696,6 +1698,7 @@ pub(crate) mod tests {
                 None,
                 PartitionMode::Partitioned,
                 false,
+                None,
             )
             .unwrap(),
         )

@@ -636,6 +636,10 @@ config_namespace! {
         /// then the output will be coerced to a non-view.
         /// Coerces `Utf8View` to `LargeUtf8`, and `BinaryView` to `LargeBinary`.
         pub expand_views_at_output: bool, default = false
+
+        /// when set to true, datafusion would try to push the build side statistic
+        /// to probe phase
+        pub dynamic_join_pushdown: bool, default = true
     }
 }
 

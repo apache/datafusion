@@ -1452,6 +1452,7 @@ mod tests {
                 None,
                 PartitionMode::Partitioned,
                 false,
+                None,
             )
             .unwrap(),
         )

@@ -140,6 +140,18 @@ impl JoinHashMap {
             next: vec![0; capacity],
         }
     }
+
+    /// extract all unique keys of this join hash map
+    pub fn extract_unique_keys(&self) -> HashSet<u64> {
+        let mut unique_keys = HashSet::new();
+        unsafe {
+            self.map.iter().for_each(|entry| {
+                let (hash, _) = entry.as_ref();
+                unique_keys.insert(hash.to_owned());
+            })
+        };
+        unique_keys
+    }
 }
 
 // Type of offsets for obtaining indices from JoinHashMap.
@@ -371,8 +383,48 @@ impl JoinHashMapType for JoinHashMap {
 }
 
 impl Debug for JoinHashMap {
-    fn fmt(&self, _f: &mut fmt::Formatter) -> fmt::Result {
-        Ok(())
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        writeln!(f, "JoinHashMap {{")?;
+        writeln!(f, "  map:")?;
+        writeln!(f, "  ----------")?;
+
+        let mut entries: Vec<_> = unsafe { self.map.iter().collect() };
+        entries.sort_by_key(|bucket| unsafe { bucket.as_ref().0 });
+
+        for bucket in entries {
+            let mut indices = Vec::new();
+            let mut curr_idx = unsafe { bucket.as_ref().1 };
+
+            while curr_idx > 0 {
+                indices.push(curr_idx - 1);
+                curr_idx = self.next[(curr_idx - 1) as usize];
+            }
+
+            indices.reverse();
+
+            writeln!(
+                f,
+                "  | {:3} | {} | -> {:?}",
+                unsafe { bucket.as_ref().0 },
+                unsafe { bucket.as_ref().1 },
+                indices
+            )?;
+        }
+
+        writeln!(f, "  ----------")?;
+        writeln!(f, "\n  next:")?;
+        writeln!(f, "  ---------------------")?;
+        write!(f, "  |")?;
+        for &next_idx in self.next.iter() {
+            write!(f, " {:2} |", next_idx)?;
+        }
+        writeln!(f)?;
+        write!(f, "  |")?;
+        for i in 0..self.next.len() {
+            write!(f, " {:2} |", i)?;
+        }
+        writeln!(f, "\n  ---------------------")?;
+        writeln!(f, "}}")
     }
 }
 
