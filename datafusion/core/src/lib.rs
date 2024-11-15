@@ -403,7 +403,7 @@
 //! [`RepartitionExec`]: https://docs.rs/datafusion/latest/datafusion/physical_plan/repartition/struct.RepartitionExec.html
 //! [Volcano style]: https://w6113.github.io/files/papers/volcanoparallelism-89.pdf
 //! [Morsel-Driven Parallelism]: https://db.in.tum.de/~leis/papers/morsels.pdf
-//! [DataFusion paper submitted SIGMOD]: https://github.com/apache/datafusion/files/13874720/DataFusion_Query_Engine___SIGMOD_2024.pdf
+//! [DataFusion paper submitted to SIGMOD]: https://github.com/apache/datafusion/files/13874720/DataFusion_Query_Engine___SIGMOD_2024.pdf
 //! [implementors of `ExecutionPlan`]: https://docs.rs/datafusion/latest/datafusion/physical_plan/trait.ExecutionPlan.html#implementors
 //!
 //! ## Streaming Execution
@@ -428,7 +428,7 @@
 //!
 //! The diagram below shows the call sequence when a consumer calls [`next()`] to
 //! get the next `RecordBatch` of output. While it is possible that some
-//! steps run a different threads, typically tokio will use the same thread
+//! steps run on different threads, typically tokio will use the same thread
 //! that called `next()` to read from the input, apply the filter, and
 //! return the results without interleaving any other operations. This results
 //! in excellent cache locality as the same CPU core that produces the data often
