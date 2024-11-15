@@ -938,7 +938,7 @@ fn repeat_arrs_from_indices(
             if repeat {
                 Ok(kernels::take::take(arr, indices, None)?)
             } else {
-                Ok(new_null_array(arr.data_type(), indices.len()))
+                Ok(new_null_array(arr.data_type(), arr.len()))
             }
         })
         .collect()
