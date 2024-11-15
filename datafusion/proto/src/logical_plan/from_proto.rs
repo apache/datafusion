@@ -28,7 +28,7 @@ use datafusion_expr::ExprFunctionExt;
 use datafusion_expr::{
     expr::{self, InList, WindowFunction},
     logical_plan::{PlanType, StringifiedPlan},
-    Between, BinaryExpr, BuiltInWindowFunction, Case, Cast, Expr, GroupingSet,
+    Between, BinaryExpr, Case, Cast, Expr, GroupingSet,
     GroupingSet::GroupingSets,
     JoinConstraint, JoinType, Like, Operator, TryCast, WindowFrame, WindowFrameBound,
     WindowFrameUnits,
@@ -144,14 +144,6 @@ impl From<&protobuf::StringifiedPlan> for StringifiedPlan {
                 PhysicalPlanError(_) => PlanType::PhysicalPlanError,
             },
             plan: Arc::new(stringified_plan.plan.clone()),
-        }
-    }
-}
-
-impl From<protobuf::BuiltInWindowFunction> for BuiltInWindowFunction {
-    fn from(built_in_function: protobuf::BuiltInWindowFunction) -> Self {
-        match built_in_function {
-            protobuf::BuiltInWindowFunction::Unspecified => todo!(),
         }
     }
 }
@@ -285,25 +277,6 @@ pub fn parse_expr(
 
             // TODO: support proto for null treatment
             match window_function {
-                window_expr_node::WindowFunction::BuiltInFunction(i) => {
-                    let built_in_function = protobuf::BuiltInWindowFunction::try_from(*i)
-                        .map_err(|_| Error::unknown("BuiltInWindowFunction", *i))?
-                        .into();
-
-                    let args = parse_exprs(&expr.exprs, registry, codec)?;
-
-                    Expr::WindowFunction(WindowFunction::new(
-                        expr::WindowFunctionDefinition::BuiltInWindowFunction(
-                            built_in_function,
-                        ),
-                        args,
-                    ))
-                    .partition_by(partition_by)
-                    .order_by(order_by)
-                    .window_frame(window_frame)
-                    .build()
-                    .map_err(Error::DataFusionError)
-                }
                 window_expr_node::WindowFunction::Udaf(udaf_name) => {
                     let udaf_function = match &expr.fun_definition {
                         Some(buf) => codec.try_decode_udaf(udaf_name, buf)?,
