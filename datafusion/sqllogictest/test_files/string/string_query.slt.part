@@ -1373,3 +1373,112 @@ p percent NULL pan Tadeusz ma iść w kąt pan Tadeusz ma iść w kąt NULL
 _ _ NULL (empty) (empty) NULL
 NULL NULL NULL NULL NULL NULL
 NULL NULL NULL NULL NULL NULL
+
+# --------------------------------------
+# Test md5
+# --------------------------------------
+
+query T
+select md5(ascii_1) from test_basic_operator;
+----
+8aae3a73a9a43ee6b04dfd986fe9d136
+76515af83bcb9d6336fe42dba18e716d
+84fc7720d5e7bf07115d91762843b8ad
+e0c4c75d58916b22a41b6ea9bc46231f
+354f047ba64552895b016bbdd60ab174
+d41d8cd98f00b204e9800998ecf8427e
+0bcef9c45bd8a48eda1b26eb0c61c869
+b14a7b8059d9c055954c92674ce60032
+NULL
+NULL
+
+# --------------------------------------
+# Test sha244
+# --------------------------------------
+
+query ?
+select sha224(ascii_1) from test_basic_operator;
+----
+abd8be3961e5dbe324bc67f9a0211d5f7d81e556baadaff6218e4bfa
+87a20c95932524a54a0263a621fe791a5d5fbc0e40242b59732d6bf5
+8dd0c8021fe87bbc1c0701bd3130e27a639dcd93083c3f1989ffdf26
+8f6caa44143a080541f083bb762107ce12224b271bfa8b36ece002ab
+951336d101e034714ba1ca0535688f0300613e235814ed938cd25115
+d14a028c2a3a2bc9476102bb288234c415a2b01f828ea62ac5b3e42f
+fda2a4d4c5fb67cfd7fc817f59b543ae42f650aa4abd79934ca5ac55
+d365e3c7512c311d0df0528a850e6c827cbe508d13235fa91b545389
+NULL
+NULL
+
+# --------------------------------------
+# Test sha256
+# --------------------------------------
+
+query ?
+select sha256(ascii_1) from test_basic_operator;
+----
+c10873196eb1124ed74461c20a67094e395f2310f6305607b9694ee6b1ee8b43
+ec792d2e89af0d5b05c88ee1e5fe041ce2db94f84c3aabac4f7cfe20f00cd032
+053e9c5f1a29bea66ff896d7a8f217bf380b8e3973e7f13c1acbe14ef7fc947e
+d8071166bbe6131a0acaf86019eeeca31c87ee4fda23b80eda0d094dbffee521
+fd86717aca41c558c78c19ab2b50691179a57ba5200bc7e3317be70efd4043ad
+e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+bbf3f11cb5b43e700273a78d12de55e4a7eab741ed2abf13787a4d2dc832b8ec
+d2e2adf7177b7a8afddbc12d1634cf23ea1a71020f6a1308070a16400fb68fde
+NULL
+NULL
+
+# --------------------------------------
+# Test sha384
+# --------------------------------------
+
+query ?
+select sha384(ascii_1) from test_basic_operator;
+----
+33a2a749758403660d131256e08647f52e4efba74840e7ad55c77012ade611ec0dc815ab3fa777e98710d43f3345222b
+7b525a4147696421c6119df0e983ee3d9ebcfa13b3e1dce2fb308f91863e236fde55b56b89936908999332f5a453845c
+359ee4b366b1965e9ceb0bd529edcdc08c33b0348aa4cc2cf4114c7f18069d53f6a798482626393c46ed340995c34b4e
+fe417fcff1b9b8cdbc4fba45fedcd882ccbeef438497647052809fd73f43bcf1a6214f543a91e7183d56c6ae8e7cb30e
+7791b34dcc841235a8a074052bc12aa7090c0d72f09ec41b1521a67fa09b026a9c02d159b42428d7b528aa5ff7598fd4
+38b060a751ac96384cd9327eb1b1e36a21fdb71114be07434c0cc7bf63f6e1da274edebfe76f65fbd51ad2f14898b95b
+bba987e661a4158451c5e9870fe91f483064574a0d7485caef40f48d7846579859c7dddebd418cbc99ccaa1ebd3619ea
+586b0fd9f8ec935c69a7dceb5560742f368962833023906d30fe1cf49c96ea6d22cea8c2b63cd18e7af08fbf9e47c3f9
+NULL
+NULL
+
+
+# --------------------------------------
+# Test sha512
+# --------------------------------------
+
+query ?
+select sha512(ascii_1) from test_basic_operator;
+----
+93262eb44d649a02a83b78889fd813ce819759daabcee2ac433f1ea7feef44f521ac0eba5b5359d47c7a7146afbe064b55134a63ac713c0fcc4c48e11eed7109
+f02c73afb1e433d6cc7e9137bb4ed40791e8c6e7877ae26e7a1edc4ce98a945a61bdf883d985adbc03d74d67ac18d4981529be5f4f53a35ff7fcd3e9814592d7
+2f25e277902f07a4c5cdb54485487b50bae3acdd615cd5551f71f4e3d97077fbccfbf0c85f88d6766d132069a343b732c6e81080a2c3ed59caff0c6947f4c57a
+cafc51edc3a949179a74a805be8d0c7991bfc849b01f773f4bcd5e7dbe51b6d71d65921d8025d375d501af6a1c1026ab76cd7f4811b91bb4544f7dcbb710fa1f
+2f845edf0e9c9728fae627d4678dc8c35c9a7f22809d355aa5ddf96d9ca3539973ac7ff96bfc6720ce6a973f93b716e265ad719ee38a85e44d9316ac1b6c89a4
+cf83e1357eefb8bdf1542850d66d8007d620e4050b5715dc83f4a921d36ce9ce47d0d13c5d85f2b0ff8318d2877eec2f63b931bd47417a81a538327af927da3e
+91972aa34055bca20ddb643b9f817a547e5d4ad49b7ff16a7f828a8d72c4cb4a5679cff4da00f9fb6b2833de7eb3480b3b4a7c7c7b85a39028de55acaf2d8812
+bbbe7f2559c7953d281fba7f25258063dbc8a55c5b9fdfcd334ecd64a8d7d8980c6f6ee0457bf496bcff747991f741446f1814222678dfa7457f1ad3a6f848b3
+NULL
+NULL
+
+# --------------------------------------
+# Test DIGEST
+# --------------------------------------
+
+query ?
+select DIGEST(ascii_1, 'sha256') from test_basic_operator;
+----
+c10873196eb1124ed74461c20a67094e395f2310f6305607b9694ee6b1ee8b43
+ec792d2e89af0d5b05c88ee1e5fe041ce2db94f84c3aabac4f7cfe20f00cd032
+053e9c5f1a29bea66ff896d7a8f217bf380b8e3973e7f13c1acbe14ef7fc947e
+d8071166bbe6131a0acaf86019eeeca31c87ee4fda23b80eda0d094dbffee521
+fd86717aca41c558c78c19ab2b50691179a57ba5200bc7e3317be70efd4043ad
+e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+bbf3f11cb5b43e700273a78d12de55e4a7eab741ed2abf13787a4d2dc832b8ec
+d2e2adf7177b7a8afddbc12d1634cf23ea1a71020f6a1308070a16400fb68fde
+NULL
+NULL
