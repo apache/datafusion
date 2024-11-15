@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::aggregates::group_values::multi_column::{nulls_equal_to, GroupColumn};
+use crate::aggregates::group_values::multi_group_by::{nulls_equal_to, GroupColumn};
 use crate::aggregates::group_values::null_builder::MaybeNullBufferBuilder;
 use arrow::array::{AsArray, BufferBuilder, GenericBinaryArray, GenericStringArray};
 use arrow::buffer::{OffsetBuffer, ScalarBuffer};
@@ -403,7 +403,7 @@ where
 mod tests {
     use std::sync::Arc;
 
-    use crate::aggregates::group_values::multi_column::bytes::ByteGroupValueBuilder;
+    use crate::aggregates::group_values::multi_group_by::bytes::ByteGroupValueBuilder;
     use arrow_array::{ArrayRef, StringArray};
     use arrow_buffer::{BooleanBufferBuilder, NullBuffer};
     use datafusion_physical_expr::binary_map::OutputType;

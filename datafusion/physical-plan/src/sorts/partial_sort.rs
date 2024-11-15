@@ -167,6 +167,11 @@ impl PartialSortExec {
         self.fetch
     }
 
+    /// Common prefix length
+    pub fn common_prefix_length(&self) -> usize {
+        self.common_prefix_length
+    }
+
     fn output_partitioning_helper(
         input: &Arc<dyn ExecutionPlan>,
         preserve_partitioning: bool,

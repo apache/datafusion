@@ -234,13 +234,15 @@ mod tests {
 
     #[test]
     fn test_make_date() {
-        #[allow(deprecated)] // TODO migrate UDF invoke to invoke_batch
         let res = MakeDateFunc::new()
-            .invoke(&[
-                ColumnarValue::Scalar(ScalarValue::Int32(Some(2024))),
-                ColumnarValue::Scalar(ScalarValue::Int64(Some(1))),
-                ColumnarValue::Scalar(ScalarValue::UInt32(Some(14))),
-            ])
+            .invoke_batch(
+                &[
+                    ColumnarValue::Scalar(ScalarValue::Int32(Some(2024))),
+                    ColumnarValue::Scalar(ScalarValue::Int64(Some(1))),
+                    ColumnarValue::Scalar(ScalarValue::UInt32(Some(14))),
+                ],
+                1,
+            )
             .expect("that make_date parsed values without error");
 
         if let ColumnarValue::Scalar(ScalarValue::Date32(date)) = res {
@@ -249,13 +251,15 @@ mod tests {
             panic!("Expected a scalar value")
         }
 
-        #[allow(deprecated)] // TODO migrate UDF invoke to invoke_batch
         let res = MakeDateFunc::new()
-            .invoke(&[
-                ColumnarValue::Scalar(ScalarValue::Int64(Some(2024))),
-                ColumnarValue::Scalar(ScalarValue::UInt64(Some(1))),
-                ColumnarValue::Scalar(ScalarValue::UInt32(Some(14))),
-            ])
+            .invoke_batch(
+                &[
+                    ColumnarValue::Scalar(ScalarValue::Int64(Some(2024))),
+                    ColumnarValue::Scalar(ScalarValue::UInt64(Some(1))),
+                    ColumnarValue::Scalar(ScalarValue::UInt32(Some(14))),
+                ],
+                1,
+            )
             .expect("that make_date parsed values without error");
 
         if let ColumnarValue::Scalar(ScalarValue::Date32(date)) = res {
@@ -264,13 +268,15 @@ mod tests {
             panic!("Expected a scalar value")
         }
 
-        #[allow(deprecated)] // TODO migrate UDF invoke to invoke_batch
         let res = MakeDateFunc::new()
-            .invoke(&[
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some("2024".to_string()))),
-                ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some("1".to_string()))),
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some("14".to_string()))),
-            ])
+            .invoke_batch(
+                &[
+                    ColumnarValue::Scalar(ScalarValue::Utf8(Some("2024".to_string()))),
+                    ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some("1".to_string()))),
+                    ColumnarValue::Scalar(ScalarValue::Utf8(Some("14".to_string()))),
+                ],
+                1,
+            )
             .expect("that make_date parsed values without error");
 
         if let ColumnarValue::Scalar(ScalarValue::Date32(date)) = res {
@@ -282,13 +288,16 @@ mod tests {
         let years = Arc::new((2021..2025).map(Some).collect::<Int64Array>());
         let months = Arc::new((1..5).map(Some).collect::<Int32Array>());
         let days = Arc::new((11..15).map(Some).collect::<UInt32Array>());
-        #[allow(deprecated)] // TODO migrate UDF invoke to invoke_batch
+        let batch_size = years.len();
         let res = MakeDateFunc::new()
-            .invoke(&[
-                ColumnarValue::Array(years),
-                ColumnarValue::Array(months),
-                ColumnarValue::Array(days),
-            ])
+            .invoke_batch(
+                &[
+                    ColumnarValue::Array(years),
+                    ColumnarValue::Array(months),
+                    ColumnarValue::Array(days),
+                ],
+                batch_size,
+            )
             .expect("that make_date parsed values without error");
 
         if let ColumnarValue::Array(array) = res {
@@ -308,45 +317,50 @@ mod tests {
         //
 
         // invalid number of arguments
-        #[allow(deprecated)] // TODO migrate UDF invoke to invoke_batch
         let res = MakeDateFunc::new()
-            .invoke(&[ColumnarValue::Scalar(ScalarValue::Int32(Some(1)))]);
+            .invoke_batch(&[ColumnarValue::Scalar(ScalarValue::Int32(Some(1)))], 1);
         assert_eq!(
             res.err().unwrap().strip_backtrace(),
             "Execution error: make_date function requires 3 arguments, got 1"
         );
 
         // invalid type
-        #[allow(deprecated)] // TODO migrate UDF invoke to invoke_batch
-        let res = MakeDateFunc::new().invoke(&[
-            ColumnarValue::Scalar(ScalarValue::IntervalYearMonth(Some(1))),
-            ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
-            ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
-        ]);
+        let res = MakeDateFunc::new().invoke_batch(
+            &[
+                ColumnarValue::Scalar(ScalarValue::IntervalYearMonth(Some(1))),
+                ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
+                ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
+            ],
+            1,
+        );
         assert_eq!(
             res.err().unwrap().strip_backtrace(),
             "Arrow error: Cast error: Casting from Interval(YearMonth) to Int32 not supported"
         );
 
         // overflow of month
-        #[allow(deprecated)] // TODO migrate UDF invoke to invoke_batch
-        let res = MakeDateFunc::new().invoke(&[
-            ColumnarValue::Scalar(ScalarValue::Int32(Some(2023))),
-            ColumnarValue::Scalar(ScalarValue::UInt64(Some(u64::MAX))),
-            ColumnarValue::Scalar(ScalarValue::Int32(Some(22))),
-        ]);
+        let res = MakeDateFunc::new().invoke_batch(
+            &[
+                ColumnarValue::Scalar(ScalarValue::Int32(Some(2023))),
+                ColumnarValue::Scalar(ScalarValue::UInt64(Some(u64::MAX))),
+                ColumnarValue::Scalar(ScalarValue::Int32(Some(22))),
+            ],
+            1,
+        );
         assert_eq!(
             res.err().unwrap().strip_backtrace(),
             "Arrow error: Cast error: Can't cast value 18446744073709551615 to type Int32"
         );
 
         // overflow of day
-        #[allow(deprecated)] // TODO migrate UDF invoke to invoke_batch
-        let res = MakeDateFunc::new().invoke(&[
-            ColumnarValue::Scalar(ScalarValue::Int32(Some(2023))),
-            ColumnarValue::Scalar(ScalarValue::Int32(Some(22))),
-            ColumnarValue::Scalar(ScalarValue::UInt32(Some(u32::MAX))),
-        ]);
+        let res = MakeDateFunc::new().invoke_batch(
+            &[
+                ColumnarValue::Scalar(ScalarValue::Int32(Some(2023))),
+                ColumnarValue::Scalar(ScalarValue::Int32(Some(22))),
+                ColumnarValue::Scalar(ScalarValue::UInt32(Some(u32::MAX))),
+            ],
+            1,
+        );
         assert_eq!(
             res.err().unwrap().strip_backtrace(),
             "Arrow error: Cast error: Can't cast value 4294967295 to type Int32"
