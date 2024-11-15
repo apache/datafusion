@@ -659,7 +659,41 @@ impl DefaultPhysicalPlanner {
                 if &physical_input_schema != physical_input_schema_from_logical
                     && !options.execution.skip_physical_aggregate_schema_check
                 {
-                    return internal_err!("Physical input schema should be the same as the one converted from logical input schema.");
+                    let mut differences = Vec::new();
+                    if physical_input_schema.fields().len()
+                        != physical_input_schema_from_logical.fields().len()
+                    {
+                        differences.push(format!(
+                            "Different number of fields: (physical) {} vs (logical) {}",
+                            physical_input_schema.fields().len(),
+                            physical_input_schema_from_logical.fields().len()
+                        ));
+                    }
+                    for (i, (physical_field, logical_field)) in physical_input_schema
+                        .fields()
+                        .iter()
+                        .zip(physical_input_schema_from_logical.fields())
+                        .enumerate()
+                    {
+                        if physical_field.name() != logical_field.name() {
+                            differences.push(format!(
+                                "field name at index {}: (physical) {} vs (logical) {}",
+                                i,
+                                physical_field.name(),
+                                logical_field.name()
+                            ));
+                        }
+                        if physical_field.data_type() != logical_field.data_type() {
+                            differences.push(format!("field data type at index {} [{}]: (physical) {} vs (logical) {}", i, physical_field.name(), physical_field.data_type(), logical_field.data_type()));
+                        }
+                        if physical_field.is_nullable() != logical_field.is_nullable() {
+                            differences.push(format!("field nullability at index {} [{}]: (physical) {} vs (logical) {}", i, physical_field.name(), physical_field.is_nullable(), logical_field.is_nullable()));
+                        }
+                    }
+                    return internal_err!("Physical input schema should be the same as the one converted from logical input schema. Differences: {}", differences
+                        .iter()
+                        .map(|s| format!("\n\t- {}", s))
+                        .join(""));
                 }
 
                 let groups = self.create_grouping_physical_expr(
