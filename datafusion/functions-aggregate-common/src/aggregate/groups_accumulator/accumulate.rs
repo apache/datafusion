@@ -426,7 +426,7 @@ pub fn accumulate_indices<F>(
                 });
         }
         (Some(valids), None) => {
-            assert_eq!(valids.len(), group_indices.len());
+            debug_assert_eq!(valids.len(), group_indices.len());
             // This is based on (ahem, COPY/PASTA) arrow::compute::aggregate::sum
             // iterate over in chunks of 64 bits for more efficient null checking
             let group_indices_chunks = group_indices.chunks_exact(64);
@@ -463,8 +463,8 @@ pub fn accumulate_indices<F>(
         }
 
         (Some(valids), Some(filter)) => {
-            assert_eq!(filter.len(), group_indices.len());
-            assert_eq!(valids.len(), group_indices.len());
+            debug_assert_eq!(filter.len(), group_indices.len());
+            debug_assert_eq!(valids.len(), group_indices.len());
 
             let group_indices_chunks = group_indices.chunks_exact(64);
             let valid_bit_chunks = valids.inner().bit_chunks();
