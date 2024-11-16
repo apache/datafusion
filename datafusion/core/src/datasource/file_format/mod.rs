@@ -32,9 +32,10 @@ pub mod parquet;
 pub mod write;
 
 use std::any::Any;
-use std::collections::HashMap;
-use std::fmt::{self, Display};
+use std::collections::{HashMap, VecDeque};
+use std::fmt::{self, Debug, Display};
 use std::sync::Arc;
+use std::task::Poll;
 
 use crate::arrow::datatypes::SchemaRef;
 use crate::datasource::physical_plan::{FileScanConfig, FileSinkConfig};
@@ -42,17 +43,20 @@ use crate::error::Result;
 use crate::execution::context::SessionState;
 use crate::physical_plan::{ExecutionPlan, Statistics};
 
-use arrow_schema::{DataType, Field, FieldRef, Schema};
+use arrow_array::RecordBatch;
+use arrow_schema::{ArrowError, DataType, Field, FieldRef, Schema};
 use datafusion_common::file_options::file_type::FileType;
 use datafusion_common::{internal_err, not_impl_err, GetExt};
 use datafusion_expr::Expr;
 use datafusion_physical_expr::PhysicalExpr;
 
 use async_trait::async_trait;
+use bytes::{Buf, Bytes};
 use datafusion_physical_expr_common::sort_expr::LexRequirement;
 use file_compression_type::FileCompressionType;
+use futures::stream::BoxStream;
+use futures::{ready, Stream, StreamExt};
 use object_store::{ObjectMeta, ObjectStore};
-use std::fmt::Debug;
 
 /// Factory for creating [`FileFormat`] instances based on session and command level options
 ///
@@ -166,6 +170,165 @@ pub enum FilePushdownSupport {
     /// The file format/system being asked *does* support pushdown and *can* make it work for the
     /// provided filter/expression
     Supported,
+}
+
+/// Possible outputs of a [`BatchDeserializer`].
+#[derive(Debug, PartialEq)]
+pub enum DeserializerOutput {
+    /// A successfully deserialized [`RecordBatch`].
+    RecordBatch(RecordBatch),
+    /// The deserializer requires more data to make progress.
+    RequiresMoreData,
+    /// The input data has been exhausted.
+    InputExhausted,
+}
+
+/// Trait defining a scheme for deserializing byte streams into structured data.
+/// Implementors of this trait are responsible for converting raw bytes into
+/// `RecordBatch` objects.
+pub trait BatchDeserializer<T>: Send + Debug {
+    /// Feeds a message for deserialization, updating the internal state of
+    /// this `BatchDeserializer`. Note that one can call this function multiple
+    /// times before calling `next`, which will queue multiple messages for
+    /// deserialization. Returns the number of bytes consumed.
+    fn digest(&mut self, message: T) -> usize;
+
+    /// Attempts to deserialize any pending messages and returns a
+    /// `DeserializerOutput` to indicate progress.
+    fn next(&mut self) -> Result<DeserializerOutput, ArrowError>;
+
+    /// Informs the deserializer that no more messages will be provided for
+    /// deserialization.
+    fn finish(&mut self);
+}
+
+/// A general interface for decoders such as [`arrow::json::reader::Decoder`] and
+/// [`arrow::csv::reader::Decoder`]. Defines an interface similar to
+/// [`Decoder::decode`] and [`Decoder::flush`] methods, but also includes
+/// a method to check if the decoder can flush early. Intended to be used in
+/// conjunction with [`DecoderDeserializer`].
+///
+/// [`arrow::json::reader::Decoder`]: ::arrow::json::reader::Decoder
+/// [`arrow::csv::reader::Decoder`]: ::arrow::csv::reader::Decoder
+/// [`Decoder::decode`]: ::arrow::json::reader::Decoder::decode
+/// [`Decoder::flush`]: ::arrow::json::reader::Decoder::flush
+pub(crate) trait Decoder: Send + Debug {
+    /// See [`arrow::json::reader::Decoder::decode`].
+    ///
+    /// [`arrow::json::reader::Decoder::decode`]: ::arrow::json::reader::Decoder::decode
+    fn decode(&mut self, buf: &[u8]) -> Result<usize, ArrowError>;
+
+    /// See [`arrow::json::reader::Decoder::flush`].
+    ///
+    /// [`arrow::json::reader::Decoder::flush`]: ::arrow::json::reader::Decoder::flush
+    fn flush(&mut self) -> Result<Option<RecordBatch>, ArrowError>;
+
+    /// Whether the decoder can flush early in its current state.
+    fn can_flush_early(&self) -> bool;
+}
+
+impl<T: Decoder> Debug for DecoderDeserializer<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Deserializer")
+            .field("buffered_queue", &self.buffered_queue)
+            .field("finalized", &self.finalized)
+            .finish()
+    }
+}
+
+impl<T: Decoder> BatchDeserializer<Bytes> for DecoderDeserializer<T> {
+    fn digest(&mut self, message: Bytes) -> usize {
+        if message.is_empty() {
+            return 0;
+        }
+
+        let consumed = message.len();
+        self.buffered_queue.push_back(message);
+        consumed
+    }
+
+    fn next(&mut self) -> Result<DeserializerOutput, ArrowError> {
+        while let Some(buffered) = self.buffered_queue.front_mut() {
+            let decoded = self.decoder.decode(buffered)?;
+            buffered.advance(decoded);
+
+            if buffered.is_empty() {
+                self.buffered_queue.pop_front();
+            }
+
+            // Flush when the stream ends or batch size is reached
+            // Certain implementations can flush early
+            if decoded == 0 || self.decoder.can_flush_early() {
+                return match self.decoder.flush() {
+                    Ok(Some(batch)) => Ok(DeserializerOutput::RecordBatch(batch)),
+                    Ok(None) => continue,
+                    Err(e) => Err(e),
+                };
+            }
+        }
+        if self.finalized {
+            Ok(DeserializerOutput::InputExhausted)
+        } else {
+            Ok(DeserializerOutput::RequiresMoreData)
+        }
+    }
+
+    fn finish(&mut self) {
+        self.finalized = true;
+        // Ensure the decoder is flushed:
+        self.buffered_queue.push_back(Bytes::new());
+    }
+}
+
+/// A generic, decoder-based deserialization scheme for processing encoded data.
+///
+/// This struct is responsible for converting a stream of bytes, which represent
+/// encoded data, into a stream of `RecordBatch` objects, following the specified
+/// schema and formatting options. It also handles any buffering necessary to satisfy
+/// the `Decoder` interface.
+pub(crate) struct DecoderDeserializer<T: Decoder> {
+    /// The underlying decoder used for deserialization
+    pub(crate) decoder: T,
+    /// The buffer used to store the remaining bytes to be decoded
+    pub(crate) buffered_queue: VecDeque<Bytes>,
+    /// Whether the input stream has been fully consumed
+    pub(crate) finalized: bool,
+}
+
+impl<T: Decoder> DecoderDeserializer<T> {
+    /// Creates a new `DecoderDeserializer` with the provided decoder.
+    pub(crate) fn new(decoder: T) -> Self {
+        DecoderDeserializer {
+            decoder,
+            buffered_queue: VecDeque::new(),
+            finalized: false,
+        }
+    }
+}
+
+/// Deserializes a stream of bytes into a stream of [`RecordBatch`] objects using the
+/// provided deserializer.
+///
+/// Returns a boxed stream of `Result<RecordBatch, ArrowError>`. The stream yields [`RecordBatch`]
+/// objects as they are produced by the deserializer, or an [`ArrowError`] if an error
+/// occurs while polling the input or deserializing.
+pub(crate) fn deserialize_stream<'a>(
+    mut input: impl Stream<Item = Result<Bytes>> + Unpin + Send + 'a,
+    mut deserializer: impl BatchDeserializer<Bytes> + 'a,
+) -> BoxStream<'a, Result<RecordBatch, ArrowError>> {
+    futures::stream::poll_fn(move |cx| loop {
+        match ready!(input.poll_next_unpin(cx)).transpose()? {
+            Some(b) => _ = deserializer.digest(b),
+            None => deserializer.finish(),
+        };
+
+        return match deserializer.next()? {
+            DeserializerOutput::RecordBatch(rb) => Poll::Ready(Some(Ok(rb))),
+            DeserializerOutput::InputExhausted => Poll::Ready(None),
+            DeserializerOutput::RequiresMoreData => continue,
+        };
+    })
+    .boxed()
 }
 
 /// A container of [FileFormatFactory] which also implements [FileType].
