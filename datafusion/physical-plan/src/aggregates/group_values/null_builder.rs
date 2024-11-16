@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow_buffer::{BooleanBufferBuilder, NullBuffer};
+use arrow_buffer::{BooleanBufferBuilder, MutableBuffer, NullBuffer};
 
 /// Builder for an (optional) null mask
 ///
@@ -35,6 +35,11 @@ impl MaybeNullBufferBuilder {
     /// Create a new builder
     pub fn new() -> Self {
         Self::NoNulls { row_count: 0 }
+    }
+
+    pub fn new_from_buffer(buffer: MutableBuffer, len: usize) -> Self {
+        let builder = BooleanBufferBuilder::new_from_buffer(buffer, len);
+        Self::Nulls(builder)
     }
 
     /// Return true if the row at index `row` is null

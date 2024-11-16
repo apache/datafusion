@@ -78,6 +78,7 @@ tokio = { workspace = true, features = [
     "fs",
     "parking_lot",
 ] }
+test-utils = { path = "../../test-utils" }
 
 [[bench]]
 harness = false

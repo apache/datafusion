@@ -17,13 +17,19 @@
 
 use crate::aggregates::group_values::multi_group_by::{nulls_equal_to, GroupColumn};
 use crate::aggregates::group_values::null_builder::MaybeNullBufferBuilder;
+use arrow::array::PrimitiveBuilder;
 use arrow::buffer::ScalarBuffer;
+use arrow::compute::{self, take};
+use arrow::compute::kernels::take;
 use arrow_array::cast::AsArray;
 use arrow_array::{Array, ArrayRef, ArrowPrimitiveType, PrimitiveArray};
+use arrow_buffer::{BooleanBufferBuilder, MutableBuffer};
+use arrow_ord::cmp::not_distinct;
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
 use itertools::izip;
-use std::iter;
+use std::cell::RefCell;
 use std::sync::Arc;
+use std::{iter, mem};
 
 /// An implementation of [`GroupColumn`] for primitive values
 ///
@@ -37,6 +43,11 @@ use std::sync::Arc;
 pub struct PrimitiveGroupValueBuilder<T: ArrowPrimitiveType, const NULLABLE: bool> {
     group_values: Vec<T::Native>,
     nulls: MaybeNullBufferBuilder,
+
+    exist_values_buffer: MutableBuffer,
+    exist_nulls_buffer: MutableBuffer,
+    input_values_buffer: MutableBuffer,
+    input_nulls_buffer: MutableBuffer,
 }
 
 impl<T, const NULLABLE: bool> PrimitiveGroupValueBuilder<T, NULLABLE>
@@ -48,6 +59,11 @@ where
         Self {
             group_values: vec![],
             nulls: MaybeNullBufferBuilder::new(),
+            exist_values_buffer: MutableBuffer::new(0),
+            exist_nulls_buffer: MutableBuffer::new(0),
+            input_values_buffer: MutableBuffer::new(0),
+            input_nulls_buffer: MutableBuffer::new(0),
+            
         }
     }
 }
@@ -84,8 +100,13 @@ impl<T: ArrowPrimitiveType, const NULLABLE: bool> GroupColumn
         }
     }
 
+    // fn take_from_exists(&mut self, lhs_rows: &[usize]) -> PrimitiveArray<T> {
+    //     // Take value firstly
+    //     take(values, indices, options)
+    // }
+
     fn vectorized_equal_to(
-        &self,
+        &mut self,
         lhs_rows: &[usize],
         array: &ArrayRef,
         rhs_rows: &[usize],
@@ -179,9 +200,11 @@ impl<T: ArrowPrimitiveType, const NULLABLE: bool> GroupColumn
         let Self {
             group_values,
             nulls,
+            ..
         } = *self;
 
         let nulls = nulls.build();
+
         if !NULLABLE {
             assert!(nulls.is_none(), "unexpected nulls in non nullable input");
         }
@@ -225,7 +248,7 @@ mod tests {
             }
         };
 
-        let equal_to = |builder: &PrimitiveGroupValueBuilder<Int64Type, true>,
+        let equal_to = |builder: &mut PrimitiveGroupValueBuilder<Int64Type, true>,
                         lhs_rows: &[usize],
                         input_array: &ArrayRef,
                         rhs_rows: &[usize],
@@ -247,7 +270,7 @@ mod tests {
             builder.vectorized_append(builder_array, append_rows);
         };
 
-        let equal_to = |builder: &PrimitiveGroupValueBuilder<Int64Type, true>,
+        let equal_to = |builder: &mut PrimitiveGroupValueBuilder<Int64Type, true>,
                         lhs_rows: &[usize],
                         input_array: &ArrayRef,
                         rhs_rows: &[usize],
@@ -267,7 +290,7 @@ mod tests {
     where
         A: FnMut(&mut PrimitiveGroupValueBuilder<Int64Type, true>, &ArrayRef, &[usize]),
         E: FnMut(
-            &PrimitiveGroupValueBuilder<Int64Type, true>,
+            &mut PrimitiveGroupValueBuilder<Int64Type, true>,
             &[usize],
             &ArrayRef,
             &[usize],
@@ -313,7 +336,7 @@ mod tests {
         // Check
         let mut equal_to_results = vec![true; builder.len()];
         equal_to(
-            &builder,
+            &mut builder,
             &[0, 1, 2, 3, 4, 5],
             &input_array,
             &[0, 1, 2, 3, 4, 5],
@@ -338,7 +361,7 @@ mod tests {
             }
         };
 
-        let equal_to = |builder: &PrimitiveGroupValueBuilder<Int64Type, false>,
+        let equal_to = |builder: &mut PrimitiveGroupValueBuilder<Int64Type, false>,
                         lhs_rows: &[usize],
                         input_array: &ArrayRef,
                         rhs_rows: &[usize],
@@ -360,7 +383,7 @@ mod tests {
             builder.vectorized_append(builder_array, append_rows);
         };
 
-        let equal_to = |builder: &PrimitiveGroupValueBuilder<Int64Type, false>,
+        let equal_to = |builder: &mut PrimitiveGroupValueBuilder<Int64Type, false>,
                         lhs_rows: &[usize],
                         input_array: &ArrayRef,
                         rhs_rows: &[usize],
@@ -380,7 +403,7 @@ mod tests {
     where
         A: FnMut(&mut PrimitiveGroupValueBuilder<Int64Type, false>, &ArrayRef, &[usize]),
         E: FnMut(
-            &PrimitiveGroupValueBuilder<Int64Type, false>,
+            &mut PrimitiveGroupValueBuilder<Int64Type, false>,
             &[usize],
             &ArrayRef,
             &[usize],
@@ -403,7 +426,7 @@ mod tests {
         // Check
         let mut equal_to_results = vec![true; builder.len()];
         equal_to(
-            &builder,
+            &mut builder,
             &[0, 1],
             &input_array,
             &[0, 1],
