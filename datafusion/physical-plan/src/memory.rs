@@ -178,12 +178,24 @@ impl MemoryExec {
         self
     }
 
+    /// Ref to partitions
     pub fn partitions(&self) -> &[Vec<RecordBatch>] {
         &self.partitions
     }
 
+    /// Ref to projection
     pub fn projection(&self) -> &Option<Vec<usize>> {
         &self.projection
+    }
+
+    /// Show sizes
+    pub fn show_sizes(&self) -> bool {
+        self.show_sizes
+    }
+
+    /// Ref to sort information
+    pub fn sort_information(&self) -> &[LexOrdering] {
+        &self.sort_information
     }
 
     /// A memory table can be ordered by multiple expressions simultaneously.
@@ -261,6 +273,7 @@ impl MemoryExec {
         Ok(self)
     }
 
+    /// Arc clone of ref to original schema
     pub fn original_schema(&self) -> SchemaRef {
         Arc::clone(&self.schema)
     }

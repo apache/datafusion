@@ -158,7 +158,7 @@ pub struct TypeCoercionRewriter<'a> {
 impl<'a> TypeCoercionRewriter<'a> {
     /// Create a new [`TypeCoercionRewriter`] with a provided schema
     /// representing both the inputs and output of the [`LogicalPlan`] node.
-    fn new(schema: &'a DFSchema) -> Self {
+    pub fn new(schema: &'a DFSchema) -> Self {
         Self { schema }
     }
 

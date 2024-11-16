@@ -39,8 +39,16 @@ use datafusion_functions_window_common::field::WindowUDFFieldArgs;
 use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 
-/// Logical representation of a user-defined window function (UDWF)
-/// A UDWF is different from a UDF in that it is stateful across batches.
+/// Logical representation of a user-defined window function (UDWF).
+///
+/// A Window Function is called via the SQL `OVER` clause:
+///
+/// ```sql
+/// SELECT first_value(col) OVER (PARTITION BY a, b ORDER BY c) FROM foo;
+/// ```
+///
+/// A UDWF is different from a user defined function (UDF) in that it is
+/// stateful across batches.
 ///
 /// See the documentation on [`PartitionEvaluator`] for more details
 ///

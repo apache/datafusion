@@ -483,10 +483,12 @@ fn expr_test_schema() -> DFSchemaRef {
         Field::new("c2", DataType::Boolean, true),
         Field::new("c3", DataType::Int64, true),
         Field::new("c4", DataType::UInt32, true),
+        Field::new("c5", DataType::Utf8View, true),
         Field::new("c1_non_null", DataType::Utf8, false),
         Field::new("c2_non_null", DataType::Boolean, false),
         Field::new("c3_non_null", DataType::Int64, false),
         Field::new("c4_non_null", DataType::UInt32, false),
+        Field::new("c5_non_null", DataType::Utf8View, false),
     ])
     .to_dfschema_ref()
     .unwrap()
@@ -665,20 +667,32 @@ fn test_simplify_concat_ws_with_null() {
 }
 
 #[test]
-fn test_simplify_concat() {
+fn test_simplify_concat() -> Result<()> {
+    let schema = expr_test_schema();
     let null = lit(ScalarValue::Utf8(None));
     let expr = concat(vec![
         null.clone(),
-        col("c0"),
+        col("c1"),
         lit("hello "),
         null.clone(),
         lit("rust"),
-        col("c1"),
+        lit(ScalarValue::Utf8View(Some("!".to_string()))),
+        col("c2"),
         lit(""),
         null,
+        col("c5"),
     ]);
-    let expected = concat(vec![col("c0"), lit("hello rust"), col("c1")]);
-    test_simplify(expr, expected)
+    let expr_datatype = expr.get_type(schema.as_ref())?;
+    let expected = concat(vec![
+        col("c1"),
+        lit(ScalarValue::Utf8View(Some("hello rust!".to_string()))),
+        col("c2"),
+        col("c5"),
+    ]);
+    let expected_datatype = expected.get_type(schema.as_ref())?;
+    assert_eq!(expr_datatype, expected_datatype);
+    test_simplify(expr, expected);
+    Ok(())
 }
 #[test]
 fn test_simplify_cycles() {

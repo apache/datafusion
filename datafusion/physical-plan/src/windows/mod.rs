@@ -103,9 +103,6 @@ pub fn create_window_expr(
     ignore_nulls: bool,
 ) -> Result<Arc<dyn WindowExpr>> {
     Ok(match fun {
-        WindowFunctionDefinition::BuiltInWindowFunction(_fun) => {
-            unreachable!()
-        }
         WindowFunctionDefinition::AggregateUDF(fun) => {
             let aggregate = AggregateExprBuilder::new(Arc::clone(fun), args.to_vec())
                 .schema(Arc::new(input_schema.clone()))
@@ -120,7 +117,6 @@ pub fn create_window_expr(
                 aggregate,
             )
         }
-        // TODO: Ordering not supported for Window UDFs yet
         WindowFunctionDefinition::WindowUDF(fun) => Arc::new(BuiltInWindowExpr::new(
             create_udwf_window_expr(fun, args, input_schema, name, ignore_nulls)?,
             partition_by,
@@ -198,7 +194,7 @@ pub fn create_udwf_window_expr(
 
 /// Implements [`BuiltInWindowFunctionExpr`] for [`WindowUDF`]
 #[derive(Clone, Debug)]
-struct WindowUDFExpr {
+pub struct WindowUDFExpr {
     fun: Arc<WindowUDF>,
     args: Vec<Arc<dyn PhysicalExpr>>,
     /// Display name
@@ -211,6 +207,12 @@ struct WindowUDFExpr {
     is_reversed: bool,
     /// Set to `true` if `IGNORE NULLS` is defined, `false` otherwise.
     ignore_nulls: bool,
+}
+
+impl WindowUDFExpr {
+    pub fn fun(&self) -> &Arc<WindowUDF> {
+        &self.fun
+    }
 }
 
 impl BuiltInWindowFunctionExpr for WindowUDFExpr {
