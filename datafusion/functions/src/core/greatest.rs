@@ -22,7 +22,6 @@ use arrow::compute::kernels::cmp;
 use arrow::compute::kernels::zip::zip;
 use arrow::compute::SortOptions;
 use arrow::datatypes::DataType;
-use arrow::error::ArrowError;
 use arrow_buffer::BooleanBuffer;
 use datafusion_common::{exec_err, plan_err, Result, ScalarValue};
 use datafusion_expr::{ColumnarValue};
