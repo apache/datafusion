@@ -402,10 +402,8 @@ pub fn accumulate_indices<F>(
 
             group_indices_chunks.zip(bit_chunks.iter()).for_each(
                 |(group_index_chunk, mask)| {
-                    // index_mask has value 1 << i in the loop
                     let mut index_mask = 1;
                     group_index_chunk.iter().for_each(|&group_index| {
-                        // valid bit was set, real vale
                         let is_valid = (mask & index_mask) != 0;
                         if is_valid {
                             index_fn(group_index);
@@ -478,18 +476,14 @@ pub fn accumulate_indices<F>(
                 .zip(valid_bit_chunks.iter())
                 .zip(filter_bit_chunks.iter())
                 .for_each(|((group_index_chunk, valid_mask), filter_mask)| {
-                    // index_mask has value 1 << i in the loop
                     let mut index_mask = 1;
-                    group_index_chunk.iter().for_each(
-                        |&group_index| {
-                            // valid bit was set, real value
-                            let is_valid = (filter_mask & valid_mask & index_mask) != 0;
-                            if is_valid {
-                                index_fn(group_index);
-                            }
-                            index_mask <<= 1;
-                        },
-                    )
+                    group_index_chunk.iter().for_each(|&group_index| {
+                        let is_valid = (filter_mask & valid_mask & index_mask) != 0;
+                        if is_valid {
+                            index_fn(group_index);
+                        }
+                        index_mask <<= 1;
+                    })
                 });
 
             // handle any remaining bits (after the initial 64)
@@ -499,7 +493,8 @@ pub fn accumulate_indices<F>(
                 .iter()
                 .enumerate()
                 .for_each(|(i, &group_index)| {
-                    let is_valid = remainder_filter_bits & remainder_valids_bits & (1 << i) != 0;
+                    let is_valid =
+                        remainder_filter_bits & remainder_valids_bits & (1 << i) != 0;
                     if is_valid {
                         index_fn(group_index)
                     }
