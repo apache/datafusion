@@ -763,5 +763,5 @@ SELECT NULL WHERE FALSE;
 1
 
 # Test Union of List Types. Issue: https://github.com/apache/datafusion/issues/12291
-query error DataFusion error: type_coercion
+query error DataFusion error: type_coercion\ncaused by\nError during planning: Incompatible inputs for Union: Previous inputs were  of type List(.*), but got incompatible type List(.*) on column 'x'
 SELECT make_array(2) x UNION ALL SELECT make_array(now()) x;
