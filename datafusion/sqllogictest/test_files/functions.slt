@@ -1342,3 +1342,158 @@ query B
 select contains('', '');
 ----
 true
+
+# test for greatest
+
+statement ok
+CREATE TABLE t1 (a int, b int, c int) as VALUES
+(4, NULL, NULL),
+(1, 2, 3),
+(3, 1, 2),
+(1, NULL, -1),
+(NULL, NULL, NULL),
+(3, 0, -1);
+
+query I
+SELECT greatest(a, b, c) FROM t1
+----
+4
+3
+3
+1
+NULL
+3
+
+
+statement ok
+drop table t1
+
+
+query I
+SELECT greatest(1)
+----
+1
+
+query I
+SELECT greatest(1, 2)
+----
+2
+
+query I
+SELECT greatest(3, 1)
+----
+3
+
+query ?
+SELECT greatest(NULL)
+----
+NULL
+
+query I
+SELECT greatest(1, NULL, -1)
+----
+1
+
+query I
+SELECT greatest((3), (0), (-1));
+----
+3
+
+query ?
+SELECT greatest([4, 3], [4, 2], [4, 4]);
+----
+[4, 4]
+
+query ?
+SELECT greatest([2, 3], [1, 4], [5, 0]);
+----
+[5, 0]
+
+query I
+SELECT greatest(1::int, 2::text)
+----
+2
+
+query R
+SELECT greatest(-1, 1, 2.3, 123456789, 3 + 5, -(-4))
+----
+123456789
+
+query R
+SELECT greatest(-1.123, 1.21313, 2.3, 123456789.321, 3 + 5.3213, -(-4.3213), abs(-9))
+----
+123456789.321
+
+query R
+SELECT greatest(-1, 1, 2.3, 123456789, 3 + 5, -(-4), abs(-9.0))
+----
+123456789
+
+
+query error greatest does not support zero arguments
+SELECT greatest()
+
+query I
+SELECT greatest(4, 5, 7, 1, 2)
+----
+7
+
+query I
+SELECT greatest(4, NULL, 7, 1, 2)
+----
+7
+
+query I
+SELECT greatest(NULL, NULL, 7, NULL, 2)
+----
+7
+
+query I
+SELECT greatest(NULL, NULL, NULL, NULL, 2)
+----
+2
+
+query I
+SELECT greatest(2, NULL, NULL, NULL, NULL)
+----
+2
+
+query ?
+SELECT greatest(NULL, NULL, NULL)
+----
+NULL
+
+query I
+SELECT greatest(2, '4')
+----
+4
+
+query T
+SELECT greatest('foo', 'bar', 'foobar')
+----
+foobar
+
+query R
+SELECT greatest(1, 1.2)
+----
+1.2
+
+statement ok
+CREATE TABLE foo (a int)
+
+statement ok
+INSERT INTO foo (a) VALUES (1)
+
+# Test homogenous functions that can't be constant folded.
+query I
+SELECT greatest(NULL, a, 5, NULL) FROM foo
+----
+5
+
+query I
+SELECT greatest(NULL, NULL, NULL, a, -1) FROM foo
+----
+1
+
+statement ok
+drop table foo
