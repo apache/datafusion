@@ -114,5 +114,6 @@ pub fn functions() -> Vec<Arc<ScalarUDF>> {
         coalesce(),
         greatest(),
         version(),
+        r#struct(),
     ]
 }

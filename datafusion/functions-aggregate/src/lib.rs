@@ -14,6 +14,7 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
+
 // Make cheap clones clear: https://github.com/apache/datafusion/issues/11143
 #![deny(clippy::clone_on_ref_ptr)]
 
@@ -78,7 +79,6 @@ pub mod average;
 pub mod bit_and_or_xor;
 pub mod bool_and_or;
 pub mod grouping;
-pub mod kurtosis_pop;
 pub mod nth_value;
 pub mod string_agg;
 
@@ -171,7 +171,6 @@ pub fn all_default_aggregate_functions() -> Vec<Arc<AggregateUDF>> {
         average::avg_udaf(),
         grouping::grouping_udaf(),
         nth_value::nth_value_udaf(),
-        kurtosis_pop::kurtosis_pop_udaf(),
     ]
 }
 

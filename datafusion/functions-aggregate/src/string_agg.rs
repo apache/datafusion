@@ -22,12 +22,15 @@ use arrow_schema::DataType;
 use datafusion_common::cast::as_generic_string_array;
 use datafusion_common::Result;
 use datafusion_common::{not_impl_err, ScalarValue};
+use datafusion_expr::aggregate_doc_sections::DOC_SECTION_GENERAL;
 use datafusion_expr::function::AccumulatorArgs;
 use datafusion_expr::{
-    Accumulator, AggregateUDFImpl, Signature, TypeSignature, Volatility,
+    Accumulator, AggregateUDFImpl, Documentation, Signature, TypeSignature, Volatility,
 };
 use datafusion_physical_expr::expressions::Literal;
 use std::any::Any;
+use std::mem::size_of_val;
+use std::sync::OnceLock;
 
 make_udaf_expr_and_func!(
     StringAgg,
@@ -98,6 +101,37 @@ impl AggregateUDFImpl for StringAgg {
 
         not_impl_err!("expect literal")
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_string_agg_doc())
+    }
+}
+
+static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+
+fn get_string_agg_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_GENERAL)
+            .with_description(
+                "Concatenates the values of string expressions and places separator values between them."
+            )
+            .with_syntax_example("string_agg(expression, delimiter)")
+            .with_sql_example(r#"```sql
+> SELECT string_agg(name, ', ') AS names_list
+  FROM employee;
++--------------------------+
+| names_list               |
++--------------------------+
+| Alice, Bob, Charlie      |
++--------------------------+
+```"#, 
+            )
+            .with_argument("expression", "The string expression to concatenate. Can be a column or any valid string expression.")
+            .with_argument("delimiter", "A literal string used as a separator between the concatenated values.")
+            .build()
+            .unwrap()
+    })
 }
 
 #[derive(Debug)]
@@ -146,7 +180,7 @@ impl Accumulator for StringAggAccumulator {
     }
 
     fn size(&self) -> usize {
-        std::mem::size_of_val(self)
+        size_of_val(self)
             + self.values.as_ref().map(|v| v.capacity()).unwrap_or(0)
             + self.delimiter.capacity()
     }

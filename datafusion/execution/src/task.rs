@@ -15,11 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{
-    collections::{HashMap, HashSet},
-    sync::Arc,
-};
-
 use crate::{
     config::SessionConfig,
     memory_pool::MemoryPool,
@@ -29,6 +24,8 @@ use crate::{
 use datafusion_common::{plan_datafusion_err, DataFusionError, Result};
 use datafusion_expr::planner::ExprPlanner;
 use datafusion_expr::{AggregateUDF, ScalarUDF, WindowUDF};
+use std::collections::HashSet;
+use std::{collections::HashMap, sync::Arc};
 
 /// Task Execution Context
 ///
@@ -123,6 +120,18 @@ impl TaskContext {
     /// Return the [RuntimeEnv] associated with this [TaskContext]
     pub fn runtime_env(&self) -> Arc<RuntimeEnv> {
         Arc::clone(&self.runtime)
+    }
+
+    pub fn scalar_functions(&self) -> &HashMap<String, Arc<ScalarUDF>> {
+        &self.scalar_functions
+    }
+
+    pub fn aggregate_functions(&self) -> &HashMap<String, Arc<AggregateUDF>> {
+        &self.aggregate_functions
+    }
+
+    pub fn window_functions(&self) -> &HashMap<String, Arc<WindowUDF>> {
+        &self.window_functions
     }
 
     /// Update the [`SessionConfig`]

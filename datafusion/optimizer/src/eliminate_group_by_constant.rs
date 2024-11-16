@@ -26,7 +26,7 @@ use datafusion_expr::{Aggregate, Expr, LogicalPlan, LogicalPlanBuilder, Volatili
 /// Optimizer rule that removes constant expressions from `GROUP BY` clause
 /// and places additional projection on top of aggregation, to preserve
 /// original schema
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct EliminateGroupByConstant {}
 
 impl EliminateGroupByConstant {

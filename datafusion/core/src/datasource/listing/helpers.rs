@@ -17,14 +17,14 @@
 
 //! Helper functions for the table implementation
 
-use std::collections::HashMap;
 use std::mem;
 use std::sync::Arc;
 
 use super::ListingTableUrl;
 use super::PartitionedFile;
 use crate::execution::context::SessionState;
-use datafusion_common::{Result, ScalarValue};
+use datafusion_common::internal_err;
+use datafusion_common::{HashMap, Result, ScalarValue};
 use datafusion_expr::{BinaryExpr, Operator};
 
 use arrow::{
@@ -53,66 +53,64 @@ use object_store::{ObjectMeta, ObjectStore};
 ///   was performed
 pub fn expr_applicable_for_cols(col_names: &[&str], expr: &Expr) -> bool {
     let mut is_applicable = true;
-    expr.apply(|expr| {
-        match expr {
-            Expr::Column(Column { ref name, .. }) => {
-                is_applicable &= col_names.contains(&name.as_str());
-                if is_applicable {
-                    Ok(TreeNodeRecursion::Jump)
-                } else {
+    expr.apply(|expr| match expr {
+        Expr::Column(Column { ref name, .. }) => {
+            is_applicable &= col_names.contains(&name.as_str());
+            if is_applicable {
+                Ok(TreeNodeRecursion::Jump)
+            } else {
+                Ok(TreeNodeRecursion::Stop)
+            }
+        }
+        Expr::Literal(_)
+        | Expr::Alias(_)
+        | Expr::OuterReferenceColumn(_, _)
+        | Expr::ScalarVariable(_, _)
+        | Expr::Not(_)
+        | Expr::IsNotNull(_)
+        | Expr::IsNull(_)
+        | Expr::IsTrue(_)
+        | Expr::IsFalse(_)
+        | Expr::IsUnknown(_)
+        | Expr::IsNotTrue(_)
+        | Expr::IsNotFalse(_)
+        | Expr::IsNotUnknown(_)
+        | Expr::Negative(_)
+        | Expr::Cast(_)
+        | Expr::TryCast(_)
+        | Expr::BinaryExpr(_)
+        | Expr::Between(_)
+        | Expr::Like(_)
+        | Expr::SimilarTo(_)
+        | Expr::InList(_)
+        | Expr::Exists(_)
+        | Expr::InSubquery(_)
+        | Expr::ScalarSubquery(_)
+        | Expr::GroupingSet(_)
+        | Expr::Case(_) => Ok(TreeNodeRecursion::Continue),
+
+        Expr::ScalarFunction(scalar_function) => {
+            match scalar_function.func.signature().volatility {
+                Volatility::Immutable => Ok(TreeNodeRecursion::Continue),
+                // TODO: Stable functions could be `applicable`, but that would require access to the context
+                Volatility::Stable | Volatility::Volatile => {
+                    is_applicable = false;
                     Ok(TreeNodeRecursion::Stop)
                 }
             }
-            Expr::Literal(_)
-            | Expr::Alias(_)
-            | Expr::OuterReferenceColumn(_, _)
-            | Expr::ScalarVariable(_, _)
-            | Expr::Not(_)
-            | Expr::IsNotNull(_)
-            | Expr::IsNull(_)
-            | Expr::IsTrue(_)
-            | Expr::IsFalse(_)
-            | Expr::IsUnknown(_)
-            | Expr::IsNotTrue(_)
-            | Expr::IsNotFalse(_)
-            | Expr::IsNotUnknown(_)
-            | Expr::Negative(_)
-            | Expr::Cast { .. }
-            | Expr::TryCast { .. }
-            | Expr::BinaryExpr { .. }
-            | Expr::Between { .. }
-            | Expr::Like { .. }
-            | Expr::SimilarTo { .. }
-            | Expr::InList { .. }
-            | Expr::Exists { .. }
-            | Expr::InSubquery(_)
-            | Expr::ScalarSubquery(_)
-            | Expr::GroupingSet(_)
-            | Expr::Case { .. } => Ok(TreeNodeRecursion::Continue),
+        }
 
-            Expr::ScalarFunction(scalar_function) => {
-                match scalar_function.func.signature().volatility {
-                    Volatility::Immutable => Ok(TreeNodeRecursion::Continue),
-                    // TODO: Stable functions could be `applicable`, but that would require access to the context
-                    Volatility::Stable | Volatility::Volatile => {
-                        is_applicable = false;
-                        Ok(TreeNodeRecursion::Stop)
-                    }
-                }
-            }
-
-            // TODO other expressions are not handled yet:
-            // - AGGREGATE and WINDOW should not end up in filter conditions, except maybe in some edge cases
-            // - Can `Wildcard` be considered as a `Literal`?
-            // - ScalarVariable could be `applicable`, but that would require access to the context
-            Expr::AggregateFunction { .. }
-            | Expr::WindowFunction { .. }
-            | Expr::Wildcard { .. }
-            | Expr::Unnest { .. }
-            | Expr::Placeholder(_) => {
-                is_applicable = false;
-                Ok(TreeNodeRecursion::Stop)
-            }
+        // TODO other expressions are not handled yet:
+        // - AGGREGATE and WINDOW should not end up in filter conditions, except maybe in some edge cases
+        // - Can `Wildcard` be considered as a `Literal`?
+        // - ScalarVariable could be `applicable`, but that would require access to the context
+        Expr::AggregateFunction { .. }
+        | Expr::WindowFunction { .. }
+        | Expr::Wildcard { .. }
+        | Expr::Unnest { .. }
+        | Expr::Placeholder(_) => {
+            is_applicable = false;
+            Ok(TreeNodeRecursion::Stop)
         }
     })
     .unwrap();
@@ -287,25 +285,20 @@ async fn prune_partitions(
     let props = ExecutionProps::new();
 
     // Applies `filter` to `batch` returning `None` on error
-    let do_filter = |filter| -> Option<ArrayRef> {
-        let expr = create_physical_expr(filter, &df_schema, &props).ok()?;
-        expr.evaluate(&batch)
-            .ok()?
-            .into_array(partitions.len())
-            .ok()
+    let do_filter = |filter| -> Result<ArrayRef> {
+        let expr = create_physical_expr(filter, &df_schema, &props)?;
+        expr.evaluate(&batch)?.into_array(partitions.len())
     };
 
-    //.Compute the conjunction of the filters, ignoring errors
+    //.Compute the conjunction of the filters
     let mask = filters
         .iter()
-        .fold(None, |acc, filter| match (acc, do_filter(filter)) {
-            (Some(a), Some(b)) => Some(and(&a, b.as_boolean()).unwrap_or(a)),
-            (None, Some(r)) => Some(r.as_boolean().clone()),
-            (r, None) => r,
-        });
+        .map(|f| do_filter(f).map(|a| a.as_boolean().clone()))
+        .reduce(|a, b| Ok(and(&a?, &b?)?));
 
     let mask = match mask {
-        Some(mask) => mask,
+        Some(Ok(mask)) => mask,
+        Some(Err(err)) => return Err(err),
         None => return Ok(partitions),
     };
 
@@ -403,8 +396,8 @@ fn evaluate_partition_prefix<'a>(
 
 /// Discover the partitions on the given path and prune out files
 /// that belong to irrelevant partitions using `filters` expressions.
-/// `filters` might contain expressions that can be resolved only at the
-/// file level (e.g. Parquet row group pruning).
+/// `filters` should only contain expressions that can be evaluated
+/// using only the partition columns.
 pub async fn pruned_partition_list<'a>(
     ctx: &'a SessionState,
     store: &'a dyn ObjectStore,
@@ -415,6 +408,12 @@ pub async fn pruned_partition_list<'a>(
 ) -> Result<BoxStream<'a, Result<PartitionedFile>>> {
     // if no partition col => simply list all the files
     if partition_cols.is_empty() {
+        if !filters.is_empty() {
+            return internal_err!(
+                "Got partition filters for unpartitioned table {}",
+                table_path
+            );
+        }
         return Ok(Box::pin(
             table_path
                 .list_all_files(ctx, store, file_extension)
@@ -469,6 +468,7 @@ pub async fn pruned_partition_list<'a>(
                     range: None,
                     statistics: None,
                     extensions: None,
+                    metadata_size_hint: None,
                 })
             }));
 
@@ -633,13 +633,11 @@ mod tests {
         ]);
         let filter1 = Expr::eq(col("part1"), lit("p1v2"));
         let filter2 = Expr::eq(col("part2"), lit("p2v1"));
-        // filter3 cannot be resolved at partition pruning
-        let filter3 = Expr::eq(col("part2"), col("other"));
         let pruned = pruned_partition_list(
             &state,
             store.as_ref(),
             &ListingTableUrl::parse("file:///tablepath/").unwrap(),
-            &[filter1, filter2, filter3],
+            &[filter1, filter2],
             ".parquet",
             &[
                 (String::from("part1"), DataType::Utf8),

@@ -100,6 +100,7 @@ pub async fn main() -> Result<()> {
 
 /// An example OptimizerRule that replaces all `col = <const>` predicates with a
 /// user defined function
+#[derive(Default, Debug)]
 struct MyOptimizerRule {}
 
 impl OptimizerRule for MyOptimizerRule {

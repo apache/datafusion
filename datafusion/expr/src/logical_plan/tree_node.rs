@@ -37,12 +37,13 @@
 //! * [`LogicalPlan::with_new_exprs`]: Create a new plan with different expressions
 //! * [`LogicalPlan::expressions`]: Return a copy of the plan's expressions
 use crate::{
-    dml::CopyTo, Aggregate, Analyze, CreateMemoryTable, CreateView, CrossJoin,
-    DdlStatement, Distinct, DistinctOn, DmlStatement, Explain, Expr, Extension, Filter,
-    Join, Limit, LogicalPlan, Partitioning, Prepare, Projection, RecursiveQuery,
-    Repartition, Sort, Subquery, SubqueryAlias, TableScan, Union, Unnest,
-    UserDefinedLogicalNode, Values, Window,
+    dml::CopyTo, Aggregate, Analyze, CreateMemoryTable, CreateView, DdlStatement,
+    Distinct, DistinctOn, DmlStatement, Explain, Expr, Extension, Filter, Join, Limit,
+    LogicalPlan, Partitioning, Projection, RecursiveQuery, Repartition, Sort, Subquery,
+    SubqueryAlias, TableScan, Union, Unnest, UserDefinedLogicalNode, Values, Window,
 };
+use recursive::recursive;
+use std::ops::Deref;
 use std::sync::Arc;
 
 use crate::expr::{Exists, InSubquery};
@@ -159,22 +160,6 @@ impl TreeNode for LogicalPlan {
                     null_equals_null,
                 })
             }),
-            LogicalPlan::CrossJoin(CrossJoin {
-                left,
-                right,
-                schema,
-            }) => map_until_stop_and_collect!(
-                rewrite_arc(left, &mut f),
-                right,
-                rewrite_arc(right, &mut f)
-            )?
-            .update_data(|(left, right)| {
-                LogicalPlan::CrossJoin(CrossJoin {
-                    left,
-                    right,
-                    schema,
-                })
-            }),
             LogicalPlan::Limit(Limit { skip, fetch, input }) => rewrite_arc(input, f)?
                 .update_data(|input| LogicalPlan::Limit(Limit { skip, fetch, input })),
             LogicalPlan::Subquery(Subquery {
@@ -285,6 +270,7 @@ impl TreeNode for LogicalPlan {
                         if_not_exists,
                         or_replace,
                         column_defaults,
+                        temporary,
                     }) => rewrite_arc(input, f)?.update_data(|input| {
                         DdlStatement::CreateMemoryTable(CreateMemoryTable {
                             name,
@@ -293,6 +279,7 @@ impl TreeNode for LogicalPlan {
                             if_not_exists,
                             or_replace,
                             column_defaults,
+                            temporary,
                         })
                     }),
                     DdlStatement::CreateView(CreateView {
@@ -300,12 +287,14 @@ impl TreeNode for LogicalPlan {
                         input,
                         or_replace,
                         definition,
+                        temporary,
                     }) => rewrite_arc(input, f)?.update_data(|input| {
                         DdlStatement::CreateView(CreateView {
                             name,
                             input,
                             or_replace,
                             definition,
+                            temporary,
                         })
                     }),
                     // no inputs in these statements
@@ -340,17 +329,6 @@ impl TreeNode for LogicalPlan {
                     options,
                 })
             }),
-            LogicalPlan::Prepare(Prepare {
-                name,
-                data_types,
-                input,
-            }) => rewrite_arc(input, f)?.update_data(|input| {
-                LogicalPlan::Prepare(Prepare {
-                    name,
-                    data_types,
-                    input,
-                })
-            }),
             LogicalPlan::RecursiveQuery(RecursiveQuery {
                 name,
                 static_term,
@@ -369,9 +347,11 @@ impl TreeNode for LogicalPlan {
                     is_distinct,
                 })
             }),
+            LogicalPlan::Statement(stmt) => {
+                stmt.map_inputs(f)?.update_data(LogicalPlan::Statement)
+            }
             // plans without inputs
             LogicalPlan::TableScan { .. }
-            | LogicalPlan::Statement { .. }
             | LogicalPlan::EmptyRelation { .. }
             | LogicalPlan::Values { .. }
             | LogicalPlan::DescribeTable(_) => Transformed::no(self),
@@ -380,7 +360,7 @@ impl TreeNode for LogicalPlan {
 }
 
 /// Applies `f` to rewrite a `Arc<LogicalPlan>` without copying, if possible
-fn rewrite_arc<F: FnMut(LogicalPlan) -> Result<Transformed<LogicalPlan>>>(
+pub(super) fn rewrite_arc<F: FnMut(LogicalPlan) -> Result<Transformed<LogicalPlan>>>(
     plan: Arc<LogicalPlan>,
     mut f: F,
 ) -> Result<Transformed<Arc<LogicalPlan>>> {
@@ -511,14 +491,17 @@ impl LogicalPlan {
                 .chain(select_expr.iter())
                 .chain(sort_expr.iter().flatten().map(|sort| &sort.expr))
                 .apply_until_stop(f),
+            LogicalPlan::Limit(Limit { skip, fetch, .. }) => skip
+                .iter()
+                .chain(fetch.iter())
+                .map(|e| e.deref())
+                .apply_until_stop(f),
+            LogicalPlan::Statement(stmt) => stmt.expression_iter().apply_until_stop(f),
             // plans without expressions
             LogicalPlan::EmptyRelation(_)
             | LogicalPlan::RecursiveQuery(_)
             | LogicalPlan::Subquery(_)
             | LogicalPlan::SubqueryAlias(_)
-            | LogicalPlan::Limit(_)
-            | LogicalPlan::Statement(_)
-            | LogicalPlan::CrossJoin(_)
             | LogicalPlan::Analyze(_)
             | LogicalPlan::Explain(_)
             | LogicalPlan::Union(_)
@@ -526,8 +509,7 @@ impl LogicalPlan {
             | LogicalPlan::Dml(_)
             | LogicalPlan::Ddl(_)
             | LogicalPlan::Copy(_)
-            | LogicalPlan::DescribeTable(_)
-            | LogicalPlan::Prepare(_) => Ok(TreeNodeRecursion::Continue),
+            | LogicalPlan::DescribeTable(_) => Ok(TreeNodeRecursion::Continue),
         }
     }
 
@@ -722,15 +704,35 @@ impl LogicalPlan {
                     schema,
                 }))
             }),
+            LogicalPlan::Limit(Limit { skip, fetch, input }) => {
+                let skip = skip.map(|e| *e);
+                let fetch = fetch.map(|e| *e);
+                map_until_stop_and_collect!(
+                    skip.map_or(Ok::<_, DataFusionError>(Transformed::no(None)), |e| {
+                        Ok(f(e)?.update_data(Some))
+                    }),
+                    fetch,
+                    fetch.map_or(Ok::<_, DataFusionError>(Transformed::no(None)), |e| {
+                        Ok(f(e)?.update_data(Some))
+                    })
+                )?
+                .update_data(|(skip, fetch)| {
+                    LogicalPlan::Limit(Limit {
+                        skip: skip.map(Box::new),
+                        fetch: fetch.map(Box::new),
+                        input,
+                    })
+                })
+            }
+            LogicalPlan::Statement(stmt) => {
+                stmt.map_expressions(f)?.update_data(LogicalPlan::Statement)
+            }
             // plans without expressions
             LogicalPlan::EmptyRelation(_)
             | LogicalPlan::Unnest(_)
             | LogicalPlan::RecursiveQuery(_)
             | LogicalPlan::Subquery(_)
             | LogicalPlan::SubqueryAlias(_)
-            | LogicalPlan::Limit(_)
-            | LogicalPlan::Statement(_)
-            | LogicalPlan::CrossJoin(_)
             | LogicalPlan::Analyze(_)
             | LogicalPlan::Explain(_)
             | LogicalPlan::Union(_)
@@ -738,13 +740,13 @@ impl LogicalPlan {
             | LogicalPlan::Dml(_)
             | LogicalPlan::Ddl(_)
             | LogicalPlan::Copy(_)
-            | LogicalPlan::DescribeTable(_)
-            | LogicalPlan::Prepare(_) => Transformed::no(self),
+            | LogicalPlan::DescribeTable(_) => Transformed::no(self),
         })
     }
 
     /// Visits a plan similarly to [`Self::visit`], including subqueries that
     /// may appear in expressions such as `IN (SELECT ...)`.
+    #[recursive]
     pub fn visit_with_subqueries<V: for<'n> TreeNodeVisitor<'n, Node = Self>>(
         &self,
         visitor: &mut V,
@@ -761,6 +763,7 @@ impl LogicalPlan {
     /// Similarly to [`Self::rewrite`], rewrites this node and its inputs using `f`,
     /// including subqueries that may appear in expressions such as `IN (SELECT
     /// ...)`.
+    #[recursive]
     pub fn rewrite_with_subqueries<R: TreeNodeRewriter<Node = Self>>(
         self,
         rewriter: &mut R,
@@ -779,6 +782,7 @@ impl LogicalPlan {
         &self,
         mut f: F,
     ) -> Result<TreeNodeRecursion> {
+        #[recursive]
         fn apply_with_subqueries_impl<
             F: FnMut(&LogicalPlan) -> Result<TreeNodeRecursion>,
         >(
@@ -814,6 +818,7 @@ impl LogicalPlan {
         self,
         mut f: F,
     ) -> Result<Transformed<Self>> {
+        #[recursive]
         fn transform_down_with_subqueries_impl<
             F: FnMut(LogicalPlan) -> Result<Transformed<LogicalPlan>>,
         >(
@@ -839,6 +844,7 @@ impl LogicalPlan {
         self,
         mut f: F,
     ) -> Result<Transformed<Self>> {
+        #[recursive]
         fn transform_up_with_subqueries_impl<
             F: FnMut(LogicalPlan) -> Result<Transformed<LogicalPlan>>,
         >(
@@ -866,6 +872,7 @@ impl LogicalPlan {
         mut f_down: FD,
         mut f_up: FU,
     ) -> Result<Transformed<Self>> {
+        #[recursive]
         fn transform_down_up_with_subqueries_impl<
             FD: FnMut(LogicalPlan) -> Result<Transformed<LogicalPlan>>,
             FU: FnMut(LogicalPlan) -> Result<Transformed<LogicalPlan>>,

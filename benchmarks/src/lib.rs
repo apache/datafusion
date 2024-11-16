@@ -17,8 +17,9 @@
 
 //! DataFusion benchmark runner
 pub mod clickbench;
+pub mod imdb;
 pub mod parquet_filter;
 pub mod sort;
+pub mod sort_tpch;
 pub mod tpch;
-mod util;
-pub use util::*;
+pub mod util;

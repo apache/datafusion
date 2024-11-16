@@ -117,7 +117,7 @@ impl ValueNormalizer {
 /// CTEs, Views, subqueries and PREPARE statements. The states include
 /// Common Table Expression (CTE) provided with WITH clause and
 /// Parameter Data Types provided with PREPARE statement and the query schema of the
-/// outer query plan
+/// outer query plan.
 ///
 /// # Cloning
 ///
@@ -138,6 +138,8 @@ pub struct PlannerContext {
     /// The joined schemas of all FROM clauses planned so far. When planning LATERAL
     /// FROM clauses, this should become a suffix of the `outer_query_schema`.
     outer_from_schema: Option<DFSchemaRef>,
+    /// The query schema defined by the table
+    create_table_schema: Option<DFSchemaRef>,
 }
 
 impl Default for PlannerContext {
@@ -154,6 +156,7 @@ impl PlannerContext {
             ctes: HashMap::new(),
             outer_query_schema: None,
             outer_from_schema: None,
+            create_table_schema: None,
         }
     }
 
@@ -166,12 +169,12 @@ impl PlannerContext {
         self
     }
 
-    // return a reference to the outer queries schema
+    // Return a reference to the outer query's schema
     pub fn outer_query_schema(&self) -> Option<&DFSchema> {
         self.outer_query_schema.as_ref().map(|s| s.as_ref())
     }
 
-    /// sets the outer query schema, returning the existing one, if
+    /// Sets the outer query schema, returning the existing one, if
     /// any
     pub fn set_outer_query_schema(
         &mut self,
@@ -181,12 +184,24 @@ impl PlannerContext {
         schema
     }
 
-    // return a clone of the outer FROM schema
+    pub fn set_table_schema(
+        &mut self,
+        mut schema: Option<DFSchemaRef>,
+    ) -> Option<DFSchemaRef> {
+        std::mem::swap(&mut self.create_table_schema, &mut schema);
+        schema
+    }
+
+    pub fn table_schema(&self) -> Option<DFSchemaRef> {
+        self.create_table_schema.clone()
+    }
+
+    // Return a clone of the outer FROM schema
     pub fn outer_from_schema(&self) -> Option<Arc<DFSchema>> {
         self.outer_from_schema.clone()
     }
 
-    /// sets the outer FROM schema, returning the existing one, if any
+    /// Sets the outer FROM schema, returning the existing one, if any
     pub fn set_outer_from_schema(
         &mut self,
         mut schema: Option<DFSchemaRef>,
@@ -195,11 +210,11 @@ impl PlannerContext {
         schema
     }
 
-    /// extends the FROM schema, returning the existing one, if any
+    /// Extends the FROM schema, returning the existing one, if any
     pub fn extend_outer_from_schema(&mut self, schema: &DFSchemaRef) -> Result<()> {
-        self.outer_from_schema = match self.outer_from_schema.as_ref() {
-            Some(from_schema) => Some(Arc::new(from_schema.join(schema)?)),
-            None => Some(Arc::clone(schema)),
+        match self.outer_from_schema.as_mut() {
+            Some(from_schema) => Arc::make_mut(from_schema).merge(schema),
+            None => self.outer_from_schema = Some(Arc::clone(schema)),
         };
         Ok(())
     }
@@ -209,7 +224,7 @@ impl PlannerContext {
         &self.prepare_param_data_types
     }
 
-    /// returns true if there is a Common Table Expression (CTE) /
+    /// Returns true if there is a Common Table Expression (CTE) /
     /// Subquery for the specified name
     pub fn contains_cte(&self, cte_name: &str) -> bool {
         self.ctes.contains_key(cte_name)
@@ -386,12 +401,34 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     }
 
     pub(crate) fn convert_data_type(&self, sql_type: &SQLDataType) -> Result<DataType> {
+        // First check if any of the registered type_planner can handle this type
+        if let Some(type_planner) = self.context_provider.get_type_planner() {
+            if let Some(data_type) = type_planner.plan_type(sql_type)? {
+                return Ok(data_type);
+            }
+        }
+
+        // If no type_planner can handle this type, use the default conversion
         match sql_type {
-            SQLDataType::Array(ArrayElemTypeDef::AngleBracket(inner_sql_type))
-            | SQLDataType::Array(ArrayElemTypeDef::SquareBracket(inner_sql_type, _)) => {
+            SQLDataType::Array(ArrayElemTypeDef::AngleBracket(inner_sql_type)) => {
                 // Arrays may be multi-dimensional.
                 let inner_data_type = self.convert_data_type(inner_sql_type)?;
                 Ok(DataType::new_list(inner_data_type, true))
+            }
+            SQLDataType::Array(ArrayElemTypeDef::SquareBracket(
+                inner_sql_type,
+                maybe_array_size,
+            )) => {
+                let inner_data_type = self.convert_data_type(inner_sql_type)?;
+                if let Some(array_size) = maybe_array_size {
+                    Ok(DataType::new_fixed_size_list(
+                        inner_data_type,
+                        *array_size as i32,
+                        true,
+                    ))
+                } else {
+                    Ok(DataType::new_list(inner_data_type, true))
+                }
             }
             SQLDataType::Array(ArrayElemTypeDef::None) => {
                 not_impl_err!("Arrays with unspecified type is not supported")
@@ -425,7 +462,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             SQLDataType::Char(_)
             | SQLDataType::Text
             | SQLDataType::String(_) => Ok(DataType::Utf8),
-            SQLDataType::Timestamp(None, tz_info) => {
+            SQLDataType::Timestamp(precision, tz_info)
+            if precision.is_none() || [0, 3, 6, 9].contains(&precision.unwrap()) => {
                 let tz = if matches!(tz_info, TimezoneInfo::Tz)
                     || matches!(tz_info, TimezoneInfo::WithTimeZone)
                 {
@@ -437,7 +475,14 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     // Timestamp Without Time zone
                     None
                 };
-                Ok(DataType::Timestamp(TimeUnit::Nanosecond, tz.map(Into::into)))
+                let precision = match precision {
+                    Some(0) => TimeUnit::Second,
+                    Some(3) => TimeUnit::Millisecond,
+                    Some(6) => TimeUnit::Microsecond,
+                    None | Some(9) => TimeUnit::Nanosecond,
+                    _ => unreachable!(),
+                };
+                Ok(DataType::Timestamp(precision, tz.map(Into::into)))
             }
             SQLDataType::Date => Ok(DataType::Date32),
             SQLDataType::Time(None, tz_info) => {
@@ -506,9 +551,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             | SQLDataType::CharVarying(_)
             | SQLDataType::CharacterLargeObject(_)
             | SQLDataType::CharLargeObject(_)
-            // precision is not supported
-            | SQLDataType::Timestamp(Some(_), _)
-            // precision is not supported
+            // Unsupported precision
+            | SQLDataType::Timestamp(_, _)
+            // Precision is not supported
             | SQLDataType::Time(Some(_), _)
             | SQLDataType::Dec(_)
             | SQLDataType::BigNumeric(_)
@@ -572,7 +617,7 @@ pub fn object_name_to_table_reference(
     object_name: ObjectName,
     enable_normalization: bool,
 ) -> Result<TableReference> {
-    // use destructure to make it clear no fields on ObjectName are ignored
+    // Use destructure to make it clear no fields on ObjectName are ignored
     let ObjectName(idents) = object_name;
     idents_to_table_reference(idents, enable_normalization)
 }
@@ -583,7 +628,7 @@ pub(crate) fn idents_to_table_reference(
     enable_normalization: bool,
 ) -> Result<TableReference> {
     struct IdentTaker(Vec<Ident>);
-    /// take the next identifier from the back of idents, panic'ing if
+    /// Take the next identifier from the back of idents, panic'ing if
     /// there are none left
     impl IdentTaker {
         fn take(&mut self, enable_normalization: bool) -> String {

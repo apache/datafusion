@@ -32,7 +32,7 @@ use datafusion_common::{exec_err, internal_err, plan_err, Result, ScalarValue};
 
 use core::any::type_name;
 use datafusion_common::DataFusionError;
-use datafusion_expr::{ColumnarValue, ScalarFunctionImplementation};
+use datafusion_expr::ColumnarValue;
 
 macro_rules! downcast_arg {
     ($ARG:expr, $ARRAY_TYPE:ident) => {{
@@ -60,11 +60,13 @@ pub(crate) fn check_datatypes(name: &str, args: &[&ArrayRef]) -> Result<()> {
 }
 
 /// array function wrapper that differentiates between scalar (length 1) and array.
-pub(crate) fn make_scalar_function<F>(inner: F) -> ScalarFunctionImplementation
+pub(crate) fn make_scalar_function<F>(
+    inner: F,
+) -> impl Fn(&[ColumnarValue]) -> Result<ColumnarValue>
 where
-    F: Fn(&[ArrayRef]) -> Result<ArrayRef> + Sync + Send + 'static,
+    F: Fn(&[ArrayRef]) -> Result<ArrayRef>,
 {
-    Arc::new(move |args: &[ColumnarValue]| {
+    move |args: &[ColumnarValue]| {
         // first, identify if any of the arguments is an Array. If yes, store its `len`,
         // as any scalar will need to be converted to an array of len `len`.
         let len = args
@@ -87,7 +89,7 @@ where
         } else {
             result.map(ColumnarValue::Array)
         }
-    })
+    }
 }
 
 pub(crate) fn align_array_dimensions<O: OffsetSizeTrait>(

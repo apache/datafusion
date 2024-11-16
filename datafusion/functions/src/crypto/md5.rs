@@ -19,8 +19,12 @@
 use crate::crypto::basic::md5;
 use arrow::datatypes::DataType;
 use datafusion_common::{plan_err, Result};
-use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::scalar_doc_sections::DOC_SECTION_HASHING;
+use datafusion_expr::{
+    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+};
 use std::any::Any;
+use std::sync::OnceLock;
 
 #[derive(Debug)]
 pub struct Md5Func {
@@ -38,7 +42,7 @@ impl Md5Func {
         Self {
             signature: Signature::uniform(
                 1,
-                vec![Utf8, LargeUtf8, Binary, LargeBinary],
+                vec![Utf8View, Utf8, LargeUtf8, Binary, LargeBinary],
                 Volatility::Immutable,
             ),
         }
@@ -61,7 +65,7 @@ impl ScalarUDFImpl for Md5Func {
         use DataType::*;
         Ok(match &arg_types[0] {
             LargeUtf8 | LargeBinary => LargeUtf8,
-            Utf8 | Binary => Utf8,
+            Utf8View | Utf8 | Binary => Utf8,
             Null => Null,
             Dictionary(_, t) => match **t {
                 LargeUtf8 | LargeBinary => LargeUtf8,
@@ -84,4 +88,32 @@ impl ScalarUDFImpl for Md5Func {
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
         md5(args)
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_md5_doc())
+    }
+}
+
+static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+
+fn get_md5_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_HASHING)
+            .with_description("Computes an MD5 128-bit checksum for a string expression.")
+            .with_syntax_example("md5(expression)")
+            .with_sql_example(
+                r#"```sql
+> select md5('foo');
++-------------------------------------+
+| md5(Utf8("foo"))                    |
++-------------------------------------+
+| <md5_checksum_result>               |
++-------------------------------------+
+```"#,
+            )
+            .with_standard_argument("expression", Some("String"))
+            .build()
+            .unwrap()
+    })
 }

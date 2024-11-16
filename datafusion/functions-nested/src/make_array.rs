@@ -17,7 +17,9 @@
 
 //! [`ScalarUDFImpl`] definitions for `make_array` function.
 
-use std::{any::Any, sync::Arc};
+use std::any::Any;
+use std::sync::{Arc, OnceLock};
+use std::vec;
 
 use arrow::array::{ArrayData, Capacities, MutableArrayData};
 use arrow_array::{
@@ -26,11 +28,15 @@ use arrow_array::{
 use arrow_buffer::OffsetBuffer;
 use arrow_schema::DataType::{LargeList, List, Null};
 use arrow_schema::{DataType, Field};
-use datafusion_common::internal_err;
 use datafusion_common::{plan_err, utils::array_into_list_array_nullable, Result};
-use datafusion_expr::type_coercion::binary::comparison_coercion;
+use datafusion_expr::binary::{
+    try_type_union_resolution_with_struct, type_union_resolution,
+};
+use datafusion_expr::scalar_doc_sections::DOC_SECTION_ARRAY;
 use datafusion_expr::TypeSignature;
-use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{
+    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+};
 
 use crate::utils::make_scalar_function;
 
@@ -57,7 +63,7 @@ impl MakeArray {
     pub fn new() -> Self {
         Self {
             signature: Signature::one_of(
-                vec![TypeSignature::UserDefined, TypeSignature::Any(0)],
+                vec![TypeSignature::NullAry, TypeSignature::UserDefined],
                 Volatility::Immutable,
             ),
             aliases: vec![String::from("make_list")],
@@ -82,29 +88,22 @@ impl ScalarUDFImpl for MakeArray {
         match arg_types.len() {
             0 => Ok(empty_array_type()),
             _ => {
-                let mut expr_type = DataType::Null;
-                for arg_type in arg_types {
-                    if !arg_type.equals_datatype(&DataType::Null) {
-                        expr_type = arg_type.clone();
-                        break;
-                    }
-                }
-
-                if expr_type.is_null() {
-                    expr_type = DataType::Int64;
-                }
-
-                Ok(List(Arc::new(Field::new("item", expr_type, true))))
+                // At this point, all the type in array should be coerced to the same one
+                Ok(List(Arc::new(Field::new(
+                    "item",
+                    arg_types[0].to_owned(),
+                    true,
+                ))))
             }
         }
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         make_scalar_function(make_array_inner)(args)
-    }
-
-    fn invoke_no_args(&self, _number_rows: usize) -> Result<ColumnarValue> {
-        make_scalar_function(make_array_inner)(&[])
     }
 
     fn aliases(&self) -> &[String] {
@@ -112,28 +111,70 @@ impl ScalarUDFImpl for MakeArray {
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        let new_type = arg_types.iter().skip(1).try_fold(
-            arg_types.first().unwrap().clone(),
-            |acc, x| {
-                // The coerced types found by `comparison_coercion` are not guaranteed to be
-                // coercible for the arguments. `comparison_coercion` returns more loose
-                // types that can be coerced to both `acc` and `x` for comparison purpose.
-                // See `maybe_data_types` for the actual coercion.
-                let coerced_type = comparison_coercion(&acc, x);
-                if let Some(coerced_type) = coerced_type {
-                    Ok(coerced_type)
-                } else {
-                    internal_err!("Coercion from {acc:?} to {x:?} failed.")
-                }
-            },
-        )?;
-        Ok(vec![new_type; arg_types.len()])
+        let mut errors = vec![];
+        match try_type_union_resolution_with_struct(arg_types) {
+            Ok(r) => return Ok(r),
+            Err(e) => {
+                errors.push(e);
+            }
+        }
+
+        if let Some(new_type) = type_union_resolution(arg_types) {
+            // TODO: Move FixedSizeList to List in type_union_resolution
+            if let DataType::FixedSizeList(field, _) = new_type {
+                Ok(vec![List(field); arg_types.len()])
+            } else if new_type.is_null() {
+                Ok(vec![DataType::Int64; arg_types.len()])
+            } else {
+                Ok(vec![new_type; arg_types.len()])
+            }
+        } else {
+            plan_err!(
+                "Fail to find the valid type between {:?} for {}, errors are {:?}",
+                arg_types,
+                self.name(),
+                errors
+            )
+        }
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_make_array_doc())
+    }
+}
+
+static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+
+fn get_make_array_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_ARRAY)
+            .with_description(
+                "Returns an array using the specified input expressions.",
+            )
+            .with_syntax_example("make_array(expression1[, ..., expression_n])")
+            .with_sql_example(
+                r#"```sql
+> select make_array(1, 2, 3, 4, 5);
++----------------------------------------------------------+
+| make_array(Int64(1),Int64(2),Int64(3),Int64(4),Int64(5)) |
++----------------------------------------------------------+
+| [1, 2, 3, 4, 5]                                          |
++----------------------------------------------------------+
+```"#,
+            )
+            .with_argument(
+                "expression_n",
+                "Expression to include in the output array. Can be a constant, column, or function, and any combination of arithmetic or string operators.",
+            )
+            .build()
+            .unwrap()
+    })
 }
 
 // Empty array is a special case that is useful for many other array functions
 pub(super) fn empty_array_type() -> DataType {
-    DataType::List(Arc::new(Field::new("item", DataType::Int64, true)))
+    List(Arc::new(Field::new("item", DataType::Int64, true)))
 }
 
 /// `make_array_inner` is the implementation of the `make_array` function.

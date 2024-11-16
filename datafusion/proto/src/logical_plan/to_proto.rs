@@ -25,11 +25,12 @@ use datafusion_expr::expr::{
     ScalarFunction, Unnest,
 };
 use datafusion_expr::{
-    logical_plan::PlanType, logical_plan::StringifiedPlan, BuiltInWindowFunction, Expr,
-    JoinConstraint, JoinType, SortExpr, TryCast, WindowFrame, WindowFrameBound,
-    WindowFrameUnits, WindowFunctionDefinition,
+    logical_plan::PlanType, logical_plan::StringifiedPlan, Expr, JoinConstraint,
+    JoinType, SortExpr, TryCast, WindowFrame, WindowFrameBound, WindowFrameUnits,
+    WindowFunctionDefinition,
 };
 
+use crate::protobuf::RecursionUnnestOption;
 use crate::protobuf::{
     self,
     plan_type::PlanTypeEnum::{
@@ -37,6 +38,7 @@ use crate::protobuf::{
         FinalPhysicalPlan, FinalPhysicalPlanWithSchema, FinalPhysicalPlanWithStats,
         InitialLogicalPlan, InitialPhysicalPlan, InitialPhysicalPlanWithSchema,
         InitialPhysicalPlanWithStats, OptimizedLogicalPlan, OptimizedPhysicalPlan,
+        PhysicalPlanError,
     },
     AnalyzedLogicalPlanType, CubeNode, EmptyMessage, GroupingSetNode, LogicalExprList,
     OptimizedLogicalPlanType, OptimizedPhysicalPlanType, PlaceholderNode, RollupNode,
@@ -49,6 +51,15 @@ impl From<&UnnestOptions> for protobuf::UnnestOptions {
     fn from(opts: &UnnestOptions) -> Self {
         Self {
             preserve_nulls: opts.preserve_nulls,
+            recursions: opts
+                .recursions
+                .iter()
+                .map(|r| RecursionUnnestOption {
+                    input_column: Some((&r.input_column).into()),
+                    output_column: Some((&r.output_column).into()),
+                    depth: r.depth as u32,
+                })
+                .collect(),
         }
     }
 }
@@ -105,25 +116,11 @@ impl From<&StringifiedPlan> for protobuf::StringifiedPlan {
                 PlanType::FinalPhysicalPlanWithSchema => Some(protobuf::PlanType {
                     plan_type_enum: Some(FinalPhysicalPlanWithSchema(EmptyMessage {})),
                 }),
+                PlanType::PhysicalPlanError => Some(protobuf::PlanType {
+                    plan_type_enum: Some(PhysicalPlanError(EmptyMessage {})),
+                }),
             },
             plan: stringified_plan.plan.to_string(),
-        }
-    }
-}
-
-impl From<&BuiltInWindowFunction> for protobuf::BuiltInWindowFunction {
-    fn from(value: &BuiltInWindowFunction) -> Self {
-        match value {
-            BuiltInWindowFunction::FirstValue => Self::FirstValue,
-            BuiltInWindowFunction::LastValue => Self::LastValue,
-            BuiltInWindowFunction::NthValue => Self::NthValue,
-            BuiltInWindowFunction::Ntile => Self::Ntile,
-            BuiltInWindowFunction::CumeDist => Self::CumeDist,
-            BuiltInWindowFunction::PercentRank => Self::PercentRank,
-            BuiltInWindowFunction::Rank => Self::Rank,
-            BuiltInWindowFunction::Lag => Self::Lag,
-            BuiltInWindowFunction::Lead => Self::Lead,
-            BuiltInWindowFunction::DenseRank => Self::DenseRank,
         }
     }
 }
@@ -309,12 +306,6 @@ pub fn serialize_expr(
             null_treatment: _,
         }) => {
             let (window_function, fun_definition) = match fun {
-                WindowFunctionDefinition::BuiltInWindowFunction(fun) => (
-                    protobuf::window_expr_node::WindowFunction::BuiltInFunction(
-                        protobuf::BuiltInWindowFunction::from(fun).into(),
-                    ),
-                    None,
-                ),
                 WindowFunctionDefinition::AggregateUDF(aggr_udf) => {
                     let mut buf = Vec::new();
                     let _ = codec.try_encode_udaf(aggr_udf, &mut buf);
@@ -336,25 +327,19 @@ pub fn serialize_expr(
                     )
                 }
             };
-            let arg_expr: Option<Box<protobuf::LogicalExprNode>> = if !args.is_empty() {
-                let arg = &args[0];
-                Some(Box::new(serialize_expr(arg, codec)?))
-            } else {
-                None
-            };
             let partition_by = serialize_exprs(partition_by, codec)?;
             let order_by = serialize_sorts(order_by, codec)?;
 
             let window_frame: Option<protobuf::WindowFrame> =
                 Some(window_frame.try_into()?);
-            let window_expr = Box::new(protobuf::WindowExprNode {
-                expr: arg_expr,
+            let window_expr = protobuf::WindowExprNode {
+                exprs: serialize_exprs(args, codec)?,
                 window_function: Some(window_function),
                 partition_by,
                 order_by,
                 window_frame,
                 fun_definition,
-            });
+            };
             protobuf::LogicalExprNode {
                 expr_type: Some(ExprType::WindowExpr(window_expr)),
             }
@@ -688,6 +673,7 @@ impl From<JoinType> for protobuf::JoinType {
             JoinType::RightSemi => protobuf::JoinType::Rightsemi,
             JoinType::LeftAnti => protobuf::JoinType::Leftanti,
             JoinType::RightAnti => protobuf::JoinType::Rightanti,
+            JoinType::LeftMark => protobuf::JoinType::Leftmark,
         }
     }
 }

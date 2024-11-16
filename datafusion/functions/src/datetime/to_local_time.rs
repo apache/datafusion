@@ -17,26 +17,23 @@
 
 use std::any::Any;
 use std::ops::Add;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use arrow::array::timezone::Tz;
 use arrow::array::{Array, ArrayRef, PrimitiveBuilder};
 use arrow::datatypes::DataType::Timestamp;
+use arrow::datatypes::TimeUnit::{Microsecond, Millisecond, Nanosecond, Second};
 use arrow::datatypes::{
     ArrowTimestampType, DataType, TimestampMicrosecondType, TimestampMillisecondType,
     TimestampNanosecondType, TimestampSecondType,
 };
-use arrow::datatypes::{
-    TimeUnit,
-    TimeUnit::{Microsecond, Millisecond, Nanosecond, Second},
-};
 
 use chrono::{DateTime, MappedLocalTime, Offset, TimeDelta, TimeZone, Utc};
 use datafusion_common::cast::as_primitive_array;
-use datafusion_common::{exec_err, DataFusionError, Result, ScalarValue};
-use datafusion_expr::TypeSignature::Exact;
+use datafusion_common::{exec_err, plan_err, DataFusionError, Result, ScalarValue};
+use datafusion_expr::scalar_doc_sections::DOC_SECTION_DATETIME;
 use datafusion_expr::{
-    ColumnarValue, ScalarUDFImpl, Signature, Volatility, TIMEZONE_WILDCARD,
+    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
 
 /// A UDF function that converts a timezone-aware timestamp to local time (with no offset or
@@ -55,20 +52,8 @@ impl Default for ToLocalTimeFunc {
 
 impl ToLocalTimeFunc {
     pub fn new() -> Self {
-        let base_sig = |array_type: TimeUnit| {
-            [
-                Exact(vec![Timestamp(array_type, None)]),
-                Exact(vec![Timestamp(array_type, Some(TIMEZONE_WILDCARD.into()))]),
-            ]
-        };
-
-        let full_sig = [Nanosecond, Microsecond, Millisecond, Second]
-            .into_iter()
-            .flat_map(base_sig)
-            .collect::<Vec<_>>();
-
         Self {
-            signature: Signature::one_of(full_sig, Volatility::Immutable),
+            signature: Signature::user_defined(Volatility::Immutable),
         }
     }
 
@@ -83,7 +68,7 @@ impl ToLocalTimeFunc {
         let time_value = &args[0];
         let arg_type = time_value.data_type();
         match arg_type {
-            DataType::Timestamp(_, None) => {
+            Timestamp(_, None) => {
                 // if no timezone specified, just return the input
                 Ok(time_value.clone())
             }
@@ -93,7 +78,7 @@ impl ToLocalTimeFunc {
             // for more details.
             //
             // Then remove the timezone in return type, i.e. return None
-            DataType::Timestamp(_, Some(timezone)) => {
+            Timestamp(_, Some(timezone)) => {
                 let tz: Tz = timezone.parse()?;
 
                 match time_value {
@@ -328,13 +313,10 @@ impl ScalarUDFImpl for ToLocalTimeFunc {
         }
 
         match &arg_types[0] {
-            Timestamp(Nanosecond, _) => Ok(Timestamp(Nanosecond, None)),
-            Timestamp(Microsecond, _) => Ok(Timestamp(Microsecond, None)),
-            Timestamp(Millisecond, _) => Ok(Timestamp(Millisecond, None)),
-            Timestamp(Second, _) => Ok(Timestamp(Second, None)),
+            Timestamp(timeunit, _) => Ok(Timestamp(*timeunit, None)),
             _ => exec_err!(
                 "The to_local_time function can only accept timestamp as the arg, got {:?}", arg_types[0]
-            ),
+            )
         }
     }
 
@@ -348,6 +330,96 @@ impl ScalarUDFImpl for ToLocalTimeFunc {
 
         self.to_local_time(args)
     }
+
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        if arg_types.len() != 1 {
+            return plan_err!(
+                "to_local_time function requires 1 argument, got {:?}",
+                arg_types.len()
+            );
+        }
+
+        let first_arg = arg_types[0].clone();
+        match &first_arg {
+            Timestamp(Nanosecond, timezone) => {
+                Ok(vec![Timestamp(Nanosecond, timezone.clone())])
+            }
+            Timestamp(Microsecond, timezone) => {
+                Ok(vec![Timestamp(Microsecond, timezone.clone())])
+            }
+            Timestamp(Millisecond, timezone) => {
+                Ok(vec![Timestamp(Millisecond, timezone.clone())])
+            }
+            Timestamp(Second, timezone) => Ok(vec![Timestamp(Second, timezone.clone())]),
+            _ => plan_err!("The to_local_time function can only accept Timestamp as the arg got {first_arg}"),
+        }
+    }
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_to_local_time_doc())
+    }
+}
+
+static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+
+fn get_to_local_time_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_DATETIME)
+            .with_description("Converts a timestamp with a timezone to a timestamp without a timezone (with no offset or timezone information). This function handles daylight saving time changes.")
+            .with_syntax_example("to_local_time(expression)")
+            .with_argument(
+                "expression",
+                "Time expression to operate on. Can be a constant, column, or function."
+            )
+            .with_sql_example(r#"```sql
+> SELECT to_local_time('2024-04-01T00:00:20Z'::timestamp);
++---------------------------------------------+
+| to_local_time(Utf8("2024-04-01T00:00:20Z")) |
++---------------------------------------------+
+| 2024-04-01T00:00:20                         |
++---------------------------------------------+
+
+> SELECT to_local_time('2024-04-01T00:00:20Z'::timestamp AT TIME ZONE 'Europe/Brussels');
++---------------------------------------------+
+| to_local_time(Utf8("2024-04-01T00:00:20Z")) |
++---------------------------------------------+
+| 2024-04-01T00:00:20                         |
++---------------------------------------------+
+
+> SELECT
+  time,
+  arrow_typeof(time) as type,
+  to_local_time(time) as to_local_time,
+  arrow_typeof(to_local_time(time)) as to_local_time_type
+FROM (
+  SELECT '2024-04-01T00:00:20Z'::timestamp AT TIME ZONE 'Europe/Brussels' AS time
+);
++---------------------------+------------------------------------------------+---------------------+-----------------------------+
+| time                      | type                                           | to_local_time       | to_local_time_type          |
++---------------------------+------------------------------------------------+---------------------+-----------------------------+
+| 2024-04-01T00:00:20+02:00 | Timestamp(Nanosecond, Some("Europe/Brussels")) | 2024-04-01T00:00:20 | Timestamp(Nanosecond, None) |
++---------------------------+------------------------------------------------+---------------------+-----------------------------+
+
+# combine `to_local_time()` with `date_bin()` to bin on boundaries in the timezone rather
+# than UTC boundaries
+
+> SELECT date_bin(interval '1 day', to_local_time('2024-04-01T00:00:20Z'::timestamp AT TIME ZONE 'Europe/Brussels')) AS date_bin;
++---------------------+
+| date_bin            |
++---------------------+
+| 2024-04-01T00:00:00 |
++---------------------+
+
+> SELECT date_bin(interval '1 day', to_local_time('2024-04-01T00:00:20Z'::timestamp AT TIME ZONE 'Europe/Brussels')) AT TIME ZONE 'Europe/Brussels' AS date_bin_with_timezone;
++---------------------------+
+| date_bin_with_timezone    |
++---------------------------+
+| 2024-04-01T00:00:00+02:00 |
++---------------------------+
+```"#)
+            .build()
+            .unwrap()
+    })
 }
 
 #[cfg(test)]
@@ -486,7 +558,7 @@ mod tests {
 
     fn test_to_local_time_helper(input: ScalarValue, expected: ScalarValue) {
         let res = ToLocalTimeFunc::new()
-            .invoke(&[ColumnarValue::Scalar(input)])
+            .invoke_batch(&[ColumnarValue::Scalar(input)], 1)
             .unwrap();
         match res {
             ColumnarValue::Scalar(res) => {
@@ -544,8 +616,9 @@ mod tests {
                 .iter()
                 .map(|s| Some(string_to_timestamp_nanos(s).unwrap()))
                 .collect::<TimestampNanosecondArray>();
+            let batch_size = input.len();
             let result = ToLocalTimeFunc::new()
-                .invoke(&[ColumnarValue::Array(Arc::new(input))])
+                .invoke_batch(&[ColumnarValue::Array(Arc::new(input))], batch_size)
                 .unwrap();
             if let ColumnarValue::Array(result) = result {
                 assert_eq!(

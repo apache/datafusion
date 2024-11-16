@@ -174,6 +174,7 @@ pub fn populate_csv_partitions(
 }
 
 /// TableFactory for tests
+#[derive(Default, Debug)]
 pub struct TestTableFactory {}
 
 #[async_trait]
@@ -191,6 +192,7 @@ impl TableProviderFactory for TestTableFactory {
 }
 
 /// TableProvider for testing purposes
+#[derive(Debug)]
 pub struct TestTableProvider {
     /// URL of table files or folder
     pub url: String,
@@ -207,7 +209,7 @@ impl TableProvider for TestTableProvider {
     }
 
     fn schema(&self) -> SchemaRef {
-        self.schema.clone()
+        Arc::clone(&self.schema)
     }
 
     fn table_type(&self) -> TableType {
@@ -423,7 +425,7 @@ impl TestAggregate {
 
     /// Create a new COUNT(column) aggregate
     pub fn new_count_column(schema: &Arc<Schema>) -> Self {
-        Self::ColumnA(schema.clone())
+        Self::ColumnA(Arc::clone(schema))
     }
 
     /// Return appropriate expr depending if COUNT is for col or table (*)

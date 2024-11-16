@@ -18,6 +18,8 @@
 //! [`CovarianceSample`]: covariance sample aggregations.
 
 use std::fmt::Debug;
+use std::mem::size_of_val;
+use std::sync::OnceLock;
 
 use arrow::{
     array::{ArrayRef, Float64Array, UInt64Array},
@@ -29,11 +31,12 @@ use datafusion_common::{
     downcast_value, plan_err, unwrap_or_internal_err, DataFusionError, Result,
     ScalarValue,
 };
+use datafusion_expr::aggregate_doc_sections::DOC_SECTION_STATISTICAL;
 use datafusion_expr::{
     function::{AccumulatorArgs, StateFieldsArgs},
     type_coercion::aggregates::NUMERICS,
     utils::format_state_name,
-    Accumulator, AggregateUDFImpl, Signature, Volatility,
+    Accumulator, AggregateUDFImpl, Documentation, Signature, Volatility,
 };
 use datafusion_functions_aggregate_common::stats::StatsType;
 
@@ -124,6 +127,35 @@ impl AggregateUDFImpl for CovarianceSample {
     fn aliases(&self) -> &[String] {
         &self.aliases
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_covar_samp_doc())
+    }
+}
+
+static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+
+fn get_covar_samp_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_STATISTICAL)
+            .with_description("Returns the sample covariance of a set of number pairs.")
+            .with_syntax_example("covar_samp(expression1, expression2)")
+            .with_sql_example(
+                r#"```sql
+> SELECT covar_samp(column1, column2) FROM table_name;
++-----------------------------------+
+| covar_samp(column1, column2)      |
++-----------------------------------+
+| 8.25                              |
++-----------------------------------+
+```"#,
+            )
+            .with_standard_argument("expression1", Some("First"))
+            .with_standard_argument("expression2", Some("Second"))
+            .build()
+            .unwrap()
+    })
 }
 
 pub struct CovariancePopulation {
@@ -193,6 +225,35 @@ impl AggregateUDFImpl for CovariancePopulation {
             StatsType::Population,
         )?))
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_covar_pop_doc())
+    }
+}
+
+fn get_covar_pop_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_STATISTICAL)
+            .with_description(
+                "Returns the population covariance of a set of number pairs.",
+            )
+            .with_syntax_example("covar_pop(expression1, expression2)")
+            .with_sql_example(
+                r#"```sql
+> SELECT covar_pop(column1, column2) FROM table_name;
++-----------------------------------+
+| covar_pop(column1, column2)       |
++-----------------------------------+
+| 7.63                              |
++-----------------------------------+
+```"#,
+            )
+            .with_standard_argument("expression1", Some("First"))
+            .with_standard_argument("expression2", Some("Second"))
+            .build()
+            .unwrap()
+    })
 }
 
 /// An accumulator to compute covariance
@@ -388,6 +449,6 @@ impl Accumulator for CovarianceAccumulator {
     }
 
     fn size(&self) -> usize {
-        std::mem::size_of_val(self)
+        size_of_val(self)
     }
 }

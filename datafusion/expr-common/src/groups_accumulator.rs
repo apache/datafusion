@@ -56,8 +56,31 @@ impl EmitTo {
     }
 }
 
-/// `GroupAccumulator` implements a single aggregate (e.g. AVG) and
+/// `GroupsAccumulator` implements a single aggregate (e.g. AVG) and
 /// stores the state for *all* groups internally.
+///
+/// Logically, a [`GroupsAccumulator`] stores a mapping from each group index to
+/// the state of the aggregate for that group. For example an implementation for
+/// `min` might look like
+///
+/// ```text
+///    ┌─────┐
+///    │  0  │───────────▶   100
+///    ├─────┤
+///    │  1  │───────────▶   200
+///    └─────┘
+///      ...                 ...
+///    ┌─────┐
+///    │ N-2 │───────────▶    50
+///    ├─────┤
+///    │ N-1 │───────────▶   200
+///    └─────┘
+///
+///
+///  Logical group      Current Min
+///     number          value for that
+///                     group
+/// ```
 ///
 /// # Notes on Implementing `GroupAccumulator`
 ///
@@ -66,6 +89,11 @@ impl EmitTo {
 /// optional and is harder to implement than `Accumulator`, but can be much
 /// faster for queries with many group values.  See the [Aggregating Millions of
 /// Groups Fast blog] for more background.
+///
+/// [`NullState`] can help keep the state for groups that have not seen any
+/// values and produce the correct output for those groups.
+///
+/// [`NullState`]: https://docs.rs/datafusion/latest/datafusion/physical_expr/struct.NullState.html
 ///
 /// # Details
 /// Each group is assigned a `group_index` by the hash table and each
@@ -83,8 +111,7 @@ pub trait GroupsAccumulator: Send {
     ///
     /// * `values`: the input arguments to the accumulator
     ///
-    /// * `group_indices`: To which groups do the rows in `values`
-    ///   belong, group id)
+    /// * `group_indices`: The group indices to which each row in `values` belongs.
     ///
     /// * `opt_filter`: if present, only update aggregate state using
     ///   `values[i]` if `opt_filter[i]` is true
@@ -94,6 +121,11 @@ pub trait GroupsAccumulator: Send {
     ///
     /// Note that subsequent calls to update_batch may have larger
     /// total_num_groups as new groups are seen.
+    ///
+    /// See [`NullState`] to help keep the state for groups that have not seen any
+    /// values and produce the correct output for those groups.
+    ///
+    /// [`NullState`]: https://docs.rs/datafusion/latest/datafusion/physical_expr/struct.NullState.html
     fn update_batch(
         &mut self,
         values: &[ArrayRef],
@@ -152,9 +184,9 @@ pub trait GroupsAccumulator: Send {
     /// differ. See [`Self::state`] for more details on how state is
     /// used and merged.
     ///
-    /// * `values`: arrays produced from calling `state` previously to the accumulator
+    /// * `values`: arrays produced from previously calling `state` on other accumulators.
     ///
-    /// Other arguments are the same as for [`Self::update_batch`];
+    /// Other arguments are the same as for [`Self::update_batch`].
     fn merge_batch(
         &mut self,
         values: &[ArrayRef],
@@ -163,7 +195,7 @@ pub trait GroupsAccumulator: Send {
         total_num_groups: usize,
     ) -> Result<()>;
 
-    /// Converts an input batch directly the intermediate aggregate state.
+    /// Converts an input batch directly to the intermediate aggregate state.
     ///
     /// This is the equivalent of treating each input row as its own group. It
     /// is invoked when the Partial phase of a multi-phase aggregation is not

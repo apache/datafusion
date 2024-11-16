@@ -18,6 +18,7 @@
 //! [`VecAllocExt`] and [`RawTableAllocExt`] to help tracking of memory allocations
 
 use hashbrown::raw::{Bucket, RawTable};
+use std::mem::size_of;
 
 /// Extension trait for [`Vec`] to account for allocations.
 pub trait VecAllocExt {
@@ -93,7 +94,7 @@ impl<T> VecAllocExt for Vec<T> {
         let new_capacity = self.capacity();
         if new_capacity > prev_capacty {
             // capacity changed, so we allocated more
-            let bump_size = (new_capacity - prev_capacty) * std::mem::size_of::<T>();
+            let bump_size = (new_capacity - prev_capacty) * size_of::<T>();
             // Note multiplication should never overflow because `push` would
             // have panic'd first, but the checked_add could potentially
             // overflow since accounting could be tracking additional values, and
@@ -102,7 +103,7 @@ impl<T> VecAllocExt for Vec<T> {
         }
     }
     fn allocated_size(&self) -> usize {
-        std::mem::size_of::<T>() * self.capacity()
+        size_of::<T>() * self.capacity()
     }
 }
 
@@ -157,7 +158,7 @@ impl<T> RawTableAllocExt for RawTable<T> {
                 // need to request more memory
 
                 let bump_elements = self.capacity().max(16);
-                let bump_size = bump_elements * std::mem::size_of::<T>();
+                let bump_size = bump_elements * size_of::<T>();
                 *accounting = (*accounting).checked_add(bump_size).expect("overflow");
 
                 self.reserve(bump_elements, hasher);

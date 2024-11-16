@@ -18,6 +18,8 @@
 //! Defines physical expressions that can evaluated at runtime during query execution
 
 use std::any::Any;
+use std::mem::size_of_val;
+use std::sync::OnceLock;
 
 use arrow::array::ArrayRef;
 use arrow::array::BooleanArray;
@@ -29,10 +31,12 @@ use arrow::datatypes::Field;
 use datafusion_common::internal_err;
 use datafusion_common::{downcast_value, not_impl_err};
 use datafusion_common::{DataFusionError, Result, ScalarValue};
+use datafusion_expr::aggregate_doc_sections::DOC_SECTION_GENERAL;
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::{format_state_name, AggregateOrderSensitivity};
 use datafusion_expr::{
-    Accumulator, AggregateUDFImpl, GroupsAccumulator, ReversedUDAF, Signature, Volatility,
+    Accumulator, AggregateUDFImpl, Documentation, GroupsAccumulator, ReversedUDAF,
+    Signature, Volatility,
 };
 
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::bool_op::BooleanGroupsAccumulator;
@@ -172,6 +176,36 @@ impl AggregateUDFImpl for BoolAnd {
     fn reverse_expr(&self) -> ReversedUDAF {
         ReversedUDAF::Identical
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_bool_and_doc())
+    }
+}
+
+static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+
+fn get_bool_and_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_GENERAL)
+            .with_description(
+                "Returns true if all non-null input values are true, otherwise false.",
+            )
+            .with_syntax_example("bool_and(expression)")
+            .with_sql_example(
+                r#"```sql
+> SELECT bool_and(column_name) FROM table_name;
++----------------------------+
+| bool_and(column_name)       |
++----------------------------+
+| true                        |
++----------------------------+
+```"#,
+            )
+            .with_standard_argument("expression", None)
+            .build()
+            .unwrap()
+    })
 }
 
 #[derive(Debug, Default)]
@@ -196,7 +230,7 @@ impl Accumulator for BoolAndAccumulator {
     }
 
     fn size(&self) -> usize {
-        std::mem::size_of_val(self)
+        size_of_val(self)
     }
 
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
@@ -293,6 +327,34 @@ impl AggregateUDFImpl for BoolOr {
     fn reverse_expr(&self) -> ReversedUDAF {
         ReversedUDAF::Identical
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_bool_or_doc())
+    }
+}
+
+fn get_bool_or_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_GENERAL)
+            .with_description(
+                "Returns true if any non-null input value is true, otherwise false.",
+            )
+            .with_syntax_example("bool_or(expression)")
+            .with_sql_example(
+                r#"```sql
+> SELECT bool_or(column_name) FROM table_name;
++----------------------------+
+| bool_or(column_name)        |
++----------------------------+
+| true                        |
++----------------------------+
+```"#,
+            )
+            .with_standard_argument("expression", None)
+            .build()
+            .unwrap()
+    })
 }
 
 #[derive(Debug, Default)]
@@ -317,7 +379,7 @@ impl Accumulator for BoolOrAccumulator {
     }
 
     fn size(&self) -> usize {
-        std::mem::size_of_val(self)
+        size_of_val(self)
     }
 
     fn state(&mut self) -> Result<Vec<ScalarValue>> {

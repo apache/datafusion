@@ -18,7 +18,7 @@
 use std::any::Any;
 use std::ops::{Add, Sub};
 use std::str::FromStr;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use arrow::array::temporal_conversions::{
     as_datetime_with_timezone, timestamp_ns_to_datetime,
@@ -36,12 +36,13 @@ use datafusion_common::{exec_err, plan_err, DataFusionError, Result, ScalarValue
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::TypeSignature::Exact;
 use datafusion_expr::{
-    ColumnarValue, ScalarUDFImpl, Signature, Volatility, TIMEZONE_WILDCARD,
+    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility, TIMEZONE_WILDCARD,
 };
 
 use chrono::{
     DateTime, Datelike, Duration, LocalResult, NaiveDateTime, Offset, TimeDelta, Timelike,
 };
+use datafusion_expr::scalar_doc_sections::DOC_SECTION_DATETIME;
 
 #[derive(Debug)]
 pub struct DateTruncFunc {
@@ -123,7 +124,9 @@ impl ScalarUDFImpl for DateTruncFunc {
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         match &arg_types[1] {
-            Timestamp(Nanosecond, None) | Utf8 | Null => Ok(Timestamp(Nanosecond, None)),
+            Timestamp(Nanosecond, None) | Utf8 | DataType::Date32 | Null => {
+                Ok(Timestamp(Nanosecond, None))
+            }
             Timestamp(Nanosecond, tz_opt) => Ok(Timestamp(Nanosecond, tz_opt.clone())),
             Timestamp(Microsecond, tz_opt) => Ok(Timestamp(Microsecond, tz_opt.clone())),
             Timestamp(Millisecond, tz_opt) => Ok(Timestamp(Millisecond, tz_opt.clone())),
@@ -189,36 +192,37 @@ impl ScalarUDFImpl for DateTruncFunc {
             }
             ColumnarValue::Array(array) => {
                 let array_type = array.data_type();
-                match array_type {
-                    Timestamp(Second, tz_opt) => {
-                        process_array::<TimestampSecondType>(array, granularity, tz_opt)?
+                if let Timestamp(unit, tz_opt) = array_type {
+                    match unit {
+                        Second => process_array::<TimestampSecondType>(
+                            array,
+                            granularity,
+                            tz_opt,
+                        )?,
+                        Millisecond => process_array::<TimestampMillisecondType>(
+                            array,
+                            granularity,
+                            tz_opt,
+                        )?,
+                        Microsecond => process_array::<TimestampMicrosecondType>(
+                            array,
+                            granularity,
+                            tz_opt,
+                        )?,
+                        Nanosecond => process_array::<TimestampNanosecondType>(
+                            array,
+                            granularity,
+                            tz_opt,
+                        )?,
                     }
-                    Timestamp(Millisecond, tz_opt) => process_array::<
-                        TimestampMillisecondType,
-                    >(
-                        array, granularity, tz_opt
-                    )?,
-                    Timestamp(Microsecond, tz_opt) => process_array::<
-                        TimestampMicrosecondType,
-                    >(
-                        array, granularity, tz_opt
-                    )?,
-                    Timestamp(Nanosecond, tz_opt) => process_array::<
-                        TimestampNanosecondType,
-                    >(
-                        array, granularity, tz_opt
-                    )?,
-                    _ => process_array::<TimestampNanosecondType>(
-                        array,
-                        granularity,
-                        &None,
-                    )?,
+                } else {
+                    return exec_err!("second argument of `date_trunc` is an unsupported array type: {array_type}");
                 }
             }
             _ => {
                 return exec_err!(
-            "second argument of `date_trunc` must be nanosecond timestamp scalar or array"
-        );
+                    "second argument of `date_trunc` must be timestamp scalar or array"
+                );
             }
         })
     }
@@ -238,6 +242,40 @@ impl ScalarUDFImpl for DateTruncFunc {
             Ok(SortProperties::Unordered)
         }
     }
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_date_trunc_doc())
+    }
+}
+
+static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+
+fn get_date_trunc_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_DATETIME)
+            .with_description("Truncates a timestamp value to a specified precision.")
+            .with_syntax_example("date_trunc(precision, expression)")
+            .with_argument(
+                "precision",
+                r#"Time precision to truncate to. The following precisions are supported:
+
+    - year / YEAR
+    - quarter / QUARTER
+    - month / MONTH
+    - week / WEEK
+    - day / DAY
+    - hour / HOUR
+    - minute / MINUTE
+    - second / SECOND
+"#,
+            )
+            .with_argument(
+                "expression",
+                "Time expression to operate on. Can be a constant, column, or function.",
+            )
+            .build()
+            .unwrap()
+    })
 }
 
 fn _date_trunc_coarse<T>(granularity: &str, value: Option<T>) -> Result<Option<T>>
@@ -446,7 +484,7 @@ mod tests {
 
     use arrow::array::cast::as_primitive_array;
     use arrow::array::types::TimestampNanosecondType;
-    use arrow::array::TimestampNanosecondArray;
+    use arrow::array::{Array, TimestampNanosecondArray};
     use arrow::compute::kernels::cast_utils::string_to_timestamp_nanos;
     use arrow::datatypes::{DataType, TimeUnit};
     use datafusion_common::ScalarValue;
@@ -686,11 +724,15 @@ mod tests {
                 .map(|s| Some(string_to_timestamp_nanos(s).unwrap()))
                 .collect::<TimestampNanosecondArray>()
                 .with_timezone_opt(tz_opt.clone());
+            let batch_size = input.len();
             let result = DateTruncFunc::new()
-                .invoke(&[
-                    ColumnarValue::Scalar(ScalarValue::from("day")),
-                    ColumnarValue::Array(Arc::new(input)),
-                ])
+                .invoke_batch(
+                    &[
+                        ColumnarValue::Scalar(ScalarValue::from("day")),
+                        ColumnarValue::Array(Arc::new(input)),
+                    ],
+                    batch_size,
+                )
                 .unwrap();
             if let ColumnarValue::Array(result) = result {
                 assert_eq!(
@@ -844,11 +886,15 @@ mod tests {
                 .map(|s| Some(string_to_timestamp_nanos(s).unwrap()))
                 .collect::<TimestampNanosecondArray>()
                 .with_timezone_opt(tz_opt.clone());
+            let batch_size = input.len();
             let result = DateTruncFunc::new()
-                .invoke(&[
-                    ColumnarValue::Scalar(ScalarValue::from("hour")),
-                    ColumnarValue::Array(Arc::new(input)),
-                ])
+                .invoke_batch(
+                    &[
+                        ColumnarValue::Scalar(ScalarValue::from("hour")),
+                        ColumnarValue::Array(Arc::new(input)),
+                    ],
+                    batch_size,
+                )
                 .unwrap();
             if let ColumnarValue::Array(result) = result {
                 assert_eq!(

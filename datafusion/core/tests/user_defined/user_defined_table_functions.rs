@@ -105,6 +105,7 @@ async fn test_deregister_udtf() -> Result<()> {
     Ok(())
 }
 
+#[derive(Debug)]
 struct SimpleCsvTable {
     schema: SchemaRef,
     exprs: Vec<Expr>,
@@ -191,6 +192,7 @@ impl SimpleCsvTable {
     }
 }
 
+#[derive(Debug)]
 struct SimpleCsvTableFunc {}
 
 impl TableFunctionImpl for SimpleCsvTableFunc {

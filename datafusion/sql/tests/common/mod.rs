@@ -18,15 +18,16 @@
 use std::any::Any;
 #[cfg(test)]
 use std::collections::HashMap;
-use std::fmt::Display;
+use std::fmt::{Debug, Display};
 use std::{sync::Arc, vec};
 
 use arrow_schema::*;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::file_options::file_type::FileType;
-use datafusion_common::{plan_err, GetExt, Result, TableReference};
-use datafusion_expr::planner::ExprPlanner;
-use datafusion_expr::{AggregateUDF, ScalarUDF, TableSource, WindowUDF};
+use datafusion_common::{plan_err, DFSchema, GetExt, Result, TableReference};
+use datafusion_expr::planner::{ExprPlanner, PlannerResult, TypePlanner};
+use datafusion_expr::{AggregateUDF, Expr, ScalarUDF, TableSource, WindowUDF};
+use datafusion_functions_nested::expr_fn::make_array;
 use datafusion_sql::planner::ContextProvider;
 
 struct MockCsvType {}
@@ -54,12 +55,19 @@ pub(crate) struct MockSessionState {
     scalar_functions: HashMap<String, Arc<ScalarUDF>>,
     aggregate_functions: HashMap<String, Arc<AggregateUDF>>,
     expr_planners: Vec<Arc<dyn ExprPlanner>>,
+    type_planner: Option<Arc<dyn TypePlanner>>,
+    window_functions: HashMap<String, Arc<WindowUDF>>,
     pub config_options: ConfigOptions,
 }
 
 impl MockSessionState {
     pub fn with_expr_planner(mut self, expr_planner: Arc<dyn ExprPlanner>) -> Self {
         self.expr_planners.push(expr_planner);
+        self
+    }
+
+    pub fn with_type_planner(mut self, type_planner: Arc<dyn TypePlanner>) -> Self {
+        self.type_planner = Some(type_planner);
         self
     }
 
@@ -78,6 +86,12 @@ impl MockSessionState {
             aggregate_function.name().to_string().to_lowercase(),
             aggregate_function,
         );
+        self
+    }
+
+    pub fn with_window_function(mut self, window_function: Arc<WindowUDF>) -> Self {
+        self.window_functions
+            .insert(window_function.name().to_string(), window_function);
         self
     }
 }
@@ -217,18 +231,15 @@ impl ContextProvider for MockContextProvider {
         unimplemented!()
     }
 
-    fn get_window_meta(&self, _name: &str) -> Option<Arc<WindowUDF>> {
-        None
+    fn get_window_meta(&self, name: &str) -> Option<Arc<WindowUDF>> {
+        self.state.window_functions.get(name).cloned()
     }
 
     fn options(&self) -> &ConfigOptions {
         &self.state.config_options
     }
 
-    fn get_file_type(
-        &self,
-        _ext: &str,
-    ) -> Result<Arc<dyn datafusion_common::file_options::file_type::FileType>> {
+    fn get_file_type(&self, _ext: &str) -> Result<Arc<dyn FileType>> {
         Ok(Arc::new(MockCsvType {}))
     }
 
@@ -255,6 +266,14 @@ impl ContextProvider for MockContextProvider {
     fn get_expr_planners(&self) -> &[Arc<dyn ExprPlanner>] {
         &self.state.expr_planners
     }
+
+    fn get_type_planner(&self) -> Option<Arc<dyn TypePlanner>> {
+        if let Some(type_planner) = &self.state.type_planner {
+            Some(Arc::clone(type_planner))
+        } else {
+            None
+        }
+    }
 }
 
 struct EmptyTable {
@@ -268,11 +287,45 @@ impl EmptyTable {
 }
 
 impl TableSource for EmptyTable {
-    fn as_any(&self) -> &dyn std::any::Any {
+    fn as_any(&self) -> &dyn Any {
         self
     }
 
     fn schema(&self) -> SchemaRef {
         Arc::clone(&self.table_schema)
+    }
+}
+
+#[derive(Debug)]
+pub struct CustomTypePlanner {}
+
+impl TypePlanner for CustomTypePlanner {
+    fn plan_type(&self, sql_type: &sqlparser::ast::DataType) -> Result<Option<DataType>> {
+        match sql_type {
+            sqlparser::ast::DataType::Datetime(precision) => {
+                let precision = match precision {
+                    Some(0) => TimeUnit::Second,
+                    Some(3) => TimeUnit::Millisecond,
+                    Some(6) => TimeUnit::Microsecond,
+                    None | Some(9) => TimeUnit::Nanosecond,
+                    _ => unreachable!(),
+                };
+                Ok(Some(DataType::Timestamp(precision, None)))
+            }
+            _ => Ok(None),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct CustomExprPlanner {}
+
+impl ExprPlanner for CustomExprPlanner {
+    fn plan_array_literal(
+        &self,
+        exprs: Vec<Expr>,
+        _schema: &DFSchema,
+    ) -> Result<PlannerResult<Vec<Expr>>> {
+        Ok(PlannerResult::Planned(make_array(exprs)))
     }
 }

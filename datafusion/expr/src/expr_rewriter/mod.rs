@@ -19,6 +19,7 @@
 
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::fmt::Debug;
 use std::sync::Arc;
 
 use crate::expr::{Alias, Sort, Unnest};
@@ -42,7 +43,7 @@ pub use order_by::rewrite_sort_cols_by_aggs;
 /// `Operator::ArrowAt`, but can be implemented by calling a function
 /// `array_concat` from the `functions-nested` crate.
 // This is not used in datafusion internally, but it is still helpful for downstream project so don't remove it.
-pub trait FunctionRewrite {
+pub trait FunctionRewrite: Debug {
     /// Return a human readable name for this rewrite
     fn name(&self) -> &str;
 
@@ -305,9 +306,16 @@ impl NamePreserver {
     /// Create a new NamePreserver for rewriting the `expr` that is part of the specified plan
     pub fn new(plan: &LogicalPlan) -> Self {
         Self {
-            // The schema of Filter and Join nodes comes from their inputs rather than their output expressions,
-            // so there is no need to use aliases to preserve expression names.
-            use_alias: !matches!(plan, LogicalPlan::Filter(_) | LogicalPlan::Join(_)),
+            // The expressions of these plans do not contribute to their output schema,
+            // so there is no need to preserve expression names to prevent a schema change.
+            use_alias: !matches!(
+                plan,
+                LogicalPlan::Filter(_)
+                    | LogicalPlan::Join(_)
+                    | LogicalPlan::TableScan(_)
+                    | LogicalPlan::Limit(_)
+                    | LogicalPlan::Statement(_)
+            ),
         }
     }
 

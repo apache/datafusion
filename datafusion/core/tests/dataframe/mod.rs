@@ -114,10 +114,7 @@ async fn test_count_wildcard_on_where_in() -> Result<()> {
                     .await?
                     .aggregate(vec![], vec![count(wildcard())])?
                     .select(vec![count(wildcard())])?
-                    .into_unoptimized_plan(),
-                // Usually, into_optimized_plan() should be used here, but due to
-                // https://github.com/apache/datafusion/issues/5771,
-                // subqueries in SQL cannot be optimized, resulting in differences in logical_plan. Therefore, into_unoptimized_plan() is temporarily used here.
+                    .into_optimized_plan()?,
             ),
         ))?
         .select(vec![col("a"), col("b")])?
@@ -1391,7 +1388,7 @@ async fn unnest_with_redundant_columns() -> Result<()> {
     let optimized_plan = df.clone().into_optimized_plan()?;
     let expected = vec![
         "Projection: shapes.shape_id [shape_id:UInt32]",
-        "  Unnest: lists[shape_id2] structs[] [shape_id:UInt32, shape_id2:UInt32;N]",
+        "  Unnest: lists[shape_id2|depth=1] structs[] [shape_id:UInt32, shape_id2:UInt32;N]",
         "    Aggregate: groupBy=[[shapes.shape_id]], aggr=[[array_agg(shapes.shape_id) AS shape_id2]] [shape_id:UInt32, shape_id2:List(Field { name: \"item\", data_type: UInt32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} });N]",
         "      TableScan: shapes projection=[shape_id] [shape_id:UInt32]",
     ];
@@ -1434,9 +1431,7 @@ async fn unnest_analyze_metrics() -> Result<()> {
         .explain(false, true)?
         .collect()
         .await?;
-    let formatted = arrow::util::pretty::pretty_format_batches(&results)
-        .unwrap()
-        .to_string();
+    let formatted = pretty_format_batches(&results).unwrap().to_string();
     assert_contains!(&formatted, "elapsed_compute=");
     assert_contains!(&formatted, "input_batches=1");
     assert_contains!(&formatted, "input_rows=5");

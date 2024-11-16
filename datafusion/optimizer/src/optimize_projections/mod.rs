@@ -19,15 +19,15 @@
 
 mod required_indices;
 
-use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
-
 use crate::optimizer::ApplyOrder;
 use crate::{OptimizerConfig, OptimizerRule};
+use recursive::recursive;
+use std::collections::HashSet;
+use std::sync::Arc;
 
 use datafusion_common::{
     get_required_group_by_exprs_indices, internal_datafusion_err, internal_err, Column,
-    JoinType, Result,
+    HashMap, JoinType, Result,
 };
 use datafusion_expr::expr::Alias;
 use datafusion_expr::Unnest;
@@ -57,7 +57,7 @@ use datafusion_common::tree_node::{
 /// The rule analyzes the input logical plan, determines the necessary column
 /// indices, and then removes any unnecessary columns. It also removes any
 /// unnecessary projections from the plan tree.
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct OptimizeProjections {}
 
 impl OptimizeProjections {
@@ -110,6 +110,7 @@ impl OptimizerRule for OptimizeProjections {
 ///   columns.
 /// - `Ok(None)`: Signal that the given logical plan did not require any change.
 /// - `Err(error)`: An error occurred during the optimization process.
+#[recursive]
 fn optimize_projections(
     plan: LogicalPlan,
     config: &dyn OptimizerConfig,
@@ -176,7 +177,7 @@ fn optimize_projections(
             let all_exprs_iter = new_group_bys.iter().chain(new_aggr_expr.iter());
             let schema = aggregate.input.schema();
             let necessary_indices =
-                RequiredIndicies::new().with_exprs(schema, all_exprs_iter)?;
+                RequiredIndicies::new().with_exprs(schema, all_exprs_iter);
             let necessary_exprs = necessary_indices.get_required_exprs(schema);
 
             return optimize_projections(
@@ -216,8 +217,7 @@ fn optimize_projections(
 
             // Get all the required column indices at the input, either by the
             // parent or window expression requirements.
-            let required_indices =
-                child_reqs.with_exprs(&input_schema, &new_window_expr)?;
+            let required_indices = child_reqs.with_exprs(&input_schema, &new_window_expr);
 
             return optimize_projections(
                 Arc::unwrap_or_clone(window.input),
@@ -269,7 +269,6 @@ fn optimize_projections(
             .map(LogicalPlan::TableScan)
             .map(Transformed::yes);
         }
-
         // Other node types are handled below
         _ => {}
     };
@@ -297,7 +296,7 @@ fn optimize_projections(
                 })
                 .collect::<Result<_>>()?
         }
-        LogicalPlan::Limit(_) | LogicalPlan::Prepare(_) => {
+        LogicalPlan::Limit(_) => {
             // Pass index requirements from the parent as well as column indices
             // that appear in this plan's expressions to its child. These operators
             // do not benefit from "small" inputs, so the projection_beneficial
@@ -313,6 +312,7 @@ fn optimize_projections(
         | LogicalPlan::Explain(_)
         | LogicalPlan::Analyze(_)
         | LogicalPlan::Subquery(_)
+        | LogicalPlan::Statement(_)
         | LogicalPlan::Distinct(Distinct::All(_)) => {
             // These plans require all their fields, and their children should
             // be treated as final plans -- otherwise, we may have schema a
@@ -348,7 +348,6 @@ fn optimize_projections(
         }
         LogicalPlan::EmptyRelation(_)
         | LogicalPlan::RecursiveQuery(_)
-        | LogicalPlan::Statement(_)
         | LogicalPlan::Values(_)
         | LogicalPlan::DescribeTable(_) => {
             // These operators have no inputs, so stop the optimization process.
@@ -362,17 +361,6 @@ fn optimize_projections(
                 left_req_indices.with_plan_exprs(&plan, join.left.schema())?;
             let right_indices =
                 right_req_indices.with_plan_exprs(&plan, join.right.schema())?;
-            // Joins benefit from "small" input tables (lower memory usage).
-            // Therefore, each child benefits from projection:
-            vec![
-                left_indices.with_projection_beneficial(),
-                right_indices.with_projection_beneficial(),
-            ]
-        }
-        LogicalPlan::CrossJoin(cross_join) => {
-            let left_len = cross_join.left.schema().fields().len();
-            let (left_indices, right_indices) =
-                split_join_requirements(left_len, indices, &JoinType::Inner);
             // Joins benefit from "small" input tables (lower memory usage).
             // Therefore, each child benefits from projection:
             vec![
@@ -690,7 +678,11 @@ fn split_join_requirements(
 ) -> (RequiredIndicies, RequiredIndicies) {
     match join_type {
         // In these cases requirements are split between left/right children:
-        JoinType::Inner | JoinType::Left | JoinType::Right | JoinType::Full => {
+        JoinType::Inner
+        | JoinType::Left
+        | JoinType::Right
+        | JoinType::Full
+        | JoinType::LeftMark => {
             // Decrease right side indices by `left_len` so that they point to valid
             // positions within the right child:
             indices.split_off(left_len)
@@ -761,7 +753,7 @@ fn rewrite_projection_given_requirements(
     let exprs_used = indices.get_at_indices(&expr);
 
     let required_indices =
-        RequiredIndicies::new().with_exprs(input.schema(), exprs_used.iter())?;
+        RequiredIndicies::new().with_exprs(input.schema(), exprs_used.iter());
 
     // rewrite the children projection, and if they are changed rewrite the
     // projection down
@@ -781,12 +773,13 @@ fn rewrite_projection_given_requirements(
 /// - input schema of the projection, output schema of the projection are same, and
 /// - all projection expressions are either Column or Literal
 fn is_projection_unnecessary(input: &LogicalPlan, proj_exprs: &[Expr]) -> Result<bool> {
-    Ok(&projection_schema(input, proj_exprs)? == input.schema()
-        && proj_exprs.iter().all(is_expr_trivial))
+    let proj_schema = projection_schema(input, proj_exprs)?;
+    Ok(&proj_schema == input.schema() && proj_exprs.iter().all(is_expr_trivial))
 }
 
 #[cfg(test)]
 mod tests {
+    use std::cmp::Ordering;
     use std::collections::HashMap;
     use std::fmt::Formatter;
     use std::ops::Add;
@@ -846,6 +839,16 @@ mod tests {
         }
     }
 
+    // Manual implementation needed because of `schema` field. Comparison excludes this field.
+    impl PartialOrd for NoOpUserDefined {
+        fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+            match self.exprs.partial_cmp(&other.exprs) {
+                Some(Ordering::Equal) => self.input.partial_cmp(&other.input),
+                cmp => cmp,
+            }
+        }
+    }
+
     impl UserDefinedLogicalNodeCore for NoOpUserDefined {
         fn name(&self) -> &str {
             "NoOpUserDefined"
@@ -886,6 +889,10 @@ mod tests {
             // Since schema is same. Output columns requires their corresponding version in the input columns.
             Some(vec![output_columns.to_vec()])
         }
+
+        fn supports_limit_pushdown(&self) -> bool {
+            false // Disallow limit push-down by default
+        }
     }
 
     #[derive(Debug, Hash, PartialEq, Eq)]
@@ -908,6 +915,23 @@ mod tests {
                 schema,
                 left_child,
                 right_child,
+            }
+        }
+    }
+
+    // Manual implementation needed because of `schema` field. Comparison excludes this field.
+    impl PartialOrd for UserDefinedCrossJoin {
+        fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+            match self.exprs.partial_cmp(&other.exprs) {
+                Some(Ordering::Equal) => {
+                    match self.left_child.partial_cmp(&other.left_child) {
+                        Some(Ordering::Equal) => {
+                            self.right_child.partial_cmp(&other.right_child)
+                        }
+                        cmp => cmp,
+                    }
+                }
+                cmp => cmp,
             }
         }
     }
@@ -964,6 +988,10 @@ mod tests {
                 }
             }
             Some(vec![left_reqs, right_reqs])
+        }
+
+        fn supports_limit_pushdown(&self) -> bool {
+            false // Disallow limit push-down by default
         }
     }
 

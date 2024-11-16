@@ -15,20 +15,20 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::fmt::Display;
 use std::sync::Arc;
 
 use super::{add_offset_to_expr, collapse_lex_req, ProjectionMapping};
 use crate::{
     expressions::Column, physical_expr::deduplicate_physical_exprs,
-    physical_exprs_bag_equal, physical_exprs_contains, LexOrdering, LexOrderingRef,
-    LexRequirement, LexRequirementRef, PhysicalExpr, PhysicalExprRef, PhysicalSortExpr,
-    PhysicalSortRequirement,
+    physical_exprs_bag_equal, physical_exprs_contains, LexOrdering, LexRequirement,
+    PhysicalExpr, PhysicalExprRef, PhysicalSortExpr, PhysicalSortRequirement,
 };
 
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::JoinType;
+use datafusion_physical_expr_common::physical_expr::format_physical_expr_list;
 
-#[derive(Debug, Clone)]
 /// A structure representing a expression known to be constant in a physical execution plan.
 ///
 /// The `ConstExpr` struct encapsulates an expression that is constant during the execution
@@ -39,9 +39,10 @@ use datafusion_common::JoinType;
 ///
 /// - `expr`: Constant expression for a node in the physical plan.
 ///
-/// - `across_partitions`: A boolean flag indicating whether the constant expression is
-///   valid across partitions. If set to `true`, the constant expression has same value for all partitions.
-///   If set to `false`, the constant expression may have different values for different partitions.
+/// - `across_partitions`: A boolean flag indicating whether the constant
+///   expression is the same across partitions. If set to `true`, the constant
+///   expression has same value for all partitions. If set to `false`, the
+///   constant expression may have different values for different partitions.
 ///
 /// # Example
 ///
@@ -54,9 +55,19 @@ use datafusion_common::JoinType;
 /// // create a constant expression from a physical expression
 /// let const_expr = ConstExpr::from(col);
 /// ```
+#[derive(Debug, Clone)]
 pub struct ConstExpr {
+    /// The  expression that is known to be constant (e.g. a `Column`)
     expr: Arc<dyn PhysicalExpr>,
+    /// Does the constant have the same value across all partitions? See
+    /// struct docs for more details
     across_partitions: bool,
+}
+
+impl PartialEq for ConstExpr {
+    fn eq(&self, other: &Self) -> bool {
+        self.across_partitions == other.across_partitions && self.expr.eq(&other.expr)
+    }
 }
 
 impl ConstExpr {
@@ -72,11 +83,17 @@ impl ConstExpr {
         }
     }
 
+    /// Set the `across_partitions` flag
+    ///
+    /// See struct docs for more details
     pub fn with_across_partitions(mut self, across_partitions: bool) -> Self {
         self.across_partitions = across_partitions;
         self
     }
 
+    /// Is the  expression the same across all partitions?
+    ///
+    /// See struct docs for more details
     pub fn across_partitions(&self) -> bool {
         self.across_partitions
     }
@@ -98,6 +115,44 @@ impl ConstExpr {
             expr,
             across_partitions: self.across_partitions,
         })
+    }
+
+    /// Returns true if this constant expression is equal to the given expression
+    pub fn eq_expr(&self, other: impl AsRef<dyn PhysicalExpr>) -> bool {
+        self.expr.as_ref() == other.as_ref()
+    }
+
+    /// Returns a [`Display`]able list of `ConstExpr`.
+    pub fn format_list(input: &[ConstExpr]) -> impl Display + '_ {
+        struct DisplayableList<'a>(&'a [ConstExpr]);
+        impl<'a> Display for DisplayableList<'a> {
+            fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                let mut first = true;
+                for const_expr in self.0 {
+                    if first {
+                        first = false;
+                    } else {
+                        write!(f, ",")?;
+                    }
+                    write!(f, "{}", const_expr)?;
+                }
+                Ok(())
+            }
+        }
+        DisplayableList(input)
+    }
+}
+
+/// Display implementation for `ConstExpr`
+///
+/// Example `c` or `c(across_partitions)`
+impl Display for ConstExpr {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "{}", self.expr)?;
+        if self.across_partitions {
+            write!(f, "(across_partitions)")?;
+        }
+        Ok(())
     }
 }
 
@@ -221,6 +276,12 @@ impl EquivalenceClass {
             .map(|e| add_offset_to_expr(e, offset))
             .collect();
         Self::new(new_exprs)
+    }
+}
+
+impl Display for EquivalenceClass {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "[{}]", format_physical_expr_list(&self.exprs))
     }
 }
 
@@ -412,13 +473,13 @@ impl EquivalenceGroup {
     /// This function applies the `normalize_sort_expr` function for all sort
     /// expressions in `sort_exprs` and returns the corresponding normalized
     /// sort expressions.
-    pub fn normalize_sort_exprs(&self, sort_exprs: LexOrderingRef) -> LexOrdering {
+    pub fn normalize_sort_exprs(&self, sort_exprs: &LexOrdering) -> LexOrdering {
         // Convert sort expressions to sort requirements:
-        let sort_reqs = PhysicalSortRequirement::from_sort_exprs(sort_exprs.iter());
+        let sort_reqs = LexRequirement::from(sort_exprs.clone());
         // Normalize the requirements:
         let normalized_sort_reqs = self.normalize_sort_requirements(&sort_reqs);
         // Convert sort requirements back to sort expressions:
-        PhysicalSortRequirement::to_sort_exprs(normalized_sort_reqs)
+        LexOrdering::from(normalized_sort_reqs)
     }
 
     /// This function applies the `normalize_sort_requirement` function for all
@@ -426,14 +487,14 @@ impl EquivalenceGroup {
     /// sort requirements.
     pub fn normalize_sort_requirements(
         &self,
-        sort_reqs: LexRequirementRef,
+        sort_reqs: &LexRequirement,
     ) -> LexRequirement {
-        collapse_lex_req(
+        collapse_lex_req(LexRequirement::new(
             sort_reqs
                 .iter()
                 .map(|sort_req| self.normalize_sort_requirement(sort_req.clone()))
                 .collect(),
-        )
+        ))
     }
 
     /// Projects `expr` according to the given projection mapping.
@@ -494,7 +555,7 @@ impl EquivalenceGroup {
                 new_classes.push((source, vec![Arc::clone(target)]));
             }
             if let Some((_, values)) =
-                new_classes.iter_mut().find(|(key, _)| key.eq(source))
+                new_classes.iter_mut().find(|(key, _)| *key == source)
             {
                 if !physical_exprs_contains(values, target) {
                     values.push(Arc::clone(target));
@@ -569,9 +630,23 @@ impl EquivalenceGroup {
                 }
                 result
             }
-            JoinType::LeftSemi | JoinType::LeftAnti => self.clone(),
+            JoinType::LeftSemi | JoinType::LeftAnti | JoinType::LeftMark => self.clone(),
             JoinType::RightSemi | JoinType::RightAnti => right_equivalences.clone(),
         }
+    }
+}
+
+impl Display for EquivalenceGroup {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "[")?;
+        let mut iter = self.iter();
+        if let Some(cls) = iter.next() {
+            write!(f, "{}", cls)?;
+        }
+        for cls in iter {
+            write!(f, ", {}", cls)?;
+        }
+        write!(f, "]")
     }
 }
 

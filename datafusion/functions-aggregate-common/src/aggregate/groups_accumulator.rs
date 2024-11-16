@@ -23,15 +23,16 @@ pub mod bool_op;
 pub mod nulls;
 pub mod prim_op;
 
+use std::mem::{size_of, size_of_val};
+
+use arrow::array::new_empty_array;
 use arrow::{
     array::{ArrayRef, AsArray, BooleanArray, PrimitiveArray},
     compute,
+    compute::take_arrays,
     datatypes::UInt32Type,
 };
-use datafusion_common::{
-    arrow_datafusion_err, utils::get_arrayref_at_indices, DataFusionError, Result,
-    ScalarValue,
-};
+use datafusion_common::{arrow_datafusion_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr_common::accumulator::Accumulator;
 use datafusion_expr_common::groups_accumulator::{EmitTo, GroupsAccumulator};
 
@@ -42,6 +43,52 @@ use datafusion_expr_common::groups_accumulator::{EmitTo, GroupsAccumulator};
 /// they are not as fast as a specialized `GroupsAccumulator`. This
 /// interface bridges the gap so the group by operator only operates
 /// in terms of [`Accumulator`].
+///
+/// Internally, this adapter creates a new [`Accumulator`] for each group which
+/// stores the state for that group. This both requires an allocation for each
+/// Accumulator, internal indices, as well as whatever internal allocations the
+/// Accumulator itself requires.
+///
+/// For example, a `MinAccumulator` that computes the minimum string value with
+/// a [`ScalarValue::Utf8`]. That will require at least two allocations per group
+/// (one for the `MinAccumulator` and one for the `ScalarValue::Utf8`).
+///
+/// ```text
+///                       ┌─────────────────────────────────┐
+///                       │MinAccumulator {                 │
+///                ┌─────▶│ min: ScalarValue::Utf8("A")     │───────┐
+///                │      │}                                │       │
+///                │      └─────────────────────────────────┘       └───────▶   "A"
+///    ┌─────┐     │      ┌─────────────────────────────────┐
+///    │  0  │─────┘      │MinAccumulator {                 │
+///    ├─────┤     ┌─────▶│ min: ScalarValue::Utf8("Z")     │───────────────▶   "Z"
+///    │  1  │─────┘      │}                                │
+///    └─────┘            └─────────────────────────────────┘                   ...
+///      ...                 ...
+///    ┌─────┐            ┌────────────────────────────────┐
+///    │ N-2 │            │MinAccumulator {                │
+///    ├─────┤            │  min: ScalarValue::Utf8("A")   │────────────────▶   "A"
+///    │ N-1 │─────┐      │}                               │
+///    └─────┘     │      └────────────────────────────────┘
+///                │      ┌────────────────────────────────┐        ┌───────▶   "Q"
+///                │      │MinAccumulator {                │        │
+///                └─────▶│  min: ScalarValue::Utf8("Q")   │────────┘
+///                       │}                               │
+///                       └────────────────────────────────┘
+///
+///
+///  Logical group         Current Min/Max value for that group stored
+///     number             as a ScalarValue which points to an
+///                        indivdually allocated String
+///
+///```
+///
+/// # Optimizations
+///
+/// The adapter minimizes the number of calls to [`Accumulator::update_batch`]
+/// by first collecting the input rows for each group into a contiguous array
+/// using [`compute::take`]
+///
 pub struct GroupsAccumulatorAdapter {
     factory: Box<dyn Fn() -> Result<Box<dyn Accumulator>> + Send>,
 
@@ -61,9 +108,9 @@ struct AccumulatorState {
     /// [`Accumulator`] that stores the per-group state
     accumulator: Box<dyn Accumulator>,
 
-    // scratch space: indexes in the input array that will be fed to
-    // this accumulator. Stores indexes as `u32` to match the arrow
-    // `take` kernel input.
+    /// scratch space: indexes in the input array that will be fed to
+    /// this accumulator. Stores indexes as `u32` to match the arrow
+    /// `take` kernel input.
     indices: Vec<u32>,
 }
 
@@ -77,9 +124,7 @@ impl AccumulatorState {
 
     /// Returns the amount of memory taken by this structure and its accumulator
     fn size(&self) -> usize {
-        self.accumulator.size()
-            + std::mem::size_of_val(self)
-            + self.indices.allocated_size()
+        self.accumulator.size() + size_of_val(self) + self.indices.allocated_size()
     }
 }
 
@@ -193,7 +238,7 @@ impl GroupsAccumulatorAdapter {
         // reorder the values and opt_filter by batch_indices so that
         // all values for each group are contiguous, then invoke the
         // accumulator once per group with values
-        let values = get_arrayref_at_indices(values, &batch_indices)?;
+        let values = take_arrays(values, &batch_indices, None)?;
         let opt_filter = get_filter_at_indices(opt_filter, &batch_indices)?;
 
         // invoke each accumulator with the appropriate rows, first
@@ -212,7 +257,7 @@ impl GroupsAccumulatorAdapter {
                 opt_filter.as_ref().map(|f| f.as_boolean()),
                 offsets,
             )?;
-            (f)(state.accumulator.as_mut(), &values_to_accumulate)?;
+            f(state.accumulator.as_mut(), &values_to_accumulate)?;
 
             // clear out the state so they are empty for next
             // iteration
@@ -360,6 +405,18 @@ impl GroupsAccumulator for GroupsAccumulatorAdapter {
     ) -> Result<Vec<ArrayRef>> {
         let num_rows = values[0].len();
 
+        // If there are no rows, return empty arrays
+        if num_rows == 0 {
+            // create empty accumulator to get the state types
+            let empty_state = (self.factory)()?.state()?;
+            let empty_arrays = empty_state
+                .into_iter()
+                .map(|state_val| new_empty_array(&state_val.data_type()))
+                .collect::<Vec<_>>();
+
+            return Ok(empty_arrays);
+        }
+
         // Each row has its respective group
         let mut results = vec![];
         for row_idx in 0..num_rows {
@@ -407,7 +464,7 @@ pub trait VecAllocExt {
 impl<T> VecAllocExt for Vec<T> {
     type T = T;
     fn allocated_size(&self) -> usize {
-        std::mem::size_of::<T>() * self.capacity()
+        size_of::<T>() * self.capacity()
     }
 }
 

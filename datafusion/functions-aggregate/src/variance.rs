@@ -18,22 +18,25 @@
 //! [`VarianceSample`]: variance sample aggregations.
 //! [`VariancePopulation`]: variance population aggregations.
 
-use std::{fmt::Debug, sync::Arc};
-
 use arrow::{
     array::{Array, ArrayRef, BooleanArray, Float64Array, UInt64Array},
     buffer::NullBuffer,
     compute::kernels::cast,
     datatypes::{DataType, Field},
 };
+use std::mem::{size_of, size_of_val};
+use std::sync::OnceLock;
+use std::{fmt::Debug, sync::Arc};
 
 use datafusion_common::{
     downcast_value, not_impl_err, plan_err, DataFusionError, Result, ScalarValue,
 };
+use datafusion_expr::aggregate_doc_sections::DOC_SECTION_GENERAL;
 use datafusion_expr::{
     function::{AccumulatorArgs, StateFieldsArgs},
     utils::format_state_name,
-    Accumulator, AggregateUDFImpl, GroupsAccumulator, Signature, Volatility,
+    Accumulator, AggregateUDFImpl, Documentation, GroupsAccumulator, Signature,
+    Volatility,
 };
 use datafusion_functions_aggregate_common::{
     aggregate::groups_accumulator::accumulate::accumulate, stats::StatsType,
@@ -79,10 +82,7 @@ impl VarianceSample {
     pub fn new() -> Self {
         Self {
             aliases: vec![String::from("var_sample"), String::from("var_samp")],
-            signature: Signature::coercible(
-                vec![DataType::Float64],
-                Volatility::Immutable,
-            ),
+            signature: Signature::numeric(1, Volatility::Immutable),
         }
     }
 }
@@ -135,6 +135,26 @@ impl AggregateUDFImpl for VarianceSample {
     ) -> Result<Box<dyn GroupsAccumulator>> {
         Ok(Box::new(VarianceGroupsAccumulator::new(StatsType::Sample)))
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_variance_sample_doc())
+    }
+}
+
+static VARIANCE_SAMPLE_DOC: OnceLock<Documentation> = OnceLock::new();
+
+fn get_variance_sample_doc() -> &'static Documentation {
+    VARIANCE_SAMPLE_DOC.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_GENERAL)
+            .with_description(
+                "Returns the statistical sample variance of a set of numbers.",
+            )
+            .with_syntax_example("var(expression)")
+            .with_standard_argument("expression", Some("Numeric"))
+            .build()
+            .unwrap()
+    })
 }
 
 pub struct VariancePopulation {
@@ -222,6 +242,25 @@ impl AggregateUDFImpl for VariancePopulation {
             StatsType::Population,
         )))
     }
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_variance_population_doc())
+    }
+}
+
+static VARIANCE_POPULATION_DOC: OnceLock<Documentation> = OnceLock::new();
+
+fn get_variance_population_doc() -> &'static Documentation {
+    VARIANCE_POPULATION_DOC.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_GENERAL)
+            .with_description(
+                "Returns the statistical population variance of a set of numbers.",
+            )
+            .with_syntax_example("var_pop(expression)")
+            .with_standard_argument("expression", Some("Numeric"))
+            .build()
+            .unwrap()
+    })
 }
 
 /// An accumulator to compute variance
@@ -274,6 +313,7 @@ fn merge(
     mean2: f64,
     m22: f64,
 ) -> (u64, f64, f64) {
+    debug_assert!(count != 0 || count2 != 0, "Cannot merge two empty states");
     let new_count = count + count2;
     let new_mean =
         mean * count as f64 / new_count as f64 + mean2 * count2 as f64 / new_count as f64;
@@ -383,7 +423,7 @@ impl Accumulator for VarianceAccumulator {
     }
 
     fn size(&self) -> usize {
-        std::mem::size_of_val(self)
+        size_of_val(self)
     }
 
     fn supports_retract_batch(&self) -> bool {
@@ -470,7 +510,7 @@ impl VarianceGroupsAccumulator {
 
         if let StatsType::Sample = self.stats_type {
             counts.iter_mut().for_each(|count| {
-                *count -= 1;
+                *count = count.saturating_sub(1);
             });
         }
         let nulls = NullBuffer::from_iter(counts.iter().map(|&count| count != 0));
@@ -488,7 +528,7 @@ impl GroupsAccumulator for VarianceGroupsAccumulator {
         &mut self,
         values: &[ArrayRef],
         group_indices: &[usize],
-        opt_filter: Option<&arrow::array::BooleanArray>,
+        opt_filter: Option<&BooleanArray>,
         total_num_groups: usize,
     ) -> Result<()> {
         assert_eq!(values.len(), 1, "single argument to update_batch");
@@ -514,7 +554,7 @@ impl GroupsAccumulator for VarianceGroupsAccumulator {
         &mut self,
         values: &[ArrayRef],
         group_indices: &[usize],
-        opt_filter: Option<&arrow::array::BooleanArray>,
+        opt_filter: Option<&BooleanArray>,
         total_num_groups: usize,
     ) -> Result<()> {
         assert_eq!(values.len(), 3, "two arguments to merge_batch");
@@ -531,6 +571,9 @@ impl GroupsAccumulator for VarianceGroupsAccumulator {
             partial_m2s,
             opt_filter,
             |group_index, partial_count, partial_mean, partial_m2| {
+                if partial_count == 0 {
+                    return;
+                }
                 let (new_count, new_mean, new_m2) = merge(
                     self.counts[group_index],
                     self.means[group_index],
@@ -565,8 +608,37 @@ impl GroupsAccumulator for VarianceGroupsAccumulator {
     }
 
     fn size(&self) -> usize {
-        self.m2s.capacity() * std::mem::size_of::<f64>()
-            + self.means.capacity() * std::mem::size_of::<f64>()
-            + self.counts.capacity() * std::mem::size_of::<u64>()
+        self.m2s.capacity() * size_of::<f64>()
+            + self.means.capacity() * size_of::<f64>()
+            + self.counts.capacity() * size_of::<u64>()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use datafusion_expr::EmitTo;
+
+    use super::*;
+
+    #[test]
+    fn test_groups_accumulator_merge_empty_states() -> Result<()> {
+        let state_1 = vec![
+            Arc::new(UInt64Array::from(vec![0])) as ArrayRef,
+            Arc::new(Float64Array::from(vec![0.0])),
+            Arc::new(Float64Array::from(vec![0.0])),
+        ];
+        let state_2 = vec![
+            Arc::new(UInt64Array::from(vec![2])) as ArrayRef,
+            Arc::new(Float64Array::from(vec![1.0])),
+            Arc::new(Float64Array::from(vec![1.0])),
+        ];
+        let mut acc = VarianceGroupsAccumulator::new(StatsType::Sample);
+        acc.merge_batch(&state_1, &[0], None, 1)?;
+        acc.merge_batch(&state_2, &[0], None, 1)?;
+        let result = acc.evaluate(EmitTo::All)?;
+        let result = result.as_any().downcast_ref::<Float64Array>().unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result.value(0), 1.0);
+        Ok(())
     }
 }

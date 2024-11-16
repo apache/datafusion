@@ -22,15 +22,17 @@ use super::TableProvider;
 use datafusion_common::Result;
 use datafusion_expr::Expr;
 
+use std::fmt::Debug;
 use std::sync::Arc;
 
 /// A trait for table function implementations
-pub trait TableFunctionImpl: Sync + Send {
+pub trait TableFunctionImpl: Debug + Sync + Send {
     /// Create a table provider
     fn call(&self, args: &[Expr]) -> Result<Arc<dyn TableProvider>>;
 }
 
 /// A table that uses a function to generate data
+#[derive(Debug)]
 pub struct TableFunction {
     /// Name of the table function
     name: String,

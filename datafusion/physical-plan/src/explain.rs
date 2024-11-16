@@ -67,7 +67,7 @@ impl ExplainExec {
         &self.stringified_plans
     }
 
-    /// access to verbose
+    /// Access to verbose
     pub fn verbose(&self) -> bool {
         self.verbose
     }
@@ -112,7 +112,7 @@ impl ExecutionPlan for ExplainExec {
     }
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
-        // this is a leaf node and has no children
+        // This is a leaf node and has no children
         vec![]
     }
 
@@ -132,7 +132,6 @@ impl ExecutionPlan for ExplainExec {
         if 0 != partition {
             return internal_err!("ExplainExec invalid partition {partition}");
         }
-
         let mut type_builder =
             StringBuilder::with_capacity(self.stringified_plans.len(), 1024);
         let mut plan_builder =

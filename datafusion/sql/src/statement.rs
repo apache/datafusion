@@ -30,14 +30,15 @@ use crate::planner::{
 use crate::utils::normalize_ident;
 
 use arrow_schema::{DataType, Fields};
+use datafusion_common::error::_plan_err;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{
     exec_err, not_impl_err, plan_datafusion_err, plan_err, schema_err,
-    unqualified_field_not_found, Column, Constraints, DFSchema, DFSchemaRef,
+    unqualified_field_not_found, Column, Constraint, Constraints, DFSchema, DFSchemaRef,
     DataFusionError, Result, ScalarValue, SchemaError, SchemaReference, TableReference,
     ToDFSchema,
 };
-use datafusion_expr::dml::CopyTo;
+use datafusion_expr::dml::{CopyTo, InsertOp};
 use datafusion_expr::expr_rewriter::normalize_col_with_schemas_and_ambiguity_check;
 use datafusion_expr::logical_plan::builder::project;
 use datafusion_expr::logical_plan::DdlStatement;
@@ -45,15 +46,15 @@ use datafusion_expr::utils::expr_to_columns;
 use datafusion_expr::{
     cast, col, Analyze, CreateCatalog, CreateCatalogSchema,
     CreateExternalTable as PlanCreateExternalTable, CreateFunction, CreateFunctionBody,
-    CreateIndex as PlanCreateIndex, CreateMemoryTable, CreateView, DescribeTable,
-    DmlStatement, DropCatalogSchema, DropFunction, DropTable, DropView, EmptyRelation,
-    Explain, Expr, ExprSchemable, Filter, LogicalPlan, LogicalPlanBuilder,
-    OperateFunctionArg, PlanType, Prepare, SetVariable, SortExpr,
+    CreateIndex as PlanCreateIndex, CreateMemoryTable, CreateView, Deallocate,
+    DescribeTable, DmlStatement, DropCatalogSchema, DropFunction, DropTable, DropView,
+    EmptyRelation, Execute, Explain, Expr, ExprSchemable, Filter, LogicalPlan,
+    LogicalPlanBuilder, OperateFunctionArg, PlanType, Prepare, SetVariable, SortExpr,
     Statement as PlanStatement, ToStringifiedPlan, TransactionAccessMode,
     TransactionConclusion, TransactionEnd, TransactionIsolationLevel, TransactionStart,
     Volatility, WriteOp,
 };
-use sqlparser::ast;
+use sqlparser::ast::{self, SqliteOnConflict};
 use sqlparser::ast::{
     Assignment, AssignmentTarget, ColumnDef, CreateIndex, CreateTable,
     CreateTableOptions, Delete, DescribeAlias, Expr as SQLExpr, FromTable, Ident, Insert,
@@ -98,7 +99,7 @@ fn calc_inline_constraints_from_columns(columns: &[ColumnDef]) -> Vec<TableConst
                 ast::ColumnOption::Unique {
                     is_primary: false,
                     characteristics,
-                } => constraints.push(ast::TableConstraint::Unique {
+                } => constraints.push(TableConstraint::Unique {
                     name: name.clone(),
                     columns: vec![column.name.clone()],
                     characteristics: *characteristics,
@@ -110,7 +111,7 @@ fn calc_inline_constraints_from_columns(columns: &[ColumnDef]) -> Vec<TableConst
                 ast::ColumnOption::Unique {
                     is_primary: true,
                     characteristics,
-                } => constraints.push(ast::TableConstraint::PrimaryKey {
+                } => constraints.push(TableConstraint::PrimaryKey {
                     name: name.clone(),
                     columns: vec![column.name.clone()],
                     characteristics: *characteristics,
@@ -124,7 +125,7 @@ fn calc_inline_constraints_from_columns(columns: &[ColumnDef]) -> Vec<TableConst
                     on_delete,
                     on_update,
                     characteristics,
-                } => constraints.push(ast::TableConstraint::ForeignKey {
+                } => constraints.push(TableConstraint::ForeignKey {
                     name: name.clone(),
                     columns: vec![],
                     foreign_table: foreign_table.clone(),
@@ -134,7 +135,7 @@ fn calc_inline_constraints_from_columns(columns: &[ColumnDef]) -> Vec<TableConst
                     characteristics: *characteristics,
                 }),
                 ast::ColumnOption::Check(expr) => {
-                    constraints.push(ast::TableConstraint::Check {
+                    constraints.push(TableConstraint::Check {
                         name: name.clone(),
                         expr: Box::new(expr.clone()),
                     })
@@ -151,6 +152,10 @@ fn calc_inline_constraints_from_columns(columns: &[ColumnDef]) -> Vec<TableConst
                 | ast::ColumnOption::OnUpdate(_)
                 | ast::ColumnOption::Materialized(_)
                 | ast::ColumnOption::Ephemeral(_)
+                | ast::ColumnOption::Identity(_)
+                | ast::ColumnOption::OnConflict(_)
+                | ast::ColumnOption::Policy(_)
+                | ast::ColumnOption::Tags(_)
                 | ast::ColumnOption::Alias(_) => {}
             }
         }
@@ -393,13 +398,19 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 // Build column default values
                 let column_defaults =
                     self.build_column_defaults(&columns, planner_context)?;
+
+                let has_columns = !columns.is_empty();
+                let schema = self.build_schema(columns)?.to_dfschema_ref()?;
+                if has_columns {
+                    planner_context.set_table_schema(Some(Arc::clone(&schema)));
+                }
+
                 match query {
                     Some(query) => {
                         let plan = self.query_to_plan(*query, planner_context)?;
                         let input_schema = plan.schema();
 
-                        let plan = if !columns.is_empty() {
-                            let schema = self.build_schema(columns)?.to_dfschema_ref()?;
+                        let plan = if has_columns {
                             if schema.fields().len() != input_schema.fields().len() {
                                 return plan_err!(
                             "Mismatch: {} columns specified, but result has {} columns",
@@ -427,7 +438,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                             plan
                         };
 
-                        let constraints = Constraints::new_from_table_constraints(
+                        let constraints = Self::new_constraint_from_table_constraints(
                             &all_constraints,
                             plan.schema(),
                         )?;
@@ -440,18 +451,18 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                                 if_not_exists,
                                 or_replace,
                                 column_defaults,
+                                temporary,
                             },
                         )))
                     }
 
                     None => {
-                        let schema = self.build_schema(columns)?.to_dfschema_ref()?;
                         let plan = EmptyRelation {
                             produce_one_row: false,
                             schema,
                         };
                         let plan = LogicalPlan::EmptyRelation(plan);
-                        let constraints = Constraints::new_from_table_constraints(
+                        let constraints = Self::new_constraint_from_table_constraints(
                             &all_constraints,
                             plan.schema(),
                         )?;
@@ -463,6 +474,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                                 if_not_exists,
                                 or_replace,
                                 column_defaults,
+                                temporary,
                             },
                         )))
                     }
@@ -498,9 +510,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 if if_not_exists {
                     return not_impl_err!("If not exists not supported")?;
                 }
-                if temporary {
-                    return not_impl_err!("Temporary views not supported")?;
-                }
                 if to.is_some() {
                     return not_impl_err!("To not supported")?;
                 }
@@ -526,6 +535,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     input: Arc::new(plan),
                     or_replace,
                     definition: sql,
+                    temporary,
                 })))
             }
             Statement::ShowCreate { obj_type, obj_name } => match obj_type {
@@ -630,18 +640,56 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     *statement,
                     &mut planner_context,
                 )?;
-                Ok(LogicalPlan::Prepare(Prepare {
+                Ok(LogicalPlan::Statement(PlanStatement::Prepare(Prepare {
                     name: ident_to_string(&name),
                     data_types,
                     input: Arc::new(plan),
-                }))
+                })))
             }
+            Statement::Execute {
+                name,
+                parameters,
+                using,
+                // has_parentheses specifies the syntax, but the plan is the
+                // same no matter the synax used, so ignore it
+                has_parentheses: _,
+            } => {
+                // `USING` is a MySQL-specific syntax and currently not supported.
+                if !using.is_empty() {
+                    return not_impl_err!(
+                        "Execute statement with USING is not supported"
+                    );
+                }
+
+                let empty_schema = DFSchema::empty();
+                let parameters = parameters
+                    .into_iter()
+                    .map(|expr| self.sql_to_expr(expr, &empty_schema, planner_context))
+                    .collect::<Result<Vec<Expr>>>()?;
+
+                Ok(LogicalPlan::Statement(PlanStatement::Execute(Execute {
+                    name: object_name_to_string(&name),
+                    parameters,
+                })))
+            }
+            Statement::Deallocate {
+                name,
+                // Similar to PostgreSQL, the PREPARE keyword is ignored
+                prepare: _,
+            } => Ok(LogicalPlan::Statement(PlanStatement::Deallocate(
+                Deallocate {
+                    name: ident_to_string(&name),
+                },
+            ))),
 
             Statement::ShowTables {
                 extended,
                 full,
                 db_name,
                 filter,
+                // SHOW TABLES IN/FROM are equivalent, this field specifies which the user
+                // specified, but it doesn't affect the plan so ignore the field
+                clause: _,
             } => self.show_tables_to_plan(extended, full, db_name, filter),
 
             Statement::ShowColumns {
@@ -665,12 +713,15 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 returning,
                 ignore,
                 table_alias,
-                replace_into,
+                mut replace_into,
                 priority,
                 insert_alias,
             }) => {
-                if or.is_some() {
-                    plan_err!("Inserts with or clauses not supported")?;
+                if let Some(or) = or {
+                    match or {
+                        SqliteOnConflict::Replace => replace_into = true,
+                        _ => plan_err!("Inserts with {or} clause is not supported")?,
+                    }
                 }
                 if partitioned.is_some() {
                     plan_err!("Partitioned inserts not yet supported")?;
@@ -698,9 +749,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         "Inserts with a table alias not supported: {table_alias:?}"
                     )?
                 };
-                if replace_into {
-                    plan_err!("Inserts with a `REPLACE INTO` clause not supported")?
-                };
                 if let Some(priority) = priority {
                     plan_err!(
                         "Inserts with a `PRIORITY` clause not supported: {priority:?}"
@@ -710,7 +758,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     plan_err!("Inserts with an alias not supported")?;
                 }
                 let _ = into; // optional keyword doesn't change behavior
-                self.insert_to_plan(table_name, columns, source, overwrite)
+                self.insert_to_plan(table_name, columns, source, overwrite, replace_into)
             }
             Statement::Update {
                 table,
@@ -770,7 +818,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 }
                 let isolation_level: ast::TransactionIsolationLevel = modes
                     .iter()
-                    .filter_map(|m: &ast::TransactionMode| match m {
+                    .filter_map(|m: &TransactionMode| match m {
                         TransactionMode::AccessMode(_) => None,
                         TransactionMode::IsolationLevel(level) => Some(level),
                     })
@@ -779,7 +827,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     .unwrap_or(ast::TransactionIsolationLevel::Serializable);
                 let access_mode: ast::TransactionAccessMode = modes
                     .iter()
-                    .filter_map(|m: &ast::TransactionMode| match m {
+                    .filter_map(|m: &TransactionMode| match m {
                         TransactionMode::AccessMode(mode) => Some(mode),
                         TransactionMode::IsolationLevel(_) => None,
                     })
@@ -811,7 +859,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 let statement = PlanStatement::TransactionStart(TransactionStart {
                     access_mode,
                     isolation_level,
-                    schema: DFSchemaRef::new(DFSchema::empty()),
                 });
                 Ok(LogicalPlan::Statement(statement))
             }
@@ -819,7 +866,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 let statement = PlanStatement::TransactionEnd(TransactionEnd {
                     conclusion: TransactionConclusion::Commit,
                     chain,
-                    schema: DFSchemaRef::new(DFSchema::empty()),
                 });
                 Ok(LogicalPlan::Statement(statement))
             }
@@ -830,7 +876,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 let statement = PlanStatement::TransactionEnd(TransactionEnd {
                     conclusion: TransactionConclusion::Rollback,
                     chain,
-                    schema: DFSchemaRef::new(DFSchema::empty()),
                 });
                 Ok(LogicalPlan::Statement(statement))
             }
@@ -878,14 +923,14 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     }
                     None => None,
                 };
-                // at the moment functions can't be qualified `schema.name`
+                // At the moment functions can't be qualified `schema.name`
                 let name = match &name.0[..] {
                     [] => exec_err!("Function should have name")?,
                     [n] => n.value.clone(),
                     [..] => not_impl_err!("Qualified functions are not supported")?,
                 };
                 //
-                // convert resulting expression to data fusion expression
+                // Convert resulting expression to data fusion expression
                 //
                 let arg_types = args.as_ref().map(|arg| {
                     arg.iter().map(|t| t.data_type.clone()).collect::<Vec<_>>()
@@ -933,10 +978,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 func_desc,
                 ..
             } => {
-                // according to postgresql documentation it can be only one function
+                // According to postgresql documentation it can be only one function
                 // specified in drop statement
                 if let Some(desc) = func_desc.first() {
-                    // at the moment functions can't be qualified `schema.name`
+                    // At the moment functions can't be qualified `schema.name`
                     let name = match &desc.name.0[..] {
                         [] => exec_err!("Function should have name")?,
                         [n] => n.value.clone(),
@@ -1028,7 +1073,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         filter: Option<ShowStatementFilter>,
     ) -> Result<LogicalPlan> {
         if self.has_table("information_schema", "tables") {
-            // we only support the basic "SHOW TABLES"
+            // We only support the basic "SHOW TABLES"
             // https://github.com/apache/datafusion/issues/3188
             if db_name.is_some() || filter.is_some() || full || extended {
                 plan_err!("Unsupported parameters to SHOW TABLES")
@@ -1059,7 +1104,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     }
 
     fn copy_to_plan(&self, statement: CopyToStatement) -> Result<LogicalPlan> {
-        // determine if source is table or query and handle accordingly
+        // Determine if source is table or query and handle accordingly
         let copy_source = statement.source;
         let (input, input_schema, table_ref) = match copy_source {
             CopyToSource::Relation(object_name) => {
@@ -1073,7 +1118,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 (plan, input_schema, Some(table_ref))
             }
             CopyToSource::Query(query) => {
-                let plan = self.query_to_plan(query, &mut PlannerContext::new())?;
+                let plan = self.query_to_plan(*query, &mut PlannerContext::new())?;
                 let input_schema = Arc::clone(plan.schema());
                 (plan, input_schema, None)
             }
@@ -1100,7 +1145,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                             .to_string(),
                     )
                 };
-                // try to infer file format from file extension
+                // Try to infer file format from file extension
                 let extension: &str = &Path::new(&statement.target)
                     .extension()
                     .ok_or_else(e)?
@@ -1136,11 +1181,33 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         schema: &DFSchemaRef,
         planner_context: &mut PlannerContext,
     ) -> Result<Vec<Vec<SortExpr>>> {
-        // Ask user to provide a schema if schema is empty.
         if !order_exprs.is_empty() && schema.fields().is_empty() {
-            return plan_err!(
-                "Provide a schema before specifying the order while creating a table."
-            );
+            let results = order_exprs
+                .iter()
+                .map(|lex_order| {
+                    let result = lex_order
+                        .iter()
+                        .map(|order_by_expr| {
+                            let ordered_expr = &order_by_expr.expr;
+                            let ordered_expr = ordered_expr.to_owned();
+                            let ordered_expr = self
+                                .sql_expr_to_logical_expr(
+                                    ordered_expr,
+                                    schema,
+                                    planner_context,
+                                )
+                                .unwrap();
+                            let asc = order_by_expr.asc.unwrap_or(true);
+                            let nulls_first = order_by_expr.nulls_first.unwrap_or(!asc);
+
+                            SortExpr::new(ordered_expr, asc, nulls_first)
+                        })
+                        .collect::<Vec<SortExpr>>();
+                    result
+                })
+                .collect::<Vec<Vec<SortExpr>>>();
+
+            return Ok(results);
         }
 
         let mut all_results = vec![];
@@ -1176,6 +1243,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             location,
             table_partition_cols,
             if_not_exists,
+            temporary,
             order_exprs,
             unbounded,
             options,
@@ -1217,10 +1285,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let ordered_exprs =
             self.build_order_by(order_exprs, &df_schema, &mut planner_context)?;
 
-        // External tables do not support schemas at the moment, so the name is just a table name
-        let name = TableReference::bare(name);
+        let name = self.object_name_to_table_reference(name)?;
         let constraints =
-            Constraints::new_from_table_constraints(&all_constraints, &df_schema)?;
+            Self::new_constraint_from_table_constraints(&all_constraints, &df_schema)?;
         Ok(LogicalPlan::Ddl(DdlStatement::CreateExternalTable(
             PlanCreateExternalTable {
                 schema: df_schema,
@@ -1229,6 +1296,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 file_type,
                 table_partition_cols,
                 if_not_exists,
+                temporary,
                 definition,
                 order_exprs: ordered_exprs,
                 unbounded,
@@ -1237,6 +1305,74 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 column_defaults,
             },
         )))
+    }
+
+    /// Convert each [TableConstraint] to corresponding [Constraint]
+    fn new_constraint_from_table_constraints(
+        constraints: &[TableConstraint],
+        df_schema: &DFSchemaRef,
+    ) -> Result<Constraints> {
+        let constraints = constraints
+            .iter()
+            .map(|c: &TableConstraint| match c {
+                TableConstraint::Unique { name, columns, .. } => {
+                    let field_names = df_schema.field_names();
+                    // Get unique constraint indices in the schema:
+                    let indices = columns
+                        .iter()
+                        .map(|u| {
+                            let idx = field_names
+                                .iter()
+                                .position(|item| *item == u.value)
+                                .ok_or_else(|| {
+                                    let name = name
+                                        .as_ref()
+                                        .map(|name| format!("with name '{name}' "))
+                                        .unwrap_or("".to_string());
+                                    DataFusionError::Execution(
+                                        format!("Column for unique constraint {}not found in schema: {}", name,u.value)
+                                    )
+                                })?;
+                            Ok(idx)
+                        })
+                        .collect::<Result<Vec<_>>>()?;
+                    Ok(Constraint::Unique(indices))
+                }
+                TableConstraint::PrimaryKey { columns, .. } => {
+                    let field_names = df_schema.field_names();
+                    // Get primary key indices in the schema:
+                    let indices = columns
+                        .iter()
+                        .map(|pk| {
+                            let idx = field_names
+                                .iter()
+                                .position(|item| *item == pk.value)
+                                .ok_or_else(|| {
+                                    DataFusionError::Execution(format!(
+                                        "Column for primary key not found in schema: {}",
+                                        pk.value
+                                    ))
+                                })?;
+                            Ok(idx)
+                        })
+                        .collect::<Result<Vec<_>>>()?;
+                    Ok(Constraint::PrimaryKey(indices))
+                }
+                TableConstraint::ForeignKey { .. } => {
+                    _plan_err!("Foreign key constraints are not currently supported")
+                }
+                TableConstraint::Check { .. } => {
+                    _plan_err!("Check constraints are not currently supported")
+                }
+                TableConstraint::Index { .. } => {
+                    _plan_err!("Indexes are not currently supported")
+                }
+                TableConstraint::FulltextOrSpatial { .. } => {
+                    _plan_err!("Indexes are not currently supported")
+                }
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(Constraints::new_unverified(constraints))
     }
 
     fn parse_options_map(
@@ -1385,11 +1521,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let mut variable_lower = variable.to_lowercase();
 
         if variable_lower == "timezone" || variable_lower == "time.zone" {
-            // we could introduce alias in OptionDefinition if this string matching thing grows
+            // We could introduce alias in OptionDefinition if this string matching thing grows
             variable_lower = "datafusion.execution.time_zone".to_string();
         }
 
-        // parse value string from Expr
+        // Parse value string from Expr
         let value_string = match &value[0] {
             SQLExpr::Identifier(i) => ident_to_string(i),
             SQLExpr::Value(v) => match crate::utils::value_to_string(v) {
@@ -1398,7 +1534,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 }
                 Some(v) => v,
             },
-            // for capture signed number e.g. +8, -8
+            // For capture signed number e.g. +8, -8
             SQLExpr::UnaryOp { op, expr } => match op {
                 UnaryOperator::Plus => format!("+{expr}"),
                 UnaryOperator::Minus => format!("-{expr}"),
@@ -1414,7 +1550,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let statement = PlanStatement::SetVariable(SetVariable {
             variable: variable_lower,
             value: value_string,
-            schema: DFSchemaRef::new(DFSchema::empty()),
         });
 
         Ok(LogicalPlan::Statement(statement))
@@ -1553,7 +1688,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     None => {
                         // If the target table has an alias, use it to qualify the column name
                         if let Some(alias) = &table_alias {
-                            datafusion_expr::Expr::Column(Column::new(
+                            Expr::Column(Column::new(
                                 Some(self.ident_normalizer.normalize(alias.name.clone())),
                                 field.name(),
                             ))
@@ -1583,6 +1718,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         columns: Vec<Ident>,
         source: Box<Query>,
         overwrite: bool,
+        replace_into: bool,
     ) -> Result<LogicalPlan> {
         // Do a table lookup to verify the table exists
         let table_name = self.object_name_to_table_reference(table_name)?;
@@ -1592,10 +1728,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         // Get insert fields and target table's value indices
         //
-        // if value_indices[i] = Some(j), it means that the value of the i-th target table's column is
+        // If value_indices[i] = Some(j), it means that the value of the i-th target table's column is
         // derived from the j-th output of the source.
         //
-        // if value_indices[i] = None, it means that the value of the i-th target table's column is
+        // If value_indices[i] = None, it means that the value of the i-th target table's column is
         // not provided, and should be filled with a default value later.
         let (fields, value_indices) = if columns.is_empty() {
             // Empty means we're inserting into all columns of the table
@@ -1685,16 +1821,17 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             .collect::<Result<Vec<Expr>>>()?;
         let source = project(source, exprs)?;
 
-        let op = if overwrite {
-            WriteOp::InsertOverwrite
-        } else {
-            WriteOp::InsertInto
+        let insert_op = match (overwrite, replace_into) {
+            (false, false) => InsertOp::Append,
+            (true, false) => InsertOp::Overwrite,
+            (false, true) => InsertOp::Replace,
+            (true, true) => plan_err!("Conflicting insert operations: `overwrite` and `replace_into` cannot both be true")?,
         };
 
         let plan = LogicalPlan::Dml(DmlStatement::new(
             table_name,
             Arc::new(table_schema),
-            op,
+            WriteOp::Insert(insert_op),
             Arc::new(source),
         ));
         Ok(plan)
@@ -1726,7 +1863,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let table_ref = self.object_name_to_table_reference(sql_table_name)?;
         let _ = self.context_provider.get_table_source(table_ref)?;
 
-        // treat both FULL and EXTENDED as the same
+        // Treat both FULL and EXTENDED as the same
         let select_list = if full || extended {
             "*"
         } else {

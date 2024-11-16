@@ -101,3 +101,33 @@ query I
 SELECT NULLIF(NULL, NULL);
 ----
 NULL
+
+query T
+SELECT NULLIF(arrow_cast('a', 'Utf8View'), 'a');
+----
+NULL
+
+query T
+SELECT NULLIF('a', arrow_cast('a', 'Utf8View'));
+----
+NULL
+
+query T
+SELECT NULLIF(arrow_cast('a', 'Utf8View'), 'b');
+----
+a
+
+query T
+SELECT NULLIF('a', arrow_cast('b', 'Utf8View'));
+----
+a
+
+query T
+SELECT NULLIF(null, arrow_cast('a', 'Utf8View'));
+----
+NULL
+
+query T
+SELECT NULLIF(arrow_cast('a', 'Utf8View'), null);
+----
+a

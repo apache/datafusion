@@ -28,7 +28,7 @@ use datafusion_expr::{lit, Expr, LogicalPlan, WindowFunctionDefinition};
 /// Rewrite `Count(Expr:Wildcard)` to `Count(Expr:Literal)`.
 ///
 /// Resolves issue: <https://github.com/apache/datafusion/issues/5473>
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct CountWildcardRule {}
 
 impl CountWildcardRule {
@@ -48,13 +48,7 @@ impl AnalyzerRule for CountWildcardRule {
 }
 
 fn is_wildcard(expr: &Expr) -> bool {
-    matches!(
-        expr,
-        Expr::Wildcard {
-            qualifier: None,
-            ..
-        }
-    )
+    matches!(expr, Expr::Wildcard { .. })
 }
 
 fn is_count_star_aggregate(aggregate_function: &AggregateFunction) -> bool {
@@ -107,7 +101,7 @@ mod tests {
     use datafusion_expr::expr::Sort;
     use datafusion_expr::ExprFunctionExt;
     use datafusion_expr::{
-        col, exists, expr, in_subquery, logical_plan::LogicalPlanBuilder, out_ref_col,
+        col, exists, in_subquery, logical_plan::LogicalPlanBuilder, out_ref_col,
         scalar_subquery, wildcard, WindowFrame, WindowFrameBound, WindowFrameUnits,
     };
     use datafusion_functions_aggregate::count::count_udaf;
@@ -225,7 +219,7 @@ mod tests {
         let table_scan = test_table_scan()?;
 
         let plan = LogicalPlanBuilder::from(table_scan)
-            .window(vec![Expr::WindowFunction(expr::WindowFunction::new(
+            .window(vec![Expr::WindowFunction(WindowFunction::new(
                 WindowFunctionDefinition::AggregateUDF(count_udaf()),
                 vec![wildcard()],
             ))

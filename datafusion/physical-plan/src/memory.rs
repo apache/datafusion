@@ -22,7 +22,6 @@ use std::fmt;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use super::expressions::PhysicalSortExpr;
 use super::{
     common, DisplayAs, DisplayFormatType, ExecutionMode, ExecutionPlan, Partitioning,
     PlanProperties, RecordBatchStream, SendableRecordBatchStream, Statistics,
@@ -33,11 +32,15 @@ use arrow::record_batch::RecordBatch;
 use datafusion_common::{internal_err, project_schema, Result};
 use datafusion_execution::memory_pool::MemoryReservation;
 use datafusion_execution::TaskContext;
+use datafusion_physical_expr::equivalence::ProjectionMapping;
+use datafusion_physical_expr::expressions::Column;
+use datafusion_physical_expr::utils::collect_columns;
 use datafusion_physical_expr::{EquivalenceProperties, LexOrdering};
 
 use futures::Stream;
 
 /// Execution plan for reading in-memory batches of data
+#[derive(Clone)]
 pub struct MemoryExec {
     /// The partitions to query
     partitions: Vec<Vec<RecordBatch>>,
@@ -56,22 +59,17 @@ pub struct MemoryExec {
 
 impl fmt::Debug for MemoryExec {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "partitions: [...]")?;
-        write!(f, "schema: {:?}", self.projected_schema)?;
-        write!(f, "projection: {:?}", self.projection)?;
-        if let Some(sort_info) = &self.sort_information.first() {
-            write!(f, ", output_ordering: {:?}", sort_info)?;
-        }
-        Ok(())
+        f.debug_struct("MemoryExec")
+            .field("partitions", &"[...]")
+            .field("schema", &self.schema)
+            .field("projection", &self.projection)
+            .field("sort_information", &self.sort_information)
+            .finish()
     }
 }
 
 impl DisplayAs for MemoryExec {
-    fn fmt_as(
-        &self,
-        t: DisplayFormatType,
-        f: &mut std::fmt::Formatter,
-    ) -> std::fmt::Result {
+    fn fmt_as(&self, t: DisplayFormatType, f: &mut fmt::Formatter) -> fmt::Result {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 let partition_sizes: Vec<_> =
@@ -81,10 +79,7 @@ impl DisplayAs for MemoryExec {
                     .sort_information
                     .first()
                     .map(|output_ordering| {
-                        format!(
-                            ", output_ordering={}",
-                            PhysicalSortExpr::format_list(output_ordering)
-                        )
+                        format!(", output_ordering={}", output_ordering)
                     })
                     .unwrap_or_default();
 
@@ -117,7 +112,7 @@ impl ExecutionPlan for MemoryExec {
     }
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
-        // this is a leaf node and has no children
+        // This is a leaf node and has no children
         vec![]
     }
 
@@ -177,18 +172,30 @@ impl MemoryExec {
         })
     }
 
-    /// set `show_sizes` to determine whether to display partition sizes
+    /// Set `show_sizes` to determine whether to display partition sizes
     pub fn with_show_sizes(mut self, show_sizes: bool) -> Self {
         self.show_sizes = show_sizes;
         self
     }
 
+    /// Ref to partitions
     pub fn partitions(&self) -> &[Vec<RecordBatch>] {
         &self.partitions
     }
 
+    /// Ref to projection
     pub fn projection(&self) -> &Option<Vec<usize>> {
         &self.projection
+    }
+
+    /// Show sizes
+    pub fn show_sizes(&self) -> bool {
+        self.show_sizes
+    }
+
+    /// Ref to sort information
+    pub fn sort_information(&self) -> &[LexOrdering] {
+        &self.sort_information
     }
 
     /// A memory table can be ordered by multiple expressions simultaneously.
@@ -207,18 +214,66 @@ impl MemoryExec {
     /// where both `a ASC` and `b DESC` can describe the table ordering. With
     /// [`EquivalenceProperties`], we can keep track of these equivalences
     /// and treat `a ASC` and `b DESC` as the same ordering requirement.
-    pub fn with_sort_information(mut self, sort_information: Vec<LexOrdering>) -> Self {
-        self.sort_information = sort_information;
+    ///
+    /// Note that if there is an internal projection, that projection will be
+    /// also applied to the given `sort_information`.
+    pub fn try_with_sort_information(
+        mut self,
+        mut sort_information: Vec<LexOrdering>,
+    ) -> Result<Self> {
+        // All sort expressions must refer to the original schema
+        let fields = self.schema.fields();
+        let ambiguous_column = sort_information
+            .iter()
+            .flat_map(|ordering| ordering.inner.clone())
+            .flat_map(|expr| collect_columns(&expr.expr))
+            .find(|col| {
+                fields
+                    .get(col.index())
+                    .map(|field| field.name() != col.name())
+                    .unwrap_or(true)
+            });
+        if let Some(col) = ambiguous_column {
+            return internal_err!(
+                "Column {:?} is not found in the original schema of the MemoryExec",
+                col
+            );
+        }
 
+        // If there is a projection on the source, we also need to project orderings
+        if let Some(projection) = &self.projection {
+            let base_eqp = EquivalenceProperties::new_with_orderings(
+                self.original_schema(),
+                &sort_information,
+            );
+            let proj_exprs = projection
+                .iter()
+                .map(|idx| {
+                    let base_schema = self.original_schema();
+                    let name = base_schema.field(*idx).name();
+                    (Arc::new(Column::new(name, *idx)) as _, name.to_string())
+                })
+                .collect::<Vec<_>>();
+            let projection_mapping =
+                ProjectionMapping::try_new(&proj_exprs, &self.original_schema())?;
+            sort_information = base_eqp
+                .project(&projection_mapping, self.schema())
+                .oeq_class
+                .orderings;
+        }
+
+        self.sort_information = sort_information;
         // We need to update equivalence properties when updating sort information.
         let eq_properties = EquivalenceProperties::new_with_orderings(
             self.schema(),
             &self.sort_information,
         );
         self.cache = self.cache.with_eq_properties(eq_properties);
-        self
+
+        Ok(self)
     }
 
+    /// Arc clone of ref to original schema
     pub fn original_schema(&self) -> SchemaRef {
         Arc::clone(&self.schema)
     }
@@ -320,6 +375,7 @@ mod tests {
     use arrow_schema::{DataType, Field, Schema, SortOptions};
     use datafusion_physical_expr::expressions::col;
     use datafusion_physical_expr::PhysicalSortExpr;
+    use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
     #[test]
     fn test_memory_order_eq() -> datafusion_common::Result<()> {
@@ -328,7 +384,7 @@ mod tests {
             Field::new("b", DataType::Int64, false),
             Field::new("c", DataType::Int64, false),
         ]));
-        let sort1 = vec![
+        let sort1 = LexOrdering::new(vec![
             PhysicalSortExpr {
                 expr: col("a", &schema)?,
                 options: SortOptions::default(),
@@ -337,22 +393,22 @@ mod tests {
                 expr: col("b", &schema)?,
                 options: SortOptions::default(),
             },
-        ];
-        let sort2 = vec![PhysicalSortExpr {
+        ]);
+        let sort2 = LexOrdering::new(vec![PhysicalSortExpr {
             expr: col("c", &schema)?,
             options: SortOptions::default(),
-        }];
-        let mut expected_output_order = vec![];
+        }]);
+        let mut expected_output_order = LexOrdering::default();
         expected_output_order.extend(sort1.clone());
         expected_output_order.extend(sort2.clone());
 
         let sort_information = vec![sort1.clone(), sort2.clone()];
         let mem_exec = MemoryExec::try_new(&[vec![]], schema, None)?
-            .with_sort_information(sort_information);
+            .try_with_sort_information(sort_information)?;
 
         assert_eq!(
-            mem_exec.properties().output_ordering().unwrap(),
-            expected_output_order
+            mem_exec.properties().output_ordering().unwrap().to_vec(),
+            expected_output_order.inner
         );
         let eq_properties = mem_exec.properties().equivalence_properties();
         assert!(eq_properties.oeq_class().contains(&sort1));

@@ -19,15 +19,20 @@
 
 use crate::utils::make_scalar_function;
 use arrow::array::{Capacities, MutableArrayData};
-use arrow_array::{ArrayRef, GenericListArray, Int64Array, OffsetSizeTrait};
-use arrow_buffer::{ArrowNativeType, OffsetBuffer};
+use arrow_array::{
+    new_null_array, Array, ArrayRef, GenericListArray, Int64Array, OffsetSizeTrait,
+};
+use arrow_buffer::{ArrowNativeType, BooleanBufferBuilder, NullBuffer, OffsetBuffer};
 use arrow_schema::DataType::{FixedSizeList, LargeList, List};
 use arrow_schema::{DataType, FieldRef};
 use datafusion_common::cast::{as_int64_array, as_large_list_array, as_list_array};
 use datafusion_common::{exec_err, internal_datafusion_err, Result, ScalarValue};
-use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::scalar_doc_sections::DOC_SECTION_ARRAY;
+use datafusion_expr::{
+    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+};
 use std::any::Any;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 make_udf_expr_and_func!(
     ArrayResize,
@@ -82,12 +87,70 @@ impl ScalarUDFImpl for ArrayResize {
     fn aliases(&self) -> &[String] {
         &self.aliases
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_array_resize_doc())
+    }
+}
+
+static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+
+fn get_array_resize_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_ARRAY)
+            .with_description(
+                "Resizes the list to contain size elements. Initializes new elements with value or empty if value is not set.",
+            )
+            .with_syntax_example("array_resize(array, size, value)")
+            .with_sql_example(
+                r#"```sql
+> select array_resize([1, 2, 3], 5, 0);
++-------------------------------------+
+| array_resize(List([1,2,3],5,0))     |
++-------------------------------------+
+| [1, 2, 3, 0, 0]                     |
++-------------------------------------+
+```"#,
+            )
+            .with_argument(
+                "array",
+                "Array expression. Can be a constant, column, or function, and any combination of array operators.",
+            )
+            .with_argument(
+                "size",
+                "New size of given array.",
+            )
+            .with_argument(
+                "value",
+                "Defines new elements' value or empty if value is not set.",
+            )
+            .build()
+            .unwrap()
+    })
 }
 
 /// array_resize SQL function
 pub(crate) fn array_resize_inner(arg: &[ArrayRef]) -> Result<ArrayRef> {
     if arg.len() < 2 || arg.len() > 3 {
         return exec_err!("array_resize needs two or three arguments");
+    }
+
+    let array = &arg[0];
+
+    // Checks if entire array is null
+    if array.null_count() == array.len() {
+        let return_type = match array.data_type() {
+            List(field) => List(Arc::clone(field)),
+            LargeList(field) => LargeList(Arc::clone(field)),
+            _ => {
+                return exec_err!(
+                    "array_resize does not support type '{:?}'.",
+                    array.data_type()
+                )
+            }
+        };
+        return Ok(new_null_array(&return_type, array.len()));
     }
 
     let new_len = as_int64_array(&arg[1])?;
@@ -140,7 +203,16 @@ fn general_list_resize<O: OffsetSizeTrait + TryInto<i64>>(
         capacity,
     );
 
+    let mut null_builder = BooleanBufferBuilder::new(array.len());
+
     for (row_index, offset_window) in array.offsets().windows(2).enumerate() {
+        if array.is_null(row_index) {
+            null_builder.append(false);
+            offsets.push(offsets[row_index]);
+            continue;
+        }
+        null_builder.append(true);
+
         let count = count_array.value(row_index).to_usize().ok_or_else(|| {
             internal_datafusion_err!("array_resize: failed to convert size to usize")
         })?;
@@ -167,10 +239,12 @@ fn general_list_resize<O: OffsetSizeTrait + TryInto<i64>>(
     }
 
     let data = mutable.freeze();
+    let null_bit_buffer: NullBuffer = null_builder.finish().into();
+
     Ok(Arc::new(GenericListArray::<O>::try_new(
         Arc::clone(field),
         OffsetBuffer::<O>::new(offsets.into()),
         arrow_array::make_array(data),
-        None,
+        Some(null_bit_buffer),
     )?))
 }

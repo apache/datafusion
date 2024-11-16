@@ -54,7 +54,7 @@ rust_decimal = { version = "1.27.0" }
 sqllogictest = "0.22.0"
 sqlparser = { workspace = true }
 tempfile = { workspace = true }
-thiserror = { workspace = true }
+thiserror = "2.0.0"
 tokio = { workspace = true }
 tokio-postgres = { version = "0.7.7", optional = true }
 

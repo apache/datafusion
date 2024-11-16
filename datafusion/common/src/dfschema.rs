@@ -226,7 +226,12 @@ impl DFSchema {
 
         for (field, qualifier) in self.inner.fields().iter().zip(&self.field_qualifiers) {
             if let Some(qualifier) = qualifier {
-                qualified_names.insert((qualifier, field.name()));
+                if !qualified_names.insert((qualifier, field.name())) {
+                    return _schema_err!(SchemaError::DuplicateQualifiedField {
+                        qualifier: Box::new(qualifier.clone()),
+                        name: field.name().to_string(),
+                    });
+                }
             } else if !unqualified_names.insert(field.name()) {
                 return _schema_err!(SchemaError::DuplicateUnqualifiedField {
                     name: field.name().to_string()
@@ -310,7 +315,6 @@ impl DFSchema {
                 None => self_unqualified_names.contains(field.name().as_str()),
             };
             if !duplicated_field {
-                // self.inner.fields.push(field.clone());
                 schema_builder.push(Arc::clone(field));
                 qualifiers.push(qualifier.cloned());
             }
@@ -355,18 +359,7 @@ impl DFSchema {
                 // qualifier and name.
                 (Some(q), Some(field_q)) => q.resolved_eq(field_q) && f.name() == name,
                 // field to lookup is qualified but current field is unqualified.
-                (Some(qq), None) => {
-                    // the original field may now be aliased with a name that matches the
-                    // original qualified name
-                    let column = Column::from_qualified_name(f.name());
-                    match column {
-                        Column {
-                            relation: Some(r),
-                            name: column_name,
-                        } => &r == qq && column_name == name,
-                        _ => false,
-                    }
-                }
+                (Some(_), None) => false,
                 // field to lookup is unqualified, no need to compare qualifier
                 (None, Some(_)) | (None, None) => f.name() == name,
             })
@@ -693,7 +686,7 @@ impl DFSchema {
     /// name and type), ignoring both metadata and nullability.
     ///
     /// request to upstream: <https://github.com/apache/arrow-rs/issues/3199>
-    fn datatype_is_semantically_equal(dt1: &DataType, dt2: &DataType) -> bool {
+    pub fn datatype_is_semantically_equal(dt1: &DataType, dt2: &DataType) -> bool {
         // check nested fields
         match (dt1, dt2) {
             (DataType::Dictionary(k1, v1), DataType::Dictionary(k2, v2)) => {
@@ -1149,7 +1142,10 @@ mod tests {
         let left = DFSchema::try_from_qualified_schema("t1", &test_schema_1())?;
         let right = DFSchema::try_from_qualified_schema("t1", &test_schema_1())?;
         let join = left.join(&right);
-        assert!(join.err().is_none());
+        assert_eq!(
+            join.unwrap_err().strip_backtrace(),
+            "Schema error: Schema contains duplicate qualified field name t1.c0",
+        );
         Ok(())
     }
 

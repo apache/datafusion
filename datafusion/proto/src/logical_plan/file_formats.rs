@@ -57,7 +57,7 @@ impl CsvOptionsProto {
                 escape: options.escape.map_or(vec![], |v| vec![v]),
                 double_quote: options.double_quote.map_or(vec![], |v| vec![v as u8]),
                 compression: options.compression as i32,
-                schema_infer_max_rec: options.schema_infer_max_rec as u64,
+                schema_infer_max_rec: options.schema_infer_max_rec.map(|v| v as u64),
                 date_format: options.date_format.clone().unwrap_or_default(),
                 datetime_format: options.datetime_format.clone().unwrap_or_default(),
                 timestamp_format: options.timestamp_format.clone().unwrap_or_default(),
@@ -110,7 +110,7 @@ impl From<&CsvOptionsProto> for CsvOptions {
                 3 => CompressionTypeVariant::ZSTD,
                 _ => CompressionTypeVariant::UNCOMPRESSED,
             },
-            schema_infer_max_rec: proto.schema_infer_max_rec as usize,
+            schema_infer_max_rec: proto.schema_infer_max_rec.map(|v| v as usize),
             date_format: if proto.date_format.is_empty() {
                 None
             } else {
@@ -161,7 +161,7 @@ impl LogicalExtensionCodec for CsvLogicalExtensionCodec {
         &self,
         _buf: &[u8],
         _inputs: &[datafusion_expr::LogicalPlan],
-        _ctx: &datafusion::prelude::SessionContext,
+        _ctx: &SessionContext,
     ) -> datafusion_common::Result<datafusion_expr::Extension> {
         not_impl_err!("Method not implemented")
     }
@@ -179,17 +179,15 @@ impl LogicalExtensionCodec for CsvLogicalExtensionCodec {
         _buf: &[u8],
         _table_ref: &TableReference,
         _schema: arrow::datatypes::SchemaRef,
-        _ctx: &datafusion::prelude::SessionContext,
-    ) -> datafusion_common::Result<
-        std::sync::Arc<dyn datafusion::datasource::TableProvider>,
-    > {
+        _ctx: &SessionContext,
+    ) -> datafusion_common::Result<Arc<dyn datafusion::datasource::TableProvider>> {
         not_impl_err!("Method not implemented")
     }
 
     fn try_encode_table_provider(
         &self,
         _table_ref: &TableReference,
-        _node: std::sync::Arc<dyn datafusion::datasource::TableProvider>,
+        _node: Arc<dyn datafusion::datasource::TableProvider>,
         _buf: &mut Vec<u8>,
     ) -> datafusion_common::Result<()> {
         not_impl_err!("Method not implemented")
@@ -241,7 +239,7 @@ impl JsonOptionsProto {
         if let Some(options) = &factory.options {
             JsonOptionsProto {
                 compression: options.compression as i32,
-                schema_infer_max_rec: options.schema_infer_max_rec as u64,
+                schema_infer_max_rec: options.schema_infer_max_rec.map(|v| v as u64),
             }
         } else {
             JsonOptionsProto::default()
@@ -259,7 +257,7 @@ impl From<&JsonOptionsProto> for JsonOptions {
                 3 => CompressionTypeVariant::ZSTD,
                 _ => CompressionTypeVariant::UNCOMPRESSED,
             },
-            schema_infer_max_rec: proto.schema_infer_max_rec as usize,
+            schema_infer_max_rec: proto.schema_infer_max_rec.map(|v| v as usize),
         }
     }
 }
@@ -273,7 +271,7 @@ impl LogicalExtensionCodec for JsonLogicalExtensionCodec {
         &self,
         _buf: &[u8],
         _inputs: &[datafusion_expr::LogicalPlan],
-        _ctx: &datafusion::prelude::SessionContext,
+        _ctx: &SessionContext,
     ) -> datafusion_common::Result<datafusion_expr::Extension> {
         not_impl_err!("Method not implemented")
     }
@@ -291,17 +289,15 @@ impl LogicalExtensionCodec for JsonLogicalExtensionCodec {
         _buf: &[u8],
         _table_ref: &TableReference,
         _schema: arrow::datatypes::SchemaRef,
-        _ctx: &datafusion::prelude::SessionContext,
-    ) -> datafusion_common::Result<
-        std::sync::Arc<dyn datafusion::datasource::TableProvider>,
-    > {
+        _ctx: &SessionContext,
+    ) -> datafusion_common::Result<Arc<dyn datafusion::datasource::TableProvider>> {
         not_impl_err!("Method not implemented")
     }
 
     fn try_encode_table_provider(
         &self,
         _table_ref: &TableReference,
-        _node: std::sync::Arc<dyn datafusion::datasource::TableProvider>,
+        _node: Arc<dyn datafusion::datasource::TableProvider>,
         _buf: &mut Vec<u8>,
     ) -> datafusion_common::Result<()> {
         not_impl_err!("Method not implemented")
@@ -407,6 +403,7 @@ impl TableParquetOptionsProto {
                 maximum_parallel_row_group_writers: global_options.global.maximum_parallel_row_group_writers as u64,
                 maximum_buffered_record_batches_per_stream: global_options.global.maximum_buffered_record_batches_per_stream as u64,
                 schema_force_view_types: global_options.global.schema_force_view_types,
+                binary_as_string: global_options.global.binary_as_string,
             }),
             column_specific_options: column_specific_options.into_iter().map(|(column_name, options)| {
                 ParquetColumnSpecificOptions {
@@ -497,6 +494,7 @@ impl From<&ParquetOptionsProto> for ParquetOptions {
             maximum_parallel_row_group_writers: proto.maximum_parallel_row_group_writers as usize,
             maximum_buffered_record_batches_per_stream: proto.maximum_buffered_record_batches_per_stream as usize,
             schema_force_view_types: proto.schema_force_view_types,
+            binary_as_string: proto.binary_as_string,
         }
     }
 }
@@ -572,7 +570,7 @@ impl LogicalExtensionCodec for ParquetLogicalExtensionCodec {
         &self,
         _buf: &[u8],
         _inputs: &[datafusion_expr::LogicalPlan],
-        _ctx: &datafusion::prelude::SessionContext,
+        _ctx: &SessionContext,
     ) -> datafusion_common::Result<datafusion_expr::Extension> {
         not_impl_err!("Method not implemented")
     }
@@ -590,17 +588,15 @@ impl LogicalExtensionCodec for ParquetLogicalExtensionCodec {
         _buf: &[u8],
         _table_ref: &TableReference,
         _schema: arrow::datatypes::SchemaRef,
-        _ctx: &datafusion::prelude::SessionContext,
-    ) -> datafusion_common::Result<
-        std::sync::Arc<dyn datafusion::datasource::TableProvider>,
-    > {
+        _ctx: &SessionContext,
+    ) -> datafusion_common::Result<Arc<dyn datafusion::datasource::TableProvider>> {
         not_impl_err!("Method not implemented")
     }
 
     fn try_encode_table_provider(
         &self,
         _table_ref: &TableReference,
-        _node: std::sync::Arc<dyn datafusion::datasource::TableProvider>,
+        _node: Arc<dyn datafusion::datasource::TableProvider>,
         _buf: &mut Vec<u8>,
     ) -> datafusion_common::Result<()> {
         not_impl_err!("Method not implemented")
@@ -662,7 +658,7 @@ impl LogicalExtensionCodec for ArrowLogicalExtensionCodec {
         &self,
         _buf: &[u8],
         _inputs: &[datafusion_expr::LogicalPlan],
-        _ctx: &datafusion::prelude::SessionContext,
+        _ctx: &SessionContext,
     ) -> datafusion_common::Result<datafusion_expr::Extension> {
         not_impl_err!("Method not implemented")
     }
@@ -680,17 +676,15 @@ impl LogicalExtensionCodec for ArrowLogicalExtensionCodec {
         _buf: &[u8],
         _table_ref: &TableReference,
         _schema: arrow::datatypes::SchemaRef,
-        _ctx: &datafusion::prelude::SessionContext,
-    ) -> datafusion_common::Result<
-        std::sync::Arc<dyn datafusion::datasource::TableProvider>,
-    > {
+        _ctx: &SessionContext,
+    ) -> datafusion_common::Result<Arc<dyn datafusion::datasource::TableProvider>> {
         not_impl_err!("Method not implemented")
     }
 
     fn try_encode_table_provider(
         &self,
         _table_ref: &TableReference,
-        _node: std::sync::Arc<dyn datafusion::datasource::TableProvider>,
+        _node: Arc<dyn datafusion::datasource::TableProvider>,
         _buf: &mut Vec<u8>,
     ) -> datafusion_common::Result<()> {
         not_impl_err!("Method not implemented")
@@ -722,7 +716,7 @@ impl LogicalExtensionCodec for AvroLogicalExtensionCodec {
         &self,
         _buf: &[u8],
         _inputs: &[datafusion_expr::LogicalPlan],
-        _ctx: &datafusion::prelude::SessionContext,
+        _ctx: &SessionContext,
     ) -> datafusion_common::Result<datafusion_expr::Extension> {
         not_impl_err!("Method not implemented")
     }
@@ -740,17 +734,15 @@ impl LogicalExtensionCodec for AvroLogicalExtensionCodec {
         _buf: &[u8],
         _table_ref: &TableReference,
         _schema: arrow::datatypes::SchemaRef,
-        _cts: &datafusion::prelude::SessionContext,
-    ) -> datafusion_common::Result<
-        std::sync::Arc<dyn datafusion::datasource::TableProvider>,
-    > {
+        _cts: &SessionContext,
+    ) -> datafusion_common::Result<Arc<dyn datafusion::datasource::TableProvider>> {
         not_impl_err!("Method not implemented")
     }
 
     fn try_encode_table_provider(
         &self,
         _table_ref: &TableReference,
-        _node: std::sync::Arc<dyn datafusion::datasource::TableProvider>,
+        _node: Arc<dyn datafusion::datasource::TableProvider>,
         _buf: &mut Vec<u8>,
     ) -> datafusion_common::Result<()> {
         not_impl_err!("Method not implemented")

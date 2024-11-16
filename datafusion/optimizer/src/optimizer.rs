@@ -17,7 +17,7 @@
 
 //! [`Optimizer`] and [`OptimizerRule`]
 
-use std::collections::HashSet;
+use std::fmt::Debug;
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
@@ -27,8 +27,8 @@ use log::{debug, warn};
 use datafusion_common::alias::AliasGenerator;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::instant::Instant;
-use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRewriter};
-use datafusion_common::{internal_err, DFSchema, DataFusionError, Result};
+use datafusion_common::tree_node::{Transformed, TreeNodeRewriter};
+use datafusion_common::{internal_err, DFSchema, DataFusionError, HashSet, Result};
 use datafusion_expr::logical_plan::LogicalPlan;
 
 use crate::common_subexpr_eliminate::CommonSubexprEliminate;
@@ -50,7 +50,6 @@ use crate::propagate_empty_relation::PropagateEmptyRelation;
 use crate::push_down_filter::PushDownFilter;
 use crate::push_down_limit::PushDownLimit;
 use crate::replace_distinct_aggregate::ReplaceDistinctWithAggregate;
-use crate::rewrite_disjunctive_predicate::RewriteDisjunctivePredicate;
 use crate::scalar_subquery_to_join::ScalarSubqueryToJoin;
 use crate::simplify_expressions::SimplifyExpressions;
 use crate::single_distinct_to_groupby::SingleDistinctToGroupBy;
@@ -70,7 +69,7 @@ use crate::utils::log_plan;
 /// [`AnalyzerRule`]: crate::analyzer::AnalyzerRule
 /// [`SessionState::add_optimizer_rule`]: https://docs.rs/datafusion/latest/datafusion/execution/session_state/struct.SessionState.html#method.add_optimizer_rule
 
-pub trait OptimizerRule {
+pub trait OptimizerRule: Debug {
     /// Try and rewrite `plan` to an optimized form, returning None if the plan
     /// cannot be optimized by this rule.
     ///
@@ -214,7 +213,7 @@ impl OptimizerConfig for OptimizerContext {
 }
 
 /// A rule-based optimizer.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Optimizer {
     /// All optimizer rules to apply
     pub rules: Vec<Arc<dyn OptimizerRule + Send + Sync>>,
@@ -250,11 +249,6 @@ impl Optimizer {
             Arc::new(DecorrelatePredicateSubquery::new()),
             Arc::new(ScalarSubqueryToJoin::new()),
             Arc::new(ExtractEquijoinPredicate::new()),
-            // simplify expressions does not simplify expressions in subqueries, so we
-            // run it again after running the optimizations that potentially converted
-            // subqueries to joins
-            Arc::new(SimplifyExpressions::new()),
-            Arc::new(RewriteDisjunctivePredicate::new()),
             Arc::new(EliminateDuplicatedExpr::new()),
             Arc::new(EliminateFilter::new()),
             Arc::new(EliminateCrossJoin::new()),
@@ -385,11 +379,9 @@ impl Optimizer {
 
                 let result = match rule.apply_order() {
                     // optimizer handles recursion
-                    Some(apply_order) => new_plan.rewrite(&mut Rewriter::new(
-                        apply_order,
-                        rule.as_ref(),
-                        config,
-                    )),
+                    Some(apply_order) => new_plan.rewrite_with_subqueries(
+                        &mut Rewriter::new(apply_order, rule.as_ref(), config),
+                    ),
                     // rule handles recursion itself
                     None => optimize_plan_node(new_plan, rule.as_ref(), config),
                 }
@@ -666,6 +658,7 @@ mod tests {
 
     fn observe(_plan: &LogicalPlan, _rule: &dyn OptimizerRule) {}
 
+    #[derive(Default, Debug)]
     struct BadRule {}
 
     impl OptimizerRule for BadRule {
@@ -687,6 +680,7 @@ mod tests {
     }
 
     /// Replaces whatever plan with a single table scan
+    #[derive(Default, Debug)]
     struct GetTableScanRule {}
 
     impl OptimizerRule for GetTableScanRule {
@@ -713,6 +707,7 @@ mod tests {
     /// A goofy rule doing rotation of columns in all projections.
     ///
     /// Useful to test cycle detection.
+    #[derive(Default, Debug)]
     struct RotateProjectionRule {
         // reverse exprs instead of rotating on the first pass
         reverse_on_first_pass: Mutex<bool>,

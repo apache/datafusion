@@ -257,6 +257,17 @@ impl<'a> Default for ParquetReadOptions<'a> {
 }
 
 impl<'a> ParquetReadOptions<'a> {
+    /// Create a new ParquetReadOptions with default values
+    pub fn new() -> Self {
+        Default::default()
+    }
+
+    /// Specify file_extension
+    pub fn file_extension(mut self, file_extension: &'a str) -> Self {
+        self.file_extension = file_extension;
+        self
+    }
+
     /// Specify parquet_pruning
     pub fn parquet_pruning(mut self, parquet_pruning: bool) -> Self {
         self.parquet_pruning = Some(parquet_pruning);

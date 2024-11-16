@@ -28,6 +28,7 @@ use std::fmt;
 use std::hash::Hash;
 use std::hash::Hasher;
 use std::iter::repeat;
+use std::mem::{size_of, size_of_val};
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -58,6 +59,7 @@ use arrow::{
 use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano, ScalarBuffer};
 use arrow_schema::{UnionFields, UnionMode};
 
+use crate::format::DEFAULT_CAST_OPTIONS;
 use half::f16;
 pub use struct_builder::ScalarStructBuilder;
 
@@ -104,7 +106,7 @@ pub use struct_builder::ScalarStructBuilder;
 ///
 /// `ScalarValue` represents null values in the same way as Arrow. Nulls are
 /// "typed" in the sense that a null value in an [`Int32Array`] is different
-/// than a null value in a [`Float64Array`], and is different than the values in
+/// from a null value in a [`Float64Array`], and is different from the values in
 /// a [`NullArray`].
 ///
 /// ```
@@ -690,8 +692,8 @@ hash_float_value!((f64, u64), (f32, u32));
 // # Panics
 //
 // Panics if there is an error when creating hash values for rows
-impl std::hash::Hash for ScalarValue {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+impl Hash for ScalarValue {
+    fn hash<H: Hasher>(&self, state: &mut H) {
         use ScalarValue::*;
         match self {
             Decimal128(v, p, s) => {
@@ -767,7 +769,7 @@ impl std::hash::Hash for ScalarValue {
     }
 }
 
-fn hash_nested_array<H: std::hash::Hasher>(arr: ArrayRef, state: &mut H) {
+fn hash_nested_array<H: Hasher>(arr: ArrayRef, state: &mut H) {
     let arrays = vec![arr.to_owned()];
     let hashes_buffer = &mut vec![0; arr.len()];
     let random_state = ahash::RandomState::with_seeds(0, 0, 0, 0);
@@ -801,7 +803,7 @@ fn dict_from_scalar<K: ArrowDictionaryKeyType>(
     let values_array = value.to_array_of_size(1)?;
 
     // Create a key array with `size` elements, each of 0
-    let key_array: PrimitiveArray<K> = std::iter::repeat(if value.is_null() {
+    let key_array: PrimitiveArray<K> = repeat(if value.is_null() {
         None
     } else {
         Some(K::default_value())
@@ -976,6 +978,11 @@ impl ScalarValue {
     /// Returns a [`ScalarValue::Utf8`] representing `val`
     pub fn new_utf8(val: impl Into<String>) -> Self {
         ScalarValue::from(val.into())
+    }
+
+    /// Returns a [`ScalarValue::Utf8View`] representing `val`
+    pub fn new_utf8view(val: impl Into<String>) -> Self {
+        ScalarValue::Utf8View(Some(val.into()))
     }
 
     /// Returns a [`ScalarValue::IntervalYearMonth`] representing
@@ -2042,7 +2049,7 @@ impl ScalarValue {
         scale: i8,
         size: usize,
     ) -> Result<Decimal256Array> {
-        Ok(std::iter::repeat(value)
+        Ok(repeat(value)
             .take(size)
             .collect::<Decimal256Array>()
             .with_precision_and_scale(precision, scale)?)
@@ -2511,7 +2518,7 @@ impl ScalarValue {
     }
 
     fn list_to_array_of_size(arr: &dyn Array, size: usize) -> Result<ArrayRef> {
-        let arrays = std::iter::repeat(arr).take(size).collect::<Vec<_>>();
+        let arrays = repeat(arr).take(size).collect::<Vec<_>>();
         let ret = match !arrays.is_empty() {
             true => arrow::compute::concat(arrays.as_slice())?,
             false => arr.slice(0, 0),
@@ -2809,22 +2816,30 @@ impl ScalarValue {
 
     /// Try to parse `value` into a ScalarValue of type `target_type`
     pub fn try_from_string(value: String, target_type: &DataType) -> Result<Self> {
-        let value = ScalarValue::from(value);
-        let cast_options = CastOptions {
-            safe: false,
-            format_options: Default::default(),
-        };
-        let cast_arr = cast_with_options(&value.to_array()?, target_type, &cast_options)?;
-        ScalarValue::try_from_array(&cast_arr, 0)
+        ScalarValue::from(value).cast_to(target_type)
     }
 
     /// Try to cast this value to a ScalarValue of type `data_type`
-    pub fn cast_to(&self, data_type: &DataType) -> Result<Self> {
-        let cast_options = CastOptions {
-            safe: false,
-            format_options: Default::default(),
+    pub fn cast_to(&self, target_type: &DataType) -> Result<Self> {
+        self.cast_to_with_options(target_type, &DEFAULT_CAST_OPTIONS)
+    }
+
+    /// Try to cast this value to a ScalarValue of type `data_type` with [`CastOptions`]
+    pub fn cast_to_with_options(
+        &self,
+        target_type: &DataType,
+        cast_options: &CastOptions<'static>,
+    ) -> Result<Self> {
+        let scalar_array = match (self, target_type) {
+            (
+                ScalarValue::Float64(Some(float_ts)),
+                DataType::Timestamp(TimeUnit::Nanosecond, None),
+            ) => ScalarValue::Int64(Some((float_ts * 1_000_000_000_f64).trunc() as i64))
+                .to_array()?,
+            _ => self.to_array()?,
         };
-        let cast_arr = cast_with_options(&self.to_array()?, data_type, &cast_options)?;
+
+        let cast_arr = cast_with_options(&scalar_array, target_type, cast_options)?;
         ScalarValue::try_from_array(&cast_arr, 0)
     }
 
@@ -3074,7 +3089,7 @@ impl ScalarValue {
     /// Estimate size if bytes including `Self`. For values with internal containers such as `String`
     /// includes the allocated size (`capacity`) rather than the current length (`len`)
     pub fn size(&self) -> usize {
-        std::mem::size_of_val(self)
+        size_of_val(self)
             + match self {
                 ScalarValue::Null
                 | ScalarValue::Boolean(_)
@@ -3128,12 +3143,12 @@ impl ScalarValue {
                 ScalarValue::Map(arr) => arr.get_array_memory_size(),
                 ScalarValue::Union(vals, fields, _mode) => {
                     vals.as_ref()
-                        .map(|(_id, sv)| sv.size() - std::mem::size_of_val(sv))
+                        .map(|(_id, sv)| sv.size() - size_of_val(sv))
                         .unwrap_or_default()
                         // `fields` is boxed, so it is NOT already included in `self`
-                        + std::mem::size_of_val(fields)
-                        + (std::mem::size_of::<Field>() * fields.len())
-                        + fields.iter().map(|(_idx, field)| field.size() - std::mem::size_of_val(field)).sum::<usize>()
+                        + size_of_val(fields)
+                        + (size_of::<Field>() * fields.len())
+                        + fields.iter().map(|(_idx, field)| field.size() - size_of_val(field)).sum::<usize>()
                 }
                 ScalarValue::Dictionary(dt, sv) => {
                     // `dt` and `sv` are boxed, so they are NOT already included in `self`
@@ -3146,11 +3161,11 @@ impl ScalarValue {
     ///
     /// Includes the size of the [`Vec`] container itself.
     pub fn size_of_vec(vec: &Vec<Self>) -> usize {
-        std::mem::size_of_val(vec)
-            + (std::mem::size_of::<ScalarValue>() * vec.capacity())
+        size_of_val(vec)
+            + (size_of::<ScalarValue>() * vec.capacity())
             + vec
                 .iter()
-                .map(|sv| sv.size() - std::mem::size_of_val(sv))
+                .map(|sv| sv.size() - size_of_val(sv))
                 .sum::<usize>()
     }
 
@@ -3158,11 +3173,11 @@ impl ScalarValue {
     ///
     /// Includes the size of the [`VecDeque`] container itself.
     pub fn size_of_vec_deque(vec_deque: &VecDeque<Self>) -> usize {
-        std::mem::size_of_val(vec_deque)
-            + (std::mem::size_of::<ScalarValue>() * vec_deque.capacity())
+        size_of_val(vec_deque)
+            + (size_of::<ScalarValue>() * vec_deque.capacity())
             + vec_deque
                 .iter()
-                .map(|sv| sv.size() - std::mem::size_of_val(sv))
+                .map(|sv| sv.size() - size_of_val(sv))
                 .sum::<usize>()
     }
 
@@ -3170,11 +3185,11 @@ impl ScalarValue {
     ///
     /// Includes the size of the [`HashSet`] container itself.
     pub fn size_of_hashset<S>(set: &HashSet<Self, S>) -> usize {
-        std::mem::size_of_val(set)
-            + (std::mem::size_of::<ScalarValue>() * set.capacity())
+        size_of_val(set)
+            + (size_of::<ScalarValue>() * set.capacity())
             + set
                 .iter()
-                .map(|sv| sv.size() - std::mem::size_of_val(sv))
+                .map(|sv| sv.size() - size_of_val(sv))
                 .sum::<usize>()
     }
 }
@@ -3577,9 +3592,8 @@ impl fmt::Display for ScalarValue {
                     columns
                         .iter()
                         .zip(fields.iter())
-                        .enumerate()
-                        .map(|(index, (column, field))| {
-                            if nulls.is_some_and(|b| b.is_null(index)) {
+                        .map(|(column, field)| {
+                            if nulls.is_some_and(|b| b.is_null(0)) {
                                 format!("{}:NULL", field.name())
                             } else if let DataType::Struct(_) = field.data_type() {
                                 let sv = ScalarValue::Struct(Arc::new(
@@ -3875,7 +3889,7 @@ mod tests {
     use arrow::compute::{is_null, kernels};
     use arrow::error::ArrowError;
     use arrow::util::pretty::pretty_format_columns;
-    use arrow_buffer::Buffer;
+    use arrow_buffer::{Buffer, NullBuffer};
     use arrow_schema::Fields;
     use chrono::NaiveDate;
     use rand::Rng;
@@ -4437,7 +4451,7 @@ mod tests {
         let right_array = right.to_array().expect("Failed to convert to array");
         let arrow_left_array = left_array.as_primitive::<T>();
         let arrow_right_array = right_array.as_primitive::<T>();
-        let arrow_result = kernels::numeric::add(arrow_left_array, arrow_right_array);
+        let arrow_result = add(arrow_left_array, arrow_right_array);
 
         assert_eq!(scalar_result.is_ok(), arrow_result.is_ok());
     }
@@ -5052,13 +5066,13 @@ mod tests {
         // thus the size of the enum appears to as well
 
         // The value may also change depending on rust version
-        assert_eq!(std::mem::size_of::<ScalarValue>(), 64);
+        assert_eq!(size_of::<ScalarValue>(), 64);
     }
 
     #[test]
     fn memory_size() {
         let sv = ScalarValue::Binary(Some(Vec::with_capacity(10)));
-        assert_eq!(sv.size(), std::mem::size_of::<ScalarValue>() + 10,);
+        assert_eq!(sv.size(), size_of::<ScalarValue>() + 10,);
         let sv_size = sv.size();
 
         let mut v = Vec::with_capacity(10);
@@ -5067,9 +5081,7 @@ mod tests {
         assert_eq!(v.capacity(), 10);
         assert_eq!(
             ScalarValue::size_of_vec(&v),
-            std::mem::size_of::<Vec<ScalarValue>>()
-                + (9 * std::mem::size_of::<ScalarValue>())
-                + sv_size,
+            size_of::<Vec<ScalarValue>>() + (9 * size_of::<ScalarValue>()) + sv_size,
         );
 
         let mut s = HashSet::with_capacity(0);
@@ -5079,8 +5091,8 @@ mod tests {
         let s_capacity = s.capacity();
         assert_eq!(
             ScalarValue::size_of_hashset(&s),
-            std::mem::size_of::<HashSet<ScalarValue>>()
-                + ((s_capacity - 1) * std::mem::size_of::<ScalarValue>())
+            size_of::<HashSet<ScalarValue>>()
+                + ((s_capacity - 1) * size_of::<ScalarValue>())
                 + sv_size,
         );
     }
@@ -6585,6 +6597,43 @@ mod tests {
             "+-------------+",
             "| {a: 1, b: } |",
             "+-------------+",
+        ];
+        assert_batches_eq!(&expected, &[batch]);
+    }
+
+    #[test]
+    fn test_null_bug() {
+        let field_a = Field::new("a", DataType::Int32, true);
+        let field_b = Field::new("b", DataType::Int32, true);
+        let fields = Fields::from(vec![field_a, field_b]);
+
+        let array_a = Arc::new(Int32Array::from_iter_values([1]));
+        let array_b = Arc::new(Int32Array::from_iter_values([2]));
+        let arrays: Vec<ArrayRef> = vec![array_a, array_b];
+
+        let mut not_nulls = BooleanBufferBuilder::new(1);
+        not_nulls.append(true);
+        let not_nulls = not_nulls.finish();
+        let not_nulls = Some(NullBuffer::new(not_nulls));
+
+        let ar = StructArray::new(fields, arrays, not_nulls);
+        let s = ScalarValue::Struct(Arc::new(ar));
+
+        assert_eq!(s.to_string(), "{a:1,b:2}");
+        assert_eq!(format!("{s:?}"), r#"Struct({a:1,b:2})"#);
+
+        let ScalarValue::Struct(arr) = s else {
+            panic!("Expected struct");
+        };
+
+        //verify compared to arrow display
+        let batch = RecordBatch::try_from_iter(vec![("s", arr as _)]).unwrap();
+        let expected = [
+            "+--------------+",
+            "| s            |",
+            "+--------------+",
+            "| {a: 1, b: 2} |",
+            "+--------------+",
         ];
         assert_batches_eq!(&expected, &[batch]);
     }

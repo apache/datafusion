@@ -53,7 +53,7 @@ use futures::{ready, Stream, StreamExt};
 /// Note that there won't be any limit or checks applied to detect
 /// an infinite recursion, so it is up to the planner to ensure that
 /// it won't happen.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct RecursiveQueryExec {
     /// Name of the query handler
     name: String,
@@ -93,6 +93,26 @@ impl RecursiveQueryExec {
             metrics: ExecutionPlanMetricsSet::new(),
             cache,
         })
+    }
+
+    /// Ref to name
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Ref to static term
+    pub fn static_term(&self) -> &Arc<dyn ExecutionPlan> {
+        &self.static_term
+    }
+
+    /// Ref to recursive term
+    pub fn recursive_term(&self) -> &Arc<dyn ExecutionPlan> {
+        &self.recursive_term
+    }
+
+    /// is distinct
+    pub fn is_distinct(&self) -> bool {
+        self.is_distinct
     }
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.

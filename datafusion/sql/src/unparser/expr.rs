@@ -15,16 +15,16 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion_expr::ScalarUDF;
+use datafusion_expr::expr::Unnest;
 use sqlparser::ast::Value::SingleQuotedString;
 use sqlparser::ast::{
-    self, BinaryOperator, Expr as AstExpr, Function, FunctionArg, Ident, Interval,
-    ObjectName, TimezoneInfo, UnaryOperator,
+    self, BinaryOperator, Expr as AstExpr, Function, Ident, Interval, ObjectName,
+    TimezoneInfo, UnaryOperator,
 };
 use std::sync::Arc;
 use std::vec;
 
-use super::dialect::{DateFieldExtractStyle, IntervalStyle};
+use super::dialect::IntervalStyle;
 use super::Unparser;
 use arrow::datatypes::{Decimal128Type, Decimal256Type, DecimalType};
 use arrow::util::display::array_value_to_string;
@@ -77,13 +77,8 @@ pub fn expr_to_sql(expr: &Expr) -> Result<ast::Expr> {
     unparser.expr_to_sql(expr)
 }
 
-pub fn sort_to_sql(sort: &Sort) -> Result<ast::OrderByExpr> {
-    let unparser = Unparser::default();
-    unparser.sort_to_sql(sort)
-}
-
 const LOWEST: &BinaryOperator = &BinaryOperator::Or;
-// closest precedence we have to IS operator is BitwiseAnd (any other) in PG docs
+// Closest precedence we have to IS operator is BitwiseAnd (any other) in PG docs
 // (https://www.postgresql.org/docs/7.2/sql-precedence.html)
 const IS: &BinaryOperator = &BinaryOperator::BitwiseAnd;
 
@@ -116,47 +111,14 @@ impl Unparser<'_> {
             Expr::ScalarFunction(ScalarFunction { func, args }) => {
                 let func_name = func.name();
 
-                if let Some(expr) =
-                    self.scalar_function_to_sql_overrides(func_name, func, args)
+                if let Some(expr) = self
+                    .dialect
+                    .scalar_function_to_sql_overrides(self, func_name, args)?
                 {
                     return Ok(expr);
                 }
 
-                let args = args
-                    .iter()
-                    .map(|e| {
-                        if matches!(
-                            e,
-                            Expr::Wildcard {
-                                qualifier: None,
-                                ..
-                            }
-                        ) {
-                            Ok(FunctionArg::Unnamed(ast::FunctionArgExpr::Wildcard))
-                        } else {
-                            self.expr_to_sql_inner(e).map(|e| {
-                                FunctionArg::Unnamed(ast::FunctionArgExpr::Expr(e))
-                            })
-                        }
-                    })
-                    .collect::<Result<Vec<_>>>()?;
-
-                Ok(ast::Expr::Function(Function {
-                    name: ast::ObjectName(vec![Ident {
-                        value: func_name.to_string(),
-                        quote_style: None,
-                    }]),
-                    args: ast::FunctionArguments::List(ast::FunctionArgumentList {
-                        duplicate_treatment: None,
-                        args,
-                        clauses: vec![],
-                    }),
-                    filter: None,
-                    null_treatment: None,
-                    over: None,
-                    within_group: vec![],
-                    parameters: ast::FunctionArguments::None,
-                }))
+                self.scalar_function_to_sql(func_name, args)
             }
             Expr::Between(Between {
                 expr,
@@ -219,12 +181,24 @@ impl Unparser<'_> {
             }
             Expr::Cast(Cast { expr, data_type }) => {
                 let inner_expr = self.expr_to_sql_inner(expr)?;
-                Ok(ast::Expr::Cast {
-                    kind: ast::CastKind::Cast,
-                    expr: Box::new(inner_expr),
-                    data_type: self.arrow_dtype_to_ast_dtype(data_type)?,
-                    format: None,
-                })
+                match data_type {
+                    DataType::Dictionary(_, _) => match inner_expr {
+                        // Dictionary values don't need to be cast to other types when rewritten back to sql
+                        ast::Expr::Value(_) => Ok(inner_expr),
+                        _ => Ok(ast::Expr::Cast {
+                            kind: ast::CastKind::Cast,
+                            expr: Box::new(inner_expr),
+                            data_type: self.arrow_dtype_to_ast_dtype(data_type)?,
+                            format: None,
+                        }),
+                    },
+                    _ => Ok(ast::Expr::Cast {
+                        kind: ast::CastKind::Cast,
+                        expr: Box::new(inner_expr),
+                        data_type: self.arrow_dtype_to_ast_dtype(data_type)?,
+                        format: None,
+                    }),
+                }
             }
             Expr::Literal(value) => Ok(self.scalar_to_sql(value)?),
             Expr::Alias(Alias { expr, name: _, .. }) => self.expr_to_sql_inner(expr),
@@ -251,9 +225,10 @@ impl Unparser<'_> {
                         ast::WindowFrameUnits::Groups
                     }
                 };
-                let order_by: Vec<ast::OrderByExpr> = order_by
+
+                let order_by = order_by
                     .iter()
-                    .map(sort_to_sql)
+                    .map(|sort_expr| self.sort_to_sql(sort_expr))
                     .collect::<Result<Vec<_>>>()?;
 
                 let start_bound = self.convert_bound(&window_frame.start_bound)?;
@@ -273,7 +248,7 @@ impl Unparser<'_> {
                 }));
 
                 Ok(ast::Expr::Function(Function {
-                    name: ast::ObjectName(vec![Ident {
+                    name: ObjectName(vec![Ident {
                         value: func_name.to_string(),
                         quote_style: None,
                     }]),
@@ -307,6 +282,7 @@ impl Unparser<'_> {
                 expr: Box::new(self.expr_to_sql_inner(expr)?),
                 pattern: Box::new(self.expr_to_sql_inner(pattern)?),
                 escape_char: escape_char.map(|c| c.to_string()),
+                any: false,
             }),
             Expr::AggregateFunction(agg) => {
                 let func_name = agg.func.name();
@@ -317,7 +293,7 @@ impl Unparser<'_> {
                     None => None,
                 };
                 Ok(ast::Expr::Function(Function {
-                    name: ast::ObjectName(vec![Ident {
+                    name: ObjectName(vec![Ident {
                         value: func_name.to_string(),
                         quote_style: None,
                     }]),
@@ -492,8 +468,32 @@ impl Unparser<'_> {
                 Ok(ast::Expr::Value(ast::Value::Placeholder(p.id.to_string())))
             }
             Expr::OuterReferenceColumn(_, col) => self.col_to_sql(col),
-            Expr::Unnest(_) => not_impl_err!("Unsupported Expr conversion: {expr:?}"),
+            Expr::Unnest(unnest) => self.unnest_to_sql(unnest),
         }
+    }
+
+    pub fn scalar_function_to_sql(
+        &self,
+        func_name: &str,
+        args: &[Expr],
+    ) -> Result<ast::Expr> {
+        let args = self.function_args_to_sql(args)?;
+        Ok(ast::Expr::Function(Function {
+            name: ObjectName(vec![Ident {
+                value: func_name.to_string(),
+                quote_style: None,
+            }]),
+            args: ast::FunctionArguments::List(ast::FunctionArgumentList {
+                duplicate_treatment: None,
+                args,
+                clauses: vec![],
+            }),
+            filter: None,
+            null_treatment: None,
+            over: None,
+            within_group: vec![],
+            parameters: ast::FunctionArguments::None,
+        }))
     }
 
     pub fn sort_to_sql(&self, sort: &Sort) -> Result<ast::OrderByExpr> {
@@ -518,90 +518,9 @@ impl Unparser<'_> {
         })
     }
 
-    fn scalar_function_to_sql_overrides(
-        &self,
-        func_name: &str,
-        _func: &Arc<ScalarUDF>,
-        args: &[Expr],
-    ) -> Option<ast::Expr> {
-        if func_name.to_lowercase() == "date_part" {
-            match (self.dialect.date_field_extract_style(), args.len()) {
-                (DateFieldExtractStyle::Extract, 2) => {
-                    let date_expr = self.expr_to_sql(&args[1]).ok()?;
-
-                    if let Expr::Literal(ScalarValue::Utf8(Some(field))) = &args[0] {
-                        let field = match field.to_lowercase().as_str() {
-                            "year" => ast::DateTimeField::Year,
-                            "month" => ast::DateTimeField::Month,
-                            "day" => ast::DateTimeField::Day,
-                            "hour" => ast::DateTimeField::Hour,
-                            "minute" => ast::DateTimeField::Minute,
-                            "second" => ast::DateTimeField::Second,
-                            _ => return None,
-                        };
-
-                        return Some(ast::Expr::Extract {
-                            field,
-                            expr: Box::new(date_expr),
-                            syntax: ast::ExtractSyntax::From,
-                        });
-                    }
-                }
-                (DateFieldExtractStyle::Strftime, 2) => {
-                    let column = self.expr_to_sql(&args[1]).ok()?;
-
-                    if let Expr::Literal(ScalarValue::Utf8(Some(field))) = &args[0] {
-                        let field = match field.to_lowercase().as_str() {
-                            "year" => "%Y",
-                            "month" => "%m",
-                            "day" => "%d",
-                            "hour" => "%H",
-                            "minute" => "%M",
-                            "second" => "%S",
-                            _ => return None,
-                        };
-
-                        return Some(ast::Expr::Function(ast::Function {
-                            name: ast::ObjectName(vec![ast::Ident {
-                                value: "strftime".to_string(),
-                                quote_style: None,
-                            }]),
-                            args: ast::FunctionArguments::List(
-                                ast::FunctionArgumentList {
-                                    duplicate_treatment: None,
-                                    args: vec![
-                                        ast::FunctionArg::Unnamed(
-                                            ast::FunctionArgExpr::Expr(ast::Expr::Value(
-                                                ast::Value::SingleQuotedString(
-                                                    field.to_string(),
-                                                ),
-                                            )),
-                                        ),
-                                        ast::FunctionArg::Unnamed(
-                                            ast::FunctionArgExpr::Expr(column),
-                                        ),
-                                    ],
-                                    clauses: vec![],
-                                },
-                            ),
-                            filter: None,
-                            null_treatment: None,
-                            over: None,
-                            within_group: vec![],
-                            parameters: ast::FunctionArguments::None,
-                        }));
-                    }
-                }
-                _ => {} // no overrides for DateFieldExtractStyle::DatePart, because it's already a date_part
-            }
-        }
-
-        None
-    }
-
     fn ast_type_for_date64_in_cast(&self) -> ast::DataType {
         if self.dialect.use_timestamp_for_date64() {
-            ast::DataType::Timestamp(None, ast::TimezoneInfo::None)
+            ast::DataType::Timestamp(None, TimezoneInfo::None)
         } else {
             ast::DataType::Datetime(None)
         }
@@ -609,7 +528,11 @@ impl Unparser<'_> {
 
     fn col_to_sql(&self, col: &Column) -> Result<ast::Expr> {
         if let Some(table_ref) = &col.relation {
-            let mut id = table_ref.to_vec();
+            let mut id = if self.dialect.full_qualified_col() {
+                table_ref.to_vec()
+            } else {
+                vec![table_ref.table().to_string()]
+            };
             id.push(col.name.to_string());
             return Ok(ast::Expr::CompoundIdentifier(
                 id.iter()
@@ -653,7 +576,10 @@ impl Unparser<'_> {
         }
     }
 
-    fn function_args_to_sql(&self, args: &[Expr]) -> Result<Vec<ast::FunctionArg>> {
+    pub(crate) fn function_args_to_sql(
+        &self,
+        args: &[Expr],
+    ) -> Result<Vec<ast::FunctionArg>> {
         args.iter()
             .map(|e| {
                 if matches!(
@@ -673,16 +599,16 @@ impl Unparser<'_> {
     }
 
     /// This function can create an identifier with or without quotes based on the dialect rules
-    pub(super) fn new_ident_quoted_if_needs(&self, ident: String) -> ast::Ident {
+    pub(super) fn new_ident_quoted_if_needs(&self, ident: String) -> Ident {
         let quote_style = self.dialect.identifier_quote_style(&ident);
-        ast::Ident {
+        Ident {
             value: ident,
             quote_style,
         }
     }
 
-    pub(super) fn new_ident_without_quote_style(&self, str: String) -> ast::Ident {
-        ast::Ident {
+    pub(super) fn new_ident_without_quote_style(&self, str: String) -> Ident {
+        Ident {
             value: str,
             quote_style: None,
         }
@@ -692,7 +618,7 @@ impl Unparser<'_> {
         &self,
         lhs: ast::Expr,
         rhs: ast::Expr,
-        op: ast::BinaryOperator,
+        op: BinaryOperator,
     ) -> ast::Expr {
         ast::Expr::BinaryOp {
             left: Box::new(lhs),
@@ -774,10 +700,10 @@ impl Unparser<'_> {
         match expr {
             ast::Expr::Nested(_) | ast::Expr::Identifier(_) | ast::Expr::Value(_) => 100,
             ast::Expr::BinaryOp { op, .. } => self.sql_op_precedence(op),
-            // closest precedence we currently have to Between is PGLikeMatch
+            // Closest precedence we currently have to Between is PGLikeMatch
             // (https://www.postgresql.org/docs/7.2/sql-precedence.html)
             ast::Expr::Between { .. } => {
-                self.sql_op_precedence(&ast::BinaryOperator::PGLikeMatch)
+                self.sql_op_precedence(&BinaryOperator::PGLikeMatch)
             }
             _ => 0,
         }
@@ -807,70 +733,70 @@ impl Unparser<'_> {
 
     fn sql_to_op(&self, op: &BinaryOperator) -> Result<Operator> {
         match op {
-            ast::BinaryOperator::Eq => Ok(Operator::Eq),
-            ast::BinaryOperator::NotEq => Ok(Operator::NotEq),
-            ast::BinaryOperator::Lt => Ok(Operator::Lt),
-            ast::BinaryOperator::LtEq => Ok(Operator::LtEq),
-            ast::BinaryOperator::Gt => Ok(Operator::Gt),
-            ast::BinaryOperator::GtEq => Ok(Operator::GtEq),
-            ast::BinaryOperator::Plus => Ok(Operator::Plus),
-            ast::BinaryOperator::Minus => Ok(Operator::Minus),
-            ast::BinaryOperator::Multiply => Ok(Operator::Multiply),
-            ast::BinaryOperator::Divide => Ok(Operator::Divide),
-            ast::BinaryOperator::Modulo => Ok(Operator::Modulo),
-            ast::BinaryOperator::And => Ok(Operator::And),
-            ast::BinaryOperator::Or => Ok(Operator::Or),
-            ast::BinaryOperator::PGRegexMatch => Ok(Operator::RegexMatch),
-            ast::BinaryOperator::PGRegexIMatch => Ok(Operator::RegexIMatch),
-            ast::BinaryOperator::PGRegexNotMatch => Ok(Operator::RegexNotMatch),
-            ast::BinaryOperator::PGRegexNotIMatch => Ok(Operator::RegexNotIMatch),
-            ast::BinaryOperator::PGILikeMatch => Ok(Operator::ILikeMatch),
-            ast::BinaryOperator::PGNotLikeMatch => Ok(Operator::NotLikeMatch),
-            ast::BinaryOperator::PGLikeMatch => Ok(Operator::LikeMatch),
-            ast::BinaryOperator::PGNotILikeMatch => Ok(Operator::NotILikeMatch),
-            ast::BinaryOperator::BitwiseAnd => Ok(Operator::BitwiseAnd),
-            ast::BinaryOperator::BitwiseOr => Ok(Operator::BitwiseOr),
-            ast::BinaryOperator::BitwiseXor => Ok(Operator::BitwiseXor),
-            ast::BinaryOperator::PGBitwiseShiftRight => Ok(Operator::BitwiseShiftRight),
-            ast::BinaryOperator::PGBitwiseShiftLeft => Ok(Operator::BitwiseShiftLeft),
-            ast::BinaryOperator::StringConcat => Ok(Operator::StringConcat),
-            ast::BinaryOperator::AtArrow => Ok(Operator::AtArrow),
-            ast::BinaryOperator::ArrowAt => Ok(Operator::ArrowAt),
+            BinaryOperator::Eq => Ok(Operator::Eq),
+            BinaryOperator::NotEq => Ok(Operator::NotEq),
+            BinaryOperator::Lt => Ok(Operator::Lt),
+            BinaryOperator::LtEq => Ok(Operator::LtEq),
+            BinaryOperator::Gt => Ok(Operator::Gt),
+            BinaryOperator::GtEq => Ok(Operator::GtEq),
+            BinaryOperator::Plus => Ok(Operator::Plus),
+            BinaryOperator::Minus => Ok(Operator::Minus),
+            BinaryOperator::Multiply => Ok(Operator::Multiply),
+            BinaryOperator::Divide => Ok(Operator::Divide),
+            BinaryOperator::Modulo => Ok(Operator::Modulo),
+            BinaryOperator::And => Ok(Operator::And),
+            BinaryOperator::Or => Ok(Operator::Or),
+            BinaryOperator::PGRegexMatch => Ok(Operator::RegexMatch),
+            BinaryOperator::PGRegexIMatch => Ok(Operator::RegexIMatch),
+            BinaryOperator::PGRegexNotMatch => Ok(Operator::RegexNotMatch),
+            BinaryOperator::PGRegexNotIMatch => Ok(Operator::RegexNotIMatch),
+            BinaryOperator::PGILikeMatch => Ok(Operator::ILikeMatch),
+            BinaryOperator::PGNotLikeMatch => Ok(Operator::NotLikeMatch),
+            BinaryOperator::PGLikeMatch => Ok(Operator::LikeMatch),
+            BinaryOperator::PGNotILikeMatch => Ok(Operator::NotILikeMatch),
+            BinaryOperator::BitwiseAnd => Ok(Operator::BitwiseAnd),
+            BinaryOperator::BitwiseOr => Ok(Operator::BitwiseOr),
+            BinaryOperator::BitwiseXor => Ok(Operator::BitwiseXor),
+            BinaryOperator::PGBitwiseShiftRight => Ok(Operator::BitwiseShiftRight),
+            BinaryOperator::PGBitwiseShiftLeft => Ok(Operator::BitwiseShiftLeft),
+            BinaryOperator::StringConcat => Ok(Operator::StringConcat),
+            BinaryOperator::AtArrow => Ok(Operator::AtArrow),
+            BinaryOperator::ArrowAt => Ok(Operator::ArrowAt),
             _ => not_impl_err!("unsupported operation: {op:?}"),
         }
     }
 
-    fn op_to_sql(&self, op: &Operator) -> Result<ast::BinaryOperator> {
+    fn op_to_sql(&self, op: &Operator) -> Result<BinaryOperator> {
         match op {
-            Operator::Eq => Ok(ast::BinaryOperator::Eq),
-            Operator::NotEq => Ok(ast::BinaryOperator::NotEq),
-            Operator::Lt => Ok(ast::BinaryOperator::Lt),
-            Operator::LtEq => Ok(ast::BinaryOperator::LtEq),
-            Operator::Gt => Ok(ast::BinaryOperator::Gt),
-            Operator::GtEq => Ok(ast::BinaryOperator::GtEq),
-            Operator::Plus => Ok(ast::BinaryOperator::Plus),
-            Operator::Minus => Ok(ast::BinaryOperator::Minus),
-            Operator::Multiply => Ok(ast::BinaryOperator::Multiply),
-            Operator::Divide => Ok(ast::BinaryOperator::Divide),
-            Operator::Modulo => Ok(ast::BinaryOperator::Modulo),
-            Operator::And => Ok(ast::BinaryOperator::And),
-            Operator::Or => Ok(ast::BinaryOperator::Or),
+            Operator::Eq => Ok(BinaryOperator::Eq),
+            Operator::NotEq => Ok(BinaryOperator::NotEq),
+            Operator::Lt => Ok(BinaryOperator::Lt),
+            Operator::LtEq => Ok(BinaryOperator::LtEq),
+            Operator::Gt => Ok(BinaryOperator::Gt),
+            Operator::GtEq => Ok(BinaryOperator::GtEq),
+            Operator::Plus => Ok(BinaryOperator::Plus),
+            Operator::Minus => Ok(BinaryOperator::Minus),
+            Operator::Multiply => Ok(BinaryOperator::Multiply),
+            Operator::Divide => Ok(BinaryOperator::Divide),
+            Operator::Modulo => Ok(BinaryOperator::Modulo),
+            Operator::And => Ok(BinaryOperator::And),
+            Operator::Or => Ok(BinaryOperator::Or),
             Operator::IsDistinctFrom => not_impl_err!("unsupported operation: {op:?}"),
             Operator::IsNotDistinctFrom => not_impl_err!("unsupported operation: {op:?}"),
-            Operator::RegexMatch => Ok(ast::BinaryOperator::PGRegexMatch),
-            Operator::RegexIMatch => Ok(ast::BinaryOperator::PGRegexIMatch),
-            Operator::RegexNotMatch => Ok(ast::BinaryOperator::PGRegexNotMatch),
-            Operator::RegexNotIMatch => Ok(ast::BinaryOperator::PGRegexNotIMatch),
-            Operator::ILikeMatch => Ok(ast::BinaryOperator::PGILikeMatch),
-            Operator::NotLikeMatch => Ok(ast::BinaryOperator::PGNotLikeMatch),
-            Operator::LikeMatch => Ok(ast::BinaryOperator::PGLikeMatch),
-            Operator::NotILikeMatch => Ok(ast::BinaryOperator::PGNotILikeMatch),
-            Operator::BitwiseAnd => Ok(ast::BinaryOperator::BitwiseAnd),
-            Operator::BitwiseOr => Ok(ast::BinaryOperator::BitwiseOr),
-            Operator::BitwiseXor => Ok(ast::BinaryOperator::BitwiseXor),
-            Operator::BitwiseShiftRight => Ok(ast::BinaryOperator::PGBitwiseShiftRight),
-            Operator::BitwiseShiftLeft => Ok(ast::BinaryOperator::PGBitwiseShiftLeft),
-            Operator::StringConcat => Ok(ast::BinaryOperator::StringConcat),
+            Operator::RegexMatch => Ok(BinaryOperator::PGRegexMatch),
+            Operator::RegexIMatch => Ok(BinaryOperator::PGRegexIMatch),
+            Operator::RegexNotMatch => Ok(BinaryOperator::PGRegexNotMatch),
+            Operator::RegexNotIMatch => Ok(BinaryOperator::PGRegexNotIMatch),
+            Operator::ILikeMatch => Ok(BinaryOperator::PGILikeMatch),
+            Operator::NotLikeMatch => Ok(BinaryOperator::PGNotLikeMatch),
+            Operator::LikeMatch => Ok(BinaryOperator::PGLikeMatch),
+            Operator::NotILikeMatch => Ok(BinaryOperator::PGNotILikeMatch),
+            Operator::BitwiseAnd => Ok(BinaryOperator::BitwiseAnd),
+            Operator::BitwiseOr => Ok(BinaryOperator::BitwiseOr),
+            Operator::BitwiseXor => Ok(BinaryOperator::BitwiseXor),
+            Operator::BitwiseShiftRight => Ok(BinaryOperator::PGBitwiseShiftRight),
+            Operator::BitwiseShiftLeft => Ok(BinaryOperator::PGBitwiseShiftLeft),
+            Operator::StringConcat => Ok(BinaryOperator::StringConcat),
             Operator::AtArrow => not_impl_err!("unsupported operation: {op:?}"),
             Operator::ArrowAt => not_impl_err!("unsupported operation: {op:?}"),
         }
@@ -953,11 +879,19 @@ impl Unparser<'_> {
             }
             ScalarValue::Float16(None) => Ok(ast::Expr::Value(ast::Value::Null)),
             ScalarValue::Float32(Some(f)) => {
-                Ok(ast::Expr::Value(ast::Value::Number(f.to_string(), false)))
+                let f_val = match f.fract() {
+                    0.0 => format!("{:.1}", f),
+                    _ => format!("{}", f),
+                };
+                Ok(ast::Expr::Value(ast::Value::Number(f_val, false)))
             }
             ScalarValue::Float32(None) => Ok(ast::Expr::Value(ast::Value::Null)),
             ScalarValue::Float64(Some(f)) => {
-                Ok(ast::Expr::Value(ast::Value::Number(f.to_string(), false)))
+                let f_val = match f.fract() {
+                    0.0 => format!("{:.1}", f),
+                    _ => format!("{}", f),
+                };
+                Ok(ast::Expr::Value(ast::Value::Number(f_val, false)))
             }
             ScalarValue::Float64(None) => Ok(ast::Expr::Value(ast::Value::Null)),
             ScalarValue::Decimal128(Some(value), precision, scale) => {
@@ -1006,17 +940,17 @@ impl Unparser<'_> {
                 Ok(ast::Expr::Value(ast::Value::Number(ui.to_string(), false)))
             }
             ScalarValue::UInt64(None) => Ok(ast::Expr::Value(ast::Value::Null)),
-            ScalarValue::Utf8(Some(str)) => Ok(ast::Expr::Value(
-                ast::Value::SingleQuotedString(str.to_string()),
-            )),
+            ScalarValue::Utf8(Some(str)) => {
+                Ok(ast::Expr::Value(SingleQuotedString(str.to_string())))
+            }
             ScalarValue::Utf8(None) => Ok(ast::Expr::Value(ast::Value::Null)),
-            ScalarValue::Utf8View(Some(str)) => Ok(ast::Expr::Value(
-                ast::Value::SingleQuotedString(str.to_string()),
-            )),
+            ScalarValue::Utf8View(Some(str)) => {
+                Ok(ast::Expr::Value(SingleQuotedString(str.to_string())))
+            }
             ScalarValue::Utf8View(None) => Ok(ast::Expr::Value(ast::Value::Null)),
-            ScalarValue::LargeUtf8(Some(str)) => Ok(ast::Expr::Value(
-                ast::Value::SingleQuotedString(str.to_string()),
-            )),
+            ScalarValue::LargeUtf8(Some(str)) => {
+                Ok(ast::Expr::Value(SingleQuotedString(str.to_string())))
+            }
             ScalarValue::LargeUtf8(None) => Ok(ast::Expr::Value(ast::Value::Null)),
             ScalarValue::Binary(Some(_)) => not_impl_err!("Unsupported scalar: {v:?}"),
             ScalarValue::Binary(None) => Ok(ast::Expr::Value(ast::Value::Null)),
@@ -1049,7 +983,7 @@ impl Unparser<'_> {
 
                 Ok(ast::Expr::Cast {
                     kind: ast::CastKind::Cast,
-                    expr: Box::new(ast::Expr::Value(ast::Value::SingleQuotedString(
+                    expr: Box::new(ast::Expr::Value(SingleQuotedString(
                         date.to_string(),
                     ))),
                     data_type: ast::DataType::Date,
@@ -1072,7 +1006,7 @@ impl Unparser<'_> {
 
                 Ok(ast::Expr::Cast {
                     kind: ast::CastKind::Cast,
-                    expr: Box::new(ast::Expr::Value(ast::Value::SingleQuotedString(
+                    expr: Box::new(ast::Expr::Value(SingleQuotedString(
                         datetime.to_string(),
                     ))),
                     data_type: self.ast_type_for_date64_in_cast(),
@@ -1209,7 +1143,7 @@ impl Unparser<'_> {
             return Ok(ast::Expr::Interval(interval));
         }
 
-        // calculate the best single interval to represent the provided days and microseconds
+        // Calculate the best single interval to represent the provided days and microseconds
 
         let microseconds = microseconds + (days as i64 * 24 * 60 * 60 * 1_000_000);
 
@@ -1314,9 +1248,9 @@ impl Unparser<'_> {
             IntervalStyle::SQLStandard => match v {
                 ScalarValue::IntervalYearMonth(Some(v)) => {
                     let interval = Interval {
-                        value: Box::new(ast::Expr::Value(
-                            ast::Value::SingleQuotedString(v.to_string()),
-                        )),
+                        value: Box::new(ast::Expr::Value(SingleQuotedString(
+                            v.to_string(),
+                        ))),
                         leading_field: Some(ast::DateTimeField::Month),
                         leading_precision: None,
                         last_field: None,
@@ -1335,11 +1269,9 @@ impl Unparser<'_> {
 
                     let millis = v.milliseconds % 1_000;
                     let interval = Interval {
-                        value: Box::new(ast::Expr::Value(
-                            ast::Value::SingleQuotedString(format!(
-                                "{days} {hours}:{mins}:{secs}.{millis:3}"
-                            )),
-                        )),
+                        value: Box::new(ast::Expr::Value(SingleQuotedString(format!(
+                            "{days} {hours}:{mins}:{secs}.{millis:3}"
+                        )))),
                         leading_field: Some(ast::DateTimeField::Day),
                         leading_precision: None,
                         last_field: Some(ast::DateTimeField::Second),
@@ -1350,9 +1282,9 @@ impl Unparser<'_> {
                 ScalarValue::IntervalMonthDayNano(Some(v)) => {
                     if v.months >= 0 && v.days == 0 && v.nanoseconds == 0 {
                         let interval = Interval {
-                            value: Box::new(ast::Expr::Value(
-                                ast::Value::SingleQuotedString(v.months.to_string()),
-                            )),
+                            value: Box::new(ast::Expr::Value(SingleQuotedString(
+                                v.months.to_string(),
+                            ))),
                             leading_field: Some(ast::DateTimeField::Month),
                             leading_precision: None,
                             last_field: None,
@@ -1371,11 +1303,9 @@ impl Unparser<'_> {
                         let millis = (v.nanoseconds % 1_000_000_000) / 1_000_000;
 
                         let interval = Interval {
-                            value: Box::new(ast::Expr::Value(
-                                ast::Value::SingleQuotedString(format!(
-                                    "{days} {hours}:{mins}:{secs}.{millis:03}"
-                                )),
-                            )),
+                            value: Box::new(ast::Expr::Value(SingleQuotedString(
+                                format!("{days} {hours}:{mins}:{secs}.{millis:03}"),
+                            ))),
                             leading_field: Some(ast::DateTimeField::Day),
                             leading_precision: None,
                             last_field: Some(ast::DateTimeField::Second),
@@ -1412,6 +1342,29 @@ impl Unparser<'_> {
         }
     }
 
+    /// Converts an UNNEST operation to an AST expression by wrapping it as a function call,
+    /// since there is no direct representation for UNNEST in the AST.
+    fn unnest_to_sql(&self, unnest: &Unnest) -> Result<ast::Expr> {
+        let args = self.function_args_to_sql(std::slice::from_ref(&unnest.expr))?;
+
+        Ok(ast::Expr::Function(Function {
+            name: ObjectName(vec![Ident {
+                value: "UNNEST".to_string(),
+                quote_style: None,
+            }]),
+            args: ast::FunctionArguments::List(ast::FunctionArgumentList {
+                duplicate_treatment: None,
+                args,
+                clauses: vec![],
+            }),
+            filter: None,
+            null_treatment: None,
+            over: None,
+            within_group: vec![],
+            parameters: ast::FunctionArguments::None,
+        }))
+    }
+
     fn arrow_dtype_to_ast_dtype(&self, data_type: &DataType) -> Result<ast::DataType> {
         match data_type {
             DataType::Null => {
@@ -1420,7 +1373,7 @@ impl Unparser<'_> {
             DataType::Boolean => Ok(ast::DataType::Bool),
             DataType::Int8 => Ok(ast::DataType::TinyInt(None)),
             DataType::Int16 => Ok(ast::DataType::SmallInt(None)),
-            DataType::Int32 => Ok(ast::DataType::Integer(None)),
+            DataType::Int32 => Ok(self.dialect.int32_cast_dtype()),
             DataType::Int64 => Ok(self.dialect.int64_cast_dtype()),
             DataType::UInt8 => Ok(ast::DataType::UnsignedTinyInt(None)),
             DataType::UInt16 => Ok(ast::DataType::UnsignedSmallInt(None)),
@@ -1534,7 +1487,10 @@ mod tests {
     use datafusion_functions_aggregate::expr_fn::sum;
     use datafusion_functions_window::row_number::row_number_udwf;
 
-    use crate::unparser::dialect::{CustomDialect, CustomDialectBuilder};
+    use crate::unparser::dialect::{
+        CustomDialect, CustomDialectBuilder, DateFieldExtractStyle, Dialect,
+        PostgreSqlDialect,
+    };
 
     use super::*;
 
@@ -1594,7 +1550,7 @@ mod tests {
                     name: "c".to_string(),
                 })
                 .gt(lit(4)),
-                r#"(a.b.c > 4)"#,
+                r#"(b.c > 4)"#,
             ),
             (
                 case(col("a"))
@@ -1924,6 +1880,15 @@ mod tests {
                 }),
                 r#"CAST(a AS DECIMAL(12,0))"#,
             ),
+            (
+                Expr::Unnest(Unnest {
+                    expr: Box::new(Expr::Column(Column {
+                        relation: Some(TableReference::partial("schema", "table")),
+                        name: "array_col".to_string(),
+                    })),
+                }),
+                r#"UNNEST("table".array_col)"#,
+            ),
         ];
 
         for (expr, expected) in tests {
@@ -1998,11 +1963,8 @@ mod tests {
     #[test]
     fn custom_dialect_float64_ast_dtype() -> Result<()> {
         for (float64_ast_dtype, identifier) in [
-            (sqlparser::ast::DataType::Double, "DOUBLE"),
-            (
-                sqlparser::ast::DataType::DoublePrecision,
-                "DOUBLE PRECISION",
-            ),
+            (ast::DataType::Double, "DOUBLE"),
+            (ast::DataType::DoublePrecision, "DOUBLE PRECISION"),
         ] {
             let dialect = CustomDialectBuilder::new()
                 .with_float64_ast_dtype(float64_ast_dtype)
@@ -2184,6 +2146,28 @@ mod tests {
     }
 
     #[test]
+    fn test_float_scalar_to_expr() {
+        let tests = [
+            (Expr::Literal(ScalarValue::Float64(Some(3f64))), "3.0"),
+            (Expr::Literal(ScalarValue::Float64(Some(3.1f64))), "3.1"),
+            (Expr::Literal(ScalarValue::Float32(Some(-2f32))), "-2.0"),
+            (
+                Expr::Literal(ScalarValue::Float32(Some(-2.989f32))),
+                "-2.989",
+            ),
+        ];
+        for (value, expected) in tests {
+            let dialect = CustomDialectBuilder::new().build();
+            let unparser = Unparser::new(&dialect);
+
+            let ast = unparser.expr_to_sql(&value).expect("to be unparsed");
+            let actual = format!("{ast}");
+
+            assert_eq!(actual, expected);
+        }
+    }
+
+    #[test]
     fn custom_dialect_use_char_for_utf8_cast() -> Result<()> {
         let default_dialect = CustomDialectBuilder::default().build();
         let mysql_custom_dialect = CustomDialectBuilder::new()
@@ -2297,6 +2281,34 @@ mod tests {
     }
 
     #[test]
+    fn custom_dialect_with_int32_cast_dtype() -> Result<()> {
+        let default_dialect = CustomDialectBuilder::new().build();
+        let mysql_dialect = CustomDialectBuilder::new()
+            .with_int32_cast_dtype(ast::DataType::Custom(
+                ObjectName(vec![Ident::new("SIGNED")]),
+                vec![],
+            ))
+            .build();
+
+        for (dialect, identifier) in
+            [(default_dialect, "INTEGER"), (mysql_dialect, "SIGNED")]
+        {
+            let unparser = Unparser::new(&dialect);
+            let expr = Expr::Cast(Cast {
+                expr: Box::new(col("a")),
+                data_type: DataType::Int32,
+            });
+            let ast = unparser.expr_to_sql(&expr)?;
+
+            let actual = format!("{}", ast);
+            let expected = format!(r#"CAST(a AS {identifier})"#);
+
+            assert_eq!(actual, expected);
+        }
+        Ok(())
+    }
+
+    #[test]
     fn custom_dialect_with_timestamp_cast_dtype() -> Result<()> {
         let default_dialect = CustomDialectBuilder::new().build();
         let mysql_dialect = CustomDialectBuilder::new()
@@ -2356,6 +2368,63 @@ mod tests {
 
             let actual = format!("{}", ast);
             let expected = format!(r#"CAST(a AS {identifier})"#);
+
+            assert_eq!(actual, expected);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_cast_value_to_dict_expr() {
+        let tests = [(
+            Expr::Cast(Cast {
+                expr: Box::new(Expr::Literal(ScalarValue::Utf8(Some(
+                    "variation".to_string(),
+                )))),
+                data_type: DataType::Dictionary(Box::new(Int8), Box::new(DataType::Utf8)),
+            }),
+            "'variation'",
+        )];
+        for (value, expected) in tests {
+            let dialect = CustomDialectBuilder::new().build();
+            let unparser = Unparser::new(&dialect);
+
+            let ast = unparser.expr_to_sql(&value).expect("to be unparsed");
+            let actual = format!("{ast}");
+
+            assert_eq!(actual, expected);
+        }
+    }
+
+    #[test]
+    fn test_round_scalar_fn_to_expr() -> Result<()> {
+        let default_dialect: Arc<dyn Dialect> = Arc::new(
+            CustomDialectBuilder::new()
+                .with_identifier_quote_style('"')
+                .build(),
+        );
+        let postgres_dialect: Arc<dyn Dialect> = Arc::new(PostgreSqlDialect {});
+
+        for (dialect, identifier) in
+            [(default_dialect, "DOUBLE"), (postgres_dialect, "NUMERIC")]
+        {
+            let unparser = Unparser::new(dialect.as_ref());
+            let expr = Expr::ScalarFunction(ScalarFunction {
+                func: Arc::new(ScalarUDF::from(
+                    datafusion_functions::math::round::RoundFunc::new(),
+                )),
+                args: vec![
+                    Expr::Cast(Cast {
+                        expr: Box::new(col("a")),
+                        data_type: DataType::Float64,
+                    }),
+                    Expr::Literal(ScalarValue::Int64(Some(2))),
+                ],
+            });
+            let ast = unparser.expr_to_sql(&expr)?;
+
+            let actual = format!("{}", ast);
+            let expected = format!(r#"round(CAST("a" AS {identifier}), 2)"#);
 
             assert_eq!(actual, expected);
         }

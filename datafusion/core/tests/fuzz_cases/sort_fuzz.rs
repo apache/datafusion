@@ -30,6 +30,7 @@ use datafusion::physical_plan::{collect, ExecutionPlan};
 use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_execution::memory_pool::GreedyMemoryPool;
 use datafusion_physical_expr::expressions::col;
+use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use rand::Rng;
 use std::sync::Arc;
 use test_utils::{batches_to_vec, partitions_to_sorted_vec};
@@ -37,8 +38,8 @@ use test_utils::{batches_to_vec, partitions_to_sorted_vec};
 const KB: usize = 1 << 10;
 #[tokio::test]
 #[cfg_attr(tarpaulin, ignore)]
-async fn test_sort_1k_mem() {
-    for (batch_size, should_spill) in [(5, false), (20000, true), (1000000, true)] {
+async fn test_sort_10k_mem() {
+    for (batch_size, should_spill) in [(5, false), (20000, true), (500000, true)] {
         SortTest::new()
             .with_int32_batches(batch_size)
             .with_pool_size(10 * KB)
@@ -114,13 +115,13 @@ impl SortTest {
             .expect("at least one batch");
         let schema = first_batch.schema();
 
-        let sort = vec![PhysicalSortExpr {
+        let sort = LexOrdering::new(vec![PhysicalSortExpr {
             expr: col("x", &schema).unwrap(),
             options: SortOptions {
                 descending: false,
                 nulls_first: true,
             },
-        }];
+        }]);
 
         let exec = MemoryExec::try_new(&input, schema, None).unwrap();
         let sort = Arc::new(SortExec::new(sort, Arc::new(exec)));

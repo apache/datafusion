@@ -21,13 +21,14 @@ use crate::expr::schema_name_from_exprs_comma_seperated_without_space;
 use crate::simplify::{ExprSimplifyResult, SimplifyInfo};
 use crate::sort_properties::{ExprProperties, SortProperties};
 use crate::{
-    ColumnarValue, Expr, ReturnTypeFunction, ScalarFunctionImplementation, Signature,
+    ColumnarValue, Documentation, Expr, ScalarFunctionImplementation, Signature,
 };
 use arrow::datatypes::DataType;
 use datafusion_common::{not_impl_err, ExprSchema, Result};
 use datafusion_expr_common::interval_arithmetic::Interval;
 use std::any::Any;
-use std::fmt::{self, Debug, Formatter};
+use std::cmp::Ordering;
+use std::fmt::Debug;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::Arc;
 
@@ -64,6 +65,16 @@ impl PartialEq for ScalarUDF {
     }
 }
 
+// Manual implementation based on `ScalarUDFImpl::equals`
+impl PartialOrd for ScalarUDF {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        match self.name().partial_cmp(other.name()) {
+            Some(Ordering::Equal) => self.signature().partial_cmp(other.signature()),
+            cmp => cmp,
+        }
+    }
+}
+
 impl Eq for ScalarUDF {}
 
 impl Hash for ScalarUDF {
@@ -73,25 +84,6 @@ impl Hash for ScalarUDF {
 }
 
 impl ScalarUDF {
-    /// Create a new ScalarUDF from low level details.
-    ///
-    /// See  [`ScalarUDFImpl`] for a more convenient way to create a
-    /// `ScalarUDF` using trait objects
-    #[deprecated(since = "34.0.0", note = "please implement ScalarUDFImpl instead")]
-    pub fn new(
-        name: &str,
-        signature: &Signature,
-        return_type: &ReturnTypeFunction,
-        fun: &ScalarFunctionImplementation,
-    ) -> Self {
-        Self::new_from_impl(ScalarUdfLegacyWrapper {
-            name: name.to_owned(),
-            signature: signature.clone(),
-            return_type: Arc::clone(return_type),
-            fun: Arc::clone(fun),
-        })
-    }
-
     /// Create a new `ScalarUDF` from a `[ScalarUDFImpl]` trait object
     ///
     /// Note this is the same as using the `From` impl (`ScalarUDF::from`)
@@ -172,6 +164,19 @@ impl ScalarUDF {
         self.inner.signature()
     }
 
+    /// The datatype this function returns given the input argument types.
+    /// This function is used when the input arguments are [`DataType`]s.
+    ///
+    ///  # Notes
+    ///
+    /// If a function implement [`ScalarUDFImpl::return_type_from_exprs`],
+    /// its [`ScalarUDFImpl::return_type`] should raise an error.
+    ///
+    /// See [`ScalarUDFImpl::return_type`] for more details.
+    pub fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+        self.inner.return_type(arg_types)
+    }
+
     /// The datatype this function returns given the input argument input types.
     /// This function is used when the input arguments are [`Expr`]s.
     ///
@@ -201,7 +206,9 @@ impl ScalarUDF {
     /// Invoke the function on `args`, returning the appropriate result.
     ///
     /// See [`ScalarUDFImpl::invoke`] for more details.
+    #[deprecated(since = "42.1.0", note = "Use `invoke_batch` instead")]
     pub fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+        #[allow(deprecated)]
         self.inner.invoke(args)
     }
 
@@ -209,17 +216,32 @@ impl ScalarUDF {
         self.inner.is_nullable(args, schema)
     }
 
+    /// Invoke the function with `args` and number of rows, returning the appropriate result.
+    ///
+    /// See [`ScalarUDFImpl::invoke_batch`] for more details.
+    pub fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        number_rows: usize,
+    ) -> Result<ColumnarValue> {
+        self.inner.invoke_batch(args, number_rows)
+    }
+
     /// Invoke the function without `args` but number of rows, returning the appropriate result.
     ///
     /// See [`ScalarUDFImpl::invoke_no_args`] for more details.
+    #[deprecated(since = "42.1.0", note = "Use `invoke_batch` instead")]
     pub fn invoke_no_args(&self, number_rows: usize) -> Result<ColumnarValue> {
+        #[allow(deprecated)]
         self.inner.invoke_no_args(number_rows)
     }
 
     /// Returns a `ScalarFunctionImplementation` that can invoke the function
     /// during execution
+    #[deprecated(since = "42.0.0", note = "Use `invoke_batch` instead")]
     pub fn fun(&self) -> ScalarFunctionImplementation {
         let captured = Arc::clone(&self.inner);
+        #[allow(deprecated)]
         Arc::new(move |args| captured.invoke(args))
     }
 
@@ -283,6 +305,14 @@ impl ScalarUDF {
     pub fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
         self.inner.coerce_types(arg_types)
     }
+
+    /// Returns the documentation for this Scalar UDF.
+    ///
+    /// Documentation can be accessed programmatically as well as
+    /// generating publicly facing documentation.
+    pub fn documentation(&self) -> Option<&Documentation> {
+        self.inner.documentation()
+    }
 }
 
 impl<F> From<F> for ScalarUDF
@@ -307,21 +337,38 @@ where
 /// # Basic Example
 /// ```
 /// # use std::any::Any;
+/// # use std::sync::OnceLock;
 /// # use arrow::datatypes::DataType;
 /// # use datafusion_common::{DataFusionError, plan_err, Result};
-/// # use datafusion_expr::{col, ColumnarValue, Signature, Volatility};
+/// # use datafusion_expr::{col, ColumnarValue, Documentation, Signature, Volatility};
 /// # use datafusion_expr::{ScalarUDFImpl, ScalarUDF};
+/// # use datafusion_expr::scalar_doc_sections::DOC_SECTION_MATH;
+///
 /// #[derive(Debug)]
 /// struct AddOne {
-///   signature: Signature
+///   signature: Signature,
 /// }
 ///
 /// impl AddOne {
 ///   fn new() -> Self {
 ///     Self {
-///       signature: Signature::uniform(1, vec![DataType::Int32], Volatility::Immutable)
+///       signature: Signature::uniform(1, vec![DataType::Int32], Volatility::Immutable),
 ///      }
 ///   }
+/// }
+///  
+/// static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+///
+/// fn get_doc() -> &'static Documentation {
+///     DOCUMENTATION.get_or_init(|| {
+///         Documentation::builder()
+///             .with_doc_section(DOC_SECTION_MATH)
+///             .with_description("Add one to an int32")
+///             .with_syntax_example("add_one(2)")
+///             .with_argument("arg1", "The int32 number to add one to")
+///             .build()
+///             .unwrap()
+///     })
 /// }
 ///
 /// /// Implement the ScalarUDFImpl trait for AddOne
@@ -337,6 +384,9 @@ where
 ///    }
 ///    // The actual implementation would add one to the argument
 ///    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> { unimplemented!() }
+///    fn documentation(&self) -> Option<&Documentation> {
+///         Some(get_doc())
+///     }
 /// }
 ///
 /// // Create a new ScalarUDF from the implementation
@@ -446,10 +496,50 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     /// to arrays, which will likely be simpler code, but be slower.
     ///
     /// [invoke_no_args]: ScalarUDFImpl::invoke_no_args
-    fn invoke(&self, _args: &[ColumnarValue]) -> Result<ColumnarValue>;
+    #[deprecated(since = "42.1.0", note = "Use `invoke_batch` instead")]
+    fn invoke(&self, _args: &[ColumnarValue]) -> Result<ColumnarValue> {
+        not_impl_err!(
+            "Function {} does not implement invoke but called",
+            self.name()
+        )
+    }
+
+    /// Invoke the function with `args` and the number of rows,
+    /// returning the appropriate result.
+    ///
+    /// The function will be invoked with the slice of [`ColumnarValue`]
+    /// (either scalar or array).
+    ///
+    /// # Performance
+    ///
+    /// For the best performance, the implementations should handle the common case
+    /// when one or more of their arguments are constant values (aka
+    /// [`ColumnarValue::Scalar`]).
+    ///
+    /// [`ColumnarValue::values_to_arrays`] can be used to convert the arguments
+    /// to arrays, which will likely be simpler code, but be slower.
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        number_rows: usize,
+    ) -> Result<ColumnarValue> {
+        match args.is_empty() {
+            true =>
+            {
+                #[allow(deprecated)]
+                self.invoke_no_args(number_rows)
+            }
+            false =>
+            {
+                #[allow(deprecated)]
+                self.invoke(args)
+            }
+        }
+    }
 
     /// Invoke the function without `args`, instead the number of rows are provided,
     /// returning the appropriate result.
+    #[deprecated(since = "42.1.0", note = "Use `invoke_batch` instead")]
     fn invoke_no_args(&self, _number_rows: usize) -> Result<ColumnarValue> {
         not_impl_err!(
             "Function {} does not implement invoke_no_args but called",
@@ -566,8 +656,8 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     /// documentation for more details on type coercion
     ///
     /// For example, if your function requires a floating point arguments, but the user calls
-    /// it like `my_func(1::int)` (aka with `1` as an integer), coerce_types could return `[DataType::Float64]`
-    /// to ensure the argument was cast to `1::double`
+    /// it like `my_func(1::int)` (i.e. with `1` as an integer), coerce_types can return `[DataType::Float64]`
+    /// to ensure the argument is converted to `1::double`
     ///
     /// # Parameters
     /// * `arg_types`: The argument types of the arguments  this function with
@@ -604,6 +694,14 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
         self.name().hash(hasher);
         self.signature().hash(hasher);
         hasher.finish()
+    }
+
+    /// Returns the documentation for this Scalar UDF.
+    ///
+    /// Documentation can be accessed programmatically as well as
+    /// generating publicly facing documentation.
+    fn documentation(&self) -> Option<&Documentation> {
+        None
     }
 }
 
@@ -664,12 +762,12 @@ impl ScalarUDFImpl for AliasedScalarUDFImpl {
         self.inner.return_type_from_exprs(args, schema, arg_types)
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        self.inner.invoke(args)
-    }
-
-    fn invoke_no_args(&self, number_rows: usize) -> Result<ColumnarValue> {
-        self.inner.invoke_no_args(number_rows)
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        number_rows: usize,
+    ) -> Result<ColumnarValue> {
+        self.inner.invoke_batch(args, number_rows)
     }
 
     fn simplify(
@@ -718,62 +816,100 @@ impl ScalarUDFImpl for AliasedScalarUDFImpl {
         self.aliases.hash(hasher);
         hasher.finish()
     }
-}
 
-/// Implementation of [`ScalarUDFImpl`] that wraps the function style pointers
-/// of the older API (see <https://github.com/apache/datafusion/pull/8578>
-/// for more details)
-struct ScalarUdfLegacyWrapper {
-    /// The name of the function
-    name: String,
-    /// The signature (the types of arguments that are supported)
-    signature: Signature,
-    /// Function that returns the return type given the argument types
-    return_type: ReturnTypeFunction,
-    /// actual implementation
-    ///
-    /// The fn param is the wrapped function but be aware that the function will
-    /// be passed with the slice / vec of columnar values (either scalar or array)
-    /// with the exception of zero param function, where a singular element vec
-    /// will be passed. In that case the single element is a null array to indicate
-    /// the batch's row count (so that the generative zero-argument function can know
-    /// the result array size).
-    fun: ScalarFunctionImplementation,
-}
-
-impl Debug for ScalarUdfLegacyWrapper {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        f.debug_struct("ScalarUDF")
-            .field("name", &self.name)
-            .field("signature", &self.signature)
-            .field("fun", &"<FUNC>")
-            .finish()
+    fn documentation(&self) -> Option<&Documentation> {
+        self.inner.documentation()
     }
 }
 
-impl ScalarUDFImpl for ScalarUdfLegacyWrapper {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-    fn name(&self) -> &str {
-        &self.name
+// Scalar UDF doc sections for use in public documentation
+pub mod scalar_doc_sections {
+    use crate::DocSection;
+
+    pub fn doc_sections() -> Vec<DocSection> {
+        vec![
+            DOC_SECTION_MATH,
+            DOC_SECTION_CONDITIONAL,
+            DOC_SECTION_STRING,
+            DOC_SECTION_BINARY_STRING,
+            DOC_SECTION_REGEX,
+            DOC_SECTION_DATETIME,
+            DOC_SECTION_ARRAY,
+            DOC_SECTION_STRUCT,
+            DOC_SECTION_MAP,
+            DOC_SECTION_HASHING,
+            DOC_SECTION_OTHER,
+        ]
     }
 
-    fn signature(&self) -> &Signature {
-        &self.signature
-    }
+    pub const DOC_SECTION_MATH: DocSection = DocSection {
+        include: true,
+        label: "Math Functions",
+        description: None,
+    };
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        // Old API returns an Arc of the datatype for some reason
-        let res = (self.return_type)(arg_types)?;
-        Ok(res.as_ref().clone())
-    }
+    pub const DOC_SECTION_CONDITIONAL: DocSection = DocSection {
+        include: true,
+        label: "Conditional Functions",
+        description: None,
+    };
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        (self.fun)(args)
-    }
+    pub const DOC_SECTION_STRING: DocSection = DocSection {
+        include: true,
+        label: "String Functions",
+        description: None,
+    };
 
-    fn aliases(&self) -> &[String] {
-        &[]
-    }
+    pub const DOC_SECTION_BINARY_STRING: DocSection = DocSection {
+        include: true,
+        label: "Binary String Functions",
+        description: None,
+    };
+
+    pub const DOC_SECTION_REGEX: DocSection = DocSection {
+        include: true,
+        label: "Regular Expression Functions",
+        description: Some(
+            r#"Apache DataFusion uses a [PCRE-like](https://en.wikibooks.org/wiki/Regular_Expressions/Perl-Compatible_Regular_Expressions)
+regular expression [syntax](https://docs.rs/regex/latest/regex/#syntax)
+(minus support for several features including look-around and backreferences).
+The following regular expression functions are supported:"#,
+        ),
+    };
+
+    pub const DOC_SECTION_DATETIME: DocSection = DocSection {
+        include: true,
+        label: "Time and Date Functions",
+        description: None,
+    };
+
+    pub const DOC_SECTION_ARRAY: DocSection = DocSection {
+        include: true,
+        label: "Array Functions",
+        description: None,
+    };
+
+    pub const DOC_SECTION_STRUCT: DocSection = DocSection {
+        include: true,
+        label: "Struct Functions",
+        description: None,
+    };
+
+    pub const DOC_SECTION_MAP: DocSection = DocSection {
+        include: true,
+        label: "Map Functions",
+        description: None,
+    };
+
+    pub const DOC_SECTION_HASHING: DocSection = DocSection {
+        include: true,
+        label: "Hashing Functions",
+        description: None,
+    };
+
+    pub const DOC_SECTION_OTHER: DocSection = DocSection {
+        include: true,
+        label: "Other Functions",
+        description: None,
+    };
 }

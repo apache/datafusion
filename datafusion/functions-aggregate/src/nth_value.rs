@@ -20,18 +20,20 @@
 
 use std::any::Any;
 use std::collections::VecDeque;
-use std::sync::Arc;
+use std::mem::{size_of, size_of_val};
+use std::sync::{Arc, OnceLock};
 
 use arrow::array::{new_empty_array, ArrayRef, AsArray, StructArray};
 use arrow_schema::{DataType, Field, Fields};
 
 use datafusion_common::utils::{array_into_list_array_nullable, get_row_at_idx};
 use datafusion_common::{exec_err, internal_err, not_impl_err, Result, ScalarValue};
+use datafusion_expr::aggregate_doc_sections::DOC_SECTION_STATISTICAL;
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{
-    lit, Accumulator, AggregateUDFImpl, ExprFunctionExt, ReversedUDAF, Signature,
-    SortExpr, Volatility,
+    lit, Accumulator, AggregateUDFImpl, Documentation, ExprFunctionExt, ReversedUDAF,
+    Signature, SortExpr, Volatility,
 };
 use datafusion_functions_aggregate_common::merge_arrays::merge_ordered_arrays;
 use datafusion_functions_aggregate_common::utils::ordering_fields;
@@ -131,7 +133,7 @@ impl AggregateUDFImpl for NthValueAgg {
             n,
             &data_type,
             &ordering_dtypes,
-            acc_args.ordering_req.to_vec(),
+            acc_args.ordering_req.clone(),
         )
         .map(|acc| Box::new(acc) as _)
     }
@@ -161,6 +163,40 @@ impl AggregateUDFImpl for NthValueAgg {
     fn reverse_expr(&self) -> ReversedUDAF {
         ReversedUDAF::Reversed(nth_value_udaf())
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_nth_value_doc())
+    }
+}
+
+static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+
+fn get_nth_value_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_STATISTICAL)
+            .with_description(
+                "Returns the nth value in a group of values.",
+            )
+            .with_syntax_example("nth_value(expression, n ORDER BY expression)")
+            .with_sql_example(r#"```sql
+> SELECT dept_id, salary, NTH_VALUE(salary, 2) OVER (PARTITION BY dept_id ORDER BY salary ASC) AS second_salary_by_dept
+  FROM employee;
++---------+--------+-------------------------+
+| dept_id | salary | second_salary_by_dept   |
++---------+--------+-------------------------+
+| 1       | 30000  | NULL                    |
+| 1       | 40000  | 40000                   |
+| 1       | 50000  | 40000                   |
+| 2       | 35000  | NULL                    |
+| 2       | 45000  | 45000                   |
++---------+--------+-------------------------+
+```"#)
+            .with_argument("expression", "The column or expression to retrieve the nth value from.")
+            .with_argument("n", "The position (nth) of the value to retrieve, based on the ordering.")
+            .build()
+            .unwrap()
+    })
 }
 
 #[derive(Debug)]
@@ -343,25 +379,23 @@ impl Accumulator for NthValueAccumulator {
     }
 
     fn size(&self) -> usize {
-        let mut total = std::mem::size_of_val(self)
-            + ScalarValue::size_of_vec_deque(&self.values)
-            - std::mem::size_of_val(&self.values);
+        let mut total = size_of_val(self) + ScalarValue::size_of_vec_deque(&self.values)
+            - size_of_val(&self.values);
 
         // Add size of the `self.ordering_values`
-        total +=
-            std::mem::size_of::<Vec<ScalarValue>>() * self.ordering_values.capacity();
+        total += size_of::<Vec<ScalarValue>>() * self.ordering_values.capacity();
         for row in &self.ordering_values {
-            total += ScalarValue::size_of_vec(row) - std::mem::size_of_val(row);
+            total += ScalarValue::size_of_vec(row) - size_of_val(row);
         }
 
         // Add size of the `self.datatypes`
-        total += std::mem::size_of::<DataType>() * self.datatypes.capacity();
+        total += size_of::<DataType>() * self.datatypes.capacity();
         for dtype in &self.datatypes {
-            total += dtype.size() - std::mem::size_of_val(dtype);
+            total += dtype.size() - size_of_val(dtype);
         }
 
         // Add size of the `self.ordering_req`
-        total += std::mem::size_of::<PhysicalSortExpr>() * self.ordering_req.capacity();
+        total += size_of::<PhysicalSortExpr>() * self.ordering_req.capacity();
         // TODO: Calculate size of each `PhysicalSortExpr` more accurately.
         total
     }
@@ -369,7 +403,7 @@ impl Accumulator for NthValueAccumulator {
 
 impl NthValueAccumulator {
     fn evaluate_orderings(&self) -> Result<ScalarValue> {
-        let fields = ordering_fields(&self.ordering_req, &self.datatypes[1..]);
+        let fields = ordering_fields(self.ordering_req.as_ref(), &self.datatypes[1..]);
         let struct_field = Fields::from(fields.clone());
 
         let mut column_wise_ordering_values = vec![];

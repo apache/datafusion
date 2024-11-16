@@ -17,6 +17,7 @@
 
 //! [`ContextProvider`] and [`ExprPlanner`] APIs to customize SQL query planning
 
+use std::fmt::Debug;
 use std::sync::Arc;
 
 use arrow::datatypes::{DataType, Field, SchemaRef};
@@ -24,6 +25,7 @@ use datafusion_common::{
     config::ConfigOptions, file_options::file_type::FileType, not_impl_err, DFSchema,
     Result, TableReference,
 };
+use sqlparser::ast;
 
 use crate::{AggregateUDF, Expr, GetFieldAccess, ScalarUDF, TableSource, WindowUDF};
 
@@ -65,6 +67,11 @@ pub trait ContextProvider {
         &[]
     }
 
+    /// Getter for the data type planner
+    fn get_type_planner(&self) -> Option<Arc<dyn TypePlanner>> {
+        None
+    }
+
     /// Getter for a UDF description
     fn get_function_meta(&self, name: &str) -> Option<Arc<ScalarUDF>>;
     /// Getter for a UDAF description
@@ -88,7 +95,7 @@ pub trait ContextProvider {
 }
 
 /// This trait allows users to customize the behavior of the SQL planner
-pub trait ExprPlanner: Send + Sync {
+pub trait ExprPlanner: Debug + Send + Sync {
     /// Plan the binary operation between two expressions, returns original
     /// BinaryExpr if not possible
     fn plan_binary_op(
@@ -215,7 +222,7 @@ pub trait ExprPlanner: Send + Sync {
 /// custom expressions.
 #[derive(Debug, Clone)]
 pub struct RawBinaryExpr {
-    pub op: sqlparser::ast::BinaryOperator,
+    pub op: ast::BinaryOperator,
     pub left: Expr,
     pub right: Expr,
 }
@@ -247,4 +254,14 @@ pub enum PlannerResult<T> {
     Planned(Expr),
     /// The raw expression could not be planned, and is returned unmodified
     Original(T),
+}
+
+/// This trait allows users to customize the behavior of the data type planning
+pub trait TypePlanner: Debug + Send + Sync {
+    /// Plan SQL type to DataFusion data type
+    ///
+    /// Returns None if not possible
+    fn plan_type(&self, _sql_type: &ast::DataType) -> Result<Option<DataType>> {
+        Ok(None)
+    }
 }

@@ -37,13 +37,16 @@ use datafusion_common::cast::{
 use datafusion_common::{
     exec_datafusion_err, exec_err, internal_err, not_impl_datafusion_err, Result,
 };
-use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::scalar_doc_sections::DOC_SECTION_ARRAY;
+use datafusion_expr::{
+    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+};
 use itertools::Itertools;
 use std::any::Any;
 use std::cmp::Ordering;
 use std::iter::from_fn;
 use std::str::FromStr;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 make_udf_expr_and_func!(
     Range,
@@ -133,6 +136,54 @@ impl ScalarUDFImpl for Range {
     fn aliases(&self) -> &[String] {
         &self.aliases
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_range_doc())
+    }
+}
+
+static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+
+fn get_range_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_ARRAY)
+            .with_description(
+                "Returns an Arrow array between start and stop with step. The range start..end contains all values with start <= x < end. It is empty if start >= end. Step cannot be 0.",
+            )
+            .with_syntax_example("range(start, stop, step)")
+            .with_sql_example(
+                r#"```sql
+> select range(2, 10, 3);
++-----------------------------------+
+| range(Int64(2),Int64(10),Int64(3))|
++-----------------------------------+
+| [2, 5, 8]                         |
++-----------------------------------+
+
+> select range(DATE '1992-09-01', DATE '1993-03-01', INTERVAL '1' MONTH);
++--------------------------------------------------------------+
+| range(DATE '1992-09-01', DATE '1993-03-01', INTERVAL '1' MONTH) |
++--------------------------------------------------------------+
+| [1992-09-01, 1992-10-01, 1992-11-01, 1992-12-01, 1993-01-01, 1993-02-01] |
++--------------------------------------------------------------+
+```"#,
+            )
+            .with_argument(
+                "start",
+                "Start of the range. Ints, timestamps, dates or string types that can be coerced to Date32 are supported.",
+            )
+            .with_argument(
+                "end",
+                "End of the range (not included). Type must be the same as start.",
+            )
+            .with_argument(
+                "step",
+                "Increase by step (cannot be 0). Steps less than a day are supported only for timestamp ranges.",
+            )
+            .build()
+            .unwrap()
+    })
 }
 
 make_udf_expr_and_func!(
@@ -226,6 +277,47 @@ impl ScalarUDFImpl for GenSeries {
     fn aliases(&self) -> &[String] {
         &self.aliases
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_generate_series_doc())
+    }
+}
+
+static GENERATE_SERIES_DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+
+fn get_generate_series_doc() -> &'static Documentation {
+    GENERATE_SERIES_DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_ARRAY)
+            .with_description(
+                "Similar to the range function, but it includes the upper bound.",
+            )
+            .with_syntax_example("generate_series(start, stop, step)")
+            .with_sql_example(
+                r#"```sql
+> select generate_series(1,3);
++------------------------------------+
+| generate_series(Int64(1),Int64(3)) |
++------------------------------------+
+| [1, 2, 3]                          |
++------------------------------------+
+```"#,
+            )
+            .with_argument(
+                "start",
+                "start of the series. Ints, timestamps, dates or string types that can be coerced to Date32 are supported.",
+            )
+            .with_argument(
+                "end",
+                "end of the series (included). Type must be the same as start.",
+            )
+            .with_argument(
+                "step",
+                "increase by step (can not be 0). Steps less than a day are supported only for timestamp ranges.",
+            )
+            .build()
+            .unwrap()
+    })
 }
 
 /// Generates an array of integers from start to stop with a given step.

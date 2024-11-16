@@ -135,6 +135,7 @@ struct DirSchemaOpts<'a> {
     format: Arc<dyn FileFormat>,
 }
 /// Schema where every file with extension `ext` in a given `dir` is a table.
+#[derive(Debug)]
 struct DirSchema {
     ext: String,
     tables: RwLock<HashMap<String, Arc<dyn TableProvider>>>,
@@ -218,6 +219,7 @@ impl SchemaProvider for DirSchema {
     }
 }
 /// Catalog holds multiple schemas
+#[derive(Debug)]
 struct DirCatalog {
     schemas: RwLock<HashMap<String, Arc<dyn SchemaProvider>>>,
 }
@@ -259,6 +261,7 @@ impl CatalogProvider for DirCatalog {
     }
 }
 /// Catalog lists holds multiple catalog providers. Each context has a single catalog list.
+#[derive(Debug)]
 struct CustomCatalogProviderList {
     catalogs: RwLock<HashMap<String, Arc<dyn CatalogProvider>>>,
 }

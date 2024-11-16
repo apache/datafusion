@@ -26,9 +26,7 @@ pub mod binary_map {
 }
 pub mod equivalence;
 pub mod expressions;
-pub mod functions;
 pub mod intervals;
-pub mod math_expressions;
 mod partitioning;
 mod physical_expr;
 pub mod planner;
@@ -56,8 +54,7 @@ pub use physical_expr::{
 
 pub use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 pub use datafusion_physical_expr_common::sort_expr::{
-    LexOrdering, LexOrderingRef, LexRequirement, LexRequirementRef, PhysicalSortExpr,
-    PhysicalSortRequirement,
+    LexOrdering, LexRequirement, PhysicalSortExpr, PhysicalSortRequirement,
 };
 
 pub use planner::{create_physical_expr, create_physical_exprs};

@@ -29,6 +29,7 @@ use datafusion_expr::expr::Alias;
 use datafusion_expr::planner::{ExprPlanner, PlannerResult, RawBinaryExpr};
 use datafusion_expr::BinaryExpr;
 
+#[derive(Debug)]
 struct MyCustomPlanner;
 
 impl ExprPlanner for MyCustomPlanner {

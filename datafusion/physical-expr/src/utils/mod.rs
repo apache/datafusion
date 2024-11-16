@@ -17,10 +17,8 @@
 
 mod guarantee;
 pub use guarantee::{Guarantee, LiteralGuarantee};
-use hashbrown::HashSet;
 
 use std::borrow::Borrow;
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::expressions::{BinaryExpr, Column};
@@ -32,9 +30,10 @@ use arrow::datatypes::SchemaRef;
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
 };
-use datafusion_common::Result;
+use datafusion_common::{HashMap, HashSet, Result};
 use datafusion_expr::Operator;
 
+use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use itertools::Itertools;
 use petgraph::graph::NodeIndex;
 use petgraph::stable_graph::StableGraph;
@@ -86,6 +85,10 @@ pub fn map_columns_before_projection(
     parent_required: &[Arc<dyn PhysicalExpr>],
     proj_exprs: &[(Arc<dyn PhysicalExpr>, String)],
 ) -> Vec<Arc<dyn PhysicalExpr>> {
+    if parent_required.is_empty() {
+        // No need to build mapping.
+        return vec![];
+    }
     let column_mapping = proj_exprs
         .iter()
         .filter_map(|(expr, name)| {
@@ -241,10 +244,7 @@ pub fn reassign_predicate_columns(
 }
 
 /// Merge left and right sort expressions, checking for duplicates.
-pub fn merge_vectors(
-    left: &[PhysicalSortExpr],
-    right: &[PhysicalSortExpr],
-) -> Vec<PhysicalSortExpr> {
+pub fn merge_vectors(left: &LexOrdering, right: &LexOrdering) -> LexOrdering {
     left.iter()
         .cloned()
         .chain(right.iter().cloned())
@@ -525,7 +525,7 @@ pub(crate) mod tests {
         )
         .unwrap();
 
-        assert_eq!(actual.as_ref(), expected.as_any());
+        assert_eq!(actual.as_ref(), expected.as_ref());
     }
 
     #[test]

@@ -68,11 +68,35 @@ pub use pool::*;
 /// Note that a `MemoryPool` can be shared by concurrently executing plans,
 /// which can be used to control memory usage in a multi-tenant system.
 ///
+/// # How MemoryPool works by example
+///
+/// Scenario 1:
+/// For `Filter` operator, `RecordBatch`es will stream through it, so it
+/// don't have to keep track of memory usage through [`MemoryPool`].
+///
+/// Scenario 2:
+/// For `CrossJoin` operator, if the input size gets larger, the intermediate
+/// state will also grow. So `CrossJoin` operator will use [`MemoryPool`] to
+/// limit the memory usage.
+/// 2.1 `CrossJoin` operator has read a new batch, asked memory pool for
+/// additional memory. Memory pool updates the usage and returns success.
+/// 2.2 `CrossJoin` has read another batch, and tries to reserve more memory
+/// again, memory pool does not have enough memory. Since `CrossJoin` operator
+/// has not implemented spilling, it will stop execution and return an error.
+///
+/// Scenario 3:
+/// For `Aggregate` operator, its intermediate states will also accumulate as
+/// the input size gets larger, but with spilling capability. When it tries to
+/// reserve more memory from the memory pool, and the memory pool has already
+/// reached the memory limit, it will return an error. Then, `Aggregate`
+/// operator will spill the intermediate buffers to disk, and release memory
+/// from the memory pool, and continue to retry memory reservation.
+///
 /// # Implementing `MemoryPool`
 ///
 /// You can implement a custom allocation policy by implementing the
 /// [`MemoryPool`] trait and configuring a `SessionContext` appropriately.
-/// However, mDataFusion comes with the following simple memory pool implementations that
+/// However, DataFusion comes with the following simple memory pool implementations that
 /// handle many common cases:
 ///
 /// * [`UnboundedMemoryPool`]: no memory limits (the default)
@@ -310,13 +334,17 @@ impl Drop for MemoryReservation {
     }
 }
 
-const TB: u64 = 1 << 40;
-const GB: u64 = 1 << 30;
-const MB: u64 = 1 << 20;
-const KB: u64 = 1 << 10;
+pub mod units {
+    pub const TB: u64 = 1 << 40;
+    pub const GB: u64 = 1 << 30;
+    pub const MB: u64 = 1 << 20;
+    pub const KB: u64 = 1 << 10;
+}
 
 /// Present size in human readable form
 pub fn human_readable_size(size: usize) -> String {
+    use units::*;
+
     let size = size as u64;
     let (value, unit) = {
         if size >= 2 * TB {

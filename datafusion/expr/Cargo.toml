@@ -46,8 +46,11 @@ chrono = { workspace = true }
 datafusion-common = { workspace = true }
 datafusion-expr-common = { workspace = true }
 datafusion-functions-aggregate-common = { workspace = true }
+datafusion-functions-window-common = { workspace = true }
 datafusion-physical-expr-common = { workspace = true }
+indexmap = { workspace = true }
 paste = "^1.0"
+recursive = { workspace = true }
 serde_json = { workspace = true }
 sqlparser = { workspace = true }
 strum = { version = "0.26.1", features = ["derive"] }

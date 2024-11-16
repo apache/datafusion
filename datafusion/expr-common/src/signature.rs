@@ -18,7 +18,10 @@
 //! Signature module contains foundational types that are used to represent signatures, types,
 //! and return types of functions in DataFusion.
 
+use crate::type_coercion::aggregates::{NUMERICS, STRINGS};
 use arrow::datatypes::DataType;
+use datafusion_common::types::{LogicalTypeRef, NativeType};
+use itertools::Itertools;
 
 /// Constant that is used as a placeholder for any valid timezone.
 /// This is used where a function can accept a timestamp type with any
@@ -35,7 +38,7 @@ pub const TIMEZONE_WILDCARD: &str = "+TZ";
 /// valid length. It exists to avoid the need to enumerate all possible fixed size list lengths.
 pub const FIXED_SIZE_LIST_WILDCARD: i32 = i32::MIN;
 
-///A function's volatility, which defines the functions eligibility for certain optimizations
+/// A function's volatility, which defines the functions eligibility for certain optimizations
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Hash)]
 pub enum Volatility {
     /// An immutable function will always return the same output when given the same
@@ -43,8 +46,8 @@ pub enum Volatility {
     Immutable,
     /// A stable function may return different values given the same input across different
     /// queries but must return the same value for a given input within a query. An example of
-    /// this is the `Now` function. DataFusion
-    /// will attempt to inline `Stable` functions during planning, when possible.
+    /// this is the `Now` function. DataFusion will attempt to inline `Stable` functions
+    /// during planning, when possible.
     /// For query `select col1, now() from t1`, it might take a while to execute but
     /// `now()` column will be the same for each output row, which is evaluated
     /// during planning.
@@ -86,7 +89,7 @@ pub enum Volatility {
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
 pub enum TypeSignature {
-    /// One or more arguments of an common type out of a list of valid types.
+    /// One or more arguments of a common type out of a list of valid types.
     ///
     /// # Examples
     /// A function such as `concat` is `Variadic(vec![DataType::Utf8, DataType::LargeUtf8])`
@@ -106,12 +109,11 @@ pub enum TypeSignature {
     /// Exact number of arguments of an exact type
     Exact(Vec<DataType>),
     /// The number of arguments that can be coerced to in order
-    /// For example, `Coercible(vec![DataType::Float64])` accepts
+    /// For example, `Coercible(vec![logical_float64()])` accepts
     /// arguments like `vec![DataType::Int32]` or `vec![DataType::Float32]`
     /// since i32 and f32 can be casted to f64
-    Coercible(Vec<DataType>),
-    /// Fixed number of arguments of arbitrary types
-    /// If a function takes 0 argument, its `TypeSignature` should be `Any(0)`
+    Coercible(Vec<LogicalTypeRef>),
+    /// Fixed number of arguments of arbitrary types, number should be larger than 0
     Any(usize),
     /// Matches exactly one of a list of [`TypeSignature`]s. Coercion is attempted to match
     /// the signatures in order, and stops after the first success, if any.
@@ -123,8 +125,17 @@ pub enum TypeSignature {
     /// Specifies Signatures for array functions
     ArraySignature(ArrayFunctionSignature),
     /// Fixed number of arguments of numeric types.
-    /// See <https://docs.rs/arrow/latest/arrow/datatypes/enum.DataType.html#method.is_numeric> to know which type is considered numeric
+    /// See [`NativeType::is_numeric`] to know which type is considered numeric
+    ///
+    /// [`NativeType::is_numeric`]: datafusion_common
     Numeric(usize),
+    /// Fixed number of arguments of all the same string types.
+    /// The precedence of type from high to low is Utf8View, LargeUtf8 and Utf8.
+    /// Null is considerd as `Utf8` by default
+    /// Dictionary with string value type is also handled.
+    String(usize),
+    /// Zero argument
+    NullAry,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
@@ -181,6 +192,9 @@ impl std::fmt::Display for ArrayFunctionSignature {
 impl TypeSignature {
     pub fn to_string_repr(&self) -> Vec<String> {
         match self {
+            TypeSignature::NullAry => {
+                vec!["NullAry()".to_string()]
+            }
             TypeSignature::Variadic(types) => {
                 vec![format!("{}, ..", Self::join_types(types, "/"))]
             }
@@ -190,10 +204,16 @@ impl TypeSignature {
                     .collect::<Vec<String>>()
                     .join(", ")]
             }
-            TypeSignature::Numeric(num) => {
-                vec![format!("Numeric({})", num)]
+            TypeSignature::String(num) => {
+                vec![format!("String({num})")]
             }
-            TypeSignature::Exact(types) | TypeSignature::Coercible(types) => {
+            TypeSignature::Numeric(num) => {
+                vec![format!("Numeric({num})")]
+            }
+            TypeSignature::Coercible(types) => {
+                vec![Self::join_types(types, ", ")]
+            }
+            TypeSignature::Exact(types) => {
                 vec![Self::join_types(types, ", ")]
             }
             TypeSignature::Any(arg_count) => {
@@ -228,12 +248,83 @@ impl TypeSignature {
     pub fn supports_zero_argument(&self) -> bool {
         match &self {
             TypeSignature::Exact(vec) => vec.is_empty(),
-            TypeSignature::Uniform(0, _) | TypeSignature::Any(0) => true,
+            TypeSignature::NullAry => true,
             TypeSignature::OneOf(types) => types
                 .iter()
                 .any(|type_sig| type_sig.supports_zero_argument()),
             _ => false,
         }
+    }
+
+    /// get all possible types for the given `TypeSignature`
+    pub fn get_possible_types(&self) -> Vec<Vec<DataType>> {
+        match self {
+            TypeSignature::Exact(types) => vec![types.clone()],
+            TypeSignature::OneOf(types) => types
+                .iter()
+                .flat_map(|type_sig| type_sig.get_possible_types())
+                .collect(),
+            TypeSignature::Uniform(arg_count, types) => types
+                .iter()
+                .cloned()
+                .map(|data_type| vec![data_type; *arg_count])
+                .collect(),
+            TypeSignature::Coercible(types) => types
+                .iter()
+                .map(|logical_type| get_data_types(logical_type.native()))
+                .multi_cartesian_product()
+                .collect(),
+            TypeSignature::Variadic(types) => types
+                .iter()
+                .cloned()
+                .map(|data_type| vec![data_type])
+                .collect(),
+            TypeSignature::Numeric(arg_count) => NUMERICS
+                .iter()
+                .cloned()
+                .map(|numeric_type| vec![numeric_type; *arg_count])
+                .collect(),
+            TypeSignature::String(arg_count) => STRINGS
+                .iter()
+                .cloned()
+                .map(|string_type| vec![string_type; *arg_count])
+                .collect(),
+            // TODO: Implement for other types
+            TypeSignature::Any(_)
+            | TypeSignature::NullAry
+            | TypeSignature::VariadicAny
+            | TypeSignature::ArraySignature(_)
+            | TypeSignature::UserDefined => vec![],
+        }
+    }
+}
+
+fn get_data_types(native_type: &NativeType) -> Vec<DataType> {
+    match native_type {
+        NativeType::Null => vec![DataType::Null],
+        NativeType::Boolean => vec![DataType::Boolean],
+        NativeType::Int8 => vec![DataType::Int8],
+        NativeType::Int16 => vec![DataType::Int16],
+        NativeType::Int32 => vec![DataType::Int32],
+        NativeType::Int64 => vec![DataType::Int64],
+        NativeType::UInt8 => vec![DataType::UInt8],
+        NativeType::UInt16 => vec![DataType::UInt16],
+        NativeType::UInt32 => vec![DataType::UInt32],
+        NativeType::UInt64 => vec![DataType::UInt64],
+        NativeType::Float16 => vec![DataType::Float16],
+        NativeType::Float32 => vec![DataType::Float32],
+        NativeType::Float64 => vec![DataType::Float64],
+        NativeType::Date => vec![DataType::Date32, DataType::Date64],
+        NativeType::Binary => vec![
+            DataType::Binary,
+            DataType::LargeBinary,
+            DataType::BinaryView,
+        ],
+        NativeType::String => {
+            vec![DataType::Utf8, DataType::LargeUtf8, DataType::Utf8View]
+        }
+        // TODO: support other native types
+        _ => vec![],
     }
 }
 
@@ -280,6 +371,14 @@ impl Signature {
         }
     }
 
+    /// A specified number of numeric arguments
+    pub fn string(arg_count: usize, volatility: Volatility) -> Self {
+        Self {
+            type_signature: TypeSignature::String(arg_count),
+            volatility,
+        }
+    }
+
     /// An arbitrary number of arguments of any type.
     pub fn variadic_any(volatility: Volatility) -> Self {
         Self {
@@ -306,9 +405,16 @@ impl Signature {
         }
     }
     /// Target coerce types in order
-    pub fn coercible(target_types: Vec<DataType>, volatility: Volatility) -> Self {
+    pub fn coercible(target_types: Vec<LogicalTypeRef>, volatility: Volatility) -> Self {
         Self {
             type_signature: TypeSignature::Coercible(target_types),
+            volatility,
+        }
+    }
+
+    pub fn nullary(volatility: Volatility) -> Self {
+        Signature {
+            type_signature: TypeSignature::NullAry,
             volatility,
         }
     }
@@ -374,6 +480,8 @@ impl Signature {
 
 #[cfg(test)]
 mod tests {
+    use datafusion_common::types::{logical_int64, logical_string};
+
     use super::*;
 
     #[test]
@@ -381,13 +489,12 @@ mod tests {
         // Testing `TypeSignature`s which supports 0 arg
         let positive_cases = vec![
             TypeSignature::Exact(vec![]),
-            TypeSignature::Uniform(0, vec![DataType::Float64]),
-            TypeSignature::Any(0),
             TypeSignature::OneOf(vec![
                 TypeSignature::Exact(vec![DataType::Int8]),
-                TypeSignature::Any(0),
+                TypeSignature::NullAry,
                 TypeSignature::Uniform(1, vec![DataType::Int8]),
             ]),
+            TypeSignature::NullAry,
         ];
 
         for case in positive_cases {
@@ -436,6 +543,101 @@ mod tests {
         assert!(
             TypeSignature::Uniform(usize::MAX, vec![DataType::Null])
                 < TypeSignature::Exact(vec![DataType::Null])
+        );
+    }
+
+    #[test]
+    fn test_get_possible_types() {
+        let type_signature = TypeSignature::Exact(vec![DataType::Int32, DataType::Int64]);
+        let possible_types = type_signature.get_possible_types();
+        assert_eq!(possible_types, vec![vec![DataType::Int32, DataType::Int64]]);
+
+        let type_signature = TypeSignature::OneOf(vec![
+            TypeSignature::Exact(vec![DataType::Int32, DataType::Int64]),
+            TypeSignature::Exact(vec![DataType::Float32, DataType::Float64]),
+        ]);
+        let possible_types = type_signature.get_possible_types();
+        assert_eq!(
+            possible_types,
+            vec![
+                vec![DataType::Int32, DataType::Int64],
+                vec![DataType::Float32, DataType::Float64]
+            ]
+        );
+
+        let type_signature = TypeSignature::OneOf(vec![
+            TypeSignature::Exact(vec![DataType::Int32, DataType::Int64]),
+            TypeSignature::Exact(vec![DataType::Float32, DataType::Float64]),
+            TypeSignature::Exact(vec![DataType::Utf8]),
+        ]);
+        let possible_types = type_signature.get_possible_types();
+        assert_eq!(
+            possible_types,
+            vec![
+                vec![DataType::Int32, DataType::Int64],
+                vec![DataType::Float32, DataType::Float64],
+                vec![DataType::Utf8]
+            ]
+        );
+
+        let type_signature =
+            TypeSignature::Uniform(2, vec![DataType::Float32, DataType::Int64]);
+        let possible_types = type_signature.get_possible_types();
+        assert_eq!(
+            possible_types,
+            vec![
+                vec![DataType::Float32, DataType::Float32],
+                vec![DataType::Int64, DataType::Int64]
+            ]
+        );
+
+        let type_signature =
+            TypeSignature::Coercible(vec![logical_string(), logical_int64()]);
+        let possible_types = type_signature.get_possible_types();
+        assert_eq!(
+            possible_types,
+            vec![
+                vec![DataType::Utf8, DataType::Int64],
+                vec![DataType::LargeUtf8, DataType::Int64],
+                vec![DataType::Utf8View, DataType::Int64]
+            ]
+        );
+
+        let type_signature =
+            TypeSignature::Variadic(vec![DataType::Int32, DataType::Int64]);
+        let possible_types = type_signature.get_possible_types();
+        assert_eq!(
+            possible_types,
+            vec![vec![DataType::Int32], vec![DataType::Int64]]
+        );
+
+        let type_signature = TypeSignature::Numeric(2);
+        let possible_types = type_signature.get_possible_types();
+        assert_eq!(
+            possible_types,
+            vec![
+                vec![DataType::Int8, DataType::Int8],
+                vec![DataType::Int16, DataType::Int16],
+                vec![DataType::Int32, DataType::Int32],
+                vec![DataType::Int64, DataType::Int64],
+                vec![DataType::UInt8, DataType::UInt8],
+                vec![DataType::UInt16, DataType::UInt16],
+                vec![DataType::UInt32, DataType::UInt32],
+                vec![DataType::UInt64, DataType::UInt64],
+                vec![DataType::Float32, DataType::Float32],
+                vec![DataType::Float64, DataType::Float64]
+            ]
+        );
+
+        let type_signature = TypeSignature::String(2);
+        let possible_types = type_signature.get_possible_types();
+        assert_eq!(
+            possible_types,
+            vec![
+                vec![DataType::Utf8, DataType::Utf8],
+                vec![DataType::LargeUtf8, DataType::LargeUtf8],
+                vec![DataType::Utf8View, DataType::Utf8View]
+            ]
         );
     }
 }

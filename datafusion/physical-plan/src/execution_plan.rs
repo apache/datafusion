@@ -21,6 +21,7 @@ use std::sync::Arc;
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
+use arrow_array::Array;
 use futures::stream::{StreamExt, TryStreamExt};
 use tokio::task::JoinSet;
 
@@ -34,9 +35,9 @@ pub use datafusion_execution::{RecordBatchStream, SendableRecordBatchStream};
 pub use datafusion_expr::{Accumulator, ColumnarValue};
 pub use datafusion_physical_expr::window::WindowExpr;
 pub use datafusion_physical_expr::{
-    expressions, functions, udf, Distribution, Partitioning, PhysicalExpr,
+    expressions, udf, Distribution, Partitioning, PhysicalExpr,
 };
-use datafusion_physical_expr::{EquivalenceProperties, LexOrdering, PhysicalSortExpr};
+use datafusion_physical_expr::{EquivalenceProperties, LexOrdering};
 use datafusion_physical_expr_common::sort_expr::LexRequirement;
 
 use crate::coalesce_partitions::CoalescePartitionsExec;
@@ -228,6 +229,16 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     /// [`TryStreamExt`]: futures::stream::TryStreamExt
     /// [`RecordBatchStreamAdapter`]: crate::stream::RecordBatchStreamAdapter
     ///
+    /// # Error handling
+    ///
+    /// Any error that occurs during execution is sent as an `Err` in the output
+    /// stream.
+    ///
+    /// `ExecutionPlan` implementations in DataFusion cancel additional work
+    /// immediately once an error occurs. The rationale is that if the overall
+    /// query will return an error,  any additional work such as continued
+    /// polling of inputs will be wasted as it will be thrown away.
+    ///
     /// # Cancellation / Aborting Execution
     ///
     /// The [`Stream`] that is returned must ensure that any allocated resources
@@ -379,6 +390,9 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     /// Returns statistics for this `ExecutionPlan` node. If statistics are not
     /// available, should return [`Statistics::new_unknown`] (the default), not
     /// an error.
+    ///
+    /// For TableScan executors, which supports filter pushdown, special attention
+    /// needs to be paid to whether the stats returned by this method are exact or not
     fn statistics(&self) -> Result<Statistics> {
         Ok(Statistics::new_unknown(&self.schema()))
     }
@@ -403,6 +417,11 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     fn fetch(&self) -> Option<usize> {
         None
     }
+
+    /// Gets the effect on cardinality, if known
+    fn cardinality_effect(&self) -> CardinalityEffect {
+        CardinalityEffect::Unknown
+    }
 }
 
 /// Extension trait provides an easy API to fetch various properties of
@@ -424,7 +443,7 @@ pub trait ExecutionPlanProperties {
     /// For example, `SortExec` (obviously) produces sorted output as does
     /// `SortPreservingMergeStream`. Less obviously, `Projection` produces sorted
     /// output if its input is sorted as it does not reorder the input rows.
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]>;
+    fn output_ordering(&self) -> Option<&LexOrdering>;
 
     /// Get the [`EquivalenceProperties`] within the plan.
     ///
@@ -455,7 +474,7 @@ impl ExecutionPlanProperties for Arc<dyn ExecutionPlan> {
         self.properties().execution_mode()
     }
 
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+    fn output_ordering(&self) -> Option<&LexOrdering> {
         self.properties().output_ordering()
     }
 
@@ -473,7 +492,7 @@ impl ExecutionPlanProperties for &dyn ExecutionPlan {
         self.properties().execution_mode()
     }
 
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+    fn output_ordering(&self) -> Option<&LexOrdering> {
         self.properties().output_ordering()
     }
 
@@ -624,8 +643,8 @@ impl PlanProperties {
         &self.partitioning
     }
 
-    pub fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        self.output_ordering.as_deref()
+    pub fn output_ordering(&self) -> Option<&LexOrdering> {
+        self.output_ordering.as_ref()
     }
 
     pub fn execution_mode(&self) -> ExecutionMode {
@@ -834,7 +853,7 @@ pub fn execute_input_stream(
         Ok(Box::pin(RecordBatchStreamAdapter::new(
             sink_schema,
             input_stream
-                .map(move |batch| check_not_null_contraits(batch?, &risky_columns)),
+                .map(move |batch| check_not_null_constraints(batch?, &risky_columns)),
         )))
     }
 }
@@ -854,7 +873,7 @@ pub fn execute_input_stream(
 /// This function iterates over the specified column indices and ensures that none
 /// of the columns contain null values. If any column contains null values, an error
 /// is returned.
-pub fn check_not_null_contraits(
+pub fn check_not_null_constraints(
     batch: RecordBatch,
     column_indices: &Vec<usize>,
 ) -> Result<RecordBatch> {
@@ -867,7 +886,13 @@ pub fn check_not_null_contraits(
             );
         }
 
-        if batch.column(index).null_count() > 0 {
+        if batch
+            .column(index)
+            .logical_nulls()
+            .map(|nulls| nulls.null_count())
+            .unwrap_or_default()
+            > 0
+        {
             return exec_err!(
                 "Invalid batch column at '{}' has null but schema specifies non-nullable",
                 index
@@ -885,13 +910,27 @@ pub fn get_plan_string(plan: &Arc<dyn ExecutionPlan>) -> Vec<String> {
     actual.iter().map(|elem| elem.to_string()).collect()
 }
 
+/// Indicates the effect an execution plan operator will have on the cardinality
+/// of its input stream
+pub enum CardinalityEffect {
+    /// Unknown effect. This is the default
+    Unknown,
+    /// The operator is guaranteed to produce exactly one row for
+    /// each input row
+    Equal,
+    /// The operator may produce fewer output rows than it receives input rows
+    LowerEqual,
+    /// The operator may produce more output rows than it receives input rows
+    GreaterEqual,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use arrow_array::{DictionaryArray, Int32Array, NullArray, RunArray};
+    use arrow_schema::{DataType, Field, Schema, SchemaRef};
     use std::any::Any;
     use std::sync::Arc;
-
-    use arrow_schema::{Schema, SchemaRef};
 
     use datafusion_common::{Result, Statistics};
     use datafusion_execution::{SendableRecordBatchStream, TaskContext};
@@ -1036,6 +1075,136 @@ mod tests {
     fn use_execution_plan_as_trait_object(plan: &dyn ExecutionPlan) {
         let _ = plan.name();
     }
-}
 
-// pub mod test;
+    #[test]
+    fn test_check_not_null_constraints_accept_non_null() -> Result<()> {
+        check_not_null_constraints(
+            RecordBatch::try_new(
+                Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)])),
+                vec![Arc::new(Int32Array::from(vec![Some(1), Some(2), Some(3)]))],
+            )?,
+            &vec![0],
+        )?;
+        Ok(())
+    }
+
+    #[test]
+    fn test_check_not_null_constraints_reject_null() -> Result<()> {
+        let result = check_not_null_constraints(
+            RecordBatch::try_new(
+                Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)])),
+                vec![Arc::new(Int32Array::from(vec![Some(1), None, Some(3)]))],
+            )?,
+            &vec![0],
+        );
+        assert!(result.is_err());
+        assert_starts_with(
+            result.err().unwrap().message().as_ref(),
+            "Invalid batch column at '0' has null but schema specifies non-nullable",
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_check_not_null_constraints_with_run_end_array() -> Result<()> {
+        // some null value inside REE array
+        let run_ends = Int32Array::from(vec![1, 2, 3, 4]);
+        let values = Int32Array::from(vec![Some(0), None, Some(1), None]);
+        let run_end_array = RunArray::try_new(&run_ends, &values)?;
+        let result = check_not_null_constraints(
+            RecordBatch::try_new(
+                Arc::new(Schema::new(vec![Field::new(
+                    "a",
+                    run_end_array.data_type().to_owned(),
+                    true,
+                )])),
+                vec![Arc::new(run_end_array)],
+            )?,
+            &vec![0],
+        );
+        assert!(result.is_err());
+        assert_starts_with(
+            result.err().unwrap().message().as_ref(),
+            "Invalid batch column at '0' has null but schema specifies non-nullable",
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_check_not_null_constraints_with_dictionary_array_with_null() -> Result<()> {
+        let values = Arc::new(Int32Array::from(vec![Some(1), None, Some(3), Some(4)]));
+        let keys = Int32Array::from(vec![0, 1, 2, 3]);
+        let dictionary = DictionaryArray::new(keys, values);
+        let result = check_not_null_constraints(
+            RecordBatch::try_new(
+                Arc::new(Schema::new(vec![Field::new(
+                    "a",
+                    dictionary.data_type().to_owned(),
+                    true,
+                )])),
+                vec![Arc::new(dictionary)],
+            )?,
+            &vec![0],
+        );
+        assert!(result.is_err());
+        assert_starts_with(
+            result.err().unwrap().message().as_ref(),
+            "Invalid batch column at '0' has null but schema specifies non-nullable",
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_check_not_null_constraints_with_dictionary_masking_null() -> Result<()> {
+        // some null value marked out by dictionary array
+        let values = Arc::new(Int32Array::from(vec![
+            Some(1),
+            None, // this null value is masked by dictionary keys
+            Some(3),
+            Some(4),
+        ]));
+        let keys = Int32Array::from(vec![0, /*1,*/ 2, 3]);
+        let dictionary = DictionaryArray::new(keys, values);
+        check_not_null_constraints(
+            RecordBatch::try_new(
+                Arc::new(Schema::new(vec![Field::new(
+                    "a",
+                    dictionary.data_type().to_owned(),
+                    true,
+                )])),
+                vec![Arc::new(dictionary)],
+            )?,
+            &vec![0],
+        )?;
+        Ok(())
+    }
+
+    #[test]
+    fn test_check_not_null_constraints_on_null_type() -> Result<()> {
+        // null value of Null type
+        let result = check_not_null_constraints(
+            RecordBatch::try_new(
+                Arc::new(Schema::new(vec![Field::new("a", DataType::Null, true)])),
+                vec![Arc::new(NullArray::new(3))],
+            )?,
+            &vec![0],
+        );
+        assert!(result.is_err());
+        assert_starts_with(
+            result.err().unwrap().message().as_ref(),
+            "Invalid batch column at '0' has null but schema specifies non-nullable",
+        );
+        Ok(())
+    }
+
+    fn assert_starts_with(actual: impl AsRef<str>, expected_prefix: impl AsRef<str>) {
+        let actual = actual.as_ref();
+        let expected_prefix = expected_prefix.as_ref();
+        assert!(
+            actual.starts_with(expected_prefix),
+            "Expected '{}' to start with '{}'",
+            actual,
+            expected_prefix
+        );
+    }
+}

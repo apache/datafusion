@@ -94,7 +94,7 @@ logical_plan
 07)--------Filter: annotated_data.d = Int32(3)
 08)----------TableScan: annotated_data projection=[a, b, c, d], partial_filters=[annotated_data.d = Int32(3)]
 physical_plan
-01)SortPreservingMergeExec: [a2@0 ASC NULLS LAST,b@1 ASC NULLS LAST], fetch=10
+01)SortPreservingMergeExec: [a2@0 ASC NULLS LAST, b@1 ASC NULLS LAST], fetch=10
 02)--ProjectionExec: expr=[a@0 as a2, b@1 as b]
 03)----CoalesceBatchesExec: target_batch_size=8192, fetch=10
 04)------HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(d@1, d@3), (c@0, c@2)], projection=[a@0, b@1]

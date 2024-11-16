@@ -18,17 +18,19 @@
 use arrow::array::{as_largestring_array, Array};
 use arrow::datatypes::DataType;
 use std::any::Any;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
+use crate::string::concat;
+use crate::strings::{
+    ColumnarValueRef, LargeStringArrayBuilder, StringArrayBuilder, StringViewArrayBuilder,
+};
 use datafusion_common::cast::{as_string_array, as_string_view_array};
 use datafusion_common::{internal_err, plan_err, Result, ScalarValue};
 use datafusion_expr::expr::ScalarFunction;
+use datafusion_expr::scalar_doc_sections::DOC_SECTION_STRING;
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
-use datafusion_expr::{lit, ColumnarValue, Expr, Volatility};
+use datafusion_expr::{lit, ColumnarValue, Documentation, Expr, Volatility};
 use datafusion_expr::{ScalarUDFImpl, Signature};
-
-use crate::string::common::*;
-use crate::string::concat;
 
 #[derive(Debug)]
 pub struct ConcatFunc {
@@ -46,7 +48,7 @@ impl ConcatFunc {
         use DataType::*;
         Self {
             signature: Signature::variadic(
-                vec![Utf8, Utf8View, LargeUtf8],
+                vec![Utf8View, Utf8, LargeUtf8],
                 Volatility::Immutable,
             ),
         }
@@ -108,8 +110,19 @@ impl ScalarUDFImpl for ConcatFunc {
         if array_len.is_none() {
             let mut result = String::new();
             for arg in args {
-                if let ColumnarValue::Scalar(ScalarValue::Utf8(Some(v))) = arg {
-                    result.push_str(v);
+                match arg {
+                    ColumnarValue::Scalar(ScalarValue::Utf8(Some(v)))
+                    | ColumnarValue::Scalar(ScalarValue::Utf8View(Some(v)))
+                    | ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some(v))) => {
+                        result.push_str(v);
+                    }
+                    ColumnarValue::Scalar(ScalarValue::Utf8(None))
+                    | ColumnarValue::Scalar(ScalarValue::Utf8View(None))
+                    | ColumnarValue::Scalar(ScalarValue::LargeUtf8(None)) => {}
+                    other => plan_err!(
+                        "Concat function does not support scalar type {:?}",
+                        other
+                    )?,
                 }
             }
 
@@ -184,7 +197,7 @@ impl ScalarUDFImpl for ConcatFunc {
                         }
                     };
                 }
-                _ => unreachable!(),
+                _ => unreachable!("concat"),
             }
         }
 
@@ -244,21 +257,73 @@ impl ScalarUDFImpl for ConcatFunc {
     ) -> Result<ExprSimplifyResult> {
         simplify_concat(args)
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_concat_doc())
+    }
+}
+
+static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+
+fn get_concat_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_STRING)
+            .with_description("Concatenates multiple strings together.")
+            .with_syntax_example("concat(str[, ..., str_n])")
+            .with_sql_example(
+                r#"```sql
+> select concat('data', 'f', 'us', 'ion');
++-------------------------------------------------------+
+| concat(Utf8("data"),Utf8("f"),Utf8("us"),Utf8("ion")) |
++-------------------------------------------------------+
+| datafusion                                            |
++-------------------------------------------------------+
+```"#,
+            )
+            .with_standard_argument("str", Some("String"))
+            .with_argument("str_n", "Subsequent string expressions to concatenate.")
+            .with_related_udf("concat_ws")
+            .build()
+            .unwrap()
+    })
 }
 
 pub fn simplify_concat(args: Vec<Expr>) -> Result<ExprSimplifyResult> {
     let mut new_args = Vec::with_capacity(args.len());
     let mut contiguous_scalar = "".to_string();
 
+    let return_type = {
+        let data_types: Vec<_> = args
+            .iter()
+            .filter_map(|expr| match expr {
+                Expr::Literal(l) => Some(l.data_type()),
+                _ => None,
+            })
+            .collect();
+        ConcatFunc::new().return_type(&data_types)
+    }?;
+
     for arg in args.clone() {
         match arg {
+            Expr::Literal(ScalarValue::Utf8(None)) => {}
+            Expr::Literal(ScalarValue::LargeUtf8(None)) => {
+            }
+            Expr::Literal(ScalarValue::Utf8View(None)) => { }
+
             // filter out `null` args
-            Expr::Literal(ScalarValue::Utf8(None) | ScalarValue::LargeUtf8(None) | ScalarValue::Utf8View(None)) => {}
             // All literals have been converted to Utf8 or LargeUtf8 in type_coercion.
             // Concatenate it with the `contiguous_scalar`.
-            Expr::Literal(
-                ScalarValue::Utf8(Some(v)) | ScalarValue::LargeUtf8(Some(v)) | ScalarValue::Utf8View(Some(v)),
-            ) => contiguous_scalar += &v,
+            Expr::Literal(ScalarValue::Utf8(Some(v))) => {
+                contiguous_scalar += &v;
+            }
+            Expr::Literal(ScalarValue::LargeUtf8(Some(v))) => {
+                contiguous_scalar += &v;
+            }
+            Expr::Literal(ScalarValue::Utf8View(Some(v))) => {
+                contiguous_scalar += &v;
+            }
+
             Expr::Literal(x) => {
                 return internal_err!(
                     "The scalar {x} should be casted to string type during the type coercion."
@@ -269,7 +334,12 @@ pub fn simplify_concat(args: Vec<Expr>) -> Result<ExprSimplifyResult> {
             // Then pushing this arg to the `new_args`.
             arg => {
                 if !contiguous_scalar.is_empty() {
-                    new_args.push(lit(contiguous_scalar));
+                    match return_type {
+                        DataType::Utf8 => new_args.push(lit(contiguous_scalar)),
+                        DataType::LargeUtf8 => new_args.push(lit(ScalarValue::LargeUtf8(Some(contiguous_scalar)))),
+                        DataType::Utf8View => new_args.push(lit(ScalarValue::Utf8View(Some(contiguous_scalar)))),
+                        _ => unreachable!(),
+                    }
                     contiguous_scalar = "".to_string();
                 }
                 new_args.push(arg);
@@ -278,7 +348,16 @@ pub fn simplify_concat(args: Vec<Expr>) -> Result<ExprSimplifyResult> {
     }
 
     if !contiguous_scalar.is_empty() {
-        new_args.push(lit(contiguous_scalar));
+        match return_type {
+            DataType::Utf8 => new_args.push(lit(contiguous_scalar)),
+            DataType::LargeUtf8 => {
+                new_args.push(lit(ScalarValue::LargeUtf8(Some(contiguous_scalar))))
+            }
+            DataType::Utf8View => {
+                new_args.push(lit(ScalarValue::Utf8View(Some(contiguous_scalar))))
+            }
+            _ => unreachable!(),
+        }
     }
 
     if !args.eq(&new_args) {
@@ -360,6 +439,17 @@ mod tests {
             LargeUtf8,
             LargeStringArray
         );
+        test_function!(
+            ConcatFunc::new(),
+            &[
+                ColumnarValue::Scalar(ScalarValue::Utf8View(Some("aa".to_string()))),
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some("cc".to_string()))),
+            ],
+            Ok(Some("aacc")),
+            &str,
+            Utf8View,
+            StringViewArray
+        );
 
         Ok(())
     }
@@ -374,11 +464,18 @@ mod tests {
             None,
             Some("z"),
         ])));
-        let args = &[c0, c1, c2];
+        let c3 = ColumnarValue::Scalar(ScalarValue::Utf8View(Some(",".to_string())));
+        let c4 = ColumnarValue::Array(Arc::new(StringViewArray::from(vec![
+            Some("a"),
+            None,
+            Some("b"),
+        ])));
+        let args = &[c0, c1, c2, c3, c4];
 
-        let result = ConcatFunc::new().invoke(args)?;
+        let result = ConcatFunc::new().invoke_batch(args, 3)?;
         let expected =
-            Arc::new(StringArray::from(vec!["foo,x", "bar,", "baz,z"])) as ArrayRef;
+            Arc::new(StringViewArray::from(vec!["foo,x,a", "bar,,", "baz,z,b"]))
+                as ArrayRef;
         match &result {
             ColumnarValue::Array(array) => {
                 assert_eq!(&expected, array);

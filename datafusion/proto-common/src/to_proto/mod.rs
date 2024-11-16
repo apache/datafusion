@@ -759,6 +759,7 @@ impl From<JoinSide> for protobuf::JoinSide {
         match t {
             JoinSide::Left => protobuf::JoinSide::LeftSide,
             JoinSide::Right => protobuf::JoinSide::RightSide,
+            JoinSide::None => protobuf::JoinSide::None,
         }
     }
 }
@@ -831,6 +832,7 @@ impl TryFrom<&ParquetOptions> for protobuf::ParquetOptions {
             maximum_parallel_row_group_writers: value.maximum_parallel_row_group_writers as u64,
             maximum_buffered_record_batches_per_stream: value.maximum_buffered_record_batches_per_stream as u64,
             schema_force_view_types: value.schema_force_view_types,
+            binary_as_string: value.binary_as_string,
         })
     }
 }
@@ -919,7 +921,7 @@ impl TryFrom<&CsvOptions> for protobuf::CsvOptions {
                 .newlines_in_values
                 .map_or_else(Vec::new, |h| vec![h as u8]),
             compression: compression.into(),
-            schema_infer_max_rec: opts.schema_infer_max_rec as u64,
+            schema_infer_max_rec: opts.schema_infer_max_rec.map(|h| h as u64),
             date_format: opts.date_format.clone().unwrap_or_default(),
             datetime_format: opts.datetime_format.clone().unwrap_or_default(),
             timestamp_format: opts.timestamp_format.clone().unwrap_or_default(),
@@ -938,7 +940,7 @@ impl TryFrom<&JsonOptions> for protobuf::JsonOptions {
         let compression: protobuf::CompressionTypeVariant = opts.compression.into();
         Ok(protobuf::JsonOptions {
             compression: compression.into(),
-            schema_infer_max_rec: opts.schema_infer_max_rec as u64,
+            schema_infer_max_rec: opts.schema_infer_max_rec.map(|h| h as u64),
         })
     }
 }

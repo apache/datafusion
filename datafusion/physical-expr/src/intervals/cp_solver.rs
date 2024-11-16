@@ -6,7 +6,7 @@
 // "License"); you may not use this file except in compliance
 // with the License.  You may obtain a copy of the License at
 //
-//http://www.apache.org/licenses/LICENSE-2.0
+//   http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing,
 // software distributed under the License is distributed on an
@@ -19,6 +19,7 @@
 
 use std::collections::HashSet;
 use std::fmt::{Display, Formatter};
+use std::mem::{size_of, size_of_val};
 use std::sync::Arc;
 
 use super::utils::{
@@ -128,12 +129,11 @@ impl ExprIntervalGraph {
     /// Estimate size of bytes including `Self`.
     pub fn size(&self) -> usize {
         let node_memory_usage = self.graph.node_count()
-            * (std::mem::size_of::<ExprIntervalGraphNode>()
-                + std::mem::size_of::<NodeIndex>());
-        let edge_memory_usage = self.graph.edge_count()
-            * (std::mem::size_of::<usize>() + std::mem::size_of::<NodeIndex>() * 2);
+            * (size_of::<ExprIntervalGraphNode>() + size_of::<NodeIndex>());
+        let edge_memory_usage =
+            self.graph.edge_count() * (size_of::<usize>() + size_of::<NodeIndex>() * 2);
 
-        std::mem::size_of_val(self) + node_memory_usage + edge_memory_usage
+        size_of_val(self) + node_memory_usage + edge_memory_usage
     }
 }
 

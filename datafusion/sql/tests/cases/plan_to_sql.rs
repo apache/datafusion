@@ -20,12 +20,18 @@ use std::vec;
 
 use arrow_schema::*;
 use datafusion_common::{DFSchema, Result, TableReference};
-use datafusion_expr::test::function_stub::{count_udaf, max_udaf, min_udaf, sum_udaf};
+use datafusion_expr::test::function_stub::{
+    count_udaf, max_udaf, min_udaf, sum, sum_udaf,
+};
 use datafusion_expr::{col, lit, table_scan, wildcard, LogicalPlanBuilder};
+use datafusion_functions::unicode;
+use datafusion_functions_aggregate::grouping::grouping_udaf;
+use datafusion_functions_nested::make_array::make_array_udf;
+use datafusion_functions_window::rank::rank_udwf;
 use datafusion_sql::planner::{ContextProvider, PlannerContext, SqlToRel};
 use datafusion_sql::unparser::dialect::{
-    DefaultDialect as UnparserDefaultDialect, Dialect as UnparserDialect,
-    MySqlDialect as UnparserMySqlDialect, SqliteDialect,
+    CustomDialectBuilder, DefaultDialect as UnparserDefaultDialect, DefaultDialect,
+    Dialect as UnparserDialect, MySqlDialect as UnparserMySqlDialect, SqliteDialect,
 };
 use datafusion_sql::unparser::{expr_to_sql, plan_to_sql, Unparser};
 
@@ -71,7 +77,7 @@ fn roundtrip_expr() {
 
         let ast = expr_to_sql(&expr)?;
 
-        Ok(format!("{}", ast))
+        Ok(ast.to_string())
     };
 
     for (table, query, expected) in tests {
@@ -139,6 +145,13 @@ fn roundtrip_statement() -> Result<()> {
             SELECT j2_string as string FROM j2
             ORDER BY string DESC
             LIMIT 10"#,
+            r#"SELECT col1, id FROM (
+                SELECT j1_string AS col1, j1_id AS id FROM j1
+                UNION ALL
+                SELECT j2_string AS col1, j2_id AS id FROM j2
+                UNION ALL
+                SELECT j3_string AS col1, j3_id AS id FROM j3
+            ) AS subquery GROUP BY col1, id ORDER BY col1 ASC, id ASC"#,
             "SELECT id, count(*) over (PARTITION BY first_name ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING),
             last_name, sum(id) over (PARTITION BY first_name ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING),
             first_name from person",
@@ -146,7 +159,30 @@ fn roundtrip_statement() -> Result<()> {
             sum(id) OVER (PARTITION BY first_name ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) from person"#,
             "SELECT id, sum(id) OVER (PARTITION BY first_name ROWS BETWEEN 5 PRECEDING AND 2 FOLLOWING) from person",
             "WITH t1 AS (SELECT j1_id AS id, j1_string name FROM j1), t2 AS (SELECT j2_id AS id, j2_string name FROM j2) SELECT * FROM t1 JOIN t2 USING (id, name)",
-        ];
+            "WITH w1 AS (SELECT 'a' as col), w2 AS (SELECT 'b' as col), w3 as (SELECT 'c' as col) SELECT * FROM w1 UNION ALL SELECT * FROM w2 UNION ALL SELECT * FROM w3",
+            "WITH w1 AS (SELECT 'a' as col), w2 AS (SELECT 'b' as col), w3 as (SELECT 'c' as col), w4 as (SELECT 'd' as col) SELECT * FROM w1 UNION ALL SELECT * FROM w2 UNION ALL SELECT * FROM w3 UNION ALL SELECT * FROM w4",
+            "WITH w1 AS (SELECT 'a' as col), w2 AS (SELECT 'b' as col) SELECT * FROM w1 JOIN w2 ON w1.col = w2.col UNION ALL SELECT * FROM w1 JOIN w2 ON w1.col = w2.col UNION ALL SELECT * FROM w1 JOIN w2 ON w1.col = w2.col",
+            r#"SELECT id, first_name,
+            SUM(id) AS total_sum,
+            SUM(id) OVER (PARTITION BY first_name ROWS BETWEEN 5 PRECEDING AND 2 FOLLOWING) AS moving_sum,
+            MAX(SUM(id)) OVER (PARTITION BY first_name ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS max_total
+            FROM person JOIN orders ON person.id = orders.customer_id GROUP BY id, first_name"#,
+            r#"SELECT id, first_name,
+            SUM(id) AS total_sum,
+            SUM(id) OVER (PARTITION BY first_name ROWS BETWEEN 5 PRECEDING AND 2 FOLLOWING) AS moving_sum,
+            MAX(SUM(id)) OVER (PARTITION BY first_name ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS max_total
+            FROM (SELECT id, first_name from person) person JOIN (SELECT customer_id FROM orders) orders ON person.id = orders.customer_id GROUP BY id, first_name"#,
+            r#"SELECT id, first_name, last_name, customer_id, SUM(id) AS total_sum
+            FROM person
+            JOIN orders ON person.id = orders.customer_id
+            GROUP BY ROLLUP(id, first_name, last_name, customer_id)"#,
+            r#"SELECT id, first_name, last_name,
+            SUM(id) AS total_sum,
+            COUNT(*) AS total_count,
+            SUM(id) OVER (ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS running_total
+            FROM person
+            GROUP BY GROUPING SETS ((id, first_name, last_name), (first_name, last_name), (last_name))"#,
+    ];
 
     // For each test sql string, we transform as follows:
     // sql -> ast::Statement (s1) -> LogicalPlan (p1) -> ast::Statement (s2) -> LogicalPlan (p2)
@@ -161,6 +197,7 @@ fn roundtrip_statement() -> Result<()> {
         let state = MockSessionState::default()
             .with_aggregate_function(sum_udaf())
             .with_aggregate_function(count_udaf())
+            .with_aggregate_function(max_udaf())
             .with_expr_planner(Arc::new(CoreFunctionPlanner::default()));
         let context = MockContextProvider { state };
         let sql_to_rel = SqlToRel::new(&context);
@@ -168,7 +205,7 @@ fn roundtrip_statement() -> Result<()> {
 
         let roundtrip_statement = plan_to_sql(&plan)?;
 
-        let actual = format!("{}", &roundtrip_statement);
+        let actual = &roundtrip_statement.to_string();
         println!("roundtrip sql: {actual}");
         println!("plan {}", plan.display_indent());
 
@@ -200,7 +237,7 @@ fn roundtrip_crossjoin() -> Result<()> {
 
     let roundtrip_statement = plan_to_sql(&plan)?;
 
-    let actual = format!("{}", &roundtrip_statement);
+    let actual = &roundtrip_statement.to_string();
     println!("roundtrip sql: {actual}");
     println!("plan {}", plan.display_indent());
 
@@ -209,11 +246,11 @@ fn roundtrip_crossjoin() -> Result<()> {
         .unwrap();
 
     let expected = "Projection: j1.j1_id, j2.j2_string\
-        \n  Inner Join:  Filter: Boolean(true)\
+        \n  Cross Join: \
         \n    TableScan: j1\
         \n    TableScan: j2";
 
-    assert_eq!(format!("{plan_roundtrip}"), expected);
+    assert_eq!(plan_roundtrip.to_string(), expected);
 
     Ok(())
 }
@@ -227,6 +264,45 @@ fn roundtrip_statement_with_dialect() -> Result<()> {
         unparser_dialect: Box<dyn UnparserDialect>,
     }
     let tests: Vec<TestStatementWithDialect> = vec![
+        TestStatementWithDialect {
+            sql: "select min(ta.j1_id) as j1_min from j1 ta order by min(ta.j1_id) limit 10;",
+            expected:
+                // top projection sort gets derived into a subquery
+                // for MySQL, this subquery needs an alias
+                "SELECT `j1_min` FROM (SELECT min(`ta`.`j1_id`) AS `j1_min`, min(`ta`.`j1_id`) FROM `j1` AS `ta` ORDER BY min(`ta`.`j1_id`) ASC) AS `derived_sort` LIMIT 10",
+            parser_dialect: Box::new(MySqlDialect {}),
+            unparser_dialect: Box::new(UnparserMySqlDialect {}),
+        },
+        TestStatementWithDialect {
+            sql: "select min(ta.j1_id) as j1_min from j1 ta order by min(ta.j1_id) limit 10;",
+            expected:
+                // top projection sort still gets derived into a subquery in default dialect
+                // except for the default dialect, the subquery is left non-aliased
+                "SELECT j1_min FROM (SELECT min(ta.j1_id) AS j1_min, min(ta.j1_id) FROM j1 AS ta ORDER BY min(ta.j1_id) ASC NULLS LAST) LIMIT 10",
+            parser_dialect: Box::new(GenericDialect {}),
+            unparser_dialect: Box::new(UnparserDefaultDialect {}),
+        },
+        TestStatementWithDialect {
+            sql: "select min(ta.j1_id) as j1_min, max(tb.j1_max) from j1 ta, (select distinct max(ta.j1_id) as j1_max from j1 ta order by max(ta.j1_id)) tb order by min(ta.j1_id) limit 10;",
+            expected:
+                "SELECT `j1_min`, `max(tb.j1_max)` FROM (SELECT min(`ta`.`j1_id`) AS `j1_min`, max(`tb`.`j1_max`), min(`ta`.`j1_id`) FROM `j1` AS `ta` JOIN (SELECT `j1_max` FROM (SELECT DISTINCT max(`ta`.`j1_id`) AS `j1_max` FROM `j1` AS `ta`) AS `derived_distinct`) AS `tb` ORDER BY min(`ta`.`j1_id`) ASC) AS `derived_sort` LIMIT 10",
+            parser_dialect: Box::new(MySqlDialect {}),
+            unparser_dialect: Box::new(UnparserMySqlDialect {}),
+        },
+        TestStatementWithDialect {
+            sql: "select j1_id from (select 1 as j1_id);",
+            expected:
+                "SELECT `j1_id` FROM (SELECT 1 AS `j1_id`) AS `derived_projection`",
+            parser_dialect: Box::new(MySqlDialect {}),
+            unparser_dialect: Box::new(UnparserMySqlDialect {}),
+        },
+        TestStatementWithDialect {
+            sql: "select * from (select * from j1 limit 10);",
+            expected:
+                "SELECT * FROM (SELECT * FROM `j1` LIMIT 10) AS `derived_limit`",
+            parser_dialect: Box::new(MySqlDialect {}),
+            unparser_dialect: Box::new(UnparserMySqlDialect {}),
+        },
         TestStatementWithDialect {
             sql: "select ta.j1_id from j1 ta order by j1_id limit 10;",
             expected:
@@ -421,6 +497,18 @@ fn roundtrip_statement_with_dialect() -> Result<()> {
             parser_dialect: Box::new(GenericDialect {}),
             unparser_dialect: Box::new(SqliteDialect {}),
         },
+        TestStatementWithDialect {
+            sql: "SELECT * FROM (SELECT j1_id + 1 FROM j1) AS temp_j(id2)",
+            expected: r#"SELECT * FROM (SELECT (`j1`.`j1_id` + 1) AS `id2` FROM `j1`) AS `temp_j`"#,
+            parser_dialect: Box::new(GenericDialect {}),
+            unparser_dialect: Box::new(SqliteDialect {}),
+        },
+        TestStatementWithDialect {
+            sql: "SELECT * FROM (SELECT j1_id FROM j1 LIMIT 1) AS temp_j(id2)",
+            expected: r#"SELECT * FROM (SELECT `j1`.`j1_id` AS `id2` FROM `j1` LIMIT 1) AS `temp_j`"#,
+            parser_dialect: Box::new(GenericDialect {}),
+            unparser_dialect: Box::new(SqliteDialect {}),
+        },
     ];
 
     for query in tests {
@@ -442,7 +530,7 @@ fn roundtrip_statement_with_dialect() -> Result<()> {
         let unparser = Unparser::new(&*query.unparser_dialect);
         let roundtrip_statement = unparser.plan_to_sql(&plan)?;
 
-        let actual = format!("{}", &roundtrip_statement);
+        let actual = &roundtrip_statement.to_string();
         println!("roundtrip sql: {actual}");
         println!("plan {}", plan.display_indent());
 
@@ -466,20 +554,46 @@ fn test_unnest_logical_plan() -> Result<()> {
     };
     let sql_to_rel = SqlToRel::new(&context);
     let plan = sql_to_rel.sql_statement_to_plan(statement).unwrap();
+    let expected = r#"
+Projection: unnest_placeholder(unnest_table.struct_col).field1, unnest_placeholder(unnest_table.struct_col).field2, unnest_placeholder(unnest_table.array_col,depth=1) AS UNNEST(unnest_table.array_col), unnest_table.struct_col, unnest_table.array_col
+  Unnest: lists[unnest_placeholder(unnest_table.array_col)|depth=1] structs[unnest_placeholder(unnest_table.struct_col)]
+    Projection: unnest_table.struct_col AS unnest_placeholder(unnest_table.struct_col), unnest_table.array_col AS unnest_placeholder(unnest_table.array_col), unnest_table.struct_col, unnest_table.array_col
+      TableScan: unnest_table"#.trim_start();
 
-    let expected = "Projection: UNNEST(unnest_table.struct_col).field1, UNNEST(unnest_table.struct_col).field2, UNNEST(unnest_table.array_col), unnest_table.struct_col, unnest_table.array_col\
-    \n  Unnest: lists[UNNEST(unnest_table.array_col)] structs[UNNEST(unnest_table.struct_col)]\
-    \n    Projection: unnest_table.struct_col AS UNNEST(unnest_table.struct_col), unnest_table.array_col AS UNNEST(unnest_table.array_col), unnest_table.struct_col, unnest_table.array_col\
-    \n      TableScan: unnest_table";
+    assert_eq!(plan.to_string(), expected);
 
-    assert_eq!(format!("{plan}"), expected);
+    Ok(())
+}
+
+#[test]
+fn test_aggregation_without_projection() -> Result<()> {
+    let schema = Schema::new(vec![
+        Field::new("name", DataType::Utf8, false),
+        Field::new("age", DataType::UInt8, false),
+    ]);
+
+    let plan = LogicalPlanBuilder::from(
+        table_scan(Some("users"), &schema, Some(vec![0, 1]))?.build()?,
+    )
+    .aggregate(vec![col("name")], vec![sum(col("age"))])?
+    .build()?;
+
+    let unparser = Unparser::default();
+    let statement = unparser.plan_to_sql(&plan)?;
+
+    let actual = &statement.to_string();
+
+    assert_eq!(
+        actual,
+        r#"SELECT sum(users.age), users."name" FROM (SELECT users."name", users.age FROM users) GROUP BY users."name""#
+    );
 
     Ok(())
 }
 
 #[test]
 fn test_table_references_in_plan_to_sql() {
-    fn test(table_name: &str, expected_sql: &str) {
+    fn test(table_name: &str, expected_sql: &str, dialect: &impl UnparserDialect) {
         let schema = Schema::new(vec![
             Field::new("id", DataType::Utf8, false),
             Field::new("value", DataType::Utf8, false),
@@ -490,22 +604,48 @@ fn test_table_references_in_plan_to_sql() {
             .unwrap()
             .build()
             .unwrap();
-        let sql = plan_to_sql(&plan).unwrap();
 
-        assert_eq!(format!("{}", sql), expected_sql)
+        let unparser = Unparser::new(dialect);
+        let sql = unparser.plan_to_sql(&plan).unwrap();
+
+        assert_eq!(sql.to_string(), expected_sql)
     }
 
     test(
         "catalog.schema.table",
-        r#"SELECT "catalog"."schema"."table".id, "catalog"."schema"."table"."value" FROM "catalog"."schema"."table""#,
+        r#"SELECT "table".id, "table"."value" FROM "catalog"."schema"."table""#,
+        &DefaultDialect {},
     );
     test(
         "schema.table",
-        r#"SELECT "schema"."table".id, "schema"."table"."value" FROM "schema"."table""#,
+        r#"SELECT "table".id, "table"."value" FROM "schema"."table""#,
+        &DefaultDialect {},
     );
     test(
         "table",
         r#"SELECT "table".id, "table"."value" FROM "table""#,
+        &DefaultDialect {},
+    );
+
+    let custom_dialect = CustomDialectBuilder::default()
+        .with_full_qualified_col(true)
+        .with_identifier_quote_style('"')
+        .build();
+
+    test(
+        "catalog.schema.table",
+        r#"SELECT "catalog"."schema"."table"."id", "catalog"."schema"."table"."value" FROM "catalog"."schema"."table""#,
+        &custom_dialect,
+    );
+    test(
+        "schema.table",
+        r#"SELECT "schema"."table"."id", "schema"."table"."value" FROM "schema"."table""#,
+        &custom_dialect,
+    );
+    test(
+        "table",
+        r#"SELECT "table"."id", "table"."value" FROM "table""#,
+        &custom_dialect,
     );
 }
 
@@ -522,7 +662,7 @@ fn test_table_scan_with_no_projection_in_plan_to_sql() {
             .build()
             .unwrap();
         let sql = plan_to_sql(&plan).unwrap();
-        assert_eq!(format!("{}", sql), expected_sql)
+        assert_eq!(sql.to_string(), expected_sql)
     }
 
     test(
@@ -610,15 +750,24 @@ fn test_pretty_roundtrip() -> Result<()> {
     Ok(())
 }
 
-fn sql_round_trip(query: &str, expect: &str) {
-    let statement = Parser::new(&GenericDialect {})
+fn sql_round_trip<D>(dialect: D, query: &str, expect: &str)
+where
+    D: Dialect,
+{
+    let statement = Parser::new(&dialect)
         .try_with_sql(query)
         .unwrap()
         .parse_statement()
         .unwrap();
 
     let context = MockContextProvider {
-        state: MockSessionState::default(),
+        state: MockSessionState::default()
+            .with_aggregate_function(sum_udaf())
+            .with_aggregate_function(max_udaf())
+            .with_aggregate_function(grouping_udaf())
+            .with_window_function(rank_udwf())
+            .with_scalar_function(Arc::new(unicode::substr().as_ref().clone()))
+            .with_scalar_function(make_array_udf()),
     };
     let sql_to_rel = SqlToRel::new(&context);
     let plan = sql_to_rel.sql_statement_to_plan(statement).unwrap();
@@ -628,23 +777,103 @@ fn sql_round_trip(query: &str, expect: &str) {
 }
 
 #[test]
-fn test_table_scan_pushdown() -> Result<()> {
+fn test_table_scan_alias() -> Result<()> {
     let schema = Schema::new(vec![
         Field::new("id", DataType::Utf8, false),
         Field::new("age", DataType::Utf8, false),
     ]);
 
+    let plan = table_scan(Some("t1"), &schema, None)?
+        .project(vec![col("id")])?
+        .alias("a")?
+        .build()?;
+    let sql = plan_to_sql(&plan)?;
+    assert_eq!(sql.to_string(), "SELECT * FROM (SELECT t1.id FROM t1) AS a");
+
+    let plan = table_scan(Some("t1"), &schema, None)?
+        .project(vec![col("id")])?
+        .alias("a")?
+        .build()?;
+
+    let sql = plan_to_sql(&plan)?;
+    assert_eq!(sql.to_string(), "SELECT * FROM (SELECT t1.id FROM t1) AS a");
+
+    let plan = table_scan(Some("t1"), &schema, None)?
+        .filter(col("id").gt(lit(5)))?
+        .project(vec![col("id")])?
+        .alias("a")?
+        .build()?;
+    let sql = plan_to_sql(&plan)?;
+    assert_eq!(
+        sql.to_string(),
+        "SELECT * FROM (SELECT t1.id FROM t1 WHERE (t1.id > 5)) AS a"
+    );
+
+    let table_scan_with_two_filter = table_scan_with_filters(
+        Some("t1"),
+        &schema,
+        None,
+        vec![col("id").gt(lit(1)), col("age").lt(lit(2))],
+    )?
+    .project(vec![col("id")])?
+    .alias("a")?
+    .build()?;
+    let table_scan_with_two_filter = plan_to_sql(&table_scan_with_two_filter)?;
+    assert_eq!(
+        table_scan_with_two_filter.to_string(),
+        "SELECT a.id FROM t1 AS a WHERE ((a.id > 1) AND (a.age < 2))"
+    );
+
+    let table_scan_with_fetch =
+        table_scan_with_filter_and_fetch(Some("t1"), &schema, None, vec![], Some(10))?
+            .project(vec![col("id")])?
+            .alias("a")?
+            .build()?;
+    let table_scan_with_fetch = plan_to_sql(&table_scan_with_fetch)?;
+    assert_eq!(
+        table_scan_with_fetch.to_string(),
+        "SELECT a.id FROM (SELECT * FROM t1 LIMIT 10) AS a"
+    );
+
+    let table_scan_with_pushdown_all = table_scan_with_filter_and_fetch(
+        Some("t1"),
+        &schema,
+        Some(vec![0, 1]),
+        vec![col("id").gt(lit(1))],
+        Some(10),
+    )?
+    .project(vec![col("id")])?
+    .alias("a")?
+    .build()?;
+    let table_scan_with_pushdown_all = plan_to_sql(&table_scan_with_pushdown_all)?;
+    assert_eq!(
+        table_scan_with_pushdown_all.to_string(),
+        "SELECT a.id FROM (SELECT a.id, a.age FROM t1 AS a WHERE (a.id > 1) LIMIT 10) AS a"
+    );
+    Ok(())
+}
+
+#[test]
+fn test_table_scan_pushdown() -> Result<()> {
+    let schema = Schema::new(vec![
+        Field::new("id", DataType::Utf8, false),
+        Field::new("age", DataType::Utf8, false),
+    ]);
     let scan_with_projection =
         table_scan(Some("t1"), &schema, Some(vec![0, 1]))?.build()?;
     let scan_with_projection = plan_to_sql(&scan_with_projection)?;
     assert_eq!(
-        format!("{}", scan_with_projection),
+        scan_with_projection.to_string(),
         "SELECT t1.id, t1.age FROM t1"
     );
 
+    let scan_with_projection = table_scan(Some("t1"), &schema, Some(vec![1]))?.build()?;
+    let scan_with_projection = plan_to_sql(&scan_with_projection)?;
+    assert_eq!(scan_with_projection.to_string(), "SELECT t1.age FROM t1");
+
     let scan_with_no_projection = table_scan(Some("t1"), &schema, None)?.build()?;
     let scan_with_no_projection = plan_to_sql(&scan_with_no_projection)?;
-    assert_eq!(format!("{}", scan_with_no_projection), "SELECT * FROM t1");
+    assert_eq!(scan_with_no_projection.to_string(), "SELECT * FROM t1");
 
     let table_scan_with_projection_alias =
         table_scan(Some("t1"), &schema, Some(vec![0, 1]))?
@@ -653,8 +882,19 @@ fn test_table_scan_pushdown() -> Result<()> {
     let table_scan_with_projection_alias =
         plan_to_sql(&table_scan_with_projection_alias)?;
     assert_eq!(
-        format!("{}", table_scan_with_projection_alias),
+        table_scan_with_projection_alias.to_string(),
         "SELECT ta.id, ta.age FROM t1 AS ta"
+    );
+
+    let table_scan_with_projection_alias =
+        table_scan(Some("t1"), &schema, Some(vec![1]))?
+            .alias("ta")?
+            .build()?;
+    let table_scan_with_projection_alias =
+        plan_to_sql(&table_scan_with_projection_alias)?;
+    assert_eq!(
+        table_scan_with_projection_alias.to_string(),
+        "SELECT ta.age FROM t1 AS ta"
     );
 
     let table_scan_with_no_projection_alias = table_scan(Some("t1"), &schema, None)?
@@ -663,7 +903,7 @@ fn test_table_scan_pushdown() -> Result<()> {
     let table_scan_with_no_projection_alias =
         plan_to_sql(&table_scan_with_no_projection_alias)?;
     assert_eq!(
-        format!("{}", table_scan_with_no_projection_alias),
+        table_scan_with_no_projection_alias.to_string(),
         "SELECT * FROM t1 AS ta"
     );
 
@@ -675,7 +915,7 @@ fn test_table_scan_pushdown() -> Result<()> {
     let query_from_table_scan_with_projection =
         plan_to_sql(&query_from_table_scan_with_projection)?;
     assert_eq!(
-        format!("{}", query_from_table_scan_with_projection),
+        query_from_table_scan_with_projection.to_string(),
         "SELECT * FROM (SELECT t1.id, t1.age FROM t1)"
     );
 
@@ -688,7 +928,7 @@ fn test_table_scan_pushdown() -> Result<()> {
     .build()?;
     let table_scan_with_filter = plan_to_sql(&table_scan_with_filter)?;
     assert_eq!(
-        format!("{}", table_scan_with_filter),
+        table_scan_with_filter.to_string(),
         "SELECT * FROM t1 WHERE (t1.id > t1.age)"
     );
 
@@ -701,7 +941,7 @@ fn test_table_scan_pushdown() -> Result<()> {
     .build()?;
     let table_scan_with_two_filter = plan_to_sql(&table_scan_with_two_filter)?;
     assert_eq!(
-        format!("{}", table_scan_with_two_filter),
+        table_scan_with_two_filter.to_string(),
         "SELECT * FROM t1 WHERE ((t1.id > 1) AND (t1.age < 2))"
     );
 
@@ -715,7 +955,7 @@ fn test_table_scan_pushdown() -> Result<()> {
     .build()?;
     let table_scan_with_filter_alias = plan_to_sql(&table_scan_with_filter_alias)?;
     assert_eq!(
-        format!("{}", table_scan_with_filter_alias),
+        table_scan_with_filter_alias.to_string(),
         "SELECT * FROM t1 AS ta WHERE (ta.id > ta.age)"
     );
 
@@ -729,8 +969,22 @@ fn test_table_scan_pushdown() -> Result<()> {
     let table_scan_with_projection_and_filter =
         plan_to_sql(&table_scan_with_projection_and_filter)?;
     assert_eq!(
-        format!("{}", table_scan_with_projection_and_filter),
+        table_scan_with_projection_and_filter.to_string(),
         "SELECT t1.id, t1.age FROM t1 WHERE (t1.id > t1.age)"
+    );
+
+    let table_scan_with_projection_and_filter = table_scan_with_filters(
+        Some("t1"),
+        &schema,
+        Some(vec![1]),
+        vec![col("id").gt(col("age"))],
+    )?
+    .build()?;
+    let table_scan_with_projection_and_filter =
+        plan_to_sql(&table_scan_with_projection_and_filter)?;
+    assert_eq!(
+        table_scan_with_projection_and_filter.to_string(),
+        "SELECT t1.age FROM t1 WHERE (t1.id > t1.age)"
     );
 
     let table_scan_with_inline_fetch =
@@ -738,7 +992,7 @@ fn test_table_scan_pushdown() -> Result<()> {
             .build()?;
     let table_scan_with_inline_fetch = plan_to_sql(&table_scan_with_inline_fetch)?;
     assert_eq!(
-        format!("{}", table_scan_with_inline_fetch),
+        table_scan_with_inline_fetch.to_string(),
         "SELECT * FROM t1 LIMIT 10"
     );
 
@@ -753,7 +1007,7 @@ fn test_table_scan_pushdown() -> Result<()> {
     let table_scan_with_projection_and_inline_fetch =
         plan_to_sql(&table_scan_with_projection_and_inline_fetch)?;
     assert_eq!(
-        format!("{}", table_scan_with_projection_and_inline_fetch),
+        table_scan_with_projection_and_inline_fetch.to_string(),
         "SELECT t1.id, t1.age FROM t1 LIMIT 10"
     );
 
@@ -767,15 +1021,138 @@ fn test_table_scan_pushdown() -> Result<()> {
     .build()?;
     let table_scan_with_all = plan_to_sql(&table_scan_with_all)?;
     assert_eq!(
-        format!("{}", table_scan_with_all),
+        table_scan_with_all.to_string(),
         "SELECT t1.id, t1.age FROM t1 WHERE (t1.id > t1.age) LIMIT 10"
     );
+
+    let table_scan_with_additional_filter = table_scan_with_filters(
+        Some("t1"),
+        &schema,
+        None,
+        vec![col("id").gt(col("age"))],
+    )?
+    .filter(col("id").eq(lit(5)))?
+    .build()?;
+    let table_scan_with_filter = plan_to_sql(&table_scan_with_additional_filter)?;
+    assert_eq!(
+        table_scan_with_filter.to_string(),
+        "SELECT * FROM t1 WHERE (t1.id = 5) AND (t1.id > t1.age)"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn test_sort_with_push_down_fetch() -> Result<()> {
+    let schema = Schema::new(vec![
+        Field::new("id", DataType::Utf8, false),
+        Field::new("age", DataType::Utf8, false),
+    ]);
+
+    let plan = table_scan(Some("t1"), &schema, None)?
+        .project(vec![col("id"), col("age")])?
+        .sort_with_limit(vec![col("age").sort(true, true)], Some(10))?
+        .build()?;
+
+    let sql = plan_to_sql(&plan)?;
+    assert_eq!(
+        format!("{}", sql),
+        "SELECT t1.id, t1.age FROM t1 ORDER BY t1.age ASC NULLS FIRST LIMIT 10"
+    );
+    Ok(())
+}
+
+#[test]
+fn test_join_with_table_scan_filters() -> Result<()> {
+    let schema_left = Schema::new(vec![
+        Field::new("id", DataType::Utf8, false),
+        Field::new("name", DataType::Utf8, false),
+    ]);
+
+    let schema_right = Schema::new(vec![
+        Field::new("id", DataType::Utf8, false),
+        Field::new("age", DataType::Utf8, false),
+    ]);
+
+    let left_plan = table_scan_with_filters(
+        Some("left_table"),
+        &schema_left,
+        None,
+        vec![col("name").like(lit("some_name"))],
+    )?
+    .alias("left")?
+    .build()?;
+
+    let right_plan = table_scan_with_filters(
+        Some("right_table"),
+        &schema_right,
+        None,
+        vec![col("age").gt(lit(10))],
+    )?
+    .build()?;
+
+    let join_plan_with_filter = LogicalPlanBuilder::from(left_plan.clone())
+        .join(
+            right_plan.clone(),
+            datafusion_expr::JoinType::Inner,
+            (vec!["left.id"], vec!["right_table.id"]),
+            Some(col("left.id").gt(lit(5))),
+        )?
+        .build()?;
+
+    let sql = plan_to_sql(&join_plan_with_filter)?;
+
+    let expected_sql = r#"SELECT * FROM left_table AS "left" JOIN right_table ON "left".id = right_table.id AND (("left".id > 5) AND ("left"."name" LIKE 'some_name' AND (age > 10)))"#;
+
+    assert_eq!(sql.to_string(), expected_sql);
+
+    let join_plan_no_filter = LogicalPlanBuilder::from(left_plan.clone())
+        .join(
+            right_plan,
+            datafusion_expr::JoinType::Inner,
+            (vec!["left.id"], vec!["right_table.id"]),
+            None,
+        )?
+        .build()?;
+
+    let sql = plan_to_sql(&join_plan_no_filter)?;
+
+    let expected_sql = r#"SELECT * FROM left_table AS "left" JOIN right_table ON "left".id = right_table.id AND ("left"."name" LIKE 'some_name' AND (age > 10))"#;
+
+    assert_eq!(sql.to_string(), expected_sql);
+
+    let right_plan_with_filter = table_scan_with_filters(
+        Some("right_table"),
+        &schema_right,
+        None,
+        vec![col("age").gt(lit(10))],
+    )?
+    .filter(col("right_table.name").eq(lit("before_join_filter_val")))?
+    .build()?;
+
+    let join_plan_multiple_filters = LogicalPlanBuilder::from(left_plan.clone())
+        .join(
+            right_plan_with_filter,
+            datafusion_expr::JoinType::Inner,
+            (vec!["left.id"], vec!["right_table.id"]),
+            Some(col("left.id").gt(lit(5))),
+        )?
+        .filter(col("left.name").eq(lit("after_join_filter_val")))?
+        .build()?;
+
+    let sql = plan_to_sql(&join_plan_multiple_filters)?;
+
+    let expected_sql = r#"SELECT * FROM left_table AS "left" JOIN right_table ON "left".id = right_table.id AND (("left".id > 5) AND (("left"."name" LIKE 'some_name' AND (right_table."name" = 'before_join_filter_val')) AND (age > 10))) WHERE ("left"."name" = 'after_join_filter_val')"#;
+
+    assert_eq!(sql.to_string(), expected_sql);
+
     Ok(())
 }
 
 #[test]
 fn test_interval_lhs_eq() {
     sql_round_trip(
+        GenericDialect {},
         "select interval '2 seconds' = interval '2 seconds'",
         "SELECT (INTERVAL '2.000000000 SECS' = INTERVAL '2.000000000 SECS')",
     );
@@ -784,7 +1161,84 @@ fn test_interval_lhs_eq() {
 #[test]
 fn test_interval_lhs_lt() {
     sql_round_trip(
+        GenericDialect {},
         "select interval '2 seconds' < interval '2 seconds'",
         "SELECT (INTERVAL '2.000000000 SECS' < INTERVAL '2.000000000 SECS')",
+    );
+}
+
+#[test]
+fn test_without_offset() {
+    sql_round_trip(MySqlDialect {}, "select 1", "SELECT 1");
+}
+
+#[test]
+fn test_with_offset0() {
+    sql_round_trip(MySqlDialect {}, "select 1 offset 0", "SELECT 1 OFFSET 0");
+}
+
+#[test]
+fn test_with_offset95() {
+    sql_round_trip(MySqlDialect {}, "select 1 offset 95", "SELECT 1 OFFSET 95");
+}
+
+#[test]
+fn test_order_by_to_sql() {
+    // order by aggregation function
+    sql_round_trip(
+        GenericDialect {},
+        r#"SELECT id, first_name, SUM(id) FROM person GROUP BY id, first_name ORDER BY SUM(id) ASC, first_name DESC, id, first_name LIMIT 10"#,
+        r#"SELECT person.id, person.first_name, sum(person.id) FROM person GROUP BY person.id, person.first_name ORDER BY sum(person.id) ASC NULLS LAST, person.first_name DESC NULLS FIRST, person.id ASC NULLS LAST, person.first_name ASC NULLS LAST LIMIT 10"#,
+    );
+
+    // order by aggregation function alias
+    sql_round_trip(
+        GenericDialect {},
+        r#"SELECT id, first_name, SUM(id) as total_sum FROM person GROUP BY id, first_name ORDER BY total_sum ASC, first_name DESC, id, first_name LIMIT 10"#,
+        r#"SELECT person.id, person.first_name, sum(person.id) AS total_sum FROM person GROUP BY person.id, person.first_name ORDER BY total_sum ASC NULLS LAST, person.first_name DESC NULLS FIRST, person.id ASC NULLS LAST, person.first_name ASC NULLS LAST LIMIT 10"#,
+    );
+
+    // order by scalar function from projection
+    sql_round_trip(
+        GenericDialect {},
+        r#"SELECT id, first_name, substr(first_name,0,5) FROM person ORDER BY id, substr(first_name,0,5)"#,
+        r#"SELECT person.id, person.first_name, substr(person.first_name, 0, 5) FROM person ORDER BY person.id ASC NULLS LAST, substr(person.first_name, 0, 5) ASC NULLS LAST"#,
+    );
+}
+
+#[test]
+fn test_aggregation_to_sql() {
+    sql_round_trip(
+        GenericDialect {},
+        r#"SELECT id, first_name,
+        SUM(id) AS total_sum,
+        SUM(id) OVER (PARTITION BY first_name ROWS BETWEEN 5 PRECEDING AND 2 FOLLOWING) AS moving_sum,
+        MAX(SUM(id)) OVER (PARTITION BY first_name ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS max_total,
+        rank() OVER (PARTITION BY grouping(id) + grouping(age), CASE WHEN grouping(age) = 0 THEN id END ORDER BY sum(id) DESC) AS rank_within_parent_1,
+        rank() OVER (PARTITION BY grouping(age) + grouping(id), CASE WHEN (CAST(grouping(age) AS BIGINT) = 0) THEN id END ORDER BY sum(id) DESC) AS rank_within_parent_2
+        FROM person
+        GROUP BY id, first_name;"#,
+        r#"SELECT person.id, person.first_name,
+sum(person.id) AS total_sum, sum(person.id) OVER (PARTITION BY person.first_name ROWS BETWEEN 5 PRECEDING AND 2 FOLLOWING) AS moving_sum,
+max(sum(person.id)) OVER (PARTITION BY person.first_name ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS max_total,
+rank() OVER (PARTITION BY (grouping(person.id) + grouping(person.age)), CASE WHEN (grouping(person.age) = 0) THEN person.id END ORDER BY sum(person.id) DESC NULLS FIRST RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS rank_within_parent_1,
+rank() OVER (PARTITION BY (grouping(person.age) + grouping(person.id)), CASE WHEN (CAST(grouping(person.age) AS BIGINT) = 0) THEN person.id END ORDER BY sum(person.id) DESC NULLS FIRST RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS rank_within_parent_2
+FROM person
+GROUP BY person.id, person.first_name"#.replace("\n", " ").as_str(),
+    );
+}
+
+#[test]
+fn test_unnest_to_sql() {
+    sql_round_trip(
+        GenericDialect {},
+        r#"SELECT unnest(array_col) as u1, struct_col, array_col FROM unnest_table WHERE array_col != NULL ORDER BY struct_col, array_col"#,
+        r#"SELECT UNNEST(unnest_table.array_col) AS u1, unnest_table.struct_col, unnest_table.array_col FROM unnest_table WHERE (unnest_table.array_col <> NULL) ORDER BY unnest_table.struct_col ASC NULLS LAST, unnest_table.array_col ASC NULLS LAST"#,
+    );
+
+    sql_round_trip(
+        GenericDialect {},
+        r#"SELECT unnest(make_array(1, 2, 2, 5, NULL)) as u1"#,
+        r#"SELECT UNNEST(make_array(1, 2, 2, 5, NULL)) AS u1"#,
     );
 }

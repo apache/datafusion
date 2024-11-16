@@ -15,15 +15,16 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
-
-use arrow::datatypes::{DataType, TimeUnit};
-
-use crate::datetime::common::*;
-use datafusion_common::{exec_err, Result};
-use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
-
 use super::to_timestamp::ToTimestampSecondsFunc;
+use crate::datetime::common::*;
+use arrow::datatypes::{DataType, TimeUnit};
+use datafusion_common::{exec_err, Result};
+use datafusion_expr::scalar_doc_sections::DOC_SECTION_DATETIME;
+use datafusion_expr::{
+    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+};
+use std::any::Any;
+use std::sync::OnceLock;
 
 #[derive(Debug)]
 pub struct ToUnixtimeFunc {
@@ -61,7 +62,11 @@ impl ScalarUDFImpl for ToUnixtimeFunc {
         Ok(DataType::Int64)
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        batch_size: usize,
+    ) -> Result<ColumnarValue> {
         if args.is_empty() {
             return exec_err!("to_unixtime function requires 1 or more arguments, got 0");
         }
@@ -79,11 +84,49 @@ impl ScalarUDFImpl for ToUnixtimeFunc {
                 .cast_to(&DataType::Timestamp(TimeUnit::Second, None), None)?
                 .cast_to(&DataType::Int64, None),
             DataType::Utf8 => ToTimestampSecondsFunc::new()
-                .invoke(args)?
+                .invoke_batch(args, batch_size)?
                 .cast_to(&DataType::Int64, None),
             other => {
                 exec_err!("Unsupported data type {:?} for function to_unixtime", other)
             }
         }
     }
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_to_unixtime_doc())
+    }
+}
+
+static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+
+fn get_to_unixtime_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_DATETIME)
+            .with_description("Converts a value to seconds since the unix epoch (`1970-01-01T00:00:00Z`). Supports strings, dates, timestamps and double types as input. Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00') if no [Chrono formats](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) are provided.")
+            .with_syntax_example("to_unixtime(expression[, ..., format_n])")
+            .with_argument(
+                "expression",
+                "Expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators."
+            ).with_argument(
+            "format_n",
+            "Optional [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) strings to use to parse the expression. Formats will be tried in the order they appear with the first successful one being returned. If none of the formats successfully parse the expression an error will be returned.")
+            .with_sql_example(r#"
+```sql
+> select to_unixtime('2020-09-08T12:00:00+00:00');
++------------------------------------------------+
+| to_unixtime(Utf8("2020-09-08T12:00:00+00:00")) |
++------------------------------------------------+
+| 1599566400                                     |
++------------------------------------------------+
+> select to_unixtime('01-14-2023 01:01:30+05:30', '%q', '%d-%m-%Y %H/%M/%S', '%+', '%m-%d-%Y %H:%M:%S%#z');
++-----------------------------------------------------------------------------------------------------------------------------+
+| to_unixtime(Utf8("01-14-2023 01:01:30+05:30"),Utf8("%q"),Utf8("%d-%m-%Y %H/%M/%S"),Utf8("%+"),Utf8("%m-%d-%Y %H:%M:%S%#z")) |
++-----------------------------------------------------------------------------------------------------------------------------+
+| 1673638290                                                                                                                  |
++-----------------------------------------------------------------------------------------------------------------------------+
+```
+"#)
+            .build()
+            .unwrap()
+    })
 }

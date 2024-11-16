@@ -19,37 +19,35 @@ use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 
 use arrow_schema::DataType;
 use datafusion_common::{
-    internal_datafusion_err, not_impl_err, plan_datafusion_err, plan_err, DFSchema,
-    Dependency, Result,
+    internal_datafusion_err, internal_err, not_impl_err, plan_datafusion_err, plan_err,
+    DFSchema, Dependency, Result,
 };
 use datafusion_expr::expr::WildcardOptions;
+use datafusion_expr::expr::{ScalarFunction, Unnest};
 use datafusion_expr::planner::PlannerResult;
 use datafusion_expr::{
     expr, Expr, ExprFunctionExt, ExprSchemable, WindowFrame, WindowFunctionDefinition,
-};
-use datafusion_expr::{
-    expr::{ScalarFunction, Unnest},
-    BuiltInWindowFunction,
 };
 use sqlparser::ast::{
     DuplicateTreatment, Expr as SQLExpr, Function as SQLFunction, FunctionArg,
     FunctionArgExpr, FunctionArgumentClause, FunctionArgumentList, FunctionArguments,
     NullTreatment, ObjectName, OrderByExpr, WindowType,
 };
-use strum::IntoEnumIterator;
 
 /// Suggest a valid function based on an invalid input function name
+///
+/// Returns `None` if no valid matches are found. This happens when there are no
+/// functions registered with the context.
 pub fn suggest_valid_function(
     input_function_name: &str,
     is_window_func: bool,
     ctx: &dyn ContextProvider,
-) -> String {
+) -> Option<String> {
     let valid_funcs = if is_window_func {
         // All aggregate functions and builtin window functions
         let mut funcs = Vec::new();
 
         funcs.extend(ctx.udaf_names());
-        funcs.extend(BuiltInWindowFunction::iter().map(|func| func.to_string()));
         funcs.extend(ctx.udwf_names());
 
         funcs
@@ -66,18 +64,15 @@ pub fn suggest_valid_function(
 }
 
 /// Find the closest matching string to the target string in the candidates list, using edit distance(case insensitive)
-/// Input `candidates` must not be empty otherwise it will panic
-fn find_closest_match(candidates: Vec<String>, target: &str) -> String {
+/// Input `candidates` must not be empty otherwise an error is returned.
+fn find_closest_match(candidates: Vec<String>, target: &str) -> Option<String> {
     let target = target.to_lowercase();
-    candidates
-        .into_iter()
-        .min_by_key(|candidate| {
-            datafusion_common::utils::datafusion_strsim::levenshtein(
-                &candidate.to_lowercase(),
-                &target,
-            )
-        })
-        .expect("No candidates provided.") // Panic if `candidates` argument is empty
+    candidates.into_iter().min_by_key(|candidate| {
+        datafusion_common::utils::datafusion_strsim::levenshtein(
+            &candidate.to_lowercase(),
+            &target,
+        )
+    })
 }
 
 /// Arguments to for a function call extracted from the SQL AST
@@ -237,7 +232,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             }
         }
 
-        // user-defined function (UDF) should have precedence
+        // User-defined function (UDF) should have precedence
         if let Some(fm) = self.context_provider.get_function_meta(&name) {
             let args = self.function_args_to_expr(args, schema, planner_context)?;
             return Ok(Expr::ScalarFunction(ScalarFunction::new_udf(fm, args)));
@@ -260,12 +255,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             );
         }
 
-        // then, window function
+        // Then, window function
         if let Some(WindowType::WindowSpec(window)) = over {
             let partition_by = window
                 .partition_by
                 .into_iter()
-                // ignore window spec PARTITION BY for scalar values
+                // Ignore window spec PARTITION BY for scalar values
                 // as they do not change and thus do not generate new partitions
                 .filter(|e| !matches!(e, sqlparser::ast::Expr::Value { .. },))
                 .map(|e| self.sql_expr_to_logical_expr(e, schema, planner_context))
@@ -353,9 +348,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         }
 
         // Could not find the relevant function, so return an error
-        let suggested_func_name =
-            suggest_valid_function(&name, is_function_window, self.context_provider);
-        plan_err!("Invalid function '{name}'.\nDid you mean '{suggested_func_name}'?")
+        if let Some(suggested_func_name) =
+            suggest_valid_function(&name, is_function_window, self.context_provider)
+        {
+            plan_err!("Invalid function '{name}'.\nDid you mean '{suggested_func_name}'?")
+        } else {
+            internal_err!("No functions registered with this context.")
+        }
     }
 
     pub(super) fn sql_fn_name_to_expr(
@@ -379,7 +378,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         &self,
         name: &str,
     ) -> Result<WindowFunctionDefinition> {
-        // check udaf first
+        // Check udaf first
         let udaf = self.context_provider.get_aggregate_meta(name);
         // Use the builtin window function instead of the user-defined aggregate function
         if udaf.as_ref().is_some_and(|udaf| {
@@ -389,12 +388,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         }) {
             Ok(WindowFunctionDefinition::AggregateUDF(udaf.unwrap()))
         } else {
-            expr::find_df_window_func(name)
-                .or_else(|| {
-                    self.context_provider
-                        .get_window_meta(name)
-                        .map(WindowFunctionDefinition::WindowUDF)
-                })
+            self.context_provider
+                .get_window_meta(name)
+                .map(WindowFunctionDefinition::WindowUDF)
                 .ok_or_else(|| {
                     plan_datafusion_err!("There is no window function named {name}")
                 })
@@ -428,6 +424,18 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 qualifier: None,
                 options: WildcardOptions::default(),
             }),
+            FunctionArg::Unnamed(FunctionArgExpr::QualifiedWildcard(object_name)) => {
+                let qualifier = self.object_name_to_table_reference(object_name)?;
+                // Sanity check on qualifier with schema
+                let qualified_indices = schema.fields_indices_with_qualified(&qualifier);
+                if qualified_indices.is_empty() {
+                    return plan_err!("Invalid qualifier {qualifier}");
+                }
+                Ok(Expr::Wildcard {
+                    qualifier: Some(qualifier),
+                    options: WildcardOptions::default(),
+                })
+            }
             _ => not_impl_err!("Unsupported qualified wildcard argument: {sql:?}"),
         }
     }

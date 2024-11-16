@@ -14,6 +14,9 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
+
+// Make cheap clones clear: https://github.com/apache/datafusion/issues/11143
+#![cfg_attr(not(test), deny(clippy::clone_on_ref_ptr))]
 #![warn(missing_docs, clippy::needless_borrow)]
 
 //! [DataFusion] is an extensible query engine written in Rust that

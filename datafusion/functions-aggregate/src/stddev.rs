@@ -19,17 +19,20 @@
 
 use std::any::Any;
 use std::fmt::{Debug, Formatter};
-use std::sync::Arc;
+use std::mem::align_of_val;
+use std::sync::{Arc, OnceLock};
 
 use arrow::array::Float64Array;
 use arrow::{array::ArrayRef, datatypes::DataType, datatypes::Field};
 
 use datafusion_common::{internal_err, not_impl_err, Result};
 use datafusion_common::{plan_err, ScalarValue};
+use datafusion_expr::aggregate_doc_sections::DOC_SECTION_STATISTICAL;
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{
-    Accumulator, AggregateUDFImpl, GroupsAccumulator, Signature, Volatility,
+    Accumulator, AggregateUDFImpl, Documentation, GroupsAccumulator, Signature,
+    Volatility,
 };
 use datafusion_functions_aggregate_common::stats::StatsType;
 
@@ -68,10 +71,7 @@ impl Stddev {
     /// Create a new STDDEV aggregate function
     pub fn new() -> Self {
         Self {
-            signature: Signature::coercible(
-                vec![DataType::Float64],
-                Volatility::Immutable,
-            ),
+            signature: Signature::numeric(1, Volatility::Immutable),
             alias: vec!["stddev_samp".to_string()],
         }
     }
@@ -132,6 +132,34 @@ impl AggregateUDFImpl for Stddev {
     ) -> Result<Box<dyn GroupsAccumulator>> {
         Ok(Box::new(StddevGroupsAccumulator::new(StatsType::Sample)))
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_stddev_doc())
+    }
+}
+
+static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+
+fn get_stddev_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_STATISTICAL)
+            .with_description("Returns the standard deviation of a set of numbers.")
+            .with_syntax_example("stddev(expression)")
+            .with_sql_example(
+                r#"```sql
+> SELECT stddev(column_name) FROM table_name;
++----------------------+
+| stddev(column_name)   |
++----------------------+
+| 12.34                |
++----------------------+
+```"#,
+            )
+            .with_standard_argument("expression", None)
+            .build()
+            .unwrap()
+    })
 }
 
 make_udaf_expr_and_func!(
@@ -228,6 +256,34 @@ impl AggregateUDFImpl for StddevPop {
             StatsType::Population,
         )))
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_stddev_pop_doc())
+    }
+}
+
+fn get_stddev_pop_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_STATISTICAL)
+            .with_description(
+                "Returns the population standard deviation of a set of numbers.",
+            )
+            .with_syntax_example("stddev_pop(expression)")
+            .with_sql_example(
+                r#"```sql
+> SELECT stddev_pop(column_name) FROM table_name;
++--------------------------+
+| stddev_pop(column_name)   |
++--------------------------+
+| 10.56                    |
++--------------------------+
+```"#,
+            )
+            .with_standard_argument("expression", None)
+            .build()
+            .unwrap()
+    })
 }
 
 /// An accumulator to compute the average
@@ -285,8 +341,7 @@ impl Accumulator for StddevAccumulator {
     }
 
     fn size(&self) -> usize {
-        std::mem::align_of_val(self) - std::mem::align_of_val(&self.variance)
-            + self.variance.size()
+        align_of_val(self) - align_of_val(&self.variance) + self.variance.size()
     }
 
     fn supports_retract_batch(&self) -> bool {
@@ -352,6 +407,7 @@ mod tests {
     use datafusion_expr::AggregateUDF;
     use datafusion_functions_aggregate_common::utils::get_accum_scalar_values_as_arrays;
     use datafusion_physical_expr::expressions::col;
+    use datafusion_physical_expr_common::sort_expr::LexOrdering;
     use std::sync::Arc;
 
     #[test]
@@ -403,7 +459,7 @@ mod tests {
             return_type: &DataType::Float64,
             schema,
             ignore_nulls: false,
-            ordering_req: &[],
+            ordering_req: &LexOrdering::default(),
             name: "a",
             is_distinct: false,
             is_reversed: false,
@@ -414,7 +470,7 @@ mod tests {
             return_type: &DataType::Float64,
             schema,
             ignore_nulls: false,
-            ordering_req: &[],
+            ordering_req: &LexOrdering::default(),
             name: "a",
             is_distinct: false,
             is_reversed: false,

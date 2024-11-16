@@ -88,8 +88,9 @@ impl ArrowBytesViewSet {
 /// values that can produce the set of keys on
 /// output as `GenericBinaryViewArray` without copies.
 ///
-/// Equivalent to `HashSet<String, V>` but with better performance for arrow
-/// data.
+/// Equivalent to `HashSet<String, V>` but with better performance if you need
+/// to emit the keys as an Arrow `StringViewArray` / `BinaryViewArray`. For other
+/// purposes it is the same as a `HashMap<String, V>`
 ///
 /// # Generic Arguments
 ///
@@ -243,7 +244,7 @@ where
         let batch_hashes = &mut self.hashes_buffer;
         batch_hashes.clear();
         batch_hashes.resize(values.len(), 0);
-        create_hashes(&[values.clone()], &self.random_state, batch_hashes)
+        create_hashes(&[Arc::clone(values)], &self.random_state, batch_hashes)
             // hash is supported for all types and create_hashes only
             // returns errors for unsupported types
             .unwrap();
@@ -392,7 +393,7 @@ where
 #[cfg(test)]
 mod tests {
     use arrow::array::{BinaryViewArray, GenericByteViewArray, StringViewArray};
-    use hashbrown::HashMap;
+    use datafusion_common::HashMap;
 
     use super::*;
 

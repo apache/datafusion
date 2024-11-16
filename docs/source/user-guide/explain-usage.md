@@ -223,6 +223,23 @@ Again, reading from bottom up:
 - `SortPreservingMergeExec`
   - `output_rows=5`, `elapsed_compute=2.375µs`: Produced the final 5 rows in 2.375µs (microseconds)
 
+When predicate pushdown is enabled, `ParquetExec` gains the following metrics:
+
+- `page_index_rows_matched`: number of rows in pages that were tested by a page index filter, and passed
+- `page_index_rows_pruned`: number of rows in pages that were tested by a page index filter, and did not pass
+- `row_groups_matched_bloom_filter`: number of rows in row groups that were tested by a Bloom Filter, and passed
+- `row_groups_pruned_bloom_filter`: number of rows in row groups that were tested by a Bloom Filter, and did not pass
+- `row_groups_matched_statistics`: number of rows in row groups that were tested by row group statistics (min and max value), and passed
+- `row_groups_pruned_statistics`: number of rows in row groups that were tested by row group statistics (min and max value), and did not pass
+- `pushdown_rows_matched`: rows that were tested by any of the above filtered, and passed all of them (this should be minimum of `page_index_rows_matched`, `row_groups_pruned_bloom_filter`, and `row_groups_pruned_statistics`)
+- `pushdown_rows_pruned`: rows that were tested by any of the above filtered, and did not pass one of them (this should be sum of `page_index_rows_matched`, `row_groups_pruned_bloom_filter`, and `row_groups_pruned_statistics`)
+- `predicate_evaluation_errors`: number of times evaluating the filter expression failed (expected to be zero in normal operation)
+- `num_predicate_creation_errors`: number of errors creating predicates (expected to be zero in normal operation)
+- `bloom_filter_eval_time`: time spent parsing and evaluating Bloom Filters
+- `statistics_eval_time`: time spent parsing and evaluating row group-level statistics
+- `row_pushdown_eval_time`: time spent evaluating row-level filters
+- `page_index_eval_time`: time required to evaluate the page index filters
+
 ## Partitions and Execution
 
 DataFusion determines the optimal number of cores to use as part of query

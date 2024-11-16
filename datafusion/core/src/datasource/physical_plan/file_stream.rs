@@ -24,6 +24,7 @@
 use std::collections::VecDeque;
 use std::mem;
 use std::pin::Pin;
+use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use crate::datasource::listing::PartitionedFile;
@@ -252,7 +253,7 @@ impl<F: FileOpener> FileStream<F> {
     ) -> Result<Self> {
         let (projected_schema, ..) = config.project();
         let pc_projector = PartitionColumnProjector::new(
-            projected_schema.clone(),
+            Arc::clone(&projected_schema),
             &config
                 .table_partition_cols
                 .iter()
@@ -295,6 +296,7 @@ impl<F: FileOpener> FileStream<F> {
             object_meta: part_file.object_meta,
             range: part_file.range,
             extensions: part_file.extensions,
+            metadata_size_hint: part_file.metadata_size_hint,
         };
 
         Some(
@@ -509,7 +511,7 @@ impl<F: FileOpener> Stream for FileStream<F> {
 
 impl<F: FileOpener> RecordBatchStream for FileStream<F> {
     fn schema(&self) -> SchemaRef {
-        self.projected_schema.clone()
+        Arc::clone(&self.projected_schema)
     }
 }
 

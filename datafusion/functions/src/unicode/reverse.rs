@@ -16,18 +16,20 @@
 // under the License.
 
 use std::any::Any;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
+use crate::utils::{make_scalar_function, utf8_to_str_type};
 use arrow::array::{
     Array, ArrayAccessor, ArrayIter, ArrayRef, AsArray, GenericStringArray,
     OffsetSizeTrait,
 };
 use arrow::datatypes::DataType;
 use datafusion_common::{exec_err, Result};
-use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::scalar_doc_sections::DOC_SECTION_STRING;
+use datafusion_expr::{
+    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+};
 use DataType::{LargeUtf8, Utf8, Utf8View};
-
-use crate::utils::{make_scalar_function, utf8_to_str_type};
 
 #[derive(Debug)]
 pub struct ReverseFunc {
@@ -79,6 +81,34 @@ impl ScalarUDFImpl for ReverseFunc {
             }
         }
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_reverse_doc())
+    }
+}
+
+static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+
+fn get_reverse_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_STRING)
+            .with_description("Reverses the character order of a string.")
+            .with_syntax_example("reverse(str)")
+            .with_sql_example(
+                r#"```sql
+> select reverse('datafusion');
++-----------------------------+
+| reverse(Utf8("datafusion")) |
++-----------------------------+
+| noisufatad                  |
++-----------------------------+
+```"#,
+            )
+            .with_standard_argument("str", Some("String"))
+            .build()
+            .unwrap()
+    })
 }
 
 /// Reverses the order of the characters in the string.

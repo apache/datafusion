@@ -33,6 +33,7 @@ use arrow_schema::SchemaRef;
 use datafusion_common::{config_err, plan_err, Constraints, DataFusionError, Result};
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
+use datafusion_expr::dml::InsertOp;
 use datafusion_expr::{CreateExternalTable, Expr, SortExpr, TableType};
 use datafusion_physical_plan::insert::{DataSink, DataSinkExec};
 use datafusion_physical_plan::metrics::MetricsSet;
@@ -186,7 +187,7 @@ impl StreamProvider for FileStreamProvider {
 
     fn reader(&self) -> Result<Box<dyn RecordBatchReader>> {
         let file = File::open(&self.location)?;
-        let schema = self.schema.clone();
+        let schema = Arc::clone(&self.schema);
         match &self.encoding {
             StreamEncoding::Csv => {
                 let reader = arrow::csv::ReaderBuilder::new(schema)
@@ -293,6 +294,7 @@ impl StreamConfig {
 ///
 /// [Hadoop]: https://hadoop.apache.org/
 /// [`ListingTable`]: crate::datasource::listing::ListingTable
+#[derive(Debug)]
 pub struct StreamTable(Arc<StreamConfig>);
 
 impl StreamTable {
@@ -309,7 +311,7 @@ impl TableProvider for StreamTable {
     }
 
     fn schema(&self) -> SchemaRef {
-        self.0.source.schema().clone()
+        Arc::clone(self.0.source.schema())
     }
 
     fn constraints(&self) -> Option<&Constraints> {
@@ -336,8 +338,8 @@ impl TableProvider for StreamTable {
         };
 
         Ok(Arc::new(StreamingTableExec::try_new(
-            self.0.source.schema().clone(),
-            vec![Arc::new(StreamRead(self.0.clone())) as _],
+            Arc::clone(self.0.source.schema()),
+            vec![Arc::new(StreamRead(Arc::clone(&self.0))) as _],
             projection,
             projected_schema,
             true,
@@ -349,7 +351,7 @@ impl TableProvider for StreamTable {
         &self,
         _state: &dyn Session,
         input: Arc<dyn ExecutionPlan>,
-        _overwrite: bool,
+        _insert_op: InsertOp,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let ordering = match self.0.order.first() {
             Some(x) => {
@@ -363,13 +365,14 @@ impl TableProvider for StreamTable {
 
         Ok(Arc::new(DataSinkExec::new(
             input,
-            Arc::new(StreamWrite(self.0.clone())),
-            self.0.source.schema().clone(),
+            Arc::new(StreamWrite(Arc::clone(&self.0))),
+            Arc::clone(self.0.source.schema()),
             ordering,
         )))
     }
 }
 
+#[derive(Debug)]
 struct StreamRead(Arc<StreamConfig>);
 
 impl PartitionStream for StreamRead {
@@ -378,8 +381,8 @@ impl PartitionStream for StreamRead {
     }
 
     fn execute(&self, _ctx: Arc<TaskContext>) -> SendableRecordBatchStream {
-        let config = self.0.clone();
-        let schema = self.0.source.schema().clone();
+        let config = Arc::clone(&self.0);
+        let schema = Arc::clone(self.0.source.schema());
         let mut builder = RecordBatchReceiverStreamBuilder::new(schema, 2);
         let tx = builder.tx();
         builder.spawn_blocking(move || {
@@ -419,7 +422,7 @@ impl DataSink for StreamWrite {
         mut data: SendableRecordBatchStream,
         _context: &Arc<TaskContext>,
     ) -> Result<u64> {
-        let config = self.0.clone();
+        let config = Arc::clone(&self.0);
         let (sender, mut receiver) = tokio::sync::mpsc::channel::<RecordBatch>(2);
         // Note: FIFO Files support poll so this could use AsyncFd
         let write_task = SpawnedTask::spawn_blocking(move || {

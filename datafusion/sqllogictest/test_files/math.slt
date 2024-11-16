@@ -102,7 +102,12 @@ SELECT nanvl(asin(10), 1.0), nanvl(1.0, 2.0), nanvl(asin(10), asin(10))
 
 # isnan
 query BBBB
-SELECT isnan(1.0), isnan('NaN'::DOUBLE), isnan(-'NaN'::DOUBLE), isnan(NULL)
+SELECT isnan(1.0::DOUBLE), isnan('NaN'::DOUBLE), isnan(-'NaN'::DOUBLE), isnan(NULL)
+----
+false true true NULL
+
+query BBBB
+SELECT isnan(1.0::FLOAT), isnan('NaN'::FLOAT), isnan(-'NaN'::FLOAT), isnan(NULL::FLOAT)
 ----
 false true true NULL
 
@@ -121,9 +126,16 @@ statement error
 SELECT abs(1, 2);
 
 # abs: unsupported argument type
-query error DataFusion error: This feature is not implemented: Unsupported data type Utf8 for function abs
+query error This feature is not implemented: Unsupported data type Utf8 for function abs
 SELECT abs('foo');
 
+# abs: numeric string
+# TODO: In Postgres, '-1.2' is unknown type and interpreted to float8 so they don't fail on this query
+query error DataFusion error: This feature is not implemented: Unsupported data type Utf8 for function abs
+select abs('-1.2');
+
+query error DataFusion error: This feature is not implemented: Unsupported data type Utf8 for function abs
+select abs(arrow_cast('-1.2', 'Utf8'));
 
 statement ok
 CREATE TABLE test_nullable_integer(

@@ -38,6 +38,7 @@ use datafusion_physical_plan::streaming::{PartitionStream, StreamingTableExec};
 use datafusion_physical_plan::{get_plan_string, ExecutionPlan, ExecutionPlanProperties};
 use std::sync::Arc;
 
+#[derive(Debug)]
 struct DummyStreamPartition {
     schema: SchemaRef,
 }

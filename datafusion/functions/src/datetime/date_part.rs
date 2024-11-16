@@ -17,14 +17,16 @@
 
 use std::any::Any;
 use std::str::FromStr;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use arrow::array::{Array, ArrayRef, Float64Array};
 use arrow::compute::kernels::cast_utils::IntervalUnit;
 use arrow::compute::{binary, cast, date_part, DatePart};
 use arrow::datatypes::DataType::{
-    Date32, Date64, Float64, Time32, Time64, Timestamp, Utf8, Utf8View,
+    Date32, Date64, Duration, Float64, Interval, Time32, Time64, Timestamp, Utf8,
+    Utf8View,
 };
+use arrow::datatypes::IntervalUnit::{DayTime, MonthDayNano, YearMonth};
 use arrow::datatypes::TimeUnit::{Microsecond, Millisecond, Nanosecond, Second};
 use arrow::datatypes::{DataType, TimeUnit};
 
@@ -35,9 +37,10 @@ use datafusion_common::cast::{
     as_timestamp_nanosecond_array, as_timestamp_second_array,
 };
 use datafusion_common::{exec_err, Result, ScalarValue};
+use datafusion_expr::scalar_doc_sections::DOC_SECTION_DATETIME;
 use datafusion_expr::TypeSignature::Exact;
 use datafusion_expr::{
-    ColumnarValue, ScalarUDFImpl, Signature, Volatility, TIMEZONE_WILDCARD,
+    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility, TIMEZONE_WILDCARD,
 };
 
 #[derive(Debug)]
@@ -109,6 +112,20 @@ impl DatePartFunc {
                     Exact(vec![Utf8View, Time64(Microsecond)]),
                     Exact(vec![Utf8, Time64(Nanosecond)]),
                     Exact(vec![Utf8View, Time64(Nanosecond)]),
+                    Exact(vec![Utf8, Interval(YearMonth)]),
+                    Exact(vec![Utf8View, Interval(YearMonth)]),
+                    Exact(vec![Utf8, Interval(DayTime)]),
+                    Exact(vec![Utf8View, Interval(DayTime)]),
+                    Exact(vec![Utf8, Interval(MonthDayNano)]),
+                    Exact(vec![Utf8View, Interval(MonthDayNano)]),
+                    Exact(vec![Utf8, Duration(Second)]),
+                    Exact(vec![Utf8View, Duration(Second)]),
+                    Exact(vec![Utf8, Duration(Millisecond)]),
+                    Exact(vec![Utf8View, Duration(Millisecond)]),
+                    Exact(vec![Utf8, Duration(Microsecond)]),
+                    Exact(vec![Utf8View, Duration(Microsecond)]),
+                    Exact(vec![Utf8, Duration(Nanosecond)]),
+                    Exact(vec![Utf8View, Duration(Nanosecond)]),
                 ],
                 Volatility::Immutable,
             ),
@@ -201,6 +218,47 @@ impl ScalarUDFImpl for DatePartFunc {
     fn aliases(&self) -> &[String] {
         &self.aliases
     }
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_date_part_doc())
+    }
+}
+
+static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+
+fn get_date_part_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_DATETIME)
+            .with_description("Returns the specified part of the date as an integer.")
+            .with_syntax_example("date_part(part, expression)")
+            .with_argument(
+                "part",
+                r#"Part of the date to return. The following date parts are supported:
+
+    - year
+    - quarter (emits value in inclusive range [1, 4] based on which quartile of the year the date is in)
+    - month
+    - week (week of the year)
+    - day (day of the month)
+    - hour
+    - minute
+    - second
+    - millisecond
+    - microsecond
+    - nanosecond
+    - dow (day of the week)
+    - doy (day of the year)
+    - epoch (seconds since Unix epoch)
+"#,
+            )
+            .with_argument(
+                "expression",
+                "Time expression to operate on. Can be a constant, column, or function.",
+            )
+            .with_alternative_syntax("extract(field FROM source)")
+            .build()
+            .unwrap()
+    })
 }
 
 /// Invoke [`date_part`] and cast the result to Float64
@@ -224,10 +282,28 @@ fn seconds(array: &dyn Array, unit: TimeUnit) -> Result<ArrayRef> {
     let subsecs = date_part(array, DatePart::Nanosecond)?;
     let subsecs = as_int32_array(subsecs.as_ref())?;
 
-    let r: Float64Array = binary(secs, subsecs, |secs, subsecs| {
-        (secs as f64 + (subsecs as f64 / 1_000_000_000_f64)) * sf
-    })?;
-    Ok(Arc::new(r))
+    // Special case where there are no nulls.
+    if subsecs.null_count() == 0 {
+        let r: Float64Array = binary(secs, subsecs, |secs, subsecs| {
+            (secs as f64 + ((subsecs % 1_000_000_000) as f64 / 1_000_000_000_f64)) * sf
+        })?;
+        Ok(Arc::new(r))
+    } else {
+        // Nulls in secs are preserved, nulls in subsecs are treated as zero to account for the case
+        // where the number of nanoseconds overflows.
+        let r: Float64Array = secs
+            .iter()
+            .zip(subsecs)
+            .map(|(secs, subsecs)| {
+                secs.map(|secs| {
+                    let subsecs = subsecs.unwrap_or(0);
+                    (secs as f64 + ((subsecs % 1_000_000_000) as f64 / 1_000_000_000_f64))
+                        * sf
+                })
+            })
+            .collect();
+        Ok(Arc::new(r))
+    }
 }
 
 fn epoch(array: &dyn Array) -> Result<ArrayRef> {
@@ -256,7 +332,8 @@ fn epoch(array: &dyn Array) -> Result<ArrayRef> {
         Time64(Nanosecond) => {
             as_time64_nanosecond_array(array)?.unary(|x| x as f64 / 1_000_000_000_f64)
         }
-        d => return exec_err!("Can not convert {d:?} to epoch"),
+        Interval(_) | Duration(_) => return seconds(array, Second),
+        d => return exec_err!("Cannot convert {d:?} to epoch"),
     };
     Ok(Arc::new(f))
 }

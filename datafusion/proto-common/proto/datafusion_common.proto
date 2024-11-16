@@ -84,6 +84,7 @@ enum JoinType {
   LEFTANTI = 5;
   RIGHTSEMI = 6;
   RIGHTANTI = 7;
+  LEFTMARK = 8;
 }
 
 enum JoinConstraint {
@@ -413,7 +414,7 @@ message CsvOptions {
   bytes quote = 3; // Quote character as a byte
   bytes escape = 4; // Optional escape character as a byte
   CompressionTypeVariant compression = 5; // Compression type
-  uint64 schema_infer_max_rec = 6; // Max records for schema inference
+  optional uint64 schema_infer_max_rec = 6; // Optional max records for schema inference
   string date_format = 7; // Optional date format
   string datetime_format = 8; // Optional datetime format
   string timestamp_format = 9; // Optional timestamp format
@@ -429,7 +430,7 @@ message CsvOptions {
 // Options controlling CSV format
 message JsonOptions {
   CompressionTypeVariant compression = 1; // Compression type
-  uint64 schema_infer_max_rec = 2; // Max records for schema inference
+  optional uint64 schema_infer_max_rec = 2; // Optional max records for schema inference
 }
 
 message TableParquetOptions {
@@ -494,6 +495,7 @@ message ParquetOptions {
   bool bloom_filter_on_read = 26; // default = true
   bool bloom_filter_on_write = 27; // default = false
   bool schema_force_view_types = 28; // default = false
+  bool binary_as_string = 29; // default = false
 
   oneof metadata_size_hint_opt {
     uint64 metadata_size_hint = 4;
@@ -540,9 +542,10 @@ message ParquetOptions {
   string created_by = 16;
 }
 
-enum JoinSide{
+enum JoinSide {
   LEFT_SIDE = 0;
   RIGHT_SIDE = 1;
+  NONE = 2;
 }
 
 message Precision{

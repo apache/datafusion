@@ -15,12 +15,15 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::utils::test::read_json;
 use datafusion::arrow::array::ArrayRef;
 use datafusion::physical_plan::Accumulator;
 use datafusion::scalar::ScalarValue;
 use datafusion_substrait::logical_plan::{
     consumer::from_substrait_plan, producer::to_substrait_plan,
 };
+use std::cmp::Ordering;
+use std::mem::size_of_val;
 
 use datafusion::arrow::datatypes::{DataType, Field, IntervalUnit, Schema, TimeUnit};
 use datafusion::common::{not_impl_err, plan_err, DFSchema, DFSchemaRef};
@@ -37,13 +40,11 @@ use std::hash::Hash;
 use std::sync::Arc;
 
 use datafusion::execution::session_state::SessionStateBuilder;
-use substrait::proto::extensions::simple_extension_declaration::{
-    ExtensionType, MappingType,
-};
-use substrait::proto::extensions::SimpleExtensionDeclaration;
+use substrait::proto::extensions::simple_extension_declaration::MappingType;
 use substrait::proto::rel::RelType;
 use substrait::proto::{plan_rel, Plan, Rel};
 
+#[derive(Debug)]
 struct MockSerializerRegistry;
 
 impl SerializerRegistry for MockSerializerRegistry {
@@ -66,8 +67,7 @@ impl SerializerRegistry for MockSerializerRegistry {
         &self,
         name: &str,
         bytes: &[u8],
-    ) -> Result<std::sync::Arc<dyn datafusion::logical_expr::UserDefinedLogicalNode>>
-    {
+    ) -> Result<Arc<dyn UserDefinedLogicalNode>> {
         if name == "MockUserDefinedLogicalPlan" {
             MockUserDefinedLogicalPlan::deserialize(bytes)
         } else {
@@ -82,6 +82,17 @@ struct MockUserDefinedLogicalPlan {
     validation_bytes: Vec<u8>,
     inputs: Vec<LogicalPlan>,
     empty_schema: DFSchemaRef,
+}
+
+// `PartialOrd` needed for `UserDefinedLogicalNodeCore`, manual implementation necessary due to
+// the `empty_schema` field.
+impl PartialOrd for MockUserDefinedLogicalPlan {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        match self.validation_bytes.partial_cmp(&other.validation_bytes) {
+            Some(Ordering::Equal) => self.inputs.partial_cmp(&other.inputs),
+            cmp => cmp,
+        }
+    }
 }
 
 impl UserDefinedLogicalNode for MockUserDefinedLogicalPlan {
@@ -132,6 +143,14 @@ impl UserDefinedLogicalNode for MockUserDefinedLogicalPlan {
     fn dyn_eq(&self, _: &dyn UserDefinedLogicalNode) -> bool {
         unimplemented!()
     }
+
+    fn dyn_ord(&self, _: &dyn UserDefinedLogicalNode) -> Option<Ordering> {
+        unimplemented!()
+    }
+
+    fn supports_limit_pushdown(&self) -> bool {
+        false // Disallow limit push-down by default
+    }
 }
 
 impl MockUserDefinedLogicalPlan {
@@ -162,7 +181,13 @@ async fn simple_select() -> Result<()> {
 
 #[tokio::test]
 async fn wildcard_select() -> Result<()> {
-    roundtrip("SELECT * FROM data").await
+    assert_expected_plan_unoptimized(
+        "SELECT * FROM data",
+        "Projection: data.a, data.b, data.c, data.d, data.e, data.f\
+        \n  TableScan: data",
+        true,
+    )
+    .await
 }
 
 #[tokio::test]
@@ -200,23 +225,6 @@ async fn select_with_reused_functions() -> Result<()> {
     ];
     assert_eq!(functions, expected);
 
-    Ok(())
-}
-
-#[tokio::test]
-async fn roundtrip_udt_extensions() -> Result<()> {
-    let ctx = create_context().await?;
-    let proto =
-        roundtrip_with_ctx("SELECT INTERVAL '1 YEAR 1 DAY 1 SECOND' FROM data", ctx)
-            .await?;
-    let expected_type = SimpleExtensionDeclaration {
-        mapping_type: Some(MappingType::ExtensionType(ExtensionType {
-            extension_uri_reference: u32::MAX,
-            type_anchor: 0,
-            name: "interval-month-day-nano".to_string(),
-        })),
-    };
-    assert_eq!(proto.extensions, vec![expected_type]);
     Ok(())
 }
 
@@ -273,8 +281,9 @@ async fn aggregate_grouping_sets() -> Result<()> {
 async fn aggregate_grouping_rollup() -> Result<()> {
     assert_expected_plan(
         "SELECT a, c, e, avg(b) FROM data GROUP BY ROLLUP (a, c, e)",
-        "Aggregate: groupBy=[[GROUPING SETS ((data.a, data.c, data.e), (data.a, data.c), (data.a), ())]], aggr=[[avg(data.b)]]\
-        \n  TableScan: data projection=[a, b, c, e]",
+        "Projection: data.a, data.c, data.e, avg(data.b)\
+        \n  Aggregate: groupBy=[[GROUPING SETS ((data.a, data.c, data.e), (data.a, data.c), (data.a), ())]], aggr=[[avg(data.b)]]\
+        \n    TableScan: data projection=[a, b, c, e]",
         true
     ).await
 }
@@ -445,17 +454,15 @@ async fn roundtrip_inlist_5() -> Result<()> {
     // on roundtrip there is an additional projection during TableScan which includes all column of the table,
     // using assert_expected_plan here as a workaround
     assert_expected_plan(
-    "SELECT a, f FROM data WHERE (f IN ('a', 'b', 'c') OR a in (SELECT data2.a FROM data2 WHERE f IN ('b', 'c', 'd')))",
-    "Filter: data.f = Utf8(\"a\") OR data.f = Utf8(\"b\") OR data.f = Utf8(\"c\") OR data.a IN (<subquery>)\
-    \n  Subquery:\
-    \n    Projection: data2.a\
-    \n      Filter: data2.f IN ([Utf8(\"b\"), Utf8(\"c\"), Utf8(\"d\")])\
-    \n        TableScan: data2 projection=[a, b, c, d, e, f]\
-    \n  TableScan: data projection=[a, f], partial_filters=[data.f = Utf8(\"a\") OR data.f = Utf8(\"b\") OR data.f = Utf8(\"c\") OR data.a IN (<subquery>)]\
-    \n    Subquery:\
-    \n      Projection: data2.a\
-    \n        Filter: data2.f IN ([Utf8(\"b\"), Utf8(\"c\"), Utf8(\"d\")])\
-    \n          TableScan: data2 projection=[a, b, c, d, e, f]",
+        "SELECT a, f FROM data WHERE (f IN ('a', 'b', 'c') OR a in (SELECT data2.a FROM data2 WHERE f IN ('b', 'c', 'd')))",
+
+        "Projection: data.a, data.f\
+        \n  Filter: data.f = Utf8(\"a\") OR data.f = Utf8(\"b\") OR data.f = Utf8(\"c\") OR data2.mark\
+        \n    LeftMark Join: data.a = data2.a\
+        \n      TableScan: data projection=[a, f]\
+        \n      Projection: data2.a\
+        \n        Filter: data2.f = Utf8(\"b\") OR data2.f = Utf8(\"c\") OR data2.f = Utf8(\"d\")\
+        \n          TableScan: data2 projection=[a, f], partial_filters=[data2.f = Utf8(\"b\") OR data2.f = Utf8(\"c\") OR data2.f = Utf8(\"d\")]",
     true).await
 }
 
@@ -568,6 +575,11 @@ async fn roundtrip_ilike() -> Result<()> {
 }
 
 #[tokio::test]
+async fn roundtrip_modulus() -> Result<()> {
+    roundtrip("SELECT a%3 from data").await
+}
+
+#[tokio::test]
 async fn roundtrip_not() -> Result<()> {
     roundtrip("SELECT * FROM data WHERE NOT d").await
 }
@@ -639,6 +651,122 @@ async fn simple_intersect() -> Result<()> {
         true
     )
         .await
+}
+
+#[tokio::test]
+async fn aggregate_wo_projection_consume() -> Result<()> {
+    let proto_plan =
+        read_json("tests/testdata/test_plans/aggregate_no_project.substrait.json");
+
+    assert_expected_plan_substrait(
+        proto_plan,
+        "Aggregate: groupBy=[[data.a]], aggr=[[count(data.a) AS countA]]\
+        \n  TableScan: data projection=[a]",
+    )
+    .await
+}
+
+#[tokio::test]
+async fn aggregate_wo_projection_group_expression_ref_consume() -> Result<()> {
+    let proto_plan =
+        read_json("tests/testdata/test_plans/aggregate_no_project_group_expression_ref.substrait.json");
+
+    assert_expected_plan_substrait(
+        proto_plan,
+        "Aggregate: groupBy=[[data.a]], aggr=[[count(data.a) AS countA]]\
+        \n  TableScan: data projection=[a]",
+    )
+    .await
+}
+
+#[tokio::test]
+async fn aggregate_wo_projection_sorted_consume() -> Result<()> {
+    let proto_plan =
+        read_json("tests/testdata/test_plans/aggregate_sorted_no_project.substrait.json");
+
+    assert_expected_plan_substrait(
+        proto_plan,
+        "Aggregate: groupBy=[[data.a]], aggr=[[count(data.a) ORDER BY [data.a DESC NULLS FIRST] AS countA]]\
+        \n  TableScan: data projection=[a]",
+    )
+    .await
+}
+
+#[tokio::test]
+async fn simple_intersect_consume() -> Result<()> {
+    let proto_plan = read_json("tests/testdata/test_plans/intersect.substrait.json");
+
+    assert_substrait_sql(
+        proto_plan,
+        "SELECT a FROM data INTERSECT SELECT a FROM data2",
+    )
+    .await
+}
+
+#[tokio::test]
+async fn primary_intersect_consume() -> Result<()> {
+    let proto_plan =
+        read_json("tests/testdata/test_plans/intersect_primary.substrait.json");
+
+    assert_substrait_sql(
+        proto_plan,
+        "SELECT a FROM data INTERSECT (SELECT a FROM data2 UNION ALL SELECT a FROM data2)",
+    )
+    .await
+}
+
+#[tokio::test]
+async fn multiset_intersect_consume() -> Result<()> {
+    let proto_plan =
+        read_json("tests/testdata/test_plans/intersect_multiset.substrait.json");
+
+    assert_substrait_sql(
+        proto_plan,
+        "SELECT a FROM data INTERSECT SELECT a FROM data2 INTERSECT SELECT a FROM data2",
+    )
+    .await
+}
+
+#[tokio::test]
+async fn multiset_intersect_all_consume() -> Result<()> {
+    let proto_plan =
+        read_json("tests/testdata/test_plans/intersect_multiset_all.substrait.json");
+
+    assert_substrait_sql(
+        proto_plan,
+        "SELECT a FROM data INTERSECT ALL SELECT a FROM data2 INTERSECT ALL SELECT a FROM data2",
+    )
+    .await
+}
+
+#[tokio::test]
+async fn primary_except_consume() -> Result<()> {
+    let proto_plan = read_json("tests/testdata/test_plans/minus_primary.substrait.json");
+
+    assert_substrait_sql(
+        proto_plan,
+        "SELECT a FROM data EXCEPT SELECT a FROM data2 EXCEPT SELECT a FROM data2",
+    )
+    .await
+}
+
+#[tokio::test]
+async fn primary_except_all_consume() -> Result<()> {
+    let proto_plan =
+        read_json("tests/testdata/test_plans/minus_primary_all.substrait.json");
+
+    assert_substrait_sql(
+        proto_plan,
+        "SELECT a FROM data EXCEPT ALL SELECT a FROM data2 EXCEPT ALL SELECT a FROM data2",
+    )
+    .await
+}
+
+#[tokio::test]
+async fn union_distinct_consume() -> Result<()> {
+    let proto_plan = read_json("tests/testdata/test_plans/union_distinct.substrait.json");
+
+    assert_substrait_sql(proto_plan, "SELECT a FROM data UNION SELECT a FROM data2").await
 }
 
 #[tokio::test]
@@ -884,7 +1012,7 @@ async fn roundtrip_aggregate_udf() -> Result<()> {
         }
 
         fn size(&self) -> usize {
-            std::mem::size_of_val(self)
+            size_of_val(self)
         }
     }
 
@@ -904,8 +1032,9 @@ async fn roundtrip_aggregate_udf() -> Result<()> {
 
     let ctx = create_context().await?;
     ctx.register_udaf(dummy_agg);
+    roundtrip_with_ctx("select dummy_agg(a) from data", ctx.clone()).await?;
+    roundtrip_with_ctx("select dummy_agg(a order by a) from data", ctx.clone()).await?;
 
-    roundtrip_with_ctx("select dummy_agg(a) from data", ctx).await?;
     Ok(())
 }
 
@@ -1062,6 +1191,32 @@ async fn verify_post_join_filter_value(proto: Box<Plan>) -> Result<()> {
     Ok(())
 }
 
+async fn assert_expected_plan_unoptimized(
+    sql: &str,
+    expected_plan_str: &str,
+    assert_schema: bool,
+) -> Result<()> {
+    let ctx = create_context().await?;
+    let df = ctx.sql(sql).await?;
+    let plan = df.into_unoptimized_plan();
+    let proto = to_substrait_plan(&plan, &ctx)?;
+    let plan2 = from_substrait_plan(&ctx, &proto).await?;
+
+    println!("{plan}");
+    println!("{plan2}");
+
+    println!("{proto:?}");
+
+    if assert_schema {
+        assert_eq!(plan.schema(), plan2.schema());
+    }
+
+    let plan2str = format!("{plan2}");
+    assert_eq!(expected_plan_str, &plan2str);
+
+    Ok(())
+}
+
 async fn assert_expected_plan(
     sql: &str,
     expected_plan_str: &str,
@@ -1085,6 +1240,38 @@ async fn assert_expected_plan(
 
     let plan2str = format!("{plan2}");
     assert_eq!(expected_plan_str, &plan2str);
+
+    Ok(())
+}
+
+async fn assert_expected_plan_substrait(
+    substrait_plan: Plan,
+    expected_plan_str: &str,
+) -> Result<()> {
+    let ctx = create_context().await?;
+
+    let plan = from_substrait_plan(&ctx, &substrait_plan).await?;
+
+    let plan = ctx.state().optimize(&plan)?;
+
+    let planstr = format!("{plan}");
+    assert_eq!(planstr, expected_plan_str);
+
+    Ok(())
+}
+
+async fn assert_substrait_sql(substrait_plan: Plan, sql: &str) -> Result<()> {
+    let ctx = create_context().await?;
+
+    let expected = ctx.sql(sql).await?.into_optimized_plan()?;
+
+    let plan = from_substrait_plan(&ctx, &substrait_plan).await?;
+
+    let plan = ctx.state().optimize(&plan)?;
+
+    let planstr = format!("{plan}");
+    let expectedstr = format!("{expected}");
+    assert_eq!(planstr, expectedstr);
 
     Ok(())
 }

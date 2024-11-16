@@ -198,22 +198,22 @@ NULL
 query IT
 SELECT id, CAST(string_col AS varchar) FROM alltypes_plain_multi_files
 ----
-4  0
-5  1
-6  0
-7  1
-2  0
-3  1
-0  0
-1  1
-4  0
-5  1
-6  0
-7  1
-2  0
-3  1
-0  0
-1  1
+4 0
+5 1
+6 0
+7 1
+2 0
+3 1
+0 0
+1 1
+4 0
+5 1
+6 0
+7 1
+2 0
+3 1
+0 0
+1 1
 
 # test avro nested records
 query ????

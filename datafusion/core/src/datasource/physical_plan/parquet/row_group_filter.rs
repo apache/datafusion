@@ -109,6 +109,9 @@ impl RowGroupAccessPlanFilter {
         predicate: &PruningPredicate,
         metrics: &ParquetFileMetrics,
     ) {
+        // scoped timer updates on drop
+        let _timer_guard = metrics.statistics_eval_time.timer();
+
         assert_eq!(groups.len(), self.access_plan.len());
         // Indexes of row groups still to scan
         let row_group_indexes = self.access_plan.row_group_indexes();
@@ -158,6 +161,9 @@ impl RowGroupAccessPlanFilter {
         predicate: &PruningPredicate,
         metrics: &ParquetFileMetrics,
     ) {
+        // scoped timer updates on drop
+        let _timer_guard = metrics.bloom_filter_eval_time.timer();
+
         assert_eq!(builder.metadata().num_row_groups(), self.access_plan.len());
         for idx in 0..self.access_plan.len() {
             if !self.access_plan.should_scan(idx) {
@@ -264,8 +270,12 @@ impl PruningStatistics for BloomFilterStatistics {
             .iter()
             .map(|value| {
                 match value {
-                    ScalarValue::Utf8(Some(v)) => sbbf.check(&v.as_str()),
-                    ScalarValue::Binary(Some(v)) => sbbf.check(v),
+                    ScalarValue::Utf8(Some(v)) | ScalarValue::Utf8View(Some(v)) => {
+                        sbbf.check(&v.as_str())
+                    }
+                    ScalarValue::Binary(Some(v)) | ScalarValue::BinaryView(Some(v)) => {
+                        sbbf.check(v)
+                    }
                     ScalarValue::FixedSizeBinary(_size, Some(v)) => sbbf.check(v),
                     ScalarValue::Boolean(Some(v)) => sbbf.check(v),
                     ScalarValue::Float64(Some(v)) => sbbf.check(v),
@@ -769,11 +779,8 @@ mod tests {
 
         // INT32: c1 > 5, the c1 is decimal(9,2)
         // The type of scalar value if decimal(9,2), don't need to do cast
-        let schema = Arc::new(Schema::new(vec![Field::new(
-            "c1",
-            DataType::Decimal128(9, 2),
-            false,
-        )]));
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("c1", Decimal128(9, 2), false)]));
         let field = PrimitiveTypeField::new("c1", PhysicalType::INT32)
             .with_logical_type(LogicalType::Decimal {
                 scale: 2,
@@ -839,11 +846,8 @@ mod tests {
         // The c1 type is decimal(9,0) in the parquet file, and the type of scalar is decimal(5,2).
         // We should convert all type to the coercion type, which is decimal(11,2)
         // The decimal of arrow is decimal(5,2), the decimal of parquet is decimal(9,0)
-        let schema = Arc::new(Schema::new(vec![Field::new(
-            "c1",
-            DataType::Decimal128(9, 0),
-            false,
-        )]));
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("c1", Decimal128(9, 0), false)]));
 
         let field = PrimitiveTypeField::new("c1", PhysicalType::INT32)
             .with_logical_type(LogicalType::Decimal {
@@ -853,7 +857,7 @@ mod tests {
             .with_scale(0)
             .with_precision(9);
         let schema_descr = get_test_schema_descr(vec![field]);
-        let expr = cast(col("c1"), DataType::Decimal128(11, 2)).gt(cast(
+        let expr = cast(col("c1"), Decimal128(11, 2)).gt(cast(
             lit(ScalarValue::Decimal128(Some(500), 5, 2)),
             Decimal128(11, 2),
         ));
@@ -937,7 +941,7 @@ mod tests {
         // INT64: c1 < 5, the c1 is decimal(18,2)
         let schema = Arc::new(Schema::new(vec![Field::new(
             "c1",
-            DataType::Decimal128(18, 2),
+            Decimal128(18, 2),
             false,
         )]));
         let field = PrimitiveTypeField::new("c1", PhysicalType::INT64)
@@ -995,7 +999,7 @@ mod tests {
         // the type of parquet is decimal(18,2)
         let schema = Arc::new(Schema::new(vec![Field::new(
             "c1",
-            DataType::Decimal128(18, 2),
+            Decimal128(18, 2),
             false,
         )]));
         let field = PrimitiveTypeField::new("c1", PhysicalType::FIXED_LEN_BYTE_ARRAY)
@@ -1008,7 +1012,7 @@ mod tests {
             .with_byte_len(16);
         let schema_descr = get_test_schema_descr(vec![field]);
         // cast the type of c1 to decimal(28,3)
-        let left = cast(col("c1"), DataType::Decimal128(28, 3));
+        let left = cast(col("c1"), Decimal128(28, 3));
         let expr = left.eq(lit(ScalarValue::Decimal128(Some(100000), 28, 3)));
         let expr = logical2physical(&expr, &schema);
         let pruning_predicate = PruningPredicate::try_new(expr, schema.clone()).unwrap();
@@ -1073,7 +1077,7 @@ mod tests {
         // the type of parquet is decimal(18,2)
         let schema = Arc::new(Schema::new(vec![Field::new(
             "c1",
-            DataType::Decimal128(18, 2),
+            Decimal128(18, 2),
             false,
         )]));
         let field = PrimitiveTypeField::new("c1", PhysicalType::BYTE_ARRAY)
@@ -1086,7 +1090,7 @@ mod tests {
             .with_byte_len(16);
         let schema_descr = get_test_schema_descr(vec![field]);
         // cast the type of c1 to decimal(28,3)
-        let left = cast(col("c1"), DataType::Decimal128(28, 3));
+        let left = cast(col("c1"), Decimal128(28, 3));
         let expr = left.eq(lit(ScalarValue::Decimal128(Some(100000), 28, 3)));
         let expr = logical2physical(&expr, &schema);
         let pruning_predicate = PruningPredicate::try_new(expr, schema.clone()).unwrap();
@@ -1220,6 +1224,25 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_row_group_bloom_filter_pruning_predicate_multiple_expr_view() {
+        BloomFilterTest::new_data_index_bloom_encoding_stats()
+            .with_expect_all_pruned()
+            // generate pruning predicate `(String = "Hello_Not_exists" OR String = "Hello_Not_exists2")`
+            .run(
+                lit("1").eq(lit("1")).and(
+                    col(r#""String""#)
+                        .eq(Expr::Literal(ScalarValue::Utf8View(Some(String::from(
+                            "Hello_Not_Exists",
+                        )))))
+                        .or(col(r#""String""#).eq(Expr::Literal(ScalarValue::Utf8View(
+                            Some(String::from("Hello_Not_Exists2")),
+                        )))),
+                ),
+            )
+            .await
+    }
+
+    #[tokio::test]
     async fn test_row_group_bloom_filter_pruning_predicate_sql_in() {
         // load parquet file
         let testdata = datafusion_common::test_util::parquet_test_data();
@@ -1282,6 +1305,26 @@ mod tests {
                     .eq(lit("Hello"))
                     .or(col(r#""String""#).eq(lit("the quick")))
                     .or(col(r#""String""#).eq(lit("are you"))),
+            )
+            .await
+    }
+
+    #[tokio::test]
+    async fn test_row_group_bloom_filter_pruning_predicate_with_exists_3_values_view() {
+        BloomFilterTest::new_data_index_bloom_encoding_stats()
+            .with_expect_none_pruned()
+            // generate pruning predicate `(String = "Hello") OR (String = "the quick") OR (String = "are you")`
+            .run(
+                col(r#""String""#)
+                    .eq(Expr::Literal(ScalarValue::Utf8View(Some(String::from(
+                        "Hello",
+                    )))))
+                    .or(col(r#""String""#).eq(Expr::Literal(ScalarValue::Utf8View(
+                        Some(String::from("the quick")),
+                    ))))
+                    .or(col(r#""String""#).eq(Expr::Literal(ScalarValue::Utf8View(
+                        Some(String::from("are you")),
+                    )))),
             )
             .await
     }

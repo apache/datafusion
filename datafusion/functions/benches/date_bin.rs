@@ -45,6 +45,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         let udf = date_bin();
 
         b.iter(|| {
+            #[allow(deprecated)] // TODO use invoke_batch
             black_box(
                 udf.invoke(&[interval.clone(), timestamps.clone()])
                     .expect("date_bin should work on valid values"),

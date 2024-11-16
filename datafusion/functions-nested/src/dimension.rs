@@ -29,8 +29,11 @@ use datafusion_common::{exec_err, plan_err, Result};
 use crate::utils::{compute_array_dims, make_scalar_function};
 use arrow_schema::DataType::{FixedSizeList, LargeList, List, UInt64};
 use arrow_schema::Field;
-use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
-use std::sync::Arc;
+use datafusion_expr::scalar_doc_sections::DOC_SECTION_ARRAY;
+use datafusion_expr::{
+    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+};
+use std::sync::{Arc, OnceLock};
 
 make_udf_expr_and_func!(
     ArrayDims,
@@ -85,6 +88,39 @@ impl ScalarUDFImpl for ArrayDims {
     fn aliases(&self) -> &[String] {
         &self.aliases
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_array_dims_doc())
+    }
+}
+
+static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+
+fn get_array_dims_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_ARRAY)
+            .with_description(
+                "Returns an array of the array's dimensions.",
+            )
+            .with_syntax_example("array_dims(array)")
+            .with_sql_example(
+                r#"```sql
+> select array_dims([[1, 2, 3], [4, 5, 6]]);
++---------------------------------+
+| array_dims(List([1,2,3,4,5,6])) |
++---------------------------------+
+| [2, 3]                          |
++---------------------------------+
+```"#,
+            )
+            .with_argument(
+                "array",
+                "Array expression. Can be a constant, column, or function, and any combination of array operators.",
+            )
+            .build()
+            .unwrap()
+    })
 }
 
 make_udf_expr_and_func!(
@@ -137,6 +173,41 @@ impl ScalarUDFImpl for ArrayNdims {
     fn aliases(&self) -> &[String] {
         &self.aliases
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_array_ndims_doc())
+    }
+}
+
+fn get_array_ndims_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_ARRAY)
+            .with_description(
+                "Returns the number of dimensions of the array.",
+            )
+            .with_syntax_example("array_ndims(array, element)")
+            .with_sql_example(
+                r#"```sql
+> select array_ndims([[1, 2, 3], [4, 5, 6]]);
++----------------------------------+
+| array_ndims(List([1,2,3,4,5,6])) |
++----------------------------------+
+| 2                                |
++----------------------------------+
+```"#,
+            )
+            .with_argument(
+                "array",
+                "Array expression. Can be a constant, column, or function, and any combination of array operators.",
+            )
+            .with_argument(
+                "element",
+                "Array element.",
+            )
+            .build()
+            .unwrap()
+    })
 }
 
 /// Array_dims SQL function

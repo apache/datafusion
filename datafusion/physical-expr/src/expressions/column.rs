@@ -18,9 +18,10 @@
 //! Physical column reference: [`Column`]
 
 use std::any::Any;
-use std::hash::{Hash, Hasher};
+use std::hash::Hash;
 use std::sync::Arc;
 
+use crate::physical_expr::PhysicalExpr;
 use arrow::{
     datatypes::{DataType, Schema},
     record_batch::RecordBatch,
@@ -29,8 +30,6 @@ use arrow_schema::SchemaRef;
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{internal_err, plan_err, Result};
 use datafusion_expr::ColumnarValue;
-
-use crate::physical_expr::{down_cast_any_ref, PhysicalExpr};
 
 /// Represents the column at a given index in a RecordBatch
 ///
@@ -107,7 +106,7 @@ impl std::fmt::Display for Column {
 
 impl PhysicalExpr for Column {
     /// Return a reference to Any that can be used for downcasting
-    fn as_any(&self) -> &dyn std::any::Any {
+    fn as_any(&self) -> &dyn Any {
         self
     }
 
@@ -139,20 +138,6 @@ impl PhysicalExpr for Column {
     ) -> Result<Arc<dyn PhysicalExpr>> {
         Ok(self)
     }
-
-    fn dyn_hash(&self, state: &mut dyn Hasher) {
-        let mut s = state;
-        self.hash(&mut s);
-    }
-}
-
-impl PartialEq<dyn Any> for Column {
-    fn eq(&self, other: &dyn Any) -> bool {
-        down_cast_any_ref(other)
-            .downcast_ref::<Self>()
-            .map(|x| self == x)
-            .unwrap_or(false)
-    }
 }
 
 impl Column {
@@ -163,7 +148,10 @@ impl Column {
             internal_err!(
                 "PhysicalExpr Column references column '{}' at index {} (zero-based) but input schema only has {} columns: {:?}",
                 self.name,
-                self.index, input_schema.fields.len(), input_schema.fields().iter().map(|f| f.name().clone()).collect::<Vec<String>>())
+                self.index,
+                input_schema.fields.len(),
+                input_schema.fields().iter().map(|f| f.name()).collect::<Vec<_>>()
+            )
         }
     }
 }

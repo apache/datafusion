@@ -6595,7 +6595,7 @@ select make_array(1, 2.0, null, 3)
 query ?
 select make_array(1.0, '2', null)
 ----
-[1.0, 2, ]
+[1.0, 2.0, ]
 
 ### FixedSizeListArray
 
@@ -6985,7 +6985,7 @@ select array_resize(column1, column2, column3) from arrays_values;
 [11, 12, 13, 14, 15, 16, 17, 18, , 20, 2, 2]
 [21, 22, 23, , 25, 26, 27, 28, 29, 30, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3]
 [31, 32, 33, 34, 35, , 37, 38, 39, 40, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4]
-[5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5]
+NULL
 []
 [51, 52, , 54, 55, 56, 57, 58, 59, 60, , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , ]
 [61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7]
@@ -6997,7 +6997,7 @@ select array_resize(arrow_cast(column1, 'LargeList(Int64)'), column2, column3) f
 [11, 12, 13, 14, 15, 16, 17, 18, , 20, 2, 2]
 [21, 22, 23, , 25, 26, 27, 28, 29, 30, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3]
 [31, 32, 33, 34, 35, , 37, 38, 39, 40, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4]
-[5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5]
+NULL
 []
 [51, 52, , 54, 55, 56, 57, 58, 59, 60, , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , ]
 [61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7]
@@ -7012,6 +7012,51 @@ query ?
 select array_resize(arrow_cast([[1], [2], [3]], 'LargeList(List(Int64))'), 10, [5]);
 ----
 [[1], [2], [3], [5], [5], [5], [5], [5], [5], [5]]
+
+# array_resize null value
+query ?
+select array_resize(arrow_cast(NULL, 'List(Int8)'), 1);
+----
+NULL
+
+statement ok
+CREATE TABLE array_resize_values 
+AS VALUES
+  (make_array(1, NULL, 3, 4, 5, 6, 7, 8, 9, 10), 2, 1),
+  (make_array(11, 12, NULL, 14, 15, 16, 17, 18, 19, 20), 5, 2),
+  (make_array(21, 22, 23, 24, NULL, 26, 27, 28, 29, 30), 8, 3),
+  (make_array(31, 32, 33, 34, 35, 36, NULL, 38, 39, 40), 12, 4),
+  (NULL, 3, 0),
+  (make_array(41, 42, 43, 44, 45, 46, 47, 48, 49, 50), NULL, 6),
+  (make_array(51, 52, 53, 54, 55, NULL, 57, 58, 59, 60), 13, NULL),
+  (make_array(61, 62, 63, 64, 65, 66, 67, 68, 69, 70), 15, 7)
+;
+
+# array_resize columnar test #1
+query ?
+select array_resize(column1, column2, column3) from array_resize_values;
+----
+[1, ]
+[11, 12, , 14, 15]
+[21, 22, 23, 24, , 26, 27, 28]
+[31, 32, 33, 34, 35, 36, , 38, 39, 40, 4, 4]
+NULL
+[]
+[51, 52, 53, 54, 55, , 57, 58, 59, 60, , , ]
+[61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 7, 7, 7, 7, 7]
+
+# array_resize columnar test #2
+query ?
+select array_resize(arrow_cast(column1, 'LargeList(Int64)'), column2, column3) from array_resize_values;
+----
+[1, ]
+[11, 12, , 14, 15]
+[21, 22, 23, 24, , 26, 27, 28]
+[31, 32, 33, 34, 35, 36, , 38, 39, 40, 4, 4]
+NULL
+[]
+[51, 52, 53, 54, 55, , 57, 58, 59, 60, , , ]
+[61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 7, 7, 7, 7, 7]
 
 ## array_reverse
 query ??
@@ -7096,6 +7141,19 @@ select array_has(a, 1) from values_all_empty;
 ----
 false
 false
+
+# Test create table with fixed sized array
+statement ok
+create table fixed_size_col_table (a int[3]) as values ([1,2,3]), ([4,5,6]);
+
+query T
+select arrow_typeof(a) from fixed_size_col_table;
+----
+FixedSizeList(Field { name: "item", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, 3)
+FixedSizeList(Field { name: "item", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, 3)
+
+statement error
+create table varying_fixed_size_col_table (a int[3]) as values ([1,2,3]), ([4,5]);
 
 ### Delete tables
 
@@ -7272,3 +7330,6 @@ drop table test_create_array_table;
 
 statement ok
 drop table values_all_empty;
+
+statement ok
+drop table fixed_size_col_table;

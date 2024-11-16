@@ -26,7 +26,7 @@ use crate::error::_not_impl_err;
 use crate::{DataFusionError, Result};
 
 /// Join type
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Hash)]
 pub enum JoinType {
     /// Inner Join
     Inner,
@@ -44,6 +44,20 @@ pub enum JoinType {
     LeftAnti,
     /// Right Anti Join
     RightAnti,
+    /// Left Mark join
+    ///
+    /// Returns one record for each record from the left input. The output contains an additional
+    /// column "mark" which is true if there is at least one match in the right input where the
+    /// join condition evaluates to true. Otherwise, the mark column is false. For more details see
+    /// [1]. This join type is used to decorrelate EXISTS subqueries used inside disjunctive
+    /// predicates.
+    ///
+    /// Note: This we currently do not implement the full null semantics for the mark join described
+    /// in [1] which will be needed if we and ANY subqueries. In our version the mark column will
+    /// only be true for had a match and false when no match was found, never null.
+    ///
+    /// [1]: http://btw2017.informatik.uni-stuttgart.de/slidesandpapers/F1-10-37/paper_web.pdf
+    LeftMark,
 }
 
 impl JoinType {
@@ -63,6 +77,7 @@ impl Display for JoinType {
             JoinType::RightSemi => "RightSemi",
             JoinType::LeftAnti => "LeftAnti",
             JoinType::RightAnti => "RightAnti",
+            JoinType::LeftMark => "LeftMark",
         };
         write!(f, "{join_type}")
     }
@@ -82,13 +97,14 @@ impl FromStr for JoinType {
             "RIGHTSEMI" => Ok(JoinType::RightSemi),
             "LEFTANTI" => Ok(JoinType::LeftAnti),
             "RIGHTANTI" => Ok(JoinType::RightAnti),
+            "LEFTMARK" => Ok(JoinType::LeftMark),
             _ => _not_impl_err!("The join type {s} does not exist or is not implemented"),
         }
     }
 }
 
 /// Join constraint
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Hash)]
 pub enum JoinConstraint {
     /// Join ON
     On,
@@ -97,10 +113,11 @@ pub enum JoinConstraint {
 }
 
 impl Display for JoinSide {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
             JoinSide::Left => write!(f, "left"),
             JoinSide::Right => write!(f, "right"),
+            JoinSide::None => write!(f, "none"),
         }
     }
 }
@@ -113,6 +130,9 @@ pub enum JoinSide {
     Left,
     /// Right side of the join
     Right,
+    /// Neither side of the join, used for Mark joins where the mark column does not belong to
+    /// either side of the join
+    None,
 }
 
 impl JoinSide {
@@ -121,6 +141,7 @@ impl JoinSide {
         match self {
             JoinSide::Left => JoinSide::Right,
             JoinSide::Right => JoinSide::Left,
+            JoinSide::None => JoinSide::None,
         }
     }
 }

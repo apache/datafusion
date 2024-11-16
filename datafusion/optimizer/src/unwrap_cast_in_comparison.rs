@@ -72,7 +72,7 @@ use datafusion_expr::{lit, Expr, ExprSchemable, LogicalPlan};
 /// Filter: c1 > INT32(10)
 /// ```
 ///
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct UnwrapCastInComparison {}
 
 impl UnwrapCastInComparison {
@@ -146,7 +146,7 @@ impl TreeNodeRewriter for UnwrapCastExprRewriter {
                     };
                     is_supported_type(&left_type)
                         && is_supported_type(&right_type)
-                        && op.is_comparison_operator()
+                        && op.supports_propagation()
                 } =>
             {
                 match (left.as_mut(), right.as_mut()) {

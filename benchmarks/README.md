@@ -330,6 +330,40 @@ steps.
 The tests sort the entire dataset using several different sort
 orders.
 
+## Sort TPCH
+
+Test performance of end-to-end sort SQL queries. (While the `Sort` benchmark focuses on a single sort executor, this benchmark tests how sorting is executed across multiple CPU cores by benchmarking sorting the whole relational table.)
+
+Sort integration benchmark runs whole table sort queries on TPCH `lineitem` table, with different characteristics. For example, different number of sort keys, different sort key cardinality, different number of payload columns, etc.
+
+See [`sort_tpch.rs`](src/sort_tpch.rs) for more details.
+
+### Sort TPCH Benchmark Example Runs
+1. Run all queries with default setting:
+```bash
+ cargo run --release --bin dfbench -- sort-tpch -p '....../datafusion/benchmarks/data/tpch_sf1' -o '/tmp/sort_tpch.json'
+```
+
+2. Run a specific query:
+```bash
+ cargo run --release --bin dfbench -- sort-tpch -p '....../datafusion/benchmarks/data/tpch_sf1' -o '/tmp/sort_tpch.json' --query 2
+```
+
+3. Run all queries with `bench.sh` script:
+```bash
+./bench.sh run sort_tpch
+```
+
+## IMDB
+
+Run Join Order Benchmark (JOB) on IMDB dataset.
+
+The Internet Movie Database (IMDB) dataset contains real-world movie data. Unlike synthetic datasets like TPCH, which assume uniform data distribution and uncorrelated columns, the IMDB dataset includes skewed data and correlated columns (which are common for real dataset), making it more suitable for testing query optimizers, particularly for cardinality estimation.
+
+This benchmark is derived from [Join Order Benchmark](https://github.com/gregrahn/join-order-benchmark).
+
+See paper [How Good Are Query Optimizers, Really](http://www.vldb.org/pvldb/vol9/p204-leis.pdf) for more details.
+
 ## TPCH
 
 Run the tpch benchmark.
@@ -341,6 +375,34 @@ This benchmarks is derived from the [TPC-H][1] version
 [1]: http://www.tpc.org/tpch/
 [2]: https://github.com/databricks/tpch-dbgen.git,
 [2.17.1]: https://www.tpc.org/tpc_documents_current_versions/pdf/tpc-h_v2.17.1.pdf
+
+## External Aggregation
+
+Run the benchmark for aggregations with limited memory.
+
+When the memory limit is exceeded, the aggregation intermediate results will be spilled to disk, and finally read back with sort-merge.
+
+External aggregation benchmarks run several aggregation queries with different memory limits, on TPCH `lineitem` table. Queries can be found in [`external_aggr.rs`](src/bin/external_aggr.rs).
+
+This benchmark is inspired by [DuckDB's external aggregation paper](https://hannes.muehleisen.org/publications/icde2024-out-of-core-kuiper-boncz-muehleisen.pdf), specifically Section VI.
+
+### External Aggregation Example Runs
+1. Run all queries with predefined memory limits:
+```bash
+# Under 'benchmarks/' directory
+cargo run --release --bin external_aggr -- benchmark -n 4 --iterations 3 -p '....../data/tpch_sf1' -o '/tmp/aggr.json'
+```
+
+2. Run a query with specific memory limit:
+```bash
+cargo run --release --bin external_aggr -- benchmark -n 4 --iterations 3 -p '....../data/tpch_sf1' -o '/tmp/aggr.json' --query 1 --memory-limit 30M
+```
+
+3. Run all queries with `bench.sh` script:
+```bash
+./bench.sh data external_aggr
+./bench.sh run external_aggr
+```
 
 
 # Older Benchmarks
