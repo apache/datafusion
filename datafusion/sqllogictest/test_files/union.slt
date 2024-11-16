@@ -761,3 +761,11 @@ SELECT NULL WHERE FALSE;
 ----
 0.5
 1
+
+# Test Union of List Types. Issue: https://github.com/apache/datafusion/issues/12291
+query error
+SELECT make_array(2) x UNION ALL SELECT make_array(now()) x;
+----
+DataFusion error: type_coercion
+caused by
+Error during planning: Incompatible inputs for Union: Previous inputs were of type List(Field { name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), but got incompatible type List(Field { name: "item", data_type: Timestamp(Nanosecond, Some("+00:00")), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }) on column 'x'
