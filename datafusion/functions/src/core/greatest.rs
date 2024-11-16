@@ -111,7 +111,9 @@ fn keep_larger_scalar<'a>(lhs: &'a ScalarValue, rhs: &'a ScalarValue) -> Result<
 }
 
 fn find_coerced_type(data_types: &[DataType]) -> Result<DataType> {
-    if let Some(coerced_type) = type_union_resolution(data_types) {
+    if data_types.is_empty() {
+        plan_err!("greatest was called without any arguments. It requires at least 1.")
+    } else if let Some(coerced_type) = type_union_resolution(data_types) {
         Ok(coerced_type)
     } else {
         plan_err!("Cannot find a common type for arguments")
@@ -136,12 +138,13 @@ impl ScalarUDFImpl for GreatestFunc {
     }
 
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        // do not accept less than 2 arguments.
-        if args.len() < 2 {
-            return exec_err!(
-                "greatest was called with {} arguments. It requires at least 2.",
-                args.len()
-            );
+        if args.is_empty() {
+            return exec_err!("greatest was called with no arguments. It requires at least 1.");
+        }
+
+        // Some engines (e.g. SQL Server) allow greatest with single arg, it's a noop
+        if args.len() == 1 {
+            return Ok(args[0].clone())
         }
 
         // Split to scalars and arrays for later optimization
@@ -204,13 +207,6 @@ impl ScalarUDFImpl for GreatestFunc {
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        if arg_types.len() < 2 {
-            return exec_err!(
-                "greatest was called with {} arguments. It requires at least 2.",
-                arg_types.len()
-            );
-        }
-
         let coerced_type = find_coerced_type(arg_types)?;
 
         Ok(vec![coerced_type; arg_types.len()])
