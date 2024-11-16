@@ -1138,12 +1138,13 @@ fn numeric_string_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<D
     }
 }
 
-macro_rules! coerce_list_children {
-    ($LHS_TYPE:expr, $RHS_TYPE:expr) => {
-        Arc::new(Arc::unwrap_or_clone(Arc::clone($LHS_TYPE)).with_data_type(
-            comparison_coercion($LHS_TYPE.data_type(), $RHS_TYPE.data_type())?,
-        ))
-    };
+fn coerce_list_children(lhs_field: &FieldRef, rhs_field: &FieldRef) -> Option<FieldRef> {
+    Some(Arc::new(
+        Arc::unwrap_or_clone(Arc::clone(lhs_field)).with_data_type(comparison_coercion(
+            lhs_field.data_type(),
+            rhs_field.data_type(),
+        )?),
+    ))
 }
 
 /// Coercion rules for list types.
@@ -1153,7 +1154,7 @@ fn list_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
         (List(lhs_field), List(rhs_field))
         | (List(lhs_field), FixedSizeList(rhs_field, _))
         | (FixedSizeList(lhs_field, _), List(rhs_field)) => {
-            Some(List(coerce_list_children!(lhs_field, rhs_field)))
+            Some(List(coerce_list_children(lhs_field, rhs_field)?))
         }
 
         (LargeList(lhs_field), List(rhs_field))
@@ -1161,7 +1162,7 @@ fn list_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
         | (LargeList(lhs_field), LargeList(rhs_field))
         | (LargeList(lhs_field), FixedSizeList(rhs_field, _))
         | (FixedSizeList(lhs_field, _), LargeList(rhs_field)) => {
-            Some(LargeList(coerce_list_children!(lhs_field, rhs_field)))
+            Some(LargeList(coerce_list_children(lhs_field, rhs_field)?))
         }
 
         // Coerce to the left side FixedSizeList type if the list lengths are the same,
@@ -1169,7 +1170,7 @@ fn list_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
         (FixedSizeList(lhs_field, ls), FixedSizeList(rhs_field, rs)) => {
             if ls == rs {
                 Some(FixedSizeList(
-                    coerce_list_children!(lhs_field, rhs_field),
+                    coerce_list_children(lhs_field, rhs_field)?,
                     *rs,
                 ))
             } else {
