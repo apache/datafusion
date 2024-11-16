@@ -1138,27 +1138,44 @@ fn numeric_string_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<D
     }
 }
 
+macro_rules! coerce_list_children {
+    ($LHS_TYPE:expr, $RHS_TYPE:expr) => {
+        Arc::new(Arc::unwrap_or_clone(Arc::clone($LHS_TYPE)).with_data_type(
+            comparison_coercion($LHS_TYPE.data_type(), $RHS_TYPE.data_type())?,
+        ))
+    };
+}
+
 /// Coercion rules for list types.
 fn list_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
     use arrow::datatypes::DataType::*;
     match (lhs_type, rhs_type) {
-        (List(_), List(_)) => Some(lhs_type.clone()),
-        (LargeList(_), List(_)) => Some(lhs_type.clone()),
-        (List(_), LargeList(_)) => Some(rhs_type.clone()),
-        (LargeList(_), LargeList(_)) => Some(lhs_type.clone()),
-        (List(_), FixedSizeList(_, _)) => Some(lhs_type.clone()),
-        (FixedSizeList(_, _), List(_)) => Some(rhs_type.clone()),
+        (List(lhs_field), List(rhs_field))
+        | (List(lhs_field), FixedSizeList(rhs_field, _))
+        | (FixedSizeList(lhs_field, _), List(rhs_field)) => {
+            Some(List(coerce_list_children!(lhs_field, rhs_field)))
+        }
+
+        (LargeList(lhs_field), List(rhs_field))
+        | (List(lhs_field), LargeList(rhs_field))
+        | (LargeList(lhs_field), LargeList(rhs_field))
+        | (LargeList(lhs_field), FixedSizeList(rhs_field, _))
+        | (FixedSizeList(lhs_field, _), LargeList(rhs_field)) => {
+            Some(LargeList(coerce_list_children!(lhs_field, rhs_field)))
+        }
+
         // Coerce to the left side FixedSizeList type if the list lengths are the same,
         // otherwise coerce to list with the left type for dynamic length
-        (FixedSizeList(lf, ls), FixedSizeList(_, rs)) => {
+        (FixedSizeList(lhs_field, ls), FixedSizeList(rhs_field, rs)) => {
             if ls == rs {
-                Some(lhs_type.clone())
+                Some(FixedSizeList(
+                    coerce_list_children!(lhs_field, rhs_field),
+                    *rs,
+                ))
             } else {
-                Some(List(Arc::clone(lf)))
+                Some(List(Arc::clone(lhs_field)))
             }
         }
-        (LargeList(_), FixedSizeList(_, _)) => Some(lhs_type.clone()),
-        (FixedSizeList(_, _), LargeList(_)) => Some(rhs_type.clone()),
         _ => None,
     }
 }
@@ -2104,6 +2121,19 @@ mod tests {
             Operator::Eq,
             DataType::List(Arc::clone(&inner_field))
         );
+
+        // Negative test: inner_timestamp_field and inner_field are not compatible because their inner types are not compatible
+        let inner_timestamp_field = Arc::new(Field::new(
+            "item",
+            DataType::Timestamp(TimeUnit::Microsecond, None),
+            true,
+        ));
+        let result_type = get_input_types(
+            &DataType::List(Arc::clone(&inner_field)),
+            &Operator::Eq,
+            &DataType::List(Arc::clone(&inner_timestamp_field)),
+        );
+        assert!(result_type.is_err());
 
         // TODO add other data type
         Ok(())
