@@ -1180,7 +1180,7 @@ fn binary_to_string_coercion(
         (BinaryView, Utf8View) => Some(Utf8View),
         (LargeBinary, Utf8) => Some(LargeUtf8),
         (LargeBinary, LargeUtf8) => Some(LargeUtf8),
-        (LargeBinary, Utf8View) => Some(Utf8View),
+        (LargeBinary, Utf8View) => Some(LargeUtf8),
         (Utf8, Binary) => Some(Utf8),
         (Utf8, LargeBinary) => Some(LargeUtf8),
         (Utf8, BinaryView) => Some(Utf8View),
@@ -1597,7 +1597,7 @@ mod tests {
         );
         assert_eq!(
             binary_to_string_coercion(&DataType::LargeBinary, &DataType::Utf8View),
-            Some(DataType::Utf8View)
+            Some(DataType::LargeUtf8)
         );
         assert_eq!(
             binary_to_string_coercion(&DataType::Utf8View, &DataType::Int32),
