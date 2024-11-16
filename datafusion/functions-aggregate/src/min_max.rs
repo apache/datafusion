@@ -115,8 +115,8 @@ macro_rules! primitive_max_accumulator {
         Ok(Box::new(
             PrimitiveGroupsAccumulator::<$PRIMTYPE, _>::new($DATA_TYPE, |cur, new| {
                 match (new).partial_cmp(cur) {
-                    None | Some(Ordering::Greater) => {
-                        // new is NaN or greater
+                    Some(Ordering::Greater) | None => {
+                        // new is Greater or None
                         *cur = new
                     }
                     _ => {}
@@ -138,8 +138,8 @@ macro_rules! primitive_min_accumulator {
         Ok(Box::new(
             PrimitiveGroupsAccumulator::<$PRIMTYPE, _>::new(&$DATA_TYPE, |cur, new| {
                 match (new).partial_cmp(cur) {
-                    None | Some(Ordering::Less) => {
-                        // new is NaN or Less
+                    Some(Ordering::Less) | None => {
+                        // new is Less or NaN
                         *cur = new
                     }
                     _ => {}
