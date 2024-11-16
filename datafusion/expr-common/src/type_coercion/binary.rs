@@ -1173,7 +1173,7 @@ fn list_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
                     *rs,
                 ))
             } else {
-                Some(List(Arc::clone(lhs_field)))
+                Some(List(coerce_list_children(lhs_field, rhs_field)?))
             }
         }
         _ => None,
