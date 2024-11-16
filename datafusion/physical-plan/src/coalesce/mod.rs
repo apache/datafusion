@@ -114,6 +114,7 @@ impl BatchCoalescer {
     /// Push next batch, and returns [`CoalescerState`] indicating the current
     /// state of the buffer.
     pub fn push_batch(&mut self, batch: RecordBatch) -> CoalescerState {
+        // println!("batch num_rows: {}", batch.num_rows());
         let batch = gc_string_view_batch(&batch);
         if self.limit_reached(&batch) {
             CoalescerState::LimitReached
@@ -182,6 +183,7 @@ impl BatchCoalescer {
 
     /// Concatenates and returns all buffered batches, and clears the buffer.
     pub fn finish_batch(&mut self) -> datafusion_common::Result<RecordBatch> {
+        // println!("buffered_rows: {}", self.buffered_rows);
         let batch = concat_batches(&self.schema, &self.buffer)?;
         self.buffer.clear();
         self.buffered_rows = 0;

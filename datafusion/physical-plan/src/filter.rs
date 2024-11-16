@@ -616,6 +616,7 @@ impl FilterExecStream {
 
     fn emit(&mut self) -> Result<Option<RecordBatch>> {
         let row_count = self.filter_builder[0].row_count();
+        // println!("emit with row_count: {:?}", row_count);
 
         let filter_builder = std::mem::take(&mut self.filter_builder);
 
