@@ -106,6 +106,8 @@ impl TestContext {
                 let example_udf = create_example_udf();
                 test_ctx.ctx.register_udf(example_udf);
                 register_partition_table(&mut test_ctx).await;
+                info!("Registering table with many types");
+                register_table_with_many_types(test_ctx.session_ctx()).await;
             }
             "metadata.slt" => {
                 info!("Registering metadata table tables");
