@@ -1151,18 +1151,17 @@ fn coerce_list_children(lhs_field: &FieldRef, rhs_field: &FieldRef) -> Option<Fi
 fn list_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
     use arrow::datatypes::DataType::*;
     match (lhs_type, rhs_type) {
-        (List(lhs_field), List(rhs_field))
-        | (List(lhs_field), FixedSizeList(rhs_field, _))
-        | (FixedSizeList(lhs_field, _), List(rhs_field)) => {
-            Some(List(coerce_list_children(lhs_field, rhs_field)?))
+        (
+            LargeList(lhs_field),
+            List(rhs_field) | LargeList(rhs_field) | FixedSizeList(rhs_field, _),
+        )
+        | (FixedSizeList(lhs_field, _) | List(lhs_field), LargeList(rhs_field)) => {
+            Some(LargeList(coerce_list_children(lhs_field, rhs_field)?))
         }
 
-        (LargeList(lhs_field), List(rhs_field))
-        | (List(lhs_field), LargeList(rhs_field))
-        | (LargeList(lhs_field), LargeList(rhs_field))
-        | (LargeList(lhs_field), FixedSizeList(rhs_field, _))
-        | (FixedSizeList(lhs_field, _), LargeList(rhs_field)) => {
-            Some(LargeList(coerce_list_children(lhs_field, rhs_field)?))
+        (List(lhs_field), List(rhs_field) | FixedSizeList(rhs_field, _))
+        | (FixedSizeList(lhs_field, _), List(rhs_field)) => {
+            Some(List(coerce_list_children(lhs_field, rhs_field)?))
         }
 
         // Coerce to the left side FixedSizeList type if the list lengths are the same,
