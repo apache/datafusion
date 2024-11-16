@@ -16,11 +16,13 @@
 // under the License.
 
 mod bytes;
+mod bytes_view;
 
 use std::sync::Arc;
 
 use arrow_schema::{DataType, Schema};
 pub(crate) use bytes::ByteFilterBuilder;
+pub(crate) use bytes_view::ByteViewFilterBuilder;
 
 use arrow::{
     array::AsArray,
@@ -326,8 +328,9 @@ fn supported_type(data_type: &DataType) -> bool {
             | DataType::Binary
             | DataType::LargeBinary
             | DataType::Date32
-            | DataType::Date64 // | DataType::Utf8View
-                               // | DataType::BinaryView
+            | DataType::Date64
+            | DataType::Utf8View
+            | DataType::BinaryView
     )
 }
 

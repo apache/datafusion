@@ -35,8 +35,9 @@ use crate::{
 
 use arrow::compute::filter_record_batch;
 use arrow::datatypes::{
-    DataType, Date32Type, Date64Type, Float32Type, Float64Type, Int16Type, Int32Type,
-    Int64Type, Int8Type, SchemaRef, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
+    BinaryViewType, DataType, Date32Type, Date64Type, Float32Type, Float64Type,
+    Int16Type, Int32Type, Int64Type, Int8Type, SchemaRef, StringViewType, UInt16Type,
+    UInt32Type, UInt64Type, UInt8Type,
 };
 use arrow::record_batch::RecordBatch;
 use arrow_array::{BooleanArray, RecordBatchOptions};
@@ -56,7 +57,8 @@ use datafusion_physical_expr::{
     analyze, split_conjunction, AnalysisContext, ConstExpr, ExprBoundaries, PhysicalExpr,
 };
 use filter_coalesce::{
-    ByteFilterBuilder, FilterBuilder, FilterCoalescer, PrimitiveFilterBuilder,
+    ByteFilterBuilder, ByteViewFilterBuilder, FilterBuilder, FilterCoalescer,
+    PrimitiveFilterBuilder,
 };
 
 use crate::execution_plan::CardinalityEffect;
@@ -389,6 +391,7 @@ impl ExecutionPlan for FilterExec {
         let len = self.schema().fields().len();
         let mut v = Vec::with_capacity(len);
         let schema = self.schema();
+        // print!("types: {:?}", schema.fields().iter().map(|f|f.data_type()).collect::<Vec<_>>());
         if filter_coalesce::supported_schema(&schema) {
             let nullable = true;
             for f in self.schema().fields().iter() {
@@ -423,6 +426,14 @@ impl ExecutionPlan for FilterExec {
                     }
                     DataType::LargeBinary => {
                         let b = ByteFilterBuilder::<i64>::new(OutputType::Binary);
+                        v.push(Box::new(b) as _)
+                    }
+                    DataType::Utf8View => {
+                        let b = ByteViewFilterBuilder::<StringViewType>::new();
+                        v.push(Box::new(b) as _)
+                    }
+                    DataType::BinaryView => {
+                        let b = ByteViewFilterBuilder::<BinaryViewType>::new();
                         v.push(Box::new(b) as _)
                     }
                     _ => todo!(),

@@ -256,6 +256,7 @@ fn gc_string_view_batch(batch: &RecordBatch) -> RecordBatch {
             // Re-creating the array copies data and can be time consuming.
             // We only do it if the array is sparse
             if actual_buffer_size > (ideal_buffer_size * 2) {
+                // println!("apply gc!");
                 // We set the block size to `ideal_buffer_size` so that the new StringViewArray only has one buffer, which accelerate later concat_batches.
                 // See https://github.com/apache/arrow-rs/issues/6094 for more details.
                 let mut builder = StringViewBuilder::with_capacity(s.len());
