@@ -1,0 +1,11 @@
+statement ok
+CREATE EXTERNAL TABLE hits
+STORED AS PARQUET
+LOCATION '../../benchmarks/data/hits.parquet';
+
+query I
+SELECT COUNT(*) FROM hits WHERE "URL" LIKE '%google%';
+----
+15911
+
+

@@ -124,6 +124,18 @@ impl BatchCoalescer {
         }
     }
 
+    /// Push next batch, and returns [`CoalescerState`] indicating the current
+    /// state of the buffer.
+    pub fn push_batch_without_gc(&mut self, batch: RecordBatch) -> CoalescerState {
+        if self.limit_reached(&batch) {
+            CoalescerState::LimitReached
+        } else if self.target_reached(batch) {
+            CoalescerState::TargetReached
+        } else {
+            CoalescerState::Continue
+        }
+    }
+
     /// Return true if the there is no data buffered
     pub fn is_empty(&self) -> bool {
         self.buffer.is_empty()

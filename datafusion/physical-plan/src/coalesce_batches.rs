@@ -271,7 +271,7 @@ impl Stream for CoalesceBatchesStream {
 /// - updated buffer: `{[4000]}`
 /// - next state: `Exhausted`
 #[derive(Debug, Clone, Eq, PartialEq)]
-enum CoalesceBatchesStreamState {
+pub enum CoalesceBatchesStreamState {
     /// State to pull a new batch from the input stream.
     Pull,
     /// State to return a buffered batch.
