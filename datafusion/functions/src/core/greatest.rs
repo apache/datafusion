@@ -24,9 +24,9 @@ use arrow::compute::SortOptions;
 use arrow::datatypes::DataType;
 use arrow_buffer::BooleanBuffer;
 use datafusion_common::{exec_err, plan_err, Result, ScalarValue};
-use datafusion_expr::type_coercion::functions::can_coerce_from;
 use datafusion_expr::{ColumnarValue};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::binary::type_union_resolution;
 
 const SORT_OPTIONS: SortOptions = SortOptions {
     // We want greatest first
@@ -110,28 +110,12 @@ fn keep_larger_scalar<'a>(lhs: &'a ScalarValue, rhs: &'a ScalarValue) -> Result<
     }
 }
 
-
-fn find_coerced_type(data_types: &[DataType]) -> Result<&DataType> {
-    let non_null_types = data_types
-        .iter()
-        .filter(|t| !t.is_null())
-        .collect::<Vec<_>>();
-
-    if non_null_types.is_empty() {
-        return Ok(&DataType::Null);
+fn find_coerced_type(data_types: &[DataType]) -> Result<DataType> {
+    if let Some(coerced_type) = type_union_resolution(data_types) {
+        Ok(coerced_type)
+    } else {
+        plan_err!("Cannot find a common type for arguments")
     }
-
-    let non_null_types_clone = non_null_types.clone();
-
-    for data_type in non_null_types_clone {
-        let can_coerce_to_all = non_null_types.iter().all(|t| can_coerce_from(data_type, t));
-
-        if can_coerce_to_all {
-            return Ok(data_type);
-        }
-    }
-
-    plan_err!("Cannot find a common type for arguments")
 }
 
 impl ScalarUDFImpl for GreatestFunc {
@@ -148,7 +132,7 @@ impl ScalarUDFImpl for GreatestFunc {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        find_coerced_type(arg_types).cloned()
+        find_coerced_type(arg_types)
     }
 
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
@@ -229,7 +213,7 @@ impl ScalarUDFImpl for GreatestFunc {
 
         let coerced_type = find_coerced_type(arg_types)?;
 
-        Ok(vec![coerced_type.clone(); arg_types.len()])
+        Ok(vec![coerced_type; arg_types.len()])
     }
 }
 
@@ -240,11 +224,11 @@ mod test {
     use datafusion_expr::ScalarUDFImpl;
 
     #[test]
-    fn test_greatest_return_types() {
+    fn test_greatest_return_types_without_common_supertype_in_arg_type() {
         let greatest = core::greatest::GreatestFunc::new();
         let return_type = greatest
-            .return_type(&[DataType::Int8, DataType::Int16])
+            .return_type(&[DataType::Decimal128(10, 3), DataType::Decimal128(10, 4)])
             .unwrap();
-        assert_eq!(return_type, DataType::Int16);
+        assert_eq!(return_type, DataType::Decimal128(11, 4));
     }
 }
