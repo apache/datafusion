@@ -80,8 +80,12 @@ impl<B: ByteViewType> ByteViewFilterBuilder<B> {
         }
     }
 
-    fn do_append_val_inner(&mut self, array: &GenericByteViewArray<B>, row: usize, view: u128)
-    where
+    fn do_append_val_inner(
+        &mut self,
+        array: &GenericByteViewArray<B>,
+        row: usize,
+        view: u128,
+    ) where
         B: ByteViewType,
     {
         let value_len = view as u32;
@@ -94,9 +98,14 @@ impl<B: ByteViewType> ByteViewFilterBuilder<B> {
             // Append value
             let buffer_index = self.completed.len();
             let offset = self.in_progress.len();
-            self.in_progress.extend_from_slice(array.value(row).as_ref());
+            self.in_progress
+                .extend_from_slice(array.value(row).as_ref());
 
-            let view = make_view_for_non_inline_string(array.value(row).as_ref(), buffer_index as u32, offset as u32);
+            let view = make_view_for_non_inline_string(
+                array.value(row).as_ref(),
+                buffer_index as u32,
+                offset as u32,
+            );
             self.views.push(view);
         }
     }
@@ -117,7 +126,7 @@ impl<B: ByteViewType> ByteViewFilterBuilder<B> {
     }
 
     // append if all the rows are null
-    fn append_nulls(&mut self, arr_len:usize, predicate: &FilterPredicate) {
+    fn append_nulls(&mut self, arr_len: usize, predicate: &FilterPredicate) {
         match &predicate.strategy {
             IterationStrategy::SlicesIterator => {
                 for (start, end) in SlicesIterator::new(&predicate.filter) {
@@ -134,7 +143,8 @@ impl<B: ByteViewType> ByteViewFilterBuilder<B> {
             }
             IterationStrategy::IndexIterator => {
                 self.nulls.append_n(predicate.count, true);
-                self.views.extend(std::iter::repeat(0).take(predicate.count));
+                self.views
+                    .extend(std::iter::repeat(0).take(predicate.count));
             }
             IterationStrategy::Indices(indices) => {
                 self.nulls.append_n(indices.len(), true);
@@ -149,7 +159,12 @@ impl<B: ByteViewType> ByteViewFilterBuilder<B> {
     }
 
     // append if all the rows are non null
-    fn append_non_nulls(&mut self, arr: &GenericByteViewArray<B>, arr_len:usize, predicate: &FilterPredicate) {
+    fn append_non_nulls(
+        &mut self,
+        arr: &GenericByteViewArray<B>,
+        arr_len: usize,
+        predicate: &FilterPredicate,
+    ) {
         let views = arr.views();
         match &predicate.strategy {
             IterationStrategy::SlicesIterator => {
@@ -275,7 +290,6 @@ impl<B: ByteViewType> FilterCoalescer for ByteViewFilterBuilder<B> {
 
         Ok(())
     }
-
 
     fn row_count(&self) -> usize {
         self.views.len()

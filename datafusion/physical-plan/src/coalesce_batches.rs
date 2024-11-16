@@ -295,16 +295,26 @@ impl CoalesceBatchesStream {
                     let _timer = cloned_time.timer();
 
                     match input_batch {
-                        Some(Ok(batch)) => match self.coalescer.push_batch(batch) {
-                            CoalescerState::Continue => {}
-                            CoalescerState::LimitReached => {
-                                self.inner_state = CoalesceBatchesStreamState::Exhausted;
+                        Some(Ok(batch)) => {
+                            // let num_rows = batch.num_rows();
+                            // println!("num_rows: {:?}", num_rows);
+
+                            // if num_rows >= 8192 {
+                            //     return Poll::Ready(Some(Ok(batch)));
+                            // }
+
+                            match self.coalescer.push_batch(batch) {
+                                CoalescerState::Continue => {}
+                                CoalescerState::LimitReached => {
+                                    self.inner_state =
+                                        CoalesceBatchesStreamState::Exhausted;
+                                }
+                                CoalescerState::TargetReached => {
+                                    self.inner_state =
+                                        CoalesceBatchesStreamState::ReturnBuffer;
+                                }
                             }
-                            CoalescerState::TargetReached => {
-                                self.inner_state =
-                                    CoalesceBatchesStreamState::ReturnBuffer;
-                            }
-                        },
+                        }
                         None => {
                             // End of input stream, but buffered batches might still be present.
                             self.inner_state = CoalesceBatchesStreamState::Exhausted;

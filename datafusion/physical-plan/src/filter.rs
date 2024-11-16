@@ -40,6 +40,7 @@ use arrow::datatypes::{
     UInt32Type, UInt64Type, UInt8Type,
 };
 use arrow::record_batch::RecordBatch;
+use arrow::row;
 use arrow_array::{BooleanArray, RecordBatchOptions};
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::stats::Precision;
@@ -443,7 +444,7 @@ impl ExecutionPlan for FilterExec {
         } else {
             assert_eq!(v.len(), 0);
         }
-
+        // println!("created filter builders: {:?}", v.len());
         Ok(Box::pin(FilterExecStream {
             schema: self.schema(),
             predicate: Arc::clone(&self.predicate),
@@ -594,12 +595,19 @@ impl FilterExecStream {
             .map(|(i, a)| self.filter_builder[i].append_filtered_array(a, &filter))
             .collect::<Result<Vec<_>, _>>()?;
 
+        let row_count = self.filter_builder[0].row_count();
+        for b in &self.filter_builder {
+            debug_assert_eq!(b.row_count(), row_count);
+        }
+
         Ok(())
     }
 
     fn emit_if_possible(&mut self) -> Result<Option<RecordBatch>> {
         let row_count = self.filter_builder[0].row_count();
+        // println!("row_count: {:?}", row_count);
         if row_count >= 8192 {
+            // println!("emit early");
             return self.emit();
         }
 
@@ -652,7 +660,6 @@ impl Stream for FilterExecStream {
                                 if force_to_old || self.filter_builder.is_empty() {
                                     Ok(Some(filter_record_batch(&batch, filter_array)?))
                                 } else {
-                                    // println!("reach here");
                                     self.filter_record_batch_v2(&batch, filter_array)?;
                                     self.emit_if_possible()
                                 }
@@ -689,41 +696,12 @@ impl Stream for FilterExecStream {
                     if filtered_batch.num_rows() == 0 {
                         continue;
                     }
-                    match self.coalescer.push_batch_without_gc(filtered_batch) {
-                        CoalescerState::Continue => {
-                            let empty_batch = RecordBatch::new_empty(self.schema());
-                            poll = Poll::Ready(Some(Ok(empty_batch)))
-                        }
-                        CoalescerState::LimitReached => {
-                            // Handle the end of the input stream.
-                            poll = if self.coalescer.is_empty() {
-                                // If buffer is empty, return None indicating the stream is fully consumed.
-                                Poll::Ready(None)
-                            } else {
-                                // If the buffer still contains batches, prepare to return them.
-                                let batch = self.coalescer.finish_batch()?;
-                                Poll::Ready(Some(Ok(batch)))
-                            };
-                        }
-                        CoalescerState::TargetReached => {
-                            // Combine buffered batches into one batch and return it.
-                            let batch = self.coalescer.finish_batch()?;
-                            // Set to pull state for the next iteration.
-                            poll = Poll::Ready(Some(Ok(batch)));
-                        }
-                    }
+                    poll = Poll::Ready(Some(Ok(filtered_batch)));
                     break;
                 }
                 value => {
                     if self.filter_builder.is_empty() {
-                        if !self.coalescer.is_empty() {
-                            // Combine buffered batches into one batch and return it.
-                            let batch = self.coalescer.finish_batch()?;
-                            // Set to pull state for the next iteration.
-                            poll = Poll::Ready(Some(Ok(batch)));
-                        } else {
-                            poll = Poll::Ready(value);
-                        }
+                        poll = Poll::Ready(value);
                     } else {
                         if let Some(rb) = self.emit()? {
                             poll = Poll::Ready(Some(Ok(rb)));
