@@ -251,8 +251,11 @@ pub async fn register_table_with_many_types(ctx: &SessionContext) {
         .unwrap();
     ctx.register_catalog("my_catalog", Arc::new(catalog));
 
-    ctx.register_table("my_catalog.my_schema.t2", table_with_many_types())
-        .unwrap();
+    ctx.register_table(
+        "my_catalog.my_schema.table_with_many_types",
+        table_with_many_types(),
+    )
+    .unwrap();
 }
 
 pub async fn register_table_with_map(ctx: &SessionContext) {
