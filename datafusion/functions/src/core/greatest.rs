@@ -22,6 +22,7 @@ use arrow::compute::kernels::cmp;
 use arrow::compute::kernels::zip::zip;
 use arrow::compute::SortOptions;
 use arrow::datatypes::DataType;
+use arrow::error::ArrowError;
 use arrow_buffer::BooleanBuffer;
 use datafusion_common::{exec_err, plan_err, Result, ScalarValue};
 use datafusion_expr::{ColumnarValue};
@@ -69,9 +70,11 @@ fn get_larger(lhs: &dyn Array, rhs: &dyn Array) -> Result<BooleanArray> {
 
     let cmp = make_comparator(lhs, rhs, SORT_OPTIONS)?;
 
-    let len = lhs.len().min(rhs.len());
+    if lhs.len() != rhs.len() {
+        return exec_err!("All arrays should have the same length for greatest comparison")
+    }
 
-    let values = BooleanBuffer::collect_bool(len, |i| cmp(i, i).is_ge());
+    let values = BooleanBuffer::collect_bool(lhs.len(), |i| cmp(i, i).is_ge());
 
     // No nulls as we only want to keep the values that are larger, its either true or false
     Ok(BooleanArray::new(values, None))
