@@ -284,7 +284,8 @@ impl<T: Decoder> BatchDeserializer<Bytes> for DecoderDeserializer<T> {
 ///
 /// This struct is responsible for converting a stream of bytes, which represent
 /// encoded data, into a stream of `RecordBatch` objects, following the specified
-/// schema and formatting options.
+/// schema and formatting options. It also handles any buffering necessary to satisfy
+/// the `Decoder` interface.
 pub(crate) struct DecoderDeserializer<T: Decoder> {
     /// The underlying decoder used for deserialization
     pub(crate) decoder: T,
