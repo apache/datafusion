@@ -1344,7 +1344,6 @@ select contains('', '');
 true
 
 # test for greatest
-
 statement ok
 CREATE TABLE t1 (a int, b int, c int) as VALUES
 (4, NULL, NULL),
@@ -1364,10 +1363,8 @@ SELECT greatest(a, b, c) FROM t1
 NULL
 3
 
-
 statement ok
 drop table t1
-
 
 query I
 SELECT greatest(1)
@@ -1497,3 +1494,49 @@ SELECT greatest(NULL, NULL, NULL, a, -1) FROM foo
 
 statement ok
 drop table foo
+
+query R
+select greatest(arrow_cast('NAN','Float64'), arrow_cast('NAN','Float64'))
+----
+NaN
+
+query R
+select greatest(arrow_cast('NAN','Float64'), arrow_cast('NAN','Float32'))
+----
+NaN
+
+query R
+select greatest(arrow_cast('NAN','Float64'), '+Inf'::Double)
+----
+NaN
+
+query R
+select greatest(arrow_cast('NAN','Float64'), NULL)
+----
+NaN
+
+query R
+select greatest(NULL, '+Inf'::Double)
+----
+Infinity
+
+query R
+select greatest(NULL, '-Inf'::Double)
+----
+-Infinity
+
+statement ok
+CREATE TABLE t1 (a double, b double, c double) as VALUES
+(1, arrow_cast('NAN', 'Float64'), '+Inf'::Double),
+(NULL, arrow_cast('NAN','Float64'), '+Inf'::Double),
+(1, '+Inf'::Double, NULL);
+
+query R
+SELECT greatest(a, b, c) FROM t1
+----
+NaN
+NaN
+Infinity
+
+statement ok
+drop table t1
