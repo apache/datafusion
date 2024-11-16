@@ -56,6 +56,10 @@ impl GreatestFunc {
     }
 }
 
+fn get_logical_null_count(arr: &dyn Array) -> usize {
+    arr.logical_nulls().map(|n| n.null_count()).unwrap_or_default()
+
+}
 
 /// Return boolean array where `arr[i] = lhs[i] >= rhs[i]` for all i, where `arr` is the result array
 /// Nulls are always considered smaller than any other value
@@ -64,7 +68,7 @@ fn get_larger(lhs: &dyn Array, rhs: &dyn Array) -> Result<BooleanArray> {
     // If both arrays are not nested, have the same length and no nulls, we can use the faster vectorised kernel
     // - If both arrays are not nested: Nested types, such as lists, are not supported as the null semantics are not well-defined.
     // - both array does not have any nulls: cmp::gt_eq will return null if any of the input is null while we want to return false in that case
-    if !lhs.data_type().is_nested() && lhs.null_count() == 0 && rhs.null_count() == 0 {
+    if !lhs.data_type().is_nested() && get_logical_null_count(lhs) == 0 && get_logical_null_count(rhs) == 0 {
         return cmp::gt_eq(&lhs, &rhs).map_err(|e| e.into());
     }
 
