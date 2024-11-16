@@ -2865,10 +2865,7 @@ mod tests {
         );
 
         // single character
-        assert_change(
-            regex_match(col("c1"), lit("x")),
-            col("c1").like(lit("%x%")),
-        );
+        assert_change(regex_match(col("c1"), lit("x")), col("c1").like(lit("%x%")));
 
         // single word
         assert_change(
@@ -2977,32 +2974,37 @@ mod tests {
         // OR-chain
         assert_change(
             regex_match(col("c1"), lit("foo|bar|baz")),
-            col("c1").like(lit("%foo%"))
+            col("c1")
+                .like(lit("%foo%"))
                 .or(col("c1").like(lit("%bar%")))
                 .or(col("c1").like(lit("%baz%"))),
         );
         assert_change(
             regex_match(col("c1"), lit("foo|x|baz")),
-            col("c1").like(lit("%foo%"))
+            col("c1")
+                .like(lit("%foo%"))
                 .or(col("c1").like(lit("%x%")))
                 .or(col("c1").like(lit("%baz%"))),
         );
         assert_change(
             regex_not_match(col("c1"), lit("foo|bar|baz")),
-            col("c1").not_like(lit("%foo%"))
+            col("c1")
+                .not_like(lit("%foo%"))
                 .and(col("c1").not_like(lit("%bar%")))
                 .and(col("c1").not_like(lit("%baz%"))),
         );
         // both anchored expressions (translated to equality) and unanchored
         assert_change(
             regex_match(col("c1"), lit("foo|^x$|baz")),
-            col("c1").like(lit("%foo%"))
+            col("c1")
+                .like(lit("%foo%"))
                 .or(col("c1").eq(lit("x")))
                 .or(col("c1").like(lit("%baz%"))),
         );
         assert_change(
             regex_not_match(col("c1"), lit("foo|^bar$|baz")),
-            col("c1").not_like(lit("%foo%"))
+            col("c1")
+                .not_like(lit("%foo%"))
                 .and(col("c1").not_eq(lit("bar")))
                 .and(col("c1").not_like(lit("%baz%"))),
         );
