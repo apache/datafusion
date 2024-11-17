@@ -486,7 +486,7 @@
 //! sensitive I/O work on the same thread pool ([`Runtime`]).
 //! Using the same (default) `Runtime` is convenient, and often works well for
 //! initial development and processing local files, but it can lead to problems
-//! under load when reading from network sources such as AWS S3.
+//! under load and/or when reading from network sources such as AWS S3.
 //!
 //! If your system does not fully utilize either the CPU or network bandwidth
 //! during execution, or you see significantly higher tail (e.g. p99) latencies
@@ -570,6 +570,13 @@
 //!                          ─────────────────────────────────────────────────────────────▶
 //!                                                                                           time
 //!```
+//!
+//! Note that DataFusion does not use [`tokio::task::spawn_blocking`] for
+//! CPU-bounded work, because `spawn_blocking` is designed for blocking **IO**,
+//! not designed CPU bound tasks. Among other challenges, spawned blocking
+//! tasks can't yield waiting for input (can't call `await`) so they
+//! can't be used to limit the number of concurrent CPU bound tasks or
+//! keep the processing pipeline to the same core.
 //!
 //! [Tokio]:  https://tokio.rs
 //! [`Runtime`]: tokio::runtime::Runtime
