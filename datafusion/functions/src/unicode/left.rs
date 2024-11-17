@@ -17,20 +17,21 @@
 
 use std::any::Any;
 use std::cmp::Ordering;
+use std::string;
 use std::sync::{Arc, OnceLock};
 
 use arrow::array::{
-    Array, ArrayAccessor, ArrayIter, ArrayRef, GenericStringArray, Int64Array,
-    OffsetSizeTrait,
+    as_dictionary_array, Array, ArrayAccessor, ArrayIter, ArrayRef, GenericStringArray,
+    Int64Array, OffsetSizeTrait,
 };
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, Int32Type};
 
 use crate::utils::{make_scalar_function, utf8_to_str_type};
 use datafusion_common::cast::{
     as_generic_string_array, as_int64_array, as_string_view_array,
 };
 use datafusion_common::exec_err;
-use datafusion_common::types::{logical_int64, logical_string};
+use datafusion_common::types::{logical_int64, logical_string, TypeSignature};
 use datafusion_common::Result;
 use datafusion_expr::scalar_doc_sections::DOC_SECTION_STRING;
 use datafusion_expr::{
@@ -82,6 +83,10 @@ impl ScalarUDFImpl for LeftFunc {
                 make_scalar_function(left::<i32>, vec![])(args)
             }
             DataType::LargeUtf8 => make_scalar_function(left::<i64>, vec![])(args),
+            DataType::Dictionary(_, v) => match &*v {
+                DataType::Utf8 => make_scalar_function(left::<i32>, vec![])(args),
+                _ => exec_err!("Unsupported data type {v:?}"),
+            },
             other => exec_err!(
                 "Unsupported data type {other:?} for function left,\
                 expected Utf8View, Utf8 or LargeUtf8."
@@ -127,8 +132,25 @@ pub fn left<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
     if args[0].data_type() == &DataType::Utf8View {
         let string_array = as_string_view_array(&args[0])?;
         left_impl::<T, _>(string_array, n_array)
-    } else {
+    } else if args[0].data_type() == &DataType::Utf8
+        || args[0].data_type() == &DataType::LargeUtf8
+    {
         let string_array = as_generic_string_array::<T>(&args[0])?;
+        left_impl::<T, _>(string_array, n_array)
+    } else {
+        let dict_array = match &args[0].data_type() {
+            DataType::Dictionary(k, _) => match **k {
+                DataType::Int32 => Ok(as_dictionary_array::<Int32Type>(&args[0])),
+                _ => exec_err!("Unsupported Dictionary key type {k:?}"),
+            },
+            _ => exec_err!("Unsupported type {:?}", &args[0].data_type()),
+        }
+        .unwrap();
+        let string_array = dict_array
+            .values()
+            .as_any()
+            .downcast_ref::<GenericStringArray<T>>()
+            .unwrap();
         left_impl::<T, _>(string_array, n_array)
     }
 }
