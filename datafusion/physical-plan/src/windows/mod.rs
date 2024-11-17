@@ -194,7 +194,7 @@ pub fn create_udwf_window_expr(
 
 /// Implements [`BuiltInWindowFunctionExpr`] for [`WindowUDF`]
 #[derive(Clone, Debug)]
-struct WindowUDFExpr {
+pub struct WindowUDFExpr {
     fun: Arc<WindowUDF>,
     args: Vec<Arc<dyn PhysicalExpr>>,
     /// Display name
@@ -207,6 +207,12 @@ struct WindowUDFExpr {
     is_reversed: bool,
     /// Set to `true` if `IGNORE NULLS` is defined, `false` otherwise.
     ignore_nulls: bool,
+}
+
+impl WindowUDFExpr {
+    pub fn fun(&self) -> &Arc<WindowUDF> {
+        &self.fun
+    }
 }
 
 impl BuiltInWindowFunctionExpr for WindowUDFExpr {

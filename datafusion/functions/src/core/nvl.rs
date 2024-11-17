@@ -47,6 +47,7 @@ static SUPPORTED_NVL_TYPES: &[DataType] = &[
     DataType::Int64,
     DataType::Float32,
     DataType::Float64,
+    DataType::Utf8View,
     DataType::Utf8,
     DataType::LargeUtf8,
 ];

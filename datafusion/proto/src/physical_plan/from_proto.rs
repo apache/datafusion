@@ -152,6 +152,12 @@ pub fn parse_physical_window_expr(
                     None => registry.udaf(udaf_name)?
                 })
             }
+            protobuf::physical_window_expr_node::WindowFunction::UserDefinedWindowFunction(udwf_name) => {
+                WindowFunctionDefinition::WindowUDF(match &proto.fun_definition {
+                    Some(buf) => codec.try_decode_udwf(udwf_name, buf)?,
+                    None => registry.udwf(udwf_name)?
+                })
+            }
         }
     } else {
         return Err(proto_error("Missing required field in protobuf"));

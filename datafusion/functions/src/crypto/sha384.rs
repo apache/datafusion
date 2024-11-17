@@ -42,7 +42,7 @@ impl SHA384Func {
         Self {
             signature: Signature::uniform(
                 1,
-                vec![Utf8, LargeUtf8, Binary, LargeBinary],
+                vec![Utf8View, Utf8, LargeUtf8, Binary, LargeBinary],
                 Volatility::Immutable,
             ),
         }
