@@ -249,13 +249,12 @@ impl ScalarUDFImpl for StringToArray {
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         Ok(match arg_types[0] {
-            Utf8 | LargeUtf8 => {
+            Utf8 | Utf8View | LargeUtf8 => {
                 List(Arc::new(Field::new("item", arg_types[0].clone(), true)))
             }
-            Utf8View => List(Arc::new(Field::new("item", Utf8View, true))),
             _ => {
                 return plan_err!(
-                    "The string_to_array function can only accept Utf8, LargeUtf8 or Utf8View."
+                    "The string_to_array function can only accept Utf8, Utf8View or LargeUtf8."
                 );
             }
         })
