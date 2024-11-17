@@ -656,8 +656,8 @@ impl DefaultPhysicalPlanner {
                 let logical_input_schema = input.as_ref().schema();
                 let physical_input_schema_from_logical = logical_input_schema.inner();
 
-                if &physical_input_schema != physical_input_schema_from_logical
-                    && !options.execution.skip_physical_aggregate_schema_check
+                if !options.execution.skip_physical_aggregate_schema_check
+                    && &physical_input_schema != physical_input_schema_from_logical
                 {
                     return internal_err!("Physical input schema should be the same as the one converted from logical input schema.");
                 }
