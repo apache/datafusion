@@ -44,6 +44,7 @@ use datafusion_common::{
 use datafusion_expr::aggregate_doc_sections::DOC_SECTION_GENERAL;
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::prim_op::PrimitiveGroupsAccumulator;
 use datafusion_physical_expr::expressions;
+use std::cmp::Ordering;
 use std::fmt::Debug;
 
 use arrow::datatypes::i256;
@@ -113,8 +114,12 @@ macro_rules! primitive_max_accumulator {
     ($DATA_TYPE:ident, $NATIVE:ident, $PRIMTYPE:ident) => {{
         Ok(Box::new(
             PrimitiveGroupsAccumulator::<$PRIMTYPE, _>::new($DATA_TYPE, |cur, new| {
-                if *cur < new {
-                    *cur = new
+                match (new).partial_cmp(cur) {
+                    Some(Ordering::Greater) | None => {
+                        // new is Greater or None
+                        *cur = new
+                    }
+                    _ => {}
                 }
             })
             // Initialize each accumulator to $NATIVE::MIN
@@ -132,8 +137,12 @@ macro_rules! primitive_min_accumulator {
     ($DATA_TYPE:ident, $NATIVE:ident, $PRIMTYPE:ident) => {{
         Ok(Box::new(
             PrimitiveGroupsAccumulator::<$PRIMTYPE, _>::new(&$DATA_TYPE, |cur, new| {
-                if *cur > new {
-                    *cur = new
+                match (new).partial_cmp(cur) {
+                    Some(Ordering::Less) | None => {
+                        // new is Less or NaN
+                        *cur = new
+                    }
+                    _ => {}
                 }
             })
             // Initialize each accumulator to $NATIVE::MAX
