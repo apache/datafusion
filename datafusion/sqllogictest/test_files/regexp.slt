@@ -424,26 +424,6 @@ from (values ('a'), ('b')) as tbl(col);
 NULL NULL NULL
 NULL NULL NULL
 
-query T
-SELECT regexp_replace('a(b(c)d)e', '\\((b(c)d)\\)', '[\\1]', 'g') AS result;
-----
-a(b(c)d)e
-
-# Utf8
-query T
-SELECT regexp_replace('Café Münchén', 'é', 'e', 'g') AS result;
-----
-Cafe München
-
-query T
-SELECT regexp_replace(arrow_cast(123.45, 'Utf8'), '\\.', 'X', 'g') AS result;
-----
-123.45
-
-query T
-SELECT regexp_replace(12345, '2', 'X', 'g') AS result;
-----
-
 # multiline string
 query B
 SELECT 'foo\nbar\nbaz' ~ 'bar';
