@@ -396,24 +396,25 @@ pub fn accumulate_indices<F>(
         }
         (None, Some(filter)) => {
             debug_assert_eq!(filter.len(), group_indices.len());
-            filter.values().set_indices().for_each(|index| {
-                index_fn(group_indices[index])
-            });
+            filter
+                .values()
+                .set_indices()
+                .for_each(|index| index_fn(group_indices[index]));
         }
         (Some(valids), None) => {
             debug_assert_eq!(valids.len(), group_indices.len());
-            valids.valid_indices().for_each(|index| {
-                index_fn(group_indices[index])
-            });
+            valids
+                .valid_indices()
+                .for_each(|index| index_fn(group_indices[index]));
         }
 
         (Some(valids), Some(filter)) => {
             debug_assert_eq!(filter.len(), group_indices.len());
             debug_assert_eq!(valids.len(), group_indices.len());
             let valid_and_filter_indices = valids.inner() & filter.values();
-            valid_and_filter_indices.set_indices().for_each(|index| {
-                index_fn(group_indices[index])
-            });
+            valid_and_filter_indices
+                .set_indices()
+                .for_each(|index| index_fn(group_indices[index]));
         }
     }
 }
@@ -438,7 +439,7 @@ fn initialize_builder(
 mod test {
     use super::*;
 
-    use arrow::{array::UInt32Array, compute::kernels::filter};
+    use arrow::array::UInt32Array;
     use rand::{rngs::ThreadRng, Rng};
     use std::collections::HashSet;
 
@@ -849,31 +850,5 @@ mod test {
                 .map(|group_index| self.expected_seen(group_index))
                 .collect()
         }
-    }
-
-    #[test]
-    fn filter_set() {
-        let filter_array = BooleanArray::from(vec![Some(true), Some(false), None, Some(false), Some(true)]);
-        let valid_array = BooleanArray::from(vec![Some(true), Some(false), None, Some(true), Some(true)]);
-
-        let v = filter_array.values() & valid_array.values();
-        v.set_indices().for_each(|x| {
-            println!("x: {:?}", x);
-        });
-
-        // let p = filter_array.values().bit_chunks();
-        // let r = p.remainder_bits();
-        // filter_array.values().bit_chunks().iter().for_each(|x| {
-        //     println!("x1: {:?}", x);
-        // });
-        // println!("r: {:?}", r);
-
-        // for x in filter_array.values().set_indices() {
-        //     println!("x: {:?}", x);
-        // }
-
-        // for x in filter_array.iter() {
-        //     println!("y: {:?}", x);
-        // }
     }
 }
