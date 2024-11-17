@@ -364,6 +364,11 @@ SELECT bit_length(NULL)
 ----
 NULL
 
+query I
+SELECT bit_length(arrow_cast('jonathan', 'Utf8View'));
+----
+64
+
 query T
 SELECT btrim(' xyxtrimyyx ', NULL)
 ----
