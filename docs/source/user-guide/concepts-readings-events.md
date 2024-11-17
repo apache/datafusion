@@ -131,11 +131,11 @@ This is a list of DataFusion related blog posts, articles, and other resources. 
 
 # 🌎 Community Events
 
+- **2025-01-25** (Upcoming) [Amsterdam Apache DataFusion Meetup](https://g ithub.com/apache/datafusion/discussions/12988)
 - **2025-01-15** (Upcoming) [Boston Apache DataFusion Meetup](https://github.com/apache/datafusion/discussions/13165)
 - **2024-12-18** (Upcoming) [Chicago Apache DataFusion Meetup](https://lu.ma/eq5myc5i)
+- **2024-10-14** [Seattle Apache DataFusion Meetup](https://lu.ma/tnwl866b)
 - **2024-09-27** [Belgrade Apache DataFusion Meetup](https://lu.ma/tmwuz4lg), [recap](https://github.com/apache/datafusion/discussions/11431#discussioncomment-10832070), [slides](https://github.com/apache/datafusion/discussions/11431#discussioncomment-10826169), [recordings](https://www.youtube.com/watch?v=4huEsFFv6bQ&list=PLrhIfEjaw9ilQEczOQlHyMznabtVRptyX)
 - **2024-06-26** [New York City Apache DataFusion Meetup](https://lu.ma/2iwba0xm). [slides](https://docs.google.com/presentation/d/1dOLPAFPEMLhLv4NN6O9QSDIyyeiIySqAjky5cVgdWAE/edit#slide=id.g26bebde4fcc_3_7)
-- **2024-06-25** [San Francisco Bay Area Apache DataFusion Meetup](https://lu.ma/6bphole2). [slides](https://docs.google.com/presentation/d/1Oz2yGllrWBkNGyiRMLr8qXTt4vmvtJWuI_weGThaZak/edit#slide=id.g26bebde4fcc_3_7)
-- **2024-03-27** [Austin Apache DataFusion Meetup](https://github.com/apache/datafusion/discussions/8522). [slides](https://docs.google.com/presentation/d/1S51TK8waxHEJaxi_-uiSMrgQZ09m_hfaasPk5X5ExEY), [recording](https://www.youtube.com/watch?v=q1N3pH3tFw8)
 - **2024-06-25** [San Francisco Bay Area Apache DataFusion Meetup](https://lu.ma/6bphole2). [slides](https://docs.google.com/presentation/d/1Oz2yGllrWBkNGyiRMLr8qXTt4vmvtJWuI_weGThaZak/edit#slide=id.g26bebde4fcc_3_7)
 - **2024-03-27** [Austin Apache DataFusion Meetup](https://github.com/apache/datafusion/discussions/8522). [slides](https://docs.google.com/presentation/d/1S51TK8waxHEJaxi_-uiSMrgQZ09m_hfaasPk5X5ExEY), [recording](https://www.youtube.com/watch?v=q1N3pH3tFw8)
