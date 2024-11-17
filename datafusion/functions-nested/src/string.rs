@@ -32,6 +32,7 @@ use std::any::{type_name, Any};
 
 use crate::utils::{downcast_arg, make_scalar_function};
 use arrow::compute::cast;
+use arrow_array::builder::{ArrayBuilder, StringViewBuilder};
 use arrow_array::cast::AsArray;
 use arrow_array::{GenericStringArray, StringViewArray};
 use arrow_schema::DataType::{
@@ -45,27 +46,6 @@ use datafusion_expr::{
 };
 use datafusion_functions::strings::StringArrayType;
 use std::sync::{Arc, OnceLock};
-
-macro_rules! to_string {
-    ($ARG:expr, $ARRAY:expr, $DELIMITER:expr, $NULL_STRING:expr, $WITH_NULL_STRING:expr, $ARRAY_TYPE:ident) => {{
-        let arr = downcast_arg!($ARRAY, $ARRAY_TYPE);
-        for x in arr {
-            match x {
-                Some(x) => {
-                    $ARG.push_str(&x.to_string());
-                    $ARG.push_str($DELIMITER);
-                }
-                None => {
-                    if $WITH_NULL_STRING {
-                        $ARG.push_str($NULL_STRING);
-                        $ARG.push_str($DELIMITER);
-                    }
-                }
-            }
-        }
-        Ok($ARG)
-    }};
-}
 
 macro_rules! call_array_function {
     ($DATATYPE:expr, false) => {
@@ -90,8 +70,8 @@ macro_rules! call_array_function {
     ($DATATYPE:expr, $INCLUDE_LIST:expr) => {{
         match $DATATYPE {
             DataType::List(_) => array_function!(ListArray),
-            DataType::Utf8View => array_function!(StringViewArray),
             DataType::Utf8 => array_function!(StringArray),
+            DataType::Utf8View => array_function!(StringViewArray),
             DataType::LargeUtf8 => array_function!(LargeStringArray),
             DataType::Boolean => array_function!(BooleanArray),
             DataType::Float32 => array_function!(Float32Array),
@@ -106,6 +86,27 @@ macro_rules! call_array_function {
             DataType::UInt64 => array_function!(UInt64Array),
             dt => not_impl_err!("Unsupported data type in array_to_string: {dt}"),
         }
+    }};
+}
+
+macro_rules! to_string {
+    ($ARG:expr, $ARRAY:expr, $DELIMITER:expr, $NULL_STRING:expr, $WITH_NULL_STRING:expr, $ARRAY_TYPE:ident) => {{
+        let arr = downcast_arg!($ARRAY, $ARRAY_TYPE);
+        for x in arr {
+            match x {
+                Some(x) => {
+                    $ARG.push_str(&x.to_string());
+                    $ARG.push_str($DELIMITER);
+                }
+                None => {
+                    if $WITH_NULL_STRING {
+                        $ARG.push_str($NULL_STRING);
+                        $ARG.push_str($DELIMITER);
+                    }
+                }
+            }
+        }
+        Ok($ARG)
     }};
 }
 
@@ -225,10 +226,7 @@ impl StringToArray {
     pub fn new() -> Self {
         Self {
             signature: Signature::one_of(
-                vec![
-                    TypeSignature::Uniform(2, vec![Utf8View, Utf8, LargeUtf8]),
-                    TypeSignature::Uniform(3, vec![Utf8View, Utf8, LargeUtf8]),
-                ],
+                vec![TypeSignature::String(2), TypeSignature::String(3)],
                 Volatility::Immutable,
             ),
             aliases: vec![String::from("string_to_list")],
@@ -254,7 +252,7 @@ impl ScalarUDFImpl for StringToArray {
             Utf8 | LargeUtf8 => {
                 List(Arc::new(Field::new("item", arg_types[0].clone(), true)))
             }
-            Utf8View => List(Arc::new(Field::new("item", Utf8, true))),
+            Utf8View => List(Arc::new(Field::new("item", Utf8View, true))),
             _ => {
                 return plan_err!(
                     "The string_to_array function can only accept Utf8, LargeUtf8 or Utf8View."
@@ -507,6 +505,8 @@ pub fn string_to_array_inner<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<Ar
         (Utf8View, Utf8View) => {
             let string_array = args[0].as_string_view();
             let delimiter_array = args[1].as_string_view();
+            let builder = StringViewBuilder::with_capacity(string_array.len());
+
             if args.len() == 3 {
                 match args[2].data_type() {
                     Utf8View => {
@@ -515,8 +515,9 @@ pub fn string_to_array_inner<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<Ar
                             &StringViewArray,
                             &StringViewArray,
                             &StringViewArray,
+                            StringViewBuilder,
                         >(
-                            string_array, delimiter_array, null_type_array
+                            string_array, delimiter_array, null_type_array, builder
                         )
                     }
                     Utf8 | LargeUtf8 => {
@@ -525,8 +526,9 @@ pub fn string_to_array_inner<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<Ar
                             &StringViewArray,
                             &StringViewArray,
                             &GenericStringArray<T>,
+                            StringViewBuilder,
                         >(
-                            string_array, delimiter_array, null_type_array
+                            string_array, delimiter_array, null_type_array, builder
                         )
                     }
                     other => {
@@ -540,12 +542,14 @@ pub fn string_to_array_inner<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<Ar
                     &StringViewArray,
                     &StringViewArray,
                     &GenericStringArray<T>,
-                >(string_array, delimiter_array, None)
+                    StringViewBuilder,
+                >(string_array, delimiter_array, None, builder)
             }
         }
         (Utf8View, Utf8 | LargeUtf8) => {
             let string_array = args[0].as_string_view();
             let delimiter_array = args[1].as_string::<T>();
+            let builder = StringViewBuilder::with_capacity(string_array.len());
             if args.len() == 3 {
                 match args[2].data_type() {
                     Utf8View => {
@@ -554,8 +558,9 @@ pub fn string_to_array_inner<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<Ar
                             &StringViewArray,
                             &GenericStringArray<T>,
                             &StringViewArray,
+                            StringViewBuilder,
                         >(
-                            string_array, delimiter_array, null_type_array
+                            string_array, delimiter_array, null_type_array, builder
                         )
                     }
                     Utf8 | LargeUtf8 => {
@@ -564,8 +569,9 @@ pub fn string_to_array_inner<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<Ar
                             &StringViewArray,
                             &GenericStringArray<T>,
                             &GenericStringArray<T>,
+                            StringViewBuilder,
                         >(
-                            string_array, delimiter_array, null_type_array
+                            string_array, delimiter_array, null_type_array, builder
                         )
                     }
                     other => {
@@ -579,12 +585,17 @@ pub fn string_to_array_inner<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<Ar
                     &StringViewArray,
                     &GenericStringArray<T>,
                     &GenericStringArray<T>,
-                >(string_array, delimiter_array, None)
+                    StringViewBuilder,
+                >(string_array, delimiter_array, None, builder)
             }
         }
         (Utf8 | LargeUtf8, Utf8 | LargeUtf8) => {
             let string_array = args[0].as_string::<T>();
             let delimiter_array = args[1].as_string::<T>();
+            let builder = StringBuilder::with_capacity(
+                string_array.len(),
+                string_array.get_buffer_memory_size(),
+            );
             if args.len() == 3 {
                 match args[2].data_type() {
                     Utf8View => {
@@ -593,8 +604,9 @@ pub fn string_to_array_inner<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<Ar
                             &GenericStringArray<T>,
                             &GenericStringArray<T>,
                             &StringViewArray,
+                            StringBuilder,
                         >(
-                            string_array, delimiter_array, null_type_array
+                            string_array, delimiter_array, null_type_array, builder
                         )
                     }
                     Utf8 | LargeUtf8 => {
@@ -603,8 +615,9 @@ pub fn string_to_array_inner<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<Ar
                             &GenericStringArray<T>,
                             &GenericStringArray<T>,
                             &GenericStringArray<T>,
+                            StringBuilder,
                         >(
-                            string_array, delimiter_array, null_type_array
+                            string_array, delimiter_array, null_type_array, builder
                         )
                     }
                     other => {
@@ -618,12 +631,17 @@ pub fn string_to_array_inner<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<Ar
                     &GenericStringArray<T>,
                     &GenericStringArray<T>,
                     &GenericStringArray<T>,
-                >(string_array, delimiter_array, None)
+                    StringBuilder,
+                >(string_array, delimiter_array, None, builder)
             }
         }
         (Utf8 | LargeUtf8, Utf8View) => {
             let string_array = args[0].as_string::<T>();
             let delimiter_array = args[1].as_string_view();
+            let builder = StringBuilder::with_capacity(
+                string_array.len(),
+                string_array.get_buffer_memory_size(),
+            );
             if args.len() == 3 {
                 match args[2].data_type() {
                     Utf8View => {
@@ -632,8 +650,9 @@ pub fn string_to_array_inner<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<Ar
                             &GenericStringArray<T>,
                             &StringViewArray,
                             &StringViewArray,
+                            StringBuilder,
                         >(
-                            string_array, delimiter_array, null_type_array
+                            string_array, delimiter_array, null_type_array, builder
                         )
                     }
                     Utf8 | LargeUtf8 => {
@@ -642,8 +661,9 @@ pub fn string_to_array_inner<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<Ar
                             &GenericStringArray<T>,
                             &StringViewArray,
                             &GenericStringArray<T>,
+                            StringBuilder,
                         >(
-                            string_array, delimiter_array, null_type_array
+                            string_array, delimiter_array, null_type_array, builder
                         )
                     }
                     other => {
@@ -657,7 +677,8 @@ pub fn string_to_array_inner<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<Ar
                     &GenericStringArray<T>,
                     &StringViewArray,
                     &GenericStringArray<T>,
-                >(string_array, delimiter_array, None)
+                    StringBuilder,
+                >(string_array, delimiter_array, None, builder)
             }
         }
         other => {
@@ -666,20 +687,25 @@ pub fn string_to_array_inner<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<Ar
     }
 }
 
-fn string_to_array_impl<'a, StringArrType, DelimiterArrType, NullValueArrType>(
+fn string_to_array_impl<
+    'a,
+    StringArrType,
+    DelimiterArrType,
+    NullValueArrType,
+    StringBuilderType,
+>(
     string_array: StringArrType,
     delimiter_array: DelimiterArrType,
     null_value_array: Option<NullValueArrType>,
+    string_builder: StringBuilderType,
 ) -> Result<ArrayRef>
 where
     StringArrType: StringArrayType<'a>,
     DelimiterArrType: StringArrayType<'a>,
     NullValueArrType: StringArrayType<'a>,
+    StringBuilderType: StringArrayBuilderType,
 {
-    let mut list_builder = ListBuilder::new(StringBuilder::with_capacity(
-        string_array.len(),
-        string_array.get_buffer_memory_size(),
-    ));
+    let mut list_builder = ListBuilder::new(string_builder);
 
     match null_value_array {
         None => {
@@ -698,7 +724,7 @@ where
                         }
                         (Some(string), None) => {
                             string.chars().map(|c| c.to_string()).for_each(|c| {
-                                list_builder.values().append_value(c);
+                                list_builder.values().append_value(c.as_str());
                             });
                             list_builder.append(true);
                         }
@@ -736,7 +762,7 @@ where
                             if Some(c.as_str()) == null_value {
                                 list_builder.values().append_null();
                             } else {
-                                list_builder.values().append_value(c);
+                                list_builder.values().append_value(c.as_str());
                             }
                         });
                         list_builder.append(true);
@@ -748,4 +774,30 @@ where
 
     let list_array = list_builder.finish();
     Ok(Arc::new(list_array) as ArrayRef)
+}
+
+trait StringArrayBuilderType: ArrayBuilder {
+    fn append_value(&mut self, val: &str);
+
+    fn append_null(&mut self);
+}
+
+impl StringArrayBuilderType for StringBuilder {
+    fn append_value(&mut self, val: &str) {
+        StringBuilder::append_value(self, val);
+    }
+
+    fn append_null(&mut self) {
+        StringBuilder::append_null(self);
+    }
+}
+
+impl StringArrayBuilderType for StringViewBuilder {
+    fn append_value(&mut self, val: &str) {
+        StringViewBuilder::append_value(self, val)
+    }
+
+    fn append_null(&mut self) {
+        StringViewBuilder::append_null(self)
+    }
 }
