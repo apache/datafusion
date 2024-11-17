@@ -1139,12 +1139,9 @@ fn numeric_string_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<D
 }
 
 fn coerce_list_children(lhs_field: &FieldRef, rhs_field: &FieldRef) -> Option<FieldRef> {
-    Some(Arc::new(
-        Arc::unwrap_or_clone(Arc::clone(lhs_field)).with_data_type(comparison_coercion(
-            lhs_field.data_type(),
-            rhs_field.data_type(),
-        )?),
-    ))
+    Some(Arc::new((**lhs_field).clone().with_data_type(
+        comparison_coercion(lhs_field.data_type(), rhs_field.data_type())?,
+    )))
 }
 
 /// Coercion rules for list types.
