@@ -396,109 +396,24 @@ pub fn accumulate_indices<F>(
         }
         (None, Some(filter)) => {
             debug_assert_eq!(filter.len(), group_indices.len());
-            let group_indices_chunks = group_indices.chunks_exact(64);
-            let bit_chunks = filter.values().bit_chunks();
-            let group_indices_remainder = group_indices_chunks.remainder();
-
-            group_indices_chunks.zip(bit_chunks.iter()).for_each(
-                |(group_index_chunk, mask)| {
-                    let mut index_mask = 1;
-                    group_index_chunk.iter().for_each(|&group_index| {
-                        let is_valid = (mask & index_mask) != 0;
-                        if is_valid {
-                            index_fn(group_index);
-                        }
-                        index_mask <<= 1;
-                    })
-                },
-            );
-
-            // handle any remaining bits (after the initial 64)
-            let remainder_bits = bit_chunks.remainder_bits();
-            group_indices_remainder
-                .iter()
-                .enumerate()
-                .for_each(|(i, &group_index)| {
-                    let is_valid = remainder_bits & (1 << i) != 0;
-                    if is_valid {
-                        index_fn(group_index)
-                    }
-                });
+            filter.values().set_indices().for_each(|index| {
+                index_fn(group_indices[index])
+            });
         }
         (Some(valids), None) => {
             debug_assert_eq!(valids.len(), group_indices.len());
-            // This is based on (ahem, COPY/PASTA) arrow::compute::aggregate::sum
-            // iterate over in chunks of 64 bits for more efficient null checking
-            let group_indices_chunks = group_indices.chunks_exact(64);
-            let bit_chunks = valids.inner().bit_chunks();
-
-            let group_indices_remainder = group_indices_chunks.remainder();
-
-            group_indices_chunks.zip(bit_chunks.iter()).for_each(
-                |(group_index_chunk, mask)| {
-                    // index_mask has value 1 << i in the loop
-                    let mut index_mask = 1;
-                    group_index_chunk.iter().for_each(|&group_index| {
-                        // valid bit was set, real vale
-                        let is_valid = (mask & index_mask) != 0;
-                        if is_valid {
-                            index_fn(group_index);
-                        }
-                        index_mask <<= 1;
-                    })
-                },
-            );
-
-            // handle any remaining bits (after the initial 64)
-            let remainder_bits = bit_chunks.remainder_bits();
-            group_indices_remainder
-                .iter()
-                .enumerate()
-                .for_each(|(i, &group_index)| {
-                    let is_valid = remainder_bits & (1 << i) != 0;
-                    if is_valid {
-                        index_fn(group_index)
-                    }
-                });
+            valids.valid_indices().for_each(|index| {
+                index_fn(group_indices[index])
+            });
         }
 
         (Some(valids), Some(filter)) => {
             debug_assert_eq!(filter.len(), group_indices.len());
             debug_assert_eq!(valids.len(), group_indices.len());
-
-            let group_indices_chunks = group_indices.chunks_exact(64);
-            let valid_bit_chunks = valids.inner().bit_chunks();
-            let filter_bit_chunks = filter.values().bit_chunks();
-
-            let group_indices_remainder = group_indices_chunks.remainder();
-
-            group_indices_chunks
-                .zip(valid_bit_chunks.iter())
-                .zip(filter_bit_chunks.iter())
-                .for_each(|((group_index_chunk, valid_mask), filter_mask)| {
-                    let mut index_mask = 1;
-                    group_index_chunk.iter().for_each(|&group_index| {
-                        let is_valid = (filter_mask & valid_mask & index_mask) != 0;
-                        if is_valid {
-                            index_fn(group_index);
-                        }
-                        index_mask <<= 1;
-                    })
-                });
-
-            // handle any remaining bits (after the initial 64)
-            let remainder_valids_bits = valids.inner().bit_chunks().remainder_bits();
-            let remainder_filter_bits = filter.values().bit_chunks().remainder_bits();
-            group_indices_remainder
-                .iter()
-                .enumerate()
-                .for_each(|(i, &group_index)| {
-                    let is_valid =
-                        remainder_filter_bits & remainder_valids_bits & (1 << i) != 0;
-                    if is_valid {
-                        index_fn(group_index)
-                    }
-                });
+            let valid_and_filter_indices = valids.inner() & filter.values();
+            valid_and_filter_indices.set_indices().for_each(|index| {
+                index_fn(group_indices[index])
+            });
         }
     }
 }
@@ -523,7 +438,7 @@ fn initialize_builder(
 mod test {
     use super::*;
 
-    use arrow::array::UInt32Array;
+    use arrow::{array::UInt32Array, compute::kernels::filter};
     use rand::{rngs::ThreadRng, Rng};
     use std::collections::HashSet;
 
@@ -934,5 +849,31 @@ mod test {
                 .map(|group_index| self.expected_seen(group_index))
                 .collect()
         }
+    }
+
+    #[test]
+    fn filter_set() {
+        let filter_array = BooleanArray::from(vec![Some(true), Some(false), None, Some(false), Some(true)]);
+        let valid_array = BooleanArray::from(vec![Some(true), Some(false), None, Some(true), Some(true)]);
+
+        let v = filter_array.values() & valid_array.values();
+        v.set_indices().for_each(|x| {
+            println!("x: {:?}", x);
+        });
+
+        // let p = filter_array.values().bit_chunks();
+        // let r = p.remainder_bits();
+        // filter_array.values().bit_chunks().iter().for_each(|x| {
+        //     println!("x1: {:?}", x);
+        // });
+        // println!("r: {:?}", r);
+
+        // for x in filter_array.values().set_indices() {
+        //     println!("x: {:?}", x);
+        // }
+
+        // for x in filter_array.iter() {
+        //     println!("y: {:?}", x);
+        // }
     }
 }
