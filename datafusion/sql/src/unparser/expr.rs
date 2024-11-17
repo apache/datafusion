@@ -18,8 +18,8 @@
 use datafusion_expr::expr::Unnest;
 use sqlparser::ast::Value::SingleQuotedString;
 use sqlparser::ast::{
-    self, BinaryOperator, Expr as AstExpr, Function, Ident, Interval, ObjectName,
-    TimezoneInfo, UnaryOperator,
+    self, Array, BinaryOperator, Expr as AstExpr, Function, Ident, Interval, ObjectName,
+    Subscript, TimezoneInfo, UnaryOperator,
 };
 use std::sync::Arc;
 use std::vec;
@@ -477,6 +477,19 @@ impl Unparser<'_> {
         func_name: &str,
         args: &[Expr],
     ) -> Result<ast::Expr> {
+        match func_name {
+            "make_array" => self.make_array_to_sql(args),
+            "array_element" => self.array_element_to_sql(args),
+            // TODO: support for the construct and access functions of the `map` and `struct` types
+            _ => self.scalar_function_to_sql_internal(func_name, args),
+        }
+    }
+
+    fn scalar_function_to_sql_internal(
+        &self,
+        func_name: &str,
+        args: &[Expr],
+    ) -> Result<ast::Expr> {
         let args = self.function_args_to_sql(args)?;
         Ok(ast::Expr::Function(Function {
             name: ObjectName(vec![Ident {
@@ -494,6 +507,29 @@ impl Unparser<'_> {
             within_group: vec![],
             parameters: ast::FunctionArguments::None,
         }))
+    }
+
+    fn make_array_to_sql(&self, args: &[Expr]) -> Result<ast::Expr> {
+        let args = args
+            .iter()
+            .map(|e| self.expr_to_sql(e))
+            .collect::<Result<Vec<_>>>()?;
+        Ok(ast::Expr::Array(Array {
+            elem: args,
+            named: false,
+        }))
+    }
+
+    fn array_element_to_sql(&self, args: &[Expr]) -> Result<ast::Expr> {
+        if args.len() != 2 {
+            return internal_err!("array_element must have exactly 2 arguments");
+        }
+        let array = self.expr_to_sql(&args[0])?;
+        let index = self.expr_to_sql(&args[1])?;
+        Ok(ast::Expr::Subscript {
+            expr: Box::new(array),
+            subscript: Box::new(Subscript::Index { index }),
+        })
     }
 
     pub fn sort_to_sql(&self, sort: &Sort) -> Result<ast::OrderByExpr> {
@@ -1485,11 +1521,12 @@ mod tests {
     use datafusion_expr::{interval_month_day_nano_lit, ExprFunctionExt};
     use datafusion_functions_aggregate::count::count_udaf;
     use datafusion_functions_aggregate::expr_fn::sum;
+    use datafusion_functions_nested::expr_fn::{array_element, make_array};
     use datafusion_functions_window::row_number::row_number_udwf;
 
     use crate::unparser::dialect::{
-        CustomDialect, CustomDialectBuilder, DateFieldExtractStyle, Dialect,
-        PostgreSqlDialect,
+        CharacterLengthStyle, CustomDialect, CustomDialectBuilder, DateFieldExtractStyle,
+        Dialect, PostgreSqlDialect,
     };
 
     use super::*;
@@ -1889,6 +1926,12 @@ mod tests {
                 }),
                 r#"UNNEST("table".array_col)"#,
             ),
+            (make_array(vec![lit(1), lit(2), lit(3)]), "[1, 2, 3]"),
+            (array_element(col("array_col"), lit(1)), "array_col[1]"),
+            (
+                array_element(make_array(vec![lit(1), lit(2), lit(3)]), lit(1)),
+                "[1, 2, 3][1]",
+            ),
         ];
 
         for (expr, expected) in tests {
@@ -2005,6 +2048,33 @@ mod tests {
         }
 
         Ok(())
+    }
+
+    #[test]
+    fn test_character_length_scalar_to_expr() {
+        let tests = [
+            (CharacterLengthStyle::Length, "length(x)"),
+            (CharacterLengthStyle::CharacterLength, "character_length(x)"),
+        ];
+
+        for (style, expected) in tests {
+            let dialect = CustomDialectBuilder::new()
+                .with_character_length_style(style)
+                .build();
+            let unparser = Unparser::new(&dialect);
+
+            let expr = ScalarUDF::new_from_impl(
+                datafusion_functions::unicode::character_length::CharacterLengthFunc::new(
+                ),
+            )
+            .call(vec![col("x")]);
+
+            let ast = unparser.expr_to_sql(&expr).expect("to be unparsed");
+
+            let actual = format!("{ast}");
+
+            assert_eq!(actual, expected);
+        }
     }
 
     #[test]
