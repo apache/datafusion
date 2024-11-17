@@ -494,7 +494,9 @@ fn statistical_join_selection_subrule(
         } else if let Some(nl_join) = plan.as_any().downcast_ref::<NestedLoopJoinExec>() {
             let left = nl_join.left();
             let right = nl_join.right();
-            if should_swap_join_order(&**left, &**right)? {
+            if supports_swap(*nl_join.join_type())
+                && should_swap_join_order(&**left, &**right)?
+            {
                 swap_nl_join(nl_join).map(Some)?
             } else {
                 None
