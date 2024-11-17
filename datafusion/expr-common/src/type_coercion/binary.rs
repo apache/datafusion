@@ -1139,9 +1139,15 @@ fn numeric_string_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<D
 }
 
 fn coerce_list_children(lhs_field: &FieldRef, rhs_field: &FieldRef) -> Option<FieldRef> {
-    Some(Arc::new((**lhs_field).clone().with_data_type(
-        comparison_coercion(lhs_field.data_type(), rhs_field.data_type())?,
-    )))
+    Some(Arc::new(
+        (**lhs_field)
+            .clone()
+            .with_data_type(comparison_coercion(
+                lhs_field.data_type(),
+                rhs_field.data_type(),
+            )?)
+            .with_nullable(lhs_field.is_nullable() || rhs_field.is_nullable()),
+    ))
 }
 
 /// Coercion rules for list types.
@@ -1152,7 +1158,7 @@ fn list_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
             LargeList(lhs_field),
             List(rhs_field) | LargeList(rhs_field) | FixedSizeList(rhs_field, _),
         )
-        | (FixedSizeList(lhs_field, _) | List(lhs_field), LargeList(rhs_field)) => {
+        | (List(lhs_field) | FixedSizeList(lhs_field, _), LargeList(rhs_field)) => {
             Some(LargeList(coerce_list_children(lhs_field, rhs_field)?))
         }
 
@@ -2134,6 +2140,19 @@ mod tests {
 
         // TODO add other data type
         Ok(())
+    }
+
+    #[test]
+    fn test_list_coercion() {
+        let lhs_type = DataType::List(Arc::new(Field::new("lhs", DataType::Int8, false)));
+
+        let rhs_type = DataType::List(Arc::new(Field::new("rhs", DataType::Int64, true)));
+
+        let coerced_type = list_coercion(&lhs_type, &rhs_type).unwrap();
+        assert_eq!(
+            coerced_type,
+            DataType::List(Arc::new(Field::new("lhs", DataType::Int64, true)))
+        ); // nullable because the RHS is nullable
     }
 
     #[test]
