@@ -28,6 +28,7 @@ use datafusion_common::{not_impl_err, ExprSchema, Result};
 use datafusion_expr_common::interval_arithmetic::Interval;
 use std::any::Any;
 use std::cmp::Ordering;
+use std::collections::HashMap;
 use std::fmt::Debug;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::Arc;
@@ -214,6 +215,15 @@ impl ScalarUDF {
 
     pub fn is_nullable(&self, args: &[Expr], schema: &dyn ExprSchema) -> bool {
         self.inner.is_nullable(args, schema)
+    }
+
+    /// Returns the schema metadata for this function.
+    pub fn metadata(
+        &self,
+        args: &[Expr],
+        schema: &dyn ExprSchema,
+    ) -> HashMap<String, String> {
+        self.inner.metadata(args, schema)
     }
 
     /// Invoke the function with `args` and number of rows, returning the appropriate result.
@@ -475,6 +485,15 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
 
     fn is_nullable(&self, _args: &[Expr], _schema: &dyn ExprSchema) -> bool {
         true
+    }
+
+    /// Returns the schema metadata for this function.
+    fn metadata(
+        &self,
+        _args: &[Expr],
+        _schema: &dyn ExprSchema,
+    ) -> HashMap<String, String> {
+        HashMap::new()
     }
 
     /// Invoke the function on `args`, returning the appropriate result
