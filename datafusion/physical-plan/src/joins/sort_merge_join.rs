@@ -105,6 +105,9 @@ use crate::{
 ///
 /// Reference for the algorithm:
 /// <https://en.wikipedia.org/wiki/Sort-merge_join>
+///
+/// Helpful short video demonstration
+/// https://www.youtube.com/watch?v=jiWCPJtDE2c
 #[derive(Debug, Clone)]
 pub struct SortMergeJoinExec {
     /// Left sorted joining execution plan
