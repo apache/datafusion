@@ -15,12 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-/// Documentation for use by [`ScalarUDFImpl`](crate::ScalarUDFImpl),
-/// [`AggregateUDFImpl`](crate::AggregateUDFImpl) and [`WindowUDFImpl`](crate::WindowUDFImpl) functions
+#[allow(rustdoc::broken_intra_doc_links)]
+/// Documentation for use by [`ScalarUDFImpl`](ScalarUDFImpl),
+/// [`AggregateUDFImpl`](AggregateUDFImpl) and [`WindowUDFImpl`](WindowUDFImpl) functions
 /// that will be used to generate public documentation.
 ///
-/// The name of the udf will be pulled from the [`ScalarUDFImpl::name`](crate::ScalarUDFImpl::name),
-/// [`AggregateUDFImpl::name`](crate::AggregateUDFImpl::name) or [`WindowUDFImpl::name`](crate::WindowUDFImpl::name)
+/// The name of the udf will be pulled from the [`ScalarUDFImpl::name`](ScalarUDFImpl::name),
+/// [`AggregateUDFImpl::name`](AggregateUDFImpl::name) or [`WindowUDFImpl::name`](WindowUDFImpl::name)
 /// function as appropriate.
 ///
 /// All strings in the documentation are required to be
