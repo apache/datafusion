@@ -481,11 +481,15 @@ impl GroupsAccumulator for CountGroupsAccumulator {
         // Adds the counts with the partial counts
         self.counts.resize(total_num_groups, 0);
         match opt_filter {
-            Some(filter) => {
-                filter.values().set_indices().for_each(|index| {
-                    self.counts[group_indices[index]] += partial_counts[index]
-                });
-            }
+            Some(filter) => filter
+                .iter()
+                .zip(group_indices.iter())
+                .zip(partial_counts.iter())
+                .for_each(|((filter_value, &group_index), partial_count)| {
+                    if let Some(true) = filter_value {
+                        self.counts[group_index] += partial_count;
+                    }
+                }),
             None => group_indices.iter().zip(partial_counts.iter()).for_each(
                 |(&group_index, partial_count)| {
                     self.counts[group_index] += partial_count;
