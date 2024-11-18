@@ -2500,7 +2500,7 @@ mod tests {
     }
 
     #[test]
-    fn test_utf8_view_to_ast_dtype() -> Result<()> {
+    fn test_utf8_view_to_sql() -> Result<()> {
         let dialect = CustomDialectBuilder::new()
             .with_utf8_cast_dtype(ast::DataType::Char(None))
             .build();
@@ -2518,6 +2518,20 @@ mod tests {
 
         let actual = format!("{}", ast);
         let expected = r#"CAST(a AS CHAR)"#.to_string();
+
+        assert_eq!(actual, expected);
+
+        let expr = Expr::Column(Column {
+            name: "a".to_string(),
+            relation: None,
+        });
+        let expr = expr.eq(Expr::Literal(ScalarValue::Utf8View(Some(
+            "hello".to_string(),
+        ))));
+        let ast = unparser.expr_to_sql(&expr)?;
+
+        let actual = format!("{}", ast);
+        let expected = r#"(a = 'hello')"#.to_string();
 
         assert_eq!(actual, expected);
 
