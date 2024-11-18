@@ -1451,9 +1451,7 @@ impl Unparser<'_> {
             }
             DataType::Utf8 => Ok(self.dialect.utf8_cast_dtype()),
             DataType::LargeUtf8 => Ok(self.dialect.large_utf8_cast_dtype()),
-            DataType::Utf8View => {
-                not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
-            }
+            DataType::Utf8View => Ok(self.dialect.utf8_cast_dtype()),
             DataType::List(_) => {
                 not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
             }
@@ -2498,6 +2496,31 @@ mod tests {
 
             assert_eq!(actual, expected);
         }
+        Ok(())
+    }
+
+    #[test]
+    fn test_utf8_view_to_ast_dtype() -> Result<()> {
+        let dialect = CustomDialectBuilder::new()
+            .with_utf8_cast_dtype(ast::DataType::Char(None))
+            .build();
+        let unparser = Unparser::new(&dialect);
+
+        let ast_dtype = unparser.arrow_dtype_to_ast_dtype(&DataType::Utf8View)?;
+
+        assert_eq!(ast_dtype, ast::DataType::Char(None));
+
+        let expr = Expr::Cast(Cast {
+            expr: Box::new(col("a")),
+            data_type: DataType::Utf8View,
+        });
+        let ast = unparser.expr_to_sql(&expr)?;
+
+        let actual = format!("{}", ast);
+        let expected = r#"CAST(a AS CHAR)"#.to_string();
+
+        assert_eq!(actual, expected);
+
         Ok(())
     }
 }
