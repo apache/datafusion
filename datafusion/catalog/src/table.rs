@@ -247,6 +247,9 @@ pub trait TableProvider: Debug + Sync + Send {
     }
 
     /// Get statistics for this table, if available
+    /// Although not presently used in mainline DataFusion, this allows implementation specific
+    /// behavior for downstream repositories, in conjunction with specialized optimizer rules to
+    /// perform operations such as re-ordering of joins.
     fn statistics(&self) -> Option<Statistics> {
         None
     }
