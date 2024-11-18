@@ -1261,4 +1261,9 @@ fn test_join_with_no_conditions() {
         "SELECT * FROM j1 JOIN j2",
         "SELECT * FROM j1 CROSS JOIN j2",
     );
+    sql_round_trip(
+        GenericDialect {},
+        "SELECT * FROM j1 CROSS JOIN j2",
+        "SELECT * FROM j1 CROSS JOIN j2",
+    );
 }
