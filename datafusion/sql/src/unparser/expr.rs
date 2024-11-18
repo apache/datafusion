@@ -1458,9 +1458,7 @@ impl Unparser<'_> {
             }
             DataType::Utf8 => Ok(self.dialect.utf8_cast_dtype()),
             DataType::LargeUtf8 => Ok(self.dialect.large_utf8_cast_dtype()),
-            DataType::Utf8View => {
-                not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
-            }
+            DataType::Utf8View => Ok(self.dialect.utf8_cast_dtype()),
             DataType::List(_) => {
                 not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
             }
@@ -1520,7 +1518,7 @@ mod tests {
     use datafusion_common::TableReference;
     use datafusion_expr::expr::WildcardOptions;
     use datafusion_expr::{
-        case, col, cube, exists, grouping_set, interval_datetime_lit,
+        case, cast, col, cube, exists, grouping_set, interval_datetime_lit,
         interval_year_month_lit, lit, not, not_exists, out_ref_col, placeholder, rollup,
         table_scan, try_cast, when, wildcard, ColumnarValue, ScalarUDF, ScalarUDFImpl,
         Signature, Volatility, WindowFrame, WindowFunctionDefinition,
@@ -2538,6 +2536,52 @@ mod tests {
 
             assert_eq!(actual, expected);
         }
+        Ok(())
+    }
+
+    #[test]
+    fn test_utf8_view_to_sql() -> Result<()> {
+        let dialect = CustomDialectBuilder::new()
+            .with_utf8_cast_dtype(ast::DataType::Char(None))
+            .build();
+        let unparser = Unparser::new(&dialect);
+
+        let ast_dtype = unparser.arrow_dtype_to_ast_dtype(&DataType::Utf8View)?;
+
+        assert_eq!(ast_dtype, ast::DataType::Char(None));
+
+        let expr = cast(col("a"), DataType::Utf8View);
+        let ast = unparser.expr_to_sql(&expr)?;
+
+        let actual = format!("{}", ast);
+        let expected = r#"CAST(a AS CHAR)"#.to_string();
+
+        assert_eq!(actual, expected);
+
+        let expr = col("a").eq(lit(ScalarValue::Utf8View(Some("hello".to_string()))));
+        let ast = unparser.expr_to_sql(&expr)?;
+
+        let actual = format!("{}", ast);
+        let expected = r#"(a = 'hello')"#.to_string();
+
+        assert_eq!(actual, expected);
+
+        let expr = col("a").is_not_null();
+
+        let ast = unparser.expr_to_sql(&expr)?;
+        let actual = format!("{}", ast);
+        let expected = r#"a IS NOT NULL"#.to_string();
+
+        assert_eq!(actual, expected);
+
+        let expr = col("a").is_null();
+
+        let ast = unparser.expr_to_sql(&expr)?;
+        let actual = format!("{}", ast);
+        let expected = r#"a IS NULL"#.to_string();
+
+        assert_eq!(actual, expected);
+
         Ok(())
     }
 }
