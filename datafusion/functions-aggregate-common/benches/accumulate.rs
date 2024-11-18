@@ -20,11 +20,11 @@ extern crate criterion;
 use std::sync::Arc;
 
 use arrow::array::{ArrayRef, BooleanArray, Int64Array};
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{criterion_group, criterion_main, Criterion};
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::accumulate::accumulate_indices;
 
 fn generate_group_indices(len: usize) -> Vec<usize> {
-    (0..len).map(|i| i).collect()
+    (0..len).collect()
 }
 
 fn generate_values(len: usize, has_null: bool) -> ArrayRef {
@@ -72,41 +72,41 @@ fn criterion_benchmark(c: &mut Criterion) {
 
     c.bench_function("Handle both nulls and filter", |b| {
         b.iter(|| {
-            black_box(accumulate_indices(
+            accumulate_indices(
                 &group_indices,
                 values.logical_nulls().as_ref(),
                 opt_filter.as_ref(),
                 |group_index| {
                     counts[group_index] += 1;
                 },
-            ));
+            );
         })
     });
 
     c.bench_function("Handle nulls only", |b| {
         b.iter(|| {
-            black_box(accumulate_indices(
+            accumulate_indices(
                 &group_indices,
                 values.logical_nulls().as_ref(),
                 None,
                 |group_index| {
                     counts[group_index] += 1;
                 },
-            ));
+            );
         })
     });
 
     let values = generate_values(len, false);
     c.bench_function("Handle filter only", |b| {
         b.iter(|| {
-            black_box(accumulate_indices(
+            accumulate_indices(
                 &group_indices,
                 values.logical_nulls().as_ref(),
                 opt_filter.as_ref(),
                 |group_index| {
                     counts[group_index] += 1;
                 },
-            ));
+            );
         })
     });
 }
