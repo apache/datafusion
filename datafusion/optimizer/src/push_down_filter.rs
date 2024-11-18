@@ -1002,7 +1002,7 @@ impl OptimizerRule for PushDownFilter {
                     filter_predicates
                         .into_iter()
                         .zip(results)
-                        .map(|(&ref expr, res)| {
+                        .map(|(expr, res)| {
                             let filter_pushdown_type = if expr.is_volatile() {
                                 // Do not push down predicate with volatile functions to scan
                                 TableProviderFilterPushDown::Unsupported
@@ -1011,7 +1011,6 @@ impl OptimizerRule for PushDownFilter {
                             };
                             (expr, filter_pushdown_type)
                         });
-
 
                 let new_scan_filters = zip
                     .clone()
@@ -3422,5 +3421,4 @@ Projection: a, b
         \n    TableScan: test";
         assert_optimized_plan_eq(plan, expected_after)
     }
-
 }
