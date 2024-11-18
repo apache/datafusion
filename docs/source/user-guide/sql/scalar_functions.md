@@ -675,26 +675,6 @@ nvl2(expression1, expression2, expression3)
 +----------------------------------------+
 ```
 
-## Comparison Functions
-
-- [greatest](#greatest)
-
-### `greatest`
-
-Returns the greatest value in a list of expressions.
-Returns _null_ if all expressions are _null_.
-
-```
-greatest(expression1[, ..., expression_n])
-```
-
-#### Arguments
-
-- **expression1, expression_n**:
-  Expressions to compare and return the greatest value.
-  Can be a constant, column, or function, and any combination of arithmetic operators.
-  Pass as many expression arguments as necessary.
-
 ## String Functions
 
 - [ascii](#ascii)
