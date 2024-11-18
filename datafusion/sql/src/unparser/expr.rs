@@ -2526,6 +2526,22 @@ mod tests {
 
         assert_eq!(actual, expected);
 
+        let expr = col("a").is_not_null();
+
+        let ast = unparser.expr_to_sql(&expr)?;
+        let actual = format!("{}", ast);
+        let expected = r#"a IS NOT NULL"#.to_string();
+
+        assert_eq!(actual, expected);
+
+        let expr = col("a").is_null();
+
+        let ast = unparser.expr_to_sql(&expr)?;
+        let actual = format!("{}", ast);
+        let expected = r#"a IS NULL"#.to_string();
+
+        assert_eq!(actual, expected);
+
         Ok(())
     }
 }
