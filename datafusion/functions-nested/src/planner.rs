@@ -133,7 +133,6 @@ impl ExprPlanner for NestedFunctionPlanner {
 
 #[derive(Debug)]
 pub struct FieldAccessPlanner;
-
 impl ExprPlanner for FieldAccessPlanner {
     fn plan_field_access(
         &self,
