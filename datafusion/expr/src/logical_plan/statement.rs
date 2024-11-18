@@ -16,8 +16,7 @@
 // under the License.
 
 use arrow::datatypes::DataType;
-use datafusion_common::tree_node::{Container, Transformed};
-use datafusion_common::{DFSchema, DFSchemaRef, Result};
+use datafusion_common::{DFSchema, DFSchemaRef};
 use std::fmt::{self, Display};
 use std::sync::{Arc, OnceLock};
 
