@@ -217,7 +217,7 @@ impl ScalarUDF {
         self.inner.is_nullable(args, schema)
     }
 
-    /// Returns the schema metadata for this function.
+    /// Returns the field metadata for this function.
     pub fn metadata(
         &self,
         args: &[Expr],
@@ -487,7 +487,7 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
         true
     }
 
-    /// Returns the schema metadata for this function.
+    /// Returns the field metadata for this function.
     fn metadata(
         &self,
         _args: &[Expr],
