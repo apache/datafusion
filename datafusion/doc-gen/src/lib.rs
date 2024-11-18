@@ -15,6 +15,19 @@
 // specific language governing permissions and limitations
 // under the License.
 
+/// Documentation for use by [`ScalarUDFImpl`](crate::ScalarUDFImpl),
+/// [`AggregateUDFImpl`](crate::AggregateUDFImpl) and [`WindowUDFImpl`](crate::WindowUDFImpl) functions
+/// that will be used to generate public documentation.
+///
+/// The name of the udf will be pulled from the [`ScalarUDFImpl::name`](crate::ScalarUDFImpl::name),
+/// [`AggregateUDFImpl::name`](crate::AggregateUDFImpl::name) or [`WindowUDFImpl::name`](crate::WindowUDFImpl::name)
+/// function as appropriate.
+///
+/// All strings in the documentation are required to be
+/// in [markdown format](https://www.markdownguide.org/basic-syntax/).
+///
+/// Currently, documentation only supports a single language
+/// thus all text should be in English.
 #[derive(Debug, Clone)]
 pub struct Documentation {
     /// The section in the documentation where the UDF will be documented
@@ -177,6 +190,9 @@ impl DocumentationBuilder {
         self
     }
 
+    /// Build the documentation from provided components
+    ///
+    /// Panics if `doc_section`, `description` or `syntax_example` is not set
     pub fn build(self) -> Documentation {
         let Self {
             doc_section,

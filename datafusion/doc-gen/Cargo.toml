@@ -16,7 +16,7 @@
 # under the License.
 
 [package]
-name = "datafusion-doc-gen"
+name = "datafusion-doc"
 description = "Documentation module for DataFusion query engine"
 keywords = ["datafusion", "query", "sql"]
 version = { workspace = true }

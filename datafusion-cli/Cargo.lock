@@ -1320,7 +1320,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "datafusion-doc-gen"
+name = "datafusion-doc"
 version = "43.0.0"
 
 [[package]]
@@ -1352,7 +1352,7 @@ dependencies = [
  "arrow-buffer",
  "chrono",
  "datafusion-common",
- "datafusion-doc-gen",
+ "datafusion-doc",
  "datafusion-expr-common",
  "datafusion-functions-aggregate-common",
  "datafusion-functions-window-common",
@@ -1387,7 +1387,7 @@ dependencies = [
  "blake3",
  "chrono",
  "datafusion-common",
- "datafusion-doc-gen",
+ "datafusion-doc",
  "datafusion-execution",
  "datafusion-expr",
  "datafusion-macros",
@@ -1480,7 +1480,7 @@ dependencies = [
 name = "datafusion-macros"
 version = "43.0.0"
 dependencies = [
- "datafusion-doc-gen",
+ "datafusion-doc",
  "proc-macro2",
  "quote",
  "syn",

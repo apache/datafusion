@@ -20,6 +20,83 @@ use proc_macro::TokenStream;
 use quote::quote;
 use syn::{parse_macro_input, DeriveInput, LitStr};
 
+/// The procedural macro is intended to parse rust custom attribute and create a user documentation
+/// from it by constructing a `DocumentBuilder()` automatically. The `Documentation` can be
+/// retrieved from `documentation()` method
+/// declared on `AggregateUDF`, `WindowUDFImpl`, `ScalarUDFImpl` traits.
+///
+/// Example:
+/// #[user_doc(
+///     doc_section(include = "true", label = "Time and Date Functions"),
+///     description = r"Converts a value to a date (`YYYY-MM-DD`)."
+///     sql_example = "```sql\n\
+/// \> select to_date('2023-01-31');\n\
+/// \+-----------------------------+\n\
+/// | to_date(Utf8(\"2023-01-31\")) |\n\
+/// \+-----------------------------+\n\
+/// | 2023-01-31                  |\n\
+/// +-----------------------------+\n\
+/// \> select to_date('2023/01/31', '%Y-%m-%d', '%Y/%m/%d');\n\
+/// +---------------------------------------------------------------+\n\
+/// | to_date(Utf8(\"2023/01/31\"),Utf8(\"%Y-%m-%d\"),Utf8(\"%Y/%m/%d\")) |\n\
+/// +---------------------------------------------------------------+\n\
+/// | 2023-01-31                                                    |\n\
+/// +---------------------------------------------------------------+\n\
+/// ```\n\n\
+/// Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/to_date.rs)",
+///     standard_argument(name = "expression", prefix = "String"),
+///     argument(
+///         name = "format_n",
+///         description = r"Optional [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) strings to use to parse the expression. Formats will be tried in the order
+///   they appear with the first successful one being returned. If none of the formats successfully parse the expression
+///   an error will be returned."
+///    )
+/// )]
+/// #[derive(Debug)]
+/// pub struct ToDateFunc {
+///     signature: Signature,
+/// }
+///
+/// will generate the following code
+///
+/// #[derive(Debug)] pub struct ToDateFunc { signature : Signature, }
+/// use datafusion_doc_gen :: DocSection; use datafusion_doc_gen :: DocumentationBuilder;
+/// static DOCUMENTATION : OnceLock < Documentation > = OnceLock :: new();
+/// impl ToDateFunc
+/// {
+///     fn doc(& self) -> Option < & Documentation >
+///     {
+///         Some(DOCUMENTATION.get_or_init(||
+///         {
+///             Documentation ::
+///             builder().with_doc_section(DocSection
+///             {
+///                 include : true, label : "Time and Date Functions", description
+///                 : None
+///             }).with_description(r"Converts a value to a date (`YYYY-MM-DD`).")
+/// .with_syntax_example("to_date('2017-05-31', '%Y-%m-%d')".to_string()).with_sql_example("```sql\n\
+/// > select to_date('2023-01-31');\n\
+/// +-----------------------------+\n\
+/// | to_date(Utf8(\"2023-01-31\")) |\n\
+/// +-----------------------------+\n\
+/// | 2023-01-31                  |\n\
+/// +-----------------------------+\n\
+/// > select to_date('2023/01/31', '%Y-%m-%d', '%Y/%m/%d');\n\
+/// +---------------------------------------------------------------+\n\
+/// | to_date(Utf8(\"2023/01/31\"),Utf8(\"%Y-%m-%d\"),Utf8(\"%Y/%m/%d\")) |\n\
+/// +---------------------------------------------------------------+\n\
+/// | 2023-01-31                                                    |\n\
+/// +---------------------------------------------------------------+\n\
+/// ```\n\n\
+/// Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/to_date.rs)".to_string())
+/// .with_standard_argument("expression", "String".into())
+/// .with_argument("format_n",
+///             r"Optional [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) strings to use to parse the expression. Formats will be tried in the order
+///   they appear with the first successful one being returned. If none of the formats successfully parse the expression
+///   an error will be returned.").build()
+///         }))
+///     }
+/// }
 #[proc_macro_attribute]
 pub fn user_doc(args: TokenStream, input: TokenStream) -> TokenStream {
     let mut doc_section_include: Option<LitStr> = None;
@@ -122,7 +199,7 @@ pub fn user_doc(args: TokenStream, input: TokenStream) -> TokenStream {
         })
         .collect::<Vec<_>>();
 
-    let expanded = quote! {
+    let generated = quote! {
         #input
 
         use datafusion_doc_gen::DocSection;
@@ -147,8 +224,8 @@ pub fn user_doc(args: TokenStream, input: TokenStream) -> TokenStream {
     };
 
     // Debug the generated code if needed
-    // eprintln!("{}", expanded);
+    // eprintln!("Generated code: {}", generated);
 
     // Return the generated code
-    TokenStream::from(expanded)
+    TokenStream::from(generated)
 }
