@@ -1253,3 +1253,12 @@ fn test_unnest_to_sql() {
         r#"SELECT UNNEST([1, 2, 2, 5, NULL]) AS u1"#,
     );
 }
+
+#[test]
+fn test_join_with_no_conditions() {
+    sql_round_trip(
+        GenericDialect {},
+        "SELECT * FROM j1 JOIN j2",
+        "SELECT * FROM j1 CROSS JOIN j2",
+    );
+}
