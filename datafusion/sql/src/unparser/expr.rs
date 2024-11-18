@@ -1511,7 +1511,7 @@ mod tests {
     use datafusion_common::TableReference;
     use datafusion_expr::expr::WildcardOptions;
     use datafusion_expr::{
-        case, col, cube, exists, grouping_set, interval_datetime_lit,
+        case, cast, col, cube, exists, grouping_set, interval_datetime_lit,
         interval_year_month_lit, lit, not, not_exists, out_ref_col, placeholder, rollup,
         table_scan, try_cast, when, wildcard, ColumnarValue, ScalarUDF, ScalarUDFImpl,
         Signature, Volatility, WindowFrame, WindowFunctionDefinition,
