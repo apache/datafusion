@@ -840,182 +840,182 @@ SELECT EXTRACT("'''year'''" FROM  timestamp '2020-09-08T12:00:00+00:00')
 query error
 SELECT EXTRACT("'year'" FROM  timestamp '2020-09-08T12:00:00+00:00')
 
-query R
+query I
 SELECT date_part('YEAR', CAST('2000-01-01' AS DATE))
 ----
 2000
 
-query R
+query I
 SELECT EXTRACT(year FROM  timestamp '2020-09-08T12:00:00+00:00')
 ----
 2020
 
-query R
+query I
 SELECT EXTRACT("year" FROM  timestamp '2020-09-08T12:00:00+00:00')
 ----
 2020
 
-query R
+query I
 SELECT EXTRACT('year' FROM  timestamp '2020-09-08T12:00:00+00:00')
 ----
 2020
 
-query R
+query I
 SELECT date_part('QUARTER', CAST('2000-01-01' AS DATE))
 ----
 1
 
-query R
+query I
 SELECT EXTRACT(quarter FROM to_timestamp('2020-09-08T12:00:00+00:00'))
 ----
 3
 
-query R
+query I
 SELECT EXTRACT("quarter" FROM to_timestamp('2020-09-08T12:00:00+00:00'))
 ----
 3
 
-query R
+query I
 SELECT EXTRACT('quarter' FROM to_timestamp('2020-09-08T12:00:00+00:00'))
 ----
 3
 
-query R
+query I
 SELECT date_part('MONTH', CAST('2000-01-01' AS DATE))
 ----
 1
 
-query R
+query I
 SELECT EXTRACT(month FROM to_timestamp('2020-09-08T12:00:00+00:00'))
 ----
 9
 
-query R
+query I
 SELECT EXTRACT("month" FROM to_timestamp('2020-09-08T12:00:00+00:00'))
 ----
 9
 
-query R
+query I
 SELECT EXTRACT('month' FROM to_timestamp('2020-09-08T12:00:00+00:00'))
 ----
 9
 
-query R
+query I
 SELECT date_part('WEEK', CAST('2003-01-01' AS DATE))
 ----
 1
 
-query R
+query I
 SELECT EXTRACT(WEEK FROM to_timestamp('2020-09-08T12:00:00+00:00'))
 ----
 37
 
-query R
+query I
 SELECT EXTRACT("WEEK" FROM to_timestamp('2020-09-08T12:00:00+00:00'))
 ----
 37
 
-query R
+query I
 SELECT EXTRACT('WEEK' FROM to_timestamp('2020-09-08T12:00:00+00:00'))
 ----
 37
 
-query R
+query I
 SELECT date_part('DAY', CAST('2000-01-01' AS DATE))
 ----
 1
 
-query R
+query I
 SELECT EXTRACT(day FROM to_timestamp('2020-09-08T12:00:00+00:00'))
 ----
 8
 
-query R
+query I
 SELECT EXTRACT("day" FROM to_timestamp('2020-09-08T12:00:00+00:00'))
 ----
 8
 
-query R
+query I
 SELECT EXTRACT('day' FROM to_timestamp('2020-09-08T12:00:00+00:00'))
 ----
 8
 
-query R
+query I
 SELECT date_part('DOY', CAST('2000-01-01' AS DATE))
 ----
 1
 
-query R
+query I
 SELECT EXTRACT(doy FROM to_timestamp('2020-09-08T12:00:00+00:00'))
 ----
 252
 
-query R
+query I
 SELECT EXTRACT("doy" FROM to_timestamp('2020-09-08T12:00:00+00:00'))
 ----
 252
 
-query R
+query I
 SELECT EXTRACT('doy' FROM to_timestamp('2020-09-08T12:00:00+00:00'))
 ----
 252
 
-query R
+query I
 SELECT date_part('DOW', CAST('2000-01-01' AS DATE))
 ----
 6
 
-query R
+query I
 SELECT EXTRACT(dow FROM to_timestamp('2020-09-08T12:00:00+00:00'))
 ----
 2
 
-query R
+query I
 SELECT EXTRACT("dow" FROM to_timestamp('2020-09-08T12:00:00+00:00'))
 ----
 2
 
-query R
+query I
 SELECT EXTRACT('dow' FROM to_timestamp('2020-09-08T12:00:00+00:00'))
 ----
 2
 
-query R
+query I
 SELECT date_part('HOUR', CAST('2000-01-01' AS DATE))
 ----
 0
 
-query R
+query I
 SELECT EXTRACT(hour FROM to_timestamp('2020-09-08T12:03:03+00:00'))
 ----
 12
 
-query R
+query I
 SELECT EXTRACT("hour" FROM to_timestamp('2020-09-08T12:03:03+00:00'))
 ----
 12
 
-query R
+query I
 SELECT EXTRACT('hour' FROM to_timestamp('2020-09-08T12:03:03+00:00'))
 ----
 12
 
-query R
+query I
 SELECT EXTRACT(minute FROM to_timestamp('2020-09-08T12:12:00+00:00'))
 ----
 12
 
-query R
+query I
 SELECT EXTRACT("minute" FROM to_timestamp('2020-09-08T12:12:00+00:00'))
 ----
 12
 
-query R
+query I
 SELECT EXTRACT('minute' FROM to_timestamp('2020-09-08T12:12:00+00:00'))
 ----
 12
 
-query R
+query I
 SELECT date_part('minute', to_timestamp('2020-09-08T12:12:00+00:00'))
 ----
 12
@@ -1124,22 +1124,22 @@ SELECT date_part('nanosecond', '2020-09-08T12:00:12.12345678+00:00')
 # test_date_part_time
 
 ## time32 seconds
-query R
+query I
 SELECT date_part('hour', arrow_cast('23:32:50'::time, 'Time32(Second)'))
 ----
 23
 
-query R
+query I
 SELECT extract(hour from arrow_cast('23:32:50'::time, 'Time32(Second)'))
 ----
 23
 
-query R
+query I
 SELECT date_part('minute', arrow_cast('23:32:50'::time, 'Time32(Second)'))
 ----
 32
 
-query R
+query I
 SELECT extract(minute from arrow_cast('23:32:50'::time, 'Time32(Second)'))
 ----
 32
@@ -1195,22 +1195,22 @@ SELECT extract(epoch from arrow_cast('23:32:50'::time, 'Time32(Second)'))
 84770
 
 ## time32 milliseconds
-query R
+query I
 SELECT date_part('hour', arrow_cast('23:32:50.123'::time, 'Time32(Millisecond)'))
 ----
 23
 
-query R
+query I
 SELECT extract(hour from arrow_cast('23:32:50.123'::time, 'Time32(Millisecond)'))
 ----
 23
 
-query R
+query I
 SELECT date_part('minute', arrow_cast('23:32:50.123'::time, 'Time32(Millisecond)'))
 ----
 32
 
-query R
+query I
 SELECT extract(minute from arrow_cast('23:32:50.123'::time, 'Time32(Millisecond)'))
 ----
 32
@@ -1266,22 +1266,22 @@ SELECT extract(epoch from arrow_cast('23:32:50.123'::time, 'Time32(Millisecond)'
 84770.123
 
 ## time64 microseconds
-query R
+query I
 SELECT date_part('hour', arrow_cast('23:32:50.123456'::time, 'Time64(Microsecond)'))
 ----
 23
 
-query R
+query I
 SELECT extract(hour from arrow_cast('23:32:50.123456'::time, 'Time64(Microsecond)'))
 ----
 23
 
-query R
+query I
 SELECT date_part('minute', arrow_cast('23:32:50.123456'::time, 'Time64(Microsecond)'))
 ----
 32
 
-query R
+query I
 SELECT extract(minute from arrow_cast('23:32:50.123456'::time, 'Time64(Microsecond)'))
 ----
 32
@@ -1337,22 +1337,22 @@ SELECT extract(epoch from arrow_cast('23:32:50.123456'::time, 'Time64(Microsecon
 84770.123456
 
 ## time64 nanoseconds
-query R
+query I
 SELECT date_part('hour', arrow_cast('23:32:50.123456789'::time, 'Time64(Nanosecond)'))
 ----
 23
 
-query R
+query I
 SELECT extract(hour from arrow_cast('23:32:50.123456789'::time, 'Time64(Nanosecond)'))
 ----
 23
 
-query R
+query I
 SELECT date_part('minute', arrow_cast('23:32:50.123456789'::time, 'Time64(Nanosecond)'))
 ----
 32
 
-query R
+query I
 SELECT extract(minute from arrow_cast('23:32:50.123456789'::time, 'Time64(Nanosecond)'))
 ----
 32
@@ -1487,32 +1487,32 @@ SELECT extract(epoch from arrow_cast('1969-12-31', 'Date64'))
 
 # test_extract_interval
 
-query R
+query I
 SELECT extract(year from arrow_cast('10 years', 'Interval(YearMonth)'))
 ----
 10
 
-query R
+query I
 SELECT extract(month from arrow_cast('10 years', 'Interval(YearMonth)'))
 ----
 0
 
-query R
+query I
 SELECT extract(year from arrow_cast('10 months', 'Interval(YearMonth)'))
 ----
 0
 
-query R
+query I
 SELECT extract(month from arrow_cast('10 months', 'Interval(YearMonth)'))
 ----
 10
 
-query R
+query I
 SELECT extract(year from arrow_cast('20 months', 'Interval(YearMonth)'))
 ----
 1
 
-query R
+query I
 SELECT extract(month from arrow_cast('20 months', 'Interval(YearMonth)'))
 ----
 8
@@ -1523,17 +1523,17 @@ SELECT extract(year from arrow_cast('10 days', 'Interval(DayTime)'))
 query error DataFusion error: Arrow error: Compute error: Month does not support: Interval\(DayTime\)
 SELECT extract(month from arrow_cast('10 days', 'Interval(DayTime)'))
 
-query R
+query I
 SELECT extract(day from arrow_cast('10 days', 'Interval(DayTime)'))
 ----
 10
 
-query R
+query I
 SELECT extract(day from arrow_cast('14400 minutes', 'Interval(DayTime)'))
 ----
 0
 
-query R
+query I
 SELECT extract(minute from arrow_cast('14400 minutes', 'Interval(DayTime)'))
 ----
 14400
@@ -1597,7 +1597,7 @@ create table t (id int, i interval) as values
   (4, interval '8 months'),
   (5, NULL);
 
-query IRR rowsort
+query IRI
 select
   id,
   extract(second from i),
@@ -1652,7 +1652,7 @@ SELECT extract(millisecond from arrow_cast(2002, 'Duration(Millisecond)'))
 ----
 2002
 
-query R
+query I
 SELECT extract(day from arrow_cast(864000, 'Duration(Second)'))
 ----
 10
@@ -1663,7 +1663,7 @@ SELECT extract(month from arrow_cast(864000, 'Duration(Second)'))
 query error DataFusion error: Arrow error: Compute error: Year does not support: Duration\(Second\)
 SELECT extract(year from arrow_cast(864000, 'Duration(Second)'))
 
-query R
+query I
 SELECT extract(day from arrow_cast(NULL, 'Duration(Second)'))
 ----
 NULL
@@ -2230,7 +2230,7 @@ SELECT digest('','blake3');
 ----
 af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262
 
-# vverify utf8view 
+# vverify utf8view
 query ?
 SELECT sha224(arrow_cast('tom', 'Utf8View'));
 ----

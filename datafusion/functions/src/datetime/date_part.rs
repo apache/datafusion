@@ -21,10 +21,9 @@ use std::sync::{Arc, OnceLock};
 
 use arrow::array::{Array, ArrayRef, Float64Array};
 use arrow::compute::kernels::cast_utils::IntervalUnit;
-use arrow::compute::{binary, cast, date_part, DatePart};
+use arrow::compute::{binary, date_part, DatePart};
 use arrow::datatypes::DataType::{
-    Date32, Date64, Duration, Float64, Interval, Time32, Time64, Timestamp, Utf8,
-    Utf8View,
+    Date32, Date64, Duration, Interval, Time32, Time64, Timestamp, Utf8, Utf8View,
 };
 use arrow::datatypes::IntervalUnit::{DayTime, MonthDayNano, YearMonth};
 use arrow::datatypes::TimeUnit::{Microsecond, Millisecond, Nanosecond, Second};
@@ -36,11 +35,12 @@ use datafusion_common::cast::{
     as_timestamp_microsecond_array, as_timestamp_millisecond_array,
     as_timestamp_nanosecond_array, as_timestamp_second_array,
 };
-use datafusion_common::{exec_err, Result, ScalarValue};
+use datafusion_common::{exec_err, internal_err, ExprSchema, Result, ScalarValue};
 use datafusion_expr::scalar_doc_sections::DOC_SECTION_DATETIME;
 use datafusion_expr::TypeSignature::Exact;
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility, TIMEZONE_WILDCARD,
+    ColumnarValue, Documentation, Expr, ScalarUDFImpl, Signature, Volatility,
+    TIMEZONE_WILDCARD,
 };
 
 #[derive(Debug)]
@@ -148,7 +148,21 @@ impl ScalarUDFImpl for DatePartFunc {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(Float64)
+        internal_err!("return_type_from_exprs shoud be called instead")
+    }
+
+    fn return_type_from_exprs(
+        &self,
+        args: &[Expr],
+        _schema: &dyn ExprSchema,
+        _arg_types: &[DataType],
+    ) -> Result<DataType> {
+        match &args[0] {
+            Expr::Literal(ScalarValue::Utf8(Some(part))) if is_integar_part(part) => {
+                Ok(DataType::Int32)
+            }
+            _ => Ok(DataType::Float64),
+        }
     }
 
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
@@ -174,22 +188,18 @@ impl ScalarUDFImpl for DatePartFunc {
             ColumnarValue::Scalar(scalar) => scalar.to_array()?,
         };
 
-        // to remove quotes at most 2 characters
-        let part_trim = part.trim_matches(|c| c == '\'' || c == '\"');
-        if ![2, 0].contains(&(part.len() - part_trim.len())) {
-            return exec_err!("Date part '{part}' not supported");
-        }
+        let part_trim = part_normalization(part);
 
         // using IntervalUnit here means we hand off all the work of supporting plurals (like "seconds")
         // and synonyms ( like "ms,msec,msecond,millisecond") to Arrow
         let arr = if let Ok(interval_unit) = IntervalUnit::from_str(part_trim) {
             match interval_unit {
-                IntervalUnit::Year => date_part_f64(array.as_ref(), DatePart::Year)?,
-                IntervalUnit::Month => date_part_f64(array.as_ref(), DatePart::Month)?,
-                IntervalUnit::Week => date_part_f64(array.as_ref(), DatePart::Week)?,
-                IntervalUnit::Day => date_part_f64(array.as_ref(), DatePart::Day)?,
-                IntervalUnit::Hour => date_part_f64(array.as_ref(), DatePart::Hour)?,
-                IntervalUnit::Minute => date_part_f64(array.as_ref(), DatePart::Minute)?,
+                IntervalUnit::Year => date_part(array.as_ref(), DatePart::Year)?,
+                IntervalUnit::Month => date_part(array.as_ref(), DatePart::Month)?,
+                IntervalUnit::Week => date_part(array.as_ref(), DatePart::Week)?,
+                IntervalUnit::Day => date_part(array.as_ref(), DatePart::Day)?,
+                IntervalUnit::Hour => date_part(array.as_ref(), DatePart::Hour)?,
+                IntervalUnit::Minute => date_part(array.as_ref(), DatePart::Minute)?,
                 IntervalUnit::Second => seconds(array.as_ref(), Second)?,
                 IntervalUnit::Millisecond => seconds(array.as_ref(), Millisecond)?,
                 IntervalUnit::Microsecond => seconds(array.as_ref(), Microsecond)?,
@@ -200,9 +210,9 @@ impl ScalarUDFImpl for DatePartFunc {
         } else {
             // special cases that can be extracted (in postgres) but are not interval units
             match part_trim.to_lowercase().as_str() {
-                "qtr" | "quarter" => date_part_f64(array.as_ref(), DatePart::Quarter)?,
-                "doy" => date_part_f64(array.as_ref(), DatePart::DayOfYear)?,
-                "dow" => date_part_f64(array.as_ref(), DatePart::DayOfWeekSunday0)?,
+                "qtr" | "quarter" => date_part(array.as_ref(), DatePart::Quarter)?,
+                "doy" => date_part(array.as_ref(), DatePart::DayOfYear)?,
+                "dow" => date_part(array.as_ref(), DatePart::DayOfWeekSunday0)?,
                 "epoch" => epoch(array.as_ref())?,
                 _ => return exec_err!("Date part '{part}' not supported"),
             }
@@ -221,6 +231,30 @@ impl ScalarUDFImpl for DatePartFunc {
     fn documentation(&self) -> Option<&Documentation> {
         Some(get_date_part_doc())
     }
+}
+
+fn is_integar_part(part: &str) -> bool {
+    let part = part_normalization(part);
+    matches!(
+        part.to_lowercase().as_str(),
+        "year"
+            | "month"
+            | "week"
+            | "day"
+            | "hour"
+            | "minute"
+            | "qtr"
+            | "quarter"
+            | "doy"
+            | "dow"
+    )
+}
+
+// Try to remove quote if exist, if the quote is invalid, return original string and let the downstream function handle the error
+fn part_normalization(part: &str) -> &str {
+    part.strip_prefix(|c| c == '\'' || c == '\"')
+        .and_then(|s| s.strip_suffix(|c| c == '\'' || c == '\"'))
+        .unwrap_or(part)
 }
 
 static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
@@ -259,11 +293,6 @@ fn get_date_part_doc() -> &'static Documentation {
             .build()
             .unwrap()
     })
-}
-
-/// Invoke [`date_part`] and cast the result to Float64
-fn date_part_f64(array: &dyn Array, part: DatePart) -> Result<ArrayRef> {
-    Ok(cast(date_part(array, part)?.as_ref(), &Float64)?)
 }
 
 /// Invoke [`date_part`] on an `array` (e.g. Timestamp) and convert the

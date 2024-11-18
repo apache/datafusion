@@ -4294,7 +4294,7 @@ physical_plan
 08)--------------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
 09)----------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/timestamps.csv]]}, projection=[ts], output_ordering=[ts@0 DESC], has_header=false
 
-query R
+query I
 SELECT extract(month from ts) as months
   FROM csv_with_timestamps
   GROUP BY extract(month from ts)
@@ -4344,7 +4344,7 @@ create table t1(state string, city string, min_temp float, area int, time timest
     ('MA', 'Boston', 70.4, 1, 50),
     ('MA', 'Bedford', 71.59, 2, 150);
 
-query RI
+query II
 select date_part('year', time) as bla, count(distinct state) as count from t1 group by bla;
 ----
 1970 1
