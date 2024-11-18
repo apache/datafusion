@@ -264,7 +264,6 @@ where
 ///             .with_syntax_example("smooth_it(2)")
 ///             .with_argument("arg1", "The int32 number to smooth by")
 ///             .build()
-///             .unwrap()
 ///     })
 /// }
 ///

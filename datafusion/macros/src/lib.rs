@@ -89,7 +89,7 @@ pub fn user_doc(args: TokenStream, input: TokenStream) -> TokenStream {
 
             m
         } else {
-            Err(meta.error("unsupported property"))
+            Err(meta.error(format!("Unsupported property {:?}", meta.path.get_ident())))
         }
     });
 

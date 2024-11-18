@@ -59,6 +59,26 @@ pub struct DocSection {
 }
 
 /// A builder to be used for building [`Documentation`]'s.
+///
+/// Example:
+///
+/// ```rust
+///
+/// # fn main() {
+///     use datafusion_doc_gen::{DocSection, Documentation};
+///     let doc_section = DocSection {
+///         include: true,
+///         label: "Display Label",
+///         description: None,
+///     };
+///
+///     let documentation = Documentation::builder()
+///           .with_doc_section(doc_section)
+///           .with_description("Add one to an int32")
+///           .with_syntax_example("add_one(2)")
+///           .with_argument("arg_1", "The int32 number to add one to")
+///           .build();
+/// # }
 pub struct DocumentationBuilder {
     pub doc_section: Option<DocSection>,
     pub description: Option<String>,

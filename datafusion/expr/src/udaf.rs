@@ -339,7 +339,6 @@ where
 ///             .with_syntax_example("geo_mean(2.0)")
 ///             .with_argument("arg1", "The Float64 number for the geometric mean")
 ///             .build()
-///             .unwrap()
 ///     })
 /// }
 ///    
