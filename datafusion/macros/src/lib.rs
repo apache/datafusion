@@ -104,17 +104,23 @@ pub fn user_doc(args: TokenStream, input: TokenStream) -> TokenStream {
         .map(|desc| quote! { Some(#desc)})
         .unwrap_or(quote! { None });
 
-    let udf_args = udf_args.iter().map(|(name, desc)| {
-        quote! {
-            .with_argument(#name, #desc)
-        }
-    }).collect::<Vec<_>>();
+    let udf_args = udf_args
+        .iter()
+        .map(|(name, desc)| {
+            quote! {
+                .with_argument(#name, #desc)
+            }
+        })
+        .collect::<Vec<_>>();
 
-    let standard_args = standard_args.iter().map(|(name, desc)| {
-        quote! {
-            .with_standard_argument(#name, #desc.into())
-        }
-    }).collect::<Vec<_>>();
+    let standard_args = standard_args
+        .iter()
+        .map(|(name, desc)| {
+            quote! {
+                .with_standard_argument(#name, #desc.into())
+            }
+        })
+        .collect::<Vec<_>>();
 
     let expanded = quote! {
         #input

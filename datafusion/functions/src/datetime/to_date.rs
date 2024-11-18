@@ -455,15 +455,9 @@ mod tests {
 
         if let Ok(ColumnarValue::Scalar(ScalarValue::Date32(_))) = to_date_result {
             panic!(
-                "Conversion of {} succeded, but should have failed, ",
+                "Conversion of {} succeeded, but should have failed, ",
                 date_str
             );
         }
-    }
-
-    #[test]
-    fn test_doc() {
-        let dt = ToDateFunc::new();
-        println!("{:?}", dt.documentation_test());
     }
 }
