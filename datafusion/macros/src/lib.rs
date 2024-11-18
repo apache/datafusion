@@ -35,7 +35,6 @@ pub fn user_doc(args: TokenStream, input: TokenStream) -> TokenStream {
     let parser = syn::meta::parser(|meta| {
         if meta.path.is_ident("doc_section") {
             meta.parse_nested_meta(|meta| {
-                //dbg!(meta.path);
                 if meta.path.is_ident("include") {
                     doc_section_include = meta.value()?.parse()?;
                     return Ok(());
@@ -59,20 +58,23 @@ pub fn user_doc(args: TokenStream, input: TokenStream) -> TokenStream {
             Ok(())
         } else if meta.path.is_ident("standard_argument") {
             let mut standard_arg: (Option<LitStr>, Option<LitStr>) = (None, None);
-            meta.parse_nested_meta(|meta| {
+            let m = meta.parse_nested_meta(|meta| {
                 if meta.path.is_ident("name") {
                     standard_arg.0 = meta.value()?.parse()?;
                     return Ok(());
-                } else if meta.path.is_ident("expression_type") {
+                } else if meta.path.is_ident("prefix") {
                     standard_arg.1 = meta.value()?.parse()?;
                     return Ok(());
                 }
-                standard_args.push(standard_arg.clone());
                 Ok(())
-            })
+            });
+
+            standard_args.push(standard_arg.clone());
+
+            m
         } else if meta.path.is_ident("argument") {
             let mut arg: (Option<LitStr>, Option<LitStr>) = (None, None);
-            meta.parse_nested_meta(|meta| {
+            let m = meta.parse_nested_meta(|meta| {
                 if meta.path.is_ident("name") {
                     arg.0 = meta.value()?.parse()?;
                     return Ok(());
@@ -80,24 +82,39 @@ pub fn user_doc(args: TokenStream, input: TokenStream) -> TokenStream {
                     arg.1 = meta.value()?.parse()?;
                     return Ok(());
                 }
-                udf_args.push(arg.clone());
                 Ok(())
-            })
+            });
+
+            udf_args.push(arg.clone());
+
+            m
         } else {
             Err(meta.error("unsupported property"))
         }
     });
+
     parse_macro_input!(args with parser);
 
     // Parse the input struct
     let input = parse_macro_input!(input as DeriveInput);
     let name = input.clone().ident;
 
-    eprintln!("doc_section_include=cc{doc_section_include:?}cc");
     let doc_section_include: bool = doc_section_include.unwrap().value().parse().unwrap();
     let doc_section_description = doc_section_desc
         .map(|desc| quote! { Some(#desc)})
         .unwrap_or(quote! { None });
+
+    let udf_args = udf_args.iter().map(|(name, desc)| {
+        quote! {
+            .with_argument(#name, #desc)
+        }
+    }).collect::<Vec<_>>();
+
+    let standard_args = standard_args.iter().map(|(name, desc)| {
+        quote! {
+            .with_standard_argument(#name, #desc.into())
+        }
+    }).collect::<Vec<_>>();
 
     let expanded = quote! {
         #input
@@ -108,19 +125,23 @@ pub fn user_doc(args: TokenStream, input: TokenStream) -> TokenStream {
         static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
         impl #name {
-                fn documentation_test(&self) -> Option<&Documentation> {
+                fn doc(&self) -> Option<&Documentation> {
                     Some(DOCUMENTATION.get_or_init(|| {
                         Documentation::builder()
                         .with_doc_section(DocSection { include: #doc_section_include, label: #doc_section_lbl, description: #doc_section_description })
                         .with_description(#description.to_string())
                         .with_syntax_example(#syntax_example.to_string())
+                        .with_sql_example(#sql_example.to_string())
+                        #(#standard_args)*
+                        #(#udf_args)*
                         .build()
                     }))
             }
         }
     };
 
-    eprintln!("{}", expanded);
+    // Debug the generated code if needed
+    // eprintln!("{}", expanded);
 
     // Return the generated code
     TokenStream::from(expanded)
