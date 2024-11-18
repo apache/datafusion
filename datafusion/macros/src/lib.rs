@@ -31,19 +31,11 @@ use syn::{parse_macro_input, DeriveInput, LitStr};
 ///     description = r"Converts a value to a date (`YYYY-MM-DD`)."
 ///     sql_example = "```sql\n\
 /// \> select to_date('2023-01-31');\n\
-/// \+-----------------------------+\n\
-/// | to_date(Utf8(\"2023-01-31\")) |\n\
-/// \+-----------------------------+\n\
-/// | 2023-01-31                  |\n\
 /// +-----------------------------+\n\
-/// \> select to_date('2023/01/31', '%Y-%m-%d', '%Y/%m/%d');\n\
-/// +---------------------------------------------------------------+\n\
-/// | to_date(Utf8(\"2023/01/31\"),Utf8(\"%Y-%m-%d\"),Utf8(\"%Y/%m/%d\")) |\n\
-/// +---------------------------------------------------------------+\n\
-/// | 2023-01-31                                                    |\n\
-/// +---------------------------------------------------------------+\n\
-/// ```\n\n\
-/// Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/to_date.rs)",
+/// | to_date(Utf8(\"2023-01-31\")) |\n\
+/// +-----------------------------+\n\
+/// | 2023-01-31                  |\n\
+/// +-----------------------------+\n\"),
 ///     standard_argument(name = "expression", prefix = "String"),
 ///     argument(
 ///         name = "format_n",
@@ -75,20 +67,12 @@ use syn::{parse_macro_input, DeriveInput, LitStr};
 ///                 : None
 ///             }).with_description(r"Converts a value to a date (`YYYY-MM-DD`).")
 /// .with_syntax_example("to_date('2017-05-31', '%Y-%m-%d')".to_string()).with_sql_example("```sql\n\
-/// > select to_date('2023-01-31');\n\
+/// \> select to_date('2023-01-31');\n\
 /// +-----------------------------+\n\
 /// | to_date(Utf8(\"2023-01-31\")) |\n\
 /// +-----------------------------+\n\
 /// | 2023-01-31                  |\n\
-/// +-----------------------------+\n\
-/// > select to_date('2023/01/31', '%Y-%m-%d', '%Y/%m/%d');\n\
-/// +---------------------------------------------------------------+\n\
-/// | to_date(Utf8(\"2023/01/31\"),Utf8(\"%Y-%m-%d\"),Utf8(\"%Y/%m/%d\")) |\n\
-/// +---------------------------------------------------------------+\n\
-/// | 2023-01-31                                                    |\n\
-/// +---------------------------------------------------------------+\n\
-/// ```\n\n\
-/// Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/to_date.rs)".to_string())
+/// +-----------------------------+\n\)
 /// .with_standard_argument("expression", "String".into())
 /// .with_argument("format_n",
 ///             r"Optional [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) strings to use to parse the expression. Formats will be tried in the order
