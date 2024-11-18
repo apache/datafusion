@@ -998,7 +998,20 @@ impl OptimizerRule for PushDownFilter {
                         filter_predicates.len());
                 }
 
-                let zip = filter_predicates.into_iter().zip(results);
+                let zip =
+                    filter_predicates
+                        .into_iter()
+                        .zip(results)
+                        .map(|(&ref expr, res)| {
+                            let filter_pushdown_type = if expr.is_volatile() {
+                                // Do not push down predicate with volatile functions to scan
+                                TableProviderFilterPushDown::Unsupported
+                            } else {
+                                res
+                            };
+                            (expr, filter_pushdown_type)
+                        });
+
 
                 let new_scan_filters = zip
                     .clone()
@@ -3385,4 +3398,29 @@ Projection: a, b
         \n          TableScan: test2";
         assert_optimized_plan_eq(plan, expected)
     }
+
+    #[test]
+    fn test_push_down_volatile_table_scan() -> Result<()> {
+        // SELECT test.a, test.b FROM test as t WHERE TestScalarUDF() > 0.1;
+        let table_scan = test_table_scan()?;
+        let fun = ScalarUDF::new_from_impl(TestScalarUDF {
+            signature: Signature::exact(vec![], Volatility::Volatile),
+        });
+        let expr = Expr::ScalarFunction(ScalarFunction::new_udf(Arc::new(fun), vec![]));
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .project(vec![col("a"), col("b")])?
+            .filter(expr.gt(lit(0.1)))?
+            .build()?;
+
+        let expected_before = "Filter: TestScalarUDF() > Float64(0.1)\
+        \n  Projection: test.a, test.b\
+        \n    TableScan: test";
+        assert_eq!(format!("{plan}"), expected_before);
+
+        let expected_after = "Projection: test.a, test.b\
+        \n  Filter: TestScalarUDF() > Float64(0.1)\
+        \n    TableScan: test";
+        assert_optimized_plan_eq(plan, expected_after)
+    }
+
 }
