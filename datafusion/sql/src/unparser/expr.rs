@@ -2518,13 +2518,7 @@ mod tests {
 
         assert_eq!(actual, expected);
 
-        let expr = Expr::Column(Column {
-            name: "a".to_string(),
-            relation: None,
-        });
-        let expr = expr.eq(Expr::Literal(ScalarValue::Utf8View(Some(
-            "hello".to_string(),
-        ))));
+        let expr = col("a").eq(lit(ScalarValue::Utf8View(Some("hello".to_string()))));
         let ast = unparser.expr_to_sql(&expr)?;
 
         let actual = format!("{}", ast);
