@@ -2510,10 +2510,7 @@ mod tests {
 
         assert_eq!(ast_dtype, ast::DataType::Char(None));
 
-        let expr = Expr::Cast(Cast {
-            expr: Box::new(col("a")),
-            data_type: DataType::Utf8View,
-        });
+        let expr = cast(col("a"), DataType::Utf8View);
         let ast = unparser.expr_to_sql(&expr)?;
 
         let actual = format!("{}", ast);
