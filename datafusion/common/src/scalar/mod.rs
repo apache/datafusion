@@ -2090,7 +2090,7 @@ impl ScalarValue {
         } else {
             Self::iter_to_array(values.iter().cloned()).unwrap()
         };
-        Arc::new(array_into_list_array(values, nullable))
+        Arc::new(array_into_list_array(values, nullable, None))
     }
 
     /// Same as [`ScalarValue::new_list`] but with nullable set to true.
@@ -2146,7 +2146,7 @@ impl ScalarValue {
         } else {
             Self::iter_to_array(values).unwrap()
         };
-        Arc::new(array_into_list_array(values, nullable))
+        Arc::new(array_into_list_array(values, nullable, None))
     }
 
     /// Converts `Vec<ScalarValue>` where each element has type corresponding to
@@ -2183,7 +2183,7 @@ impl ScalarValue {
         } else {
             Self::iter_to_array(values.iter().cloned()).unwrap()
         };
-        Arc::new(array_into_large_list_array(values))
+        Arc::new(array_into_large_list_array(values, None))
     }
 
     /// Converts a scalar value into an array of `size` rows.
@@ -2663,27 +2663,36 @@ impl ScalarValue {
                 let list_array = array.as_list::<i32>();
                 let nested_array = list_array.value(index);
                 // Produces a single element `ListArray` with the value at `index`.
-                let arr =
-                    Arc::new(array_into_list_array(nested_array, field.is_nullable()));
+                let arr = Arc::new(array_into_list_array(
+                    nested_array,
+                    field.is_nullable(),
+                    Some(field.name()),
+                ));
 
                 ScalarValue::List(arr)
             }
-            DataType::LargeList(_) => {
+            DataType::LargeList(field) => {
                 let list_array = as_large_list_array(array);
                 let nested_array = list_array.value(index);
                 // Produces a single element `LargeListArray` with the value at `index`.
-                let arr = Arc::new(array_into_large_list_array(nested_array));
+                let arr = Arc::new(array_into_large_list_array(
+                    nested_array,
+                    Some(field.name()),
+                ));
 
                 ScalarValue::LargeList(arr)
             }
             // TODO: There is no test for FixedSizeList now, add it later
-            DataType::FixedSizeList(_, _) => {
+            DataType::FixedSizeList(field, _) => {
                 let list_array = as_fixed_size_list_array(array)?;
                 let nested_array = list_array.value(index);
                 // Produces a single element `ListArray` with the value at `index`.
                 let list_size = nested_array.len();
-                let arr =
-                    Arc::new(array_into_fixed_size_list_array(nested_array, list_size));
+                let arr = Arc::new(array_into_fixed_size_list_array(
+                    nested_array,
+                    list_size,
+                    Some(field.name()),
+                ));
 
                 ScalarValue::FixedSizeList(arr)
             }
@@ -4060,11 +4069,10 @@ mod tests {
 
         let result = ScalarValue::new_list_nullable(scalars.as_slice(), &DataType::Utf8);
 
-        let expected = array_into_list_array_nullable(Arc::new(StringArray::from(vec![
-            "rust",
-            "arrow",
-            "data-fusion",
-        ])));
+        let expected = array_into_list_array_nullable(
+            Arc::new(StringArray::from(vec!["rust", "arrow", "data-fusion"])),
+            None,
+        );
         assert_eq!(*result, expected);
     }
 
@@ -4272,12 +4280,14 @@ mod tests {
 
     #[test]
     fn iter_to_array_string_test() {
-        let arr1 = array_into_list_array_nullable(Arc::new(StringArray::from(vec![
-            "foo", "bar", "baz",
-        ])));
-        let arr2 = array_into_list_array_nullable(Arc::new(StringArray::from(vec![
-            "rust", "world",
-        ])));
+        let arr1 = array_into_list_array_nullable(
+            Arc::new(StringArray::from(vec!["foo", "bar", "baz"])),
+            None,
+        );
+        let arr2 = array_into_list_array_nullable(
+            Arc::new(StringArray::from(vec!["rust", "world"])),
+            None,
+        );
 
         let scalars = vec![
             ScalarValue::List(Arc::new(arr1)),
@@ -5734,13 +5744,16 @@ mod tests {
         // Define list-of-structs scalars
 
         let nl0_array = ScalarValue::iter_to_array(vec![s0, s1.clone()]).unwrap();
-        let nl0 = ScalarValue::List(Arc::new(array_into_list_array_nullable(nl0_array)));
+        let nl0 =
+            ScalarValue::List(Arc::new(array_into_list_array_nullable(nl0_array, None)));
 
         let nl1_array = ScalarValue::iter_to_array(vec![s2]).unwrap();
-        let nl1 = ScalarValue::List(Arc::new(array_into_list_array_nullable(nl1_array)));
+        let nl1 =
+            ScalarValue::List(Arc::new(array_into_list_array_nullable(nl1_array, None)));
 
         let nl2_array = ScalarValue::iter_to_array(vec![s1]).unwrap();
-        let nl2 = ScalarValue::List(Arc::new(array_into_list_array_nullable(nl2_array)));
+        let nl2 =
+            ScalarValue::List(Arc::new(array_into_list_array_nullable(nl2_array, None)));
 
         // iter_to_array for list-of-struct
         let array = ScalarValue::iter_to_array(vec![nl0, nl1, nl2]).unwrap();

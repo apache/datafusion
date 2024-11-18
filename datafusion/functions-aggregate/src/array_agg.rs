@@ -240,7 +240,7 @@ impl Accumulator for ArrayAggAccumulator {
         }
 
         let concated_array = arrow::compute::concat(&element_arrays)?;
-        let list_array = array_into_list_array_nullable(concated_array);
+        let list_array = array_into_list_array_nullable(concated_array, None);
 
         Ok(ScalarValue::List(Arc::new(list_array)))
     }
@@ -534,6 +534,7 @@ impl OrderSensitiveArrayAggAccumulator {
             StructArray::try_new(struct_field, column_wise_ordering_values, None)?;
         Ok(ScalarValue::List(Arc::new(array_into_list_array_nullable(
             Arc::new(ordering_array),
+            None,
         ))))
     }
 }

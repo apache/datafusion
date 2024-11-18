@@ -290,10 +290,12 @@ mod tests {
             ]));
 
         let array2d_1 = Arc::new(array_into_list_array_nullable(
-            Arc::clone(&array1d_1) as ArrayRef
+            Arc::clone(&array1d_1) as ArrayRef,
+            None,
         )) as ArrayRef;
         let array2d_2 = Arc::new(array_into_list_array_nullable(
-            Arc::clone(&array1d_2) as ArrayRef
+            Arc::clone(&array1d_2) as ArrayRef,
+            None,
         )) as ArrayRef;
 
         let res = align_array_dimensions::<i32>(vec![
@@ -310,8 +312,9 @@ mod tests {
             expected_dim
         );
 
-        let array3d_1 = Arc::new(array_into_list_array_nullable(array2d_1)) as ArrayRef;
-        let array3d_2 = array_into_list_array_nullable(array2d_2.to_owned());
+        let array3d_1 =
+            Arc::new(array_into_list_array_nullable(array2d_1, None)) as ArrayRef;
+        let array3d_2 = array_into_list_array_nullable(array2d_2.to_owned(), None);
         let res =
             align_array_dimensions::<i32>(vec![array1d_1, Arc::new(array3d_2)]).unwrap();
 

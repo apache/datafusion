@@ -427,6 +427,7 @@ impl NthValueAccumulator {
 
         Ok(ScalarValue::List(Arc::new(array_into_list_array_nullable(
             Arc::new(ordering_array),
+            None,
         ))))
     }
 
