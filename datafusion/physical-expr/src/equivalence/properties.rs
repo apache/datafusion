@@ -3774,8 +3774,11 @@ mod tests {
         assert_eq!(result.oeq_class().len(), 1);
         assert_eq!(result.oeq_class().orderings[0].len(), 3);
         assert!(result.oeq_class().orderings[0][0].expr.eq(&col_a));
+        assert!(result.oeq_class().orderings[0][0].options.eq(&asc));
         assert!(result.oeq_class().orderings[0][1].expr.eq(&col_b));
+        assert!(result.oeq_class().orderings[0][1].options.eq(&desc));
         assert!(result.oeq_class().orderings[0][2].expr.eq(&col_c));
+        assert!(result.oeq_class().orderings[0][2].options.eq(&asc));
 
         Ok(())
     }
@@ -3820,7 +3823,9 @@ mod tests {
         // Verify orderings
         assert_eq!(result.oeq_class().orderings[0].len(), 2);
         assert!(result.oeq_class().orderings[0][0].expr.eq(&col_b));
+        assert!(result.oeq_class().orderings[0][0].options.eq(&asc));
         assert!(result.oeq_class().orderings[0][1].expr.eq(&col_c));
+        assert!(result.oeq_class().orderings[0][1].options.eq(&asc));
 
         Ok(())
     }
