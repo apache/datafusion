@@ -46,7 +46,6 @@ use object_store::{GetOptions, GetRange, GetResultPayload, ObjectStore};
 
 /// Execution plan for scanning Arrow data source
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct ArrowExec {
     base_config: FileScanConfig,
     projected_statistics: Statistics,
