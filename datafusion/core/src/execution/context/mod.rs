@@ -41,9 +41,9 @@ use crate::{
     logical_expr::ScalarUDF,
     logical_expr::{
         CreateCatalog, CreateCatalogSchema, CreateExternalTable, CreateFunction,
-        CreateMemoryTable, CreateView, DropCatalogSchema, DropFunction, DropTable,
-        DropView, Execute, LogicalPlan, LogicalPlanBuilder, Prepare, SetVariable,
-        TableType, UNNAMED_TABLE,
+        CreateMemoryTable, CreateMemoryTableFields, CreateView, CreateViewFields,
+        DropCatalogSchema, DropFunction, DropTable, DropView, Execute, LogicalPlan,
+        LogicalPlanBuilder, Prepare, SetVariable, TableType, UNNAMED_TABLE,
     },
     physical_expr::PhysicalExpr,
     physical_plan::ExecutionPlan,
@@ -792,7 +792,7 @@ impl SessionContext {
     }
 
     async fn create_memory_table(&self, cmd: CreateMemoryTable) -> Result<DataFrame> {
-        let CreateMemoryTable {
+        let CreateMemoryTableFields {
             name,
             input,
             if_not_exists,
@@ -800,7 +800,7 @@ impl SessionContext {
             constraints,
             column_defaults,
             temporary,
-        } = cmd;
+        } = cmd.into_fields();
 
         let input = Arc::unwrap_or_clone(input);
         let input = self.state().optimize(&input)?;
@@ -852,13 +852,13 @@ impl SessionContext {
     }
 
     async fn create_view(&self, cmd: CreateView) -> Result<DataFrame> {
-        let CreateView {
+        let CreateViewFields {
             name,
             input,
             or_replace,
             definition,
             temporary,
-        } = cmd;
+        } = cmd.into_fields();
 
         let view = self.table(name.clone()).await;
 

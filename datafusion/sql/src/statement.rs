@@ -444,15 +444,15 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         )?;
 
                         Ok(LogicalPlan::Ddl(DdlStatement::CreateMemoryTable(
-                            CreateMemoryTable {
-                                name: self.object_name_to_table_reference(name)?,
-                                constraints,
-                                input: Arc::new(plan),
-                                if_not_exists,
-                                or_replace,
-                                column_defaults,
-                                temporary,
-                            },
+                            CreateMemoryTable::builder()
+                                .name(self.object_name_to_table_reference(name)?)
+                                .constraints(constraints)
+                                .input(Arc::new(plan))
+                                .if_not_exists(if_not_exists)
+                                .or_replace(or_replace)
+                                .column_defaults(column_defaults)
+                                .temporary(temporary)
+                                .build()?,
                         )))
                     }
 
@@ -467,15 +467,15 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                             plan.schema(),
                         )?;
                         Ok(LogicalPlan::Ddl(DdlStatement::CreateMemoryTable(
-                            CreateMemoryTable {
-                                name: self.object_name_to_table_reference(name)?,
-                                constraints,
-                                input: Arc::new(plan),
-                                if_not_exists,
-                                or_replace,
-                                column_defaults,
-                                temporary,
-                            },
+                            CreateMemoryTable::builder()
+                                .name(self.object_name_to_table_reference(name)?)
+                                .constraints(constraints)
+                                .input(Arc::new(plan))
+                                .if_not_exists(if_not_exists)
+                                .or_replace(or_replace)
+                                .column_defaults(column_defaults)
+                                .temporary(temporary)
+                                .build()?,
                         )))
                     }
                 }
@@ -530,13 +530,15 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 let mut plan = self.query_to_plan(*query, &mut PlannerContext::new())?;
                 plan = self.apply_expr_alias(plan, columns)?;
 
-                Ok(LogicalPlan::Ddl(DdlStatement::CreateView(CreateView {
-                    name: self.object_name_to_table_reference(name)?,
-                    input: Arc::new(plan),
-                    or_replace,
-                    definition: sql,
-                    temporary,
-                })))
+                Ok(LogicalPlan::Ddl(DdlStatement::CreateView(
+                    CreateView::builder()
+                        .name(self.object_name_to_table_reference(name)?)
+                        .input(Arc::new(plan))
+                        .or_replace(or_replace)
+                        .definition(sql)
+                        .temporary(temporary)
+                        .build()?,
+                )))
             }
             Statement::ShowCreate { obj_type, obj_name } => match obj_type {
                 ShowCreateObject::Table => self.show_create_table_to_plan(obj_name),
@@ -1289,21 +1291,21 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let constraints =
             Self::new_constraint_from_table_constraints(&all_constraints, &df_schema)?;
         Ok(LogicalPlan::Ddl(DdlStatement::CreateExternalTable(
-            PlanCreateExternalTable {
-                schema: df_schema,
-                name,
-                location,
-                file_type,
-                table_partition_cols,
-                if_not_exists,
-                temporary,
-                definition,
-                order_exprs: ordered_exprs,
-                unbounded,
-                options: options_map,
-                constraints,
-                column_defaults,
-            },
+            PlanCreateExternalTable::builder()
+                .schema(df_schema)
+                .name(name)
+                .location(location)
+                .file_type(file_type)
+                .table_partition_cols(table_partition_cols)
+                .if_not_exists(if_not_exists)
+                .temporary(temporary)
+                .definition(definition)
+                .order_exprs(ordered_exprs)
+                .unbounded(unbounded)
+                .options(options_map)
+                .constraints(constraints)
+                .column_defaults(column_defaults)
+                .build()?,
         )))
     }
 

@@ -192,11 +192,12 @@ impl DdlStatement {
 
 /// Creates an external table.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct CreateExternalTable {
-    /// The table schema
-    pub schema: DFSchemaRef,
     /// The table name
     pub name: TableReference,
+    /// The table schema
+    pub schema: DFSchemaRef,
     /// The physical location
     pub location: String,
     /// The file type of physical file
@@ -224,8 +225,8 @@ pub struct CreateExternalTable {
 // Hashing refers to a subset of fields considered in PartialEq.
 impl Hash for CreateExternalTable {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.schema.hash(state);
         self.name.hash(state);
+        self.schema.hash(state);
         self.location.hash(state);
         self.file_type.hash(state);
         self.table_partition_cols.hash(state);
@@ -288,8 +289,233 @@ impl PartialOrd for CreateExternalTable {
     }
 }
 
+impl CreateExternalTable {
+    pub fn new(fields: CreateExternalTableFields) -> Result<Self> {
+        let CreateExternalTableFields {
+            name,
+            schema,
+            location,
+            file_type,
+            table_partition_cols,
+            if_not_exists,
+            temporary,
+            definition,
+            order_exprs,
+            unbounded,
+            options,
+            constraints,
+            column_defaults,
+        } = fields;
+        Ok(Self {
+            name,
+            schema,
+            location,
+            file_type,
+            table_partition_cols,
+            if_not_exists,
+            temporary,
+            definition,
+            order_exprs,
+            unbounded,
+            options,
+            constraints,
+            column_defaults,
+        })
+    }
+
+    pub fn into_fields(self) -> CreateExternalTableFields {
+        let Self {
+            name,
+            schema,
+            location,
+            file_type,
+            table_partition_cols,
+            if_not_exists,
+            temporary,
+            definition,
+            order_exprs,
+            unbounded,
+            options,
+            constraints,
+            column_defaults,
+        } = self;
+        CreateExternalTableFields {
+            name,
+            schema,
+            location,
+            file_type,
+            table_partition_cols,
+            if_not_exists,
+            temporary,
+            definition,
+            order_exprs,
+            unbounded,
+            options,
+            constraints,
+            column_defaults,
+        }
+    }
+
+    pub fn builder() -> CreateExternalTableBuilder {
+        CreateExternalTableBuilder::new()
+    }
+}
+
+/// A struct with same fields as [`CreateExternalTable`] struct so that the DDL can be conveniently
+/// destructed with validation that each field is handled, while still requiring that all
+/// construction goes through the [`CreateExternalTable::new`] constructor or the builder.
+pub struct CreateExternalTableFields {
+    /// The table name
+    pub name: TableReference,
+    /// The table schema
+    pub schema: DFSchemaRef,
+    /// The physical location
+    pub location: String,
+    /// The file type of physical file
+    pub file_type: String,
+    /// Partition Columns
+    pub table_partition_cols: Vec<String>,
+    /// Option to not error if table already exists
+    pub if_not_exists: bool,
+    /// Whether the table is a temporary table
+    pub temporary: bool,
+    /// SQL used to create the table, if available
+    pub definition: Option<String>,
+    /// Order expressions supplied by user
+    pub order_exprs: Vec<Vec<Sort>>,
+    /// Whether the table is an infinite streams
+    pub unbounded: bool,
+    /// Table(provider) specific options
+    pub options: HashMap<String, String>,
+    /// The list of constraints in the schema, such as primary key, unique, etc.
+    pub constraints: Constraints,
+    /// Default values for columns
+    pub column_defaults: HashMap<String, Expr>,
+}
+
+/// A builder or [`CreateExternalTable`]. Use [`CreateExternalTable::builder`] to obtain a new builder instance.
+pub struct CreateExternalTableBuilder {
+    name: Option<TableReference>,
+    schema: Option<DFSchemaRef>,
+    location: Option<String>,
+    file_type: Option<String>,
+    table_partition_cols: Vec<String>,
+    if_not_exists: bool,
+    temporary: bool,
+    definition: Option<String>,
+    order_exprs: Vec<Vec<Sort>>,
+    unbounded: bool,
+    options: HashMap<String, String>,
+    constraints: Constraints,
+    column_defaults: HashMap<String, Expr>,
+}
+
+impl CreateExternalTableBuilder {
+    fn new() -> Self {
+        Self {
+            name: None,
+            schema: None,
+            location: None,
+            file_type: None,
+            table_partition_cols: vec![],
+            if_not_exists: false,
+            temporary: false,
+            definition: None,
+            order_exprs: vec![],
+            unbounded: false,
+            options: HashMap::new(),
+            constraints: Constraints::empty(),
+            column_defaults: HashMap::new(),
+        }
+    }
+
+    pub fn name(mut self, name: TableReference) -> Self {
+        self.name = Some(name);
+        self
+    }
+
+    pub fn schema(mut self, schema: DFSchemaRef) -> Self {
+        self.schema = Some(schema);
+        self
+    }
+
+    pub fn location(mut self, location: String) -> Self {
+        self.location = Some(location);
+        self
+    }
+
+    pub fn file_type(mut self, file_type: String) -> Self {
+        self.file_type = Some(file_type);
+        self
+    }
+
+    pub fn table_partition_cols(mut self, table_partition_cols: Vec<String>) -> Self {
+        self.table_partition_cols = table_partition_cols;
+        self
+    }
+
+    pub fn if_not_exists(mut self, if_not_exists: bool) -> Self {
+        self.if_not_exists = if_not_exists;
+        self
+    }
+
+    pub fn temporary(mut self, temporary: bool) -> Self {
+        self.temporary = temporary;
+        self
+    }
+
+    pub fn definition(mut self, definition: Option<String>) -> Self {
+        self.definition = definition;
+        self
+    }
+
+    pub fn order_exprs(mut self, order_exprs: Vec<Vec<Sort>>) -> Self {
+        self.order_exprs = order_exprs;
+        self
+    }
+
+    pub fn unbounded(mut self, unbounded: bool) -> Self {
+        self.unbounded = unbounded;
+        self
+    }
+
+    pub fn options(mut self, options: HashMap<String, String>) -> Self {
+        self.options = options;
+        self
+    }
+
+    pub fn constraints(mut self, constraints: Constraints) -> Self {
+        self.constraints = constraints;
+        self
+    }
+
+    pub fn column_defaults(mut self, column_defaults: HashMap<String, Expr>) -> Self {
+        self.column_defaults = column_defaults;
+        self
+    }
+
+    pub fn build(self) -> Result<CreateExternalTable> {
+        CreateExternalTable::new(CreateExternalTableFields {
+            name: self.name.expect("name is required"),
+            schema: self.schema.expect("schema is required"),
+            location: self.location.expect("location is required"),
+            file_type: self.file_type.expect("file_type is required"),
+            table_partition_cols: self.table_partition_cols,
+            if_not_exists: self.if_not_exists,
+            temporary: self.temporary,
+            definition: self.definition,
+            order_exprs: self.order_exprs,
+            unbounded: self.unbounded,
+            options: self.options,
+            constraints: self.constraints,
+            column_defaults: self.column_defaults,
+        })
+    }
+}
+
 /// Creates an in memory table.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
+#[non_exhaustive]
 pub struct CreateMemoryTable {
     /// The table name
     pub name: TableReference,
@@ -303,12 +529,153 @@ pub struct CreateMemoryTable {
     pub or_replace: bool,
     /// Default values for columns
     pub column_defaults: Vec<(String, Expr)>,
-    /// Wheter the table is `TableType::Temporary`
+    /// Whether the table is `TableType::Temporary`
     pub temporary: bool,
+}
+
+impl CreateMemoryTable {
+    pub fn new(fields: CreateMemoryTableFields) -> Result<Self> {
+        let CreateMemoryTableFields {
+            name,
+            constraints,
+            input,
+            if_not_exists,
+            or_replace,
+            column_defaults,
+            temporary,
+        } = fields;
+        Ok(Self {
+            name,
+            constraints,
+            input,
+            if_not_exists,
+            or_replace,
+            column_defaults,
+            temporary,
+        })
+    }
+
+    pub fn into_fields(self) -> CreateMemoryTableFields {
+        let Self {
+            name,
+            constraints,
+            input,
+            if_not_exists,
+            or_replace,
+            column_defaults,
+            temporary,
+        } = self;
+        CreateMemoryTableFields {
+            name,
+            constraints,
+            input,
+            if_not_exists,
+            or_replace,
+            column_defaults,
+            temporary,
+        }
+    }
+
+    pub fn builder() -> CreateMemoryTableBuilder {
+        CreateMemoryTableBuilder::new()
+    }
+}
+
+/// A struct with same fields as [`CreateMemoryTable`] struct so that the DDL can be conveniently
+/// destructed with validation that each field is handled, while still requiring that all
+/// construction goes through the [`CreateMemoryTable::new`] constructor or the builder.
+pub struct CreateMemoryTableFields {
+    /// The table name
+    pub name: TableReference,
+    /// The list of constraints in the schema, such as primary key, unique, etc.
+    pub constraints: Constraints,
+    /// The logical plan
+    pub input: Arc<LogicalPlan>,
+    /// Option to not error if table already exists
+    pub if_not_exists: bool,
+    /// Option to replace table content if table already exists
+    pub or_replace: bool,
+    /// Default values for columns
+    pub column_defaults: Vec<(String, Expr)>,
+    /// Whether the table is `TableType::Temporary`
+    pub temporary: bool,
+}
+
+/// A builder or [`CreateMemoryTable`]. Use [`CreateMemoryTable::builder`] to obtain a new builder instance.
+pub struct CreateMemoryTableBuilder {
+    name: Option<TableReference>,
+    constraints: Constraints,
+    input: Option<Arc<LogicalPlan>>,
+    if_not_exists: bool,
+    or_replace: bool,
+    column_defaults: Vec<(String, Expr)>,
+    temporary: bool,
+}
+
+impl CreateMemoryTableBuilder {
+    fn new() -> Self {
+        Self {
+            name: None,
+            constraints: Constraints::empty(),
+            input: None,
+            if_not_exists: false,
+            or_replace: false,
+            column_defaults: vec![],
+            temporary: false,
+        }
+    }
+
+    pub fn name(mut self, name: TableReference) -> Self {
+        self.name = Some(name);
+        self
+    }
+
+    pub fn constraints(mut self, constraints: Constraints) -> Self {
+        self.constraints = constraints;
+        self
+    }
+
+    pub fn input(mut self, input: Arc<LogicalPlan>) -> Self {
+        self.input = Some(input);
+        self
+    }
+
+    pub fn if_not_exists(mut self, if_not_exists: bool) -> Self {
+        self.if_not_exists = if_not_exists;
+        self
+    }
+
+    pub fn or_replace(mut self, or_replace: bool) -> Self {
+        self.or_replace = or_replace;
+        self
+    }
+
+    pub fn column_defaults(mut self, column_defaults: Vec<(String, Expr)>) -> Self {
+        self.column_defaults = column_defaults;
+        self
+    }
+
+    pub fn temporary(mut self, temporary: bool) -> Self {
+        self.temporary = temporary;
+        self
+    }
+
+    pub fn build(self) -> Result<CreateMemoryTable> {
+        CreateMemoryTable::new(CreateMemoryTableFields {
+            name: self.name.expect("name is required"),
+            constraints: self.constraints,
+            input: self.input.expect("input is required"),
+            if_not_exists: self.if_not_exists,
+            or_replace: self.or_replace,
+            column_defaults: self.column_defaults,
+            temporary: self.temporary,
+        })
+    }
 }
 
 /// Creates a view.
 #[derive(Debug, Clone, PartialEq, PartialOrd, Eq, Hash)]
+#[non_exhaustive]
 pub struct CreateView {
     /// The table name
     pub name: TableReference,
@@ -318,8 +685,120 @@ pub struct CreateView {
     pub or_replace: bool,
     /// SQL used to create the view, if available
     pub definition: Option<String>,
-    /// Wheter the view is ephemeral
+    /// Whether the view is ephemeral
     pub temporary: bool,
+}
+
+impl CreateView {
+    pub fn new(fields: CreateViewFields) -> Result<Self> {
+        let CreateViewFields {
+            name,
+            input,
+            or_replace,
+            definition,
+            temporary,
+        } = fields;
+        Ok(Self {
+            name,
+            input,
+            or_replace,
+            definition,
+            temporary,
+        })
+    }
+
+    pub fn into_fields(self) -> CreateViewFields {
+        let Self {
+            name,
+            input,
+            or_replace,
+            definition,
+            temporary,
+        } = self;
+        CreateViewFields {
+            name,
+            input,
+            or_replace,
+            definition,
+            temporary,
+        }
+    }
+
+    pub fn builder() -> CreateViewBuilder {
+        CreateViewBuilder::new()
+    }
+}
+
+/// A struct with same fields as [`CreateView`] struct so that the DDL can be conveniently
+/// destructed with validation that each field is handled, while still requiring that all
+/// construction goes through the [`CreateView::new`] constructor or the builder.
+pub struct CreateViewFields {
+    /// The table name
+    pub name: TableReference,
+    /// The logical plan
+    pub input: Arc<LogicalPlan>,
+    /// Option to not error if table already exists
+    pub or_replace: bool,
+    /// SQL used to create the view, if available
+    pub definition: Option<String>,
+    /// Whether the view is ephemeral
+    pub temporary: bool,
+}
+
+/// A builder or [`CreateView`]. Use [`CreateView::builder`] to obtain a new builder instance.
+pub struct CreateViewBuilder {
+    name: Option<TableReference>,
+    input: Option<Arc<LogicalPlan>>,
+    or_replace: bool,
+    definition: Option<String>,
+    temporary: bool,
+}
+
+impl CreateViewBuilder {
+    fn new() -> Self {
+        Self {
+            name: None,
+            input: None,
+            or_replace: false,
+            definition: None,
+            temporary: false,
+        }
+    }
+
+    pub fn name(mut self, name: TableReference) -> Self {
+        self.name = Some(name);
+        self
+    }
+
+    pub fn input(mut self, input: Arc<LogicalPlan>) -> Self {
+        self.input = Some(input);
+        self
+    }
+
+    pub fn or_replace(mut self, or_replace: bool) -> Self {
+        self.or_replace = or_replace;
+        self
+    }
+
+    pub fn definition(mut self, definition: Option<String>) -> Self {
+        self.definition = definition;
+        self
+    }
+
+    pub fn temporary(mut self, temporary: bool) -> Self {
+        self.temporary = temporary;
+        self
+    }
+
+    pub fn build(self) -> Result<CreateView> {
+        CreateView::new(CreateViewFields {
+            name: self.name.expect("name is required"),
+            input: self.input.expect("input is required"),
+            or_replace: self.or_replace,
+            definition: self.definition,
+            temporary: self.temporary,
+        })
+    }
 }
 
 /// Creates a catalog (aka "Database").
