@@ -3714,25 +3714,62 @@ mod tests {
         ));
 
         let mut eq_properties = EquivalenceProperties::new(Arc::clone(&schema));
-        eq_properties.add_new_ordering(vec![
-            PhysicalSortExpr::new_default(Arc::clone(&a_plus_b)).asc(),
+
+        eq_properties.add_new_ordering(LexOrdering::from(vec![
+            PhysicalSortExpr::new_default(Arc::clone(&col_c)).asc(),
             PhysicalSortExpr::new_default(Arc::clone(&col_a)).asc(),
             PhysicalSortExpr::new_default(Arc::clone(&col_b)).asc(),
-        ]);
+        ]));
 
         eq_properties.add_equal_conditions(&col_c, &a_plus_b)?;
 
         let orderings = eq_properties.oeq_class().orderings.clone();
 
-        let expected_ordering1 = vec![PhysicalSortExpr::new_default(Arc::clone(&a_plus_b)).asc()];
-        let expected_ordering2 = vec![
+        let expected_ordering1 = LexOrdering::from(vec![PhysicalSortExpr::new_default(Arc::clone(&col_c)).asc()]);
+        let expected_ordering2 = LexOrdering::from(vec![
             PhysicalSortExpr::new_default(Arc::clone(&col_a)).asc(),
             PhysicalSortExpr::new_default(Arc::clone(&col_b)).asc(),
-        ];
+        ]);
 
         assert_eq!(orderings.len(), 2);
         assert!(orderings.contains(&expected_ordering1));
         assert!(orderings.contains(&expected_ordering2));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_discover_new_orderings_with_multiple_children_unaffected() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+            Field::new("c", DataType::Int32, false),
+        ]));
+
+        let col_a = col("a", &schema)?;
+        let col_b = col("b", &schema)?;
+        let col_c = col("c", &schema)?;
+
+        let a_plus_b: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+            Arc::clone(&col_a),
+            Operator::Plus,
+            Arc::clone(&col_b),
+        ));
+
+        let mut eq_properties = EquivalenceProperties::new(Arc::clone(&schema));
+        let initial_ordering = LexOrdering::from(vec![
+            PhysicalSortExpr::new_default(Arc::clone(&a_plus_b)).asc(),
+            PhysicalSortExpr::new_default(Arc::clone(&col_a)).asc(),
+            PhysicalSortExpr::new_default(Arc::clone(&col_b)).asc(),
+        ]);
+
+        eq_properties.add_new_ordering(initial_ordering.clone());
+        eq_properties.add_equal_conditions(&col_c, &a_plus_b)?;
+
+        let orderings = eq_properties.oeq_class().orderings.clone();
+
+        assert_eq!(orderings.len(), 1);
+        assert!(orderings.contains(&initial_ordering));
 
         Ok(())
     }
@@ -3756,11 +3793,12 @@ mod tests {
         ));
 
         let mut eq_properties = EquivalenceProperties::new(Arc::clone(&schema));
-        let initial_ordering = vec![
+        let initial_ordering = LexOrdering::from(vec![
             PhysicalSortExpr::new_default(Arc::clone(&a_minus_b)).asc(),
             PhysicalSortExpr::new_default(Arc::clone(&col_a)).asc(),
             PhysicalSortExpr::new_default(Arc::clone(&col_b)).desc(),
-        ];
+        ]);
+
         eq_properties.add_new_ordering(initial_ordering.clone());
 
         let orderings_before = eq_properties.oeq_class().orderings.clone();
@@ -3770,11 +3808,11 @@ mod tests {
         eq_properties.add_equal_conditions(&col_c, &a_minus_b)?;
 
         let orderings = eq_properties.oeq_class().orderings.clone();
-        let expected_ordering1 = vec![PhysicalSortExpr::new_default(Arc::clone(&a_minus_b)).asc()];
-        let expected_ordering2 = vec![
+        let expected_ordering1 = LexOrdering::from(vec![PhysicalSortExpr::new_default(Arc::clone(&a_minus_b)).asc()]);
+        let expected_ordering2 = LexOrdering::from(vec![
             PhysicalSortExpr::new_default(Arc::clone(&col_a)).asc(),
             PhysicalSortExpr::new_default(Arc::clone(&col_b)).desc(),
-        ];
+        ]);
 
         assert_eq!(orderings.len(), 2);
         assert!(orderings.contains(&expected_ordering1));
