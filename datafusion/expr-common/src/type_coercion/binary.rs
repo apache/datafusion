@@ -480,11 +480,6 @@ fn type_union_resolution_coercion(
             let new_value_type = type_union_resolution_coercion(value_type, other_type);
             new_value_type.map(|t| DataType::Dictionary(index_type.clone(), Box::new(t)))
         }
-        (DataType::List(lhs), DataType::List(rhs)) => {
-            let new_item_type =
-                type_union_resolution_coercion(lhs.data_type(), rhs.data_type());
-            new_item_type.map(|t| DataType::List(Arc::new(Field::new("item", t, true))))
-        }
         (DataType::Struct(lhs), DataType::Struct(rhs)) => {
             if lhs.len() != rhs.len() {
                 return None;
@@ -529,6 +524,7 @@ fn type_union_resolution_coercion(
             // Numeric coercion is the same as comparison coercion, both find the narrowest type
             // that can accommodate both types
             binary_numeric_coercion(lhs_type, rhs_type)
+                .or_else(|| list_coercion(lhs_type, rhs_type))
                 .or_else(|| temporal_coercion_nonstrict_timezone(lhs_type, rhs_type))
                 .or_else(|| string_coercion(lhs_type, rhs_type))
                 .or_else(|| numeric_string_coercion(lhs_type, rhs_type))
