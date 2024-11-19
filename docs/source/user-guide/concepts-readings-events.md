@@ -131,7 +131,7 @@ This is a list of DataFusion related blog posts, articles, and other resources. 
 
 # 🌎 Community Events
 
-- **2025-01-25** (Upcoming) [Amsterdam Apache DataFusion Meetup](https://g ithub.com/apache/datafusion/discussions/12988)
+- **2025-01-25** (Upcoming) [Amsterdam Apache DataFusion Meetup](https://github.com/apache/datafusion/discussions/12988)
 - **2025-01-15** (Upcoming) [Boston Apache DataFusion Meetup](https://github.com/apache/datafusion/discussions/13165)
 - **2024-12-18** (Upcoming) [Chicago Apache DataFusion Meetup](https://lu.ma/eq5myc5i)
 - **2024-10-14** [Seattle Apache DataFusion Meetup](https://lu.ma/tnwl866b)
