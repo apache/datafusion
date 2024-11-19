@@ -22,12 +22,10 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use crate::{
-    common::{Column, DFSchema},
-    error::{DataFusionError, Result},
-    logical_expr::Operator,
-    physical_plan::{ColumnarValue, PhysicalExpr},
-};
+use datafusion_common::error::{DataFusionError, Result};
+use datafusion_common::{Column, DFSchema};
+use datafusion_expr::Operator;
+use datafusion_physical_plan::{ColumnarValue, PhysicalExpr};
 
 use arrow::{
     array::{new_null_array, ArrayRef, BooleanArray},
@@ -653,7 +651,7 @@ impl PruningPredicate {
 
     // this is only used by `parquet` feature right now
     #[allow(dead_code)]
-    pub(crate) fn required_columns(&self) -> &RequiredColumns {
+    pub fn required_columns(&self) -> &RequiredColumns {
         &self.required_columns
     }
 
@@ -762,7 +760,7 @@ fn is_always_true(expr: &Arc<dyn PhysicalExpr>) -> bool {
 /// Handles creating references to the min/max statistics
 /// for columns as well as recording which statistics are needed
 #[derive(Debug, Default, Clone)]
-pub(crate) struct RequiredColumns {
+pub struct RequiredColumns {
     /// The statistics required to evaluate this predicate:
     /// * The unqualified column in the input schema
     /// * Statistics type (e.g. Min or Max or Null_Count)
@@ -786,7 +784,7 @@ impl RequiredColumns {
     /// * `true` returns None
     #[allow(dead_code)]
     // this fn is only used by `parquet` feature right now, thus the `allow(dead_code)`
-    pub(crate) fn single_column(&self) -> Option<&phys_expr::Column> {
+    pub fn single_column(&self) -> Option<&phys_expr::Column> {
         if self.columns.windows(2).all(|w| {
             // check if all columns are the same (ignoring statistics and field)
             let c1 = &w[0].0;
@@ -1664,8 +1662,8 @@ mod tests {
     use std::ops::{Not, Rem};
 
     use super::*;
-    use crate::assert_batches_eq;
-    use crate::logical_expr::{col, lit};
+    use datafusion_common::assert_batches_eq;
+    use datafusion_expr::{col, lit};
 
     use arrow::array::Decimal128Array;
     use arrow::{
