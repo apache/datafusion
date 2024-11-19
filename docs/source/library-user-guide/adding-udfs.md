@@ -24,7 +24,7 @@ User Defined Functions (UDFs) are functions that can be used in the context of D
 This page covers how to add UDFs to DataFusion. In particular, it covers how to add Scalar, Window, and Aggregate UDFs.
 
 | UDF Type  | Description                                                                                                | Example             |
-|-----------|------------------------------------------------------------------------------------------------------------|---------------------|
+| --------- | ---------------------------------------------------------------------------------------------------------- | ------------------- |
 | Scalar    | A function that takes a row of data and returns a single value.                                            | [simple_udf.rs][1]  |
 | Window    | A function that takes a row of data and returns a single value, but also has access to the rows around it. | [simple_udwf.rs][2] |
 | Aggregate | A function that takes a group of rows and returns a single value.                                          | [simple_udaf.rs][3] |
@@ -178,11 +178,8 @@ Arc::new(add_one),
 ```
 
 [`scalarudf`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/struct.ScalarUDF.html
-
 [`create_udf`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/fn.create_udf.html
-
 [`process_scalar_func_inputs`]: https://docs.rs/datafusion/latest/datafusion/physical_expr/functions/fn.process_scalar_func_inputs.html
-
 [`advanced_udf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/advanced_udf.rs
 
 A few things to note:
@@ -311,9 +308,7 @@ Arc::new(make_partition_evaluator),
 ```
 
 [`windowudf`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/struct.WindowUDF.html
-
 [`create_udwf`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/fn.create_udwf.html
-
 [`advanced_udwf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/advanced_udwf.rs
 
 The `create_udwf` has five arguments to check:
@@ -523,9 +518,7 @@ Arc::new(vec![DataType::Float64, DataType::UInt32]),
 ```
 
 [`aggregateudf`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/struct.AggregateUDF.html
-
 [`create_udaf`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/fn.create_udaf.html
-
 [`advanced_udaf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/advanced_udaf.rs
 
 The `create_udaf` has six arguments to check:
@@ -658,9 +651,6 @@ pretty::print_batches( & results) ?;
 ```
 
 [1]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/simple_udf.rs
-
 [2]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/simple_udwf.rs
-
 [3]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/simple_udaf.rs
-
 [4]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/simple_udtf.rs
