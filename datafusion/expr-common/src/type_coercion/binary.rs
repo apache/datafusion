@@ -1138,6 +1138,7 @@ fn numeric_string_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<D
     }
 }
 
+/// Coerces two fields together, ensuring the field data (name and nullability) is correctly set.
 fn coerce_list_children(lhs_field: &FieldRef, rhs_field: &FieldRef) -> Option<FieldRef> {
     let data_types = vec![lhs_field.data_type().clone(), rhs_field.data_type().clone()];
     Some(Arc::new(
