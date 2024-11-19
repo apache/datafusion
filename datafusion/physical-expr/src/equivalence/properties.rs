@@ -409,10 +409,10 @@ impl EquivalenceProperties {
 
         // Preserve valid suffixes from existing orderings
         for existing in self.oeq_class.orderings.iter() {
-            if let Some(extended) = self.try_extend_ordering(&filtered_exprs, existing) {
-                if extended.len() > filtered_exprs.len() {
-                    orderings.push(extended);
-                }
+            if self.is_prefix_of(&filtered_exprs, existing) {
+                let mut extended = filtered_exprs.clone();
+                extended.extend(existing[filtered_exprs.len()..].iter().cloned());
+                orderings.push(extended);
             }
         }
 
@@ -420,34 +420,19 @@ impl EquivalenceProperties {
         self
     }
 
-    /// Attempts to extend the new ordering with a suffix from an existing ordering.
-    ///
-    /// Returns Some(extended_ordering) if the new ordering matches a prefix of the
-    /// existing ordering (considering expression equivalences), None otherwise.
-    fn try_extend_ordering(
-        &self,
-        new_order: &LexOrdering,
-        existing: &LexOrdering,
-    ) -> Option<LexOrdering> {
+    /// Checks if the new ordering matches a prefix of the existing ordering
+    /// (considering expression equivalences)
+    fn is_prefix_of(&self, new_order: &LexOrdering, existing: &LexOrdering) -> bool {
         // Check if new order is longer than existing - can't be a prefix
         if new_order.len() > existing.len() {
-            return None;
+            return false;
         }
 
         // Check if new order matches existing prefix (considering equivalences)
-        let prefix_matches = new_order.iter().zip(existing).all(|(new, existing)| {
+        new_order.iter().zip(existing).all(|(new, existing)| {
             self.eq_group.exprs_equal(&new.expr, &existing.expr) &&
             new.options == existing.options
-        });
-
-        if prefix_matches {
-            // Combine new order with existing suffix
-            let mut result = new_order.clone();
-            result.extend(existing[new_order.len()..].iter().cloned());
-            Some(result)
-        } else {
-            None
-        }
+        })
     }
 
     /// Normalizes the given sort expressions (i.e. `sort_exprs`) using the
