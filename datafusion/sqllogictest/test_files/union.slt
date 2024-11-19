@@ -771,3 +771,9 @@ select make_array(arrow_cast(2, 'UInt8')) x UNION ALL SELECT make_array(arrow_ca
 ----
 [-2]
 [2]
+
+query ?
+select make_array(make_array(1)) x UNION ALL SELECT make_array(arrow_cast(make_array(-1), 'LargeList(Int8)')) x;
+----
+[[-1]]
+[[1]]
