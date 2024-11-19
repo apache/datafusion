@@ -467,6 +467,7 @@ impl GroupsAccumulator for CountGroupsAccumulator {
         &mut self,
         values: &[ArrayRef],
         group_indices: &[usize],
+        // Since aggregate filter should be applied in partial stage, in final stage there should be no filter
         _opt_filter: Option<&BooleanArray>,
         total_num_groups: usize,
     ) -> Result<()> {
