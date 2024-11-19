@@ -88,26 +88,34 @@ use crate::{
 ///
 /// # "Streamed" vs "Buffered"
 ///
+/// The number of record batches of streamed input currently present in the memory will depend
+/// on the output batch size of the execution plan. There is no spilling support for streamed input.
+/// The comparisons are performed from values of join keys in streamed input with the values of
+/// join keys in buffered input. One row in streamed record batch could be matched with multiple rows in
+/// buffered input batches. The streamed input is managed through the states in `StreamedState`
+/// and streamed input batches are represented by `StreamedBatch`.
+///
 /// Buffered input is buffered for all record batches having the same value of join key.
 /// If the memory limit increases beyond the specified value and spilling is enabled,
 /// buffered batches could be spilled to disk. If spilling is disabled, the execution
-/// will fail under the same conditions. Multiple record batches of buffered could be
-/// present in memory/disk during the exectution.
+/// will fail under the same conditions. Multiple record batches of buffered could currently reside
+/// in memory/disk during the exectution. The number of buffered batches residing in
+/// memory/disk depends on the number of rows of buffered input having the same value
+/// of join key as that of streamed input rows currently present in memory. Due to pre-sorted inputs,
+/// the algorithm understands when it is not needed anymore, and releases the buffered batches
+/// from memory/disk. The buffered input is managed through the states in `BufferedState`
+/// and buffered input batches are represented by `BufferedBatch`.
 ///
-/// Only one record batch of streamed input will be present in the memory at all times. There is no
-/// spilling support for streamed input. The comparisons are performed from values of join keys in
-/// streamed input with the values of join keys in buffered input. One row in streamed record
-/// batch could be matched with multiple rows in buffered input batches.
-///
-/// Depending on the type of join left or right input may be selected as streamed or buffered
+/// Depending on the type of join, left or right input may be selected as streamed or buffered
 /// respectively. For example, in a left-outer join, the left execution plan will be selected as
+/// streamed input while in a right-outer join, the right execution plan will be selected as the
 /// streamed input.
 ///
 /// Reference for the algorithm:
-/// <https://en.wikipedia.org/wiki/Sort-merge_join>
+/// <https://en.wikipedia.org/wiki/Sort-merge_join>.
 ///
-/// Helpful short video demonstration
-/// https://www.youtube.com/watch?v=jiWCPJtDE2c
+/// Helpful short video demonstration:
+/// <https://www.youtube.com/watch?v=jiWCPJtDE2c>.
 #[derive(Debug, Clone)]
 pub struct SortMergeJoinExec {
     /// Left sorted joining execution plan
