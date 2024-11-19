@@ -1155,6 +1155,10 @@ select column1, column5 from arrays_values_without_nulls;
 [21, 22, 23, 24, 25, 26, 27, 28, 29, 30] [6, 7]
 [31, 32, 33, 34, 35, 26, 37, 38, 39, 40] [8, 9]
 
+# make array with arrays of different types
+query ?
+select make_array(make_array(1), arrow_cast(make_array(-1), 'LargeList(Int8)'))
+
 query ???
 select make_array(column1),
        make_array(column1, column5),
