@@ -24,7 +24,7 @@ use std::fmt::Display;
 use std::sync::Arc;
 
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_common::JoinType;
+use datafusion_common::{JoinType, ScalarValue};
 use datafusion_physical_expr_common::physical_expr::format_physical_expr_list;
 
 use indexmap::{IndexMap, IndexSet};
@@ -62,6 +62,7 @@ pub struct ConstExpr {
     /// Does the constant have the same value across all partitions? See
     /// struct docs for more details
     across_partitions: bool,
+    value: Option<ScalarValue>
 }
 
 impl PartialEq for ConstExpr {
@@ -80,7 +81,13 @@ impl ConstExpr {
             expr,
             // By default, assume constant expressions are not same across partitions.
             across_partitions: false,
+            value: None,
         }
+    }
+
+    pub fn with_value(mut self, value: ScalarValue) -> Self {
+        self.value = Some(value);
+        self
     }
 
     /// Set the `across_partitions` flag
@@ -106,6 +113,10 @@ impl ConstExpr {
         self.expr
     }
 
+    pub fn value(&self) -> Option<&ScalarValue> {
+        self.value.as_ref()
+    }
+
     pub fn map<F>(&self, f: F) -> Option<Self>
     where
         F: Fn(&Arc<dyn PhysicalExpr>) -> Option<Arc<dyn PhysicalExpr>>,
@@ -114,6 +125,7 @@ impl ConstExpr {
         maybe_expr.map(|expr| Self {
             expr,
             across_partitions: self.across_partitions,
+            value: self.value.clone(),
         })
     }
 
@@ -151,6 +163,9 @@ impl Display for ConstExpr {
         write!(f, "{}", self.expr)?;
         if self.across_partitions {
             write!(f, "(across_partitions)")?;
+        }
+        if let Some(value) = self.value.as_ref() {
+            write!(f, "({})", value)?;
         }
         Ok(())
     }
