@@ -53,7 +53,7 @@ members = [
     "test-utils",
     "benchmarks",
     "datafusion/macros",
-    "datafusion/doc-gen",
+    "datafusion/doc",
 ]
 resolver = "2"
 
@@ -102,7 +102,7 @@ datafusion = { path = "datafusion/core", version = "43.0.0", default-features = 
 datafusion-catalog = { path = "datafusion/catalog", version = "43.0.0" }
 datafusion-common = { path = "datafusion/common", version = "43.0.0", default-features = false }
 datafusion-common-runtime = { path = "datafusion/common-runtime", version = "43.0.0" }
-datafusion-doc = { path = "datafusion/doc-gen", version = "43.0.0" }
+datafusion-doc = { path = "datafusion/doc", version = "43.0.0" }
 datafusion-execution = { path = "datafusion/execution", version = "43.0.0" }
 datafusion-expr = { path = "datafusion/expr", version = "43.0.0" }
 datafusion-expr-common = { path = "datafusion/expr-common", version = "43.0.0" }

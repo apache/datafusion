@@ -33,7 +33,7 @@ use crate::{
     function::WindowFunctionSimplification, Expr, PartitionEvaluator, Signature,
 };
 use datafusion_common::{not_impl_err, Result};
-use datafusion_doc_gen::Documentation;
+use datafusion_doc::Documentation;
 use datafusion_functions_window_common::expr::ExpressionArgs;
 use datafusion_functions_window_common::field::WindowUDFFieldArgs;
 use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
@@ -556,7 +556,7 @@ impl WindowUDFImpl for AliasedWindowUDFImpl {
 
 // Window UDF doc sections for use in public documentation
 pub mod window_doc_sections {
-    use datafusion_doc_gen::DocSection;
+    use datafusion_doc::DocSection;
 
     pub fn doc_sections() -> Vec<DocSection> {
         vec![

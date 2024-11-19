@@ -52,7 +52,8 @@ use syn::{parse_macro_input, DeriveInput, LitStr};
 /// will generate the following code
 ///
 /// #[derive(Debug)] pub struct ToDateFunc { signature : Signature, }
-/// use datafusion_doc_gen :: DocSection; use datafusion_doc_gen :: DocumentationBuilder;
+/// use datafusion_doc :: DocSection;
+/// use datafusion_doc :: DocumentationBuilder;
 /// static DOCUMENTATION : OnceLock < Documentation > = OnceLock :: new();
 /// impl ToDateFunc
 /// {
@@ -186,8 +187,8 @@ pub fn user_doc(args: TokenStream, input: TokenStream) -> TokenStream {
     let generated = quote! {
         #input
 
-        use datafusion_doc_gen::DocSection;
-        use datafusion_doc_gen::DocumentationBuilder;
+        use datafusion_doc::DocSection;
+        use datafusion_doc::DocumentationBuilder;
 
         static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 

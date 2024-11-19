@@ -79,7 +79,7 @@ pub struct DocSection {
 /// ```rust
 ///
 /// # fn main() {
-///     use datafusion_doc_gen::{DocSection, Documentation};
+///     use datafusion_doc::{DocSection, Documentation};
 ///     let doc_section = DocSection {
 ///         include: true,
 ///         label: "Display Label",
