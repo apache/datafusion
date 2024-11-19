@@ -460,7 +460,7 @@ impl VarianceGroupsAccumulator {
         counts: &UInt64Array,
         means: &Float64Array,
         m2s: &Float64Array,
-        opt_filter: Option<&BooleanArray>,
+        _opt_filter: Option<&BooleanArray>,
         mut value_fn: F,
     ) where
         F: FnMut(usize, u64, f64, f64) + Send,
@@ -469,33 +469,14 @@ impl VarianceGroupsAccumulator {
         assert_eq!(means.null_count(), 0);
         assert_eq!(m2s.null_count(), 0);
 
-        match opt_filter {
-            None => {
-                group_indices
-                    .iter()
-                    .zip(counts.values().iter())
-                    .zip(means.values().iter())
-                    .zip(m2s.values().iter())
-                    .for_each(|(((&group_index, &count), &mean), &m2)| {
-                        value_fn(group_index, count, mean, m2);
-                    });
-            }
-            Some(filter) => {
-                group_indices
-                    .iter()
-                    .zip(counts.values().iter())
-                    .zip(means.values().iter())
-                    .zip(m2s.values().iter())
-                    .zip(filter.iter())
-                    .for_each(
-                        |((((&group_index, &count), &mean), &m2), filter_value)| {
-                            if let Some(true) = filter_value {
-                                value_fn(group_index, count, mean, m2);
-                            }
-                        },
-                    );
-            }
-        }
+        group_indices
+            .iter()
+            .zip(counts.values().iter())
+            .zip(means.values().iter())
+            .zip(m2s.values().iter())
+            .for_each(|(((&group_index, &count), &mean), &m2)| {
+                value_fn(group_index, count, mean, m2);
+            });
     }
 
     pub fn variance(
@@ -554,7 +535,8 @@ impl GroupsAccumulator for VarianceGroupsAccumulator {
         &mut self,
         values: &[ArrayRef],
         group_indices: &[usize],
-        opt_filter: Option<&BooleanArray>,
+        // Since aggregate filter should be applied in partial stage, in final stage there should be no filter
+        _opt_filter: Option<&BooleanArray>,
         total_num_groups: usize,
     ) -> Result<()> {
         assert_eq!(values.len(), 3, "two arguments to merge_batch");
@@ -569,7 +551,7 @@ impl GroupsAccumulator for VarianceGroupsAccumulator {
             partial_counts,
             partial_means,
             partial_m2s,
-            opt_filter,
+            None,
             |group_index, partial_count, partial_mean, partial_m2| {
                 if partial_count == 0 {
                     return;
