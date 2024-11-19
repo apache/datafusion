@@ -1158,6 +1158,8 @@ select column1, column5 from arrays_values_without_nulls;
 # make array with arrays of different types
 query ?
 select make_array(make_array(1), arrow_cast(make_array(-1), 'LargeList(Int8)'))
+----
+[[1], [-1]]
 
 query ???
 select make_array(column1),
