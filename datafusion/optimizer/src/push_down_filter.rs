@@ -1002,14 +1002,18 @@ impl OptimizerRule for PushDownFilter {
                     filter_predicates
                         .into_iter()
                         .zip(results)
-                        .map(|(expr, res)| {
-                            let filter_pushdown_type = if expr.is_volatile() {
+                        .map(|(pred, res)| {
+                            let filter_pushdown_type = if !matches!(
+                                res,
+                                TableProviderFilterPushDown::Unsupported
+                            ) && pred.is_volatile()
+                            {
                                 // Do not push down predicate with volatile functions to scan
                                 TableProviderFilterPushDown::Unsupported
                             } else {
                                 res
                             };
-                            (expr, filter_pushdown_type)
+                            (pred, filter_pushdown_type)
                         });
 
                 let new_scan_filters = zip
