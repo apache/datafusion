@@ -327,13 +327,15 @@ where
     }
 }
 
+/// Arguments passed to [`ScalarUDFImpl::invoke_with_args`] when invoking a
+/// scalar function.
 pub struct ScalarFunctionArgs<'a> {
-    // The evaluated arguments to the function
+    /// The evaluated arguments to the function
     pub args: &'a [ColumnarValue],
-    // The number of rows in record batch being evaluated
+    /// The number of rows in record batch being evaluated
     pub number_rows: usize,
-    // The return type of the scalar function returned (from `return_type` or `return_type_from_exprs`)
-    // when creating the physical expression from the logical expression
+    /// The return type of the scalar function returned (from `return_type` or `return_type_from_exprs`)
+    /// when creating the physical expression from the logical expression
     pub return_type: &'a DataType,
 }
 
