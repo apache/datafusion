@@ -774,11 +774,17 @@ impl<T> Transformed<T> {
 /// The elements of the container are siblings so the continuation rules are similar to
 /// [`TreeNodeRecursion::visit_sibling`] / [`Transformed::transform_sibling`].
 pub trait TreeNodeContainer<'a, T: 'a>: Sized {
+    /// Applies `f` to all elements of the container.
+    /// This method is usually called from [`TreeNode::apply_children`] implementations as
+    /// a node is actually a container of the node's children.
     fn apply_elements<F: FnMut(&'a T) -> Result<TreeNodeRecursion>>(
         &'a self,
         f: F,
     ) -> Result<TreeNodeRecursion>;
 
+    /// Maps all elements of the container with `f`.
+    /// This method is usually called from [`TreeNode::map_children`] implementations as
+    /// a node is actually a container of the node's children.
     fn map_elements<F: FnMut(T) -> Result<Transformed<T>>>(
         self,
         f: F,
@@ -984,6 +990,9 @@ impl<
 /// applied on. The elements of the container are siblings so the continuation rules are
 /// similar to [`TreeNodeRecursion::visit_sibling`].
 pub trait TreeNodeRefContainer<'a, T: 'a>: Sized {
+    /// Applies `f` to all elements of the container.
+    /// This method is usually called from [`TreeNode::apply_children`] implementations as
+    /// a node is actually a container of the node's children.
     fn apply_ref_elements<F: FnMut(&'a T) -> Result<TreeNodeRecursion>>(
         &self,
         f: F,
