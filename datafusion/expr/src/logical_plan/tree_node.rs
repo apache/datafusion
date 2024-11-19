@@ -44,12 +44,12 @@ use crate::{
     Sort, Statement, Subquery, SubqueryAlias, TableScan, Union, Unnest,
     UserDefinedLogicalNode, Values, Window,
 };
-use datafusion_common::tree_node::RefContainer;
+use datafusion_common::tree_node::TreeNodeRefContainer;
 use recursive::recursive;
 
 use crate::expr::{Exists, InSubquery};
 use datafusion_common::tree_node::{
-    Container, Transformed, TreeNode, TreeNodeIterator, TreeNodeRecursion,
+    Transformed, TreeNode, TreeNodeContainer, TreeNodeIterator, TreeNodeRecursion,
     TreeNodeRewriter, TreeNodeVisitor,
 };
 use datafusion_common::{internal_err, Result};

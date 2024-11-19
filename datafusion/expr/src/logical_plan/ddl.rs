@@ -26,7 +26,7 @@ use std::{
 
 use crate::expr::Sort;
 use arrow::datatypes::DataType;
-use datafusion_common::tree_node::{Container, Transformed, TreeNodeRecursion};
+use datafusion_common::tree_node::{Transformed, TreeNodeContainer, TreeNodeRecursion};
 use datafusion_common::{
     Constraints, DFSchemaRef, Result, SchemaReference, TableReference,
 };
@@ -491,7 +491,7 @@ pub struct OperateFunctionArg {
     pub default_expr: Option<Expr>,
 }
 
-impl<'a> Container<'a, Expr> for OperateFunctionArg {
+impl<'a> TreeNodeContainer<'a, Expr> for OperateFunctionArg {
     fn apply_elements<F: FnMut(&'a Expr) -> Result<TreeNodeRecursion>>(
         &'a self,
         f: F,
@@ -522,7 +522,7 @@ pub struct CreateFunctionBody {
     pub function_body: Option<Expr>,
 }
 
-impl<'a> Container<'a, Expr> for CreateFunctionBody {
+impl<'a> TreeNodeContainer<'a, Expr> for CreateFunctionBody {
     fn apply_elements<F: FnMut(&'a Expr) -> Result<TreeNodeRecursion>>(
         &'a self,
         f: F,

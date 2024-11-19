@@ -770,10 +770,10 @@ impl<T> Transformed<T> {
     }
 }
 
-/// [`Container`] contains elements that a function can be applied on or mapped. The
-/// elements of the container are siblings so the continuation rules are similar to
+/// [`TreeNodeContainer`] contains elements that a function can be applied on or mapped.
+/// The elements of the container are siblings so the continuation rules are similar to
 /// [`TreeNodeRecursion::visit_sibling`] / [`Transformed::transform_sibling`].
-pub trait Container<'a, T: 'a>: Sized {
+pub trait TreeNodeContainer<'a, T: 'a>: Sized {
     fn apply_elements<F: FnMut(&'a T) -> Result<TreeNodeRecursion>>(
         &'a self,
         f: F,
@@ -785,7 +785,7 @@ pub trait Container<'a, T: 'a>: Sized {
     ) -> Result<Transformed<Self>>;
 }
 
-impl<'a, T: 'a, C: Container<'a, T>> Container<'a, T> for Box<C> {
+impl<'a, T: 'a, C: TreeNodeContainer<'a, T>> TreeNodeContainer<'a, T> for Box<C> {
     fn apply_elements<F: FnMut(&'a T) -> Result<TreeNodeRecursion>>(
         &'a self,
         f: F,
@@ -801,7 +801,7 @@ impl<'a, T: 'a, C: Container<'a, T>> Container<'a, T> for Box<C> {
     }
 }
 
-impl<'a, T: 'a, C: Container<'a, T> + Clone> Container<'a, T> for Arc<C> {
+impl<'a, T: 'a, C: TreeNodeContainer<'a, T> + Clone> TreeNodeContainer<'a, T> for Arc<C> {
     fn apply_elements<F: FnMut(&'a T) -> Result<TreeNodeRecursion>>(
         &'a self,
         f: F,
@@ -819,7 +819,7 @@ impl<'a, T: 'a, C: Container<'a, T> + Clone> Container<'a, T> for Arc<C> {
     }
 }
 
-impl<'a, T: 'a, C: Container<'a, T>> Container<'a, T> for Option<C> {
+impl<'a, T: 'a, C: TreeNodeContainer<'a, T>> TreeNodeContainer<'a, T> for Option<C> {
     fn apply_elements<F: FnMut(&'a T) -> Result<TreeNodeRecursion>>(
         &'a self,
         f: F,
@@ -840,7 +840,7 @@ impl<'a, T: 'a, C: Container<'a, T>> Container<'a, T> for Option<C> {
     }
 }
 
-impl<'a, T: 'a, C: Container<'a, T>> Container<'a, T> for Vec<C> {
+impl<'a, T: 'a, C: TreeNodeContainer<'a, T>> TreeNodeContainer<'a, T> for Vec<C> {
     fn apply_elements<F: FnMut(&'a T) -> Result<TreeNodeRecursion>>(
         &'a self,
         mut f: F,
@@ -878,7 +878,9 @@ impl<'a, T: 'a, C: Container<'a, T>> Container<'a, T> for Vec<C> {
     }
 }
 
-impl<'a, T: 'a, K: Eq + Hash, C: Container<'a, T>> Container<'a, T> for HashMap<K, C> {
+impl<'a, T: 'a, K: Eq + Hash, C: TreeNodeContainer<'a, T>> TreeNodeContainer<'a, T>
+    for HashMap<K, C>
+{
     fn apply_elements<F: FnMut(&'a T) -> Result<TreeNodeRecursion>>(
         &'a self,
         mut f: F,
@@ -916,8 +918,8 @@ impl<'a, T: 'a, K: Eq + Hash, C: Container<'a, T>> Container<'a, T> for HashMap<
     }
 }
 
-impl<'a, T: 'a, C0: Container<'a, T>, C1: Container<'a, T>> Container<'a, T>
-    for (C0, C1)
+impl<'a, T: 'a, C0: TreeNodeContainer<'a, T>, C1: TreeNodeContainer<'a, T>>
+    TreeNodeContainer<'a, T> for (C0, C1)
 {
     fn apply_elements<F: FnMut(&'a T) -> Result<TreeNodeRecursion>>(
         &'a self,
@@ -942,8 +944,13 @@ impl<'a, T: 'a, C0: Container<'a, T>, C1: Container<'a, T>> Container<'a, T>
     }
 }
 
-impl<'a, T: 'a, C0: Container<'a, T>, C1: Container<'a, T>, C2: Container<'a, T>>
-    Container<'a, T> for (C0, C1, C2)
+impl<
+        'a,
+        T: 'a,
+        C0: TreeNodeContainer<'a, T>,
+        C1: TreeNodeContainer<'a, T>,
+        C2: TreeNodeContainer<'a, T>,
+    > TreeNodeContainer<'a, T> for (C0, C1, C2)
 {
     fn apply_elements<F: FnMut(&'a T) -> Result<TreeNodeRecursion>>(
         &'a self,
@@ -973,17 +980,17 @@ impl<'a, T: 'a, C0: Container<'a, T>, C1: Container<'a, T>, C2: Container<'a, T>
     }
 }
 
-/// [`RefContainer`] contains references to elements that a function can be applied on.
-/// The elements of the container are siblings so the continuation rules are similar to
-/// [`TreeNodeRecursion::visit_sibling`].
-pub trait RefContainer<'a, T: 'a>: Sized {
+/// [`TreeNodeRefContainer`] contains references to elements that a function can be
+/// applied on. The elements of the container are siblings so the continuation rules are
+/// similar to [`TreeNodeRecursion::visit_sibling`].
+pub trait TreeNodeRefContainer<'a, T: 'a>: Sized {
     fn apply_ref_elements<F: FnMut(&'a T) -> Result<TreeNodeRecursion>>(
         &self,
         f: F,
     ) -> Result<TreeNodeRecursion>;
 }
 
-impl<'a, T: 'a, C: Container<'a, T>> RefContainer<'a, T> for Vec<&'a C> {
+impl<'a, T: 'a, C: TreeNodeContainer<'a, T>> TreeNodeRefContainer<'a, T> for Vec<&'a C> {
     fn apply_ref_elements<F: FnMut(&'a T) -> Result<TreeNodeRecursion>>(
         &self,
         mut f: F,
@@ -1000,8 +1007,8 @@ impl<'a, T: 'a, C: Container<'a, T>> RefContainer<'a, T> for Vec<&'a C> {
     }
 }
 
-impl<'a, T: 'a, C0: Container<'a, T>, C1: Container<'a, T>> RefContainer<'a, T>
-    for (&'a C0, &'a C1)
+impl<'a, T: 'a, C0: TreeNodeContainer<'a, T>, C1: TreeNodeContainer<'a, T>>
+    TreeNodeRefContainer<'a, T> for (&'a C0, &'a C1)
 {
     fn apply_ref_elements<F: FnMut(&'a T) -> Result<TreeNodeRecursion>>(
         &self,
@@ -1013,8 +1020,13 @@ impl<'a, T: 'a, C0: Container<'a, T>, C1: Container<'a, T>> RefContainer<'a, T>
     }
 }
 
-impl<'a, T: 'a, C0: Container<'a, T>, C1: Container<'a, T>, C2: Container<'a, T>>
-    RefContainer<'a, T> for (&'a C0, &'a C1, &'a C2)
+impl<
+        'a,
+        T: 'a,
+        C0: TreeNodeContainer<'a, T>,
+        C1: TreeNodeContainer<'a, T>,
+        C2: TreeNodeContainer<'a, T>,
+    > TreeNodeRefContainer<'a, T> for (&'a C0, &'a C1, &'a C2)
 {
     fn apply_ref_elements<F: FnMut(&'a T) -> Result<TreeNodeRecursion>>(
         &self,
@@ -1235,7 +1247,7 @@ pub(crate) mod tests {
     use std::fmt::Display;
 
     use crate::tree_node::{
-        Container, Transformed, TreeNode, TreeNodeRecursion, TreeNodeRewriter,
+        Transformed, TreeNode, TreeNodeContainer, TreeNodeRecursion, TreeNodeRewriter,
         TreeNodeVisitor,
     };
     use crate::Result;
@@ -1285,7 +1297,7 @@ pub(crate) mod tests {
         }
     }
 
-    impl<'a, T: 'a> Container<'a, Self> for TestTreeNode<T> {
+    impl<'a, T: 'a> TreeNodeContainer<'a, Self> for TestTreeNode<T> {
         fn apply_elements<F: FnMut(&'a Self) -> Result<TreeNodeRecursion>>(
             &'a self,
             mut f: F,

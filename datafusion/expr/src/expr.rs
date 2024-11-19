@@ -32,7 +32,7 @@ use crate::{udaf, ExprSchemable, Operator, Signature, WindowFrame, WindowUDF};
 use arrow::datatypes::{DataType, FieldRef};
 use datafusion_common::cse::HashNode;
 use datafusion_common::tree_node::{
-    Container, Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
+    Transformed, TransformedResult, TreeNode, TreeNodeContainer, TreeNodeRecursion,
 };
 use datafusion_common::{
     plan_err, Column, DFSchema, HashMap, Result, ScalarValue, TableReference,
@@ -351,7 +351,7 @@ impl<'a> From<(Option<&'a TableReference>, &'a FieldRef)> for Expr {
     }
 }
 
-impl<'a> Container<'a, Self> for Expr {
+impl<'a> TreeNodeContainer<'a, Self> for Expr {
     fn apply_elements<F: FnMut(&'a Self) -> Result<TreeNodeRecursion>>(
         &'a self,
         mut f: F,
@@ -669,7 +669,7 @@ impl Display for Sort {
     }
 }
 
-impl<'a> Container<'a, Expr> for Sort {
+impl<'a> TreeNodeContainer<'a, Expr> for Sort {
     fn apply_elements<F: FnMut(&'a Expr) -> Result<TreeNodeRecursion>>(
         &'a self,
         f: F,

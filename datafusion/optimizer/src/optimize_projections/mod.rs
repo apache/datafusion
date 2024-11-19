@@ -38,7 +38,9 @@ use datafusion_expr::{
 
 use crate::optimize_projections::required_indices::RequiredIndicies;
 use crate::utils::NamePreserver;
-use datafusion_common::tree_node::{Container, Transformed, TreeNode, TreeNodeRecursion};
+use datafusion_common::tree_node::{
+    Transformed, TreeNode, TreeNodeContainer, TreeNodeRecursion,
+};
 
 /// Optimizer rule to prune unnecessary columns from intermediate schemas
 /// inside the [`LogicalPlan`]. This rule:

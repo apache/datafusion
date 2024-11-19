@@ -18,7 +18,7 @@
 use std::{collections::HashSet, sync::Arc};
 
 use arrow_schema::Schema;
-use datafusion_common::tree_node::Container;
+use datafusion_common::tree_node::TreeNodeContainer;
 use datafusion_common::{
     tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRewriter},
     Column, HashMap, Result, TableReference,
