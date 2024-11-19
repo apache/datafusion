@@ -525,12 +525,12 @@ impl Unparser<'_> {
             .chunks_exact(2)
             .map(|chunk| {
                 let key = match &chunk[0] {
-                    Expr::Literal(lit) => lit.to_string(),
+                    Expr::Literal(lit) => self.new_ident_quoted_if_needs(lit.to_string()),
                     _ => return internal_err!("named_struct arg is invalid"),
                 };
 
                 Ok(ast::DictionaryField {
-                    key: Ident::new(key),
+                    key,
                     value: Box::new(self.expr_to_sql(&chunk[1])?),
                 })
             })

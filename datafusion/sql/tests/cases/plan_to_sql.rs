@@ -24,7 +24,6 @@ use datafusion_expr::test::function_stub::{
     count_udaf, max_udaf, min_udaf, sum, sum_udaf,
 };
 use datafusion_expr::{col, lit, table_scan, wildcard, LogicalPlanBuilder};
-use datafusion_functions::core::named_struct;
 use datafusion_functions::unicode;
 use datafusion_functions_aggregate::grouping::grouping_udaf;
 use datafusion_functions_nested::make_array::make_array_udf;
