@@ -400,6 +400,10 @@ impl EquivalenceProperties {
                 .collect()
         );
 
+        if filtered_exprs.is_empty() {
+            return self;
+        }
+
         let mut orderings = vec![filtered_exprs.clone()];
 
         // Preserve valid suffixes from existing orderings
