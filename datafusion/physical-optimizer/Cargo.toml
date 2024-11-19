@@ -33,13 +33,11 @@ workspace = true
 
 [dependencies]
 arrow = { workspace = true }
-arrow-array = { workspace = true }
 arrow-schema = { workspace = true }
 datafusion-common = { workspace = true, default-features = true }
 datafusion-execution = { workspace = true }
 datafusion-expr-common = { workspace = true, default-features = true }
-datafusion-expr = { workspace = true, default-features = true }
-datafusion-functions-nested = { workspace = true }
+datafusion-optimizer = { workspace = true }
 datafusion-physical-expr = { workspace = true }
 datafusion-physical-plan = { workspace = true }
 itertools = { workspace = true }
@@ -47,5 +45,7 @@ log = { workspace = true }
 recursive = { workspace = true }
 
 [dev-dependencies]
+datafusion-expr = { workspace = true }
 datafusion-functions-aggregate = { workspace = true }
+datafusion-functions-nested = { workspace = true }
 tokio = { workspace = true }
