@@ -233,7 +233,7 @@ impl ScalarUDFImpl for DatePartFunc {
     }
 }
 
-fn is_integar_part(part: &str) -> bool {
+fn is_integer_part(part: &str) -> bool {
     let part = part_normalization(part);
     matches!(
         part.to_lowercase().as_str(),
