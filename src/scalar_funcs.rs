@@ -354,7 +354,7 @@ pub fn spark_round(
             DataType::Int32 if *point < 0 => round_integer_array!(array, point, Int32Array, i32),
             DataType::Int16 if *point < 0 => round_integer_array!(array, point, Int16Array, i16),
             DataType::Int8 if *point < 0 => round_integer_array!(array, point, Int8Array, i8),
-            DataType::Decimal128(_, scale) if *scale > 0 => {
+            DataType::Decimal128(_, scale) if *scale >= 0 => {
                 let f = decimal_round_f(scale, point);
                 let (precision, scale) = get_precision_scale(data_type);
                 make_decimal_array(array, precision, scale, &f)
