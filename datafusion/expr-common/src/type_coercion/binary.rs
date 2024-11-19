@@ -1139,13 +1139,11 @@ fn numeric_string_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<D
 }
 
 fn coerce_list_children(lhs_field: &FieldRef, rhs_field: &FieldRef) -> Option<FieldRef> {
+    let data_types = vec![lhs_field.data_type().clone(), rhs_field.data_type().clone()];
     Some(Arc::new(
         (**lhs_field)
             .clone()
-            .with_data_type(comparison_coercion(
-                lhs_field.data_type(),
-                rhs_field.data_type(),
-            )?)
+            .with_data_type(type_union_resolution(&data_types)?)
             .with_nullable(lhs_field.is_nullable() || rhs_field.is_nullable()),
     ))
 }
