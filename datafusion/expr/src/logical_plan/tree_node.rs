@@ -72,7 +72,7 @@ impl TreeNode for LogicalPlan {
     /// [`Expr::Exists`]: crate::Expr::Exists
     fn map_children<F: FnMut(Self) -> Result<Transformed<Self>>>(
         self,
-        mut f: F,
+        f: F,
     ) -> Result<Transformed<Self>> {
         Ok(match self {
             LogicalPlan::Projection(Projection {
@@ -142,20 +142,18 @@ impl TreeNode for LogicalPlan {
                 join_constraint,
                 schema,
                 null_equals_null,
-            }) => (left, right)
-                .map_elements(&mut f)?
-                .update_data(|(left, right)| {
-                    LogicalPlan::Join(Join {
-                        left,
-                        right,
-                        on,
-                        filter,
-                        join_type,
-                        join_constraint,
-                        schema,
-                        null_equals_null,
-                    })
-                }),
+            }) => (left, right).map_elements(f)?.update_data(|(left, right)| {
+                LogicalPlan::Join(Join {
+                    left,
+                    right,
+                    on,
+                    filter,
+                    join_type,
+                    join_constraint,
+                    schema,
+                    null_equals_null,
+                })
+            }),
             LogicalPlan::Limit(Limit { skip, fetch, input }) => input
                 .map_elements(f)?
                 .update_data(|input| LogicalPlan::Limit(Limit { skip, fetch, input })),
@@ -332,16 +330,16 @@ impl TreeNode for LogicalPlan {
                 static_term,
                 recursive_term,
                 is_distinct,
-            }) => (static_term, recursive_term)
-                .map_elements(&mut f)?
-                .update_data(|(static_term, recursive_term)| {
+            }) => (static_term, recursive_term).map_elements(f)?.update_data(
+                |(static_term, recursive_term)| {
                     LogicalPlan::RecursiveQuery(RecursiveQuery {
                         name,
                         static_term,
                         recursive_term,
                         is_distinct,
                     })
-                }),
+                },
+            ),
             LogicalPlan::Statement(stmt) => match stmt {
                 Statement::Prepare(p) => p
                     .input
@@ -551,7 +549,7 @@ impl LogicalPlan {
                 group_expr,
                 aggr_expr,
                 schema,
-            }) => (group_expr, aggr_expr).map_elements(&mut f)?.update_data(
+            }) => (group_expr, aggr_expr).map_elements(f)?.update_data(
                 |(group_expr, aggr_expr)| {
                     LogicalPlan::Aggregate(Aggregate {
                         input,
@@ -574,22 +572,20 @@ impl LogicalPlan {
                 join_constraint,
                 schema,
                 null_equals_null,
-            }) => (on, filter)
-                .map_elements(&mut f)?
-                .update_data(|(on, filter)| {
-                    LogicalPlan::Join(Join {
-                        left,
-                        right,
-                        on,
-                        filter,
-                        join_type,
-                        join_constraint,
-                        schema,
-                        null_equals_null,
-                    })
-                }),
+            }) => (on, filter).map_elements(f)?.update_data(|(on, filter)| {
+                LogicalPlan::Join(Join {
+                    left,
+                    right,
+                    on,
+                    filter,
+                    join_type,
+                    join_constraint,
+                    schema,
+                    null_equals_null,
+                })
+            }),
             LogicalPlan::Sort(Sort { expr, input, fetch }) => expr
-                .map_elements(&mut f)?
+                .map_elements(f)?
                 .update_data(|expr| LogicalPlan::Sort(Sort { expr, input, fetch })),
             LogicalPlan::Extension(Extension { node }) => {
                 // would be nice to avoid this copy -- maybe can
@@ -628,7 +624,7 @@ impl LogicalPlan {
                 input,
                 schema,
             })) => (on_expr, select_expr, sort_expr)
-                .map_elements(&mut f)?
+                .map_elements(f)?
                 .update_data(|(on_expr, select_expr, sort_expr)| {
                     LogicalPlan::Distinct(Distinct::On(DistinctOn {
                         on_expr,
@@ -638,11 +634,11 @@ impl LogicalPlan {
                         schema,
                     }))
                 }),
-            LogicalPlan::Limit(Limit { skip, fetch, input }) => (skip, fetch)
-                .map_elements(&mut f)?
-                .update_data(|(skip, fetch)| {
+            LogicalPlan::Limit(Limit { skip, fetch, input }) => {
+                (skip, fetch).map_elements(f)?.update_data(|(skip, fetch)| {
                     LogicalPlan::Limit(Limit { skip, fetch, input })
-                }),
+                })
+            }
             LogicalPlan::Statement(stmt) => match stmt {
                 Statement::Execute(e) => {
                     e.parameters.map_elements(f)?.update_data(|parameters| {

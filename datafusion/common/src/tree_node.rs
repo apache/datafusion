@@ -996,12 +996,12 @@ impl<
 /// construct a temporary container to be able to call `apply_ref_elements` on a
 /// collection of tree node references. But in that case the container's temporary
 /// lifetime is different to the lifetime of tree nodes that we put into it.
-/// Please find an example usecase in case in `Expr::apply_children` in `Expr::Case` case.
+/// Please find an example usecase in `Expr::apply_children` with the `Expr::Case` case.
 ///
 /// Most of the cases we don't need to create a temporary container with
 /// `TreeNodeRefContainer`, but we can just call `TreeNodeContainer::apply_elements`.
-/// Please find an example usecase in case in `Expr::apply_children` in
-/// `Expr::GroupingSet` case.
+/// Please find an example usecase in `Expr::apply_children` with the `Expr::GroupingSet`
+/// case.
 pub trait TreeNodeRefContainer<'a, T: 'a>: Sized {
     /// Applies `f` to all elements of the container.
     /// This method is usually called from [`TreeNode::apply_children`] implementations as
