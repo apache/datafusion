@@ -3860,4 +3860,75 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn test_with_reorder_comprehensive() -> Result<()> {
+        let schema = create_test_schema()?;
+        let mut eq_properties = EquivalenceProperties::new(schema.clone());
+
+        let col_a = col("a", &schema)?;
+        let col_b = col("b", &schema)?;
+        let col_c = col("c", &schema)?;
+        let col_d = col("d", &schema)?;
+        let col_e = col("e", &schema)?;
+
+        let asc = SortOptions::default();
+
+        // Constants: c is constant
+        eq_properties = eq_properties.with_constants([ConstExpr::from(&col_c)]);
+
+        // Equality: b = d
+        eq_properties.add_equal_conditions(&col_b, &col_d)?;
+
+        // Orderings: [d ASC, a ASC], [e ASC]
+        eq_properties.add_new_orderings([
+            LexOrdering::new(vec![
+                PhysicalSortExpr {
+                    expr: Arc::clone(&col_d),
+                    options: asc,
+                },
+                PhysicalSortExpr {
+                    expr: Arc::clone(&col_a),
+                    options: asc,
+                },
+            ]),
+            LexOrdering::new(vec![PhysicalSortExpr {
+                expr: Arc::clone(&col_e),
+                options: asc,
+            }]),
+        ]);
+
+        // Initial ordering: [b ASC, c ASC]
+        let new_order = LexOrdering::new(vec![
+            PhysicalSortExpr {
+                expr: Arc::clone(&col_b),
+                options: asc,
+            },
+            PhysicalSortExpr {
+                expr: Arc::clone(&col_c),
+                options: asc,
+            },
+        ]);
+
+        let result = eq_properties.with_reorder(new_order);
+
+        // Should preserve the original [d ASC, a ASC] ordering
+        assert_eq!(result.oeq_class().len(), 1);
+        let ordering = &result.oeq_class().orderings[0];
+        assert_eq!(ordering.len(), 2);
+
+        // First expression should be either b or d (they're equivalent)
+        assert!(
+            ordering[0].expr.eq(&col_b) || ordering[0].expr.eq(&col_d),
+            "Expected b or d as first expression, got {:?}",
+            ordering[0].expr
+        );
+        assert!(ordering[0].options.eq(&asc));
+
+        // Second expression should be a
+        assert!(ordering[1].expr.eq(&col_a));
+        assert!(ordering[1].options.eq(&asc));
+
+        Ok(())
+    }
 }
