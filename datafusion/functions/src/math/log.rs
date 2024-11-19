@@ -277,7 +277,7 @@ mod tests {
             ]))), // num
             ColumnarValue::Array(Arc::new(Int64Array::from(vec![5, 10, 15, 20]))),
         ];
-
+        #[allow(deprecated)] // TODO: migrate to invoke_with_args
         let _ = LogFunc::new().invoke_batch(&args, 4);
     }
 
@@ -286,7 +286,7 @@ mod tests {
         let args = [
             ColumnarValue::Array(Arc::new(Int64Array::from(vec![10]))), // num
         ];
-
+        #[allow(deprecated)] // TODO: migrate to invoke_with_args
         let result = LogFunc::new().invoke_batch(&args, 1);
         result.expect_err("expected error");
     }
@@ -296,7 +296,7 @@ mod tests {
         let args = [
             ColumnarValue::Scalar(ScalarValue::Float32(Some(10.0))), // num
         ];
-
+        #[allow(deprecated)] // TODO: migrate to invoke_with_args
         let result = LogFunc::new()
             .invoke_batch(&args, 1)
             .expect("failed to initialize function log");
@@ -320,7 +320,7 @@ mod tests {
         let args = [
             ColumnarValue::Scalar(ScalarValue::Float64(Some(10.0))), // num
         ];
-
+        #[allow(deprecated)] // TODO: migrate to invoke_with_args
         let result = LogFunc::new()
             .invoke_batch(&args, 1)
             .expect("failed to initialize function log");
@@ -345,7 +345,7 @@ mod tests {
             ColumnarValue::Scalar(ScalarValue::Float32(Some(2.0))), // num
             ColumnarValue::Scalar(ScalarValue::Float32(Some(32.0))), // num
         ];
-
+        #[allow(deprecated)] // TODO: migrate to invoke_with_args
         let result = LogFunc::new()
             .invoke_batch(&args, 1)
             .expect("failed to initialize function log");
@@ -370,7 +370,7 @@ mod tests {
             ColumnarValue::Scalar(ScalarValue::Float64(Some(2.0))), // num
             ColumnarValue::Scalar(ScalarValue::Float64(Some(64.0))), // num
         ];
-
+        #[allow(deprecated)] // TODO: migrate to invoke_with_args
         let result = LogFunc::new()
             .invoke_batch(&args, 1)
             .expect("failed to initialize function log");
@@ -396,7 +396,7 @@ mod tests {
                 10.0, 100.0, 1000.0, 10000.0,
             ]))), // num
         ];
-
+        #[allow(deprecated)] // TODO: migrate to invoke_with_args
         let result = LogFunc::new()
             .invoke_batch(&args, 4)
             .expect("failed to initialize function log");
@@ -425,7 +425,7 @@ mod tests {
                 10.0, 100.0, 1000.0, 10000.0,
             ]))), // num
         ];
-
+        #[allow(deprecated)] // TODO: migrate to invoke_with_args
         let result = LogFunc::new()
             .invoke_batch(&args, 4)
             .expect("failed to initialize function log");
@@ -455,7 +455,7 @@ mod tests {
                 8.0, 4.0, 81.0, 625.0,
             ]))), // num
         ];
-
+        #[allow(deprecated)] // TODO: migrate to invoke_with_args
         let result = LogFunc::new()
             .invoke_batch(&args, 4)
             .expect("failed to initialize function log");
@@ -485,7 +485,7 @@ mod tests {
                 8.0, 4.0, 81.0, 625.0,
             ]))), // num
         ];
-
+        #[allow(deprecated)] // TODO: migrate to invoke_with_args
         let result = LogFunc::new()
             .invoke_batch(&args, 4)
             .expect("failed to initialize function log");
