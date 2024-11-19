@@ -72,7 +72,11 @@ impl ScalarUDFImpl for RepeatFunc {
         utf8_to_str_type(&arg_types[0], "repeat")
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         make_scalar_function(repeat, vec![])(args)
     }
 

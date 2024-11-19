@@ -33,7 +33,8 @@ use datafusion_common::cast::as_primitive_array;
 use datafusion_common::{exec_err, plan_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr::scalar_doc_sections::DOC_SECTION_DATETIME;
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    Volatility,
 };
 
 /// A UDF function that converts a timezone-aware timestamp to local time (with no offset or
@@ -320,15 +321,15 @@ impl ScalarUDFImpl for ToLocalTimeFunc {
         }
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        if args.len() != 1 {
+    fn invoke(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        if args.args.len() != 1 {
             return exec_err!(
                 "to_local_time function requires 1 argument, got {:?}",
-                args.len()
+                args.args.len()
             );
         }
 
-        self.to_local_time(args)
+        self.to_local_time(args.args.as_slice())
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
@@ -558,8 +559,8 @@ mod tests {
 
     fn test_to_local_time_helper(input: ScalarValue, expected: ScalarValue) {
         let res = ToLocalTimeFunc::new()
-            .invoke_with_args(ScalarFunctionArgs {
-                args: &[ColumnarValue::Scalar(input)],
+            .invoke(ScalarFunctionArgs {
+                args: vec![ColumnarValue::Scalar(input)],
                 number_rows: 1,
                 return_type: &expected.data_type(),
             })

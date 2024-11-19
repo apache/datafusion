@@ -151,7 +151,11 @@ impl ScalarUDFImpl for DatePartFunc {
         Ok(Float64)
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         if args.len() != 2 {
             return exec_err!("Expected two arguments in DATE_PART");
         }

@@ -125,7 +125,11 @@ impl ScalarUDFImpl for LogFunc {
     }
 
     // Support overloaded log(base, x) and log(x) which defaults to log(10, x)
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         let args = ColumnarValue::values_to_arrays(args)?;
 
         let mut base = ColumnarValue::Scalar(ScalarValue::Float32(Some(10.0)));

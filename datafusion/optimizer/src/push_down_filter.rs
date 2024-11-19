@@ -3301,7 +3301,11 @@ Projection: a, b
             Ok(DataType::Int32)
         }
 
-        fn invoke(&self, _args: &[ColumnarValue]) -> Result<ColumnarValue> {
+        fn invoke_batch(
+            &self,
+            _args: &[ColumnarValue],
+            _number_rows: usize,
+        ) -> Result<ColumnarValue> {
             Ok(ColumnarValue::Scalar(ScalarValue::from(1)))
         }
     }

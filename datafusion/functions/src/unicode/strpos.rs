@@ -66,7 +66,11 @@ impl ScalarUDFImpl for StrposFunc {
         utf8_to_int_type(&arg_types[0], "strpos/instr/position")
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         make_scalar_function(strpos, vec![])(args)
     }
 

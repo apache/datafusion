@@ -75,7 +75,11 @@ impl ScalarUDFImpl for ConcatWsFunc {
 
     /// Concatenates all but the first argument, with separators. The first argument is used as the separator string, and should not be NULL. Other NULL arguments are ignored.
     /// concat_ws(',', 'abcde', 2, NULL, 22) = 'abcde,2,22'
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         // do not accept 0 arguments.
         if args.len() < 2 {
             return exec_err!(
@@ -467,6 +471,7 @@ mod tests {
         ])));
         let args = &[c0, c1, c2];
 
+        #[allow(deprecated)] // TODO migrate UDF invoke to invoke_batch
         let result = ConcatWsFunc::new().invoke_batch(args, 3)?;
         let expected =
             Arc::new(StringArray::from(vec!["foo,x", "bar", "baz,z"])) as ArrayRef;
@@ -492,6 +497,7 @@ mod tests {
         ])));
         let args = &[c0, c1, c2];
 
+        #[allow(deprecated)] // TODO migrate UDF invoke to invoke_batch
         let result = ConcatWsFunc::new().invoke_batch(args, 3)?;
         let expected =
             Arc::new(StringArray::from(vec![Some("foo,x"), None, Some("baz+z")]))

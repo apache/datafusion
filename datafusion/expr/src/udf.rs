@@ -20,9 +20,7 @@
 use crate::expr::schema_name_from_exprs_comma_seperated_without_space;
 use crate::simplify::{ExprSimplifyResult, SimplifyInfo};
 use crate::sort_properties::{ExprProperties, SortProperties};
-use crate::{
-    ColumnarValue, Documentation, Expr, ScalarFunctionImplementation, Signature,
-};
+use crate::{ColumnarValue, Documentation, Expr, Signature};
 use arrow::datatypes::DataType;
 use datafusion_common::{not_impl_err, ExprSchema, Result};
 use datafusion_expr_common::interval_arithmetic::Interval;
@@ -203,12 +201,6 @@ impl ScalarUDF {
         self.inner.simplify(args, info)
     }
 
-    #[deprecated(since = "42.1.0", note = "Use `invoke_batch` instead")]
-    pub fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        #[allow(deprecated)]
-        self.inner.invoke(args)
-    }
-
     pub fn is_nullable(&self, args: &[Expr], schema: &dyn ExprSchema) -> bool {
         self.inner.is_nullable(args, schema)
     }
@@ -225,27 +217,9 @@ impl ScalarUDF {
 
     /// Invoke the function on `args`, returning the appropriate result.
     ///
-    /// See [`ScalarUDFImpl::invoke_with_args`] for more details.
-    pub fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        self.inner.invoke_with_args(args)
-    }
-
-    /// Invoke the function without `args` but number of rows, returning the appropriate result.
-    ///
-    /// See [`ScalarUDFImpl::invoke_no_args`] for more details.
-    #[deprecated(since = "42.1.0", note = "Use `invoke_batch` instead")]
-    pub fn invoke_no_args(&self, number_rows: usize) -> Result<ColumnarValue> {
-        #[allow(deprecated)]
-        self.inner.invoke_no_args(number_rows)
-    }
-
-    /// Returns a `ScalarFunctionImplementation` that can invoke the function
-    /// during execution
-    #[deprecated(since = "42.0.0", note = "Use `invoke_batch` instead")]
-    pub fn fun(&self) -> ScalarFunctionImplementation {
-        let captured = Arc::clone(&self.inner);
-        #[allow(deprecated)]
-        Arc::new(move |args| captured.invoke(args))
+    /// See [`ScalarUDFImpl::invoke`] for more details.
+    pub fn invoke(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        self.inner.invoke(args)
     }
 
     /// Get the circuits of inner implementation
@@ -329,7 +303,7 @@ where
 
 pub struct ScalarFunctionArgs<'a> {
     // The evaluated arguments to the function
-    pub args: &'a [ColumnarValue],
+    pub args: Vec<ColumnarValue>,
     // The number of rows in record batch being evaluated
     pub number_rows: usize,
     // The return type of the scalar function returned (from `return_type` or `return_type_from_exprs`)
@@ -353,7 +327,7 @@ pub struct ScalarFunctionArgs<'a> {
 /// # use std::sync::OnceLock;
 /// # use arrow::datatypes::DataType;
 /// # use datafusion_common::{DataFusionError, plan_err, Result};
-/// # use datafusion_expr::{col, ColumnarValue, Documentation, Signature, Volatility};
+/// # use datafusion_expr::{col, ColumnarValue, Documentation, ScalarFunctionArgs, Signature, Volatility};
 /// # use datafusion_expr::{ScalarUDFImpl, ScalarUDF};
 /// # use datafusion_expr::scalar_doc_sections::DOC_SECTION_MATH;
 ///
@@ -396,7 +370,7 @@ pub struct ScalarFunctionArgs<'a> {
 ///      Ok(DataType::Int32)
 ///    }
 ///    // The actual implementation would add one to the argument
-///    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> { unimplemented!() }
+///    fn invoke(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> { unimplemented!() }
 ///    fn documentation(&self) -> Option<&Documentation> {
 ///         Some(get_doc())
 ///     }
@@ -490,33 +464,6 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
         true
     }
 
-    /// Invoke the function on `args`, returning the appropriate result
-    ///
-    /// The function will be invoked passed with the slice of [`ColumnarValue`]
-    /// (either scalar or array).
-    ///
-    /// If the function does not take any arguments, please use [invoke_no_args]
-    /// instead and return [not_impl_err] for this function.
-    ///
-    ///
-    /// # Performance
-    ///
-    /// For the best performance, the implementations of `invoke` should handle
-    /// the common case when one or more of their arguments are constant values
-    /// (aka  [`ColumnarValue::Scalar`]).
-    ///
-    /// [`ColumnarValue::values_to_arrays`] can be used to convert the arguments
-    /// to arrays, which will likely be simpler code, but be slower.
-    ///
-    /// [invoke_no_args]: ScalarUDFImpl::invoke_no_args
-    #[deprecated(since = "42.1.0", note = "Use `invoke_batch` instead")]
-    fn invoke(&self, _args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        not_impl_err!(
-            "Function {} does not implement invoke but called",
-            self.name()
-        )
-    }
-
     /// Invoke the function with `args` and the number of rows,
     /// returning the appropriate result.
     ///
@@ -531,24 +478,15 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     ///
     /// [`ColumnarValue::values_to_arrays`] can be used to convert the arguments
     /// to arrays, which will likely be simpler code, but be slower.
-    #[deprecated(since = "43.0.0", note = "Use `invoke_with_args` instead")]
+    #[deprecated(since = "43.0.0", note = "Use `invoke` instead")]
     fn invoke_batch(
         &self,
-        args: &[ColumnarValue],
-        number_rows: usize,
+        _args: &[ColumnarValue],
+        _number_rows: usize,
     ) -> Result<ColumnarValue> {
-        match args.is_empty() {
-            true =>
-            {
-                #[allow(deprecated)]
-                self.invoke_no_args(number_rows)
-            }
-            false =>
-            {
-                #[allow(deprecated)]
-                self.invoke(args)
-            }
-        }
+        not_impl_err!(
+            "invoke_batch, this method is deprecated implement `invoke` instead"
+        )
     }
 
     /// Invoke the function with `args: ScalarFunctionArgs` returning the appropriate result.
@@ -563,19 +501,11 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     ///
     /// [`ColumnarValue::values_to_arrays`] can be used to convert the arguments
     /// to arrays, which will likely be simpler code, but be slower.
-    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+    /// Note that this invoke method replaces the original invoke function deprecated in
+    /// version = 42.1.0.
+    fn invoke(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         #[allow(deprecated)]
-        self.invoke_batch(args.args, args.number_rows)
-    }
-
-    /// Invoke the function without `args`, instead the number of rows are provided,
-    /// returning the appropriate result.
-    #[deprecated(since = "42.1.0", note = "Use `invoke_batch` instead")]
-    fn invoke_no_args(&self, _number_rows: usize) -> Result<ColumnarValue> {
-        not_impl_err!(
-            "Function {} does not implement invoke_no_args but called",
-            self.name()
-        )
+        self.invoke_batch(args.args.as_slice(), args.number_rows)
     }
 
     /// Returns any aliases (alternate names) for this function.

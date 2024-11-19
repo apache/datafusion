@@ -30,7 +30,8 @@ use datafusion_common::cast::as_int64_array;
 use datafusion_common::{exec_err, plan_err, Result};
 use datafusion_expr::scalar_doc_sections::DOC_SECTION_STRING;
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    Volatility,
 };
 
 #[derive(Debug)]
@@ -75,8 +76,8 @@ impl ScalarUDFImpl for SubstrFunc {
         }
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        make_scalar_function(substr, vec![])(args)
+    fn invoke(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        make_scalar_function(substr, vec![])(args.args.as_slice())
     }
 
     fn aliases(&self) -> &[String] {

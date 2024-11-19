@@ -30,7 +30,8 @@ use datafusion_common::{exec_err, Result};
 use datafusion_expr::scalar_doc_sections::DOC_SECTION_STRING;
 use datafusion_expr::TypeSignature::Exact;
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    Volatility,
 };
 
 #[derive(Debug)]
@@ -76,8 +77,8 @@ impl ScalarUDFImpl for TranslateFunc {
         utf8_to_str_type(&arg_types[0], "translate")
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        make_scalar_function(invoke_translate, vec![])(args)
+    fn invoke(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        make_scalar_function(invoke_translate, vec![])(args.args.as_slice())
     }
 
     fn documentation(&self) -> Option<&Documentation> {

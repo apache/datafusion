@@ -155,7 +155,11 @@ mod tests {
         fn return_type(&self, _args: &[DataType]) -> Result<DataType> {
             Ok(DataType::Int32)
         }
-        fn invoke(&self, _args: &[ColumnarValue]) -> Result<ColumnarValue> {
+        fn invoke_batch(
+            &self,
+            _args: &[ColumnarValue],
+            _number_rows: usize,
+        ) -> Result<ColumnarValue> {
             unimplemented!()
         }
     }

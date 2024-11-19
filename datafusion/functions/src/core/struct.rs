@@ -101,7 +101,11 @@ impl ScalarUDFImpl for StructFunc {
         Ok(DataType::Struct(Fields::from(return_fields)))
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         struct_expr(args)
     }
 

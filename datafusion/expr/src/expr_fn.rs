@@ -27,7 +27,7 @@ use crate::function::{
 };
 use crate::{
     conditional_expressions::CaseBuilder, expr::Sort, logical_plan::Subquery,
-    AggregateUDF, Expr, LogicalPlan, Operator, PartitionEvaluator,
+    AggregateUDF, Expr, LogicalPlan, Operator, PartitionEvaluator, ScalarFunctionArgs,
     ScalarFunctionImplementation, ScalarUDF, Signature, Volatility,
 };
 use crate::{
@@ -462,8 +462,8 @@ impl ScalarUDFImpl for SimpleScalarUDF {
         Ok(self.return_type.clone())
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        (self.fun)(args)
+    fn invoke(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        (self.fun)(args.args.as_slice())
     }
 }
 

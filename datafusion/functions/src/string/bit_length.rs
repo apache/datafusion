@@ -62,7 +62,11 @@ impl ScalarUDFImpl for BitLengthFunc {
         utf8_to_int_type(&arg_types[0], "bit_length")
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         if args.len() != 1 {
             return exec_err!(
                 "bit_length function requires 1 argument, got {}",

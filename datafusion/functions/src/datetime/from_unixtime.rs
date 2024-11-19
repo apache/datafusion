@@ -88,7 +88,11 @@ impl ScalarUDFImpl for FromUnixtimeFunc {
         internal_err!("call return_type_from_exprs instead")
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         let len = args.len();
         if len != 1 && len != 2 {
             return exec_err!(
@@ -163,7 +167,7 @@ mod test {
         let args = [ColumnarValue::Scalar(Int64(Some(1729900800)))];
 
         #[allow(deprecated)] // TODO use invoke_batch
-        let result = FromUnixtimeFunc::new().invoke(&args).unwrap();
+        let result = FromUnixtimeFunc::new().invoke_batch(&args, 1).unwrap();
 
         match result {
             ColumnarValue::Scalar(ScalarValue::TimestampSecond(Some(sec), None)) => {
@@ -183,7 +187,7 @@ mod test {
         ];
 
         #[allow(deprecated)] // TODO use invoke_batch
-        let result = FromUnixtimeFunc::new().invoke(&args).unwrap();
+        let result = FromUnixtimeFunc::new().invoke_batch(&args, 2).unwrap();
 
         match result {
             ColumnarValue::Scalar(ScalarValue::TimestampSecond(Some(sec), Some(tz))) => {

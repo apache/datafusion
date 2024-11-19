@@ -21,7 +21,7 @@ use arrow::datatypes::DataType;
 use arrow::error::ArrowError;
 use datafusion_common::{internal_err, Result};
 use datafusion_expr::scalar_doc_sections::DOC_SECTION_STRING;
-use datafusion_expr::{ColumnarValue, Documentation};
+use datafusion_expr::{ColumnarValue, Documentation, ScalarFunctionArgs};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use std::any::Any;
 use std::sync::{Arc, OnceLock};
@@ -64,8 +64,11 @@ impl ScalarUDFImpl for AsciiFunc {
         Ok(Int32)
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        make_scalar_function(ascii, vec![])(args)
+    fn invoke(
+        &self,
+        ScalarFunctionArgs { args, .. }: ScalarFunctionArgs,
+    ) -> Result<ColumnarValue> {
+        make_scalar_function(ascii, vec![])(args.as_slice())
     }
 
     fn documentation(&self) -> Option<&Documentation> {

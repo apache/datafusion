@@ -95,7 +95,11 @@ impl ScalarUDFImpl for CotFunc {
         Some(get_cot_doc())
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         make_scalar_function(cot, vec![])(args)
     }
 }

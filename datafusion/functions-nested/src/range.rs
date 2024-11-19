@@ -117,7 +117,11 @@ impl ScalarUDFImpl for Range {
         }
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         if args.iter().any(|arg| arg.data_type().is_null()) {
             return Ok(ColumnarValue::Array(Arc::new(NullArray::new(1))));
         }
@@ -255,7 +259,11 @@ impl ScalarUDFImpl for GenSeries {
         }
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         if args.iter().any(|arg| arg.data_type().is_null()) {
             return Ok(ColumnarValue::Array(Arc::new(NullArray::new(1))));
         }

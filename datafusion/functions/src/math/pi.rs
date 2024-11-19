@@ -20,7 +20,7 @@ use std::sync::OnceLock;
 
 use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::Float64;
-use datafusion_common::{internal_err, not_impl_err, Result, ScalarValue};
+use datafusion_common::{internal_err, Result, ScalarValue};
 use datafusion_expr::scalar_doc_sections::DOC_SECTION_MATH;
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::{
@@ -61,10 +61,6 @@ impl ScalarUDFImpl for PiFunc {
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
         Ok(Float64)
-    }
-
-    fn invoke(&self, _args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        not_impl_err!("{} function does not accept arguments", self.name())
     }
 
     fn invoke_batch(

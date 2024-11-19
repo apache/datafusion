@@ -96,7 +96,11 @@ impl ScalarUDFImpl for ArrayDistance {
         Ok(result)
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         make_scalar_function(array_distance_inner)(args)
     }
 

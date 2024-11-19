@@ -93,7 +93,11 @@ impl ScalarUDFImpl for NullIfFunc {
             .map_err(|e| e.context("Failed to coerce arguments for NULLIF"))
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         nullif_func(args)
     }
 
