@@ -5983,6 +5983,51 @@ mod tests {
             ScalarValue::from("larger than 12 bytes string"),
             DataType::Utf8View,
         );
+        check_scalar_cast(
+            {
+                let element_field =
+                    Arc::new(Field::new("element", DataType::Int32, true));
+
+                let mut builder =
+                    ListBuilder::new(Int32Builder::new()).with_field(element_field);
+                builder.append_value([Some(1)]);
+                builder.append(true);
+
+                ScalarValue::List(Arc::new(builder.finish()))
+            },
+            DataType::List(Arc::new(Field::new("element", DataType::Int64, true))),
+        );
+        check_scalar_cast(
+            {
+                let element_field =
+                    Arc::new(Field::new("element", DataType::Int32, true));
+
+                let mut builder = FixedSizeListBuilder::new(Int32Builder::new(), 1)
+                    .with_field(element_field);
+                builder.values().append_value(1);
+                builder.append(true);
+
+                ScalarValue::FixedSizeList(Arc::new(builder.finish()))
+            },
+            DataType::FixedSizeList(
+                Arc::new(Field::new("element", DataType::Int64, true)),
+                1,
+            ),
+        );
+        check_scalar_cast(
+            {
+                let element_field =
+                    Arc::new(Field::new("element", DataType::Int32, true));
+
+                let mut builder =
+                    LargeListBuilder::new(Int32Builder::new()).with_field(element_field);
+                builder.append_value([Some(1)]);
+                builder.append(true);
+
+                ScalarValue::LargeList(Arc::new(builder.finish()))
+            },
+            DataType::LargeList(Arc::new(Field::new("element", DataType::Int64, true))),
+        );
     }
 
     // mimics how casting work on scalar values by `casting` `scalar` to `desired_type`
