@@ -19,7 +19,7 @@ use std::sync::Arc;
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 
-use datafusion_common::{not_impl_err, Constraints, DFSchema, Result};
+use datafusion_common::{not_impl_err, DFSchema, Result};
 use datafusion_expr::expr::Sort;
 use datafusion_expr::{
     CreateMemoryTable, DdlStatement, Distinct, LogicalPlan, LogicalPlanBuilder,
@@ -134,15 +134,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     ) -> Result<LogicalPlan> {
         match select_into {
             Some(into) => Ok(LogicalPlan::Ddl(DdlStatement::CreateMemoryTable(
-                CreateMemoryTable {
-                    name: self.object_name_to_table_reference(into.name)?,
-                    constraints: Constraints::empty(),
-                    input: Arc::new(plan),
-                    if_not_exists: false,
-                    or_replace: false,
-                    temporary: false,
-                    column_defaults: vec![],
-                },
+                CreateMemoryTable::builder()
+                    .name(self.object_name_to_table_reference(into.name)?)
+                    .input(Arc::new(plan))
+                    .build()?,
             ))),
             _ => Ok(plan),
         }
