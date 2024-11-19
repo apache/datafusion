@@ -1020,6 +1020,12 @@ SELECT date_part('minute', to_timestamp('2020-09-08T12:12:00+00:00'))
 ----
 12
 
+# make sure the return type is integer
+query T
+SELECT arrow_typeof(date_part('minute', to_timestamp('2020-09-08T12:12:00+00:00')))
+----
+Int32
+
 query R
 SELECT EXTRACT(second FROM timestamp '2020-09-08T12:00:12.12345678+00:00')
 ----
