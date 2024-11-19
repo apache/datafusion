@@ -1557,8 +1557,6 @@ pub fn project(
             _ => projected_expr.push(columnize_expr(normalize_col(e, &plan)?, &plan)?),
         }
     }
-    validate_unique_names("Projections", projected_expr.iter())?;
-
     Projection::try_new(projected_expr, Arc::new(plan)).map(LogicalPlan::Projection)
 }
 
@@ -1966,7 +1964,7 @@ mod tests {
     use crate::logical_plan::StringifiedPlan;
     use crate::{col, expr, expr_fn::exists, in_subquery, lit, scalar_subquery};
 
-    use datafusion_common::{RecursionUnnestOption, SchemaError};
+    use datafusion_common::RecursionUnnestOption;
 
     #[test]
     fn plan_builder_simple() -> Result<()> {
@@ -2202,25 +2200,14 @@ mod tests {
             Some(vec![0, 1]),
         )?
         // two columns with the same name => error
-        .project(vec![col("id"), col("first_name").alias("id")]);
+        .project(vec![col("id"), col("first_name").alias("id")])?
+        .build()?;
 
-        match plan {
-            Err(DataFusionError::SchemaError(
-                SchemaError::AmbiguousReference {
-                    field:
-                        Column {
-                            relation: Some(TableReference::Bare { table }),
-                            name,
-                        },
-                },
-                _,
-            )) => {
-                assert_eq!(*"employee_csv", *table);
-                assert_eq!("id", &name);
-                Ok(())
-            }
-            _ => plan_err!("Plan should have returned an DataFusionError::SchemaError"),
-        }
+        let expected = "\
+        Projection: employee_csv.id, employee_csv.first_name AS id\
+        \n  TableScan: employee_csv projection=[id, first_name]";
+        assert_eq!(expected, format!("{plan}"));
+        Ok(())
     }
 
     fn employee_schema() -> Schema {

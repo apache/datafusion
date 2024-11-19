@@ -18,7 +18,7 @@
 //! DFSchema is an extended schema struct that DataFusion uses to provide support for
 //! fields with optional relation names.
 
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 use std::fmt::{Display, Formatter};
 use std::hash::Hash;
 use std::sync::Arc;
@@ -154,7 +154,6 @@ impl DFSchema {
             field_qualifiers: qualifiers,
             functional_dependencies: FunctionalDependencies::empty(),
         };
-        dfschema.check_names()?;
         Ok(dfschema)
     }
 
@@ -183,7 +182,6 @@ impl DFSchema {
             field_qualifiers: vec![None; field_count],
             functional_dependencies: FunctionalDependencies::empty(),
         };
-        dfschema.check_names()?;
         Ok(dfschema)
     }
 
@@ -201,7 +199,6 @@ impl DFSchema {
             field_qualifiers: vec![Some(qualifier); schema.fields.len()],
             functional_dependencies: FunctionalDependencies::empty(),
         };
-        schema.check_names()?;
         Ok(schema)
     }
 
@@ -215,38 +212,7 @@ impl DFSchema {
             field_qualifiers: qualifiers,
             functional_dependencies: FunctionalDependencies::empty(),
         };
-        dfschema.check_names()?;
         Ok(dfschema)
-    }
-
-    /// Check if the schema have some fields with the same name
-    pub fn check_names(&self) -> Result<()> {
-        let mut qualified_names = BTreeSet::new();
-        let mut unqualified_names = BTreeSet::new();
-
-        for (field, qualifier) in self.inner.fields().iter().zip(&self.field_qualifiers) {
-            if let Some(qualifier) = qualifier {
-                if !qualified_names.insert((qualifier, field.name())) {
-                    return _schema_err!(SchemaError::DuplicateQualifiedField {
-                        qualifier: Box::new(qualifier.clone()),
-                        name: field.name().to_string(),
-                    });
-                }
-            } else if !unqualified_names.insert(field.name()) {
-                return _schema_err!(SchemaError::DuplicateUnqualifiedField {
-                    name: field.name().to_string()
-                });
-            }
-        }
-
-        for (qualifier, name) in qualified_names {
-            if unqualified_names.contains(name) {
-                return _schema_err!(SchemaError::AmbiguousReference {
-                    field: Column::new(Some(qualifier.clone()), name)
-                });
-            }
-        }
-        Ok(())
     }
 
     /// Assigns functional dependencies.
@@ -285,7 +251,6 @@ impl DFSchema {
             field_qualifiers: new_qualifiers,
             functional_dependencies: FunctionalDependencies::empty(),
         };
-        new_self.check_names()?;
         Ok(new_self)
     }
 
@@ -1141,10 +1106,10 @@ mod tests {
     fn join_qualified_duplicate() -> Result<()> {
         let left = DFSchema::try_from_qualified_schema("t1", &test_schema_1())?;
         let right = DFSchema::try_from_qualified_schema("t1", &test_schema_1())?;
-        let join = left.join(&right);
+        let join = left.join(&right)?;
         assert_eq!(
-            join.unwrap_err().strip_backtrace(),
-            "Schema error: Schema contains duplicate qualified field name t1.c0",
+            "fields:[t1.c0, t1.c1, t1.c0, t1.c1], metadata:{}",
+            join.to_string()
         );
         Ok(())
     }
@@ -1153,11 +1118,8 @@ mod tests {
     fn join_unqualified_duplicate() -> Result<()> {
         let left = DFSchema::try_from(test_schema_1())?;
         let right = DFSchema::try_from(test_schema_1())?;
-        let join = left.join(&right);
-        assert_eq!(
-            join.unwrap_err().strip_backtrace(),
-            "Schema error: Schema contains duplicate unqualified field name c0"
-        );
+        let join = left.join(&right)?;
+        assert_eq!("fields:[c0, c1, c0, c1], metadata:{}", join.to_string());
         Ok(())
     }
 
@@ -1190,10 +1152,11 @@ mod tests {
     fn join_mixed_duplicate() -> Result<()> {
         let left = DFSchema::try_from_qualified_schema("t1", &test_schema_1())?;
         let right = DFSchema::try_from(test_schema_1())?;
-        let join = left.join(&right);
-        assert_contains!(join.unwrap_err().to_string(),
-                         "Schema error: Schema contains qualified \
-                          field name t1.c0 and unqualified field name c0 which would be ambiguous");
+        let join = left.join(&right)?;
+        assert_eq!(
+            "fields:[t1.c0, t1.c1, c0, c1], metadata:{}",
+            join.to_string()
+        );
         Ok(())
     }
 

@@ -1282,7 +1282,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         let schema = self.build_schema(columns)?;
         let df_schema = schema.to_dfschema_ref()?;
-        df_schema.check_names()?;
 
         let ordered_exprs =
             self.build_order_by(order_exprs, &df_schema, &mut planner_context)?;

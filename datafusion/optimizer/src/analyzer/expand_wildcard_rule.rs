@@ -55,7 +55,6 @@ fn expand_internal(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
     match plan {
         LogicalPlan::Projection(Projection { expr, input, .. }) => {
             let projected_expr = expand_exprlist(&input, expr)?;
-            validate_unique_names("Projections", projected_expr.iter())?;
             Ok(Transformed::yes(
                 Projection::try_new(projected_expr, Arc::clone(&input))
                     .map(LogicalPlan::Projection)?,

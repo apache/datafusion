@@ -17,7 +17,7 @@
 
 use crate::{Expr, LogicalPlan, SortExpr, Volatility};
 use std::cmp::Ordering;
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 use std::{
     fmt::{self, Display},
@@ -28,7 +28,8 @@ use crate::expr::Sort;
 use arrow::datatypes::DataType;
 use datafusion_common::tree_node::{Transformed, TreeNodeContainer, TreeNodeRecursion};
 use datafusion_common::{
-    Constraints, DFSchemaRef, Result, SchemaReference, TableReference,
+    schema_err, Column, Constraints, DFSchema, DFSchemaRef, DataFusionError, Result,
+    SchemaError, SchemaReference, TableReference,
 };
 use sqlparser::ast::Ident;
 
@@ -306,6 +307,7 @@ impl CreateExternalTable {
             constraints,
             column_defaults,
         } = fields;
+        check_fields_unique(&schema)?;
         Ok(Self {
             name,
             schema,
@@ -544,6 +546,7 @@ impl CreateMemoryTable {
             column_defaults,
             temporary,
         } = fields;
+        check_fields_unique(input.schema())?;
         Ok(Self {
             name,
             constraints,
@@ -698,6 +701,7 @@ impl CreateView {
             definition,
             temporary,
         } = fields;
+        check_fields_unique(input.schema())?;
         Ok(Self {
             name,
             input,
@@ -799,6 +803,48 @@ impl CreateViewBuilder {
             temporary: self.temporary,
         })
     }
+}
+fn check_fields_unique(schema: &DFSchema) -> Result<()> {
+    // Use tree set for deterministic error messages
+    let mut qualified_names = BTreeSet::new();
+    let mut unqualified_names = HashSet::new();
+    let mut name_occurrences: HashMap<&String, usize> = HashMap::new();
+
+    for (qualifier, field) in schema.iter() {
+        if let Some(qualifier) = qualifier {
+            // Check for duplicate qualified field names
+            if !qualified_names.insert((qualifier, field.name())) {
+                return schema_err!(SchemaError::DuplicateQualifiedField {
+                    qualifier: Box::new(qualifier.clone()),
+                    name: field.name().to_string(),
+                });
+            }
+        // Check for duplicate unqualified field names
+        } else if !unqualified_names.insert(field.name()) {
+            return schema_err!(SchemaError::DuplicateUnqualifiedField {
+                name: field.name().to_string()
+            });
+        }
+        *name_occurrences.entry(field.name()).or_default() += 1;
+    }
+
+    for (qualifier, name) in qualified_names {
+        // Check for duplicate between qualified and unqualified field names
+        if unqualified_names.contains(name) {
+            return schema_err!(SchemaError::AmbiguousReference {
+                field: Column::new(Some(qualifier.clone()), name)
+            });
+        }
+        // Check for duplicates between qualified names as the qualification will be stripped off
+        if name_occurrences[name] > 1 {
+            return schema_err!(SchemaError::QualifiedFieldWithDuplicateName {
+                qualifier: Box::new(qualifier.clone()),
+                name: name.to_owned(),
+            });
+        }
+    }
+
+    Ok(())
 }
 
 /// Creates a catalog (aka "Database").
@@ -1085,7 +1131,9 @@ impl PartialOrd for CreateIndex {
 
 #[cfg(test)]
 mod test {
+    use super::*;
     use crate::{CreateCatalog, DdlStatement, DropView};
+    use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::{DFSchema, DFSchemaRef, TableReference};
     use std::cmp::Ordering;
 
@@ -1111,5 +1159,86 @@ mod test {
         });
 
         assert_eq!(drop_view.partial_cmp(&catalog), Some(Ordering::Greater));
+    }
+
+    #[test]
+    fn test_check_fields_unique() -> Result<()> {
+        // no duplicate fields, unqualified schema
+        check_fields_unique(&DFSchema::try_from(Schema::new(vec![
+            Field::new("c100", DataType::Boolean, true),
+            Field::new("c101", DataType::Boolean, true),
+        ]))?)?;
+
+        // no duplicate fields, qualified schema
+        check_fields_unique(&DFSchema::try_from_qualified_schema(
+            "t1",
+            &Schema::new(vec![
+                Field::new("c100", DataType::Boolean, true),
+                Field::new("c101", DataType::Boolean, true),
+            ]),
+        )?)?;
+
+        // duplicate unqualified field with same qualifier
+        assert_eq!(
+            check_fields_unique(&DFSchema::try_from(Schema::new(vec![
+                Field::new("c0", DataType::Boolean, true),
+                Field::new("c1", DataType::Boolean, true),
+                Field::new("c1", DataType::Boolean, true),
+                Field::new("c2", DataType::Boolean, true),
+            ]))?)
+            .unwrap_err()
+            .strip_backtrace()
+            .to_string(),
+            "Schema error: Schema contains duplicate unqualified field name c1"
+        );
+
+        // duplicate qualified field with same qualifier
+        assert_eq!(
+            check_fields_unique(&DFSchema::try_from_qualified_schema(
+                "t1",
+                &Schema::new(vec![
+                    Field::new("c1", DataType::Boolean, true),
+                    Field::new("c1", DataType::Boolean, true),
+                ]),
+            )?)
+            .unwrap_err()
+            .strip_backtrace()
+            .to_string(),
+            "Schema error: Schema contains duplicate qualified field name t1.c1"
+        );
+
+        // duplicate qualified and unqualified field
+        assert_eq!(
+            check_fields_unique(&DFSchema::from_field_specific_qualified_schema(
+                vec![
+                    None,
+                    Some(TableReference::from("t1")),
+                ],
+                &Arc::new(Schema::new(vec![
+                    Field::new("c1", DataType::Boolean, true),
+                    Field::new("c1", DataType::Boolean, true),
+                ]))
+            )?)
+                .unwrap_err().strip_backtrace().to_string(),
+            "Schema error: Schema contains qualified field name t1.c1 and unqualified field name c1 which would be ambiguous"
+        );
+
+        // qualified fields with duplicate unqualified names
+        assert_eq!(
+            check_fields_unique(&DFSchema::from_field_specific_qualified_schema(
+                vec![
+                    Some(TableReference::from("t1")),
+                    Some(TableReference::from("t2")),
+                ],
+                &Arc::new(Schema::new(vec![
+                    Field::new("c1", DataType::Boolean, true),
+                    Field::new("c1", DataType::Boolean, true),
+                ]))
+            )?)
+                .unwrap_err().strip_backtrace().to_string(),
+             "Schema error: Schema contains qualified fields with duplicate unqualified names t1.c1"
+        );
+
+        Ok(())
     }
 }

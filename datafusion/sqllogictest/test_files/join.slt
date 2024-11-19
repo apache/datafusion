@@ -1215,14 +1215,18 @@ statement ok
 create table t1(v1 int) as values(100);
 
 ## Query with Ambiguous column reference
-query error DataFusion error: Schema error: Schema contains duplicate qualified field name t1\.v1
+query I
 select count(*)
 from t1
 right outer join t1
 on t1.v1 > 0;
+----
+1
 
-query error DataFusion error: Schema error: Schema contains duplicate qualified field name t1\.v1
+query I
 select t1.v1 from t1 join t1 using(v1) cross join (select struct('foo' as v1) as t1);
+----
+100
 
 statement ok
 drop table t1;
