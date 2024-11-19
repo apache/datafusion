@@ -391,6 +391,7 @@ impl EquivalenceProperties {
     /// Updates the ordering equivalence group within assuming that the table
     /// is re-sorted according to the argument `sort_exprs`. Note that constants
     /// and equivalence classes are unchanged as they are unaffected by a re-sort.
+    /// If the given ordering is already satisfied, the function does nothing.
     pub fn with_reorder(mut self, sort_exprs: LexOrdering) -> Self {
         // Filter out constant expressions as they don't affect ordering
         let filtered_exprs = LexOrdering::new(
