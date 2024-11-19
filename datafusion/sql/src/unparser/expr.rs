@@ -523,10 +523,15 @@ impl Unparser<'_> {
 
         let args = args
             .chunks_exact(2)
-            .map(|exprs| {
+            .map(|chunk| {
+                let key = match &chunk[0] {
+                    Expr::Literal(lit) => lit.to_string(),
+                    _ => return internal_err!("named_struct arg is invalid"),
+                };
+
                 Ok(ast::DictionaryField {
-                    key: self.new_ident_quoted_if_needs(exprs[0].to_string()),
-                    value: Box::new(self.expr_to_sql(&exprs[1])?),
+                    key: Ident::new(key),
+                    value: Box::new(self.expr_to_sql(&chunk[1])?),
                 })
             })
             .collect::<Result<Vec<_>>>()?;
@@ -1982,7 +1987,7 @@ mod tests {
                 "[1, 2, 3][1]",
             ),
             (
-                named_struct(vec![col("a"), lit("1"), col("b"), lit(2)]),
+                named_struct(vec![lit("a"), lit("1"), lit("b"), lit(2)]),
                 "{a: '1', b: 2}",
             ),
             (get_field(col("a.b"), "c"), "a.b.c"),
