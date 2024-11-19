@@ -1533,13 +1533,11 @@ name = "datafusion-physical-optimizer"
 version = "43.0.0"
 dependencies = [
  "arrow",
- "arrow-array",
  "arrow-schema",
  "datafusion-common",
  "datafusion-execution",
- "datafusion-expr",
  "datafusion-expr-common",
- "datafusion-functions-nested",
+ "datafusion-optimizer",
  "datafusion-physical-expr",
  "datafusion-physical-plan",
  "itertools",
