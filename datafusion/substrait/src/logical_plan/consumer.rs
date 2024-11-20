@@ -586,9 +586,13 @@ pub async fn from_substrait_rel(
 
                 let mut explicit_exprs: Vec<Expr> = vec![];
                 for expr in &p.expressions {
-                    let e =
-                        from_substrait_rex(state, expr, input.clone().schema(), extensions)
-                            .await?;
+                    let e = from_substrait_rex(
+                        state,
+                        expr,
+                        input.clone().schema(),
+                        extensions,
+                    )
+                    .await?;
                     // if the expression is WindowFunction, wrap in a Window relation
                     if let Expr::WindowFunction(_) = &e {
                         // Adding the same expression here and in the project below
@@ -779,10 +783,12 @@ pub async fn from_substrait_rel(
             }
 
             let left: LogicalPlanBuilder = LogicalPlanBuilder::from(
-                from_substrait_rel(state, join.left.as_ref().unwrap(), extensions).await?,
+                from_substrait_rel(state, join.left.as_ref().unwrap(), extensions)
+                    .await?,
             );
             let right = LogicalPlanBuilder::from(
-                from_substrait_rel(state, join.right.as_ref().unwrap(), extensions).await?,
+                from_substrait_rel(state, join.right.as_ref().unwrap(), extensions)
+                    .await?,
             );
             let (left, right) = requalify_sides_if_needed(left, right)?;
 
@@ -830,7 +836,8 @@ pub async fn from_substrait_rel(
         }
         Some(RelType::Cross(cross)) => {
             let left = LogicalPlanBuilder::from(
-                from_substrait_rel(state, cross.left.as_ref().unwrap(), extensions).await?,
+                from_substrait_rel(state, cross.left.as_ref().unwrap(), extensions)
+                    .await?,
             );
             let right = LogicalPlanBuilder::from(
                 from_substrait_rel(state, cross.right.as_ref().unwrap(), extensions)
@@ -1465,7 +1472,8 @@ pub async fn from_substrait_rex_vec(
 ) -> Result<Vec<Expr>> {
     let mut expressions: Vec<Expr> = vec![];
     for expr in exprs {
-        let expression = from_substrait_rex(state, expr, input_schema, extensions).await?;
+        let expression =
+            from_substrait_rex(state, expr, input_schema, extensions).await?;
         expressions.push(expression);
     }
     Ok(expressions)
@@ -2868,8 +2876,14 @@ impl BuiltinExprBuilder {
             "not" | "negative" | "negate" | "is_null" | "is_not_null" | "is_true"
             | "is_false" | "is_not_true" | "is_not_false" | "is_unknown"
             | "is_not_unknown" => {
-                Self::build_unary_expr(state, &self.expr_name, f, input_schema, extensions)
-                    .await
+                Self::build_unary_expr(
+                    state,
+                    &self.expr_name,
+                    f,
+                    input_schema,
+                    extensions,
+                )
+                .await
             }
             _ => {
                 not_impl_err!("Unsupported builtin expression: {}", self.expr_name)
@@ -2932,7 +2946,8 @@ impl BuiltinExprBuilder {
             return substrait_err!("Invalid arguments type for `{fn_name}` expr");
         };
         let pattern =
-            from_substrait_rex(state, pattern_substrait, input_schema, extensions).await?;
+            from_substrait_rex(state, pattern_substrait, input_schema, extensions)
+                .await?;
 
         // Default case: escape character is Literal(Utf8(None))
         let escape_char = if f.arguments.len() == 3 {
@@ -2941,9 +2956,13 @@ impl BuiltinExprBuilder {
                 return substrait_err!("Invalid arguments type for `{fn_name}` expr");
             };
 
-            let escape_char_expr =
-                from_substrait_rex(state, escape_char_substrait, input_schema, extensions)
-                    .await?;
+            let escape_char_expr = from_substrait_rex(
+                state,
+                escape_char_substrait,
+                input_schema,
+                extensions,
+            )
+            .await?;
 
             match escape_char_expr {
                 Expr::Literal(ScalarValue::Utf8(escape_char_string)) => {

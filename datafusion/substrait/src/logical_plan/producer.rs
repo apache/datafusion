@@ -375,7 +375,9 @@ pub fn to_substrait_rel(
             let measures = agg
                 .aggr_expr
                 .iter()
-                .map(|e| to_substrait_agg_measure(state, e, agg.input.schema(), extensions))
+                .map(|e| {
+                    to_substrait_agg_measure(state, e, agg.input.schema(), extensions)
+                })
                 .collect::<Result<Vec<_>>>()?;
 
             Ok(Box::new(Rel {
@@ -2100,7 +2102,8 @@ fn to_substrait_unary_scalar_fn(
     extensions: &mut Extensions,
 ) -> Result<Expression> {
     let function_anchor = extensions.register_function(fn_name.to_string());
-    let substrait_expr = to_substrait_rex(state, arg, schema, col_ref_offset, extensions)?;
+    let substrait_expr =
+        to_substrait_rex(state, arg, schema, col_ref_offset, extensions)?;
 
     Ok(Expression {
         rex_type: Some(RexType::ScalarFunction(ScalarFunction {
