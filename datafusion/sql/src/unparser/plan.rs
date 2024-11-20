@@ -518,10 +518,7 @@ impl Unparser<'_> {
                     return internal_err!("Failed to build right relation");
                 };
 
-                let join_filters = match &join.filter {
-                    Some(filter) => Some(filter.clone()),
-                    None => None,
-                };
+                let join_filters = join.filter.as_ref().map(|filter| filter.clone());
 
                 let join_constraint = self.join_constraint_to_sql(
                     join.join_constraint,
