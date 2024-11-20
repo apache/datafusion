@@ -1161,6 +1161,12 @@ select make_array(make_array(1), arrow_cast(make_array(-1), 'LargeList(Int8)'))
 ----
 [[1], [-1]]
 
+query T
+select arrow_typeof(make_array(make_array(1), arrow_cast(make_array(-1), 'LargeList(Int8)')));
+----
+List(Field { name: "item", data_type: LargeList(Field { name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} })
+
+
 query ???
 select make_array(column1),
        make_array(column1, column5),
