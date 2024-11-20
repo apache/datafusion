@@ -32,12 +32,14 @@ use ahash::RandomState;
 use arrow::compute::cast;
 use arrow::datatypes::{
     BinaryViewType, Date32Type, Date64Type, Float32Type, Float64Type, Int16Type,
-    Int32Type, Int64Type, Int8Type, StringViewType, UInt16Type, UInt32Type, UInt64Type,
-    UInt8Type,
+    Int32Type, Int64Type, Int8Type, StringViewType, Time32MillisecondType,
+    Time32SecondType, Time64MicrosecondType, Time64NanosecondType,
+    TimestampMicrosecondType, TimestampMillisecondType, TimestampNanosecondType,
+    TimestampSecondType, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
 };
 use arrow::record_batch::RecordBatch;
 use arrow_array::{Array, ArrayRef};
-use arrow_schema::{DataType, Schema, SchemaRef};
+use arrow_schema::{DataType, Schema, SchemaRef, TimeUnit};
 use datafusion_common::hash_utils::create_hashes;
 use datafusion_common::{not_impl_err, DataFusionError, Result};
 use datafusion_execution::memory_pool::proxy::{RawTableAllocExt, VecAllocExt};
@@ -913,6 +915,38 @@ impl<const STREAMING: bool> GroupValues for GroupValuesColumn<STREAMING> {
                     }
                     &DataType::Date32 => instantiate_primitive!(v, nullable, Date32Type),
                     &DataType::Date64 => instantiate_primitive!(v, nullable, Date64Type),
+                    &DataType::Time32(t) => match t {
+                        TimeUnit::Second => {
+                            instantiate_primitive!(v, nullable, Time32SecondType)
+                        }
+                        TimeUnit::Millisecond => {
+                            instantiate_primitive!(v, nullable, Time32MillisecondType)
+                        }
+                        _ => {}
+                    },
+                    &DataType::Time64(t) => match t {
+                        TimeUnit::Microsecond => {
+                            instantiate_primitive!(v, nullable, Time64MicrosecondType)
+                        }
+                        TimeUnit::Nanosecond => {
+                            instantiate_primitive!(v, nullable, Time64NanosecondType)
+                        }
+                        _ => {}
+                    },
+                    &DataType::Timestamp(t, _) => match t {
+                        TimeUnit::Second => {
+                            instantiate_primitive!(v, nullable, TimestampSecondType)
+                        }
+                        TimeUnit::Millisecond => {
+                            instantiate_primitive!(v, nullable, TimestampMillisecondType)
+                        }
+                        TimeUnit::Microsecond => {
+                            instantiate_primitive!(v, nullable, TimestampMicrosecondType)
+                        }
+                        TimeUnit::Nanosecond => {
+                            instantiate_primitive!(v, nullable, TimestampNanosecondType)
+                        }
+                    },
                     &DataType::Utf8 => {
                         let b = ByteGroupValueBuilder::<i32>::new(OutputType::Utf8);
                         v.push(Box::new(b) as _)
@@ -1125,6 +1159,8 @@ fn supported_type(data_type: &DataType) -> bool {
             | DataType::LargeBinary
             | DataType::Date32
             | DataType::Date64
+            | DataType::Time32(_)
+            | DataType::Timestamp(_, _)
             | DataType::Utf8View
             | DataType::BinaryView
     )
