@@ -3423,4 +3423,63 @@ Projection: a, b
         \n    TableScan: test";
         assert_optimized_plan_eq(plan, expected_after)
     }
+
+    #[test]
+    fn test_push_down_volatile_mixed_table_scan() -> Result<()> {
+        // SELECT test.a, test.b FROM test as t WHERE TestScalarUDF() > 0.1 and test.a > 5 and test.b > 10;
+        let table_scan = test_table_scan()?;
+        let fun = ScalarUDF::new_from_impl(TestScalarUDF {
+            signature: Signature::exact(vec![], Volatility::Volatile),
+        });
+        let expr = Expr::ScalarFunction(ScalarFunction::new_udf(Arc::new(fun), vec![]));
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .project(vec![col("a"), col("b")])?
+            .filter(
+                expr.gt(lit(0.1))
+                    .and(col("t.a").gt(lit(5)))
+                    .and(col("t.b").gt(lit(10))),
+            )?
+            .build()?;
+
+        let expected_before = "Filter: TestScalarUDF() > Float64(0.1) AND t.a > Int32(5) AND t.b > Int32(10)\
+        \n  Projection: test.a, test.b\
+        \n    TableScan: test";
+        assert_eq!(format!("{plan}"), expected_before);
+
+        let expected_after = "Projection: test.a, test.b\
+        \n  Filter: TestScalarUDF() > Float64(0.1)\
+        \n    TableScan: test, full_filters=[t.a > Int32(5), t.b > Int32(10)]";
+        assert_optimized_plan_eq(plan, expected_after)
+    }
+
+    #[test]
+    fn test_push_down_volatile_mixed_unsupported_table_scan() -> Result<()> {
+        // SELECT test.a, test.b FROM test as t WHERE TestScalarUDF() > 0.1 and test.a > 5 and test.b > 10;
+        let fun = ScalarUDF::new_from_impl(TestScalarUDF {
+            signature: Signature::exact(vec![], Volatility::Volatile),
+        });
+        let expr = Expr::ScalarFunction(ScalarFunction::new_udf(Arc::new(fun), vec![]));
+        let plan = table_scan_with_pushdown_provider_builder(
+            TableProviderFilterPushDown::Unsupported,
+            vec![],
+            None,
+        )?
+        .project(vec![col("a"), col("b")])?
+        .filter(
+            expr.gt(lit(0.1))
+                .and(col("t.a").gt(lit(5)))
+                .and(col("t.b").gt(lit(10))),
+        )?
+        .build()?;
+
+        let expected_before = "Filter: TestScalarUDF() > Float64(0.1) AND t.a > Int32(5) AND t.b > Int32(10)\
+        \n  Projection: a, b\
+        \n    TableScan: test";
+        assert_eq!(format!("{plan}"), expected_before);
+
+        let expected_after = "Projection: a, b\
+        \n  Filter: t.a > Int32(5) AND t.b > Int32(10) AND TestScalarUDF() > Float64(0.1)\
+        \n    TableScan: test";
+        assert_optimized_plan_eq(plan, expected_after)
+    }
 }
