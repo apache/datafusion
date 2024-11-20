@@ -29,6 +29,7 @@ use datafusion_expr::EmitTo;
 use hashbrown::raw::RawTable;
 use std::mem::size_of;
 use std::sync::Arc;
+use log::debug;
 
 /// A [`GroupValues`] making use of [`Rows`]
 ///
@@ -80,6 +81,9 @@ pub struct GroupValuesRows {
 
 impl GroupValuesRows {
     pub fn try_new(schema: SchemaRef) -> Result<Self> {
+        // Print a debugging message, so it is clear when the (slower) fallback
+        // GroupValuesRows is used.
+        debug!("Creating GroupValuesRows for schema: {}", schema);
         let row_converter = RowConverter::new(
             schema
                 .fields()
