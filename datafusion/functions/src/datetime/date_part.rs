@@ -158,7 +158,7 @@ impl ScalarUDFImpl for DatePartFunc {
         _arg_types: &[DataType],
     ) -> Result<DataType> {
         match &args[0] {
-            Expr::Literal(ScalarValue::Utf8(Some(part))) if is_integar_part(part) => {
+            Expr::Literal(ScalarValue::Utf8(Some(part))) if is_integer_part(part) => {
                 Ok(DataType::Int32)
             }
             _ => Ok(DataType::Float64),
