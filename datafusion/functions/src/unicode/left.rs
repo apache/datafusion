@@ -17,7 +17,6 @@
 
 use std::any::Any;
 use std::cmp::Ordering;
-use std::string;
 use std::sync::{Arc, OnceLock};
 
 use arrow::array::{
@@ -31,7 +30,7 @@ use datafusion_common::cast::{
     as_generic_string_array, as_int64_array, as_string_view_array,
 };
 use datafusion_common::exec_err;
-use datafusion_common::types::{logical_int64, logical_string, TypeSignature};
+use datafusion_common::types::{logical_int64, logical_string};
 use datafusion_common::Result;
 use datafusion_expr::scalar_doc_sections::DOC_SECTION_STRING;
 use datafusion_expr::{

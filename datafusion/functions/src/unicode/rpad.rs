@@ -21,7 +21,7 @@ use arrow::array::{
     ArrayRef, AsArray, GenericStringArray, GenericStringBuilder, Int64Array,
     OffsetSizeTrait, StringViewArray,
 };
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, Int32Type};
 use datafusion_common::cast::as_int64_array;
 use datafusion_common::types::{logical_int64, logical_string};
 use datafusion_common::DataFusionError;
@@ -35,7 +35,7 @@ use std::any::Any;
 use std::fmt::Write;
 use std::sync::{Arc, OnceLock};
 use unicode_segmentation::UnicodeSegmentation;
-use DataType::{LargeUtf8, Utf8, Utf8View};
+use DataType::{Dictionary, LargeUtf8, Utf8, Utf8View};
 
 #[derive(Debug)]
 pub struct RPadFunc {
@@ -105,6 +105,14 @@ impl ScalarUDFImpl for RPadFunc {
             (3, LargeUtf8, Some(Utf8 | Utf8View)) => {
                 make_scalar_function(rpad::<i64, i32>, vec![])(args)
             }
+            (3, Dictionary(_, v), Some(Utf8 | Utf8View)) => match &*v {
+                Utf8 => make_scalar_function(rpad::<i32, i32>, vec![])(args),
+                _ => exec_err!("Unsupported data type {v:?}"),
+            },
+            (3, Dictionary(_, v), Some(LargeUtf8)) => match &*v {
+                Utf8 => make_scalar_function(rpad::<i32, i64>, vec![])(args),
+                _ => exec_err!("Unsupported data type {v:?}"),
+            },
             (_, _, _) => {
                 exec_err!("Unsupported combination of data types for function rpad")
             }
@@ -191,6 +199,39 @@ pub fn rpad<StringArrayLen: OffsetSizeTrait, FillArrayLen: OffsetSizeTrait>(
             length_array,
             Some(args[2].as_string_view()),
         ),
+        (3, Dictionary(k, _), pad_str) => {
+            let dict_array = match &**k {
+                DataType::Int32 => Ok(args[0].as_dictionary::<Int32Type>()),
+                _ => exec_err!("Unsupported Dictionary key type {k:?}"),
+            }
+            .unwrap();
+            let string_array = dict_array
+                .values()
+                .as_any()
+                .downcast_ref::<GenericStringArray<StringArrayLen>>()
+                .unwrap();
+            match pad_str {
+                Some(Utf8 | LargeUtf8) => rpad_impl::<
+                    &GenericStringArray<StringArrayLen>,
+                    &GenericStringArray<StringArrayLen>,
+                    StringArrayLen,
+                >(
+                    string_array,
+                    length_array,
+                    Some(args[2].as_string::<StringArrayLen>()),
+                ),
+                Some(Utf8View) => {
+                    rpad_impl::<
+                        &GenericStringArray<StringArrayLen>,
+                        &StringViewArray,
+                        StringArrayLen,
+                    >(
+                        string_array, length_array, Some(args[2].as_string_view())
+                    )
+                }
+                _ => exec_err!("Unsupported type {pad_str:?}"),
+            }
+        }
         (_, _, _) => rpad_impl::<
             &GenericStringArray<StringArrayLen>,
             &GenericStringArray<FillArrayLen>,

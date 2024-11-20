@@ -24,8 +24,8 @@ use arrow::array::{
     ArrayRef, AsArray, GenericStringArray, GenericStringBuilder, Int64Array,
     OffsetSizeTrait, StringViewArray,
 };
-use arrow::datatypes::DataType;
-use arrow::datatypes::DataType::{LargeUtf8, Utf8, Utf8View};
+use arrow::datatypes::DataType::{Dictionary, LargeUtf8, Utf8, Utf8View};
+use arrow::datatypes::{DataType, Int32Type};
 use datafusion_common::cast::as_int64_array;
 use datafusion_common::types::{logical_int64, logical_string};
 use datafusion_common::{exec_err, Result};
@@ -125,6 +125,22 @@ fn repeat(args: &[ArrayRef]) -> Result<ArrayRef> {
             let string_array = args[0].as_string::<i64>();
             repeat_impl::<i64, &GenericStringArray<i64>>(string_array, number_array)
         }
+        Dictionary(k, v) => match &**v {
+            Utf8 => {
+                let dict_array = match &**k {
+                    DataType::Int32 => Ok(args[0].as_dictionary::<Int32Type>()),
+                    _ => exec_err!("Unsupported Dictionary key type {k:?}"),
+                }
+                .unwrap();
+                let string_array = dict_array
+                    .values()
+                    .as_any()
+                    .downcast_ref::<GenericStringArray<i32>>()
+                    .unwrap();
+                repeat_impl::<i32, &GenericStringArray<i32>>(string_array, number_array)
+            }
+            _ => exec_err!("Unsupported type {v:?}"),
+        },
         other => exec_err!(
             "Unsupported data type {other:?} for function repeat. \
         Expected Utf8, Utf8View or LargeUtf8."

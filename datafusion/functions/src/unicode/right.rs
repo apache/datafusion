@@ -20,10 +20,9 @@ use std::cmp::{max, Ordering};
 use std::sync::{Arc, OnceLock};
 
 use arrow::array::{
-    Array, ArrayAccessor, ArrayIter, ArrayRef, GenericStringArray, Int64Array,
-    OffsetSizeTrait,
+    as_dictionary_array, Array, ArrayAccessor, ArrayIter, ArrayRef, AsArray, GenericStringArray, Int64Array, OffsetSizeTrait
 };
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, Int32Type};
 
 use crate::utils::{make_scalar_function, utf8_to_str_type};
 use datafusion_common::cast::{
@@ -82,6 +81,10 @@ impl ScalarUDFImpl for RightFunc {
                 make_scalar_function(right::<i32>, vec![])(args)
             }
             DataType::LargeUtf8 => make_scalar_function(right::<i64>, vec![])(args),
+            DataType::Dictionary(_, v) => match &*v {
+                DataType::Utf8 => make_scalar_function(right::<i32>, vec![])(args),
+                _ => exec_err!("Unsupported data type {v:?}"),
+            },
             other => exec_err!(
                 "Unsupported data type {other:?} for function right,\
             expected Utf8View, Utf8 or LargeUtf8."
@@ -127,9 +130,26 @@ pub fn right<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
         // string_view_right(args)
         let string_array = as_string_view_array(&args[0])?;
         right_impl::<T, _>(&mut string_array.iter(), n_array)
-    } else {
+    } else if args[0].data_type() == &DataType::Utf8
+        || args[0].data_type() == &DataType::LargeUtf8
+    {
         // string_right::<T>(args)
         let string_array = &as_generic_string_array::<T>(&args[0])?;
+        right_impl::<T, _>(&mut string_array.iter(), n_array)
+    } else {
+        let dict_array = match &args[0].data_type() {
+            DataType::Dictionary(k, _) => match **k {
+                DataType::Int32 => Ok(as_dictionary_array::<Int32Type>(&args[0])),
+                _ => exec_err!("Unsupported Dictionary key type {k:?}"),
+            },
+            _ => exec_err!("Unsupported type {:?}", &args[0].data_type()),
+        }
+        .unwrap();
+        let string_array = dict_array
+            .values()
+            .as_any()
+            .downcast_ref::<GenericStringArray<T>>()
+            .unwrap();
         right_impl::<T, _>(&mut string_array.iter(), n_array)
     }
 }
