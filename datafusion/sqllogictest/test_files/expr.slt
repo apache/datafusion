@@ -1026,106 +1026,98 @@ SELECT arrow_typeof(date_part('minute', to_timestamp('2020-09-08T12:12:00+00:00'
 ----
 Int32
 
-query R
+query I
 SELECT EXTRACT(second FROM timestamp '2020-09-08T12:00:12.12345678+00:00')
 ----
-12.12345678
+12
 
-query R
+query I
 SELECT EXTRACT(millisecond FROM timestamp '2020-09-08T12:00:12.12345678+00:00')
 ----
-12123.45678
+12123
 
-query R
+query I
 SELECT EXTRACT(microsecond FROM timestamp '2020-09-08T12:00:12.12345678+00:00')
 ----
-12123456.78
+12123456
 
-query R
+query error DataFusion error: Internal error: unit Nanosecond not supported.
 SELECT EXTRACT(nanosecond FROM timestamp '2020-09-08T12:00:12.12345678+00:00')
-----
-12123456780
 
-query R
+query I
 SELECT EXTRACT("second" FROM timestamp '2020-09-08T12:00:12.12345678+00:00')
 ----
-12.12345678
+12
 
-query R
+query I
 SELECT EXTRACT("millisecond" FROM timestamp '2020-09-08T12:00:12.12345678+00:00')
 ----
-12123.45678
+12123
 
-query R
+query I
 SELECT EXTRACT("microsecond" FROM timestamp '2020-09-08T12:00:12.12345678+00:00')
 ----
-12123456.78
+12123456
 
-query R
+query error DataFusion error: Internal error: unit Nanosecond not supported.
 SELECT EXTRACT("nanosecond" FROM timestamp '2020-09-08T12:00:12.12345678+00:00')
-----
-12123456780
 
-query R
+query I
 SELECT EXTRACT('second' FROM timestamp '2020-09-08T12:00:12.12345678+00:00')
 ----
-12.12345678
+12
 
-query R
+query I
 SELECT EXTRACT('millisecond' FROM timestamp '2020-09-08T12:00:12.12345678+00:00')
 ----
-12123.45678
+12123
 
-query R
+query I
 SELECT EXTRACT('microsecond' FROM timestamp '2020-09-08T12:00:12.12345678+00:00')
 ----
-12123456.78
+12123456
 
-query R
+query error DataFusion error: Internal error: unit Nanosecond not supported.
 SELECT EXTRACT('nanosecond' FROM timestamp '2020-09-08T12:00:12.12345678+00:00')
-----
-12123456780
+
 
 # Keep precision when coercing Utf8 to Timestamp
-query R
+query I
 SELECT date_part('second', timestamp '2020-09-08T12:00:12.12345678+00:00')
 ----
-12.12345678
+12
 
-query R
+query I
 SELECT date_part('millisecond', timestamp '2020-09-08T12:00:12.12345678+00:00')
 ----
-12123.45678
+12123
 
-query R
+query I
 SELECT date_part('microsecond', timestamp '2020-09-08T12:00:12.12345678+00:00')
 ----
-12123456.78
+12123456
 
-query R
+query error DataFusion error: Internal error: unit Nanosecond not supported.
 SELECT date_part('nanosecond', timestamp '2020-09-08T12:00:12.12345678+00:00')
-----
-12123456780
 
-query R
+
+query I
 SELECT date_part('second', '2020-09-08T12:00:12.12345678+00:00')
 ----
-12.12345678
+12
 
-query R
+query I
 SELECT date_part('millisecond', '2020-09-08T12:00:12.12345678+00:00')
 ----
-12123.45678
+12123
 
-query R
+query I
 SELECT date_part('microsecond', '2020-09-08T12:00:12.12345678+00:00')
 ----
-12123456.78
+12123456
 
-query R
+query error DataFusion error: Internal error: unit Nanosecond not supported.
 SELECT date_part('nanosecond', '2020-09-08T12:00:12.12345678+00:00')
-----
-12123456780
 
 # test_date_part_time
 
@@ -1150,45 +1142,38 @@ SELECT extract(minute from arrow_cast('23:32:50'::time, 'Time32(Second)'))
 ----
 32
 
-query R
+query I
 SELECT date_part('second', arrow_cast('23:32:50'::time, 'Time32(Second)'))
 ----
 50
 
-query R
+query I
 SELECT extract(second from arrow_cast('23:32:50'::time, 'Time32(Second)'))
 ----
 50
 
-query R
+query I
 SELECT date_part('millisecond', arrow_cast('23:32:50'::time, 'Time32(Second)'))
 ----
 50000
 
-query R
+query I
 SELECT extract(millisecond from arrow_cast('23:32:50'::time, 'Time32(Second)'))
 ----
 50000
 
-query R
+query I
 SELECT date_part('microsecond', arrow_cast('23:32:50'::time, 'Time32(Second)'))
 ----
 50000000
 
-query R
+query I
 SELECT extract(microsecond from arrow_cast('23:32:50'::time, 'Time32(Second)'))
 ----
 50000000
 
-query R
-SELECT date_part('nanosecond', arrow_cast('23:32:50'::time, 'Time32(Second)'))
-----
-50000000000
-
-query R
+query error DataFusion error: Internal error: unit Nanosecond not supported.
 SELECT extract(nanosecond from arrow_cast('23:32:50'::time, 'Time32(Second)'))
-----
-50000000000
 
 query R
 SELECT date_part('epoch', arrow_cast('23:32:50'::time, 'Time32(Second)'))
@@ -1221,45 +1206,38 @@ SELECT extract(minute from arrow_cast('23:32:50.123'::time, 'Time32(Millisecond)
 ----
 32
 
-query R
+query I
 SELECT date_part('second', arrow_cast('23:32:50.123'::time, 'Time32(Millisecond)'))
 ----
-50.123
+50
 
-query R
+query I
 SELECT extract(second from arrow_cast('23:32:50.123'::time, 'Time32(Millisecond)'))
 ----
-50.123
+50
 
-query R
+query I
 SELECT date_part('millisecond', arrow_cast('23:32:50.123'::time, 'Time32(Millisecond)'))
 ----
 50123
 
-query R
+query I
 SELECT extract(millisecond from arrow_cast('23:32:50.123'::time, 'Time32(Millisecond)'))
 ----
 50123
 
-query R
+query I
 SELECT date_part('microsecond', arrow_cast('23:32:50.123'::time, 'Time32(Millisecond)'))
 ----
 50123000
 
-query R
+query I
 SELECT extract(microsecond from arrow_cast('23:32:50.123'::time, 'Time32(Millisecond)'))
 ----
 50123000
 
-query R
-SELECT date_part('nanosecond', arrow_cast('23:32:50.123'::time, 'Time32(Millisecond)'))
-----
-50123000000
-
-query R
+query error DataFusion error: Internal error: unit Nanosecond not supported.
 SELECT extract(nanosecond from arrow_cast('23:32:50.123'::time, 'Time32(Millisecond)'))
-----
-50123000000
 
 query R
 SELECT date_part('epoch', arrow_cast('23:32:50.123'::time, 'Time32(Millisecond)'))
@@ -1292,45 +1270,38 @@ SELECT extract(minute from arrow_cast('23:32:50.123456'::time, 'Time64(Microseco
 ----
 32
 
-query R
+query I
 SELECT date_part('second', arrow_cast('23:32:50.123456'::time, 'Time64(Microsecond)'))
 ----
-50.123456
+50
 
-query R
+query I
 SELECT extract(second from arrow_cast('23:32:50.123456'::time, 'Time64(Microsecond)'))
 ----
-50.123456
+50
 
-query R
+query I
 SELECT date_part('millisecond', arrow_cast('23:32:50.123456'::time, 'Time64(Microsecond)'))
 ----
-50123.456
+50123
 
-query R
+query I
 SELECT extract(millisecond from arrow_cast('23:32:50.123456'::time, 'Time64(Microsecond)'))
 ----
-50123.456
+50123
 
-query R
+query I
 SELECT date_part('microsecond', arrow_cast('23:32:50.123456'::time, 'Time64(Microsecond)'))
 ----
 50123456
 
-query R
+query I
 SELECT extract(microsecond from arrow_cast('23:32:50.123456'::time, 'Time64(Microsecond)'))
 ----
 50123456
 
-query R
-SELECT date_part('nanosecond', arrow_cast('23:32:50.123456'::time, 'Time64(Microsecond)'))
-----
-50123456000
-
-query R
+query error DataFusion error: Internal error: unit Nanosecond not supported.
 SELECT extract(nanosecond from arrow_cast('23:32:50.123456'::time, 'Time64(Microsecond)'))
-----
-50123456000
 
 query R
 SELECT date_part('epoch', arrow_cast('23:32:50.123456'::time, 'Time64(Microsecond)'))
@@ -1363,61 +1334,54 @@ SELECT extract(minute from arrow_cast('23:32:50.123456789'::time, 'Time64(Nanose
 ----
 32
 
-query R
+query I
 SELECT date_part('second', arrow_cast('23:32:50.123456789'::time, 'Time64(Nanosecond)'))
 ----
-50.123456789
+50
 
-query R
+query I
 select extract(second from '2024-08-09T12:13:14')
 ----
 14
 
-query R
+query I
 select extract(seconds from '2024-08-09T12:13:14')
 ----
 14
 
-query R
+query I
 SELECT extract(second from arrow_cast('23:32:50.123456789'::time, 'Time64(Nanosecond)'))
 ----
-50.123456789
+50
 
-query R
+query I
 SELECT date_part('millisecond', arrow_cast('23:32:50.123456789'::time, 'Time64(Nanosecond)'))
 ----
-50123.456789
+50123
 
-query R
+query I
 SELECT extract(millisecond from arrow_cast('23:32:50.123456789'::time, 'Time64(Nanosecond)'))
 ----
-50123.456789
+50123
 
 # just some floating point stuff happening in the result here
-query R
+query I
 SELECT date_part('microsecond', arrow_cast('23:32:50.123456789'::time, 'Time64(Nanosecond)'))
 ----
-50123456.789000005
+50123456
 
-query R
+query I
 SELECT extract(microsecond from arrow_cast('23:32:50.123456789'::time, 'Time64(Nanosecond)'))
 ----
-50123456.789000005
+50123456
 
-query R
+query I
 SELECT extract(us from arrow_cast('23:32:50.123456789'::time, 'Time64(Nanosecond)'))
 ----
-50123456.789000005
+50123456
 
-query R
+query error DataFusion error: Internal error: unit Nanosecond not supported.
 SELECT date_part('nanosecond', arrow_cast('23:32:50.123456789'::time, 'Time64(Nanosecond)'))
-----
-50123456789
-
-query R
-SELECT extract(nanosecond from arrow_cast('23:32:50.123456789'::time, 'Time64(Nanosecond)'))
-----
-50123456789
 
 query R
 SELECT date_part('epoch', arrow_cast('23:32:50.123456789'::time, 'Time64(Nanosecond)'))
@@ -1544,32 +1508,32 @@ SELECT extract(minute from arrow_cast('14400 minutes', 'Interval(DayTime)'))
 ----
 14400
 
-query R
+query I
 SELECT extract(second from arrow_cast('5.1 seconds', 'Interval(DayTime)'))
 ----
 5
 
-query R
+query I
 SELECT extract(second from arrow_cast('14400 minutes', 'Interval(DayTime)'))
 ----
 864000
 
-query R
+query I
 SELECT extract(second from arrow_cast('2 months', 'Interval(MonthDayNano)'))
 ----
 0
 
-query R
+query I
 SELECT extract(second from arrow_cast('2 days', 'Interval(MonthDayNano)'))
 ----
 0
 
-query R
+query I
 SELECT extract(second from arrow_cast('2 seconds', 'Interval(MonthDayNano)'))
 ----
 2
 
-query R
+query I
 SELECT extract(seconds from arrow_cast('2 seconds', 'Interval(MonthDayNano)'))
 ----
 2
@@ -1579,17 +1543,17 @@ SELECT extract(epoch from arrow_cast('2 seconds', 'Interval(MonthDayNano)'))
 ----
 2
 
-query R
+query I
 SELECT extract(milliseconds from arrow_cast('2 seconds', 'Interval(MonthDayNano)'))
 ----
 2000
 
-query R
+query I
 SELECT extract(second from arrow_cast('2030 milliseconds', 'Interval(MonthDayNano)'))
 ----
-2.03
+2
 
-query R
+query I
 SELECT extract(second from arrow_cast(NULL, 'Interval(MonthDayNano)'))
 ----
 NULL
@@ -1603,7 +1567,7 @@ create table t (id int, i interval) as values
   (4, interval '8 months'),
   (5, NULL);
 
-query IRI
+query III
 select
   id,
   extract(second from i),
@@ -1611,9 +1575,9 @@ select
 from t
 order by id;
 ----
-0 0.00000001 5
+0 0 5
 1 0 15
-2 0.002 0
+2 0 0
 3 2 0
 4 0 8
 5 NULL NULL
@@ -1623,12 +1587,12 @@ drop table t;
 
 # test_extract_duration
 
-query R
+query I
 SELECT extract(second from arrow_cast(2, 'Duration(Second)'))
 ----
 2
 
-query R
+query I
 SELECT extract(seconds from arrow_cast(2, 'Duration(Second)'))
 ----
 2
@@ -1638,22 +1602,22 @@ SELECT extract(epoch from arrow_cast(2, 'Duration(Second)'))
 ----
 2
 
-query R
+query I
 SELECT extract(millisecond from arrow_cast(2, 'Duration(Second)'))
 ----
 2000
 
-query R
+query I
 SELECT extract(second from arrow_cast(2, 'Duration(Millisecond)'))
 ----
-0.002
+0
 
-query R
+query I
 SELECT extract(second from arrow_cast(2002, 'Duration(Millisecond)'))
 ----
-2.002
+2
 
-query R
+query I
 SELECT extract(millisecond from arrow_cast(2002, 'Duration(Millisecond)'))
 ----
 2002
@@ -1726,10 +1690,8 @@ SELECT (date_part('microsecond', now()) = EXTRACT(microsecond FROM now()))
 ----
 true
 
-query B
+query error DataFusion error: Internal error: unit Nanosecond not supported.
 SELECT (date_part('nanosecond', now()) = EXTRACT(nanosecond FROM now()))
-----
-true
 
 query B
 SELECT 'a' IN ('a','b')

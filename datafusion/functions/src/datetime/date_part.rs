@@ -19,7 +19,7 @@ use std::any::Any;
 use std::str::FromStr;
 use std::sync::{Arc, OnceLock};
 
-use arrow::array::{Array, ArrayRef, Float64Array};
+use arrow::array::{Array, ArrayRef, Float64Array, Int32Array};
 use arrow::compute::kernels::cast_utils::IntervalUnit;
 use arrow::compute::{binary, date_part, DatePart};
 use arrow::datatypes::DataType::{
@@ -158,10 +158,10 @@ impl ScalarUDFImpl for DatePartFunc {
         _arg_types: &[DataType],
     ) -> Result<DataType> {
         match &args[0] {
-            Expr::Literal(ScalarValue::Utf8(Some(part))) if is_integer_part(part) => {
-                Ok(DataType::Int32)
+            Expr::Literal(ScalarValue::Utf8(Some(part))) if is_epoch(part) => {
+                Ok(DataType::Float64)
             }
-            _ => Ok(DataType::Float64),
+            _ => Ok(DataType::Int32),
         }
     }
 
@@ -200,10 +200,10 @@ impl ScalarUDFImpl for DatePartFunc {
                 IntervalUnit::Day => date_part(array.as_ref(), DatePart::Day)?,
                 IntervalUnit::Hour => date_part(array.as_ref(), DatePart::Hour)?,
                 IntervalUnit::Minute => date_part(array.as_ref(), DatePart::Minute)?,
-                IntervalUnit::Second => seconds(array.as_ref(), Second)?,
-                IntervalUnit::Millisecond => seconds(array.as_ref(), Millisecond)?,
-                IntervalUnit::Microsecond => seconds(array.as_ref(), Microsecond)?,
-                IntervalUnit::Nanosecond => seconds(array.as_ref(), Nanosecond)?,
+                IntervalUnit::Second => seconds_as_i32(array.as_ref(), Second)?,
+                IntervalUnit::Millisecond => seconds_as_i32(array.as_ref(), Millisecond)?,
+                IntervalUnit::Microsecond => seconds_as_i32(array.as_ref(), Microsecond)?,
+                IntervalUnit::Nanosecond => seconds_as_i32(array.as_ref(), Nanosecond)?,
                 // century and decade are not supported by `DatePart`, although they are supported in postgres
                 _ => return exec_err!("Date part '{part}' not supported"),
             }
@@ -233,21 +233,9 @@ impl ScalarUDFImpl for DatePartFunc {
     }
 }
 
-fn is_integer_part(part: &str) -> bool {
+fn is_epoch(part: &str) -> bool {
     let part = part_normalization(part);
-    matches!(
-        part.to_lowercase().as_str(),
-        "year"
-            | "month"
-            | "week"
-            | "day"
-            | "hour"
-            | "minute"
-            | "qtr"
-            | "quarter"
-            | "doy"
-            | "dow"
-    )
+    matches!(part.to_lowercase().as_str(), "epoch")
 }
 
 // Try to remove quote if exist, if the quote is invalid, return original string and let the downstream function handle the error
@@ -298,6 +286,60 @@ fn get_date_part_doc() -> &'static Documentation {
 /// Invoke [`date_part`] on an `array` (e.g. Timestamp) and convert the
 /// result to a total number of seconds, milliseconds, microseconds or
 /// nanoseconds
+fn seconds_as_i32(array: &dyn Array, unit: TimeUnit) -> Result<ArrayRef> {
+    // Nanosecond is neither supported in Postgres nor DuckDB, to avoid to deal with overflow and precision issue we don't support nanosecond
+    if unit == Nanosecond {
+        return internal_err!("unit {unit:?} not supported");
+    }
+
+    let conversion_factor = match unit {
+        Second => 1_000_000_000,
+        Millisecond => 1_000_000,
+        Microsecond => 1_000,
+        Nanosecond => 1,
+    };
+
+    let second_factor = match unit {
+        Second => 1,
+        Millisecond => 1_000,
+        Microsecond => 1_000_000,
+        Nanosecond => 1_000_000_000,
+    };
+
+    let secs = date_part(array, DatePart::Second)?;
+    // This assumes array is primitive and not a dictionary
+    let secs = as_int32_array(secs.as_ref())?;
+    let subsecs = date_part(array, DatePart::Nanosecond)?;
+    let subsecs = as_int32_array(subsecs.as_ref())?;
+
+    // Special case where there are no nulls.
+    if subsecs.null_count() == 0 {
+        let r: Int32Array = binary(secs, subsecs, |secs, subsecs| {
+            secs * second_factor + (subsecs % 1_000_000_000) / conversion_factor
+        })?;
+        Ok(Arc::new(r))
+    } else {
+        // Nulls in secs are preserved, nulls in subsecs are treated as zero to account for the case
+        // where the number of nanoseconds overflows.
+        let r: Int32Array = secs
+            .iter()
+            .zip(subsecs)
+            .map(|(secs, subsecs)| {
+                secs.map(|secs| {
+                    let subsecs = subsecs.unwrap_or(0);
+                    secs * second_factor + (subsecs % 1_000_000_000) / conversion_factor
+                })
+            })
+            .collect();
+        Ok(Arc::new(r))
+    }
+}
+
+/// Invoke [`date_part`] on an `array` (e.g. Timestamp) and convert the
+/// result to a total number of seconds, milliseconds, microseconds or
+/// nanoseconds
+///
+/// Given epoch return f64, this is a duplicated function to optimize for f64 type
 fn seconds(array: &dyn Array, unit: TimeUnit) -> Result<ArrayRef> {
     let sf = match unit {
         Second => 1_f64,
