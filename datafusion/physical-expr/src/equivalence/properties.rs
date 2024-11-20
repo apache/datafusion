@@ -28,7 +28,7 @@ use crate::equivalence::{
     collapse_lex_req, EquivalenceClass, EquivalenceGroup, OrderingEquivalenceClass,
     ProjectionMapping,
 };
-use crate::expressions::{with_new_schema, CastExpr, Column, Literal, CaseExpr};
+use crate::expressions::{with_new_schema, CaseExpr, CastExpr, Column, Literal};
 use crate::{
     physical_exprs_contains, ConstExpr, LexOrdering, LexRequirement, PhysicalExpr,
     PhysicalExprRef, PhysicalSortExpr, PhysicalSortRequirement,
@@ -1211,7 +1211,9 @@ fn is_constant_recurse(
     // When expression contains branch even if all children are constant
     // final result may not be constant
     let is_branched = expr.as_any().is::<CaseExpr>();
-    !children.is_empty() && children.iter().all(|c| is_constant_recurse(constants, c)) && !is_branched
+    !children.is_empty()
+        && children.iter().all(|c| is_constant_recurse(constants, c))
+        && !is_branched
 }
 
 /// This function examines whether a referring expression directly refers to a
