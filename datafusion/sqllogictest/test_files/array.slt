@@ -3985,6 +3985,18 @@ SELECT array_to_string(make_array(arrow_cast('a', 'Utf8View'), 'b', 'c', 'd'), '
 ----
 a,b,c,d
 
+# array_to_string using largeutf8 for second arg
+query TTT
+select array_to_string(['h', 'e', 'l', 'l', 'o'], arrow_cast(',', 'LargeUtf8')), array_to_string([1, 2, 3, 4, 5], arrow_cast('-', 'LargeUtf8')), array_to_string([1.0, 2.0, 3.0], arrow_cast('|', 'LargeUtf8'));
+----
+h,e,l,l,o 1-2-3-4-5 1|2|3
+
+# array_to_string using utf8view for second arg
+query TTT
+select array_to_string(['h', 'e', 'l', 'l', 'o'], arrow_cast(',', 'Utf8View')), array_to_string([1, 2, 3, 4, 5], arrow_cast('-', 'Utf8View')), array_to_string([1.0, 2.0, 3.0], arrow_cast('|', 'Utf8View'));
+----
+h,e,l,l,o 1-2-3-4-5 1|2|3
+
 statement ok
 drop table table1;
 
@@ -6919,6 +6931,51 @@ query ?
 select string_to_array(e, ',') from values;
 ----
 [Lorem]
+[ipsum]
+[dolor]
+[sit]
+[amet]
+[, ]
+[consectetur]
+[adipiscing]
+NULL
+
+# karge string tests for string_to_array
+
+# string_to_array scalar function
+query ?
+SELECT string_to_array(arrow_cast('abcxxxdef', 'LargeUtf8'), 'xxx')
+----
+[abc, def]
+
+# string_to_array scalar function
+query ?
+SELECT string_to_array(arrow_cast('abcxxxdef', 'LargeUtf8'), arrow_cast('xxx', 'LargeUtf8'))
+----
+[abc, def]
+
+query ?
+SELECT string_to_array(arrow_cast('abc', 'LargeUtf8'), NULL)
+----
+[a, b, c]
+
+query ?
+select string_to_array(arrow_cast(e, 'LargeUtf8'), ',') from values;
+----
+[Lorem]
+[ipsum]
+[dolor]
+[sit]
+[amet]
+[, ]
+[consectetur]
+[adipiscing]
+NULL
+
+query ?
+select string_to_array(arrow_cast(e, 'LargeUtf8'), ',', arrow_cast('Lorem', 'LargeUtf8')) from values;
+----
+[]
 [ipsum]
 [dolor]
 [sit]
