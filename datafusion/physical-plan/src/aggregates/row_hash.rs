@@ -859,14 +859,13 @@ impl GroupedHashAggregateStream {
                         )?;
                     }
                     _ => {
+                        if opt_filter.is_some() {
+                            return internal_err!("aggregate filter should be applied in partial stage, there should be no filter in final stage");
+                        }
+
                         // if aggregation is over intermediate states,
                         // use merge
-                        acc.merge_batch(
-                            values,
-                            group_indices,
-                            opt_filter,
-                            total_num_groups,
-                        )?;
+                        acc.merge_batch(values, group_indices, None, total_num_groups)?;
                     }
                 }
             }

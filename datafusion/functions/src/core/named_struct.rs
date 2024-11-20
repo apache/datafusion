@@ -24,9 +24,9 @@ use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use std::any::Any;
 use std::sync::{Arc, OnceLock};
 
-/// put values in a struct array.
+/// Put values in a struct array.
 fn named_struct_expr(args: &[ColumnarValue]) -> Result<ColumnarValue> {
-    // do not accept 0 arguments.
+    // Do not accept 0 arguments.
     if args.is_empty() {
         return exec_err!(
             "named_struct requires at least one pair of arguments, got 0 instead"

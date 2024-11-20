@@ -5466,3 +5466,20 @@ drop view t
 
 statement ok
 drop table source;
+
+# Test whether min, max accumulator produces NaN result when input is NaN.
+# See https://github.com/apache/datafusion/issues/13415 for rationale
+statement ok
+CREATE TABLE input_table (
+    "row" integer,
+    "x" double precision
+);
+
+statement ok
+INSERT INTO input_table VALUES    (1, 'NaN');
+
+query RR
+SELECT max(input_table.x), min(input_table.x) from input_table GROUP BY input_table."row";
+----
+NaN NaN
+
