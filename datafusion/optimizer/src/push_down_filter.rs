@@ -988,38 +988,32 @@ impl OptimizerRule for PushDownFilter {
             LogicalPlan::Join(join) => push_down_join(join, Some(&filter.predicate)),
             LogicalPlan::TableScan(scan) => {
                 let filter_predicates = split_conjunction(&filter.predicate);
-                let results = scan
-                    .source
-                    .supports_filters_pushdown(filter_predicates.as_slice())?;
-                if filter_predicates.len() != results.len() {
-                    return internal_err!(
-                        "Vec returned length: {} from supports_filters_pushdown is not the same size as the filters passed, which length is: {}",
-                        results.len(),
-                        filter_predicates.len());
-                }
 
-                let zip =
+                let (volatile_filters, non_volatile_filters): (Vec<&Expr>, Vec<&Expr>) =
                     filter_predicates
                         .into_iter()
-                        .zip(results)
-                        .map(|(pred, res)| {
-                            let filter_pushdown_type = if !matches!(
-                                res,
-                                TableProviderFilterPushDown::Unsupported
-                            ) && pred.is_volatile()
-                            {
-                                // Do not push down predicate with volatile functions to scan
-                                TableProviderFilterPushDown::Unsupported
-                            } else {
-                                res
-                            };
-                            (pred, filter_pushdown_type)
-                        });
+                        .partition(|pred| pred.is_volatile());
+
+                // Check which non-volatile filters are supported by source
+                let supported_filters = scan
+                    .source
+                    .supports_filters_pushdown(non_volatile_filters.as_slice())?;
+                if non_volatile_filters.len() != supported_filters.len() {
+                    return internal_err!(
+                        "Vec returned length: {} from supports_filters_pushdown is not the same size as the filters passed, which length is: {}",
+                        supported_filters.len(),
+                        non_volatile_filters.len());
+                }
+
+                // Compose scan filters from non-volatile filters of `Exact` or `Inexact` pushdown type
+                let zip = non_volatile_filters.into_iter().zip(supported_filters);
 
                 let new_scan_filters = zip
                     .clone()
                     .filter(|(_, res)| res != &TableProviderFilterPushDown::Unsupported)
                     .map(|(pred, _)| pred);
+
+                // Add new scan filters
                 let new_scan_filters: Vec<Expr> = scan
                     .filters
                     .iter()
@@ -1027,9 +1021,13 @@ impl OptimizerRule for PushDownFilter {
                     .unique()
                     .cloned()
                     .collect();
+
+                // Compose predicates to be of `Unsupported` or `Inexact` pushdown type, and also include volatile filters
                 let new_predicate: Vec<Expr> = zip
                     .filter(|(_, res)| res != &TableProviderFilterPushDown::Exact)
-                    .map(|(pred, _)| pred.clone())
+                    .map(|(pred, _)| pred)
+                    .chain(volatile_filters)
+                    .cloned()
                     .collect();
 
                 let new_scan = LogicalPlan::TableScan(TableScan {
