@@ -526,7 +526,7 @@ impl Unparser<'_> {
             .map(|chunk| {
                 let key = match &chunk[0] {
                     Expr::Literal(lit) => self.new_ident_quoted_if_needs(lit.to_string()),
-                    _ => return internal_err!("named_struct arg is invalid"),
+                    _ => return internal_err!("named_struct expects even arguments to be strings, but received: {:?}", &chunk[0])
                 };
 
                 Ok(ast::DictionaryField {
@@ -548,14 +548,14 @@ impl Unparser<'_> {
             Expr::Column(col) => match self.col_to_sql(col)? {
                 ast::Expr::Identifier(ident) => vec![ident],
                 ast::Expr::CompoundIdentifier(idents) => idents,
-                _ => unreachable!(),
+                other => return internal_err!("expected col_to_sql to return an Identifier or CompoundIdentifier, but received: {:?}", other),
             },
-            _ => return internal_err!("get_field column is invalid"),
+            _ => return internal_err!("get_field expects first argument to be column, but received: {:?}", &args[0]),
         };
 
         let field = match &args[1] {
             Expr::Literal(lit) => self.new_ident_quoted_if_needs(lit.to_string()),
-            _ => return internal_err!("get_field field_name is invalid"),
+            _ => return internal_err!("get_field expects second argument to be a string, but received: {:?}", &args[0]),
         };
         id.push(field);
 
