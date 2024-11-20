@@ -100,10 +100,13 @@ use substrait::{
     version,
 };
 
-use super::context::Context;
+use super::context::SubstraitPlanningContext;
 
 /// Convert DataFusion LogicalPlan to Substrait Plan
-pub fn to_substrait_plan(plan: &LogicalPlan, ctx: &dyn Context) -> Result<Box<Plan>> {
+pub fn to_substrait_plan(
+    plan: &LogicalPlan,
+    ctx: &dyn SubstraitPlanningContext,
+) -> Result<Box<Plan>> {
     let mut extensions = Extensions::default();
     // Parse relation nodes
     // Generate PlanRel(s)
@@ -146,7 +149,7 @@ pub fn to_substrait_plan(plan: &LogicalPlan, ctx: &dyn Context) -> Result<Box<Pl
 pub fn to_substrait_extended_expr(
     exprs: &[(&Expr, &Field)],
     schema: &DFSchemaRef,
-    ctx: &dyn Context,
+    ctx: &dyn SubstraitPlanningContext,
 ) -> Result<Box<ExtendedExpression>> {
     let mut extensions = Extensions::default();
 
@@ -185,7 +188,7 @@ pub fn to_substrait_extended_expr(
 #[allow(deprecated)]
 pub fn to_substrait_rel(
     plan: &LogicalPlan,
-    ctx: &dyn Context,
+    ctx: &dyn SubstraitPlanningContext,
     extensions: &mut Extensions,
 ) -> Result<Box<Rel>> {
     match plan {
@@ -688,7 +691,7 @@ fn to_substrait_named_struct(schema: &DFSchemaRef) -> Result<NamedStruct> {
 }
 
 fn to_substrait_join_expr(
-    ctx: &dyn Context,
+    ctx: &dyn SubstraitPlanningContext,
     join_conditions: &Vec<(Expr, Expr)>,
     eq_op: Operator,
     left_schema: &DFSchemaRef,
@@ -771,7 +774,7 @@ pub fn operator_to_name(op: Operator) -> &'static str {
 
 #[allow(deprecated)]
 pub fn parse_flat_grouping_exprs(
-    ctx: &dyn Context,
+    ctx: &dyn SubstraitPlanningContext,
     exprs: &[Expr],
     schema: &DFSchemaRef,
     extensions: &mut Extensions,
@@ -793,7 +796,7 @@ pub fn parse_flat_grouping_exprs(
 }
 
 pub fn to_substrait_groupings(
-    ctx: &dyn Context,
+    ctx: &dyn SubstraitPlanningContext,
     exprs: &[Expr],
     schema: &DFSchemaRef,
     extensions: &mut Extensions,
@@ -858,7 +861,7 @@ pub fn to_substrait_groupings(
 
 #[allow(deprecated)]
 pub fn to_substrait_agg_measure(
-    ctx: &dyn Context,
+    ctx: &dyn SubstraitPlanningContext,
     expr: &Expr,
     schema: &DFSchemaRef,
     extensions: &mut Extensions,
@@ -909,7 +912,7 @@ pub fn to_substrait_agg_measure(
 
 /// Converts sort expression to corresponding substrait `SortField`
 fn to_substrait_sort_field(
-    ctx: &dyn Context,
+    ctx: &dyn SubstraitPlanningContext,
     sort: &Sort,
     schema: &DFSchemaRef,
     extensions: &mut Extensions,
@@ -978,7 +981,7 @@ pub fn make_binary_op_scalar_func(
 /// * `extensions` - Substrait extension info. Contains registered function information
 #[allow(deprecated)]
 pub fn to_substrait_rex(
-    ctx: &dyn Context,
+    ctx: &dyn SubstraitPlanningContext,
     expr: &Expr,
     schema: &DFSchemaRef,
     col_ref_offset: usize,
@@ -1675,7 +1678,7 @@ fn make_substrait_window_function(
 #[allow(deprecated)]
 #[allow(clippy::too_many_arguments)]
 fn make_substrait_like_expr(
-    ctx: &dyn Context,
+    ctx: &dyn SubstraitPlanningContext,
     ignore_case: bool,
     negated: bool,
     expr: &Expr,
@@ -2089,7 +2092,7 @@ fn to_substrait_literal_expr(
 
 /// Util to generate substrait [RexType::ScalarFunction] with one argument
 fn to_substrait_unary_scalar_fn(
-    ctx: &dyn Context,
+    ctx: &dyn SubstraitPlanningContext,
     fn_name: &str,
     arg: &Expr,
     schema: &DFSchemaRef,
@@ -2138,7 +2141,7 @@ fn try_to_substrait_field_reference(
 }
 
 fn substrait_sort_field(
-    ctx: &dyn Context,
+    ctx: &dyn SubstraitPlanningContext,
     sort: &Sort,
     schema: &DFSchemaRef,
     extensions: &mut Extensions,

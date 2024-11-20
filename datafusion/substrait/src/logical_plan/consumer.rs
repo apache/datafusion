@@ -99,7 +99,7 @@ use substrait::proto::{
 };
 use substrait::proto::{ExtendedExpression, FunctionArgument, SortField};
 
-use super::context::Context;
+use super::context::SubstraitPlanningContext;
 
 // Substrait PrecisionTimestampTz indicates that the timestamp is relative to UTC, which
 // is the same as the expectation for any non-empty timezone in DF, so any non-empty timezone
@@ -202,7 +202,7 @@ fn split_eq_and_noneq_join_predicate_with_nulls_equality(
 
 async fn union_rels(
     rels: &[Rel],
-    ctx: &dyn Context,
+    ctx: &dyn SubstraitPlanningContext,
     extensions: &Extensions,
     is_all: bool,
 ) -> Result<LogicalPlan> {
@@ -223,7 +223,7 @@ async fn union_rels(
 
 async fn intersect_rels(
     rels: &[Rel],
-    ctx: &dyn Context,
+    ctx: &dyn SubstraitPlanningContext,
     extensions: &Extensions,
     is_all: bool,
 ) -> Result<LogicalPlan> {
@@ -242,7 +242,7 @@ async fn intersect_rels(
 
 async fn except_rels(
     rels: &[Rel],
-    ctx: &dyn Context,
+    ctx: &dyn SubstraitPlanningContext,
     extensions: &Extensions,
     is_all: bool,
 ) -> Result<LogicalPlan> {
@@ -260,7 +260,10 @@ async fn except_rels(
 }
 
 /// Convert Substrait Plan to DataFusion LogicalPlan
-pub async fn from_substrait_plan(ctx: &dyn Context, plan: &Plan) -> Result<LogicalPlan> {
+pub async fn from_substrait_plan(
+    ctx: &dyn SubstraitPlanningContext,
+    plan: &Plan,
+) -> Result<LogicalPlan> {
     // Register function extension
     let extensions = Extensions::try_from(&plan.extensions)?;
     if !extensions.type_variations.is_empty() {
@@ -337,7 +340,7 @@ pub struct ExprContainer {
 /// between systems.  This is often useful for scenarios like pushdown where filter
 /// expressions need to be sent to remote systems.
 pub async fn from_substrait_extended_expr(
-    ctx: &dyn Context,
+    ctx: &dyn SubstraitPlanningContext,
     extended_expr: &ExtendedExpression,
 ) -> Result<ExprContainer> {
     // Register function extension
@@ -557,7 +560,7 @@ fn make_renamed_schema(
 #[allow(deprecated)]
 #[async_recursion]
 pub async fn from_substrait_rel(
-    ctx: &dyn Context,
+    ctx: &dyn SubstraitPlanningContext,
     rel: &Rel,
     extensions: &Extensions,
 ) -> Result<LogicalPlan> {
@@ -838,7 +841,7 @@ pub async fn from_substrait_rel(
         }
         Some(RelType::Read(read)) => {
             async fn read_with_schema(
-                ctx: &dyn Context,
+                ctx: &dyn SubstraitPlanningContext,
                 table_ref: TableReference,
                 schema: DFSchema,
                 projection: &Option<MaskExpression>,
@@ -1405,7 +1408,7 @@ fn from_substrait_jointype(join_type: i32) -> Result<JoinType> {
 
 /// Convert Substrait Sorts to DataFusion Exprs
 pub async fn from_substrait_sorts(
-    ctx: &dyn Context,
+    ctx: &dyn SubstraitPlanningContext,
     substrait_sorts: &Vec<SortField>,
     input_schema: &DFSchema,
     extensions: &Extensions,
@@ -1455,7 +1458,7 @@ pub async fn from_substrait_sorts(
 
 /// Convert Substrait Expressions to DataFusion Exprs
 pub async fn from_substrait_rex_vec(
-    ctx: &dyn Context,
+    ctx: &dyn SubstraitPlanningContext,
     exprs: &Vec<Expression>,
     input_schema: &DFSchema,
     extensions: &Extensions,
@@ -1470,7 +1473,7 @@ pub async fn from_substrait_rex_vec(
 
 /// Convert Substrait FunctionArguments to DataFusion Exprs
 pub async fn from_substrait_func_args(
-    ctx: &dyn Context,
+    ctx: &dyn SubstraitPlanningContext,
     arguments: &Vec<FunctionArgument>,
     input_schema: &DFSchema,
     extensions: &Extensions,
@@ -1490,7 +1493,7 @@ pub async fn from_substrait_func_args(
 
 /// Convert Substrait AggregateFunction to DataFusion Expr
 pub async fn from_substrait_agg_func(
-    ctx: &dyn Context,
+    ctx: &dyn SubstraitPlanningContext,
     f: &AggregateFunction,
     input_schema: &DFSchema,
     extensions: &Extensions,
@@ -1533,7 +1536,7 @@ pub async fn from_substrait_agg_func(
 /// Convert Substrait Rex to DataFusion Expr
 #[async_recursion]
 pub async fn from_substrait_rex(
-    ctx: &dyn Context,
+    ctx: &dyn SubstraitPlanningContext,
     e: &Expression,
     input_schema: &DFSchema,
     extensions: &Extensions,
@@ -2788,7 +2791,7 @@ fn from_substrait_null(
 
 #[allow(deprecated)]
 async fn from_substrait_grouping(
-    ctx: &dyn Context,
+    ctx: &dyn SubstraitPlanningContext,
     grouping: &Grouping,
     expressions: &[Expr],
     input_schema: &DFSchemaRef,
@@ -2850,7 +2853,7 @@ impl BuiltinExprBuilder {
 
     pub async fn build(
         self,
-        ctx: &dyn Context,
+        ctx: &dyn SubstraitPlanningContext,
         f: &ScalarFunction,
         input_schema: &DFSchema,
         extensions: &Extensions,
@@ -2875,7 +2878,7 @@ impl BuiltinExprBuilder {
     }
 
     async fn build_unary_expr(
-        ctx: &dyn Context,
+        ctx: &dyn SubstraitPlanningContext,
         fn_name: &str,
         f: &ScalarFunction,
         input_schema: &DFSchema,
@@ -2909,7 +2912,7 @@ impl BuiltinExprBuilder {
     }
 
     async fn build_like_expr(
-        ctx: &dyn Context,
+        ctx: &dyn SubstraitPlanningContext,
         case_insensitive: bool,
         f: &ScalarFunction,
         input_schema: &DFSchema,

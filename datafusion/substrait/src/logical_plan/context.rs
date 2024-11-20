@@ -25,8 +25,17 @@ use datafusion::{
     sql::TableReference,
 };
 
+/// This trait provides the context needed to transform a substrait plan into a
+/// [`datafusion::logical_expr::LogicalPlan`] (via [`super::consumer::from_substrait_plan`])
+/// and back again into a substrait plan (via [`super::producer::to_substrait_plan`]).
+///
+/// The context is declared as a trait to decouple the substrait plan encoder /
+/// decoder from the [`SessionState`], potentially allowing users to define
+/// their own slimmer context just for serializing and deserializing substrait.
+///
+/// [`SessionState`] implements this trait.
 #[async_trait]
-pub trait Context: Sync + Send + FunctionRegistry {
+pub trait SubstraitPlanningContext: Sync + Send + FunctionRegistry {
     /// Return [SerializerRegistry] for extensions
     fn serializer_registry(&self) -> &Arc<dyn SerializerRegistry>;
 
@@ -37,7 +46,7 @@ pub trait Context: Sync + Send + FunctionRegistry {
 }
 
 #[async_trait]
-impl Context for SessionState {
+impl SubstraitPlanningContext for SessionState {
     fn serializer_registry(&self) -> &Arc<dyn SerializerRegistry> {
         self.serializer_registry()
     }
