@@ -35,7 +35,7 @@ use datafusion::{
 ///
 /// [`SessionState`] implements this trait.
 #[async_trait]
-pub trait SubstraitPlanningContext: Sync + Send + FunctionRegistry {
+pub trait SubstraitPlanningState: Sync + Send + FunctionRegistry {
     /// Return [SerializerRegistry] for extensions
     fn serializer_registry(&self) -> &Arc<dyn SerializerRegistry>;
 
@@ -46,7 +46,7 @@ pub trait SubstraitPlanningContext: Sync + Send + FunctionRegistry {
 }
 
 #[async_trait]
-impl SubstraitPlanningContext for SessionState {
+impl SubstraitPlanningState for SessionState {
     fn serializer_registry(&self) -> &Arc<dyn SerializerRegistry> {
         self.serializer_registry()
     }
