@@ -331,7 +331,7 @@ where
 /// scalar function.
 pub struct ScalarFunctionArgs<'a> {
     /// The evaluated arguments to the function
-    pub args: &'a [ColumnarValue],
+    pub args: Vec<ColumnarValue>,
     /// The number of rows in record batch being evaluated
     pub number_rows: usize,
     /// The return type of the scalar function returned (from `return_type` or `return_type_from_exprs`)
@@ -553,11 +553,11 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
         }
     }
 
-    /// Invoke the function with `args: ScalarFunctionArgs` returning the appropriate result.
+    /// Invoke the function  returning the appropriate result.
     ///
     /// The function will be invoked with a struct `ScalarFunctionArgs`
     ///
-    /// # Performance
+    /// # Performance Notes
     ///
     /// For the best performance, the implementations should handle the common case
     /// when one or more of their arguments are constant values (aka
@@ -567,7 +567,7 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     /// to arrays, which will likely be simpler code, but be slower.
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         #[allow(deprecated)]
-        self.invoke_batch(args.args, args.number_rows)
+        self.invoke_batch(&args.args, args.number_rows)
     }
 
     /// Invoke the function without `args`, instead the number of rows are provided,

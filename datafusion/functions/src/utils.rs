@@ -149,7 +149,8 @@ pub mod test {
                     let return_type = return_type.unwrap();
                     assert_eq!(return_type, $EXPECTED_DATA_TYPE);
 
-                    let result = func.invoke_with_args(datafusion_expr::ScalarFunctionArgs{args: $ARGS, number_rows: cardinality, return_type: &return_type});
+                    let args: Vec<_> = $ARGS.into_iter().collect();
+                    let result = func.invoke_with_args(datafusion_expr::ScalarFunctionArgs{args, number_rows: cardinality, return_type: &return_type});
                     assert_eq!(result.is_ok(), true, "function returned an error: {}", result.unwrap_err());
 
                     let result = result.unwrap().clone().into_array(cardinality).expect("Failed to convert to array");
