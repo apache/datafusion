@@ -110,7 +110,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             |b| {
                 b.iter(|| {
                     #[allow(deprecated)] // TODO use invoke_batch
-                    black_box(substr.invoke(&args))
+                    black_box(substr.invoke_batch(&args, size))
                 })
             },
         );
@@ -121,7 +121,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             |b| {
                 b.iter(|| {
                     #[allow(deprecated)] // TODO use invoke_batch
-                    black_box(substr.invoke(&args))
+                    black_box(substr.invoke_batch(&args, size))
                 })
             },
         );
@@ -132,7 +132,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             |b| {
                 b.iter(|| {
                     #[allow(deprecated)] // TODO use invoke_batch
-                    black_box(substr.invoke(&args))
+                    black_box(substr.invoke_batch(&args, size))
                 })
             },
         );
@@ -155,7 +155,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             |b| {
                 b.iter(|| {
                     #[allow(deprecated)] // TODO use invoke_batch
-                    black_box(substr.invoke(&args))
+                    black_box(substr.invoke_batch(&args, size))
                 })
             },
         );
@@ -169,7 +169,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             |b| {
                 b.iter(|| {
                     #[allow(deprecated)] // TODO use invoke_batch
-                    black_box(substr.invoke(&args))
+                    black_box(substr.invoke_batch(&args, size))
                 })
             },
         );
@@ -182,8 +182,8 @@ fn criterion_benchmark(c: &mut Criterion) {
             ),
             |b| {
                 b.iter(|| {
-                    #[allow(deprecated)] // TODO use invoke_batch
-                    black_box(substr.invoke(&args))
+                    #[allow(deprecated)] // TODO use invoke
+                    black_box(substr.invoke_batch(&args, size))
                 })
             },
         );
@@ -205,8 +205,8 @@ fn criterion_benchmark(c: &mut Criterion) {
             ),
             |b| {
                 b.iter(|| {
-                    #[allow(deprecated)] // TODO use invoke_batch
-                    black_box(substr.invoke(&args))
+                    #[allow(deprecated)] // TODO use invoke
+                    black_box(substr.invoke_batch(&args, size))
                 })
             },
         );
@@ -220,7 +220,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             |b| {
                 b.iter(|| {
                     #[allow(deprecated)] // TODO use invoke_batch
-                    black_box(substr.invoke(&args))
+                    black_box(substr.invoke_batch(&args, size))
                 })
             },
         );
@@ -234,7 +234,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             |b| {
                 b.iter(|| {
                     #[allow(deprecated)] // TODO use invoke_batch
-                    black_box(substr.invoke(&args))
+                    black_box(substr.invoke_batch(&args, size))
                 })
             },
         );

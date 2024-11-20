@@ -20,7 +20,7 @@ extern crate criterion;
 use std::sync::Arc;
 
 use arrow::array::builder::StringBuilder;
-use arrow::array::{ArrayRef, StringArray};
+use arrow::array::{Array, ArrayRef, StringArray};
 use arrow::compute::cast;
 use arrow::datatypes::DataType;
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
@@ -110,13 +110,15 @@ fn data_with_formats() -> (StringArray, StringArray, StringArray, StringArray) {
 }
 fn criterion_benchmark(c: &mut Criterion) {
     c.bench_function("to_timestamp_no_formats_utf8", |b| {
-        let string_array = ColumnarValue::Array(Arc::new(data()) as ArrayRef);
+        let arr_data = data();
+        let batch_len = arr_data.len();
+        let string_array = ColumnarValue::Array(Arc::new(arr_data) as ArrayRef);
 
         b.iter(|| {
             #[allow(deprecated)] // TODO use invoke_batch
             black_box(
                 to_timestamp()
-                    .invoke(&[string_array.clone()])
+                    .invoke_batch(&[string_array.clone()], batch_len)
                     .expect("to_timestamp should work on valid values"),
             )
         })
@@ -124,13 +126,14 @@ fn criterion_benchmark(c: &mut Criterion) {
 
     c.bench_function("to_timestamp_no_formats_largeutf8", |b| {
         let data = cast(&data(), &DataType::LargeUtf8).unwrap();
+        let batch_len = data.len();
         let string_array = ColumnarValue::Array(Arc::new(data) as ArrayRef);
 
         b.iter(|| {
             #[allow(deprecated)] // TODO use invoke_batch
             black_box(
                 to_timestamp()
-                    .invoke(&[string_array.clone()])
+                    .invoke_batch(&[string_array.clone()], batch_len)
                     .expect("to_timestamp should work on valid values"),
             )
         })
@@ -138,13 +141,14 @@ fn criterion_benchmark(c: &mut Criterion) {
 
     c.bench_function("to_timestamp_no_formats_utf8view", |b| {
         let data = cast(&data(), &DataType::Utf8View).unwrap();
+        let batch_len = data.len();
         let string_array = ColumnarValue::Array(Arc::new(data) as ArrayRef);
 
         b.iter(|| {
             #[allow(deprecated)] // TODO use invoke_batch
             black_box(
                 to_timestamp()
-                    .invoke(&[string_array.clone()])
+                    .invoke_batch(&[string_array.clone()], batch_len)
                     .expect("to_timestamp should work on valid values"),
             )
         })
@@ -152,6 +156,7 @@ fn criterion_benchmark(c: &mut Criterion) {
 
     c.bench_function("to_timestamp_with_formats_utf8", |b| {
         let (inputs, format1, format2, format3) = data_with_formats();
+        let batch_len = inputs.len();
 
         let args = [
             ColumnarValue::Array(Arc::new(inputs) as ArrayRef),
@@ -163,7 +168,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             #[allow(deprecated)] // TODO use invoke_batch
             black_box(
                 to_timestamp()
-                    .invoke(&args.clone())
+                    .invoke_batch(&args.clone(), batch_len)
                     .expect("to_timestamp should work on valid values"),
             )
         })
@@ -171,6 +176,7 @@ fn criterion_benchmark(c: &mut Criterion) {
 
     c.bench_function("to_timestamp_with_formats_largeutf8", |b| {
         let (inputs, format1, format2, format3) = data_with_formats();
+        let batch_len = inputs.len();
 
         let args = [
             ColumnarValue::Array(
@@ -190,7 +196,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             #[allow(deprecated)] // TODO use invoke_batch
             black_box(
                 to_timestamp()
-                    .invoke(&args.clone())
+                    .invoke_batch(&args.clone(), batch_len)
                     .expect("to_timestamp should work on valid values"),
             )
         })
@@ -198,6 +204,8 @@ fn criterion_benchmark(c: &mut Criterion) {
 
     c.bench_function("to_timestamp_with_formats_utf8view", |b| {
         let (inputs, format1, format2, format3) = data_with_formats();
+
+        let batch_len = inputs.len();
 
         let args = [
             ColumnarValue::Array(
@@ -217,7 +225,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             #[allow(deprecated)] // TODO use invoke_batch
             black_box(
                 to_timestamp()
-                    .invoke(&args.clone())
+                    .invoke_batch(&args.clone(), batch_len)
                     .expect("to_timestamp should work on valid values"),
             )
         })

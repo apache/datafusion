@@ -74,7 +74,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             |b| {
                 b.iter(|| {
                     #[allow(deprecated)] // TODO use invoke_batch
-                    black_box(repeat.invoke(&args))
+                    black_box(repeat.invoke_batch(&args, repeat_times as usize))
                 })
             },
         );
@@ -88,7 +88,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             |b| {
                 b.iter(|| {
                     #[allow(deprecated)] // TODO use invoke_batch
-                    black_box(repeat.invoke(&args))
+                    black_box(repeat.invoke_batch(&args, repeat_times as usize))
                 })
             },
         );
@@ -102,7 +102,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             |b| {
                 b.iter(|| {
                     #[allow(deprecated)] // TODO use invoke_batch
-                    black_box(repeat.invoke(&args))
+                    black_box(repeat.invoke_batch(&args, repeat_times as usize))
                 })
             },
         );
@@ -125,7 +125,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             |b| {
                 b.iter(|| {
                     #[allow(deprecated)] // TODO use invoke_batch
-                    black_box(repeat.invoke(&args))
+                    black_box(repeat.invoke_batch(&args, repeat_times as usize))
                 })
             },
         );
@@ -139,7 +139,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             |b| {
                 b.iter(|| {
                     #[allow(deprecated)] // TODO use invoke_batch
-                    black_box(repeat.invoke(&args))
+                    black_box(repeat.invoke_batch(&args))
                 })
             },
         );
@@ -153,7 +153,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             |b| {
                 b.iter(|| {
                     #[allow(deprecated)] // TODO use invoke_batch
-                    black_box(repeat.invoke(&args))
+                    black_box(repeat.invoke_batch(&args, repeat_times as usize))
                 })
             },
         );

@@ -103,7 +103,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         group.bench_function(BenchmarkId::new("utf8 type", size), |b| {
             b.iter(|| {
                 #[allow(deprecated)] // TODO use invoke_batch
-                criterion::black_box(lpad().invoke(&args).unwrap())
+                criterion::black_box(lpad().invoke_batch(&args, size).unwrap())
             })
         });
 
@@ -111,7 +111,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         group.bench_function(BenchmarkId::new("largeutf8 type", size), |b| {
             b.iter(|| {
                 #[allow(deprecated)] // TODO use invoke_batch
-                criterion::black_box(lpad().invoke(&args).unwrap())
+                criterion::black_box(lpad().invoke_batch(&args, size).unwrap())
             })
         });
 
@@ -119,7 +119,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         group.bench_function(BenchmarkId::new("stringview type", size), |b| {
             b.iter(|| {
                 #[allow(deprecated)] // TODO use invoke_batch
-                criterion::black_box(lpad().invoke(&args).unwrap())
+                criterion::black_box(lpad().invoke_batch(&args, size).unwrap())
             })
         });
 
@@ -131,7 +131,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         group.bench_function(BenchmarkId::new("utf8 type", size), |b| {
             b.iter(|| {
                 #[allow(deprecated)] // TODO use invoke_batch
-                criterion::black_box(rpad().invoke(&args).unwrap())
+                criterion::black_box(rpad().invoke_batch(&args, size).unwrap())
             })
         });
 
@@ -139,7 +139,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         group.bench_function(BenchmarkId::new("largeutf8 type", size), |b| {
             b.iter(|| {
                 #[allow(deprecated)] // TODO use invoke_batch
-                criterion::black_box(rpad().invoke(&args).unwrap())
+                criterion::black_box(rpad().invoke_batch(&args, size).unwrap())
             })
         });
 
@@ -148,7 +148,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         group.bench_function(BenchmarkId::new("stringview type", size), |b| {
             b.iter(|| {
                 #[allow(deprecated)] // TODO use invoke_batch
-                criterion::black_box(rpad().invoke(&args).unwrap())
+                criterion::black_box(rpad().invoke_batch(&args, size).unwrap())
             })
         });
 

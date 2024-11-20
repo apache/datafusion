@@ -30,19 +30,21 @@ fn criterion_benchmark(c: &mut Criterion) {
     let iszero = iszero();
     for size in [1024, 4096, 8192] {
         let f32_array = Arc::new(create_primitive_array::<Float32Type>(size, 0.2));
+        let batch_len =  f32_array.len();
         let f32_args = vec![ColumnarValue::Array(f32_array)];
         c.bench_function(&format!("iszero f32 array: {}", size), |b| {
             b.iter(|| {
                 #[allow(deprecated)] // TODO use invoke_batch
-                black_box(iszero.invoke(&f32_args).unwrap())
+                black_box(iszero.invoke_batch(&f32_args, batch_len).unwrap())
             })
         });
         let f64_array = Arc::new(create_primitive_array::<Float64Type>(size, 0.2));
+        let batch_len =  f64_array.len();
         let f64_args = vec![ColumnarValue::Array(f64_array)];
         c.bench_function(&format!("iszero f64 array: {}", size), |b| {
             b.iter(|| {
                 #[allow(deprecated)] // TODO use invoke_batch
-                black_box(iszero.invoke(&f64_args).unwrap())
+                black_box(iszero.invoke_batch(&f64_args, batch_len).unwrap())
             })
         });
     }

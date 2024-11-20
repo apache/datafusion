@@ -31,13 +31,13 @@ fn criterion_benchmark(c: &mut Criterion) {
             let method = ColumnarValue::Scalar("base64".into());
             #[allow(deprecated)] // TODO use invoke_batch
             let encoded = encoding::encode()
-                .invoke(&[ColumnarValue::Array(str_array.clone()), method.clone()])
+                .invoke_batch(&[ColumnarValue::Array(str_array.clone()), method.clone()], size)
                 .unwrap();
 
             let args = vec![encoded, method];
             b.iter(|| {
                 #[allow(deprecated)] // TODO use invoke_batch
-                black_box(decode.invoke(&args).unwrap())
+                black_box(decode.invoke_batch(&args, size).unwrap())
             })
         });
 
@@ -45,13 +45,13 @@ fn criterion_benchmark(c: &mut Criterion) {
             let method = ColumnarValue::Scalar("hex".into());
             #[allow(deprecated)] // TODO use invoke_batch
             let encoded = encoding::encode()
-                .invoke(&[ColumnarValue::Array(str_array.clone()), method.clone()])
+                .invoke_batch(&[ColumnarValue::Array(str_array.clone()), method.clone()], size)
                 .unwrap();
 
             let args = vec![encoded, method];
             b.iter(|| {
                 #[allow(deprecated)] // TODO use invoke_batch
-                black_box(decode.invoke(&args).unwrap())
+                black_box(decode.invoke_batch(&args, size).unwrap())
             })
         });
     }

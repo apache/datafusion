@@ -115,7 +115,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             |b| {
                 b.iter(|| {
                     #[allow(deprecated)] // TODO use invoke_batch
-                    black_box(strpos.invoke(&args_string_ascii))
+                    black_box(strpos.invoke_batch(&args_string_ascii, n_rows))
                 })
             },
         );
@@ -127,7 +127,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             |b| {
                 b.iter(|| {
                     #[allow(deprecated)] // TODO use invoke_batch
-                    black_box(strpos.invoke(&args_string_utf8))
+                    black_box(strpos.invoke_batch(&args_string_utf8, n_rows))
                 })
             },
         );
@@ -139,7 +139,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             |b| {
                 b.iter(|| {
                     #[allow(deprecated)] // TODO use invoke_batch
-                    black_box(strpos.invoke(&args_string_view_ascii))
+                    black_box(strpos.invoke_batch(&args_string_view_ascii, n_rows))
                 })
             },
         );
@@ -151,7 +151,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             |b| {
                 b.iter(|| {
                     #[allow(deprecated)] // TODO use invoke_batch
-                    black_box(strpos.invoke(&args_string_view_utf8))
+                    black_box(strpos.invoke_batch(&args_string_view_utf8, n_rows))
                 })
             },
         );

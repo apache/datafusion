@@ -105,7 +105,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             #[allow(deprecated)] // TODO use invoke_batch
             black_box(
                 to_char()
-                    .invoke(&[data.clone(), patterns.clone()])
+                    .invoke_batch(&[data.clone(), patterns.clone()], )
                     .expect("to_char should work on valid values"),
             )
         })
@@ -129,7 +129,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             #[allow(deprecated)] // TODO use invoke_batch
             black_box(
                 to_char()
-                    .invoke(&[data.clone(), pattern.clone()])
+                    .invoke_batch(&[data.clone(), pattern.clone()], 1)
                     .expect("to_char should work on valid values"),
             )
         })

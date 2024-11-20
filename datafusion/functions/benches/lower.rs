@@ -126,7 +126,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         c.bench_function(&format!("lower_all_values_are_ascii: {}", size), |b| {
             b.iter(|| {
                 #[allow(deprecated)] // TODO use invoke_batch
-                black_box(lower.invoke(&args))
+                black_box(lower.invoke_batch(&args, size))
             })
         });
 
@@ -136,7 +136,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             |b| {
                 b.iter(|| {
                     #[allow(deprecated)] // TODO use invoke_batch
-                    black_box(lower.invoke(&args))
+                    black_box(lower.invoke_batch(&args, size))
                 })
             },
         );
@@ -147,7 +147,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             |b| {
                 b.iter(|| {
                     #[allow(deprecated)] // TODO use invoke_batch
-                    black_box(lower.invoke(&args))
+                    black_box(lower.invoke_batch(&args, size))
                 })
             },
         );
@@ -168,7 +168,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                      size, str_len, null_density, mixed),
                         |b| b.iter(|| {
                             #[allow(deprecated)] // TODO use invoke_batch
-                            black_box(lower.invoke(&args))
+                            black_box(lower.invoke_batch(&args, size))
                         }),
                     );
 
@@ -178,7 +178,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                      size, str_len, null_density, mixed),
                         |b| b.iter(|| {
                             #[allow(deprecated)] // TODO use invoke_batch
-                            black_box(lower.invoke(&args))
+                            black_box(lower.invoke_batch(&args, size))
                         }),
                     );
 
@@ -188,7 +188,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                      size, str_len, 0.1, null_density, mixed),
                         |b| b.iter(|| {
                             #[allow(deprecated)] // TODO use invoke_batch
-                            black_box(lower.invoke(&args))
+                            black_box(lower.invoke_batch(&args, size))
                         }),
                     );
                 }

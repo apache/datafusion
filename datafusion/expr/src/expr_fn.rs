@@ -27,7 +27,7 @@ use crate::function::{
 };
 use crate::{
     conditional_expressions::CaseBuilder, expr::Sort, logical_plan::Subquery,
-    AggregateUDF, Expr, LogicalPlan, Operator, PartitionEvaluator, ScalarFunctionArgs,
+    AggregateUDF, Expr, LogicalPlan, Operator, PartitionEvaluator,
     ScalarFunctionImplementation, ScalarUDF, Signature, Volatility,
 };
 use crate::{
