@@ -18,33 +18,30 @@
 //! [`PruningPredicate`] to apply filter [`Expr`] to prune "containers"
 //! based on statistics (e.g. Parquet Row Groups)
 //!
-//! [`Expr`]: crate::prelude::Expr
+//! [`Expr`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/enum.Expr.html
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use crate::{
-    common::{Column, DFSchema},
-    error::{DataFusionError, Result},
-    logical_expr::Operator,
-    physical_plan::{ColumnarValue, PhysicalExpr},
-};
-
+use arrow::array::AsArray;
 use arrow::{
     array::{new_null_array, ArrayRef, BooleanArray},
     datatypes::{DataType, Field, Schema, SchemaRef},
     record_batch::{RecordBatch, RecordBatchOptions},
 };
-use arrow_array::cast::AsArray;
+use log::trace;
+
+use datafusion_common::error::{DataFusionError, Result};
 use datafusion_common::tree_node::TransformedResult;
 use datafusion_common::{
     internal_err, plan_datafusion_err, plan_err,
     tree_node::{Transformed, TreeNode},
     ScalarValue,
 };
+use datafusion_common::{Column, DFSchema};
+use datafusion_expr_common::operator::Operator;
 use datafusion_physical_expr::utils::{collect_columns, Guarantee, LiteralGuarantee};
 use datafusion_physical_expr::{expressions as phys_expr, PhysicalExprRef};
-
-use log::trace;
+use datafusion_physical_plan::{ColumnarValue, PhysicalExpr};
 
 /// A source of runtime statistical information to [`PruningPredicate`]s.
 ///
@@ -567,7 +564,7 @@ impl PruningPredicate {
     /// expressions like `b = false`, but it does handle the
     /// simplified version `b`. See [`ExprSimplifier`] to simplify expressions.
     ///
-    /// [`ExprSimplifier`]: crate::optimizer::simplify_expressions::ExprSimplifier
+    /// [`ExprSimplifier`]: https://docs.rs/datafusion/latest/datafusion/optimizer/simplify_expressions/struct.ExprSimplifier.html
     pub fn prune<S: PruningStatistics>(&self, statistics: &S) -> Result<Vec<bool>> {
         let mut builder = BoolVecBuilder::new(statistics.num_containers());
 
@@ -653,7 +650,7 @@ impl PruningPredicate {
 
     // this is only used by `parquet` feature right now
     #[allow(dead_code)]
-    pub(crate) fn required_columns(&self) -> &RequiredColumns {
+    pub fn required_columns(&self) -> &RequiredColumns {
         &self.required_columns
     }
 
@@ -762,7 +759,7 @@ fn is_always_true(expr: &Arc<dyn PhysicalExpr>) -> bool {
 /// Handles creating references to the min/max statistics
 /// for columns as well as recording which statistics are needed
 #[derive(Debug, Default, Clone)]
-pub(crate) struct RequiredColumns {
+pub struct RequiredColumns {
     /// The statistics required to evaluate this predicate:
     /// * The unqualified column in the input schema
     /// * Statistics type (e.g. Min or Max or Null_Count)
@@ -786,7 +783,7 @@ impl RequiredColumns {
     /// * `true` returns None
     #[allow(dead_code)]
     // this fn is only used by `parquet` feature right now, thus the `allow(dead_code)`
-    pub(crate) fn single_column(&self) -> Option<&phys_expr::Column> {
+    pub fn single_column(&self) -> Option<&phys_expr::Column> {
         if self.columns.windows(2).all(|w| {
             // check if all columns are the same (ignoring statistics and field)
             let c1 = &w[0].0;
@@ -1664,15 +1661,14 @@ mod tests {
     use std::ops::{Not, Rem};
 
     use super::*;
-    use crate::assert_batches_eq;
-    use crate::logical_expr::{col, lit};
+    use datafusion_common::assert_batches_eq;
+    use datafusion_expr::{col, lit};
 
     use arrow::array::Decimal128Array;
     use arrow::{
-        array::{BinaryArray, Int32Array, Int64Array, StringArray},
+        array::{BinaryArray, Int32Array, Int64Array, StringArray, UInt64Array},
         datatypes::TimeUnit,
     };
-    use arrow_array::UInt64Array;
     use datafusion_expr::expr::InList;
     use datafusion_expr::{cast, is_null, try_cast, Expr};
     use datafusion_functions_nested::expr_fn::{array_has, make_array};
@@ -3536,7 +3532,7 @@ mod tests {
         // more complex case with unknown column
         let input = known_expression.clone().and(input.clone());
         let expected = phys_expr::BinaryExpr::new(
-            known_expression_transformed.clone(),
+            Arc::<dyn PhysicalExpr>::clone(&known_expression_transformed),
             Operator::And,
             logical2physical(&lit(42), &schema),
         );
@@ -3552,7 +3548,7 @@ mod tests {
         // more complex case with unknown expression
         let input = known_expression.and(input);
         let expected = phys_expr::BinaryExpr::new(
-            known_expression_transformed.clone(),
+            Arc::<dyn PhysicalExpr>::clone(&known_expression_transformed),
             Operator::And,
             logical2physical(&lit(42), &schema),
         );
@@ -4038,7 +4034,7 @@ mod tests {
     ) {
         println!("Pruning with expr: {}", expr);
         let expr = logical2physical(&expr, schema);
-        let p = PruningPredicate::try_new(expr, schema.clone()).unwrap();
+        let p = PruningPredicate::try_new(expr, Arc::<Schema>::clone(schema)).unwrap();
         let result = p.prune(statistics).unwrap();
         assert_eq!(result, expected);
     }
