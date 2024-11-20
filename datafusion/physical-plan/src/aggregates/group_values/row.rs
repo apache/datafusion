@@ -27,9 +27,9 @@ use datafusion_common::Result;
 use datafusion_execution::memory_pool::proxy::{RawTableAllocExt, VecAllocExt};
 use datafusion_expr::EmitTo;
 use hashbrown::raw::RawTable;
+use log::debug;
 use std::mem::size_of;
 use std::sync::Arc;
-use log::debug;
 
 /// A [`GroupValues`] making use of [`Rows`]
 ///
