@@ -663,6 +663,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                     projection,
                     partition_mode,
                     hashjoin.null_equals_null,
+                    None,
                 )?))
             }
             PhysicalPlanType::SymmetricHashJoin(sym_join) => {

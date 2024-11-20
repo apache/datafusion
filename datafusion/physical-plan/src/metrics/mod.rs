@@ -263,6 +263,7 @@ impl MetricsSet {
             MetricValue::Gauge { name, .. } => name == metric_name,
             MetricValue::StartTimestamp(_) => false,
             MetricValue::EndTimestamp(_) => false,
+            MetricValue::DynamicFilter(_) => false,
         })
     }
 

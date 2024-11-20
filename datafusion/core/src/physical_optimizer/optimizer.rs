@@ -17,9 +17,8 @@
 
 //! Physical optimizer traits
 
-use datafusion_physical_optimizer::PhysicalOptimizerRule;
-use std::sync::Arc;
-
+#[cfg(feature = "parquet")]
+use super::join_filter_pushdown::JoinFilterPushdown;
 use super::projection_pushdown::ProjectionPushdown;
 use super::update_aggr_exprs::OptimizeAggregateOrder;
 use crate::physical_optimizer::aggregate_statistics::AggregateStatistics;
@@ -33,6 +32,8 @@ use crate::physical_optimizer::limited_distinct_aggregation::LimitedDistinctAggr
 use crate::physical_optimizer::output_requirements::OutputRequirements;
 use crate::physical_optimizer::sanity_checker::SanityCheckPlan;
 use crate::physical_optimizer::topk_aggregation::TopKAggregation;
+use datafusion_physical_optimizer::PhysicalOptimizerRule;
+use std::sync::Arc;
 
 /// A rule-based physical optimizer.
 #[derive(Clone, Debug)]
@@ -112,6 +113,8 @@ impl PhysicalOptimizer {
             // given query plan; i.e. it only acts as a final
             // gatekeeping rule.
             Arc::new(SanityCheckPlan::new()),
+            #[cfg(feature = "parquet")]
+            Arc::new(JoinFilterPushdown::new()),
         ];
 
         Self::with_rules(rules)

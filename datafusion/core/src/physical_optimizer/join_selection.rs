@@ -199,6 +199,7 @@ pub fn swap_hash_join(
         ),
         partition_mode,
         hash_join.null_equals_null(),
+        None,
     )?;
     // In case of anti / semi joins or if there is embedded projection in HashJoinExec, output column order is preserved, no need to add projection again
     if matches!(
@@ -396,6 +397,7 @@ fn try_collect_left(
                     hash_join.projection.clone(),
                     PartitionMode::CollectLeft,
                     hash_join.null_equals_null(),
+                    hash_join.dynamic_filters_pushdown.clone(),
                 )?)))
             }
         }
@@ -408,6 +410,7 @@ fn try_collect_left(
             hash_join.projection.clone(),
             PartitionMode::CollectLeft,
             hash_join.null_equals_null(),
+            hash_join.dynamic_filters_pushdown.clone(),
         )?))),
         (false, true) => {
             if supports_swap(*hash_join.join_type()) {
@@ -436,6 +439,7 @@ fn partitioned_hash_join(hash_join: &HashJoinExec) -> Result<Arc<dyn ExecutionPl
             hash_join.projection.clone(),
             PartitionMode::Partitioned,
             hash_join.null_equals_null(),
+            hash_join.dynamic_filters_pushdown.clone(),
         )?))
     }
 }
@@ -925,6 +929,7 @@ mod tests_statistical {
                 None,
                 PartitionMode::CollectLeft,
                 false,
+                None,
             )
             .unwrap(),
         );
@@ -981,6 +986,7 @@ mod tests_statistical {
                 None,
                 PartitionMode::CollectLeft,
                 false,
+                None,
             )
             .unwrap(),
         );
@@ -1028,6 +1034,7 @@ mod tests_statistical {
                     None,
                     PartitionMode::Partitioned,
                     false,
+                    None,
                 )
                 .unwrap(),
             );
@@ -1097,6 +1104,7 @@ mod tests_statistical {
             None,
             PartitionMode::CollectLeft,
             false,
+            None,
         )
         .unwrap();
         let child_schema = child_join.schema();
@@ -1116,6 +1124,7 @@ mod tests_statistical {
             None,
             PartitionMode::CollectLeft,
             false,
+            None,
         )
         .unwrap();
 
@@ -1157,6 +1166,7 @@ mod tests_statistical {
                 None,
                 PartitionMode::CollectLeft,
                 false,
+                None,
             )
             .unwrap(),
         );
@@ -1354,6 +1364,7 @@ mod tests_statistical {
             Some(projection),
             PartitionMode::Partitioned,
             false,
+            None,
         )?);
 
         let swapped = swap_hash_join(&join.clone(), PartitionMode::Partitioned)
@@ -1548,6 +1559,7 @@ mod tests_statistical {
                 None,
                 PartitionMode::Auto,
                 false,
+                None,
             )
             .unwrap(),
         );
@@ -1992,6 +2004,7 @@ mod hash_join_tests {
             None,
             t.initial_mode,
             false,
+            None,
         )?);
 
         let optimized_join_plan = hash_join_swap_subrule(join, &ConfigOptions::new())?;

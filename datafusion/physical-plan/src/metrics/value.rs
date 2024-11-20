@@ -400,6 +400,9 @@ pub enum MetricValue {
     StartTimestamp(Timestamp),
     /// The time at which execution ended
     EndTimestamp(Timestamp),
+
+    /// Dynamic filters
+    DynamicFilter(String),
 }
 
 impl MetricValue {
@@ -417,6 +420,7 @@ impl MetricValue {
             Self::Time { name, .. } => name.borrow(),
             Self::StartTimestamp(_) => "start_timestamp",
             Self::EndTimestamp(_) => "end_timestamp",
+            Self::DynamicFilter(_) => "dynamic_filters",
         }
     }
 
@@ -442,6 +446,7 @@ impl MetricValue {
                 .and_then(|ts| ts.timestamp_nanos_opt())
                 .map(|nanos| nanos as usize)
                 .unwrap_or(0),
+            Self::DynamicFilter(_) => 1,
         }
     }
 
@@ -469,6 +474,7 @@ impl MetricValue {
             },
             Self::StartTimestamp(_) => Self::StartTimestamp(Timestamp::new()),
             Self::EndTimestamp(_) => Self::EndTimestamp(Timestamp::new()),
+            Self::DynamicFilter(name) => Self::DynamicFilter(name.clone()),
         }
     }
 
@@ -515,6 +521,7 @@ impl MetricValue {
             (Self::EndTimestamp(timestamp), Self::EndTimestamp(other_timestamp)) => {
                 timestamp.update_to_max(other_timestamp);
             }
+            (Self::DynamicFilter(_), _) => {}
             m @ (_, _) => {
                 panic!(
                     "Mismatched metric types. Can not aggregate {:?} with value {:?}",
@@ -539,6 +546,7 @@ impl MetricValue {
             Self::Time { .. } => 8,
             Self::StartTimestamp(_) => 9, // show timestamps last
             Self::EndTimestamp(_) => 10,
+            Self::DynamicFilter(_) => 11,
         }
     }
 
@@ -573,6 +581,9 @@ impl Display for MetricValue {
             }
             Self::StartTimestamp(timestamp) | Self::EndTimestamp(timestamp) => {
                 write!(f, "{timestamp}")
+            }
+            Self::DynamicFilter(filter) => {
+                write!(f, "{filter}")
             }
         }
     }

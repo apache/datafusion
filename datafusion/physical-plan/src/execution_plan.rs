@@ -43,6 +43,7 @@ use datafusion_physical_expr_common::sort_expr::LexRequirement;
 use crate::coalesce_partitions::CoalescePartitionsExec;
 use crate::display::DisplayableExecutionPlan;
 pub use crate::display::{DefaultDisplay, DisplayAs, DisplayFormatType, VerboseDisplay};
+use crate::joins::DynamicFilterInfo;
 pub use crate::metrics::Metric;
 use crate::metrics::MetricsSet;
 pub use crate::ordering::InputOrderMode;
@@ -421,6 +422,19 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     /// Gets the effect on cardinality, if known
     fn cardinality_effect(&self) -> CardinalityEffect {
         CardinalityEffect::Unknown
+    }
+
+    /// whether it is a physical scan or not
+    fn support_dynamic_filter(&self) -> bool {
+        false
+    }
+
+    /// return a new execution plan with dynamic filter
+    fn with_dynamic_filter(
+        &self,
+        _dynamic_filters: Option<Arc<DynamicFilterInfo>>,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        Ok(None)
     }
 }
 

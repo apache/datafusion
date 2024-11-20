@@ -698,6 +698,7 @@ fn try_pushdown_through_hash_join(
         hash_join.projection.clone(),
         *hash_join.partition_mode(),
         hash_join.null_equals_null,
+        hash_join.dynamic_filters_pushdown.clone(),
     )?)))
 }
 
@@ -2452,6 +2453,7 @@ mod tests {
             None,
             PartitionMode::Auto,
             true,
+            None,
         )?);
         let projection: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
             vec![
