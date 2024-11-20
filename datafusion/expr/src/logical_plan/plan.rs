@@ -25,7 +25,7 @@ use std::sync::{Arc, OnceLock};
 
 use super::dml::CopyTo;
 use super::DdlStatement;
-use crate::builder::{change_redundant_column, unnest_with_options};
+use crate::builder::unnest_with_options;
 use crate::expr::{Placeholder, Sort as SortExpr, WindowFunction};
 use crate::expr_rewriter::{
     create_col_from_scalar_expr, normalize_cols, normalize_sorts, NamePreserver,
@@ -2193,7 +2193,7 @@ impl SubqueryAlias {
         alias: impl Into<TableReference>,
     ) -> Result<Self> {
         let alias = alias.into();
-        let fields = change_redundant_column(plan.schema().fields());
+        let fields = plan.schema().fields().clone();
         let meta_data = plan.schema().as_ref().metadata().clone();
         let schema: Schema =
             DFSchema::from_unqualified_fields(fields.into(), meta_data)?.into();

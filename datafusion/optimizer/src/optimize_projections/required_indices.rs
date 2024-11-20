@@ -96,7 +96,7 @@ impl RequiredIndicies {
         // Add indices of the child fields referred to by the expressions in the
         // parent
         plan.apply_expressions(|e| {
-            self.add_expr(schema, e);
+            self.add_expr(schema, e)?;
             Ok(TreeNodeRecursion::Continue)
         })?;
         Ok(self.compact())
@@ -111,17 +111,18 @@ impl RequiredIndicies {
     ///
     /// * `input_schema`: The input schema to analyze for index requirements.
     /// * `expr`: An expression for which we want to find necessary field indices.
-    fn add_expr(&mut self, input_schema: &DFSchemaRef, expr: &Expr) {
+    fn add_expr(&mut self, input_schema: &DFSchemaRef, expr: &Expr) -> Result<()> {
         // TODO could remove these clones (and visit the expression directly)
         let mut cols = expr.column_refs();
         // Get outer-referenced (subquery) columns:
         outer_columns(expr, &mut cols);
         self.indices.reserve(cols.len());
         for col in cols {
-            if let Some(idx) = input_schema.maybe_index_of_column(col) {
+            if let Some(idx) = input_schema.maybe_index_of_column(col)? {
                 self.indices.push(idx);
             }
         }
+        Ok(())
     }
 
     /// Adds the indices of the fields referred to by the given expressions
@@ -132,17 +133,14 @@ impl RequiredIndicies {
     /// * `input_schema`: The input schema to analyze for index requirements.
     /// * `exprs`: the expressions for which we want to find field indices.
     pub fn with_exprs<'a>(
-        self,
+        mut self,
         schema: &DFSchemaRef,
         exprs: impl IntoIterator<Item = &'a Expr>,
-    ) -> Self {
-        exprs
-            .into_iter()
-            .fold(self, |mut acc, expr| {
-                acc.add_expr(schema, expr);
-                acc
-            })
-            .compact()
+    ) -> Result<Self> {
+        for expr in exprs {
+            self.add_expr(schema, expr)?;
+        }
+        Ok(self.compact())
     }
 
     /// Adds all `indices` into this instance.

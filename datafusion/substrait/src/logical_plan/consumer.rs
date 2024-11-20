@@ -1270,7 +1270,7 @@ fn apply_projection(table: DataFrame, substrait_schema: DFSchema) -> Result<Logi
                 .iter()
                 .map(|substrait_field| {
                     Ok(df_schema
-                        .index_of_column_by_name(None, substrait_field.name().as_str())
+                        .index_of_column_by_name(None, substrait_field.name().as_str())?
                         .unwrap())
                 })
                 .collect::<Result<_>>()?;

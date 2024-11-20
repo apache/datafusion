@@ -269,7 +269,7 @@ pub(crate) fn unproject_sort_expr(
 
     // In case of aggregation there could be columns containing aggregation functions we need to unproject
     if let Some(agg) = agg {
-        if agg.schema.is_column_from_schema(col_ref) {
+        if agg.schema.is_column_from_schema(col_ref)? {
             let new_expr = unproject_agg_exprs(sort_expr.expr, agg, None)?;
             sort_expr.expr = new_expr;
             return Ok(sort_expr);

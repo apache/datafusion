@@ -1807,11 +1807,23 @@ SELECT id AS col, id+1 AS col FROM users
 ----
 1 2
 
+# a reference is ambiguous
+query error DataFusion error: Schema error: Ambiguous reference to unqualified field a
+select a from (select 1 as a, 2 as a) t;
+
+# t.a reference is ambiguous
+query error DataFusion error: Schema error: Schema contains duplicate qualified field name t\.a
+select t.a from (select 1 as a, 2 as a) t;
+
+# TODO PostgreSQL disallows self-join without giving tables distinct aliases, but some other databases, e.g. Trino, do allow this, so this could work
 # TODO When joining using USING, the condition columns should appear once in the output, and should be selectible using unqualified name only
-query ITIT
+query error
 SELECT * FROM users JOIN users USING (id);
 ----
-1 Tom 1 Tom
+DataFusion error: expand_wildcard_rule
+caused by
+Schema error: Schema contains duplicate qualified field name users.id
+
 
 statement ok
 create view v as select count(id) from users;
