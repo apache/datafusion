@@ -21,7 +21,6 @@ use crate::AnalyzerRule;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult};
 use datafusion_common::{Column, Result};
-use datafusion_expr::builder::validate_unique_names;
 use datafusion_expr::expr::PlannedReplaceSelectItem;
 use datafusion_expr::utils::{
     expand_qualified_wildcard, expand_wildcard, find_base_plan,
@@ -53,12 +52,16 @@ impl AnalyzerRule for ExpandWildcardRule {
 
 fn expand_internal(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
     match plan {
-        LogicalPlan::Projection(Projection { expr, input, .. }) => {
-            let projected_expr = expand_exprlist(&input, expr)?;
-            Ok(Transformed::yes(
-                Projection::try_new(projected_expr, Arc::clone(&input))
-                    .map(LogicalPlan::Projection)?,
-            ))
+        LogicalPlan::Projection(projection) => {
+            let projected_expr =
+                expand_exprlist(&projection.input, projection.expr.clone())?;
+            match projected_expr {
+                None => Ok(Transformed::no(LogicalPlan::Projection(projection))),
+                Some(projected_expr) => Ok(Transformed::yes(
+                    Projection::try_new(projected_expr, Arc::clone(&projection.input))
+                        .map(LogicalPlan::Projection)?,
+                )),
+            }
         }
         // The schema of the plan should also be updated if the child plan is transformed.
         LogicalPlan::SubqueryAlias(SubqueryAlias { input, alias, .. }) => {
@@ -68,22 +71,30 @@ fn expand_internal(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
         }
         LogicalPlan::Distinct(Distinct::On(distinct_on)) => {
             let projected_expr =
-                expand_exprlist(&distinct_on.input, distinct_on.select_expr)?;
-            validate_unique_names("Distinct", projected_expr.iter())?;
-            Ok(Transformed::yes(LogicalPlan::Distinct(Distinct::On(
-                DistinctOn::try_new(
-                    distinct_on.on_expr,
-                    projected_expr,
-                    distinct_on.sort_expr,
-                    distinct_on.input,
-                )?,
-            ))))
+                expand_exprlist(&distinct_on.input, distinct_on.select_expr.clone())?;
+            match projected_expr {
+                None => Ok(Transformed::no(LogicalPlan::Distinct(Distinct::On(
+                    distinct_on,
+                )))),
+                Some(projected_expr) => Ok(Transformed::yes(LogicalPlan::Distinct(
+                    Distinct::On(DistinctOn::try_new(
+                        distinct_on.on_expr,
+                        projected_expr,
+                        distinct_on.sort_expr,
+                        distinct_on.input,
+                    )?),
+                ))),
+            }
         }
         _ => Ok(Transformed::no(plan)),
     }
 }
 
-fn expand_exprlist(input: &LogicalPlan, expr: Vec<Expr>) -> Result<Vec<Expr>> {
+fn expand_exprlist(input: &LogicalPlan, expr: Vec<Expr>) -> Result<Option<Vec<Expr>>> {
+    if !expr.iter().any(|e| matches!(e, Expr::Wildcard { .. })) {
+        return Ok(None);
+    }
+
     let mut projected_expr = vec![];
     let input = find_base_plan(input);
     for e in expr {
@@ -144,7 +155,7 @@ fn expand_exprlist(input: &LogicalPlan, expr: Vec<Expr>) -> Result<Vec<Expr>> {
             _ => projected_expr.push(e),
         }
     }
-    Ok(projected_expr)
+    Ok(Some(projected_expr))
 }
 
 /// If there is a REPLACE statement in the projected expression in the form of
