@@ -555,10 +555,12 @@ impl Unparser<'_> {
 
         let field = match &args[1] {
             Expr::Literal(lit) => self.new_ident_quoted_if_needs(lit.to_string()),
-            _ => return internal_err!(
+            _ => {
+                return internal_err!(
                 "get_field expects second argument to be a string, but received: {:?}",
                 &args[0]
-            ),
+            )
+            }
         };
         id.push(field);
 
