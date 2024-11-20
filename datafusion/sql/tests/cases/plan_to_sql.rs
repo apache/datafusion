@@ -1113,7 +1113,7 @@ fn test_join_with_table_scan_filters() -> Result<()> {
 
     let sql = plan_to_sql(&join_plan_with_filter)?;
 
-    let expected_sql = r#"SELECT * FROM left_table AS "left" JOIN right_table ON "left".id = right_table.id AND (("left".id > 5) AND ("left"."name" LIKE 'some_name' AND (age > 10)))"#;
+    let expected_sql = r#"SELECT * FROM left_table AS "left" JOIN right_table ON "left".id = right_table.id AND ("left".id > 5) WHERE "left"."name" LIKE 'some_name' AND (right_table.age > 10)"#;
 
     assert_eq!(sql.to_string(), expected_sql);
 
@@ -1128,7 +1128,7 @@ fn test_join_with_table_scan_filters() -> Result<()> {
 
     let sql = plan_to_sql(&join_plan_no_filter)?;
 
-    let expected_sql = r#"SELECT * FROM left_table AS "left" JOIN right_table ON "left".id = right_table.id AND ("left"."name" LIKE 'some_name' AND (age > 10))"#;
+    let expected_sql = r#"SELECT * FROM left_table AS "left" JOIN right_table ON "left".id = right_table.id WHERE "left"."name" LIKE 'some_name' AND (right_table.age > 10)"#;
 
     assert_eq!(sql.to_string(), expected_sql);
 
@@ -1153,7 +1153,7 @@ fn test_join_with_table_scan_filters() -> Result<()> {
 
     let sql = plan_to_sql(&join_plan_multiple_filters)?;
 
-    let expected_sql = r#"SELECT * FROM left_table AS "left" JOIN right_table ON "left".id = right_table.id AND (("left".id > 5) AND (("left"."name" LIKE 'some_name' AND (right_table."name" = 'before_join_filter_val')) AND (age > 10))) WHERE ("left"."name" = 'after_join_filter_val')"#;
+    let expected_sql = r#"SELECT * FROM left_table AS "left" JOIN right_table ON "left".id = right_table.id AND ("left".id > 5) WHERE ("left"."name" = 'after_join_filter_val') AND "left"."name" LIKE 'some_name' AND ((right_table."name" = 'before_join_filter_val') AND (right_table.age > 10))"#;
 
     assert_eq!(sql.to_string(), expected_sql);
 

@@ -15,18 +15,17 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{cmp::Ordering, sync::Arc, vec};
-
 use datafusion_common::{
     internal_err,
     tree_node::{Transformed, TransformedResult, TreeNode},
     Column, DataFusionError, Result, ScalarValue,
 };
 use datafusion_expr::{
-    expr, utils::grouping_set_to_exprlist, Aggregate, Expr, LogicalPlan,
-    LogicalPlanBuilder, Projection, SortExpr, Unnest, Window,
+    expr, utils::grouping_set_to_exprlist, Aggregate, BinaryExpr, Expr, LogicalPlan,
+    LogicalPlanBuilder, Operator, Projection, SortExpr, Unnest, Window,
 };
 use sqlparser::ast;
+use std::{cmp::Ordering, sync::Arc, vec};
 
 use super::{
     dialect::CharacterLengthStyle, dialect::DateFieldExtractStyle,
@@ -309,7 +308,7 @@ pub(crate) fn unproject_sort_expr(
 /// And filters: [ta.j1_id < 5, ta.j1_id > 10]
 pub(crate) fn try_transform_to_simple_table_scan_with_filters(
     plan: &LogicalPlan,
-) -> Result<Option<(LogicalPlan, Vec<Expr>)>> {
+) -> Result<Option<LogicalPlan>> {
     let mut filters: Vec<Expr> = vec![];
     let mut plan_stack = vec![plan];
     let mut table_alias = None;
@@ -349,6 +348,14 @@ pub(crate) fn try_transform_to_simple_table_scan_with_filters(
 
                 filters.extend(table_scan_filters);
 
+                let combined_filters = filters.into_iter().reduce(|acc, filter| {
+                    Expr::BinaryExpr(BinaryExpr {
+                        left: Box::new(acc),
+                        op: Operator::And,
+                        right: Box::new(filter),
+                    })
+                });
+
                 let mut builder = LogicalPlanBuilder::scan(
                     table_scan.table_name.clone(),
                     Arc::clone(&table_scan.source),
@@ -359,9 +366,18 @@ pub(crate) fn try_transform_to_simple_table_scan_with_filters(
                     builder = builder.alias(alias)?;
                 }
 
-                let plan = builder.build()?;
+                let table_scan_plan = builder.build()?;
 
-                return Ok(Some((plan, filters)));
+                // If there are combined filters, wrap the TableScan in a Filter
+                let plan = if let Some(filter_expr) = combined_filters {
+                    LogicalPlanBuilder::from(table_scan_plan)
+                        .filter(filter_expr)?
+                        .build()?
+                } else {
+                    table_scan_plan
+                };
+
+                return Ok(Some(plan));
             }
             _ => {
                 return Ok(None);
