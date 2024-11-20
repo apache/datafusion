@@ -598,9 +598,9 @@ macro_rules! arrow_err {
 #[macro_export]
 macro_rules! schema_datafusion_err {
     ($ERR:expr) => {
-        DataFusionError::SchemaError(
+        $crate::error::DataFusionError::SchemaError(
             $ERR,
-            Box::new(Some(DataFusionError::get_back_trace())),
+            Box::new(Some($crate::error::DataFusionError::get_back_trace())),
         )
     };
 }
@@ -609,9 +609,9 @@ macro_rules! schema_datafusion_err {
 #[macro_export]
 macro_rules! schema_err {
     ($ERR:expr) => {
-        Err(DataFusionError::SchemaError(
+        Err($crate::error::DataFusionError::SchemaError(
             $ERR,
-            Box::new(Some(DataFusionError::get_back_trace())),
+            Box::new(Some($crate::error::DataFusionError::get_back_trace())),
         ))
     };
 }
