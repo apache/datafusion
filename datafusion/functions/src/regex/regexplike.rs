@@ -192,7 +192,34 @@ pub fn regexp_like(args: &[ArrayRef]) -> Result<ArrayRef> {
     match args.len() {
         2 => handle_regexp_like(&args[0], &args[1], None),
         3 => {
-            let flags = args[2].as_string::<i32>();
+            let flags = match args[2].data_type() {
+                Utf8 => args[2].as_string::<i32>(),
+                LargeUtf8 => {
+                    let large_string_array = args[2].as_string::<i64>();
+                    let string_vec: Vec<Option<&str>> = (0..large_string_array.len()).map(|i| {
+                        if large_string_array.is_null(i) {
+                            None
+                        } else {
+                            Some(large_string_array.value(i))
+                        }
+                    })
+                    .collect();
+
+                    &GenericStringArray::<i32>::from(string_vec)
+                },
+                _ => {
+                    let string_view_array = args[2].as_string_view();
+                    let string_vec: Vec<Option<String>> = (0..string_view_array.len()).map(|i| {
+                        if string_view_array.is_null(i) {
+                            None
+                        } else {
+                            Some(string_view_array.value(i).to_string())
+                        }
+                    })
+                    .collect();
+                    &GenericStringArray::<i32>::from(string_vec)
+                },
+            };
 
             if flags.iter().any(|s| s == Some("g")) {
                 return plan_err!("regexp_like() does not support the \"global\" option");
