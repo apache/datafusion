@@ -400,7 +400,7 @@ pub struct ScalarFunctionArgs<'a> {
 ///    // The actual implementation would add one to the argument
 ///    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
 ///         unimplemented!()
-/// }
+///    }
 ///    fn documentation(&self) -> Option<&Documentation> {
 ///         Some(get_doc())
 ///     }
@@ -513,6 +513,8 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     ///
     /// Note: This method is deprecated and will be removed in future releases.
     /// User defined functions should implement [`Self::invoke_with_args`] instead.
+    ///
+    /// See <https://github.com/apache/datafusion/issues/13515> for more details.
     fn invoke_batch(
         &self,
         args: &[ColumnarValue],
