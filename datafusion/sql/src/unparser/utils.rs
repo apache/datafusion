@@ -26,6 +26,7 @@ use datafusion_expr::{
     expr, utils::grouping_set_to_exprlist, Aggregate, Expr, LogicalPlan,
     LogicalPlanBuilder, Projection, SortExpr, Unnest, Window,
 };
+use indexmap::IndexSet;
 use sqlparser::ast;
 
 use super::{dialect::DateFieldExtractStyle, rewrite::TableAliasRewriter, Unparser};
@@ -307,7 +308,7 @@ pub(crate) fn unproject_sort_expr(
 pub(crate) fn try_transform_to_simple_table_scan_with_filters(
     plan: &LogicalPlan,
 ) -> Result<Option<(LogicalPlan, Vec<Expr>)>> {
-    let mut filters: Vec<Expr> = vec![];
+    let mut filters: IndexSet<Expr> = IndexSet::new();
     let mut plan_stack = vec![plan];
     let mut table_alias = None;
 
@@ -319,7 +320,7 @@ pub(crate) fn try_transform_to_simple_table_scan_with_filters(
             }
             LogicalPlan::Filter(filter) => {
                 if !filters.contains(&filter.predicate) {
-                    filters.push(filter.predicate.clone());
+                    filters.insert(filter.predicate.clone());
                 }
                 plan_stack.push(filter.input.as_ref());
             }
@@ -348,7 +349,7 @@ pub(crate) fn try_transform_to_simple_table_scan_with_filters(
 
                 for table_scan_filter in table_scan_filters {
                     if !filters.contains(&table_scan_filter) {
-                        filters.push(table_scan_filter);
+                        filters.insert(table_scan_filter);
                     }
                 }
 
@@ -363,6 +364,7 @@ pub(crate) fn try_transform_to_simple_table_scan_with_filters(
                 }
 
                 let plan = builder.build()?;
+                let filters = filters.into_iter().collect();
 
                 return Ok(Some((plan, filters)));
             }
