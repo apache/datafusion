@@ -1008,7 +1008,7 @@ mod tests {
             for array in arrays {
                 let rt = udf.return_type(&[array.data_type()]).unwrap();
                 assert!(matches!(rt, Timestamp(_, Some(_))));
-
+                #[allow(deprecated)] // TODO: migrate to invoke_with_args
                 let res = udf
                     .invoke_batch(&[array.clone()], 1)
                     .expect("that to_timestamp parsed values without error");
@@ -1051,7 +1051,7 @@ mod tests {
             for array in arrays {
                 let rt = udf.return_type(&[array.data_type()]).unwrap();
                 assert!(matches!(rt, Timestamp(_, None)));
-
+                #[allow(deprecated)] // TODO: migrate to invoke_with_args
                 let res = udf
                     .invoke_batch(&[array.clone()], 1)
                     .expect("that to_timestamp parsed values without error");

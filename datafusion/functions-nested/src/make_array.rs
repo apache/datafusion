@@ -26,7 +26,7 @@ use arrow_array::{
     new_null_array, Array, ArrayRef, GenericListArray, NullArray, OffsetSizeTrait,
 };
 use arrow_buffer::OffsetBuffer;
-use arrow_schema::DataType::{LargeList, List, Null};
+use arrow_schema::DataType::{List, Null};
 use arrow_schema::{DataType, Field};
 use datafusion_common::{plan_err, utils::array_into_list_array_nullable, Result};
 use datafusion_expr::binary::{
@@ -198,7 +198,6 @@ pub(crate) fn make_array_inner(arrays: &[ArrayRef]) -> Result<ArrayRef> {
             let array = new_null_array(&DataType::Int64, length);
             Ok(Arc::new(array_into_list_array_nullable(array)))
         }
-        LargeList(..) => array_array::<i64>(arrays, data_type),
         _ => array_array::<i32>(arrays, data_type),
     }
 }

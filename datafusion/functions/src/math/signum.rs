@@ -167,6 +167,7 @@ mod test {
             f32::NEG_INFINITY,
         ]));
         let batch_size = array.len();
+        #[allow(deprecated)] // TODO: migrate to invoke_with_args
         let result = SignumFunc::new()
             .invoke_batch(&[ColumnarValue::Array(array)], batch_size)
             .expect("failed to initialize function signum");
@@ -207,6 +208,7 @@ mod test {
             f64::NEG_INFINITY,
         ]));
         let batch_size = array.len();
+        #[allow(deprecated)] // TODO: migrate to invoke_with_args
         let result = SignumFunc::new()
             .invoke_batch(&[ColumnarValue::Array(array)], batch_size)
             .expect("failed to initialize function signum");
