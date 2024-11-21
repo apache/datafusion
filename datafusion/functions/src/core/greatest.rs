@@ -16,7 +16,8 @@
 // under the License.
 
 use std::any::Any;
-use std::sync::OnceLock;
+use std::ops::Deref;
+use std::sync::{Arc, OnceLock};
 use arrow::array::{make_comparator, Array, ArrayRef, BooleanArray};
 use arrow::compute::kernels::cmp;
 use arrow::compute::kernels::zip::zip;
@@ -197,17 +198,17 @@ impl ScalarUDFImpl for GreatestFunc {
 
             // Start with the largest value
             largest = keep_larger(
-                first_array.clone(),
+                Arc::clone(first_array),
                 largest_scalar.to_array_of_size(first_array.len())?
             )?;
         } else {
             // If we only have arrays, start with the first array
             // (We must have at least one array)
-            largest = first_array.unwrap().clone();
+            largest = Arc::clone(first_array.unwrap());
         }
 
         for array in arrays_iter {
-            largest = keep_larger(array.clone(), largest)?;
+            largest = keep_larger(Arc::clone(array), largest)?;
         }
 
         Ok(ColumnarValue::Array(largest))
