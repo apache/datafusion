@@ -188,7 +188,9 @@ fn roundtrip_statement() -> Result<()> {
             "SELECT ARRAY[1, 2, 3][1]",
             "SELECT [1, 2, 3]",
             "SELECT [1, 2, 3][1]",
-            "SELECT left[1] FROM array"
+            "SELECT left[1] FROM array",
+            "SELECT {a:1, b:2}",
+            "SELECT s.a FROM (SELECT {a:1, b:2} AS s)"
     ];
 
     // For each test sql string, we transform as follows:
