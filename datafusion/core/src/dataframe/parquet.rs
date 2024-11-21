@@ -26,6 +26,7 @@ use super::{
 };
 
 use datafusion_common::config::TableParquetOptions;
+use datafusion_common::not_impl_err;
 use datafusion_expr::dml::InsertOp;
 
 impl DataFrame {
@@ -59,10 +60,10 @@ impl DataFrame {
         writer_options: Option<TableParquetOptions>,
     ) -> Result<Vec<RecordBatch>, DataFusionError> {
         if options.insert_op != InsertOp::Append {
-            return Err(DataFusionError::NotImplemented(format!(
+            return not_impl_err!(
                 "{} is not implemented for DataFrame::write_parquet.",
                 options.insert_op
-            )));
+            );
         }
 
         let format = if let Some(parquet_opts) = writer_options {
