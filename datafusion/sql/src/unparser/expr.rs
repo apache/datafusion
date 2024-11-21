@@ -525,7 +525,7 @@ impl Unparser<'_> {
             .chunks_exact(2)
             .map(|chunk| {
                 let key = match &chunk[0] {
-                    Expr::Literal(lit) => self.new_ident_quoted_if_needs(lit.to_string()),
+                    Expr::Literal(ScalarValue::Utf8(Some(s))) => self.new_ident_quoted_if_needs(s.to_string()),
                     _ => return internal_err!("named_struct expects even arguments to be strings, but received: {:?}", &chunk[0])
                 };
 
