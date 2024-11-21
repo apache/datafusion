@@ -16,9 +16,13 @@
 // under the License.
 
 //! Math function: `power()`.
+use std::any::Any;
+use std::sync::{Arc, OnceLock};
 
-use arrow::datatypes::{ArrowNativeTypeOp, DataType};
+use super::log::LogFunc;
 
+use arrow::array::{ArrayRef, AsArray, Int64Array};
+use arrow::datatypes::{ArrowNativeTypeOp, DataType, Float64Type};
 use datafusion_common::{
     arrow_datafusion_err, exec_datafusion_err, exec_err, plan_datafusion_err,
     DataFusionError, Result, ScalarValue,
@@ -27,13 +31,7 @@ use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::scalar_doc_sections::DOC_SECTION_MATH;
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
 use datafusion_expr::{ColumnarValue, Documentation, Expr, ScalarUDF, TypeSignature};
-
-use arrow::array::{ArrayRef, Float64Array, Int64Array};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
-use std::any::Any;
-use std::sync::{Arc, OnceLock};
-
-use super::log::LogFunc;
 
 #[derive(Debug)]
 pub struct PowerFunc {
@@ -90,15 +88,16 @@ impl ScalarUDFImpl for PowerFunc {
         let args = ColumnarValue::values_to_arrays(args)?;
 
         let arr: ArrayRef = match args[0].data_type() {
-            DataType::Float64 => Arc::new(make_function_inputs2!(
-                &args[0],
-                &args[1],
-                "base",
-                "exponent",
-                Float64Array,
-                { f64::powf }
-            )),
-
+            DataType::Float64 => {
+                let bases = args[0].as_primitive::<Float64Type>();
+                let exponents = args[1].as_primitive::<Float64Type>();
+                let result = arrow::compute::binary::<_, _, _, Float64Type>(
+                    bases,
+                    exponents,
+                    f64::powf,
+                )?;
+                Arc::new(result) as _
+            }
             DataType::Int64 => {
                 let bases = downcast_arg!(&args[0], "base", Int64Array);
                 let exponents = downcast_arg!(&args[1], "exponent", Int64Array);
@@ -116,7 +115,7 @@ impl ScalarUDFImpl for PowerFunc {
                         _ => Ok(None),
                     })
                     .collect::<Result<Int64Array>>()
-                    .map(Arc::new)? as ArrayRef
+                    .map(Arc::new)? as _
             }
 
             other => {
@@ -181,8 +180,8 @@ fn get_power_doc() -> &'static Documentation {
                 "Returns a base expression raised to the power of an exponent.",
             )
             .with_syntax_example("power(base, exponent)")
-            .with_standard_argument("base", "Numeric")
-            .with_standard_argument("exponent", "Exponent numeric")
+            .with_standard_argument("base", Some("Numeric"))
+            .with_standard_argument("exponent", Some("Exponent numeric"))
             .build()
             .unwrap()
     })
@@ -195,6 +194,7 @@ fn is_log(func: &ScalarUDF) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use arrow::array::Float64Array;
     use datafusion_common::cast::{as_float64_array, as_int64_array};
 
     use super::*;
@@ -207,7 +207,7 @@ mod tests {
         ];
 
         let result = PowerFunc::new()
-            .invoke(&args)
+            .invoke_batch(&args, 4)
             .expect("failed to initialize function power");
 
         match result {
@@ -234,7 +234,7 @@ mod tests {
         ];
 
         let result = PowerFunc::new()
-            .invoke(&args)
+            .invoke_batch(&args, 4)
             .expect("failed to initialize function power");
 
         match result {

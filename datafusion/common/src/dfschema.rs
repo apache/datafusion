@@ -315,7 +315,6 @@ impl DFSchema {
                 None => self_unqualified_names.contains(field.name().as_str()),
             };
             if !duplicated_field {
-                // self.inner.fields.push(field.clone());
                 schema_builder.push(Arc::clone(field));
                 qualifiers.push(qualifier.cloned());
             }
@@ -687,7 +686,7 @@ impl DFSchema {
     /// name and type), ignoring both metadata and nullability.
     ///
     /// request to upstream: <https://github.com/apache/arrow-rs/issues/3199>
-    fn datatype_is_semantically_equal(dt1: &DataType, dt2: &DataType) -> bool {
+    pub fn datatype_is_semantically_equal(dt1: &DataType, dt2: &DataType) -> bool {
         // check nested fields
         match (dt1, dt2) {
             (DataType::Dictionary(k1, v1), DataType::Dictionary(k2, v2)) => {

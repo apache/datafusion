@@ -43,7 +43,7 @@ impl SHA224Func {
         Self {
             signature: Signature::uniform(
                 1,
-                vec![Utf8, LargeUtf8, Binary, LargeBinary],
+                vec![Utf8View, Utf8, LargeUtf8, Binary, LargeBinary],
                 Volatility::Immutable,
             ),
         }
@@ -68,7 +68,7 @@ fn get_sha224_doc() -> &'static Documentation {
 +------------------------------------------+
 ```"#,
             )
-            .with_standard_argument("expression", "String")
+            .with_standard_argument("expression", Some("String"))
             .build()
             .unwrap()
     })

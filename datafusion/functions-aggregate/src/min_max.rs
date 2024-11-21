@@ -2,6 +2,7 @@
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
 // regarding copyright ownership.  The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
 // "License"); you may not use this file except in compliance
 // with the License.  You may obtain a copy of the License at
 //
@@ -43,6 +44,7 @@ use datafusion_common::{
 use datafusion_expr::aggregate_doc_sections::DOC_SECTION_GENERAL;
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::prim_op::PrimitiveGroupsAccumulator;
 use datafusion_physical_expr::expressions;
+use std::cmp::Ordering;
 use std::fmt::Debug;
 
 use arrow::datatypes::i256;
@@ -60,6 +62,7 @@ use datafusion_expr::{
 };
 use datafusion_expr::{GroupsAccumulator, StatisticsArgs};
 use half::f16;
+use std::mem::size_of_val;
 use std::ops::Deref;
 use std::sync::OnceLock;
 
@@ -111,8 +114,12 @@ macro_rules! primitive_max_accumulator {
     ($DATA_TYPE:ident, $NATIVE:ident, $PRIMTYPE:ident) => {{
         Ok(Box::new(
             PrimitiveGroupsAccumulator::<$PRIMTYPE, _>::new($DATA_TYPE, |cur, new| {
-                if *cur < new {
-                    *cur = new
+                match (new).partial_cmp(cur) {
+                    Some(Ordering::Greater) | None => {
+                        // new is Greater or None
+                        *cur = new
+                    }
+                    _ => {}
                 }
             })
             // Initialize each accumulator to $NATIVE::MIN
@@ -130,8 +137,12 @@ macro_rules! primitive_min_accumulator {
     ($DATA_TYPE:ident, $NATIVE:ident, $PRIMTYPE:ident) => {{
         Ok(Box::new(
             PrimitiveGroupsAccumulator::<$PRIMTYPE, _>::new(&$DATA_TYPE, |cur, new| {
-                if *cur > new {
-                    *cur = new
+                match (new).partial_cmp(cur) {
+                    Some(Ordering::Less) | None => {
+                        // new is Less or NaN
+                        *cur = new
+                    }
+                    _ => {}
                 }
             })
             // Initialize each accumulator to $NATIVE::MAX
@@ -357,7 +368,7 @@ fn get_max_doc() -> &'static Documentation {
 +----------------------+
 ```"#,
             )
-            .with_standard_argument("expression", "The")
+            .with_standard_argument("expression", None)
             .build()
             .unwrap()
     })
@@ -923,7 +934,7 @@ impl Accumulator for MaxAccumulator {
     }
 
     fn size(&self) -> usize {
-        std::mem::size_of_val(self) - std::mem::size_of_val(&self.max) + self.max.size()
+        size_of_val(self) - size_of_val(&self.max) + self.max.size()
     }
 }
 
@@ -982,7 +993,7 @@ impl Accumulator for SlidingMaxAccumulator {
     }
 
     fn size(&self) -> usize {
-        std::mem::size_of_val(self) - std::mem::size_of_val(&self.max) + self.max.size()
+        size_of_val(self) - size_of_val(&self.max) + self.max.size()
     }
 }
 
@@ -1187,7 +1198,7 @@ fn get_min_doc() -> &'static Documentation {
 +----------------------+
 ```"#,
             )
-            .with_standard_argument("expression", "The")
+            .with_standard_argument("expression", None)
             .build()
             .unwrap()
     })
@@ -1231,7 +1242,7 @@ impl Accumulator for MinAccumulator {
     }
 
     fn size(&self) -> usize {
-        std::mem::size_of_val(self) - std::mem::size_of_val(&self.min) + self.min.size()
+        size_of_val(self) - size_of_val(&self.min) + self.min.size()
     }
 }
 
@@ -1294,7 +1305,7 @@ impl Accumulator for SlidingMinAccumulator {
     }
 
     fn size(&self) -> usize {
-        std::mem::size_of_val(self) - std::mem::size_of_val(&self.min) + self.min.size()
+        size_of_val(self) - size_of_val(&self.min) + self.min.size()
     }
 }
 

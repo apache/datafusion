@@ -19,15 +19,15 @@
 
 mod required_indices;
 
-use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
-
 use crate::optimizer::ApplyOrder;
 use crate::{OptimizerConfig, OptimizerRule};
+use recursive::recursive;
+use std::collections::HashSet;
+use std::sync::Arc;
 
 use datafusion_common::{
     get_required_group_by_exprs_indices, internal_datafusion_err, internal_err, Column,
-    JoinType, Result,
+    HashMap, JoinType, Result,
 };
 use datafusion_expr::expr::Alias;
 use datafusion_expr::Unnest;
@@ -39,7 +39,7 @@ use datafusion_expr::{
 use crate::optimize_projections::required_indices::RequiredIndicies;
 use crate::utils::NamePreserver;
 use datafusion_common::tree_node::{
-    Transformed, TreeNode, TreeNodeIterator, TreeNodeRecursion,
+    Transformed, TreeNode, TreeNodeContainer, TreeNodeRecursion,
 };
 
 /// Optimizer rule to prune unnecessary columns from intermediate schemas
@@ -110,6 +110,7 @@ impl OptimizerRule for OptimizeProjections {
 ///   columns.
 /// - `Ok(None)`: Signal that the given logical plan did not require any change.
 /// - `Err(error)`: An error occurred during the optimization process.
+#[recursive]
 fn optimize_projections(
     plan: LogicalPlan,
     config: &dyn OptimizerConfig,
@@ -295,7 +296,7 @@ fn optimize_projections(
                 })
                 .collect::<Result<_>>()?
         }
-        LogicalPlan::Limit(_) | LogicalPlan::Prepare(_) => {
+        LogicalPlan::Limit(_) => {
             // Pass index requirements from the parent as well as column indices
             // that appear in this plan's expressions to its child. These operators
             // do not benefit from "small" inputs, so the projection_beneficial
@@ -311,6 +312,7 @@ fn optimize_projections(
         | LogicalPlan::Explain(_)
         | LogicalPlan::Analyze(_)
         | LogicalPlan::Subquery(_)
+        | LogicalPlan::Statement(_)
         | LogicalPlan::Distinct(Distinct::All(_)) => {
             // These plans require all their fields, and their children should
             // be treated as final plans -- otherwise, we may have schema a
@@ -346,7 +348,6 @@ fn optimize_projections(
         }
         LogicalPlan::EmptyRelation(_)
         | LogicalPlan::RecursiveQuery(_)
-        | LogicalPlan::Statement(_)
         | LogicalPlan::Values(_)
         | LogicalPlan::DescribeTable(_) => {
             // These operators have no inputs, so stop the optimization process.
@@ -360,17 +361,6 @@ fn optimize_projections(
                 left_req_indices.with_plan_exprs(&plan, join.left.schema())?;
             let right_indices =
                 right_req_indices.with_plan_exprs(&plan, join.right.schema())?;
-            // Joins benefit from "small" input tables (lower memory usage).
-            // Therefore, each child benefits from projection:
-            vec![
-                left_indices.with_projection_beneficial(),
-                right_indices.with_projection_beneficial(),
-            ]
-        }
-        LogicalPlan::CrossJoin(cross_join) => {
-            let left_len = cross_join.left.schema().fields().len();
-            let (left_indices, right_indices) =
-                split_join_requirements(left_len, indices, &JoinType::Inner);
             // Joins benefit from "small" input tables (lower memory usage).
             // Therefore, each child benefits from projection:
             vec![
@@ -494,7 +484,7 @@ fn merge_consecutive_projections(proj: Projection) -> Result<Transformed<Project
     // previous projection as input:
     let name_preserver = NamePreserver::new_for_projection();
     let mut original_names = vec![];
-    let new_exprs = expr.into_iter().map_until_stop_and_collect(|expr| {
+    let new_exprs = expr.map_elements(|expr| {
         original_names.push(name_preserver.save(&expr));
 
         // do not rewrite top level Aliases (rewriter will remove all aliases within exprs)
@@ -688,7 +678,11 @@ fn split_join_requirements(
 ) -> (RequiredIndicies, RequiredIndicies) {
     match join_type {
         // In these cases requirements are split between left/right children:
-        JoinType::Inner | JoinType::Left | JoinType::Right | JoinType::Full => {
+        JoinType::Inner
+        | JoinType::Left
+        | JoinType::Right
+        | JoinType::Full
+        | JoinType::LeftMark => {
             // Decrease right side indices by `left_len` so that they point to valid
             // positions within the right child:
             indices.split_off(left_len)

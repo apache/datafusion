@@ -42,7 +42,8 @@ use crate::{
     logical_expr::{
         CreateCatalog, CreateCatalogSchema, CreateExternalTable, CreateFunction,
         CreateMemoryTable, CreateView, DropCatalogSchema, DropFunction, DropTable,
-        DropView, LogicalPlan, LogicalPlanBuilder, SetVariable, TableType, UNNAMED_TABLE,
+        DropView, Execute, LogicalPlan, LogicalPlanBuilder, Prepare, SetVariable,
+        TableType, UNNAMED_TABLE,
     },
     physical_expr::PhysicalExpr,
     physical_plan::ExecutionPlan,
@@ -54,9 +55,9 @@ use arrow::record_batch::RecordBatch;
 use arrow_schema::Schema;
 use datafusion_common::{
     config::{ConfigExtension, TableOptions},
-    exec_err, not_impl_err, plan_datafusion_err, plan_err,
+    exec_datafusion_err, exec_err, not_impl_err, plan_datafusion_err, plan_err,
     tree_node::{TreeNodeRecursion, TreeNodeVisitor},
-    DFSchema, SchemaReference, TableReference,
+    DFSchema, ParamValues, ScalarValue, SchemaReference, TableReference,
 };
 use datafusion_execution::registry::SerializerRegistry;
 use datafusion_expr::{
@@ -507,7 +508,7 @@ impl SessionContext {
 
     /// Return the [RuntimeEnv] used to run queries with this `SessionContext`
     pub fn runtime_env(&self) -> Arc<RuntimeEnv> {
-        self.state.read().runtime_env().clone()
+        Arc::clone(self.state.read().runtime_env())
     }
 
     /// Returns an id that uniquely identifies this `SessionContext`.
@@ -687,7 +688,39 @@ impl SessionContext {
             LogicalPlan::Statement(Statement::SetVariable(stmt)) => {
                 self.set_variable(stmt).await
             }
-
+            LogicalPlan::Statement(Statement::Prepare(Prepare {
+                name,
+                input,
+                data_types,
+            })) => {
+                // The number of parameters must match the specified data types length.
+                if !data_types.is_empty() {
+                    let param_names = input.get_parameter_names()?;
+                    if param_names.len() != data_types.len() {
+                        return plan_err!(
+                            "Prepare specifies {} data types but query has {} parameters",
+                            data_types.len(),
+                            param_names.len()
+                        );
+                    }
+                }
+                // Store the unoptimized plan into the session state. Although storing the
+                // optimized plan or the physical plan would be more efficient, doing so is
+                // not currently feasible. This is because `now()` would be optimized to a
+                // constant value, causing each EXECUTE to yield the same result, which is
+                // incorrect behavior.
+                self.state.write().store_prepared(name, data_types, input)?;
+                self.return_empty_dataframe()
+            }
+            LogicalPlan::Statement(Statement::Execute(execute)) => {
+                self.execute_prepared(execute)
+            }
+            LogicalPlan::Statement(Statement::Deallocate(deallocate)) => {
+                self.state
+                    .write()
+                    .remove_prepared(deallocate.name.as_str())?;
+                self.return_empty_dataframe()
+            }
             plan => Ok(DataFrame::new(self.state(), plan)),
         }
     }
@@ -1088,6 +1121,49 @@ impl SessionContext {
         }
     }
 
+    fn execute_prepared(&self, execute: Execute) -> Result<DataFrame> {
+        let Execute {
+            name, parameters, ..
+        } = execute;
+        let prepared = self.state.read().get_prepared(&name).ok_or_else(|| {
+            exec_datafusion_err!("Prepared statement '{}' does not exist", name)
+        })?;
+
+        // Only allow literals as parameters for now.
+        let mut params: Vec<ScalarValue> = parameters
+            .into_iter()
+            .map(|e| match e {
+                Expr::Literal(scalar) => Ok(scalar),
+                _ => not_impl_err!("Unsupported parameter type: {}", e),
+            })
+            .collect::<Result<_>>()?;
+
+        // If the prepared statement provides data types, cast the params to those types.
+        if !prepared.data_types.is_empty() {
+            if params.len() != prepared.data_types.len() {
+                return exec_err!(
+                    "Prepared statement '{}' expects {} parameters, but {} provided",
+                    name,
+                    prepared.data_types.len(),
+                    params.len()
+                );
+            }
+            params = params
+                .into_iter()
+                .zip(prepared.data_types.iter())
+                .map(|(e, dt)| e.cast_to(dt))
+                .collect::<Result<_>>()?;
+        }
+
+        let params = ParamValues::List(params);
+        let plan = prepared
+            .plan
+            .as_ref()
+            .clone()
+            .replace_params_with_values(&params)?;
+        Ok(DataFrame::new(self.state(), plan))
+    }
+
     /// Registers a variable provider within this context.
     pub fn register_variable(
         &self,
@@ -1352,8 +1428,8 @@ impl SessionContext {
     /// Registers a [`TableProvider`] as a table that can be
     /// referenced from SQL statements executed against this context.
     ///
-    /// Returns the [`TableProvider`] previously registered for this
-    /// reference, if any
+    /// If a table of the same name was already registered, returns "Table
+    /// already exists" error.
     pub fn register_table(
         &self,
         table_ref: impl Into<TableReference>,
@@ -1469,7 +1545,7 @@ impl SessionContext {
 
     /// Get reference to [`SessionState`]
     pub fn state_ref(&self) -> Arc<RwLock<SessionState>> {
-        self.state.clone()
+        Arc::clone(&self.state)
     }
 
     /// Get weak reference to [`SessionState`]
@@ -1712,15 +1788,15 @@ impl<'n, 'a> TreeNodeVisitor<'n> for BadPlanVisitor<'a> {
 
 #[cfg(test)]
 mod tests {
-    use std::env;
-    use std::path::PathBuf;
-
     use super::{super::options::CsvReadOptions, *};
     use crate::assert_batches_eq;
     use crate::execution::memory_pool::MemoryConsumer;
     use crate::execution::runtime_env::RuntimeEnvBuilder;
     use crate::test;
     use crate::test_util::{plan_and_collect, populate_csv_partitions};
+    use arrow_schema::{DataType, TimeUnit};
+    use std::env;
+    use std::path::PathBuf;
 
     use datafusion_common_runtime::SpawnedTask;
 
@@ -1728,6 +1804,8 @@ mod tests {
     use crate::execution::session_state::SessionStateBuilder;
     use crate::physical_planner::PhysicalPlanner;
     use async_trait::async_trait;
+    use datafusion_expr::planner::TypePlanner;
+    use sqlparser::ast;
     use tempfile::TempDir;
 
     #[tokio::test]
@@ -2124,6 +2202,29 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn custom_type_planner() -> Result<()> {
+        let state = SessionStateBuilder::new()
+            .with_default_features()
+            .with_type_planner(Arc::new(MyTypePlanner {}))
+            .build();
+        let ctx = SessionContext::new_with_state(state);
+        let result = ctx
+            .sql("SELECT DATETIME '2021-01-01 00:00:00'")
+            .await?
+            .collect()
+            .await?;
+        let expected = [
+            "+-----------------------------+",
+            "| Utf8(\"2021-01-01 00:00:00\") |",
+            "+-----------------------------+",
+            "| 2021-01-01T00:00:00         |",
+            "+-----------------------------+",
+        ];
+        assert_batches_eq!(expected, &result);
+        Ok(())
+    }
+
     struct MyPhysicalPlanner {}
 
     #[async_trait]
@@ -2139,9 +2240,9 @@ mod tests {
         fn create_physical_expr(
             &self,
             _expr: &Expr,
-            _input_dfschema: &crate::common::DFSchema,
+            _input_dfschema: &DFSchema,
             _session_state: &SessionState,
-        ) -> Result<Arc<dyn crate::physical_plan::PhysicalExpr>> {
+        ) -> Result<Arc<dyn PhysicalExpr>> {
             unimplemented!()
         }
     }
@@ -2183,5 +2284,26 @@ mod tests {
         .await?;
 
         Ok(ctx)
+    }
+
+    #[derive(Debug)]
+    struct MyTypePlanner {}
+
+    impl TypePlanner for MyTypePlanner {
+        fn plan_type(&self, sql_type: &ast::DataType) -> Result<Option<DataType>> {
+            match sql_type {
+                ast::DataType::Datetime(precision) => {
+                    let precision = match precision {
+                        Some(0) => TimeUnit::Second,
+                        Some(3) => TimeUnit::Millisecond,
+                        Some(6) => TimeUnit::Microsecond,
+                        None | Some(9) => TimeUnit::Nanosecond,
+                        _ => unreachable!(),
+                    };
+                    Ok(Some(DataType::Timestamp(precision, None)))
+                }
+                _ => Ok(None),
+            }
+        }
     }
 }

@@ -79,7 +79,10 @@ impl ScalarUDFImpl for BitLengthFunc {
                 ScalarValue::LargeUtf8(v) => Ok(ColumnarValue::Scalar(
                     ScalarValue::Int64(v.as_ref().map(|x| (x.len() * 8) as i64)),
                 )),
-                _ => unreachable!(),
+                ScalarValue::Utf8View(v) => Ok(ColumnarValue::Scalar(
+                    ScalarValue::Int32(v.as_ref().map(|x| (x.len() * 8) as i32)),
+                )),
+                _ => unreachable!("bit length"),
             },
         }
     }
@@ -107,7 +110,7 @@ fn get_bit_length_doc() -> &'static Documentation {
 +--------------------------------+
 ```"#,
             )
-            .with_standard_argument("str", "String")
+            .with_standard_argument("str", Some("String"))
             .with_related_udf("length")
             .with_related_udf("octet_length")
             .build()

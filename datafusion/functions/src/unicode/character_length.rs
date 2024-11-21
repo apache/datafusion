@@ -103,7 +103,7 @@ fn get_character_length_doc() -> &'static Documentation {
 +------------------------------------+
 ```"#,
             )
-            .with_standard_argument("str", "String")
+            .with_standard_argument("str", Some("String"))
             .with_related_udf("bit_length")
             .with_related_udf("octet_length")
             .build()
@@ -128,7 +128,7 @@ fn character_length(args: &[ArrayRef]) -> Result<ArrayRef> {
             let string_array = args[0].as_string_view();
             character_length_general::<Int32Type, _>(string_array)
         }
-        _ => unreachable!(),
+        _ => unreachable!("CharacterLengthFunc"),
     }
 }
 

@@ -42,6 +42,7 @@ impl DigestFunc {
         Self {
             signature: Signature::one_of(
                 vec![
+                    Exact(vec![Utf8View, Utf8View]),
                     Exact(vec![Utf8, Utf8]),
                     Exact(vec![LargeUtf8, Utf8]),
                     Exact(vec![Binary, Utf8]),
@@ -98,7 +99,7 @@ fn get_digest_doc() -> &'static Documentation {
 ```"#,
             )
             .with_standard_argument(
-                "expression", "String")
+                "expression", Some("String"))
             .with_argument(
                 "algorithm",
                 "String expression specifying algorithm to use. Must be one of:

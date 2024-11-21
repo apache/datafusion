@@ -107,7 +107,7 @@ fn get_isnan_doc() -> &'static Documentation {
                 "Returns true if a given number is +NaN or -NaN otherwise returns false.",
             )
             .with_syntax_example("isnan(numeric_expression)")
-            .with_standard_argument("numeric_expression", "Numeric")
+            .with_standard_argument("numeric_expression", Some("Numeric"))
             .build()
             .unwrap()
     })

@@ -23,17 +23,14 @@ pub mod proxy;
 pub mod string_utils;
 
 use crate::error::{_internal_datafusion_err, _internal_err};
-use crate::{arrow_datafusion_err, DataFusionError, Result, ScalarValue};
-use arrow::array::{ArrayRef, PrimitiveArray};
+use crate::{DataFusionError, Result, ScalarValue};
+use arrow::array::ArrayRef;
 use arrow::buffer::OffsetBuffer;
-use arrow::compute;
 use arrow::compute::{partition, SortColumn, SortOptions};
-use arrow::datatypes::{Field, SchemaRef, UInt32Type};
-use arrow::record_batch::RecordBatch;
+use arrow::datatypes::{Field, SchemaRef};
 use arrow_array::cast::AsArray;
 use arrow_array::{
     Array, FixedSizeListArray, LargeListArray, ListArray, OffsetSizeTrait,
-    RecordBatchOptions,
 };
 use arrow_schema::DataType;
 use sqlparser::ast::Ident;
@@ -91,20 +88,6 @@ pub fn get_row_at_idx(columns: &[ArrayRef], idx: usize) -> Result<Vec<ScalarValu
         .iter()
         .map(|arr| ScalarValue::try_from_array(arr, idx))
         .collect()
-}
-
-/// Construct a new RecordBatch from the rows of the `record_batch` at the `indices`.
-pub fn get_record_batch_at_indices(
-    record_batch: &RecordBatch,
-    indices: &PrimitiveArray<UInt32Type>,
-) -> Result<RecordBatch> {
-    let new_columns = take_arrays(record_batch.columns(), indices)?;
-    RecordBatch::try_new_with_options(
-        record_batch.schema(),
-        new_columns,
-        &RecordBatchOptions::new().with_row_count(Some(indices.len())),
-    )
-    .map_err(|e| arrow_datafusion_err!(e))
 }
 
 /// This function compares two tuples depending on the given sort options.
@@ -288,24 +271,6 @@ pub(crate) fn parse_identifiers(s: &str) -> Result<Vec<Ident>> {
     let mut parser = Parser::new(&dialect).try_with_sql(s)?;
     let idents = parser.parse_multipart_identifier()?;
     Ok(idents)
-}
-
-/// Construct a new [`Vec`] of [`ArrayRef`] from the rows of the `arrays` at the `indices`.
-///
-/// TODO: use implementation in arrow-rs when available:
-/// <https://github.com/apache/arrow-rs/pull/6475>
-pub fn take_arrays(arrays: &[ArrayRef], indices: &dyn Array) -> Result<Vec<ArrayRef>> {
-    arrays
-        .iter()
-        .map(|array| {
-            compute::take(
-                array.as_ref(),
-                indices,
-                None, // None: no index check
-            )
-            .map_err(|e| arrow_datafusion_err!(e))
-        })
-        .collect()
 }
 
 pub(crate) fn parse_identifiers_normalized(s: &str, ignore_case: bool) -> Vec<String> {
@@ -1000,40 +965,6 @@ mod tests {
             );
         }
 
-        Ok(())
-    }
-
-    #[test]
-    fn test_take_arrays() -> Result<()> {
-        let arrays: Vec<ArrayRef> = vec![
-            Arc::new(Float64Array::from(vec![5.0, 7.0, 8.0, 9., 10.])),
-            Arc::new(Float64Array::from(vec![2.0, 3.0, 3.0, 4.0, 5.0])),
-            Arc::new(Float64Array::from(vec![5.0, 7.0, 8.0, 10., 11.0])),
-            Arc::new(Float64Array::from(vec![15.0, 13.0, 8.0, 5., 0.0])),
-        ];
-
-        let row_indices_vec: Vec<Vec<u32>> = vec![
-            // Get rows 0 and 1
-            vec![0, 1],
-            // Get rows 0 and 1
-            vec![0, 2],
-            // Get rows 1 and 3
-            vec![1, 3],
-            // Get rows 2 and 4
-            vec![2, 4],
-        ];
-        for row_indices in row_indices_vec {
-            let indices: PrimitiveArray<UInt32Type> =
-                PrimitiveArray::from_iter_values(row_indices.iter().cloned());
-            let chunk = take_arrays(&arrays, &indices)?;
-            for (arr_orig, arr_chunk) in arrays.iter().zip(&chunk) {
-                for (idx, orig_idx) in row_indices.iter().enumerate() {
-                    let res1 = ScalarValue::try_from_array(arr_orig, *orig_idx as usize)?;
-                    let res2 = ScalarValue::try_from_array(arr_chunk, idx)?;
-                    assert_eq!(res1, res2);
-                }
-            }
-        }
         Ok(())
     }
 

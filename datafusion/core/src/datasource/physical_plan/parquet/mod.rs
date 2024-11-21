@@ -425,7 +425,7 @@ impl ParquetExecBuilder {
         let pruning_predicate = predicate
             .clone()
             .and_then(|predicate_expr| {
-                match PruningPredicate::try_new(predicate_expr, file_schema.clone()) {
+                match PruningPredicate::try_new(predicate_expr, Arc::clone(file_schema)) {
                     Ok(pruning_predicate) => Some(Arc::new(pruning_predicate)),
                     Err(e) => {
                         debug!("Could not create pruning predicate for: {e}");
@@ -439,7 +439,7 @@ impl ParquetExecBuilder {
         let page_pruning_predicate = predicate
             .as_ref()
             .map(|predicate_expr| {
-                PagePruningAccessPlanFilter::new(predicate_expr, file_schema.clone())
+                PagePruningAccessPlanFilter::new(predicate_expr, Arc::clone(file_schema))
             })
             .map(Arc::new);
 
@@ -807,7 +807,7 @@ impl ExecutionPlan for ParquetExec {
             predicate: self.predicate.clone(),
             pruning_predicate: self.pruning_predicate.clone(),
             page_pruning_predicate: self.page_pruning_predicate.clone(),
-            table_schema: self.base_config.file_schema.clone(),
+            table_schema: Arc::clone(&self.base_config.file_schema),
             metadata_size_hint: self.metadata_size_hint,
             metrics: self.metrics.clone(),
             parquet_file_reader_factory,
@@ -883,6 +883,7 @@ mod tests {
     // See also `parquet_exec` integration test
     use std::fs::{self, File};
     use std::io::Write;
+    use std::sync::Mutex;
 
     use super::*;
     use crate::dataframe::DataFrameWriteOptions;
@@ -908,6 +909,7 @@ mod tests {
     use arrow::datatypes::{Field, Schema, SchemaBuilder};
     use arrow::record_batch::RecordBatch;
     use arrow_schema::{DataType, Fields};
+    use bytes::{BufMut, BytesMut};
     use datafusion_common::{assert_contains, ScalarValue};
     use datafusion_expr::{col, lit, when, Expr};
     use datafusion_physical_expr::planner::logical2physical;
@@ -917,7 +919,7 @@ mod tests {
     use futures::StreamExt;
     use object_store::local::LocalFileSystem;
     use object_store::path::Path;
-    use object_store::ObjectMeta;
+    use object_store::{ObjectMeta, ObjectStore};
     use parquet::arrow::ArrowWriter;
     use parquet::file::properties::WriterProperties;
     use tempfile::TempDir;
@@ -1656,6 +1658,7 @@ mod tests {
                 range: Some(FileRange { start, end }),
                 statistics: None,
                 extensions: None,
+                metadata_size_hint: None,
             }
         }
 
@@ -1748,6 +1751,7 @@ mod tests {
             range: None,
             statistics: None,
             extensions: None,
+            metadata_size_hint: None,
         };
 
         let expected_schema = Schema::new(vec![
@@ -1835,6 +1839,7 @@ mod tests {
             range: None,
             statistics: None,
             extensions: None,
+            metadata_size_hint: None,
         };
 
         let file_schema = Arc::new(Schema::empty());
@@ -2227,7 +2232,7 @@ mod tests {
 
         // execute a simple query and write the results to parquet
         let out_dir = tmp_dir.as_ref().to_str().unwrap().to_string() + "/out";
-        std::fs::create_dir(&out_dir).unwrap();
+        fs::create_dir(&out_dir).unwrap();
         let df = ctx.sql("SELECT c1, c2 FROM test").await?;
         let schema: Schema = df.schema().into();
         // Register a listing table - this will use all files in the directory as data sources
@@ -2377,5 +2382,135 @@ mod tests {
         writer.write(&batch).unwrap();
         writer.flush().unwrap();
         writer.close().unwrap();
+    }
+
+    /// Write out a batch to a parquet file and return the total size of the file
+    async fn write_batch(
+        path: &str,
+        store: Arc<dyn ObjectStore>,
+        batch: RecordBatch,
+    ) -> usize {
+        let mut writer =
+            ArrowWriter::try_new(BytesMut::new().writer(), batch.schema(), None).unwrap();
+        writer.write(&batch).unwrap();
+        writer.flush().unwrap();
+        let bytes = writer.into_inner().unwrap().into_inner().freeze();
+        let total_size = bytes.len();
+        let path = Path::from(path);
+        let payload = object_store::PutPayload::from_bytes(bytes);
+        store
+            .put_opts(&path, payload, object_store::PutOptions::default())
+            .await
+            .unwrap();
+        total_size
+    }
+
+    /// A ParquetFileReaderFactory that tracks the metadata_size_hint passed to it
+    #[derive(Debug, Clone)]
+    struct TrackingParquetFileReaderFactory {
+        inner: Arc<dyn ParquetFileReaderFactory>,
+        metadata_size_hint_calls: Arc<Mutex<Vec<Option<usize>>>>,
+    }
+
+    impl TrackingParquetFileReaderFactory {
+        fn new(store: Arc<dyn ObjectStore>) -> Self {
+            Self {
+                inner: Arc::new(DefaultParquetFileReaderFactory::new(store)) as _,
+                metadata_size_hint_calls: Arc::new(Mutex::new(vec![])),
+            }
+        }
+    }
+
+    impl ParquetFileReaderFactory for TrackingParquetFileReaderFactory {
+        fn create_reader(
+            &self,
+            partition_index: usize,
+            file_meta: crate::datasource::physical_plan::FileMeta,
+            metadata_size_hint: Option<usize>,
+            metrics: &ExecutionPlanMetricsSet,
+        ) -> Result<Box<dyn parquet::arrow::async_reader::AsyncFileReader + Send>>
+        {
+            self.metadata_size_hint_calls
+                .lock()
+                .unwrap()
+                .push(metadata_size_hint);
+            self.inner.create_reader(
+                partition_index,
+                file_meta,
+                metadata_size_hint,
+                metrics,
+            )
+        }
+    }
+
+    /// Test passing `metadata_size_hint` to either a single file or the whole exec
+    #[tokio::test]
+    async fn test_metadata_size_hint() {
+        let store =
+            Arc::new(object_store::memory::InMemory::new()) as Arc<dyn ObjectStore>;
+        let store_url = ObjectStoreUrl::parse("memory://test").unwrap();
+
+        let ctx = SessionContext::new();
+        ctx.register_object_store(store_url.as_ref(), store.clone());
+
+        // write some data out, it doesn't matter what it is
+        let c1: ArrayRef = Arc::new(Int32Array::from(vec![Some(1)]));
+        let batch = create_batch(vec![("c1", c1)]);
+        let schema = batch.schema();
+        let name_1 = "test1.parquet";
+        let name_2 = "test2.parquet";
+        let total_size_1 = write_batch(name_1, store.clone(), batch.clone()).await;
+        let total_size_2 = write_batch(name_2, store.clone(), batch.clone()).await;
+
+        let reader_factory =
+            Arc::new(TrackingParquetFileReaderFactory::new(store.clone()));
+
+        let size_hint_calls = reader_factory.metadata_size_hint_calls.clone();
+
+        let exec = ParquetExec::builder(
+            FileScanConfig::new(store_url, schema)
+                .with_file(
+                    PartitionedFile {
+                        object_meta: ObjectMeta {
+                            location: Path::from(name_1),
+                            last_modified: Utc::now(),
+                            size: total_size_1,
+                            e_tag: None,
+                            version: None,
+                        },
+                        partition_values: vec![],
+                        range: None,
+                        statistics: None,
+                        extensions: None,
+                        metadata_size_hint: None,
+                    }
+                    .with_metadata_size_hint(123),
+                )
+                .with_file(PartitionedFile {
+                    object_meta: ObjectMeta {
+                        location: Path::from(name_2),
+                        last_modified: Utc::now(),
+                        size: total_size_2,
+                        e_tag: None,
+                        version: None,
+                    },
+                    partition_values: vec![],
+                    range: None,
+                    statistics: None,
+                    extensions: None,
+                    metadata_size_hint: None,
+                }),
+        )
+        .with_parquet_file_reader_factory(reader_factory)
+        .with_metadata_size_hint(456)
+        .build();
+
+        let exec = Arc::new(exec);
+        let res = collect(exec, ctx.task_ctx()).await.unwrap();
+        assert_eq!(res.len(), 2);
+
+        let calls = size_hint_calls.lock().unwrap().clone();
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls, vec![Some(123), Some(456)]);
     }
 }

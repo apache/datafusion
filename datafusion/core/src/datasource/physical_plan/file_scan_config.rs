@@ -19,7 +19,8 @@
 //! file sources.
 
 use std::{
-    borrow::Cow, collections::HashMap, fmt::Debug, marker::PhantomData, sync::Arc, vec,
+    borrow::Cow, collections::HashMap, fmt::Debug, marker::PhantomData, mem::size_of,
+    sync::Arc, vec,
 };
 
 use super::{get_projected_output_ordering, statistics::MinMaxStatistics};
@@ -33,7 +34,7 @@ use arrow_array::{ArrayRef, DictionaryArray, RecordBatch, RecordBatchOptions};
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::stats::Precision;
 use datafusion_common::{exec_err, ColumnStatistics, DataFusionError, Statistics};
-use datafusion_physical_expr::{LexOrdering, PhysicalSortExpr};
+use datafusion_physical_expr::LexOrdering;
 
 use log::warn;
 
@@ -248,9 +249,10 @@ impl FileScanConfig {
             column_statistics: table_cols_stats,
         };
 
-        let projected_schema = Arc::new(
-            Schema::new(table_fields).with_metadata(self.file_schema.metadata().clone()),
-        );
+        let projected_schema = Arc::new(Schema::new_with_metadata(
+            table_fields,
+            self.file_schema.metadata().clone(),
+        ));
 
         let projected_output_ordering =
             get_projected_output_ordering(self, &projected_schema);
@@ -281,7 +283,12 @@ impl FileScanConfig {
 
         fields.map_or_else(
             || Arc::clone(&self.file_schema),
-            |f| Arc::new(Schema::new(f).with_metadata(self.file_schema.metadata.clone())),
+            |f| {
+                Arc::new(Schema::new_with_metadata(
+                    f,
+                    self.file_schema.metadata.clone(),
+                ))
+            },
         )
     }
 
@@ -300,7 +307,7 @@ impl FileScanConfig {
     pub fn split_groups_by_statistics(
         table_schema: &SchemaRef,
         file_groups: &[Vec<PartitionedFile>],
-        sort_order: &[PhysicalSortExpr],
+        sort_order: &LexOrdering,
     ) -> Result<Vec<Vec<PartitionedFile>>> {
         let flattened_files = file_groups.iter().flatten().collect::<Vec<_>>();
         // First Fit:
@@ -491,7 +498,7 @@ impl<T> ZeroBufferGenerator<T>
 where
     T: ArrowNativeType,
 {
-    const SIZE: usize = std::mem::size_of::<T>();
+    const SIZE: usize = size_of::<T>();
 
     fn get_buffer(&mut self, n_vals: usize) -> Buffer {
         match &mut self.cache {
@@ -1105,17 +1112,19 @@ mod tests {
                     ))))
                     .collect::<Vec<_>>(),
             ));
-            let sort_order = case
-                .sort
-                .into_iter()
-                .map(|expr| {
-                    crate::physical_planner::create_physical_sort_expr(
-                        &expr,
-                        &DFSchema::try_from(table_schema.as_ref().clone())?,
-                        &ExecutionProps::default(),
-                    )
-                })
-                .collect::<Result<Vec<_>>>()?;
+            let sort_order = LexOrdering {
+                inner: case
+                    .sort
+                    .into_iter()
+                    .map(|expr| {
+                        crate::physical_planner::create_physical_sort_expr(
+                            &expr,
+                            &DFSchema::try_from(table_schema.as_ref().clone())?,
+                            &ExecutionProps::default(),
+                        )
+                    })
+                    .collect::<Result<Vec<_>>>()?,
+            };
 
             let partitioned_files =
                 case.files.into_iter().map(From::from).collect::<Vec<_>>();
@@ -1200,6 +1209,7 @@ mod tests {
                             .collect::<Vec<_>>(),
                     }),
                     extensions: None,
+                    metadata_size_hint: None,
                 }
             }
         }

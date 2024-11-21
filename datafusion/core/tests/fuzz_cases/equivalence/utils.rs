@@ -14,24 +14,26 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
-//
-// use datafusion_physical_expr::expressions::{col, Column};
+
 use datafusion::physical_plan::expressions::col;
 use datafusion::physical_plan::expressions::Column;
 use datafusion_physical_expr::{ConstExpr, EquivalenceProperties, PhysicalSortExpr};
 use std::any::Any;
+use std::cmp::Ordering;
 use std::sync::Arc;
 
-use arrow::compute::{lexsort_to_indices, SortColumn};
+use arrow::compute::{lexsort_to_indices, take_record_batch, SortColumn};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow_array::{ArrayRef, Float32Array, Float64Array, RecordBatch, UInt32Array};
 use arrow_schema::{SchemaRef, SortOptions};
+use datafusion_common::utils::{compare_rows, get_row_at_idx};
 use datafusion_common::{exec_err, plan_datafusion_err, DataFusionError, Result};
-
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 use datafusion_physical_expr::equivalence::{EquivalenceClass, ProjectionMapping};
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
+use datafusion_physical_expr_common::sort_expr::LexOrdering;
+
 use itertools::izip;
 use rand::prelude::*;
 
@@ -67,7 +69,7 @@ pub fn output_schema(
 }
 
 // Generate a schema which consists of 6 columns (a, b, c, d, e, f)
-fn create_test_schema_2() -> Result<SchemaRef> {
+pub fn create_test_schema_2() -> Result<SchemaRef> {
     let a = Field::new("a", DataType::Float64, true);
     let b = Field::new("b", DataType::Float64, true);
     let c = Field::new("c", DataType::Float64, true);
@@ -221,7 +223,7 @@ fn add_equal_conditions_test() -> Result<()> {
 /// If the table remains the same after sorting with the added unique column, it indicates that the table was
 /// already sorted according to `required_ordering` to begin with.
 pub fn is_table_same_after_sort(
-    mut required_ordering: Vec<PhysicalSortExpr>,
+    mut required_ordering: LexOrdering,
     batch: RecordBatch,
 ) -> Result<bool> {
     // Clone the original schema and columns
@@ -291,6 +293,63 @@ fn get_representative_arr(
         }
     }
     None
+}
+
+// Generate a schema which consists of 8 columns (a, b, c, d, e, f, g, h)
+pub fn create_test_schema() -> Result<SchemaRef> {
+    let a = Field::new("a", DataType::Int32, true);
+    let b = Field::new("b", DataType::Int32, true);
+    let c = Field::new("c", DataType::Int32, true);
+    let d = Field::new("d", DataType::Int32, true);
+    let e = Field::new("e", DataType::Int32, true);
+    let f = Field::new("f", DataType::Int32, true);
+    let g = Field::new("g", DataType::Int32, true);
+    let h = Field::new("h", DataType::Int32, true);
+    let schema = Arc::new(Schema::new(vec![a, b, c, d, e, f, g, h]));
+
+    Ok(schema)
+}
+
+/// Construct a schema with following properties
+/// Schema satisfies following orderings:
+/// [a ASC], [d ASC, b ASC], [e DESC, f ASC, g ASC]
+/// and
+/// Column [a=c] (e.g they are aliases).
+pub fn create_test_params() -> Result<(SchemaRef, EquivalenceProperties)> {
+    let test_schema = create_test_schema()?;
+    let col_a = &col("a", &test_schema)?;
+    let col_b = &col("b", &test_schema)?;
+    let col_c = &col("c", &test_schema)?;
+    let col_d = &col("d", &test_schema)?;
+    let col_e = &col("e", &test_schema)?;
+    let col_f = &col("f", &test_schema)?;
+    let col_g = &col("g", &test_schema)?;
+    let mut eq_properties = EquivalenceProperties::new(Arc::clone(&test_schema));
+    eq_properties.add_equal_conditions(col_a, col_c)?;
+
+    let option_asc = SortOptions {
+        descending: false,
+        nulls_first: false,
+    };
+    let option_desc = SortOptions {
+        descending: true,
+        nulls_first: true,
+    };
+    let orderings = vec![
+        // [a ASC]
+        vec![(col_a, option_asc)],
+        // [d ASC, b ASC]
+        vec![(col_d, option_asc), (col_b, option_asc)],
+        // [e DESC, f ASC, g ASC]
+        vec![
+            (col_e, option_desc),
+            (col_f, option_asc),
+            (col_g, option_asc),
+        ],
+    ];
+    let orderings = convert_to_orderings(&orderings);
+    eq_properties.add_new_orderings(orderings);
+    Ok((test_schema, eq_properties))
 }
 
 // Generate a table that satisfies the given equivalence properties; i.e.
@@ -372,6 +431,111 @@ pub fn generate_table_for_eq_properties(
         .collect();
 
     Ok(RecordBatch::try_from_iter(res)?)
+}
+
+// Generate a table that satisfies the given orderings;
+pub fn generate_table_for_orderings(
+    mut orderings: Vec<LexOrdering>,
+    schema: SchemaRef,
+    n_elem: usize,
+    n_distinct: usize,
+) -> Result<RecordBatch> {
+    let mut rng = StdRng::seed_from_u64(23);
+
+    assert!(!orderings.is_empty());
+    // Sort the inner vectors by their lengths (longest first)
+    orderings.sort_by_key(|v| std::cmp::Reverse(v.inner.len()));
+
+    let arrays = schema
+        .fields
+        .iter()
+        .map(|field| {
+            (
+                field.name(),
+                generate_random_f64_array(n_elem, n_distinct, &mut rng),
+            )
+        })
+        .collect::<Vec<_>>();
+    let batch = RecordBatch::try_from_iter(arrays)?;
+
+    // Sort batch according to first ordering expression
+    let sort_columns = get_sort_columns(&batch, orderings[0].as_ref())?;
+    let sort_indices = lexsort_to_indices(&sort_columns, None)?;
+    let mut batch = take_record_batch(&batch, &sort_indices)?;
+
+    // prune out rows that is invalid according to remaining orderings.
+    for ordering in orderings.iter().skip(1) {
+        let sort_columns = get_sort_columns(&batch, ordering)?;
+
+        // Collect sort options and values into separate vectors.
+        let (sort_options, sort_col_values): (Vec<_>, Vec<_>) = sort_columns
+            .into_iter()
+            .map(|sort_col| (sort_col.options.unwrap(), sort_col.values))
+            .unzip();
+
+        let mut cur_idx = 0;
+        let mut keep_indices = vec![cur_idx as u32];
+        for next_idx in 1..batch.num_rows() {
+            let cur_row = get_row_at_idx(&sort_col_values, cur_idx)?;
+            let next_row = get_row_at_idx(&sort_col_values, next_idx)?;
+
+            if compare_rows(&cur_row, &next_row, &sort_options)? != Ordering::Greater {
+                // next row satisfies ordering relation given, compared to the current row.
+                keep_indices.push(next_idx as u32);
+                cur_idx = next_idx;
+            }
+        }
+        // Only keep valid rows, that satisfies given ordering relation.
+        batch = take_record_batch(&batch, &UInt32Array::from_iter_values(keep_indices))?;
+    }
+
+    Ok(batch)
+}
+
+// Convert each tuple to PhysicalSortExpr
+pub fn convert_to_sort_exprs(
+    in_data: &[(&Arc<dyn PhysicalExpr>, SortOptions)],
+) -> LexOrdering {
+    in_data
+        .iter()
+        .map(|(expr, options)| PhysicalSortExpr {
+            expr: Arc::clone(*expr),
+            options: *options,
+        })
+        .collect()
+}
+
+// Convert each inner tuple to PhysicalSortExpr
+pub fn convert_to_orderings(
+    orderings: &[Vec<(&Arc<dyn PhysicalExpr>, SortOptions)>],
+) -> Vec<LexOrdering> {
+    orderings
+        .iter()
+        .map(|sort_exprs| convert_to_sort_exprs(sort_exprs))
+        .collect()
+}
+
+// Utility function to generate random f64 array
+fn generate_random_f64_array(
+    n_elems: usize,
+    n_distinct: usize,
+    rng: &mut StdRng,
+) -> ArrayRef {
+    let values: Vec<f64> = (0..n_elems)
+        .map(|_| rng.gen_range(0..n_distinct) as f64 / 2.0)
+        .collect();
+    Arc::new(Float64Array::from_iter_values(values))
+}
+
+// Helper function to get sort columns from a batch
+fn get_sort_columns(
+    batch: &RecordBatch,
+    ordering: &LexOrdering,
+) -> Result<Vec<SortColumn>> {
+    ordering
+        .iter()
+        .map(|expr| expr.evaluate_to_sort_column(batch))
+        .collect::<Result<Vec<_>>>()
 }
 
 #[derive(Debug, Clone)]

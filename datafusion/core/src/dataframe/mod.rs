@@ -373,32 +373,9 @@ impl DataFrame {
         self.select(expr)
     }
 
-    /// Expand each list element of a column to multiple rows.
-    #[deprecated(since = "37.0.0", note = "use unnest_columns instead")]
-    pub fn unnest_column(self, column: &str) -> Result<DataFrame> {
-        self.unnest_columns(&[column])
-    }
-
-    /// Expand each list element of a column to multiple rows, with
-    /// behavior controlled by [`UnnestOptions`].
-    ///
-    /// Please see the documentation on [`UnnestOptions`] for more
-    /// details about the meaning of unnest.
-    #[deprecated(since = "37.0.0", note = "use unnest_columns_with_options instead")]
-    pub fn unnest_column_with_options(
-        self,
-        column: &str,
-        options: UnnestOptions,
-    ) -> Result<DataFrame> {
-        self.unnest_columns_with_options(&[column], options)
-    }
-
     /// Expand multiple list/struct columns into a set of rows and new columns.
     ///
-    /// See also:
-    ///
-    /// 1. [`UnnestOptions`] documentation for the behavior of `unnest`
-    /// 2. [`Self::unnest_column_with_options`]
+    /// See also: [`UnnestOptions`] documentation for the behavior of `unnest`
     ///
     /// # Example
     /// ```
@@ -1964,17 +1941,17 @@ mod tests {
     use crate::physical_plan::{ColumnarValue, Partitioning, PhysicalExpr};
     use crate::test_util::{register_aggregate_csv, test_table, test_table_with_name};
 
-    use arrow::array::{self, Int32Array};
+    use arrow::array::Int32Array;
     use datafusion_common::{assert_batches_eq, Constraint, Constraints, ScalarValue};
     use datafusion_common_runtime::SpawnedTask;
     use datafusion_expr::expr::WindowFunction;
     use datafusion_expr::{
-        cast, create_udf, expr, lit, BuiltInWindowFunction, ExprFunctionExt,
-        ScalarFunctionImplementation, Volatility, WindowFrame, WindowFrameBound,
-        WindowFrameUnits, WindowFunctionDefinition,
+        cast, create_udf, lit, ExprFunctionExt, ScalarFunctionImplementation, Volatility,
+        WindowFrame, WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition,
     };
     use datafusion_functions_aggregate::expr_fn::{array_agg, count_distinct};
     use datafusion_functions_window::expr_fn::row_number;
+    use datafusion_functions_window::nth_value::first_value_udwf;
     use datafusion_physical_expr::expressions::Column;
     use datafusion_physical_plan::{get_plan_string, ExecutionPlanProperties};
     use sqlparser::ast::NullTreatment;
@@ -2002,8 +1979,8 @@ mod tests {
         let batch = RecordBatch::try_new(
             dual_schema.clone(),
             vec![
-                Arc::new(array::Int32Array::from(vec![1])),
-                Arc::new(array::StringArray::from(vec!["a"])),
+                Arc::new(Int32Array::from(vec![1])),
+                Arc::new(StringArray::from(vec!["a"])),
             ],
         )
         .unwrap();
@@ -2199,10 +2176,8 @@ mod tests {
     async fn select_with_window_exprs() -> Result<()> {
         // build plan using Table API
         let t = test_table().await?;
-        let first_row = Expr::WindowFunction(expr::WindowFunction::new(
-            WindowFunctionDefinition::BuiltInWindowFunction(
-                BuiltInWindowFunction::FirstValue,
-            ),
+        let first_row = Expr::WindowFunction(WindowFunction::new(
+            WindowFunctionDefinition::WindowUDF(first_value_udwf()),
             vec![col("aggregate_test_100.c1")],
         ))
         .partition_by(vec![col("aggregate_test_100.c2")])
@@ -2616,6 +2591,54 @@ mod tests {
                 "| 5  |",
                 "| 6  |",
                 "+----+",
+            ],
+            &df_results
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_aggregate_with_union() -> Result<()> {
+        let df = test_table().await?;
+
+        let df1 = df
+            .clone()
+            // GROUP BY `c1`
+            .aggregate(vec![col("c1")], vec![min(col("c2"))])?
+            // SELECT `c1` , min(c2) as `result`
+            .select(vec![col("c1"), min(col("c2")).alias("result")])?;
+        let df2 = df
+            .clone()
+            // GROUP BY `c1`
+            .aggregate(vec![col("c1")], vec![max(col("c3"))])?
+            // SELECT `c1` , max(c3) as `result`
+            .select(vec![col("c1"), max(col("c3")).alias("result")])?;
+
+        let df_union = df1.union(df2)?;
+        let df = df_union
+            // GROUP BY `c1`
+            .aggregate(
+                vec![col("c1")],
+                vec![sum(col("result")).alias("sum_result")],
+            )?
+            // SELECT `c1`, sum(result) as `sum_result`
+            .select(vec![(col("c1")), col("sum_result")])?;
+
+        let df_results = df.collect().await?;
+
+        #[rustfmt::skip]
+        assert_batches_sorted_eq!(
+            [
+                "+----+------------+",
+                "| c1 | sum_result |",
+                "+----+------------+",
+                "| a  | 84         |",
+                "| b  | 69         |",
+                "| c  | 124        |",
+                "| d  | 126        |",
+                "| e  | 121        |",
+                "+----+------------+"
             ],
             &df_results
         );
@@ -3545,11 +3568,10 @@ mod tests {
 
     #[tokio::test]
     async fn with_column_renamed_case_sensitive() -> Result<()> {
-        let config =
-            SessionConfig::from_string_hash_map(&std::collections::HashMap::from([(
-                "datafusion.sql_parser.enable_ident_normalization".to_owned(),
-                "false".to_owned(),
-            )]))?;
+        let config = SessionConfig::from_string_hash_map(&HashMap::from([(
+            "datafusion.sql_parser.enable_ident_normalization".to_owned(),
+            "false".to_owned(),
+        )]))?;
         let ctx = SessionContext::new_with_config(config);
         let name = "aggregate_test_100";
         register_aggregate_csv(&ctx, name).await?;
@@ -3621,7 +3643,7 @@ mod tests {
 
     #[tokio::test]
     async fn row_writer_resize_test() -> Result<()> {
-        let schema = Arc::new(Schema::new(vec![arrow::datatypes::Field::new(
+        let schema = Arc::new(Schema::new(vec![Field::new(
             "column_1",
             DataType::Utf8,
             false,
@@ -3630,7 +3652,7 @@ mod tests {
         let data = RecordBatch::try_new(
             schema,
             vec![
-                Arc::new(arrow::array::StringArray::from(vec![
+                Arc::new(StringArray::from(vec![
                     Some("2a0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"),
                     Some("3a0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000800"),
                 ]))
@@ -3840,6 +3862,7 @@ mod tests {
             JoinType::RightSemi,
             JoinType::LeftAnti,
             JoinType::RightAnti,
+            JoinType::LeftMark,
         ];
 
         let default_partition_count = SessionConfig::new().target_partitions();
@@ -3857,7 +3880,10 @@ mod tests {
             let join_schema = physical_plan.schema();
 
             match join_type {
-                JoinType::Left | JoinType::LeftSemi | JoinType::LeftAnti => {
+                JoinType::Left
+                | JoinType::LeftSemi
+                | JoinType::LeftAnti
+                | JoinType::LeftMark => {
                     let left_exprs: Vec<Arc<dyn PhysicalExpr>> = vec![
                         Arc::new(Column::new_with_schema("c1", &join_schema)?),
                         Arc::new(Column::new_with_schema("c2", &join_schema)?),

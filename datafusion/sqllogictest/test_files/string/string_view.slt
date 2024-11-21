@@ -37,6 +37,11 @@ select arrow_cast(col1, 'Utf8View') as c1 from test_substr_base;
 statement ok
 drop table test_source
 
+# TODO: Revisit this issue after upgrading to the arrow-rs version that includes apache/arrow-rs#6671.
+# see issue https://github.com/apache/datafusion/issues/13329
+query error DataFusion error: Arrow error: Compute error: bit_length not supported for Utf8View
+select bit_length(ascii_1), bit_length(ascii_2), bit_length(unicode_1), bit_length(unicode_2) from test_basic_operator;
+
 #
 # common test for string-like functions and operators
 #
@@ -60,6 +65,7 @@ create table test_source as values
   ('Andrew', 'X'),
   ('Xiangpeng', 'Xiangpeng'),
   ('Raphael', 'R'),
+  ('', 'Warsaw'),
   (NULL, 'R');
 
 # Table with the different combination of column types
@@ -89,10 +95,8 @@ select octet_length(column1_utf8view) from test;
 6
 9
 7
+0
 NULL
-
-query error DataFusion error: Arrow error: Compute error: bit_length not supported for Utf8View
-select bit_length(column1_utf8view) from test;
 
 query T
 select btrim(column1_large_utf8) from test;
@@ -100,6 +104,7 @@ select btrim(column1_large_utf8) from test;
 Andrew
 Xiangpeng
 Raphael
+(empty)
 NULL
 
 ########
@@ -119,6 +124,7 @@ from test;
 Andrew X false false true true
 Xiangpeng Xiangpeng true true false false
 Raphael R false false true true
+(empty) Warsaw false false true true
 NULL R NULL NULL NULL NULL
 
 # test StringViewArray with LargeUtf8 columns
@@ -134,6 +140,7 @@ from test;
 Andrew X false false true true
 Xiangpeng Xiangpeng true true false false
 Raphael R false false true true
+(empty) Warsaw false false true true
 NULL R NULL NULL NULL NULL
 
 ########
@@ -153,6 +160,7 @@ from test;
 Andrew X false false true true
 Xiangpeng Xiangpeng true true false false
 Raphael R false false true true
+(empty) Warsaw false false true true
 NULL R NULL NULL NULL NULL
 
 # StringView column to Dict scalar
@@ -168,6 +176,7 @@ from test;
 Andrew X true true false false
 Xiangpeng Xiangpeng false false true true
 Raphael R false false true true
+(empty) Warsaw false false true true
 NULL R NULL NULL NULL NULL
 
 # Dict column to StringView scalar
@@ -183,6 +192,7 @@ from test;
 Andrew X true true false false
 Xiangpeng Xiangpeng false false true true
 Raphael R false false true true
+(empty) Warsaw false false true true
 NULL R NULL NULL NULL NULL
 
 ########
@@ -296,6 +306,7 @@ FROM test;
 false false false
 true true true
 true true true
+false false false
 NULL NULL NULL
 
 # Test STARTS_WITH with utf8 against utf8view, utf8, and largeutf8
@@ -322,6 +333,7 @@ FROM test;
 false false false
 true true true
 true true true
+false false false
 NULL NULL NULL
 
 
@@ -381,12 +393,12 @@ drop table test_lowercase
 ## Ensure no casts for LIKE/ILIKE
 query TT
 EXPLAIN SELECT
-  column1_utf8view like 'foo' as "like",
-  column1_utf8view ilike 'foo' as "ilike"
+  column1_utf8view like '%foo%' as "like",
+  column1_utf8view ilike '%foo%' as "ilike"
 FROM test;
 ----
 logical_plan
-01)Projection: test.column1_utf8view LIKE Utf8View("foo") AS like, test.column1_utf8view ILIKE Utf8View("foo") AS ilike
+01)Projection: test.column1_utf8view LIKE Utf8View("%foo%") AS like, test.column1_utf8view ILIKE Utf8View("%foo%") AS ilike
 02)--TableScan: test projection=[column1_utf8view]
 
 
@@ -702,6 +714,7 @@ FROM test;
 AndrewX
 XiangpengXiangpeng
 RaphaelR
+Warsaw
 R
 
 ## Should run CONCAT successfully with utf8 utf8view and largeutf8
@@ -713,6 +726,7 @@ FROM test;
 AndrewXX
 XiangpengXiangpengXiangpeng
 RaphaelRR
+WarsawWarsaw
 RR
 
 ## Ensure no casts for REGEXP_LIKE
@@ -919,6 +933,94 @@ FROM test;
 ----
 logical_plan
 01)Projection: to_timestamp(test.column1_utf8view, Utf8("a,b,c,d")) AS c
+02)--TableScan: test projection=[column1_utf8view]
+
+## Ensure no casts for NVL
+query TT
+EXPLAIN SELECT NVL(column1_utf8view, 'a') as c2 FROM test;
+----
+logical_plan
+01)Projection: nvl(test.column1_utf8view, Utf8View("a")) AS c2
+02)--TableScan: test projection=[column1_utf8view]
+
+## Ensure no casts for nullif
+query TT
+EXPLAIN SELECT
+  nullif(column1_utf8view, 'a') as c
+FROM test;
+----
+logical_plan
+01)Projection: nullif(test.column1_utf8view, Utf8View("a")) AS c
+02)--TableScan: test projection=[column1_utf8view]
+
+## Ensure no casts for nullif
+query TT
+EXPLAIN SELECT
+  nullif(column1_utf8view, column1_utf8view) as c
+FROM test;
+----
+logical_plan
+01)Projection: nullif(test.column1_utf8view, test.column1_utf8view) AS c
+02)--TableScan: test projection=[column1_utf8view]
+
+## Ensure no casts for md5
+query TT
+EXPLAIN SELECT
+  md5(column1_utf8view) as c
+FROM test;
+----
+logical_plan
+01)Projection: md5(test.column1_utf8view) AS c
+02)--TableScan: test projection=[column1_utf8view]
+
+## Ensure no casts for sha224
+query TT
+EXPLAIN SELECT
+  sha224(column1_utf8view) as c
+FROM test;
+----
+logical_plan
+01)Projection: sha224(test.column1_utf8view) AS c
+02)--TableScan: test projection=[column1_utf8view]
+
+## Ensure no casts for sha256
+query TT
+EXPLAIN SELECT
+  sha256(column1_utf8view) as c
+FROM test;
+----
+logical_plan
+01)Projection: sha256(test.column1_utf8view) AS c
+02)--TableScan: test projection=[column1_utf8view]
+
+## Ensure no casts for sha384
+query TT
+EXPLAIN SELECT
+  sha384(column1_utf8view) as c
+FROM test;
+----
+logical_plan
+01)Projection: sha384(test.column1_utf8view) AS c
+02)--TableScan: test projection=[column1_utf8view]
+
+## Ensure no casts for sha512
+query TT
+EXPLAIN SELECT
+  sha512(column1_utf8view) as c
+FROM test;
+----
+logical_plan
+01)Projection: sha512(test.column1_utf8view) AS c
+02)--TableScan: test projection=[column1_utf8view]
+
+## Ensure no casts for digest
+query TT
+EXPLAIN SELECT
+  digest(column1_utf8view, 'md5') as c
+FROM test;
+----
+logical_plan
+01)Projection: digest(test.column1_utf8view, Utf8View("md5")) AS c
 02)--TableScan: test projection=[column1_utf8view]
 
 ## Ensure no casts for binary operators

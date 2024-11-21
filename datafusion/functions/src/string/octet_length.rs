@@ -82,7 +82,7 @@ impl ScalarUDFImpl for OctetLengthFunc {
                 ScalarValue::Utf8View(v) => Ok(ColumnarValue::Scalar(
                     ScalarValue::Int32(v.as_ref().map(|x| x.len() as i32)),
                 )),
-                _ => unreachable!(),
+                _ => unreachable!("OctetLengthFunc"),
             },
         }
     }
@@ -110,7 +110,7 @@ fn get_octet_length_doc() -> &'static Documentation {
 +--------------------------------+
 ```"#,
             )
-            .with_standard_argument("str", "String")
+            .with_standard_argument("str", Some("String"))
             .with_related_udf("bit_length")
             .with_related_udf("length")
             .build()

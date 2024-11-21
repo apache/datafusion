@@ -22,7 +22,7 @@ use crate::util::{AccessLogOpt, BenchmarkRun, CommonOpt};
 
 use arrow::util::pretty;
 use datafusion::common::Result;
-use datafusion::physical_expr::PhysicalSortExpr;
+use datafusion::physical_expr::{LexOrdering, PhysicalSortExpr};
 use datafusion::physical_plan::collect;
 use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::prelude::{SessionConfig, SessionContext};
@@ -70,31 +70,28 @@ impl RunOpt {
         let sort_cases = vec![
             (
                 "sort utf8",
-                vec![PhysicalSortExpr {
+                LexOrdering::new(vec![PhysicalSortExpr {
                     expr: col("request_method", &schema)?,
                     options: Default::default(),
-                }],
+                }]),
             ),
             (
                 "sort int",
-                vec![PhysicalSortExpr {
-                    expr: col("request_bytes", &schema)?,
+                LexOrdering::new(vec![PhysicalSortExpr {
+                    expr: col("response_bytes", &schema)?,
                     options: Default::default(),
-                }],
+                }]),
             ),
             (
                 "sort decimal",
-                vec![
-                    // sort decimal
-                    PhysicalSortExpr {
-                        expr: col("decimal_price", &schema)?,
-                        options: Default::default(),
-                    },
-                ],
+                LexOrdering::new(vec![PhysicalSortExpr {
+                    expr: col("decimal_price", &schema)?,
+                    options: Default::default(),
+                }]),
             ),
             (
                 "sort integer tuple",
-                vec![
+                LexOrdering::new(vec![
                     PhysicalSortExpr {
                         expr: col("request_bytes", &schema)?,
                         options: Default::default(),
@@ -103,11 +100,11 @@ impl RunOpt {
                         expr: col("response_bytes", &schema)?,
                         options: Default::default(),
                     },
-                ],
+                ]),
             ),
             (
                 "sort utf8 tuple",
-                vec![
+                LexOrdering::new(vec![
                     // sort utf8 tuple
                     PhysicalSortExpr {
                         expr: col("service", &schema)?,
@@ -125,11 +122,11 @@ impl RunOpt {
                         expr: col("image", &schema)?,
                         options: Default::default(),
                     },
-                ],
+                ]),
             ),
             (
                 "sort mixed tuple",
-                vec![
+                LexOrdering::new(vec![
                     PhysicalSortExpr {
                         expr: col("service", &schema)?,
                         options: Default::default(),
@@ -142,7 +139,7 @@ impl RunOpt {
                         expr: col("decimal_price", &schema)?,
                         options: Default::default(),
                     },
-                ],
+                ]),
             ),
         ];
         for (title, expr) in sort_cases {
@@ -170,13 +167,13 @@ impl RunOpt {
 
 async fn exec_sort(
     ctx: &SessionContext,
-    expr: &[PhysicalSortExpr],
+    expr: &LexOrdering,
     test_file: &TestParquetFile,
     debug: bool,
 ) -> Result<(usize, std::time::Duration)> {
     let start = Instant::now();
     let scan = test_file.create_scan(ctx, None).await?;
-    let exec = Arc::new(SortExec::new(expr.to_owned(), scan));
+    let exec = Arc::new(SortExec::new(expr.clone(), scan));
     let task_ctx = ctx.task_ctx();
     let result = collect(exec, task_ctx).await?;
     let elapsed = start.elapsed();

@@ -15,17 +15,15 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{
-    collections::{HashMap, HashSet},
-    sync::Arc,
-};
+use std::{collections::HashSet, sync::Arc};
 
-use arrow_schema::SchemaRef;
+use arrow_schema::Schema;
+use datafusion_common::tree_node::TreeNodeContainer;
 use datafusion_common::{
     tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRewriter},
-    Column, Result, TableReference,
+    Column, HashMap, Result, TableReference,
 };
-use datafusion_expr::{expr::Alias, tree_node::transform_sort_vec};
+use datafusion_expr::expr::Alias;
 use datafusion_expr::{Expr, LogicalPlan, Projection, Sort, SortExpr};
 use sqlparser::ast::Ident;
 
@@ -86,17 +84,18 @@ pub(super) fn normalize_union_schema(plan: &LogicalPlan) -> Result<LogicalPlan> 
 
 /// Rewrite sort expressions that have a UNION plan as their input to remove the table reference.
 fn rewrite_sort_expr_for_union(exprs: Vec<SortExpr>) -> Result<Vec<SortExpr>> {
-    let sort_exprs = transform_sort_vec(exprs, &mut |expr| {
-        expr.transform_up(|expr| {
-            if let Expr::Column(mut col) = expr {
-                col.relation = None;
-                Ok(Transformed::yes(Expr::Column(col)))
-            } else {
-                Ok(Transformed::no(expr))
-            }
+    let sort_exprs = exprs
+        .map_elements(&mut |expr: Expr| {
+            expr.transform_up(|expr| {
+                if let Expr::Column(mut col) = expr {
+                    col.relation = None;
+                    Ok(Transformed::yes(Expr::Column(col)))
+                } else {
+                    Ok(Transformed::no(expr))
+                }
+            })
         })
-    })
-    .data()?;
+        .data()?;
 
     Ok(sort_exprs)
 }
@@ -293,7 +292,7 @@ pub(super) fn inject_column_aliases_into_subquery(
 /// - `SELECT col1, col2 FROM table` with aliases `["alias_1", "some_alias_2"]` will be transformed to
 /// - `SELECT col1 AS alias_1, col2 AS some_alias_2 FROM table`
 pub(super) fn inject_column_aliases(
-    projection: &datafusion_expr::Projection,
+    projection: &Projection,
     aliases: impl IntoIterator<Item = Ident>,
 ) -> LogicalPlan {
     let mut updated_projection = projection.clone();
@@ -343,12 +342,12 @@ fn find_projection(logical_plan: &LogicalPlan) -> Option<&Projection> {
 ///   from which the columns are referenced. This is used to look up columns by their names.
 /// * `alias_name`: The alias (`TableReference`) that will replace the table name
 ///   in the column references when applicable.
-pub struct TableAliasRewriter {
-    pub table_schema: SchemaRef,
+pub struct TableAliasRewriter<'a> {
+    pub table_schema: &'a Schema,
     pub alias_name: TableReference,
 }
 
-impl TreeNodeRewriter for TableAliasRewriter {
+impl TreeNodeRewriter for TableAliasRewriter<'_> {
     type Node = Expr;
 
     fn f_down(&mut self, expr: Expr) -> Result<Transformed<Expr>> {

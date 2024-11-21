@@ -95,7 +95,7 @@ fn get_contains_doc() -> &'static Documentation {
 +---------------------------------------------------+
 ```"#,
             )
-            .with_standard_argument("str", "String")
+            .with_standard_argument("str", Some("String"))
             .with_argument("search_str", "The string to search for in str.")
             .build()
             .unwrap()
@@ -145,7 +145,7 @@ mod test {
             Some("yyy?()"),
         ])));
         let scalar = ColumnarValue::Scalar(ScalarValue::Utf8(Some("x?(".to_string())));
-        let actual = udf.invoke(&[array, scalar]).unwrap();
+        let actual = udf.invoke_batch(&[array, scalar], 2).unwrap();
         let expect = ColumnarValue::Array(Arc::new(BooleanArray::from(vec![
             Some(true),
             Some(false),

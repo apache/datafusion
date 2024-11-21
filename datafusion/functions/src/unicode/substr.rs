@@ -170,9 +170,10 @@ fn get_substr_doc() -> &'static Documentation {
 | fus                                          |
 +----------------------------------------------+ 
 ```"#)
-            .with_standard_argument("str", "String")
+            .with_standard_argument("str", Some("String"))
             .with_argument("start_pos", "Character position to start the substring at. The first character in the string has a position of 1.")
             .with_argument("length", "Number of characters to extract. If not specified, returns the rest of the string after the start position.")
+            .with_alternative_syntax("substring(str from start_pos for length)")
             .build()
             .unwrap()
     })

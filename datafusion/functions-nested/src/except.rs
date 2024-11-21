@@ -23,13 +23,12 @@ use arrow_array::cast::AsArray;
 use arrow_array::{Array, ArrayRef, GenericListArray, OffsetSizeTrait};
 use arrow_buffer::OffsetBuffer;
 use arrow_schema::{DataType, FieldRef};
-use datafusion_common::{exec_err, internal_err, Result};
+use datafusion_common::{exec_err, internal_err, HashSet, Result};
 use datafusion_expr::scalar_doc_sections::DOC_SECTION_ARRAY;
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
 use std::any::Any;
-use std::collections::HashSet;
 use std::sync::{Arc, OnceLock};
 
 make_udf_expr_and_func!(

@@ -65,6 +65,7 @@ use crate::{
 use arrow::datatypes::{DataType, SchemaRef};
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::PhysicalSortExpr;
+use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
 use futures::StreamExt;
 use log::debug;
@@ -247,6 +248,8 @@ pub struct FileMeta {
     pub range: Option<FileRange>,
     /// An optional field for user defined per object metadata
     pub extensions: Option<Arc<dyn std::any::Any + Send + Sync>>,
+    /// Size hint for the metadata of this file
+    pub metadata_size_hint: Option<usize>,
 }
 
 impl FileMeta {
@@ -262,6 +265,7 @@ impl From<ObjectMeta> for FileMeta {
             object_meta,
             range: None,
             extensions: None,
+            metadata_size_hint: None,
         }
     }
 }
@@ -328,11 +332,11 @@ impl From<ObjectMeta> for FileMeta {
 fn get_projected_output_ordering(
     base_config: &FileScanConfig,
     projected_schema: &SchemaRef,
-) -> Vec<Vec<PhysicalSortExpr>> {
+) -> Vec<LexOrdering> {
     let mut all_orderings = vec![];
     for output_ordering in &base_config.output_ordering {
-        let mut new_ordering = vec![];
-        for PhysicalSortExpr { expr, options } in output_ordering {
+        let mut new_ordering = LexOrdering::default();
+        for PhysicalSortExpr { expr, options } in output_ordering.iter() {
             if let Some(col) = expr.as_any().downcast_ref::<Column>() {
                 let name = col.name();
                 if let Some((idx, _)) = projected_schema.column_with_name(name) {
@@ -763,7 +767,7 @@ mod tests {
     /// create a PartitionedFile for testing
     fn partitioned_file(path: &str) -> PartitionedFile {
         let object_meta = ObjectMeta {
-            location: object_store::path::Path::parse(path).unwrap(),
+            location: Path::parse(path).unwrap(),
             last_modified: Utc::now(),
             size: 42,
             e_tag: None,
@@ -776,6 +780,7 @@ mod tests {
             range: None,
             statistics: None,
             extensions: None,
+            metadata_size_hint: None,
         }
     }
 }

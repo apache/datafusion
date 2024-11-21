@@ -190,7 +190,7 @@ impl Precision<ScalarValue> {
     }
 }
 
-impl<T: fmt::Debug + Clone + PartialEq + Eq + PartialOrd> Debug for Precision<T> {
+impl<T: Debug + Clone + PartialEq + Eq + PartialOrd> Debug for Precision<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Precision::Exact(inner) => write!(f, "Exact({:?})", inner),
@@ -200,7 +200,7 @@ impl<T: fmt::Debug + Clone + PartialEq + Eq + PartialOrd> Debug for Precision<T>
     }
 }
 
-impl<T: fmt::Debug + Clone + PartialEq + Eq + PartialOrd> Display for Precision<T> {
+impl<T: Debug + Clone + PartialEq + Eq + PartialOrd> Display for Precision<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Precision::Exact(inner) => write!(f, "Exact({:?})", inner),
@@ -255,6 +255,48 @@ impl Statistics {
             .into_iter()
             .map(|s| s.to_inexact())
             .collect();
+        self
+    }
+
+    /// Project the statistics to the given column indices.
+    ///
+    /// For example, if we had statistics for columns `{"a", "b", "c"}`,
+    /// projecting to `vec![2, 1]` would return statistics for columns `{"c",
+    /// "b"}`.
+    pub fn project(mut self, projection: Option<&Vec<usize>>) -> Self {
+        let Some(projection) = projection else {
+            return self;
+        };
+
+        enum Slot {
+            /// The column is taken and put into the specified statistics location
+            Taken(usize),
+            /// The original columns is present
+            Present(ColumnStatistics),
+        }
+
+        // Convert to Vec<Slot> so we can avoid copying the statistics
+        let mut columns: Vec<_> = std::mem::take(&mut self.column_statistics)
+            .into_iter()
+            .map(Slot::Present)
+            .collect();
+
+        for idx in projection {
+            let next_idx = self.column_statistics.len();
+            let slot = std::mem::replace(
+                columns.get_mut(*idx).expect("projection out of bounds"),
+                Slot::Taken(next_idx),
+            );
+            match slot {
+                // The column was there, so just move it
+                Slot::Present(col) => self.column_statistics.push(col),
+                // The column was taken, so copy from the previous location
+                Slot::Taken(prev_idx) => self
+                    .column_statistics
+                    .push(self.column_statistics[prev_idx].clone()),
+            }
+        }
+
         self
     }
 
@@ -341,7 +383,7 @@ fn check_num_rows(value: Option<usize>, is_exact: bool) -> Precision<usize> {
 }
 
 impl Display for Statistics {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         // string of column statistics
         let column_stats = self
             .column_statistics
@@ -560,5 +602,51 @@ mod tests {
         #[allow(clippy::redundant_clone)]
         let p2 = precision.clone();
         assert_eq!(precision, p2);
+    }
+
+    #[test]
+    fn test_project_none() {
+        let projection = None;
+        let stats = make_stats(vec![10, 20, 30]).project(projection.as_ref());
+        assert_eq!(stats, make_stats(vec![10, 20, 30]));
+    }
+
+    #[test]
+    fn test_project_empty() {
+        let projection = Some(vec![]);
+        let stats = make_stats(vec![10, 20, 30]).project(projection.as_ref());
+        assert_eq!(stats, make_stats(vec![]));
+    }
+
+    #[test]
+    fn test_project_swap() {
+        let projection = Some(vec![2, 1]);
+        let stats = make_stats(vec![10, 20, 30]).project(projection.as_ref());
+        assert_eq!(stats, make_stats(vec![30, 20]));
+    }
+
+    #[test]
+    fn test_project_repeated() {
+        let projection = Some(vec![1, 2, 1, 1, 0, 2]);
+        let stats = make_stats(vec![10, 20, 30]).project(projection.as_ref());
+        assert_eq!(stats, make_stats(vec![20, 30, 20, 20, 10, 30]));
+    }
+
+    // Make a Statistics structure with the specified null counts for each column
+    fn make_stats(counts: impl IntoIterator<Item = usize>) -> Statistics {
+        Statistics {
+            num_rows: Precision::Exact(42),
+            total_byte_size: Precision::Exact(500),
+            column_statistics: counts.into_iter().map(col_stats_i64).collect(),
+        }
+    }
+
+    fn col_stats_i64(null_count: usize) -> ColumnStatistics {
+        ColumnStatistics {
+            null_count: Precision::Exact(null_count),
+            max_value: Precision::Exact(ScalarValue::Int64(Some(42))),
+            min_value: Precision::Exact(ScalarValue::Int64(Some(64))),
+            distinct_count: Precision::Exact(100),
+        }
     }
 }

@@ -30,9 +30,8 @@ use crate::equivalence::{
 };
 use crate::expressions::{with_new_schema, CastExpr, Column, Literal};
 use crate::{
-    physical_exprs_contains, ConstExpr, LexOrdering, LexOrderingRef, LexRequirement,
-    LexRequirementRef, PhysicalExpr, PhysicalExprRef, PhysicalSortExpr,
-    PhysicalSortRequirement,
+    physical_exprs_contains, ConstExpr, LexOrdering, LexRequirement, PhysicalExpr,
+    PhysicalExprRef, PhysicalSortExpr, PhysicalSortRequirement,
 };
 
 use arrow_schema::{SchemaRef, SortOptions};
@@ -103,7 +102,7 @@ use itertools::Itertools;
 /// # use arrow_schema::{Schema, Field, DataType, SchemaRef};
 /// # use datafusion_physical_expr::{ConstExpr, EquivalenceProperties};
 /// # use datafusion_physical_expr::expressions::col;
-/// use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
+/// use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 /// # let schema: SchemaRef = Arc::new(Schema::new(vec![
 /// #   Field::new("a", DataType::Int32, false),
 /// #   Field::new("b", DataType::Int32, false),
@@ -116,12 +115,12 @@ use itertools::Itertools;
 /// // with a single constant value of b
 /// let mut eq_properties = EquivalenceProperties::new(schema)
 ///   .with_constants(vec![ConstExpr::from(col_b)]);
-/// eq_properties.add_new_ordering(vec![
+/// eq_properties.add_new_ordering(LexOrdering::new(vec![
 ///   PhysicalSortExpr::new_default(col_a).asc(),
 ///   PhysicalSortExpr::new_default(col_c).desc(),
-/// ]);
+/// ]));
 ///
-/// assert_eq!(eq_properties.to_string(), "order: [[a@0 ASC,c@2 DESC]], const: [b@1]")
+/// assert_eq!(eq_properties.to_string(), "order: [[a@0 ASC, c@2 DESC]], const: [b@1]")
 /// ```
 #[derive(Debug, Clone)]
 pub struct EquivalenceProperties {
@@ -185,6 +184,7 @@ impl EquivalenceProperties {
         let mut output_ordering = self.oeq_class().output_ordering().unwrap_or_default();
         // Prune out constant expressions
         output_ordering
+            .inner
             .retain(|sort_expr| !const_exprs_contains(constants, &sort_expr.expr));
         (!output_ordering.is_empty()).then_some(output_ordering)
     }
@@ -351,7 +351,7 @@ impl EquivalenceProperties {
             .iter()
             .filter(|ordering| ordering[0].expr.eq(&normalized_expr))
             // First expression after leading ordering
-            .filter_map(|ordering| Some(ordering).zip(ordering.get(1)))
+            .filter_map(|ordering| Some(ordering).zip(ordering.inner.get(1)))
         {
             let leading_ordering = ordering[0].options;
             // Currently, we only handle expressions with a single child.
@@ -378,7 +378,7 @@ impl EquivalenceProperties {
                     // then we can deduce that ordering `[b ASC]` is also valid.
                     // Hence, ordering `[b ASC]` can be added to the state as valid ordering.
                     // (e.g. existing ordering where leading ordering is removed)
-                    new_orderings.push(ordering[1..].to_vec());
+                    new_orderings.push(LexOrdering::new(ordering[1..].to_vec()));
                     break;
                 }
             }
@@ -391,7 +391,7 @@ impl EquivalenceProperties {
     /// Updates the ordering equivalence group within assuming that the table
     /// is re-sorted according to the argument `sort_exprs`. Note that constants
     /// and equivalence classes are unchanged as they are unaffected by a re-sort.
-    pub fn with_reorder(mut self, sort_exprs: Vec<PhysicalSortExpr>) -> Self {
+    pub fn with_reorder(mut self, sort_exprs: LexOrdering) -> Self {
         // TODO: In some cases, existing ordering equivalences may still be valid add this analysis.
         self.oeq_class = OrderingEquivalenceClass::new(vec![sort_exprs]);
         self
@@ -407,13 +407,13 @@ impl EquivalenceProperties {
     /// function would return `vec![a ASC, c ASC]`. Internally, it would first
     /// normalize to `vec![a ASC, c ASC, a ASC]` and end up with the final result
     /// after deduplication.
-    fn normalize_sort_exprs(&self, sort_exprs: LexOrderingRef) -> LexOrdering {
+    fn normalize_sort_exprs(&self, sort_exprs: &LexOrdering) -> LexOrdering {
         // Convert sort expressions to sort requirements:
-        let sort_reqs = PhysicalSortRequirement::from_sort_exprs(sort_exprs.iter());
+        let sort_reqs = LexRequirement::from(sort_exprs.clone());
         // Normalize the requirements:
         let normalized_sort_reqs = self.normalize_sort_requirements(&sort_reqs);
         // Convert sort requirements back to sort expressions:
-        PhysicalSortRequirement::to_sort_exprs(normalized_sort_reqs)
+        LexOrdering::from(normalized_sort_reqs)
     }
 
     /// Normalizes the given sort requirements (i.e. `sort_reqs`) using the
@@ -429,10 +429,7 @@ impl EquivalenceProperties {
     /// function would return `vec![a ASC, c ASC]`. Internally, it would first
     /// normalize to `vec![a ASC, c ASC, a ASC]` and end up with the final result
     /// after deduplication.
-    fn normalize_sort_requirements(
-        &self,
-        sort_reqs: LexRequirementRef,
-    ) -> LexRequirement {
+    fn normalize_sort_requirements(&self, sort_reqs: &LexRequirement) -> LexRequirement {
         let normalized_sort_reqs = self.eq_group.normalize_sort_requirements(sort_reqs);
         let mut constant_exprs = vec![];
         constant_exprs.extend(
@@ -455,15 +452,15 @@ impl EquivalenceProperties {
 
     /// Checks whether the given ordering is satisfied by any of the existing
     /// orderings.
-    pub fn ordering_satisfy(&self, given: LexOrderingRef) -> bool {
+    pub fn ordering_satisfy(&self, given: &LexOrdering) -> bool {
         // Convert the given sort expressions to sort requirements:
-        let sort_requirements = PhysicalSortRequirement::from_sort_exprs(given.iter());
+        let sort_requirements = LexRequirement::from(given.clone());
         self.ordering_satisfy_requirement(&sort_requirements)
     }
 
     /// Checks whether the given sort requirements are satisfied by any of the
     /// existing orderings.
-    pub fn ordering_satisfy_requirement(&self, reqs: LexRequirementRef) -> bool {
+    pub fn ordering_satisfy_requirement(&self, reqs: &LexRequirement) -> bool {
         let mut eq_properties = self.clone();
         // First, standardize the given requirement:
         let normalized_reqs = eq_properties.normalize_sort_requirements(reqs);
@@ -524,8 +521,8 @@ impl EquivalenceProperties {
     /// than the `reference` sort requirements.
     pub fn requirements_compatible(
         &self,
-        given: LexRequirementRef,
-        reference: LexRequirementRef,
+        given: &LexRequirement,
+        reference: &LexRequirement,
     ) -> bool {
         let normalized_given = self.normalize_sort_requirements(given);
         let normalized_reference = self.normalize_sort_requirements(reference);
@@ -547,15 +544,15 @@ impl EquivalenceProperties {
     /// the latter.
     pub fn get_finer_ordering(
         &self,
-        lhs: LexOrderingRef,
-        rhs: LexOrderingRef,
+        lhs: &LexOrdering,
+        rhs: &LexOrdering,
     ) -> Option<LexOrdering> {
         // Convert the given sort expressions to sort requirements:
-        let lhs = PhysicalSortRequirement::from_sort_exprs(lhs);
-        let rhs = PhysicalSortRequirement::from_sort_exprs(rhs);
+        let lhs = LexRequirement::from(lhs.clone());
+        let rhs = LexRequirement::from(rhs.clone());
         let finer = self.get_finer_requirement(&lhs, &rhs);
         // Convert the chosen sort requirements back to sort expressions:
-        finer.map(PhysicalSortRequirement::to_sort_exprs)
+        finer.map(LexOrdering::from)
     }
 
     /// Returns the finer ordering among the requirements `lhs` and `rhs`,
@@ -568,8 +565,8 @@ impl EquivalenceProperties {
     /// is the latter.
     pub fn get_finer_requirement(
         &self,
-        req1: LexRequirementRef,
-        req2: LexRequirementRef,
+        req1: &LexRequirement,
+        req2: &LexRequirement,
     ) -> Option<LexRequirement> {
         let mut lhs = self.normalize_sort_requirements(req1);
         let mut rhs = self.normalize_sort_requirements(req2);
@@ -605,8 +602,8 @@ impl EquivalenceProperties {
     pub fn substitute_ordering_component(
         &self,
         mapping: &ProjectionMapping,
-        sort_expr: &[PhysicalSortExpr],
-    ) -> Result<Vec<Vec<PhysicalSortExpr>>> {
+        sort_expr: &LexOrdering,
+    ) -> Result<Vec<LexOrdering>> {
         let new_orderings = sort_expr
             .iter()
             .map(|sort_expr| {
@@ -616,7 +613,7 @@ impl EquivalenceProperties {
                     .filter(|source| expr_refers(source, &sort_expr.expr))
                     .cloned()
                     .collect();
-                let mut res = vec![sort_expr.clone()];
+                let mut res = LexOrdering::new(vec![sort_expr.clone()]);
                 // TODO: Add one-to-ones analysis for ScalarFunctions.
                 for r_expr in referring_exprs {
                     // we check whether this expression is substitutable or not
@@ -639,7 +636,9 @@ impl EquivalenceProperties {
         // Generate all valid orderings, given substituted expressions.
         let res = new_orderings
             .into_iter()
+            .map(|ordering| ordering.inner)
             .multi_cartesian_product()
+            .map(LexOrdering::new)
             .collect::<Vec<_>>();
         Ok(res)
     }
@@ -836,7 +835,7 @@ impl EquivalenceProperties {
             if prefixes.is_empty() {
                 // If prefix is empty, there is no dependency. Insert
                 // empty ordering:
-                prefixes = vec![vec![]];
+                prefixes = vec![LexOrdering::default()];
             }
             // Append current ordering on top its dependencies:
             for ordering in prefixes.iter_mut() {
@@ -986,7 +985,8 @@ impl EquivalenceProperties {
             // Add new ordered section to the state.
             result.extend(ordered_exprs);
         }
-        result.into_iter().unzip()
+        let (left, right) = result.into_iter().unzip();
+        (LexOrdering::new(left), right)
     }
 
     /// This function determines whether the provided expression is constant
@@ -1076,6 +1076,7 @@ impl EquivalenceProperties {
         let mut new_orderings = vec![];
         for ordering in self.oeq_class.orderings {
             let new_ordering = ordering
+                .inner
                 .into_iter()
                 .map(|mut sort_expr| {
                     sort_expr.expr = with_new_schema(sort_expr.expr, &schema)?;
@@ -1113,7 +1114,7 @@ impl EquivalenceProperties {
 /// order: [[a ASC, b ASC], [a ASC, c ASC]], eq: [[a = b], [a = c]], const: [a = 1]
 /// ```
 impl Display for EquivalenceProperties {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if self.eq_group.is_empty()
             && self.oeq_class.is_empty()
             && self.constants.is_empty()
@@ -1313,7 +1314,7 @@ fn construct_prefix_orderings(
 /// Generates all possible orderings where dependencies are satisfied for the
 /// current projection expression.
 ///
-/// # Examaple
+/// # Example
 ///  If `dependences` is `a + b ASC` and the dependency map holds dependencies
 ///  * `a ASC` --> `[c ASC]`
 ///  * `b ASC` --> `[d DESC]`,
@@ -1348,7 +1349,7 @@ fn generate_dependency_orderings(
     // No dependency, dependent is a leading ordering.
     if relevant_prefixes.is_empty() {
         // Return an empty ordering:
-        return vec![vec![]];
+        return vec![LexOrdering::default()];
     }
 
     relevant_prefixes
@@ -1358,7 +1359,12 @@ fn generate_dependency_orderings(
             prefix_orderings
                 .iter()
                 .permutations(prefix_orderings.len())
-                .map(|prefixes| prefixes.into_iter().flatten().cloned().collect())
+                .map(|prefixes| {
+                    prefixes
+                        .into_iter()
+                        .flat_map(|ordering| ordering.inner.clone())
+                        .collect()
+                })
                 .collect::<Vec<_>>()
         })
         .collect()
@@ -1651,7 +1657,7 @@ impl<'a> DependencyEnumerator<'a> {
         // An empty dependency means the referred_sort_expr represents a global ordering.
         // Return its projected version, which is the target_expression.
         if node.dependencies.is_empty() {
-            return vec![vec![target_sort_expr.clone()]];
+            return vec![LexOrdering::new(vec![target_sort_expr.clone()])];
         };
 
         node.dependencies
@@ -1961,7 +1967,7 @@ impl UnionEquivalentOrderingBuilder {
     ) -> AddedOrdering {
         if ordering.is_empty() {
             AddedOrdering::Yes
-        } else if constants.is_empty() && properties.ordering_satisfy(&ordering) {
+        } else if constants.is_empty() && properties.ordering_satisfy(ordering.as_ref()) {
             // If the ordering satisfies the target properties, no need to
             // augment it with constants.
             self.orderings.push(ordering);
@@ -2002,7 +2008,7 @@ impl UnionEquivalentOrderingBuilder {
                 &properties.constants,
             ) {
                 if !augmented_ordering.is_empty() {
-                    assert!(properties.ordering_satisfy(&augmented_ordering));
+                    assert!(properties.ordering_satisfy(augmented_ordering.as_ref()));
                     self.orderings.push(augmented_ordering);
                 }
             }
@@ -2022,9 +2028,9 @@ impl UnionEquivalentOrderingBuilder {
         existing_ordering: &LexOrdering,
         existing_constants: &[ConstExpr],
     ) -> Option<LexOrdering> {
-        let mut augmented_ordering = vec![];
-        let mut sort_expr_iter = ordering.iter().peekable();
-        let mut existing_sort_expr_iter = existing_ordering.iter().peekable();
+        let mut augmented_ordering = LexOrdering::default();
+        let mut sort_expr_iter = ordering.inner.iter().peekable();
+        let mut existing_sort_expr_iter = existing_ordering.inner.iter().peekable();
 
         // walk in parallel down the two orderings, trying to match them up
         while sort_expr_iter.peek().is_some() || existing_sort_expr_iter.peek().is_some()
@@ -2170,20 +2176,20 @@ mod tests {
 
         let mut input_properties = EquivalenceProperties::new(Arc::clone(&input_schema));
         // add equivalent ordering [a, b, c, d]
-        input_properties.add_new_ordering(vec![
+        input_properties.add_new_ordering(LexOrdering::new(vec![
             parse_sort_expr("a", &input_schema),
             parse_sort_expr("b", &input_schema),
             parse_sort_expr("c", &input_schema),
             parse_sort_expr("d", &input_schema),
-        ]);
+        ]));
 
         // add equivalent ordering [a, c, b, d]
-        input_properties.add_new_ordering(vec![
+        input_properties.add_new_ordering(LexOrdering::new(vec![
             parse_sort_expr("a", &input_schema),
             parse_sort_expr("c", &input_schema),
             parse_sort_expr("b", &input_schema), // NB b and c are swapped
             parse_sort_expr("d", &input_schema),
-        ]);
+        ]));
 
         // simply project all the columns in order
         let proj_exprs = vec![
@@ -2197,7 +2203,7 @@ mod tests {
 
         assert_eq!(
             out_properties.to_string(),
-            "order: [[a@0 ASC,c@2 ASC,b@1 ASC,d@3 ASC], [a@0 ASC,b@1 ASC,c@2 ASC,d@3 ASC]]"
+            "order: [[a@0 ASC, c@2 ASC, b@1 ASC, d@3 ASC], [a@0 ASC, b@1 ASC, c@2 ASC, d@3 ASC]]"
         );
 
         Ok(())
@@ -2403,27 +2409,27 @@ mod tests {
 
         eq_properties.add_equal_conditions(&col_a_expr, &col_c_expr)?;
         let others = vec![
-            vec![PhysicalSortExpr {
+            LexOrdering::new(vec![PhysicalSortExpr {
                 expr: Arc::clone(&col_b_expr),
                 options: sort_options,
-            }],
-            vec![PhysicalSortExpr {
+            }]),
+            LexOrdering::new(vec![PhysicalSortExpr {
                 expr: Arc::clone(&col_c_expr),
                 options: sort_options,
-            }],
+            }]),
         ];
         eq_properties.add_new_orderings(others);
 
         let mut expected_eqs = EquivalenceProperties::new(Arc::new(schema));
         expected_eqs.add_new_orderings([
-            vec![PhysicalSortExpr {
+            LexOrdering::new(vec![PhysicalSortExpr {
                 expr: Arc::clone(&col_b_expr),
                 options: sort_options,
-            }],
-            vec![PhysicalSortExpr {
+            }]),
+            LexOrdering::new(vec![PhysicalSortExpr {
                 expr: Arc::clone(&col_c_expr),
                 options: sort_options,
-            }],
+            }]),
         ]);
 
         let oeq_class = eq_properties.oeq_class().clone();
@@ -2446,7 +2452,7 @@ mod tests {
         let col_b = &col("b", &schema)?;
         let required_columns = [Arc::clone(col_b), Arc::clone(col_a)];
         let mut eq_properties = EquivalenceProperties::new(Arc::new(schema));
-        eq_properties.add_new_orderings([vec![
+        eq_properties.add_new_orderings([LexOrdering::new(vec![
             PhysicalSortExpr {
                 expr: Arc::new(Column::new("b", 1)),
                 options: sort_options_not,
@@ -2455,12 +2461,12 @@ mod tests {
                 expr: Arc::new(Column::new("a", 0)),
                 options: sort_options,
             },
-        ]]);
+        ])]);
         let (result, idxs) = eq_properties.find_longest_permutation(&required_columns);
         assert_eq!(idxs, vec![0, 1]);
         assert_eq!(
             result,
-            vec![
+            LexOrdering::new(vec![
                 PhysicalSortExpr {
                     expr: Arc::clone(col_b),
                     options: sort_options_not
@@ -2469,7 +2475,7 @@ mod tests {
                     expr: Arc::clone(col_a),
                     options: sort_options
                 }
-            ]
+            ])
         );
 
         let schema = Schema::new(vec![
@@ -2482,11 +2488,11 @@ mod tests {
         let required_columns = [Arc::clone(col_b), Arc::clone(col_a)];
         let mut eq_properties = EquivalenceProperties::new(Arc::new(schema));
         eq_properties.add_new_orderings([
-            vec![PhysicalSortExpr {
+            LexOrdering::new(vec![PhysicalSortExpr {
                 expr: Arc::new(Column::new("c", 2)),
                 options: sort_options,
-            }],
-            vec![
+            }]),
+            LexOrdering::new(vec![
                 PhysicalSortExpr {
                     expr: Arc::new(Column::new("b", 1)),
                     options: sort_options_not,
@@ -2495,13 +2501,13 @@ mod tests {
                     expr: Arc::new(Column::new("a", 0)),
                     options: sort_options,
                 },
-            ],
+            ]),
         ]);
         let (result, idxs) = eq_properties.find_longest_permutation(&required_columns);
         assert_eq!(idxs, vec![0, 1]);
         assert_eq!(
             result,
-            vec![
+            LexOrdering::new(vec![
                 PhysicalSortExpr {
                     expr: Arc::clone(col_b),
                     options: sort_options_not
@@ -2510,7 +2516,7 @@ mod tests {
                     expr: Arc::clone(col_a),
                     options: sort_options
                 }
-            ]
+            ])
         );
 
         let required_columns = [
@@ -2525,7 +2531,7 @@ mod tests {
         let mut eq_properties = EquivalenceProperties::new(Arc::new(schema));
 
         // not satisfied orders
-        eq_properties.add_new_orderings([vec![
+        eq_properties.add_new_orderings([LexOrdering::new(vec![
             PhysicalSortExpr {
                 expr: Arc::new(Column::new("b", 1)),
                 options: sort_options_not,
@@ -2538,7 +2544,7 @@ mod tests {
                 expr: Arc::new(Column::new("a", 0)),
                 options: sort_options,
             },
-        ]]);
+        ])]);
         let (_, idxs) = eq_properties.find_longest_permutation(&required_columns);
         assert_eq!(idxs, vec![0]);
 
@@ -2567,14 +2573,14 @@ mod tests {
         eq_properties.add_equal_conditions(col_b, col_a)?;
         // [b ASC], [d ASC]
         eq_properties.add_new_orderings(vec![
-            vec![PhysicalSortExpr {
+            LexOrdering::new(vec![PhysicalSortExpr {
                 expr: Arc::clone(col_b),
                 options: option_asc,
-            }],
-            vec![PhysicalSortExpr {
+            }]),
+            LexOrdering::new(vec![PhysicalSortExpr {
                 expr: Arc::clone(col_d),
                 options: option_asc,
-            }],
+            }]),
         ]);
 
         let test_cases = vec![
@@ -2605,7 +2611,7 @@ mod tests {
             let leading_orderings = eq_properties
                 .oeq_class()
                 .iter()
-                .flat_map(|ordering| ordering.first().cloned())
+                .flat_map(|ordering| ordering.inner.first().cloned())
                 .collect::<Vec<_>>();
             let expr_props = eq_properties.get_expr_properties(Arc::clone(&expr));
             let err_msg = format!(
@@ -2649,7 +2655,7 @@ mod tests {
             nulls_first: true,
         };
         // [d ASC, h DESC] also satisfies schema.
-        eq_properties.add_new_orderings([vec![
+        eq_properties.add_new_orderings([LexOrdering::new(vec![
             PhysicalSortExpr {
                 expr: Arc::clone(col_d),
                 options: option_asc,
@@ -2658,7 +2664,7 @@ mod tests {
                 expr: Arc::clone(col_h),
                 options: option_desc,
             },
-        ]]);
+        ])]);
         let test_cases = vec![
             // TEST CASE 1
             (vec![col_a], vec![(col_a, option_asc)]),
@@ -2940,7 +2946,7 @@ mod tests {
             Field::new("c", DataType::Timestamp(TimeUnit::Nanosecond, None), true),
         ]));
         let base_properties = EquivalenceProperties::new(Arc::clone(&schema))
-            .with_reorder(
+            .with_reorder(LexOrdering::new(
                 ["a", "b", "c"]
                     .into_iter()
                     .map(|c| {
@@ -2953,7 +2959,7 @@ mod tests {
                         })
                     })
                     .collect::<Result<Vec<_>>>()?,
-            );
+            ));
 
         struct TestCase {
             name: &'static str,
@@ -3042,10 +3048,10 @@ mod tests {
                             options: SortOptions::default(),
                         })
                     })
-                    .collect::<Result<Vec<_>>>()?;
+                    .collect::<Result<LexOrdering>>()?;
 
                 assert_eq!(
-                    properties.ordering_satisfy(&sort),
+                    properties.ordering_satisfy(sort.as_ref()),
                     case.should_satisfy_ordering,
                     "failed test '{}'",
                     case.name
@@ -3564,7 +3570,7 @@ mod tests {
                     ordering
                         .iter()
                         .map(|name| parse_sort_expr(name, schema))
-                        .collect::<Vec<_>>()
+                        .collect::<LexOrdering>()
                 })
                 .collect::<Vec<_>>();
 

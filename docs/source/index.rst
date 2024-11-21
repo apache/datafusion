@@ -103,6 +103,7 @@ To get started, see
 
    user-guide/introduction
    user-guide/example-usage
+   user-guide/concepts-readings-events
    user-guide/crate-configuration
    user-guide/cli/index
    user-guide/dataframe
@@ -130,6 +131,7 @@ To get started, see
    library-user-guide/extending-operators
    library-user-guide/profiling
    library-user-guide/query-optimizer
+   library-user-guide/api-health
 .. _toc.contributor-guide:
 
 .. toctree::

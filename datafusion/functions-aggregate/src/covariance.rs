@@ -18,6 +18,7 @@
 //! [`CovarianceSample`]: covariance sample aggregations.
 
 use std::fmt::Debug;
+use std::mem::size_of_val;
 use std::sync::OnceLock;
 
 use arrow::{
@@ -150,8 +151,8 @@ fn get_covar_samp_doc() -> &'static Documentation {
 +-----------------------------------+
 ```"#,
             )
-            .with_standard_argument("expression1", "First")
-            .with_standard_argument("expression2", "Second")
+            .with_standard_argument("expression1", Some("First"))
+            .with_standard_argument("expression2", Some("Second"))
             .build()
             .unwrap()
     })
@@ -248,8 +249,8 @@ fn get_covar_pop_doc() -> &'static Documentation {
 +-----------------------------------+
 ```"#,
             )
-            .with_standard_argument("expression1", "First")
-            .with_standard_argument("expression2", "Second")
+            .with_standard_argument("expression1", Some("First"))
+            .with_standard_argument("expression2", Some("Second"))
             .build()
             .unwrap()
     })
@@ -448,6 +449,6 @@ impl Accumulator for CovarianceAccumulator {
     }
 
     fn size(&self) -> usize {
-        std::mem::size_of_val(self)
+        size_of_val(self)
     }
 }

@@ -101,7 +101,7 @@ Negative numbers return `-1`.
 Zero and positive numbers return `1`."#,
             )
             .with_syntax_example("signum(numeric_expression)")
-            .with_standard_argument("numeric_expression", "Numeric")
+            .with_standard_argument("numeric_expression", Some("Numeric"))
             .build()
             .unwrap()
     })
@@ -155,7 +155,7 @@ mod test {
 
     #[test]
     fn test_signum_f32() {
-        let args = [ColumnarValue::Array(Arc::new(Float32Array::from(vec![
+        let array = Arc::new(Float32Array::from(vec![
             -1.0,
             -0.0,
             0.0,
@@ -165,10 +165,10 @@ mod test {
             f32::NAN,
             f32::INFINITY,
             f32::NEG_INFINITY,
-        ])))];
-
+        ]));
+        let batch_size = array.len();
         let result = SignumFunc::new()
-            .invoke(&args)
+            .invoke_batch(&[ColumnarValue::Array(array)], batch_size)
             .expect("failed to initialize function signum");
 
         match result {
@@ -195,7 +195,7 @@ mod test {
 
     #[test]
     fn test_signum_f64() {
-        let args = [ColumnarValue::Array(Arc::new(Float64Array::from(vec![
+        let array = Arc::new(Float64Array::from(vec![
             -1.0,
             -0.0,
             0.0,
@@ -205,10 +205,10 @@ mod test {
             f64::NAN,
             f64::INFINITY,
             f64::NEG_INFINITY,
-        ])))];
-
+        ]));
+        let batch_size = array.len();
         let result = SignumFunc::new()
-            .invoke(&args)
+            .invoke_batch(&[ColumnarValue::Array(array)], batch_size)
             .expect("failed to initialize function signum");
 
         match result {

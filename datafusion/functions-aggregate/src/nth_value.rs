@@ -20,6 +20,7 @@
 
 use std::any::Any;
 use std::collections::VecDeque;
+use std::mem::{size_of, size_of_val};
 use std::sync::{Arc, OnceLock};
 
 use arrow::array::{new_empty_array, ArrayRef, AsArray, StructArray};
@@ -132,7 +133,7 @@ impl AggregateUDFImpl for NthValueAgg {
             n,
             &data_type,
             &ordering_dtypes,
-            acc_args.ordering_req.to_vec(),
+            acc_args.ordering_req.clone(),
         )
         .map(|acc| Box::new(acc) as _)
     }
@@ -191,7 +192,7 @@ fn get_nth_value_doc() -> &'static Documentation {
 | 2       | 45000  | 45000                   |
 +---------+--------+-------------------------+
 ```"#)
-            .with_standard_argument("expression", "The column or expression to retrieve the nth value from.")
+            .with_argument("expression", "The column or expression to retrieve the nth value from.")
             .with_argument("n", "The position (nth) of the value to retrieve, based on the ordering.")
             .build()
             .unwrap()
@@ -378,25 +379,23 @@ impl Accumulator for NthValueAccumulator {
     }
 
     fn size(&self) -> usize {
-        let mut total = std::mem::size_of_val(self)
-            + ScalarValue::size_of_vec_deque(&self.values)
-            - std::mem::size_of_val(&self.values);
+        let mut total = size_of_val(self) + ScalarValue::size_of_vec_deque(&self.values)
+            - size_of_val(&self.values);
 
         // Add size of the `self.ordering_values`
-        total +=
-            std::mem::size_of::<Vec<ScalarValue>>() * self.ordering_values.capacity();
+        total += size_of::<Vec<ScalarValue>>() * self.ordering_values.capacity();
         for row in &self.ordering_values {
-            total += ScalarValue::size_of_vec(row) - std::mem::size_of_val(row);
+            total += ScalarValue::size_of_vec(row) - size_of_val(row);
         }
 
         // Add size of the `self.datatypes`
-        total += std::mem::size_of::<DataType>() * self.datatypes.capacity();
+        total += size_of::<DataType>() * self.datatypes.capacity();
         for dtype in &self.datatypes {
-            total += dtype.size() - std::mem::size_of_val(dtype);
+            total += dtype.size() - size_of_val(dtype);
         }
 
         // Add size of the `self.ordering_req`
-        total += std::mem::size_of::<PhysicalSortExpr>() * self.ordering_req.capacity();
+        total += size_of::<PhysicalSortExpr>() * self.ordering_req.capacity();
         // TODO: Calculate size of each `PhysicalSortExpr` more accurately.
         total
     }
@@ -404,7 +403,7 @@ impl Accumulator for NthValueAccumulator {
 
 impl NthValueAccumulator {
     fn evaluate_orderings(&self) -> Result<ScalarValue> {
-        let fields = ordering_fields(&self.ordering_req, &self.datatypes[1..]);
+        let fields = ordering_fields(self.ordering_req.as_ref(), &self.datatypes[1..]);
         let struct_field = Fields::from(fields.clone());
 
         let mut column_wise_ordering_values = vec![];

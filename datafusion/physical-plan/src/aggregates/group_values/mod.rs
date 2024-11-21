@@ -18,26 +18,36 @@
 //! [`GroupValues`] trait for storing and interning group keys
 
 use arrow::record_batch::RecordBatch;
+use arrow_array::types::{
+    Date32Type, Date64Type, Time32MillisecondType, Time32SecondType,
+    Time64MicrosecondType, Time64NanosecondType, TimestampMicrosecondType,
+    TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
+};
 use arrow_array::{downcast_primitive, ArrayRef};
+use arrow_schema::TimeUnit;
 use arrow_schema::{DataType, SchemaRef};
-use bytes_view::GroupValuesBytesView;
 use datafusion_common::Result;
 
-pub(crate) mod primitive;
 use datafusion_expr::EmitTo;
-use primitive::GroupValuesPrimitive;
 
-mod column;
+pub(crate) mod multi_group_by;
+
 mod row;
-use column::GroupValuesColumn;
+mod single_group_by;
+use datafusion_physical_expr::binary_map::OutputType;
+use multi_group_by::GroupValuesColumn;
 use row::GroupValuesRows;
 
-mod bytes;
-mod bytes_view;
-use bytes::GroupValuesByes;
-use datafusion_physical_expr::binary_map::OutputType;
+pub(crate) use single_group_by::primitive::HashValue;
 
-mod group_column;
+use crate::aggregates::{
+    group_values::single_group_by::{
+        bytes::GroupValuesByes, bytes_view::GroupValuesBytesView,
+        primitive::GroupValuesPrimitive,
+    },
+    order::GroupOrdering,
+};
+
 mod null_builder;
 
 /// Stores the group values during hash aggregation.
@@ -76,7 +86,7 @@ mod null_builder;
 /// Each distinct group in a hash aggregation is identified by a unique group id
 /// (usize) which is assigned by instances of this trait. Group ids are
 /// continuous without gaps, starting from 0.
-pub trait GroupValues: Send {
+pub(crate) trait GroupValues: Send {
     /// Calculates the group id for each input row of `cols`, assigning new
     /// group ids as necessary.
     ///
@@ -105,7 +115,24 @@ pub trait GroupValues: Send {
 }
 
 /// Return a specialized implementation of [`GroupValues`] for the given schema.
-pub fn new_group_values(schema: SchemaRef) -> Result<Box<dyn GroupValues>> {
+///
+/// [`GroupValues`] implementations choosing logic:
+///
+///   - If group by single column, and type of this column has
+///     the specific [`GroupValues`] implementation, such implementation
+///     will be chosen.
+///   
+///   - If group by multiple columns, and all column types have the specific
+///     [`GroupColumn`] implementations, [`GroupValuesColumn`] will be chosen.
+///
+///   - Otherwise, the general implementation [`GroupValuesRows`] will be chosen.
+///
+/// [`GroupColumn`]:  crate::aggregates::group_values::multi_group_by::GroupColumn
+///
+pub(crate) fn new_group_values(
+    schema: SchemaRef,
+    group_ordering: &GroupOrdering,
+) -> Result<Box<dyn GroupValues>> {
     if schema.fields.len() == 1 {
         let d = schema.fields[0].data_type();
 
@@ -121,6 +148,28 @@ pub fn new_group_values(schema: SchemaRef) -> Result<Box<dyn GroupValues>> {
         }
 
         match d {
+            DataType::Date32 => {
+                downcast_helper!(Date32Type, d);
+            }
+            DataType::Date64 => {
+                downcast_helper!(Date64Type, d);
+            }
+            DataType::Time32(t) => match t {
+                TimeUnit::Second => downcast_helper!(Time32SecondType, d),
+                TimeUnit::Millisecond => downcast_helper!(Time32MillisecondType, d),
+                _ => {}
+            },
+            DataType::Time64(t) => match t {
+                TimeUnit::Microsecond => downcast_helper!(Time64MicrosecondType, d),
+                TimeUnit::Nanosecond => downcast_helper!(Time64NanosecondType, d),
+                _ => {}
+            },
+            DataType::Timestamp(t, _) => match t {
+                TimeUnit::Second => downcast_helper!(TimestampSecondType, d),
+                TimeUnit::Millisecond => downcast_helper!(TimestampMillisecondType, d),
+                TimeUnit::Microsecond => downcast_helper!(TimestampMicrosecondType, d),
+                TimeUnit::Nanosecond => downcast_helper!(TimestampNanosecondType, d),
+            },
             DataType::Utf8 => {
                 return Ok(Box::new(GroupValuesByes::<i32>::new(OutputType::Utf8)));
             }
@@ -143,8 +192,12 @@ pub fn new_group_values(schema: SchemaRef) -> Result<Box<dyn GroupValues>> {
         }
     }
 
-    if GroupValuesColumn::supported_schema(schema.as_ref()) {
-        Ok(Box::new(GroupValuesColumn::try_new(schema)?))
+    if multi_group_by::supported_schema(schema.as_ref()) {
+        if matches!(group_ordering, GroupOrdering::None) {
+            Ok(Box::new(GroupValuesColumn::<false>::try_new(schema)?))
+        } else {
+            Ok(Box::new(GroupValuesColumn::<true>::try_new(schema)?))
+        }
     } else {
         Ok(Box::new(GroupValuesRows::try_new(schema)?))
     }

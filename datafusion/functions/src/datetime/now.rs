@@ -43,7 +43,7 @@ impl Default for NowFunc {
 impl NowFunc {
     pub fn new() -> Self {
         Self {
-            signature: Signature::uniform(0, vec![], Volatility::Stable),
+            signature: Signature::nullary(Volatility::Stable),
             aliases: vec!["current_timestamp".to_string()],
         }
     }

@@ -6,7 +6,7 @@
 // "License"); you may not use this file except in compliance
 // with the License.  You may obtain a copy of the License at
 //
-//http://www.apache.org/licenses/LICENSE-2.0
+//   http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing,
 // software distributed under the License is distributed on an
@@ -119,7 +119,7 @@ pub fn check_plan_sanity(
     plan: Arc<dyn ExecutionPlan>,
     optimizer_options: &OptimizerOptions,
 ) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
-    check_finiteness_requirements(plan.clone(), optimizer_options)?;
+    check_finiteness_requirements(Arc::clone(&plan), optimizer_options)?;
 
     for ((idx, child), sort_req, dist_req) in izip!(
         plan.children().iter().enumerate(),

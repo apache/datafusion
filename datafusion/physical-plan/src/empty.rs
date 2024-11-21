@@ -35,7 +35,7 @@ use datafusion_physical_expr::EquivalenceProperties;
 use log::trace;
 
 /// Execution plan for empty relation with produce_one_row=false
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct EmptyExec {
     /// The schema for the produced row
     schema: SchemaRef,
@@ -173,7 +173,7 @@ mod tests {
         let empty = EmptyExec::new(Arc::clone(&schema));
         assert_eq!(empty.schema(), schema);
 
-        // we should have no results
+        // We should have no results
         let iter = empty.execute(0, task_ctx)?;
         let batches = common::collect(iter).await?;
         assert!(batches.is_empty());

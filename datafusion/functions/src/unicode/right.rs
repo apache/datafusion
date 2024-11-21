@@ -115,7 +115,7 @@ fn get_right_doc() -> &'static Documentation {
 | fusion                             |
 +------------------------------------+
 ```"#)
-            .with_standard_argument("str", "String")
+            .with_standard_argument("str", Some("String"))
             .with_argument("n", "Number of characters to return")
             .with_related_udf("left")
             .build()

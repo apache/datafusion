@@ -85,7 +85,7 @@ fn get_factorial_doc() -> &'static Documentation {
             .with_doc_section(DOC_SECTION_MATH)
             .with_description("Factorial. Returns 1 if value is less than 2.")
             .with_syntax_example("factorial(numeric_expression)")
-            .with_standard_argument("numeric_expression", "Numeric")
+            .with_standard_argument("numeric_expression", Some("Numeric"))
             .build()
             .unwrap()
     })
@@ -94,7 +94,7 @@ fn get_factorial_doc() -> &'static Documentation {
 /// Factorial SQL function
 fn factorial(args: &[ArrayRef]) -> Result<ArrayRef> {
     match args[0].data_type() {
-        DataType::Int64 => {
+        Int64 => {
             let arg = downcast_arg!((&args[0]), "value", Int64Array);
             Ok(arg
                 .iter()

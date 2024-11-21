@@ -5,7 +5,7 @@
 pub struct LogicalPlanNode {
     #[prost(
         oneof = "logical_plan_node::LogicalPlanType",
-        tags = "1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30"
+        tags = "1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32"
     )]
     pub logical_plan_type: ::core::option::Option<logical_plan_node::LogicalPlanType>,
 }
@@ -71,6 +71,10 @@ pub mod logical_plan_node {
         CopyTo(::prost::alloc::boxed::Box<super::CopyToNode>),
         #[prost(message, tag = "30")]
         Unnest(::prost::alloc::boxed::Box<super::UnnestNode>),
+        #[prost(message, tag = "31")]
+        RecursiveQuery(::prost::alloc::boxed::Box<super::RecursiveQueryNode>),
+        #[prost(message, tag = "32")]
+        CteWorkTableScan(super::CteWorkTableScanNode),
     }
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -400,7 +404,7 @@ pub struct UnnestNode {
     #[prost(message, optional, boxed, tag = "1")]
     pub input: ::core::option::Option<::prost::alloc::boxed::Box<LogicalPlanNode>>,
     #[prost(message, repeated, tag = "2")]
-    pub exec_columns: ::prost::alloc::vec::Vec<ColumnUnnestExec>,
+    pub exec_columns: ::prost::alloc::vec::Vec<super::datafusion_common::Column>,
     #[prost(message, repeated, tag = "3")]
     pub list_type_columns: ::prost::alloc::vec::Vec<ColumnUnnestListItem>,
     #[prost(uint64, repeated, tag = "4")]
@@ -432,28 +436,20 @@ pub struct ColumnUnnestListRecursion {
     pub depth: u32,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
-pub struct ColumnUnnestExec {
-    #[prost(message, optional, tag = "1")]
-    pub column: ::core::option::Option<super::datafusion_common::Column>,
-    #[prost(oneof = "column_unnest_exec::UnnestType", tags = "2, 3, 4")]
-    pub unnest_type: ::core::option::Option<column_unnest_exec::UnnestType>,
-}
-/// Nested message and enum types in `ColumnUnnestExec`.
-pub mod column_unnest_exec {
-    #[derive(Clone, PartialEq, ::prost::Oneof)]
-    pub enum UnnestType {
-        #[prost(message, tag = "2")]
-        List(super::ColumnUnnestListRecursions),
-        #[prost(message, tag = "3")]
-        Struct(super::super::datafusion_common::EmptyMessage),
-        #[prost(message, tag = "4")]
-        Inferred(super::super::datafusion_common::EmptyMessage),
-    }
-}
-#[derive(Clone, Copy, PartialEq, ::prost::Message)]
 pub struct UnnestOptions {
     #[prost(bool, tag = "1")]
     pub preserve_nulls: bool,
+    #[prost(message, repeated, tag = "2")]
+    pub recursions: ::prost::alloc::vec::Vec<RecursionUnnestOption>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct RecursionUnnestOption {
+    #[prost(message, optional, tag = "1")]
+    pub output_column: ::core::option::Option<super::datafusion_common::Column>,
+    #[prost(message, optional, tag = "2")]
+    pub input_column: ::core::option::Option<super::datafusion_common::Column>,
+    #[prost(uint32, tag = "3")]
+    pub depth: u32,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct UnionNode {
@@ -538,7 +534,7 @@ pub mod logical_expr_node {
         TryCast(::prost::alloc::boxed::Box<super::TryCastNode>),
         /// window expressions
         #[prost(message, tag = "18")]
-        WindowExpr(::prost::alloc::boxed::Box<super::WindowExprNode>),
+        WindowExpr(super::WindowExprNode),
         /// AggregateUDF expressions
         #[prost(message, tag = "19")]
         AggregateUdfExpr(::prost::alloc::boxed::Box<super::AggregateUdfExprNode>),
@@ -735,8 +731,8 @@ pub struct ScalarUdfExprNode {
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct WindowExprNode {
-    #[prost(message, optional, boxed, tag = "4")]
-    pub expr: ::core::option::Option<::prost::alloc::boxed::Box<LogicalExprNode>>,
+    #[prost(message, repeated, tag = "4")]
+    pub exprs: ::prost::alloc::vec::Vec<LogicalExprNode>,
     #[prost(message, repeated, tag = "5")]
     pub partition_by: ::prost::alloc::vec::Vec<LogicalExprNode>,
     #[prost(message, repeated, tag = "6")]
@@ -746,15 +742,14 @@ pub struct WindowExprNode {
     pub window_frame: ::core::option::Option<WindowFrame>,
     #[prost(bytes = "vec", optional, tag = "10")]
     pub fun_definition: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
-    #[prost(oneof = "window_expr_node::WindowFunction", tags = "2, 3, 9")]
+    #[prost(oneof = "window_expr_node::WindowFunction", tags = "3, 9")]
     pub window_function: ::core::option::Option<window_expr_node::WindowFunction>,
 }
 /// Nested message and enum types in `WindowExprNode`.
 pub mod window_expr_node {
     #[derive(Clone, PartialEq, ::prost::Oneof)]
     pub enum WindowFunction {
-        #[prost(enumeration = "super::BuiltInWindowFunction", tag = "2")]
-        BuiltInFunction(i32),
+        /// BuiltInWindowFunction built_in_function = 2;
         #[prost(string, tag = "3")]
         Udaf(::prost::alloc::string::String),
         #[prost(string, tag = "9")]
@@ -896,7 +891,7 @@ pub struct OptimizedPhysicalPlanType {
 pub struct PlanType {
     #[prost(
         oneof = "plan_type::PlanTypeEnum",
-        tags = "1, 7, 8, 2, 3, 4, 9, 11, 5, 6, 10, 12"
+        tags = "1, 7, 8, 2, 3, 4, 9, 11, 5, 6, 10, 12, 13"
     )]
     pub plan_type_enum: ::core::option::Option<plan_type::PlanTypeEnum>,
 }
@@ -928,6 +923,8 @@ pub mod plan_type {
         FinalPhysicalPlanWithStats(super::super::datafusion_common::EmptyMessage),
         #[prost(message, tag = "12")]
         FinalPhysicalPlanWithSchema(super::super::datafusion_common::EmptyMessage),
+        #[prost(message, tag = "13")]
+        PhysicalPlanError(super::super::datafusion_common::EmptyMessage),
     }
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1269,7 +1266,7 @@ pub struct PhysicalWindowExprNode {
     pub name: ::prost::alloc::string::String,
     #[prost(bytes = "vec", optional, tag = "9")]
     pub fun_definition: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
-    #[prost(oneof = "physical_window_expr_node::WindowFunction", tags = "2, 3")]
+    #[prost(oneof = "physical_window_expr_node::WindowFunction", tags = "3, 10")]
     pub window_function: ::core::option::Option<
         physical_window_expr_node::WindowFunction,
     >,
@@ -1278,10 +1275,11 @@ pub struct PhysicalWindowExprNode {
 pub mod physical_window_expr_node {
     #[derive(Clone, PartialEq, ::prost::Oneof)]
     pub enum WindowFunction {
-        #[prost(enumeration = "super::BuiltInWindowFunction", tag = "2")]
-        BuiltInFunction(i32),
+        /// BuiltInWindowFunction built_in_function = 2;
         #[prost(string, tag = "3")]
         UserDefinedAggrFunction(::prost::alloc::string::String),
+        #[prost(string, tag = "10")]
+        UserDefinedWindowFunction(::prost::alloc::string::String),
     }
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1817,54 +1815,25 @@ pub struct PartitionStats {
     #[prost(message, repeated, tag = "4")]
     pub column_stats: ::prost::alloc::vec::Vec<super::datafusion_common::ColumnStats>,
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
-#[repr(i32)]
-pub enum BuiltInWindowFunction {
-    /// <https://protobuf.dev/programming-guides/dos-donts/#unspecified-enum>
-    Unspecified = 0,
-    /// ROW_NUMBER = 0;
-    ///   RANK = 1;
-    ///   DENSE_RANK = 2;
-    ///   PERCENT_RANK = 3;
-    CumeDist = 4,
-    Ntile = 5,
-    Lag = 6,
-    Lead = 7,
-    FirstValue = 8,
-    LastValue = 9,
-    NthValue = 10,
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct RecursiveQueryNode {
+    #[prost(string, tag = "1")]
+    pub name: ::prost::alloc::string::String,
+    #[prost(message, optional, boxed, tag = "2")]
+    pub static_term: ::core::option::Option<::prost::alloc::boxed::Box<LogicalPlanNode>>,
+    #[prost(message, optional, boxed, tag = "3")]
+    pub recursive_term: ::core::option::Option<
+        ::prost::alloc::boxed::Box<LogicalPlanNode>,
+    >,
+    #[prost(bool, tag = "4")]
+    pub is_distinct: bool,
 }
-impl BuiltInWindowFunction {
-    /// String value of the enum field names used in the ProtoBuf definition.
-    ///
-    /// The values are not transformed in any way and thus are considered stable
-    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
-    pub fn as_str_name(&self) -> &'static str {
-        match self {
-            Self::Unspecified => "UNSPECIFIED",
-            Self::CumeDist => "CUME_DIST",
-            Self::Ntile => "NTILE",
-            Self::Lag => "LAG",
-            Self::Lead => "LEAD",
-            Self::FirstValue => "FIRST_VALUE",
-            Self::LastValue => "LAST_VALUE",
-            Self::NthValue => "NTH_VALUE",
-        }
-    }
-    /// Creates an enum from field names used in the ProtoBuf definition.
-    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
-        match value {
-            "UNSPECIFIED" => Some(Self::Unspecified),
-            "CUME_DIST" => Some(Self::CumeDist),
-            "NTILE" => Some(Self::Ntile),
-            "LAG" => Some(Self::Lag),
-            "LEAD" => Some(Self::Lead),
-            "FIRST_VALUE" => Some(Self::FirstValue),
-            "LAST_VALUE" => Some(Self::LastValue),
-            "NTH_VALUE" => Some(Self::NthValue),
-            _ => None,
-        }
-    }
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct CteWorkTableScanNode {
+    #[prost(string, tag = "1")]
+    pub name: ::prost::alloc::string::String,
+    #[prost(message, optional, tag = "2")]
+    pub schema: ::core::option::Option<super::datafusion_common::Schema>,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]

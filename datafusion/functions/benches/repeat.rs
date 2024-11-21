@@ -71,7 +71,12 @@ fn criterion_benchmark(c: &mut Criterion) {
                 "repeat_string_view [size={}, repeat_times={}]",
                 size, repeat_times
             ),
-            |b| b.iter(|| black_box(repeat.invoke(&args))),
+            |b| {
+                b.iter(|| {
+                    #[allow(deprecated)] // TODO use invoke_batch
+                    black_box(repeat.invoke(&args))
+                })
+            },
         );
 
         let args = create_args::<i32>(size, 32, repeat_times, false);
@@ -80,7 +85,12 @@ fn criterion_benchmark(c: &mut Criterion) {
                 "repeat_string [size={}, repeat_times={}]",
                 size, repeat_times
             ),
-            |b| b.iter(|| black_box(repeat.invoke(&args))),
+            |b| {
+                b.iter(|| {
+                    #[allow(deprecated)] // TODO use invoke_batch
+                    black_box(repeat.invoke(&args))
+                })
+            },
         );
 
         let args = create_args::<i64>(size, 32, repeat_times, false);
@@ -89,7 +99,12 @@ fn criterion_benchmark(c: &mut Criterion) {
                 "repeat_large_string [size={}, repeat_times={}]",
                 size, repeat_times
             ),
-            |b| b.iter(|| black_box(repeat.invoke(&args))),
+            |b| {
+                b.iter(|| {
+                    #[allow(deprecated)] // TODO use invoke_batch
+                    black_box(repeat.invoke(&args))
+                })
+            },
         );
 
         group.finish();
@@ -107,7 +122,12 @@ fn criterion_benchmark(c: &mut Criterion) {
                 "repeat_string_view [size={}, repeat_times={}]",
                 size, repeat_times
             ),
-            |b| b.iter(|| black_box(repeat.invoke(&args))),
+            |b| {
+                b.iter(|| {
+                    #[allow(deprecated)] // TODO use invoke_batch
+                    black_box(repeat.invoke(&args))
+                })
+            },
         );
 
         let args = create_args::<i32>(size, 32, repeat_times, false);
@@ -116,7 +136,12 @@ fn criterion_benchmark(c: &mut Criterion) {
                 "repeat_string [size={}, repeat_times={}]",
                 size, repeat_times
             ),
-            |b| b.iter(|| black_box(repeat.invoke(&args))),
+            |b| {
+                b.iter(|| {
+                    #[allow(deprecated)] // TODO use invoke_batch
+                    black_box(repeat.invoke(&args))
+                })
+            },
         );
 
         let args = create_args::<i64>(size, 32, repeat_times, false);
@@ -125,7 +150,12 @@ fn criterion_benchmark(c: &mut Criterion) {
                 "repeat_large_string [size={}, repeat_times={}]",
                 size, repeat_times
             ),
-            |b| b.iter(|| black_box(repeat.invoke(&args))),
+            |b| {
+                b.iter(|| {
+                    #[allow(deprecated)] // TODO use invoke_batch
+                    black_box(repeat.invoke(&args))
+                })
+            },
         );
 
         group.finish();

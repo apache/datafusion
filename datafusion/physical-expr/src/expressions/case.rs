@@ -16,11 +16,10 @@
 // under the License.
 
 use std::borrow::Cow;
-use std::hash::{Hash, Hasher};
+use std::hash::Hash;
 use std::{any::Any, sync::Arc};
 
 use crate::expressions::try_cast;
-use crate::physical_expr::down_cast_any_ref;
 use crate::PhysicalExpr;
 
 use arrow::array::*;
@@ -37,7 +36,7 @@ use itertools::Itertools;
 
 type WhenThen = (Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>);
 
-#[derive(Debug, Hash)]
+#[derive(Debug, Hash, PartialEq, Eq)]
 enum EvalMethod {
     /// CASE WHEN condition THEN result
     ///      [WHEN ...]
@@ -80,7 +79,7 @@ enum EvalMethod {
 ///     [WHEN ...]
 ///     [ELSE result]
 /// END
-#[derive(Debug, Hash)]
+#[derive(Debug, Hash, PartialEq, Eq)]
 pub struct CaseExpr {
     /// Optional base expression that can be compared to literal values in the "when" expressions
     expr: Option<Arc<dyn PhysicalExpr>>,
@@ -505,39 +504,6 @@ impl PhysicalExpr for CaseExpr {
                 else_expr.cloned(),
             )?))
         }
-    }
-
-    fn dyn_hash(&self, state: &mut dyn Hasher) {
-        let mut s = state;
-        self.hash(&mut s);
-    }
-}
-
-impl PartialEq<dyn Any> for CaseExpr {
-    fn eq(&self, other: &dyn Any) -> bool {
-        down_cast_any_ref(other)
-            .downcast_ref::<Self>()
-            .map(|x| {
-                let expr_eq = match (&self.expr, &x.expr) {
-                    (Some(expr1), Some(expr2)) => expr1.eq(expr2),
-                    (None, None) => true,
-                    _ => false,
-                };
-                let else_expr_eq = match (&self.else_expr, &x.else_expr) {
-                    (Some(expr1), Some(expr2)) => expr1.eq(expr2),
-                    (None, None) => true,
-                    _ => false,
-                };
-                expr_eq
-                    && else_expr_eq
-                    && self.when_then_expr.len() == x.when_then_expr.len()
-                    && self.when_then_expr.iter().zip(x.when_then_expr.iter()).all(
-                        |((when1, then1), (when2, then2))| {
-                            when1.eq(when2) && then1.eq(then2)
-                        },
-                    )
-            })
-            .unwrap_or(false)
     }
 }
 
@@ -1096,16 +1062,15 @@ mod tests {
 
         let expr2 = Arc::clone(&expr)
             .transform(|e| {
-                let transformed =
-                    match e.as_any().downcast_ref::<crate::expressions::Literal>() {
-                        Some(lit_value) => match lit_value.value() {
-                            ScalarValue::Utf8(Some(str_value)) => {
-                                Some(lit(str_value.to_uppercase()))
-                            }
-                            _ => None,
-                        },
+                let transformed = match e.as_any().downcast_ref::<Literal>() {
+                    Some(lit_value) => match lit_value.value() {
+                        ScalarValue::Utf8(Some(str_value)) => {
+                            Some(lit(str_value.to_uppercase()))
+                        }
                         _ => None,
-                    };
+                    },
+                    _ => None,
+                };
                 Ok(if let Some(transformed) = transformed {
                     Transformed::yes(transformed)
                 } else {
@@ -1117,16 +1082,15 @@ mod tests {
 
         let expr3 = Arc::clone(&expr)
             .transform_down(|e| {
-                let transformed =
-                    match e.as_any().downcast_ref::<crate::expressions::Literal>() {
-                        Some(lit_value) => match lit_value.value() {
-                            ScalarValue::Utf8(Some(str_value)) => {
-                                Some(lit(str_value.to_uppercase()))
-                            }
-                            _ => None,
-                        },
+                let transformed = match e.as_any().downcast_ref::<Literal>() {
+                    Some(lit_value) => match lit_value.value() {
+                        ScalarValue::Utf8(Some(str_value)) => {
+                            Some(lit(str_value.to_uppercase()))
+                        }
                         _ => None,
-                    };
+                    },
+                    _ => None,
+                };
                 Ok(if let Some(transformed) = transformed {
                     Transformed::yes(transformed)
                 } else {

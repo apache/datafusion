@@ -164,7 +164,7 @@ impl ScalarUDFImpl for ConcatWsFunc {
                     ColumnarValueRef::NonNullableArray(string_array)
                 }
             }
-            _ => unreachable!(),
+            _ => unreachable!("concat ws"),
         };
 
         let mut columns = Vec::with_capacity(args.len() - 1);
@@ -295,11 +295,8 @@ fn get_concat_ws_doc() -> &'static Documentation {
                 "separator",
                 "Separator to insert between concatenated strings.",
             )
-            .with_standard_argument("str", "String")
-            .with_standard_argument(
-                "str_n",
-                "Subsequent string expressions to concatenate.",
-            )
+            .with_standard_argument("str", Some("String"))
+            .with_argument("str_n", "Subsequent string expressions to concatenate.")
             .with_related_udf("concat")
             .build()
             .unwrap()
@@ -470,7 +467,7 @@ mod tests {
         ])));
         let args = &[c0, c1, c2];
 
-        let result = ConcatWsFunc::new().invoke(args)?;
+        let result = ConcatWsFunc::new().invoke_batch(args, 3)?;
         let expected =
             Arc::new(StringArray::from(vec!["foo,x", "bar", "baz,z"])) as ArrayRef;
         match &result {
@@ -495,7 +492,7 @@ mod tests {
         ])));
         let args = &[c0, c1, c2];
 
-        let result = ConcatWsFunc::new().invoke(args)?;
+        let result = ConcatWsFunc::new().invoke_batch(args, 3)?;
         let expected =
             Arc::new(StringArray::from(vec![Some("foo,x"), None, Some("baz+z")]))
                 as ArrayRef;

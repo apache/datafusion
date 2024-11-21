@@ -35,7 +35,7 @@ use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::datasource::physical_plan::{FileScanConfig, FileSinkConfig};
 use datafusion::execution::FunctionRegistry;
 use datafusion::logical_expr::WindowFunctionDefinition;
-use datafusion::physical_expr::{PhysicalSortExpr, ScalarFunctionExpr};
+use datafusion::physical_expr::{LexOrdering, PhysicalSortExpr, ScalarFunctionExpr};
 use datafusion::physical_plan::expressions::{
     in_list, BinaryExpr, CaseExpr, CastExpr, Column, IsNotNullExpr, IsNullExpr, LikeExpr,
     Literal, NegativeExpr, NotExpr, TryCastExpr,
@@ -99,13 +99,13 @@ pub fn parse_physical_sort_exprs(
     registry: &dyn FunctionRegistry,
     input_schema: &Schema,
     codec: &dyn PhysicalExtensionCodec,
-) -> Result<Vec<PhysicalSortExpr>> {
+) -> Result<LexOrdering> {
     proto
         .iter()
         .map(|sort_expr| {
             parse_physical_sort_expr(sort_expr, registry, input_schema, codec)
         })
-        .collect::<Result<Vec<_>>>()
+        .collect::<Result<LexOrdering>>()
 }
 
 /// Parses a physical window expr from a protobuf.
@@ -146,19 +146,16 @@ pub fn parse_physical_window_expr(
 
     let fun = if let Some(window_func) = proto.window_function.as_ref() {
         match window_func {
-            protobuf::physical_window_expr_node::WindowFunction::BuiltInFunction(n) => {
-                let f = protobuf::BuiltInWindowFunction::try_from(*n).map_err(|_| {
-                    proto_error(format!(
-                        "Received an unknown window builtin function: {n}"
-                    ))
-                })?;
-
-                WindowFunctionDefinition::BuiltInWindowFunction(f.into())
-            }
             protobuf::physical_window_expr_node::WindowFunction::UserDefinedAggrFunction(udaf_name) => {
                 WindowFunctionDefinition::AggregateUDF(match &proto.fun_definition {
                     Some(buf) => codec.try_decode_udaf(udaf_name, buf)?,
                     None => registry.udaf(udaf_name)?
+                })
+            }
+            protobuf::physical_window_expr_node::WindowFunction::UserDefinedWindowFunction(udwf_name) => {
+                WindowFunctionDefinition::WindowUDF(match &proto.fun_definition {
+                    Some(buf) => codec.try_decode_udwf(udwf_name, buf)?,
+                    None => registry.udwf(udwf_name)?
                 })
             }
         }
@@ -175,7 +172,7 @@ pub fn parse_physical_window_expr(
         name,
         &window_node_expr,
         &partition_by,
-        &order_by,
+        order_by.as_ref(),
         Arc::new(window_frame),
         &extended_schema,
         false,
@@ -559,6 +556,7 @@ impl TryFrom<&protobuf::PartitionedFile> for PartitionedFile {
             range: val.range.as_ref().map(|v| v.try_into()).transpose()?,
             statistics: val.statistics.as_ref().map(|v| v.try_into()).transpose()?,
             extensions: None,
+            metadata_size_hint: None,
         })
     }
 }

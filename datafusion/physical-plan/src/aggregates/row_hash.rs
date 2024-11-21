@@ -48,13 +48,13 @@ use datafusion_expr::{EmitTo, GroupsAccumulator};
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::{GroupsAccumulatorAdapter, PhysicalSortExpr};
 
+use super::order::GroupOrdering;
+use super::AggregateExec;
 use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
+use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use futures::ready;
 use futures::stream::{Stream, StreamExt};
 use log::debug;
-
-use super::order::GroupOrdering;
-use super::AggregateExec;
 
 #[derive(Debug, Clone)]
 /// This object tracks the aggregation phase (input/output)
@@ -80,7 +80,7 @@ struct SpillState {
     // the execution.
     // ========================================================================
     /// Sorting expression for spilling batches
-    spill_expr: Vec<PhysicalSortExpr>,
+    spill_expr: LexOrdering,
 
     /// Schema for spilling batches
     spill_schema: SchemaRef,
@@ -511,10 +511,10 @@ impl GroupedHashAggregateStream {
         let group_ordering = GroupOrdering::try_new(
             &group_schema,
             &agg.input_order_mode,
-            ordering.as_slice(),
+            ordering.as_ref(),
         )?;
 
-        let group_values = new_group_values(group_schema)?;
+        let group_values = new_group_values(group_schema, &group_ordering)?;
         timer.done();
 
         let exec_state = ExecutionState::ReadingInput;
@@ -591,7 +591,7 @@ impl GroupedHashAggregateStream {
 /// that is supported by the aggregate, or a
 /// [`GroupsAccumulatorAdapter`] if not.
 pub(crate) fn create_group_accumulator(
-    agg_expr: &AggregateFunctionExpr,
+    agg_expr: &Arc<AggregateFunctionExpr>,
 ) -> Result<Box<dyn GroupsAccumulator>> {
     if agg_expr.groups_accumulator_supported() {
         agg_expr.create_groups_accumulator()
@@ -601,7 +601,7 @@ pub(crate) fn create_group_accumulator(
             "Creating GroupsAccumulatorAdapter for {}: {agg_expr:?}",
             agg_expr.name()
         );
-        let agg_expr_captured = agg_expr.clone();
+        let agg_expr_captured = Arc::clone(agg_expr);
         let factory = move || agg_expr_captured.create_accumulator();
         Ok(Box::new(GroupsAccumulatorAdapter::new(factory)))
     }
@@ -859,14 +859,13 @@ impl GroupedHashAggregateStream {
                         )?;
                     }
                     _ => {
+                        if opt_filter.is_some() {
+                            return internal_err!("aggregate filter should be applied in partial stage, there should be no filter in final stage");
+                        }
+
                         // if aggregation is over intermediate states,
                         // use merge
-                        acc.merge_batch(
-                            values,
-                            group_indices,
-                            opt_filter,
-                            total_num_groups,
-                        )?;
+                        acc.merge_batch(values, group_indices, None, total_num_groups)?;
                     }
                 }
             }
@@ -965,7 +964,7 @@ impl GroupedHashAggregateStream {
     /// Emit all rows, sort them, and store them on disk.
     fn spill(&mut self) -> Result<()> {
         let emit = self.emit(EmitTo::All, true)?;
-        let sorted = sort_batch(&emit, &self.spill_state.spill_expr, None)?;
+        let sorted = sort_batch(&emit, self.spill_state.spill_expr.as_ref(), None)?;
         let spillfile = self.runtime.disk_manager.create_tmp_file("HashAggSpill")?;
         // TODO: slice large `sorted` and write to multiple files in parallel
         spill_record_batch_by_size(
@@ -1030,7 +1029,7 @@ impl GroupedHashAggregateStream {
         streams.push(Box::pin(RecordBatchStreamAdapter::new(
             Arc::clone(&schema),
             futures::stream::once(futures::future::lazy(move |_| {
-                sort_batch(&batch, &expr, None)
+                sort_batch(&batch, expr.as_ref(), None)
             })),
         )));
         for spill in self.spill_state.spills.drain(..) {
@@ -1041,7 +1040,7 @@ impl GroupedHashAggregateStream {
         self.input = StreamingMergeBuilder::new()
             .with_streams(streams)
             .with_schema(schema)
-            .with_expressions(&self.spill_state.spill_expr)
+            .with_expressions(self.spill_state.spill_expr.as_ref())
             .with_metrics(self.baseline_metrics.clone())
             .with_batch_size(self.batch_size)
             .with_reservation(self.reservation.new_empty())

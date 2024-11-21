@@ -15,13 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::{ArrayRef, PrimitiveArray, UInt32Array};
-use arrow::datatypes::{
-    Float32Type, Float64Type, Int16Type, Int32Type, Int64Type, Int8Type, UInt16Type,
-    UInt32Type, UInt64Type, UInt8Type,
-};
-use rand::rngs::StdRng;
-use rand::Rng;
+use arrow::array::{ArrayRef, ArrowPrimitiveType, PrimitiveArray, UInt32Array};
+use arrow::datatypes::DataType;
+use chrono_tz::{Tz, TZ_VARIANTS};
+use rand::{rngs::StdRng, seq::SliceRandom, thread_rng, Rng};
+use std::sync::Arc;
+
+use super::random_data::RandomNativeData;
 
 /// Randomly generate primitive array
 pub struct PrimitiveArrayGenerator {
@@ -35,46 +35,81 @@ pub struct PrimitiveArrayGenerator {
     pub rng: StdRng,
 }
 
-macro_rules! impl_gen_data {
-    ($NATIVE_TYPE:ty, $ARROW_TYPE:ident) => {
-        paste::paste! {
-            pub fn [< gen_data_ $NATIVE_TYPE >](&mut self) -> ArrayRef {
-                    // table of strings from which to draw
-                    let distinct_primitives: PrimitiveArray<$ARROW_TYPE> = (0..self.num_distinct_primitives)
-                    .map(|_| Some(self.rng.gen::<$NATIVE_TYPE>()))
-                    .collect();
-
-                // pick num_strings randomly from the distinct string table
-                let indicies: UInt32Array = (0..self.num_primitives)
-                    .map(|_| {
-                        if self.rng.gen::<f64>() < self.null_pct {
-                            None
-                        } else if self.num_distinct_primitives > 1 {
-                            let range = 1..(self.num_distinct_primitives as u32);
-                            Some(self.rng.gen_range(range))
-                        } else {
-                            Some(0)
-                        }
-                    })
-                    .collect();
-
-                let options = None;
-                arrow::compute::take(&distinct_primitives, &indicies, options).unwrap()
-            }
-        }
-    };
-}
-
 // TODO: support generating more primitive arrays
 impl PrimitiveArrayGenerator {
-    impl_gen_data!(i8, Int8Type);
-    impl_gen_data!(i16, Int16Type);
-    impl_gen_data!(i32, Int32Type);
-    impl_gen_data!(i64, Int64Type);
-    impl_gen_data!(u8, UInt8Type);
-    impl_gen_data!(u16, UInt16Type);
-    impl_gen_data!(u32, UInt32Type);
-    impl_gen_data!(u64, UInt64Type);
-    impl_gen_data!(f32, Float32Type);
-    impl_gen_data!(f64, Float64Type);
+    pub fn gen_data<A>(&mut self) -> ArrayRef
+    where
+        A: ArrowPrimitiveType + RandomNativeData,
+    {
+        let data_type = match A::DATA_TYPE {
+            DataType::Timestamp(unit, _) => {
+                let timezone = Self::generate_timezone();
+                DataType::Timestamp(unit, timezone)
+            }
+            other => other,
+        };
+
+        // table of primitives from which to draw
+        let distinct_primitives: PrimitiveArray<A> = match data_type {
+            DataType::Int8
+            | DataType::Int16
+            | DataType::Int32
+            | DataType::Int64
+            | DataType::UInt8
+            | DataType::UInt16
+            | DataType::UInt32
+            | DataType::UInt64
+            | DataType::Float32
+            | DataType::Float64
+            | DataType::Date32
+            | DataType::Date64
+            | DataType::Time32(_)
+            | DataType::Time64(_)
+            | DataType::Interval(_)
+            | DataType::Binary
+            | DataType::LargeBinary
+            | DataType::BinaryView
+            | DataType::Timestamp(_, _) => (0..self.num_distinct_primitives)
+                .map(|_| Some(A::generate_random_native_data(&mut self.rng)))
+                .collect(),
+            _ => {
+                let arrow_type = A::DATA_TYPE;
+                panic!("Unsupported arrow data type: {arrow_type}")
+            }
+        };
+
+        // pick num_primitves randomly from the distinct string table
+        let indicies: UInt32Array = (0..self.num_primitives)
+            .map(|_| {
+                if self.rng.gen::<f64>() < self.null_pct {
+                    None
+                } else if self.num_distinct_primitives > 1 {
+                    let range = 1..(self.num_distinct_primitives as u32);
+                    Some(self.rng.gen_range(range))
+                } else {
+                    Some(0)
+                }
+            })
+            .collect();
+
+        let options = None;
+        arrow::compute::take(&distinct_primitives, &indicies, options).unwrap()
+    }
+
+    // Generates a random timezone or returns `None`.
+    ///
+    /// Returns:
+    /// - `Some(Arc<String>)` containing the timezone name.
+    /// - `None` if no timezone is selected.
+    fn generate_timezone() -> Option<Arc<str>> {
+        let mut rng = thread_rng();
+
+        // Allows for timezones + None
+        let mut timezone_options: Vec<Option<&Tz>> = vec![None];
+        timezone_options.extend(TZ_VARIANTS.iter().map(Some));
+
+        let selected_option = timezone_options.choose(&mut rng).cloned().flatten(); // random timezone/None
+
+        selected_option.map(|tz| Arc::from(tz.name()))
+    }
 }

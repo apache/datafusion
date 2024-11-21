@@ -37,6 +37,7 @@ use datafusion_physical_expr::{
     expressions::{cast, col},
     PhysicalExpr, PhysicalSortExpr,
 };
+use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_optimizer::{
     limited_distinct_aggregation::LimitedDistinctAggregation, PhysicalOptimizerRule,
 };
@@ -347,10 +348,10 @@ fn test_has_aggregate_expression() -> Result<()> {
     let single_agg = AggregateExec::try_new(
         AggregateMode::Single,
         build_group_by(&schema, vec!["a".to_string()]),
-        vec![agg.count_expr(&schema)], /* aggr_expr */
-        vec![None],                    /* filter_expr */
-        source,                        /* input */
-        schema.clone(),                /* input_schema */
+        vec![Arc::new(agg.count_expr(&schema))], /* aggr_expr */
+        vec![None],                              /* filter_expr */
+        source,                                  /* input */
+        schema.clone(),                          /* input_schema */
     )?;
     let limit_exec = LocalLimitExec::new(
         Arc::new(single_agg),
@@ -375,7 +376,7 @@ fn test_has_filter() -> Result<()> {
     // `SELECT a FROM MemoryExec WHERE a > 1 GROUP BY a LIMIT 10;`, Single AggregateExec
     // the `a > 1` filter is applied in the AggregateExec
     let filter_expr = Some(expressions::binary(
-        expressions::col("a", &schema)?,
+        col("a", &schema)?,
         Operator::Gt,
         cast(expressions::lit(1u32), &schema, DataType::Int32)?,
         &schema,
@@ -384,10 +385,10 @@ fn test_has_filter() -> Result<()> {
     let single_agg = AggregateExec::try_new(
         AggregateMode::Single,
         build_group_by(&schema.clone(), vec!["a".to_string()]),
-        vec![agg.count_expr(&schema)], /* aggr_expr */
-        vec![filter_expr],             /* filter_expr */
-        source,                        /* input */
-        schema.clone(),                /* input_schema */
+        vec![Arc::new(agg.count_expr(&schema))], /* aggr_expr */
+        vec![filter_expr],                       /* filter_expr */
+        source,                                  /* input */
+        schema.clone(),                          /* input_schema */
     )?;
     let limit_exec = LocalLimitExec::new(
         Arc::new(single_agg),
@@ -407,10 +408,10 @@ fn test_has_filter() -> Result<()> {
 
 #[test]
 fn test_has_order_by() -> Result<()> {
-    let sort_key = vec![PhysicalSortExpr {
-        expr: expressions::col("a", &schema()).unwrap(),
+    let sort_key = LexOrdering::new(vec![PhysicalSortExpr {
+        expr: col("a", &schema()).unwrap(),
         options: SortOptions::default(),
-    }];
+    }]);
     let source = parquet_exec_with_sort(vec![sort_key]);
     let schema = source.schema();
 

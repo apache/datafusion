@@ -33,7 +33,7 @@ use datafusion_expr::{
     logical_plan::{LogicalPlan, Prepare},
     test::function_stub::sum_udaf,
     ColumnarValue, CreateExternalTable, CreateIndex, DdlStatement, ScalarUDF,
-    ScalarUDFImpl, Signature, Volatility,
+    ScalarUDFImpl, Signature, Statement, Volatility,
 };
 use datafusion_functions::{string, unicode};
 use datafusion_sql::{
@@ -41,13 +41,14 @@ use datafusion_sql::{
     planner::{ParserOptions, SqlToRel},
 };
 
-use crate::common::MockSessionState;
+use crate::common::{CustomExprPlanner, CustomTypePlanner, MockSessionState};
 use datafusion_functions::core::planner::CoreFunctionPlanner;
 use datafusion_functions_aggregate::{
     approx_median::approx_median_udaf, count::count_udaf, min_max::max_udaf,
     min_max::min_udaf,
 };
 use datafusion_functions_aggregate::{average::avg_udaf, grouping::grouping_udaf};
+use datafusion_functions_nested::make_array::make_array_udf;
 use datafusion_functions_window::rank::rank_udwf;
 use rstest::rstest;
 use sqlparser::dialect::{Dialect, GenericDialect, HiveDialect, MySqlDialect};
@@ -898,7 +899,7 @@ fn natural_right_join() {
 fn natural_join_no_common_becomes_cross_join() {
     let sql = "SELECT * FROM person a NATURAL JOIN lineitem b";
     let expected = "Projection: *\
-                        \n  CrossJoin:\
+                        \n  Cross Join: \
                         \n    SubqueryAlias: a\
                         \n      TableScan: person\
                         \n    SubqueryAlias: b\
@@ -2710,7 +2711,9 @@ fn prepare_stmt_quick_test(
     assert_eq!(format!("{assert_plan}"), expected_plan);
 
     // verify data types
-    if let LogicalPlan::Prepare(Prepare { data_types, .. }) = assert_plan {
+    if let LogicalPlan::Statement(Statement::Prepare(Prepare { data_types, .. })) =
+        assert_plan
+    {
         let dt = format!("{data_types:?}");
         assert_eq!(dt, expected_data_types);
     }
@@ -2744,8 +2747,8 @@ fn cross_join_not_to_inner_join() {
         "select person.id from person, orders, lineitem where person.id = person.age;";
     let expected = "Projection: person.id\
                                     \n  Filter: person.id = person.age\
-                                    \n    CrossJoin:\
-                                    \n      CrossJoin:\
+                                    \n    Cross Join: \
+                                    \n      Cross Join: \
                                     \n        TableScan: person\
                                     \n        TableScan: orders\
                                     \n      TableScan: lineitem";
@@ -2842,11 +2845,11 @@ fn exists_subquery_schema_outer_schema_overlap() {
         \n    Subquery:\
         \n      Projection: person.first_name\
         \n        Filter: person.id = p2.id AND person.last_name = outer_ref(p.last_name) AND person.state = outer_ref(p.state)\
-        \n          CrossJoin:\
+        \n          Cross Join: \
         \n            TableScan: person\
         \n            SubqueryAlias: p2\
         \n              TableScan: person\
-        \n    CrossJoin:\
+        \n    Cross Join: \
         \n      TableScan: person\
         \n      SubqueryAlias: p\
         \n        TableScan: person";
@@ -2934,10 +2937,10 @@ fn scalar_subquery_reference_outer_field() {
         \n      Projection: count(*)\
         \n        Aggregate: groupBy=[[]], aggr=[[count(*)]]\
         \n          Filter: outer_ref(j2.j2_id) = j1.j1_id AND j1.j1_id = j3.j3_id\
-        \n            CrossJoin:\
+        \n            Cross Join: \
         \n              TableScan: j1\
         \n              TableScan: j3\
-        \n    CrossJoin:\
+        \n    Cross Join: \
         \n      TableScan: j1\
         \n      TableScan: j2";
 
@@ -3123,7 +3126,7 @@ fn join_on_complex_condition() {
 fn lateral_constant() {
     let sql = "SELECT * FROM j1, LATERAL (SELECT 1) AS j2";
     let expected = "Projection: *\
-            \n  CrossJoin:\
+            \n  Cross Join: \
             \n    TableScan: j1\
             \n    SubqueryAlias: j2\
             \n      Subquery:\
@@ -3138,7 +3141,7 @@ fn lateral_comma_join() {
             j1, \
             LATERAL (SELECT * FROM j2 WHERE j1_id < j2_id) AS j2";
     let expected = "Projection: j1.j1_string, j2.j2_string\
-            \n  CrossJoin:\
+            \n  Cross Join: \
             \n    TableScan: j1\
             \n    SubqueryAlias: j2\
             \n      Subquery:\
@@ -3154,7 +3157,7 @@ fn lateral_comma_join_referencing_join_rhs() {
             \n  j1 JOIN (j2 JOIN j3 ON(j2_id = j3_id - 2)) ON(j1_id = j2_id),\
             \n  LATERAL (SELECT * FROM j3 WHERE j3_string = j2_string) as j4;";
     let expected = "Projection: *\
-            \n  CrossJoin:\
+            \n  Cross Join: \
             \n    Inner Join:  Filter: j1.j1_id = j2.j2_id\
             \n      TableScan: j1\
             \n      Inner Join:  Filter: j2.j2_id = j3.j3_id - Int64(2)\
@@ -3178,12 +3181,12 @@ fn lateral_comma_join_with_shadowing() {
               ) as j2\
             ) as j2;";
     let expected = "Projection: *\
-            \n  CrossJoin:\
+            \n  Cross Join: \
             \n    TableScan: j1\
             \n    SubqueryAlias: j2\
             \n      Subquery:\
             \n        Projection: *\
-            \n          CrossJoin:\
+            \n          Cross Join: \
             \n            TableScan: j1\
             \n            SubqueryAlias: j2\
             \n              Subquery:\
@@ -3215,7 +3218,7 @@ fn lateral_nested_left_join() {
             j1, \
             (j2 LEFT JOIN LATERAL (SELECT * FROM j3 WHERE j1_id + j2_id = j3_id) AS j3 ON(true))";
     let expected = "Projection: *\
-            \n  CrossJoin:\
+            \n  Cross Join: \
             \n    TableScan: j1\
             \n    Left Join:  Filter: Boolean(true)\
             \n      TableScan: j2\
@@ -4210,6 +4213,29 @@ fn test_prepare_statement_to_plan_having() {
 }
 
 #[test]
+fn test_prepare_statement_to_plan_limit() {
+    let sql = "PREPARE my_plan(BIGINT, BIGINT) AS
+        SELECT id FROM person \
+        OFFSET $1 LIMIT $2";
+
+    let expected_plan = "Prepare: \"my_plan\" [Int64, Int64] \
+        \n  Limit: skip=$1, fetch=$2\
+        \n    Projection: person.id\
+        \n      TableScan: person";
+
+    let expected_dt = "[Int64, Int64]";
+
+    let plan = prepare_stmt_quick_test(sql, expected_plan, expected_dt);
+
+    // replace params with values
+    let param_values = vec![ScalarValue::Int64(Some(10)), ScalarValue::Int64(Some(200))];
+    let expected_plan = "Limit: skip=10, fetch=200\
+        \n  Projection: person.id\
+        \n    TableScan: person";
+    prepare_stmt_replace_params_quick_test(plan, param_values, expected_plan);
+}
+
+#[test]
 fn test_prepare_statement_to_plan_value_list() {
     let sql = "PREPARE my_plan(STRING, STRING) AS SELECT * FROM (VALUES(1, $1), (2, $2)) AS t (num, letter);";
 
@@ -4281,7 +4307,7 @@ fn test_table_alias() {
 
     let expected = "Projection: *\
         \n  SubqueryAlias: f\
-        \n    CrossJoin:\
+        \n    Cross Join: \
         \n      SubqueryAlias: t1\
         \n        Projection: person.id\
         \n          TableScan: person\
@@ -4299,7 +4325,7 @@ fn test_table_alias() {
     let expected = "Projection: *\
         \n  SubqueryAlias: f\
         \n    Projection: t1.id AS c1, t2.age AS c2\
-        \n      CrossJoin:\
+        \n      Cross Join: \
         \n        SubqueryAlias: t1\
         \n          Projection: person.id\
         \n            TableScan: person\
@@ -4471,4 +4497,57 @@ fn test_no_functions_registered() {
         err.unwrap_err().to_string(),
         "Internal error: No functions registered with this context."
     );
+}
+
+#[test]
+fn test_custom_type_plan() -> Result<()> {
+    let sql = "SELECT DATETIME '2001-01-01 18:00:00'";
+
+    // test the default behavior
+    let options = ParserOptions::default();
+    let dialect = &GenericDialect {};
+    let state = MockSessionState::default();
+    let context = MockContextProvider { state };
+    let planner = SqlToRel::new_with_options(&context, options);
+    let result = DFParser::parse_sql_with_dialect(sql, dialect);
+    let mut ast = result.unwrap();
+    let err = planner.statement_to_plan(ast.pop_front().unwrap());
+    assert_contains!(
+        err.unwrap_err().to_string(),
+        "This feature is not implemented: Unsupported SQL type Datetime(None)"
+    );
+
+    fn plan_sql(sql: &str) -> LogicalPlan {
+        let options = ParserOptions::default();
+        let dialect = &GenericDialect {};
+        let state = MockSessionState::default()
+            .with_scalar_function(make_array_udf())
+            .with_expr_planner(Arc::new(CustomExprPlanner {}))
+            .with_type_planner(Arc::new(CustomTypePlanner {}));
+        let context = MockContextProvider { state };
+        let planner = SqlToRel::new_with_options(&context, options);
+        let result = DFParser::parse_sql_with_dialect(sql, dialect);
+        let mut ast = result.unwrap();
+        planner.statement_to_plan(ast.pop_front().unwrap()).unwrap()
+    }
+
+    let plan = plan_sql(sql);
+    let expected =
+        "Projection: CAST(Utf8(\"2001-01-01 18:00:00\") AS Timestamp(Nanosecond, None))\
+    \n  EmptyRelation";
+    assert_eq!(plan.to_string(), expected);
+
+    let plan = plan_sql("SELECT CAST(TIMESTAMP '2001-01-01 18:00:00' AS DATETIME)");
+    let expected = "Projection: CAST(CAST(Utf8(\"2001-01-01 18:00:00\") AS Timestamp(Nanosecond, None)) AS Timestamp(Nanosecond, None))\
+    \n  EmptyRelation";
+    assert_eq!(plan.to_string(), expected);
+
+    let plan = plan_sql(
+        "SELECT ARRAY[DATETIME '2001-01-01 18:00:00', DATETIME '2001-01-02 18:00:00']",
+    );
+    let expected = "Projection: make_array(CAST(Utf8(\"2001-01-01 18:00:00\") AS Timestamp(Nanosecond, None)), CAST(Utf8(\"2001-01-02 18:00:00\") AS Timestamp(Nanosecond, None)))\
+    \n  EmptyRelation";
+    assert_eq!(plan.to_string(), expected);
+
+    Ok(())
 }

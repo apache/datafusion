@@ -88,7 +88,7 @@ fn get_upper_doc() -> &'static Documentation {
 +---------------------------+
 ```"#,
             )
-            .with_standard_argument("str", "String")
+            .with_standard_argument("str", Some("String"))
             .with_related_udf("initcap")
             .with_related_udf("lower")
             .build()
@@ -104,10 +104,11 @@ mod tests {
 
     fn to_upper(input: ArrayRef, expected: ArrayRef) -> Result<()> {
         let func = UpperFunc::new();
+        let batch_size = input.len();
         let args = vec![ColumnarValue::Array(input)];
-        let result = match func.invoke(&args)? {
+        let result = match func.invoke_batch(&args, batch_size)? {
             ColumnarValue::Array(result) => result,
-            _ => unreachable!(),
+            _ => unreachable!("upper"),
         };
         assert_eq!(&expected, &result);
         Ok(())

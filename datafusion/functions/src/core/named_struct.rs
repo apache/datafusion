@@ -17,17 +17,16 @@
 
 use arrow::array::StructArray;
 use arrow::datatypes::{DataType, Field, Fields};
-use datafusion_common::{exec_err, internal_err, Result, ScalarValue};
+use datafusion_common::{exec_err, internal_err, HashSet, Result, ScalarValue};
 use datafusion_expr::scalar_doc_sections::DOC_SECTION_STRUCT;
 use datafusion_expr::{ColumnarValue, Documentation, Expr, ExprSchemable};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
-use hashbrown::HashSet;
 use std::any::Any;
 use std::sync::{Arc, OnceLock};
 
-/// put values in a struct array.
+/// Put values in a struct array.
 fn named_struct_expr(args: &[ColumnarValue]) -> Result<ColumnarValue> {
-    // do not accept 0 arguments.
+    // Do not accept 0 arguments.
     if args.is_empty() {
         return exec_err!(
             "named_struct requires at least one pair of arguments, got 0 instead"
@@ -124,7 +123,7 @@ impl ScalarUDFImpl for NamedStructFunc {
 
     fn return_type_from_exprs(
         &self,
-        args: &[datafusion_expr::Expr],
+        args: &[Expr],
         schema: &dyn datafusion_common::ExprSchema,
         _arg_types: &[DataType],
     ) -> Result<DataType> {

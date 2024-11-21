@@ -54,34 +54,34 @@ impl ToCharFunc {
                 vec![
                     Exact(vec![Date32, Utf8]),
                     Exact(vec![Date64, Utf8]),
+                    Exact(vec![Time64(Nanosecond), Utf8]),
+                    Exact(vec![Time64(Microsecond), Utf8]),
                     Exact(vec![Time32(Millisecond), Utf8]),
                     Exact(vec![Time32(Second), Utf8]),
-                    Exact(vec![Time64(Microsecond), Utf8]),
-                    Exact(vec![Time64(Nanosecond), Utf8]),
-                    Exact(vec![Timestamp(Second, None), Utf8]),
-                    Exact(vec![
-                        Timestamp(Second, Some(TIMEZONE_WILDCARD.into())),
-                        Utf8,
-                    ]),
-                    Exact(vec![Timestamp(Millisecond, None), Utf8]),
-                    Exact(vec![
-                        Timestamp(Millisecond, Some(TIMEZONE_WILDCARD.into())),
-                        Utf8,
-                    ]),
-                    Exact(vec![Timestamp(Microsecond, None), Utf8]),
-                    Exact(vec![
-                        Timestamp(Microsecond, Some(TIMEZONE_WILDCARD.into())),
-                        Utf8,
-                    ]),
-                    Exact(vec![Timestamp(Nanosecond, None), Utf8]),
                     Exact(vec![
                         Timestamp(Nanosecond, Some(TIMEZONE_WILDCARD.into())),
                         Utf8,
                     ]),
-                    Exact(vec![Duration(Second), Utf8]),
-                    Exact(vec![Duration(Millisecond), Utf8]),
-                    Exact(vec![Duration(Microsecond), Utf8]),
+                    Exact(vec![Timestamp(Nanosecond, None), Utf8]),
+                    Exact(vec![
+                        Timestamp(Microsecond, Some(TIMEZONE_WILDCARD.into())),
+                        Utf8,
+                    ]),
+                    Exact(vec![Timestamp(Microsecond, None), Utf8]),
+                    Exact(vec![
+                        Timestamp(Millisecond, Some(TIMEZONE_WILDCARD.into())),
+                        Utf8,
+                    ]),
+                    Exact(vec![Timestamp(Millisecond, None), Utf8]),
+                    Exact(vec![
+                        Timestamp(Second, Some(TIMEZONE_WILDCARD.into())),
+                        Utf8,
+                    ]),
+                    Exact(vec![Timestamp(Second, None), Utf8]),
                     Exact(vec![Duration(Nanosecond), Utf8]),
+                    Exact(vec![Duration(Microsecond), Utf8]),
+                    Exact(vec![Duration(Millisecond), Utf8]),
+                    Exact(vec![Duration(Second), Utf8]),
                 ],
                 Volatility::Immutable,
             ),
@@ -222,10 +222,7 @@ fn _to_char_scalar(
         if is_scalar_expression {
             return Ok(ColumnarValue::Scalar(ScalarValue::Utf8(None)));
         } else {
-            return Ok(ColumnarValue::Array(new_null_array(
-                &DataType::Utf8,
-                array.len(),
-            )));
+            return Ok(ColumnarValue::Array(new_null_array(&Utf8, array.len())));
         }
     }
 
@@ -388,7 +385,10 @@ mod tests {
 
         for (value, format, expected) in scalar_data {
             let result = ToCharFunc::new()
-                .invoke(&[ColumnarValue::Scalar(value), ColumnarValue::Scalar(format)])
+                .invoke_batch(
+                    &[ColumnarValue::Scalar(value), ColumnarValue::Scalar(format)],
+                    1,
+                )
                 .expect("that to_char parsed values without error");
 
             if let ColumnarValue::Scalar(ScalarValue::Utf8(date)) = result {
@@ -461,11 +461,15 @@ mod tests {
         ];
 
         for (value, format, expected) in scalar_array_data {
+            let batch_size = format.len();
             let result = ToCharFunc::new()
-                .invoke(&[
-                    ColumnarValue::Scalar(value),
-                    ColumnarValue::Array(Arc::new(format) as ArrayRef),
-                ])
+                .invoke_batch(
+                    &[
+                        ColumnarValue::Scalar(value),
+                        ColumnarValue::Array(Arc::new(format) as ArrayRef),
+                    ],
+                    batch_size,
+                )
                 .expect("that to_char parsed values without error");
 
             if let ColumnarValue::Scalar(ScalarValue::Utf8(date)) = result {
@@ -586,11 +590,15 @@ mod tests {
         ];
 
         for (value, format, expected) in array_scalar_data {
+            let batch_size = value.len();
             let result = ToCharFunc::new()
-                .invoke(&[
-                    ColumnarValue::Array(value as ArrayRef),
-                    ColumnarValue::Scalar(format),
-                ])
+                .invoke_batch(
+                    &[
+                        ColumnarValue::Array(value as ArrayRef),
+                        ColumnarValue::Scalar(format),
+                    ],
+                    batch_size,
+                )
                 .expect("that to_char parsed values without error");
 
             if let ColumnarValue::Array(result) = result {
@@ -602,11 +610,15 @@ mod tests {
         }
 
         for (value, format, expected) in array_array_data {
+            let batch_size = value.len();
             let result = ToCharFunc::new()
-                .invoke(&[
-                    ColumnarValue::Array(value),
-                    ColumnarValue::Array(Arc::new(format) as ArrayRef),
-                ])
+                .invoke_batch(
+                    &[
+                        ColumnarValue::Array(value),
+                        ColumnarValue::Array(Arc::new(format) as ArrayRef),
+                    ],
+                    batch_size,
+                )
                 .expect("that to_char parsed values without error");
 
             if let ColumnarValue::Array(result) = result {
@@ -623,17 +635,20 @@ mod tests {
 
         // invalid number of arguments
         let result = ToCharFunc::new()
-            .invoke(&[ColumnarValue::Scalar(ScalarValue::Int32(Some(1)))]);
+            .invoke_batch(&[ColumnarValue::Scalar(ScalarValue::Int32(Some(1)))], 1);
         assert_eq!(
             result.err().unwrap().strip_backtrace(),
             "Execution error: to_char function requires 2 arguments, got 1"
         );
 
         // invalid type
-        let result = ToCharFunc::new().invoke(&[
-            ColumnarValue::Scalar(ScalarValue::Int32(Some(1))),
-            ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
-        ]);
+        let result = ToCharFunc::new().invoke_batch(
+            &[
+                ColumnarValue::Scalar(ScalarValue::Int32(Some(1))),
+                ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
+            ],
+            1,
+        );
         assert_eq!(
             result.err().unwrap().strip_backtrace(),
             "Execution error: Format for `to_char` must be non-null Utf8, received Timestamp(Nanosecond, None)"

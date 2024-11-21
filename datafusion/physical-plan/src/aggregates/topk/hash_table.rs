@@ -17,7 +17,7 @@
 
 //! A wrapper around `hashbrown::RawTable` that allows entries to be tracked by index
 
-use crate::aggregates::group_values::primitive::HashValue;
+use crate::aggregates::group_values::HashValue;
 use crate::aggregates::topk::heap::Comparable;
 use ahash::RandomState;
 use arrow::datatypes::i256;
@@ -109,7 +109,7 @@ impl StringHashTable {
         Self {
             owned,
             map: TopKHashTable::new(limit, limit * 10),
-            rnd: ahash::RandomState::default(),
+            rnd: RandomState::default(),
         }
     }
 }
@@ -181,7 +181,7 @@ where
         Self {
             owned,
             map: TopKHashTable::new(limit, limit * 10),
-            rnd: ahash::RandomState::default(),
+            rnd: RandomState::default(),
         }
     }
 }

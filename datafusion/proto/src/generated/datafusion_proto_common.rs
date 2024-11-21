@@ -572,9 +572,9 @@ pub struct CsvOptions {
     /// Compression type
     #[prost(enumeration = "CompressionTypeVariant", tag = "5")]
     pub compression: i32,
-    /// Max records for schema inference
-    #[prost(uint64, tag = "6")]
-    pub schema_infer_max_rec: u64,
+    /// Optional max records for schema inference
+    #[prost(uint64, optional, tag = "6")]
+    pub schema_infer_max_rec: ::core::option::Option<u64>,
     /// Optional date format
     #[prost(string, tag = "7")]
     pub date_format: ::prost::alloc::string::String,
@@ -612,9 +612,9 @@ pub struct JsonOptions {
     /// Compression type
     #[prost(enumeration = "CompressionTypeVariant", tag = "1")]
     pub compression: i32,
-    /// Max records for schema inference
-    #[prost(uint64, tag = "2")]
-    pub schema_infer_max_rec: u64,
+    /// Optional max records for schema inference
+    #[prost(uint64, optional, tag = "2")]
+    pub schema_infer_max_rec: ::core::option::Option<u64>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct TableParquetOptions {
@@ -757,6 +757,9 @@ pub struct ParquetOptions {
     /// default = false
     #[prost(bool, tag = "28")]
     pub schema_force_view_types: bool,
+    /// default = false
+    #[prost(bool, tag = "29")]
+    pub binary_as_string: bool,
     #[prost(uint64, tag = "12")]
     pub dictionary_page_size_limit: u64,
     #[prost(uint64, tag = "18")]
@@ -880,6 +883,7 @@ pub enum JoinType {
     Leftanti = 5,
     Rightsemi = 6,
     Rightanti = 7,
+    Leftmark = 8,
 }
 impl JoinType {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -896,6 +900,7 @@ impl JoinType {
             Self::Leftanti => "LEFTANTI",
             Self::Rightsemi => "RIGHTSEMI",
             Self::Rightanti => "RIGHTANTI",
+            Self::Leftmark => "LEFTMARK",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -909,6 +914,7 @@ impl JoinType {
             "LEFTANTI" => Some(Self::Leftanti),
             "RIGHTSEMI" => Some(Self::Rightsemi),
             "RIGHTANTI" => Some(Self::Rightanti),
+            "LEFTMARK" => Some(Self::Leftmark),
             _ => None,
         }
     }
@@ -1066,6 +1072,7 @@ impl CompressionTypeVariant {
 pub enum JoinSide {
     LeftSide = 0,
     RightSide = 1,
+    None = 2,
 }
 impl JoinSide {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -1076,6 +1083,7 @@ impl JoinSide {
         match self {
             Self::LeftSide => "LEFT_SIDE",
             Self::RightSide => "RIGHT_SIDE",
+            Self::None => "NONE",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -1083,6 +1091,7 @@ impl JoinSide {
         match value {
             "LEFT_SIDE" => Some(Self::LeftSide),
             "RIGHT_SIDE" => Some(Self::RightSide),
+            "NONE" => Some(Self::None),
             _ => None,
         }
     }

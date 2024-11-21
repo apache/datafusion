@@ -19,7 +19,6 @@
 name = "datafusion-expr-common"
 description = "Logical plan and expression representation for DataFusion query engine"
 keywords = ["datafusion", "logical", "plan", "expressions"]
-readme = "README.md"
 version = { workspace = true }
 edition = { workspace = true }
 homepage = { workspace = true }
@@ -40,4 +39,5 @@ path = "src/lib.rs"
 [dependencies]
 arrow = { workspace = true }
 datafusion-common = { workspace = true }
+itertools = { workspace = true }
 paste = "^1.0"

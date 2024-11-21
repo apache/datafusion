@@ -138,6 +138,8 @@ pub struct PlannerContext {
     /// The joined schemas of all FROM clauses planned so far. When planning LATERAL
     /// FROM clauses, this should become a suffix of the `outer_query_schema`.
     outer_from_schema: Option<DFSchemaRef>,
+    /// The query schema defined by the table
+    create_table_schema: Option<DFSchemaRef>,
 }
 
 impl Default for PlannerContext {
@@ -154,6 +156,7 @@ impl PlannerContext {
             ctes: HashMap::new(),
             outer_query_schema: None,
             outer_from_schema: None,
+            create_table_schema: None,
         }
     }
 
@@ -179,6 +182,18 @@ impl PlannerContext {
     ) -> Option<DFSchemaRef> {
         std::mem::swap(&mut self.outer_query_schema, &mut schema);
         schema
+    }
+
+    pub fn set_table_schema(
+        &mut self,
+        mut schema: Option<DFSchemaRef>,
+    ) -> Option<DFSchemaRef> {
+        std::mem::swap(&mut self.create_table_schema, &mut schema);
+        schema
+    }
+
+    pub fn table_schema(&self) -> Option<DFSchemaRef> {
+        self.create_table_schema.clone()
     }
 
     // Return a clone of the outer FROM schema
@@ -386,6 +401,14 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     }
 
     pub(crate) fn convert_data_type(&self, sql_type: &SQLDataType) -> Result<DataType> {
+        // First check if any of the registered type_planner can handle this type
+        if let Some(type_planner) = self.context_provider.get_type_planner() {
+            if let Some(data_type) = type_planner.plan_type(sql_type)? {
+                return Ok(data_type);
+            }
+        }
+
+        // If no type_planner can handle this type, use the default conversion
         match sql_type {
             SQLDataType::Array(ArrayElemTypeDef::AngleBracket(inner_sql_type)) => {
                 // Arrays may be multi-dimensional.
@@ -439,7 +462,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             SQLDataType::Char(_)
             | SQLDataType::Text
             | SQLDataType::String(_) => Ok(DataType::Utf8),
-            SQLDataType::Timestamp(None, tz_info) => {
+            SQLDataType::Timestamp(precision, tz_info)
+            if precision.is_none() || [0, 3, 6, 9].contains(&precision.unwrap()) => {
                 let tz = if matches!(tz_info, TimezoneInfo::Tz)
                     || matches!(tz_info, TimezoneInfo::WithTimeZone)
                 {
@@ -451,7 +475,14 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     // Timestamp Without Time zone
                     None
                 };
-                Ok(DataType::Timestamp(TimeUnit::Nanosecond, tz.map(Into::into)))
+                let precision = match precision {
+                    Some(0) => TimeUnit::Second,
+                    Some(3) => TimeUnit::Millisecond,
+                    Some(6) => TimeUnit::Microsecond,
+                    None | Some(9) => TimeUnit::Nanosecond,
+                    _ => unreachable!(),
+                };
+                Ok(DataType::Timestamp(precision, tz.map(Into::into)))
             }
             SQLDataType::Date => Ok(DataType::Date32),
             SQLDataType::Time(None, tz_info) => {
@@ -520,8 +551,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             | SQLDataType::CharVarying(_)
             | SQLDataType::CharacterLargeObject(_)
             | SQLDataType::CharLargeObject(_)
-            // Precision is not supported
-            | SQLDataType::Timestamp(Some(_), _)
+            // Unsupported precision
+            | SQLDataType::Timestamp(_, _)
             // Precision is not supported
             | SQLDataType::Time(Some(_), _)
             | SQLDataType::Dec(_)

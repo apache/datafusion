@@ -34,7 +34,7 @@ impl From<DataFusionError> for PyErr {
 }
 
 impl FromPyArrow for ScalarValue {
-    fn from_pyarrow_bound(value: &pyo3::Bound<'_, pyo3::PyAny>) -> PyResult<Self> {
+    fn from_pyarrow_bound(value: &Bound<'_, PyAny>) -> PyResult<Self> {
         let py = value.py();
         let typ = value.getattr("type")?;
         let val = value.call_method0("as_py")?;

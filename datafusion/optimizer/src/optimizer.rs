@@ -17,7 +17,6 @@
 
 //! [`Optimizer`] and [`OptimizerRule`]
 
-use std::collections::HashSet;
 use std::fmt::Debug;
 use std::sync::Arc;
 
@@ -28,8 +27,8 @@ use log::{debug, warn};
 use datafusion_common::alias::AliasGenerator;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::instant::Instant;
-use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRewriter};
-use datafusion_common::{internal_err, DFSchema, DataFusionError, Result};
+use datafusion_common::tree_node::{Transformed, TreeNodeRewriter};
+use datafusion_common::{internal_err, DFSchema, DataFusionError, HashSet, Result};
 use datafusion_expr::logical_plan::LogicalPlan;
 
 use crate::common_subexpr_eliminate::CommonSubexprEliminate;
@@ -51,7 +50,6 @@ use crate::propagate_empty_relation::PropagateEmptyRelation;
 use crate::push_down_filter::PushDownFilter;
 use crate::push_down_limit::PushDownLimit;
 use crate::replace_distinct_aggregate::ReplaceDistinctWithAggregate;
-use crate::rewrite_disjunctive_predicate::RewriteDisjunctivePredicate;
 use crate::scalar_subquery_to_join::ScalarSubqueryToJoin;
 use crate::simplify_expressions::SimplifyExpressions;
 use crate::single_distinct_to_groupby::SingleDistinctToGroupBy;
@@ -251,11 +249,6 @@ impl Optimizer {
             Arc::new(DecorrelatePredicateSubquery::new()),
             Arc::new(ScalarSubqueryToJoin::new()),
             Arc::new(ExtractEquijoinPredicate::new()),
-            // simplify expressions does not simplify expressions in subqueries, so we
-            // run it again after running the optimizations that potentially converted
-            // subqueries to joins
-            Arc::new(SimplifyExpressions::new()),
-            Arc::new(RewriteDisjunctivePredicate::new()),
             Arc::new(EliminateDuplicatedExpr::new()),
             Arc::new(EliminateFilter::new()),
             Arc::new(EliminateCrossJoin::new()),
@@ -386,11 +379,9 @@ impl Optimizer {
 
                 let result = match rule.apply_order() {
                     // optimizer handles recursion
-                    Some(apply_order) => new_plan.rewrite(&mut Rewriter::new(
-                        apply_order,
-                        rule.as_ref(),
-                        config,
-                    )),
+                    Some(apply_order) => new_plan.rewrite_with_subqueries(
+                        &mut Rewriter::new(apply_order, rule.as_ref(), config),
+                    ),
                     // rule handles recursion itself
                     None => optimize_plan_node(new_plan, rule.as_ref(), config),
                 }

@@ -2,6 +2,7 @@
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
 // regarding copyright ownership.  The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
 // "License"); you may not use this file except in compliance
 // with the License.  You may obtain a copy of the License at
 //
@@ -22,6 +23,7 @@ use arrow_schema::DataType;
 use datafusion_common::{internal_err, Result};
 use datafusion_expr::{EmitTo, GroupsAccumulator};
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::nulls::apply_filter_as_nulls;
+use std::mem::size_of;
 use std::sync::Arc;
 
 /// Implements fast Min/Max [`GroupsAccumulator`] for "bytes" types ([`StringArray`],
@@ -337,6 +339,10 @@ impl GroupsAccumulator for MinMaxBytesAccumulator {
 /// This is a heuristic to avoid allocating too many small buffers
 fn capacity_to_view_block_size(data_capacity: usize) -> u32 {
     let max_block_size = 2 * 1024 * 1024;
+    // Avoid block size equal to zero when calling `with_fixed_block_size()`.
+    if data_capacity == 0 {
+        return 1;
+    }
     if let Ok(block_size) = u32::try_from(data_capacity) {
         block_size.min(max_block_size)
     } else {
@@ -509,7 +515,6 @@ impl MinMaxBytesState {
     }
 
     fn size(&self) -> usize {
-        self.total_data_bytes
-            + self.min_max.len() * std::mem::size_of::<Option<Vec<u8>>>()
+        self.total_data_bytes + self.min_max.len() * size_of::<Option<Vec<u8>>>()
     }
 }

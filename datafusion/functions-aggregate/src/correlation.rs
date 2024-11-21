@@ -19,6 +19,7 @@
 
 use std::any::Any;
 use std::fmt::Debug;
+use std::mem::size_of_val;
 use std::sync::{Arc, OnceLock};
 
 use arrow::compute::{and, filter, is_not_null};
@@ -134,8 +135,8 @@ fn get_corr_doc() -> &'static Documentation {
 +--------------------------------+
 ```"#,
             )
-            .with_standard_argument("expression1", "First")
-            .with_standard_argument("expression2", "Second")
+            .with_standard_argument("expression1", Some("First"))
+            .with_standard_argument("expression2", Some("Second"))
             .build()
             .unwrap()
     })
@@ -204,11 +205,10 @@ impl Accumulator for CorrelationAccumulator {
     }
 
     fn size(&self) -> usize {
-        std::mem::size_of_val(self) - std::mem::size_of_val(&self.covar)
-            + self.covar.size()
-            - std::mem::size_of_val(&self.stddev1)
+        size_of_val(self) - size_of_val(&self.covar) + self.covar.size()
+            - size_of_val(&self.stddev1)
             + self.stddev1.size()
-            - std::mem::size_of_val(&self.stddev2)
+            - size_of_val(&self.stddev2)
             + self.stddev2.size()
     }
 

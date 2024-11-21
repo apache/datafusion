@@ -54,7 +54,7 @@ use datafusion_physical_expr::{
 use datafusion_physical_plan::streaming::StreamingTableExec;
 use datafusion_physical_plan::union::UnionExec;
 
-use datafusion_physical_expr_common::sort_expr::LexRequirement;
+use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use itertools::Itertools;
 
@@ -101,7 +101,7 @@ pub fn remove_unnecessary_projections(
         // If the projection does not cause any change on the input, we can
         // safely remove it:
         if is_projection_removable(projection) {
-            return Ok(Transformed::yes(projection.input().clone()));
+            return Ok(Transformed::yes(Arc::clone(projection.input())));
         }
         // If it does, check if we can push it under its child(ren):
         let input = projection.input().as_any();
@@ -246,7 +246,7 @@ fn try_swapping_with_streaming_table(
 
     let mut lex_orderings = vec![];
     for lex_ordering in streaming_table.projected_output_ordering().into_iter() {
-        let mut orderings = vec![];
+        let mut orderings = LexOrdering::default();
         for order in lex_ordering {
             let Some(new_ordering) = update_expr(&order.expr, projection.expr(), false)?
             else {
@@ -261,7 +261,7 @@ fn try_swapping_with_streaming_table(
     }
 
     StreamingTableExec::try_new(
-        streaming_table.partition_schema().clone(),
+        Arc::clone(streaming_table.partition_schema()),
         streaming_table.partitions().clone(),
         Some(new_projections.as_ref()),
         lex_orderings,
@@ -297,7 +297,7 @@ fn try_unifying_projections(
     // beneficial as caching mechanism for non-trivial computations.
     // See discussion in: https://github.com/apache/datafusion/issues/8296
     if column_ref_map.iter().any(|(column, count)| {
-        *count > 1 && !is_expr_trivial(&child.expr()[column.index()].0.clone())
+        *count > 1 && !is_expr_trivial(&Arc::clone(&child.expr()[column.index()].0))
     }) {
         return Ok(None);
     }
@@ -312,7 +312,7 @@ fn try_unifying_projections(
         projected_exprs.push((expr, alias.clone()));
     }
 
-    ProjectionExec::try_new(projected_exprs, child.input().clone())
+    ProjectionExec::try_new(projected_exprs, Arc::clone(child.input()))
         .map(|e| Some(Arc::new(e) as _))
 }
 
@@ -467,7 +467,7 @@ fn try_swapping_with_sort(
         return Ok(None);
     }
 
-    let mut updated_exprs = vec![];
+    let mut updated_exprs = LexOrdering::default();
     for sort in sort.expr() {
         let Some(new_expr) = update_expr(&sort.expr, projection.expr(), false)? else {
             return Ok(None);
@@ -497,7 +497,7 @@ fn try_swapping_with_sort_preserving_merge(
         return Ok(None);
     }
 
-    let mut updated_exprs = vec![];
+    let mut updated_exprs = LexOrdering::default();
     for sort in spm.expr() {
         let Some(updated_expr) = update_expr(&sort.expr, projection.expr(), false)?
         else {
@@ -603,7 +603,7 @@ fn try_embed_projection<Exec: EmbeddedProjection + 'static>(
     // Old projection may contain some alias or expression such as `a + 1` and `CAST('true' AS BOOLEAN)`, but our projection_exprs in hash join just contain column, so we need to create the new projection to keep the original projection.
     let new_projection = Arc::new(ProjectionExec::try_new(
         new_projection_exprs,
-        new_execution_plan.clone(),
+        Arc::clone(&new_execution_plan) as _,
     )?);
     if is_projection_removable(&new_projection) {
         Ok(Some(new_execution_plan))
@@ -915,8 +915,14 @@ fn try_swapping_with_sym_hash_join(
         new_filter,
         sym_join.join_type(),
         sym_join.null_equals_null(),
-        sym_join.right().output_ordering().map(|p| p.to_vec()),
-        sym_join.left().output_ordering().map(|p| p.to_vec()),
+        sym_join
+            .right()
+            .output_ordering()
+            .map(|p| LexOrdering::new(p.to_vec())),
+        sym_join
+            .left()
+            .output_ordering()
+            .map(|p| LexOrdering::new(p.to_vec())),
         sym_join.partition_mode(),
     )?)))
 }
@@ -999,8 +1005,7 @@ fn update_expr(
 
     let mut state = RewriteState::Unchanged;
 
-    let new_expr = expr
-        .clone()
+    let new_expr = Arc::clone(expr)
         .transform_up(|expr: Arc<dyn PhysicalExpr>| {
             if state == RewriteState::RewrittenInvalid {
                 return Ok(Transformed::no(expr));
@@ -1012,7 +1017,9 @@ fn update_expr(
             if sync_with_child {
                 state = RewriteState::RewrittenValid;
                 // Update the index of `column`:
-                Ok(Transformed::yes(projected_exprs[column.index()].0.clone()))
+                Ok(Transformed::yes(Arc::clone(
+                    &projected_exprs[column.index()].0,
+                )))
             } else {
                 // default to invalid, in case we can't find the relevant column
                 state = RewriteState::RewrittenInvalid;
@@ -1049,7 +1056,7 @@ fn make_with_child(
     projection: &ProjectionExec,
     child: &Arc<dyn ExecutionPlan>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
-    ProjectionExec::try_new(projection.expr().to_vec(), child.clone())
+    ProjectionExec::try_new(projection.expr().to_vec(), Arc::clone(child))
         .map(|e| Arc::new(e) as _)
 }
 
@@ -1149,8 +1156,7 @@ fn new_columns_for_join_on(
         .iter()
         .filter_map(|on| {
             // Rewrite all columns in `on`
-            (*on)
-                .clone()
+            Arc::clone(*on)
                 .transform(|expr| {
                     if let Some(column) = expr.as_any().downcast_ref::<Column>() {
                         // Find the column in the projection expressions
@@ -1213,7 +1219,7 @@ fn update_join_filter(
         == join_filter.column_indices().len())
     .then(|| {
         JoinFilter::new(
-            join_filter.expression().clone(),
+            Arc::clone(join_filter.expression()),
             join_filter
                 .column_indices()
                 .iter()
@@ -1296,7 +1302,7 @@ fn new_join_children(
                 )
             })
             .collect_vec(),
-        left_child.clone(),
+        Arc::clone(left_child),
     )?;
     let left_size = left_child.schema().fields().len() as i32;
     let new_right = ProjectionExec::try_new(
@@ -1314,7 +1320,7 @@ fn new_join_children(
                 )
             })
             .collect_vec(),
-        right_child.clone(),
+        Arc::clone(right_child),
     )?;
 
     Ok((new_left, new_right))
@@ -1863,7 +1869,7 @@ mod tests {
             }) as _],
             Some(&vec![0_usize, 2, 4, 3]),
             vec![
-                vec![
+                LexOrdering::new(vec![
                     PhysicalSortExpr {
                         expr: Arc::new(Column::new("e", 2)),
                         options: SortOptions::default(),
@@ -1872,11 +1878,11 @@ mod tests {
                         expr: Arc::new(Column::new("a", 0)),
                         options: SortOptions::default(),
                     },
-                ],
-                vec![PhysicalSortExpr {
+                ]),
+                LexOrdering::new(vec![PhysicalSortExpr {
                     expr: Arc::new(Column::new("d", 3)),
                     options: SortOptions::default(),
-                }],
+                }]),
             ]
             .into_iter(),
             true,
@@ -1923,7 +1929,7 @@ mod tests {
         assert_eq!(
             result.projected_output_ordering().into_iter().collect_vec(),
             vec![
-                vec![
+                LexOrdering::new(vec![
                     PhysicalSortExpr {
                         expr: Arc::new(Column::new("e", 1)),
                         options: SortOptions::default(),
@@ -1932,11 +1938,11 @@ mod tests {
                         expr: Arc::new(Column::new("a", 2)),
                         options: SortOptions::default(),
                     },
-                ],
-                vec![PhysicalSortExpr {
+                ]),
+                LexOrdering::new(vec![PhysicalSortExpr {
                     expr: Arc::new(Column::new("d", 0)),
                     options: SortOptions::default(),
-                }],
+                }]),
             ]
         );
         assert!(result.is_infinite());
@@ -2553,7 +2559,7 @@ mod tests {
     fn test_sort_after_projection() -> Result<()> {
         let csv = create_simple_csv_exec();
         let sort_req: Arc<dyn ExecutionPlan> = Arc::new(SortExec::new(
-            vec![
+            LexOrdering::new(vec![
                 PhysicalSortExpr {
                     expr: Arc::new(Column::new("b", 1)),
                     options: SortOptions::default(),
@@ -2566,7 +2572,7 @@ mod tests {
                     )),
                     options: SortOptions::default(),
                 },
-            ],
+            ]),
             csv.clone(),
         ));
         let projection: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
@@ -2581,7 +2587,7 @@ mod tests {
         let initial = get_plan_string(&projection);
         let expected_initial = [
             "ProjectionExec: expr=[c@2 as c, a@0 as new_a, b@1 as b]",
-            "  SortExec: expr=[b@1 ASC,c@2 + a@0 ASC], preserve_partitioning=[false]",
+            "  SortExec: expr=[b@1 ASC, c@2 + a@0 ASC], preserve_partitioning=[false]",
             "    CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], has_header=false"
             ];
         assert_eq!(initial, expected_initial);
@@ -2590,7 +2596,7 @@ mod tests {
             ProjectionPushdown::new().optimize(projection, &ConfigOptions::new())?;
 
         let expected = [
-            "SortExec: expr=[b@2 ASC,c@0 + new_a@1 ASC], preserve_partitioning=[false]",
+            "SortExec: expr=[b@2 ASC, c@0 + new_a@1 ASC], preserve_partitioning=[false]",
             "  ProjectionExec: expr=[c@2 as c, a@0 as new_a, b@1 as b]",
             "    CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], has_header=false"
         ];
@@ -2603,7 +2609,7 @@ mod tests {
     fn test_sort_preserving_after_projection() -> Result<()> {
         let csv = create_simple_csv_exec();
         let sort_req: Arc<dyn ExecutionPlan> = Arc::new(SortPreservingMergeExec::new(
-            vec![
+            LexOrdering::new(vec![
                 PhysicalSortExpr {
                     expr: Arc::new(Column::new("b", 1)),
                     options: SortOptions::default(),
@@ -2616,7 +2622,7 @@ mod tests {
                     )),
                     options: SortOptions::default(),
                 },
-            ],
+            ]),
             csv.clone(),
         ));
         let projection: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
@@ -2631,7 +2637,7 @@ mod tests {
         let initial = get_plan_string(&projection);
         let expected_initial = [
             "ProjectionExec: expr=[c@2 as c, a@0 as new_a, b@1 as b]",
-            "  SortPreservingMergeExec: [b@1 ASC,c@2 + a@0 ASC]",
+            "  SortPreservingMergeExec: [b@1 ASC, c@2 + a@0 ASC]",
             "    CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], has_header=false"
             ];
         assert_eq!(initial, expected_initial);
@@ -2640,7 +2646,7 @@ mod tests {
             ProjectionPushdown::new().optimize(projection, &ConfigOptions::new())?;
 
         let expected = [
-            "SortPreservingMergeExec: [b@2 ASC,c@0 + new_a@1 ASC]",
+            "SortPreservingMergeExec: [b@2 ASC, c@0 + new_a@1 ASC]",
             "  ProjectionExec: expr=[c@2 as c, a@0 as new_a, b@1 as b]",
             "    CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], has_header=false"
         ];

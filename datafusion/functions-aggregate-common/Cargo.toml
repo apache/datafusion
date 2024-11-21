@@ -19,7 +19,6 @@
 name = "datafusion-functions-aggregate-common"
 description = "Utility functions for implementing aggregate functions for the DataFusion query engine"
 keywords = ["datafusion", "logical", "plan", "expressions"]
-readme = "README.md"
 version = { workspace = true }
 edition = { workspace = true }
 homepage = { workspace = true }
@@ -44,3 +43,10 @@ datafusion-common = { workspace = true }
 datafusion-expr-common = { workspace = true }
 datafusion-physical-expr-common = { workspace = true }
 rand = { workspace = true }
+
+[dev-dependencies]
+criterion = "0.5"
+
+[[bench]]
+harness = false
+name = "accumulate"

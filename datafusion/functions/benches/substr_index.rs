@@ -90,6 +90,7 @@ fn criterion_benchmark(c: &mut Criterion) {
 
         let args = [strings, delimiters, counts];
         b.iter(|| {
+            #[allow(deprecated)] // TODO use invoke_batch
             black_box(
                 substr_index()
                     .invoke(&args)

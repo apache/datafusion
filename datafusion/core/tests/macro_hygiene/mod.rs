@@ -14,9 +14,11 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
+
 //! Verifies [Macro Hygene]
 //!
 //! [Macro Hygene]: https://en.wikipedia.org/wiki/Hygienic_macro
+
 mod plan_err {
     // NO other imports!
     use datafusion_common::plan_err;
@@ -35,5 +37,15 @@ mod plan_datafusion_err {
     #[test]
     fn test_macro() {
         plan_datafusion_err!("foo");
+    }
+}
+
+mod record_batch {
+    // NO other imports!
+    use datafusion_common::record_batch;
+
+    #[test]
+    fn test_macro() {
+        record_batch!(("column_name", Int32, vec![1, 2, 3])).unwrap();
     }
 }

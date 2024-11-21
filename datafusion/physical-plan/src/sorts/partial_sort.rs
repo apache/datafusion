@@ -57,7 +57,6 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use crate::expressions::PhysicalSortExpr;
 use crate::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use crate::sorts::sort::sort_batch;
 use crate::{
@@ -82,7 +81,7 @@ pub struct PartialSortExec {
     /// Input schema
     pub(crate) input: Arc<dyn ExecutionPlan>,
     /// Sort expressions
-    expr: Vec<PhysicalSortExpr>,
+    expr: LexOrdering,
     /// Length of continuous matching columns of input that satisfy
     /// the required ordering for the sort
     common_prefix_length: usize,
@@ -100,7 +99,7 @@ pub struct PartialSortExec {
 impl PartialSortExec {
     /// Create a new partial sort execution plan
     pub fn new(
-        expr: Vec<PhysicalSortExpr>,
+        expr: LexOrdering,
         input: Arc<dyn ExecutionPlan>,
         common_prefix_length: usize,
     ) -> Self {
@@ -159,13 +158,18 @@ impl PartialSortExec {
     }
 
     /// Sort expressions
-    pub fn expr(&self) -> &[PhysicalSortExpr] {
-        &self.expr
+    pub fn expr(&self) -> &LexOrdering {
+        self.expr.as_ref()
     }
 
     /// If `Some(fetch)`, limits output to only the first "fetch" items
     pub fn fetch(&self) -> Option<usize> {
         self.fetch
+    }
+
+    /// Common prefix length
+    pub fn common_prefix_length(&self) -> usize {
+        self.common_prefix_length
     }
 
     fn output_partitioning_helper(
@@ -212,13 +216,12 @@ impl DisplayAs for PartialSortExec {
     ) -> std::fmt::Result {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                let expr = PhysicalSortExpr::format_list(&self.expr);
                 let common_prefix_length = self.common_prefix_length;
                 match self.fetch {
                     Some(fetch) => {
-                        write!(f, "PartialSortExec: TopK(fetch={fetch}), expr=[{expr}], common_prefix_length=[{common_prefix_length}]", )
+                        write!(f, "PartialSortExec: TopK(fetch={fetch}), expr=[{}], common_prefix_length=[{common_prefix_length}]", self.expr)
                     }
-                    None => write!(f, "PartialSortExec: expr=[{expr}], common_prefix_length=[{common_prefix_length}]"),
+                    None => write!(f, "PartialSortExec: expr=[{}], common_prefix_length=[{common_prefix_length}]", self.expr),
                 }
             }
         }
@@ -315,7 +318,7 @@ struct PartialSortStream {
     /// The input plan
     input: SendableRecordBatchStream,
     /// Sort expressions
-    expr: Vec<PhysicalSortExpr>,
+    expr: LexOrdering,
     /// Length of prefix common to input ordering and required ordering of plan
     /// should be more than 0 otherwise PartialSort is not applicable
     common_prefix_length: usize,
@@ -394,7 +397,7 @@ impl PartialSortStream {
     fn sort_in_mem_batches(self: &mut Pin<&mut Self>) -> Result<RecordBatch> {
         let input_batch = concat_batches(&self.schema(), &self.in_mem_batches)?;
         self.in_mem_batches.clear();
-        let result = sort_batch(&input_batch, &self.expr, self.fetch)?;
+        let result = sort_batch(&input_batch, self.expr.as_ref(), self.fetch)?;
         if let Some(remaining_fetch) = self.fetch {
             // remaining_fetch - result.num_rows() is always be >= 0
             // because result length of sort_batch with limit cannot be
@@ -448,6 +451,7 @@ mod tests {
 
     use crate::collect;
     use crate::expressions::col;
+    use crate::expressions::PhysicalSortExpr;
     use crate::memory::MemoryExec;
     use crate::sorts::sort::SortExec;
     use crate::test;
@@ -475,7 +479,7 @@ mod tests {
         };
 
         let partial_sort_exec = Arc::new(PartialSortExec::new(
-            vec![
+            LexOrdering::new(vec![
                 PhysicalSortExpr {
                     expr: col("a", &schema)?,
                     options: option_asc,
@@ -488,7 +492,7 @@ mod tests {
                     expr: col("c", &schema)?,
                     options: option_asc,
                 },
-            ],
+            ]),
             Arc::clone(&source),
             2,
         )) as Arc<dyn ExecutionPlan>;
@@ -539,7 +543,7 @@ mod tests {
         for common_prefix_length in [1, 2] {
             let partial_sort_exec = Arc::new(
                 PartialSortExec::new(
-                    vec![
+                    LexOrdering::new(vec![
                         PhysicalSortExpr {
                             expr: col("a", &schema)?,
                             options: option_asc,
@@ -552,7 +556,7 @@ mod tests {
                             expr: col("c", &schema)?,
                             options: option_asc,
                         },
-                    ],
+                    ]),
                     Arc::clone(&source),
                     common_prefix_length,
                 )
@@ -611,7 +615,7 @@ mod tests {
             [(1, &source_tables[0]), (2, &source_tables[1])]
         {
             let partial_sort_exec = Arc::new(PartialSortExec::new(
-                vec![
+                LexOrdering::new(vec![
                     PhysicalSortExpr {
                         expr: col("a", &schema)?,
                         options: option_asc,
@@ -624,7 +628,7 @@ mod tests {
                         expr: col("c", &schema)?,
                         options: option_asc,
                     },
-                ],
+                ]),
                 Arc::clone(source),
                 common_prefix_length,
             ));
@@ -701,7 +705,7 @@ mod tests {
         };
         let schema = mem_exec.schema();
         let partial_sort_executor = PartialSortExec::new(
-            vec![
+            LexOrdering::new(vec![
                 PhysicalSortExpr {
                     expr: col("a", &schema)?,
                     options: option_asc,
@@ -714,7 +718,7 @@ mod tests {
                     expr: col("c", &schema)?,
                     options: option_asc,
                 },
-            ],
+            ]),
             Arc::clone(&mem_exec),
             1,
         );
@@ -762,7 +766,7 @@ mod tests {
             (Some(250), vec![0, 125, 125]),
         ] {
             let partial_sort_executor = PartialSortExec::new(
-                vec![
+                LexOrdering::new(vec![
                     PhysicalSortExpr {
                         expr: col("a", &schema)?,
                         options: option_asc,
@@ -775,7 +779,7 @@ mod tests {
                         expr: col("c", &schema)?,
                         options: option_asc,
                     },
-                ],
+                ]),
                 Arc::clone(&mem_exec),
                 1,
             )
@@ -834,10 +838,10 @@ mod tests {
         )?);
 
         let partial_sort_exec = Arc::new(PartialSortExec::new(
-            vec![PhysicalSortExpr {
+            LexOrdering::new(vec![PhysicalSortExpr {
                 expr: col("field_name", &schema)?,
                 options: SortOptions::default(),
-            }],
+            }]),
             input,
             1,
         ));
@@ -923,7 +927,7 @@ mod tests {
         )?;
 
         let partial_sort_exec = Arc::new(PartialSortExec::new(
-            vec![
+            LexOrdering::new(vec![
                 PhysicalSortExpr {
                     expr: col("a", &schema)?,
                     options: option_asc,
@@ -936,7 +940,7 @@ mod tests {
                     expr: col("c", &schema)?,
                     options: option_desc,
                 },
-            ],
+            ]),
             Arc::new(MemoryExec::try_new(&[vec![batch]], schema, None)?),
             2,
         ));
@@ -1000,10 +1004,10 @@ mod tests {
         let blocking_exec = Arc::new(BlockingExec::new(Arc::clone(&schema), 1));
         let refs = blocking_exec.refs();
         let sort_exec = Arc::new(PartialSortExec::new(
-            vec![PhysicalSortExpr {
+            LexOrdering::new(vec![PhysicalSortExpr {
                 expr: col("a", &schema)?,
                 options: SortOptions::default(),
-            }],
+            }]),
             blocking_exec,
             1,
         ));

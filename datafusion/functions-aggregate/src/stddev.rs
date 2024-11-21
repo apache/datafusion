@@ -19,6 +19,7 @@
 
 use std::any::Any;
 use std::fmt::{Debug, Formatter};
+use std::mem::align_of_val;
 use std::sync::{Arc, OnceLock};
 
 use arrow::array::Float64Array;
@@ -70,10 +71,7 @@ impl Stddev {
     /// Create a new STDDEV aggregate function
     pub fn new() -> Self {
         Self {
-            signature: Signature::coercible(
-                vec![DataType::Float64],
-                Volatility::Immutable,
-            ),
+            signature: Signature::numeric(1, Volatility::Immutable),
             alias: vec!["stddev_samp".to_string()],
         }
     }
@@ -158,7 +156,7 @@ fn get_stddev_doc() -> &'static Documentation {
 +----------------------+
 ```"#,
             )
-            .with_standard_argument("expression", "The")
+            .with_standard_argument("expression", None)
             .build()
             .unwrap()
     })
@@ -282,7 +280,7 @@ fn get_stddev_pop_doc() -> &'static Documentation {
 +--------------------------+
 ```"#,
             )
-            .with_standard_argument("expression", "The")
+            .with_standard_argument("expression", None)
             .build()
             .unwrap()
     })
@@ -343,8 +341,7 @@ impl Accumulator for StddevAccumulator {
     }
 
     fn size(&self) -> usize {
-        std::mem::align_of_val(self) - std::mem::align_of_val(&self.variance)
-            + self.variance.size()
+        align_of_val(self) - align_of_val(&self.variance) + self.variance.size()
     }
 
     fn supports_retract_batch(&self) -> bool {
@@ -410,6 +407,7 @@ mod tests {
     use datafusion_expr::AggregateUDF;
     use datafusion_functions_aggregate_common::utils::get_accum_scalar_values_as_arrays;
     use datafusion_physical_expr::expressions::col;
+    use datafusion_physical_expr_common::sort_expr::LexOrdering;
     use std::sync::Arc;
 
     #[test]
@@ -461,7 +459,7 @@ mod tests {
             return_type: &DataType::Float64,
             schema,
             ignore_nulls: false,
-            ordering_req: &[],
+            ordering_req: &LexOrdering::default(),
             name: "a",
             is_distinct: false,
             is_reversed: false,
@@ -472,7 +470,7 @@ mod tests {
             return_type: &DataType::Float64,
             schema,
             ignore_nulls: false,
-            ordering_req: &[],
+            ordering_req: &LexOrdering::default(),
             name: "a",
             is_distinct: false,
             is_reversed: false,
