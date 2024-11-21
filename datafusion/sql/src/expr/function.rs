@@ -97,6 +97,8 @@ struct FunctionArgs {
     null_treatment: Option<NullTreatment>,
     /// DISTINCT
     distinct: bool,
+    /// WITHIN_GROUP clause, if any
+    within_group: Vec<OrderByExpr>,
 }
 
 impl FunctionArgs {
@@ -121,6 +123,7 @@ impl FunctionArgs {
                 filter,
                 null_treatment,
                 distinct: false,
+                within_group,
             });
         };
 
@@ -191,6 +194,7 @@ impl FunctionArgs {
             filter,
             null_treatment,
             distinct,
+            within_group,
         })
     }
 }
@@ -211,6 +215,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             filter,
             null_treatment,
             distinct,
+            within_group,
         } = function_args;
 
         // If function is a window function (it has an OVER clause),
@@ -337,6 +342,17 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 )?;
                 let order_by = (!order_by.is_empty()).then_some(order_by);
                 let args = self.function_args_to_expr(args, schema, planner_context)?;
+
+                let within_group = self.order_by_to_sort_expr( // TODO : need to double check if it can be used as it is
+                    within_group,
+                    schema,
+                    planner_context,
+                    false,
+                    None,
+                )?;
+
+                let within_group = (!within_group.is_empty()).then_some(within_group);
+
                 let filter: Option<Box<Expr>> = filter
                     .map(|e| self.sql_expr_to_logical_expr(*e, schema, planner_context))
                     .transpose()?
@@ -348,6 +364,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     filter,
                     order_by,
                     null_treatment,
+                    within_group,
                 )));
             }
         }

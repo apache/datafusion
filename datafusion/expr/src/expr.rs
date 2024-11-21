@@ -665,6 +665,8 @@ pub struct AggregateFunction {
     /// Optional ordering
     pub order_by: Option<Vec<Sort>>,
     pub null_treatment: Option<NullTreatment>,
+    /// Optional within group for ordered-set aggregate functions
+    pub within_group: Option<Vec<Sort>>,
 }
 
 impl AggregateFunction {
@@ -676,6 +678,7 @@ impl AggregateFunction {
         filter: Option<Box<Expr>>,
         order_by: Option<Vec<Sort>>,
         null_treatment: Option<NullTreatment>,
+        within_group: Option<Vec<Sort>>,
     ) -> Self {
         Self {
             func,
@@ -684,6 +687,7 @@ impl AggregateFunction {
             filter,
             order_by,
             null_treatment,
+            within_group,
         }
     }
 }
