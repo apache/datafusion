@@ -71,6 +71,22 @@ _ (empty) false false false false
 NULL NULL NULL NULL NULL NULL
 NULL NULL NULL NULL NULL NULL
 
+# TODO: move it back to `string_query.slt.part` after fixing the issue
+# see issue https://github.com/apache/datafusion/issues/13329
+query IIII
+select bit_length(ascii_1), bit_length(ascii_2), bit_length(unicode_1), bit_length(unicode_2) from test_basic_operator;
+----
+48 8 144 32
+72 72 176 176
+56 8 240 64
+88 88 104 256
+56 24 216 288
+0 8 0 0
+8 16 0 0
+8 16 0 0
+NULL 8 NULL NULL
+NULL 8 NULL 32
+
 #
 # common test for string-like functions and operators
 #

@@ -39,7 +39,7 @@ use datafusion_expr::{
 use crate::optimize_projections::required_indices::RequiredIndicies;
 use crate::utils::NamePreserver;
 use datafusion_common::tree_node::{
-    Transformed, TreeNode, TreeNodeIterator, TreeNodeRecursion,
+    Transformed, TreeNode, TreeNodeContainer, TreeNodeRecursion,
 };
 
 /// Optimizer rule to prune unnecessary columns from intermediate schemas
@@ -484,7 +484,7 @@ fn merge_consecutive_projections(proj: Projection) -> Result<Transformed<Project
     // previous projection as input:
     let name_preserver = NamePreserver::new_for_projection();
     let mut original_names = vec![];
-    let new_exprs = expr.into_iter().map_until_stop_and_collect(|expr| {
+    let new_exprs = expr.map_elements(|expr| {
         original_names.push(name_preserver.save(&expr));
 
         // do not rewrite top level Aliases (rewriter will remove all aliases within exprs)

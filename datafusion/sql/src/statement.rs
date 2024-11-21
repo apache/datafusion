@@ -152,6 +152,10 @@ fn calc_inline_constraints_from_columns(columns: &[ColumnDef]) -> Vec<TableConst
                 | ast::ColumnOption::OnUpdate(_)
                 | ast::ColumnOption::Materialized(_)
                 | ast::ColumnOption::Ephemeral(_)
+                | ast::ColumnOption::Identity(_)
+                | ast::ColumnOption::OnConflict(_)
+                | ast::ColumnOption::Policy(_)
+                | ast::ColumnOption::Tags(_)
                 | ast::ColumnOption::Alias(_) => {}
             }
         }
@@ -646,6 +650,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 name,
                 parameters,
                 using,
+                // has_parentheses specifies the syntax, but the plan is the
+                // same no matter the synax used, so ignore it
+                has_parentheses: _,
             } => {
                 // `USING` is a MySQL-specific syntax and currently not supported.
                 if !using.is_empty() {
@@ -661,7 +668,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     .collect::<Result<Vec<Expr>>>()?;
 
                 Ok(LogicalPlan::Statement(PlanStatement::Execute(Execute {
-                    name: ident_to_string(&name),
+                    name: object_name_to_string(&name),
                     parameters,
                 })))
             }
@@ -680,6 +687,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 full,
                 db_name,
                 filter,
+                // SHOW TABLES IN/FROM are equivalent, this field specifies which the user
+                // specified, but it doesn't affect the plan so ignore the field
+                clause: _,
             } => self.show_tables_to_plan(extended, full, db_name, filter),
 
             Statement::ShowColumns {
@@ -1108,7 +1118,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 (plan, input_schema, Some(table_ref))
             }
             CopyToSource::Query(query) => {
-                let plan = self.query_to_plan(query, &mut PlannerContext::new())?;
+                let plan = self.query_to_plan(*query, &mut PlannerContext::new())?;
                 let input_schema = Arc::clone(plan.schema());
                 (plan, input_schema, None)
             }

@@ -395,19 +395,41 @@ pub fn accumulate_indices<F>(
             }
         }
         (None, Some(filter)) => {
-            assert_eq!(filter.len(), group_indices.len());
-            // The performance with a filter could be improved by
-            // iterating over the filter in chunks, rather than a single
-            // iterator. TODO file a ticket
-            let iter = group_indices.iter().zip(filter.iter());
-            for (&group_index, filter_value) in iter {
-                if let Some(true) = filter_value {
-                    index_fn(group_index)
-                }
-            }
+            debug_assert_eq!(filter.len(), group_indices.len());
+            let group_indices_chunks = group_indices.chunks_exact(64);
+            let bit_chunks = filter.values().bit_chunks();
+
+            let group_indices_remainder = group_indices_chunks.remainder();
+
+            group_indices_chunks.zip(bit_chunks.iter()).for_each(
+                |(group_index_chunk, mask)| {
+                    // index_mask has value 1 << i in the loop
+                    let mut index_mask = 1;
+                    group_index_chunk.iter().for_each(|&group_index| {
+                        // valid bit was set, real vale
+                        let is_valid = (mask & index_mask) != 0;
+                        if is_valid {
+                            index_fn(group_index);
+                        }
+                        index_mask <<= 1;
+                    })
+                },
+            );
+
+            // handle any remaining bits (after the initial 64)
+            let remainder_bits = bit_chunks.remainder_bits();
+            group_indices_remainder
+                .iter()
+                .enumerate()
+                .for_each(|(i, &group_index)| {
+                    let is_valid = remainder_bits & (1 << i) != 0;
+                    if is_valid {
+                        index_fn(group_index)
+                    }
+                });
         }
         (Some(valids), None) => {
-            assert_eq!(valids.len(), group_indices.len());
+            debug_assert_eq!(valids.len(), group_indices.len());
             // This is based on (ahem, COPY/PASTA) arrow::compute::aggregate::sum
             // iterate over in chunks of 64 bits for more efficient null checking
             let group_indices_chunks = group_indices.chunks_exact(64);
@@ -444,20 +466,44 @@ pub fn accumulate_indices<F>(
         }
 
         (Some(valids), Some(filter)) => {
-            assert_eq!(filter.len(), group_indices.len());
-            assert_eq!(valids.len(), group_indices.len());
-            // The performance with a filter could likely be improved by
-            // iterating over the filter in chunks, rather than using
-            // iterators. TODO file a ticket
-            filter
+            debug_assert_eq!(filter.len(), group_indices.len());
+            debug_assert_eq!(valids.len(), group_indices.len());
+
+            let group_indices_chunks = group_indices.chunks_exact(64);
+            let valid_bit_chunks = valids.inner().bit_chunks();
+            let filter_bit_chunks = filter.values().bit_chunks();
+
+            let group_indices_remainder = group_indices_chunks.remainder();
+
+            group_indices_chunks
+                .zip(valid_bit_chunks.iter())
+                .zip(filter_bit_chunks.iter())
+                .for_each(|((group_index_chunk, valid_mask), filter_mask)| {
+                    // index_mask has value 1 << i in the loop
+                    let mut index_mask = 1;
+                    group_index_chunk.iter().for_each(|&group_index| {
+                        // valid bit was set, real vale
+                        let is_valid = (valid_mask & filter_mask & index_mask) != 0;
+                        if is_valid {
+                            index_fn(group_index);
+                        }
+                        index_mask <<= 1;
+                    })
+                });
+
+            // handle any remaining bits (after the initial 64)
+            let remainder_valid_bits = valid_bit_chunks.remainder_bits();
+            let remainder_filter_bits = filter_bit_chunks.remainder_bits();
+            group_indices_remainder
                 .iter()
-                .zip(group_indices.iter())
-                .zip(valids.iter())
-                .for_each(|((filter_value, &group_index), is_valid)| {
-                    if let (Some(true), true) = (filter_value, is_valid) {
+                .enumerate()
+                .for_each(|(i, &group_index)| {
+                    let is_valid =
+                        remainder_valid_bits & remainder_filter_bits & (1 << i) != 0;
+                    if is_valid {
                         index_fn(group_index)
                     }
-                })
+                });
         }
     }
 }

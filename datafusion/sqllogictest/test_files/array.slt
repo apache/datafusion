@@ -1155,6 +1155,18 @@ select column1, column5 from arrays_values_without_nulls;
 [21, 22, 23, 24, 25, 26, 27, 28, 29, 30] [6, 7]
 [31, 32, 33, 34, 35, 26, 37, 38, 39, 40] [8, 9]
 
+# make array with arrays of different types
+query ?
+select make_array(make_array(1), arrow_cast(make_array(-1), 'LargeList(Int8)'))
+----
+[[1], [-1]]
+
+query T
+select arrow_typeof(make_array(make_array(1), arrow_cast(make_array(-1), 'LargeList(Int8)')));
+----
+List(Field { name: "item", data_type: LargeList(Field { name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} })
+
+
 query ???
 select make_array(column1),
        make_array(column1, column5),

@@ -18,8 +18,8 @@
 use datafusion_expr::expr::Unnest;
 use sqlparser::ast::Value::SingleQuotedString;
 use sqlparser::ast::{
-    self, BinaryOperator, Expr as AstExpr, Function, Ident, Interval, ObjectName,
-    TimezoneInfo, UnaryOperator,
+    self, Array, BinaryOperator, Expr as AstExpr, Function, Ident, Interval, ObjectName,
+    Subscript, TimezoneInfo, UnaryOperator,
 };
 use std::sync::Arc;
 use std::vec;
@@ -180,25 +180,7 @@ impl Unparser<'_> {
                 })
             }
             Expr::Cast(Cast { expr, data_type }) => {
-                let inner_expr = self.expr_to_sql_inner(expr)?;
-                match data_type {
-                    DataType::Dictionary(_, _) => match inner_expr {
-                        // Dictionary values don't need to be cast to other types when rewritten back to sql
-                        ast::Expr::Value(_) => Ok(inner_expr),
-                        _ => Ok(ast::Expr::Cast {
-                            kind: ast::CastKind::Cast,
-                            expr: Box::new(inner_expr),
-                            data_type: self.arrow_dtype_to_ast_dtype(data_type)?,
-                            format: None,
-                        }),
-                    },
-                    _ => Ok(ast::Expr::Cast {
-                        kind: ast::CastKind::Cast,
-                        expr: Box::new(inner_expr),
-                        data_type: self.arrow_dtype_to_ast_dtype(data_type)?,
-                        format: None,
-                    }),
-                }
+                Ok(self.cast_to_sql(expr, data_type)?)
             }
             Expr::Literal(value) => Ok(self.scalar_to_sql(value)?),
             Expr::Alias(Alias { expr, name: _, .. }) => self.expr_to_sql_inner(expr),
@@ -282,6 +264,7 @@ impl Unparser<'_> {
                 expr: Box::new(self.expr_to_sql_inner(expr)?),
                 pattern: Box::new(self.expr_to_sql_inner(pattern)?),
                 escape_char: escape_char.map(|c| c.to_string()),
+                any: false,
             }),
             Expr::AggregateFunction(agg) => {
                 let func_name = agg.func.name();
@@ -476,6 +459,19 @@ impl Unparser<'_> {
         func_name: &str,
         args: &[Expr],
     ) -> Result<ast::Expr> {
+        match func_name {
+            "make_array" => self.make_array_to_sql(args),
+            "array_element" => self.array_element_to_sql(args),
+            // TODO: support for the construct and access functions of the `map` and `struct` types
+            _ => self.scalar_function_to_sql_internal(func_name, args),
+        }
+    }
+
+    fn scalar_function_to_sql_internal(
+        &self,
+        func_name: &str,
+        args: &[Expr],
+    ) -> Result<ast::Expr> {
         let args = self.function_args_to_sql(args)?;
         Ok(ast::Expr::Function(Function {
             name: ObjectName(vec![Ident {
@@ -493,6 +489,29 @@ impl Unparser<'_> {
             within_group: vec![],
             parameters: ast::FunctionArguments::None,
         }))
+    }
+
+    fn make_array_to_sql(&self, args: &[Expr]) -> Result<ast::Expr> {
+        let args = args
+            .iter()
+            .map(|e| self.expr_to_sql(e))
+            .collect::<Result<Vec<_>>>()?;
+        Ok(ast::Expr::Array(Array {
+            elem: args,
+            named: false,
+        }))
+    }
+
+    fn array_element_to_sql(&self, args: &[Expr]) -> Result<ast::Expr> {
+        if args.len() != 2 {
+            return internal_err!("array_element must have exactly 2 arguments");
+        }
+        let array = self.expr_to_sql(&args[0])?;
+        let index = self.expr_to_sql(&args[1])?;
+        Ok(ast::Expr::Subscript {
+            expr: Box::new(array),
+            subscript: Box::new(Subscript::Index { index }),
+        })
     }
 
     pub fn sort_to_sql(&self, sort: &Sort) -> Result<ast::OrderByExpr> {
@@ -862,6 +881,31 @@ impl Unparser<'_> {
             data_type: ast::DataType::Time(None, TimezoneInfo::None),
             format: None,
         })
+    }
+
+    // Explicit type cast on ast::Expr::Value is not needed by underlying engine for certain types
+    // For example: CAST(Utf8("binary_value") AS Binary) and  CAST(Utf8("dictionary_value") AS Dictionary)
+    fn cast_to_sql(&self, expr: &Expr, data_type: &DataType) -> Result<ast::Expr> {
+        let inner_expr = self.expr_to_sql_inner(expr)?;
+        match inner_expr {
+            ast::Expr::Value(_) => match data_type {
+                DataType::Dictionary(_, _) | DataType::Binary | DataType::BinaryView => {
+                    Ok(inner_expr)
+                }
+                _ => Ok(ast::Expr::Cast {
+                    kind: ast::CastKind::Cast,
+                    expr: Box::new(inner_expr),
+                    data_type: self.arrow_dtype_to_ast_dtype(data_type)?,
+                    format: None,
+                }),
+            },
+            _ => Ok(ast::Expr::Cast {
+                kind: ast::CastKind::Cast,
+                expr: Box::new(inner_expr),
+                data_type: self.arrow_dtype_to_ast_dtype(data_type)?,
+                format: None,
+            }),
+        }
     }
 
     /// DataFusion ScalarValues sometimes require a ast::Expr to construct.
@@ -1414,9 +1458,7 @@ impl Unparser<'_> {
             }
             DataType::Utf8 => Ok(self.dialect.utf8_cast_dtype()),
             DataType::LargeUtf8 => Ok(self.dialect.large_utf8_cast_dtype()),
-            DataType::Utf8View => {
-                not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
-            }
+            DataType::Utf8View => Ok(self.dialect.utf8_cast_dtype()),
             DataType::List(_) => {
                 not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
             }
@@ -1476,7 +1518,7 @@ mod tests {
     use datafusion_common::TableReference;
     use datafusion_expr::expr::WildcardOptions;
     use datafusion_expr::{
-        case, col, cube, exists, grouping_set, interval_datetime_lit,
+        case, cast, col, cube, exists, grouping_set, interval_datetime_lit,
         interval_year_month_lit, lit, not, not_exists, out_ref_col, placeholder, rollup,
         table_scan, try_cast, when, wildcard, ColumnarValue, ScalarUDF, ScalarUDFImpl,
         Signature, Volatility, WindowFrame, WindowFunctionDefinition,
@@ -1484,11 +1526,12 @@ mod tests {
     use datafusion_expr::{interval_month_day_nano_lit, ExprFunctionExt};
     use datafusion_functions_aggregate::count::count_udaf;
     use datafusion_functions_aggregate::expr_fn::sum;
+    use datafusion_functions_nested::expr_fn::{array_element, make_array};
     use datafusion_functions_window::row_number::row_number_udwf;
 
     use crate::unparser::dialect::{
-        CustomDialect, CustomDialectBuilder, DateFieldExtractStyle, Dialect,
-        PostgreSqlDialect,
+        CharacterLengthStyle, CustomDialect, CustomDialectBuilder, DateFieldExtractStyle,
+        Dialect, PostgreSqlDialect,
     };
 
     use super::*;
@@ -1888,6 +1931,12 @@ mod tests {
                 }),
                 r#"UNNEST("table".array_col)"#,
             ),
+            (make_array(vec![lit(1), lit(2), lit(3)]), "[1, 2, 3]"),
+            (array_element(col("array_col"), lit(1)), "array_col[1]"),
+            (
+                array_element(make_array(vec![lit(1), lit(2), lit(3)]), lit(1)),
+                "[1, 2, 3][1]",
+            ),
         ];
 
         for (expr, expected) in tests {
@@ -2004,6 +2053,33 @@ mod tests {
         }
 
         Ok(())
+    }
+
+    #[test]
+    fn test_character_length_scalar_to_expr() {
+        let tests = [
+            (CharacterLengthStyle::Length, "length(x)"),
+            (CharacterLengthStyle::CharacterLength, "character_length(x)"),
+        ];
+
+        for (style, expected) in tests {
+            let dialect = CustomDialectBuilder::new()
+                .with_character_length_style(style)
+                .build();
+            let unparser = Unparser::new(&dialect);
+
+            let expr = ScalarUDF::new_from_impl(
+                datafusion_functions::unicode::character_length::CharacterLengthFunc::new(
+                ),
+            )
+            .call(vec![col("x")]);
+
+            let ast = unparser.expr_to_sql(&expr).expect("to be unparsed");
+
+            let actual = format!("{ast}");
+
+            assert_eq!(actual, expected);
+        }
     }
 
     #[test]
@@ -2153,6 +2229,39 @@ mod tests {
             (
                 Expr::Literal(ScalarValue::Float32(Some(-2.989f32))),
                 "-2.989",
+            ),
+        ];
+        for (value, expected) in tests {
+            let dialect = CustomDialectBuilder::new().build();
+            let unparser = Unparser::new(&dialect);
+
+            let ast = unparser.expr_to_sql(&value).expect("to be unparsed");
+            let actual = format!("{ast}");
+
+            assert_eq!(actual, expected);
+        }
+    }
+
+    #[test]
+    fn test_cast_value_to_binary_expr() {
+        let tests = [
+            (
+                Expr::Cast(Cast {
+                    expr: Box::new(Expr::Literal(ScalarValue::Utf8(Some(
+                        "blah".to_string(),
+                    )))),
+                    data_type: DataType::Binary,
+                }),
+                "'blah'",
+            ),
+            (
+                Expr::Cast(Cast {
+                    expr: Box::new(Expr::Literal(ScalarValue::Utf8(Some(
+                        "blah".to_string(),
+                    )))),
+                    data_type: DataType::BinaryView,
+                }),
+                "'blah'",
             ),
         ];
         for (value, expected) in tests {
@@ -2427,6 +2536,52 @@ mod tests {
 
             assert_eq!(actual, expected);
         }
+        Ok(())
+    }
+
+    #[test]
+    fn test_utf8_view_to_sql() -> Result<()> {
+        let dialect = CustomDialectBuilder::new()
+            .with_utf8_cast_dtype(ast::DataType::Char(None))
+            .build();
+        let unparser = Unparser::new(&dialect);
+
+        let ast_dtype = unparser.arrow_dtype_to_ast_dtype(&DataType::Utf8View)?;
+
+        assert_eq!(ast_dtype, ast::DataType::Char(None));
+
+        let expr = cast(col("a"), DataType::Utf8View);
+        let ast = unparser.expr_to_sql(&expr)?;
+
+        let actual = format!("{}", ast);
+        let expected = r#"CAST(a AS CHAR)"#.to_string();
+
+        assert_eq!(actual, expected);
+
+        let expr = col("a").eq(lit(ScalarValue::Utf8View(Some("hello".to_string()))));
+        let ast = unparser.expr_to_sql(&expr)?;
+
+        let actual = format!("{}", ast);
+        let expected = r#"(a = 'hello')"#.to_string();
+
+        assert_eq!(actual, expected);
+
+        let expr = col("a").is_not_null();
+
+        let ast = unparser.expr_to_sql(&expr)?;
+        let actual = format!("{}", ast);
+        let expected = r#"a IS NOT NULL"#.to_string();
+
+        assert_eq!(actual, expected);
+
+        let expr = col("a").is_null();
+
+        let ast = unparser.expr_to_sql(&expr)?;
+        let actual = format!("{}", ast);
+        let expected = r#"a IS NULL"#.to_string();
+
+        assert_eq!(actual, expected);
+
         Ok(())
     }
 }

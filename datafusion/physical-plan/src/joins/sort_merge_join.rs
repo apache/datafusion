@@ -204,16 +204,34 @@ impl SortMergeJoinExec {
         &self.on
     }
 
+    /// Ref to right execution plan
     pub fn right(&self) -> &Arc<dyn ExecutionPlan> {
         &self.right
     }
 
+    /// Join type
     pub fn join_type(&self) -> JoinType {
         self.join_type
     }
 
+    /// Ref to left execution plan
     pub fn left(&self) -> &Arc<dyn ExecutionPlan> {
         &self.left
+    }
+
+    /// Ref to join filter
+    pub fn filter(&self) -> &Option<JoinFilter> {
+        &self.filter
+    }
+
+    /// Ref to sort options
+    pub fn sort_options(&self) -> &[SortOptions] {
+        &self.sort_options
+    }
+
+    /// Null equals null
+    pub fn null_equals_null(&self) -> bool {
+        self.null_equals_null
     }
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
@@ -371,7 +389,7 @@ impl ExecutionPlan for SortMergeJoinExec {
             .register(context.memory_pool());
 
         // create join stream
-        Ok(Box::pin(SMJStream::try_new(
+        Ok(Box::pin(SortMergeJoinStream::try_new(
             Arc::clone(&self.schema),
             self.sort_options.clone(),
             self.null_equals_null,
@@ -461,7 +479,7 @@ impl SortMergeJoinMetrics {
 
 /// State of SMJ stream
 #[derive(Debug, PartialEq, Eq)]
-enum SMJState {
+enum SortMergeJoinState {
     /// Init joining with a new streamed row or a new buffered batches
     Init,
     /// Polling one streamed row or one buffered batch, or both
@@ -597,11 +615,11 @@ struct BufferedBatch {
     pub null_joined: Vec<usize>,
     /// Size estimation used for reserving / releasing memory
     pub size_estimation: usize,
-    /// The indices of buffered batch that failed the join filter.
-    /// This is a map between buffered row index and a boolean value indicating whether all joined row
-    /// of the buffered row failed the join filter.
+    /// The indices of buffered batch that the join filter doesn't satisfy.
+    /// This is a map between right row index and a boolean value indicating whether all joined row
+    /// of the right row does not satisfy the filter .
     /// When dequeuing the buffered batch, we need to produce null joined rows for these indices.
-    pub join_filter_failed_map: HashMap<u64, bool>,
+    pub join_filter_not_matched_map: HashMap<u64, bool>,
     /// Current buffered batch number of rows. Equal to batch.num_rows()
     /// but if batch is spilled to disk this property is preferable
     /// and less expensive
@@ -642,7 +660,7 @@ impl BufferedBatch {
             join_arrays,
             null_joined: vec![],
             size_estimation,
-            join_filter_failed_map: HashMap::new(),
+            join_filter_not_matched_map: HashMap::new(),
             num_rows,
             spill_file: None,
         }
@@ -651,9 +669,9 @@ impl BufferedBatch {
 
 /// Sort-merge join stream that consumes streamed and buffered data stream
 /// and produces joined output
-struct SMJStream {
+struct SortMergeJoinStream {
     /// Current state of the stream
-    pub state: SMJState,
+    pub state: SortMergeJoinState,
     /// Output schema
     pub schema: SchemaRef,
     /// Sort options of join columns used to sort streamed and buffered data stream
@@ -722,7 +740,15 @@ struct JoinedRecordBatches {
     pub batch_ids: Vec<usize>,
 }
 
-impl RecordBatchStream for SMJStream {
+impl JoinedRecordBatches {
+    fn clear(&mut self) {
+        self.batches.clear();
+        self.batch_ids.clear();
+        self.filter_mask = BooleanBuilder::new();
+        self.row_indices = UInt64Builder::new();
+    }
+}
+impl RecordBatchStream for SortMergeJoinStream {
     fn schema(&self) -> SchemaRef {
         Arc::clone(&self.schema)
     }
@@ -852,12 +878,63 @@ fn get_corrected_filter_mask(
             corrected_mask.extend(vec![Some(true); null_matched]);
             Some(corrected_mask.finish())
         }
+        JoinType::Full => {
+            let mut mask: Vec<Option<bool>> = vec![Some(true); row_indices_length];
+            let mut last_true_idx = 0;
+            let mut first_row_idx = 0;
+            let mut seen_false = false;
+
+            for i in 0..row_indices_length {
+                let last_index =
+                    last_index_for_row(i, row_indices, batch_ids, row_indices_length);
+                let val = filter_mask.value(i);
+                let is_null = filter_mask.is_null(i);
+
+                if val {
+                    // memoize the first seen matched row
+                    if !seen_true {
+                        last_true_idx = i;
+                    }
+                    seen_true = true;
+                }
+
+                if is_null || val {
+                    mask[i] = Some(true);
+                } else if !is_null && !val && (seen_true || seen_false) {
+                    mask[i] = None;
+                } else {
+                    mask[i] = Some(false);
+                }
+
+                if !is_null && !val {
+                    seen_false = true;
+                }
+
+                if last_index {
+                    // If the left row seen as true its needed to output it once
+                    // To do that we mark all other matches for same row as null to avoid the output
+                    if seen_true {
+                        #[allow(clippy::needless_range_loop)]
+                        for j in first_row_idx..last_true_idx {
+                            mask[j] = None;
+                        }
+                    }
+
+                    seen_true = false;
+                    seen_false = false;
+                    last_true_idx = 0;
+                    first_row_idx = i + 1;
+                }
+            }
+
+            Some(BooleanArray::from(mask))
+        }
         // Only outer joins needs to keep track of processed rows and apply corrected filter mask
         _ => None,
     }
 }
 
-impl Stream for SMJStream {
+impl Stream for SortMergeJoinStream {
     type Item = Result<RecordBatch>;
 
     fn poll_next(
@@ -868,13 +945,13 @@ impl Stream for SMJStream {
         let _timer = join_time.timer();
         loop {
             match &self.state {
-                SMJState::Init => {
+                SortMergeJoinState::Init => {
                     let streamed_exhausted =
                         self.streamed_state == StreamedState::Exhausted;
                     let buffered_exhausted =
                         self.buffered_state == BufferedState::Exhausted;
                     self.state = if streamed_exhausted && buffered_exhausted {
-                        SMJState::Exhausted
+                        SortMergeJoinState::Exhausted
                     } else {
                         match self.current_ordering {
                             Ordering::Less | Ordering::Equal => {
@@ -887,6 +964,7 @@ impl Stream for SMJStream {
                                                 | JoinType::LeftMark
                                                 | JoinType::Right
                                                 | JoinType::LeftAnti
+                                                | JoinType::Full
                                         )
                                     {
                                         self.freeze_all()?;
@@ -912,10 +990,10 @@ impl Stream for SMJStream {
                                 }
                             }
                         }
-                        SMJState::Polling
+                        SortMergeJoinState::Polling
                     };
                 }
-                SMJState::Polling => {
+                SortMergeJoinState::Polling => {
                     if ![StreamedState::Exhausted, StreamedState::Ready]
                         .contains(&self.streamed_state)
                     {
@@ -938,19 +1016,19 @@ impl Stream for SMJStream {
                     let buffered_exhausted =
                         self.buffered_state == BufferedState::Exhausted;
                     if streamed_exhausted && buffered_exhausted {
-                        self.state = SMJState::Exhausted;
+                        self.state = SortMergeJoinState::Exhausted;
                         continue;
                     }
                     self.current_ordering = self.compare_streamed_buffered()?;
-                    self.state = SMJState::JoinOutput;
+                    self.state = SortMergeJoinState::JoinOutput;
                 }
-                SMJState::JoinOutput => {
+                SortMergeJoinState::JoinOutput => {
                     self.join_partial()?;
 
                     if self.output_size < self.batch_size {
                         if self.buffered_data.scanning_finished() {
                             self.buffered_data.scanning_reset();
-                            self.state = SMJState::Init;
+                            self.state = SortMergeJoinState::Init;
                         }
                     } else {
                         self.freeze_all()?;
@@ -969,6 +1047,7 @@ impl Stream for SMJStream {
                                         | JoinType::Right
                                         | JoinType::LeftAnti
                                         | JoinType::LeftMark
+                                        | JoinType::Full
                                 )
                             {
                                 continue;
@@ -979,7 +1058,7 @@ impl Stream for SMJStream {
                         return Poll::Pending;
                     }
                 }
-                SMJState::Exhausted => {
+                SortMergeJoinState::Exhausted => {
                     self.freeze_all()?;
 
                     if !self.output_record_batches.batches.is_empty() {
@@ -990,6 +1069,7 @@ impl Stream for SMJStream {
                                     | JoinType::LeftSemi
                                     | JoinType::Right
                                     | JoinType::LeftAnti
+                                    | JoinType::Full
                                     | JoinType::LeftMark
                             )
                         {
@@ -1008,7 +1088,7 @@ impl Stream for SMJStream {
     }
 }
 
-impl SMJStream {
+impl SortMergeJoinStream {
     #[allow(clippy::too_many_arguments)]
     pub fn try_new(
         schema: SchemaRef,
@@ -1028,7 +1108,7 @@ impl SMJStream {
         let streamed_schema = streamed.schema();
         let buffered_schema = buffered.schema();
         Ok(Self {
-            state: SMJState::Init,
+            state: SortMergeJoinState::Init,
             sort_options,
             null_equals_null,
             schema,
@@ -1171,9 +1251,10 @@ impl SMJStream {
                         // If the head batch is fully processed, dequeue it and produce output of it.
                         if head_batch.range.end == head_batch.num_rows {
                             self.freeze_dequeuing_buffered()?;
-                            if let Some(buffered_batch) =
+                            if let Some(mut buffered_batch) =
                                 self.buffered_data.batches.pop_front()
                             {
+                                self.produce_buffered_not_matched(&mut buffered_batch)?;
                                 self.free_reservation(buffered_batch)?;
                             }
                         } else {
@@ -1401,8 +1482,8 @@ impl SMJStream {
     }
 
     fn freeze_all(&mut self) -> Result<()> {
+        self.freeze_buffered(self.buffered_data.batches.len())?;
         self.freeze_streamed()?;
-        self.freeze_buffered(self.buffered_data.batches.len(), false)?;
         Ok(())
     }
 
@@ -1413,7 +1494,7 @@ impl SMJStream {
     fn freeze_dequeuing_buffered(&mut self) -> Result<()> {
         self.freeze_streamed()?;
         // Only freeze and produce the first batch in buffered_data as the batch is fully processed
-        self.freeze_buffered(1, true)?;
+        self.freeze_buffered(1)?;
         Ok(())
     }
 
@@ -1422,13 +1503,7 @@ impl SMJStream {
     //
     // Applicable only in case of Full join.
     //
-    // If `output_not_matched_filter` is true, this will also produce record batches
-    // for buffered rows which are joined with streamed side but don't match join filter.
-    fn freeze_buffered(
-        &mut self,
-        batch_count: usize,
-        output_not_matched_filter: bool,
-    ) -> Result<()> {
+    fn freeze_buffered(&mut self, batch_count: usize) -> Result<()> {
         if !matches!(self.join_type, JoinType::Full) {
             return Ok(());
         }
@@ -1442,34 +1517,64 @@ impl SMJStream {
                 &buffered_indices,
                 buffered_batch,
             )? {
+                let num_rows = record_batch.num_rows();
+                self.output_record_batches
+                    .filter_mask
+                    .extend(&BooleanArray::from(vec![None; num_rows]));
+                self.output_record_batches
+                    .row_indices
+                    .extend(&UInt64Array::from(vec![None; num_rows]));
+                self.output_record_batches
+                    .batch_ids
+                    .extend(vec![0; num_rows]);
+
                 self.output_record_batches.batches.push(record_batch);
             }
             buffered_batch.null_joined.clear();
-
-            // For buffered row which is joined with streamed side rows but all joined rows
-            // don't satisfy the join filter
-            if output_not_matched_filter {
-                let not_matched_buffered_indices = buffered_batch
-                    .join_filter_failed_map
-                    .iter()
-                    .filter_map(|(idx, failed)| if *failed { Some(*idx) } else { None })
-                    .collect::<Vec<_>>();
-
-                let buffered_indices = UInt64Array::from_iter_values(
-                    not_matched_buffered_indices.iter().copied(),
-                );
-
-                if let Some(record_batch) = produce_buffered_null_batch(
-                    &self.schema,
-                    &self.streamed_schema,
-                    &buffered_indices,
-                    buffered_batch,
-                )? {
-                    self.output_record_batches.batches.push(record_batch);
-                }
-                buffered_batch.join_filter_failed_map.clear();
-            }
         }
+        Ok(())
+    }
+
+    fn produce_buffered_not_matched(
+        &mut self,
+        buffered_batch: &mut BufferedBatch,
+    ) -> Result<()> {
+        if !matches!(self.join_type, JoinType::Full) {
+            return Ok(());
+        }
+
+        // For buffered row which is joined with streamed side rows but all joined rows
+        // don't satisfy the join filter
+        let not_matched_buffered_indices = buffered_batch
+            .join_filter_not_matched_map
+            .iter()
+            .filter_map(|(idx, failed)| if *failed { Some(*idx) } else { None })
+            .collect::<Vec<_>>();
+
+        let buffered_indices =
+            UInt64Array::from_iter_values(not_matched_buffered_indices.iter().copied());
+
+        if let Some(record_batch) = produce_buffered_null_batch(
+            &self.schema,
+            &self.streamed_schema,
+            &buffered_indices,
+            buffered_batch,
+        )? {
+            let num_rows = record_batch.num_rows();
+
+            self.output_record_batches
+                .filter_mask
+                .extend(&BooleanArray::from(vec![None; num_rows]));
+            self.output_record_batches
+                .row_indices
+                .extend(&UInt64Array::from(vec![None; num_rows]));
+            self.output_record_batches
+                .batch_ids
+                .extend(vec![0; num_rows]);
+            self.output_record_batches.batches.push(record_batch);
+        }
+        buffered_batch.join_filter_not_matched_map.clear();
+
         Ok(())
     }
 
@@ -1478,31 +1583,31 @@ impl SMJStream {
     fn freeze_streamed(&mut self) -> Result<()> {
         for chunk in self.streamed_batch.output_indices.iter_mut() {
             // The row indices of joined streamed batch
-            let streamed_indices = chunk.streamed_indices.finish();
+            let left_indices = chunk.streamed_indices.finish();
 
-            if streamed_indices.is_empty() {
+            if left_indices.is_empty() {
                 continue;
             }
 
-            let mut streamed_columns = self
+            let mut left_columns = self
                 .streamed_batch
                 .batch
                 .columns()
                 .iter()
-                .map(|column| take(column, &streamed_indices, None))
+                .map(|column| take(column, &left_indices, None))
                 .collect::<Result<Vec<_>, ArrowError>>()?;
 
             // The row indices of joined buffered batch
-            let buffered_indices: UInt64Array = chunk.buffered_indices.finish();
-            let mut buffered_columns = if matches!(self.join_type, JoinType::LeftMark) {
-                vec![Arc::new(is_not_null(&buffered_indices)?) as ArrayRef]
+            let right_indices: UInt64Array = chunk.buffered_indices.finish();
+            let mut right_columns = if matches!(self.join_type, JoinType::LeftMark) {
+                vec![Arc::new(is_not_null(&right_indices)?) as ArrayRef]
             } else if matches!(self.join_type, JoinType::LeftSemi | JoinType::LeftAnti) {
                 vec![]
             } else if let Some(buffered_idx) = chunk.buffered_batch_idx {
-                get_buffered_columns(
+                fetch_right_columns_by_idxs(
                     &self.buffered_data,
                     buffered_idx,
-                    &buffered_indices,
+                    &right_indices,
                 )?
             } else {
                 // If buffered batch none, meaning it is null joined batch.
@@ -1510,31 +1615,30 @@ impl SMJStream {
                 create_unmatched_columns(
                     self.join_type,
                     &self.buffered_schema,
-                    buffered_indices.len(),
+                    right_indices.len(),
                 )
             };
-
-            let streamed_columns_length = streamed_columns.len();
 
             // Prepare the columns we apply join filter on later.
             // Only for joined rows between streamed and buffered.
             let filter_columns = if chunk.buffered_batch_idx.is_some() {
-                if matches!(self.join_type, JoinType::Right) {
-                    get_filter_column(&self.filter, &buffered_columns, &streamed_columns)
-                } else if matches!(
-                    self.join_type,
-                    JoinType::LeftSemi | JoinType::LeftAnti | JoinType::LeftMark
-                ) {
-                    // unwrap is safe here as we check is_some on top of if statement
-                    let buffered_columns = get_buffered_columns(
-                        &self.buffered_data,
-                        chunk.buffered_batch_idx.unwrap(),
-                        &buffered_indices,
-                    )?;
+                if !matches!(self.join_type, JoinType::Right) {
+                    if matches!(
+                        self.join_type,
+                        JoinType::LeftSemi | JoinType::LeftAnti | JoinType::LeftMark
+                    ) {
+                        let right_cols = fetch_right_columns_by_idxs(
+                            &self.buffered_data,
+                            chunk.buffered_batch_idx.unwrap(),
+                            &right_indices,
+                        )?;
 
-                    get_filter_column(&self.filter, &streamed_columns, &buffered_columns)
+                        get_filter_column(&self.filter, &left_columns, &right_cols)
+                    } else {
+                        get_filter_column(&self.filter, &left_columns, &right_columns)
+                    }
                 } else {
-                    get_filter_column(&self.filter, &streamed_columns, &buffered_columns)
+                    get_filter_column(&self.filter, &right_columns, &left_columns)
                 }
             } else {
                 // This chunk is totally for null joined rows (outer join), we don't need to apply join filter.
@@ -1542,12 +1646,12 @@ impl SMJStream {
                 vec![]
             };
 
-            let columns = if matches!(self.join_type, JoinType::Right) {
-                buffered_columns.extend(streamed_columns);
-                buffered_columns
+            let columns = if !matches!(self.join_type, JoinType::Right) {
+                left_columns.extend(right_columns);
+                left_columns
             } else {
-                streamed_columns.extend(buffered_columns);
-                streamed_columns
+                right_columns.extend(left_columns);
+                right_columns
             };
 
             let output_batch = RecordBatch::try_new(Arc::clone(&self.schema), columns)?;
@@ -1587,22 +1691,23 @@ impl SMJStream {
                             | JoinType::Right
                             | JoinType::LeftAnti
                             | JoinType::LeftMark
+                            | JoinType::Full
                     ) {
-                        self.output_record_batches
-                            .batches
-                            .push(output_batch.clone());
+                        self.output_record_batches.batches.push(output_batch);
                     } else {
                         let filtered_batch = filter_record_batch(&output_batch, &mask)?;
                         self.output_record_batches.batches.push(filtered_batch);
                     }
 
-                    self.output_record_batches.filter_mask.extend(&mask);
-                    self.output_record_batches
-                        .row_indices
-                        .extend(&streamed_indices);
+                    if !matches!(self.join_type, JoinType::Full) {
+                        self.output_record_batches.filter_mask.extend(&mask);
+                    } else {
+                        self.output_record_batches.filter_mask.extend(pre_mask);
+                    }
+                    self.output_record_batches.row_indices.extend(&left_indices);
                     self.output_record_batches.batch_ids.extend(vec![
-                            self.streamed_batch_counter.load(Relaxed);
-                            streamed_indices.len()
+                        self.streamed_batch_counter.load(Relaxed);
+                        left_indices.len()
                         ]);
 
                     // For outer joins, we need to push the null joined rows to the output if
@@ -1610,83 +1715,26 @@ impl SMJStream {
                     // I.e., if all rows joined from a streamed row are failed with the join filter,
                     // we need to join it with nulls as buffered side.
                     if matches!(self.join_type, JoinType::Full) {
-                        // We need to get the mask for row indices that the joined rows are failed
-                        // on the join filter. I.e., for a row in streamed side, if all joined rows
-                        // between it and all buffered rows are failed on the join filter, we need to
-                        // output it with null columns from buffered side. For the mask here, it
-                        // behaves like LeftAnti join.
-                        let not_mask = if mask.null_count() > 0 {
-                            // If the mask contains nulls, we need to use `prep_null_mask_filter` to
-                            // handle the nulls in the mask as false to produce rows where the mask
-                            // was null itself.
-                            compute::not(&compute::prep_null_mask_filter(&mask))?
-                        } else {
-                            compute::not(&mask)?
-                        };
+                        let buffered_batch = &mut self.buffered_data.batches
+                            [chunk.buffered_batch_idx.unwrap()];
 
-                        let null_joined_batch =
-                            filter_record_batch(&output_batch, &not_mask)?;
-
-                        let buffered_columns = self
-                            .buffered_schema
-                            .fields()
-                            .iter()
-                            .map(|f| {
-                                new_null_array(
-                                    f.data_type(),
-                                    null_joined_batch.num_rows(),
-                                )
-                            })
-                            .collect::<Vec<_>>();
-
-                        let columns = {
-                            let mut streamed_columns = null_joined_batch
-                                .columns()
-                                .iter()
-                                .take(streamed_columns_length)
-                                .cloned()
-                                .collect::<Vec<_>>();
-
-                            streamed_columns.extend(buffered_columns);
-                            streamed_columns
-                        };
-
-                        // Push the streamed/buffered batch joined nulls to the output
-                        let null_joined_streamed_batch =
-                            RecordBatch::try_new(Arc::clone(&self.schema), columns)?;
-
-                        self.output_record_batches
-                            .batches
-                            .push(null_joined_streamed_batch);
-
-                        // For full join, we also need to output the null joined rows from the buffered side.
-                        // Usually this is done by `freeze_buffered`. However, if a buffered row is joined with
-                        // streamed side, it won't be outputted by `freeze_buffered`.
-                        // We need to check if a buffered row is joined with streamed side and output.
-                        // If it is joined with streamed side, but doesn't match the join filter,
-                        // we need to output it with nulls as streamed side.
-                        if matches!(self.join_type, JoinType::Full) {
-                            let buffered_batch = &mut self.buffered_data.batches
-                                [chunk.buffered_batch_idx.unwrap()];
-
-                            for i in 0..pre_mask.len() {
-                                // If the buffered row is not joined with streamed side,
-                                // skip it.
-                                if buffered_indices.is_null(i) {
-                                    continue;
-                                }
-
-                                let buffered_index = buffered_indices.value(i);
-
-                                buffered_batch.join_filter_failed_map.insert(
-                                    buffered_index,
-                                    *buffered_batch
-                                        .join_filter_failed_map
-                                        .get(&buffered_index)
-                                        .unwrap_or(&true)
-                                        && !pre_mask.value(i),
-                                );
+                        for i in 0..pre_mask.len() {
+                            // If the buffered row is not joined with streamed side,
+                            // skip it.
+                            if right_indices.is_null(i) {
+                                continue;
                             }
+
+                            let buffered_index = right_indices.value(i);
+
+                            buffered_batch.join_filter_not_matched_map.insert(
+                                buffered_index,
+                                *buffered_batch
+                                    .join_filter_not_matched_map
+                                    .get(&buffered_index)
+                                    .unwrap_or(&true)
+                                    && !pre_mask.value(i),
+                            );
                         }
                     }
                 } else {
@@ -1726,6 +1774,7 @@ impl SMJStream {
                     | JoinType::Right
                     | JoinType::LeftAnti
                     | JoinType::LeftMark
+                    | JoinType::Full
             ))
         {
             self.output_record_batches.batches.clear();
@@ -1735,12 +1784,31 @@ impl SMJStream {
 
     fn filter_joined_batch(&mut self) -> Result<RecordBatch> {
         let record_batch = self.output_record_batch_and_reset()?;
-        let out_indices = self.output_record_batches.row_indices.finish();
-        let out_mask = self.output_record_batches.filter_mask.finish();
+        let mut out_indices = self.output_record_batches.row_indices.finish();
+        let mut out_mask = self.output_record_batches.filter_mask.finish();
+        let mut batch_ids = &self.output_record_batches.batch_ids;
+        let default_batch_ids = vec![0; record_batch.num_rows()];
+
+        // If only nulls come in and indices sizes doesn't match with expected record batch count
+        // generate missing indices
+        // Happens for null joined batches for Full Join
+        if out_indices.null_count() == out_indices.len()
+            && out_indices.len() != record_batch.num_rows()
+        {
+            out_mask = BooleanArray::from(vec![None; record_batch.num_rows()]);
+            out_indices = UInt64Array::from(vec![None; record_batch.num_rows()]);
+            batch_ids = &default_batch_ids;
+        }
+
+        if out_mask.is_empty() {
+            self.output_record_batches.batches.clear();
+            return Ok(record_batch);
+        }
+
         let maybe_corrected_mask = get_corrected_filter_mask(
             self.join_type,
             &out_indices,
-            &self.output_record_batches.batch_ids,
+            batch_ids,
             &out_mask,
             record_batch.num_rows(),
         );
@@ -1753,8 +1821,8 @@ impl SMJStream {
 
         let mut filtered_record_batch =
             filter_record_batch(&record_batch, corrected_mask)?;
-        let buffered_columns_length = self.buffered_schema.fields.len();
-        let streamed_columns_length = self.streamed_schema.fields.len();
+        let left_columns_length = self.streamed_schema.fields.len();
+        let right_columns_length = self.buffered_schema.fields.len();
 
         if matches!(
             self.join_type,
@@ -1763,33 +1831,32 @@ impl SMJStream {
             let null_mask = compute::not(corrected_mask)?;
             let null_joined_batch = filter_record_batch(&record_batch, &null_mask)?;
 
-            let mut buffered_columns = create_unmatched_columns(
+            let mut right_columns = create_unmatched_columns(
                 self.join_type,
                 &self.buffered_schema,
                 null_joined_batch.num_rows(),
             );
 
-            let columns = if matches!(self.join_type, JoinType::Right) {
-                let streamed_columns = null_joined_batch
+            let columns = if !matches!(self.join_type, JoinType::Right) {
+                let mut left_columns = null_joined_batch
                     .columns()
                     .iter()
-                    .skip(buffered_columns_length)
+                    .take(right_columns_length)
                     .cloned()
                     .collect::<Vec<_>>();
 
-                buffered_columns.extend(streamed_columns);
-                buffered_columns
+                left_columns.extend(right_columns);
+                left_columns
             } else {
-                // Left join or full outer join
-                let mut streamed_columns = null_joined_batch
+                let left_columns = null_joined_batch
                     .columns()
                     .iter()
-                    .take(streamed_columns_length)
+                    .skip(left_columns_length)
                     .cloned()
                     .collect::<Vec<_>>();
 
-                streamed_columns.extend(buffered_columns);
-                streamed_columns
+                right_columns.extend(left_columns);
+                right_columns
             };
 
             // Push the streamed/buffered batch joined nulls to the output
@@ -1801,15 +1868,72 @@ impl SMJStream {
                 &[filtered_record_batch, null_joined_streamed_batch],
             )?;
         } else if matches!(self.join_type, JoinType::LeftSemi | JoinType::LeftAnti) {
-            let output_column_indices = (0..streamed_columns_length).collect::<Vec<_>>();
+            let output_column_indices = (0..left_columns_length).collect::<Vec<_>>();
             filtered_record_batch =
                 filtered_record_batch.project(&output_column_indices)?;
+        } else if matches!(self.join_type, JoinType::Full)
+            && corrected_mask.false_count() > 0
+        {
+            // Find rows which joined by key but Filter predicate evaluated as false
+            let joined_filter_not_matched_mask = compute::not(corrected_mask)?;
+            let joined_filter_not_matched_batch =
+                filter_record_batch(&record_batch, &joined_filter_not_matched_mask)?;
+
+            // Add left unmatched rows adding the right side as nulls
+            let right_null_columns = self
+                .buffered_schema
+                .fields()
+                .iter()
+                .map(|f| {
+                    new_null_array(
+                        f.data_type(),
+                        joined_filter_not_matched_batch.num_rows(),
+                    )
+                })
+                .collect::<Vec<_>>();
+
+            let mut result_joined = joined_filter_not_matched_batch
+                .columns()
+                .iter()
+                .take(left_columns_length)
+                .cloned()
+                .collect::<Vec<_>>();
+
+            result_joined.extend(right_null_columns);
+
+            let left_null_joined_batch =
+                RecordBatch::try_new(Arc::clone(&self.schema), result_joined)?;
+
+            // Add right unmatched rows adding the left side as nulls
+            let mut result_joined = self
+                .streamed_schema
+                .fields()
+                .iter()
+                .map(|f| {
+                    new_null_array(
+                        f.data_type(),
+                        joined_filter_not_matched_batch.num_rows(),
+                    )
+                })
+                .collect::<Vec<_>>();
+
+            let right_data = joined_filter_not_matched_batch
+                .columns()
+                .iter()
+                .skip(left_columns_length)
+                .cloned()
+                .collect::<Vec<_>>();
+
+            result_joined.extend(right_data);
+
+            filtered_record_batch = concat_batches(
+                &self.schema,
+                &[filtered_record_batch, left_null_joined_batch],
+            )?;
         }
 
-        self.output_record_batches.batches.clear();
-        self.output_record_batches.batch_ids = vec![];
-        self.output_record_batches.filter_mask = BooleanBuilder::new();
-        self.output_record_batches.row_indices = UInt64Builder::new();
+        self.output_record_batches.clear();
+
         Ok(filtered_record_batch)
     }
 }
@@ -1871,39 +1995,39 @@ fn produce_buffered_null_batch(
     }
 
     // Take buffered (right) columns
-    let buffered_columns =
-        get_buffered_columns_from_batch(buffered_batch, buffered_indices)?;
+    let right_columns =
+        fetch_right_columns_from_batch_by_idxs(buffered_batch, buffered_indices)?;
 
     // Create null streamed (left) columns
-    let mut streamed_columns = streamed_schema
+    let mut left_columns = streamed_schema
         .fields()
         .iter()
         .map(|f| new_null_array(f.data_type(), buffered_indices.len()))
         .collect::<Vec<_>>();
 
-    streamed_columns.extend(buffered_columns);
+    left_columns.extend(right_columns);
 
     Ok(Some(RecordBatch::try_new(
         Arc::clone(schema),
-        streamed_columns,
+        left_columns,
     )?))
 }
 
-/// Get `buffered_indices` rows for `buffered_data[buffered_batch_idx]`
+/// Get `buffered_indices` rows for `buffered_data[buffered_batch_idx]` by specific column indices
 #[inline(always)]
-fn get_buffered_columns(
+fn fetch_right_columns_by_idxs(
     buffered_data: &BufferedData,
     buffered_batch_idx: usize,
     buffered_indices: &UInt64Array,
 ) -> Result<Vec<ArrayRef>> {
-    get_buffered_columns_from_batch(
+    fetch_right_columns_from_batch_by_idxs(
         &buffered_data.batches[buffered_batch_idx],
         buffered_indices,
     )
 }
 
 #[inline(always)]
-fn get_buffered_columns_from_batch(
+fn fetch_right_columns_from_batch_by_idxs(
     buffered_batch: &BufferedBatch,
     buffered_indices: &UInt64Array,
 ) -> Result<Vec<ArrayRef>> {

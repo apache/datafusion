@@ -295,7 +295,7 @@ query error DataFusion error: Error during planning: unnest\(\) requires exactly
 select unnest();
 
 ## Unnest empty expression in from clause
-query error DataFusion error: SQL error: ParserError\("Expected: an expression:, found: \)"\)
+query error DataFusion error: SQL error: ParserError\("Expected: an expression, found: \)"\)
 select * from unnest();
 
 
@@ -853,3 +853,9 @@ select unnest(u.column5), j.* except(column2, column3) from unnest_table u join 
 1 2 1
 3 4 2
 NULL NULL 4
+
+## Issue: https://github.com/apache/datafusion/issues/13237
+query I
+select count(*) from (select unnest(range(0, 100000)) id) t inner join (select unnest(range(0, 100000)) id) t1 on t.id = t1.id;
+----
+100000

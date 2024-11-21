@@ -15,23 +15,31 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! `GroupValues` implementations for multi group by cases
+
+mod bytes;
+mod bytes_view;
+mod primitive;
+
 use std::mem::{self, size_of};
 
-use crate::aggregates::group_values::group_column::{
-    ByteGroupValueBuilder, ByteViewGroupValueBuilder, GroupColumn,
-    PrimitiveGroupValueBuilder,
+use crate::aggregates::group_values::multi_group_by::{
+    bytes::ByteGroupValueBuilder, bytes_view::ByteViewGroupValueBuilder,
+    primitive::PrimitiveGroupValueBuilder,
 };
 use crate::aggregates::group_values::GroupValues;
 use ahash::RandomState;
 use arrow::compute::cast;
 use arrow::datatypes::{
     BinaryViewType, Date32Type, Date64Type, Float32Type, Float64Type, Int16Type,
-    Int32Type, Int64Type, Int8Type, StringViewType, UInt16Type, UInt32Type, UInt64Type,
-    UInt8Type,
+    Int32Type, Int64Type, Int8Type, StringViewType, Time32MillisecondType,
+    Time32SecondType, Time64MicrosecondType, Time64NanosecondType,
+    TimestampMicrosecondType, TimestampMillisecondType, TimestampNanosecondType,
+    TimestampSecondType, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
 };
 use arrow::record_batch::RecordBatch;
 use arrow_array::{Array, ArrayRef};
-use arrow_schema::{DataType, Schema, SchemaRef};
+use arrow_schema::{DataType, Schema, SchemaRef, TimeUnit};
 use datafusion_common::hash_utils::create_hashes;
 use datafusion_common::{not_impl_err, DataFusionError, Result};
 use datafusion_execution::memory_pool::proxy::{RawTableAllocExt, VecAllocExt};
@@ -42,6 +50,72 @@ use hashbrown::raw::RawTable;
 
 const NON_INLINED_FLAG: u64 = 0x8000000000000000;
 const VALUE_MASK: u64 = 0x7FFFFFFFFFFFFFFF;
+
+/// Trait for storing a single column of group values in [`GroupValuesColumn`]
+///
+/// Implementations of this trait store an in-progress collection of group values
+/// (similar to various builders in Arrow-rs) that allow for quick comparison to
+/// incoming rows.
+///
+/// [`GroupValuesColumn`]: crate::aggregates::group_values::GroupValuesColumn
+pub trait GroupColumn: Send + Sync {
+    /// Returns equal if the row stored in this builder at `lhs_row` is equal to
+    /// the row in `array` at `rhs_row`
+    ///
+    /// Note that this comparison returns true if both elements are NULL
+    fn equal_to(&self, lhs_row: usize, array: &ArrayRef, rhs_row: usize) -> bool;
+
+    /// Appends the row at `row` in `array` to this builder
+    fn append_val(&mut self, array: &ArrayRef, row: usize);
+
+    /// The vectorized version equal to
+    ///
+    /// When found nth row stored in this builder at `lhs_row`
+    /// is equal to the row in `array` at `rhs_row`,
+    /// it will record the `true` result at the corresponding
+    /// position in `equal_to_results`.
+    ///
+    /// And if found nth result in `equal_to_results` is already
+    /// `false`, the check for nth row will be skipped.
+    ///
+    fn vectorized_equal_to(
+        &self,
+        lhs_rows: &[usize],
+        array: &ArrayRef,
+        rhs_rows: &[usize],
+        equal_to_results: &mut [bool],
+    );
+
+    /// The vectorized version `append_val`
+    fn vectorized_append(&mut self, array: &ArrayRef, rows: &[usize]);
+
+    /// Returns the number of rows stored in this builder
+    fn len(&self) -> usize;
+
+    /// Returns the number of bytes used by this [`GroupColumn`]
+    fn size(&self) -> usize;
+
+    /// Builds a new array from all of the stored rows
+    fn build(self: Box<Self>) -> ArrayRef;
+
+    /// Builds a new array from the first `n` stored rows, shifting the
+    /// remaining rows to the start of the builder
+    fn take_n(&mut self, n: usize) -> ArrayRef;
+}
+
+/// Determines if the nullability of the existing and new input array can be used
+/// to short-circuit the comparison of the two values.
+///
+/// Returns `Some(result)` if the result of the comparison can be determined
+/// from the nullness of the two values, and `None` if the comparison must be
+/// done on the values themselves.
+pub fn nulls_equal_to(lhs_null: bool, rhs_null: bool) -> Option<bool> {
+    match (lhs_null, rhs_null) {
+        (true, true) => Some(true),
+        (false, true) | (true, false) => Some(false),
+        _ => None,
+    }
+}
 
 /// The view of indices pointing to the actual values in `GroupValues`
 ///
@@ -841,6 +915,38 @@ impl<const STREAMING: bool> GroupValues for GroupValuesColumn<STREAMING> {
                     }
                     &DataType::Date32 => instantiate_primitive!(v, nullable, Date32Type),
                     &DataType::Date64 => instantiate_primitive!(v, nullable, Date64Type),
+                    &DataType::Time32(t) => match t {
+                        TimeUnit::Second => {
+                            instantiate_primitive!(v, nullable, Time32SecondType)
+                        }
+                        TimeUnit::Millisecond => {
+                            instantiate_primitive!(v, nullable, Time32MillisecondType)
+                        }
+                        _ => {}
+                    },
+                    &DataType::Time64(t) => match t {
+                        TimeUnit::Microsecond => {
+                            instantiate_primitive!(v, nullable, Time64MicrosecondType)
+                        }
+                        TimeUnit::Nanosecond => {
+                            instantiate_primitive!(v, nullable, Time64NanosecondType)
+                        }
+                        _ => {}
+                    },
+                    &DataType::Timestamp(t, _) => match t {
+                        TimeUnit::Second => {
+                            instantiate_primitive!(v, nullable, TimestampSecondType)
+                        }
+                        TimeUnit::Millisecond => {
+                            instantiate_primitive!(v, nullable, TimestampMillisecondType)
+                        }
+                        TimeUnit::Microsecond => {
+                            instantiate_primitive!(v, nullable, TimestampMicrosecondType)
+                        }
+                        TimeUnit::Nanosecond => {
+                            instantiate_primitive!(v, nullable, TimestampNanosecondType)
+                        }
+                    },
                     &DataType::Utf8 => {
                         let b = ByteGroupValueBuilder::<i32>::new(OutputType::Utf8);
                         v.push(Box::new(b) as _)
@@ -1053,6 +1159,8 @@ fn supported_type(data_type: &DataType) -> bool {
             | DataType::LargeBinary
             | DataType::Date32
             | DataType::Date64
+            | DataType::Time32(_)
+            | DataType::Timestamp(_, _)
             | DataType::Utf8View
             | DataType::BinaryView
     )
@@ -1068,7 +1176,9 @@ mod tests {
     use datafusion_common::utils::proxy::RawTableAllocExt;
     use datafusion_expr::EmitTo;
 
-    use crate::aggregates::group_values::{column::GroupValuesColumn, GroupValues};
+    use crate::aggregates::group_values::{
+        multi_group_by::GroupValuesColumn, GroupValues,
+    };
 
     use super::GroupIndexView;
 

@@ -24,6 +24,7 @@ use std::task::Poll;
 
 use super::{calculate_range, FileGroupPartitioner, FileScanConfig, RangeCalculation};
 use crate::datasource::file_format::file_compression_type::FileCompressionType;
+use crate::datasource::file_format::{deserialize_stream, DecoderDeserializer};
 use crate::datasource::listing::{FileRange, ListingTableUrl, PartitionedFile};
 use crate::datasource::physical_plan::file_stream::{
     FileOpenFuture, FileOpener, FileStream,
@@ -42,8 +43,7 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{EquivalenceProperties, LexOrdering};
 
-use bytes::{Buf, Bytes};
-use futures::{ready, StreamExt, TryStreamExt};
+use futures::{StreamExt, TryStreamExt};
 use object_store::buffered::BufWriter;
 use object_store::{GetOptions, GetResultPayload, ObjectStore};
 use tokio::io::AsyncWriteExt;
@@ -651,36 +651,14 @@ impl FileOpener for CsvOpener {
                     Ok(futures::stream::iter(config.open(decoder)?).boxed())
                 }
                 GetResultPayload::Stream(s) => {
-                    let mut decoder = config.builder().build_decoder();
+                    let decoder = config.builder().build_decoder();
                     let s = s.map_err(DataFusionError::from);
-                    let mut input =
-                        file_compression_type.convert_stream(s.boxed())?.fuse();
-                    let mut buffered = Bytes::new();
+                    let input = file_compression_type.convert_stream(s.boxed())?.fuse();
 
-                    let s = futures::stream::poll_fn(move |cx| {
-                        loop {
-                            if buffered.is_empty() {
-                                match ready!(input.poll_next_unpin(cx)) {
-                                    Some(Ok(b)) => buffered = b,
-                                    Some(Err(e)) => {
-                                        return Poll::Ready(Some(Err(e.into())))
-                                    }
-                                    None => {}
-                                };
-                            }
-                            let decoded = match decoder.decode(buffered.as_ref()) {
-                                // Note: the decoder needs to be called with an empty
-                                // array to delimt the final record
-                                Ok(0) => break,
-                                Ok(decoded) => decoded,
-                                Err(e) => return Poll::Ready(Some(Err(e))),
-                            };
-                            buffered.advance(decoded);
-                        }
-
-                        Poll::Ready(decoder.flush().transpose())
-                    });
-                    Ok(s.boxed())
+                    Ok(deserialize_stream(
+                        input,
+                        DecoderDeserializer::from(decoder),
+                    ))
                 }
             }
         }))
@@ -753,6 +731,7 @@ mod tests {
     use crate::{scalar::ScalarValue, test_util::aggr_test_schema};
 
     use arrow::datatypes::*;
+    use bytes::Bytes;
     use datafusion_common::test_util::arrow_test_data;
 
     use datafusion_common::config::CsvOptions;

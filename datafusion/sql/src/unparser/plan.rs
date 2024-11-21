@@ -420,7 +420,27 @@ impl Unparser<'_> {
                 )
             }
             LogicalPlan::Aggregate(agg) => {
-                // Aggregate nodes are handled simultaneously with Projection nodes
+                // Aggregation can be already handled in the projection case
+                if !select.already_projected() {
+                    // The query returns aggregate and group expressions. If that weren't the case,
+                    // the aggregate would have been placed inside a projection, making the check above^ false
+                    let exprs: Vec<_> = agg
+                        .aggr_expr
+                        .iter()
+                        .chain(agg.group_expr.iter())
+                        .map(|expr| self.select_item_to_sql(expr))
+                        .collect::<Result<Vec<_>>>()?;
+                    select.projection(exprs);
+
+                    select.group_by(ast::GroupByExpr::Expressions(
+                        agg.group_expr
+                            .iter()
+                            .map(|expr| self.expr_to_sql(expr))
+                            .collect::<Result<Vec<_>>>()?,
+                        vec![],
+                    ));
+                }
+
                 self.select_to_sql_recursively(
                     agg.input.as_ref(),
                     query,
@@ -856,7 +876,16 @@ impl Unparser<'_> {
         constraint: ast::JoinConstraint,
     ) -> Result<ast::JoinOperator> {
         Ok(match join_type {
-            JoinType::Inner => ast::JoinOperator::Inner(constraint),
+            JoinType::Inner => match &constraint {
+                ast::JoinConstraint::On(_)
+                | ast::JoinConstraint::Using(_)
+                | ast::JoinConstraint::Natural => ast::JoinOperator::Inner(constraint),
+                ast::JoinConstraint::None => {
+                    // Inner joins with no conditions or filters are not valid SQL in most systems,
+                    // return a CROSS JOIN instead
+                    ast::JoinOperator::CrossJoin
+                }
+            },
             JoinType::Left => ast::JoinOperator::LeftOuter(constraint),
             JoinType::Right => ast::JoinOperator::RightOuter(constraint),
             JoinType::Full => ast::JoinOperator::FullOuter(constraint),

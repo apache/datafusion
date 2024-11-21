@@ -4292,3 +4292,24 @@ query T
 select * from table1 as t1 natural join table1_stringview as t2;
 ----
 foo
+
+query TT
+EXPLAIN SELECT count(*)
+FROM my_catalog.my_schema.table_with_many_types AS l
+JOIN my_catalog.my_schema.table_with_many_types AS r ON l.binary_col = r.binary_col
+----
+logical_plan
+01)Aggregate: groupBy=[[]], aggr=[[count(Int64(1)) AS count(*)]]
+02)--Projection: 
+03)----Inner Join: l.binary_col = r.binary_col
+04)------SubqueryAlias: l
+05)--------TableScan: my_catalog.my_schema.table_with_many_types projection=[binary_col]
+06)------SubqueryAlias: r
+07)--------TableScan: my_catalog.my_schema.table_with_many_types projection=[binary_col]
+physical_plan
+01)AggregateExec: mode=Single, gby=[], aggr=[count(*)]
+02)--ProjectionExec: expr=[]
+03)----CoalesceBatchesExec: target_batch_size=3
+04)------HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(binary_col@0, binary_col@0)]
+05)--------MemoryExec: partitions=1, partition_sizes=[1]
+06)--------MemoryExec: partitions=1, partition_sizes=[1]

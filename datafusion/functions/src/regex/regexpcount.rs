@@ -312,12 +312,12 @@ where
 
             let pattern = compile_regex(regex, flags_scalar)?;
 
-            Ok(Arc::new(Int64Array::from_iter_values(
+            Ok(Arc::new(
                 values
                     .iter()
                     .map(|value| count_matches(value, &pattern, start_scalar))
-                    .collect::<Result<Vec<i64>, ArrowError>>()?,
-            )))
+                    .collect::<Result<Int64Array, ArrowError>>()?,
+            ))
         }
         (true, true, false) => {
             let regex = match regex_scalar {
@@ -336,17 +336,17 @@ where
                 )));
             }
 
-            Ok(Arc::new(Int64Array::from_iter_values(
+            Ok(Arc::new(
                 values
                     .iter()
                     .zip(flags_array.iter())
                     .map(|(value, flags)| {
                         let pattern =
                             compile_and_cache_regex(regex, flags, &mut regex_cache)?;
-                        count_matches(value, &pattern, start_scalar)
+                        count_matches(value, pattern, start_scalar)
                     })
-                    .collect::<Result<Vec<i64>, ArrowError>>()?,
-            )))
+                    .collect::<Result<Int64Array, ArrowError>>()?,
+            ))
         }
         (true, false, true) => {
             let regex = match regex_scalar {
@@ -360,13 +360,13 @@ where
 
             let start_array = start_array.unwrap();
 
-            Ok(Arc::new(Int64Array::from_iter_values(
+            Ok(Arc::new(
                 values
                     .iter()
                     .zip(start_array.iter())
                     .map(|(value, start)| count_matches(value, &pattern, start))
-                    .collect::<Result<Vec<i64>, ArrowError>>()?,
-            )))
+                    .collect::<Result<Int64Array, ArrowError>>()?,
+            ))
         }
         (true, false, false) => {
             let regex = match regex_scalar {
@@ -385,7 +385,7 @@ where
                 )));
             }
 
-            Ok(Arc::new(Int64Array::from_iter_values(
+            Ok(Arc::new(
                 izip!(
                     values.iter(),
                     start_array.unwrap().iter(),
@@ -395,10 +395,10 @@ where
                     let pattern =
                         compile_and_cache_regex(regex, flags, &mut regex_cache)?;
 
-                    count_matches(value, &pattern, start)
+                    count_matches(value, pattern, start)
                 })
-                .collect::<Result<Vec<i64>, ArrowError>>()?,
-            )))
+                .collect::<Result<Int64Array, ArrowError>>()?,
+            ))
         }
         (false, true, true) => {
             if values.len() != regex_array.len() {
@@ -409,7 +409,7 @@ where
                 )));
             }
 
-            Ok(Arc::new(Int64Array::from_iter_values(
+            Ok(Arc::new(
                 values
                     .iter()
                     .zip(regex_array.iter())
@@ -424,10 +424,10 @@ where
                             flags_scalar,
                             &mut regex_cache,
                         )?;
-                        count_matches(value, &pattern, start_scalar)
+                        count_matches(value, pattern, start_scalar)
                     })
-                    .collect::<Result<Vec<i64>, ArrowError>>()?,
-            )))
+                    .collect::<Result<Int64Array, ArrowError>>()?,
+            ))
         }
         (false, true, false) => {
             if values.len() != regex_array.len() {
@@ -447,7 +447,7 @@ where
                 )));
             }
 
-            Ok(Arc::new(Int64Array::from_iter_values(
+            Ok(Arc::new(
                 izip!(values.iter(), regex_array.iter(), flags_array.iter())
                     .map(|(value, regex, flags)| {
                         let regex = match regex {
@@ -458,10 +458,10 @@ where
                         let pattern =
                             compile_and_cache_regex(regex, flags, &mut regex_cache)?;
 
-                        count_matches(value, &pattern, start_scalar)
+                        count_matches(value, pattern, start_scalar)
                     })
-                    .collect::<Result<Vec<i64>, ArrowError>>()?,
-            )))
+                    .collect::<Result<Int64Array, ArrowError>>()?,
+            ))
         }
         (false, false, true) => {
             if values.len() != regex_array.len() {
@@ -481,7 +481,7 @@ where
                 )));
             }
 
-            Ok(Arc::new(Int64Array::from_iter_values(
+            Ok(Arc::new(
                 izip!(values.iter(), regex_array.iter(), start_array.iter())
                     .map(|(value, regex, start)| {
                         let regex = match regex {
@@ -494,10 +494,10 @@ where
                             flags_scalar,
                             &mut regex_cache,
                         )?;
-                        count_matches(value, &pattern, start)
+                        count_matches(value, pattern, start)
                     })
-                    .collect::<Result<Vec<i64>, ArrowError>>()?,
-            )))
+                    .collect::<Result<Int64Array, ArrowError>>()?,
+            ))
         }
         (false, false, false) => {
             if values.len() != regex_array.len() {
@@ -526,7 +526,7 @@ where
                 )));
             }
 
-            Ok(Arc::new(Int64Array::from_iter_values(
+            Ok(Arc::new(
                 izip!(
                     values.iter(),
                     regex_array.iter(),
@@ -541,27 +541,30 @@ where
 
                     let pattern =
                         compile_and_cache_regex(regex, flags, &mut regex_cache)?;
-                    count_matches(value, &pattern, start)
+                    count_matches(value, pattern, start)
                 })
-                .collect::<Result<Vec<i64>, ArrowError>>()?,
-            )))
+                .collect::<Result<Int64Array, ArrowError>>()?,
+            ))
         }
     }
 }
 
-fn compile_and_cache_regex(
-    regex: &str,
-    flags: Option<&str>,
-    regex_cache: &mut HashMap<String, Regex>,
-) -> Result<Regex, ArrowError> {
-    match regex_cache.entry(regex.to_string()) {
-        Entry::Vacant(entry) => {
+fn compile_and_cache_regex<'strings, 'cache>(
+    regex: &'strings str,
+    flags: Option<&'strings str>,
+    regex_cache: &'cache mut HashMap<(&'strings str, Option<&'strings str>), Regex>,
+) -> Result<&'cache Regex, ArrowError>
+where
+    'strings: 'cache,
+{
+    let result = match regex_cache.entry((regex, flags)) {
+        Entry::Occupied(occupied_entry) => occupied_entry.into_mut(),
+        Entry::Vacant(vacant_entry) => {
             let compiled = compile_regex(regex, flags)?;
-            entry.insert(compiled.clone());
-            Ok(compiled)
+            vacant_entry.insert(compiled)
         }
-        Entry::Occupied(entry) => Ok(entry.get().to_owned()),
-    }
+    };
+    Ok(result)
 }
 
 fn compile_regex(regex: &str, flags: Option<&str>) -> Result<Regex, ArrowError> {
@@ -638,6 +641,8 @@ mod tests {
         test_case_sensitive_regexp_count_array_complex::<GenericStringArray<i32>>();
         test_case_sensitive_regexp_count_array_complex::<GenericStringArray<i64>>();
         test_case_sensitive_regexp_count_array_complex::<StringViewArray>();
+
+        test_case_regexp_count_cache_check::<GenericStringArray<i32>>();
     }
 
     fn test_case_sensitive_regexp_count_scalar() {
@@ -971,6 +976,27 @@ mod tests {
         let flags = A::from(vec!["", "i", "", "", "i"]);
 
         let expected = Int64Array::from(vec![0, 1, 1, 1, 1]);
+
+        let re = regexp_count_func(&[
+            Arc::new(values),
+            Arc::new(regex),
+            Arc::new(start),
+            Arc::new(flags),
+        ])
+        .unwrap();
+        assert_eq!(re.as_ref(), &expected);
+    }
+
+    fn test_case_regexp_count_cache_check<A>()
+    where
+        A: From<Vec<&'static str>> + Array + 'static,
+    {
+        let values = A::from(vec!["aaa", "Aaa", "aaa"]);
+        let regex = A::from(vec!["aaa", "aaa", "aaa"]);
+        let start = Int64Array::from(vec![1, 1, 1]);
+        let flags = A::from(vec!["", "i", ""]);
+
+        let expected = Int64Array::from(vec![1, 1, 1]);
 
         let re = regexp_count_func(&[
             Arc::new(values),

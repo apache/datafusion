@@ -52,7 +52,7 @@ use crate::execution_plan::CardinalityEffect;
 use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
 use itertools::Itertools;
 
-pub mod group_values;
+pub(crate) mod group_values;
 mod no_grouping;
 pub mod order;
 mod row_hash;

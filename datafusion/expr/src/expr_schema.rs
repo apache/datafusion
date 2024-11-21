@@ -32,6 +32,7 @@ use datafusion_common::{
     TableReference,
 };
 use datafusion_functions_window_common::field::WindowUDFFieldArgs;
+use recursive::recursive;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -99,6 +100,7 @@ impl ExprSchemable for Expr {
     /// expression refers to a column that does not exist in the
     /// schema, or when the expression is incorrectly typed
     /// (e.g. `[utf8] + [bool]`).
+    #[recursive]
     fn get_type(&self, schema: &dyn ExprSchema) -> Result<DataType> {
         match self {
             Expr::Alias(Alias { expr, name, .. }) => match &**expr {
@@ -479,12 +481,6 @@ impl Expr {
             .map(|e| e.get_type(schema))
             .collect::<Result<Vec<_>>>()?;
         match fun {
-            WindowFunctionDefinition::BuiltInWindowFunction(window_fun) => {
-                let return_type = window_fun.return_type(&data_types)?;
-                let nullable =
-                    !["RANK", "NTILE", "CUME_DIST"].contains(&window_fun.name());
-                Ok((return_type, nullable))
-            }
             WindowFunctionDefinition::AggregateUDF(udaf) => {
                 let new_types = data_types_with_aggregate_udf(&data_types, udaf)
                     .map_err(|err| {

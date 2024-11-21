@@ -46,7 +46,9 @@ use crate::{
 
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::cse::{NormalizeEq, Normalizeable};
-use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
+use datafusion_common::tree_node::{
+    Transformed, TreeNode, TreeNodeContainer, TreeNodeRecursion,
+};
 use datafusion_common::{
     aggregate_functional_dependencies, internal_err, plan_err, Column, Constraints,
     DFSchema, DFSchemaRef, DataFusionError, Dependency, FunctionalDependence,
@@ -285,6 +287,22 @@ impl Default for LogicalPlan {
             produce_one_row: false,
             schema: Arc::new(DFSchema::empty()),
         })
+    }
+}
+
+impl<'a> TreeNodeContainer<'a, Self> for LogicalPlan {
+    fn apply_elements<F: FnMut(&'a Self) -> Result<TreeNodeRecursion>>(
+        &'a self,
+        mut f: F,
+    ) -> Result<TreeNodeRecursion> {
+        f(self)
+    }
+
+    fn map_elements<F: FnMut(Self) -> Result<Transformed<Self>>>(
+        self,
+        mut f: F,
+    ) -> Result<Transformed<Self>> {
+        f(self)
     }
 }
 
