@@ -106,6 +106,8 @@ impl TestContext {
                 let example_udf = create_example_udf();
                 test_ctx.ctx.register_udf(example_udf);
                 register_partition_table(&mut test_ctx).await;
+                info!("Registering table with many types");
+                register_table_with_many_types(test_ctx.session_ctx()).await;
             }
             "metadata.slt" => {
                 info!("Registering metadata table tables");
@@ -251,8 +253,11 @@ pub async fn register_table_with_many_types(ctx: &SessionContext) {
         .unwrap();
     ctx.register_catalog("my_catalog", Arc::new(catalog));
 
-    ctx.register_table("my_catalog.my_schema.t2", table_with_many_types())
-        .unwrap();
+    ctx.register_table(
+        "my_catalog.my_schema.table_with_many_types",
+        table_with_many_types(),
+    )
+    .unwrap();
 }
 
 pub async fn register_table_with_map(ctx: &SessionContext) {

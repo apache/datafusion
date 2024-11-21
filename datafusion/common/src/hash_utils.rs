@@ -32,7 +32,7 @@ use arrow_buffer::IntervalMonthDayNano;
 use crate::cast::{
     as_binary_view_array, as_boolean_array, as_fixed_size_list_array,
     as_generic_binary_array, as_large_list_array, as_list_array, as_map_array,
-    as_primitive_array, as_string_array, as_string_view_array, as_struct_array,
+    as_string_array, as_string_view_array, as_struct_array,
 };
 use crate::error::Result;
 #[cfg(not(feature = "force_hash_collisions"))]
@@ -391,14 +391,6 @@ pub fn create_hashes<'a>(
             DataType::FixedSizeBinary(_) => {
                 let array: &FixedSizeBinaryArray = array.as_any().downcast_ref().unwrap();
                 hash_array(array, random_state, hashes_buffer, rehash)
-            }
-            DataType::Decimal128(_, _) => {
-                let array = as_primitive_array::<Decimal128Type>(array)?;
-                hash_array_primitive(array, random_state, hashes_buffer, rehash)
-            }
-            DataType::Decimal256(_, _) => {
-                let array = as_primitive_array::<Decimal256Type>(array)?;
-                hash_array_primitive(array, random_state, hashes_buffer, rehash)
             }
             DataType::Dictionary(_, _) => downcast_dictionary_array! {
                 array => hash_dictionary(array, random_state, hashes_buffer, rehash)?,

@@ -18,11 +18,12 @@
 use std::{collections::HashSet, sync::Arc};
 
 use arrow_schema::Schema;
+use datafusion_common::tree_node::TreeNodeContainer;
 use datafusion_common::{
     tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRewriter},
     Column, HashMap, Result, TableReference,
 };
-use datafusion_expr::{expr::Alias, tree_node::transform_sort_vec};
+use datafusion_expr::expr::Alias;
 use datafusion_expr::{Expr, LogicalPlan, Projection, Sort, SortExpr};
 use sqlparser::ast::Ident;
 
@@ -83,17 +84,18 @@ pub(super) fn normalize_union_schema(plan: &LogicalPlan) -> Result<LogicalPlan> 
 
 /// Rewrite sort expressions that have a UNION plan as their input to remove the table reference.
 fn rewrite_sort_expr_for_union(exprs: Vec<SortExpr>) -> Result<Vec<SortExpr>> {
-    let sort_exprs = transform_sort_vec(exprs, &mut |expr| {
-        expr.transform_up(|expr| {
-            if let Expr::Column(mut col) = expr {
-                col.relation = None;
-                Ok(Transformed::yes(Expr::Column(col)))
-            } else {
-                Ok(Transformed::no(expr))
-            }
+    let sort_exprs = exprs
+        .map_elements(&mut |expr: Expr| {
+            expr.transform_up(|expr| {
+                if let Expr::Column(mut col) = expr {
+                    col.relation = None;
+                    Ok(Transformed::yes(Expr::Column(col)))
+                } else {
+                    Ok(Transformed::no(expr))
+                }
+            })
         })
-    })
-    .data()?;
+        .data()?;
 
     Ok(sort_exprs)
 }
