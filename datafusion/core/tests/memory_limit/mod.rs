@@ -31,6 +31,7 @@ use datafusion_execution::memory_pool::{
 };
 use datafusion_expr::{Expr, TableType};
 use datafusion_physical_expr::{LexOrdering, PhysicalSortExpr};
+use datafusion_physical_plan::spill::get_record_batch_memory_size;
 use futures::StreamExt;
 use std::any::Any;
 use std::num::NonZeroUsize;
@@ -265,6 +266,10 @@ async fn sort_spill_reservation() {
     // This test case shows how sort_spill_reservation works by
     // purposely sorting data that requires non trivial memory to
     // sort/merge.
+
+    // Merge operation needs extra memory to do row conversion, so make the
+    // memory limit larger.
+    let mem_limit = partition_size * 2;
     let test = TestCase::new()
     // This query uses a different order than the input table to
     // force a sort. It also needs to have multiple columns to
@@ -272,7 +277,7 @@ async fn sort_spill_reservation() {
     // substantial memory
         .with_query("select * from t ORDER BY a , b DESC")
     // enough memory to sort if we don't try to merge it all at once
-        .with_memory_limit(partition_size)
+        .with_memory_limit(mem_limit)
     // use a single partition so only a sort is needed
         .with_scenario(scenario)
         .with_disk_manager_config(DiskManagerConfig::NewOs)
@@ -311,7 +316,7 @@ async fn sort_spill_reservation() {
         // reserve sufficient space up front for merge and this time,
         // which will force the spills to happen with less buffered
         // input and thus with enough to merge.
-        .with_sort_spill_reservation_bytes(partition_size / 2);
+        .with_sort_spill_reservation_bytes(mem_limit / 2);
 
     test.with_config(config).with_expected_success().run().await;
 }
@@ -774,7 +779,7 @@ fn make_dict_batches() -> Vec<RecordBatch> {
 
 // How many bytes does the memory from dict_batches consume?
 fn batches_byte_size(batches: &[RecordBatch]) -> usize {
-    batches.iter().map(|b| b.get_array_memory_size()).sum()
+    batches.iter().map(get_record_batch_memory_size).sum()
 }
 
 #[derive(Debug)]

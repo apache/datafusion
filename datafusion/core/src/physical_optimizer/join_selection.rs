@@ -382,8 +382,8 @@ fn try_collect_left(
 
     match (left_can_collect, right_can_collect) {
         (true, true) => {
-            if should_swap_join_order(&**left, &**right)?
-                && supports_swap(*hash_join.join_type())
+            if supports_swap(*hash_join.join_type())
+                && should_swap_join_order(&**left, &**right)?
             {
                 Ok(Some(swap_hash_join(hash_join, PartitionMode::CollectLeft)?))
             } else {
@@ -423,7 +423,7 @@ fn try_collect_left(
 fn partitioned_hash_join(hash_join: &HashJoinExec) -> Result<Arc<dyn ExecutionPlan>> {
     let left = hash_join.left();
     let right = hash_join.right();
-    if should_swap_join_order(&**left, &**right)? && supports_swap(*hash_join.join_type())
+    if supports_swap(*hash_join.join_type()) && should_swap_join_order(&**left, &**right)?
     {
         swap_hash_join(hash_join, PartitionMode::Partitioned)
     } else {
@@ -468,8 +468,8 @@ fn statistical_join_selection_subrule(
                 PartitionMode::Partitioned => {
                     let left = hash_join.left();
                     let right = hash_join.right();
-                    if should_swap_join_order(&**left, &**right)?
-                        && supports_swap(*hash_join.join_type())
+                    if supports_swap(*hash_join.join_type())
+                        && should_swap_join_order(&**left, &**right)?
                     {
                         swap_hash_join(hash_join, PartitionMode::Partitioned).map(Some)?
                     } else {
@@ -494,7 +494,9 @@ fn statistical_join_selection_subrule(
         } else if let Some(nl_join) = plan.as_any().downcast_ref::<NestedLoopJoinExec>() {
             let left = nl_join.left();
             let right = nl_join.right();
-            if should_swap_join_order(&**left, &**right)? {
+            if supports_swap(*nl_join.join_type())
+                && should_swap_join_order(&**left, &**right)?
+            {
                 swap_nl_join(nl_join).map(Some)?
             } else {
                 None

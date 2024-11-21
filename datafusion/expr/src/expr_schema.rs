@@ -481,12 +481,6 @@ impl Expr {
             .map(|e| e.get_type(schema))
             .collect::<Result<Vec<_>>>()?;
         match fun {
-            WindowFunctionDefinition::BuiltInWindowFunction(window_fun) => {
-                let return_type = window_fun.return_type(&data_types)?;
-                let nullable =
-                    !["RANK", "NTILE", "CUME_DIST"].contains(&window_fun.name());
-                Ok((return_type, nullable))
-            }
             WindowFunctionDefinition::AggregateUDF(udaf) => {
                 let new_types = data_types_with_aggregate_udf(&data_types, udaf)
                     .map_err(|err| {

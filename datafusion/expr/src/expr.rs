@@ -27,15 +27,12 @@ use crate::expr_fn::binary_expr;
 use crate::logical_plan::Subquery;
 use crate::utils::expr_to_columns;
 use crate::Volatility;
-use crate::{
-    udaf, BuiltInWindowFunction, ExprSchemable, Operator, Signature, WindowFrame,
-    WindowUDF,
-};
+use crate::{udaf, ExprSchemable, Operator, Signature, WindowFrame, WindowUDF};
 
 use arrow::datatypes::{DataType, FieldRef};
 use datafusion_common::cse::HashNode;
 use datafusion_common::tree_node::{
-    Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
+    Transformed, TransformedResult, TreeNode, TreeNodeContainer, TreeNodeRecursion,
 };
 use datafusion_common::{
     plan_err, Column, DFSchema, HashMap, Result, ScalarValue, TableReference,
@@ -354,6 +351,22 @@ impl<'a> From<(Option<&'a TableReference>, &'a FieldRef)> for Expr {
     }
 }
 
+impl<'a> TreeNodeContainer<'a, Self> for Expr {
+    fn apply_elements<F: FnMut(&'a Self) -> Result<TreeNodeRecursion>>(
+        &'a self,
+        mut f: F,
+    ) -> Result<TreeNodeRecursion> {
+        f(self)
+    }
+
+    fn map_elements<F: FnMut(Self) -> Result<Transformed<Self>>>(
+        self,
+        mut f: F,
+    ) -> Result<Transformed<Self>> {
+        f(self)
+    }
+}
+
 /// UNNEST expression.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Hash, Debug)]
 pub struct Unnest {
@@ -656,6 +669,24 @@ impl Display for Sort {
     }
 }
 
+impl<'a> TreeNodeContainer<'a, Expr> for Sort {
+    fn apply_elements<F: FnMut(&'a Expr) -> Result<TreeNodeRecursion>>(
+        &'a self,
+        f: F,
+    ) -> Result<TreeNodeRecursion> {
+        self.expr.apply_elements(f)
+    }
+
+    fn map_elements<F: FnMut(Expr) -> Result<Transformed<Expr>>>(
+        self,
+        f: F,
+    ) -> Result<Transformed<Self>> {
+        self.expr
+            .map_elements(f)?
+            .map_data(|expr| Ok(Self { expr, ..self }))
+    }
+}
+
 /// Aggregate function
 ///
 /// See also  [`ExprFunctionExt`] to set these fields on `Expr`
@@ -697,13 +728,13 @@ impl AggregateFunction {
     }
 }
 
-/// WindowFunction
+/// A function used as a SQL window function
+///
+/// In SQL, you can use:
+/// - Actual window functions ([`WindowUDF`])
+/// - Normal aggregate functions ([`AggregateUDF`])
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
-/// Defines which implementation of an aggregate function DataFusion should call.
 pub enum WindowFunctionDefinition {
-    /// A built in aggregate function that leverages an aggregate function
-    /// A a built-in window function
-    BuiltInWindowFunction(BuiltInWindowFunction),
     /// A user defined aggregate function
     AggregateUDF(Arc<crate::AggregateUDF>),
     /// A user defined aggregate function
@@ -719,9 +750,6 @@ impl WindowFunctionDefinition {
         display_name: &str,
     ) -> Result<DataType> {
         match self {
-            WindowFunctionDefinition::BuiltInWindowFunction(fun) => {
-                fun.return_type(input_expr_types)
-            }
             WindowFunctionDefinition::AggregateUDF(fun) => {
                 fun.return_type(input_expr_types)
             }
@@ -734,7 +762,6 @@ impl WindowFunctionDefinition {
     /// The signatures supported by the function `fun`.
     pub fn signature(&self) -> Signature {
         match self {
-            WindowFunctionDefinition::BuiltInWindowFunction(fun) => fun.signature(),
             WindowFunctionDefinition::AggregateUDF(fun) => fun.signature().clone(),
             WindowFunctionDefinition::WindowUDF(fun) => fun.signature().clone(),
         }
@@ -743,7 +770,6 @@ impl WindowFunctionDefinition {
     /// Function's name for display
     pub fn name(&self) -> &str {
         match self {
-            WindowFunctionDefinition::BuiltInWindowFunction(fun) => fun.name(),
             WindowFunctionDefinition::WindowUDF(fun) => fun.name(),
             WindowFunctionDefinition::AggregateUDF(fun) => fun.name(),
         }
@@ -753,16 +779,9 @@ impl WindowFunctionDefinition {
 impl Display for WindowFunctionDefinition {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         match self {
-            WindowFunctionDefinition::BuiltInWindowFunction(fun) => Display::fmt(fun, f),
             WindowFunctionDefinition::AggregateUDF(fun) => Display::fmt(fun, f),
             WindowFunctionDefinition::WindowUDF(fun) => Display::fmt(fun, f),
         }
-    }
-}
-
-impl From<BuiltInWindowFunction> for WindowFunctionDefinition {
-    fn from(value: BuiltInWindowFunction) -> Self {
-        Self::BuiltInWindowFunction(value)
     }
 }
 
@@ -780,26 +799,16 @@ impl From<Arc<WindowUDF>> for WindowFunctionDefinition {
 
 /// Window function
 ///
-/// Holds the actual actual function to call [`WindowFunction`] as well as its
+/// Holds the actual function to call [`WindowFunction`] as well as its
 /// arguments (`args`) and the contents of the `OVER` clause:
 ///
 /// 1. `PARTITION BY`
 /// 2. `ORDER BY`
 /// 3. Window frame (e.g. `ROWS 1 PRECEDING AND 1 FOLLOWING`)
 ///
-/// # Example
-/// ```
-/// # use datafusion_expr::{Expr, BuiltInWindowFunction, col, ExprFunctionExt};
-/// # use datafusion_expr::expr::WindowFunction;
-/// // Create FIRST_VALUE(a) OVER (PARTITION BY b ORDER BY c)
-/// let expr = Expr::WindowFunction(
-///     WindowFunction::new(BuiltInWindowFunction::FirstValue, vec![col("a")])
-/// )
-///   .partition_by(vec![col("b")])
-///   .order_by(vec![col("b").sort(true, true)])
-///   .build()
-///   .unwrap();
-/// ```
+/// See [`ExprFunctionExt`] for examples of how to create a `WindowFunction`.
+///
+/// [`ExprFunctionExt`]: crate::ExprFunctionExt
 #[derive(Clone, PartialEq, Eq, PartialOrd, Hash, Debug)]
 pub struct WindowFunction {
     /// Name of the function

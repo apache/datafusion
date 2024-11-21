@@ -204,16 +204,34 @@ impl SortMergeJoinExec {
         &self.on
     }
 
+    /// Ref to right execution plan
     pub fn right(&self) -> &Arc<dyn ExecutionPlan> {
         &self.right
     }
 
+    /// Join type
     pub fn join_type(&self) -> JoinType {
         self.join_type
     }
 
+    /// Ref to left execution plan
     pub fn left(&self) -> &Arc<dyn ExecutionPlan> {
         &self.left
+    }
+
+    /// Ref to join filter
+    pub fn filter(&self) -> &Option<JoinFilter> {
+        &self.filter
+    }
+
+    /// Ref to sort options
+    pub fn sort_options(&self) -> &[SortOptions] {
+        &self.sort_options
+    }
+
+    /// Null equals null
+    pub fn null_equals_null(&self) -> bool {
+        self.null_equals_null
     }
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.

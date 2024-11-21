@@ -40,6 +40,8 @@ use datafusion_expr::builder::{
     table_scan_with_filter_and_fetch, table_scan_with_filters,
 };
 use datafusion_functions::core::planner::CoreFunctionPlanner;
+use datafusion_functions_nested::extract::array_element_udf;
+use datafusion_functions_nested::planner::{FieldAccessPlanner, NestedFunctionPlanner};
 use sqlparser::dialect::{Dialect, GenericDialect, MySqlDialect};
 use sqlparser::parser::Parser;
 
@@ -182,6 +184,11 @@ fn roundtrip_statement() -> Result<()> {
             SUM(id) OVER (ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS running_total
             FROM person
             GROUP BY GROUPING SETS ((id, first_name, last_name), (first_name, last_name), (last_name))"#,
+            "SELECT ARRAY[1, 2, 3]",
+            "SELECT ARRAY[1, 2, 3][1]",
+            "SELECT [1, 2, 3]",
+            "SELECT [1, 2, 3][1]",
+            "SELECT left[1] FROM array"
     ];
 
     // For each test sql string, we transform as follows:
@@ -195,10 +202,14 @@ fn roundtrip_statement() -> Result<()> {
             .try_with_sql(query)?
             .parse_statement()?;
         let state = MockSessionState::default()
+            .with_scalar_function(make_array_udf())
+            .with_scalar_function(array_element_udf())
             .with_aggregate_function(sum_udaf())
             .with_aggregate_function(count_udaf())
             .with_aggregate_function(max_udaf())
-            .with_expr_planner(Arc::new(CoreFunctionPlanner::default()));
+            .with_expr_planner(Arc::new(CoreFunctionPlanner::default()))
+            .with_expr_planner(Arc::new(NestedFunctionPlanner))
+            .with_expr_planner(Arc::new(FieldAccessPlanner));
         let context = MockContextProvider { state };
         let sql_to_rel = SqlToRel::new(&context);
         let plan = sql_to_rel.sql_statement_to_plan(statement).unwrap();
@@ -285,7 +296,7 @@ fn roundtrip_statement_with_dialect() -> Result<()> {
         TestStatementWithDialect {
             sql: "select min(ta.j1_id) as j1_min, max(tb.j1_max) from j1 ta, (select distinct max(ta.j1_id) as j1_max from j1 ta order by max(ta.j1_id)) tb order by min(ta.j1_id) limit 10;",
             expected:
-                "SELECT `j1_min`, `max(tb.j1_max)` FROM (SELECT min(`ta`.`j1_id`) AS `j1_min`, max(`tb`.`j1_max`), min(`ta`.`j1_id`) FROM `j1` AS `ta` JOIN (SELECT `j1_max` FROM (SELECT DISTINCT max(`ta`.`j1_id`) AS `j1_max` FROM `j1` AS `ta`) AS `derived_distinct`) AS `tb` ORDER BY min(`ta`.`j1_id`) ASC) AS `derived_sort` LIMIT 10",
+                "SELECT `j1_min`, `max(tb.j1_max)` FROM (SELECT min(`ta`.`j1_id`) AS `j1_min`, max(`tb`.`j1_max`), min(`ta`.`j1_id`) FROM `j1` AS `ta` CROSS JOIN (SELECT `j1_max` FROM (SELECT DISTINCT max(`ta`.`j1_id`) AS `j1_max` FROM `j1` AS `ta`) AS `derived_distinct`) AS `tb` ORDER BY min(`ta`.`j1_id`) ASC) AS `derived_sort` LIMIT 10",
             parser_dialect: Box::new(MySqlDialect {}),
             unparser_dialect: Box::new(UnparserMySqlDialect {}),
         },
@@ -1269,6 +1280,20 @@ fn test_unnest_to_sql() {
     sql_round_trip(
         GenericDialect {},
         r#"SELECT unnest(make_array(1, 2, 2, 5, NULL)) as u1"#,
-        r#"SELECT UNNEST(make_array(1, 2, 2, 5, NULL)) AS u1"#,
+        r#"SELECT UNNEST([1, 2, 2, 5, NULL]) AS u1"#,
+    );
+}
+
+#[test]
+fn test_join_with_no_conditions() {
+    sql_round_trip(
+        GenericDialect {},
+        "SELECT * FROM j1 JOIN j2",
+        "SELECT * FROM j1 CROSS JOIN j2",
+    );
+    sql_round_trip(
+        GenericDialect {},
+        "SELECT * FROM j1 CROSS JOIN j2",
+        "SELECT * FROM j1 CROSS JOIN j2",
     );
 }

@@ -24,6 +24,7 @@ use std::task::Poll;
 
 use super::{calculate_range, FileGroupPartitioner, FileScanConfig, RangeCalculation};
 use crate::datasource::file_format::file_compression_type::FileCompressionType;
+use crate::datasource::file_format::{deserialize_stream, DecoderDeserializer};
 use crate::datasource::listing::{ListingTableUrl, PartitionedFile};
 use crate::datasource::physical_plan::file_stream::{
     FileOpenFuture, FileOpener, FileStream,
@@ -41,8 +42,7 @@ use arrow::{datatypes::SchemaRef, json};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{EquivalenceProperties, LexOrdering};
 
-use bytes::{Buf, Bytes};
-use futures::{ready, StreamExt, TryStreamExt};
+use futures::{StreamExt, TryStreamExt};
 use object_store::buffered::BufWriter;
 use object_store::{GetOptions, GetResultPayload, ObjectStore};
 use tokio::io::AsyncWriteExt;
@@ -84,6 +84,11 @@ impl NdJsonExec {
     /// Ref to the base configs
     pub fn base_config(&self) -> &FileScanConfig {
         &self.base_config
+    }
+
+    /// Ref to file compression type
+    pub fn file_compression_type(&self) -> &FileCompressionType {
+        &self.file_compression_type
     }
 
     fn output_partitioning_helper(file_scan_config: &FileScanConfig) -> Partitioning {
@@ -307,37 +312,15 @@ impl FileOpener for JsonOpener {
                 GetResultPayload::Stream(s) => {
                     let s = s.map_err(DataFusionError::from);
 
-                    let mut decoder = ReaderBuilder::new(schema)
+                    let decoder = ReaderBuilder::new(schema)
                         .with_batch_size(batch_size)
                         .build_decoder()?;
-                    let mut input =
-                        file_compression_type.convert_stream(s.boxed())?.fuse();
-                    let mut buffer = Bytes::new();
+                    let input = file_compression_type.convert_stream(s.boxed())?.fuse();
 
-                    let s = futures::stream::poll_fn(move |cx| {
-                        loop {
-                            if buffer.is_empty() {
-                                match ready!(input.poll_next_unpin(cx)) {
-                                    Some(Ok(b)) => buffer = b,
-                                    Some(Err(e)) => {
-                                        return Poll::Ready(Some(Err(e.into())))
-                                    }
-                                    None => {}
-                                };
-                            }
-
-                            let decoded = match decoder.decode(buffer.as_ref()) {
-                                Ok(0) => break,
-                                Ok(decoded) => decoded,
-                                Err(e) => return Poll::Ready(Some(Err(e))),
-                            };
-
-                            buffer.advance(decoded);
-                        }
-
-                        Poll::Ready(decoder.flush().transpose())
-                    });
-                    Ok(s.boxed())
+                    Ok(deserialize_stream(
+                        input,
+                        DecoderDeserializer::from(decoder),
+                    ))
                 }
             }
         }))

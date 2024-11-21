@@ -1654,74 +1654,6 @@ impl<'de> serde::Deserialize<'de> for BinaryExprNode {
         deserializer.deserialize_struct("datafusion.BinaryExprNode", FIELDS, GeneratedVisitor)
     }
 }
-impl serde::Serialize for BuiltInWindowFunction {
-    #[allow(deprecated)]
-    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        let variant = match self {
-            Self::Unspecified => "UNSPECIFIED",
-        };
-        serializer.serialize_str(variant)
-    }
-}
-impl<'de> serde::Deserialize<'de> for BuiltInWindowFunction {
-    #[allow(deprecated)]
-    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        const FIELDS: &[&str] = &[
-            "UNSPECIFIED",
-        ];
-
-        struct GeneratedVisitor;
-
-        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
-            type Value = BuiltInWindowFunction;
-
-            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                write!(formatter, "expected one of: {:?}", &FIELDS)
-            }
-
-            fn visit_i64<E>(self, v: i64) -> std::result::Result<Self::Value, E>
-            where
-                E: serde::de::Error,
-            {
-                i32::try_from(v)
-                    .ok()
-                    .and_then(|x| x.try_into().ok())
-                    .ok_or_else(|| {
-                        serde::de::Error::invalid_value(serde::de::Unexpected::Signed(v), &self)
-                    })
-            }
-
-            fn visit_u64<E>(self, v: u64) -> std::result::Result<Self::Value, E>
-            where
-                E: serde::de::Error,
-            {
-                i32::try_from(v)
-                    .ok()
-                    .and_then(|x| x.try_into().ok())
-                    .ok_or_else(|| {
-                        serde::de::Error::invalid_value(serde::de::Unexpected::Unsigned(v), &self)
-                    })
-            }
-
-            fn visit_str<E>(self, value: &str) -> std::result::Result<Self::Value, E>
-            where
-                E: serde::de::Error,
-            {
-                match value {
-                    "UNSPECIFIED" => Ok(BuiltInWindowFunction::Unspecified),
-                    _ => Err(serde::de::Error::unknown_variant(value, FIELDS)),
-                }
-            }
-        }
-        deserializer.deserialize_any(GeneratedVisitor)
-    }
-}
 impl serde::Serialize for CaseNode {
     #[allow(deprecated)]
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
@@ -16391,13 +16323,11 @@ impl serde::Serialize for PhysicalWindowExprNode {
         }
         if let Some(v) = self.window_function.as_ref() {
             match v {
-                physical_window_expr_node::WindowFunction::BuiltInFunction(v) => {
-                    let v = BuiltInWindowFunction::try_from(*v)
-                        .map_err(|_| serde::ser::Error::custom(format!("Invalid variant {}", *v)))?;
-                    struct_ser.serialize_field("builtInFunction", &v)?;
-                }
                 physical_window_expr_node::WindowFunction::UserDefinedAggrFunction(v) => {
                     struct_ser.serialize_field("userDefinedAggrFunction", v)?;
+                }
+                physical_window_expr_node::WindowFunction::UserDefinedWindowFunction(v) => {
+                    struct_ser.serialize_field("userDefinedWindowFunction", v)?;
                 }
             }
         }
@@ -16421,10 +16351,10 @@ impl<'de> serde::Deserialize<'de> for PhysicalWindowExprNode {
             "name",
             "fun_definition",
             "funDefinition",
-            "built_in_function",
-            "builtInFunction",
             "user_defined_aggr_function",
             "userDefinedAggrFunction",
+            "user_defined_window_function",
+            "userDefinedWindowFunction",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -16435,8 +16365,8 @@ impl<'de> serde::Deserialize<'de> for PhysicalWindowExprNode {
             WindowFrame,
             Name,
             FunDefinition,
-            BuiltInFunction,
             UserDefinedAggrFunction,
+            UserDefinedWindowFunction,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -16464,8 +16394,8 @@ impl<'de> serde::Deserialize<'de> for PhysicalWindowExprNode {
                             "windowFrame" | "window_frame" => Ok(GeneratedField::WindowFrame),
                             "name" => Ok(GeneratedField::Name),
                             "funDefinition" | "fun_definition" => Ok(GeneratedField::FunDefinition),
-                            "builtInFunction" | "built_in_function" => Ok(GeneratedField::BuiltInFunction),
                             "userDefinedAggrFunction" | "user_defined_aggr_function" => Ok(GeneratedField::UserDefinedAggrFunction),
+                            "userDefinedWindowFunction" | "user_defined_window_function" => Ok(GeneratedField::UserDefinedWindowFunction),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -16532,17 +16462,17 @@ impl<'de> serde::Deserialize<'de> for PhysicalWindowExprNode {
                                 map_.next_value::<::std::option::Option<::pbjson::private::BytesDeserialize<_>>>()?.map(|x| x.0)
                             ;
                         }
-                        GeneratedField::BuiltInFunction => {
-                            if window_function__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("builtInFunction"));
-                            }
-                            window_function__ = map_.next_value::<::std::option::Option<BuiltInWindowFunction>>()?.map(|x| physical_window_expr_node::WindowFunction::BuiltInFunction(x as i32));
-                        }
                         GeneratedField::UserDefinedAggrFunction => {
                             if window_function__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("userDefinedAggrFunction"));
                             }
                             window_function__ = map_.next_value::<::std::option::Option<_>>()?.map(physical_window_expr_node::WindowFunction::UserDefinedAggrFunction);
+                        }
+                        GeneratedField::UserDefinedWindowFunction => {
+                            if window_function__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("userDefinedWindowFunction"));
+                            }
+                            window_function__ = map_.next_value::<::std::option::Option<_>>()?.map(physical_window_expr_node::WindowFunction::UserDefinedWindowFunction);
                         }
                     }
                 }
@@ -21475,11 +21405,6 @@ impl serde::Serialize for WindowExprNode {
         }
         if let Some(v) = self.window_function.as_ref() {
             match v {
-                window_expr_node::WindowFunction::BuiltInFunction(v) => {
-                    let v = BuiltInWindowFunction::try_from(*v)
-                        .map_err(|_| serde::ser::Error::custom(format!("Invalid variant {}", *v)))?;
-                    struct_ser.serialize_field("builtInFunction", &v)?;
-                }
                 window_expr_node::WindowFunction::Udaf(v) => {
                     struct_ser.serialize_field("udaf", v)?;
                 }
@@ -21507,8 +21432,6 @@ impl<'de> serde::Deserialize<'de> for WindowExprNode {
             "windowFrame",
             "fun_definition",
             "funDefinition",
-            "built_in_function",
-            "builtInFunction",
             "udaf",
             "udwf",
         ];
@@ -21520,7 +21443,6 @@ impl<'de> serde::Deserialize<'de> for WindowExprNode {
             OrderBy,
             WindowFrame,
             FunDefinition,
-            BuiltInFunction,
             Udaf,
             Udwf,
         }
@@ -21549,7 +21471,6 @@ impl<'de> serde::Deserialize<'de> for WindowExprNode {
                             "orderBy" | "order_by" => Ok(GeneratedField::OrderBy),
                             "windowFrame" | "window_frame" => Ok(GeneratedField::WindowFrame),
                             "funDefinition" | "fun_definition" => Ok(GeneratedField::FunDefinition),
-                            "builtInFunction" | "built_in_function" => Ok(GeneratedField::BuiltInFunction),
                             "udaf" => Ok(GeneratedField::Udaf),
                             "udwf" => Ok(GeneratedField::Udwf),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
@@ -21610,12 +21531,6 @@ impl<'de> serde::Deserialize<'de> for WindowExprNode {
                             fun_definition__ = 
                                 map_.next_value::<::std::option::Option<::pbjson::private::BytesDeserialize<_>>>()?.map(|x| x.0)
                             ;
-                        }
-                        GeneratedField::BuiltInFunction => {
-                            if window_function__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("builtInFunction"));
-                            }
-                            window_function__ = map_.next_value::<::std::option::Option<BuiltInWindowFunction>>()?.map(|x| window_expr_node::WindowFunction::BuiltInFunction(x as i32));
                         }
                         GeneratedField::Udaf => {
                             if window_function__.is_some() {
