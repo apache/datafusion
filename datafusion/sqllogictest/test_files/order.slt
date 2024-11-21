@@ -1284,10 +1284,10 @@ logical_plan
 07)--------EmptyRelation
 physical_plan
 01)SortPreservingMergeExec: [a@0 DESC]
-02)--SortExec: expr=[a@0 DESC], preserve_partitioning=[true]
-03)----ProjectionExec: expr=[CASE WHEN name@0 = name1 THEN 0 WHEN name@0 = name2 THEN 0.5 END as a]
-04)------UnionExec
-05)--------ProjectionExec: expr=[name1 as name]
-06)----------PlaceholderRowExec
-07)--------ProjectionExec: expr=[name2 as name]
-08)----------PlaceholderRowExec
+02)--ProjectionExec: expr=[CASE WHEN name@0 = name1 THEN 0 WHEN name@0 = name2 THEN 0.5 END as a]
+03)----UnionExec
+04)------ProjectionExec: expr=[name1 as name]
+05)--------PlaceholderRowExec
+06)------ProjectionExec: expr=[name2 as name]
+07)--------PlaceholderRowExec
+
