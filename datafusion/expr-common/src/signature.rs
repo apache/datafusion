@@ -131,7 +131,7 @@ pub enum TypeSignature {
     Numeric(usize),
     /// Fixed number of arguments of all the same string types.
     /// The precedence of type from high to low is Utf8View, LargeUtf8 and Utf8.
-    /// Null is considerd as `Utf8` by default
+    /// Null is considered as `Utf8` by default
     /// Dictionary with string value type is also handled.
     String(usize),
     /// Zero argument
