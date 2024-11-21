@@ -27,7 +27,6 @@ use datafusion_expr::scalar_doc_sections::DOC_SECTION_CONDITIONAL;
 use datafusion_expr::{ColumnarValue, Documentation};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use std::any::Any;
-use std::ops::Deref;
 use std::sync::{Arc, OnceLock};
 
 const SORT_OPTIONS: SortOptions = SortOptions {
