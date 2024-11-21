@@ -141,7 +141,7 @@ impl ScalarUDFImpl for GreatestFunc {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        find_coerced_type(arg_types)
+        Ok(arg_types[0].clone())
     }
 
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
@@ -259,8 +259,8 @@ mod test {
     fn test_greatest_return_types_without_common_supertype_in_arg_type() {
         let greatest = core::greatest::GreatestFunc::new();
         let return_type = greatest
-            .return_type(&[DataType::Decimal128(10, 3), DataType::Decimal128(10, 4)])
+            .coerce_types(&[DataType::Decimal128(10, 3), DataType::Decimal128(10, 4)])
             .unwrap();
-        assert_eq!(return_type, DataType::Decimal128(11, 4));
+        assert_eq!(return_type, vec![DataType::Decimal128(11, 4), DataType::Decimal128(11, 4)]);
     }
 }
