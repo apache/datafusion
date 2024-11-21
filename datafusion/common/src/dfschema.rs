@@ -656,9 +656,26 @@ impl DFSchema {
             (othertype, DataType::Dictionary(_, v1)) => v1.as_ref() == othertype,
             (DataType::List(f1), DataType::List(f2))
             | (DataType::LargeList(f1), DataType::LargeList(f2))
-            | (DataType::FixedSizeList(f1, _), DataType::FixedSizeList(f2, _))
-            | (DataType::Map(f1, _), DataType::Map(f2, _)) => {
-                Self::field_is_logically_equal(f1, f2)
+            | (DataType::FixedSizeList(f1, _), DataType::FixedSizeList(f2, _)) => {
+                // Don't compare the names of the technical inner field
+                // Usually "item" but that's not mandated
+                Self::datatype_is_logically_equal(f1.data_type(), f2.data_type())
+            }
+            (DataType::Map(f1, _), DataType::Map(f2, _)) => {
+                // Don't compare the names of the technical inner fields
+                // Usually "entries", "key", "value" but that's not mandated
+                match (f1.data_type(), f2.data_type()) {
+                    (DataType::Struct(f1_inner), DataType::Struct(f2_inner)) => {
+                        f1_inner.len() == f2_inner.len()
+                            && f1_inner.iter().zip(f2_inner.iter()).all(|(f1, f2)| {
+                                Self::datatype_is_logically_equal(
+                                    f1.data_type(),
+                                    f2.data_type(),
+                                )
+                            })
+                    }
+                    _ => panic!("Map type should have an inner struct field"),
+                }
             }
             (DataType::Struct(fields1), DataType::Struct(fields2)) => {
                 let iter1 = fields1.iter();
@@ -1330,6 +1347,137 @@ mod tests {
         }
 
         Ok(())
+    }
+
+    #[test]
+    fn test_datatype_is_logically_equal() {
+        assert!(DFSchema::datatype_is_logically_equal(
+            &DataType::Int8,
+            &DataType::Int8
+        ));
+
+        assert!(!DFSchema::datatype_is_logically_equal(
+            &DataType::Int8,
+            &DataType::Int16
+        ));
+
+        // Test lists
+
+        // Succeeds if both have the same element type, disregards names and nullability
+        assert!(DFSchema::datatype_is_logically_equal(
+            &DataType::List(Field::new("item", DataType::Int8, true).into()),
+            &DataType::List(Field::new("element", DataType::Int8, false).into())
+        ));
+
+        // Fails if element type is different
+        assert!(!DFSchema::datatype_is_logically_equal(
+            &DataType::List(Field::new("item", DataType::Int8, true).into()),
+            &DataType::List(Field::new("item", DataType::Int16, true).into())
+        ));
+
+        // Test maps
+        let map_field = DataType::Map(
+            Field::new(
+                "entries",
+                DataType::Struct(Fields::from(vec![
+                    Field::new("key", DataType::Int8, false),
+                    Field::new("value", DataType::Int8, true),
+                ])),
+                true,
+            )
+            .into(),
+            true,
+        );
+
+        // Succeeds if both maps have the same key and value types, disregards names and nullability
+        assert!(DFSchema::datatype_is_logically_equal(
+            &map_field,
+            &DataType::Map(
+                Field::new(
+                    "pairs",
+                    DataType::Struct(Fields::from(vec![
+                        Field::new("one", DataType::Int8, false),
+                        Field::new("two", DataType::Int8, false)
+                    ])),
+                    true
+                )
+                .into(),
+                true
+            )
+        ));
+        // Fails if value type is different
+        assert!(!DFSchema::datatype_is_logically_equal(
+            &map_field,
+            &DataType::Map(
+                Field::new(
+                    "entries",
+                    DataType::Struct(Fields::from(vec![
+                        Field::new("key", DataType::Int8, false),
+                        Field::new("value", DataType::Int16, true)
+                    ])),
+                    true
+                )
+                .into(),
+                true
+            )
+        ));
+
+        // Fails if key type is different
+        assert!(!DFSchema::datatype_is_logically_equal(
+            &map_field,
+            &DataType::Map(
+                Field::new(
+                    "entries",
+                    DataType::Struct(Fields::from(vec![
+                        Field::new("key", DataType::Int16, false),
+                        Field::new("value", DataType::Int8, true)
+                    ])),
+                    true
+                )
+                .into(),
+                true
+            )
+        ));
+
+        // Test structs
+
+        let struct_field = DataType::Struct(Fields::from(vec![
+            Field::new("a", DataType::Int8, true),
+            Field::new("b", DataType::Int8, true),
+        ]));
+
+        // Succeeds if both have same names and datatypes, ignores nullability
+        assert!(DFSchema::datatype_is_logically_equal(
+            &struct_field,
+            &DataType::Struct(Fields::from(vec![
+                Field::new("a", DataType::Int8, false),
+                Field::new("b", DataType::Int8, true),
+            ]))
+        ));
+
+        // Fails if field names are different
+        assert!(!DFSchema::datatype_is_logically_equal(
+            &struct_field,
+            &DataType::Struct(Fields::from(vec![
+                Field::new("x", DataType::Int8, true),
+                Field::new("y", DataType::Int8, true),
+            ]))
+        ));
+
+        // Fails if types are different
+        assert!(!DFSchema::datatype_is_logically_equal(
+            &struct_field,
+            &DataType::Struct(Fields::from(vec![
+                Field::new("a", DataType::Int16, true),
+                Field::new("b", DataType::Int8, true),
+            ]))
+        ));
+
+        // Fails if more or less fields
+        assert!(!DFSchema::datatype_is_logically_equal(
+            &struct_field,
+            &DataType::Struct(Fields::from(vec![Field::new("a", DataType::Int8, true),]))
+        ));
     }
 
     fn test_schema_2() -> Schema {
