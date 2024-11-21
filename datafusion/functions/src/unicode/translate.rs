@@ -77,7 +77,7 @@ impl ScalarUDFImpl for TranslateFunc {
         utf8_to_str_type(&arg_types[0], "translate")
     }
 
-    fn invoke(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         make_scalar_function(invoke_translate, vec![])(args.args.as_slice())
     }
 

@@ -20,7 +20,7 @@
 use crate::expr::schema_name_from_exprs_comma_seperated_without_space;
 use crate::simplify::{ExprSimplifyResult, SimplifyInfo};
 use crate::sort_properties::{ExprProperties, SortProperties};
-use crate::{ColumnarValue, Documentation, Expr, Signature};
+use crate::{ColumnarValue, Documentation, Expr, ScalarFunctionImplementation, Signature};
 use arrow::datatypes::DataType;
 use datafusion_common::{not_impl_err, ExprSchema, Result};
 use datafusion_expr_common::interval_arithmetic::Interval;
@@ -535,9 +535,9 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     /// to arrays, which will likely be simpler code, but be slower.
     /// Note that this invoke method replaces the original invoke function deprecated in
     /// version = 42.1.0.
-    fn invoke(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         #[allow(deprecated)]
-        self.invoke_batch(args.args, args.number_rows)
+        self.invoke_batch(args.args.as_slice(), args.number_rows)
     }
 
     /// Invoke the function without `args`, instead the number of rows are provided,

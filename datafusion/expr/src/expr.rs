@@ -2484,7 +2484,7 @@ mod test {
                 Ok(DataType::Utf8)
             }
 
-            fn invoke(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+            fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
                 Ok(ColumnarValue::Scalar(ScalarValue::from("a")))
             }
         }

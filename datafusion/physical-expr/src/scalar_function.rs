@@ -146,7 +146,7 @@ impl PhysicalExpr for ScalarFunctionExpr {
             .all(|arg| matches!(arg, ColumnarValue::Scalar(_)));
 
         // evaluate the function
-        let output = self.fun.invoke(ScalarFunctionArgs {
+        let output = self.fun.invoke_with_args(ScalarFunctionArgs {
             args: inputs,
             number_rows: batch.num_rows(),
             return_type: &self.return_type,

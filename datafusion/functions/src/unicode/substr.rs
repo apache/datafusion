@@ -76,7 +76,7 @@ impl ScalarUDFImpl for SubstrFunc {
         }
     }
 
-    fn invoke(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         make_scalar_function(substr, vec![])(args.args.as_slice())
     }
 

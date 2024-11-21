@@ -64,7 +64,7 @@ impl ScalarUDFImpl for AsciiFunc {
         Ok(Int32)
     }
 
-    fn invoke(
+    fn invoke_with_args(
         &self,
         ScalarFunctionArgs { args, .. }: ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {

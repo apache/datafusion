@@ -79,7 +79,7 @@ impl ScalarUDFImpl for SubstrIndexFunc {
         utf8_to_str_type(&arg_types[0], "substr_index")
     }
 
-    fn invoke(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         make_scalar_function(substr_index, vec![])(args.args.as_slice())
     }
 
