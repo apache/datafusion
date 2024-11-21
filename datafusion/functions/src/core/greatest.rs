@@ -15,9 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
-use std::ops::Deref;
-use std::sync::{Arc, OnceLock};
 use arrow::array::{make_comparator, Array, ArrayRef, BooleanArray};
 use arrow::compute::kernels::cmp;
 use arrow::compute::kernels::zip::zip;
@@ -25,10 +22,13 @@ use arrow::compute::SortOptions;
 use arrow::datatypes::DataType;
 use arrow_buffer::BooleanBuffer;
 use datafusion_common::{exec_err, plan_err, Result, ScalarValue};
-use datafusion_expr::{ColumnarValue, Documentation};
-use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use datafusion_expr::binary::type_union_resolution;
 use datafusion_expr::scalar_doc_sections::DOC_SECTION_CONDITIONAL;
+use datafusion_expr::{ColumnarValue, Documentation};
+use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
+use std::any::Any;
+use std::ops::Deref;
+use std::sync::{Arc, OnceLock};
 
 const SORT_OPTIONS: SortOptions = SortOptions {
     // We want greatest first
@@ -58,8 +58,9 @@ impl GreatestFunc {
 }
 
 fn get_logical_null_count(arr: &dyn Array) -> usize {
-    arr.logical_nulls().map(|n| n.null_count()).unwrap_or_default()
-
+    arr.logical_nulls()
+        .map(|n| n.null_count())
+        .unwrap_or_default()
 }
 
 /// Return boolean array where `arr[i] = lhs[i] >= rhs[i]` for all i, where `arr` is the result array
@@ -69,14 +70,19 @@ fn get_larger(lhs: &dyn Array, rhs: &dyn Array) -> Result<BooleanArray> {
     // If both arrays are not nested, have the same length and no nulls, we can use the faster vectorised kernel
     // - If both arrays are not nested: Nested types, such as lists, are not supported as the null semantics are not well-defined.
     // - both array does not have any nulls: cmp::gt_eq will return null if any of the input is null while we want to return false in that case
-    if !lhs.data_type().is_nested() && get_logical_null_count(lhs) == 0 && get_logical_null_count(rhs) == 0 {
+    if !lhs.data_type().is_nested()
+        && get_logical_null_count(lhs) == 0
+        && get_logical_null_count(rhs) == 0
+    {
         return cmp::gt_eq(&lhs, &rhs).map_err(|e| e.into());
     }
 
     let cmp = make_comparator(lhs, rhs, SORT_OPTIONS)?;
 
     if lhs.len() != rhs.len() {
-        return exec_err!("All arrays should have the same length for greatest comparison")
+        return exec_err!(
+            "All arrays should have the same length for greatest comparison"
+        );
     }
 
     let values = BooleanBuffer::collect_bool(lhs.len(), |i| cmp(i, i).is_ge());
@@ -95,13 +101,12 @@ fn keep_larger(lhs: ArrayRef, rhs: ArrayRef) -> Result<ArrayRef> {
     Ok(larger)
 }
 
-fn keep_larger_scalar<'a>(lhs: &'a ScalarValue, rhs: &'a ScalarValue) -> Result<&'a ScalarValue> {
+fn keep_larger_scalar<'a>(
+    lhs: &'a ScalarValue,
+    rhs: &'a ScalarValue,
+) -> Result<&'a ScalarValue> {
     if !lhs.data_type().is_nested() {
-        return if lhs >= rhs {
-            Ok(lhs)
-        } else {
-            Ok(rhs)
-        };
+        return if lhs >= rhs { Ok(lhs) } else { Ok(rhs) };
     }
 
     // If complex type we can't compare directly as we want null values to be smaller
@@ -147,12 +152,14 @@ impl ScalarUDFImpl for GreatestFunc {
 
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
         if args.is_empty() {
-            return exec_err!("greatest was called with no arguments. It requires at least 1.");
+            return exec_err!(
+                "greatest was called with no arguments. It requires at least 1."
+            );
         }
 
         // Some engines (e.g. SQL Server) allow greatest with single arg, it's a noop
         if args.len() == 1 {
-            return Ok(args[0].clone())
+            return Ok(args[0].clone());
         }
 
         // Split to scalars and arrays for later optimization
@@ -161,12 +168,10 @@ impl ScalarUDFImpl for GreatestFunc {
             ColumnarValue::Array(_) => false,
         });
 
-        let mut arrays_iter = arrays
-            .iter()
-            .map(|x| match x {
-                ColumnarValue::Array(a) => a,
-                _ => unreachable!(),
-            });
+        let mut arrays_iter = arrays.iter().map(|x| match x {
+            ColumnarValue::Array(a) => a,
+            _ => unreachable!(),
+        });
 
         let first_array = arrays_iter.next();
 
@@ -174,12 +179,10 @@ impl ScalarUDFImpl for GreatestFunc {
 
         // Optimization: merge all scalars into one to avoid recomputing
         if !scalars.is_empty() {
-            let mut scalars_iter = scalars
-                .iter()
-                .map(|x| match x {
-                    ColumnarValue::Scalar(s) => s,
-                    _ => unreachable!(),
-                });
+            let mut scalars_iter = scalars.iter().map(|x| match x {
+                ColumnarValue::Scalar(s) => s,
+                _ => unreachable!(),
+            });
 
             // We have at least one scalar
             let mut largest_scalar = scalars_iter.next().unwrap();
@@ -199,7 +202,7 @@ impl ScalarUDFImpl for GreatestFunc {
             // Start with the largest value
             largest = keep_larger(
                 Arc::clone(first_array),
-                largest_scalar.to_array_of_size(first_array.len())?
+                largest_scalar.to_array_of_size(first_array.len())?,
             )?;
         } else {
             // If we only have arrays, start with the first array
@@ -262,6 +265,9 @@ mod test {
         let return_type = greatest
             .coerce_types(&[DataType::Decimal128(10, 3), DataType::Decimal128(10, 4)])
             .unwrap();
-        assert_eq!(return_type, vec![DataType::Decimal128(11, 4), DataType::Decimal128(11, 4)]);
+        assert_eq!(
+            return_type,
+            vec![DataType::Decimal128(11, 4), DataType::Decimal128(11, 4)]
+        );
     }
 }

@@ -25,6 +25,7 @@ pub mod arrowtypeof;
 pub mod coalesce;
 pub mod expr_ext;
 pub mod getfield;
+pub mod greatest;
 pub mod named_struct;
 pub mod nullif;
 pub mod nvl;
@@ -32,7 +33,6 @@ pub mod nvl2;
 pub mod planner;
 pub mod r#struct;
 pub mod version;
-pub mod greatest;
 
 // create UDFs
 make_udf_function!(arrow_cast::ArrowCastFunc, ARROW_CAST, arrow_cast);
