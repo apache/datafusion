@@ -475,10 +475,12 @@
 //!
 //! The number of cores used is determined by the `target_partitions`
 //! configuration setting, which defaults to the number of CPU cores.
-//! During execution, DataFusion creates this many distinct `async` [`Stream`]s and
-//! this many distinct [Tokio] [`task`]s, which drive the `Stream`s
-//! using threads managed by the `Runtime`. Many DataFusion `Stream`s  perform
-//! CPU intensive processing.
+//! While preparing for execution, DataFusion tries to create this many distinct
+//! `async` [`Stream`]s for each `ExecutionPlan`.
+//! The `Stream`s for certain `ExecutionPlans`, such as as [`RepartitionExec`]
+//! and [`CoalescePartitionsExec`], spawn [Tokio] [`task`]s, that are run by
+//! threads managed by the `Runtime`.
+//! Many DataFusion `Stream`s perform CPU intensive processing.
 //!
 //! Using `async` for CPU intensive tasks makes it easy for [`TableProvider`]s
 //! to perform network I/O using standard Rust `async` during execution.
@@ -582,6 +584,8 @@
 //! [`Runtime`]: tokio::runtime::Runtime
 //! [`task`]: tokio::task
 //! [Using Rustlang’s Async Tokio Runtime for CPU-Bound Tasks]: https://thenewstack.io/using-rustlangs-async-tokio-runtime-for-cpu-bound-tasks/
+//! [`RepartitionExec`]: physical_plan::repartition::RepartitionExec
+//! [`CoalescePartitionsExec`]: physical_plan::coalesce_partitions::CoalescePartitionsExec
 //!
 //! ## State Management and Configuration
 //!

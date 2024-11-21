@@ -21,7 +21,7 @@ use arrow_schema::{Field, FieldRef};
 
 use crate::error::_schema_err;
 use crate::utils::{parse_identifiers_normalized, quote_identifier};
-use crate::{DFSchema, DataFusionError, Result, SchemaError, TableReference};
+use crate::{DFSchema, Result, SchemaError, TableReference};
 use std::collections::HashSet;
 use std::convert::Infallible;
 use std::fmt;

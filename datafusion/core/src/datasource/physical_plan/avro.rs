@@ -34,7 +34,6 @@ use datafusion_physical_expr::{EquivalenceProperties, LexOrdering};
 
 /// Execution plan for scanning Avro data source
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct AvroExec {
     base_config: FileScanConfig,
     projected_statistics: Statistics,

@@ -26,7 +26,10 @@ use std::{
 
 use crate::expr::Sort;
 use arrow::datatypes::DataType;
-use datafusion_common::{Constraints, DFSchemaRef, SchemaReference, TableReference};
+use datafusion_common::tree_node::{Transformed, TreeNodeContainer, TreeNodeRecursion};
+use datafusion_common::{
+    Constraints, DFSchemaRef, Result, SchemaReference, TableReference,
+};
 use sqlparser::ast::Ident;
 
 /// Various types of DDL  (CREATE / DROP) catalog manipulation
@@ -487,6 +490,28 @@ pub struct OperateFunctionArg {
     pub data_type: DataType,
     pub default_expr: Option<Expr>,
 }
+
+impl<'a> TreeNodeContainer<'a, Expr> for OperateFunctionArg {
+    fn apply_elements<F: FnMut(&'a Expr) -> Result<TreeNodeRecursion>>(
+        &'a self,
+        f: F,
+    ) -> Result<TreeNodeRecursion> {
+        self.default_expr.apply_elements(f)
+    }
+
+    fn map_elements<F: FnMut(Expr) -> Result<Transformed<Expr>>>(
+        self,
+        f: F,
+    ) -> Result<Transformed<Self>> {
+        self.default_expr.map_elements(f)?.map_data(|default_expr| {
+            Ok(Self {
+                default_expr,
+                ..self
+            })
+        })
+    }
+}
+
 #[derive(Clone, PartialEq, Eq, PartialOrd, Hash, Debug)]
 pub struct CreateFunctionBody {
     /// LANGUAGE lang_name
@@ -495,6 +520,29 @@ pub struct CreateFunctionBody {
     pub behavior: Option<Volatility>,
     /// RETURN or AS function body
     pub function_body: Option<Expr>,
+}
+
+impl<'a> TreeNodeContainer<'a, Expr> for CreateFunctionBody {
+    fn apply_elements<F: FnMut(&'a Expr) -> Result<TreeNodeRecursion>>(
+        &'a self,
+        f: F,
+    ) -> Result<TreeNodeRecursion> {
+        self.function_body.apply_elements(f)
+    }
+
+    fn map_elements<F: FnMut(Expr) -> Result<Transformed<Expr>>>(
+        self,
+        f: F,
+    ) -> Result<Transformed<Self>> {
+        self.function_body
+            .map_elements(f)?
+            .map_data(|function_body| {
+                Ok(Self {
+                    function_body,
+                    ..self
+                })
+            })
+    }
 }
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
