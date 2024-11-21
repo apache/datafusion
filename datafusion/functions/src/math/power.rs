@@ -205,7 +205,7 @@ mod tests {
             ColumnarValue::Array(Arc::new(Float64Array::from(vec![2.0, 2.0, 3.0, 5.0]))), // base
             ColumnarValue::Array(Arc::new(Float64Array::from(vec![3.0, 2.0, 4.0, 4.0]))), // exponent
         ];
-
+        #[allow(deprecated)] // TODO: migrate to invoke_with_args
         let result = PowerFunc::new()
             .invoke_batch(&args, 4)
             .expect("failed to initialize function power");
@@ -232,7 +232,7 @@ mod tests {
             ColumnarValue::Array(Arc::new(Int64Array::from(vec![2, 2, 3, 5]))), // base
             ColumnarValue::Array(Arc::new(Int64Array::from(vec![3, 2, 4, 4]))), // exponent
         ];
-
+        #[allow(deprecated)] // TODO: migrate to invoke_with_args
         let result = PowerFunc::new()
             .invoke_batch(&args, 4)
             .expect("failed to initialize function power");

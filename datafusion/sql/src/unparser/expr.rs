@@ -462,7 +462,9 @@ impl Unparser<'_> {
         match func_name {
             "make_array" => self.make_array_to_sql(args),
             "array_element" => self.array_element_to_sql(args),
-            // TODO: support for the construct and access functions of the `map` and `struct` types
+            "named_struct" => self.named_struct_to_sql(args),
+            "get_field" => self.get_field_to_sql(args),
+            // TODO: support for the construct and access functions of the `map` type
             _ => self.scalar_function_to_sql_internal(func_name, args),
         }
     }
@@ -512,6 +514,57 @@ impl Unparser<'_> {
             expr: Box::new(array),
             subscript: Box::new(Subscript::Index { index }),
         })
+    }
+
+    fn named_struct_to_sql(&self, args: &[Expr]) -> Result<ast::Expr> {
+        if args.len() % 2 != 0 {
+            return internal_err!("named_struct must have an even number of arguments");
+        }
+
+        let args = args
+            .chunks_exact(2)
+            .map(|chunk| {
+                let key = match &chunk[0] {
+                    Expr::Literal(ScalarValue::Utf8(Some(s))) => self.new_ident_quoted_if_needs(s.to_string()),
+                    _ => return internal_err!("named_struct expects even arguments to be strings, but received: {:?}", &chunk[0])
+                };
+
+                Ok(ast::DictionaryField {
+                    key,
+                    value: Box::new(self.expr_to_sql(&chunk[1])?),
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        Ok(ast::Expr::Dictionary(args))
+    }
+
+    fn get_field_to_sql(&self, args: &[Expr]) -> Result<ast::Expr> {
+        if args.len() != 2 {
+            return internal_err!("get_field must have exactly 2 arguments");
+        }
+
+        let mut id = match &args[0] {
+            Expr::Column(col) => match self.col_to_sql(col)? {
+                ast::Expr::Identifier(ident) => vec![ident],
+                ast::Expr::CompoundIdentifier(idents) => idents,
+                other => return internal_err!("expected col_to_sql to return an Identifier or CompoundIdentifier, but received: {:?}", other),
+            },
+            _ => return internal_err!("get_field expects first argument to be column, but received: {:?}", &args[0]),
+        };
+
+        let field = match &args[1] {
+            Expr::Literal(lit) => self.new_ident_quoted_if_needs(lit.to_string()),
+            _ => {
+                return internal_err!(
+                "get_field expects second argument to be a string, but received: {:?}",
+                &args[0]
+            )
+            }
+        };
+        id.push(field);
+
+        Ok(ast::Expr::CompoundIdentifier(id))
     }
 
     pub fn sort_to_sql(&self, sort: &Sort) -> Result<ast::OrderByExpr> {
@@ -1524,6 +1577,7 @@ mod tests {
         Signature, Volatility, WindowFrame, WindowFunctionDefinition,
     };
     use datafusion_expr::{interval_month_day_nano_lit, ExprFunctionExt};
+    use datafusion_functions::expr_fn::{get_field, named_struct};
     use datafusion_functions_aggregate::count::count_udaf;
     use datafusion_functions_aggregate::expr_fn::sum;
     use datafusion_functions_nested::expr_fn::{array_element, make_array};
@@ -1937,6 +1991,11 @@ mod tests {
                 array_element(make_array(vec![lit(1), lit(2), lit(3)]), lit(1)),
                 "[1, 2, 3][1]",
             ),
+            (
+                named_struct(vec![lit("a"), lit("1"), lit("b"), lit(2)]),
+                "{a: '1', b: 2}",
+            ),
+            (get_field(col("a.b"), "c"), "a.b.c"),
         ];
 
         for (expr, expected) in tests {
