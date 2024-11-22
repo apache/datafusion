@@ -1210,6 +1210,7 @@ dependencies = [
  "datafusion-functions",
  "datafusion-functions-aggregate",
  "datafusion-functions-nested",
+ "datafusion-functions-table",
  "datafusion-functions-window",
  "datafusion-optimizer",
  "datafusion-physical-expr",
@@ -1271,6 +1272,7 @@ dependencies = [
  "clap",
  "ctor",
  "datafusion",
+ "datafusion-catalog",
  "dirs",
  "env_logger",
  "futures",
@@ -1446,6 +1448,28 @@ dependencies = [
  "log",
  "paste",
  "rand",
+]
+
+[[package]]
+name = "datafusion-functions-table"
+version = "43.0.0"
+dependencies = [
+ "ahash",
+ "arrow",
+ "arrow-schema",
+ "async-trait",
+ "datafusion-catalog",
+ "datafusion-common",
+ "datafusion-execution",
+ "datafusion-expr",
+ "datafusion-functions-aggregate-common",
+ "datafusion-physical-expr",
+ "datafusion-physical-expr-common",
+ "datafusion-physical-plan",
+ "half",
+ "indexmap",
+ "log",
+ "paste",
 ]
 
 [[package]]
