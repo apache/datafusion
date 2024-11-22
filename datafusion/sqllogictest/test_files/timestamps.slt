@@ -1756,13 +1756,13 @@ SELECT date_bin('1 day', TIMESTAMPTZ '2022-01-01 20:10:00Z', TIMESTAMP '2020-01-
 2022-01-01T07:00:00+07:00
 
 # postgresql: 1
-query R
+query I
 SELECT date_part('hour', TIMESTAMPTZ '2000-01-01T01:01:01') as part
 ----
 1
 
 # postgresql: 8
-query R
+query I
 SELECT date_part('hour', TIMESTAMPTZ '2000-01-01T01:01:01Z') as part
 ----
 8
@@ -1839,13 +1839,13 @@ SELECT date_bin('2 hour', TIMESTAMPTZ '2022-01-01 01:10:00+07', '2020-01-01T00:0
 2021-12-31T18:00:00Z
 
 # postgresql: 1
-query R
+query I
 SELECT date_part('hour', TIMESTAMPTZ '2000-01-01T01:01:01') as part
 ----
 1
 
 # postgresql: 18
-query R
+query I
 SELECT date_part('hour', TIMESTAMPTZ '2000-01-01T01:01:01+07') as part
 ----
 18
