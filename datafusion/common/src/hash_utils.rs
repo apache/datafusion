@@ -322,7 +322,11 @@ fn hash_fixed_list_array(
 ) -> Result<()> {
     let values = Arc::clone(array.values());
     let value_len = array.value_length();
-    let offset_size = value_len as usize / array.len();
+    let offset_size = if array.len() == 0 {
+        0
+    } else {
+        value_len as usize / array.len()
+    };
     let nulls = array.nulls();
     let mut values_hashes = vec![0u64; values.len()];
     create_hashes(&[values], random_state, &mut values_hashes)?;
@@ -451,6 +455,16 @@ mod tests {
         let hashes_buff = &mut vec![0; array_ref.len()];
         let hashes = create_hashes(&[array_ref], &random_state, hashes_buff)?;
         assert_eq!(hashes.len(), 4);
+        Ok(())
+    }
+
+    #[test]
+    fn create_hashes_for_empty_fixed_size_lit() -> Result<()> {
+        let empty_array = FixedSizeListBuilder::new(StringBuilder::new(), 1).finish();
+        let random_state = RandomState::with_seeds(0, 0, 0, 0);
+        let hashes_buff = &mut vec![0; 0];
+        let hashes = create_hashes(&[Arc::new(empty_array)], &random_state, hashes_buff)?;
+        assert_eq!(hashes, &Vec::<u64>::new());
         Ok(())
     }
 
