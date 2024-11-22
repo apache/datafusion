@@ -732,6 +732,9 @@ impl DataSink for CsvSink {
 
 #[cfg(test)]
 mod tests {
+    use arrow::array::Float64Array;
+    use arrow::array::BooleanArray;
+    use arrow::util::pretty::pretty_format_batches;
     use super::super::test_util::scan_format;
     use super::*;
     use crate::assert_batches_eq;
@@ -748,7 +751,8 @@ mod tests {
     use std::iter::repeat;
 
     use arrow::compute::concat_batches;
-    use arrow_array::StringArray;
+    use arrow::csv::ReaderBuilder;
+    use arrow_array::{Int32Array, StringArray};
     use datafusion_common::cast::as_string_array;
     use datafusion_common::internal_err;
     use datafusion_common::stats::Precision;
@@ -765,6 +769,7 @@ mod tests {
     use regex::Regex;
     use rstest::*;
     use url::Url;
+    use datafusion_execution::object_store::ObjectStoreUrl;
 
     #[tokio::test]
     async fn write_multipart_csv_with_signature() {
@@ -784,8 +789,8 @@ mod tests {
             .register_object_store(&Url::parse(&s3root).unwrap(), Arc::new(store));
 
         // setup sink
+        let url = ObjectStoreUrl::parse(&s3root).unwrap();
         let str = format!("{s3root}/cx/exports/team_id=555585/file9.csv");
-        let url = Url::parse(&str).unwrap();
         let table = ListingTableUrl::parse(str).unwrap();
         let cfg = FileSinkConfig {
             object_store_url: url,
@@ -800,7 +805,8 @@ mod tests {
                 metadata: Default::default(),
             }),
             table_partition_cols: vec![],
-            overwrite: false,
+            insert_op: InsertOp::Overwrite,
+            keep_partition_by_columns: false,
         };
         let opts = CsvWriterOptions {
             writer_options: Default::default(),
@@ -824,7 +830,7 @@ mod tests {
         )) as SendableRecordBatchStream;
 
         // write the data
-        let num_rows = sink.write_all(batches, &task_ctx).await.unwrap();
+        let num_rows = sink.write_all(batches, &task_ctx).await.unwrap() as usize;
         assert_eq!(num_rows, row_count);
     }
 
