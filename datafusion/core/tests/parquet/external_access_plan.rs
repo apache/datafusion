@@ -319,7 +319,14 @@ impl TestFull {
             file_size,
         } = get_test_data();
 
-        let mut partitioned_file = PartitionedFile::new(file_name, *file_size);
+        let new_file_name = if cfg!(target_os = "windows") {
+            // Windows path separator is different from Unix
+            file_name.replace("\\", "/")
+        } else {
+            file_name.clone()
+        };
+
+        let mut partitioned_file = PartitionedFile::new(new_file_name, *file_size);
 
         // add the access plan, if any, as an extension
         if let Some(access_plan) = access_plan {
