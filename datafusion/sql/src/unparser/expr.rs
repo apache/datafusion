@@ -573,24 +573,20 @@ impl Unparser<'_> {
             return internal_err!("map must have exactly 2 arguments");
         }
 
-        let keys = match self.expr_to_sql(&args[0])? {
-            ast::Expr::Array(Array { elem, .. }) => elem,
-            other => {
-                return internal_err!(
-                    "map expects first argument to be an array, but received: {:?}",
-                    other
-                )
-            }
+        let ast::Expr::Array(Array { elem: keys, .. }) = self.expr_to_sql(&args[0])?
+        else {
+            return internal_err!(
+                "map expects first argument to be an array, but received: {:?}",
+                &args[0]
+            );
         };
 
-        let values = match self.expr_to_sql(&args[1])? {
-            ast::Expr::Array(Array { elem, .. }) => elem,
-            other => {
-                return internal_err!(
-                    "map expects second argument to be an array, but received: {:?}",
-                    other
-                )
-            }
+        let ast::Expr::Array(Array { elem: values, .. }) = self.expr_to_sql(&args[1])?
+        else {
+            return internal_err!(
+                "map expects second argument to be an array, but received: {:?}",
+                &args[1]
+            );
         };
 
         let entries = keys
