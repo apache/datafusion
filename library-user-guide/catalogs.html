@@ -645,9 +645,9 @@
 <span class="w">        </span><span class="n">table</span><span class="p">:</span><span class="w"> </span><span class="nc">Arc</span><span class="o">&lt;</span><span class="k">dyn</span><span class="w"> </span><span class="n">TableProvider</span><span class="o">&gt;</span><span class="p">,</span>
 <span class="w">    </span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="nb">Option</span><span class="o">&lt;</span><span class="n">Arc</span><span class="o">&lt;</span><span class="k">dyn</span><span class="w"> </span><span class="n">TableProvider</span><span class="o">&gt;&gt;&gt;</span><span class="w"> </span><span class="p">{</span>
 <span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="bp">self</span><span class="p">.</span><span class="n">table_exist</span><span class="p">(</span><span class="n">name</span><span class="p">.</span><span class="n">as_str</span><span class="p">())</span><span class="w"> </span><span class="p">{</span>
-<span class="w">            </span><span class="k">return</span><span class="w"> </span><span class="nb">Err</span><span class="p">(</span><span class="n">DataFusionError</span><span class="p">::</span><span class="n">Execution</span><span class="p">(</span><span class="fm">format!</span><span class="p">(</span>
+<span class="w">            </span><span class="k">return</span><span class="w"> </span><span class="n">exec_err</span><span class="o">!</span><span class="p">(</span>
 <span class="w">                </span><span class="s">&quot;The table {name} already exists&quot;</span>
-<span class="w">            </span><span class="p">)));</span>
+<span class="w">            </span><span class="p">);</span>
 <span class="w">        </span><span class="p">}</span>
 <span class="w">        </span><span class="nb">Ok</span><span class="p">(</span><span class="bp">self</span><span class="p">.</span><span class="n">tables</span><span class="p">.</span><span class="n">insert</span><span class="p">(</span><span class="n">name</span><span class="p">,</span><span class="w"> </span><span class="n">table</span><span class="p">))</span>
 <span class="w">    </span><span class="p">}</span>
