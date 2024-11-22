@@ -127,7 +127,7 @@ physical_plan
 
 
 
-query TRR
+query TIR
 select
     nation,
     o_year,
