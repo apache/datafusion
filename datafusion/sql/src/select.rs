@@ -167,7 +167,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     let group_by_expr = normalize_col(group_by_expr, &projected_plan)?;
                     self.validate_schema_satisfies_exprs(
                         base_plan.schema(),
-                        &[group_by_expr.clone()],
+                        std::slice::from_ref(&group_by_expr),
                     )?;
                     Ok(group_by_expr)
                 })
@@ -815,7 +815,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
             check_columns_satisfy_exprs(
                 &column_exprs_post_aggr,
-                &[having_expr_post_aggr.clone()],
+                std::slice::from_ref(&having_expr_post_aggr),
                 "HAVING clause references non-aggregate values",
             )?;
 
