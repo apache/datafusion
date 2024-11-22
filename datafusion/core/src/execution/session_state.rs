@@ -756,7 +756,12 @@ impl SessionState {
                 .transform_up(|expr| rewrite.rewrite(expr, df_schema, config_options))?
                 .data;
         }
-        create_physical_expr(&expr, df_schema, self.execution_props())
+        create_physical_expr(
+            &expr,
+            df_schema,
+            self.execution_props(),
+            Arc::new(config_options.clone()),
+        )
     }
 
     /// Return the session ID

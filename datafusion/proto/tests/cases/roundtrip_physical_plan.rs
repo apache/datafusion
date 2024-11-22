@@ -87,7 +87,7 @@ use datafusion::physical_plan::{
 };
 use datafusion::prelude::SessionContext;
 use datafusion::scalar::ScalarValue;
-use datafusion_common::config::TableParquetOptions;
+use datafusion_common::config::{ConfigOptions, TableParquetOptions};
 use datafusion_common::file_options::csv_writer::CsvWriterOptions;
 use datafusion_common::file_options::json_writer::JsonWriterOptions;
 use datafusion_common::parsers::CompressionTypeVariant;
@@ -133,7 +133,12 @@ fn roundtrip_test_and_return(
             .expect("to proto");
     let runtime = ctx.runtime_env();
     let result_exec_plan: Arc<dyn ExecutionPlan> = proto
-        .try_into_physical_plan(ctx, runtime.deref(), codec)
+        .try_into_physical_plan(
+            ctx,
+            Arc::new(ConfigOptions::default()),
+            runtime.deref(),
+            codec,
+        )
         .expect("from proto");
     assert_eq!(format!("{exec_plan:?}"), format!("{result_exec_plan:?}"));
     Ok(result_exec_plan)
@@ -934,6 +939,7 @@ fn roundtrip_scalar_udf() -> Result<()> {
         fun_def,
         vec![col("a", &schema)?],
         DataType::Int64,
+        Arc::new(ConfigOptions::default()),
     );
 
     let project =
@@ -1062,6 +1068,7 @@ fn roundtrip_scalar_udf_extension_codec() -> Result<()> {
         Arc::new(ScalarUDF::from(MyRegexUdf::new(".*".to_string()))),
         vec![col("text", &schema)?],
         DataType::Int64,
+        Arc::new(ConfigOptions::default()),
     ));
 
     let filter = Arc::new(FilterExec::try_new(
@@ -1166,6 +1173,7 @@ fn roundtrip_aggregate_udf_extension_codec() -> Result<()> {
         Arc::new(ScalarUDF::from(MyRegexUdf::new(".*".to_string()))),
         vec![col("text", &schema)?],
         DataType::Int64,
+        Arc::new(ConfigOptions::default()),
     ));
 
     let udaf = Arc::new(AggregateUDF::from(MyAggregateUDF::new(

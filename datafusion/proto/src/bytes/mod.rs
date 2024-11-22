@@ -289,7 +289,13 @@ pub fn physical_plan_from_json(
     let back: protobuf::PhysicalPlanNode = serde_json::from_str(json)
         .map_err(|e| plan_datafusion_err!("Error serializing plan: {e}"))?;
     let extension_codec = DefaultPhysicalExtensionCodec {};
-    back.try_into_physical_plan(ctx, &ctx.runtime_env(), &extension_codec)
+    let config_options = ctx.state().config_options().clone();
+    back.try_into_physical_plan(
+        ctx,
+        Arc::new(config_options),
+        &ctx.runtime_env(),
+        &extension_codec,
+    )
 }
 
 /// Deserialize a PhysicalPlan from bytes
@@ -309,5 +315,11 @@ pub fn physical_plan_from_bytes_with_extension_codec(
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let protobuf = protobuf::PhysicalPlanNode::decode(bytes)
         .map_err(|e| plan_datafusion_err!("Error decoding expr as protobuf: {e}"))?;
-    protobuf.try_into_physical_plan(ctx, &ctx.runtime_env(), extension_codec)
+    let config_options = ctx.state().config_options().clone();
+    protobuf.try_into_physical_plan(
+        ctx,
+        Arc::new(config_options),
+        &ctx.runtime_env(),
+        extension_codec,
+    )
 }
