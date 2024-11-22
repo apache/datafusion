@@ -19,7 +19,7 @@ extern crate criterion;
 
 use std::sync::Arc;
 
-use arrow::array::{Array, ArrayRef, Int64Array, StringArray};
+use arrow::array::{ArrayRef, Int64Array, StringArray};
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use rand::distributions::{Alphanumeric, Uniform};
 use rand::prelude::Distribution;
