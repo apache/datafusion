@@ -284,7 +284,7 @@ mod tests {
         let meta = local_unpartitioned_file(filename);
 
         let file_schema = AvroFormat {}
-            .infer_schema(&state, &store, &[meta.clone()])
+            .infer_schema(&state, &store, std::slice::from_ref(&meta))
             .await?;
 
         let avro_exec = AvroExec::new(
@@ -349,7 +349,7 @@ mod tests {
         let object_store_url = ObjectStoreUrl::local_filesystem();
         let meta = local_unpartitioned_file(filename);
         let actual_schema = AvroFormat {}
-            .infer_schema(&state, &object_store, &[meta.clone()])
+            .infer_schema(&state, &object_store, std::slice::from_ref(&meta))
             .await?;
 
         let mut builder = SchemaBuilder::from(actual_schema.fields());
@@ -422,7 +422,7 @@ mod tests {
         let object_store_url = ObjectStoreUrl::local_filesystem();
         let meta = local_unpartitioned_file(filename);
         let file_schema = AvroFormat {}
-            .infer_schema(&state, &object_store, &[meta.clone()])
+            .infer_schema(&state, &object_store, std::slice::from_ref(&meta))
             .await?;
 
         let mut partitioned_file = PartitionedFile::from(meta);
