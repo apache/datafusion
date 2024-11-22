@@ -139,7 +139,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             |b| {
                 b.iter(|| {
                     #[allow(deprecated)] // TODO use invoke_batch
-                    black_box(repeat.invoke_batch(&args))
+                    black_box(repeat.invoke_batch(&args, size))
                 })
             },
         );
