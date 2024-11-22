@@ -501,7 +501,7 @@ impl SessionState {
         sql: &str,
         dialect: &str,
     ) -> datafusion_common::Result<SQLExpr> {
-        self.sql_to_expr_with_alias(sql, dialect).map(|x|x.expr)
+        self.sql_to_expr_with_alias(sql, dialect).map(|x| x.expr)
     }
 
     /// parse a sql string into a sqlparser-rs AST [`SQLExprWithAlias`].
@@ -511,13 +511,13 @@ impl SessionState {
         &self,
         sql: &str,
         dialect: &str,
-    )-> datafusion_common::Result<SQLExprWithAlias> {
+    ) -> datafusion_common::Result<SQLExprWithAlias> {
         let dialect = dialect_from_str(dialect).ok_or_else(|| {
-        plan_datafusion_err!(
-        "Unsupported SQL dialect: {dialect}. Available dialects: \
+            plan_datafusion_err!(
+                "Unsupported SQL dialect: {dialect}. Available dialects: \
                          Generic, MySQL, PostgreSQL, Hive, SQLite, Snowflake, Redshift, \
                          MsSQL, ClickHouse, BigQuery, Ansi."
-        )
+            )
         })?;
 
         let expr = DFParser::parse_sql_into_expr_with_dialect(sql, dialect.as_ref())?;
