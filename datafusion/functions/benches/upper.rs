@@ -38,8 +38,8 @@ fn criterion_benchmark(c: &mut Criterion) {
         let args = create_args(size, 32);
         c.bench_function("upper_all_values_are_ascii", |b| {
             b.iter(|| {
-                #[allow(deprecated)] // TODO use invoke_batch
-                black_box(upper.invoke(&args))
+                #[allow(deprecated)] // TODO use invoke_with_args
+                black_box(upper.invoke_batch(&args, size))
             })
         });
     }

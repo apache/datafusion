@@ -34,8 +34,8 @@ fn criterion_benchmark(c: &mut Criterion) {
         ];
         c.bench_function(&format!("nullif scalar array: {}", size), |b| {
             b.iter(|| {
-                #[allow(deprecated)] // TODO use invoke_batch
-                black_box(nullif.invoke(&args).unwrap())
+                #[allow(deprecated)] // TODO use invoke_with_args
+                black_box(nullif.invoke_batch(&args, size).unwrap())
             })
         });
     }

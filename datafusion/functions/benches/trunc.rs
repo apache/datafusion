@@ -34,16 +34,16 @@ fn criterion_benchmark(c: &mut Criterion) {
         let f32_args = vec![ColumnarValue::Array(f32_array)];
         c.bench_function(&format!("trunc f32 array: {}", size), |b| {
             b.iter(|| {
-                #[allow(deprecated)] // TODO use invoke_batch
-                black_box(trunc.invoke(&f32_args).unwrap())
+                #[allow(deprecated)] // TODO use invoke_with_args
+                black_box(trunc.invoke_batch(&f32_args, size).unwrap())
             })
         });
         let f64_array = Arc::new(create_primitive_array::<Float64Type>(size, 0.2));
         let f64_args = vec![ColumnarValue::Array(f64_array)];
         c.bench_function(&format!("trunc f64 array: {}", size), |b| {
             b.iter(|| {
-                #[allow(deprecated)] // TODO use invoke_batch
-                black_box(trunc.invoke(&f64_args).unwrap())
+                #[allow(deprecated)] // TODO use invoke_with_args
+                black_box(trunc.invoke_batch(&f64_args, size).unwrap())
             })
         });
     }
