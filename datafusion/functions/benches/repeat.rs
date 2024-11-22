@@ -73,7 +73,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             ),
             |b| {
                 b.iter(|| {
-                    #[allow(deprecated)] // TODO use invoke_batch
+                    // TODO use invoke_with_args
                     black_box(repeat.invoke_batch(&args, repeat_times as usize))
                 })
             },
@@ -87,7 +87,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             ),
             |b| {
                 b.iter(|| {
-                    #[allow(deprecated)] // TODO use invoke_batch
+                    // TODO use invoke_with_args
                     black_box(repeat.invoke_batch(&args, repeat_times as usize))
                 })
             },
@@ -101,7 +101,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             ),
             |b| {
                 b.iter(|| {
-                    #[allow(deprecated)] // TODO use invoke_batch
+                    // TODO use invoke_with_args
                     black_box(repeat.invoke_batch(&args, repeat_times as usize))
                 })
             },
@@ -124,7 +124,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             ),
             |b| {
                 b.iter(|| {
-                    #[allow(deprecated)] // TODO use invoke_batch
+                    // TODO use invoke_with_args
                     black_box(repeat.invoke_batch(&args, repeat_times as usize))
                 })
             },
@@ -138,7 +138,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             ),
             |b| {
                 b.iter(|| {
-                    #[allow(deprecated)] // TODO use invoke_batch
+                    // TODO use invoke_with_args
                     black_box(repeat.invoke_batch(&args, size))
                 })
             },
@@ -152,7 +152,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             ),
             |b| {
                 b.iter(|| {
-                    #[allow(deprecated)] // TODO use invoke_batch
+                    // TODO use invoke_with_args
                     black_box(repeat.invoke_batch(&args, repeat_times as usize))
                 })
             },

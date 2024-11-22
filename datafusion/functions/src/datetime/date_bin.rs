@@ -185,6 +185,30 @@ Calculates time intervals and returns the start of the interval nearest to the s
 For example, if you "bin" or "window" data into 15 minute intervals, an input timestamp of `2023-01-01T18:18:18Z` will be updated to the start time of the 15 minute bin it is in: `2023-01-01T18:15:00Z`.
 "#)
             .with_syntax_example("date_bin(interval, expression, origin-timestamp)")
+            .with_sql_example(r#"```sql
+-- Bin the timestamp into 1 day intervals
+> SELECT date_bin(interval '1 day', time) as bin
+FROM VALUES ('2023-01-01T18:18:18Z'), ('2023-01-03T19:00:03Z')  t(time);
++---------------------+
+| bin                 |
++---------------------+
+| 2023-01-01T00:00:00 |
+| 2023-01-03T00:00:00 |
++---------------------+
+2 row(s) fetched.
+
+-- Bin the timestamp into 1 day intervals starting at 3AM on  2023-01-01
+> SELECT date_bin(interval '1 day', time,  '2023-01-01T03:00:00') as bin
+FROM VALUES ('2023-01-01T18:18:18Z'), ('2023-01-03T19:00:03Z')  t(time);
++---------------------+
+| bin                 |
++---------------------+
+| 2023-01-01T03:00:00 |
+| 2023-01-03T03:00:00 |
++---------------------+
+2 row(s) fetched.
+```
+"#)
             .with_argument("interval", "Bin interval.")
             .with_argument("expression", "Time expression to operate on. Can be a constant, column, or function.")
             .with_argument("origin-timestamp", "Optional. Starting point used to determine bin boundaries. If not specified defaults 1970-01-01T00:00:00Z (the UNIX epoch in UTC).

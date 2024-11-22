@@ -115,7 +115,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         let string_array = ColumnarValue::Array(Arc::new(arr_data) as ArrayRef);
 
         b.iter(|| {
-            #[allow(deprecated)] // TODO use invoke_batch
+            // TODO use invoke_with_args
             black_box(
                 to_timestamp()
                     .invoke_batch(&[string_array.clone()], batch_len)
@@ -130,7 +130,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         let string_array = ColumnarValue::Array(Arc::new(data) as ArrayRef);
 
         b.iter(|| {
-            #[allow(deprecated)] // TODO use invoke_batch
+            // TODO use invoke_with_args
             black_box(
                 to_timestamp()
                     .invoke_batch(&[string_array.clone()], batch_len)
@@ -145,7 +145,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         let string_array = ColumnarValue::Array(Arc::new(data) as ArrayRef);
 
         b.iter(|| {
-            #[allow(deprecated)] // TODO use invoke_batch
+            // TODO use invoke_with_args
             black_box(
                 to_timestamp()
                     .invoke_batch(&[string_array.clone()], batch_len)
@@ -165,7 +165,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             ColumnarValue::Array(Arc::new(format3) as ArrayRef),
         ];
         b.iter(|| {
-            #[allow(deprecated)] // TODO use invoke_batch
+            // TODO use invoke_with_args
             black_box(
                 to_timestamp()
                     .invoke_batch(&args.clone(), batch_len)
@@ -193,7 +193,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             ),
         ];
         b.iter(|| {
-            #[allow(deprecated)] // TODO use invoke_batch
+            // TODO use invoke_with_args
             black_box(
                 to_timestamp()
                     .invoke_batch(&args.clone(), batch_len)
@@ -222,7 +222,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             ),
         ];
         b.iter(|| {
-            #[allow(deprecated)] // TODO use invoke_batch
+            // TODO use invoke_with_args
             black_box(
                 to_timestamp()
                     .invoke_batch(&args.clone(), batch_len)

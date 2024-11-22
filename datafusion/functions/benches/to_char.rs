@@ -130,7 +130,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         )));
 
         b.iter(|| {
-            #[allow(deprecated)] // TODO use invoke_batch
+            // TODO use invoke_with_args
             black_box(
                 to_char()
                     .invoke_batch(&[data.clone(), pattern.clone()], 1)

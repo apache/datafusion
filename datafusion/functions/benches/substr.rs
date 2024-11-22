@@ -109,7 +109,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             format!("substr_string_view [size={}, strlen={}]", size, len),
             |b| {
                 b.iter(|| {
-                    #[allow(deprecated)] // TODO use invoke_batch
+                    // TODO use invoke_with_args
                     black_box(substr.invoke_batch(&args, size))
                 })
             },
@@ -120,7 +120,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             format!("substr_string [size={}, strlen={}]", size, len),
             |b| {
                 b.iter(|| {
-                    #[allow(deprecated)] // TODO use invoke_batch
+                    // TODO use invoke_with_args
                     black_box(substr.invoke_batch(&args, size))
                 })
             },
@@ -131,7 +131,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             format!("substr_large_string [size={}, strlen={}]", size, len),
             |b| {
                 b.iter(|| {
-                    #[allow(deprecated)] // TODO use invoke_batch
+                    // TODO use invoke_with_args
                     black_box(substr.invoke_batch(&args, size))
                 })
             },
@@ -154,7 +154,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             ),
             |b| {
                 b.iter(|| {
-                    #[allow(deprecated)] // TODO use invoke_batch
+                    // TODO use invoke_with_args
                     black_box(substr.invoke_batch(&args, size))
                 })
             },
@@ -168,7 +168,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             ),
             |b| {
                 b.iter(|| {
-                    #[allow(deprecated)] // TODO use invoke_batch
+                    // TODO use invoke_with_args
                     black_box(substr.invoke_batch(&args, size))
                 })
             },
@@ -182,7 +182,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             ),
             |b| {
                 b.iter(|| {
-                    #[allow(deprecated)] // TODO use invoke
+                    #[allow(deprecated)] // TODO use invoke_with_args
                     black_box(substr.invoke_batch(&args, size))
                 })
             },
@@ -205,7 +205,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             ),
             |b| {
                 b.iter(|| {
-                    #[allow(deprecated)] // TODO use invoke
+                    #[allow(deprecated)] // TODO use invoke_with_args
                     black_box(substr.invoke_batch(&args, size))
                 })
             },
@@ -219,7 +219,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             ),
             |b| {
                 b.iter(|| {
-                    #[allow(deprecated)] // TODO use invoke_batch
+                    // TODO use invoke_with_args
                     black_box(substr.invoke_batch(&args, size))
                 })
             },
@@ -233,7 +233,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             ),
             |b| {
                 b.iter(|| {
-                    #[allow(deprecated)] // TODO use invoke_batch
+                    // TODO use invoke_with_args
                     black_box(substr.invoke_batch(&args, size))
                 })
             },

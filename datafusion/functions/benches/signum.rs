@@ -34,7 +34,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         let f32_args = vec![ColumnarValue::Array(f32_array)];
         c.bench_function(&format!("signum f32 array: {}", size), |b| {
             b.iter(|| {
-                #[allow(deprecated)] // TODO use invoke
+                // TODO use invoke_with_args
                 black_box(signum.invoke_batch(&f32_args, batch_len).unwrap())
             })
         });
@@ -44,7 +44,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         let f64_args = vec![ColumnarValue::Array(f64_array)];
         c.bench_function(&format!("signum f64 array: {}", size), |b| {
             b.iter(|| {
-                #[allow(deprecated)] // TODO use invoke
+                #[allow(deprecated)] // TODO use invoke_with_args
                 black_box(signum.invoke_batch(&f64_args, batch_len).unwrap())
             })
         });
