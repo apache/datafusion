@@ -33,7 +33,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         let f32_args = vec![ColumnarValue::Array(f32_array)];
         c.bench_function(&format!("isnan f32 array: {}", size), |b| {
             b.iter(|| {
-                #[allow(deprecated)] // TODO use invoke_with_args
+                // TODO use invoke_with_args
                 black_box(isnan.invoke_batch(&f32_args, size).unwrap())
             })
         });
@@ -41,7 +41,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         let f64_args = vec![ColumnarValue::Array(f64_array)];
         c.bench_function(&format!("isnan f64 array: {}", size), |b| {
             b.iter(|| {
-                #[allow(deprecated)] // TODO use invoke_with_args
+                // TODO use invoke_with_args
                 black_box(isnan.invoke_batch(&f64_args, size).unwrap())
             })
         });

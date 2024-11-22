@@ -88,7 +88,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         let patterns = ColumnarValue::Array(Arc::new(patterns(&mut rng)) as ArrayRef);
 
         b.iter(|| {
-            #[allow(deprecated)] // TODO use invoke_with_args
+            // TODO use invoke_with_args
             black_box(
                 to_char()
                     .invoke_batch(&[data.clone(), patterns.clone()], batch_len)
@@ -106,7 +106,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             ColumnarValue::Scalar(ScalarValue::Utf8(Some("%Y-%m-%d".to_string())));
 
         b.iter(|| {
-            #[allow(deprecated)] // TODO use invoke_with_args
+            // TODO use invoke_with_args
             black_box(
                 to_char()
                     .invoke_batch(&[data.clone(), patterns.clone()], batch_len)

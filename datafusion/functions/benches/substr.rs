@@ -182,7 +182,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             ),
             |b| {
                 b.iter(|| {
-                    #[allow(deprecated)] // TODO use invoke_with_args
+                    // TODO use invoke_with_args
                     black_box(substr.invoke_batch(&args, size))
                 })
             },
@@ -205,7 +205,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             ),
             |b| {
                 b.iter(|| {
-                    #[allow(deprecated)] // TODO use invoke_with_args
+                    // TODO use invoke_with_args
                     black_box(substr.invoke_batch(&args, size))
                 })
             },

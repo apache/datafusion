@@ -141,7 +141,7 @@ fn run_with_string_type<M: Measurement>(
         ),
         |b| {
             b.iter(|| {
-                #[allow(deprecated)] // TODO use invoke_with_args
+                // TODO use invoke_with_args
                 black_box(ltrim.invoke_batch(&args, size))
             })
         },
