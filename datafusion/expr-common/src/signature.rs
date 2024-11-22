@@ -119,7 +119,7 @@ pub enum TypeSignature {
     /// Note:
     /// - If compares with numeric and string, numeric is preferred for numeric string cases. For example, nullif('2', 1) has coerced types Int64.
     /// - If the result is Null, it will be coerced to String (Utf8View).
-    /// 
+    ///
     /// See `comparison_coercion_numeric` for more details.
     Comparable(usize),
     /// Fixed number of arguments of arbitrary types, number should be larger than 0
