@@ -740,16 +740,15 @@ mod tests {
     use crate::datasource::file_format::{
         BatchDeserializer, DecoderDeserializer, DeserializerOutput,
     };
-    use crate::datasource::listing::ListingOptions;
+    use crate::datasource::listing::{ListingOptions, ListingTableUrl};
     use crate::execution::session_state::SessionStateBuilder;
     use crate::physical_plan::collect;
     use crate::prelude::{CsvReadOptions, SessionConfig, SessionContext};
     use crate::test_util::arrow_test_data;
+    use std::iter::repeat;
 
     use arrow::compute::concat_batches;
-    use arrow::csv::ReaderBuilder;
-    use arrow::util::pretty::pretty_format_batches;
-    use arrow_array::{BooleanArray, Float64Array, Int32Array, StringArray};
+    use arrow_array::StringArray;
     use datafusion_common::cast::as_string_array;
     use datafusion_common::internal_err;
     use datafusion_common::stats::Precision;
@@ -757,10 +756,77 @@ mod tests {
     use datafusion_expr::{col, lit};
 
     use chrono::DateTime;
+    use datafusion_common::parsers::CompressionTypeVariant;
+    use datafusion_physical_plan::stream::RecordBatchStreamAdapter;
+    use object_store::aws::AmazonS3Builder;
+    use object_store::aws::Checksum;
     use object_store::local::LocalFileSystem;
     use object_store::path::Path;
     use regex::Regex;
     use rstest::*;
+    use url::Url;
+
+    #[tokio::test]
+    async fn write_multipart_csv_with_signature() {
+        // setup session
+        let config = SessionConfig::new().with_batch_size(2);
+        let session_ctx = SessionContext::new_with_config(config);
+        let task_ctx = session_ctx.task_ctx();
+
+        let bucket = "cgx-production-c4c-archive-data";
+        let s3root = format!("s3://{bucket}");
+        let store = AmazonS3Builder::from_env()
+            .with_bucket_name(bucket)
+            .with_checksum_algorithm(Checksum::SHA256) // fails for large text
+            .build()
+            .unwrap();
+        let _ = session_ctx
+            .register_object_store(&Url::parse(&s3root).unwrap(), Arc::new(store));
+
+        // setup sink
+        let str = format!("{s3root}/cx/exports/team_id=555585/file9.csv");
+        let url = Url::parse(&str).unwrap();
+        let table = ListingTableUrl::parse(str).unwrap();
+        let cfg = FileSinkConfig {
+            object_store_url: url,
+            file_groups: vec![],
+            table_paths: vec![table],
+            output_schema: Arc::new(Schema {
+                fields: Fields::from(vec![Field::new(
+                    "applicationname",
+                    DataType::Utf8,
+                    true,
+                )]),
+                metadata: Default::default(),
+            }),
+            table_partition_cols: vec![],
+            overwrite: false,
+        };
+        let opts = CsvWriterOptions {
+            writer_options: Default::default(),
+            compression: CompressionTypeVariant::UNCOMPRESSED,
+        };
+        let sink = CsvSink::new(cfg, opts);
+
+        // Generate data
+        let text = "Hello, World!".to_string();
+        let row_count = 1_000_000;
+        let values: Vec<String> = repeat(text).take(row_count).collect();
+        let id_array = StringArray::from(values);
+        let schema =
+            Schema::new(vec![Field::new("applicationname", DataType::Utf8, false)]);
+        let batch =
+            RecordBatch::try_new(Arc::new(schema), vec![Arc::new(id_array)]).unwrap();
+        let schema = batch.schema();
+        let batches = Box::pin(RecordBatchStreamAdapter::new(
+            schema.clone(),
+            futures::stream::once(async { Ok(batch) }),
+        )) as SendableRecordBatchStream;
+
+        // write the data
+        let num_rows = sink.write_all(batches, &task_ctx).await.unwrap();
+        assert_eq!(num_rows, row_count);
+    }
 
     #[tokio::test]
     async fn read_small_batches() -> Result<()> {
