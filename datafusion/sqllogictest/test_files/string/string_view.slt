@@ -39,8 +39,19 @@ drop table test_source
 
 # TODO: Revisit this issue after upgrading to the arrow-rs version that includes apache/arrow-rs#6671.
 # see issue https://github.com/apache/datafusion/issues/13329
-query error DataFusion error: Arrow error: Compute error: bit_length not supported for Utf8View
+query IIII
 select bit_length(ascii_1), bit_length(ascii_2), bit_length(unicode_1), bit_length(unicode_2) from test_basic_operator;
+----
+48 8 144 32
+72 72 176 176
+56 8 240 64
+88 88 104 256
+56 24 216 288
+0 8 0 0
+8 16 0 0
+8 16 0 0
+NULL 8 NULL NULL
+NULL 8 NULL 32
 
 #
 # common test for string-like functions and operators
@@ -1022,6 +1033,27 @@ FROM test;
 logical_plan
 01)Projection: digest(test.column1_utf8view, Utf8View("md5")) AS c
 02)--TableScan: test projection=[column1_utf8view]
+
+## Ensure no unexpected casts for string_to_array
+query TT
+EXPLAIN SELECT
+  string_to_array(column1_utf8view, ',') AS c
+FROM test;
+----
+logical_plan
+01)Projection: string_to_array(test.column1_utf8view, Utf8View(",")) AS c
+02)--TableScan: test projection=[column1_utf8view]
+
+## Ensure no unexpected casts for array_to_string
+query TT
+EXPLAIN SELECT
+  array_to_string(string_to_array(column1_utf8view, NULL), ',') AS c
+FROM test;
+----
+logical_plan
+01)Projection: array_to_string(string_to_array(test.column1_utf8view, Utf8View(NULL)), Utf8(",")) AS c
+02)--TableScan: test projection=[column1_utf8view]
+
 
 ## Ensure no casts for binary operators
 # `~` operator (regex match)

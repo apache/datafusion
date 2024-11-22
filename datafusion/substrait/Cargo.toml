@@ -34,6 +34,7 @@ workspace = true
 [dependencies]
 arrow-buffer = { workspace = true }
 async-recursion = "1.0"
+async-trait = { workspace = true }
 chrono = { workspace = true }
 datafusion = { workspace = true, default-features = true }
 itertools = { workspace = true }
@@ -41,7 +42,7 @@ object_store = { workspace = true }
 pbjson-types = "0.7"
 # TODO use workspace version
 prost = "0.13"
-substrait = { version = "0.47", features = ["serde"] }
+substrait = { version = "0.48", features = ["serde"] }
 url = { workspace = true }
 
 [dev-dependencies]

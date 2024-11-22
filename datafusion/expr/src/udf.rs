@@ -515,12 +515,21 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     /// See <https://github.com/apache/datafusion/issues/13515> for more details.
     fn invoke_batch(
         &self,
-        _args: &[ColumnarValue],
-        _number_rows: usize,
+        args: &[ColumnarValue],
+        number_rows: usize,
     ) -> Result<ColumnarValue> {
-        not_impl_err!(
-            "invoke_batch, this method is deprecated implement `invoke` instead"
-        )
+        match args.is_empty() {
+            true =>
+            {
+                #[allow(deprecated)]
+                self.invoke_no_args(number_rows)
+            }
+            false =>
+            {
+                #[allow(deprecated)]
+                self.invoke(args)
+            }
+        }
     }
 
     /// Invoke the function returning the appropriate result.
@@ -533,8 +542,6 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     ///
     /// [`ColumnarValue::values_to_arrays`] can be used to convert the arguments
     /// to arrays, which will likely be simpler code, but be slower.
-    /// Note that this invoke method replaces the original invoke function deprecated in
-    /// version = 42.1.0.
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         #[allow(deprecated)]
         self.invoke_batch(args.args.as_slice(), args.number_rows)

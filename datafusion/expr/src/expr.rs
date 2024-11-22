@@ -32,7 +32,7 @@ use crate::{udaf, ExprSchemable, Operator, Signature, WindowFrame, WindowUDF};
 use arrow::datatypes::{DataType, FieldRef};
 use datafusion_common::cse::HashNode;
 use datafusion_common::tree_node::{
-    Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
+    Transformed, TransformedResult, TreeNode, TreeNodeContainer, TreeNodeRecursion,
 };
 use datafusion_common::{
     plan_err, Column, DFSchema, HashMap, Result, ScalarValue, TableReference,
@@ -351,6 +351,22 @@ impl<'a> From<(Option<&'a TableReference>, &'a FieldRef)> for Expr {
     }
 }
 
+impl<'a> TreeNodeContainer<'a, Self> for Expr {
+    fn apply_elements<F: FnMut(&'a Self) -> Result<TreeNodeRecursion>>(
+        &'a self,
+        mut f: F,
+    ) -> Result<TreeNodeRecursion> {
+        f(self)
+    }
+
+    fn map_elements<F: FnMut(Self) -> Result<Transformed<Self>>>(
+        self,
+        mut f: F,
+    ) -> Result<Transformed<Self>> {
+        f(self)
+    }
+}
+
 /// UNNEST expression.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Hash, Debug)]
 pub struct Unnest {
@@ -650,6 +666,24 @@ impl Display for Sort {
             write!(f, " NULLS LAST")?;
         }
         Ok(())
+    }
+}
+
+impl<'a> TreeNodeContainer<'a, Expr> for Sort {
+    fn apply_elements<F: FnMut(&'a Expr) -> Result<TreeNodeRecursion>>(
+        &'a self,
+        f: F,
+    ) -> Result<TreeNodeRecursion> {
+        self.expr.apply_elements(f)
+    }
+
+    fn map_elements<F: FnMut(Expr) -> Result<Transformed<Expr>>>(
+        self,
+        f: F,
+    ) -> Result<Transformed<Self>> {
+        self.expr
+            .map_elements(f)?
+            .map_data(|expr| Ok(Self { expr, ..self }))
     }
 }
 

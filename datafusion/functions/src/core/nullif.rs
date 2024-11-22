@@ -32,26 +32,6 @@ pub struct NullIfFunc {
     signature: Signature,
 }
 
-/// Currently supported types by the nullif function.
-/// The order of these types correspond to the order on which coercion applies
-/// This should thus be from least informative to most informative
-static SUPPORTED_NULLIF_TYPES: &[DataType] = &[
-    DataType::Boolean,
-    DataType::UInt8,
-    DataType::UInt16,
-    DataType::UInt32,
-    DataType::UInt64,
-    DataType::Int8,
-    DataType::Int16,
-    DataType::Int32,
-    DataType::Int64,
-    DataType::Float32,
-    DataType::Float64,
-    DataType::Utf8View,
-    DataType::Utf8,
-    DataType::LargeUtf8,
-];
-
 impl Default for NullIfFunc {
     fn default() -> Self {
         Self::new()
@@ -61,11 +41,20 @@ impl Default for NullIfFunc {
 impl NullIfFunc {
     pub fn new() -> Self {
         Self {
-            signature: Signature::uniform(
-                2,
-                SUPPORTED_NULLIF_TYPES.to_vec(),
-                Volatility::Immutable,
-            ),
+            // Documentation mentioned in Postgres,
+            // The result has the same type as the first argument — but there is a subtlety.
+            // What is actually returned is the first argument of the implied = operator,
+            // and in some cases that will have been promoted to match the second argument's type.
+            // For example, NULLIF(1, 2.2) yields numeric, because there is no integer = numeric operator, only numeric = numeric
+            //
+            // We don't strictly follow Postgres or DuckDB for **simplicity**.
+            // In this function, we will coerce arguments to the same data type for comparison need. Unlike DuckDB
+            // we don't return the **original** first argument type but return the final coerced type.
+            //
+            // In Postgres, nullif('2', 2) returns Null but nullif('2::varchar', 2) returns error.
+            // While in DuckDB both query returns Null. We follow DuckDB in this case since I think they are equivalent thing and should
+            // have the same result as well.
+            signature: Signature::comparable(2, Volatility::Immutable),
         }
     }
 }
@@ -83,14 +72,7 @@ impl ScalarUDFImpl for NullIfFunc {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        // NULLIF has two args and they might get coerced, get a preview of this
-        let coerced_types = datafusion_expr::type_coercion::functions::data_types(
-            arg_types,
-            &self.signature,
-        );
-        coerced_types
-            .map(|typs| typs[0].clone())
-            .map_err(|e| e.context("Failed to coerce arguments for NULLIF"))
+        Ok(arg_types[0].to_owned())
     }
 
     fn invoke_batch(
