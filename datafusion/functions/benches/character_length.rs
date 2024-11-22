@@ -111,7 +111,9 @@ fn criterion_benchmark(c: &mut Criterion) {
             |b| {
                 b.iter(|| {
                     #[allow(deprecated)] // TODO use invoke_batch
-                    black_box(character_length.invoke_batch(&args_string_view_ascii, n_rows))
+                    black_box(
+                        character_length.invoke_batch(&args_string_view_ascii, n_rows),
+                    )
                 })
             },
         );
@@ -123,7 +125,9 @@ fn criterion_benchmark(c: &mut Criterion) {
             |b| {
                 b.iter(|| {
                     #[allow(deprecated)] // TODO use invoke_batch
-                    black_box(character_length.invoke_batch(&args_string_view_utf8, n_rows))
+                    black_box(
+                        character_length.invoke_batch(&args_string_view_utf8, n_rows),
+                    )
                 })
             },
         );

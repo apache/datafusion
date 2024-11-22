@@ -462,7 +462,11 @@ impl ScalarUDFImpl for SimpleScalarUDF {
         Ok(self.return_type.clone())
     }
 
-    fn invoke_batch(&self, args: &[ColumnarValue], _number_rows: usize) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         (self.fun)(args)
     }
 }
