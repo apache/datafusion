@@ -163,7 +163,8 @@ fn check_inner_plan(inner_plan: &LogicalPlan, can_contain_outer_ref: bool) -> Re
         | LogicalPlan::Limit(_)
         | LogicalPlan::Values(_)
         | LogicalPlan::Subquery(_)
-        | LogicalPlan::SubqueryAlias(_) => {
+        | LogicalPlan::SubqueryAlias(_)
+        | LogicalPlan::Unnest(_) => {
             inner_plan.apply_children(|plan| {
                 check_inner_plan(plan, can_contain_outer_ref)?;
                 Ok(TreeNodeRecursion::Continue)
