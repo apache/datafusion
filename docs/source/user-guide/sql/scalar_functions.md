@@ -1954,32 +1954,6 @@ The following intervals are supported:
 - years
 - century
 
-#### Example
-
-```sql
--- Bin the timestamp into 1 day intervals
-> SELECT date_bin(interval '1 day', time) as bin
-FROM VALUES ('2023-01-01T18:18:18Z'), ('2023-01-03T19:00:03Z')  t(time);
-+---------------------+
-| bin                 |
-+---------------------+
-| 2023-01-01T00:00:00 |
-| 2023-01-03T00:00:00 |
-+---------------------+
-2 row(s) fetched.
-
--- Bin the timestamp into 1 day intervals starting at 3AM on  2023-01-01
-> SELECT date_bin(interval '1 day', time,  '2023-01-01T03:00:00') as bin
-FROM VALUES ('2023-01-01T18:18:18Z'), ('2023-01-03T19:00:03Z')  t(time);
-+---------------------+
-| bin                 |
-+---------------------+
-| 2023-01-01T03:00:00 |
-| 2023-01-03T03:00:00 |
-+---------------------+
-2 row(s) fetched.
-```
-
 ### `date_format`
 
 _Alias of [to_char](#to_char)._
