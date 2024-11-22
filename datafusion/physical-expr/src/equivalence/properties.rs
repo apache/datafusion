@@ -3794,7 +3794,7 @@ mod tests {
 
         let mut eq_properties = EquivalenceProperties::new(Arc::clone(&schema));
         let initial_ordering = LexOrdering::from(vec![
-            PhysicalSortExpr::new_default(Arc::clone(&a_minus_b)).asc(),
+            PhysicalSortExpr::new_default(Arc::clone(&col_c)).asc(),
             PhysicalSortExpr::new_default(Arc::clone(&col_a)).asc(),
             PhysicalSortExpr::new_default(Arc::clone(&col_b)).desc(),
         ]);
@@ -3808,7 +3808,7 @@ mod tests {
         eq_properties.add_equal_conditions(&col_c, &a_minus_b)?;
 
         let orderings = eq_properties.oeq_class().orderings.clone();
-        let expected_ordering1 = LexOrdering::from(vec![PhysicalSortExpr::new_default(Arc::clone(&a_minus_b)).asc()]);
+        let expected_ordering1 = LexOrdering::from(vec![PhysicalSortExpr::new_default(Arc::clone(&col_c)).asc()]);
         let expected_ordering2 = LexOrdering::from(vec![
             PhysicalSortExpr::new_default(Arc::clone(&col_a)).asc(),
             PhysicalSortExpr::new_default(Arc::clone(&col_b)).desc(),
