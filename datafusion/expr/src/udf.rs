@@ -218,7 +218,6 @@ impl ScalarUDF {
         args: &[ColumnarValue],
         number_rows: usize,
     ) -> Result<ColumnarValue> {
-        #[allow(deprecated)]
         self.inner.invoke_batch(args, number_rows)
     }
 
