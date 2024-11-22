@@ -29,7 +29,7 @@ dev/update_function_docs.sh file for updating surrounding text.
 
 Aggregate functions operate on a set of values to compute a single result.
 
-## General Functions 
+## General Functions
 
 - [array_agg](#array_agg)
 - [avg](#avg)
@@ -61,6 +61,7 @@ Returns an array created from the expression elements. If ordering is required, 
 ```
 array_agg(expression [ORDER BY expression])
 ```
+
 #### Arguments
 
 - **expression**: The expression to operate on. Can be a constant, column, or function, and any combination of operators.
@@ -76,7 +77,6 @@ array_agg(expression [ORDER BY expression])
 +-----------------------------------------------+
 ```
 
-
 ### `avg`
 
 Returns the average of numeric values in the specified column.
@@ -84,6 +84,7 @@ Returns the average of numeric values in the specified column.
 ```
 avg(expression)
 ```
+
 #### Arguments
 
 - **expression**: The expression to operate on. Can be a constant, column, or function, and any combination of operators.
@@ -100,6 +101,7 @@ avg(expression)
 ```
 
 #### Aliases
+
 - mean
 
 ### `bit_and`
@@ -109,6 +111,7 @@ Computes the bitwise AND of all non-null input values.
 ```
 bit_and(expression)
 ```
+
 #### Arguments
 
 - **expression**: Integer expression to operate on. Can be a constant, column, or function, and any combination of operators.
@@ -120,6 +123,7 @@ Computes the bitwise OR of all non-null input values.
 ```
 bit_or(expression)
 ```
+
 #### Arguments
 
 - **expression**: Integer expression to operate on. Can be a constant, column, or function, and any combination of operators.
@@ -131,6 +135,7 @@ Computes the bitwise exclusive OR of all non-null input values.
 ```
 bit_xor(expression)
 ```
+
 #### Arguments
 
 - **expression**: Integer expression to operate on. Can be a constant, column, or function, and any combination of operators.
@@ -142,6 +147,7 @@ Returns true if all non-null input values are true, otherwise false.
 ```
 bool_and(expression)
 ```
+
 #### Arguments
 
 - **expression**: The expression to operate on. Can be a constant, column, or function, and any combination of operators.
@@ -156,7 +162,6 @@ bool_and(expression)
 | true                        |
 +----------------------------+
 ```
-
 
 ### `bool_or`
 
@@ -165,6 +170,7 @@ Returns true if all non-null input values are true, otherwise false.
 ```
 bool_and(expression)
 ```
+
 #### Arguments
 
 - **expression**: The expression to operate on. Can be a constant, column, or function, and any combination of operators.
@@ -180,7 +186,6 @@ bool_and(expression)
 +----------------------------+
 ```
 
-
 ### `count`
 
 Returns the number of non-null values in the specified column. To include null values in the total count, use `count(*)`.
@@ -188,6 +193,7 @@ Returns the number of non-null values in the specified column. To include null v
 ```
 count(expression)
 ```
+
 #### Arguments
 
 - **expression**: The expression to operate on. Can be a constant, column, or function, and any combination of operators.
@@ -210,7 +216,6 @@ count(expression)
 +------------------+
 ```
 
-
 ### `first_value`
 
 Returns the first element in an aggregation group according to the requested ordering. If no ordering is given, returns an arbitrary element from the group.
@@ -218,6 +223,7 @@ Returns the first element in an aggregation group according to the requested ord
 ```
 first_value(expression [ORDER BY expression])
 ```
+
 #### Arguments
 
 - **expression**: The expression to operate on. Can be a constant, column, or function, and any combination of operators.
@@ -233,7 +239,6 @@ first_value(expression [ORDER BY expression])
 +-----------------------------------------------+
 ```
 
-
 ### `grouping`
 
 Returns 1 if the data is aggregated across the specified column, or 0 if it is not aggregated in the result set.
@@ -241,6 +246,7 @@ Returns 1 if the data is aggregated across the specified column, or 0 if it is n
 ```
 grouping(expression)
 ```
+
 #### Arguments
 
 - **expression**: Expression to evaluate whether data is aggregated across the specified column. Can be a constant, column, or function.
@@ -260,7 +266,6 @@ grouping(expression)
 +-------------+-------------+
 ```
 
-
 ### `last_value`
 
 Returns the first element in an aggregation group according to the requested ordering. If no ordering is given, returns an arbitrary element from the group.
@@ -268,6 +273,7 @@ Returns the first element in an aggregation group according to the requested ord
 ```
 first_value(expression [ORDER BY expression])
 ```
+
 #### Arguments
 
 - **expression**: The expression to operate on. Can be a constant, column, or function, and any combination of operators.
@@ -283,7 +289,6 @@ first_value(expression [ORDER BY expression])
 +-----------------------------------------------+
 ```
 
-
 ### `max`
 
 Returns the maximum value in the specified column.
@@ -291,6 +296,7 @@ Returns the maximum value in the specified column.
 ```
 max(expression)
 ```
+
 #### Arguments
 
 - **expression**: The expression to operate on. Can be a constant, column, or function, and any combination of operators.
@@ -307,6 +313,7 @@ max(expression)
 ```
 
 ### `mean`
+
 _Alias of [avg](#avg)._
 
 ### `median`
@@ -316,6 +323,7 @@ Returns the median value in the specified column.
 ```
 median(expression)
 ```
+
 #### Arguments
 
 - **expression**: The expression to operate on. Can be a constant, column, or function, and any combination of operators.
@@ -331,7 +339,6 @@ median(expression)
 +----------------------+
 ```
 
-
 ### `min`
 
 Returns the maximum value in the specified column.
@@ -339,6 +346,7 @@ Returns the maximum value in the specified column.
 ```
 max(expression)
 ```
+
 #### Arguments
 
 - **expression**: The expression to operate on. Can be a constant, column, or function, and any combination of operators.
@@ -354,7 +362,6 @@ max(expression)
 +----------------------+
 ```
 
-
 ### `string_agg`
 
 Concatenates the values of string expressions and places separator values between them.
@@ -362,6 +369,7 @@ Concatenates the values of string expressions and places separator values betwee
 ```
 string_agg(expression, delimiter)
 ```
+
 #### Arguments
 
 - **expression**: The string expression to concatenate. Can be a column or any valid string expression.
@@ -379,7 +387,6 @@ string_agg(expression, delimiter)
 +--------------------------+
 ```
 
-
 ### `sum`
 
 Returns the sum of all values in the specified column.
@@ -387,6 +394,7 @@ Returns the sum of all values in the specified column.
 ```
 sum(expression)
 ```
+
 #### Arguments
 
 - **expression**: The expression to operate on. Can be a constant, column, or function, and any combination of operators.
@@ -402,7 +410,6 @@ sum(expression)
 +-----------------------+
 ```
 
-
 ### `var`
 
 Returns the statistical sample variance of a set of numbers.
@@ -410,12 +417,15 @@ Returns the statistical sample variance of a set of numbers.
 ```
 var(expression)
 ```
+
 #### Arguments
 
 - **expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
+
 #### Aliases
-- var\_sample
-- var\_samp
+
+- var_sample
+- var_samp
 
 ### `var_pop`
 
@@ -424,19 +434,28 @@ Returns the statistical population variance of a set of numbers.
 ```
 var_pop(expression)
 ```
+
 #### Arguments
 
 - **expression**: Numeric expression to operate on. Can be a constant, column, or function, and any combination of operators.
+
 #### Aliases
-- var\_population
+
+- var_population
+
 ### `var_population`
+
 _Alias of [var_pop](#var_pop)._
+
 ### `var_samp`
-_Alias of [var](#var)._
-### `var_sample`
+
 _Alias of [var](#var)._
 
-## Statistical Functions 
+### `var_sample`
+
+_Alias of [var](#var)._
+
+## Statistical Functions
 
 - [corr](#corr)
 - [covar](#covar)
@@ -463,6 +482,7 @@ Returns the coefficient of correlation between two numeric values.
 ```
 corr(expression1, expression2)
 ```
+
 #### Arguments
 
 - **expression1**: First expression to operate on. Can be a constant, column, or function, and any combination of operators.
@@ -480,6 +500,7 @@ corr(expression1, expression2)
 ```
 
 ### `covar`
+
 _Alias of [covar_samp](#covar_samp)._
 
 ### `covar_pop`
@@ -489,6 +510,7 @@ Returns the sample covariance of a set of number pairs.
 ```
 covar_samp(expression1, expression2)
 ```
+
 #### Arguments
 
 - **expression1**: First expression to operate on. Can be a constant, column, or function, and any combination of operators.
@@ -505,7 +527,6 @@ covar_samp(expression1, expression2)
 +-----------------------------------+
 ```
 
-
 ### `covar_samp`
 
 Returns the sample covariance of a set of number pairs.
@@ -513,6 +534,7 @@ Returns the sample covariance of a set of number pairs.
 ```
 covar_samp(expression1, expression2)
 ```
+
 #### Arguments
 
 - **expression1**: First expression to operate on. Can be a constant, column, or function, and any combination of operators.
@@ -530,6 +552,7 @@ covar_samp(expression1, expression2)
 ```
 
 #### Aliases
+
 - covar
 
 ### `nth_value`
@@ -539,6 +562,7 @@ Returns the nth value in a group of values.
 ```
 nth_value(expression, n ORDER BY expression)
 ```
+
 #### Arguments
 
 - **expression**: The column or expression to retrieve the nth value from.
@@ -560,7 +584,6 @@ nth_value(expression, n ORDER BY expression)
 +---------+--------+-------------------------+
 ```
 
-
 ### `regr_avgx`
 
 Computes the average of the independent variable (input) expression_x for the non-null paired data points.
@@ -568,6 +591,7 @@ Computes the average of the independent variable (input) expression_x for the no
 ```
 regr_avgx(expression_y, expression_x)
 ```
+
 #### Arguments
 
 - **expression_y**: Dependent variable expression to operate on. Can be a constant, column, or function, and any combination of operators.
@@ -580,6 +604,7 @@ Computes the average of the dependent variable (output) expression_y for the non
 ```
 regr_avgy(expression_y, expression_x)
 ```
+
 #### Arguments
 
 - **expression_y**: Dependent variable expression to operate on. Can be a constant, column, or function, and any combination of operators.
@@ -592,6 +617,7 @@ Counts the number of non-null paired data points.
 ```
 regr_count(expression_y, expression_x)
 ```
+
 #### Arguments
 
 - **expression_y**: Dependent variable expression to operate on. Can be a constant, column, or function, and any combination of operators.
@@ -604,6 +630,7 @@ Computes the y-intercept of the linear regression line. For the equation (y = kx
 ```
 regr_intercept(expression_y, expression_x)
 ```
+
 #### Arguments
 
 - **expression_y**: Dependent variable expression to operate on. Can be a constant, column, or function, and any combination of operators.
@@ -616,6 +643,7 @@ Computes the square of the correlation coefficient between the independent and d
 ```
 regr_r2(expression_y, expression_x)
 ```
+
 #### Arguments
 
 - **expression_y**: Dependent variable expression to operate on. Can be a constant, column, or function, and any combination of operators.
@@ -623,11 +651,12 @@ regr_r2(expression_y, expression_x)
 
 ### `regr_slope`
 
-Returns the slope of the linear regression line for non-null pairs in aggregate columns. Given input column Y and X: regr_slope(Y, X) returns the slope (k in Y = k*X + b) using minimal RSS fitting.
+Returns the slope of the linear regression line for non-null pairs in aggregate columns. Given input column Y and X: regr_slope(Y, X) returns the slope (k in Y = k\*X + b) using minimal RSS fitting.
 
 ```
 regr_slope(expression_y, expression_x)
 ```
+
 #### Arguments
 
 - **expression_y**: Dependent variable expression to operate on. Can be a constant, column, or function, and any combination of operators.
@@ -640,6 +669,7 @@ Computes the sum of squares of the independent variable.
 ```
 regr_sxx(expression_y, expression_x)
 ```
+
 #### Arguments
 
 - **expression_y**: Dependent variable expression to operate on. Can be a constant, column, or function, and any combination of operators.
@@ -652,6 +682,7 @@ Computes the sum of products of paired data points.
 ```
 regr_sxy(expression_y, expression_x)
 ```
+
 #### Arguments
 
 - **expression_y**: Dependent variable expression to operate on. Can be a constant, column, or function, and any combination of operators.
@@ -664,6 +695,7 @@ Computes the sum of squares of the dependent variable.
 ```
 regr_syy(expression_y, expression_x)
 ```
+
 #### Arguments
 
 - **expression_y**: Dependent variable expression to operate on. Can be a constant, column, or function, and any combination of operators.
@@ -676,6 +708,7 @@ Returns the standard deviation of a set of numbers.
 ```
 stddev(expression)
 ```
+
 #### Arguments
 
 - **expression**: The expression to operate on. Can be a constant, column, or function, and any combination of operators.
@@ -692,7 +725,8 @@ stddev(expression)
 ```
 
 #### Aliases
-- stddev\_samp
+
+- stddev_samp
 
 ### `stddev_pop`
 
@@ -701,6 +735,7 @@ Returns the standard deviation of a set of numbers.
 ```
 stddev(expression)
 ```
+
 #### Arguments
 
 - **expression**: The expression to operate on. Can be a constant, column, or function, and any combination of operators.
@@ -717,9 +752,10 @@ stddev(expression)
 ```
 
 ### `stddev_samp`
+
 _Alias of [stddev](#stddev)._
 
-## Approximate Functions 
+## Approximate Functions
 
 - [approx_distinct](#approx_distinct)
 - [approx_median](#approx_median)
@@ -733,6 +769,7 @@ Returns the approximate number of distinct input values calculated using the Hyp
 ```
 approx_distinct(expression)
 ```
+
 #### Arguments
 
 - **expression**: The expression to operate on. Can be a constant, column, or function, and any combination of operators.
@@ -748,7 +785,6 @@ approx_distinct(expression)
 +-----------------------------------+
 ```
 
-
 ### `approx_median`
 
 Returns the approximate median (50th percentile) of input values. It is an alias of `approx_percentile_cont(x, 0.5)`.
@@ -756,6 +792,7 @@ Returns the approximate median (50th percentile) of input values. It is an alias
 ```
 approx_median(expression)
 ```
+
 #### Arguments
 
 - **expression**: The expression to operate on. Can be a constant, column, or function, and any combination of operators.
@@ -771,7 +808,6 @@ approx_median(expression)
 +-----------------------------------+
 ```
 
-
 ### `approx_percentile_cont`
 
 Returns the approximate percentile of input values using the t-digest algorithm.
@@ -779,6 +815,7 @@ Returns the approximate percentile of input values using the t-digest algorithm.
 ```
 approx_percentile_cont(expression, percentile, centroids)
 ```
+
 #### Arguments
 
 - **expression**: The expression to operate on. Can be a constant, column, or function, and any combination of operators.
@@ -796,7 +833,6 @@ approx_percentile_cont(expression, percentile, centroids)
 +-------------------------------------------------+
 ```
 
-
 ### `approx_percentile_cont_with_weight`
 
 Returns the weighted approximate percentile of input values using the t-digest algorithm.
@@ -804,6 +840,7 @@ Returns the weighted approximate percentile of input values using the t-digest a
 ```
 approx_percentile_cont_with_weight(expression, weight, percentile)
 ```
+
 #### Arguments
 
 - **expression**: The expression to operate on. Can be a constant, column, or function, and any combination of operators.
@@ -820,5 +857,3 @@ approx_percentile_cont_with_weight(expression, weight, percentile)
 | 78.5                                                                 |
 +----------------------------------------------------------------------+
 ```
-
-
