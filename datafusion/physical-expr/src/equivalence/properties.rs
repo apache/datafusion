@@ -346,16 +346,25 @@ impl EquivalenceProperties {
             .unwrap_or_else(|| vec![Arc::clone(&normalized_expr)]);
 
         let mut new_orderings: Vec<LexOrdering> = vec![];
-        for ordering in self
-            .normalized_oeq_class()
-            .iter()
-            .filter(|ordering| ordering[0].expr.eq(&normalized_expr))
-        {
-            let leading_ordering = ordering[0].options;
+
+        let normalized_oeq = self.normalized_oeq_class();
+        for (original_ordering, ordering) in self.oeq_class.iter().zip(normalized_oeq.iter()) {
+            if !ordering[0].expr.eq(&normalized_expr) {
+                continue;
+            }
+
+            let leading_ordering_options = ordering[0].options;
+            let original_leading_ordering_expr = original_ordering[0].expr.clone();
 
             // Handle expressions with multiple children
             for equivalent_expr in &eq_class {
+                // Skip if original ordering starts with the equivalent expression
+                if original_leading_ordering_expr.eq(&equivalent_expr) {
+                    continue;
+                }
+
                 let children = equivalent_expr.children();
+
                 if children.is_empty() {
                     continue;
                 }
@@ -384,7 +393,7 @@ impl EquivalenceProperties {
                 if all_children_match {
                     // Check if the expression is monotonic in all arguments
                     if let Ok(expr_properties) = equivalent_expr.get_properties(&child_properties) {
-                        if SortProperties::Ordered(leading_ordering) == expr_properties.sort_properties {
+                        if SortProperties::Ordered(leading_ordering_options) == expr_properties.sort_properties {
                             // Add ordering with leading expression removed
                             new_orderings.push(LexOrdering::new(ordering[1..].to_vec()));
                             break;
