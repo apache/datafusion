@@ -23,7 +23,8 @@ use datafusion_expr::planner::{
 use recursive::recursive;
 use sqlparser::ast::{
     BinaryOperator, CastFormat, CastKind, DataType as SQLDataType, DictionaryField,
-    Expr as SQLExpr, MapEntry, StructField, Subscript, TrimWhereField, Value,
+    Expr as SQLExpr, ExprWithAlias as SQLExprWithAlias, MapEntry, StructField, Subscript,
+    TrimWhereField, Value,
 };
 
 use datafusion_common::{
@@ -50,6 +51,19 @@ mod unary_op;
 mod value;
 
 impl<'a, S: ContextProvider> SqlToRel<'a, S> {
+    pub(crate) fn sql_expr_to_logical_expr_with_alias(
+        &self,
+        sql: SQLExprWithAlias,
+        schema: &DFSchema,
+        planner_context: &mut PlannerContext,
+    ) -> Result<Expr> {
+        let mut expr =
+            self.sql_expr_to_logical_expr(sql.expr, schema, planner_context)?;
+        if let Some(alias) = sql.alias {
+            expr = expr.alias(alias.value);
+        }
+        Ok(expr)
+    }
     pub(crate) fn sql_expr_to_logical_expr(
         &self,
         sql: SQLExpr,
@@ -129,6 +143,20 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             self.parse_sql_binary_op(op)?,
             Box::new(right),
         )))
+    }
+
+    pub fn sql_to_expr_with_alias(
+        &self,
+        sql: SQLExprWithAlias,
+        schema: &DFSchema,
+        planner_context: &mut PlannerContext,
+    ) -> Result<Expr> {
+        let mut expr =
+            self.sql_expr_to_logical_expr_with_alias(sql, schema, planner_context)?;
+        expr = self.rewrite_partial_qualifier(expr, schema);
+        self.validate_schema_satisfies_exprs(schema, &[expr.clone()])?;
+        let (expr, _) = expr.infer_placeholder_types(schema)?;
+        Ok(expr)
     }
 
     /// Generate a relational expression from a SQL expression
