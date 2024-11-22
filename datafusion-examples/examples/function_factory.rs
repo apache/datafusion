@@ -134,7 +134,7 @@ impl ScalarUDFImpl for ScalarFunctionWrapper {
         Ok(self.return_type.clone())
     }
 
-    fn invoke(
+    fn invoke_with_args(
         &self,
         _args: ScalarFunctionArgs,
     ) -> Result<datafusion_expr::ColumnarValue> {
