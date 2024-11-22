@@ -25,7 +25,6 @@
 //! due to congestion control and increased latencies for processing network
 //! messages.
 use arrow::util::pretty::pretty_format_batches;
-use datafusion::common::runtime::dedicated_executor;
 use datafusion::error::Result;
 use datafusion::execution::SendableRecordBatchStream;
 use datafusion::physical_plan::DedicatedExecutor;
