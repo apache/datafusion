@@ -113,7 +113,14 @@ pub enum TypeSignature {
     /// arguments like `vec![DataType::Int32]` or `vec![DataType::Float32]`
     /// since i32 and f32 can be casted to f64
     Coercible(Vec<LogicalTypeRef>),
-    /// The number of arguments that are comparable
+    /// The arguments will be coerced to a single type based on the comparison rules.
+    /// For example, i32 and i64 has coerced type Int64.
+    ///
+    /// Note:
+    /// - If compares with numeric and string, numeric is preferred for numeric string cases. For example, nullif('2', 1) has coerced types Int64.
+    /// - If the result is Null, it will be coerced to String (Utf8View).
+    /// 
+    /// See `comparison_coercion_numeric` for more details.
     Comparable(usize),
     /// Fixed number of arguments of arbitrary types, number should be larger than 0
     Any(usize),
