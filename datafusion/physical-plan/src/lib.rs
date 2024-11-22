@@ -72,6 +72,7 @@ pub mod recursive_query;
 pub mod repartition;
 pub mod sorts;
 pub mod spill;
+pub mod statistics;
 pub mod stream;
 pub mod streaming;
 pub mod tree_node;

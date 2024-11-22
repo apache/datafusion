@@ -26,22 +26,23 @@
 
 use std::sync::Arc;
 
-use crate::datasource::listing::PartitionedFile;
-
 use arrow::{
     compute::SortColumn,
     row::{Row, Rows},
 };
 use arrow_array::RecordBatch;
 use arrow_schema::SchemaRef;
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{DataFusionError, Result, Statistics};
 use datafusion_physical_expr::{expressions::Column, PhysicalSortExpr};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
-/// A normalized representation of file min/max statistics that allows for efficient sorting & comparison.
+/// A normalized representation of min/max statistics that allows for efficient sorting & comparison.
 /// The min/max values are ordered by [`Self::sort_order`].
 /// Furthermore, any columns that are reversed in the sort order have their min/max values swapped.
-pub(crate) struct MinMaxStatistics {
+///
+/// This can be used for optimizations involving reordering files and partitions in physical plans
+/// when their data is non-overlapping and ordered.
+pub struct MinMaxStatistics {
     min_by_sort_order: Rows,
     max_by_sort_order: Rows,
     sort_order: LexOrdering,
@@ -65,64 +66,27 @@ impl MinMaxStatistics {
         self.max_by_sort_order.row(idx)
     }
 
-    pub fn new_from_files<'a>(
-        projected_sort_order: &LexOrdering, // Sort order with respect to projected schema
-        projected_schema: &SchemaRef,       // Projected schema
-        projection: Option<&[usize]>, // Indices of projection in full table schema (None = all columns)
-        files: impl IntoIterator<Item = &'a PartitionedFile>,
+    pub fn new_from_statistics<'a>(
+        sort_order: &LexOrdering,
+        schema: &SchemaRef,
+        statistics: impl IntoIterator<Item = &'a Statistics>,
     ) -> Result<Self> {
         use datafusion_common::ScalarValue;
 
-        let statistics_and_partition_values = files
-            .into_iter()
-            .map(|file| {
-                file.statistics
-                    .as_ref()
-                    .zip(Some(file.partition_values.as_slice()))
-            })
-            .collect::<Option<Vec<_>>>()
-            .ok_or_else(|| {
-                DataFusionError::Plan("Parquet file missing statistics".to_string())
-            })?;
+        let sort_columns = sort_columns_from_physical_sort_exprs(sort_order).ok_or(
+            DataFusionError::Plan("sort expression must be on column".to_string()),
+        )?;
 
-        // Helper function to get min/max statistics for a given column of projected_schema
-        let get_min_max = |i: usize| -> Result<(Vec<ScalarValue>, Vec<ScalarValue>)> {
-            Ok(statistics_and_partition_values
-                .iter()
-                .map(|(s, pv)| {
-                    if i < s.column_statistics.len() {
-                        s.column_statistics[i]
-                            .min_value
-                            .get_value()
-                            .cloned()
-                            .zip(s.column_statistics[i].max_value.get_value().cloned())
-                            .ok_or_else(|| {
-                                DataFusionError::Plan("statistics not found".to_string())
-                            })
-                    } else {
-                        let partition_value = &pv[i - s.column_statistics.len()];
-                        Ok((partition_value.clone(), partition_value.clone()))
-                    }
-                })
-                .collect::<Result<Vec<_>>>()?
-                .into_iter()
-                .unzip())
-        };
-
-        let sort_columns = sort_columns_from_physical_sort_exprs(projected_sort_order)
-            .ok_or(DataFusionError::Plan(
-                "sort expression must be on column".to_string(),
-            ))?;
+        let projection = sort_columns.iter().map(|c| c.index()).collect::<Vec<_>>();
 
         // Project the schema & sort order down to just the relevant columns
-        let min_max_schema = Arc::new(
-            projected_schema
-                .project(&(sort_columns.iter().map(|c| c.index()).collect::<Vec<_>>()))?,
-        );
-        let min_max_sort_order = LexOrdering {
+
+        let projected_schema = Arc::new(schema.project(&projection)?);
+
+        let projected_sort_order = LexOrdering {
             inner: sort_columns
                 .iter()
-                .zip(projected_sort_order.iter())
+                .zip(sort_order.iter())
                 .enumerate()
                 .map(|(i, (col, sort))| PhysicalSortExpr {
                     expr: Arc::new(Column::new(col.name(), i)),
@@ -131,14 +95,35 @@ impl MinMaxStatistics {
                 .collect::<Vec<_>>(),
         };
 
+        let projected_statistics = statistics
+            .into_iter()
+            .cloned()
+            .map(|s| s.project(Some(&projection)))
+            .collect::<Vec<_>>();
+
+        // Helper function to get min/max statistics
+        let get_min_max = |i: usize| -> Result<(Vec<ScalarValue>, Vec<ScalarValue>)> {
+            Ok(projected_statistics
+                .iter()
+                .map(|s| {
+                    s.column_statistics[i]
+                        .min_value
+                        .get_value()
+                        .cloned()
+                        .zip(s.column_statistics[i].max_value.get_value().cloned())
+                        .ok_or_else(|| {
+                            DataFusionError::Plan("statistics not found".to_string())
+                        })
+                })
+                .collect::<Result<Vec<_>>>()?
+                .into_iter()
+                .unzip())
+        };
+
         let (min_values, max_values): (Vec<_>, Vec<_>) = sort_columns
             .iter()
-            .map(|c| {
-                // Reverse the projection to get the index of the column in the full statistics
-                // The file statistics contains _every_ column , but the sort column's index()
-                // refers to the index in projected_schema
-                let i = projection.map(|p| p[c.index()]).unwrap_or(c.index());
-
+            .enumerate()
+            .map(|(i, c)| {
                 let (min, max) = get_min_max(i).map_err(|e| {
                     e.context(format!("get min/max for column: '{}'", c.name()))
                 })?;
@@ -153,14 +138,14 @@ impl MinMaxStatistics {
             .unzip();
 
         Self::new(
-            &min_max_sort_order,
-            &min_max_schema,
-            RecordBatch::try_new(Arc::clone(&min_max_schema), min_values).map_err(
+            &projected_sort_order,
+            &projected_schema,
+            RecordBatch::try_new(Arc::clone(&projected_schema), min_values).map_err(
                 |e| {
                     DataFusionError::ArrowError(e, Some("\ncreate min batch".to_string()))
                 },
             )?,
-            RecordBatch::try_new(Arc::clone(&min_max_schema), max_values).map_err(
+            RecordBatch::try_new(Arc::clone(&projected_schema), max_values).map_err(
                 |e| {
                     DataFusionError::ArrowError(e, Some("\ncreate max batch".to_string()))
                 },
@@ -276,6 +261,44 @@ impl MinMaxStatistics {
             .iter()
             .zip(self.min_by_sort_order.iter().skip(1))
             .all(|(max, next_min)| max < next_min)
+    }
+
+    /// Computes a bin-packing of the min/max rows in these statistics
+    /// into chains, such that elements in a chain are non-overlapping and ordered
+    /// amongst one another.
+    /// This bin-packing is optimal in the sense that it has the fewest number of chains.
+    pub fn first_fit(&self) -> Vec<Vec<usize>> {
+        // First Fit:
+        // * Choose the first chain that an element can be placed into.
+        // * If it fits into no existing chain, create a new one.
+        //
+        // By sorting elements by min values and then applying first-fit bin packing,
+        // we can produce the smallest number of chains such that
+        // elements within a chain are in order and non-overlapping.
+        //
+        // Source: Applied Combinatorics (Keller and Trotter), Chapter 6.8
+        // https://www.appliedcombinatorics.org/book/s_posets_dilworth-intord.html
+
+        let elements_sorted_by_min = self.min_values_sorted();
+        let mut chains: Vec<Vec<usize>> = vec![];
+
+        for (idx, min) in elements_sorted_by_min {
+            let chain_to_insert = chains.iter_mut().find(|chain| {
+                // If our element is non-overlapping and comes _after_ the last element of the chain,
+                // it can be added to this chain.
+                min > self.max(
+                    *chain
+                        .last()
+                        .expect("groups should be nonempty at construction"),
+                )
+            });
+            match chain_to_insert {
+                Some(chain) => chain.push(idx),
+                None => chains.push(vec![idx]), // make a new chain
+            }
+        }
+
+        chains
     }
 }
 

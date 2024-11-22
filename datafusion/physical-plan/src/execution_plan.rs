@@ -397,6 +397,13 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
         Ok(Statistics::new_unknown(&self.schema()))
     }
 
+    fn statistics_by_partition(&self) -> Result<Vec<Statistics>> {
+        Ok(vec![
+            self.statistics()?;
+            self.properties().partitioning.partition_count()
+        ])
+    }
+
     /// Returns `true` if a limit can be safely pushed down through this
     /// `ExecutionPlan` node.
     ///

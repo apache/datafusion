@@ -26,7 +26,6 @@ mod file_stream;
 mod json;
 #[cfg(feature = "parquet")]
 pub mod parquet;
-mod statistics;
 
 pub(crate) use self::csv::plan_to_csv;
 pub(crate) use self::json::plan_to_json;
@@ -36,7 +35,9 @@ pub use self::parquet::{ParquetExec, ParquetFileMetrics, ParquetFileReaderFactor
 pub use arrow_file::ArrowExec;
 pub use avro::AvroExec;
 pub use csv::{CsvConfig, CsvExec, CsvExecBuilder, CsvOpener};
+use datafusion_common::{stats::Precision, ColumnStatistics, DataFusionError};
 use datafusion_expr::dml::InsertOp;
+use datafusion_physical_plan::statistics::MinMaxStatistics;
 pub use file_groups::FileGroupPartitioner;
 pub use file_scan_config::{
     wrap_partition_type_in_dict, wrap_partition_value_in_dict, FileScanConfig,
@@ -366,10 +367,10 @@ fn get_projected_output_ordering(
                 return false;
             }
 
-            let statistics = match statistics::MinMaxStatistics::new_from_files(
+            let statistics = match min_max_statistics_from_files(
                 &new_ordering,
                 projected_schema,
-                base_config.projection.as_deref(),
+                base_config.projection.as_ref(),
                 group,
             ) {
                 Ok(statistics) => statistics,
@@ -393,6 +394,40 @@ fn get_projected_output_ordering(
         all_orderings.push(new_ordering);
     }
     all_orderings
+}
+
+/// Construct MinMaxStatistics from a list of files
+fn min_max_statistics_from_files<'a>(
+    projected_sort_order: &LexOrdering, // Sort order with respect to projected schema
+    projected_schema: &SchemaRef,       // Projected schema
+    projection: Option<&Vec<usize>>, // Indices of projection in full table schema (None = all columns)
+    files: impl IntoIterator<Item = &'a PartitionedFile>,
+) -> Result<MinMaxStatistics> {
+    let projected_statistics = files
+        .into_iter()
+        .map(|file| {
+            let mut statistics = file.statistics.clone()?;
+            for partition in &file.partition_values {
+                statistics.column_statistics.push(ColumnStatistics {
+                    null_count: Precision::Exact(0),
+                    max_value: Precision::Exact(partition.clone()),
+                    min_value: Precision::Exact(partition.clone()),
+                    distinct_count: Precision::Exact(1),
+                });
+            }
+
+            Some(statistics.project(projection))
+        })
+        .collect::<Option<Vec<_>>>()
+        .ok_or_else(|| {
+            DataFusionError::Plan("Parquet file missing statistics".to_string())
+        })?;
+
+    MinMaxStatistics::new_from_statistics(
+        projected_sort_order,
+        projected_schema,
+        &projected_statistics,
+    )
 }
 
 /// Represents the possible outcomes of a range calculation.
