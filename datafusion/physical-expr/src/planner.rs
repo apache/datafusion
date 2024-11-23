@@ -202,7 +202,9 @@ pub fn create_physical_expr(
         }) => {
             // `\` is the implicit escape, see https://github.com/apache/datafusion/issues/13291
             if escape_char.unwrap_or('\\') != '\\' {
-                return exec_err!("LIKE does not support escape_char other than the backslash (\\)");
+                return exec_err!(
+                    "LIKE does not support escape_char other than the backslash (\\)"
+                );
             }
             let physical_expr =
                 create_physical_expr(expr, input_dfschema, execution_props)?;
