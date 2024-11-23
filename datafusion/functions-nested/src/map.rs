@@ -214,9 +214,9 @@ impl ScalarUDFImpl for MapFunc {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        if arg_types.len() % 2 != 0 {
+        if arg_types.len() != 2 {
             return exec_err!(
-                "map requires an even number of arguments, got {} instead",
+                "map requires exactly 2 arguments, got {} instead",
                 arg_types.len()
             );
         }
