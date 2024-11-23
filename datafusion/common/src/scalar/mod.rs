@@ -40,7 +40,9 @@ use crate::cast::{
 use crate::error::{DataFusionError, Result, _exec_err, _internal_err, _not_impl_err};
 use crate::hash_utils::create_hashes;
 use crate::utils::{
-    array_into_fixed_size_list_array, array_into_large_list_array, array_into_list_array,
+    array_into_fixed_size_list_array_with_field_name, array_into_large_list_array,
+    array_into_large_list_array_with_field_name, array_into_list_array,
+    array_into_list_array_with_field_name,
 };
 use arrow::compute::kernels::numeric::*;
 use arrow::util::display::{array_value_to_string, ArrayFormatter, FormatOptions};
@@ -2090,7 +2092,7 @@ impl ScalarValue {
         } else {
             Self::iter_to_array(values.iter().cloned()).unwrap()
         };
-        Arc::new(array_into_list_array(values, nullable, None))
+        Arc::new(array_into_list_array(values, nullable))
     }
 
     /// Same as [`ScalarValue::new_list`] but with nullable set to true.
@@ -2146,7 +2148,7 @@ impl ScalarValue {
         } else {
             Self::iter_to_array(values).unwrap()
         };
-        Arc::new(array_into_list_array(values, nullable, None))
+        Arc::new(array_into_list_array(values, nullable))
     }
 
     /// Converts `Vec<ScalarValue>` where each element has type corresponding to
@@ -2183,7 +2185,7 @@ impl ScalarValue {
         } else {
             Self::iter_to_array(values.iter().cloned()).unwrap()
         };
-        Arc::new(array_into_large_list_array(values, None))
+        Arc::new(array_into_large_list_array(values))
     }
 
     /// Converts a scalar value into an array of `size` rows.
@@ -2572,7 +2574,7 @@ impl ScalarValue {
     /// ]);
     ///
     /// // Wrap into another layer of list, we got nested array as [ [[1,2,3], [4,5]] ]
-    /// let list_arr = array_into_list_array_nullable(Arc::new(list_arr), None);
+    /// let list_arr = array_into_list_array_nullable(Arc::new(list_arr));
     ///
     /// // Convert the array into Scalar Values for each row, we got 1D arrays in this example
     /// let scalar_vec = ScalarValue::convert_array_to_scalar_vec(&list_arr).unwrap();
@@ -2663,10 +2665,10 @@ impl ScalarValue {
                 let list_array = array.as_list::<i32>();
                 let nested_array = list_array.value(index);
                 // Produces a single element `ListArray` with the value at `index`.
-                let arr = Arc::new(array_into_list_array(
+                let arr = Arc::new(array_into_list_array_with_field_name(
                     nested_array,
                     field.is_nullable(),
-                    Some(field.name()),
+                    field.name(),
                 ));
 
                 ScalarValue::List(arr)
@@ -2675,9 +2677,9 @@ impl ScalarValue {
                 let list_array = as_large_list_array(array);
                 let nested_array = list_array.value(index);
                 // Produces a single element `LargeListArray` with the value at `index`.
-                let arr = Arc::new(array_into_large_list_array(
+                let arr = Arc::new(array_into_large_list_array_with_field_name(
                     nested_array,
-                    Some(field.name()),
+                    field.name(),
                 ));
 
                 ScalarValue::LargeList(arr)
@@ -2688,10 +2690,10 @@ impl ScalarValue {
                 let nested_array = list_array.value(index);
                 // Produces a single element `ListArray` with the value at `index`.
                 let list_size = nested_array.len();
-                let arr = Arc::new(array_into_fixed_size_list_array(
+                let arr = Arc::new(array_into_fixed_size_list_array_with_field_name(
                     nested_array,
                     list_size,
-                    Some(field.name()),
+                    field.name(),
                 ));
 
                 ScalarValue::FixedSizeList(arr)
@@ -4069,10 +4071,11 @@ mod tests {
 
         let result = ScalarValue::new_list_nullable(scalars.as_slice(), &DataType::Utf8);
 
-        let expected = array_into_list_array_nullable(
-            Arc::new(StringArray::from(vec!["rust", "arrow", "data-fusion"])),
-            None,
-        );
+        let expected = array_into_list_array_nullable(Arc::new(StringArray::from(vec![
+            "rust",
+            "arrow",
+            "data-fusion",
+        ])));
         assert_eq!(*result, expected);
     }
 
@@ -4280,14 +4283,12 @@ mod tests {
 
     #[test]
     fn iter_to_array_string_test() {
-        let arr1 = array_into_list_array_nullable(
-            Arc::new(StringArray::from(vec!["foo", "bar", "baz"])),
-            None,
-        );
-        let arr2 = array_into_list_array_nullable(
-            Arc::new(StringArray::from(vec!["rust", "world"])),
-            None,
-        );
+        let arr1 = array_into_list_array_nullable(Arc::new(StringArray::from(vec![
+            "foo", "bar", "baz",
+        ])));
+        let arr2 = array_into_list_array_nullable(Arc::new(StringArray::from(vec![
+            "rust", "world",
+        ])));
 
         let scalars = vec![
             ScalarValue::List(Arc::new(arr1)),
@@ -5744,16 +5745,13 @@ mod tests {
         // Define list-of-structs scalars
 
         let nl0_array = ScalarValue::iter_to_array(vec![s0, s1.clone()]).unwrap();
-        let nl0 =
-            ScalarValue::List(Arc::new(array_into_list_array_nullable(nl0_array, None)));
+        let nl0 = ScalarValue::List(Arc::new(array_into_list_array_nullable(nl0_array)));
 
         let nl1_array = ScalarValue::iter_to_array(vec![s2]).unwrap();
-        let nl1 =
-            ScalarValue::List(Arc::new(array_into_list_array_nullable(nl1_array, None)));
+        let nl1 = ScalarValue::List(Arc::new(array_into_list_array_nullable(nl1_array)));
 
         let nl2_array = ScalarValue::iter_to_array(vec![s1]).unwrap();
-        let nl2 =
-            ScalarValue::List(Arc::new(array_into_list_array_nullable(nl2_array, None)));
+        let nl2 = ScalarValue::List(Arc::new(array_into_list_array_nullable(nl2_array)));
 
         // iter_to_array for list-of-struct
         let array = ScalarValue::iter_to_array(vec![nl0, nl1, nl2]).unwrap();

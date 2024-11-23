@@ -49,7 +49,7 @@ impl<O: OffsetSizeTrait> Accumulator for BytesDistinctCountAccumulator<O> {
     fn state(&mut self) -> datafusion_common::Result<Vec<ScalarValue>> {
         let set = self.0.take();
         let arr = set.into_state();
-        let list = Arc::new(array_into_list_array_nullable(arr, None));
+        let list = Arc::new(array_into_list_array_nullable(arr));
         Ok(vec![ScalarValue::List(list)])
     }
 
@@ -109,7 +109,7 @@ impl Accumulator for BytesViewDistinctCountAccumulator {
     fn state(&mut self) -> datafusion_common::Result<Vec<ScalarValue>> {
         let set = self.0.take();
         let arr = set.into_state();
-        let list = Arc::new(array_into_list_array_nullable(arr, None));
+        let list = Arc::new(array_into_list_array_nullable(arr));
         Ok(vec![ScalarValue::List(list)])
     }
 

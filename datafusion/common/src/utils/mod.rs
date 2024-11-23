@@ -324,29 +324,32 @@ pub fn longest_consecutive_prefix<T: Borrow<usize>>(
 /// Wrap an array into a single element `ListArray`.
 /// For example `[1, 2, 3]` would be converted into `[[1, 2, 3]]`
 /// The field in the list array is nullable.
-pub fn array_into_list_array_nullable(
-    arr: ArrayRef,
-    field_name: Option<&str>,
-) -> ListArray {
-    array_into_list_array(arr, true, field_name)
+pub fn array_into_list_array_nullable(arr: ArrayRef) -> ListArray {
+    array_into_list_array(arr, true)
 }
 
 /// Array Utils
 
 /// Wrap an array into a single element `ListArray`.
 /// For example `[1, 2, 3]` would be converted into `[[1, 2, 3]]`
-pub fn array_into_list_array(
+pub fn array_into_list_array(arr: ArrayRef, nullable: bool) -> ListArray {
+    let offsets = OffsetBuffer::from_lengths([arr.len()]);
+    ListArray::new(
+        Arc::new(Field::new_list_field(arr.data_type().to_owned(), nullable)),
+        offsets,
+        arr,
+        None,
+    )
+}
+
+pub fn array_into_list_array_with_field_name(
     arr: ArrayRef,
     nullable: bool,
-    field_name: Option<&str>,
+    field_name: &str,
 ) -> ListArray {
     let offsets = OffsetBuffer::from_lengths([arr.len()]);
     ListArray::new(
-        Arc::new(Field::new(
-            field_name.unwrap_or("item"),
-            arr.data_type().to_owned(),
-            nullable,
-        )),
+        Arc::new(Field::new(field_name, arr.data_type().to_owned(), nullable)),
         offsets,
         arr,
         None,
@@ -355,17 +358,23 @@ pub fn array_into_list_array(
 
 /// Wrap an array into a single element `LargeListArray`.
 /// For example `[1, 2, 3]` would be converted into `[[1, 2, 3]]`
-pub fn array_into_large_list_array(
+pub fn array_into_large_list_array(arr: ArrayRef) -> LargeListArray {
+    let offsets = OffsetBuffer::from_lengths([arr.len()]);
+    LargeListArray::new(
+        Arc::new(Field::new_list_field(arr.data_type().to_owned(), true)),
+        offsets,
+        arr,
+        None,
+    )
+}
+
+pub fn array_into_large_list_array_with_field_name(
     arr: ArrayRef,
-    field_name: Option<&str>,
+    field_name: &str,
 ) -> LargeListArray {
     let offsets = OffsetBuffer::from_lengths([arr.len()]);
     LargeListArray::new(
-        Arc::new(Field::new(
-            field_name.unwrap_or("item"),
-            arr.data_type().to_owned(),
-            true,
-        )),
+        Arc::new(Field::new(field_name, arr.data_type().to_owned(), true)),
         offsets,
         arr,
         None,
@@ -375,15 +384,24 @@ pub fn array_into_large_list_array(
 pub fn array_into_fixed_size_list_array(
     arr: ArrayRef,
     list_size: usize,
-    field_name: Option<&str>,
 ) -> FixedSizeListArray {
     let list_size = list_size as i32;
     FixedSizeListArray::new(
-        Arc::new(Field::new(
-            field_name.unwrap_or("item"),
-            arr.data_type().to_owned(),
-            true,
-        )),
+        Arc::new(Field::new_list_field(arr.data_type().to_owned(), true)),
+        list_size,
+        arr,
+        None,
+    )
+}
+
+pub fn array_into_fixed_size_list_array_with_field_name(
+    arr: ArrayRef,
+    list_size: usize,
+    field_name: &str,
+) -> FixedSizeListArray {
+    let list_size = list_size as i32;
+    FixedSizeListArray::new(
+        Arc::new(Field::new(field_name, arr.data_type().to_owned(), true)),
         list_size,
         arr,
         None,
