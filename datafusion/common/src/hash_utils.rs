@@ -321,12 +321,7 @@ fn hash_fixed_list_array(
     hashes_buffer: &mut [u64],
 ) -> Result<()> {
     let values = Arc::clone(array.values());
-    let value_len = array.value_length();
-    let offset_size = if array.len() == 0 {
-        0
-    } else {
-        value_len as usize / array.len()
-    };
+    let value_length = array.value_length() as usize;
     let nulls = array.nulls();
     let mut values_hashes = vec![0u64; values.len()];
     create_hashes(&[values], random_state, &mut values_hashes)?;
@@ -334,7 +329,8 @@ fn hash_fixed_list_array(
         for i in 0..array.len() {
             if nulls.is_valid(i) {
                 let hash = &mut hashes_buffer[i];
-                for values_hash in &values_hashes[i * offset_size..(i + 1) * offset_size]
+                for values_hash in
+                    &values_hashes[i * value_length..(i + 1) * value_length]
                 {
                     *hash = combine_hashes(*hash, *values_hash);
                 }
@@ -343,7 +339,7 @@ fn hash_fixed_list_array(
     } else {
         for i in 0..array.len() {
             let hash = &mut hashes_buffer[i];
-            for values_hash in &values_hashes[i * offset_size..(i + 1) * offset_size] {
+            for values_hash in &values_hashes[i * value_length..(i + 1) * value_length] {
                 *hash = combine_hashes(*hash, *values_hash);
             }
         }
