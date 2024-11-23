@@ -20,7 +20,7 @@ use proc_macro::TokenStream;
 use quote::quote;
 use syn::{parse_macro_input, DeriveInput, LitStr};
 
-/// The procedural macro is intended to parse rust custom attribute and create a user documentation
+/// This procedural macro is intended to parse a rust custom attribute and create user documentation
 /// from it by constructing a `DocumentBuilder()` automatically. The `Documentation` can be
 /// retrieved from `documentation()` method
 /// declared on `AggregateUDF`, `WindowUDFImpl`, `ScalarUDFImpl` traits.
