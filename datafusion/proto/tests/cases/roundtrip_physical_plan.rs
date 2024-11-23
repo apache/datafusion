@@ -54,7 +54,7 @@ use datafusion::functions_window::nth_value::nth_value_udwf;
 use datafusion::functions_window::row_number::row_number_udwf;
 use datafusion::logical_expr::{create_udf, JoinType, Operator, Volatility};
 use datafusion::physical_expr::expressions::Literal;
-use datafusion::physical_expr::window::{UDFWindowExpr, SlidingAggregateWindowExpr};
+use datafusion::physical_expr::window::{SlidingAggregateWindowExpr, UDFWindowExpr};
 use datafusion::physical_expr::{
     LexOrdering, LexRequirement, PhysicalSortRequirement, ScalarFunctionExpr,
 };

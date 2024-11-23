@@ -35,7 +35,7 @@ use datafusion_physical_expr::aggregate::{AggregateExprBuilder, AggregateFunctio
 use datafusion_physical_expr::equivalence::collapse_lex_req;
 use datafusion_physical_expr::{
     reverse_order_bys,
-    window::{UDFWindowFunctionExpr, SlidingAggregateWindowExpr},
+    window::{SlidingAggregateWindowExpr, UDFWindowFunctionExpr},
     ConstExpr, EquivalenceProperties, LexOrdering, PhysicalSortRequirement,
 };
 use itertools::Itertools;
@@ -50,7 +50,7 @@ use datafusion_functions_window_common::field::WindowUDFFieldArgs;
 use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
 use datafusion_physical_expr::expressions::Column;
 pub use datafusion_physical_expr::window::{
-    UDFWindowExpr, PlainAggregateWindowExpr, WindowExpr,
+    PlainAggregateWindowExpr, UDFWindowExpr, WindowExpr,
 };
 use datafusion_physical_expr_common::sort_expr::LexRequirement;
 pub use window_agg_exec::WindowAggExec;
@@ -345,9 +345,7 @@ pub(crate) fn window_equivalence_properties(
         .extend(input.equivalence_properties().clone());
 
     for expr in window_expr {
-        if let Some(udf_window_expr) =
-            expr.as_any().downcast_ref::<UDFWindowExpr>()
-        {
+        if let Some(udf_window_expr) = expr.as_any().downcast_ref::<UDFWindowExpr>() {
             udf_window_expr.add_equal_orderings(&mut window_eq_properties);
         }
     }

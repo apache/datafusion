@@ -19,7 +19,7 @@ use std::sync::Arc;
 
 #[cfg(feature = "parquet")]
 use datafusion::datasource::file_format::parquet::ParquetSink;
-use datafusion::physical_expr::window::{UDFWindowExpr, SlidingAggregateWindowExpr};
+use datafusion::physical_expr::window::{SlidingAggregateWindowExpr, UDFWindowExpr};
 use datafusion::physical_expr::{LexOrdering, PhysicalSortExpr, ScalarFunctionExpr};
 use datafusion::physical_plan::expressions::{
     BinaryExpr, CaseExpr, CastExpr, Column, InListExpr, IsNotNullExpr, IsNullExpr,
