@@ -66,7 +66,7 @@ impl Debug for RuntimeEnv {
 }
 
 impl RuntimeEnv {
-    #[deprecated(note = "please use `try_new` instead")]
+    #[deprecated(since = "43.0.0", note = "please use `try_new` instead")]
     pub fn new(config: RuntimeConfig) -> Result<Self> {
         Self::try_new(config)
     }
