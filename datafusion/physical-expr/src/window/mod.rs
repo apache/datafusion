@@ -16,15 +16,15 @@
 // under the License.
 
 mod aggregate;
-mod built_in;
-mod built_in_window_function_expr;
 mod sliding_aggregate;
+mod udf;
+mod udf_window_function_expr;
 mod window_expr;
 
 pub use aggregate::PlainAggregateWindowExpr;
-pub use built_in::BuiltInWindowExpr;
-pub use built_in_window_function_expr::BuiltInWindowFunctionExpr;
 pub use sliding_aggregate::SlidingAggregateWindowExpr;
+pub use udf::UDFWindowExpr;
+pub use udf_window_function_expr::UDFWindowFunctionExpr;
 pub use window_expr::PartitionBatches;
 pub use window_expr::PartitionKey;
 pub use window_expr::PartitionWindowAggStates;
