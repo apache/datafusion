@@ -1165,7 +1165,7 @@ mod tests {
                         })
                         .collect::<Vec<_>>()
                 })
-                .map_err(|e| e.to_string().leak() as &'static str);
+                .map_err(|e| e.strip_backtrace().leak() as &'static str);
 
             assert_eq!(results_by_name, case.expected_result, "{}", case.name);
         }

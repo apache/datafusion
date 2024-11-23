@@ -547,6 +547,7 @@ trunc(numeric_expression[, decimal_places])
 ## Conditional Functions
 
 - [coalesce](#coalesce)
+- [greatest](#greatest)
 - [ifnull](#ifnull)
 - [nullif](#nullif)
 - [nvl](#nvl)
@@ -573,6 +574,29 @@ coalesce(expression1[, ..., expression_n])
 +----------------------------------------+
 | datafusion                             |
 +----------------------------------------+
+```
+
+### `greatest`
+
+Returns the greatest value in a list of expressions. Returns _null_ if all expressions are _null_.
+
+```
+greatest(expression1[, ..., expression_n])
+```
+
+#### Arguments
+
+- **expression1, expression_n**: Expressions to compare and return the greatest value.. Can be a constant, column, or function, and any combination of arithmetic operators. Pass as many expression arguments as necessary.
+
+#### Example
+
+```sql
+> select greatest(4, 7, 5);
++---------------------------+
+| greatest(4,7,5)           |
++---------------------------+
+| 7                         |
++---------------------------+
 ```
 
 ### `ifnull`

@@ -29,7 +29,7 @@ use datafusion_common::{
 };
 use datafusion_expr_common::{
     signature::{ArrayFunctionSignature, FIXED_SIZE_LIST_WILDCARD, TIMEZONE_WILDCARD},
-    type_coercion::binary::string_coercion,
+    type_coercion::binary::{comparison_coercion_numeric, string_coercion},
 };
 use std::sync::Arc;
 
@@ -182,6 +182,7 @@ fn is_well_supported_signature(type_signature: &TypeSignature) -> bool {
             | TypeSignature::Coercible(_)
             | TypeSignature::Any(_)
             | TypeSignature::NullAry
+            | TypeSignature::Comparable(_)
     )
 }
 
@@ -194,13 +195,18 @@ fn try_coerce_types(
 
     // Well-supported signature that returns exact valid types.
     if !valid_types.is_empty() && is_well_supported_signature(type_signature) {
-        // exact valid types
-        assert_eq!(valid_types.len(), 1);
+        // There may be many valid types if valid signature is OneOf
+        // Otherwise, there should be only one valid type
+        if !type_signature.is_one_of() {
+            assert_eq!(valid_types.len(), 1);
+        }
+
         let valid_types = valid_types.swap_remove(0);
         if let Some(t) = maybe_data_types_without_coercion(&valid_types, current_types) {
             return Ok(t);
         }
     } else {
+        // TODO: Deprecate this branch after all signatures are well-supported (aka coercion has happened already)
         // Try and coerce the argument types to match the signature, returning the
         // coerced types from the first matching signature.
         for valid_types in valid_types {
@@ -514,6 +520,23 @@ fn get_valid_types(
             }
 
             vec![vec![valid_type; *number]]
+        }
+        TypeSignature::Comparable(num) => {
+            function_length_check(current_types.len(), *num)?;
+            let mut target_type = current_types[0].to_owned();
+            for data_type in current_types.iter().skip(1) {
+                if let Some(dt) = comparison_coercion_numeric(&target_type, data_type) {
+                    target_type = dt;
+                } else {
+                    return plan_err!("{target_type} and {data_type} is not comparable");
+                }
+            }
+            // Convert null to String type.
+            if target_type.is_null() {
+                vec![vec![DataType::Utf8View; *num]]
+            } else {
+                vec![vec![target_type; *num]]
+            }
         }
         TypeSignature::Coercible(target_types) => {
             function_length_check(current_types.len(), target_types.len())?;
