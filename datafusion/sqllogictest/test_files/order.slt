@@ -1291,7 +1291,7 @@ physical_plan
 06)------ProjectionExec: expr=[name2 as name]
 07)--------PlaceholderRowExec
 
-query I
+query R
 SELECT
     CASE
         WHEN name = 'name1' THEN 0.0
