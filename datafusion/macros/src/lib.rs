@@ -22,7 +22,7 @@ use syn::{parse_macro_input, DeriveInput, LitStr};
 
 /// This procedural macro is intended to parse a rust custom attribute and create user documentation
 /// from it by constructing a `DocumentBuilder()` automatically. The `Documentation` can be
-/// retrieved from `documentation()` method
+/// retrieved from the `documentation()` method
 /// declared on `AggregateUDF`, `WindowUDFImpl`, `ScalarUDFImpl` traits.
 ///
 /// Example:
