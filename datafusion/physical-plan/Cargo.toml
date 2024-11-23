@@ -83,3 +83,7 @@ test-utils = { path = "../../test-utils" }
 [[bench]]
 harness = false
 name = "spm"
+
+[[bench]]
+harness = false
+name = "vectorized_equal_to"
