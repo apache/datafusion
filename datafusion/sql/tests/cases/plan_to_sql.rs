@@ -27,6 +27,7 @@ use datafusion_expr::{col, lit, table_scan, wildcard, LogicalPlanBuilder};
 use datafusion_functions::unicode;
 use datafusion_functions_aggregate::grouping::grouping_udaf;
 use datafusion_functions_nested::make_array::make_array_udf;
+use datafusion_functions_nested::map::map_udf;
 use datafusion_functions_window::rank::rank_udwf;
 use datafusion_sql::planner::{ContextProvider, PlannerContext, SqlToRel};
 use datafusion_sql::unparser::dialect::{
@@ -190,7 +191,8 @@ fn roundtrip_statement() -> Result<()> {
             "SELECT [1, 2, 3][1]",
             "SELECT left[1] FROM array",
             "SELECT {a:1, b:2}",
-            "SELECT s.a FROM (SELECT {a:1, b:2} AS s)"
+            "SELECT s.a FROM (SELECT {a:1, b:2} AS s)",
+            "SELECT MAP {'a': 1, 'b': 2}"
     ];
 
     // For each test sql string, we transform as follows:
@@ -206,6 +208,7 @@ fn roundtrip_statement() -> Result<()> {
         let state = MockSessionState::default()
             .with_scalar_function(make_array_udf())
             .with_scalar_function(array_element_udf())
+            .with_scalar_function(map_udf())
             .with_aggregate_function(sum_udaf())
             .with_aggregate_function(count_udaf())
             .with_aggregate_function(max_udaf())
