@@ -15,13 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Physical exec for udf window function expressions.
+//! Physical exec for standard window function expressions.
 
 use std::any::Any;
 use std::ops::Range;
 use std::sync::Arc;
 
-use super::{UDFWindowFunctionExpr, WindowExpr};
+use super::{StandardWindowFunctionExpr, WindowExpr};
 use crate::window::window_expr::{get_orderby_values, WindowFn};
 use crate::window::{PartitionBatches, PartitionWindowAggStates, WindowState};
 use crate::{reverse_order_bys, EquivalenceProperties, PhysicalExpr};
@@ -35,19 +35,19 @@ use datafusion_expr::window_state::{WindowAggState, WindowFrameContext};
 use datafusion_expr::WindowFrame;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
-/// A window expr that takes the form of a [`UDFWindowFunctionExpr`].
+/// A window expr that takes the form of a [`StandardWindowFunctionExpr`].
 #[derive(Debug)]
-pub struct UDFWindowExpr {
-    expr: Arc<dyn UDFWindowFunctionExpr>,
+pub struct StandardWindowExpr {
+    expr: Arc<dyn StandardWindowFunctionExpr>,
     partition_by: Vec<Arc<dyn PhysicalExpr>>,
     order_by: LexOrdering,
     window_frame: Arc<WindowFrame>,
 }
 
-impl UDFWindowExpr {
-    /// create a new udf window function expression
+impl StandardWindowExpr {
+    /// create a new standard window function expression
     pub fn new(
-        expr: Arc<dyn UDFWindowFunctionExpr>,
+        expr: Arc<dyn StandardWindowFunctionExpr>,
         partition_by: &[Arc<dyn PhysicalExpr>],
         order_by: &LexOrdering,
         window_frame: Arc<WindowFrame>,
@@ -60,8 +60,8 @@ impl UDFWindowExpr {
         }
     }
 
-    /// Get UDFWindowFunction expr of UDFWindowExpr
-    pub fn get_udf_func_expr(&self) -> &Arc<dyn UDFWindowFunctionExpr> {
+    /// Get StandardWindowFunction expr of StandardWindowExpr
+    pub fn get_standard_func_expr(&self) -> &Arc<dyn StandardWindowFunctionExpr> {
         &self.expr
     }
 
@@ -79,7 +79,7 @@ impl UDFWindowExpr {
                 eq_properties
                     .add_new_orderings([LexOrdering::new(vec![fn_res_ordering])]);
             } else {
-                // If we have a PARTITION BY, udf functions can not introduce
+                // If we have a PARTITION BY, standard functions can not introduce
                 // a global ordering unless the existing ordering is compatible
                 // with PARTITION BY expressions. To elaborate, when PARTITION BY
                 // expressions and existing ordering expressions are equal (w.r.t.
@@ -96,7 +96,7 @@ impl UDFWindowExpr {
     }
 }
 
-impl WindowExpr for UDFWindowExpr {
+impl WindowExpr for StandardWindowExpr {
     /// Return a reference to Any that can be used for downcasting
     fn as_any(&self) -> &dyn Any {
         self
@@ -264,7 +264,7 @@ impl WindowExpr for UDFWindowExpr {
 
     fn get_reverse_expr(&self) -> Option<Arc<dyn WindowExpr>> {
         self.expr.reverse_expr().map(|reverse_expr| {
-            Arc::new(UDFWindowExpr::new(
+            Arc::new(StandardWindowExpr::new(
                 reverse_expr,
                 &self.partition_by.clone(),
                 reverse_order_bys(self.order_by.as_ref()).as_ref(),

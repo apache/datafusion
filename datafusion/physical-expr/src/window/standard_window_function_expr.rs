@@ -36,7 +36,7 @@ use std::sync::Arc;
 /// but others such as `first_value`, `last_value`, and
 /// `nth_value` need the value.
 #[allow(rustdoc::private_intra_doc_links)]
-pub trait UDFWindowFunctionExpr: Send + Sync + std::fmt::Debug {
+pub trait StandardWindowFunctionExpr: Send + Sync + std::fmt::Debug {
     /// Returns the aggregate expression as [`Any`] so that it can be
     /// downcast to a specific implementation.
     fn as_any(&self) -> &dyn Any;
@@ -50,7 +50,7 @@ pub trait UDFWindowFunctionExpr: Send + Sync + std::fmt::Debug {
     /// Human readable name such as `"MIN(c2)"` or `"RANK()"`. The default
     /// implementation returns placeholder text.
     fn name(&self) -> &str {
-        "UDFWindowFunctionExpr: default name"
+        "StandardWindowFunctionExpr: default name"
     }
 
     /// Evaluate window function's arguments against the input window
@@ -71,7 +71,7 @@ pub trait UDFWindowFunctionExpr: Send + Sync + std::fmt::Debug {
     /// a particular partition.
     fn create_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>>;
 
-    /// Construct a new [`UDFWindowFunctionExpr`] that produces
+    /// Construct a new [`StandardWindowFunctionExpr`] that produces
     /// the same result as this function on a window with reverse
     /// order. The return value of this function is used by the
     /// DataFusion optimizer to avoid re-sorting the data when
@@ -80,7 +80,7 @@ pub trait UDFWindowFunctionExpr: Send + Sync + std::fmt::Debug {
     /// Returns `None` (the default) if no reverse is known (or possible).
     ///
     /// For example, the reverse of `lead(10)` is `lag(10)`.
-    fn reverse_expr(&self) -> Option<Arc<dyn UDFWindowFunctionExpr>> {
+    fn reverse_expr(&self) -> Option<Arc<dyn StandardWindowFunctionExpr>> {
         None
     }
 
