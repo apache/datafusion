@@ -28,8 +28,8 @@ use crate::expr::Sort;
 use arrow::datatypes::DataType;
 use datafusion_common::tree_node::{Transformed, TreeNodeContainer, TreeNodeRecursion};
 use datafusion_common::{
-    schema_err, Column, Constraints, DFSchema, DFSchemaRef, Result,
-    SchemaError, SchemaReference, TableReference,
+    schema_err, Column, Constraints, DFSchema, DFSchemaRef, Result, SchemaError,
+    SchemaReference, TableReference,
 };
 use sqlparser::ast::Ident;
 
