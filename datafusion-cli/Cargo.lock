@@ -1190,7 +1190,6 @@ dependencies = [
 name = "datafusion"
 version = "43.0.0"
 dependencies = [
- "ahash",
  "apache-avro",
  "arrow",
  "arrow-array",
@@ -1220,9 +1219,6 @@ dependencies = [
  "flate2",
  "futures",
  "glob",
- "half",
- "hashbrown 0.14.5",
- "indexmap",
  "itertools",
  "log",
  "num-traits",
@@ -1231,7 +1227,6 @@ dependencies = [
  "parking_lot",
  "parquet",
  "paste",
- "pin-project-lite",
  "rand",
  "sqlparser",
  "tempfile",
@@ -1329,7 +1324,6 @@ dependencies = [
  "datafusion-common",
  "datafusion-expr",
  "futures",
- "hashbrown 0.14.5",
  "log",
  "object_store",
  "parking_lot",
@@ -1410,7 +1404,6 @@ dependencies = [
  "datafusion-physical-expr",
  "datafusion-physical-expr-common",
  "half",
- "indexmap",
  "log",
  "paste",
 ]
@@ -1479,11 +1472,9 @@ dependencies = [
  "datafusion-common",
  "datafusion-expr",
  "datafusion-physical-expr",
- "hashbrown 0.14.5",
  "indexmap",
  "itertools",
  "log",
- "paste",
  "recursive",
  "regex",
  "regex-syntax",
@@ -1497,10 +1488,7 @@ dependencies = [
  "arrow",
  "arrow-array",
  "arrow-buffer",
- "arrow-ord",
  "arrow-schema",
- "arrow-string",
- "chrono",
  "datafusion-common",
  "datafusion-expr",
  "datafusion-expr-common",
@@ -1525,7 +1513,6 @@ dependencies = [
  "datafusion-expr-common",
  "hashbrown 0.14.5",
  "itertools",
- "rand",
 ]
 
 [[package]]
@@ -1533,11 +1520,9 @@ name = "datafusion-physical-optimizer"
 version = "43.0.0"
 dependencies = [
  "arrow",
- "arrow-schema",
  "datafusion-common",
  "datafusion-execution",
  "datafusion-expr-common",
- "datafusion-optimizer",
  "datafusion-physical-expr",
  "datafusion-physical-plan",
  "itertools",
@@ -1561,7 +1546,6 @@ dependencies = [
  "datafusion-common-runtime",
  "datafusion-execution",
  "datafusion-expr",
- "datafusion-functions-aggregate-common",
  "datafusion-functions-window-common",
  "datafusion-physical-expr",
  "datafusion-physical-expr-common",
@@ -1592,7 +1576,6 @@ dependencies = [
  "recursive",
  "regex",
  "sqlparser",
- "strum 0.26.3",
 ]
 
 [[package]]

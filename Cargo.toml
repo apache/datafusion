@@ -89,7 +89,6 @@ arrow-ipc = { version = "53.3.0", default-features = false, features = [
 ] }
 arrow-ord = { version = "53.3.0", default-features = false }
 arrow-schema = { version = "53.3.0", default-features = false }
-arrow-string = { version = "53.3.0", default-features = false }
 async-trait = "0.1.73"
 bigdecimal = "=0.4.1"
 bytes = "1.4"
@@ -118,8 +117,6 @@ datafusion-physical-plan = { path = "datafusion/physical-plan", version = "43.0.
 datafusion-proto = { path = "datafusion/proto", version = "43.0.0" }
 datafusion-proto-common = { path = "datafusion/proto-common", version = "43.0.0" }
 datafusion-sql = { path = "datafusion/sql", version = "43.0.0" }
-datafusion-sqllogictest = { path = "datafusion/sqllogictest", version = "43.0.0" }
-datafusion-substrait = { path = "datafusion/substrait", version = "43.0.0" }
 doc-comment = "0.3"
 env_logger = "0.11"
 futures = "0.3"
