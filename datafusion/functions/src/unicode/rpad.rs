@@ -147,7 +147,6 @@ fn get_rpad_doc() -> &'static Documentation {
                            "String expression to pad with. Can be a constant, column, or function, and any combination of string operators. _Default is a space._")
             .with_related_udf("lpad")
             .build()
-            .unwrap()
     })
 }
 

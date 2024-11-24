@@ -114,7 +114,6 @@ fn get_octet_length_doc() -> &'static Documentation {
             .with_related_udf("bit_length")
             .with_related_udf("length")
             .build()
-            .unwrap()
     })
 }
 

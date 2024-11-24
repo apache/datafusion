@@ -104,7 +104,6 @@ fn get_find_in_set_doc() -> &'static Documentation {
             .with_argument("str", "String expression to find in strlist.")
             .with_argument("strlist", "A string list is a string composed of substrings separated by , characters.")
             .build()
-            .unwrap()
     })
 }
 

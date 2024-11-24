@@ -126,7 +126,6 @@ fn get_array_resize_doc() -> &'static Documentation {
                 "Defines new elements' value or empty if value is not set.",
             )
             .build()
-            .unwrap()
     })
 }
 

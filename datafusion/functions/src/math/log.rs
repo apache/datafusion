@@ -59,7 +59,6 @@ log(numeric_expression)"#)
             .with_standard_argument("base", Some("Base numeric"))
             .with_standard_argument("numeric_expression", Some("Numeric"))
             .build()
-            .unwrap()
     })
 }
 

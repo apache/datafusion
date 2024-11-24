@@ -167,7 +167,6 @@ fn get_array_has_doc() -> &'static Documentation {
                 "Scalar or Array expression. Can be a constant, column, or function, and any combination of array operators.",
             )
             .build()
-            .unwrap()
     })
 }
 
@@ -362,7 +361,6 @@ fn get_array_has_all_doc() -> &'static Documentation {
                 "Array expression. Can be a constant, column, or function, and any combination of array operators.",
             )
             .build()
-            .unwrap()
     })
 }
 
@@ -443,7 +441,6 @@ fn get_array_has_any_doc() -> &'static Documentation {
                 "Array expression. Can be a constant, column, or function, and any combination of array operators.",
             )
             .build()
-            .unwrap()
     })
 }
 

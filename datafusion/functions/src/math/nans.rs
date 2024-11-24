@@ -109,6 +109,5 @@ fn get_isnan_doc() -> &'static Documentation {
             .with_syntax_example("isnan(numeric_expression)")
             .with_standard_argument("numeric_expression", Some("Numeric"))
             .build()
-            .unwrap()
     })
 }

@@ -274,7 +274,6 @@ fn get_date_trunc_doc() -> &'static Documentation {
                 "Time expression to operate on. Can be a constant, column, or function.",
             )
             .build()
-            .unwrap()
     })
 }
 

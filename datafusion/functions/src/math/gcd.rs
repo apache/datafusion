@@ -90,7 +90,6 @@ fn get_gcd_doc() -> &'static Documentation {
             .with_standard_argument("expression_x", Some("First numeric"))
             .with_standard_argument("expression_y", Some("Second numeric"))
             .build()
-            .unwrap()
     })
 }
 

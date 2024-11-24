@@ -118,7 +118,6 @@ fn get_round_doc() -> &'static Documentation {
                 "Optional. The number of decimal places to round to. Defaults to 0.",
             )
             .build()
-            .unwrap()
     })
 }
 

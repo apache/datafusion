@@ -202,7 +202,6 @@ fn get_split_part_doc() -> &'static Documentation {
             .with_argument("delimiter", "String or character to split on.")
             .with_argument("pos", "Position of the part to return.")
             .build()
-            .unwrap()
     })
 }
 

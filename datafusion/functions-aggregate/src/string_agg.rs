@@ -130,7 +130,6 @@ fn get_string_agg_doc() -> &'static Documentation {
             .with_argument("expression", "The string expression to concatenate. Can be a column or any valid string expression.")
             .with_argument("delimiter", "A literal string used as a separator between the concatenated values.")
             .build()
-            .unwrap()
     })
 }
 

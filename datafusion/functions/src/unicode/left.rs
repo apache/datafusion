@@ -119,7 +119,6 @@ fn get_left_doc() -> &'static Documentation {
             .with_argument("n", "Number of characters to return.")
             .with_related_udf("right")
             .build()
-            .unwrap()
     })
 }
 

@@ -119,7 +119,6 @@ fn get_array_length_doc() -> &'static Documentation {
                 "Array dimension.",
             )
             .build()
-            .unwrap()
     })
 }
 

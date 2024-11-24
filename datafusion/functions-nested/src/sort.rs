@@ -132,7 +132,6 @@ fn get_array_sort_doc() -> &'static Documentation {
                 "Whether to sort nulls first(`NULLS FIRST` or `NULLS LAST`).",
             )
             .build()
-            .unwrap()
     })
 }
 

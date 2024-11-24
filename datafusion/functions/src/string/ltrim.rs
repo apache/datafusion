@@ -128,7 +128,6 @@ fn get_ltrim_doc() -> &'static Documentation {
             .with_related_udf("btrim")
             .with_related_udf("rtrim")
             .build()
-            .unwrap()
     })
 }
 

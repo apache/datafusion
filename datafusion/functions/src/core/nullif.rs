@@ -117,7 +117,6 @@ This can be used to perform the inverse operation of [`coalesce`](#coalesce).")
                 "Expression to compare to expression1. Can be a constant, column, or function, and any combination of operators."
             )
             .build()
-            .unwrap()
     })
 }
 

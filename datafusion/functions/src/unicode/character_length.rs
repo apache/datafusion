@@ -107,7 +107,6 @@ fn get_character_length_doc() -> &'static Documentation {
             .with_related_udf("bit_length")
             .with_related_udf("octet_length")
             .build()
-            .unwrap()
     })
 }
 

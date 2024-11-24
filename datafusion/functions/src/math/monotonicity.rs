@@ -48,7 +48,6 @@ pub fn get_acos_doc() -> &'static Documentation {
             .with_syntax_example("acos(numeric_expression)")
             .with_standard_argument("numeric_expression", Some("Numeric"))
             .build()
-            .unwrap()
     })
 }
 
@@ -81,7 +80,6 @@ pub fn get_acosh_doc() -> &'static Documentation {
             .with_syntax_example("acosh(numeric_expression)")
             .with_standard_argument("numeric_expression", Some("Numeric"))
             .build()
-            .unwrap()
     })
 }
 
@@ -110,7 +108,6 @@ pub fn get_asin_doc() -> &'static Documentation {
             .with_syntax_example("asin(numeric_expression)")
             .with_standard_argument("numeric_expression", Some("Numeric"))
             .build()
-            .unwrap()
     })
 }
 
@@ -131,7 +128,6 @@ pub fn get_asinh_doc() -> &'static Documentation {
             .with_syntax_example("asinh(numeric_expression)")
             .with_standard_argument("numeric_expression", Some("Numeric"))
             .build()
-            .unwrap()
     })
 }
 
@@ -150,7 +146,6 @@ pub fn get_atan_doc() -> &'static Documentation {
             .with_syntax_example("atan(numeric_expression)")
             .with_standard_argument("numeric_expression", Some("Numeric"))
             .build()
-            .unwrap()
     })
 }
 
@@ -181,7 +176,6 @@ pub fn get_atanh_doc() -> &'static Documentation {
             .with_syntax_example("atanh(numeric_expression)")
             .with_standard_argument("numeric_expression", Some("Numeric"))
             .build()
-            .unwrap()
     })
 }
 
@@ -206,7 +200,6 @@ pub fn get_atan2_doc() -> &'static Documentation {
             .with_argument("expression_x", r#"Second numeric expression to operate on.
   Can be a constant, column, or function, and any combination of arithmetic operators."#)
             .build()
-            .unwrap()
     })
 }
 
@@ -225,7 +218,6 @@ pub fn get_cbrt_doc() -> &'static Documentation {
             .with_syntax_example("cbrt(numeric_expression)")
             .with_standard_argument("numeric_expression", Some("Numeric"))
             .build()
-            .unwrap()
     })
 }
 
@@ -246,7 +238,6 @@ pub fn get_ceil_doc() -> &'static Documentation {
             .with_syntax_example("ceil(numeric_expression)")
             .with_standard_argument("numeric_expression", Some("Numeric"))
             .build()
-            .unwrap()
     })
 }
 
@@ -267,7 +258,6 @@ pub fn get_cos_doc() -> &'static Documentation {
             .with_syntax_example("cos(numeric_expression)")
             .with_standard_argument("numeric_expression", Some("Numeric"))
             .build()
-            .unwrap()
     })
 }
 
@@ -297,7 +287,6 @@ pub fn get_cosh_doc() -> &'static Documentation {
             .with_syntax_example("cosh(numeric_expression)")
             .with_standard_argument("numeric_expression", Some("Numeric"))
             .build()
-            .unwrap()
     })
 }
 
@@ -316,7 +305,6 @@ pub fn get_degrees_doc() -> &'static Documentation {
             .with_syntax_example("degrees(numeric_expression)")
             .with_standard_argument("numeric_expression", Some("Numeric"))
             .build()
-            .unwrap()
     })
 }
 
@@ -335,7 +323,6 @@ pub fn get_exp_doc() -> &'static Documentation {
             .with_syntax_example("exp(numeric_expression)")
             .with_standard_argument("numeric_expression", Some("Numeric"))
             .build()
-            .unwrap()
     })
 }
 
@@ -356,7 +343,6 @@ pub fn get_floor_doc() -> &'static Documentation {
             .with_syntax_example("floor(numeric_expression)")
             .with_standard_argument("numeric_expression", Some("Numeric"))
             .build()
-            .unwrap()
     })
 }
 
@@ -384,7 +370,6 @@ pub fn get_ln_doc() -> &'static Documentation {
             .with_syntax_example("ln(numeric_expression)")
             .with_standard_argument("numeric_expression", Some("Numeric"))
             .build()
-            .unwrap()
     })
 }
 
@@ -412,7 +397,6 @@ pub fn get_log2_doc() -> &'static Documentation {
             .with_syntax_example("log2(numeric_expression)")
             .with_standard_argument("numeric_expression", Some("Numeric"))
             .build()
-            .unwrap()
     })
 }
 
@@ -440,7 +424,6 @@ pub fn get_log10_doc() -> &'static Documentation {
             .with_syntax_example("log10(numeric_expression)")
             .with_standard_argument("numeric_expression", Some("Numeric"))
             .build()
-            .unwrap()
     })
 }
 
@@ -459,7 +442,6 @@ pub fn get_radians_doc() -> &'static Documentation {
             .with_syntax_example("radians(numeric_expression)")
             .with_standard_argument("numeric_expression", Some("Numeric"))
             .build()
-            .unwrap()
     })
 }
 
@@ -480,7 +462,6 @@ pub fn get_sin_doc() -> &'static Documentation {
             .with_syntax_example("sin(numeric_expression)")
             .with_standard_argument("numeric_expression", Some("Numeric"))
             .build()
-            .unwrap()
     })
 }
 
@@ -499,7 +480,6 @@ pub fn get_sinh_doc() -> &'static Documentation {
             .with_syntax_example("sinh(numeric_expression)")
             .with_standard_argument("numeric_expression", Some("Numeric"))
             .build()
-            .unwrap()
     })
 }
 
@@ -527,7 +507,6 @@ pub fn get_sqrt_doc() -> &'static Documentation {
             .with_syntax_example("sqrt(numeric_expression)")
             .with_standard_argument("numeric_expression", Some("Numeric"))
             .build()
-            .unwrap()
     })
 }
 
@@ -548,7 +527,6 @@ pub fn get_tan_doc() -> &'static Documentation {
             .with_syntax_example("tan(numeric_expression)")
             .with_standard_argument("numeric_expression", Some("Numeric"))
             .build()
-            .unwrap()
     })
 }
 
@@ -567,6 +545,5 @@ pub fn get_tanh_doc() -> &'static Documentation {
             .with_syntax_example("tanh(numeric_expression)")
             .with_standard_argument("numeric_expression", Some("Numeric"))
             .build()
-            .unwrap()
     })
 }

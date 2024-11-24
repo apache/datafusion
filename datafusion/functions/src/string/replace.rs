@@ -100,7 +100,6 @@ fn get_replace_doc() -> &'static Documentation {
             .with_standard_argument("substr", Some("Substring expression to replace in the input string. Substring"))
             .with_standard_argument("replacement", Some("Replacement substring"))
             .build()
-            .unwrap()
     })
 }
 

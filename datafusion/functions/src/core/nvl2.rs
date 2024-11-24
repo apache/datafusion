@@ -133,7 +133,6 @@ fn get_nvl2_doc() -> &'static Documentation {
                 "Expression to return if expr1 is null. Can be a constant, column, or function, and any combination of operators."
             )
             .build()
-            .unwrap()
     })
 }
 

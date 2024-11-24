@@ -224,7 +224,6 @@ The following intervals are supported:
 - century
 ")
             .build()
-            .unwrap()
     })
 }
 

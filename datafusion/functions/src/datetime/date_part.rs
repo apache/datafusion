@@ -279,7 +279,6 @@ fn get_date_part_doc() -> &'static Documentation {
             )
             .with_alternative_syntax("extract(field FROM source)")
             .build()
-            .unwrap()
     })
 }
 

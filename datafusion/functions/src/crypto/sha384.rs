@@ -94,6 +94,5 @@ fn get_sha384_doc() -> &'static Documentation {
             )
             .with_standard_argument("expression", Some("String"))
             .build()
-            .unwrap()
     })
 }

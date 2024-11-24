@@ -147,7 +147,6 @@ fn get_from_unixtime_doc() -> &'static Documentation {
 +-----------------------------------------------------------+
 ```"#)
             .build()
-            .unwrap()
     })
 }
 

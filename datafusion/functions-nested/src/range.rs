@@ -182,7 +182,6 @@ fn get_range_doc() -> &'static Documentation {
                 "Increase by step (cannot be 0). Steps less than a day are supported only for timestamp ranges.",
             )
             .build()
-            .unwrap()
     })
 }
 
@@ -316,7 +315,6 @@ fn get_generate_series_doc() -> &'static Documentation {
                 "increase by step (can not be 0). Steps less than a day are supported only for timestamp ranges.",
             )
             .build()
-            .unwrap()
     })
 }
 
