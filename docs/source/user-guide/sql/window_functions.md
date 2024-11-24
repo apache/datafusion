@@ -191,17 +191,17 @@ dense_rank()
 Example:
 
 ```sql
-SELECT x, dense_rank() OVER(ORDER BY y) AS dense_rank FROM VALUES(1,1), (2,1), (3,2), (4,3), (5,3) t(x,y);
+SELECT x, y, dense_rank() OVER(ORDER BY y) AS dense_rank FROM VALUES (1,1), (2,1), (3,2), (4,3), (5,3) t(x,y);
 
-+---+------------+
-| x | dense_rank |
-+---+------------+
-| 1 | 1          |
-| 2 | 1          |
-| 3 | 2          |
-| 4 | 3          |
-| 5 | 3          |
-+---+------------+
++---+---+------------+
+| x | y | dense_rank |
++---+---+------------+
+| 1 | 1 | 1          |
+| 2 | 1 | 1          |
+| 3 | 2 | 2          |
+| 4 | 3 | 3          |
+| 5 | 3 | 3          |
++---+---+------------+
 ```
 
 ### `ntile`
