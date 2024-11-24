@@ -483,10 +483,10 @@ set datafusion.catalog.information_schema = true;
 statement ok
 CREATE TABLE t AS SELECT 1::int as i;
 
-statement error Error during planning: SHOW COLUMNS with WHERE or LIKE is not supported
+statement error DataFusion error: This feature is not implemented: SHOW COLUMNS with WHERE or LIKE is not supported
 SHOW COLUMNS FROM t LIKE 'f';
 
-statement error Error during planning: SHOW COLUMNS with WHERE or LIKE is not supported
+statement error DataFusion error: This feature is not implemented: SHOW COLUMNS with WHERE or LIKE is not supported
 SHOW COLUMNS FROM t WHERE column_name = 'bar';
 
 query TTTTTT

@@ -169,6 +169,11 @@ impl FunctionArgs {
                         "Calling {name}: SEPARATOR not supported in function arguments: {sep}"
                     )
                 }
+                FunctionArgumentClause::JsonNullClause(jn) => {
+                    return not_impl_err!(
+                        "Calling {name}: JSON NULL clause not supported in function arguments: {jn}"
+                    )
+                }
             }
         }
 

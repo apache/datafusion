@@ -339,7 +339,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         plan: LogicalPlan,
         alias: TableAlias,
     ) -> Result<LogicalPlan> {
-        let plan = self.apply_expr_alias(plan, alias.columns)?;
+        let idents = alias.columns.into_iter().map(|c| c.name).collect();
+        let plan = self.apply_expr_alias(plan, idents)?;
 
         LogicalPlanBuilder::from(plan)
             .alias(TableReference::bare(
@@ -542,7 +543,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             | SQLDataType::Regclass
             | SQLDataType::Custom(_, _)
             | SQLDataType::Array(_)
-            | SQLDataType::Enum(_)
+            | SQLDataType::Enum(_, _)
             | SQLDataType::Set(_)
             | SQLDataType::MediumInt(_)
             | SQLDataType::UnsignedMediumInt(_)
@@ -586,6 +587,15 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             | SQLDataType::Nullable(_)
             | SQLDataType::LowCardinality(_)
             | SQLDataType::Trigger
+            // MySQL datatypes
+            | SQLDataType::TinyBlob
+            | SQLDataType::MediumBlob
+            | SQLDataType::LongBlob
+            | SQLDataType::TinyText
+            | SQLDataType::MediumText
+            | SQLDataType::LongText
+            | SQLDataType::Bit(_)
+            |SQLDataType::BitVarying(_)
             => not_impl_err!(
                 "Unsupported SQL type {sql_type:?}"
             ),
