@@ -5483,3 +5483,19 @@ SELECT max(input_table.x), min(input_table.x) from input_table GROUP BY input_ta
 ----
 NaN NaN
 
+# Group by timestamp
+query TP
+SELECT
+    'foo' AS text,
+    arrow_cast('2024-01-01T00:00:00Z'::timestamptz, 'Timestamp(Microsecond, Some("UTC"))') AS ts
+GROUP BY ts, text
+----
+foo 2024-01-01T00:00:00Z
+
+query TP
+SELECT
+    'foo' AS text,
+    arrow_cast('2024-01-01T00:00:00Z'::timestamptz, 'Timestamp(Second, Some("+08:00"))') AS ts
+GROUP BY ts, text
+----
+foo 2024-01-01T08:00:00+08:00
