@@ -1118,7 +1118,7 @@ impl Expr {
     }
 
     /// Returns a full and complete string representation of this expression.
-    #[deprecated(note = "use format! instead")]
+    #[deprecated(since = "42.0.0", note = "use format! instead")]
     pub fn canonical_name(&self) -> String {
         format!("{self}")
     }
