@@ -72,7 +72,7 @@ async fn main() -> Result<()> {
 
 /// Run queries directly on the current tokio `Runtime`
 ///
-/// This is now most examples in DataFusion are written and works well for
+/// This is how most examples in DataFusion are written and works well for
 /// development and local query processing.
 async fn same_runtime(ctx: &SessionContext, sql: &str) -> Result<()> {
     // Calling .sql is an async function as it may also do network
