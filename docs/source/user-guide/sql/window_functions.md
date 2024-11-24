@@ -166,6 +166,8 @@ Relative rank of the current row: (number of rows preceding or peer with current
 cume_dist()
 ```
 
+Example:
+
 ```sql
 SELECT x, cume_dist() OVER(ORDER BY y) AS cume_dist FROM VALUES (1,20), (2,10), (3,30) t(x,y);
 
@@ -185,6 +187,8 @@ Returns the rank of the current row without gaps. This function ranks rows in a 
 ```
 dense_rank()
 ```
+
+Example:
 
 ```sql
 SELECT x, dense_rank() OVER(ORDER BY y) AS dense_rank FROM VALUES(1, 1), (2, 1), (3,2), (4,3), (5,3) t(x, y);
