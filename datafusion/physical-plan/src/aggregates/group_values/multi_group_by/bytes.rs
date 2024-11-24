@@ -245,7 +245,7 @@ where
     }
 
     fn vectorized_equal_to(
-        &self,
+        &mut self,
         lhs_rows: &[usize],
         array: &ArrayRef,
         rhs_rows: &[usize],
@@ -465,7 +465,7 @@ mod tests {
             }
         };
 
-        let equal_to = |builder: &ByteGroupValueBuilder<i32>,
+        let equal_to = |builder: &mut ByteGroupValueBuilder<i32>,
                         lhs_rows: &[usize],
                         input_array: &ArrayRef,
                         rhs_rows: &[usize],
@@ -487,7 +487,7 @@ mod tests {
             builder.vectorized_append(builder_array, append_rows);
         };
 
-        let equal_to = |builder: &ByteGroupValueBuilder<i32>,
+        let equal_to = |builder: &mut ByteGroupValueBuilder<i32>,
                         lhs_rows: &[usize],
                         input_array: &ArrayRef,
                         rhs_rows: &[usize],
@@ -563,7 +563,7 @@ mod tests {
     where
         A: FnMut(&mut ByteGroupValueBuilder<i32>, &ArrayRef, &[usize]),
         E: FnMut(
-            &ByteGroupValueBuilder<i32>,
+            &mut ByteGroupValueBuilder<i32>,
             &[usize],
             &ArrayRef,
             &[usize],
@@ -616,7 +616,7 @@ mod tests {
         // Check
         let mut equal_to_results = vec![true; builder.len()];
         equal_to(
-            &builder,
+            &mut builder,
             &[0, 1, 2, 3, 4, 5],
             &input_array,
             &[0, 1, 2, 3, 4, 5],

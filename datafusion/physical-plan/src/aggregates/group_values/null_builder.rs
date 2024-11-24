@@ -15,7 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow_buffer::{BooleanBufferBuilder, NullBuffer};
+use arrow_buffer::{
+    bit_util, BooleanBuffer, BooleanBufferBuilder, MutableBuffer, NullBuffer,
+};
 
 /// Builder for an (optional) null mask
 ///
@@ -35,6 +37,11 @@ impl MaybeNullBufferBuilder {
     /// Create a new builder
     pub fn new() -> Self {
         Self::NoNulls { row_count: 0 }
+    }
+
+    pub fn new_from_buffer(buffer: MutableBuffer, len: usize) -> Self {
+        let builder = BooleanBufferBuilder::new_from_buffer(buffer, len);
+        Self::Nulls(builder)
     }
 
     /// Return true if the row at index `row` is null
@@ -129,5 +136,136 @@ impl MaybeNullBufferBuilder {
                 Some(NullBuffer::from(new_builder.finish()))
             }
         }
+    }
+}
+
+pub fn build_nulls_with_buffer<I>(
+    nulls_iter: I,
+    nulls_len: usize,
+    mut buffer: MutableBuffer,
+) -> (Option<NullBuffer>, Option<MutableBuffer>)
+where
+    I: Iterator<Item = bool>,
+{
+    // Ensure the buffer big enough, and init to all `false`
+    buffer.clear();
+    let bytes_len = bit_util::ceil(nulls_len, 8);
+    buffer.resize(bytes_len, 0);
+
+    let nulls_slice = buffer.as_slice_mut();
+    let mut has_nulls = false;
+    nulls_iter.enumerate().for_each(|(idx, is_valid)| {
+        if is_valid {
+            bit_util::set_bit(nulls_slice, idx);
+        } else {
+            has_nulls = true;
+        }
+    });
+
+    if has_nulls {
+        let bool_buffer = BooleanBuffer::new(buffer.into(), 0, nulls_len);
+        let null_buffer = NullBuffer::new(bool_buffer);
+
+        (Some(null_buffer), None)
+    } else {
+        (None, Some(buffer))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::iter;
+
+    use arrow_buffer::{bit_util, MutableBuffer};
+    use rand::{thread_rng, Rng};
+
+    use crate::aggregates::group_values::null_builder::build_nulls_with_buffer;
+
+    #[test]
+    fn test_build_nulls_with_buffer() {
+        // Situations will be covered:
+        //   1. `all valid`
+        //   2. `mixed`
+        //   3. `all valid` + `reuse buffer`
+        //   4. `mixed` + `reuse buffer`
+
+        let mut rng = thread_rng();
+        let len0 = 64;
+        let len1 = 256;
+
+        let all_valid0 = iter::repeat(true).take(len0).collect::<Vec<_>>();
+        let mixed0 = (0..len0)
+            .into_iter()
+            .map(|_| {
+                let rnd = rng.gen_range(0.0..=1.0);
+                rnd < 0.5
+            })
+            .collect::<Vec<_>>();
+
+        let all_valid1 = iter::repeat(true).take(len1).collect::<Vec<_>>();
+        let mixed1 = (0..len1)
+            .into_iter()
+            .map(|_| {
+                let rnd = rng.gen_range(0.0..=1.0);
+                rnd < 0.5
+            })
+            .collect::<Vec<_>>();
+
+        let buffer_all_valid = MutableBuffer::new(0);
+        let buffer_mixed = MutableBuffer::new(0);
+
+        // 1. `all valid`, should return `none null buffer` and `non-none reuse buffer`
+        let (null_buffer_opt, reuse_buffer_opt) =
+            build_nulls_with_buffer(all_valid0.iter().copied(), len0, buffer_all_valid);
+        assert!(null_buffer_opt.is_none());
+        assert!(reuse_buffer_opt.is_some());
+
+        let buffer_all_valid = reuse_buffer_opt.unwrap();
+        assert_eq!(buffer_all_valid.len(), bit_util::ceil(len0, 8));
+
+        // 2. `mixed`, should return `non-none null buffer` and `none reuse buffer`
+        let (null_buffer_opt, reuse_buffer_opt) =
+            build_nulls_with_buffer(mixed0.iter().copied(), len0, buffer_mixed);
+        assert!(null_buffer_opt.is_some());
+        assert!(reuse_buffer_opt.is_none());
+
+        let null_buffer = null_buffer_opt.unwrap();
+        null_buffer
+            .iter()
+            .zip(mixed0.iter().copied())
+            .for_each(|(lhs, rhs)| assert_eq!(lhs, rhs));
+        let buffer_mixed = null_buffer
+            .into_inner()
+            .into_inner()
+            .into_mutable()
+            .unwrap();
+        assert_eq!(buffer_mixed.len(), bit_util::ceil(len0, 8));
+
+        // 3. `all valid` + `reuse buffer`, should return `none null buffer` and `non-none reuse buffer`
+        let (null_buffer_opt, reuse_buffer_opt) =
+            build_nulls_with_buffer(all_valid1.iter().copied(), len1, buffer_all_valid);
+        assert!(null_buffer_opt.is_none());
+        assert!(reuse_buffer_opt.is_some());
+
+        let buffer_all_valid = reuse_buffer_opt.unwrap();
+        assert_eq!(buffer_all_valid.len(), bit_util::ceil(len1, 8));
+
+        // 4. `mixed` + `reuse buffer`, should return `non-none null buffer` and `none reuse buffer`
+        let (null_buffer_opt, reuse_buffer_opt) =
+            build_nulls_with_buffer(mixed1.iter().copied(), len1, buffer_mixed);
+        assert!(null_buffer_opt.is_some());
+        assert!(reuse_buffer_opt.is_none());
+
+        let null_buffer = null_buffer_opt.unwrap();
+        null_buffer
+            .iter()
+            .zip(mixed1.iter().copied())
+            .for_each(|(lhs, rhs)| assert_eq!(lhs, rhs));
+        let buffer_mixed = null_buffer
+            .into_inner()
+            .into_inner()
+            .into_mutable()
+            .unwrap();
+        assert_eq!(buffer_mixed.len(), bit_util::ceil(len1, 8));
     }
 }
