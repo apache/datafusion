@@ -191,7 +191,7 @@ dense_rank()
 Example:
 
 ```sql
-SELECT x, dense_rank() OVER(ORDER BY y) AS dense_rank FROM VALUES(1, 1), (2, 1), (3,2), (4,3), (5,3) t(x, y);
+SELECT x, dense_rank() OVER(ORDER BY y) AS dense_rank FROM VALUES(1,1), (2,1), (3,2), (4,3), (5,3) t(x,y);
 
 +---+------------+
 | x | dense_rank |
@@ -241,6 +241,22 @@ Returns the percentage rank of the current row within its partition. The value r
 percent_rank()
 ```
 
+Example: 
+
+```sql
+SELECT x, percent_rank() OVER (ORDER BY y) AS percent_rank FROM VALUES (1,20), (2,80), (3,100), (4,40), (5,60) t(x,y);
+
++---+--------------+
+| x | percent_rank |
++---+--------------+
+| 1 | 0.0          |
+| 4 | 0.25         |
+| 5 | 0.5          |
+| 2 | 0.75         |
+| 3 | 1.0          |
++---+--------------+
+```
+
 ### `rank`
 
 Returns the rank of the current row within its partition, allowing gaps between ranks. This function provides a ranking similar to `row_number`, but skips ranks for identical values.
@@ -249,12 +265,33 @@ Returns the rank of the current row within its partition, allowing gaps between 
 rank()
 ```
 
+Example:
+
+```sql
+SELECT x, rank() OVER(ORDER BY y) AS rank FROM VALUES (1,1), (2,1), (3,2), (4,3), (5,3) t(x,y);
+
++---+------+
+| x | rank |
++---+------+
+| 1 | 1    |
+| 2 | 1    |
+| 3 | 3    |
+| 4 | 4    |
+| 5 | 4    |
++---+------+
+```
+
 ### `row_number`
 
 Number of the current row within its partition, counting from 1.
 
 ```
 row_number()
+```
+
+Example:
+
+```sql
 ```
 
 ## Analytical Functions
