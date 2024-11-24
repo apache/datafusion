@@ -241,7 +241,7 @@ Returns the percentage rank of the current row within its partition. The value r
 percent_rank()
 ```
 
-Example: 
+Example:
 
 ```sql
 SELECT x, y, percent_rank() OVER (ORDER BY y) AS percent_rank FROM VALUES (1,0), (2,75), (3,100), (4,25), (5,50) t(x,y);
