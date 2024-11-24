@@ -611,7 +611,7 @@ mod streaming_memory_tests {
             );
             self.counter += 1;
             Ok(Some(RecordBatch::try_new(
-                self.schema.clone(),
+                Arc::clone(&self.schema),
                 vec![Arc::new(array)],
             )?))
         }
@@ -621,7 +621,7 @@ mod streaming_memory_tests {
                 counter: self.counter,
                 max_batches: self.max_batches,
                 batch_size: self.batch_size,
-                schema: self.schema.clone(),
+                schema: Arc::clone(&self.schema),
             })
         }
     }
@@ -633,7 +633,7 @@ mod streaming_memory_tests {
             counter: 0,
             max_batches: 3,
             batch_size: 2,
-            schema: schema.clone(),
+            schema: Arc::clone(&schema),
         };
 
         let exec = StreamingMemoryExec::try_new(schema, vec![Box::new(generator)])?;
@@ -683,7 +683,7 @@ mod streaming_memory_tests {
             counter: 0,
             max_batches: 1,
             batch_size: 1,
-            schema: schema.clone(),
+            schema: Arc::clone(&schema),
         };
 
         let exec = StreamingMemoryExec::try_new(schema, vec![Box::new(generator)])?;
