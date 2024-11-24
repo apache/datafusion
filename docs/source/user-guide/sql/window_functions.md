@@ -244,15 +244,15 @@ percent_rank()
 Example: 
 
 ```sql
-SELECT x, y, percent_rank() OVER (ORDER BY y) AS percent_rank FROM VALUES (1,20), (2,80), (3,100), (4,40), (5,60) t(x,y);
+SELECT x, y, percent_rank() OVER (ORDER BY y) AS percent_rank FROM VALUES (1,0), (2,75), (3,100), (4,25), (5,50) t(x,y);
 
 +---+-----+--------------+
 | x | y   | percent_rank |
 +---+-----+--------------+
-| 1 | 20  | 0.0          |
-| 4 | 40  | 0.25         |
-| 5 | 60  | 0.5          |
-| 2 | 80  | 0.75         |
+| 1 | 0   | 0.0          |
+| 4 | 25  | 0.25         |
+| 5 | 50  | 0.5          |
+| 2 | 75  | 0.75         |
 | 3 | 100 | 1.0          |
 +---+-----+--------------+
 ```
