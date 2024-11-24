@@ -214,7 +214,24 @@ ntile(expression)
 
 #### Arguments
 
-- **expression**: An integer describing the number groups the partition should be split into
+- **expression**: An integer describing the number of groups the partition should be split into
+
+Example:
+
+```sql
+SELECT x, ntile(3) OVER (ORDER BY x) AS group_num FROM VALUES (1), (2), (3), (4), (5), (6) t(x);
+
++---+-----------+
+| x | group_num |
++---+-----------+
+| 1 | 1         |
+| 2 | 1         |
+| 3 | 2         |
+| 4 | 2         |
+| 5 | 3         |
+| 6 | 3         |
++---+-----------+
+```
 
 ### `percent_rank`
 
