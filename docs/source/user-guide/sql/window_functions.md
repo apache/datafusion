@@ -292,6 +292,18 @@ row_number()
 Example:
 
 ```sql
+SELECT x, y, row_number() OVER(PARTITION BY x ORDER BY y) AS row_number FROM VALUES (1,1), (1,3), (1,2), (2,4), (2,6), (2,5) t(x,y);
+
++---+---+------------+
+| x | y | row_number |
++---+---+------------+
+| 1 | 1 | 1          |
+| 1 | 2 | 2          |
+| 1 | 3 | 3          |
+| 2 | 4 | 1          |
+| 2 | 5 | 2          |
+| 2 | 6 | 3          |
++---+---+------------+
 ```
 
 ## Analytical Functions
