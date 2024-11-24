@@ -172,7 +172,6 @@ fn get_to_char_doc() -> &'static Documentation {
 Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/to_char.rs)
 "#)
             .build()
-            .unwrap()
     })
 }
 

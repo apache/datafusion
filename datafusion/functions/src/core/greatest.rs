@@ -22,9 +22,10 @@ use arrow::compute::SortOptions;
 use arrow::datatypes::DataType;
 use arrow_buffer::BooleanBuffer;
 use datafusion_common::{exec_err, plan_err, Result, ScalarValue};
+use datafusion_doc::Documentation;
 use datafusion_expr::binary::type_union_resolution;
 use datafusion_expr::scalar_doc_sections::DOC_SECTION_CONDITIONAL;
-use datafusion_expr::{ColumnarValue, Documentation};
+use datafusion_expr::ColumnarValue;
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use std::any::Any;
 use std::sync::{Arc, OnceLock};
@@ -248,7 +249,6 @@ fn get_greatest_doc() -> &'static Documentation {
                 "Expressions to compare and return the greatest value.. Can be a constant, column, or function, and any combination of arithmetic operators. Pass as many expression arguments as necessary."
             )
             .build()
-            .unwrap()
     })
 }
 

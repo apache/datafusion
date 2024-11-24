@@ -92,7 +92,6 @@ fn get_iszero_doc() -> &'static Documentation {
             .with_syntax_example("iszero(numeric_expression)")
             .with_standard_argument("numeric_expression", Some("Numeric"))
             .build()
-            .unwrap()
     })
 }
 

@@ -148,7 +148,6 @@ fn get_regr_docs() -> &'static HashMap<RegrType, Documentation> {
                 .with_standard_argument("expression_y", Some("Dependent variable"))
                 .with_standard_argument("expression_x", Some("Independent variable"))
                 .build()
-                .unwrap()
         );
 
         hash_map.insert(
@@ -163,7 +162,6 @@ fn get_regr_docs() -> &'static HashMap<RegrType, Documentation> {
                 .with_standard_argument("expression_y", Some("Dependent variable"))
                 .with_standard_argument("expression_x", Some("Independent variable"))
                 .build()
-                .unwrap()
         );
 
         hash_map.insert(
@@ -177,7 +175,6 @@ fn get_regr_docs() -> &'static HashMap<RegrType, Documentation> {
                 .with_standard_argument("expression_y", Some("Dependent variable"))
                 .with_standard_argument("expression_x", Some("Independent variable"))
                 .build()
-                .unwrap()
         );
 
         hash_map.insert(
@@ -191,7 +188,6 @@ fn get_regr_docs() -> &'static HashMap<RegrType, Documentation> {
                 .with_standard_argument("expression_y", Some("Dependent variable"))
                 .with_standard_argument("expression_x", Some("Independent variable"))
                 .build()
-                .unwrap()
         );
 
         hash_map.insert(
@@ -205,7 +201,6 @@ fn get_regr_docs() -> &'static HashMap<RegrType, Documentation> {
                 .with_standard_argument("expression_y", Some("Dependent variable"))
                 .with_standard_argument("expression_x", Some("Independent variable"))
                 .build()
-                .unwrap()
         );
 
         hash_map.insert(
@@ -219,7 +214,6 @@ fn get_regr_docs() -> &'static HashMap<RegrType, Documentation> {
                 .with_standard_argument("expression_y", Some("Dependent variable"))
                 .with_standard_argument("expression_x", Some("Independent variable"))
                 .build()
-                .unwrap()
         );
 
         hash_map.insert(
@@ -233,7 +227,6 @@ fn get_regr_docs() -> &'static HashMap<RegrType, Documentation> {
                 .with_standard_argument("expression_y", Some("Dependent variable"))
                 .with_standard_argument("expression_x", Some("Independent variable"))
                 .build()
-                .unwrap()
         );
 
         hash_map.insert(
@@ -247,7 +240,6 @@ fn get_regr_docs() -> &'static HashMap<RegrType, Documentation> {
                 .with_standard_argument("expression_y", Some("Dependent variable"))
                 .with_standard_argument("expression_x", Some("Independent variable"))
                 .build()
-                .unwrap()
         );
 
         hash_map.insert(
@@ -261,7 +253,6 @@ fn get_regr_docs() -> &'static HashMap<RegrType, Documentation> {
                 .with_standard_argument("expression_y", Some("Dependent variable"))
                 .with_standard_argument("expression_x", Some("Independent variable"))
                 .build()
-                .unwrap()
         );
         hash_map
     })

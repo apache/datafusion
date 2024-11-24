@@ -136,7 +136,6 @@ fn get_to_hex_doc() -> &'static Documentation {
             )
             .with_standard_argument("int", Some("Integer"))
             .build()
-            .unwrap()
     })
 }
 

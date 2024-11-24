@@ -301,7 +301,6 @@ SELECT MAKE_MAP(['key1', 'key2'], ['value1', null]);
                         For `make_map`: The list of values to be mapped to the corresponding keys."
                     )
                     .build()
-                    .unwrap()
             })
 }
 

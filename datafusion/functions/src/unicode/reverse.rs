@@ -107,7 +107,6 @@ fn get_reverse_doc() -> &'static Documentation {
             )
             .with_standard_argument("str", Some("String"))
             .build()
-            .unwrap()
     })
 }
 

@@ -93,7 +93,6 @@ fn get_lower_doc() -> &'static Documentation {
             .with_related_udf("initcap")
             .with_related_udf("upper")
             .build()
-            .unwrap()
     })
 }
 #[cfg(test)]

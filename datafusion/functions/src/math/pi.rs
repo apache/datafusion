@@ -99,6 +99,5 @@ fn get_pi_doc() -> &'static Documentation {
             .with_description("Returns an approximate value of π.")
             .with_syntax_example("pi()")
             .build()
-            .unwrap()
     })
 }

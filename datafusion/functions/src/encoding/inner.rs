@@ -70,7 +70,6 @@ fn get_encode_doc() -> &'static Documentation {
             .with_argument("format", "Supported formats are: `base64`, `hex`")
             .with_related_udf("decode")
             .build()
-            .unwrap()
     })
 }
 
@@ -157,7 +156,6 @@ fn get_decode_doc() -> &'static Documentation {
             .with_argument("format", "Same arguments as [encode](#encode)")
             .with_related_udf("encode")
             .build()
-            .unwrap()
     })
 }
 

@@ -128,6 +128,5 @@ fn get_chr_doc() -> &'static Documentation {
             .with_standard_argument("expression", Some("String"))
             .with_related_udf("ascii")
             .build()
-            .unwrap()
     })
 }

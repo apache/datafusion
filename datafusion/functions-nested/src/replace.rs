@@ -136,7 +136,6 @@ fn get_array_replace_doc() -> &'static Documentation {
                 "Final element.",
             )
             .build()
-            .unwrap()
     })
 }
 
@@ -220,7 +219,6 @@ fn get_array_replace_n_doc() -> &'static Documentation {
                 "Number of first occurrences to replace.",
             )
             .build()
-            .unwrap()
     })
 }
 
@@ -300,7 +298,6 @@ fn get_array_replace_all_doc() -> &'static Documentation {
                 "Final element.",
             )
             .build()
-            .unwrap()
     })
 }
 

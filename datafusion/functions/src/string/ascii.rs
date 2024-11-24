@@ -102,7 +102,6 @@ fn get_ascii_doc() -> &'static Documentation {
             .with_standard_argument("str", Some("String"))
             .with_related_udf("chr")
             .build()
-            .unwrap()
     })
 }
 

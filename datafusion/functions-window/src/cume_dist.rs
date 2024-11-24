@@ -101,7 +101,6 @@ fn get_cume_dist_doc() -> &'static Documentation {
             )
             .with_syntax_example("cume_dist()")
             .build()
-            .unwrap()
     })
 }
 

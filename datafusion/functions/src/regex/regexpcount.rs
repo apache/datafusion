@@ -138,7 +138,6 @@ fn get_regexp_count_doc() -> &'static Documentation {
   - **R**: enables CRLF mode: when multi-line mode is enabled, \r\n is used
   - **U**: swap the meaning of x* and x*?"#)
             .build()
-            .unwrap()
     })
 }
 

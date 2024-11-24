@@ -382,7 +382,6 @@ pub struct ScalarFunctionArgs<'a> {
 ///             .with_syntax_example("add_one(2)")
 ///             .with_argument("arg1", "The int32 number to add one to")
 ///             .build()
-///             .unwrap()
 ///     })
 /// }
 ///

@@ -183,7 +183,6 @@ fn get_power_doc() -> &'static Documentation {
             .with_standard_argument("base", Some("Numeric"))
             .with_standard_argument("exponent", Some("Exponent numeric"))
             .build()
-            .unwrap()
     })
 }
 

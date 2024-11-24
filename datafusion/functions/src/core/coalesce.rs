@@ -168,7 +168,6 @@ fn get_coalesce_doc() -> &'static Documentation {
                 "Expression to use if previous expressions are _null_. Can be a constant, column, or function, and any combination of arithmetic operators. Pass as many expression arguments as necessary."
             )
             .build()
-            .unwrap()
     })
 }
 

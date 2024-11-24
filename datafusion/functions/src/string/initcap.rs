@@ -100,7 +100,6 @@ fn get_initcap_doc() -> &'static Documentation {
             .with_related_udf("lower")
             .with_related_udf("upper")
             .build()
-            .unwrap()
     })
 }
 

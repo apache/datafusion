@@ -168,7 +168,6 @@ fn get_make_array_doc() -> &'static Documentation {
                 "Expression to include in the output array. Can be a constant, column, or function, and any combination of arithmetic or string operators.",
             )
             .build()
-            .unwrap()
     })
 }
 

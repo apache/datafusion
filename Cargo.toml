@@ -52,6 +52,8 @@ members = [
     "datafusion-examples/examples/ffi/ffi_module_loader",
     "test-utils",
     "benchmarks",
+    "datafusion/macros",
+    "datafusion/doc",
 ]
 resolver = "2"
 
@@ -100,6 +102,7 @@ datafusion = { path = "datafusion/core", version = "43.0.0", default-features = 
 datafusion-catalog = { path = "datafusion/catalog", version = "43.0.0" }
 datafusion-common = { path = "datafusion/common", version = "43.0.0", default-features = false }
 datafusion-common-runtime = { path = "datafusion/common-runtime", version = "43.0.0" }
+datafusion-doc = { path = "datafusion/doc", version = "43.0.0" }
 datafusion-execution = { path = "datafusion/execution", version = "43.0.0" }
 datafusion-expr = { path = "datafusion/expr", version = "43.0.0" }
 datafusion-expr-common = { path = "datafusion/expr-common", version = "43.0.0" }
@@ -110,6 +113,7 @@ datafusion-functions-aggregate-common = { path = "datafusion/functions-aggregate
 datafusion-functions-nested = { path = "datafusion/functions-nested", version = "43.0.0" }
 datafusion-functions-window = { path = "datafusion/functions-window", version = "43.0.0" }
 datafusion-functions-window-common = { path = "datafusion/functions-window-common", version = "43.0.0" }
+datafusion-macros = { path = "datafusion/macros", version = "43.0.0" }
 datafusion-optimizer = { path = "datafusion/optimizer", version = "43.0.0", default-features = false }
 datafusion-physical-expr = { path = "datafusion/physical-expr", version = "43.0.0", default-features = false }
 datafusion-physical-expr-common = { path = "datafusion/physical-expr-common", version = "43.0.0", default-features = false }

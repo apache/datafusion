@@ -205,7 +205,6 @@ fn get_array_to_string_doc() -> &'static Documentation {
                 "Optional. String to replace null values in the array. If not provided, nulls will be handled by default behavior.",
             )
             .build()
-            .unwrap()
     })
 }
 
@@ -318,7 +317,6 @@ fn get_string_to_array_doc() -> &'static Documentation {
                 "Substring values to be replaced with `NULL`.",
             )
             .build()
-            .unwrap()
     })
 }
 

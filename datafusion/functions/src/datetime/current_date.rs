@@ -118,6 +118,5 @@ The `current_date()` return value is determined at query time and will return th
 "#)
             .with_syntax_example("current_date()")
             .build()
-            .unwrap()
     })
 }
