@@ -99,6 +99,7 @@ pub(crate) fn start_demuxer_task(
     default_extension: String,
     keep_partition_by_columns: bool,
 ) -> (SpawnedTask<Result<()>>, DemuxedStreamReceiver) {
+    println!("Starting demuxer");
     let (tx, rx) = mpsc::unbounded_channel();
     let context = Arc::clone(context);
     let single_file_output =
@@ -165,6 +166,7 @@ async fn row_count_demuxer(
     } else {
         minimum_parallel_files
     };
+    println!("minimum_parallel_files={minimum_parallel_files}");
 
     let max_rows_per_file = if single_file_output {
         usize::MAX
@@ -175,6 +177,7 @@ async fn row_count_demuxer(
     while let Some(rb) = input.next().await.transpose()? {
         // ensure we have at least minimum_parallel_files open
         if open_file_streams.len() < minimum_parallel_files {
+            println!("Rows fit in 1 file");
             open_file_streams.push(create_new_file_stream(
                 &base_output_path,
                 &write_id,
@@ -187,6 +190,7 @@ async fn row_count_demuxer(
             row_counts.push(0);
             part_idx += 1;
         } else if row_counts[next_send_steam] >= max_rows_per_file {
+            println!("More rows than allowed");
             row_counts[next_send_steam] = 0;
             open_file_streams[next_send_steam] = create_new_file_stream(
                 &base_output_path,

@@ -114,6 +114,7 @@ pub(crate) async fn serialize_rb_stream_to_object_store(
     while let Some(task) = rx.recv().await {
         match task.join().await {
             Ok(Ok((cnt, bytes))) => {
+                println!("writing {} bytes", bytes.len());
                 match writer.write_all(&bytes).await {
                     Ok(_) => (),
                     Err(e) => {
@@ -176,6 +177,7 @@ pub(crate) async fn stateless_serialize_and_write_files(
     let mut any_abort_errors = false;
     let mut join_set = JoinSet::new();
     while let Some((data_rx, serializer, writer)) = rx.recv().await {
+        println!("Got a new writer");
         join_set.spawn(async move {
             serialize_rb_stream_to_object_store(data_rx, serializer, writer).await
         });
@@ -188,10 +190,12 @@ pub(crate) async fn stateless_serialize_and_write_files(
                     writer,
                     row_count: cnt,
                 } => {
+                    println!("A writer succeeded");
                     finished_writers.push(writer);
                     row_count += cnt;
                 }
                 SerializedRecordBatchResult::Failure { writer, err } => {
+                    println!("A writer failed");
                     finished_writers.extend(writer);
                     any_errors = true;
                     triggering_error = Some(err);
@@ -212,9 +216,13 @@ pub(crate) async fn stateless_serialize_and_write_files(
 
     // Finalize or abort writers as appropriate
     for mut writer in finished_writers.into_iter() {
+        println!("writer.shutdown()");
         writer.shutdown()
                     .await
-                    .map_err(|_| internal_datafusion_err!("Error encountered while finalizing writes! Partial results may have been written to ObjectStore!"))?;
+                    .map_err(|_| {
+                        println!("fubar!");
+                        internal_datafusion_err!("Error encountered while finalizing writes! Partial results may have been written to ObjectStore!")
+                    })?;
     }
 
     if any_errors {
