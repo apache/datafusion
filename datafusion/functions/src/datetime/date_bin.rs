@@ -519,7 +519,7 @@ mod tests {
     use chrono::TimeDelta;
 
     #[test]
-    #[allow(deprecated)] // TODO migrate UDF invoke to invoke_batch
+    #[allow(deprecated)] // TODO migrate UDF invoke from invoke_batch
     fn test_date_bin() {
         let res = DateBinFunc::new().invoke_batch(
             &[
