@@ -508,7 +508,7 @@ mod tests {
 
     use crate::datetime::date_bin::{date_bin_nanos_interval, DateBinFunc};
     use arrow::array::types::TimestampNanosecondType;
-    use arrow::array::{Array, IntervalDayTimeArray, TimestampNanosecondArray};
+    use arrow::array::{Array, ArrayRef, IntervalDayTimeArray, TimestampNanosecondArray};
     use arrow::compute::kernels::cast_utils::string_to_timestamp_nanos;
     use arrow::datatypes::{DataType, TimeUnit};
 
@@ -537,6 +537,7 @@ mod tests {
         assert!(res.is_ok());
 
         let timestamps = Arc::new((1..6).map(Some).collect::<TimestampNanosecondArray>());
+        let batch_len = timestamps.len();
         let res = DateBinFunc::new().invoke_batch(
             &[
                 ColumnarValue::Scalar(ScalarValue::IntervalDayTime(Some(
@@ -545,10 +546,10 @@ mod tests {
                         milliseconds: 1,
                     },
                 ))),
-                ColumnarValue::Array(timestamps.clone()),
+                ColumnarValue::Array(timestamps),
                 ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
             ],
-            timestamps.len(),
+            batch_len,
         );
         assert!(res.is_ok());
 
