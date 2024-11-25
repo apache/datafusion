@@ -766,10 +766,37 @@ mod tests {
     use object_store::aws::Checksum;
     use object_store::local::LocalFileSystem;
     use object_store::path::Path;
+    use object_store::{MultipartUpload, PutMultipartOpts, PutPayload};
     use regex::Regex;
     use rstest::*;
     use url::Url;
     use datafusion_execution::object_store::ObjectStoreUrl;
+
+    #[tokio::test]
+    async fn write_multipart_file_with_signature() {
+        let bucket = "cgx-production-c4c-archive-data";
+        let s3root = format!("s3://{bucket}");
+        let store = AmazonS3Builder::from_env()
+            .with_bucket_name(bucket)
+            .with_checksum_algorithm(Checksum::SHA256) // fails for large text
+            .build()
+            .unwrap();
+
+
+        let str = format!("cx/exports/team_id=555585/file9.csv");
+        let path = Path::parse(str).unwrap();
+        let opts = PutMultipartOpts::default();
+        let mut upload = store.put_multipart_opts(&path, opts).await.unwrap();
+
+        let part = upload.put_part(PutPayload::from_static(&[0u8; 10485760]));
+        part.await.unwrap();
+
+        let part = upload.put_part(PutPayload::from_static(&[0u8; 5514256]));
+        part.await.unwrap();
+        
+        let res = upload.complete().await.unwrap();
+        println!("res={res:?}");
+    }
 
     #[tokio::test]
     async fn write_multipart_csv_with_signature() {
