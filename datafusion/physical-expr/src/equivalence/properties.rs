@@ -3709,7 +3709,7 @@ mod tests {
     }
 
     #[test]
-    fn test_discover_new_orderings_with_multiple_children() -> Result<()> {
+    fn test_discover_new_orderings_with_multiple_children_monotonic() -> Result<()> {
         let schema = Arc::new(Schema::new(vec![
             Field::new("a", DataType::Int32, false),
             Field::new("b", DataType::Int32, false),
@@ -3726,6 +3726,7 @@ mod tests {
             Arc::clone(&col_b),
         ));
 
+        // Assume existing ordering is [c ASC, a ASC, b ASC]
         let mut eq_properties = EquivalenceProperties::new(Arc::clone(&schema));
 
         eq_properties.add_new_ordering(LexOrdering::from(vec![
@@ -3734,6 +3735,7 @@ mod tests {
             PhysicalSortExpr::new_default(Arc::clone(&col_b)).asc(),
         ]));
 
+        // Add equality condition c = a + b
         eq_properties.add_equal_conditions(&col_c, &a_plus_b)?;
 
         let orderings = eq_properties.oeq_class().orderings.clone();
@@ -3744,6 +3746,7 @@ mod tests {
             PhysicalSortExpr::new_default(Arc::clone(&col_b)).asc(),
         ]);
 
+        // The ordering should be [c ASC] and [a ASC, b ASC]
         assert_eq!(orderings.len(), 2);
         assert!(orderings.contains(&expected_ordering1));
         assert!(orderings.contains(&expected_ordering2));
@@ -3752,7 +3755,48 @@ mod tests {
     }
 
     #[test]
-    fn test_discover_new_orderings_with_multiple_children_unaffected() -> Result<()> {
+    fn test_discover_new_orderings_with_multiple_children_non_monotonic() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+            Field::new("c", DataType::Int32, false),
+        ]));
+
+        let col_a = col("a", &schema)?;
+        let col_b = col("b", &schema)?;
+        let col_c = col("c", &schema)?;
+
+        let a_times_b: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+            Arc::clone(&col_a),
+            Operator::Multiply,
+            Arc::clone(&col_b),
+        ));
+
+        // Assume existing ordering is [c ASC, a ASC, b ASC]
+        let mut eq_properties = EquivalenceProperties::new(Arc::clone(&schema));
+
+        let initial_ordering = LexOrdering::from(vec![
+            PhysicalSortExpr::new_default(Arc::clone(&col_c)).asc(),
+            PhysicalSortExpr::new_default(Arc::clone(&col_a)).asc(),
+            PhysicalSortExpr::new_default(Arc::clone(&col_b)).asc(),
+        ]);
+
+        eq_properties.add_new_ordering(initial_ordering.clone());
+
+        // Add equality condition c = a * b
+        eq_properties.add_equal_conditions(&col_c, &a_times_b)?;
+
+        let orderings = eq_properties.oeq_class().orderings.clone();
+
+        // The ordering should remain unchanged since multiplication is not monotonic
+        assert_eq!(orderings.len(), 1);
+        assert!(orderings.contains(&initial_ordering));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_discover_new_orderings_with_multiple_children_same_ordering() -> Result<()> {
         let schema = Arc::new(Schema::new(vec![
             Field::new("a", DataType::Int32, false),
             Field::new("b", DataType::Int32, false),
@@ -3769,6 +3813,7 @@ mod tests {
             Arc::clone(&col_b),
         ));
 
+        // Assume existing ordering is [c ASC, a ASC, b ASC]
         let mut eq_properties = EquivalenceProperties::new(Arc::clone(&schema));
         let initial_ordering = LexOrdering::from(vec![
             PhysicalSortExpr::new_default(Arc::clone(&a_plus_b)).asc(),
@@ -3777,59 +3822,15 @@ mod tests {
         ]);
 
         eq_properties.add_new_ordering(initial_ordering.clone());
+
+        // Add equality condition c = a + b
         eq_properties.add_equal_conditions(&col_c, &a_plus_b)?;
 
         let orderings = eq_properties.oeq_class().orderings.clone();
 
+        // The ordering should not change
         assert_eq!(orderings.len(), 1);
         assert!(orderings.contains(&initial_ordering));
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_discover_new_orderings_with_non_monotonic_children() -> Result<()> {
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("a", DataType::Int32, false),
-            Field::new("b", DataType::Int32, false),
-            Field::new("c", DataType::Int32, false),
-        ]));
-
-        let col_a = col("a", &schema)?;
-        let col_b = col("b", &schema)?;
-        let col_c = col("c", &schema)?;
-
-        let a_minus_b: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
-            Arc::clone(&col_a),
-            Operator::Minus,
-            Arc::clone(&col_b),
-        ));
-
-        let mut eq_properties = EquivalenceProperties::new(Arc::clone(&schema));
-        let initial_ordering = LexOrdering::from(vec![
-            PhysicalSortExpr::new_default(Arc::clone(&col_c)).asc(),
-            PhysicalSortExpr::new_default(Arc::clone(&col_a)).asc(),
-            PhysicalSortExpr::new_default(Arc::clone(&col_b)).desc(),
-        ]);
-
-        eq_properties.add_new_ordering(initial_ordering.clone());
-
-        let orderings_before = eq_properties.oeq_class().orderings.clone();
-        assert_eq!(orderings_before.len(), 1);
-        assert!(orderings_before.contains(&initial_ordering));
-
-        eq_properties.add_equal_conditions(&col_c, &a_minus_b)?;
-
-        let orderings = eq_properties.oeq_class().orderings.clone();
-        let expected_ordering1 = LexOrdering::from(vec![PhysicalSortExpr::new_default(Arc::clone(&col_c)).asc()]);
-        let expected_ordering2 = LexOrdering::from(vec![
-            PhysicalSortExpr::new_default(Arc::clone(&col_a)).asc(),
-            PhysicalSortExpr::new_default(Arc::clone(&col_b)).desc(),
-        ]);
-
-        assert_eq!(orderings.len(), 2);
-        assert!(orderings.contains(&expected_ordering1));
-        assert!(orderings.contains(&expected_ordering2));
 
         Ok(())
     }
