@@ -356,9 +356,9 @@ impl EquivalenceProperties {
             let leading_ordering_options = ordering[0].options;
             let original_leading_ordering_expr = original_ordering[0].expr.clone();
 
-            // Handle expressions with multiple children
             for equivalent_expr in &eq_class {
                 // Skip if original ordering starts with the equivalent expression
+                // This avoids unintended simplifications that may not be valid
                 if original_leading_ordering_expr.eq(&equivalent_expr) {
                     continue;
                 }
@@ -394,7 +394,11 @@ impl EquivalenceProperties {
                     // Check if the expression is monotonic in all arguments
                     if let Ok(expr_properties) = equivalent_expr.get_properties(&child_properties) {
                         if SortProperties::Ordered(leading_ordering_options) == expr_properties.sort_properties {
-                            // Add ordering with leading expression removed
+                            // Assume existing ordering is [c ASC, a ASC, b ASC]
+                            // When equality c = f(a,b) is given, if we know that given ordering `[a ASC, b ASC]`,
+                            // ordering `[f(a,b) ASC]` is valid, then we can deduce that ordering `[a ASC, b ASC]` is also valid.
+                            // Hence, ordering `[a ASC, b ASC]` can be added to the state as a valid ordering.
+                            // (e.g. existing ordering where leading ordering is removed)
                             new_orderings.push(LexOrdering::new(ordering[1..].to_vec()));
                             break;
                         }
