@@ -34,7 +34,7 @@ use parquet::arrow::arrow_reader::{RowSelection, RowSelector};
 use parquet::arrow::ArrowWriter;
 use parquet::file::properties::WriterProperties;
 use std::path::Path;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 use tempfile::NamedTempFile;
 
 #[tokio::test]
@@ -378,8 +378,6 @@ struct TestData {
     file_name: String,
     file_size: u64,
 }
-
-static _TEST_DATA: OnceLock<TestData> = OnceLock::new();
 
 /// Return a parquet file with 2 row groups each with 5 rows
 fn get_test_data() -> TestData {
