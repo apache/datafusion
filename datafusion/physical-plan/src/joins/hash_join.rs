@@ -55,6 +55,7 @@ use arrow::array::{
 use arrow::compute::kernels::cmp::{eq, not_distinct};
 use arrow::compute::{and, concat_batches, take, FilterBuilder};
 use arrow::datatypes::{Schema, SchemaRef};
+use arrow::downcast_primitive_array;
 use arrow::record_batch::RecordBatch;
 use arrow::util::bit_util;
 use arrow_array::cast::downcast_array;
@@ -1222,6 +1223,63 @@ fn eq_dyn_null(
     }
 }
 
+fn equal_with_indices(
+    indices_left: &UInt64Array,
+    indices_right: &UInt32Array,
+    arr_left: &dyn Array,
+    arr_right: &dyn Array,
+    null_equals_null: bool,
+) -> Result<BooleanArray, ArrowError> {
+    // TODO: Write a reusable framework and support more arrow types.
+    downcast_primitive_array! {
+        (arr_left, arr_right) => {
+            let iter = indices_left.values().iter().zip(
+                indices_right.values().iter()
+            );
+
+            let mut equal = BooleanBufferBuilder::new(indices_left.len());
+            equal.append_n(indices_left.len(), true);
+
+            for (index, (idx_left, idx_right)) in iter.enumerate() {
+                if !equal.get_bit(index) {
+                    continue;
+                }
+
+                let idx_left = *idx_left as usize;
+                let idx_right = *idx_right as usize;
+
+                let is_equal = if null_equals_null {
+                    let null_left = arr_left.is_null(idx_left);
+                    let null_right = arr_right.is_null(idx_right);
+
+                    match (null_left, null_right) {
+                        (true, true) => true,
+                        (true, false) | (false, true) => false,
+                        (false, false) => unsafe {
+                            arr_left.value_unchecked(idx_left) == arr_right.value_unchecked(idx_right)
+                        }
+                    }
+                } else {
+                    unsafe {
+                        arr_left.value_unchecked(idx_left) == arr_right.value_unchecked(idx_right)
+                    }
+                };
+
+                equal.set_bit(index, is_equal);
+            }
+
+            Ok(equal.finish().into())
+        }
+
+        _ => {
+            let arr_left = take(arr_left, indices_left, None)?;
+            let arr_right = take(arr_right, indices_right, None)?;
+            let array = eq_dyn_null(arr_left.as_ref(), arr_right.as_ref(), null_equals_null)?;
+            Ok(array)
+        }
+    }
+}
+
 pub fn equal_rows_arr(
     indices_left: &UInt64Array,
     indices_right: &UInt32Array,
@@ -1237,19 +1295,26 @@ pub fn equal_rows_arr(
         )
     })?;
 
-    let arr_left = take(first_left.as_ref(), indices_left, None)?;
-    let arr_right = take(first_right.as_ref(), indices_right, None)?;
-
-    let mut equal: BooleanArray = eq_dyn_null(&arr_left, &arr_right, null_equals_null)?;
+    let mut equal = equal_with_indices(
+        indices_left,
+        indices_right,
+        &first_left,
+        &first_right,
+        null_equals_null,
+    )?;
 
     // Use map and try_fold to iterate over the remaining pairs of arrays.
     // In each iteration, take is used on the pair of arrays and their equality is determined.
     // The results are then folded (combined) using the and function to get a final equality result.
     equal = iter
         .map(|(left, right)| {
-            let arr_left = take(left.as_ref(), indices_left, None)?;
-            let arr_right = take(right.as_ref(), indices_right, None)?;
-            eq_dyn_null(arr_left.as_ref(), arr_right.as_ref(), null_equals_null)
+            equal_with_indices(
+                indices_left,
+                indices_right,
+                &left,
+                &right,
+                null_equals_null,
+            )
         })
         .try_fold(equal, |acc, equal2| and(&acc, &equal2?))?;
 
