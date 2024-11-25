@@ -332,6 +332,7 @@ fn calculate_median<T: ArrowNumericType>(
         None
     } else if len % 2 == 0 {
         let (low, high, _) = values.select_nth_unstable_by(len / 2, cmp);
+        // Get the maximum of the low (left side after bi-partitioning)
         // Since contains at least 1 entry, shouldn't return Some.
         let left_max = slice_max::<T>(low).unwrap();
         let median = left_max
