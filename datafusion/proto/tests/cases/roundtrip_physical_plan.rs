@@ -54,7 +54,7 @@ use datafusion::functions_window::nth_value::nth_value_udwf;
 use datafusion::functions_window::row_number::row_number_udwf;
 use datafusion::logical_expr::{create_udf, JoinType, Operator, Volatility};
 use datafusion::physical_expr::expressions::Literal;
-use datafusion::physical_expr::window::{BuiltInWindowExpr, SlidingAggregateWindowExpr};
+use datafusion::physical_expr::window::{SlidingAggregateWindowExpr, StandardWindowExpr};
 use datafusion::physical_expr::{
     LexOrdering, LexRequirement, PhysicalSortRequirement, ScalarFunctionExpr,
 };
@@ -279,7 +279,7 @@ fn roundtrip_udwf() -> Result<()> {
     let field_b = Field::new("b", DataType::Int64, false);
     let schema = Arc::new(Schema::new(vec![field_a, field_b]));
 
-    let udwf_expr = Arc::new(BuiltInWindowExpr::new(
+    let udwf_expr = Arc::new(StandardWindowExpr::new(
         create_udwf_window_expr(
             &row_number_udwf(),
             &[],
@@ -326,7 +326,7 @@ fn roundtrip_window() -> Result<()> {
             "NTH_VALUE(a, 2) PARTITION BY [b] ORDER BY [a ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW".to_string(),
             false,
         )?;
-    let udwf_expr = Arc::new(BuiltInWindowExpr::new(
+    let udwf_expr = Arc::new(StandardWindowExpr::new(
         nth_value_window,
         &[col("b", &schema)?],
         &LexOrdering {
@@ -1125,7 +1125,7 @@ fn roundtrip_udwf_extension_codec() -> Result<()> {
         WindowFrameBound::CurrentRow,
     );
 
-    let udwf_expr = Arc::new(BuiltInWindowExpr::new(
+    let udwf_expr = Arc::new(StandardWindowExpr::new(
         udwf,
         &[col("b", &schema)?],
         &LexOrdering {
