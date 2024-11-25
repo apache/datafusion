@@ -293,7 +293,7 @@ impl EquivalenceProperties {
         mut self,
         constants: impl IntoIterator<Item = ConstExpr>,
     ) -> Self {
-        let normalized_constants: Vec<_> = constants
+        let normalized_constants = constants
         .into_iter()
         .filter_map(|c| {
             let across_partitions = c.across_partitions();
@@ -315,7 +315,7 @@ impl EquivalenceProperties {
 
             Some(const_expr)
         })
-        .collect();
+        .collect::<Vec<_>>();
 
         // Add all new normalized constants
         self.constants.extend(normalized_constants);
