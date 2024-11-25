@@ -508,7 +508,7 @@ mod tests {
 
     use crate::datetime::date_bin::{date_bin_nanos_interval, DateBinFunc};
     use arrow::array::types::TimestampNanosecondType;
-    use arrow::array::{IntervalDayTimeArray, TimestampNanosecondArray};
+    use arrow::array::{Array, IntervalDayTimeArray, TimestampNanosecondArray};
     use arrow::compute::kernels::cast_utils::string_to_timestamp_nanos;
     use arrow::datatypes::{DataType, TimeUnit};
 
@@ -545,10 +545,10 @@ mod tests {
                         milliseconds: 1,
                     },
                 ))),
-                ColumnarValue::Array(timestamps),
+                ColumnarValue::Array(timestamps.clone()),
                 ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
             ],
-            1,
+            timestamps.len(),
         );
         assert!(res.is_ok());
 

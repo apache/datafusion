@@ -328,7 +328,7 @@ where
 
 pub struct ScalarFunctionArgs<'a> {
     // The evaluated arguments to the function
-    pub args: Vec<ColumnarValue>,
+    pub args: &'a [ColumnarValue],
     // The number of rows in record batch being evaluated
     pub number_rows: usize,
     // The return type of the scalar function returned (from `return_type` or `return_type_from_exprs`)
@@ -543,7 +543,7 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     /// [`ColumnarValue::values_to_arrays`] can be used to convert the arguments
     /// to arrays, which will likely be simpler code, but be slower.
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        self.invoke_batch(args.args.as_slice(), args.number_rows)
+        self.invoke_batch(args.args, args.number_rows)
     }
 
     /// Invoke the function without `args`, instead the number of rows are provided,

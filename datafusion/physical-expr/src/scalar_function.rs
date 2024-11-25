@@ -147,7 +147,7 @@ impl PhysicalExpr for ScalarFunctionExpr {
 
         // evaluate the function
         let output = self.fun.invoke_with_args(ScalarFunctionArgs {
-            args: inputs,
+            args: inputs.as_slice(),
             number_rows: batch.num_rows(),
             return_type: &self.return_type,
         })?;

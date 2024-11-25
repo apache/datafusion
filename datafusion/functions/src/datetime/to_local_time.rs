@@ -563,7 +563,7 @@ mod tests {
     fn test_to_local_time_helper(input: ScalarValue, expected: ScalarValue) {
         let res = ToLocalTimeFunc::new()
             .invoke_with_args(ScalarFunctionArgs {
-                args: vec![ColumnarValue::Scalar(input)],
+                args: &[ColumnarValue::Scalar(input)],
                 number_rows: 1,
                 return_type: &expected.data_type(),
             })
