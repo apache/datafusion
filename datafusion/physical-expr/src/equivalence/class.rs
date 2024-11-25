@@ -67,7 +67,7 @@ pub struct ConstExpr {
 
 impl PartialEq for ConstExpr {
     fn eq(&self, other: &Self) -> bool {
-        self.across_partitions == other.across_partitions && self.expr.eq(&other.expr)
+        self.across_partitions == other.across_partitions && self.expr.eq(&other.expr) && self.value == other.value
     }
 }
 
