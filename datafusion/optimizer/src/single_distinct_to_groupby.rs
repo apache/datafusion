@@ -19,13 +19,13 @@
 
 use std::sync::Arc;
 
-use crate::optimizer::ApplyOrder;
 use crate::{OptimizerConfig, OptimizerRule};
 
 use datafusion_common::{
     internal_err, tree_node::Transformed, DataFusionError, HashSet, Result,
 };
 use datafusion_expr::builder::project;
+use datafusion_expr::logical_plan::tree_node::LogicalPlanPattern;
 use datafusion_expr::{
     col,
     expr::AggregateFunction,
@@ -109,10 +109,6 @@ impl OptimizerRule for SingleDistinctToGroupBy {
         "single_distinct_aggregation_to_group_by"
     }
 
-    fn apply_order(&self) -> Option<ApplyOrder> {
-        Some(ApplyOrder::TopDown)
-    }
-
     fn supports_rewrite(&self) -> bool {
         true
     }
@@ -122,7 +118,12 @@ impl OptimizerRule for SingleDistinctToGroupBy {
         plan: LogicalPlan,
         _config: &dyn OptimizerConfig,
     ) -> Result<Transformed<LogicalPlan>, DataFusionError> {
-        match plan {
+        plan.transform_down_with_subqueries(|plan| {
+            if !plan.stats().contains_pattern(LogicalPlanPattern::LogicalPlanAggregate) {
+                return Ok(Transformed::jump(plan));
+            }
+
+            match plan {
             LogicalPlan::Aggregate(
                 Aggregate {
                     input,
@@ -277,7 +278,7 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                 Ok(Transformed::yes(project(outer_aggr, alias_expr)?))
             }
             _ => Ok(Transformed::no(plan)),
-        }
+        }})
     }
 }
 

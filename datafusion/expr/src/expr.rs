@@ -29,7 +29,7 @@ use crate::utils::expr_to_columns;
 use crate::Volatility;
 use crate::{udaf, ExprSchemable, Operator, Signature, WindowFrame, WindowUDF};
 
-use crate::logical_plan::tree_node::LogicalPlanStats;
+use crate::logical_plan::tree_node::{LogicalPlanPattern, LogicalPlanStats};
 use arrow::datatypes::{DataType, FieldRef};
 use datafusion_common::cse::HashNode;
 use datafusion_common::tree_node::{
@@ -39,6 +39,7 @@ use datafusion_common::{
     plan_err, Column, DFSchema, HashMap, Result, ScalarValue, TableReference,
 };
 use datafusion_functions_window_common::field::WindowUDFFieldArgs;
+use enumset::enum_set;
 use sqlparser::ast::{
     display_comma_separated, ExceptSelectItem, ExcludeSelectItem, IlikeSelectItem,
     NullTreatment, RenameSelectItem, ReplaceSelectElement,
@@ -1775,7 +1776,8 @@ impl Expr {
     }
 
     pub fn binary_expr(binary_expr: BinaryExpr) -> Self {
-        let stats = binary_expr.stats();
+        let stats = LogicalPlanStats::new(enum_set!(LogicalPlanPattern::ExprBinaryExpr))
+            .merge(binary_expr.stats());
         Expr::BinaryExpr(binary_expr, stats)
     }
 
@@ -1785,7 +1787,8 @@ impl Expr {
     }
 
     pub fn _like(like: Like) -> Self {
-        let stats = like.stats();
+        let stats = LogicalPlanStats::new(enum_set!(LogicalPlanPattern::ExprLike))
+            .merge(like.stats());
         Expr::Like(like, stats)
     }
 
@@ -1795,27 +1798,33 @@ impl Expr {
     }
 
     pub fn in_subquery(in_subquery: InSubquery) -> Self {
-        let stats = in_subquery.stats();
+        let stats = LogicalPlanStats::new(enum_set!(LogicalPlanPattern::ExprInSubquery))
+            .merge(in_subquery.stats());
         Expr::InSubquery(in_subquery, stats)
     }
 
     pub fn scalar_subquery(subquery: Subquery) -> Self {
-        let stats = subquery.stats();
+        let stats =
+            LogicalPlanStats::new(enum_set!(LogicalPlanPattern::ExprScalarSubquery))
+                .merge(subquery.stats());
         Expr::ScalarSubquery(subquery, stats)
     }
 
     pub fn _not(expr: Box<Expr>) -> Self {
-        let stats = expr.stats();
+        let stats = LogicalPlanStats::new(enum_set!(LogicalPlanPattern::ExprNot))
+            .merge(expr.stats());
         Expr::Not(expr, stats)
     }
 
     pub fn _is_not_null(expr: Box<Expr>) -> Self {
-        let stats = expr.stats();
+        let stats = LogicalPlanStats::new(enum_set!(LogicalPlanPattern::ExprIsNotNull))
+            .merge(expr.stats());
         Expr::IsNotNull(expr, stats)
     }
 
     pub fn _is_null(expr: Box<Expr>) -> Self {
-        let stats = expr.stats();
+        let stats = LogicalPlanStats::new(enum_set!(LogicalPlanPattern::ExprIsNull))
+            .merge(expr.stats());
         Expr::IsNull(expr, stats)
     }
 
@@ -1830,7 +1839,8 @@ impl Expr {
     }
 
     pub fn _is_unknown(expr: Box<Expr>) -> Self {
-        let stats = expr.stats();
+        let stats = LogicalPlanStats::new(enum_set!(LogicalPlanPattern::ExprIsUnknown))
+            .merge(expr.stats());
         Expr::IsUnknown(expr, stats)
     }
 
@@ -1845,47 +1855,60 @@ impl Expr {
     }
 
     pub fn _is_not_unknown(expr: Box<Expr>) -> Self {
-        let stats = expr.stats();
+        let stats =
+            LogicalPlanStats::new(enum_set!(LogicalPlanPattern::ExprIsNotUnknown))
+                .merge(expr.stats());
         Expr::IsNotUnknown(expr, stats)
     }
 
     pub fn negative(expr: Box<Expr>) -> Self {
-        let stats = expr.stats();
+        let stats = LogicalPlanStats::new(enum_set!(LogicalPlanPattern::ExprNegative))
+            .merge(expr.stats());
         Expr::Negative(expr, stats)
     }
 
     pub fn _between(between: Between) -> Self {
-        let stats = between.stats();
+        let stats = LogicalPlanStats::new(enum_set!(LogicalPlanPattern::ExprBetween))
+            .merge(between.stats());
         Expr::Between(between, stats)
     }
 
     pub fn case(case: Case) -> Self {
-        let stats = case.stats();
+        let stats = LogicalPlanStats::new(enum_set!(LogicalPlanPattern::ExprCase))
+            .merge(case.stats());
         Expr::Case(case, stats)
     }
 
     pub fn cast(cast: Cast) -> Self {
-        let stats = cast.stats();
+        let stats = LogicalPlanStats::new(enum_set!(LogicalPlanPattern::ExprCast))
+            .merge(cast.stats());
         Expr::Cast(cast, stats)
     }
 
     pub fn try_cast(try_cast: TryCast) -> Self {
-        let stats = try_cast.stats();
+        let stats = LogicalPlanStats::new(enum_set!(LogicalPlanPattern::ExprTryCast))
+            .merge(try_cast.stats());
         Expr::TryCast(try_cast, stats)
     }
 
     pub fn scalar_function(scalar_function: ScalarFunction) -> Self {
-        let stats = scalar_function.stats();
+        let stats =
+            LogicalPlanStats::new(enum_set!(LogicalPlanPattern::ExprScalarFunction))
+                .merge(scalar_function.stats());
         Expr::ScalarFunction(scalar_function, stats)
     }
 
     pub fn window_function(window_function: WindowFunction) -> Self {
-        let stats = window_function.stats();
+        let stats =
+            LogicalPlanStats::new(enum_set!(LogicalPlanPattern::ExprWindowFunction))
+                .merge(window_function.stats());
         Expr::WindowFunction(window_function, stats)
     }
 
     pub fn aggregate_function(aggregate_function: AggregateFunction) -> Self {
-        let stats = aggregate_function.stats();
+        let stats =
+            LogicalPlanStats::new(enum_set!(LogicalPlanPattern::ExprAggregateFunction))
+                .merge(aggregate_function.stats());
         Expr::AggregateFunction(aggregate_function, stats)
     }
 
@@ -1895,22 +1918,24 @@ impl Expr {
     }
 
     pub fn _in_list(in_list: InList) -> Self {
-        let stats = in_list.stats();
+        let stats = LogicalPlanStats::new(enum_set!(LogicalPlanPattern::ExprInList))
+            .merge(in_list.stats());
         Expr::InList(in_list, stats)
     }
 
     pub fn exists(exists: Exists) -> Self {
-        let stats = exists.stats();
+        let stats = LogicalPlanStats::new(enum_set!(LogicalPlanPattern::ExprExists))
+            .merge(exists.stats());
         Expr::Exists(exists, stats)
     }
 
     pub fn literal(scalar_value: ScalarValue) -> Self {
-        let stats = LogicalPlanStats::empty();
+        let stats = LogicalPlanStats::new(enum_set!(LogicalPlanPattern::ExprLiteral));
         Expr::Literal(scalar_value, stats)
     }
 
     pub fn column(column: Column) -> Self {
-        let stats = LogicalPlanStats::empty();
+        let stats = LogicalPlanStats::new(enum_set!(LogicalPlanPattern::ExprColumn));
         Expr::Column(column, stats)
     }
 
@@ -1920,7 +1945,7 @@ impl Expr {
     }
 
     pub fn placeholder(placeholder: Placeholder) -> Self {
-        let stats = LogicalPlanStats::empty();
+        let stats = LogicalPlanStats::new(enum_set!(LogicalPlanPattern::ExprPlaceholder));
         Expr::Placeholder(placeholder, stats)
     }
 

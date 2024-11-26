@@ -17,6 +17,7 @@
 
 //! Logical plan types
 
+use std::cell::Cell;
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Debug, Display, Formatter};
@@ -54,11 +55,12 @@ use datafusion_common::{
     FunctionalDependencies, ParamValues, Result, ScalarValue, TableReference,
     UnnestOptions,
 };
+use enumset::enum_set;
 use indexmap::IndexSet;
 
 // backwards compatibility
 use crate::display::PgJsonVisitor;
-use crate::logical_plan::tree_node::LogicalPlanStats;
+use crate::logical_plan::tree_node::{LogicalPlanPattern, LogicalPlanStats};
 pub use datafusion_common::display::{PlanType, StringifiedPlan, ToStringifiedPlan};
 pub use datafusion_common::{JoinConstraint, JoinType};
 
@@ -486,6 +488,13 @@ impl LogicalPlan {
         let mut using_columns: Vec<HashSet<Column>> = vec![];
 
         self.apply_with_subqueries(|plan| {
+            if !plan
+                .stats()
+                .contains_pattern(LogicalPlanPattern::LogicalPlanJoin)
+            {
+                return Ok(TreeNodeRecursion::Jump);
+            }
+
             if let LogicalPlan::Join(
                 Join {
                     join_constraint: JoinConstraint::Using,
@@ -1505,31 +1514,71 @@ impl LogicalPlan {
         self,
         param_values: &ParamValues,
     ) -> Result<LogicalPlan> {
-        self.transform_up_with_subqueries(|plan| {
-            let schema = Arc::clone(plan.schema());
-            let name_preserver = NamePreserver::new(&plan);
-            plan.map_expressions(|e| {
-                let (e, has_placeholder) = e.infer_placeholder_types(&schema)?;
-                if !has_placeholder {
-                    // Performance optimization:
-                    // avoid NamePreserver copy and second pass over expression
-                    // if no placeholders.
-                    Ok(Transformed::no(e))
-                } else {
-                    let original_name = name_preserver.save(&e);
-                    let transformed_expr = e.transform_up(|e| {
-                        if let Expr::Placeholder(Placeholder { id, .. }, _) = e {
-                            let value = param_values.get_placeholders_with_values(&id)?;
-                            Ok(Transformed::yes(Expr::literal(value)))
-                        } else {
-                            Ok(Transformed::no(e))
-                        }
-                    })?;
-                    // Preserve name to avoid breaking column references to this expression
-                    Ok(transformed_expr.update_data(|expr| original_name.restore(expr)))
+        let skip = Cell::new(false);
+        self.transform_down_up_with_subqueries(
+            |plan| {
+                if !plan
+                    .stats()
+                    .contains_pattern(LogicalPlanPattern::ExprPlaceholder)
+                {
+                    skip.set(true);
+                    return Ok(Transformed::jump(plan));
                 }
-            })
-        })
+
+                Ok(Transformed::no(plan))
+            },
+            |plan| {
+                if skip.get() {
+                    skip.set(false);
+                    return Ok(Transformed::no(plan));
+                }
+
+                let schema = Arc::clone(plan.schema());
+                let name_preserver = NamePreserver::new(&plan);
+                plan.map_expressions(|e| {
+                    let (e, has_placeholder) = e.infer_placeholder_types(&schema)?;
+                    if !has_placeholder {
+                        // Performance optimization:
+                        // avoid NamePreserver copy and second pass over expression
+                        // if no placeholders.
+                        Ok(Transformed::no(e))
+                    } else {
+                        let original_name = name_preserver.save(&e);
+                        let skip = Cell::new(false);
+                        let transformed_expr = e.transform_down_up(
+                            |e| {
+                                if !e
+                                    .stats()
+                                    .contains_pattern(LogicalPlanPattern::ExprPlaceholder)
+                                {
+                                    skip.set(true);
+                                    return Ok(Transformed::jump(e));
+                                }
+
+                                Ok(Transformed::no(e))
+                            },
+                            |e| {
+                                if skip.get() {
+                                    skip.set(false);
+                                    return Ok(Transformed::no(e));
+                                }
+
+                                if let Expr::Placeholder(Placeholder { id, .. }, _) = e {
+                                    let value =
+                                        param_values.get_placeholders_with_values(&id)?;
+                                    Ok(Transformed::yes(Expr::literal(value)))
+                                } else {
+                                    Ok(Transformed::no(e))
+                                }
+                            },
+                        )?;
+                        // Preserve name to avoid breaking column references to this expression
+                        Ok(transformed_expr
+                            .update_data(|expr| original_name.restore(expr)))
+                    }
+                })
+            },
+        )
         .map(|res| res.data)
     }
 
@@ -1537,8 +1586,22 @@ impl LogicalPlan {
     pub fn get_parameter_names(&self) -> Result<HashSet<String>> {
         let mut param_names = HashSet::new();
         self.apply_with_subqueries(|plan| {
+            if !plan
+                .stats()
+                .contains_pattern(LogicalPlanPattern::ExprPlaceholder)
+            {
+                return Ok(TreeNodeRecursion::Jump);
+            }
+
             plan.apply_expressions(|expr| {
                 expr.apply(|expr| {
+                    if !plan
+                        .stats()
+                        .contains_pattern(LogicalPlanPattern::ExprPlaceholder)
+                    {
+                        return Ok(TreeNodeRecursion::Jump);
+                    }
+
                     if let Expr::Placeholder(Placeholder { id, .. }, _) = expr {
                         param_names.insert(id.clone());
                     }
@@ -1556,8 +1619,22 @@ impl LogicalPlan {
         let mut param_types: HashMap<String, Option<DataType>> = HashMap::new();
 
         self.apply_with_subqueries(|plan| {
+            if !plan
+                .stats()
+                .contains_pattern(LogicalPlanPattern::ExprPlaceholder)
+            {
+                return Ok(TreeNodeRecursion::Jump);
+            }
+
             plan.apply_expressions(|expr| {
                 expr.apply(|expr| {
+                    if !plan
+                        .stats()
+                        .contains_pattern(LogicalPlanPattern::ExprPlaceholder)
+                    {
+                        return Ok(TreeNodeRecursion::Jump);
+                    }
+
                     if let Expr::Placeholder(Placeholder { id, data_type }, _) = expr {
                         let prev = param_types.get(id);
                         match (prev, data_type) {
@@ -2085,12 +2162,16 @@ impl LogicalPlan {
     }
 
     pub fn projection(projection: Projection) -> Self {
-        let stats = projection.stats();
+        let stats =
+            LogicalPlanStats::new(enum_set!(LogicalPlanPattern::LogicalPlanProjection))
+                .merge(projection.stats());
         LogicalPlan::Projection(projection, stats)
     }
 
     pub fn filter(filter: Filter) -> Self {
-        let stats = filter.stats();
+        let stats =
+            LogicalPlanStats::new(enum_set!(LogicalPlanPattern::LogicalPlanFilter))
+                .merge(filter.stats());
         LogicalPlan::Filter(filter, stats)
     }
 
@@ -2100,32 +2181,42 @@ impl LogicalPlan {
     }
 
     pub fn window(window: Window) -> Self {
-        let stats = window.stats();
+        let stats =
+            LogicalPlanStats::new(enum_set!(LogicalPlanPattern::LogicalPlanWindow))
+                .merge(window.stats());
         LogicalPlan::Window(window, stats)
     }
 
     pub fn aggregate(aggregate: Aggregate) -> Self {
-        let stats = aggregate.stats();
+        let stats =
+            LogicalPlanStats::new(enum_set!(LogicalPlanPattern::LogicalPlanAggregate))
+                .merge(aggregate.stats());
         LogicalPlan::Aggregate(aggregate, stats)
     }
 
     pub fn sort(sort: Sort) -> Self {
-        let stats = sort.stats();
+        let stats = LogicalPlanStats::new(enum_set!(LogicalPlanPattern::LogicalPlanSort))
+            .merge(sort.stats());
         LogicalPlan::Sort(sort, stats)
     }
 
     pub fn join(join: Join) -> Self {
-        let stats = join.stats();
+        let stats = LogicalPlanStats::new(enum_set!(LogicalPlanPattern::LogicalPlanJoin))
+            .merge(join.stats());
         LogicalPlan::Join(join, stats)
     }
 
     pub fn repartition(repartition: Repartition) -> Self {
-        let stats = repartition.stats();
+        let stats =
+            LogicalPlanStats::new(enum_set!(LogicalPlanPattern::LogicalPlanRepartition))
+                .merge(repartition.stats());
         LogicalPlan::Repartition(repartition, stats)
     }
 
     pub fn union(projection: Union) -> Self {
-        let stats = projection.stats();
+        let stats =
+            LogicalPlanStats::new(enum_set!(LogicalPlanPattern::LogicalPlanUnion))
+                .merge(projection.stats());
         LogicalPlan::Union(projection, stats)
     }
 
@@ -2140,12 +2231,17 @@ impl LogicalPlan {
     }
 
     pub fn subquery_alias(subquery_alias: SubqueryAlias) -> Self {
-        let stats = subquery_alias.stats();
+        let stats = LogicalPlanStats::new(enum_set!(
+            LogicalPlanPattern::LogicalPlanSubqueryAlias
+        ))
+        .merge(subquery_alias.stats());
         LogicalPlan::SubqueryAlias(subquery_alias, stats)
     }
 
     pub fn limit(limit: Limit) -> Self {
-        let stats = limit.stats();
+        let stats =
+            LogicalPlanStats::new(enum_set!(LogicalPlanPattern::LogicalPlanLimit))
+                .merge(limit.stats());
         LogicalPlan::Limit(limit, stats)
     }
 
@@ -2170,7 +2266,9 @@ impl LogicalPlan {
     }
 
     pub fn distinct(distinct: Distinct) -> Self {
-        let stats = distinct.stats();
+        let stats =
+            LogicalPlanStats::new(enum_set!(LogicalPlanPattern::LogicalPlanDistinct))
+                .merge(distinct.stats());
         LogicalPlan::Distinct(distinct, stats)
     }
 
@@ -2205,7 +2303,10 @@ impl LogicalPlan {
     }
 
     pub fn empty_relation(empty_relation: EmptyRelation) -> Self {
-        let stats = LogicalPlanStats::empty();
+        let stats = LogicalPlanStats::new(enum_set!(
+            LogicalPlanPattern::LogicalPlanEmptyRelation
+        ))
+        .merge(LogicalPlanStats::empty());
         LogicalPlan::EmptyRelation(empty_relation, stats)
     }
 }

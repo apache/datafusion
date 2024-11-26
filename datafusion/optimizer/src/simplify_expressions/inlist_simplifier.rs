@@ -22,20 +22,40 @@ use super::THRESHOLD_INLINE_INLIST;
 use datafusion_common::tree_node::{Transformed, TreeNodeRewriter};
 use datafusion_common::Result;
 use datafusion_expr::expr::InList;
+use datafusion_expr::logical_plan::tree_node::LogicalPlanPattern;
 use datafusion_expr::Expr;
 
-pub(super) struct ShortenInListSimplifier {}
+pub(super) struct ShortenInListSimplifier {
+    skip: bool,
+}
 
 impl ShortenInListSimplifier {
     pub(super) fn new() -> Self {
-        Self {}
+        Self { skip: false }
     }
 }
 
 impl TreeNodeRewriter for ShortenInListSimplifier {
     type Node = Expr;
 
+    fn f_down(&mut self, node: Self::Node) -> Result<Transformed<Self::Node>> {
+        if !node
+            .stats()
+            .contains_pattern(LogicalPlanPattern::ExprInList)
+        {
+            self.skip = true;
+            return Ok(Transformed::jump(node));
+        }
+
+        Ok(Transformed::no(node))
+    }
+
     fn f_up(&mut self, expr: Expr) -> Result<Transformed<Expr>> {
+        if self.skip {
+            self.skip = false;
+            return Ok(Transformed::no(expr));
+        }
+
         // if expr is a single column reference:
         // expr IN (A, B, ...) --> (expr = A) OR (expr = B) OR (expr = C)
         if let Expr::InList(

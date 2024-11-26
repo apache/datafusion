@@ -17,19 +17,10 @@
 
 //! [`Analyzer`] and [`AnalyzerRule`]
 
+use enumset::enum_set;
+use log::debug;
 use std::fmt::Debug;
 use std::sync::Arc;
-
-use log::debug;
-
-use datafusion_common::config::ConfigOptions;
-use datafusion_common::instant::Instant;
-use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
-use datafusion_common::{DataFusionError, Result};
-use datafusion_expr::expr::Exists;
-use datafusion_expr::expr::InSubquery;
-use datafusion_expr::expr_rewriter::FunctionRewrite;
-use datafusion_expr::{Expr, LogicalPlan};
 
 use crate::analyzer::count_wildcard_rule::CountWildcardRule;
 use crate::analyzer::expand_wildcard_rule::ExpandWildcardRule;
@@ -38,6 +29,15 @@ use crate::analyzer::resolve_grouping_function::ResolveGroupingFunction;
 use crate::analyzer::subquery::check_subquery_expr;
 use crate::analyzer::type_coercion::TypeCoercion;
 use crate::utils::log_plan;
+use datafusion_common::config::ConfigOptions;
+use datafusion_common::instant::Instant;
+use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
+use datafusion_common::{DataFusionError, Result};
+use datafusion_expr::expr::Exists;
+use datafusion_expr::expr::InSubquery;
+use datafusion_expr::expr_rewriter::FunctionRewrite;
+use datafusion_expr::logical_plan::tree_node::LogicalPlanPattern;
+use datafusion_expr::{Expr, LogicalPlan};
 
 use self::function_rewrite::ApplyFunctionRewrites;
 
@@ -177,9 +177,25 @@ impl Analyzer {
 /// Do necessary check and fail the invalid plan
 fn check_plan(plan: &LogicalPlan) -> Result<()> {
     plan.apply_with_subqueries(|plan: &LogicalPlan| {
+        if !plan.stats().contains_any_patterns(enum_set!(
+            LogicalPlanPattern::ExprExists
+                | LogicalPlanPattern::ExprInSubquery
+                | LogicalPlanPattern::ExprScalarSubquery
+        )) {
+            return Ok(TreeNodeRecursion::Jump);
+        }
+
         plan.apply_expressions(|expr| {
             // recursively look for subqueries
             expr.apply(|expr| {
+                if !plan.stats().contains_any_patterns(enum_set!(
+                    LogicalPlanPattern::ExprExists
+                        | LogicalPlanPattern::ExprInSubquery
+                        | LogicalPlanPattern::ExprScalarSubquery
+                )) {
+                    return Ok(TreeNodeRecursion::Jump);
+                }
+
                 match expr {
                     Expr::Exists(Exists { subquery, .. }, _)
                     | Expr::InSubquery(InSubquery { subquery, .. }, _)

@@ -53,17 +53,106 @@ use datafusion_common::tree_node::{
     TreeNodeRewriter, TreeNodeVisitor,
 };
 use datafusion_common::{internal_err, Result};
+use enumset::{enum_set, EnumSet, EnumSetType};
+
+#[derive(EnumSetType, Debug)]
+pub enum LogicalPlanPattern {
+    // [`Expr`] nodes
+    // ExprAlias,
+    ExprColumn,
+    // ExprScalarVariable,
+    ExprLiteral,
+    ExprBinaryExpr,
+    ExprLike,
+    // ExprSimilarTo,
+    ExprNot,
+    ExprIsNotNull,
+    ExprIsNull,
+    // ExprIsTrue,
+    // ExprIsFalse,
+    ExprIsUnknown,
+    // ExprIsNotTrue,
+    // ExprIsNotFalse,
+    ExprIsNotUnknown,
+    ExprNegative,
+    // ExprGetIndexedField,
+    ExprBetween,
+    ExprCase,
+    ExprCast,
+    ExprTryCast,
+    ExprScalarFunction,
+    ExprAggregateFunction,
+    ExprWindowFunction,
+    ExprInList,
+    ExprExists,
+    ExprInSubquery,
+    ExprScalarSubquery,
+    // ExprWildcard,
+    // ExprGroupingSet,
+    ExprPlaceholder,
+    // ExprOuterReferenceColumn,
+    // ExprUnnest,
+
+    // [`LogicalPlan`] nodes
+    LogicalPlanProjection,
+    LogicalPlanFilter,
+    LogicalPlanWindow,
+    LogicalPlanAggregate,
+    LogicalPlanSort,
+    LogicalPlanJoin,
+    // LogicalPlanCrossJoin,
+    LogicalPlanRepartition,
+    LogicalPlanUnion,
+    // LogicalPlanTableScan,
+    LogicalPlanEmptyRelation,
+    // LogicalPlanSubquery,
+    LogicalPlanSubqueryAlias,
+    LogicalPlanLimit,
+    // LogicalPlanStatement,
+    // LogicalPlanValues,
+    // LogicalPlanExplain,
+    // LogicalPlanAnalyze,
+    // LogicalPlanExtension,
+    LogicalPlanDistinct,
+    // LogicalPlanDml,
+    // LogicalPlanDdl,
+    // LogicalPlanCopy,
+    // LogicalPlanDescribeTable,
+    // LogicalPlanUnnest,
+    // LogicalPlanRecursiveQuery,
+}
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Hash, Debug)]
-pub struct LogicalPlanStats {}
+pub struct LogicalPlanStats {
+    patterns: EnumSet<LogicalPlanPattern>,
+}
 
 impl LogicalPlanStats {
-    pub(crate) fn empty() -> Self {
-        Self {}
+    pub(crate) fn new(patterns: EnumSet<LogicalPlanPattern>) -> Self {
+        Self { patterns }
     }
 
-    pub(crate) fn merge(self, _other: LogicalPlanStats) -> Self {
+    pub(crate) fn empty() -> Self {
+        Self {
+            patterns: EnumSet::empty(),
+        }
+    }
+
+    pub(crate) fn merge(mut self, other: LogicalPlanStats) -> Self {
+        self.patterns.insert_all(other.patterns);
         self
+    }
+
+    pub fn contains_pattern(&self, pattern: LogicalPlanPattern) -> bool {
+        self.patterns.contains(pattern)
+    }
+
+    pub fn contains_all_patterns(&self, patterns: EnumSet<LogicalPlanPattern>) -> bool {
+        self.patterns.is_superset(patterns)
+    }
+
+    pub fn contains_any_patterns(&self, patterns: EnumSet<LogicalPlanPattern>) -> bool {
+        !self.patterns.is_disjoint(patterns)
     }
 }
 
@@ -912,16 +1001,26 @@ impl LogicalPlan {
         mut f: F,
     ) -> Result<TreeNodeRecursion> {
         self.apply_expressions(|expr| {
-            expr.apply(|expr| match expr {
-                Expr::Exists(Exists { subquery, .. }, _)
-                | Expr::InSubquery(InSubquery { subquery, .. }, _)
-                | Expr::ScalarSubquery(subquery, _) => {
-                    // use a synthetic plan so the collector sees a
-                    // LogicalPlan::Subquery (even though it is
-                    // actually a Subquery alias)
-                    f(&LogicalPlan::subquery(subquery.clone()))
+            expr.apply(|expr| {
+                if !expr.stats().contains_any_patterns(enum_set!(
+                    LogicalPlanPattern::ExprExists
+                        | LogicalPlanPattern::ExprInSubquery
+                        | LogicalPlanPattern::ExprScalarSubquery
+                )) {
+                    return Ok(TreeNodeRecursion::Jump);
                 }
-                _ => Ok(TreeNodeRecursion::Continue),
+
+                match expr {
+                    Expr::Exists(Exists { subquery, .. }, _)
+                    | Expr::InSubquery(InSubquery { subquery, .. }, _)
+                    | Expr::ScalarSubquery(subquery, _) => {
+                        // use a synthetic plan so the collector sees a
+                        // LogicalPlan::Subquery (even though it is
+                        // actually a Subquery alias)
+                        f(&LogicalPlan::subquery(subquery.clone()))
+                    }
+                    _ => Ok(TreeNodeRecursion::Continue),
+                }
             })
         })
     }
@@ -935,40 +1034,51 @@ impl LogicalPlan {
         mut f: F,
     ) -> Result<Transformed<Self>> {
         self.map_expressions(|expr| {
-            expr.transform_down(|expr| match expr {
-                Expr::Exists(Exists { subquery, negated }, _) => {
-                    f(LogicalPlan::subquery(subquery))?.map_data(|s| match s {
-                        LogicalPlan::Subquery(subquery, _) => {
-                            Ok(Expr::exists(Exists { subquery, negated }))
-                        }
-                        _ => internal_err!("Transformation should return Subquery"),
-                    })
+            expr.transform_down(|expr| {
+                if !expr.stats().contains_any_patterns(enum_set!(
+                    LogicalPlanPattern::ExprExists
+                        | LogicalPlanPattern::ExprInSubquery
+                        | LogicalPlanPattern::ExprScalarSubquery
+                )) {
+                    return Ok(Transformed::jump(expr));
                 }
-                Expr::InSubquery(
-                    InSubquery {
-                        expr,
-                        subquery,
-                        negated,
-                    },
-                    _,
-                ) => f(LogicalPlan::subquery(subquery))?.map_data(|s| match s {
-                    LogicalPlan::Subquery(subquery, _) => {
-                        Ok(Expr::in_subquery(InSubquery {
+
+                match expr {
+                    Expr::Exists(Exists { subquery, negated }, _) => {
+                        f(LogicalPlan::subquery(subquery))?.map_data(|s| match s {
+                            LogicalPlan::Subquery(subquery, _) => {
+                                Ok(Expr::exists(Exists { subquery, negated }))
+                            }
+                            _ => internal_err!("Transformation should return Subquery"),
+                        })
+                    }
+                    Expr::InSubquery(
+                        InSubquery {
                             expr,
                             subquery,
                             negated,
-                        }))
-                    }
-                    _ => internal_err!("Transformation should return Subquery"),
-                }),
-                Expr::ScalarSubquery(subquery, _) => f(LogicalPlan::subquery(subquery))?
-                    .map_data(|s| match s {
+                        },
+                        _,
+                    ) => f(LogicalPlan::subquery(subquery))?.map_data(|s| match s {
                         LogicalPlan::Subquery(subquery, _) => {
-                            Ok(Expr::scalar_subquery(subquery))
+                            Ok(Expr::in_subquery(InSubquery {
+                                expr,
+                                subquery,
+                                negated,
+                            }))
                         }
                         _ => internal_err!("Transformation should return Subquery"),
                     }),
-                _ => Ok(Transformed::no(expr)),
+                    Expr::ScalarSubquery(subquery, _) => {
+                        f(LogicalPlan::subquery(subquery))?.map_data(|s| match s {
+                            LogicalPlan::Subquery(subquery, _) => {
+                                Ok(Expr::scalar_subquery(subquery))
+                            }
+                            _ => internal_err!("Transformation should return Subquery"),
+                        })
+                    }
+                    _ => Ok(Transformed::no(expr)),
+                }
             })
         })
     }

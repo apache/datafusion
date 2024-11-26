@@ -17,13 +17,14 @@
 
 //! [`FilterNullJoinKeys`] adds filters to join inputs when input isn't nullable
 
-use crate::optimizer::ApplyOrder;
 use crate::push_down_filter::on_lr_is_preserved;
 use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::tree_node::Transformed;
 use datafusion_common::Result;
+use datafusion_expr::logical_plan::tree_node::LogicalPlanPattern;
 use datafusion_expr::utils::conjunction;
 use datafusion_expr::{logical_plan::Filter, Expr, ExprSchemable, LogicalPlan};
+use std::cell::Cell;
 use std::sync::Arc;
 
 /// The FilterNullJoinKeys rule will identify joins with equi-join conditions
@@ -37,10 +38,6 @@ impl OptimizerRule for FilterNullJoinKeys {
         true
     }
 
-    fn apply_order(&self) -> Option<ApplyOrder> {
-        Some(ApplyOrder::BottomUp)
-    }
-
     fn rewrite(
         &self,
         plan: LogicalPlan,
@@ -49,45 +46,67 @@ impl OptimizerRule for FilterNullJoinKeys {
         if !config.options().optimizer.filter_null_join_keys {
             return Ok(Transformed::no(plan));
         }
-        match plan {
-            LogicalPlan::Join(mut join, _)
-                if !join.on.is_empty() && !join.null_equals_null =>
-            {
-                let (left_preserved, right_preserved) =
-                    on_lr_is_preserved(join.join_type);
 
-                let left_schema = join.left.schema();
-                let right_schema = join.right.schema();
+        let skip = Cell::new(false);
+        plan.transform_down_up_with_subqueries(
+            |plan| {
+                if !plan
+                    .stats()
+                    .contains_pattern(LogicalPlanPattern::LogicalPlanJoin)
+                {
+                    skip.set(true);
+                    return Ok(Transformed::jump(plan));
+                }
 
-                let mut left_filters = vec![];
-                let mut right_filters = vec![];
+                Ok(Transformed::no(plan))
+            },
+            |plan| {
+                if skip.get() {
+                    skip.set(false);
+                    return Ok(Transformed::no(plan));
+                }
 
-                for (l, r) in &join.on {
-                    if left_preserved && l.nullable(left_schema)? {
-                        left_filters.push(l.clone());
+                match plan {
+                    LogicalPlan::Join(mut join, _)
+                        if !join.on.is_empty() && !join.null_equals_null =>
+                    {
+                        let (left_preserved, right_preserved) =
+                            on_lr_is_preserved(join.join_type);
+
+                        let left_schema = join.left.schema();
+                        let right_schema = join.right.schema();
+
+                        let mut left_filters = vec![];
+                        let mut right_filters = vec![];
+
+                        for (l, r) in &join.on {
+                            if left_preserved && l.nullable(left_schema)? {
+                                left_filters.push(l.clone());
+                            }
+
+                            if right_preserved && r.nullable(right_schema)? {
+                                right_filters.push(r.clone());
+                            }
+                        }
+
+                        if !left_filters.is_empty() {
+                            let predicate = create_not_null_predicate(left_filters);
+                            join.left = Arc::new(LogicalPlan::filter(Filter::try_new(
+                                predicate, join.left,
+                            )?));
+                        }
+                        if !right_filters.is_empty() {
+                            let predicate = create_not_null_predicate(right_filters);
+                            join.right = Arc::new(LogicalPlan::filter(Filter::try_new(
+                                predicate, join.right,
+                            )?));
+                        }
+                        Ok(Transformed::yes(LogicalPlan::join(join)))
                     }
-
-                    if right_preserved && r.nullable(right_schema)? {
-                        right_filters.push(r.clone());
-                    }
+                    _ => Ok(Transformed::no(plan)),
                 }
-
-                if !left_filters.is_empty() {
-                    let predicate = create_not_null_predicate(left_filters);
-                    join.left = Arc::new(LogicalPlan::filter(Filter::try_new(
-                        predicate, join.left,
-                    )?));
-                }
-                if !right_filters.is_empty() {
-                    let predicate = create_not_null_predicate(right_filters);
-                    join.right = Arc::new(LogicalPlan::filter(Filter::try_new(
-                        predicate, join.right,
-                    )?));
-                }
-                Ok(Transformed::yes(LogicalPlan::join(join)))
-            }
-            _ => Ok(Transformed::no(plan)),
-        }
+            },
+        )
     }
     fn name(&self) -> &str {
         "filter_null_join_keys"

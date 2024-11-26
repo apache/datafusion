@@ -16,15 +16,17 @@
 // under the License.
 
 //! [`EliminateJoin`] rewrites `INNER JOIN` with `true`/`null`
-use crate::optimizer::ApplyOrder;
+
 use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::tree_node::Transformed;
 use datafusion_common::{Result, ScalarValue};
+use datafusion_expr::logical_plan::tree_node::LogicalPlanPattern;
 use datafusion_expr::JoinType::Inner;
 use datafusion_expr::{
     logical_plan::{EmptyRelation, LogicalPlan},
     Expr,
 };
+use enumset::enum_set;
 
 /// Eliminates joins when join condition is false.
 /// Replaces joins when inner join condition is true with a cross join.
@@ -42,31 +44,37 @@ impl OptimizerRule for EliminateJoin {
         "eliminate_join"
     }
 
-    fn apply_order(&self) -> Option<ApplyOrder> {
-        Some(ApplyOrder::TopDown)
-    }
-
     fn rewrite(
         &self,
         plan: LogicalPlan,
         _config: &dyn OptimizerConfig,
     ) -> Result<Transformed<LogicalPlan>> {
-        match plan {
-            LogicalPlan::Join(join, _)
-                if join.join_type == Inner && join.on.is_empty() =>
-            {
-                match join.filter {
-                    Some(Expr::Literal(ScalarValue::Boolean(Some(false)), _)) => Ok(
-                        Transformed::yes(LogicalPlan::empty_relation(EmptyRelation {
-                            produce_one_row: false,
-                            schema: join.schema,
-                        })),
-                    ),
-                    _ => Ok(Transformed::no(LogicalPlan::join(join))),
-                }
+        plan.transform_down_with_subqueries(|plan| {
+            if !plan.stats().contains_all_patterns(enum_set!(
+                LogicalPlanPattern::LogicalPlanJoin | LogicalPlanPattern::ExprLiteral
+            )) {
+                return Ok(Transformed::jump(plan));
             }
-            _ => Ok(Transformed::no(plan)),
-        }
+
+            match plan {
+                LogicalPlan::Join(join, _)
+                    if join.join_type == Inner && join.on.is_empty() =>
+                {
+                    match join.filter {
+                        Some(Expr::Literal(ScalarValue::Boolean(Some(false)), _)) => {
+                            Ok(Transformed::yes(LogicalPlan::empty_relation(
+                                EmptyRelation {
+                                    produce_one_row: false,
+                                    schema: join.schema,
+                                },
+                            )))
+                        }
+                        _ => Ok(Transformed::no(LogicalPlan::join(join))),
+                    }
+                }
+                _ => Ok(Transformed::no(plan)),
+            }
+        })
     }
 
     fn supports_rewrite(&self) -> bool {

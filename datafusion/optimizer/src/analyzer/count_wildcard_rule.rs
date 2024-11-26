@@ -16,12 +16,15 @@
 // under the License.
 
 use crate::analyzer::AnalyzerRule;
+use enumset::enum_set;
+use std::cell::Cell;
 
 use crate::utils::NamePreserver;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::Result;
 use datafusion_expr::expr::{AggregateFunction, WindowFunction};
+use datafusion_expr::logical_plan::tree_node::LogicalPlanPattern;
 use datafusion_expr::utils::COUNT_STAR_EXPANSION;
 use datafusion_expr::{lit, Expr, LogicalPlan, WindowFunctionDefinition};
 
@@ -39,7 +42,61 @@ impl CountWildcardRule {
 
 impl AnalyzerRule for CountWildcardRule {
     fn analyze(&self, plan: LogicalPlan, _: &ConfigOptions) -> Result<LogicalPlan> {
-        plan.transform_down_with_subqueries(analyze_internal).data()
+        plan.transform_down_with_subqueries(|plan| {
+            if !plan.stats().contains_any_patterns(enum_set!(
+                LogicalPlanPattern::ExprWindowFunction
+                    | LogicalPlanPattern::ExprAggregateFunction
+            )) {
+                return Ok(Transformed::jump(plan));
+            }
+
+            let name_preserver = NamePreserver::new(&plan);
+            plan.map_expressions(|expr| {
+                let original_name = name_preserver.save(&expr);
+                let skip = Cell::new(false);
+                let transformed_expr = expr.transform_down_up(
+                    |expr| {
+                        if !expr.stats().contains_any_patterns(enum_set!(
+                            LogicalPlanPattern::ExprWindowFunction
+                                | LogicalPlanPattern::ExprAggregateFunction
+                        )) {
+                            skip.set(true);
+                            return Ok(Transformed::jump(expr));
+                        }
+
+                        Ok(Transformed::no(expr))
+                    },
+                    |expr| {
+                        if skip.get() {
+                            skip.set(false);
+                            return Ok(Transformed::no(expr));
+                        }
+
+                        match expr {
+                            Expr::WindowFunction(mut window_function, _)
+                                if is_count_star_window_aggregate(&window_function) =>
+                            {
+                                window_function.args = vec![lit(COUNT_STAR_EXPANSION)];
+                                Ok(Transformed::yes(Expr::window_function(
+                                    window_function,
+                                )))
+                            }
+                            Expr::AggregateFunction(mut aggregate_function, _)
+                                if is_count_star_aggregate(&aggregate_function) =>
+                            {
+                                aggregate_function.args = vec![lit(COUNT_STAR_EXPANSION)];
+                                Ok(Transformed::yes(Expr::aggregate_function(
+                                    aggregate_function,
+                                )))
+                            }
+                            _ => Ok(Transformed::no(expr)),
+                        }
+                    },
+                )?;
+                Ok(transformed_expr.update_data(|data| original_name.restore(data)))
+            })
+        })
+        .data()
     }
 
     fn name(&self) -> &str {
@@ -65,31 +122,6 @@ fn is_count_star_window_aggregate(window_function: &WindowFunction) -> bool {
     matches!(window_function.fun,
         WindowFunctionDefinition::AggregateUDF(ref udaf)
             if udaf.name() == "count" && (args.len() == 1 && is_wildcard(&args[0]) || args.is_empty()))
-}
-
-fn analyze_internal(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
-    let name_preserver = NamePreserver::new(&plan);
-    plan.map_expressions(|expr| {
-        let original_name = name_preserver.save(&expr);
-        let transformed_expr = expr.transform_up(|expr| match expr {
-            Expr::WindowFunction(mut window_function, _)
-                if is_count_star_window_aggregate(&window_function) =>
-            {
-                window_function.args = vec![lit(COUNT_STAR_EXPANSION)];
-                Ok(Transformed::yes(Expr::window_function(window_function)))
-            }
-            Expr::AggregateFunction(mut aggregate_function, _)
-                if is_count_star_aggregate(&aggregate_function) =>
-            {
-                aggregate_function.args = vec![lit(COUNT_STAR_EXPANSION)];
-                Ok(Transformed::yes(Expr::aggregate_function(
-                    aggregate_function,
-                )))
-            }
-            _ => Ok(Transformed::no(expr)),
-        })?;
-        Ok(transformed_expr.update_data(|data| original_name.restore(data)))
-    })
 }
 
 #[cfg(test)]

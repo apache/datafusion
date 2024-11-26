@@ -22,7 +22,9 @@
 use datafusion_common::tree_node::{Transformed, TreeNodeRewriter};
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::interval_arithmetic::{Interval, NullableInterval};
+use datafusion_expr::logical_plan::tree_node::LogicalPlanPattern;
 use datafusion_expr::{expr::InList, lit, Between, BinaryExpr, Expr};
+use enumset::enum_set;
 use std::{borrow::Cow, collections::HashMap};
 
 /// Rewrite expressions to incorporate guarantees.
@@ -40,6 +42,7 @@ use std::{borrow::Cow, collections::HashMap};
 /// [`ExprSimplifier::with_guarantees()`]: crate::simplify_expressions::expr_simplifier::ExprSimplifier::with_guarantees
 pub struct GuaranteeRewriter<'a> {
     guarantees: HashMap<&'a Expr, &'a NullableInterval>,
+    skip: bool,
 }
 
 impl<'a> GuaranteeRewriter<'a> {
@@ -52,6 +55,7 @@ impl<'a> GuaranteeRewriter<'a> {
             //       issue is fixed.
             #[allow(clippy::map_identity)]
             guarantees: guarantees.into_iter().map(|(k, v)| (k, v)).collect(),
+            skip: false,
         }
     }
 }
@@ -59,7 +63,32 @@ impl<'a> GuaranteeRewriter<'a> {
 impl TreeNodeRewriter for GuaranteeRewriter<'_> {
     type Node = Expr;
 
+    fn f_down(&mut self, node: Self::Node) -> Result<Transformed<Self::Node>> {
+        if !node.stats().contains_any_patterns(enum_set!(
+            LogicalPlanPattern::ExprIsNull
+                | LogicalPlanPattern::ExprIsNotNull
+                | LogicalPlanPattern::ExprBetween
+                | LogicalPlanPattern::ExprBinaryExpr
+                | LogicalPlanPattern::ExprColumn
+                | LogicalPlanPattern::ExprInList
+        )) {
+            self.skip = true;
+            return Ok(Transformed::jump(node));
+        }
+
+        Ok(Transformed::no(node))
+    }
+
     fn f_up(&mut self, expr: Expr) -> Result<Transformed<Expr>> {
+        if self.skip {
+            self.skip = false;
+            return Ok(Transformed::no(expr));
+        }
+
+        if self.guarantees.is_empty() {
+            return Ok(Transformed::no(expr));
+        }
+
         match &expr {
             Expr::IsNull(inner, _) => match self.guarantees.get(inner.as_ref()) {
                 Some(NullableInterval::Null { .. }) => Ok(Transformed::yes(lit(true))),

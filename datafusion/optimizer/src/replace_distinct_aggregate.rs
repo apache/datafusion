@@ -17,16 +17,16 @@
 
 //! [`ReplaceDistinctWithAggregate`] replaces `DISTINCT ...` with `GROUP BY ...`
 
-use crate::optimizer::{ApplyOrder, ApplyOrder::BottomUp};
 use crate::{OptimizerConfig, OptimizerRule};
-use std::sync::Arc;
-
 use datafusion_common::tree_node::Transformed;
 use datafusion_common::{Column, Result};
 use datafusion_expr::expr_rewriter::normalize_cols;
+use datafusion_expr::logical_plan::tree_node::LogicalPlanPattern;
 use datafusion_expr::utils::expand_wildcard;
 use datafusion_expr::{col, ExprFunctionExt, LogicalPlanBuilder};
 use datafusion_expr::{Aggregate, Distinct, DistinctOn, Expr, LogicalPlan};
+use std::cell::Cell;
+use std::sync::Arc;
 
 /// Optimizer that replaces logical [[Distinct]] with a logical [[Aggregate]]
 ///
@@ -74,114 +74,139 @@ impl OptimizerRule for ReplaceDistinctWithAggregate {
         plan: LogicalPlan,
         config: &dyn OptimizerConfig,
     ) -> Result<Transformed<LogicalPlan>> {
-        match plan {
-            LogicalPlan::Distinct(Distinct::All(input), _) => {
-                let group_expr = expand_wildcard(input.schema(), &input, None)?;
-
-                let field_count = input.schema().fields().len();
-                for dep in input.schema().functional_dependencies().iter() {
-                    // If distinct is exactly the same with a previous GROUP BY, we can
-                    // simply remove it:
-                    if dep.source_indices.len() >= field_count
-                        && dep.source_indices[..field_count]
-                            .iter()
-                            .enumerate()
-                            .all(|(idx, f_idx)| idx == *f_idx)
-                    {
-                        return Ok(Transformed::yes(input.as_ref().clone()));
-                    }
+        let skip = Cell::new(false);
+        plan.transform_down_up_with_subqueries(
+            |plan| {
+                if !plan
+                    .stats()
+                    .contains_pattern(LogicalPlanPattern::LogicalPlanDistinct)
+                {
+                    skip.set(true);
+                    return Ok(Transformed::jump(plan));
                 }
 
-                // Replace with aggregation:
-                let aggr_plan = LogicalPlan::aggregate(Aggregate::try_new(
-                    input,
-                    group_expr,
-                    vec![],
-                )?);
-                Ok(Transformed::yes(aggr_plan))
-            }
-            LogicalPlan::Distinct(
-                Distinct::On(DistinctOn {
-                    select_expr,
-                    on_expr,
-                    sort_expr,
-                    input,
-                    schema,
-                }),
-                _,
-            ) => {
-                let expr_cnt = on_expr.len();
+                Ok(Transformed::no(plan))
+            },
+            |plan| {
+                if skip.get() {
+                    skip.set(false);
+                    return Ok(Transformed::no(plan));
+                }
 
-                // Construct the aggregation expression to be used to fetch the selected expressions.
-                let first_value_udaf: Arc<datafusion_expr::AggregateUDF> =
-                    config.function_registry().unwrap().udaf("first_value")?;
-                let aggr_expr = select_expr.into_iter().map(|e| {
-                    if let Some(order_by) = &sort_expr {
-                        first_value_udaf
-                            .call(vec![e])
-                            .order_by(order_by.clone())
-                            .build()
-                            // guaranteed to be `Expr::AggregateFunction`
-                            .unwrap()
-                    } else {
-                        first_value_udaf.call(vec![e])
+                match plan {
+                    LogicalPlan::Distinct(Distinct::All(input), _) => {
+                        let group_expr = expand_wildcard(input.schema(), &input, None)?;
+
+                        let field_count = input.schema().fields().len();
+                        for dep in input.schema().functional_dependencies().iter() {
+                            // If distinct is exactly the same with a previous GROUP BY, we can
+                            // simply remove it:
+                            if dep.source_indices.len() >= field_count
+                                && dep.source_indices[..field_count]
+                                    .iter()
+                                    .enumerate()
+                                    .all(|(idx, f_idx)| idx == *f_idx)
+                            {
+                                return Ok(Transformed::yes(input.as_ref().clone()));
+                            }
+                        }
+
+                        // Replace with aggregation:
+                        let aggr_plan = LogicalPlan::aggregate(Aggregate::try_new(
+                            input,
+                            group_expr,
+                            vec![],
+                        )?);
+                        Ok(Transformed::yes(aggr_plan))
                     }
-                });
+                    LogicalPlan::Distinct(
+                        Distinct::On(DistinctOn {
+                            select_expr,
+                            on_expr,
+                            sort_expr,
+                            input,
+                            schema,
+                        }),
+                        _,
+                    ) => {
+                        let expr_cnt = on_expr.len();
 
-                let aggr_expr = normalize_cols(aggr_expr, input.as_ref())?;
-                let group_expr = normalize_cols(on_expr, input.as_ref())?;
+                        // Construct the aggregation expression to be used to fetch the selected expressions.
+                        let first_value_udaf: Arc<datafusion_expr::AggregateUDF> =
+                            config.function_registry().unwrap().udaf("first_value")?;
+                        let aggr_expr = select_expr.into_iter().map(|e| {
+                            if let Some(order_by) = &sort_expr {
+                                first_value_udaf
+                                    .call(vec![e])
+                                    .order_by(order_by.clone())
+                                    .build()
+                                    // guaranteed to be `Expr::AggregateFunction`
+                                    .unwrap()
+                            } else {
+                                first_value_udaf.call(vec![e])
+                            }
+                        });
 
-                // Build the aggregation plan
-                let plan = LogicalPlan::aggregate(Aggregate::try_new(
-                    input, group_expr, aggr_expr,
-                )?);
-                // TODO use LogicalPlanBuilder directly rather than recreating the Aggregate
-                // when https://github.com/apache/datafusion/issues/10485 is available
-                let lpb = LogicalPlanBuilder::from(plan);
+                        let aggr_expr = normalize_cols(aggr_expr, input.as_ref())?;
+                        let group_expr = normalize_cols(on_expr, input.as_ref())?;
 
-                let plan = if let Some(mut sort_expr) = sort_expr {
-                    // While sort expressions were used in the `FIRST_VALUE` aggregation itself above,
-                    // this on it's own isn't enough to guarantee the proper output order of the grouping
-                    // (`ON`) expression, so we need to sort those as well.
+                        // Build the aggregation plan
+                        let plan = LogicalPlan::aggregate(Aggregate::try_new(
+                            input, group_expr, aggr_expr,
+                        )?);
+                        // TODO use LogicalPlanBuilder directly rather than recreating the Aggregate
+                        // when https://github.com/apache/datafusion/issues/10485 is available
+                        let lpb = LogicalPlanBuilder::from(plan);
 
-                    // truncate the sort_expr to the length of on_expr
-                    sort_expr.truncate(expr_cnt);
+                        let plan = if let Some(mut sort_expr) = sort_expr {
+                            // While sort expressions were used in the `FIRST_VALUE` aggregation itself above,
+                            // this on it's own isn't enough to guarantee the proper output order of the grouping
+                            // (`ON`) expression, so we need to sort those as well.
 
-                    lpb.sort(sort_expr)?.build()?
-                } else {
-                    lpb.build()?
-                };
+                            // truncate the sort_expr to the length of on_expr
+                            sort_expr.truncate(expr_cnt);
 
-                // Whereas the aggregation plan by default outputs both the grouping and the aggregation
-                // expressions, for `DISTINCT ON` we only need to emit the original selection expressions.
+                            lpb.sort(sort_expr)?.build()?
+                        } else {
+                            lpb.build()?
+                        };
 
-                let project_exprs = plan
-                    .schema()
-                    .iter()
-                    .skip(expr_cnt)
-                    .zip(schema.iter())
-                    .map(|((new_qualifier, new_field), (old_qualifier, old_field))| {
-                        col(Column::from((new_qualifier, new_field)))
-                            .alias_qualified(old_qualifier.cloned(), old_field.name())
-                    })
-                    .collect::<Vec<Expr>>();
+                        // Whereas the aggregation plan by default outputs both the grouping and the aggregation
+                        // expressions, for `DISTINCT ON` we only need to emit the original selection expressions.
 
-                let plan = LogicalPlanBuilder::from(plan)
-                    .project(project_exprs)?
-                    .build()?;
+                        let project_exprs = plan
+                            .schema()
+                            .iter()
+                            .skip(expr_cnt)
+                            .zip(schema.iter())
+                            .map(
+                                |(
+                                    (new_qualifier, new_field),
+                                    (old_qualifier, old_field),
+                                )| {
+                                    col(Column::from((new_qualifier, new_field)))
+                                        .alias_qualified(
+                                            old_qualifier.cloned(),
+                                            old_field.name(),
+                                        )
+                                },
+                            )
+                            .collect::<Vec<Expr>>();
 
-                Ok(Transformed::yes(plan))
-            }
-            _ => Ok(Transformed::no(plan)),
-        }
+                        let plan = LogicalPlanBuilder::from(plan)
+                            .project(project_exprs)?
+                            .build()?;
+
+                        Ok(Transformed::yes(plan))
+                    }
+                    _ => Ok(Transformed::no(plan)),
+                }
+            },
+        )
     }
 
     fn name(&self) -> &str {
         "replace_distinct_aggregate"
-    }
-
-    fn apply_order(&self) -> Option<ApplyOrder> {
-        Some(BottomUp)
     }
 }
 

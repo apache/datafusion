@@ -19,10 +19,9 @@
 
 use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::{tree_node::Transformed, Result};
+use datafusion_expr::logical_plan::tree_node::LogicalPlanPattern;
 use datafusion_expr::logical_plan::{LogicalPlan, Union};
 use std::sync::Arc;
-
-use crate::optimizer::ApplyOrder;
 
 #[derive(Default, Debug)]
 /// An optimization rule that eliminates union with one element.
@@ -49,16 +48,23 @@ impl OptimizerRule for EliminateOneUnion {
         plan: LogicalPlan,
         _config: &dyn OptimizerConfig,
     ) -> Result<Transformed<LogicalPlan>> {
-        match plan {
-            LogicalPlan::Union(Union { mut inputs, .. }, _) if inputs.len() == 1 => Ok(
-                Transformed::yes(Arc::unwrap_or_clone(inputs.pop().unwrap())),
-            ),
-            _ => Ok(Transformed::no(plan)),
-        }
-    }
+        plan.transform_down_with_subqueries(|plan| {
+            if !plan
+                .stats()
+                .contains_pattern(LogicalPlanPattern::LogicalPlanUnion)
+            {
+                return Ok(Transformed::jump(plan));
+            }
 
-    fn apply_order(&self) -> Option<ApplyOrder> {
-        Some(ApplyOrder::TopDown)
+            match plan {
+                LogicalPlan::Union(Union { mut inputs, .. }, _) if inputs.len() == 1 => {
+                    Ok(Transformed::yes(Arc::unwrap_or_clone(
+                        inputs.pop().unwrap(),
+                    )))
+                }
+                _ => Ok(Transformed::no(plan)),
+            }
+        })
     }
 }
 

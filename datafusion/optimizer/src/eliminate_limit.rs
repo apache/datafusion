@@ -16,11 +16,13 @@
 // under the License.
 
 //! [`EliminateLimit`] eliminates `LIMIT` when possible
-use crate::optimizer::ApplyOrder;
+
 use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::tree_node::Transformed;
 use datafusion_common::Result;
+use datafusion_expr::logical_plan::tree_node::LogicalPlanPattern;
 use datafusion_expr::logical_plan::{EmptyRelation, FetchType, LogicalPlan, SkipType};
+use std::cell::Cell;
 use std::sync::Arc;
 
 /// Optimizer rule to replace `LIMIT 0` or `LIMIT` whose ancestor LIMIT's skip is
@@ -45,10 +47,6 @@ impl OptimizerRule for EliminateLimit {
         "eliminate_limit"
     }
 
-    fn apply_order(&self) -> Option<ApplyOrder> {
-        Some(ApplyOrder::BottomUp)
-    }
-
     fn supports_rewrite(&self) -> bool {
         true
     }
@@ -58,31 +56,53 @@ impl OptimizerRule for EliminateLimit {
         plan: LogicalPlan,
         _config: &dyn OptimizerConfig,
     ) -> Result<Transformed<LogicalPlan>, datafusion_common::DataFusionError> {
-        match plan {
-            LogicalPlan::Limit(limit, _) => {
-                // Only supports rewriting for literal fetch
-                let FetchType::Literal(fetch) = limit.get_fetch_type()? else {
-                    return Ok(Transformed::no(LogicalPlan::limit(limit)));
-                };
-
-                if let Some(v) = fetch {
-                    if v == 0 {
-                        return Ok(Transformed::yes(LogicalPlan::empty_relation(
-                            EmptyRelation {
-                                produce_one_row: false,
-                                schema: Arc::clone(limit.input.schema()),
-                            },
-                        )));
-                    }
-                } else if matches!(limit.get_skip_type()?, SkipType::Literal(0)) {
-                    // If fetch is `None` and skip is 0, then Limit takes no effect and
-                    // we can remove it. Its input also can be Limit, so we should apply again.
-                    return self.rewrite(Arc::unwrap_or_clone(limit.input), _config);
+        let skip = Cell::new(false);
+        plan.transform_down_up_with_subqueries(
+            |plan| {
+                if !plan
+                    .stats()
+                    .contains_pattern(LogicalPlanPattern::LogicalPlanLimit)
+                {
+                    skip.set(true);
+                    return Ok(Transformed::jump(plan));
                 }
-                Ok(Transformed::no(LogicalPlan::limit(limit)))
-            }
-            _ => Ok(Transformed::no(plan)),
-        }
+
+                Ok(Transformed::no(plan))
+            },
+            |plan| {
+                if skip.get() {
+                    skip.set(false);
+                    return Ok(Transformed::no(plan));
+                }
+
+                match plan {
+                    LogicalPlan::Limit(limit, _) => {
+                        // Only supports rewriting for literal fetch
+                        let FetchType::Literal(fetch) = limit.get_fetch_type()? else {
+                            return Ok(Transformed::no(LogicalPlan::limit(limit)));
+                        };
+
+                        if let Some(v) = fetch {
+                            if v == 0 {
+                                return Ok(Transformed::yes(
+                                    LogicalPlan::empty_relation(EmptyRelation {
+                                        produce_one_row: false,
+                                        schema: Arc::clone(limit.input.schema()),
+                                    }),
+                                ));
+                            }
+                        } else if matches!(limit.get_skip_type()?, SkipType::Literal(0)) {
+                            // If fetch is `None` and skip is 0, then Limit takes no effect and
+                            // we can remove it. Its input also can be Limit, so we should apply again.
+                            return self
+                                .rewrite(Arc::unwrap_or_clone(limit.input), _config);
+                        }
+                        Ok(Transformed::no(LogicalPlan::limit(limit)))
+                    }
+                    _ => Ok(Transformed::no(plan)),
+                }
+            },
+        )
     }
 }
 

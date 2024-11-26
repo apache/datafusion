@@ -43,6 +43,7 @@ use datafusion_expr::{
     utils::{iter_conjunction, iter_conjunction_owned},
 };
 use datafusion_physical_expr::{create_physical_expr, execution_props::ExecutionProps};
+use enumset::enum_set;
 use indexmap::IndexSet;
 
 use super::inlist_simplifier::ShortenInListSimplifier;
@@ -51,6 +52,7 @@ use crate::analyzer::type_coercion::TypeCoercionRewriter;
 use crate::simplify_expressions::guarantees::GuaranteeRewriter;
 use crate::simplify_expressions::regex::simplify_regex_expr;
 use crate::simplify_expressions::SimplifyInfo;
+use datafusion_expr::logical_plan::tree_node::LogicalPlanPattern;
 use regex::Regex;
 
 /// This structure handles API for expression simplification
@@ -409,18 +411,40 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
 ///
 /// `<col1> <op> <col2>` is rewritten so that the name of `col1` sorts higher
 /// than `col2` (`a > b` would be canonicalized to `b < a`)
-struct Canonicalizer {}
+struct Canonicalizer {
+    skip: bool,
+}
 
 impl Canonicalizer {
     fn new() -> Self {
-        Self {}
+        Self { skip: false }
     }
 }
 
 impl TreeNodeRewriter for Canonicalizer {
     type Node = Expr;
 
+    fn f_down(&mut self, node: Self::Node) -> Result<Transformed<Self::Node>> {
+        if !(node
+            .stats()
+            .contains_pattern(LogicalPlanPattern::ExprBinaryExpr)
+            && node.stats().contains_any_patterns(enum_set!(
+                LogicalPlanPattern::ExprColumn | LogicalPlanPattern::ExprLiteral
+            )))
+        {
+            self.skip = true;
+            return Ok(Transformed::jump(node));
+        }
+
+        Ok(Transformed::no(node))
+    }
+
     fn f_up(&mut self, expr: Expr) -> Result<Transformed<Expr>> {
+        if self.skip {
+            self.skip = false;
+            return Ok(Transformed::no(expr));
+        }
+
         let Expr::BinaryExpr(BinaryExpr { left, op, right }, _) = expr else {
             return Ok(Transformed::no(expr));
         };
@@ -701,19 +725,49 @@ impl<'a> ConstEvaluator<'a> {
 /// * `expr = null` and `expr != null` to `null`
 struct Simplifier<'a, S> {
     info: &'a S,
+    skip: bool,
 }
 
 impl<'a, S> Simplifier<'a, S> {
     pub fn new(info: &'a S) -> Self {
-        Self { info }
+        Self { info, skip: false }
     }
 }
 
 impl<S: SimplifyInfo> TreeNodeRewriter for Simplifier<'_, S> {
     type Node = Expr;
 
+    fn f_down(&mut self, node: Self::Node) -> Result<Transformed<Self::Node>> {
+        if !node.stats().contains_any_patterns(enum_set!(
+            LogicalPlanPattern::ExprBinaryExpr
+                | LogicalPlanPattern::ExprNot
+                | LogicalPlanPattern::ExprNegative
+                | LogicalPlanPattern::ExprCase
+                | LogicalPlanPattern::ExprScalarFunction
+                | LogicalPlanPattern::ExprAggregateFunction
+                | LogicalPlanPattern::ExprWindowFunction
+                | LogicalPlanPattern::ExprBetween
+                | LogicalPlanPattern::ExprIsNotNull
+                | LogicalPlanPattern::ExprIsNull
+                | LogicalPlanPattern::ExprIsNotUnknown
+                | LogicalPlanPattern::ExprIsUnknown
+                | LogicalPlanPattern::ExprInList
+                | LogicalPlanPattern::ExprLike
+        )) {
+            self.skip = true;
+            return Ok(Transformed::jump(node));
+        }
+
+        Ok(Transformed::no(node))
+    }
+
     /// rewrite the expression simplifying any constant expressions
     fn f_up(&mut self, expr: Expr) -> Result<Transformed<Expr>> {
+        if self.skip {
+            self.skip = false;
+            return Ok(Transformed::no(expr));
+        }
+
         use datafusion_expr::Operator::{
             And, BitwiseAnd, BitwiseOr, BitwiseShiftLeft, BitwiseShiftRight, BitwiseXor,
             Divide, Eq, Modulo, Multiply, NotEq, Or, RegexIMatch, RegexMatch,

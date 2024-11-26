@@ -22,6 +22,7 @@ use recursive::recursive;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_common::{plan_err, Result};
 use datafusion_expr::expr_rewriter::strip_outer_reference;
+use datafusion_expr::logical_plan::tree_node::LogicalPlanPattern;
 use datafusion_expr::utils::split_conjunction;
 use datafusion_expr::{Aggregate, Expr, Filter, Join, JoinType, LogicalPlan, Window};
 
@@ -255,6 +256,13 @@ fn strip_inner_query(inner_plan: &LogicalPlan) -> &LogicalPlan {
 fn get_correlated_expressions(inner_plan: &LogicalPlan) -> Result<Vec<Expr>> {
     let mut exprs = vec![];
     inner_plan.apply_with_subqueries(|plan| {
+        if !plan
+            .stats()
+            .contains_pattern(LogicalPlanPattern::LogicalPlanFilter)
+        {
+            return Ok(TreeNodeRecursion::Jump);
+        }
+
         if let LogicalPlan::Filter(Filter { predicate, .. }, _) = plan {
             let (correlated, _): (Vec<_>, Vec<_>) = split_conjunction(predicate)
                 .into_iter()

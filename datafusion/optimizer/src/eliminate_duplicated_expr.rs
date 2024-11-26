@@ -17,14 +17,16 @@
 
 //! [`EliminateDuplicatedExpr`] Removes redundant expressions
 
-use crate::optimizer::ApplyOrder;
 use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::tree_node::Transformed;
 use datafusion_common::Result;
+use datafusion_expr::logical_plan::tree_node::LogicalPlanPattern;
 use datafusion_expr::logical_plan::LogicalPlan;
 use datafusion_expr::{Aggregate, Expr, Sort, SortExpr};
+use enumset::enum_set;
 use indexmap::IndexSet;
 use std::hash::{Hash, Hasher};
+
 /// Optimization rule that eliminate duplicated expr.
 #[derive(Default, Debug)]
 pub struct EliminateDuplicatedExpr;
@@ -49,10 +51,6 @@ impl Hash for SortExprWrapper {
     }
 }
 impl OptimizerRule for EliminateDuplicatedExpr {
-    fn apply_order(&self) -> Option<ApplyOrder> {
-        Some(ApplyOrder::TopDown)
-    }
-
     fn supports_rewrite(&self) -> bool {
         true
     }
@@ -62,51 +60,60 @@ impl OptimizerRule for EliminateDuplicatedExpr {
         plan: LogicalPlan,
         _config: &dyn OptimizerConfig,
     ) -> Result<Transformed<LogicalPlan>> {
-        match plan {
-            LogicalPlan::Sort(sort, _) => {
-                let len = sort.expr.len();
-                let unique_exprs: Vec<_> = sort
-                    .expr
-                    .into_iter()
-                    .map(SortExprWrapper)
-                    .collect::<IndexSet<_>>()
-                    .into_iter()
-                    .map(|wrapper| wrapper.0)
-                    .collect();
-
-                let transformed = if len != unique_exprs.len() {
-                    Transformed::yes
-                } else {
-                    Transformed::no
-                };
-
-                Ok(transformed(LogicalPlan::sort(Sort {
-                    expr: unique_exprs,
-                    input: sort.input,
-                    fetch: sort.fetch,
-                })))
+        plan.transform_down_with_subqueries(|plan| {
+            if !plan.stats().contains_any_patterns(enum_set!(
+                LogicalPlanPattern::LogicalPlanSort
+                    | LogicalPlanPattern::LogicalPlanAggregate
+            )) {
+                return Ok(Transformed::jump(plan));
             }
-            LogicalPlan::Aggregate(agg, _) => {
-                let len = agg.group_expr.len();
 
-                let unique_exprs: Vec<Expr> = agg
-                    .group_expr
-                    .into_iter()
-                    .collect::<IndexSet<_>>()
-                    .into_iter()
-                    .collect();
+            match plan {
+                LogicalPlan::Sort(sort, _) => {
+                    let len = sort.expr.len();
+                    let unique_exprs: Vec<_> = sort
+                        .expr
+                        .into_iter()
+                        .map(SortExprWrapper)
+                        .collect::<IndexSet<_>>()
+                        .into_iter()
+                        .map(|wrapper| wrapper.0)
+                        .collect();
 
-                let transformed = if len != unique_exprs.len() {
-                    Transformed::yes
-                } else {
-                    Transformed::no
-                };
+                    let transformed = if len != unique_exprs.len() {
+                        Transformed::yes
+                    } else {
+                        Transformed::no
+                    };
 
-                Aggregate::try_new(agg.input, unique_exprs, agg.aggr_expr)
-                    .map(|f| transformed(LogicalPlan::aggregate(f)))
+                    Ok(transformed(LogicalPlan::sort(Sort {
+                        expr: unique_exprs,
+                        input: sort.input,
+                        fetch: sort.fetch,
+                    })))
+                }
+                LogicalPlan::Aggregate(agg, _) => {
+                    let len = agg.group_expr.len();
+
+                    let unique_exprs: Vec<Expr> = agg
+                        .group_expr
+                        .into_iter()
+                        .collect::<IndexSet<_>>()
+                        .into_iter()
+                        .collect();
+
+                    let transformed = if len != unique_exprs.len() {
+                        Transformed::yes
+                    } else {
+                        Transformed::no
+                    };
+
+                    Aggregate::try_new(agg.input, unique_exprs, agg.aggr_expr)
+                        .map(|f| transformed(LogicalPlan::aggregate(f)))
+                }
+                _ => Ok(Transformed::no(plan)),
             }
-            _ => Ok(Transformed::no(plan)),
-        }
+        })
     }
     fn name(&self) -> &str {
         "eliminate_duplicated_expr"

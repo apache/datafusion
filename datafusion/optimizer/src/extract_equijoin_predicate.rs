@@ -16,14 +16,17 @@
 // under the License.
 
 //! [`ExtractEquijoinPredicate`] identifies equality join (equijoin) predicates
-use crate::optimizer::ApplyOrder;
+
 use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::tree_node::Transformed;
 use datafusion_common::DFSchema;
 use datafusion_common::Result;
+use datafusion_expr::logical_plan::tree_node::LogicalPlanPattern;
 use datafusion_expr::utils::split_conjunction_owned;
 use datafusion_expr::utils::{can_hash, find_valid_equijoin_key_pair};
 use datafusion_expr::{BinaryExpr, Expr, ExprSchemable, Join, LogicalPlan, Operator};
+use std::cell::Cell;
+
 // equijoin predicate
 type EquijoinPredicate = (Expr, Expr);
 
@@ -57,61 +60,82 @@ impl OptimizerRule for ExtractEquijoinPredicate {
         "extract_equijoin_predicate"
     }
 
-    fn apply_order(&self) -> Option<ApplyOrder> {
-        Some(ApplyOrder::BottomUp)
-    }
-
     fn rewrite(
         &self,
         plan: LogicalPlan,
         _config: &dyn OptimizerConfig,
     ) -> Result<Transformed<LogicalPlan>> {
-        match plan {
-            LogicalPlan::Join(
-                Join {
-                    left,
-                    right,
-                    mut on,
-                    filter: Some(expr),
-                    join_type,
-                    join_constraint,
-                    schema,
-                    null_equals_null,
-                },
-                _,
-            ) => {
-                let left_schema = left.schema();
-                let right_schema = right.schema();
-                let (equijoin_predicates, non_equijoin_expr) =
-                    split_eq_and_noneq_join_predicate(expr, left_schema, right_schema)?;
-
-                if !equijoin_predicates.is_empty() {
-                    on.extend(equijoin_predicates);
-                    Ok(Transformed::yes(LogicalPlan::join(Join {
-                        left,
-                        right,
-                        on,
-                        filter: non_equijoin_expr,
-                        join_type,
-                        join_constraint,
-                        schema,
-                        null_equals_null,
-                    })))
-                } else {
-                    Ok(Transformed::no(LogicalPlan::join(Join {
-                        left,
-                        right,
-                        on,
-                        filter: non_equijoin_expr,
-                        join_type,
-                        join_constraint,
-                        schema,
-                        null_equals_null,
-                    })))
+        let skip = Cell::new(false);
+        plan.transform_down_up_with_subqueries(
+            |plan| {
+                if !plan
+                    .stats()
+                    .contains_pattern(LogicalPlanPattern::LogicalPlanJoin)
+                {
+                    skip.set(true);
+                    return Ok(Transformed::jump(plan));
                 }
-            }
-            _ => Ok(Transformed::no(plan)),
-        }
+
+                Ok(Transformed::no(plan))
+            },
+            |plan| {
+                if skip.get() {
+                    skip.set(false);
+                    return Ok(Transformed::no(plan));
+                }
+
+                match plan {
+                    LogicalPlan::Join(
+                        Join {
+                            left,
+                            right,
+                            mut on,
+                            filter: Some(expr),
+                            join_type,
+                            join_constraint,
+                            schema,
+                            null_equals_null,
+                        },
+                        _,
+                    ) => {
+                        let left_schema = left.schema();
+                        let right_schema = right.schema();
+                        let (equijoin_predicates, non_equijoin_expr) =
+                            split_eq_and_noneq_join_predicate(
+                                expr,
+                                left_schema,
+                                right_schema,
+                            )?;
+
+                        if !equijoin_predicates.is_empty() {
+                            on.extend(equijoin_predicates);
+                            Ok(Transformed::yes(LogicalPlan::join(Join {
+                                left,
+                                right,
+                                on,
+                                filter: non_equijoin_expr,
+                                join_type,
+                                join_constraint,
+                                schema,
+                                null_equals_null,
+                            })))
+                        } else {
+                            Ok(Transformed::no(LogicalPlan::join(Join {
+                                left,
+                                right,
+                                on,
+                                filter: non_equijoin_expr,
+                                join_type,
+                                join_constraint,
+                                schema,
+                                null_equals_null,
+                            })))
+                        }
+                    }
+                    _ => Ok(Transformed::no(plan)),
+                }
+            },
+        )
     }
 }
 

@@ -16,11 +16,13 @@
 // under the License.
 
 //! [`EliminateGroupByConstant`] removes constant expressions from `GROUP BY` clause
-use crate::optimizer::ApplyOrder;
+
 use crate::{OptimizerConfig, OptimizerRule};
+use std::cell::Cell;
 
 use datafusion_common::tree_node::Transformed;
 use datafusion_common::Result;
+use datafusion_expr::logical_plan::tree_node::LogicalPlanPattern;
 use datafusion_expr::{Aggregate, Expr, LogicalPlan, LogicalPlanBuilder, Volatility};
 
 /// Optimizer rule that removes constant expressions from `GROUP BY` clause
@@ -45,49 +47,70 @@ impl OptimizerRule for EliminateGroupByConstant {
         plan: LogicalPlan,
         _config: &dyn OptimizerConfig,
     ) -> Result<Transformed<LogicalPlan>> {
-        match plan {
-            LogicalPlan::Aggregate(aggregate, _) => {
-                let (const_group_expr, nonconst_group_expr): (Vec<_>, Vec<_>) = aggregate
-                    .group_expr
-                    .iter()
-                    .partition(|expr| is_constant_expression(expr));
-
-                // If no constant expressions found (nothing to optimize) or
-                // constant expression is the only expression in aggregate,
-                // optimization is skipped
-                if const_group_expr.is_empty()
-                    || (!const_group_expr.is_empty()
-                        && nonconst_group_expr.is_empty()
-                        && aggregate.aggr_expr.is_empty())
+        let skip = Cell::new(false);
+        plan.transform_down_up_with_subqueries(
+            |plan| {
+                if !plan
+                    .stats()
+                    .contains_pattern(LogicalPlanPattern::LogicalPlanAggregate)
                 {
-                    return Ok(Transformed::no(LogicalPlan::aggregate(aggregate)));
+                    skip.set(true);
+                    return Ok(Transformed::jump(plan));
                 }
 
-                let simplified_aggregate = LogicalPlan::aggregate(Aggregate::try_new(
-                    aggregate.input,
-                    nonconst_group_expr.into_iter().cloned().collect(),
-                    aggregate.aggr_expr.clone(),
-                )?);
+                Ok(Transformed::no(plan))
+            },
+            |plan| {
+                if skip.get() {
+                    skip.set(false);
+                    return Ok(Transformed::no(plan));
+                }
 
-                let projection_expr =
-                    aggregate.group_expr.into_iter().chain(aggregate.aggr_expr);
+                match plan {
+                    LogicalPlan::Aggregate(aggregate, _) => {
+                        let (const_group_expr, nonconst_group_expr): (Vec<_>, Vec<_>) =
+                            aggregate
+                                .group_expr
+                                .iter()
+                                .partition(|expr| is_constant_expression(expr));
 
-                let projection = LogicalPlanBuilder::from(simplified_aggregate)
-                    .project(projection_expr)?
-                    .build()?;
+                        // If no constant expressions found (nothing to optimize) or
+                        // constant expression is the only expression in aggregate,
+                        // optimization is skipped
+                        if const_group_expr.is_empty()
+                            || (!const_group_expr.is_empty()
+                                && nonconst_group_expr.is_empty()
+                                && aggregate.aggr_expr.is_empty())
+                        {
+                            return Ok(Transformed::no(LogicalPlan::aggregate(
+                                aggregate,
+                            )));
+                        }
 
-                Ok(Transformed::yes(projection))
-            }
-            _ => Ok(Transformed::no(plan)),
-        }
+                        let simplified_aggregate =
+                            LogicalPlan::aggregate(Aggregate::try_new(
+                                aggregate.input,
+                                nonconst_group_expr.into_iter().cloned().collect(),
+                                aggregate.aggr_expr.clone(),
+                            )?);
+
+                        let projection_expr =
+                            aggregate.group_expr.into_iter().chain(aggregate.aggr_expr);
+
+                        let projection = LogicalPlanBuilder::from(simplified_aggregate)
+                            .project(projection_expr)?
+                            .build()?;
+
+                        Ok(Transformed::yes(projection))
+                    }
+                    _ => Ok(Transformed::no(plan)),
+                }
+            },
+        )
     }
 
     fn name(&self) -> &str {
         "eliminate_group_by_constant"
-    }
-
-    fn apply_order(&self) -> Option<ApplyOrder> {
-        Some(ApplyOrder::BottomUp)
     }
 }
 
