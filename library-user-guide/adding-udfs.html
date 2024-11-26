@@ -662,7 +662,8 @@
 </tr>
 </tbody>
 </table>
-<p>First we’ll talk about adding an Scalar UDF end-to-end, then we’ll talk about the differences between the different types of UDFs.</p>
+<p>First we’ll talk about adding an Scalar UDF end-to-end, then we’ll talk about the differences between the different
+types of UDFs.</p>
 <section id="adding-a-scalar-udf">
 <h2>Adding a Scalar UDF<a class="headerlink" href="#adding-a-scalar-udf" title="Link to this heading">¶</a></h2>
 <p>A Scalar UDF is a function that takes a row of data and returns a single value. In order for good performance
@@ -670,11 +671,13 @@ such functions are “vectorized” in DataFusion, meaning they get one or more 
 an Arrow Array with the same number of rows as output.</p>
 <p>To create a Scalar UDF, you</p>
 <ol class="arabic simple">
-<li><p>Implement the <code class="docutils literal notranslate"><span class="pre">ScalarUDFImpl</span></code> trait to tell DataFusion about your function such as what types of arguments it takes and how to calculate the results.</p></li>
+<li><p>Implement the <code class="docutils literal notranslate"><span class="pre">ScalarUDFImpl</span></code> trait to tell DataFusion about your function such as what types of arguments it takes
+and how to calculate the results.</p></li>
 <li><p>Create a <code class="docutils literal notranslate"><span class="pre">ScalarUDF</span></code> and register it with <code class="docutils literal notranslate"><span class="pre">SessionContext::register_udf</span></code> so it can be invoked by name.</p></li>
 </ol>
 <p>In the following example, we will add a function takes a single i64 and returns a single i64 with 1 added to it:</p>
-<p>For brevity, we’ll skipped some error handling, but e.g. you may want to check that <code class="docutils literal notranslate"><span class="pre">args.len()</span></code> is the expected number of arguments.</p>
+<p>For brevity, we’ll skipped some error handling, but e.g. you may want to check that <code class="docutils literal notranslate"><span class="pre">args.len()</span></code> is the expected number
+of arguments.</p>
 <section id="adding-by-impl-scalarudfimpl">
 <h3>Adding by <code class="docutils literal notranslate"><span class="pre">impl</span> <span class="pre">ScalarUDFImpl</span></code><a class="headerlink" href="#adding-by-impl-scalarudfimpl" title="Link to this heading">¶</a></h3>
 <p>This a lower level API with more functionality but is more complex, also documented in <a class="reference external" href="https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/advanced_udf.rs"><code class="docutils literal notranslate"><span class="pre">advanced_udf.rs</span></code></a>.</p>
@@ -703,20 +706,20 @@ an Arrow Array with the same number of rows as output.</p>
 <span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">name</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="kp">&amp;</span><span class="kt">str</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="s">&quot;add_one&quot;</span><span class="w"> </span><span class="p">}</span>
 <span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">signature</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">Signature</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="o">&amp;</span><span class="bp">self</span><span class="p">.</span><span class="n">signature</span><span class="w"> </span><span class="p">}</span>
 <span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">return_type</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">,</span><span class="w"> </span><span class="n">args</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="p">[</span><span class="n">DataType</span><span class="p">])</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="n">DataType</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
-<span class="w">      </span><span class="k">if</span><span class="w"> </span><span class="o">!</span><span class="fm">matches!</span><span class="p">(</span><span class="n">args</span><span class="p">.</span><span class="n">get</span><span class="p">(</span><span class="mi">0</span><span class="p">),</span><span class="w"> </span><span class="nb">Some</span><span class="p">(</span><span class="o">&amp;</span><span class="n">DataType</span><span class="p">::</span><span class="n">Int32</span><span class="p">))</span><span class="w"> </span><span class="p">{</span>
-<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="n">plan_err</span><span class="o">!</span><span class="p">(</span><span class="s">&quot;add_one only accepts Int32 arguments&quot;</span><span class="p">);</span>
-<span class="w">      </span><span class="p">}</span>
-<span class="w">      </span><span class="nb">Ok</span><span class="p">(</span><span class="n">DataType</span><span class="p">::</span><span class="n">Int32</span><span class="p">)</span>
+<span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="o">!</span><span class="fm">matches!</span><span class="p">(</span><span class="n">args</span><span class="p">.</span><span class="n">get</span><span class="p">(</span><span class="mi">0</span><span class="p">),</span><span class="w"> </span><span class="nb">Some</span><span class="p">(</span><span class="o">&amp;</span><span class="n">DataType</span><span class="p">::</span><span class="n">Int32</span><span class="p">))</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="k">return</span><span class="w"> </span><span class="n">plan_err</span><span class="o">!</span><span class="p">(</span><span class="s">&quot;add_one only accepts Int32 arguments&quot;</span><span class="p">);</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">        </span><span class="nb">Ok</span><span class="p">(</span><span class="n">DataType</span><span class="p">::</span><span class="n">Int32</span><span class="p">)</span>
 <span class="w">    </span><span class="p">}</span>
 <span class="w">    </span><span class="c1">// The actual implementation would add one to the argument</span>
-<span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">invoke</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">,</span><span class="w"> </span><span class="n">args</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="p">[</span><span class="n">ColumnarValue</span><span class="p">])</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="n">ColumnarValue</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">invoke_batch</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">,</span><span class="w"> </span><span class="n">args</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="p">[</span><span class="n">ColumnarValue</span><span class="p">],</span><span class="w"> </span><span class="n">_number_rows</span><span class="p">:</span><span class="w"> </span><span class="kt">usize</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="n">ColumnarValue</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
 <span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">args</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">columnar_values_to_array</span><span class="p">(</span><span class="n">args</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
 <span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">i64s</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">as_int64_array</span><span class="p">(</span><span class="o">&amp;</span><span class="n">args</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span><span class="o">?</span><span class="p">;</span>
 
 <span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">new_array</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">i64s</span>
-<span class="w">        </span><span class="p">.</span><span class="n">iter</span><span class="p">()</span>
-<span class="w">        </span><span class="p">.</span><span class="n">map</span><span class="p">(</span><span class="o">|</span><span class="n">array_elem</span><span class="o">|</span><span class="w"> </span><span class="n">array_elem</span><span class="p">.</span><span class="n">map</span><span class="p">(</span><span class="o">|</span><span class="n">value</span><span class="o">|</span><span class="w"> </span><span class="n">value</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="mi">1</span><span class="p">))</span>
-<span class="w">        </span><span class="p">.</span><span class="n">collect</span><span class="p">::</span><span class="o">&lt;</span><span class="n">Int64Array</span><span class="o">&gt;</span><span class="p">();</span>
+<span class="w">            </span><span class="p">.</span><span class="n">iter</span><span class="p">()</span>
+<span class="w">            </span><span class="p">.</span><span class="n">map</span><span class="p">(</span><span class="o">|</span><span class="n">array_elem</span><span class="o">|</span><span class="w"> </span><span class="n">array_elem</span><span class="p">.</span><span class="n">map</span><span class="p">(</span><span class="o">|</span><span class="n">value</span><span class="o">|</span><span class="w"> </span><span class="n">value</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="mi">1</span><span class="p">))</span>
+<span class="w">            </span><span class="p">.</span><span class="n">collect</span><span class="p">::</span><span class="o">&lt;</span><span class="n">Int64Array</span><span class="o">&gt;</span><span class="p">();</span>
 <span class="w">        </span><span class="nb">Ok</span><span class="p">(</span><span class="n">Arc</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">new_array</span><span class="p">))</span>
 <span class="w">    </span><span class="p">}</span>
 <span class="p">}</span>
@@ -753,49 +756,56 @@ an Arrow Array with the same number of rows as output.</p>
 <span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">i64s</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">as_int64_array</span><span class="p">(</span><span class="o">&amp;</span><span class="n">args</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span><span class="o">?</span><span class="p">;</span>
 
 <span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">new_array</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">i64s</span>
-<span class="w">      </span><span class="p">.</span><span class="n">iter</span><span class="p">()</span>
-<span class="w">      </span><span class="p">.</span><span class="n">map</span><span class="p">(</span><span class="o">|</span><span class="n">array_elem</span><span class="o">|</span><span class="w"> </span><span class="n">array_elem</span><span class="p">.</span><span class="n">map</span><span class="p">(</span><span class="o">|</span><span class="n">value</span><span class="o">|</span><span class="w"> </span><span class="n">value</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="mi">1</span><span class="p">))</span>
-<span class="w">      </span><span class="p">.</span><span class="n">collect</span><span class="p">::</span><span class="o">&lt;</span><span class="n">Int64Array</span><span class="o">&gt;</span><span class="p">();</span>
+<span class="w">        </span><span class="p">.</span><span class="n">iter</span><span class="p">()</span>
+<span class="w">        </span><span class="p">.</span><span class="n">map</span><span class="p">(</span><span class="o">|</span><span class="n">array_elem</span><span class="o">|</span><span class="w"> </span><span class="n">array_elem</span><span class="p">.</span><span class="n">map</span><span class="p">(</span><span class="o">|</span><span class="n">value</span><span class="o">|</span><span class="w"> </span><span class="n">value</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="mi">1</span><span class="p">))</span>
+<span class="w">        </span><span class="p">.</span><span class="n">collect</span><span class="p">::</span><span class="o">&lt;</span><span class="n">Int64Array</span><span class="o">&gt;</span><span class="p">();</span>
 
 <span class="w">    </span><span class="nb">Ok</span><span class="p">(</span><span class="n">Arc</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">new_array</span><span class="p">))</span>
 <span class="p">}</span>
 </pre></div>
 </div>
-<p>This “works” in isolation, i.e. if you have a slice of <code class="docutils literal notranslate"><span class="pre">ArrayRef</span></code>s, you can call <code class="docutils literal notranslate"><span class="pre">add_one</span></code> and it will return a new <code class="docutils literal notranslate"><span class="pre">ArrayRef</span></code> with 1 added to each value.</p>
+<p>This “works” in isolation, i.e. if you have a slice of <code class="docutils literal notranslate"><span class="pre">ArrayRef</span></code>s, you can call <code class="docutils literal notranslate"><span class="pre">add_one</span></code> and it will return a new
+<code class="docutils literal notranslate"><span class="pre">ArrayRef</span></code> with 1 added to each value.</p>
 <div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="kd">let</span><span class="w"> </span><span class="n">input</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="fm">vec!</span><span class="p">[</span><span class="nb">Some</span><span class="p">(</span><span class="mi">1</span><span class="p">),</span><span class="w"> </span><span class="nb">None</span><span class="p">,</span><span class="w"> </span><span class="nb">Some</span><span class="p">(</span><span class="mi">3</span><span class="p">)];</span>
 <span class="kd">let</span><span class="w"> </span><span class="n">input</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Arc</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">Int64Array</span><span class="p">::</span><span class="n">from</span><span class="p">(</span><span class="n">input</span><span class="p">))</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="n">ArrayRef</span><span class="p">;</span>
 
-<span class="kd">let</span><span class="w"> </span><span class="n">result</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">add_one</span><span class="p">(</span><span class="o">&amp;</span><span class="p">[</span><span class="n">input</span><span class="p">]).</span><span class="n">unwrap</span><span class="p">();</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">result</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">add_one</span><span class="p">(</span><span class="w"> </span><span class="o">&amp;</span><span class="w"> </span><span class="p">[</span><span class="n">input</span><span class="p">]).</span><span class="n">unwrap</span><span class="p">();</span>
 <span class="kd">let</span><span class="w"> </span><span class="n">result</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">result</span><span class="p">.</span><span class="n">as_any</span><span class="p">().</span><span class="n">downcast_ref</span><span class="p">::</span><span class="o">&lt;</span><span class="n">Int64Array</span><span class="o">&gt;</span><span class="p">().</span><span class="n">unwrap</span><span class="p">();</span>
 
 <span class="fm">assert_eq!</span><span class="p">(</span><span class="n">result</span><span class="p">,</span><span class="w"> </span><span class="o">&amp;</span><span class="n">Int64Array</span><span class="p">::</span><span class="n">from</span><span class="p">(</span><span class="fm">vec!</span><span class="p">[</span><span class="nb">Some</span><span class="p">(</span><span class="mi">2</span><span class="p">),</span><span class="w"> </span><span class="nb">None</span><span class="p">,</span><span class="w"> </span><span class="nb">Some</span><span class="p">(</span><span class="mi">4</span><span class="p">)]));</span>
 </pre></div>
 </div>
-<p>The challenge however is that DataFusion doesn’t know about this function. We need to register it with DataFusion so that it can be used in the context of a query.</p>
+<p>The challenge however is that DataFusion doesn’t know about this function. We need to register it with DataFusion so
+that it can be used in the context of a query.</p>
 </section>
 <section id="registering-a-scalar-udf">
 <h4>Registering a Scalar UDF<a class="headerlink" href="#registering-a-scalar-udf" title="Link to this heading">¶</a></h4>
-<p>To register a Scalar UDF, you need to wrap the function implementation in a <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/logical_expr/struct.ScalarUDF.html"><code class="docutils literal notranslate"><span class="pre">ScalarUDF</span></code></a> struct and then register it with the <code class="docutils literal notranslate"><span class="pre">SessionContext</span></code>.
+<p>To register a Scalar UDF, you need to wrap the function implementation in a <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/logical_expr/struct.ScalarUDF.html"><code class="docutils literal notranslate"><span class="pre">ScalarUDF</span></code></a> struct and then register it
+with the <code class="docutils literal notranslate"><span class="pre">SessionContext</span></code>.
 DataFusion provides the <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/logical_expr/fn.create_udf.html"><code class="docutils literal notranslate"><span class="pre">create_udf</span></code></a> and helper functions to make this easier.</p>
 <div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">logical_expr</span><span class="p">::{</span><span class="n">Volatility</span><span class="p">,</span><span class="w"> </span><span class="n">create_udf</span><span class="p">};</span>
 <span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">arrow</span><span class="p">::</span><span class="n">datatypes</span><span class="p">::</span><span class="n">DataType</span><span class="p">;</span>
 <span class="k">use</span><span class="w"> </span><span class="n">std</span><span class="p">::</span><span class="n">sync</span><span class="p">::</span><span class="n">Arc</span><span class="p">;</span>
 
 <span class="kd">let</span><span class="w"> </span><span class="n">udf</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">create_udf</span><span class="p">(</span>
-<span class="w">    </span><span class="s">&quot;add_one&quot;</span><span class="p">,</span>
-<span class="w">    </span><span class="fm">vec!</span><span class="p">[</span><span class="n">DataType</span><span class="p">::</span><span class="n">Int64</span><span class="p">],</span>
-<span class="w">    </span><span class="n">Arc</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">DataType</span><span class="p">::</span><span class="n">Int64</span><span class="p">),</span>
-<span class="w">    </span><span class="n">Volatility</span><span class="p">::</span><span class="n">Immutable</span><span class="p">,</span>
-<span class="w">    </span><span class="n">Arc</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">add_one</span><span class="p">),</span>
+<span class="s">&quot;add_one&quot;</span><span class="p">,</span>
+<span class="fm">vec!</span><span class="p">[</span><span class="n">DataType</span><span class="p">::</span><span class="n">Int64</span><span class="p">],</span>
+<span class="n">Arc</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">DataType</span><span class="p">::</span><span class="n">Int64</span><span class="p">),</span>
+<span class="n">Volatility</span><span class="p">::</span><span class="n">Immutable</span><span class="p">,</span>
+<span class="n">Arc</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">add_one</span><span class="p">),</span>
 <span class="p">);</span>
 </pre></div>
 </div>
 <p>A few things to note:</p>
 <ul class="simple">
 <li><p>The first argument is the name of the function. This is the name that will be used in SQL queries.</p></li>
-<li><p>The second argument is a vector of <code class="docutils literal notranslate"><span class="pre">DataType</span></code>s. This is the list of argument types that the function accepts. I.e. in this case, the function accepts a single <code class="docutils literal notranslate"><span class="pre">Int64</span></code> argument.</p></li>
+<li><p>The second argument is a vector of <code class="docutils literal notranslate"><span class="pre">DataType</span></code>s. This is the list of argument types that the function accepts. I.e. in
+this case, the function accepts a single <code class="docutils literal notranslate"><span class="pre">Int64</span></code> argument.</p></li>
 <li><p>The third argument is the return type of the function. I.e. in this case, the function returns an <code class="docutils literal notranslate"><span class="pre">Int64</span></code>.</p></li>
-<li><p>The fourth argument is the volatility of the function. In short, this is used to determine if the function’s performance can be optimized in some situations. In this case, the function is <code class="docutils literal notranslate"><span class="pre">Immutable</span></code> because it always returns the same value for the same input. A random number generator would be <code class="docutils literal notranslate"><span class="pre">Volatile</span></code> because it returns a different value for the same input.</p></li>
+<li><p>The fourth argument is the volatility of the function. In short, this is used to determine if the function’s
+performance can be optimized in some situations. In this case, the function is <code class="docutils literal notranslate"><span class="pre">Immutable</span></code> because it always returns
+the same value for the same input. A random number generator would be <code class="docutils literal notranslate"><span class="pre">Volatile</span></code> because it returns a different value
+for the same input.</p></li>
 <li><p>The fifth argument is the function implementation. This is the function that we defined above.</p></li>
 </ul>
 <p>That gives us a <code class="docutils literal notranslate"><span class="pre">ScalarUDF</span></code> that we can register with the <code class="docutils literal notranslate"><span class="pre">SessionContext</span></code>:</p>
@@ -809,7 +819,7 @@ DataFusion provides the <a class="reference external" href="https://docs.rs/data
 <p>At this point, you can use the <code class="docutils literal notranslate"><span class="pre">add_one</span></code> function in your query:</p>
 <div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="kd">let</span><span class="w"> </span><span class="n">sql</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">&quot;SELECT add_one(1)&quot;</span><span class="p">;</span>
 
-<span class="kd">let</span><span class="w"> </span><span class="n">df</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ctx</span><span class="p">.</span><span class="n">sql</span><span class="p">(</span><span class="o">&amp;</span><span class="n">sql</span><span class="p">).</span><span class="k">await</span><span class="p">.</span><span class="n">unwrap</span><span class="p">();</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">df</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ctx</span><span class="p">.</span><span class="n">sql</span><span class="p">(</span><span class="w"> </span><span class="o">&amp;</span><span class="w"> </span><span class="n">sql</span><span class="p">).</span><span class="k">await</span><span class="p">.</span><span class="n">unwrap</span><span class="p">();</span>
 </pre></div>
 </div>
 </section>
@@ -817,7 +827,8 @@ DataFusion provides the <a class="reference external" href="https://docs.rs/data
 </section>
 <section id="adding-a-window-udf">
 <h2>Adding a Window UDF<a class="headerlink" href="#adding-a-window-udf" title="Link to this heading">¶</a></h2>
-<p>Scalar UDFs are functions that take a row of data and return a single value. Window UDFs are similar, but they also have access to the rows around them. Access to the proximal rows is helpful, but adds some complexity to the implementation.</p>
+<p>Scalar UDFs are functions that take a row of data and return a single value. Window UDFs are similar, but they also have
+access to the rows around them. Access to the proximal rows is helpful, but adds some complexity to the implementation.</p>
 <p>For example, we will declare a user defined window function that computes a moving average.</p>
 <div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">arrow</span><span class="p">::{</span><span class="n">array</span><span class="p">::{</span><span class="n">ArrayRef</span><span class="p">,</span><span class="w"> </span><span class="n">Float64Array</span><span class="p">,</span><span class="w"> </span><span class="n">AsArray</span><span class="p">},</span><span class="w"> </span><span class="n">datatypes</span><span class="p">::</span><span class="n">Float64Type</span><span class="p">};</span>
 <span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">logical_expr</span><span class="p">::{</span><span class="n">PartitionEvaluator</span><span class="p">};</span>
@@ -887,7 +898,8 @@ DataFusion provides the <a class="reference external" href="https://docs.rs/data
 </div>
 <section id="registering-a-window-udf">
 <h3>Registering a Window UDF<a class="headerlink" href="#registering-a-window-udf" title="Link to this heading">¶</a></h3>
-<p>To register a Window UDF, you need to wrap the function implementation in a <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/logical_expr/struct.WindowUDF.html"><code class="docutils literal notranslate"><span class="pre">WindowUDF</span></code></a> struct and then register it with the <code class="docutils literal notranslate"><span class="pre">SessionContext</span></code>. DataFusion provides the <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/logical_expr/fn.create_udwf.html"><code class="docutils literal notranslate"><span class="pre">create_udwf</span></code></a> helper functions to make this easier.
+<p>To register a Window UDF, you need to wrap the function implementation in a <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/logical_expr/struct.WindowUDF.html"><code class="docutils literal notranslate"><span class="pre">WindowUDF</span></code></a> struct and then register it
+with the <code class="docutils literal notranslate"><span class="pre">SessionContext</span></code>. DataFusion provides the <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/logical_expr/fn.create_udwf.html"><code class="docutils literal notranslate"><span class="pre">create_udwf</span></code></a> helper functions to make this easier.
 There is a lower level API with more functionality but is more complex, that is documented in <a class="reference external" href="https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/advanced_udwf.rs"><code class="docutils literal notranslate"><span class="pre">advanced_udwf.rs</span></code></a>.</p>
 <div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">logical_expr</span><span class="p">::{</span><span class="n">Volatility</span><span class="p">,</span><span class="w"> </span><span class="n">create_udwf</span><span class="p">};</span>
 <span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">arrow</span><span class="p">::</span><span class="n">datatypes</span><span class="p">::</span><span class="n">DataType</span><span class="p">;</span>
@@ -895,20 +907,24 @@ There is a lower level API with more functionality but is more complex, that is 
 
 <span class="c1">// here is where we define the UDWF. We also declare its signature:</span>
 <span class="kd">let</span><span class="w"> </span><span class="n">smooth_it</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">create_udwf</span><span class="p">(</span>
-<span class="w">    </span><span class="s">&quot;smooth_it&quot;</span><span class="p">,</span>
-<span class="w">    </span><span class="n">DataType</span><span class="p">::</span><span class="n">Float64</span><span class="p">,</span>
-<span class="w">    </span><span class="n">Arc</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">DataType</span><span class="p">::</span><span class="n">Float64</span><span class="p">),</span>
-<span class="w">    </span><span class="n">Volatility</span><span class="p">::</span><span class="n">Immutable</span><span class="p">,</span>
-<span class="w">    </span><span class="n">Arc</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">make_partition_evaluator</span><span class="p">),</span>
+<span class="s">&quot;smooth_it&quot;</span><span class="p">,</span>
+<span class="n">DataType</span><span class="p">::</span><span class="n">Float64</span><span class="p">,</span>
+<span class="n">Arc</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">DataType</span><span class="p">::</span><span class="n">Float64</span><span class="p">),</span>
+<span class="n">Volatility</span><span class="p">::</span><span class="n">Immutable</span><span class="p">,</span>
+<span class="n">Arc</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">make_partition_evaluator</span><span class="p">),</span>
 <span class="p">);</span>
 </pre></div>
 </div>
 <p>The <code class="docutils literal notranslate"><span class="pre">create_udwf</span></code> has five arguments to check:</p>
 <ul class="simple">
 <li><p>The first argument is the name of the function. This is the name that will be used in SQL queries.</p></li>
-<li><p><strong>The second argument</strong> is the <code class="docutils literal notranslate"><span class="pre">DataType</span></code> of input array (attention: this is not a list of arrays). I.e. in this case, the function accepts <code class="docutils literal notranslate"><span class="pre">Float64</span></code> as argument.</p></li>
+<li><p><strong>The second argument</strong> is the <code class="docutils literal notranslate"><span class="pre">DataType</span></code> of input array (attention: this is not a list of arrays). I.e. in this case,
+the function accepts <code class="docutils literal notranslate"><span class="pre">Float64</span></code> as argument.</p></li>
 <li><p>The third argument is the return type of the function. I.e. in this case, the function returns an <code class="docutils literal notranslate"><span class="pre">Float64</span></code>.</p></li>
-<li><p>The fourth argument is the volatility of the function. In short, this is used to determine if the function’s performance can be optimized in some situations. In this case, the function is <code class="docutils literal notranslate"><span class="pre">Immutable</span></code> because it always returns the same value for the same input. A random number generator would be <code class="docutils literal notranslate"><span class="pre">Volatile</span></code> because it returns a different value for the same input.</p></li>
+<li><p>The fourth argument is the volatility of the function. In short, this is used to determine if the function’s
+performance can be optimized in some situations. In this case, the function is <code class="docutils literal notranslate"><span class="pre">Immutable</span></code> because it always returns
+the same value for the same input. A random number generator would be <code class="docutils literal notranslate"><span class="pre">Volatile</span></code> because it returns a different value
+for the same input.</p></li>
 <li><p><strong>The fifth argument</strong> is the function implementation. This is the function that we defined above.</p></li>
 </ul>
 <p>That gives us a <code class="docutils literal notranslate"><span class="pre">WindowUDF</span></code> that we can register with the <code class="docutils literal notranslate"><span class="pre">SessionContext</span></code>:</p>
@@ -920,7 +936,8 @@ There is a lower level API with more functionality but is more complex, that is 
 </pre></div>
 </div>
 <p>At this point, you can use the <code class="docutils literal notranslate"><span class="pre">smooth_it</span></code> function in your query:</p>
-<p>For example, if we have a <a class="reference external" href="https://github.com/apache/datafusion/blob/main/datafusion/core/tests/data/cars.csv"><code class="docutils literal notranslate"><span class="pre">cars.csv</span></code></a> whose contents like</p>
+<p>For example, if we have a <a class="reference external" href="https://github.com/apache/datafusion/blob/main/datafusion/core/tests/data/cars.csv">
+<code class="docutils literal notranslate"><span class="pre">cars.csv</span></code></a> whose contents like</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">car</span><span class="p">,</span><span class="n">speed</span><span class="p">,</span><span class="n">time</span>
 <span class="n">red</span><span class="p">,</span><span class="mf">20.0</span><span class="p">,</span><span class="mi">1996</span><span class="o">-</span><span class="mi">04</span><span class="o">-</span><span class="mi">12</span><span class="n">T12</span><span class="p">:</span><span class="mi">05</span><span class="p">:</span><span class="mf">03.000000000</span>
 <span class="n">red</span><span class="p">,</span><span class="mf">20.3</span><span class="p">,</span><span class="mi">1996</span><span class="o">-</span><span class="mi">04</span><span class="o">-</span><span class="mi">12</span><span class="n">T12</span><span class="p">:</span><span class="mi">05</span><span class="p">:</span><span class="mf">04.000000000</span>
@@ -933,11 +950,11 @@ There is a lower level API with more functionality but is more complex, that is 
 <div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">datasource</span><span class="p">::</span><span class="n">file_format</span><span class="p">::</span><span class="n">options</span><span class="p">::</span><span class="n">CsvReadOptions</span><span class="p">;</span>
 <span class="c1">// register csv table first</span>
 <span class="kd">let</span><span class="w"> </span><span class="n">csv_path</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">&quot;cars.csv&quot;</span><span class="p">.</span><span class="n">to_string</span><span class="p">();</span>
-<span class="n">ctx</span><span class="p">.</span><span class="n">register_csv</span><span class="p">(</span><span class="s">&quot;cars&quot;</span><span class="p">,</span><span class="w"> </span><span class="o">&amp;</span><span class="n">csv_path</span><span class="p">,</span><span class="w"> </span><span class="n">CsvReadOptions</span><span class="p">::</span><span class="n">default</span><span class="p">().</span><span class="n">has_header</span><span class="p">(</span><span class="kc">true</span><span class="p">)).</span><span class="k">await</span><span class="o">?</span><span class="p">;</span>
+<span class="n">ctx</span><span class="p">.</span><span class="n">register_csv</span><span class="p">(</span><span class="s">&quot;cars&quot;</span><span class="p">,</span><span class="w"> </span><span class="o">&amp;</span><span class="w"> </span><span class="n">csv_path</span><span class="p">,</span><span class="w"> </span><span class="n">CsvReadOptions</span><span class="p">::</span><span class="n">default</span><span class="w"> </span><span class="p">().</span><span class="n">has_header</span><span class="p">(</span><span class="kc">true</span><span class="p">)).</span><span class="k">await</span><span class="o">?</span><span class="p">;</span>
 <span class="c1">// do query with smooth_it</span>
 <span class="kd">let</span><span class="w"> </span><span class="n">df</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ctx</span>
-<span class="w">    </span><span class="p">.</span><span class="n">sql</span><span class="p">(</span>
-<span class="w">        </span><span class="s">&quot;SELECT \</span>
+<span class="p">.</span><span class="n">sql</span><span class="p">(</span>
+<span class="s">&quot;SELECT \</span>
 <span class="s">           car, \</span>
 <span class="s">           speed, \</span>
 <span class="s">           smooth_it(speed) OVER (PARTITION BY car ORDER BY time) as smooth_speed,\</span>
@@ -945,8 +962,8 @@ There is a lower level API with more functionality but is more complex, that is 
 <span class="s">           from cars \</span>
 <span class="s">         ORDER BY \</span>
 <span class="s">           car&quot;</span><span class="p">,</span>
-<span class="w">    </span><span class="p">)</span>
-<span class="w">    </span><span class="p">.</span><span class="k">await</span><span class="o">?</span><span class="p">;</span>
+<span class="p">)</span>
+<span class="p">.</span><span class="k">await</span><span class="o">?</span><span class="p">;</span>
 <span class="c1">// print the results</span>
 <span class="n">df</span><span class="p">.</span><span class="n">show</span><span class="p">().</span><span class="k">await</span><span class="o">?</span><span class="p">;</span>
 </pre></div>
@@ -976,7 +993,8 @@ There is a lower level API with more functionality but is more complex, that is 
 </section>
 <section id="adding-an-aggregate-udf">
 <h2>Adding an Aggregate UDF<a class="headerlink" href="#adding-an-aggregate-udf" title="Link to this heading">¶</a></h2>
-<p>Aggregate UDFs are functions that take a group of rows and return a single value. These are akin to SQL’s <code class="docutils literal notranslate"><span class="pre">SUM</span></code> or <code class="docutils literal notranslate"><span class="pre">COUNT</span></code> functions.</p>
+<p>Aggregate UDFs are functions that take a group of rows and return a single value. These are akin to SQL’s <code class="docutils literal notranslate"><span class="pre">SUM</span></code> or
+<code class="docutils literal notranslate"><span class="pre">COUNT</span></code> functions.</p>
 <p>For example, we will declare a single-type, single return type UDAF that computes the geometric mean.</p>
 <div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">arrow</span><span class="p">::</span><span class="n">array</span><span class="p">::</span><span class="n">ArrayRef</span><span class="p">;</span>
 <span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">scalar</span><span class="p">::</span><span class="n">ScalarValue</span><span class="p">;</span>
@@ -1068,7 +1086,8 @@ There is a lower level API with more functionality but is more complex, that is 
 </div>
 <section id="registering-an-aggregate-udf">
 <h3>registering an Aggregate UDF<a class="headerlink" href="#registering-an-aggregate-udf" title="Link to this heading">¶</a></h3>
-<p>To register a Aggregate UDF, you need to wrap the function implementation in a <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/logical_expr/struct.AggregateUDF.html"><code class="docutils literal notranslate"><span class="pre">AggregateUDF</span></code></a> struct and then register it with the <code class="docutils literal notranslate"><span class="pre">SessionContext</span></code>. DataFusion provides the <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/logical_expr/fn.create_udaf.html"><code class="docutils literal notranslate"><span class="pre">create_udaf</span></code></a> helper functions to make this easier.
+<p>To register a Aggregate UDF, you need to wrap the function implementation in a <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/logical_expr/struct.AggregateUDF.html"><code class="docutils literal notranslate"><span class="pre">AggregateUDF</span></code></a> struct and then register
+it with the <code class="docutils literal notranslate"><span class="pre">SessionContext</span></code>. DataFusion provides the <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/logical_expr/fn.create_udaf.html"><code class="docutils literal notranslate"><span class="pre">create_udaf</span></code></a> helper functions to make this easier.
 There is a lower level API with more functionality but is more complex, that is documented in <a class="reference external" href="https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/advanced_udaf.rs"><code class="docutils literal notranslate"><span class="pre">advanced_udaf.rs</span></code></a>.</p>
 <div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">logical_expr</span><span class="p">::{</span><span class="n">Volatility</span><span class="p">,</span><span class="w"> </span><span class="n">create_udaf</span><span class="p">};</span>
 <span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">arrow</span><span class="p">::</span><span class="n">datatypes</span><span class="p">::</span><span class="n">DataType</span><span class="p">;</span>
@@ -1076,26 +1095,30 @@ There is a lower level API with more functionality but is more complex, that is 
 
 <span class="c1">// here is where we define the UDAF. We also declare its signature:</span>
 <span class="kd">let</span><span class="w"> </span><span class="n">geometric_mean</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">create_udaf</span><span class="p">(</span>
-<span class="w">    </span><span class="c1">// the name; used to represent it in plan descriptions and in the registry, to use in SQL.</span>
-<span class="w">    </span><span class="s">&quot;geo_mean&quot;</span><span class="p">,</span>
-<span class="w">    </span><span class="c1">// the input type; DataFusion guarantees that the first entry of `values` in `update` has this type.</span>
-<span class="w">    </span><span class="fm">vec!</span><span class="p">[</span><span class="n">DataType</span><span class="p">::</span><span class="n">Float64</span><span class="p">],</span>
-<span class="w">    </span><span class="c1">// the return type; DataFusion expects this to match the type returned by `evaluate`.</span>
-<span class="w">    </span><span class="n">Arc</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">DataType</span><span class="p">::</span><span class="n">Float64</span><span class="p">),</span>
-<span class="w">    </span><span class="n">Volatility</span><span class="p">::</span><span class="n">Immutable</span><span class="p">,</span>
-<span class="w">    </span><span class="c1">// This is the accumulator factory; DataFusion uses it to create new accumulators.</span>
-<span class="w">    </span><span class="n">Arc</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="o">|</span><span class="n">_</span><span class="o">|</span><span class="w"> </span><span class="nb">Ok</span><span class="p">(</span><span class="nb">Box</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">GeometricMean</span><span class="p">::</span><span class="n">new</span><span class="p">()))),</span>
-<span class="w">    </span><span class="c1">// This is the description of the state. `state()` must match the types here.</span>
-<span class="w">    </span><span class="n">Arc</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="fm">vec!</span><span class="p">[</span><span class="n">DataType</span><span class="p">::</span><span class="n">Float64</span><span class="p">,</span><span class="w"> </span><span class="n">DataType</span><span class="p">::</span><span class="n">UInt32</span><span class="p">]),</span>
+<span class="c1">// the name; used to represent it in plan descriptions and in the registry, to use in SQL.</span>
+<span class="s">&quot;geo_mean&quot;</span><span class="p">,</span>
+<span class="c1">// the input type; DataFusion guarantees that the first entry of `values` in `update` has this type.</span>
+<span class="fm">vec!</span><span class="p">[</span><span class="n">DataType</span><span class="p">::</span><span class="n">Float64</span><span class="p">],</span>
+<span class="c1">// the return type; DataFusion expects this to match the type returned by `evaluate`.</span>
+<span class="n">Arc</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">DataType</span><span class="p">::</span><span class="n">Float64</span><span class="p">),</span>
+<span class="n">Volatility</span><span class="p">::</span><span class="n">Immutable</span><span class="p">,</span>
+<span class="c1">// This is the accumulator factory; DataFusion uses it to create new accumulators.</span>
+<span class="n">Arc</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">_</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="nb">Ok</span><span class="p">(</span><span class="nb">Box</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">GeometricMean</span><span class="p">::</span><span class="n">new</span><span class="p">()))),</span>
+<span class="c1">// This is the description of the state. `state()` must match the types here.</span>
+<span class="n">Arc</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="fm">vec!</span><span class="p">[</span><span class="n">DataType</span><span class="p">::</span><span class="n">Float64</span><span class="p">,</span><span class="w"> </span><span class="n">DataType</span><span class="p">::</span><span class="n">UInt32</span><span class="p">]),</span>
 <span class="p">);</span>
 </pre></div>
 </div>
 <p>The <code class="docutils literal notranslate"><span class="pre">create_udaf</span></code> has six arguments to check:</p>
 <ul class="simple">
 <li><p>The first argument is the name of the function. This is the name that will be used in SQL queries.</p></li>
-<li><p>The second argument is a vector of <code class="docutils literal notranslate"><span class="pre">DataType</span></code>s. This is the list of argument types that the function accepts. I.e. in this case, the function accepts a single <code class="docutils literal notranslate"><span class="pre">Float64</span></code> argument.</p></li>
+<li><p>The second argument is a vector of <code class="docutils literal notranslate"><span class="pre">DataType</span></code>s. This is the list of argument types that the function accepts. I.e. in
+this case, the function accepts a single <code class="docutils literal notranslate"><span class="pre">Float64</span></code> argument.</p></li>
 <li><p>The third argument is the return type of the function. I.e. in this case, the function returns an <code class="docutils literal notranslate"><span class="pre">Int64</span></code>.</p></li>
-<li><p>The fourth argument is the volatility of the function. In short, this is used to determine if the function’s performance can be optimized in some situations. In this case, the function is <code class="docutils literal notranslate"><span class="pre">Immutable</span></code> because it always returns the same value for the same input. A random number generator would be <code class="docutils literal notranslate"><span class="pre">Volatile</span></code> because it returns a different value for the same input.</p></li>
+<li><p>The fourth argument is the volatility of the function. In short, this is used to determine if the function’s
+performance can be optimized in some situations. In this case, the function is <code class="docutils literal notranslate"><span class="pre">Immutable</span></code> because it always returns
+the same value for the same input. A random number generator would be <code class="docutils literal notranslate"><span class="pre">Volatile</span></code> because it returns a different value
+for the same input.</p></li>
 <li><p>The fifth argument is the function implementation. This is the function that we defined above.</p></li>
 <li><p>The sixth argument is the description of the state, which will by passed between execution stages.</p></li>
 </ul>
@@ -1116,8 +1139,13 @@ There is a lower level API with more functionality but is more complex, that is 
 <section id="adding-a-user-defined-table-function">
 <h2>Adding a User-Defined Table Function<a class="headerlink" href="#adding-a-user-defined-table-function" title="Link to this heading">¶</a></h2>
 <p>A User-Defined Table Function (UDTF) is a function that takes parameters and returns a <code class="docutils literal notranslate"><span class="pre">TableProvider</span></code>.</p>
-<p>Because we’re returning a <code class="docutils literal notranslate"><span class="pre">TableProvider</span></code>, in this example we’ll use the <code class="docutils literal notranslate"><span class="pre">MemTable</span></code> data source to represent a table. This is a simple struct that holds a set of RecordBatches in memory and treats them as a table. In your case, this would be replaced with your own struct that implements <code class="docutils literal notranslate"><span class="pre">TableProvider</span></code>.</p>
-<p>While this is a simple example for illustrative purposes, UDTFs have a lot of potential use cases. And can be particularly useful for reading data from external sources and interactive analysis. For example, see the <a class="reference external" href="https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/simple_udtf.rs">example</a> for a working example that reads from a CSV file. As another example, you could use the built-in UDTF <code class="docutils literal notranslate"><span class="pre">parquet_metadata</span></code> in the CLI to read the metadata from a Parquet file.</p>
+<p>Because we’re returning a <code class="docutils literal notranslate"><span class="pre">TableProvider</span></code>, in this example we’ll use the <code class="docutils literal notranslate"><span class="pre">MemTable</span></code> data source to represent a table.
+This is a simple struct that holds a set of RecordBatches in memory and treats them as a table. In your case, this would
+be replaced with your own struct that implements <code class="docutils literal notranslate"><span class="pre">TableProvider</span></code>.</p>
+<p>While this is a simple example for illustrative purposes, UDTFs have a lot of potential use cases. And can be
+particularly useful for reading data from external sources and interactive analysis. For example, see the <a class="reference external" href="https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/simple_udtf.rs">example</a>
+for a working example that reads from a CSV file. As another example, you could use the built-in UDTF <code class="docutils literal notranslate"><span class="pre">parquet_metadata</span></code>
+in the CLI to read the metadata from a Parquet file.</p>
 <div class="highlight-console notranslate"><div class="highlight"><pre><span></span><span class="go">&gt; select filename, row_group_id, row_group_num_rows, row_group_bytes, stats_min, stats_max from parquet_metadata(&#39;./benchmarks/data/hits.parquet&#39;) where  column_id = 17 limit 10;</span>
 <span class="go">+--------------------------------+--------------+--------------------+-----------------+-----------+-----------+</span>
 <span class="go">| filename                       | row_group_id | row_group_num_rows | row_group_bytes | stats_min | stats_max |</span>
@@ -1137,8 +1165,11 @@ There is a lower level API with more functionality but is more complex, that is 
 </div>
 <section id="writing-the-udtf">
 <h3>Writing the UDTF<a class="headerlink" href="#writing-the-udtf" title="Link to this heading">¶</a></h3>
-<p>The simple UDTF used here takes a single <code class="docutils literal notranslate"><span class="pre">Int64</span></code> argument and returns a table with a single column with the value of the argument. To create a function in DataFusion, you need to implement the <code class="docutils literal notranslate"><span class="pre">TableFunctionImpl</span></code> trait. This trait has a single method, <code class="docutils literal notranslate"><span class="pre">call</span></code>, that takes a slice of <code class="docutils literal notranslate"><span class="pre">Expr</span></code>s and returns a <code class="docutils literal notranslate"><span class="pre">Result&lt;Arc&lt;dyn</span> <span class="pre">TableProvider&gt;&gt;</span></code>.</p>
-<p>In the <code class="docutils literal notranslate"><span class="pre">call</span></code> method, you parse the input <code class="docutils literal notranslate"><span class="pre">Expr</span></code>s and return a <code class="docutils literal notranslate"><span class="pre">TableProvider</span></code>. You might also want to do some validation of the input <code class="docutils literal notranslate"><span class="pre">Expr</span></code>s, e.g. checking that the number of arguments is correct.</p>
+<p>The simple UDTF used here takes a single <code class="docutils literal notranslate"><span class="pre">Int64</span></code> argument and returns a table with a single column with the value of the
+argument. To create a function in DataFusion, you need to implement the <code class="docutils literal notranslate"><span class="pre">TableFunctionImpl</span></code> trait. This trait has a
+single method, <code class="docutils literal notranslate"><span class="pre">call</span></code>, that takes a slice of <code class="docutils literal notranslate"><span class="pre">Expr</span></code>s and returns a <code class="docutils literal notranslate"><span class="pre">Result&lt;Arc&lt;dyn</span> <span class="pre">TableProvider&gt;&gt;</span></code>.</p>
+<p>In the <code class="docutils literal notranslate"><span class="pre">call</span></code> method, you parse the input <code class="docutils literal notranslate"><span class="pre">Expr</span></code>s and return a <code class="docutils literal notranslate"><span class="pre">TableProvider</span></code>. You might also want to do some
+validation of the input <code class="docutils literal notranslate"><span class="pre">Expr</span></code>s, e.g. checking that the number of arguments is correct.</p>
 <div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">common</span><span class="p">::</span><span class="n">plan_err</span><span class="p">;</span>
 <span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">datasource</span><span class="p">::</span><span class="n">function</span><span class="p">::</span><span class="n">TableFunctionImpl</span><span class="p">;</span>
 <span class="c1">// Other imports here</span>
@@ -1178,7 +1209,7 @@ There is a lower level API with more functionality but is more complex, that is 
 
 <span class="kd">let</span><span class="w"> </span><span class="n">ctx</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">SessionContext</span><span class="p">::</span><span class="n">new</span><span class="p">();</span>
 
-<span class="n">ctx</span><span class="p">.</span><span class="n">register_udtf</span><span class="p">(</span><span class="s">&quot;echo&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">Arc</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">EchoFunction</span><span class="p">::</span><span class="n">default</span><span class="p">()));</span>
+<span class="n">ctx</span><span class="p">.</span><span class="n">register_udtf</span><span class="p">(</span><span class="s">&quot;echo&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">Arc</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">EchoFunction</span><span class="p">::</span><span class="n">default</span><span class="w"> </span><span class="p">()));</span>
 </pre></div>
 </div>
 <p>And if all goes well, you can use it in your query:</p>
@@ -1187,7 +1218,7 @@ There is a lower level API with more functionality but is more complex, that is 
 <span class="kd">let</span><span class="w"> </span><span class="n">df</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ctx</span><span class="p">.</span><span class="n">sql</span><span class="p">(</span><span class="s">&quot;SELECT * FROM echo(1)&quot;</span><span class="p">).</span><span class="k">await</span><span class="o">?</span><span class="p">;</span>
 
 <span class="kd">let</span><span class="w"> </span><span class="n">results</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">df</span><span class="p">.</span><span class="n">collect</span><span class="p">().</span><span class="k">await</span><span class="o">?</span><span class="p">;</span>
-<span class="n">pretty</span><span class="p">::</span><span class="n">print_batches</span><span class="p">(</span><span class="o">&amp;</span><span class="n">results</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+<span class="n">pretty</span><span class="p">::</span><span class="n">print_batches</span><span class="p">(</span><span class="w"> </span><span class="o">&amp;</span><span class="w"> </span><span class="n">results</span><span class="p">)</span><span class="w"> </span><span class="o">?</span><span class="p">;</span>
 <span class="c1">// +---+</span>
 <span class="c1">// | a |</span>
 <span class="c1">// +---+</span>
