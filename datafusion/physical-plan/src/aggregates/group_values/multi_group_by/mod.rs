@@ -32,12 +32,14 @@ use ahash::RandomState;
 use arrow::compute::cast;
 use arrow::datatypes::{
     BinaryViewType, Date32Type, Date64Type, Float32Type, Float64Type, Int16Type,
-    Int32Type, Int64Type, Int8Type, StringViewType, UInt16Type, UInt32Type, UInt64Type,
-    UInt8Type,
+    Int32Type, Int64Type, Int8Type, StringViewType, Time32MillisecondType,
+    Time32SecondType, Time64MicrosecondType, Time64NanosecondType,
+    TimestampMicrosecondType, TimestampMillisecondType, TimestampNanosecondType,
+    TimestampSecondType, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
 };
 use arrow::record_batch::RecordBatch;
 use arrow_array::{Array, ArrayRef};
-use arrow_schema::{DataType, Schema, SchemaRef};
+use arrow_schema::{DataType, Schema, SchemaRef, TimeUnit};
 use datafusion_common::hash_utils::create_hashes;
 use datafusion_common::{not_impl_err, DataFusionError, Result};
 use datafusion_execution::memory_pool::proxy::{RawTableAllocExt, VecAllocExt};
@@ -878,12 +880,12 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
 /// `$t`: the primitive type of the builder
 ///
 macro_rules! instantiate_primitive {
-    ($v:expr, $nullable:expr, $t:ty) => {
+    ($v:expr, $nullable:expr, $t:ty, $data_type:ident) => {
         if $nullable {
-            let b = PrimitiveGroupValueBuilder::<$t, true>::new();
+            let b = PrimitiveGroupValueBuilder::<$t, true>::new($data_type.to_owned());
             $v.push(Box::new(b) as _)
         } else {
-            let b = PrimitiveGroupValueBuilder::<$t, false>::new();
+            let b = PrimitiveGroupValueBuilder::<$t, false>::new($data_type.to_owned());
             $v.push(Box::new(b) as _)
         }
     };
@@ -896,23 +898,116 @@ impl<const STREAMING: bool> GroupValues for GroupValuesColumn<STREAMING> {
 
             for f in self.schema.fields().iter() {
                 let nullable = f.is_nullable();
-                match f.data_type() {
-                    &DataType::Int8 => instantiate_primitive!(v, nullable, Int8Type),
-                    &DataType::Int16 => instantiate_primitive!(v, nullable, Int16Type),
-                    &DataType::Int32 => instantiate_primitive!(v, nullable, Int32Type),
-                    &DataType::Int64 => instantiate_primitive!(v, nullable, Int64Type),
-                    &DataType::UInt8 => instantiate_primitive!(v, nullable, UInt8Type),
-                    &DataType::UInt16 => instantiate_primitive!(v, nullable, UInt16Type),
-                    &DataType::UInt32 => instantiate_primitive!(v, nullable, UInt32Type),
-                    &DataType::UInt64 => instantiate_primitive!(v, nullable, UInt64Type),
+                let data_type = f.data_type();
+                match data_type {
+                    &DataType::Int8 => {
+                        instantiate_primitive!(v, nullable, Int8Type, data_type)
+                    }
+                    &DataType::Int16 => {
+                        instantiate_primitive!(v, nullable, Int16Type, data_type)
+                    }
+                    &DataType::Int32 => {
+                        instantiate_primitive!(v, nullable, Int32Type, data_type)
+                    }
+                    &DataType::Int64 => {
+                        instantiate_primitive!(v, nullable, Int64Type, data_type)
+                    }
+                    &DataType::UInt8 => {
+                        instantiate_primitive!(v, nullable, UInt8Type, data_type)
+                    }
+                    &DataType::UInt16 => {
+                        instantiate_primitive!(v, nullable, UInt16Type, data_type)
+                    }
+                    &DataType::UInt32 => {
+                        instantiate_primitive!(v, nullable, UInt32Type, data_type)
+                    }
+                    &DataType::UInt64 => {
+                        instantiate_primitive!(v, nullable, UInt64Type, data_type)
+                    }
                     &DataType::Float32 => {
-                        instantiate_primitive!(v, nullable, Float32Type)
+                        instantiate_primitive!(v, nullable, Float32Type, data_type)
                     }
                     &DataType::Float64 => {
-                        instantiate_primitive!(v, nullable, Float64Type)
+                        instantiate_primitive!(v, nullable, Float64Type, data_type)
                     }
-                    &DataType::Date32 => instantiate_primitive!(v, nullable, Date32Type),
-                    &DataType::Date64 => instantiate_primitive!(v, nullable, Date64Type),
+                    &DataType::Date32 => {
+                        instantiate_primitive!(v, nullable, Date32Type, data_type)
+                    }
+                    &DataType::Date64 => {
+                        instantiate_primitive!(v, nullable, Date64Type, data_type)
+                    }
+                    &DataType::Time32(t) => match t {
+                        TimeUnit::Second => {
+                            instantiate_primitive!(
+                                v,
+                                nullable,
+                                Time32SecondType,
+                                data_type
+                            )
+                        }
+                        TimeUnit::Millisecond => {
+                            instantiate_primitive!(
+                                v,
+                                nullable,
+                                Time32MillisecondType,
+                                data_type
+                            )
+                        }
+                        _ => {}
+                    },
+                    &DataType::Time64(t) => match t {
+                        TimeUnit::Microsecond => {
+                            instantiate_primitive!(
+                                v,
+                                nullable,
+                                Time64MicrosecondType,
+                                data_type
+                            )
+                        }
+                        TimeUnit::Nanosecond => {
+                            instantiate_primitive!(
+                                v,
+                                nullable,
+                                Time64NanosecondType,
+                                data_type
+                            )
+                        }
+                        _ => {}
+                    },
+                    &DataType::Timestamp(t, _) => match t {
+                        TimeUnit::Second => {
+                            instantiate_primitive!(
+                                v,
+                                nullable,
+                                TimestampSecondType,
+                                data_type
+                            )
+                        }
+                        TimeUnit::Millisecond => {
+                            instantiate_primitive!(
+                                v,
+                                nullable,
+                                TimestampMillisecondType,
+                                data_type
+                            )
+                        }
+                        TimeUnit::Microsecond => {
+                            instantiate_primitive!(
+                                v,
+                                nullable,
+                                TimestampMicrosecondType,
+                                data_type
+                            )
+                        }
+                        TimeUnit::Nanosecond => {
+                            instantiate_primitive!(
+                                v,
+                                nullable,
+                                TimestampNanosecondType,
+                                data_type
+                            )
+                        }
+                    },
                     &DataType::Utf8 => {
                         let b = ByteGroupValueBuilder::<i32>::new(OutputType::Utf8);
                         v.push(Box::new(b) as _)
@@ -1125,6 +1220,8 @@ fn supported_type(data_type: &DataType) -> bool {
             | DataType::LargeBinary
             | DataType::Date32
             | DataType::Date64
+            | DataType::Time32(_)
+            | DataType::Timestamp(_, _)
             | DataType::Utf8View
             | DataType::BinaryView
     )

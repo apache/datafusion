@@ -145,7 +145,6 @@ fn get_bit_and_doc() -> &'static Documentation {
             .with_syntax_example("bit_and(expression)")
             .with_standard_argument("expression", Some("Integer"))
             .build()
-            .unwrap()
     })
 }
 
@@ -159,7 +158,6 @@ fn get_bit_or_doc() -> &'static Documentation {
             .with_syntax_example("bit_or(expression)")
             .with_standard_argument("expression", Some("Integer"))
             .build()
-            .unwrap()
     })
 }
 
@@ -175,7 +173,6 @@ fn get_bit_xor_doc() -> &'static Documentation {
             .with_syntax_example("bit_xor(expression)")
             .with_standard_argument("expression", Some("Integer"))
             .build()
-            .unwrap()
     })
 }
 

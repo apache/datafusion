@@ -79,7 +79,11 @@ impl ScalarUDFImpl for ArrayRepeat {
         ))))
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         make_scalar_function(array_repeat_inner)(args)
     }
 
@@ -127,7 +131,6 @@ fn get_array_repeat_doc() -> &'static Documentation {
                 "Value of how many times to repeat the element.",
             )
             .build()
-            .unwrap()
     })
 }
 

@@ -101,7 +101,11 @@ impl ScalarUDFImpl for StructFunc {
         Ok(DataType::Struct(Fields::from(return_fields)))
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         struct_expr(args)
     }
 
@@ -154,6 +158,5 @@ select struct(a as field_a, b) from t;
                 "expression1, expression_n",
                 "Expression to include in the output struct. Can be a constant, column, or function, any combination of arithmetic or string operators.")
             .build()
-            .unwrap()
     })
 }

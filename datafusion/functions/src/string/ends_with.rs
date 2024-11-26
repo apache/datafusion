@@ -63,7 +63,11 @@ impl ScalarUDFImpl for EndsWithFunc {
         Ok(DataType::Boolean)
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         match args[0].data_type() {
             DataType::Utf8View | DataType::Utf8 | DataType::LargeUtf8 => {
                 make_scalar_function(ends_with, vec![])(args)
@@ -106,7 +110,6 @@ fn get_ends_with_doc() -> &'static Documentation {
             .with_standard_argument("str", Some("String"))
             .with_argument("substr", "Substring to test for.")
             .build()
-            .unwrap()
     })
 }
 

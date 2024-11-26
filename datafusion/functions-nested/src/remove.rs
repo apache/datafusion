@@ -74,7 +74,11 @@ impl ScalarUDFImpl for ArrayRemove {
         Ok(arg_types[0].clone())
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         make_scalar_function(array_remove_inner)(args)
     }
 
@@ -116,7 +120,6 @@ fn get_array_remove_doc() -> &'static Documentation {
                 "Element to be removed from the array.",
             )
             .build()
-            .unwrap()
     })
 }
 
@@ -160,7 +163,11 @@ impl ScalarUDFImpl for ArrayRemoveN {
         Ok(arg_types[0].clone())
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         make_scalar_function(array_remove_n_inner)(args)
     }
 
@@ -204,7 +211,6 @@ fn get_array_remove_n_doc() -> &'static Documentation {
                 "Number of first occurrences to remove.",
             )
             .build()
-            .unwrap()
     })
 }
 
@@ -248,7 +254,11 @@ impl ScalarUDFImpl for ArrayRemoveAll {
         Ok(arg_types[0].clone())
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         make_scalar_function(array_remove_all_inner)(args)
     }
 
@@ -288,7 +298,6 @@ fn get_array_remove_all_doc() -> &'static Documentation {
                 "Element to be removed from the array.",
             )
             .build()
-            .unwrap()
     })
 }
 

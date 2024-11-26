@@ -82,7 +82,11 @@ impl ScalarUDFImpl for ArrayPosition {
         Ok(UInt64)
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         make_scalar_function(array_position_inner)(args)
     }
 
@@ -134,7 +138,6 @@ fn get_array_position_doc() -> &'static Documentation {
                 "Index at which to start searching.",
             )
             .build()
-            .unwrap()
     })
 }
 
@@ -253,7 +256,11 @@ impl ScalarUDFImpl for ArrayPositions {
         Ok(List(Arc::new(Field::new("item", UInt64, true))))
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         make_scalar_function(array_positions_inner)(args)
     }
 
@@ -293,7 +300,6 @@ fn get_array_positions_doc() -> &'static Documentation {
                 "Element to search for positions in the array.",
             )
             .build()
-            .unwrap()
     })
 }
 

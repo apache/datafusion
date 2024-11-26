@@ -204,7 +204,6 @@ fn get_bool_and_doc() -> &'static Documentation {
             )
             .with_standard_argument("expression", None)
             .build()
-            .unwrap()
     })
 }
 
@@ -353,7 +352,6 @@ fn get_bool_or_doc() -> &'static Documentation {
             )
             .with_standard_argument("expression", None)
             .build()
-            .unwrap()
     })
 }
 

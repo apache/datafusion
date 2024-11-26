@@ -16,12 +16,10 @@
 // under the License.
 
 use arrow::datatypes::DataType;
-use datafusion_common::tree_node::{Transformed, TreeNodeIterator};
-use datafusion_common::{DFSchema, DFSchemaRef, Result};
+use datafusion_common::{DFSchema, DFSchemaRef};
 use std::fmt::{self, Display};
 use std::sync::{Arc, OnceLock};
 
-use super::tree_node::rewrite_arc;
 use crate::{expr_vec_fmt, Expr, LogicalPlan};
 
 /// Statements have a unchanging empty schema.
@@ -77,53 +75,6 @@ impl Statement {
         match self {
             Statement::Prepare(Prepare { input, .. }) => vec![input.as_ref()],
             _ => vec![],
-        }
-    }
-
-    /// Rewrites input LogicalPlans in the current `Statement` using `f`.
-    pub(super) fn map_inputs<
-        F: FnMut(LogicalPlan) -> Result<Transformed<LogicalPlan>>,
-    >(
-        self,
-        f: F,
-    ) -> Result<Transformed<Self>> {
-        match self {
-            Statement::Prepare(Prepare {
-                input,
-                name,
-                data_types,
-            }) => Ok(rewrite_arc(input, f)?.update_data(|input| {
-                Statement::Prepare(Prepare {
-                    input,
-                    name,
-                    data_types,
-                })
-            })),
-            _ => Ok(Transformed::no(self)),
-        }
-    }
-
-    /// Returns a iterator over all expressions in the current `Statement`.
-    pub(super) fn expression_iter(&self) -> impl Iterator<Item = &Expr> {
-        match self {
-            Statement::Execute(Execute { parameters, .. }) => parameters.iter(),
-            _ => [].iter(),
-        }
-    }
-
-    /// Rewrites all expressions in the current `Statement` using `f`.
-    pub(super) fn map_expressions<F: FnMut(Expr) -> Result<Transformed<Expr>>>(
-        self,
-        f: F,
-    ) -> Result<Transformed<Self>> {
-        match self {
-            Statement::Execute(Execute { name, parameters }) => Ok(parameters
-                .into_iter()
-                .map_until_stop_and_collect(f)?
-                .update_data(|parameters| {
-                    Statement::Execute(Execute { parameters, name })
-                })),
-            _ => Ok(Transformed::no(self)),
         }
     }
 

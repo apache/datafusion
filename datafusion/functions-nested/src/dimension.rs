@@ -81,7 +81,11 @@ impl ScalarUDFImpl for ArrayDims {
         })
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         make_scalar_function(array_dims_inner)(args)
     }
 
@@ -119,7 +123,6 @@ fn get_array_dims_doc() -> &'static Documentation {
                 "Array expression. Can be a constant, column, or function, and any combination of array operators.",
             )
             .build()
-            .unwrap()
     })
 }
 
@@ -166,7 +169,11 @@ impl ScalarUDFImpl for ArrayNdims {
         })
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         make_scalar_function(array_ndims_inner)(args)
     }
 
@@ -206,7 +213,6 @@ fn get_array_ndims_doc() -> &'static Documentation {
                 "Array element.",
             )
             .build()
-            .unwrap()
     })
 }
 

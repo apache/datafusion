@@ -16,7 +16,7 @@
 # specific language governing permissions and limitations
 # under the License.
 
-query RR
+query IR
 select
     o_year,
     cast(cast(sum(case

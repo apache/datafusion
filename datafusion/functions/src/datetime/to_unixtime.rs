@@ -83,6 +83,7 @@ impl ScalarUDFImpl for ToUnixtimeFunc {
             DataType::Date64 | DataType::Date32 | DataType::Timestamp(_, None) => args[0]
                 .cast_to(&DataType::Timestamp(TimeUnit::Second, None), None)?
                 .cast_to(&DataType::Int64, None),
+            #[allow(deprecated)] // TODO: migrate to invoke_with_args
             DataType::Utf8 => ToTimestampSecondsFunc::new()
                 .invoke_batch(args, batch_size)?
                 .cast_to(&DataType::Int64, None),
@@ -127,6 +128,5 @@ fn get_to_unixtime_doc() -> &'static Documentation {
 ```
 "#)
             .build()
-            .unwrap()
     })
 }

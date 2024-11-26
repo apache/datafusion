@@ -4294,7 +4294,7 @@ physical_plan
 08)--------------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
 09)----------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/timestamps.csv]]}, projection=[ts], output_ordering=[ts@0 DESC], has_header=false
 
-query R
+query I
 SELECT extract(month from ts) as months
   FROM csv_with_timestamps
   GROUP BY extract(month from ts)
@@ -4344,7 +4344,7 @@ create table t1(state string, city string, min_temp float, area int, time timest
     ('MA', 'Boston', 70.4, 1, 50),
     ('MA', 'Bedford', 71.59, 2, 150);
 
-query RI
+query II
 select date_part('year', time) as bla, count(distinct state) as count from t1 group by bla;
 ----
 1970 1
@@ -5272,6 +5272,201 @@ drop view t
 statement ok
 drop table source;
 
+# Test multi group by int + Date32
+statement ok
+create table source as values
+(1, '2020-01-01'),
+(1, '2020-01-01'),
+(2, '2020-01-02'),
+(2, '2020-01-03'),
+(3, '2020-01-04'),
+(3, '2020-01-04'),
+(2, '2020-01-03'),
+(null, null),
+(null, '2020-01-01'),
+(null, null),
+(null, '2020-01-01'),
+(2, '2020-01-02'),
+(2, '2020-01-02'),
+(1, null)
+;
+
+statement ok
+create view t as select column1 as a, arrow_cast(column2, 'Date32') as b from source;
+
+query IDI
+select a, b, count(*) from t group by a, b order by a, b;
+----
+1 2020-01-01 2
+1 NULL 1
+2 2020-01-02 3
+2 2020-01-03 2
+3 2020-01-04 2
+NULL 2020-01-01 2
+NULL NULL 2
+
+statement ok
+drop view t
+
+statement ok
+drop table source;
+
+# Test multi group by int + Date64
+statement ok
+create table source as values
+(1, '2020-01-01'),
+(1, '2020-01-01'),
+(2, '2020-01-02'),
+(2, '2020-01-03'),
+(3, '2020-01-04'),
+(3, '2020-01-04'),
+(2, '2020-01-03'),
+(null, null),
+(null, '2020-01-01'),
+(null, null),
+(null, '2020-01-01'),
+(2, '2020-01-02'),
+(2, '2020-01-02'),
+(1, null)
+;
+
+statement ok
+create view t as select column1 as a, arrow_cast(column2, 'Date64') as b from source;
+
+query IDI
+select a, b, count(*) from t group by a, b order by a, b;
+----
+1 2020-01-01T00:00:00 2
+1 NULL 1
+2 2020-01-02T00:00:00 3
+2 2020-01-03T00:00:00 2
+3 2020-01-04T00:00:00 2
+NULL 2020-01-01T00:00:00 2
+NULL NULL 2
+
+statement ok
+drop view t
+
+statement ok
+drop table source;
+
+# Test multi group by int + Time32
+statement ok
+create table source as values
+(1, '12:34:56'),
+(1, '12:34:56'),
+(2, '13:00:00'),
+(2, '14:15:00'),
+(3, '23:59:59'),
+(3, '23:59:59'),
+(2, '14:15:00'),
+(null, null),
+(null, '12:00:00'),
+(null, null),
+(null, '12:00:00'),
+(2, '13:00:00'),
+(2, '13:00:00'),
+(1, null)
+;
+
+statement ok
+create view t as select column1 as a, arrow_cast(column2, 'Time32(Second)') as b from source;
+
+query IDI
+select a, b, count(*) from t group by a, b order by a, b;
+----
+1 12:34:56 2
+1 NULL 1
+2 13:00:00 3
+2 14:15:00 2
+3 23:59:59 2
+NULL 12:00:00 2
+NULL NULL 2
+
+statement ok
+drop view t
+
+statement ok
+drop table source;
+
+# Test multi group by int + Time64
+statement ok
+create table source as values
+(1, '12:34:56.123456'),
+(1, '12:34:56.123456'),
+(2, '13:00:00.000001'),
+(2, '14:15:00.999999'),
+(3, '23:59:59.500000'),
+(3, '23:59:59.500000'),
+(2, '14:15:00.999999'),
+(null, null),
+(null, '12:00:00.000000'),
+(null, null),
+(null, '12:00:00.000000'),
+(2, '13:00:00.000001'),
+(2, '13:00:00.000001'),
+(1, null)
+;
+
+statement ok
+create view t as select column1 as a, arrow_cast(column2, 'Time64(Microsecond)') as b from source;
+
+query IDI
+select a, b, count(*) from t group by a, b order by a, b;
+----
+1 12:34:56.123456 2
+1 NULL 1
+2 13:00:00.000001 3
+2 14:15:00.999999 2
+3 23:59:59.500 2
+NULL 12:00:00 2
+NULL NULL 2
+
+statement ok
+drop view t
+
+statement ok
+drop table source;
+
+# Test multi group by int + Timestamp
+statement ok
+create table source as values
+(1, '2020-01-01 12:34:56'),
+(1, '2020-01-01 12:34:56'),
+(2, '2020-01-02 13:00:00'),
+(2, '2020-01-03 14:15:00'),
+(3, '2020-01-04 23:59:59'),
+(3, '2020-01-04 23:59:59'),
+(2, '2020-01-03 14:15:00'),
+(null, null),
+(null, '2020-01-01 12:00:00'),
+(null, null),
+(null, '2020-01-01 12:00:00'),
+(2, '2020-01-02 13:00:00'),
+(2, '2020-01-02 13:00:00'),
+(1, null)
+;
+
+statement ok
+create view t as select column1 as a, arrow_cast(column2, 'Timestamp(Nanosecond, None)') as b from source;
+
+query IPI
+select a, b, count(*) from t group by a, b order by a, b;
+----
+1 2020-01-01T12:34:56 2
+1 NULL 1
+2 2020-01-02T13:00:00 3
+2 2020-01-03T14:15:00 2
+3 2020-01-04T23:59:59 2
+NULL 2020-01-01T12:00:00 2
+NULL NULL 2
+
+statement ok
+drop view t
+
+statement ok
+drop table source;
+
 # Test whether min, max accumulator produces NaN result when input is NaN.
 # See https://github.com/apache/datafusion/issues/13415 for rationale
 statement ok
@@ -5287,3 +5482,20 @@ query RR
 SELECT max(input_table.x), min(input_table.x) from input_table GROUP BY input_table."row";
 ----
 NaN NaN
+
+# Group by timestamp
+query TP
+SELECT
+    'foo' AS text,
+    arrow_cast('2024-01-01T00:00:00Z'::timestamptz, 'Timestamp(Microsecond, Some("UTC"))') AS ts
+GROUP BY ts, text
+----
+foo 2024-01-01T00:00:00Z
+
+query TP
+SELECT
+    'foo' AS text,
+    arrow_cast('2024-01-01T00:00:00Z'::timestamptz, 'Timestamp(Second, Some("+08:00"))') AS ts
+GROUP BY ts, text
+----
+foo 2024-01-01T08:00:00+08:00

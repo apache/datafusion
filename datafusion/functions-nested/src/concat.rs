@@ -86,7 +86,11 @@ impl ScalarUDFImpl for ArrayAppend {
         Ok(arg_types[0].clone())
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         make_scalar_function(array_append_inner)(args)
     }
 
@@ -128,7 +132,6 @@ fn get_array_append_doc() -> &'static Documentation {
                 "Element to append to the array.",
             )
             .build()
-            .unwrap()
     })
 }
 
@@ -182,7 +185,11 @@ impl ScalarUDFImpl for ArrayPrepend {
         Ok(arg_types[1].clone())
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         make_scalar_function(array_prepend_inner)(args)
     }
 
@@ -224,7 +231,6 @@ fn get_array_prepend_doc() -> &'static Documentation {
                 "Array expression. Can be a constant, column, or function, and any combination of array operators.",
             )
             .build()
-            .unwrap()
     })
 }
 
@@ -302,7 +308,11 @@ impl ScalarUDFImpl for ArrayConcat {
         Ok(expr_type)
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         make_scalar_function(array_concat_inner)(args)
     }
 
@@ -342,7 +352,6 @@ fn get_array_concat_doc() -> &'static Documentation {
                 "Subsequent array column or literal array to concatenate.",
             )
             .build()
-            .unwrap()
     })
 }
 

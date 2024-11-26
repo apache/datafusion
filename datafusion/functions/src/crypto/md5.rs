@@ -64,11 +64,11 @@ impl ScalarUDFImpl for Md5Func {
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         use DataType::*;
         Ok(match &arg_types[0] {
-            LargeUtf8 | LargeBinary => LargeUtf8,
+            LargeUtf8 | LargeBinary => Utf8,
             Utf8View | Utf8 | Binary => Utf8,
             Null => Null,
             Dictionary(_, t) => match **t {
-                LargeUtf8 | LargeBinary => LargeUtf8,
+                LargeUtf8 | LargeBinary => Utf8,
                 Utf8 | Binary => Utf8,
                 Null => Null,
                 _ => {
@@ -85,7 +85,11 @@ impl ScalarUDFImpl for Md5Func {
             }
         })
     }
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         md5(args)
     }
 
@@ -114,6 +118,5 @@ fn get_md5_doc() -> &'static Documentation {
             )
             .with_standard_argument("expression", Some("String"))
             .build()
-            .unwrap()
     })
 }
