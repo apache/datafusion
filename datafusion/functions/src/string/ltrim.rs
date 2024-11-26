@@ -275,9 +275,4 @@ mod tests {
             StringArray
         );
     }
-
-    #[test]
-    fn test_functions1() {
-        dbg!(LtrimFunc::new().documentation());
-    }
 }
