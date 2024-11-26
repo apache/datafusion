@@ -191,7 +191,8 @@ impl<T: ArrowPrimitiveType, const NULLABLE: bool> GroupColumn
             assert!(nulls.is_none(), "unexpected nulls in non nullable input");
         }
 
-        let arr = PrimitiveArray::<T>::new(ScalarBuffer::from(group_values), nulls);
+        let arr = PrimitiveArray::<T>::new(ScalarBuffer::from(group_values), nulls)
+            .with_data_type(data_type.clone());
         let array_ref = Arc::new(arr) as ArrayRef;
 
         // Set timezone information for timestamp
