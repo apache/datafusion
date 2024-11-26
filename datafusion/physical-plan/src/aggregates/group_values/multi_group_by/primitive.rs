@@ -22,6 +22,7 @@ use arrow_array::cast::AsArray;
 use arrow_array::{Array, ArrayRef, ArrowPrimitiveType, PrimitiveArray};
 use arrow_schema::DataType;
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
+use datafusion_physical_expr::aggregate::utils::adjust_output_array;
 use itertools::izip;
 use std::iter;
 use std::sync::Arc;
@@ -190,9 +191,15 @@ impl<T: ArrowPrimitiveType, const NULLABLE: bool> GroupColumn
             assert!(nulls.is_none(), "unexpected nulls in non nullable input");
         }
 
-        let arr = PrimitiveArray::<T>::new(ScalarBuffer::from(group_values), nulls);
+        let arr = PrimitiveArray::<T>::new(ScalarBuffer::from(group_values), nulls)
+            .with_data_type(data_type.clone());
+        let array_ref = Arc::new(arr) as ArrayRef;
+
+        let adjusted_array = adjust_output_array(&data_type, array_ref)
+            .expect("Failed to adjust array data type");
+
         // Set timezone information for timestamp
-        Arc::new(arr.with_data_type(data_type))
+        adjusted_array
     }
 
     fn take_n(&mut self, n: usize) -> ArrayRef {
