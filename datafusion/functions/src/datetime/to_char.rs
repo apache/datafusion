@@ -107,7 +107,11 @@ impl ScalarUDFImpl for ToCharFunc {
         Ok(Utf8)
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         if args.len() != 2 {
             return exec_err!(
                 "to_char function requires 2 arguments, got {}",
@@ -383,6 +387,7 @@ mod tests {
         ];
 
         for (value, format, expected) in scalar_data {
+            #[allow(deprecated)] // TODO migrate UDF to invoke from invoke_batch
             let result = ToCharFunc::new()
                 .invoke_batch(
                     &[ColumnarValue::Scalar(value), ColumnarValue::Scalar(format)],
@@ -460,14 +465,15 @@ mod tests {
         ];
 
         for (value, format, expected) in scalar_array_data {
-            let batch_size = format.len();
+            let batch_len = format.len();
+            #[allow(deprecated)] // TODO migrate UDF to invoke from invoke_batch
             let result = ToCharFunc::new()
                 .invoke_batch(
                     &[
                         ColumnarValue::Scalar(value),
                         ColumnarValue::Array(Arc::new(format) as ArrayRef),
                     ],
-                    batch_size,
+                    batch_len,
                 )
                 .expect("that to_char parsed values without error");
 
@@ -589,14 +595,15 @@ mod tests {
         ];
 
         for (value, format, expected) in array_scalar_data {
-            let batch_size = value.len();
+            let batch_len = value.len();
+            #[allow(deprecated)] // TODO migrate UDF to invoke from invoke_batch
             let result = ToCharFunc::new()
                 .invoke_batch(
                     &[
                         ColumnarValue::Array(value as ArrayRef),
                         ColumnarValue::Scalar(format),
                     ],
-                    batch_size,
+                    batch_len,
                 )
                 .expect("that to_char parsed values without error");
 
@@ -609,14 +616,15 @@ mod tests {
         }
 
         for (value, format, expected) in array_array_data {
-            let batch_size = value.len();
+            let batch_len = value.len();
+            #[allow(deprecated)] // TODO migrate UDF to invoke from invoke_batch
             let result = ToCharFunc::new()
                 .invoke_batch(
                     &[
                         ColumnarValue::Array(value),
                         ColumnarValue::Array(Arc::new(format) as ArrayRef),
                     ],
-                    batch_size,
+                    batch_len,
                 )
                 .expect("that to_char parsed values without error");
 
@@ -633,6 +641,7 @@ mod tests {
         //
 
         // invalid number of arguments
+        #[allow(deprecated)] // TODO migrate UDF to invoke from invoke_batch
         let result = ToCharFunc::new()
             .invoke_batch(&[ColumnarValue::Scalar(ScalarValue::Int32(Some(1)))], 1);
         assert_eq!(
@@ -641,6 +650,7 @@ mod tests {
         );
 
         // invalid type
+        #[allow(deprecated)] // TODO migrate UDF to invoke from invoke_batch
         let result = ToCharFunc::new().invoke_batch(
             &[
                 ColumnarValue::Scalar(ScalarValue::Int32(Some(1))),

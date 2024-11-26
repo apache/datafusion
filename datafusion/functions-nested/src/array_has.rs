@@ -98,7 +98,11 @@ impl ScalarUDFImpl for ArrayHas {
         Ok(DataType::Boolean)
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         match &args[1] {
             ColumnarValue::Array(array_needle) => {
                 // the needle is already an array, convert the haystack to an array of the same length
@@ -321,7 +325,11 @@ impl ScalarUDFImpl for ArrayHasAll {
         Ok(DataType::Boolean)
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         make_scalar_function(array_has_all_inner)(args)
     }
 
@@ -401,7 +409,11 @@ impl ScalarUDFImpl for ArrayHasAny {
         Ok(DataType::Boolean)
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         make_scalar_function(array_has_any_inner)(args)
     }
 

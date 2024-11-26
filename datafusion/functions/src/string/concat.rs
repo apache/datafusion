@@ -85,7 +85,11 @@ impl ScalarUDFImpl for ConcatFunc {
 
     /// Concatenates the text representations of all the arguments. NULL arguments are ignored.
     /// concat('abcde', 2, NULL, 22) = 'abcde222'
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         let mut return_datatype = DataType::Utf8;
         args.iter().for_each(|col| {
             if col.data_type() == DataType::Utf8View {
@@ -471,6 +475,7 @@ mod tests {
         ])));
         let args = &[c0, c1, c2, c3, c4];
 
+        #[allow(deprecated)] // TODO migrate UDF invoke to invoke_batch
         let result = ConcatFunc::new().invoke_batch(args, 3)?;
         let expected =
             Arc::new(StringViewArray::from(vec!["foo,x,a", "bar,,", "baz,z,b"]))

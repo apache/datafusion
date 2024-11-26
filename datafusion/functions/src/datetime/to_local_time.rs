@@ -320,7 +320,11 @@ impl ScalarUDFImpl for ToLocalTimeFunc {
         }
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         if args.len() != 1 {
             return exec_err!(
                 "to_local_time function requires 1 argument, got {:?}",

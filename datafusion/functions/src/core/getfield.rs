@@ -160,7 +160,11 @@ impl ScalarUDFImpl for GetFieldFunc {
         }
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         if args.len() != 2 {
             return exec_err!(
                 "get_field function requires 2 arguments, got {}",

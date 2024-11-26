@@ -64,7 +64,11 @@ impl ScalarUDFImpl for ReplaceFunc {
         utf8_to_str_type(&arg_types[0], "replace")
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         match args[0].data_type() {
             DataType::Utf8 => make_scalar_function(replace::<i32>, vec![])(args),
             DataType::LargeUtf8 => make_scalar_function(replace::<i64>, vec![])(args),

@@ -72,7 +72,11 @@ impl ScalarUDFImpl for CharacterLengthFunc {
         utf8_to_int_type(&arg_types[0], "character_length")
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         make_scalar_function(character_length, vec![])(args)
     }
 
