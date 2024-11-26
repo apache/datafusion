@@ -56,7 +56,7 @@ impl Default for ParserOptions {
             parse_float_as_decimal: false,
             enable_ident_normalization: true,
             support_varchar_with_length: true,
-            enable_options_value_normalization: true,
+            enable_options_value_normalization: false,
         }
     }
 }
