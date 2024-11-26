@@ -158,7 +158,6 @@ fn get_stddev_doc() -> &'static Documentation {
             )
             .with_standard_argument("expression", None)
             .build()
-            .unwrap()
     })
 }
 
@@ -282,7 +281,6 @@ fn get_stddev_pop_doc() -> &'static Documentation {
             )
             .with_standard_argument("expression", None)
             .build()
-            .unwrap()
     })
 }
 

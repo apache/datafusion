@@ -81,7 +81,11 @@ impl ScalarUDFImpl for SplitPartFunc {
         utf8_to_str_type(&arg_types[0], "split_part")
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         // First, determine if any of the arguments is an Array
         let len = args.iter().find_map(|arg| match arg {
             ColumnarValue::Array(a) => Some(a.len()),
@@ -202,7 +206,6 @@ fn get_split_part_doc() -> &'static Documentation {
             .with_argument("delimiter", "String or character to split on.")
             .with_argument("pos", "Position of the part to return.")
             .build()
-            .unwrap()
     })
 }
 

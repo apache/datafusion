@@ -70,7 +70,6 @@ fn get_encode_doc() -> &'static Documentation {
             .with_argument("format", "Supported formats are: `base64`, `hex`")
             .with_related_udf("decode")
             .build()
-            .unwrap()
     })
 }
 
@@ -90,7 +89,11 @@ impl ScalarUDFImpl for EncodeFunc {
         Ok(arg_types[0].to_owned())
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         encode(args)
     }
 
@@ -157,7 +160,6 @@ fn get_decode_doc() -> &'static Documentation {
             .with_argument("format", "Same arguments as [encode](#encode)")
             .with_related_udf("encode")
             .build()
-            .unwrap()
     })
 }
 
@@ -177,7 +179,11 @@ impl ScalarUDFImpl for DecodeFunc {
         Ok(arg_types[0].to_owned())
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         decode(args)
     }
 

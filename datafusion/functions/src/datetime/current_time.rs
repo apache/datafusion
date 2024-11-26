@@ -70,7 +70,11 @@ impl ScalarUDFImpl for CurrentTimeFunc {
         Ok(Time64(Nanosecond))
     }
 
-    fn invoke(&self, _args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        _args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         internal_err!(
             "invoke should not be called on a simplified current_time() function"
         )
@@ -106,6 +110,5 @@ The `current_time()` return value is determined at query time and will return th
 "#)
             .with_syntax_example("current_time()")
             .build()
-            .unwrap()
     })
 }

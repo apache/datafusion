@@ -59,7 +59,6 @@ log(numeric_expression)"#)
             .with_standard_argument("base", Some("Base numeric"))
             .with_standard_argument("numeric_expression", Some("Numeric"))
             .build()
-            .unwrap()
     })
 }
 
@@ -125,7 +124,11 @@ impl ScalarUDFImpl for LogFunc {
     }
 
     // Support overloaded log(base, x) and log(x) which defaults to log(10, x)
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         let args = ColumnarValue::values_to_arrays(args)?;
 
         let mut base = ColumnarValue::Scalar(ScalarValue::Float32(Some(10.0)));
@@ -277,7 +280,7 @@ mod tests {
             ]))), // num
             ColumnarValue::Array(Arc::new(Int64Array::from(vec![5, 10, 15, 20]))),
         ];
-
+        #[allow(deprecated)] // TODO: migrate to invoke_with_args
         let _ = LogFunc::new().invoke_batch(&args, 4);
     }
 
@@ -286,7 +289,7 @@ mod tests {
         let args = [
             ColumnarValue::Array(Arc::new(Int64Array::from(vec![10]))), // num
         ];
-
+        #[allow(deprecated)] // TODO: migrate to invoke_with_args
         let result = LogFunc::new().invoke_batch(&args, 1);
         result.expect_err("expected error");
     }
@@ -296,7 +299,7 @@ mod tests {
         let args = [
             ColumnarValue::Scalar(ScalarValue::Float32(Some(10.0))), // num
         ];
-
+        #[allow(deprecated)] // TODO: migrate to invoke_with_args
         let result = LogFunc::new()
             .invoke_batch(&args, 1)
             .expect("failed to initialize function log");
@@ -320,7 +323,7 @@ mod tests {
         let args = [
             ColumnarValue::Scalar(ScalarValue::Float64(Some(10.0))), // num
         ];
-
+        #[allow(deprecated)] // TODO: migrate to invoke_with_args
         let result = LogFunc::new()
             .invoke_batch(&args, 1)
             .expect("failed to initialize function log");
@@ -345,7 +348,7 @@ mod tests {
             ColumnarValue::Scalar(ScalarValue::Float32(Some(2.0))), // num
             ColumnarValue::Scalar(ScalarValue::Float32(Some(32.0))), // num
         ];
-
+        #[allow(deprecated)] // TODO: migrate to invoke_with_args
         let result = LogFunc::new()
             .invoke_batch(&args, 1)
             .expect("failed to initialize function log");
@@ -370,7 +373,7 @@ mod tests {
             ColumnarValue::Scalar(ScalarValue::Float64(Some(2.0))), // num
             ColumnarValue::Scalar(ScalarValue::Float64(Some(64.0))), // num
         ];
-
+        #[allow(deprecated)] // TODO: migrate to invoke_with_args
         let result = LogFunc::new()
             .invoke_batch(&args, 1)
             .expect("failed to initialize function log");
@@ -396,7 +399,7 @@ mod tests {
                 10.0, 100.0, 1000.0, 10000.0,
             ]))), // num
         ];
-
+        #[allow(deprecated)] // TODO: migrate to invoke_with_args
         let result = LogFunc::new()
             .invoke_batch(&args, 4)
             .expect("failed to initialize function log");
@@ -425,7 +428,7 @@ mod tests {
                 10.0, 100.0, 1000.0, 10000.0,
             ]))), // num
         ];
-
+        #[allow(deprecated)] // TODO: migrate to invoke_with_args
         let result = LogFunc::new()
             .invoke_batch(&args, 4)
             .expect("failed to initialize function log");
@@ -455,7 +458,7 @@ mod tests {
                 8.0, 4.0, 81.0, 625.0,
             ]))), // num
         ];
-
+        #[allow(deprecated)] // TODO: migrate to invoke_with_args
         let result = LogFunc::new()
             .invoke_batch(&args, 4)
             .expect("failed to initialize function log");
@@ -485,7 +488,7 @@ mod tests {
                 8.0, 4.0, 81.0, 625.0,
             ]))), // num
         ];
-
+        #[allow(deprecated)] // TODO: migrate to invoke_with_args
         let result = LogFunc::new()
             .invoke_batch(&args, 4)
             .expect("failed to initialize function log");

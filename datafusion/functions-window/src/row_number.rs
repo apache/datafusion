@@ -73,7 +73,6 @@ fn get_row_number_doc() -> &'static Documentation {
             )
             .with_syntax_example("row_number()")
             .build()
-            .unwrap()
     })
 }
 

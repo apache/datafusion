@@ -103,7 +103,11 @@ impl ScalarUDFImpl for ToHexFunc {
         })
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         match args[0].data_type() {
             DataType::Int32 => make_scalar_function(to_hex::<Int32Type>, vec![])(args),
             DataType::Int64 => make_scalar_function(to_hex::<Int64Type>, vec![])(args),
@@ -136,7 +140,6 @@ fn get_to_hex_doc() -> &'static Documentation {
             )
             .with_standard_argument("int", Some("Integer"))
             .build()
-            .unwrap()
     })
 }
 
