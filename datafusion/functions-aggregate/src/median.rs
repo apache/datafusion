@@ -318,9 +318,10 @@ where
 {
     // Make sure that, array is not empty.
     debug_assert!(!array.is_empty());
-    array
+    *array
         .iter()
-        .fold(array[0], |max, &val| if max > val { max } else { val })
+        .max_by(|x, y| x.partial_cmp(y).unwrap())
+        .unwrap()
 }
 
 fn calculate_median<T: ArrowNumericType>(
