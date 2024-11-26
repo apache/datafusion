@@ -311,15 +311,16 @@ impl<T: ArrowNumericType> Accumulator for DistinctMedianAccumulator<T> {
 }
 
 /// Get maximum entry in the slice,
-fn slice_max<T>(array: &[T::Native]) -> Option<T::Native>
+fn slice_max<T>(array: &[T::Native]) -> T::Native
 where
     T: ArrowPrimitiveType,
     T::Native: PartialOrd, // Ensure the type supports PartialOrd for comparison
 {
-    array.iter().fold(None, |acc, val| match acc {
-        Some(max) if max > *val => Some(max),
-        _ => Some(*val),
-    }) // Fold to find the maximum
+    // Make sure that, array is not empty.
+    debug_assert!(!array.is_empty());
+    array
+        .iter()
+        .fold(array[0], |max, &val| if max > val { max } else { val })
 }
 
 fn calculate_median<T: ArrowNumericType>(
@@ -333,8 +334,7 @@ fn calculate_median<T: ArrowNumericType>(
     } else if len % 2 == 0 {
         let (low, high, _) = values.select_nth_unstable_by(len / 2, cmp);
         // Get the maximum of the low (left side after bi-partitioning)
-        // Since contains at least 1 entry, shouldn't return Some.
-        let left_max = slice_max::<T>(low).unwrap();
+        let left_max = slice_max::<T>(low);
         let median = left_max
             .add_wrapping(*high)
             .div_wrapping(T::Native::usize_as(2));
