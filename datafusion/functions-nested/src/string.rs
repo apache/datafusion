@@ -159,7 +159,11 @@ impl ScalarUDFImpl for ArrayToString {
         })
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         make_scalar_function(array_to_string_inner)(args)
     }
 
@@ -259,7 +263,11 @@ impl ScalarUDFImpl for StringToArray {
         })
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         match args[0].data_type() {
             Utf8 | Utf8View => make_scalar_function(string_to_array_inner::<i32>)(args),
             LargeUtf8 => make_scalar_function(string_to_array_inner::<i64>)(args),

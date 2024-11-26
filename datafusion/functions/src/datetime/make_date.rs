@@ -72,7 +72,11 @@ impl ScalarUDFImpl for MakeDateFunc {
         Ok(Date32)
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         if args.len() != 3 {
             return exec_err!(
                 "make_date function requires 3 arguments, got {}",
@@ -233,6 +237,7 @@ mod tests {
 
     #[test]
     fn test_make_date() {
+        #[allow(deprecated)] // TODO migrate UDF to invoke from invoke_batch
         let res = MakeDateFunc::new()
             .invoke_batch(
                 &[
@@ -250,6 +255,7 @@ mod tests {
             panic!("Expected a scalar value")
         }
 
+        #[allow(deprecated)] // TODO migrate UDF to invoke from invoke_batch
         let res = MakeDateFunc::new()
             .invoke_batch(
                 &[
@@ -267,6 +273,7 @@ mod tests {
             panic!("Expected a scalar value")
         }
 
+        #[allow(deprecated)] // TODO migrate UDF to invoke from invoke_batch
         let res = MakeDateFunc::new()
             .invoke_batch(
                 &[
@@ -287,7 +294,8 @@ mod tests {
         let years = Arc::new((2021..2025).map(Some).collect::<Int64Array>());
         let months = Arc::new((1..5).map(Some).collect::<Int32Array>());
         let days = Arc::new((11..15).map(Some).collect::<UInt32Array>());
-        let batch_size = years.len();
+        let batch_len = years.len();
+        #[allow(deprecated)] // TODO migrate UDF to invoke from invoke_batch
         let res = MakeDateFunc::new()
             .invoke_batch(
                 &[
@@ -295,7 +303,7 @@ mod tests {
                     ColumnarValue::Array(months),
                     ColumnarValue::Array(days),
                 ],
-                batch_size,
+                batch_len,
             )
             .expect("that make_date parsed values without error");
 
@@ -316,6 +324,7 @@ mod tests {
         //
 
         // invalid number of arguments
+        #[allow(deprecated)] // TODO migrate UDF to invoke from invoke_batch
         let res = MakeDateFunc::new()
             .invoke_batch(&[ColumnarValue::Scalar(ScalarValue::Int32(Some(1)))], 1);
         assert_eq!(
@@ -324,6 +333,7 @@ mod tests {
         );
 
         // invalid type
+        #[allow(deprecated)] // TODO migrate UDF to invoke from invoke_batch
         let res = MakeDateFunc::new().invoke_batch(
             &[
                 ColumnarValue::Scalar(ScalarValue::IntervalYearMonth(Some(1))),
@@ -338,6 +348,7 @@ mod tests {
         );
 
         // overflow of month
+        #[allow(deprecated)] // TODO migrate UDF to invoke from invoke_batch
         let res = MakeDateFunc::new().invoke_batch(
             &[
                 ColumnarValue::Scalar(ScalarValue::Int32(Some(2023))),
@@ -352,6 +363,7 @@ mod tests {
         );
 
         // overflow of day
+        #[allow(deprecated)] // TODO migrate UDF to invoke from invoke_batch
         let res = MakeDateFunc::new().invoke_batch(
             &[
                 ColumnarValue::Scalar(ScalarValue::Int32(Some(2023))),

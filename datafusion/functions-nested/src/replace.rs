@@ -90,7 +90,11 @@ impl ScalarUDFImpl for ArrayReplace {
         Ok(args[0].clone())
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         make_scalar_function(array_replace_inner)(args)
     }
 
@@ -171,7 +175,11 @@ impl ScalarUDFImpl for ArrayReplaceN {
         Ok(args[0].clone())
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         make_scalar_function(array_replace_n_inner)(args)
     }
 
@@ -254,7 +262,11 @@ impl ScalarUDFImpl for ArrayReplaceAll {
         Ok(args[0].clone())
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         make_scalar_function(array_replace_all_inner)(args)
     }
 

@@ -74,7 +74,11 @@ impl ScalarUDFImpl for CoalesceFunc {
     }
 
     /// coalesce evaluates to the first value which is not NULL
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         // do not accept 0 arguments.
         if args.is_empty() {
             return exec_err!(

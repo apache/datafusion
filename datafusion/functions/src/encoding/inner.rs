@@ -89,7 +89,11 @@ impl ScalarUDFImpl for EncodeFunc {
         Ok(arg_types[0].to_owned())
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         encode(args)
     }
 
@@ -175,7 +179,11 @@ impl ScalarUDFImpl for DecodeFunc {
         Ok(arg_types[0].to_owned())
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         decode(args)
     }
 

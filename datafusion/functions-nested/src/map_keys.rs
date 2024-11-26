@@ -79,7 +79,11 @@ impl ScalarUDFImpl for MapKeysFunc {
         ))))
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         make_scalar_function(map_keys_inner)(args)
     }
 

@@ -61,7 +61,11 @@ impl ScalarUDFImpl for UpperFunc {
         utf8_to_str_type(&arg_types[0], "upper")
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         to_upper(args, "upper")
     }
 
@@ -98,14 +102,15 @@ fn get_upper_doc() -> &'static Documentation {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::{ArrayRef, StringArray};
+    use arrow::array::{Array, ArrayRef, StringArray};
     use std::sync::Arc;
 
     fn to_upper(input: ArrayRef, expected: ArrayRef) -> Result<()> {
         let func = UpperFunc::new();
-        let batch_size = input.len();
+        let batch_len = input.len();
         let args = vec![ColumnarValue::Array(input)];
-        let result = match func.invoke_batch(&args, batch_size)? {
+        #[allow(deprecated)] // TODO migrate UDF to invoke
+        let result = match func.invoke_batch(&args, batch_len)? {
             ColumnarValue::Array(result) => result,
             _ => unreachable!("upper"),
         };

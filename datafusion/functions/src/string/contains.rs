@@ -66,7 +66,11 @@ impl ScalarUDFImpl for ContainsFunc {
         Ok(Boolean)
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         make_scalar_function(contains, vec![])(args)
     }
 
@@ -144,6 +148,7 @@ mod test {
             Some("yyy?()"),
         ])));
         let scalar = ColumnarValue::Scalar(ScalarValue::Utf8(Some("x?(".to_string())));
+        #[allow(deprecated)] // TODO migrate UDF to invoke
         let actual = udf.invoke_batch(&[array, scalar], 2).unwrap();
         let expect = ColumnarValue::Array(Arc::new(BooleanArray::from(vec![
             Some(true),

@@ -213,13 +213,11 @@ impl ScalarUDF {
         self.inner.is_nullable(args, schema)
     }
 
-    #[deprecated(since = "43.0.0", note = "Use `invoke_with_args` instead")]
     pub fn invoke_batch(
         &self,
         args: &[ColumnarValue],
         number_rows: usize,
     ) -> Result<ColumnarValue> {
-        #[allow(deprecated)]
         self.inner.invoke_batch(args, number_rows)
     }
 
@@ -544,7 +542,6 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     /// [`ColumnarValue::values_to_arrays`] can be used to convert the arguments
     /// to arrays, which will likely be simpler code, but be slower.
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        #[allow(deprecated)]
         self.invoke_batch(args.args, args.number_rows)
     }
 

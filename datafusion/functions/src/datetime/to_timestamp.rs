@@ -150,7 +150,11 @@ impl ScalarUDFImpl for ToTimestampFunc {
         Ok(return_type_for(&arg_types[0], Nanosecond))
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         if args.is_empty() {
             return exec_err!(
                 "to_timestamp function requires 1 or more arguments, got {}",
@@ -246,7 +250,11 @@ impl ScalarUDFImpl for ToTimestampSecondsFunc {
         Ok(return_type_for(&arg_types[0], Second))
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         if args.is_empty() {
             return exec_err!(
                 "to_timestamp_seconds function requires 1 or more arguments, got {}",
@@ -333,7 +341,11 @@ impl ScalarUDFImpl for ToTimestampMillisFunc {
         Ok(return_type_for(&arg_types[0], Millisecond))
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         if args.is_empty() {
             return exec_err!(
                 "to_timestamp_millis function requires 1 or more arguments, got {}",
@@ -422,7 +434,11 @@ impl ScalarUDFImpl for ToTimestampMicrosFunc {
         Ok(return_type_for(&arg_types[0], Microsecond))
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         if args.is_empty() {
             return exec_err!(
                 "to_timestamp_micros function requires 1 or more arguments, got {}",
@@ -511,7 +527,11 @@ impl ScalarUDFImpl for ToTimestampNanosFunc {
         Ok(return_type_for(&arg_types[0], Nanosecond))
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         if args.is_empty() {
             return exec_err!(
                 "to_timestamp_nanos function requires 1 or more arguments, got {}",

@@ -133,7 +133,11 @@ impl ScalarUDFImpl for DateBinFunc {
         }
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         if args.len() == 2 {
             // Default to unix EPOCH
             let origin = ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(
@@ -514,6 +518,7 @@ mod tests {
     use chrono::TimeDelta;
 
     #[test]
+    #[allow(deprecated)] // TODO migrate UDF invoke from invoke_batch
     fn test_date_bin() {
         let res = DateBinFunc::new().invoke_batch(
             &[
@@ -531,7 +536,7 @@ mod tests {
         assert!(res.is_ok());
 
         let timestamps = Arc::new((1..6).map(Some).collect::<TimestampNanosecondArray>());
-        let batch_size = timestamps.len();
+        let batch_len = timestamps.len();
         let res = DateBinFunc::new().invoke_batch(
             &[
                 ColumnarValue::Scalar(ScalarValue::IntervalDayTime(Some(
@@ -543,7 +548,7 @@ mod tests {
                 ColumnarValue::Array(timestamps),
                 ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
             ],
-            batch_size,
+            batch_len,
         );
         assert!(res.is_ok());
 
@@ -719,14 +724,13 @@ mod tests {
                 })
                 .collect::<IntervalDayTimeArray>(),
         );
-        let batch_size = intervals.len();
         let res = DateBinFunc::new().invoke_batch(
             &[
                 ColumnarValue::Array(intervals),
                 ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
                 ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
             ],
-            batch_size,
+            1,
         );
         assert_eq!(
             res.err().unwrap().strip_backtrace(),
@@ -735,7 +739,7 @@ mod tests {
 
         // unsupported array type for origin
         let timestamps = Arc::new((1..6).map(Some).collect::<TimestampNanosecondArray>());
-        let batch_size = timestamps.len();
+        let batch_len = timestamps.len();
         let res = DateBinFunc::new().invoke_batch(
             &[
                 ColumnarValue::Scalar(ScalarValue::IntervalDayTime(Some(
@@ -747,7 +751,7 @@ mod tests {
                 ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
                 ColumnarValue::Array(timestamps),
             ],
-            batch_size,
+            batch_len,
         );
         assert_eq!(
             res.err().unwrap().strip_backtrace(),
@@ -863,7 +867,8 @@ mod tests {
                     .map(|s| Some(string_to_timestamp_nanos(s).unwrap()))
                     .collect::<TimestampNanosecondArray>()
                     .with_timezone_opt(tz_opt.clone());
-                let batch_size = input.len();
+                let batch_len = input.len();
+                #[allow(deprecated)] // TODO migrate UDF invoke to invoke_batch
                 let result = DateBinFunc::new()
                     .invoke_batch(
                         &[
@@ -874,7 +879,7 @@ mod tests {
                                 tz_opt.clone(),
                             )),
                         ],
-                        batch_size,
+                        batch_len,
                     )
                     .unwrap();
                 if let ColumnarValue::Array(result) = result {
