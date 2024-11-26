@@ -209,8 +209,7 @@ where
                 build_primitive(split, null_group)
             }
         };
-        let array_ref =
-            Arc::new(array.with_data_type(self.data_type.clone())) as ArrayRef;
+        let array_ref = Arc::new(array) as ArrayRef;
 
         let adjusted_array = adjust_output_array(&self.data_type, array_ref)
             .expect("Failed to adjust array data type");
