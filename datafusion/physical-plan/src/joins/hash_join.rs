@@ -50,10 +50,9 @@ use crate::{
 };
 
 use arrow::array::{
-    Array, ArrayRef, BooleanArray, BooleanBufferBuilder, UInt32Array, UInt64Array,
+    Array, ArrayRef, BooleanBufferBuilder, UInt32Array, UInt64Array,
 };
-use arrow::compute::kernels::cmp::{eq, not_distinct};
-use arrow::compute::{and, concat_batches, take, FilterBuilder};
+use arrow::compute::{concat_batches, FilterBuilder};
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::downcast_primitive_array;
 use arrow::record_batch::RecordBatch;
@@ -73,8 +72,6 @@ use datafusion_physical_expr::equivalence::{
 use datafusion_physical_expr::PhysicalExprRef;
 
 use ahash::RandomState;
-use datafusion_expr::Operator;
-use datafusion_physical_expr_common::datum::compare_op_for_nested;
 use futures::{ready, Stream, StreamExt, TryStreamExt};
 use parking_lot::Mutex;
 
@@ -1200,45 +1197,20 @@ fn lookup_join_hashmap(
     Ok((build_indices, probe_indices, next_offset))
 }
 
-// version of eq_dyn supporting equality on null arrays
-fn eq_dyn_null(
-    left: &dyn Array,
-    right: &dyn Array,
-    null_equals_null: bool,
-) -> Result<BooleanArray, ArrowError> {
-    // Nested datatypes cannot use the underlying not_distinct/eq function and must use a special
-    // implementation
-    // <https://github.com/apache/datafusion/issues/10749>
-    if left.data_type().is_nested() {
-        let op = if null_equals_null {
-            Operator::IsNotDistinctFrom
-        } else {
-            Operator::Eq
-        };
-        return Ok(compare_op_for_nested(op, &left, &right)?);
-    }
-    match (left.data_type(), right.data_type()) {
-        _ if null_equals_null => not_distinct(&left, &right),
-        _ => eq(&left, &right),
-    }
-}
-
 fn equal_with_indices(
+    equal: &mut BooleanBufferBuilder,
     indices_left: &UInt64Array,
     indices_right: &UInt32Array,
     arr_left: &dyn Array,
     arr_right: &dyn Array,
     null_equals_null: bool,
-) -> Result<BooleanArray, ArrowError> {
+) -> Result<(), ArrowError> {
     // TODO: Write a reusable framework and support more arrow types.
     downcast_primitive_array! {
         (arr_left, arr_right) => {
             let iter = indices_left.values().iter().zip(
                 indices_right.values().iter()
             );
-
-            let mut equal = BooleanBufferBuilder::new(indices_left.len());
-            equal.append_n(indices_left.len(), true);
 
             for (index, (idx_left, idx_right)) in iter.enumerate() {
                 if !equal.get_bit(index) {
@@ -1268,15 +1240,10 @@ fn equal_with_indices(
                 equal.set_bit(index, is_equal);
             }
 
-            Ok(equal.finish().into())
+            Ok(())
         }
 
-        _ => {
-            let arr_left = take(arr_left, indices_left, None)?;
-            let arr_right = take(arr_right, indices_right, None)?;
-            let array = eq_dyn_null(arr_left.as_ref(), arr_right.as_ref(), null_equals_null)?;
-            Ok(array)
-        }
+        t => unimplemented!("Take not supported for data type {:?}", t)
     }
 }
 
@@ -1289,13 +1256,17 @@ pub fn equal_rows_arr(
 ) -> Result<(UInt64Array, UInt32Array)> {
     let mut iter = left_arrays.iter().zip(right_arrays.iter());
 
+    let mut equal = BooleanBufferBuilder::new(indices_left.len());
+    equal.append_n(indices_left.len(), true);
+
     let (first_left, first_right) = iter.next().ok_or_else(|| {
         DataFusionError::Internal(
             "At least one array should be provided for both left and right".to_string(),
         )
     })?;
 
-    let mut equal = equal_with_indices(
+    equal_with_indices(
+        &mut equal,
         indices_left,
         indices_right,
         &first_left,
@@ -1306,19 +1277,20 @@ pub fn equal_rows_arr(
     // Use map and try_fold to iterate over the remaining pairs of arrays.
     // In each iteration, take is used on the pair of arrays and their equality is determined.
     // The results are then folded (combined) using the and function to get a final equality result.
-    equal = iter
-        .map(|(left, right)| {
-            equal_with_indices(
-                indices_left,
-                indices_right,
-                &left,
-                &right,
-                null_equals_null,
-            )
-        })
-        .try_fold(equal, |acc, equal2| and(&acc, &equal2?))?;
+    //
+    // TODO: Avoid using `and` and construct a new `BooleanArray` for each loop. Modify the `BooleanBuffer` directly.
+    iter.try_for_each(|(left, right)| {
+        equal_with_indices(
+            &mut equal, 
+            indices_left, 
+            indices_right, 
+            &left, 
+            &right, 
+            null_equals_null,
+        )
+    })?;
 
-    let filter_builder = FilterBuilder::new(&equal).optimize().build();
+    let filter_builder = FilterBuilder::new(&equal.finish().into()).optimize().build();
 
     let left_filtered = filter_builder.filter(indices_left)?;
     let right_filtered = filter_builder.filter(indices_right)?;
