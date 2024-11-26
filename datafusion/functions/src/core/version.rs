@@ -109,7 +109,6 @@ fn get_version_doc() -> &'static Documentation {
 ```"#,
             )
             .build()
-            .unwrap()
     })
 }
 
@@ -121,6 +120,7 @@ mod test {
     #[tokio::test]
     async fn test_version_udf() {
         let version_udf = ScalarUDF::from(VersionFunc::new());
+        #[allow(deprecated)] // TODO: migrate to invoke_with_args
         let version = version_udf.invoke_batch(&[], 1).unwrap();
 
         if let ColumnarValue::Scalar(ScalarValue::Utf8(Some(version))) = version {

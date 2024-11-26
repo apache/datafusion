@@ -30,10 +30,10 @@ use arrow::datatypes::{DataType, Field};
 
 use crate::expr::WindowFunction;
 use crate::{
-    function::WindowFunctionSimplification, Documentation, Expr, PartitionEvaluator,
-    Signature,
+    function::WindowFunctionSimplification, Expr, PartitionEvaluator, Signature,
 };
 use datafusion_common::{not_impl_err, Result};
+use datafusion_doc::Documentation;
 use datafusion_functions_window_common::expr::ExpressionArgs;
 use datafusion_functions_window_common::field::WindowUDFFieldArgs;
 use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
@@ -264,7 +264,6 @@ where
 ///             .with_syntax_example("smooth_it(2)")
 ///             .with_argument("arg1", "The int32 number to smooth by")
 ///             .build()
-///             .unwrap()
 ///     })
 /// }
 ///
@@ -557,7 +556,7 @@ impl WindowUDFImpl for AliasedWindowUDFImpl {
 
 // Window UDF doc sections for use in public documentation
 pub mod window_doc_sections {
-    use crate::DocSection;
+    use datafusion_doc::DocSection;
 
     pub fn doc_sections() -> Vec<DocSection> {
         vec![

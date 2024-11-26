@@ -21,22 +21,22 @@ use std::fmt::{self, Debug, Formatter};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use async_trait::async_trait;
 use datafusion::arrow::array::{UInt64Builder, UInt8Builder};
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::datasource::{provider_as_source, TableProvider, TableType};
 use datafusion::error::Result;
 use datafusion::execution::context::TaskContext;
+use datafusion::logical_expr::LogicalPlanBuilder;
+use datafusion::physical_expr::EquivalenceProperties;
 use datafusion::physical_plan::memory::MemoryStream;
 use datafusion::physical_plan::{
     project_schema, DisplayAs, DisplayFormatType, ExecutionMode, ExecutionPlan,
     Partitioning, PlanProperties, SendableRecordBatchStream,
 };
 use datafusion::prelude::*;
-use datafusion_expr::LogicalPlanBuilder;
-use datafusion_physical_expr::EquivalenceProperties;
 
-use async_trait::async_trait;
 use datafusion::catalog::Session;
 use tokio::time::timeout;
 

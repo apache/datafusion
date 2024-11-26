@@ -104,7 +104,11 @@ impl ScalarUDFImpl for ArrowCastFunc {
         data_type_from_args(args)
     }
 
-    fn invoke(&self, _args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        _args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         internal_err!("arrow_cast should have been simplified to cast")
     }
 
@@ -164,7 +168,6 @@ fn get_arrow_cast_doc() -> &'static Documentation {
             .with_argument("expression", "Expression to cast. The expression can be a constant, column, or function, and any combination of operators.")
             .with_argument("datatype", "[Arrow data type](https://docs.rs/arrow/latest/arrow/datatypes/enum.DataType.html) name to cast to, as a string. The format is the same as that returned by [`arrow_typeof`]")
             .build()
-            .unwrap()
     })
 }
 

@@ -83,7 +83,11 @@ impl ScalarUDFImpl for RegexpMatchFunc {
             other => DataType::List(Arc::new(Field::new("item", other.clone(), true))),
         })
     }
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         let len = args
             .iter()
             .fold(Option::<usize>::None, |acc, arg| match arg {
@@ -148,7 +152,6 @@ Additional examples can be found [here](https://github.com/apache/datafusion/blo
   - **R**: enables CRLF mode: when multi-line mode is enabled, \r\n is used
   - **U**: swap the meaning of x* and x*?"#)
             .build()
-            .unwrap()
     })
 }
 

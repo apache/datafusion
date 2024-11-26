@@ -164,7 +164,7 @@ pub(crate) fn new_group_values(
                 TimeUnit::Nanosecond => downcast_helper!(Time64NanosecondType, d),
                 _ => {}
             },
-            DataType::Timestamp(t, _) => match t {
+            DataType::Timestamp(t, _tz) => match t {
                 TimeUnit::Second => downcast_helper!(TimestampSecondType, d),
                 TimeUnit::Millisecond => downcast_helper!(TimestampMillisecondType, d),
                 TimeUnit::Microsecond => downcast_helper!(TimestampMicrosecondType, d),

@@ -320,7 +320,11 @@ impl ScalarUDFImpl for ToLocalTimeFunc {
         }
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         if args.len() != 1 {
             return exec_err!(
                 "to_local_time function requires 1 argument, got {:?}",
@@ -418,7 +422,6 @@ FROM (
 +---------------------------+
 ```"#)
             .build()
-            .unwrap()
     })
 }
 
@@ -431,7 +434,7 @@ mod tests {
     use arrow::datatypes::{DataType, TimeUnit};
     use chrono::NaiveDateTime;
     use datafusion_common::ScalarValue;
-    use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
+    use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl};
 
     use super::{adjust_to_local_time, ToLocalTimeFunc};
 
@@ -558,7 +561,11 @@ mod tests {
 
     fn test_to_local_time_helper(input: ScalarValue, expected: ScalarValue) {
         let res = ToLocalTimeFunc::new()
-            .invoke_batch(&[ColumnarValue::Scalar(input)], 1)
+            .invoke_with_args(ScalarFunctionArgs {
+                args: &[ColumnarValue::Scalar(input)],
+                number_rows: 1,
+                return_type: &expected.data_type(),
+            })
             .unwrap();
         match res {
             ColumnarValue::Scalar(res) => {
@@ -617,6 +624,7 @@ mod tests {
                 .map(|s| Some(string_to_timestamp_nanos(s).unwrap()))
                 .collect::<TimestampNanosecondArray>();
             let batch_size = input.len();
+            #[allow(deprecated)] // TODO: migrate to invoke_with_args
             let result = ToLocalTimeFunc::new()
                 .invoke_batch(&[ColumnarValue::Array(Arc::new(input))], batch_size)
                 .unwrap();

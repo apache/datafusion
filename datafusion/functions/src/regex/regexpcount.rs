@@ -81,7 +81,11 @@ impl ScalarUDFImpl for RegexpCountFunc {
         Ok(Int64)
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         let len = args
             .iter()
             .fold(Option::<usize>::None, |acc, arg| match arg {
@@ -138,7 +142,6 @@ fn get_regexp_count_doc() -> &'static Documentation {
   - **R**: enables CRLF mode: when multi-line mode is enabled, \r\n is used
   - **U**: swap the meaning of x* and x*?"#)
             .build()
-            .unwrap()
     })
 }
 
@@ -655,7 +658,7 @@ mod tests {
             let v_sv = ScalarValue::Utf8(Some(v.to_string()));
             let regex_sv = ScalarValue::Utf8(Some(regex.to_string()));
             let expected = expected.get(pos).cloned();
-
+            #[allow(deprecated)] // TODO: migrate to invoke_with_args
             let re = RegexpCountFunc::new().invoke_batch(
                 &[ColumnarValue::Scalar(v_sv), ColumnarValue::Scalar(regex_sv)],
                 1,
@@ -670,7 +673,7 @@ mod tests {
             // largeutf8
             let v_sv = ScalarValue::LargeUtf8(Some(v.to_string()));
             let regex_sv = ScalarValue::LargeUtf8(Some(regex.to_string()));
-
+            #[allow(deprecated)] // TODO: migrate to invoke_with_args
             let re = RegexpCountFunc::new().invoke_batch(
                 &[ColumnarValue::Scalar(v_sv), ColumnarValue::Scalar(regex_sv)],
                 1,
@@ -685,7 +688,7 @@ mod tests {
             // utf8view
             let v_sv = ScalarValue::Utf8View(Some(v.to_string()));
             let regex_sv = ScalarValue::Utf8View(Some(regex.to_string()));
-
+            #[allow(deprecated)] // TODO: migrate to invoke_with_args
             let re = RegexpCountFunc::new().invoke_batch(
                 &[ColumnarValue::Scalar(v_sv), ColumnarValue::Scalar(regex_sv)],
                 1,
@@ -711,7 +714,7 @@ mod tests {
             let regex_sv = ScalarValue::Utf8(Some(regex.to_string()));
             let start_sv = ScalarValue::Int64(Some(start));
             let expected = expected.get(pos).cloned();
-
+            #[allow(deprecated)] // TODO: migrate to invoke_with_args
             let re = RegexpCountFunc::new().invoke_batch(
                 &[
                     ColumnarValue::Scalar(v_sv),
@@ -730,7 +733,7 @@ mod tests {
             // largeutf8
             let v_sv = ScalarValue::LargeUtf8(Some(v.to_string()));
             let regex_sv = ScalarValue::LargeUtf8(Some(regex.to_string()));
-
+            #[allow(deprecated)] // TODO: migrate to invoke_with_args
             let re = RegexpCountFunc::new().invoke_batch(
                 &[
                     ColumnarValue::Scalar(v_sv),
@@ -749,7 +752,7 @@ mod tests {
             // utf8view
             let v_sv = ScalarValue::Utf8View(Some(v.to_string()));
             let regex_sv = ScalarValue::Utf8View(Some(regex.to_string()));
-
+            #[allow(deprecated)] // TODO: migrate to invoke_with_args
             let re = RegexpCountFunc::new().invoke_batch(
                 &[
                     ColumnarValue::Scalar(v_sv),
@@ -781,7 +784,7 @@ mod tests {
             let start_sv = ScalarValue::Int64(Some(start));
             let flags_sv = ScalarValue::Utf8(Some(flags.to_string()));
             let expected = expected.get(pos).cloned();
-
+            #[allow(deprecated)] // TODO: migrate to invoke_with_args
             let re = RegexpCountFunc::new().invoke_batch(
                 &[
                     ColumnarValue::Scalar(v_sv),
@@ -802,7 +805,7 @@ mod tests {
             let v_sv = ScalarValue::LargeUtf8(Some(v.to_string()));
             let regex_sv = ScalarValue::LargeUtf8(Some(regex.to_string()));
             let flags_sv = ScalarValue::LargeUtf8(Some(flags.to_string()));
-
+            #[allow(deprecated)] // TODO: migrate to invoke_with_args
             let re = RegexpCountFunc::new().invoke_batch(
                 &[
                     ColumnarValue::Scalar(v_sv),
@@ -823,7 +826,7 @@ mod tests {
             let v_sv = ScalarValue::Utf8View(Some(v.to_string()));
             let regex_sv = ScalarValue::Utf8View(Some(regex.to_string()));
             let flags_sv = ScalarValue::Utf8View(Some(flags.to_string()));
-
+            #[allow(deprecated)] // TODO: migrate to invoke_with_args
             let re = RegexpCountFunc::new().invoke_batch(
                 &[
                     ColumnarValue::Scalar(v_sv),
@@ -905,7 +908,7 @@ mod tests {
             let start_sv = ScalarValue::Int64(Some(start));
             let flags_sv = ScalarValue::Utf8(flags.get(pos).map(|f| f.to_string()));
             let expected = expected.get(pos).cloned();
-
+            #[allow(deprecated)] // TODO: migrate to invoke_with_args
             let re = RegexpCountFunc::new().invoke_batch(
                 &[
                     ColumnarValue::Scalar(v_sv),
@@ -926,7 +929,7 @@ mod tests {
             let v_sv = ScalarValue::LargeUtf8(Some(v.to_string()));
             let regex_sv = ScalarValue::LargeUtf8(regex.get(pos).map(|s| s.to_string()));
             let flags_sv = ScalarValue::LargeUtf8(flags.get(pos).map(|f| f.to_string()));
-
+            #[allow(deprecated)] // TODO: migrate to invoke_with_args
             let re = RegexpCountFunc::new().invoke_batch(
                 &[
                     ColumnarValue::Scalar(v_sv),
@@ -947,7 +950,7 @@ mod tests {
             let v_sv = ScalarValue::Utf8View(Some(v.to_string()));
             let regex_sv = ScalarValue::Utf8View(regex.get(pos).map(|s| s.to_string()));
             let flags_sv = ScalarValue::Utf8View(flags.get(pos).map(|f| f.to_string()));
-
+            #[allow(deprecated)] // TODO: migrate to invoke_with_args
             let re = RegexpCountFunc::new().invoke_batch(
                 &[
                     ColumnarValue::Scalar(v_sv),

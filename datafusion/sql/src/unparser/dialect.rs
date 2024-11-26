@@ -480,7 +480,7 @@ impl Default for CustomDialect {
 
 impl CustomDialect {
     // Create a CustomDialect
-    #[deprecated(note = "please use `CustomDialectBuilder` instead")]
+    #[deprecated(since = "41.0.0", note = "please use `CustomDialectBuilder` instead")]
     pub fn new(identifier_quote_style: Option<char>) -> Self {
         Self {
             identifier_quote_style,

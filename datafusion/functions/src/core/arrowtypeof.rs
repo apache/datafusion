@@ -58,7 +58,11 @@ impl ScalarUDFImpl for ArrowTypeOfFunc {
         Ok(DataType::Utf8)
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         if args.len() != 1 {
             return exec_err!(
                 "arrow_typeof function requires 1 arguments, got {}",
@@ -100,6 +104,5 @@ fn get_arrowtypeof_doc() -> &'static Documentation {
             )
             .with_argument("expression", "Expression to evaluate. The expression can be a constant, column, or function, and any combination of operators.")
             .build()
-            .unwrap()
     })
 }
