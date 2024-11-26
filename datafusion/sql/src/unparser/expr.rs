@@ -2603,7 +2603,7 @@ mod tests {
             let ast = unparser.expr_to_sql(&expr)?;
 
             let actual = format!("{}", ast);
-            let expected = format!("{}", expected);
+            let expected = expected.to_string();
 
             assert_eq!(actual, expected);
         }
