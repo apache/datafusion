@@ -54,7 +54,8 @@ fn get_log_doc() -> &'static Documentation {
         Documentation::builder(
             DOC_SECTION_MATH,
             "Returns the base-x logarithm of a number. Can either provide a specified base, or if omitted then takes the base-10 of a number.",
-            r#"log(base, numeric_expression), log(numeric_expression)"#)
+            r#"log(base, numeric_expression)
+log(numeric_expression)"#)
             .with_standard_argument("base", Some("Base numeric"))
             .with_standard_argument("numeric_expression", Some("Numeric"))
             .build()
