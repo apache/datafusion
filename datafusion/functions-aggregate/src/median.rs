@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::cmp::Ordering;
 use std::fmt::{Debug, Formatter};
 use std::mem::{size_of, size_of_val};
 use std::sync::{Arc, OnceLock};
@@ -320,7 +321,7 @@ where
     debug_assert!(!array.is_empty());
     *array
         .iter()
-        .max_by(|x, y| x.partial_cmp(y).unwrap())
+        .max_by(|x, y| x.partial_cmp(y).unwrap_or(Ordering::Less))
         .unwrap()
 }
 
