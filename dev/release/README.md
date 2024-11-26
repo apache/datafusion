@@ -48,6 +48,7 @@ git cherry-pick 12345
 git push -u <your fork>
 # make a PR as normal
 ```
+
 [example release issue]: https://github.com/apache/datafusion/issues/9904
 [example backport pr]: https://github.com/apache/datafusion/pull/10123
 
