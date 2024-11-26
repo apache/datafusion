@@ -100,12 +100,11 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_array_repeat_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_ARRAY)
-            .with_description(
+        Documentation::builder(
+            DOC_SECTION_ARRAY,
                 "Returns an array containing element `count` times.",
-            )
-            .with_syntax_example("array_repeat(element, count)")
+
+            "array_repeat(element, count)")
             .with_sql_example(
                 r#"```sql
 > select array_repeat(1, 3);

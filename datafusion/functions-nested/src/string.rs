@@ -180,12 +180,11 @@ static DOCUMENTATION_ARRAY_TO_STRING: OnceLock<Documentation> = OnceLock::new();
 
 fn get_array_to_string_doc() -> &'static Documentation {
     DOCUMENTATION_ARRAY_TO_STRING.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_ARRAY)
-            .with_description(
+        Documentation::builder(
+            DOC_SECTION_ARRAY,
                 "Converts each element to its text representation.",
-            )
-            .with_syntax_example("array_to_string(array, delimiter[, null_string])")
+
+            "array_to_string(array, delimiter[, null_string])")
             .with_sql_example(
                 r#"```sql
 > select array_to_string([[1, 2, 3, 4], [5, 6, 7, 8]], ',');
@@ -290,12 +289,11 @@ static DOCUMENTATION_STRING_TO_ARRAY: OnceLock<Documentation> = OnceLock::new();
 
 fn get_string_to_array_doc() -> &'static Documentation {
     DOCUMENTATION_STRING_TO_ARRAY.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_ARRAY)
-            .with_description(
+        Documentation::builder(
+            DOC_SECTION_ARRAY,
                 "Splits a string into an array of substrings based on a delimiter. Any substrings matching the optional `null_str` argument are replaced with NULL.",
-            )
-            .with_syntax_example("string_to_array(str, delimiter[, null_str])")
+
+            "string_to_array(str, delimiter[, null_str])")
             .with_sql_example(
                 r#"```sql
 > select string_to_array('abc##def', '##');

@@ -83,14 +83,13 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_contains_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_STRING)
-            .with_description(
-                "Return true if search_str is found within string (case-sensitive).",
-            )
-            .with_syntax_example("contains(str, search_str)")
-            .with_sql_example(
-                r#"```sql
+        Documentation::builder(
+            DOC_SECTION_STRING,
+            "Return true if search_str is found within string (case-sensitive).",
+            "contains(str, search_str)",
+        )
+        .with_sql_example(
+            r#"```sql
 > select contains('the quick brown fox', 'row');
 +---------------------------------------------------+
 | contains(Utf8("the quick brown fox"),Utf8("row")) |
@@ -98,10 +97,10 @@ fn get_contains_doc() -> &'static Documentation {
 | true                                              |
 +---------------------------------------------------+
 ```"#,
-            )
-            .with_standard_argument("str", Some("String"))
-            .with_argument("search_str", "The string to search for in str.")
-            .build()
+        )
+        .with_standard_argument("str", Some("String"))
+        .with_argument("search_str", "The string to search for in str.")
+        .build()
     })
 }
 

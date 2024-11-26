@@ -96,12 +96,11 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_map_values_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_MAP)
-            .with_description(
-                "Returns a list of all values in the map."
-            )
-            .with_syntax_example("map_values(map)")
+        Documentation::builder(
+            DOC_SECTION_MAP,
+                "Returns a list of all values in the map.",
+
+            "map_values(map)")
             .with_sql_example(
                 r#"```sql
 SELECT map_values(MAP {'a': 1, 'b': NULL, 'c': 3});

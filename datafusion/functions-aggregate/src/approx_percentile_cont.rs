@@ -280,12 +280,10 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_approx_percentile_cont_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_APPROXIMATE)
-            .with_description(
+        Documentation::builder(
+            DOC_SECTION_APPROXIMATE,
                 "Returns the approximate percentile of input values using the t-digest algorithm.",
-            )
-            .with_syntax_example("approx_percentile_cont(expression, percentile, centroids)")
+            "approx_percentile_cont(expression, percentile, centroids)")
             .with_sql_example(r#"```sql
 > SELECT approx_percentile_cont(column_name, 0.75, 100) FROM table_name;
 +-------------------------------------------------+

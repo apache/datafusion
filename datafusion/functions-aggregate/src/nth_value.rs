@@ -173,12 +173,11 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_nth_value_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_STATISTICAL)
-            .with_description(
+        Documentation::builder(
+            DOC_SECTION_STATISTICAL,
                 "Returns the nth value in a group of values.",
-            )
-            .with_syntax_example("nth_value(expression, n ORDER BY expression)")
+
+            "nth_value(expression, n ORDER BY expression)")
             .with_sql_example(r#"```sql
 > SELECT dept_id, salary, NTH_VALUE(salary, 2) OVER (PARTITION BY dept_id ORDER BY salary ASC) AS second_salary_by_dept
   FROM employee;

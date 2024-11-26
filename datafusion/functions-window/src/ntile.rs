@@ -82,12 +82,7 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_ntile_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_RANKING)
-            .with_description(
-                "Integer ranging from 1 to the argument value, dividing the partition as equally as possible",
-            )
-            .with_syntax_example("ntile(expression)")
+        Documentation::builder(DOC_SECTION_RANKING, "Integer ranging from 1 to the argument value, dividing the partition as equally as possible", "ntile(expression)")
             .with_argument("expression","An integer describing the number groups the partition should be split into")
             .build()
     })

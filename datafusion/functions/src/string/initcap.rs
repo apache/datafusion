@@ -88,10 +88,10 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_initcap_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_STRING)
-            .with_description("Capitalizes the first character in each word in the input string. Words are delimited by non-alphanumeric characters.")
-            .with_syntax_example("initcap(str)")
+        Documentation::builder(
+            DOC_SECTION_STRING,
+            "Capitalizes the first character in each word in the input string. Words are delimited by non-alphanumeric characters.",
+            "initcap(str)")
             .with_sql_example(r#"```sql
 > select initcap('apache datafusion');
 +------------------------------------+

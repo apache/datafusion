@@ -111,12 +111,11 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_array_replace_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_ARRAY)
-            .with_description(
+        Documentation::builder(
+            DOC_SECTION_ARRAY,
                 "Replaces the first occurrence of the specified element with another specified element.",
-            )
-            .with_syntax_example("array_replace(array, from, to)")
+
+            "array_replace(array, from, to)")
             .with_sql_example(
                 r#"```sql
 > select array_replace([1, 2, 2, 3, 2, 1, 4], 2, 5);
@@ -194,12 +193,11 @@ impl ScalarUDFImpl for ArrayReplaceN {
 
 fn get_array_replace_n_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_ARRAY)
-            .with_description(
+        Documentation::builder(
+            DOC_SECTION_ARRAY,
                 "Replaces the first `max` occurrences of the specified element with another specified element.",
-            )
-            .with_syntax_example("array_replace_n(array, from, to, max)")
+
+            "array_replace_n(array, from, to, max)")
             .with_sql_example(
                 r#"```sql
 > select array_replace_n([1, 2, 2, 3, 2, 1, 4], 2, 5, 2);
@@ -281,12 +279,11 @@ impl ScalarUDFImpl for ArrayReplaceAll {
 
 fn get_array_replace_all_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_ARRAY)
-            .with_description(
+        Documentation::builder(
+            DOC_SECTION_ARRAY,
                 "Replaces all occurrences of the specified element with another specified element.",
-            )
-            .with_syntax_example("array_replace_all(array, from, to)")
+
+            "array_replace_all(array, from, to)")
             .with_sql_example(
                 r#"```sql
 > select array_replace_all([1, 2, 2, 3, 2, 1, 4], 2, 5);

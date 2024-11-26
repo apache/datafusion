@@ -130,12 +130,11 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_approx_median_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_APPROXIMATE)
-            .with_description(
+        Documentation::builder(
+            DOC_SECTION_APPROXIMATE,
                 "Returns the approximate median (50th percentile) of input values. It is an alias of `approx_percentile_cont(x, 0.5)`.",
-            )
-            .with_syntax_example("approx_median(expression)")
+
+            "approx_median(expression)")
             .with_sql_example(r#"```sql
 > SELECT approx_median(column_name) FROM table_name;
 +-----------------------------------+

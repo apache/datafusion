@@ -147,12 +147,11 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_make_array_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_ARRAY)
-            .with_description(
+        Documentation::builder(
+            DOC_SECTION_ARRAY,
                 "Returns an array using the specified input expressions.",
-            )
-            .with_syntax_example("make_array(expression1[, ..., expression_n])")
+
+            "make_array(expression1[, ..., expression_n])")
             .with_sql_example(
                 r#"```sql
 > select make_array(1, 2, 3, 4, 5);

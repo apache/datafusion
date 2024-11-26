@@ -94,12 +94,11 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_array_except_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_ARRAY)
-            .with_description(
+        Documentation::builder(
+            DOC_SECTION_ARRAY,
                 "Returns an array of the elements that appear in the first array but not in the second.",
-            )
-            .with_syntax_example("array_except(array1, array2)")
+
+            "array_except(array1, array2)")
             .with_sql_example(
                 r#"```sql
 > select array_except([1, 2, 3, 4], [5, 6, 3, 4]);

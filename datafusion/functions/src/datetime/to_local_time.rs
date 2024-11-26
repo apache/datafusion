@@ -367,10 +367,10 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_to_local_time_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_DATETIME)
-            .with_description("Converts a timestamp with a timezone to a timestamp without a timezone (with no offset or timezone information). This function handles daylight saving time changes.")
-            .with_syntax_example("to_local_time(expression)")
+        Documentation::builder(
+            DOC_SECTION_DATETIME,
+            "Converts a timestamp with a timezone to a timestamp without a timezone (with no offset or timezone information). This function handles daylight saving time changes.",
+            "to_local_time(expression)")
             .with_argument(
                 "expression",
                 "Time expression to operate on. Can be a constant, column, or function."

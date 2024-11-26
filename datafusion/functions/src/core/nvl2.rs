@@ -105,10 +105,10 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_nvl2_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_CONDITIONAL)
-            .with_description("Returns _expression2_ if _expression1_ is not NULL; otherwise it returns _expression3_.")
-            .with_syntax_example("nvl2(expression1, expression2, expression3)")
+        Documentation::builder(
+            DOC_SECTION_CONDITIONAL,
+            "Returns _expression2_ if _expression1_ is not NULL; otherwise it returns _expression3_.",
+            "nvl2(expression1, expression2, expression3)")
             .with_sql_example(r#"```sql
 > select nvl2(null, 'a', 'b');
 +--------------------------------+

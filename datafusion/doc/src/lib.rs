@@ -56,8 +56,12 @@ pub struct Documentation {
 
 impl Documentation {
     /// Returns a new [`DocumentationBuilder`] with no options set.
-    pub fn builder() -> DocumentationBuilder {
-        DocumentationBuilder::new()
+    pub fn builder(
+        doc_section: DocSection,
+        description: impl Into<String>,
+        syntax_example: impl Into<String>,
+    ) -> DocumentationBuilder {
+        DocumentationBuilder::new(doc_section, description, syntax_example)
     }
 }
 
@@ -86,17 +90,14 @@ pub struct DocSection {
 ///         description: None,
 ///     };
 ///
-///     let documentation = Documentation::builder()
-///           .with_doc_section(doc_section)
-///           .with_description("Add one to an int32")
-///           .with_syntax_example("add_one(2)")
+///     let documentation = Documentation::builder(doc_section, "Add one to an int32".to_owned(), "add_one(2)".to_owned())
 ///           .with_argument("arg_1", "The int32 number to add one to")
 ///           .build();
 /// # }
 pub struct DocumentationBuilder {
-    pub doc_section: Option<DocSection>,
-    pub description: Option<String>,
-    pub syntax_example: Option<String>,
+    pub doc_section: DocSection,
+    pub description: String,
+    pub syntax_example: String,
     pub sql_example: Option<String>,
     pub arguments: Option<Vec<(String, String)>>,
     pub alternative_syntax: Option<Vec<String>>,
@@ -104,11 +105,15 @@ pub struct DocumentationBuilder {
 }
 
 impl DocumentationBuilder {
-    pub fn new() -> Self {
+    pub fn new(
+        doc_section: DocSection,
+        description: impl Into<String>,
+        syntax_example: impl Into<String>,
+    ) -> Self {
         Self {
-            doc_section: None,
-            description: None,
-            syntax_example: None,
+            doc_section,
+            description: description.into(),
+            syntax_example: syntax_example.into(),
             sql_example: None,
             arguments: None,
             alternative_syntax: None,
@@ -117,17 +122,17 @@ impl DocumentationBuilder {
     }
 
     pub fn with_doc_section(mut self, doc_section: DocSection) -> Self {
-        self.doc_section = Some(doc_section);
+        self.doc_section = doc_section;
         self
     }
 
     pub fn with_description(mut self, description: impl Into<String>) -> Self {
-        self.description = Some(description.into());
+        self.description = description.into();
         self
     }
 
     pub fn with_syntax_example(mut self, syntax_example: impl Into<String>) -> Self {
-        self.syntax_example = Some(syntax_example.into());
+        self.syntax_example = syntax_example.into();
         self
     }
 
@@ -205,30 +210,14 @@ impl DocumentationBuilder {
             related_udfs,
         } = self;
 
-        if doc_section.is_none() {
-            panic!("Documentation must have a doc section");
-        }
-        if description.is_none() {
-            panic!("Documentation must have a description");
-        }
-        if syntax_example.is_none() {
-            panic!("Documentation must have a syntax_example");
-        }
-
         Documentation {
-            doc_section: doc_section.unwrap(),
-            description: description.unwrap(),
-            syntax_example: syntax_example.unwrap(),
+            doc_section,
+            description,
+            syntax_example,
             sql_example,
             arguments,
             alternative_syntax,
             related_udfs,
         }
-    }
-}
-
-impl Default for DocumentationBuilder {
-    fn default() -> Self {
-        Self::new()
     }
 }

@@ -271,12 +271,13 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_concat_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_STRING)
-            .with_description("Concatenates multiple strings together.")
-            .with_syntax_example("concat(str[, ..., str_n])")
-            .with_sql_example(
-                r#"```sql
+        Documentation::builder(
+            DOC_SECTION_STRING,
+            "Concatenates multiple strings together.",
+            "concat(str[, ..., str_n])",
+        )
+        .with_sql_example(
+            r#"```sql
 > select concat('data', 'f', 'us', 'ion');
 +-------------------------------------------------------+
 | concat(Utf8("data"),Utf8("f"),Utf8("us"),Utf8("ion")) |
@@ -284,11 +285,11 @@ fn get_concat_doc() -> &'static Documentation {
 | datafusion                                            |
 +-------------------------------------------------------+
 ```"#,
-            )
-            .with_standard_argument("str", Some("String"))
-            .with_argument("str_n", "Subsequent string expressions to concatenate.")
-            .with_related_udf("concat_ws")
-            .build()
+        )
+        .with_standard_argument("str", Some("String"))
+        .with_argument("str_n", "Subsequent string expressions to concatenate.")
+        .with_related_udf("concat_ws")
+        .build()
     })
 }
 
