@@ -30,7 +30,7 @@ Patch releases are made on an adhoc basis, but we try and avoid them given the f
 - Once the PR is approved and merged, we tag the rc in the release branch, and release from the release branch
 - Bug fixes can be merged to the release branch and patch releases can be created from the release branch
 
-#### How to add changes to `branch-*` branch?
+#### How to backport (add changes) to `branch-*` branch
 
 If you would like to propose your change for inclusion in a release branch for a
 patch release:
@@ -39,6 +39,15 @@ patch release:
 1. Follow normal workflow to create PR to `main` branch and wait for its approval and merge.
 1. After PR is squash merged to `main`, branch from most recent release branch (e.g. `branch-37`), cherry-pick the commit and create a PR targeting the release branch [example backport PR].
 
+For example, to backport commit `12345` from `main` to `branch-43`:
+
+```shell
+git checkout branch-43
+git checkout -b backport_to_43
+git cherry-pick 12345
+git push -u <your fork>
+# make a PR as normal
+```
 [example release issue]: https://github.com/apache/datafusion/issues/9904
 [example backport pr]: https://github.com/apache/datafusion/pull/10123
 
