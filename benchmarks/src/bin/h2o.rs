@@ -27,6 +27,7 @@ use datafusion::datasource::MemTable;
 use datafusion::prelude::CsvReadOptions;
 use datafusion::{arrow::util::pretty, error::Result, prelude::SessionContext};
 use datafusion_benchmarks::util::BenchmarkRun;
+use std::num::NonZero;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::thread::{self, available_parallelism};

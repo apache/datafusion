@@ -18,6 +18,7 @@
 //! external_aggr binary entrypoint
 
 use std::collections::HashMap;
+use std::num::NonZero;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::OnceLock;
