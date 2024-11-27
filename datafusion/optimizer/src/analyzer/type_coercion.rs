@@ -692,6 +692,7 @@ fn extract_window_frame_target_type(col_type: &DataType) -> Result<DataType> {
     if col_type.is_numeric()
         || is_utf8_or_large_utf8(col_type)
         || matches!(col_type, DataType::Null)
+        || matches!(col_type, DataType::Boolean)
     {
         Ok(col_type.clone())
     } else if is_datetime(col_type) {
