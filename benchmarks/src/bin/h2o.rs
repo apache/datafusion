@@ -30,7 +30,7 @@ use datafusion_benchmarks::util::BenchmarkRun;
 use std::num::NonZero;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::thread::{self, available_parallelism};
+use std::thread::available_parallelism;
 use structopt::StructOpt;
 use tokio::time::Instant;
 
