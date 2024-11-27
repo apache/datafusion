@@ -15,8 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::num::NonZero;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::thread::available_parallelism;
 
 use crate::util::{AccessLogOpt, BenchmarkRun, CommonOpt};
 
@@ -147,7 +149,11 @@ impl RunOpt {
             rundata.start_new_case(title);
             for i in 0..self.common.iterations {
                 let config = SessionConfig::new().with_target_partitions(
-                    self.common.partitions.unwrap_or(num_cpus::get()),
+                    self.common.partitions.unwrap_or(
+                        available_parallelism()
+                            .unwrap_or(NonZero::new(1).unwrap())
+                            .get(),
+                    ),
                 );
                 let ctx = SessionContext::new_with_config(config);
                 let (rows, elapsed) =

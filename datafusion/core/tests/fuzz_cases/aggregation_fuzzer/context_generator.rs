@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{cmp, sync::Arc};
+use std::{cmp, sync::Arc, thread::available_parallelism};
 
 use datafusion::{
     datasource::MemTable,
@@ -73,7 +73,7 @@ impl SessionContextGenerator {
         ];
 
         let max_batch_size = cmp::max(1, dataset_ref.total_rows_num);
-        let max_target_partitions = num_cpus::get();
+        let max_target_partitions = available_parallelism();
 
         Self {
             dataset: dataset_ref,

@@ -22,8 +22,10 @@
 //! runs end-to-end sort queries and test the performance on multiple CPU cores.
 
 use futures::StreamExt;
+use std::num::NonZero;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::thread::available_parallelism;
 use structopt::StructOpt;
 
 use datafusion::datasource::file_format::parquet::ParquetFormat;
@@ -315,6 +317,10 @@ impl RunOpt {
     }
 
     fn partitions(&self) -> usize {
-        self.common.partitions.unwrap_or(num_cpus::get())
+        self.common.partitions.unwrap_or(
+            available_parallelism()
+                .unwrap_or(NonZero::new(1).unwrap())
+                .get(),
+        )
     }
 }
