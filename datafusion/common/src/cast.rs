@@ -37,8 +37,8 @@ use arrow::{
     datatypes::{ArrowDictionaryKeyType, ArrowPrimitiveType},
 };
 use arrow_array::{
-    BinaryViewArray, Float16Array, Int16Array, Int8Array, LargeStringArray,
-    StringViewArray, UInt16Array,
+    BinaryViewArray, Float16Array, Int16Array, Int8Array, LargeBinaryArray,
+    LargeStringArray, StringViewArray, UInt16Array,
 };
 
 // Downcast ArrayRef to Date32Array
@@ -263,6 +263,11 @@ pub fn as_binary_array(array: &dyn Array) -> Result<&BinaryArray> {
 // Downcast ArrayRef to BinaryViewArray
 pub fn as_binary_view_array(array: &dyn Array) -> Result<&BinaryViewArray> {
     Ok(downcast_value!(array, BinaryViewArray))
+}
+
+// Downcast ArrayRef to LargeBinaryArray
+pub fn as_large_binary_array(array: &dyn Array) -> Result<&LargeBinaryArray> {
+    Ok(downcast_value!(array, LargeBinaryArray))
 }
 
 // Downcast ArrayRef to FixedSizeListArray
