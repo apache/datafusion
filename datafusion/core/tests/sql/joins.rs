@@ -47,7 +47,8 @@ async fn join_change_in_planner() -> Result<()> {
         &left_file_path,
         "left",
         file_sort_order.clone(),
-    )?;
+    )
+    .await?;
     let right_file_path = tmp_dir.path().join("right.csv");
     File::create(right_file_path.clone()).unwrap();
     register_unbounded_file_with_ordering(
@@ -56,7 +57,8 @@ async fn join_change_in_planner() -> Result<()> {
         &right_file_path,
         "right",
         file_sort_order,
-    )?;
+    )
+    .await?;
     let sql = "SELECT t1.a1, t1.a2, t2.a1, t2.a2 FROM left as t1 FULL JOIN right as t2 ON t1.a2 = t2.a2 AND t1.a1 > t2.a1 + 3 AND t1.a1 < t2.a1 + 10";
     let dataframe = ctx.sql(sql).await?;
     let physical_plan = dataframe.create_physical_plan().await?;
@@ -115,7 +117,8 @@ async fn join_no_order_on_filter() -> Result<()> {
         &left_file_path,
         "left",
         file_sort_order.clone(),
-    )?;
+    )
+    .await?;
     let right_file_path = tmp_dir.path().join("right.csv");
     File::create(right_file_path.clone()).unwrap();
     register_unbounded_file_with_ordering(
@@ -124,7 +127,8 @@ async fn join_no_order_on_filter() -> Result<()> {
         &right_file_path,
         "right",
         file_sort_order,
-    )?;
+    )
+    .await?;
     let sql = "SELECT * FROM left as t1 FULL JOIN right as t2 ON t1.a2 = t2.a2 AND t1.a3 > t2.a3 + 3 AND t1.a3 < t2.a3 + 10";
     let dataframe = ctx.sql(sql).await?;
     let physical_plan = dataframe.create_physical_plan().await?;
@@ -168,13 +172,15 @@ async fn join_change_in_planner_without_sort() -> Result<()> {
     ]));
     let left_source = FileStreamProvider::new_file(schema.clone(), left_file_path);
     let left = StreamConfig::new(Arc::new(left_source));
-    ctx.register_table("left", Arc::new(StreamTable::new(Arc::new(left))))?;
+    ctx.register_table("left", Arc::new(StreamTable::new(Arc::new(left))))
+        .await?;
 
     let right_file_path = tmp_dir.path().join("right.csv");
     File::create(right_file_path.clone())?;
     let right_source = FileStreamProvider::new_file(schema, right_file_path);
     let right = StreamConfig::new(Arc::new(right_source));
-    ctx.register_table("right", Arc::new(StreamTable::new(Arc::new(right))))?;
+    ctx.register_table("right", Arc::new(StreamTable::new(Arc::new(right))))
+        .await?;
     let sql = "SELECT t1.a1, t1.a2, t2.a1, t2.a2 FROM left as t1 FULL JOIN right as t2 ON t1.a2 = t2.a2 AND t1.a1 > t2.a1 + 3 AND t1.a1 < t2.a1 + 10";
     let dataframe = ctx.sql(sql).await?;
     let physical_plan = dataframe.create_physical_plan().await?;
@@ -220,12 +226,14 @@ async fn join_change_in_planner_without_sort_not_allowed() -> Result<()> {
     ]));
     let left_source = FileStreamProvider::new_file(schema.clone(), left_file_path);
     let left = StreamConfig::new(Arc::new(left_source));
-    ctx.register_table("left", Arc::new(StreamTable::new(Arc::new(left))))?;
+    ctx.register_table("left", Arc::new(StreamTable::new(Arc::new(left))))
+        .await?;
     let right_file_path = tmp_dir.path().join("right.csv");
     File::create(right_file_path.clone())?;
     let right_source = FileStreamProvider::new_file(schema.clone(), right_file_path);
     let right = StreamConfig::new(Arc::new(right_source));
-    ctx.register_table("right", Arc::new(StreamTable::new(Arc::new(right))))?;
+    ctx.register_table("right", Arc::new(StreamTable::new(Arc::new(right))))
+        .await?;
     let df = ctx.sql("SELECT t1.a1, t1.a2, t2.a1, t2.a2 FROM left as t1 FULL JOIN right as t2 ON t1.a2 = t2.a2 AND t1.a1 > t2.a1 + 3 AND t1.a1 < t2.a1 + 10").await?;
     match df.create_physical_plan().await {
         Ok(_) => panic!("Expecting error."),

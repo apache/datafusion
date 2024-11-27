@@ -55,7 +55,8 @@ async fn main() -> Result<()> {
     let ctx = SessionContext::new();
 
     // Display the data to show the full cycle works.
-    ctx.register_table("external_table", Arc::new(foreign_table_provider))?;
+    ctx.register_table("external_table", Arc::new(foreign_table_provider))
+        .await?;
     let df = ctx.table("external_table").await?;
     df.show().await?;
 

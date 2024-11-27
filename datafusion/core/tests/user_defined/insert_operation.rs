@@ -34,6 +34,7 @@ async fn insert_operation_is_passed_correctly_to_table_provider() {
     let ctx = session_ctx_with_dialect("SQLite");
     let table_provider = Arc::new(TestInsertTableProvider::new());
     ctx.register_table("testing", table_provider.clone())
+        .await
         .unwrap();
 
     let sql = "INSERT INTO testing (column) VALUES (1)";

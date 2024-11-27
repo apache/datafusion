@@ -99,7 +99,7 @@ impl TestContext {
                 }
             }
             "dynamic_file.slt" => {
-                test_ctx.ctx = test_ctx.ctx.enable_url_table();
+                test_ctx.ctx = test_ctx.ctx.enable_url_table().await;
             }
             "joins.slt" => {
                 info!("Registering partition table tables");
@@ -241,6 +241,7 @@ pub async fn register_temp_table(ctx: &SessionContext) {
         "datafusion.public.temp",
         Arc::new(TestTable(TableType::Temporary)),
     )
+    .await
     .unwrap();
 }
 
@@ -250,13 +251,15 @@ pub async fn register_table_with_many_types(ctx: &SessionContext) {
 
     catalog
         .register_schema("my_schema", Arc::new(schema))
+        .await
         .unwrap();
-    ctx.register_catalog("my_catalog", Arc::new(catalog));
+    ctx.register_catalog("my_catalog", Arc::new(catalog)).await;
 
     ctx.register_table(
         "my_catalog.my_schema.table_with_many_types",
         table_with_many_types(),
     )
+    .await
     .unwrap();
 }
 
@@ -274,6 +277,7 @@ pub async fn register_table_with_map(ctx: &SessionContext) {
     let memory_table = MemTable::try_new(schema.into(), vec![vec![]]).unwrap();
 
     ctx.register_table("table_with_map", Arc::new(memory_table))
+        .await
         .unwrap();
 }
 
@@ -366,7 +370,9 @@ pub async fn register_metadata_tables(ctx: &SessionContext) {
     )
     .unwrap();
 
-    ctx.register_batch("table_with_metadata", batch).unwrap();
+    ctx.register_batch("table_with_metadata", batch)
+        .await
+        .unwrap();
 }
 
 /// Create a UDF function named "example". See the `sample_udf.rs` example

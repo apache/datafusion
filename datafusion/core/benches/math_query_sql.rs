@@ -19,6 +19,7 @@
 extern crate criterion;
 use criterion::Criterion;
 
+use futures::FutureExt;
 use parking_lot::Mutex;
 use std::sync::Arc;
 
@@ -72,7 +73,9 @@ fn create_context(
 
     // declare a table in memory. In spark API, this corresponds to createDataFrame(...).
     let provider = MemTable::try_new(schema, vec![batches])?;
-    ctx.register_table("t", Arc::new(provider))?;
+    ctx.register_table("t", Arc::new(provider))
+        .now_or_never()
+        .expect("default context should use synchronous in-memory catalog")?;
 
     Ok(Arc::new(Mutex::new(ctx)))
 }

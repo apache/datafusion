@@ -991,7 +991,8 @@ mod tests {
             .with_config(cfg)
             .with_runtime_env(runtime)
             .with_default_features()
-            .build();
+            .build()
+            .await;
         let integration = LocalFileSystem::new_with_prefix(arrow_test_data()).unwrap();
         let path = Path::from("csv/aggregate_test_100.csv");
         let csv = CsvFormat::default().with_has_header(true);

@@ -29,6 +29,7 @@ use datafusion::{datasource::MemTable, error::Result};
 use datafusion_execution::config::SessionConfig;
 use datafusion_execution::TaskContext;
 
+use futures::FutureExt;
 use parking_lot::Mutex;
 use std::{sync::Arc, time::Duration};
 use tokio::runtime::Runtime;
@@ -46,7 +47,7 @@ fn create_context(
 ) -> Result<Arc<Mutex<SessionContext>>> {
     let ctx = SessionContext::new();
     let provider = create_table_provider(partitions_len, array_len, batch_size)?;
-    ctx.register_table("t", provider)?;
+    ctx.register_table("t", provider).now_or_never().unwrap()?;
     Ok(Arc::new(Mutex::new(ctx)))
 }
 
@@ -137,7 +138,7 @@ pub async fn create_context_sampled_data(
     // Create the DataFrame
     let cfg = SessionConfig::new();
     let ctx = SessionContext::new_with_config(cfg);
-    let _ = ctx.register_table("traces", mem_table)?;
+    let _ = ctx.register_table("traces", mem_table).await?;
     let df = ctx.sql(sql).await?;
     let physical_plan = df.create_physical_plan().await?;
     Ok((physical_plan, ctx.task_ctx()))

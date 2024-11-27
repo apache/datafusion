@@ -74,11 +74,15 @@ async fn main() -> Result<()> {
     .await?;
 
     // register schemas into catalog
-    catalog.register_schema("schema_a", schema_a.clone())?;
-    catalog.register_schema("schema_b", schema_b.clone())?;
+    catalog
+        .register_schema("schema_a", schema_a.clone())
+        .await?;
+    catalog
+        .register_schema("schema_b", schema_b.clone())
+        .await?;
 
     // register our catalog in the context
-    ctx.register_catalog("dircat", Arc::new(catalog));
+    ctx.register_catalog("dircat", Arc::new(catalog)).await;
     {
         // catalog was passed down into our custom catalog list since we override the ctx's default
         let catalogs = cataloglist.catalogs.read().unwrap();
@@ -184,7 +188,7 @@ impl SchemaProvider for DirSchema {
         self
     }
 
-    fn table_names(&self) -> Vec<String> {
+    async fn table_names(&self) -> Vec<String> {
         let tables = self.tables.read().unwrap();
         tables.keys().cloned().collect::<Vec<_>>()
     }
@@ -194,11 +198,11 @@ impl SchemaProvider for DirSchema {
         Ok(tables.get(name).cloned())
     }
 
-    fn table_exist(&self, name: &str) -> bool {
+    async fn table_exist(&self, name: &str) -> bool {
         let tables = self.tables.read().unwrap();
         tables.contains_key(name)
     }
-    fn register_table(
+    async fn register_table(
         &self,
         name: String,
         table: Arc<dyn TableProvider>,
@@ -212,7 +216,10 @@ impl SchemaProvider for DirSchema {
     /// If supported by the implementation, removes an existing table from this schema and returns it.
     /// If no table of that name exists, returns Ok(None).
     #[allow(unused_variables)]
-    fn deregister_table(&self, name: &str) -> Result<Option<Arc<dyn TableProvider>>> {
+    async fn deregister_table(
+        &self,
+        name: &str,
+    ) -> Result<Option<Arc<dyn TableProvider>>> {
         let mut tables = self.tables.write().unwrap();
         log::info!("dropping table {name}");
         Ok(tables.remove(name))
@@ -230,11 +237,13 @@ impl DirCatalog {
         }
     }
 }
+
+#[async_trait]
 impl CatalogProvider for DirCatalog {
     fn as_any(&self) -> &dyn Any {
         self
     }
-    fn register_schema(
+    async fn register_schema(
         &self,
         name: &str,
         schema: Arc<dyn SchemaProvider>,
@@ -244,12 +253,12 @@ impl CatalogProvider for DirCatalog {
         Ok(Some(schema))
     }
 
-    fn schema_names(&self) -> Vec<String> {
+    async fn schema_names(&self) -> Vec<String> {
         let schemas = self.schemas.read().unwrap();
         schemas.keys().cloned().collect()
     }
 
-    fn schema(&self, name: &str) -> Option<Arc<dyn SchemaProvider>> {
+    async fn schema(&self, name: &str) -> Option<Arc<dyn SchemaProvider>> {
         let schemas = self.schemas.read().unwrap();
         let maybe_schema = schemas.get(name);
         if let Some(schema) = maybe_schema {
@@ -272,11 +281,13 @@ impl CustomCatalogProviderList {
         }
     }
 }
+
+#[async_trait]
 impl CatalogProviderList for CustomCatalogProviderList {
     fn as_any(&self) -> &dyn Any {
         self
     }
-    fn register_catalog(
+    async fn register_catalog(
         &self,
         name: String,
         catalog: Arc<dyn CatalogProvider>,
@@ -287,13 +298,13 @@ impl CatalogProviderList for CustomCatalogProviderList {
     }
 
     /// Retrieves the list of available catalog names
-    fn catalog_names(&self) -> Vec<String> {
+    async fn catalog_names(&self) -> Vec<String> {
         let cats = self.catalogs.read().unwrap();
         cats.keys().cloned().collect()
     }
 
     /// Retrieves a specific catalog by name, provided it exists.
-    fn catalog(&self, name: &str) -> Option<Arc<dyn CatalogProvider>> {
+    async fn catalog(&self, name: &str) -> Option<Arc<dyn CatalogProvider>> {
         let cats = self.catalogs.read().unwrap();
         cats.get(name).cloned()
     }

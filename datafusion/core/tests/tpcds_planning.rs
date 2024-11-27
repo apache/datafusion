@@ -1040,7 +1040,8 @@ async fn regression_test(query_no: u8, create_physical: bool) -> Result<()> {
                 Arc::new(table.schema.clone()),
                 vec![vec![]],
             )?),
-        )?;
+        )
+        .await?;
     }
 
     // some queries have multiple statements

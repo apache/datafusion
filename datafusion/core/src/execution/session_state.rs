@@ -66,6 +66,8 @@ use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_sql::parser::{DFParser, Statement};
 use datafusion_sql::planner::{ContextProvider, ParserOptions, PlannerContext, SqlToRel};
+use futures::future::BoxFuture;
+use futures::FutureExt;
 use itertools::Itertools;
 use log::{debug, info};
 use object_store::ObjectStore;
@@ -268,12 +270,14 @@ impl SessionState {
             .with_runtime_env(runtime)
             .with_default_features()
             .build()
+            .now_or_never()
+            .expect("state built without custom catalog should use synchronous in-memory catalog")
     }
 
     /// Returns new [`SessionState`] using the provided
     /// [`SessionConfig`],  [`RuntimeEnv`], and [`CatalogProviderList`]
     #[deprecated(since = "40.0.0", note = "Use SessionStateBuilder")]
-    pub fn new_with_config_rt_and_catalog_list(
+    pub async fn new_with_config_rt_and_catalog_list(
         config: SessionConfig,
         runtime: Arc<RuntimeEnv>,
         catalog_list: Arc<dyn CatalogProviderList>,
@@ -284,6 +288,7 @@ impl SessionState {
             .with_catalog_list(catalog_list)
             .with_default_features()
             .build()
+            .await
     }
 
     pub(crate) fn resolve_table_ref(
@@ -297,31 +302,44 @@ impl SessionState {
     }
 
     /// Retrieve the [`SchemaProvider`] for a specific [`TableReference`], if it
-    /// esists.
+    /// exists.
     pub fn schema_for_ref(
         &self,
         table_ref: impl Into<TableReference>,
-    ) -> datafusion_common::Result<Arc<dyn SchemaProvider>> {
+    ) -> BoxFuture<'static, datafusion_common::Result<Arc<dyn SchemaProvider>>> {
         let resolved_ref = self.resolve_table_ref(table_ref);
+        let catalog_list = self.catalog_list.clone();
         if self.config.information_schema() && *resolved_ref.schema == *INFORMATION_SCHEMA
         {
-            return Ok(Arc::new(InformationSchemaProvider::new(Arc::clone(
-                &self.catalog_list,
-            ))));
+            return std::future::ready(Ok(Arc::new(InformationSchemaProvider::new(
+                catalog_list,
+            )) as Arc<dyn SchemaProvider>))
+            .boxed();
         }
 
-        self.catalog_list
-            .catalog(&resolved_ref.catalog)
-            .ok_or_else(|| {
-                plan_datafusion_err!(
-                    "failed to resolve catalog: {}",
-                    resolved_ref.catalog
-                )
-            })?
-            .schema(&resolved_ref.schema)
-            .ok_or_else(|| {
-                plan_datafusion_err!("failed to resolve schema: {}", resolved_ref.schema)
-            })
+        // Note: This function is not declared async we can force the returned future to be 'static
+        // which is useful in a number of places this is called to avoid holding the `self.state`
+        // lock across an await boundary.
+        async move {
+            catalog_list
+                .catalog(&resolved_ref.catalog)
+                .await
+                .ok_or_else(|| {
+                    plan_datafusion_err!(
+                        "failed to resolve catalog: {}",
+                        resolved_ref.catalog
+                    )
+                })?
+                .schema(&resolved_ref.schema)
+                .await
+                .ok_or_else(|| {
+                    plan_datafusion_err!(
+                        "failed to resolve schema: {}",
+                        resolved_ref.schema
+                    )
+                })
+        }
+        .boxed()
     }
 
     #[deprecated(since = "40.0.0", note = "Use SessionStateBuilder")]
@@ -548,7 +566,7 @@ impl SessionState {
             let resolved = self.resolve_table_ref(reference);
             if let Entry::Vacant(v) = provider.tables.entry(resolved) {
                 let resolved = v.key();
-                if let Ok(schema) = self.schema_for_ref(resolved.clone()) {
+                if let Ok(schema) = self.schema_for_ref(resolved.clone()).await {
                     if let Some(table) = schema.table(&resolved.table).await? {
                         v.insert(provider_as_source(table));
                     }
@@ -1019,10 +1037,11 @@ impl SessionStateBuilder {
     /// be cloned from what is set in the provided session state. If the default
     /// catalog exists in existing session state, the new session state will not
     /// create default catalog and schema.
-    pub fn new_from_existing(existing: SessionState) -> Self {
+    pub async fn new_from_existing(existing: SessionState) -> Self {
         let default_catalog_exist = existing
             .catalog_list()
             .catalog(&existing.config.options().catalog.default_catalog)
+            .await
             .is_some();
         // The new `with_create_default_catalog_and_schema` should be false if the default catalog exists
         let create_default_catalog_and_schema = existing
@@ -1327,7 +1346,7 @@ impl SessionStateBuilder {
     /// Note that there is an explicit option for enabling catalog and schema defaults
     /// in [SessionConfig::create_default_catalog_and_schema] which if enabled
     /// will be built here.
-    pub fn build(self) -> SessionState {
+    pub async fn build(self) -> SessionState {
         let Self {
             session_id,
             analyzer,
@@ -1427,10 +1446,13 @@ impl SessionStateBuilder {
                 &state.runtime_env,
             );
 
-            state.catalog_list.register_catalog(
-                state.config.options().catalog.default_catalog.clone(),
-                Arc::new(default_catalog),
-            );
+            state
+                .catalog_list
+                .register_catalog(
+                    state.config.options().catalog.default_catalog.clone(),
+                    Arc::new(default_catalog),
+                )
+                .await;
         }
 
         if let Some(analyzer_rules) = analyzer_rules {
@@ -1618,12 +1640,6 @@ impl Debug for SessionStateBuilder {
 impl Default for SessionStateBuilder {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-impl From<SessionState> for SessionStateBuilder {
-    fn from(state: SessionState) -> Self {
-        SessionStateBuilder::new_from_existing(state)
     }
 }
 
@@ -1975,8 +1991,8 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::Arc;
 
-    #[test]
-    fn test_session_state_with_default_features() {
+    #[tokio::test]
+    async fn test_session_state_with_default_features() {
         // test array planners with and without builtin planners
         fn sql_to_expr(state: &SessionState) -> Result<Expr> {
             let provider = SessionContextProvider {
@@ -1994,18 +2010,21 @@ mod tests {
             query.sql_to_expr(sql_expr, &df_schema, &mut PlannerContext::new())
         }
 
-        let state = SessionStateBuilder::new().with_default_features().build();
+        let state = SessionStateBuilder::new()
+            .with_default_features()
+            .build()
+            .await;
 
         assert!(sql_to_expr(&state).is_ok());
 
         // if no builtin planners exist, you should register your own, otherwise returns error
-        let state = SessionStateBuilder::new().build();
+        let state = SessionStateBuilder::new().build().await;
 
         assert!(sql_to_expr(&state).is_err())
     }
 
-    #[test]
-    fn test_from_existing() -> Result<()> {
+    #[tokio::test]
+    async fn test_from_existing() -> Result<()> {
         fn employee_batch() -> RecordBatch {
             let name: ArrayRef =
                 Arc::new(StringArray::from_iter_values(["Andy", "Andrew"]));
@@ -2017,11 +2036,14 @@ mod tests {
 
         let session_state = SessionStateBuilder::new()
             .with_catalog_list(Arc::new(MemoryCatalogProviderList::new()))
-            .build();
+            .build()
+            .await;
         let table_ref = session_state.resolve_table_ref("employee").to_string();
         session_state
-            .schema_for_ref(&table_ref)?
-            .register_table("employee".to_string(), Arc::new(table))?;
+            .schema_for_ref(&table_ref)
+            .await?
+            .register_table("employee".to_string(), Arc::new(table))
+            .await?;
 
         let default_catalog = session_state
             .config
@@ -2038,38 +2060,57 @@ mod tests {
         let is_exist = session_state
             .catalog_list()
             .catalog(default_catalog.as_str())
+            .await
             .unwrap()
             .schema(default_schema.as_str())
+            .await
             .unwrap()
-            .table_exist("employee");
+            .table_exist("employee")
+            .await;
         assert!(is_exist);
-        let new_state = SessionStateBuilder::new_from_existing(session_state).build();
-        assert!(new_state
-            .catalog_list()
-            .catalog(default_catalog.as_str())
-            .unwrap()
-            .schema(default_schema.as_str())
-            .unwrap()
-            .table_exist("employee"));
+        let new_state = SessionStateBuilder::new_from_existing(session_state)
+            .await
+            .build()
+            .await;
+        assert!(
+            new_state
+                .catalog_list()
+                .catalog(default_catalog.as_str())
+                .await
+                .unwrap()
+                .schema(default_schema.as_str())
+                .await
+                .unwrap()
+                .table_exist("employee")
+                .await
+        );
 
         // if `with_create_default_catalog_and_schema` is disabled, the new one shouldn't create default catalog and schema
         let disable_create_default =
             SessionConfig::default().with_create_default_catalog_and_schema(false);
         let without_default_state = SessionStateBuilder::new()
             .with_config(disable_create_default)
-            .build();
+            .build()
+            .await;
         assert!(without_default_state
             .catalog_list()
             .catalog(&default_catalog)
+            .await
             .is_none());
-        let new_state =
-            SessionStateBuilder::new_from_existing(without_default_state).build();
-        assert!(new_state.catalog_list().catalog(&default_catalog).is_none());
+        let new_state = SessionStateBuilder::new_from_existing(without_default_state)
+            .await
+            .build()
+            .await;
+        assert!(new_state
+            .catalog_list()
+            .catalog(&default_catalog)
+            .await
+            .is_none());
         Ok(())
     }
 
-    #[test]
-    fn test_session_state_with_optimizer_rules() {
+    #[tokio::test]
+    async fn test_session_state_with_optimizer_rules() {
         #[derive(Default, Debug)]
         struct DummyRule {}
 
@@ -2081,14 +2122,16 @@ mod tests {
         // test building sessions with fresh set of rules
         let state = SessionStateBuilder::new()
             .with_optimizer_rules(vec![Arc::new(DummyRule {})])
-            .build();
+            .build()
+            .await;
 
         assert_eq!(state.optimizers().len(), 1);
 
         // test adding rules to default recommendations
         let state = SessionStateBuilder::new()
             .with_optimizer_rule(Arc::new(DummyRule {}))
-            .build();
+            .build()
+            .await;
 
         assert_eq!(
             state.optimizers().len(),
@@ -2096,18 +2139,19 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_with_table_factories() -> Result<()> {
+    #[tokio::test]
+    async fn test_with_table_factories() -> Result<()> {
         use crate::test_util::TestTableFactory;
 
-        let state = SessionStateBuilder::new().build();
+        let state = SessionStateBuilder::new().build().await;
         let table_factories = state.table_factories();
         assert!(table_factories.is_empty());
 
         let table_factory = Arc::new(TestTableFactory {});
         let state = SessionStateBuilder::new()
             .with_table_factory("employee".to_string(), table_factory)
-            .build();
+            .build()
+            .await;
         let table_factories = state.table_factories();
         assert_eq!(table_factories.len(), 1);
         assert!(table_factories.contains_key("employee"));

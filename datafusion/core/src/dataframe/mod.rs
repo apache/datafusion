@@ -2201,7 +2201,7 @@ mod tests {
         let batch = RecordBatch::try_from_iter(vec![("f.c1", Arc::new(array) as _)])?;
 
         let ctx = SessionContext::new();
-        ctx.register_batch("t", batch)?;
+        ctx.register_batch("t", batch).await?;
 
         let df = ctx.table("t").await?.select_columns(&["f.c1"])?;
 
@@ -2302,7 +2302,7 @@ mod tests {
         ])?;
 
         let ctx = SessionContext::new();
-        ctx.register_batch("t", batch)?;
+        ctx.register_batch("t", batch).await?;
 
         let df = ctx.table("t").await?.drop_columns(&["f\"c1"])?;
 
@@ -2334,7 +2334,7 @@ mod tests {
         ])?;
 
         let ctx = SessionContext::new();
-        ctx.register_batch("t", batch)?;
+        ctx.register_batch("t", batch).await?;
 
         let df = ctx.table("t").await?.drop_columns(&["f.c1"])?;
 
@@ -3166,7 +3166,8 @@ mod tests {
         let df_impl = DataFrame::new(ctx.state(), df.plan.clone());
 
         // register a dataframe as a table
-        ctx.register_table("test_table", df_impl.clone().into_view())?;
+        ctx.register_table("test_table", df_impl.clone().into_view())
+            .await?;
 
         // pull the table out
         let table = ctx.table("test_table").await?;
@@ -3347,8 +3348,8 @@ mod tests {
         let ctx = SessionContext::new();
 
         let table = df.into_view();
-        ctx.register_table("t1", table.clone())?;
-        ctx.register_table("t2", table)?;
+        ctx.register_table("t1", table.clone()).await?;
+        ctx.register_table("t2", table).await?;
         let df = ctx
             .table("t1")
             .await?
@@ -3463,8 +3464,8 @@ mod tests {
         let ctx = SessionContext::new();
 
         let table = df.into_view();
-        ctx.register_table("t1", table.clone())?;
-        ctx.register_table("t2", table)?;
+        ctx.register_table("t1", table.clone()).await?;
+        ctx.register_table("t2", table).await?;
 
         let actual_err = ctx
             .table("t1")
@@ -3491,8 +3492,8 @@ mod tests {
         let ctx = SessionContext::new();
 
         let table = df.into_view();
-        ctx.register_table("t1", table.clone())?;
-        ctx.register_table("t2", table)?;
+        ctx.register_table("t1", table.clone()).await?;
+        ctx.register_table("t2", table).await?;
         let df = ctx
             .table("t1")
             .await?
@@ -3659,7 +3660,7 @@ mod tests {
         )?;
 
         let ctx = SessionContext::new();
-        ctx.register_batch("test", data)?;
+        ctx.register_batch("test", data).await?;
 
         let sql = r#"
         SELECT
@@ -3682,7 +3683,7 @@ mod tests {
         let batch = RecordBatch::try_from_iter(vec![("f.c1", Arc::new(array) as _)])?;
 
         let ctx = SessionContext::new();
-        ctx.register_batch("t", batch)?;
+        ctx.register_batch("t", batch).await?;
 
         let df = ctx
             .table("t")

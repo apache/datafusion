@@ -567,7 +567,8 @@ mod tests {
         let (store, state) = make_test_store_and_state(&[
             ("tablepath/mypartition=val1/notparquetfile", 100),
             ("tablepath/file.parquet", 100),
-        ]);
+        ])
+        .await;
         let filter = Expr::eq(col("mypartition"), lit("val1"));
         let pruned = pruned_partition_list(
             &state,
@@ -591,7 +592,8 @@ mod tests {
             ("tablepath/mypartition=val1/file.parquet", 100),
             ("tablepath/mypartition=val2/file.parquet", 100),
             ("tablepath/mypartition=val1/other=val3/file.parquet", 100),
-        ]);
+        ])
+        .await;
         let filter = Expr::eq(col("mypartition"), lit("val1"));
         let pruned = pruned_partition_list(
             &state,
@@ -630,7 +632,8 @@ mod tests {
             ("tablepath/part1=p1v2/part2=p2v1/file2.parquet", 100),
             ("tablepath/part1=p1v3/part2=p2v1/file2.parquet", 100),
             ("tablepath/part1=p1v2/part2=p2v2/file2.parquet", 100),
-        ]);
+        ])
+        .await;
         let filter1 = Expr::eq(col("part1"), lit("p1v2"));
         let filter2 = Expr::eq(col("part2"), lit("p2v1"));
         let pruned = pruned_partition_list(

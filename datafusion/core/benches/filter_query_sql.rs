@@ -23,7 +23,7 @@ use arrow::{
 use criterion::{criterion_group, criterion_main, Criterion};
 use datafusion::prelude::SessionContext;
 use datafusion::{datasource::MemTable, error::Result};
-use futures::executor::block_on;
+use futures::{executor::block_on, FutureExt};
 use std::sync::Arc;
 use tokio::runtime::Runtime;
 
@@ -60,7 +60,9 @@ fn create_context(array_len: usize, batch_size: usize) -> Result<SessionContext>
 
     // declare a table in memory. In spark API, this corresponds to createDataFrame(...).
     let provider = MemTable::try_new(schema, vec![batches])?;
-    ctx.register_table("t", Arc::new(provider))?;
+    ctx.register_table("t", Arc::new(provider))
+        .now_or_never()
+        .unwrap()?;
 
     Ok(ctx)
 }

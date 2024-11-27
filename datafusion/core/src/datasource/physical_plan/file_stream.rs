@@ -636,7 +636,7 @@ mod tests {
                 .map(|(name, size)| (name.as_str(), *size))
                 .collect();
 
-            register_test_store(&ctx, &mock_files_ref);
+            register_test_store(&ctx, &mock_files_ref).await;
 
             let file_group = mock_files
                 .into_iter()

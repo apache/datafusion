@@ -233,6 +233,7 @@ impl AggregationFuzzer {
             // Generate the baseline context, and get the baseline result firstly
             let baseline_ctx_with_params = ctx_generator
                 .generate_baseline()
+                .await
                 .expect("should success to generate baseline session context");
             let baseline_result = run_sql(&sql, &baseline_ctx_with_params.ctx)
                 .await
@@ -242,6 +243,7 @@ impl AggregationFuzzer {
             for _ in 0..CTX_GEN_ROUNDS {
                 let ctx_with_params = ctx_generator
                     .generate()
+                    .await
                     .expect("should success to generate session context");
                 let task = AggregationFuzzTestTask {
                     dataset_ref: dataset_ref.clone(),

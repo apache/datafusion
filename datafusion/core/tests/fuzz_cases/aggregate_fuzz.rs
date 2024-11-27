@@ -508,7 +508,7 @@ async fn group_by_string_test(
         provider
     };
 
-    ctx.register_table("t", Arc::new(provider)).unwrap();
+    ctx.register_table("t", Arc::new(provider)).await.unwrap();
 
     let df = ctx
         .sql("SELECT a, COUNT(*) FROM t GROUP BY a")

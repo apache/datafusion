@@ -66,6 +66,7 @@ use datafusion_expr::{
     planner::ExprPlanner,
     Expr, UserDefinedLogicalNode, WindowUDF,
 };
+use futures::FutureExt;
 
 // backwards compatibility
 pub use crate::execution::session_state::SessionState;
@@ -212,9 +213,12 @@ where
 ///
 /// ```
 /// # use std::sync::Arc;
+/// # use datafusion::error::Result;
 /// # use datafusion::prelude::*;
 /// # use datafusion::execution::SessionStateBuilder;
 /// # use datafusion_execution::runtime_env::RuntimeEnvBuilder;
+/// # #[tokio::main]
+/// # async fn main() -> Result<()> {
 /// // Configure a 4k batch size
 /// let config = SessionConfig::new() .with_batch_size(4 * 1024);
 ///
@@ -230,10 +234,13 @@ where
 ///   .with_runtime_env(runtime_env)
 ///   // include support for built in functions and configurations
 ///   .with_default_features()
-///   .build();
+///   .build()
+///   .await;
 ///
 /// // Create a SessionContext
 /// let ctx = SessionContext::from(state);
+/// # Ok(())
+/// # }
 /// ```
 ///
 /// # Relationship between `SessionContext`, `SessionState`, and `TaskContext`
@@ -285,13 +292,13 @@ impl SessionContext {
 
     /// Finds any [`ListingSchemaProvider`]s and instructs them to reload tables from "disk"
     pub async fn refresh_catalogs(&self) -> Result<()> {
-        let cat_names = self.catalog_names().clone();
+        let cat_names = self.catalog_names().await.clone();
         for cat_name in cat_names.iter() {
-            let cat = self.catalog(cat_name.as_str()).ok_or_else(|| {
+            let cat = self.catalog(cat_name.as_str()).await.ok_or_else(|| {
                 DataFusionError::Internal("Catalog not found!".to_string())
             })?;
-            for schema_name in cat.schema_names() {
-                let schema = cat.schema(schema_name.as_str()).ok_or_else(|| {
+            for schema_name in cat.schema_names().await {
+                let schema = cat.schema(schema_name.as_str()).await.ok_or_else(|| {
                     DataFusionError::Internal("Schema not found!".to_string())
                 })?;
                 let lister = schema.as_any().downcast_ref::<ListingSchemaProvider>();
@@ -331,7 +338,7 @@ impl SessionContext {
             .with_config(config)
             .with_runtime_env(runtime)
             .with_default_features()
-            .build();
+            .build().now_or_never().expect("state built without custom catalog should use synchronous in-memory catalog");
         Self::new_with_state(state)
     }
 
@@ -364,7 +371,7 @@ impl SessionContext {
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
     /// let ctx = SessionContext::new()
-    ///   .enable_url_table(); // permit local file access
+    ///   .enable_url_table().await; // permit local file access
     /// let results = ctx
     ///   .sql("SELECT a, MIN(b) FROM 'tests/data/example.csv' as example GROUP BY a LIMIT 100")
     ///   .await?
@@ -383,7 +390,7 @@ impl SessionContext {
     /// # Ok(())
     /// # }
     /// ```
-    pub fn enable_url_table(self) -> Self {
+    pub async fn enable_url_table(self) -> Self {
         let current_catalog_list = Arc::clone(self.state.read().catalog_list());
         let factory = Arc::new(DynamicListTableFactory::new(SessionStore::new()));
         let catalog_list = Arc::new(DynamicFileCatalog::new(
@@ -392,8 +399,10 @@ impl SessionContext {
         ));
         let ctx: SessionContext = self
             .into_state_builder()
+            .await
             .with_catalog_list(catalog_list)
             .build()
+            .await
             .into();
         // register new state with the factory
         factory.session_store().with_state(ctx.state_weak_ref());
@@ -410,21 +419,29 @@ impl SessionContext {
     /// # Example
     /// ```
     /// # use std::sync::Arc;
+    /// # use datafusion::error::Result;
     /// # use datafusion::prelude::*;
     /// # use datafusion::execution::SessionStateBuilder;
     /// # use datafusion_optimizer::push_down_filter::PushDownFilter;
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<()> {
     /// let my_rule = PushDownFilter{}; // pretend it is a new rule
     /// // Create a new builder with a custom optimizer rule
     /// let context: SessionContext = SessionStateBuilder::new()
     ///   .with_optimizer_rule(Arc::new(my_rule))
     ///   .build()
+    ///   .await
     ///   .into();
     /// // Enable local file access and convert context back to a builder
     /// let builder = context
     ///   .enable_url_table()
-    ///   .into_state_builder();
+    ///   .await
+    ///   .into_state_builder()
+    ///   .await;
+    /// # Ok(())
+    /// # }
     /// ```
-    pub fn into_state_builder(self) -> SessionStateBuilder {
+    pub async fn into_state_builder(self) -> SessionStateBuilder {
         let SessionContext {
             session_id: _,
             session_start_time: _,
@@ -434,7 +451,7 @@ impl SessionContext {
             Ok(rwlock) => rwlock.into_inner(),
             Err(state) => state.read().clone(),
         };
-        SessionStateBuilder::from(state)
+        SessionStateBuilder::new_from_existing(state).await
     }
 
     /// Returns the time this `SessionContext` was created
@@ -492,7 +509,7 @@ impl SessionContext {
     }
 
     /// Registers the [`RecordBatch`] as the specified table name
-    pub fn register_batch(
+    pub async fn register_batch(
         &self,
         table_name: &str,
         batch: RecordBatch,
@@ -504,6 +521,7 @@ impl SessionContext {
             },
             Arc::new(table),
         )
+        .await
     }
 
     /// Return the [RuntimeEnv] used to run queries with this `SessionContext`
@@ -568,7 +586,7 @@ impl SessionContext {
     ///   .await?
     ///   .collect()
     ///   .await?;
-    /// assert!(ctx.table_exist("foo").unwrap());
+    /// assert!(ctx.table_exist("foo").await.unwrap());
     /// # Ok(())
     /// # }
     /// ```
@@ -654,9 +672,7 @@ impl SessionContext {
                 // stack overflows.
                 match ddl {
                     DdlStatement::CreateExternalTable(cmd) => {
-                        (Box::pin(async move { self.create_external_table(&cmd).await })
-                            as std::pin::Pin<Box<dyn futures::Future<Output = _> + Send>>)
-                            .await
+                        self.create_external_table(&cmd).await
                     }
                     DdlStatement::CreateMemoryTable(cmd) => {
                         Box::pin(self.create_memory_table(cmd)).await
@@ -770,7 +786,7 @@ impl SessionContext {
         &self,
         cmd: &CreateExternalTable,
     ) -> Result<DataFrame> {
-        let exist = self.table_exist(cmd.name.clone())?;
+        let exist = self.table_exist(cmd.name.clone()).await?;
 
         if cmd.temporary {
             return not_impl_err!("Temporary tables not supported");
@@ -787,7 +803,8 @@ impl SessionContext {
 
         let table_provider: Arc<dyn TableProvider> =
             self.create_custom_table(cmd).await?;
-        self.register_table(cmd.name.clone(), table_provider)?;
+        self.register_table(cmd.name.clone(), table_provider)
+            .await?;
         self.return_empty_dataframe()
     }
 
@@ -813,7 +830,7 @@ impl SessionContext {
         match (if_not_exists, or_replace, table) {
             (true, false, Ok(_)) => self.return_empty_dataframe(),
             (false, true, Ok(_)) => {
-                self.deregister_table(name.clone())?;
+                self.deregister_table(name.clone()).await?;
                 let schema = Arc::new(input.schema().as_ref().into());
                 let physical = DataFrame::new(self.state(), input);
 
@@ -825,7 +842,7 @@ impl SessionContext {
                         .with_column_defaults(column_defaults.into_iter().collect()),
                 );
 
-                self.register_table(name.clone(), table)?;
+                self.register_table(name.clone(), table).await?;
                 self.return_empty_dataframe()
             }
             (true, true, Ok(_)) => {
@@ -844,7 +861,7 @@ impl SessionContext {
                         .with_column_defaults(column_defaults.into_iter().collect()),
                 );
 
-                self.register_table(name, table)?;
+                self.register_table(name, table).await?;
                 self.return_empty_dataframe()
             }
             (false, false, Ok(_)) => exec_err!("Table '{name}' already exists"),
@@ -868,15 +885,15 @@ impl SessionContext {
 
         match (or_replace, view) {
             (true, Ok(_)) => {
-                self.deregister_table(name.clone())?;
+                self.deregister_table(name.clone()).await?;
                 let table = Arc::new(ViewTable::try_new((*input).clone(), definition)?);
 
-                self.register_table(name, table)?;
+                self.register_table(name, table).await?;
                 self.return_empty_dataframe()
             }
             (_, Err(_)) => {
                 let table = Arc::new(ViewTable::try_new((*input).clone(), definition)?);
-                self.register_table(name, table)?;
+                self.register_table(name, table).await?;
                 self.return_empty_dataframe()
             }
             (false, Ok(_)) => exec_err!("Table '{name}' already exists"),
@@ -895,9 +912,14 @@ impl SessionContext {
         let tokens: Vec<&str> = schema_name.split('.').collect();
         let (catalog, schema_name) = match tokens.len() {
             1 => {
-                let state = self.state.read();
-                let name = &state.config().options().catalog.default_catalog;
-                let catalog = state.catalog_list().catalog(name).ok_or_else(|| {
+                let (name, catalog_list) = {
+                    let state = self.state.read();
+                    let name = state.config().options().catalog.default_catalog.clone();
+                    let catalog_list = state.catalog_list().clone();
+                    (name, catalog_list)
+                };
+                let catalog_fut = catalog_list.catalog(&name);
+                let catalog = catalog_fut.await.ok_or_else(|| {
                     DataFusionError::Execution(format!(
                         "Missing default catalog '{name}'"
                     ))
@@ -906,20 +928,20 @@ impl SessionContext {
             }
             2 => {
                 let name = &tokens[0];
-                let catalog = self.catalog(name).ok_or_else(|| {
+                let catalog = self.catalog(name).await.ok_or_else(|| {
                     DataFusionError::Execution(format!("Missing catalog '{name}'"))
                 })?;
                 (catalog, tokens[1])
             }
             _ => return exec_err!("Unable to parse catalog from {schema_name}"),
         };
-        let schema = catalog.schema(schema_name);
+        let schema = catalog.schema(schema_name).await;
 
         match (if_not_exists, schema) {
             (true, Some(_)) => self.return_empty_dataframe(),
             (true, None) | (false, None) => {
                 let schema = Arc::new(MemorySchemaProvider::new());
-                catalog.register_schema(schema_name, schema)?;
+                catalog.register_schema(schema_name, schema).await?;
                 self.return_empty_dataframe()
             }
             (false, Some(_)) => exec_err!("Schema '{schema_name}' already exists"),
@@ -932,16 +954,16 @@ impl SessionContext {
             if_not_exists,
             ..
         } = cmd;
-        let catalog = self.catalog(catalog_name.as_str());
+        let catalog = self.catalog(catalog_name.as_str()).await;
 
         match (if_not_exists, catalog) {
             (true, Some(_)) => self.return_empty_dataframe(),
             (true, None) | (false, None) => {
                 let new_catalog = Arc::new(MemoryCatalogProvider::new());
-                self.state
-                    .write()
-                    .catalog_list()
-                    .register_catalog(catalog_name, new_catalog);
+                let catalog_list = self.state.write().catalog_list().clone();
+                catalog_list
+                    .register_catalog(catalog_name, new_catalog)
+                    .await;
                 self.return_empty_dataframe()
             }
             (false, Some(_)) => exec_err!("Catalog '{catalog_name}' already exists"),
@@ -984,14 +1006,18 @@ impl SessionContext {
             schema: _,
         } = cmd;
         let catalog = {
-            let state = self.state.read();
-            let catalog_name = match &name {
-                SchemaReference::Full { catalog, .. } => catalog.to_string(),
-                SchemaReference::Bare { .. } => {
-                    state.config_options().catalog.default_catalog.to_string()
-                }
+            let (catalog_name, catalog_list) = {
+                let state = self.state.read();
+                let catalog_name = match &name {
+                    SchemaReference::Full { catalog, .. } => catalog.to_string(),
+                    SchemaReference::Bare { .. } => {
+                        state.config_options().catalog.default_catalog.to_string()
+                    }
+                };
+                let catalog_list = state.catalog_list().clone();
+                (catalog_name, catalog_list)
             };
-            if let Some(catalog) = state.catalog_list().catalog(&catalog_name) {
+            if let Some(catalog) = catalog_list.catalog(&catalog_name).await {
                 catalog
             } else if allow_missing {
                 return self.return_empty_dataframe();
@@ -999,7 +1025,9 @@ impl SessionContext {
                 return self.schema_doesnt_exist_err(name);
             }
         };
-        let dereg = catalog.deregister_schema(name.schema_name(), cascade)?;
+        let dereg = catalog
+            .deregister_schema(name.schema_name(), cascade)
+            .await?;
         match (dereg, allow_missing) {
             (None, true) => self.return_empty_dataframe(),
             (None, false) => self.schema_doesnt_exist_err(name),
@@ -1051,18 +1079,23 @@ impl SessionContext {
         let table_ref = table_ref.into();
         let table = table_ref.table().to_owned();
         let maybe_schema = {
-            let state = self.state.read();
-            let resolved = state.resolve_table_ref(table_ref);
-            state
-                .catalog_list()
-                .catalog(&resolved.catalog)
-                .and_then(|c| c.schema(&resolved.schema))
+            let (resolved, catalog_list) = {
+                let state = self.state.read();
+                let resolved = state.resolve_table_ref(table_ref);
+                let catalog_list = state.catalog_list().clone();
+                (resolved, catalog_list)
+            };
+            if let Some(catalog) = catalog_list.catalog(&resolved.catalog).await {
+                catalog.schema(&resolved.schema).await
+            } else {
+                None
+            }
         };
 
         if let Some(schema) = maybe_schema {
             if let Some(table_provider) = schema.table(&table).await? {
                 if table_provider.table_type() == table_type {
-                    schema.deregister_table(&table)?;
+                    schema.deregister_table(&table).await?;
                     return Ok(true);
                 }
             }
@@ -1371,7 +1404,7 @@ impl SessionContext {
             .with_listing_options(options)
             .with_schema(resolved_schema);
         let table = ListingTable::try_new(config)?.with_definition(sql_definition);
-        self.register_table(table_ref, Arc::new(table))?;
+        self.register_table(table_ref, Arc::new(table)).await?;
         Ok(())
     }
 
@@ -1403,26 +1436,26 @@ impl SessionContext {
     ///
     /// Returns the [`CatalogProvider`] previously registered for this
     /// name, if any
-    pub fn register_catalog(
+    pub async fn register_catalog(
         &self,
         name: impl Into<String>,
         catalog: Arc<dyn CatalogProvider>,
     ) -> Option<Arc<dyn CatalogProvider>> {
         let name = name.into();
-        self.state
-            .read()
-            .catalog_list()
-            .register_catalog(name, catalog)
+        let catalog_list = self.state.read().catalog_list().clone();
+        catalog_list.register_catalog(name, catalog).await
     }
 
     /// Retrieves the list of available catalog names.
-    pub fn catalog_names(&self) -> Vec<String> {
-        self.state.read().catalog_list().catalog_names()
+    pub async fn catalog_names(&self) -> Vec<String> {
+        let catalog_list = self.state.read().catalog_list().clone();
+        catalog_list.catalog_names().await
     }
 
     /// Retrieves a [`CatalogProvider`] instance by name
-    pub fn catalog(&self, name: &str) -> Option<Arc<dyn CatalogProvider>> {
-        self.state.read().catalog_list().catalog(name)
+    pub async fn catalog(&self, name: &str) -> Option<Arc<dyn CatalogProvider>> {
+        let catalog_list = self.state.read().catalog_list().clone();
+        catalog_list.catalog(name).await
     }
 
     /// Registers a [`TableProvider`] as a table that can be
@@ -1430,44 +1463,40 @@ impl SessionContext {
     ///
     /// If a table of the same name was already registered, returns "Table
     /// already exists" error.
-    pub fn register_table(
+    pub async fn register_table(
         &self,
         table_ref: impl Into<TableReference>,
         provider: Arc<dyn TableProvider>,
     ) -> Result<Option<Arc<dyn TableProvider>>> {
         let table_ref: TableReference = table_ref.into();
         let table = table_ref.table().to_owned();
-        self.state
-            .read()
-            .schema_for_ref(table_ref)?
-            .register_table(table, provider)
+        let schema_fut = self.state.read().schema_for_ref(table_ref);
+        schema_fut.await?.register_table(table, provider).await
     }
 
     /// Deregisters the given table.
     ///
     /// Returns the registered provider, if any
-    pub fn deregister_table(
+    pub async fn deregister_table(
         &self,
         table_ref: impl Into<TableReference>,
     ) -> Result<Option<Arc<dyn TableProvider>>> {
         let table_ref = table_ref.into();
         let table = table_ref.table().to_owned();
-        self.state
-            .read()
-            .schema_for_ref(table_ref)?
-            .deregister_table(&table)
+        let schema_fut = self.state.read().schema_for_ref(table_ref);
+        schema_fut.await?.deregister_table(&table).await
     }
 
     /// Return `true` if the specified table exists in the schema provider.
-    pub fn table_exist(&self, table_ref: impl Into<TableReference>) -> Result<bool> {
+    pub async fn table_exist(
+        &self,
+        table_ref: impl Into<TableReference>,
+    ) -> Result<bool> {
         let table_ref: TableReference = table_ref.into();
         let table = table_ref.table();
         let table_ref = table_ref.clone();
-        Ok(self
-            .state
-            .read()
-            .schema_for_ref(table_ref)?
-            .table_exist(table))
+        let schema_fut = self.state.read().schema_for_ref(table_ref);
+        Ok(schema_fut.await?.table_exist(table).await)
     }
 
     /// Retrieves a [`DataFrame`] representing a table previously
@@ -1513,7 +1542,8 @@ impl SessionContext {
     ) -> Result<Arc<dyn TableProvider>> {
         let table_ref = table_ref.into();
         let table = table_ref.table().to_string();
-        let schema = self.state.read().schema_for_ref(table_ref)?;
+        let schema_fut = self.state.read().schema_for_ref(table_ref);
+        let schema = schema_fut.await?;
         match schema.table(&table).await? {
             Some(ref provider) => Ok(Arc::clone(provider)),
             _ => plan_err!("No table named '{table}'"),
@@ -1628,12 +1658,6 @@ impl From<&SessionContext> for TaskContext {
 impl From<SessionState> for SessionContext {
     fn from(state: SessionState) -> Self {
         Self::new_with_state(state)
-    }
-}
-
-impl From<SessionContext> for SessionStateBuilder {
-    fn from(session: SessionContext) -> Self {
-        session.into_state_builder()
     }
 }
 
@@ -1855,7 +1879,7 @@ mod tests {
         ctx.register_variable(VarType::UserDefined, Arc::new(variable_provider));
 
         let provider = test::create_table_dual();
-        ctx.register_table("dual", provider)?;
+        ctx.register_table("dual", provider).await?;
 
         let results =
             plan_and_collect(&ctx, "SELECT @@version, @name, @integer + 1 FROM dual")
@@ -1892,10 +1916,10 @@ mod tests {
         let ctx = create_ctx(&tmp_dir, partition_count).await?;
 
         let provider = test::create_table_dual();
-        ctx.register_table("dual", provider)?;
+        ctx.register_table("dual", provider).await?;
 
-        assert!(ctx.deregister_table("dual")?.is_some());
-        assert!(ctx.deregister_table("dual")?.is_none());
+        assert!(ctx.deregister_table("dual").await?.is_some());
+        assert!(ctx.deregister_table("dual").await?.is_none());
 
         Ok(())
     }
@@ -1940,7 +1964,8 @@ mod tests {
             .with_config(cfg)
             .with_runtime_env(runtime)
             .with_default_features()
-            .build();
+            .build()
+            .await;
         let ctx = SessionContext::new_with_state(session_state);
         ctx.refresh_catalogs().await?;
 
@@ -1972,8 +1997,11 @@ mod tests {
         let session_state = SessionStateBuilder::new()
             .with_default_features()
             .with_config(cfg)
-            .build();
-        let ctx = SessionContext::new_with_state(session_state).enable_url_table();
+            .build()
+            .await;
+        let ctx = SessionContext::new_with_state(session_state)
+            .enable_url_table()
+            .await;
         let result = plan_and_collect(
             &ctx,
             format!("select c_name from '{}' limit 3;", &url).as_str(),
@@ -2003,7 +2031,8 @@ mod tests {
             .with_runtime_env(runtime)
             .with_default_features()
             .with_query_planner(Arc::new(MyQueryPlanner {}))
-            .build();
+            .build()
+            .await;
         let ctx = SessionContext::new_with_state(session_state);
 
         let df = ctx.sql("SELECT 1").await?;
@@ -2018,7 +2047,8 @@ mod tests {
         );
 
         assert!(matches!(
-            ctx.register_table("test", test::table_with_sequence(1, 1)?),
+            ctx.register_table("test", test::table_with_sequence(1, 1)?)
+                .await,
             Err(DataFusionError::Plan(_))
         ));
 
@@ -2061,11 +2091,13 @@ mod tests {
         let schema = MemorySchemaProvider::new();
         schema
             .register_table("test".to_owned(), test::table_with_sequence(1, 1).unwrap())
+            .await
             .unwrap();
         catalog
             .register_schema("my_schema", Arc::new(schema))
+            .await
             .unwrap();
-        ctx.register_catalog("my_catalog", Arc::new(catalog));
+        ctx.register_catalog("my_catalog", Arc::new(catalog)).await;
 
         for table_ref in &["my_catalog.my_schema.test", "my_schema.test", "test"] {
             let result = plan_and_collect(
@@ -2093,16 +2125,22 @@ mod tests {
         let catalog_a = MemoryCatalogProvider::new();
         let schema_a = MemorySchemaProvider::new();
         schema_a
-            .register_table("table_a".to_owned(), test::table_with_sequence(1, 1)?)?;
-        catalog_a.register_schema("schema_a", Arc::new(schema_a))?;
-        ctx.register_catalog("catalog_a", Arc::new(catalog_a));
+            .register_table("table_a".to_owned(), test::table_with_sequence(1, 1)?)
+            .await?;
+        catalog_a
+            .register_schema("schema_a", Arc::new(schema_a))
+            .await?;
+        ctx.register_catalog("catalog_a", Arc::new(catalog_a)).await;
 
         let catalog_b = MemoryCatalogProvider::new();
         let schema_b = MemorySchemaProvider::new();
         schema_b
-            .register_table("table_b".to_owned(), test::table_with_sequence(1, 2)?)?;
-        catalog_b.register_schema("schema_b", Arc::new(schema_b))?;
-        ctx.register_catalog("catalog_b", Arc::new(catalog_b));
+            .register_table("table_b".to_owned(), test::table_with_sequence(1, 2)?)
+            .await?;
+        catalog_b
+            .register_schema("schema_b", Arc::new(schema_b))
+            .await?;
+        ctx.register_catalog("catalog_b", Arc::new(catalog_b)).await;
 
         let result = plan_and_collect(
             &ctx,
@@ -2140,7 +2178,7 @@ mod tests {
         // register a single catalog
         let catalog = Arc::new(MemoryCatalogProvider::new());
         let catalog_weak = Arc::downgrade(&catalog);
-        ctx.register_catalog("my_catalog", catalog);
+        ctx.register_catalog("my_catalog", catalog).await;
 
         let catalog_list_weak = {
             let state = ctx.state.read();
@@ -2207,7 +2245,8 @@ mod tests {
         let state = SessionStateBuilder::new()
             .with_default_features()
             .with_type_planner(Arc::new(MyTypePlanner {}))
-            .build();
+            .build()
+            .await;
         let ctx = SessionContext::new_with_state(state);
         let result = ctx
             .sql("SELECT DATETIME '2021-01-01 00:00:00'")

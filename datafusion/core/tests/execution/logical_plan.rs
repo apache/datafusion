@@ -68,7 +68,7 @@ async fn count_only_nulls() -> Result<()> {
     )?);
 
     // Execute and verify results
-    let session_state = SessionStateBuilder::new().build();
+    let session_state = SessionStateBuilder::new().build().await;
     let physical_plan = session_state.create_physical_plan(&aggregate).await?;
     let result =
         collect(physical_plan, Arc::new(TaskContext::from(&session_state))).await?;

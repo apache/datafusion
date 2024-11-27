@@ -36,7 +36,7 @@ use datafusion_common::Result;
 pub trait SchemaProvider: Debug + Sync + Send {
     /// Returns the owner of the Schema, default is None. This value is reported
     /// as part of `information_tables.schemata
-    fn owner_name(&self) -> Option<&str> {
+    async fn owner_name(&self) -> Option<&str> {
         None
     }
 
@@ -45,7 +45,7 @@ pub trait SchemaProvider: Debug + Sync + Send {
     fn as_any(&self) -> &dyn Any;
 
     /// Retrieves the list of available table names in this schema.
-    fn table_names(&self) -> Vec<String>;
+    async fn table_names(&self) -> Vec<String>;
 
     /// Retrieves a specific table from the schema by name, if it exists,
     /// otherwise returns `None`.
@@ -60,7 +60,7 @@ pub trait SchemaProvider: Debug + Sync + Send {
     /// If a table of the same name was already registered, returns "Table
     /// already exists" error.
     #[allow(unused_variables)]
-    fn register_table(
+    async fn register_table(
         &self,
         name: String,
         table: Arc<dyn TableProvider>,
@@ -73,10 +73,13 @@ pub trait SchemaProvider: Debug + Sync + Send {
     ///
     /// If no `name` table exists, returns Ok(None).
     #[allow(unused_variables)]
-    fn deregister_table(&self, name: &str) -> Result<Option<Arc<dyn TableProvider>>> {
+    async fn deregister_table(
+        &self,
+        name: &str,
+    ) -> Result<Option<Arc<dyn TableProvider>>> {
         exec_err!("schema provider does not support deregistering tables")
     }
 
     /// Returns true if table exist in the schema provider, false otherwise.
-    fn table_exist(&self, name: &str) -> bool;
+    async fn table_exist(&self, name: &str) -> bool;
 }

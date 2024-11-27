@@ -170,11 +170,11 @@ impl FlightSqlServiceImpl {
         let mut schemas = vec![];
         let mut names = vec![];
         let mut types = vec![];
-        for catalog in ctx.catalog_names() {
-            let catalog_provider = ctx.catalog(&catalog).unwrap();
-            for schema in catalog_provider.schema_names() {
-                let schema_provider = catalog_provider.schema(&schema).unwrap();
-                for table in schema_provider.table_names() {
+        for catalog in ctx.catalog_names().await {
+            let catalog_provider = ctx.catalog(&catalog).await.unwrap();
+            for schema in catalog_provider.schema_names().await {
+                let schema_provider = catalog_provider.schema(&schema).await.unwrap();
+                for table in schema_provider.table_names().await {
                     let table_provider =
                         schema_provider.table(&table).await.unwrap().unwrap();
                     catalogs.push(catalog.clone());

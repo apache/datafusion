@@ -71,7 +71,8 @@ async fn register_current_csv(
         true => {
             let source = FileStreamProvider::new_file(schema, path.into());
             let config = StreamConfig::new(Arc::new(source));
-            ctx.register_table(table_name, Arc::new(StreamTable::new(Arc::new(config))))?;
+            ctx.register_table(table_name, Arc::new(StreamTable::new(Arc::new(config))))
+                .await?;
         }
         false => {
             ctx.register_csv(table_name, &path, CsvReadOptions::new().schema(&schema))

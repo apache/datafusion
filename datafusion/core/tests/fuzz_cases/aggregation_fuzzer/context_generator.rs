@@ -87,7 +87,7 @@ impl SessionContextGenerator {
 
 impl SessionContextGenerator {
     /// Generate the `SessionContext` for the baseline run
-    pub fn generate_baseline(&self) -> Result<SessionContextWithParams> {
+    pub async fn generate_baseline(&self) -> Result<SessionContextWithParams> {
         let schema = self.dataset.batches[0].schema();
         let batches = self.dataset.batches.clone();
         let provider = MemTable::try_new(schema, vec![batches])?;
@@ -107,11 +107,11 @@ impl SessionContextGenerator {
             table_provider: Arc::new(provider),
         };
 
-        builder.build()
+        builder.build().await
     }
 
     /// Randomly generate session context
-    pub fn generate(&self) -> Result<SessionContextWithParams> {
+    pub async fn generate(&self) -> Result<SessionContextWithParams> {
         let mut rng = thread_rng();
         let schema = self.dataset.batches[0].schema();
         let batches = self.dataset.batches.clone();
@@ -155,7 +155,7 @@ impl SessionContextGenerator {
             table_provider: Arc::new(provider),
         };
 
-        builder.build()
+        builder.build().await
     }
 }
 
@@ -179,7 +179,7 @@ struct GeneratedSessionContextBuilder {
 }
 
 impl GeneratedSessionContextBuilder {
-    fn build(self) -> Result<SessionContextWithParams> {
+    async fn build(self) -> Result<SessionContextWithParams> {
         // Build session context
         let mut session_config = SessionConfig::default();
         session_config = session_config.set(
@@ -200,7 +200,8 @@ impl GeneratedSessionContextBuilder {
         );
 
         let ctx = SessionContext::new_with_config(session_config);
-        ctx.register_table(self.table_name, self.table_provider)?;
+        ctx.register_table(self.table_name, self.table_provider)
+            .await?;
 
         let params = SessionContextParams {
             batch_size: self.batch_size,
@@ -312,10 +313,10 @@ mod test {
         let ctx_generator = SessionContextGenerator::new(Arc::new(dataset), "fuzz_table");
 
         let query = "select b, count(a) from fuzz_table group by b";
-        let baseline_wrapped_ctx = ctx_generator.generate_baseline().unwrap();
+        let baseline_wrapped_ctx = ctx_generator.generate_baseline().await.unwrap();
         let mut random_wrapped_ctxs = Vec::with_capacity(8);
         for _ in 0..8 {
-            let ctx = ctx_generator.generate().unwrap();
+            let ctx = ctx_generator.generate().await.unwrap();
             random_wrapped_ctxs.push(ctx);
         }
 

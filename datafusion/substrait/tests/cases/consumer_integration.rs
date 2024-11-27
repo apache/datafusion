@@ -40,7 +40,7 @@ mod tests {
         ))
         .expect("failed to parse json");
 
-        let ctx = add_plan_schemas_to_ctx(SessionContext::new(), &proto)?;
+        let ctx = add_plan_schemas_to_ctx(SessionContext::new(), &proto).await?;
         let plan = from_substrait_plan(&ctx.state(), &proto).await?;
         Ok(format!("{}", plan))
     }

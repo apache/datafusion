@@ -46,7 +46,7 @@ pub mod test {
         .expect("failed to parse json")
     }
 
-    pub fn add_plan_schemas_to_ctx(
+    pub async fn add_plan_schemas_to_ctx(
         ctx: SessionContext,
         plan: &Plan,
     ) -> Result<SessionContext> {
@@ -66,7 +66,7 @@ pub mod test {
             }
         }
         for (table_reference, table) in schema_map.into_iter() {
-            ctx.register_table(table_reference, table)?;
+            ctx.register_table(table_reference, table).await?;
         }
         Ok(ctx)
     }

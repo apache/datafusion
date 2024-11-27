@@ -126,7 +126,8 @@ mod tests {
         )
         .await?;
 
-        ctx.register_table("t1", ctx.table("test").await?.into_view())?;
+        ctx.register_table("t1", ctx.table("test").await?.into_view())
+            .await?;
 
         let df = ctx
             .table("t1")

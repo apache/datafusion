@@ -179,7 +179,10 @@ impl GetExt for TSVFileFactory {
 #[tokio::main]
 async fn main() -> Result<()> {
     // Create a new context with the default configuration
-    let mut state = SessionStateBuilder::new().with_default_features().build();
+    let mut state = SessionStateBuilder::new()
+        .with_default_features()
+        .build()
+        .await;
 
     // Register the custom file format
     let file_format = Arc::new(TSVFileFactory::new());
@@ -189,7 +192,7 @@ async fn main() -> Result<()> {
     let ctx = SessionContext::new_with_state(state);
 
     let mem_table = create_mem_table();
-    ctx.register_table("mem_table", mem_table).unwrap();
+    ctx.register_table("mem_table", mem_table).await.unwrap();
 
     let temp_dir = tempdir().unwrap();
     let table_save_path = temp_dir.path().join("mem_table.tsv");

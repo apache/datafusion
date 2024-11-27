@@ -358,9 +358,9 @@ impl RunOpt {
                     table,
                     start.elapsed().as_millis()
                 );
-                ctx.register_table(*table, Arc::new(memtable))?;
+                ctx.register_table(*table, Arc::new(memtable)).await?;
             } else {
-                ctx.register_table(*table, table_provider)?;
+                ctx.register_table(*table, table_provider).await?;
             }
         }
         Ok(())

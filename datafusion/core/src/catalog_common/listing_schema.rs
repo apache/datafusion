@@ -123,7 +123,7 @@ impl ListingSchemaProvider {
                 DataFusionError::Internal("Cannot parse file name!".to_string())
             })?;
 
-            if !self.table_exist(table_name) {
+            if !self.table_exist(table_name).await {
                 let table_url = format!("{}/{}", self.authority, table_path);
 
                 let name = TableReference::bare(table_name);
@@ -148,8 +148,9 @@ impl ListingSchemaProvider {
                         },
                     )
                     .await?;
-                let _ =
-                    self.register_table(table_name.to_string(), Arc::clone(&provider))?;
+                let _ = self
+                    .register_table(table_name.to_string(), Arc::clone(&provider))
+                    .await?;
             }
         }
         Ok(())
@@ -162,7 +163,7 @@ impl SchemaProvider for ListingSchemaProvider {
         self
     }
 
-    fn table_names(&self) -> Vec<String> {
+    async fn table_names(&self) -> Vec<String> {
         self.tables
             .lock()
             .expect("Can't lock tables")
@@ -183,7 +184,7 @@ impl SchemaProvider for ListingSchemaProvider {
             .cloned())
     }
 
-    fn register_table(
+    async fn register_table(
         &self,
         name: String,
         table: Arc<dyn TableProvider>,
@@ -195,14 +196,14 @@ impl SchemaProvider for ListingSchemaProvider {
         Ok(Some(table))
     }
 
-    fn deregister_table(
+    async fn deregister_table(
         &self,
         name: &str,
     ) -> datafusion_common::Result<Option<Arc<dyn TableProvider>>> {
         Ok(self.tables.lock().expect("Can't lock tables").remove(name))
     }
 
-    fn table_exist(&self, name: &str) -> bool {
+    async fn table_exist(&self, name: &str) -> bool {
         self.tables
             .lock()
             .expect("Can't lock tables")

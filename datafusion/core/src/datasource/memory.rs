@@ -629,10 +629,14 @@ mod tests {
         let session_ctx = SessionContext::new();
         // Create and register the initial table with the provided schema and data
         let initial_table = Arc::new(MemTable::try_new(schema.clone(), initial_data)?);
-        session_ctx.register_table("t", initial_table.clone())?;
+        session_ctx
+            .register_table("t", initial_table.clone())
+            .await?;
         // Create and register the source table with the provided schema and inserted data
         let source_table = Arc::new(MemTable::try_new(schema.clone(), inserted_data)?);
-        session_ctx.register_table("source", source_table.clone())?;
+        session_ctx
+            .register_table("source", source_table.clone())
+            .await?;
         // Convert the source table into a provider so that it can be used in a query
         let source = provider_as_source(source_table);
         // Create a table scan logical plan to read from the source table

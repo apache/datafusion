@@ -1372,7 +1372,8 @@ async fn create_context() -> Result<SessionContext> {
         .with_runtime_env(Arc::new(RuntimeEnv::default()))
         .with_default_features()
         .with_serializer_registry(Arc::new(MockSerializerRegistry))
-        .build();
+        .build()
+        .await;
 
     // register udaf for test, e.g. `sum()`
     datafusion_functions_aggregate::register_all(&mut state)

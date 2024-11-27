@@ -49,7 +49,7 @@ async fn main() -> Result<()> {
     let ctx = SessionContext::new();
 
     // declare a table in memory. In spark API, this corresponds to createDataFrame(...).
-    ctx.register_batch("t", batch)?;
+    ctx.register_batch("t", batch).await?;
     let df = ctx.table("t").await?;
 
     // use make_date function to convert col 'y', 'm' & 'd' to a date

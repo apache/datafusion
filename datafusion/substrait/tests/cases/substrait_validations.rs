@@ -30,7 +30,7 @@ mod tests {
         use std::collections::HashMap;
         use std::sync::Arc;
 
-        fn generate_context_with_table(
+        async fn generate_context_with_table(
             table_name: &str,
             fields: Vec<(&str, DataType, bool)>,
         ) -> Result<SessionContext> {
@@ -52,7 +52,8 @@ mod tests {
             ctx.register_table(
                 table_ref,
                 Arc::new(EmptyTable::new(df_schema.inner().clone())),
-            )?;
+            )
+            .await?;
             Ok(ctx)
         }
 
@@ -64,7 +65,7 @@ mod tests {
             let df_schema =
                 vec![("a", DataType::Int32, false), ("b", DataType::Int32, true)];
 
-            let ctx = generate_context_with_table("DATA", df_schema)?;
+            let ctx = generate_context_with_table("DATA", df_schema).await?;
             let plan = from_substrait_plan(&ctx.state(), &proto_plan).await?;
 
             assert_eq!(
@@ -85,7 +86,7 @@ mod tests {
                 ("a", DataType::Int32, false),
                 ("c", DataType::Int32, false),
             ];
-            let ctx = generate_context_with_table("DATA", df_schema)?;
+            let ctx = generate_context_with_table("DATA", df_schema).await?;
             let plan = from_substrait_plan(&ctx.state(), &proto_plan).await?;
 
             assert_eq!(
@@ -108,7 +109,7 @@ mod tests {
                 ("c", DataType::Int32, false),
                 ("b", DataType::Int32, false),
             ];
-            let ctx = generate_context_with_table("DATA", df_schema)?;
+            let ctx = generate_context_with_table("DATA", df_schema).await?;
             let plan = from_substrait_plan(&ctx.state(), &proto_plan).await?;
 
             assert_eq!(
@@ -127,7 +128,7 @@ mod tests {
             let df_schema =
                 vec![("a", DataType::Int32, false), ("c", DataType::Int32, true)];
 
-            let ctx = generate_context_with_table("DATA", df_schema)?;
+            let ctx = generate_context_with_table("DATA", df_schema).await?;
             let res = from_substrait_plan(&ctx.state(), &proto_plan).await;
             assert!(res.is_err());
             Ok(())
@@ -139,7 +140,8 @@ mod tests {
                 read_json("tests/testdata/test_plans/simple_select.substrait.json");
 
             let ctx =
-                generate_context_with_table("DATA", vec![("a", DataType::Date32, true)])?;
+                generate_context_with_table("DATA", vec![("a", DataType::Date32, true)])
+                    .await?;
             let res = from_substrait_plan(&ctx.state(), &proto_plan).await;
             assert!(res.is_err());
             Ok(())

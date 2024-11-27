@@ -160,7 +160,7 @@ mod non_windows {
         let order = vec![vec![datafusion_expr::col("a1").sort(true, false)]];
 
         let provider = fifo_table(schema.clone(), fifo_path, order.clone());
-        ctx.register_table("fifo", provider)?;
+        ctx.register_table("fifo", provider).await?;
 
         let df = ctx.sql("SELECT * FROM fifo").await.unwrap();
         let mut stream = df.execute_stream().await.unwrap();

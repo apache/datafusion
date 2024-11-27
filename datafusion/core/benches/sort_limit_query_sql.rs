@@ -24,6 +24,7 @@ use datafusion::datasource::listing::{
 };
 
 use datafusion::prelude::SessionConfig;
+use futures::FutureExt;
 use parking_lot::Mutex;
 use std::sync::Arc;
 
@@ -95,6 +96,8 @@ fn create_context() -> Arc<Mutex<SessionContext>> {
             .await
             .unwrap();
         ctx.register_table("aggregate_test_100", Arc::new(mem_table))
+            .now_or_never()
+            .expect("default context should use synchronous in-memory catalog")
             .unwrap();
         ctx_holder.lock().push(Arc::new(Mutex::new(ctx)))
     });
