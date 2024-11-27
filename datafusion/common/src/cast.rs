@@ -37,7 +37,8 @@ use arrow::{
     datatypes::{ArrowDictionaryKeyType, ArrowPrimitiveType},
 };
 use arrow_array::{
-    BinaryViewArray, Float16Array, Int16Array, Int8Array, StringViewArray, UInt16Array,
+    BinaryViewArray, Float16Array, Int16Array, Int8Array, LargeStringArray,
+    StringViewArray, UInt16Array,
 };
 
 // Downcast ArrayRef to Date32Array
@@ -128,6 +129,11 @@ pub fn as_string_array(array: &dyn Array) -> Result<&StringArray> {
 // Downcast ArrayRef to StringViewArray
 pub fn as_string_view_array(array: &dyn Array) -> Result<&StringViewArray> {
     Ok(downcast_value!(array, StringViewArray))
+}
+
+// Downcast ArrayRef to LargeStringArray
+pub fn as_large_string_array(array: &dyn Array) -> Result<&LargeStringArray> {
+    Ok(downcast_value!(array, LargeStringArray))
 }
 
 // Downcast ArrayRef to BooleanArray
