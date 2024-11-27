@@ -1221,12 +1221,10 @@ fn equal_with_indices(
                     let null_left = arr_left.is_null(idx_left);
                     let null_right = arr_right.is_null(idx_right);
 
-                    let is_eq = match (null_left, null_right) {
-                        (true, false) | (false, true) => false,
-                        _ => true,
+                    match (null_left, null_right) {
+                        (true, false) | (false, true) => equal.set_bit(index, false),
+                        _ => {},
                     };
-
-                    equal.set_bit(index, is_eq);
                 } 
 
                 let iter = indices_left.values().iter().zip(
@@ -1270,6 +1268,25 @@ fn equal_with_indices(
         (DataType::Struct(_), DataType::Struct(_)) => {
             let arr_left = arr_left.as_struct();
             let arr_right = arr_right.as_struct();
+
+            if null_equals_null {
+                let iter = indices_left.values().iter().zip(
+                    indices_right.values().iter()
+                );
+    
+                for (index, (idx_left, idx_right)) in iter.enumerate() {
+                    let idx_left = *idx_left as usize;
+                    let idx_right = *idx_right as usize;
+    
+                    let null_left = arr_left.is_null(idx_left);
+                    let null_right = arr_right.is_null(idx_right);
+    
+                    match (null_left, null_right) {
+                        (true, false) | (false, true) => equal.set_bit(index, false),
+                        _ => {},
+                    };
+                }
+            } 
 
             for (left, right) in arr_left.columns().iter().zip(arr_right.columns().iter()) {
                 equal_with_indices(
