@@ -53,7 +53,7 @@ pub async fn main() -> Result<()> {
     env_logger::init();
     match ImdbOpt::from_args() {
         ImdbOpt::Benchmark(BenchmarkSubCommandOpt::DataFusionBenchmark(opt)) => {
-            opt.run().await
+            Box::pin(opt.run()).await
         }
         ImdbOpt::Convert(opt) => opt.run().await,
     }
