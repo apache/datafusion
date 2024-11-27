@@ -28,15 +28,19 @@ use datafusion_physical_plan::memory::{StreamingBatchGenerator, StreamingMemoryE
 use datafusion_physical_plan::ExecutionPlan;
 use std::fmt;
 use std::sync::Arc;
+use std::sync::Mutex;
 
 /// Table that generates a series of integers from `start`(inclusive) to `end`(inclusive)
 #[derive(Debug, Clone)]
 struct GenerateSeriesTable {
     schema: SchemaRef,
-    start: i64,
-    end: i64,
+    // None if input is Null
+    start: Option<i64>,
+    // None if input is Null
+    end: Option<i64>,
 }
 
+/// Table state that generates a series of integers from `start`(inclusive) to `end`(inclusive)
 #[derive(Debug, Clone)]
 struct GenerateSeriesState {
     schema: SchemaRef,
@@ -76,10 +80,6 @@ impl StreamingBatchGenerator for GenerateSeriesState {
 
         Ok(Some(batch))
     }
-
-    fn clone_box(&self) -> Box<dyn StreamingBatchGenerator> {
-        Box::new(self.clone())
-    }
 }
 
 #[async_trait]
@@ -104,17 +104,39 @@ impl TableProvider for GenerateSeriesTable {
         _limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let batch_size = state.config_options().execution.batch_size;
+        match (self.start, self.end) {
+            (Some(start), Some(end)) => {
+                if start > end {
+                    return plan_err!(
+                        "End value must be greater than or equal to start value"
+                    );
+                }
 
-        Ok(Arc::new(StreamingMemoryExec::try_new(
-            self.schema.clone(),
-            vec![Box::new(GenerateSeriesState {
-                schema: self.schema.clone(),
-                _start: self.start,
-                end: self.end,
-                current: self.start,
-                batch_size,
-            })],
-        )?))
+                Ok(Arc::new(StreamingMemoryExec::try_new(
+                    self.schema.clone(),
+                    vec![Arc::new(Mutex::new(GenerateSeriesState {
+                        schema: self.schema.clone(),
+                        _start: start,
+                        end,
+                        current: start,
+                        batch_size,
+                    }))],
+                )?))
+            }
+            _ => {
+                // Either start or end is None, return a generator that outputs 0 rows
+                Ok(Arc::new(StreamingMemoryExec::try_new(
+                    self.schema.clone(),
+                    vec![Arc::new(Mutex::new(GenerateSeriesState {
+                        schema: self.schema.clone(),
+                        _start: 0,
+                        end: 0,
+                        current: 1,
+                        batch_size,
+                    }))],
+                )?))
+            }
+        }
     }
 }
 
@@ -122,26 +144,30 @@ impl TableProvider for GenerateSeriesTable {
 pub struct GenerateSeriesFunc {}
 
 impl TableFunctionImpl for GenerateSeriesFunc {
+    // Check input `exprs` type and number. Input validity check (e.g. start <= end)
+    // will be performed in `TableProvider::scan`
     fn call(&self, exprs: &[Expr]) -> Result<Arc<dyn TableProvider>> {
+        // TODO: support 3 arguments following DuckDB:
+        // <https://duckdb.org/docs/sql/functions/list#generate_series>
+        if exprs.len() == 3 {
+            return not_impl_err!("generate_series does not support 3 arguments");
+        }
+
         if exprs.len() != 2 {
             return plan_err!("generate_series expects 2 arguments");
         }
 
         let start = match &exprs[0] {
-            Expr::Literal(ScalarValue::Int64(Some(n))) => *n,
+            Expr::Literal(ScalarValue::Null) => None,
+            Expr::Literal(ScalarValue::Int64(Some(n))) => Some(*n),
             _ => return plan_err!("First argument must be an integer literal"),
         };
 
         let end = match &exprs[1] {
-            Expr::Literal(ScalarValue::Int64(Some(n))) => *n,
+            Expr::Literal(ScalarValue::Null) => None,
+            Expr::Literal(ScalarValue::Int64(Some(n))) => Some(*n),
             _ => return plan_err!("Second argument must be an integer literal"),
         };
-
-        if end < start {
-            return not_impl_err!(
-                "End value must be greater than or equal to start value"
-            );
-        }
 
         let schema = Arc::new(Schema::new(vec![Field::new(
             "value",

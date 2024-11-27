@@ -20,6 +20,7 @@
 use std::any::Any;
 use std::fmt;
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::task::{Context, Poll};
 
 use super::{
@@ -368,13 +369,6 @@ impl RecordBatchStream for MemoryStream {
 pub trait StreamingBatchGenerator: Send + Sync + fmt::Debug + fmt::Display {
     /// Generate the next batch, return `None` when no more batches are available
     fn generate_next_batch(&mut self) -> Result<Option<RecordBatch>>;
-
-    /// Creates a boxed clone of this generator.
-    ///
-    /// This method is required because `Clone` cannot be directly implemented for
-    /// trait objects. It provides a way to clone trait objects of
-    /// StreamingBatchGenerator while maintaining proper type erasure.
-    fn clone_box(&self) -> Box<dyn StreamingBatchGenerator>;
 }
 
 /// Execution plan for streaming in-memory batches of data
@@ -385,7 +379,7 @@ pub struct StreamingMemoryExec {
     /// Schema representing the data
     schema: SchemaRef,
     /// Functions to generate batches for each partition
-    batch_generators: Vec<Box<dyn StreamingBatchGenerator>>,
+    batch_generators: Vec<Arc<Mutex<dyn StreamingBatchGenerator>>>,
     /// Total number of rows to generate for statistics
     cache: PlanProperties,
 }
@@ -394,7 +388,7 @@ impl StreamingMemoryExec {
     /// Create a new streaming memory execution plan
     pub fn try_new(
         schema: SchemaRef,
-        generators: Vec<Box<dyn StreamingBatchGenerator>>,
+        generators: Vec<Arc<Mutex<dyn StreamingBatchGenerator>>>,
     ) -> Result<Self> {
         let cache = PlanProperties::new(
             EquivalenceProperties::new(Arc::clone(&schema)),
@@ -428,7 +422,7 @@ impl DisplayAs for StreamingMemoryExec {
                     self.batch_generators.len(),
                     self.batch_generators
                         .iter()
-                        .map(|g| g.to_string())
+                        .map(|g| g.lock().unwrap().to_string())
                         .collect::<Vec<_>>()
                         .join(", ")
                 )
@@ -484,7 +478,7 @@ impl ExecutionPlan for StreamingMemoryExec {
 
         Ok(Box::pin(StreamingMemoryStream {
             schema: Arc::clone(&self.schema),
-            generator: self.batch_generators[partition].clone_box(),
+            generator: Arc::clone(&self.batch_generators[partition]),
         }))
     }
 
@@ -496,17 +490,24 @@ impl ExecutionPlan for StreamingMemoryExec {
 /// Stream that generates record batches on demand
 pub struct StreamingMemoryStream {
     schema: SchemaRef,
-    generator: Box<dyn StreamingBatchGenerator>,
+    /// Generator to produce batches
+    ///
+    /// Note: Idiomatically, DataFusion uses plan-time parallelism - each stream
+    /// should have a unique `StreamingBatchGenerator`. Use RepartitionExec or
+    /// construct multiple `StreamingMemoryStream`s during planning to enable
+    /// parallel execution.
+    /// Sharing generators between streams should be used with caution.
+    generator: Arc<Mutex<dyn StreamingBatchGenerator>>,
 }
 
 impl Stream for StreamingMemoryStream {
     type Item = Result<RecordBatch>;
 
     fn poll_next(
-        mut self: std::pin::Pin<&mut Self>,
+        self: std::pin::Pin<&mut Self>,
         _: &mut Context<'_>,
     ) -> Poll<Option<Self::Item>> {
-        let batch = self.generator.generate_next_batch();
+        let batch = self.generator.lock().unwrap().generate_next_batch();
 
         match batch {
             Ok(Some(batch)) => Poll::Ready(Some(Ok(batch))),
@@ -615,15 +616,6 @@ mod streaming_memory_tests {
                 vec![Arc::new(array)],
             )?))
         }
-
-        fn clone_box(&self) -> Box<dyn StreamingBatchGenerator> {
-            Box::new(TestGenerator {
-                counter: self.counter,
-                max_batches: self.max_batches,
-                batch_size: self.batch_size,
-                schema: Arc::clone(&self.schema),
-            })
-        }
     }
 
     #[tokio::test]
@@ -636,7 +628,8 @@ mod streaming_memory_tests {
             schema: Arc::clone(&schema),
         };
 
-        let exec = StreamingMemoryExec::try_new(schema, vec![Box::new(generator)])?;
+        let exec =
+            StreamingMemoryExec::try_new(schema, vec![Arc::new(Mutex::new(generator))])?;
 
         // Test schema
         assert_eq!(exec.schema().fields().len(), 1);
@@ -686,7 +679,8 @@ mod streaming_memory_tests {
             schema: Arc::clone(&schema),
         };
 
-        let exec = StreamingMemoryExec::try_new(schema, vec![Box::new(generator)])?;
+        let exec =
+            StreamingMemoryExec::try_new(schema, vec![Arc::new(Mutex::new(generator))])?;
 
         // Test invalid partition
         let result = exec.execute(1, Arc::new(TaskContext::default()));
