@@ -62,12 +62,12 @@ use syn::{parse_macro_input, DeriveInput, LitStr};
 ///         Some(DOCUMENTATION.get_or_init(||
 ///         {
 ///             Documentation ::
-///             builder().with_doc_section(DocSection
+///             builder(DocSection
 ///             {
 ///                 include : true, label : "Time and Date Functions", description
 ///                 : None
-///             }).with_description(r"Converts a value to a date (`YYYY-MM-DD`).")
-/// .with_syntax_example("to_date('2017-05-31', '%Y-%m-%d')".to_string()).with_sql_example("```sql\n\
+///             }, r"Converts a value to a date (`YYYY-MM-DD`).")
+/// .with_syntax_example("to_date('2017-05-31', '%Y-%m-%d')".to_string(),"```sql\n\
 /// \> select to_date('2023-01-31');\n\
 /// +-----------------------------+\n\
 /// | to_date(Utf8(\"2023-01-31\")) |\n\
@@ -90,9 +90,11 @@ pub fn user_doc(args: TokenStream, input: TokenStream) -> TokenStream {
 
     let mut description: Option<LitStr> = None;
     let mut syntax_example: Option<LitStr> = None;
+    let mut alt_syntax_example: Option<LitStr> = None;
     let mut sql_example: Option<LitStr> = None;
     let mut standard_args: Vec<(Option<LitStr>, Option<LitStr>)> = vec![];
     let mut udf_args: Vec<(Option<LitStr>, Option<LitStr>)> = vec![];
+    let mut related_udfs: Vec<Option<LitStr>> = vec![];
 
     let parser = syn::meta::parser(|meta| {
         if meta.path.is_ident("doc_section") {
@@ -114,6 +116,9 @@ pub fn user_doc(args: TokenStream, input: TokenStream) -> TokenStream {
             Ok(())
         } else if meta.path.is_ident("syntax_example") {
             syntax_example = Some(meta.value()?.parse()?);
+            Ok(())
+        } else if meta.path.is_ident("alternative_syntax") {
+            alt_syntax_example = Some(meta.value()?.parse()?);
             Ok(())
         } else if meta.path.is_ident("sql_example") {
             sql_example = Some(meta.value()?.parse()?);
@@ -150,8 +155,21 @@ pub fn user_doc(args: TokenStream, input: TokenStream) -> TokenStream {
             udf_args.push(arg.clone());
 
             m
+        } else if meta.path.is_ident("related_udf") {
+            let mut arg: Option<LitStr> = None;
+            let m = meta.parse_nested_meta(|meta| {
+                if meta.path.is_ident("name") {
+                    arg = meta.value()?.parse()?;
+                    return Ok(());
+                }
+                Ok(())
+            });
+
+            related_udfs.push(arg.clone());
+
+            m
         } else {
-            Err(meta.error(format!("Unsupported property {:?}", meta.path.get_ident())))
+            Err(meta.error(format!("Unsupported property: {:?}", meta.path.get_ident())))
         }
     });
 
@@ -161,7 +179,13 @@ pub fn user_doc(args: TokenStream, input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     let name = input.clone().ident;
 
-    let doc_section_include: bool = doc_section_include.unwrap().value().parse().unwrap();
+    let doc_section_include: bool = if let Some(doc_section_include) = doc_section_include
+    {
+        doc_section_include.value().parse().unwrap()
+    } else {
+        true
+    };
+
     let doc_section_description = doc_section_desc
         .map(|desc| quote! { Some(#desc)})
         .unwrap_or(quote! { None });
@@ -184,6 +208,21 @@ pub fn user_doc(args: TokenStream, input: TokenStream) -> TokenStream {
         })
         .collect::<Vec<_>>();
 
+    let related_udfs = related_udfs
+        .iter()
+        .map(|name| {
+            quote! {
+                .with_related_udf(#name)
+            }
+        })
+        .collect::<Vec<_>>();
+
+    let alt_syntax_example = alt_syntax_example.map(|syn| {
+        quote! {
+            .with_alternative_syntax(#syn)
+        }
+    });
+
     let generated = quote! {
         #input
 
@@ -195,13 +234,13 @@ pub fn user_doc(args: TokenStream, input: TokenStream) -> TokenStream {
         impl #name {
                 fn doc(&self) -> Option<&Documentation> {
                     Some(DOCUMENTATION.get_or_init(|| {
-                        Documentation::builder()
-                        .with_doc_section(DocSection { include: #doc_section_include, label: #doc_section_lbl, description: #doc_section_description })
-                        .with_description(#description.to_string())
-                        .with_syntax_example(#syntax_example.to_string())
+                        Documentation::builder(DocSection { include: #doc_section_include, label: #doc_section_lbl, description: #doc_section_description },
+                    #description.to_string(), #syntax_example.to_string())
                         .with_sql_example(#sql_example.to_string())
+                        #alt_syntax_example
                         #(#standard_args)*
                         #(#udf_args)*
+                        #(#related_udfs)*
                         .build()
                     }))
             }
@@ -209,7 +248,7 @@ pub fn user_doc(args: TokenStream, input: TokenStream) -> TokenStream {
     };
 
     // Debug the generated code if needed
-    // eprintln!("Generated code: {}", generated);
+    //eprintln!("Generated code: {}", generated);
 
     // Return the generated code
     TokenStream::from(generated)

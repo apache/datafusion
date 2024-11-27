@@ -249,13 +249,13 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_getfield_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_OTHER)
-            .with_description(r#"Returns a field within a map or a struct with the given key.
+        Documentation::builder(
+            DOC_SECTION_OTHER,
+            r#"Returns a field within a map or a struct with the given key.
 Note: most users invoke `get_field` indirectly via field access
 syntax such as `my_struct_col['field_name']` which results in a call to
-`get_field(my_struct_col, 'field_name')`."#)
-            .with_syntax_example("get_field(expression1, expression2)")
+`get_field(my_struct_col, 'field_name')`."#,
+            "get_field(expression1, expression2)")
             .with_sql_example(r#"```sql
 > create table t (idx varchar, v varchar) as values ('data','fusion'), ('apache', 'arrow');
 > select struct(idx, v) from t as c;

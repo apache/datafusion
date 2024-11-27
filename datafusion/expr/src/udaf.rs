@@ -333,10 +333,7 @@ where
 ///
 /// fn get_doc() -> &'static Documentation {
 ///     DOCUMENTATION.get_or_init(|| {
-///         Documentation::builder()
-///             .with_doc_section(DOC_SECTION_AGGREGATE)
-///             .with_description("calculates a geometric mean")
-///             .with_syntax_example("geo_mean(2.0)")
+///         Documentation::builder(DOC_SECTION_AGGREGATE, "calculates a geometric mean", "geo_mean(2.0)")
 ///             .with_argument("arg1", "The Float64 number for the geometric mean")
 ///             .build()
 ///     })

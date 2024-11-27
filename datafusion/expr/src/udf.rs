@@ -374,10 +374,7 @@ pub struct ScalarFunctionArgs<'a> {
 ///
 /// fn get_doc() -> &'static Documentation {
 ///     DOCUMENTATION.get_or_init(|| {
-///         Documentation::builder()
-///             .with_doc_section(DOC_SECTION_MATH)
-///             .with_description("Add one to an int32")
-///             .with_syntax_example("add_one(2)")
+///         Documentation::builder(DOC_SECTION_MATH, "Add one to an int32", "add_one(2)")
 ///             .with_argument("arg1", "The int32 number to add one to")
 ///             .build()
 ///     })

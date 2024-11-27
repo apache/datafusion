@@ -138,13 +138,12 @@ fn get_regr_docs() -> &'static HashMap<RegrType, Documentation> {
         let mut hash_map = HashMap::new();
         hash_map.insert(
             RegrType::Slope,
-            Documentation::builder()
-                .with_doc_section(DOC_SECTION_STATISTICAL)
-                .with_description(
+            Documentation::builder(
+                DOC_SECTION_STATISTICAL,
                     "Returns the slope of the linear regression line for non-null pairs in aggregate columns. \
                     Given input column Y and X: regr_slope(Y, X) returns the slope (k in Y = k*X + b) using minimal RSS fitting.",
-                )
-                .with_syntax_example("regr_slope(expression_y, expression_x)")
+
+                "regr_slope(expression_y, expression_x)")
                 .with_standard_argument("expression_y", Some("Dependent variable"))
                 .with_standard_argument("expression_x", Some("Independent variable"))
                 .build()
@@ -152,13 +151,12 @@ fn get_regr_docs() -> &'static HashMap<RegrType, Documentation> {
 
         hash_map.insert(
             RegrType::Intercept,
-            Documentation::builder()
-                .with_doc_section(DOC_SECTION_STATISTICAL)
-                .with_description(
+            Documentation::builder(
+                DOC_SECTION_STATISTICAL,
                     "Computes the y-intercept of the linear regression line. For the equation (y = kx + b), \
                     this function returns b.",
-                )
-                .with_syntax_example("regr_intercept(expression_y, expression_x)")
+
+                "regr_intercept(expression_y, expression_x)")
                 .with_standard_argument("expression_y", Some("Dependent variable"))
                 .with_standard_argument("expression_x", Some("Independent variable"))
                 .build()
@@ -166,12 +164,11 @@ fn get_regr_docs() -> &'static HashMap<RegrType, Documentation> {
 
         hash_map.insert(
             RegrType::Count,
-            Documentation::builder()
-                .with_doc_section(DOC_SECTION_STATISTICAL)
-                .with_description(
+            Documentation::builder(
+                DOC_SECTION_STATISTICAL,
                     "Counts the number of non-null paired data points.",
-                )
-                .with_syntax_example("regr_count(expression_y, expression_x)")
+
+                "regr_count(expression_y, expression_x)")
                 .with_standard_argument("expression_y", Some("Dependent variable"))
                 .with_standard_argument("expression_x", Some("Independent variable"))
                 .build()
@@ -179,12 +176,11 @@ fn get_regr_docs() -> &'static HashMap<RegrType, Documentation> {
 
         hash_map.insert(
             RegrType::R2,
-            Documentation::builder()
-                .with_doc_section(DOC_SECTION_STATISTICAL)
-                .with_description(
+            Documentation::builder(
+                DOC_SECTION_STATISTICAL,
                     "Computes the square of the correlation coefficient between the independent and dependent variables.",
-                )
-                .with_syntax_example("regr_r2(expression_y, expression_x)")
+
+                "regr_r2(expression_y, expression_x)")
                 .with_standard_argument("expression_y", Some("Dependent variable"))
                 .with_standard_argument("expression_x", Some("Independent variable"))
                 .build()
@@ -192,12 +188,11 @@ fn get_regr_docs() -> &'static HashMap<RegrType, Documentation> {
 
         hash_map.insert(
             RegrType::AvgX,
-            Documentation::builder()
-                .with_doc_section(DOC_SECTION_STATISTICAL)
-                .with_description(
+            Documentation::builder(
+                DOC_SECTION_STATISTICAL,
                     "Computes the average of the independent variable (input) expression_x for the non-null paired data points.",
-                )
-                .with_syntax_example("regr_avgx(expression_y, expression_x)")
+
+                "regr_avgx(expression_y, expression_x)")
                 .with_standard_argument("expression_y", Some("Dependent variable"))
                 .with_standard_argument("expression_x", Some("Independent variable"))
                 .build()
@@ -205,12 +200,11 @@ fn get_regr_docs() -> &'static HashMap<RegrType, Documentation> {
 
         hash_map.insert(
             RegrType::AvgY,
-            Documentation::builder()
-                .with_doc_section(DOC_SECTION_STATISTICAL)
-                .with_description(
+            Documentation::builder(
+                DOC_SECTION_STATISTICAL,
                     "Computes the average of the dependent variable (output) expression_y for the non-null paired data points.",
-                )
-                .with_syntax_example("regr_avgy(expression_y, expression_x)")
+
+                "regr_avgy(expression_y, expression_x)")
                 .with_standard_argument("expression_y", Some("Dependent variable"))
                 .with_standard_argument("expression_x", Some("Independent variable"))
                 .build()
@@ -218,12 +212,11 @@ fn get_regr_docs() -> &'static HashMap<RegrType, Documentation> {
 
         hash_map.insert(
             RegrType::SXX,
-            Documentation::builder()
-                .with_doc_section(DOC_SECTION_STATISTICAL)
-                .with_description(
+            Documentation::builder(
+                DOC_SECTION_STATISTICAL,
                     "Computes the sum of squares of the independent variable.",
-                )
-                .with_syntax_example("regr_sxx(expression_y, expression_x)")
+
+                "regr_sxx(expression_y, expression_x)")
                 .with_standard_argument("expression_y", Some("Dependent variable"))
                 .with_standard_argument("expression_x", Some("Independent variable"))
                 .build()
@@ -231,12 +224,11 @@ fn get_regr_docs() -> &'static HashMap<RegrType, Documentation> {
 
         hash_map.insert(
             RegrType::SYY,
-            Documentation::builder()
-                .with_doc_section(DOC_SECTION_STATISTICAL)
-                .with_description(
+            Documentation::builder(
+                DOC_SECTION_STATISTICAL,
                     "Computes the sum of squares of the dependent variable.",
-                )
-                .with_syntax_example("regr_syy(expression_y, expression_x)")
+
+                "regr_syy(expression_y, expression_x)")
                 .with_standard_argument("expression_y", Some("Dependent variable"))
                 .with_standard_argument("expression_x", Some("Independent variable"))
                 .build()
@@ -244,12 +236,11 @@ fn get_regr_docs() -> &'static HashMap<RegrType, Documentation> {
 
         hash_map.insert(
             RegrType::SXY,
-            Documentation::builder()
-                .with_doc_section(DOC_SECTION_STATISTICAL)
-                .with_description(
+            Documentation::builder(
+                DOC_SECTION_STATISTICAL,
                     "Computes the sum of products of paired data points.",
-                )
-                .with_syntax_example("regr_sxy(expression_y, expression_x)")
+
+                "regr_sxy(expression_y, expression_x)")
                 .with_standard_argument("expression_y", Some("Dependent variable"))
                 .with_standard_argument("expression_x", Some("Independent variable"))
                 .build()

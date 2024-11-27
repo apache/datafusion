@@ -102,12 +102,13 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_md5_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_HASHING)
-            .with_description("Computes an MD5 128-bit checksum for a string expression.")
-            .with_syntax_example("md5(expression)")
-            .with_sql_example(
-                r#"```sql
+        Documentation::builder(
+            DOC_SECTION_HASHING,
+            "Computes an MD5 128-bit checksum for a string expression.",
+            "md5(expression)",
+        )
+        .with_sql_example(
+            r#"```sql
 > select md5('foo');
 +-------------------------------------+
 | md5(Utf8("foo"))                    |
@@ -115,8 +116,8 @@ fn get_md5_doc() -> &'static Documentation {
 | <md5_checksum_result>               |
 +-------------------------------------+
 ```"#,
-            )
-            .with_standard_argument("expression", Some("String"))
-            .build()
+        )
+        .with_standard_argument("expression", Some("String"))
+        .build()
     })
 }

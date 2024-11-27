@@ -118,12 +118,10 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_map_extract_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_MAP)
-            .with_description(
+        Documentation::builder(
+            DOC_SECTION_MAP,
                 "Returns a list containing the value for the given key or an empty list if the key is not present in the map.",
-            )
-            .with_syntax_example("map_extract(map, key)")
+            "map_extract(map, key)")
             .with_sql_example(
                 r#"```sql
 SELECT map_extract(MAP {'a': 1, 'b': NULL, 'c': 3}, 'a');

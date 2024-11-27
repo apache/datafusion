@@ -42,12 +42,13 @@ static DOCUMENTATION_ACOS: OnceLock<Documentation> = OnceLock::new();
 
 pub fn get_acos_doc() -> &'static Documentation {
     DOCUMENTATION_ACOS.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_MATH)
-            .with_description("Returns the arc cosine or inverse cosine of a number.")
-            .with_syntax_example("acos(numeric_expression)")
-            .with_standard_argument("numeric_expression", Some("Numeric"))
-            .build()
+        Documentation::builder(
+            DOC_SECTION_MATH,
+            "Returns the arc cosine or inverse cosine of a number.",
+            "acos(numeric_expression)",
+        )
+        .with_standard_argument("numeric_expression", Some("Numeric"))
+        .build()
     })
 }
 
@@ -72,12 +73,11 @@ static DOCUMENTATION_ACOSH: OnceLock<Documentation> = OnceLock::new();
 
 pub fn get_acosh_doc() -> &'static Documentation {
     DOCUMENTATION_ACOSH.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_MATH)
-            .with_description(
+        Documentation::builder(
+            DOC_SECTION_MATH,
                 "Returns the area hyperbolic cosine or inverse hyperbolic cosine of a number.",
-            )
-            .with_syntax_example("acosh(numeric_expression)")
+
+            "acosh(numeric_expression)")
             .with_standard_argument("numeric_expression", Some("Numeric"))
             .build()
     })
@@ -102,12 +102,13 @@ static DOCUMENTATION_ASIN: OnceLock<Documentation> = OnceLock::new();
 
 pub fn get_asin_doc() -> &'static Documentation {
     DOCUMENTATION_ASIN.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_MATH)
-            .with_description("Returns the arc sine or inverse sine of a number.")
-            .with_syntax_example("asin(numeric_expression)")
-            .with_standard_argument("numeric_expression", Some("Numeric"))
-            .build()
+        Documentation::builder(
+            DOC_SECTION_MATH,
+            "Returns the arc sine or inverse sine of a number.",
+            "asin(numeric_expression)",
+        )
+        .with_standard_argument("numeric_expression", Some("Numeric"))
+        .build()
     })
 }
 
@@ -120,14 +121,13 @@ static DOCUMENTATION_ASINH: OnceLock<Documentation> = OnceLock::new();
 
 pub fn get_asinh_doc() -> &'static Documentation {
     DOCUMENTATION_ASINH.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_MATH)
-            .with_description(
-                "Returns the area hyperbolic sine or inverse hyperbolic sine of a number.",
-            )
-            .with_syntax_example("asinh(numeric_expression)")
-            .with_standard_argument("numeric_expression", Some("Numeric"))
-            .build()
+        Documentation::builder(
+            DOC_SECTION_MATH,
+            "Returns the area hyperbolic sine or inverse hyperbolic sine of a number.",
+            "asinh(numeric_expression)",
+        )
+        .with_standard_argument("numeric_expression", Some("Numeric"))
+        .build()
     })
 }
 
@@ -140,12 +140,13 @@ static DOCUMENTATION_ATAN: OnceLock<Documentation> = OnceLock::new();
 
 pub fn get_atan_doc() -> &'static Documentation {
     DOCUMENTATION_ATAN.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_MATH)
-            .with_description("Returns the arc tangent or inverse tangent of a number.")
-            .with_syntax_example("atan(numeric_expression)")
-            .with_standard_argument("numeric_expression", Some("Numeric"))
-            .build()
+        Documentation::builder(
+            DOC_SECTION_MATH,
+            "Returns the arc tangent or inverse tangent of a number.",
+            "atan(numeric_expression)",
+        )
+        .with_standard_argument("numeric_expression", Some("Numeric"))
+        .build()
     })
 }
 
@@ -168,12 +169,11 @@ static DOCUMENTATION_ATANH: OnceLock<Documentation> = OnceLock::new();
 
 pub fn get_atanh_doc() -> &'static Documentation {
     DOCUMENTATION_ATANH.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_MATH)
-            .with_description(
+        Documentation::builder(
+            DOC_SECTION_MATH,
                 "Returns the area hyperbolic tangent or inverse hyperbolic tangent of a number.",
-            )
-            .with_syntax_example("atanh(numeric_expression)")
+
+            "atanh(numeric_expression)")
             .with_standard_argument("numeric_expression", Some("Numeric"))
             .build()
     })
@@ -189,12 +189,11 @@ static DOCUMENTATION_ATANH2: OnceLock<Documentation> = OnceLock::new();
 
 pub fn get_atan2_doc() -> &'static Documentation {
     DOCUMENTATION_ATANH2.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_MATH)
-            .with_description(
+        Documentation::builder(
+            DOC_SECTION_MATH,
                 "Returns the arc tangent or inverse tangent of `expression_y / expression_x`.",
-            )
-            .with_syntax_example("atan2(expression_y, expression_x)")
+
+            "atan2(expression_y, expression_x)")
             .with_argument("expression_y", r#"First numeric expression to operate on.
   Can be a constant, column, or function, and any combination of arithmetic operators."#)
             .with_argument("expression_x", r#"Second numeric expression to operate on.
@@ -212,12 +211,13 @@ static DOCUMENTATION_CBRT: OnceLock<Documentation> = OnceLock::new();
 
 pub fn get_cbrt_doc() -> &'static Documentation {
     DOCUMENTATION_CBRT.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_MATH)
-            .with_description("Returns the cube root of a number.")
-            .with_syntax_example("cbrt(numeric_expression)")
-            .with_standard_argument("numeric_expression", Some("Numeric"))
-            .build()
+        Documentation::builder(
+            DOC_SECTION_MATH,
+            "Returns the cube root of a number.",
+            "cbrt(numeric_expression)",
+        )
+        .with_standard_argument("numeric_expression", Some("Numeric"))
+        .build()
     })
 }
 
@@ -230,14 +230,13 @@ static DOCUMENTATION_CEIL: OnceLock<Documentation> = OnceLock::new();
 
 pub fn get_ceil_doc() -> &'static Documentation {
     DOCUMENTATION_CEIL.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_MATH)
-            .with_description(
-                "Returns the nearest integer greater than or equal to a number.",
-            )
-            .with_syntax_example("ceil(numeric_expression)")
-            .with_standard_argument("numeric_expression", Some("Numeric"))
-            .build()
+        Documentation::builder(
+            DOC_SECTION_MATH,
+            "Returns the nearest integer greater than or equal to a number.",
+            "ceil(numeric_expression)",
+        )
+        .with_standard_argument("numeric_expression", Some("Numeric"))
+        .build()
     })
 }
 
@@ -252,12 +251,13 @@ static DOCUMENTATION_COS: OnceLock<Documentation> = OnceLock::new();
 
 pub fn get_cos_doc() -> &'static Documentation {
     DOCUMENTATION_COS.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_MATH)
-            .with_description("Returns the cosine of a number.")
-            .with_syntax_example("cos(numeric_expression)")
-            .with_standard_argument("numeric_expression", Some("Numeric"))
-            .build()
+        Documentation::builder(
+            DOC_SECTION_MATH,
+            "Returns the cosine of a number.",
+            "cos(numeric_expression)",
+        )
+        .with_standard_argument("numeric_expression", Some("Numeric"))
+        .build()
     })
 }
 
@@ -281,12 +281,13 @@ static DOCUMENTATION_COSH: OnceLock<Documentation> = OnceLock::new();
 
 pub fn get_cosh_doc() -> &'static Documentation {
     DOCUMENTATION_COSH.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_MATH)
-            .with_description("Returns the hyperbolic cosine of a number.")
-            .with_syntax_example("cosh(numeric_expression)")
-            .with_standard_argument("numeric_expression", Some("Numeric"))
-            .build()
+        Documentation::builder(
+            DOC_SECTION_MATH,
+            "Returns the hyperbolic cosine of a number.",
+            "cosh(numeric_expression)",
+        )
+        .with_standard_argument("numeric_expression", Some("Numeric"))
+        .build()
     })
 }
 
@@ -299,12 +300,13 @@ static DOCUMENTATION_DEGREES: OnceLock<Documentation> = OnceLock::new();
 
 pub fn get_degrees_doc() -> &'static Documentation {
     DOCUMENTATION_DEGREES.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_MATH)
-            .with_description("Converts radians to degrees.")
-            .with_syntax_example("degrees(numeric_expression)")
-            .with_standard_argument("numeric_expression", Some("Numeric"))
-            .build()
+        Documentation::builder(
+            DOC_SECTION_MATH,
+            "Converts radians to degrees.",
+            "degrees(numeric_expression)",
+        )
+        .with_standard_argument("numeric_expression", Some("Numeric"))
+        .build()
     })
 }
 
@@ -317,12 +319,13 @@ static DOCUMENTATION_EXP: OnceLock<Documentation> = OnceLock::new();
 
 pub fn get_exp_doc() -> &'static Documentation {
     DOCUMENTATION_EXP.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_MATH)
-            .with_description("Returns the base-e exponential of a number.")
-            .with_syntax_example("exp(numeric_expression)")
-            .with_standard_argument("numeric_expression", Some("Numeric"))
-            .build()
+        Documentation::builder(
+            DOC_SECTION_MATH,
+            "Returns the base-e exponential of a number.",
+            "exp(numeric_expression)",
+        )
+        .with_standard_argument("numeric_expression", Some("Numeric"))
+        .build()
     })
 }
 
@@ -335,14 +338,13 @@ static DOCUMENTATION_FLOOR: OnceLock<Documentation> = OnceLock::new();
 
 pub fn get_floor_doc() -> &'static Documentation {
     DOCUMENTATION_FLOOR.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_MATH)
-            .with_description(
-                "Returns the nearest integer less than or equal to a number.",
-            )
-            .with_syntax_example("floor(numeric_expression)")
-            .with_standard_argument("numeric_expression", Some("Numeric"))
-            .build()
+        Documentation::builder(
+            DOC_SECTION_MATH,
+            "Returns the nearest integer less than or equal to a number.",
+            "floor(numeric_expression)",
+        )
+        .with_standard_argument("numeric_expression", Some("Numeric"))
+        .build()
     })
 }
 
@@ -364,12 +366,13 @@ static DOCUMENTATION_LN: OnceLock<Documentation> = OnceLock::new();
 
 pub fn get_ln_doc() -> &'static Documentation {
     DOCUMENTATION_LN.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_MATH)
-            .with_description("Returns the natural logarithm of a number.")
-            .with_syntax_example("ln(numeric_expression)")
-            .with_standard_argument("numeric_expression", Some("Numeric"))
-            .build()
+        Documentation::builder(
+            DOC_SECTION_MATH,
+            "Returns the natural logarithm of a number.",
+            "ln(numeric_expression)",
+        )
+        .with_standard_argument("numeric_expression", Some("Numeric"))
+        .build()
     })
 }
 
@@ -391,12 +394,13 @@ static DOCUMENTATION_LOG2: OnceLock<Documentation> = OnceLock::new();
 
 pub fn get_log2_doc() -> &'static Documentation {
     DOCUMENTATION_LOG2.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_MATH)
-            .with_description("Returns the base-2 logarithm of a number.")
-            .with_syntax_example("log2(numeric_expression)")
-            .with_standard_argument("numeric_expression", Some("Numeric"))
-            .build()
+        Documentation::builder(
+            DOC_SECTION_MATH,
+            "Returns the base-2 logarithm of a number.",
+            "log2(numeric_expression)",
+        )
+        .with_standard_argument("numeric_expression", Some("Numeric"))
+        .build()
     })
 }
 
@@ -418,12 +422,13 @@ static DOCUMENTATION_LOG10: OnceLock<Documentation> = OnceLock::new();
 
 pub fn get_log10_doc() -> &'static Documentation {
     DOCUMENTATION_LOG10.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_MATH)
-            .with_description("Returns the base-10 logarithm of a number.")
-            .with_syntax_example("log10(numeric_expression)")
-            .with_standard_argument("numeric_expression", Some("Numeric"))
-            .build()
+        Documentation::builder(
+            DOC_SECTION_MATH,
+            "Returns the base-10 logarithm of a number.",
+            "log10(numeric_expression)",
+        )
+        .with_standard_argument("numeric_expression", Some("Numeric"))
+        .build()
     })
 }
 
@@ -436,12 +441,13 @@ static DOCUMENTATION_RADIONS: OnceLock<Documentation> = OnceLock::new();
 
 pub fn get_radians_doc() -> &'static Documentation {
     DOCUMENTATION_RADIONS.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_MATH)
-            .with_description("Converts degrees to radians.")
-            .with_syntax_example("radians(numeric_expression)")
-            .with_standard_argument("numeric_expression", Some("Numeric"))
-            .build()
+        Documentation::builder(
+            DOC_SECTION_MATH,
+            "Converts degrees to radians.",
+            "radians(numeric_expression)",
+        )
+        .with_standard_argument("numeric_expression", Some("Numeric"))
+        .build()
     })
 }
 
@@ -456,12 +462,13 @@ static DOCUMENTATION_SIN: OnceLock<Documentation> = OnceLock::new();
 
 pub fn get_sin_doc() -> &'static Documentation {
     DOCUMENTATION_SIN.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_MATH)
-            .with_description("Returns the sine of a number.")
-            .with_syntax_example("sin(numeric_expression)")
-            .with_standard_argument("numeric_expression", Some("Numeric"))
-            .build()
+        Documentation::builder(
+            DOC_SECTION_MATH,
+            "Returns the sine of a number.",
+            "sin(numeric_expression)",
+        )
+        .with_standard_argument("numeric_expression", Some("Numeric"))
+        .build()
     })
 }
 
@@ -474,12 +481,13 @@ static DOCUMENTATION_SINH: OnceLock<Documentation> = OnceLock::new();
 
 pub fn get_sinh_doc() -> &'static Documentation {
     DOCUMENTATION_SINH.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_MATH)
-            .with_description("Returns the hyperbolic sine of a number.")
-            .with_syntax_example("sinh(numeric_expression)")
-            .with_standard_argument("numeric_expression", Some("Numeric"))
-            .build()
+        Documentation::builder(
+            DOC_SECTION_MATH,
+            "Returns the hyperbolic sine of a number.",
+            "sinh(numeric_expression)",
+        )
+        .with_standard_argument("numeric_expression", Some("Numeric"))
+        .build()
     })
 }
 
@@ -501,12 +509,13 @@ static DOCUMENTATION_SQRT: OnceLock<Documentation> = OnceLock::new();
 
 pub fn get_sqrt_doc() -> &'static Documentation {
     DOCUMENTATION_SQRT.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_MATH)
-            .with_description("Returns the square root of a number.")
-            .with_syntax_example("sqrt(numeric_expression)")
-            .with_standard_argument("numeric_expression", Some("Numeric"))
-            .build()
+        Documentation::builder(
+            DOC_SECTION_MATH,
+            "Returns the square root of a number.",
+            "sqrt(numeric_expression)",
+        )
+        .with_standard_argument("numeric_expression", Some("Numeric"))
+        .build()
     })
 }
 
@@ -521,12 +530,13 @@ static DOCUMENTATION_TAN: OnceLock<Documentation> = OnceLock::new();
 
 pub fn get_tan_doc() -> &'static Documentation {
     DOCUMENTATION_TAN.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_MATH)
-            .with_description("Returns the tangent of a number.")
-            .with_syntax_example("tan(numeric_expression)")
-            .with_standard_argument("numeric_expression", Some("Numeric"))
-            .build()
+        Documentation::builder(
+            DOC_SECTION_MATH,
+            "Returns the tangent of a number.",
+            "tan(numeric_expression)",
+        )
+        .with_standard_argument("numeric_expression", Some("Numeric"))
+        .build()
     })
 }
 
@@ -539,11 +549,12 @@ static DOCUMENTATION_TANH: OnceLock<Documentation> = OnceLock::new();
 
 pub fn get_tanh_doc() -> &'static Documentation {
     DOCUMENTATION_TANH.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_MATH)
-            .with_description("Returns the hyperbolic tangent of a number.")
-            .with_syntax_example("tanh(numeric_expression)")
-            .with_standard_argument("numeric_expression", Some("Numeric"))
-            .build()
+        Documentation::builder(
+            DOC_SECTION_MATH,
+            "Returns the hyperbolic tangent of a number.",
+            "tanh(numeric_expression)",
+        )
+        .with_standard_argument("numeric_expression", Some("Numeric"))
+        .build()
     })
 }
