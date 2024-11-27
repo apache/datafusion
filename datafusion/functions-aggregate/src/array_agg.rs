@@ -154,12 +154,11 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_array_agg_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_GENERAL)
-            .with_description(
+        Documentation::builder(
+            DOC_SECTION_GENERAL,
                 "Returns an array created from the expression elements. If ordering is required, elements are inserted in the specified order.",
-            )
-            .with_syntax_example("array_agg(expression [ORDER BY expression])")
+
+            "array_agg(expression [ORDER BY expression])")
             .with_sql_example(r#"```sql
 > SELECT array_agg(column_name ORDER BY other_column) FROM table_name;
 +-----------------------------------------------+

@@ -231,10 +231,10 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_greatest_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_CONDITIONAL)
-            .with_description("Returns the greatest value in a list of expressions. Returns _null_ if all expressions are _null_.")
-            .with_syntax_example("greatest(expression1[, ..., expression_n])")
+        Documentation::builder(
+            DOC_SECTION_CONDITIONAL,
+            "Returns the greatest value in a list of expressions. Returns _null_ if all expressions are _null_.",
+            "greatest(expression1[, ..., expression_n])")
             .with_sql_example(r#"```sql
 > select greatest(4, 7, 5);
 +---------------------------+

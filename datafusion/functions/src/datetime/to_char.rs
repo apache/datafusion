@@ -151,10 +151,10 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_to_char_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_DATETIME)
-            .with_description("Returns a string representation of a date, time, timestamp or duration based on a [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html). Unlike the PostgreSQL equivalent of this function numerical formatting is not supported.")
-            .with_syntax_example("to_char(expression, format)")
+        Documentation::builder(
+            DOC_SECTION_DATETIME,
+            "Returns a string representation of a date, time, timestamp or duration based on a [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html). Unlike the PostgreSQL equivalent of this function numerical formatting is not supported.",
+            "to_char(expression, format)")
             .with_argument(
                 "expression",
                 " Expression to operate on. Can be a constant, column, or function that results in a date, time, timestamp or duration."

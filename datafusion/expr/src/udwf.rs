@@ -258,10 +258,7 @@ where
 ///
 /// fn get_doc() -> &'static Documentation {
 ///     DOCUMENTATION.get_or_init(|| {
-///         Documentation::builder()
-///             .with_doc_section(DOC_SECTION_ANALYTICAL)
-///             .with_description("smooths the windows")
-///             .with_syntax_example("smooth_it(2)")
+///         Documentation::builder(DOC_SECTION_ANALYTICAL, "smooths the windows", "smooth_it(2)")
 ///             .with_argument("arg1", "The int32 number to smooth by")
 ///             .build()
 ///     })

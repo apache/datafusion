@@ -130,10 +130,10 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_rpad_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_STRING)
-            .with_description("Pads the right side of a string with another string to a specified string length.")
-            .with_syntax_example("rpad(str, n[, padding_str])")
+        Documentation::builder(
+            DOC_SECTION_STRING,
+            "Pads the right side of a string with another string to a specified string length.",
+            "rpad(str, n[, padding_str])")
             .with_sql_example(r#"```sql
 >  select rpad('datafusion', 20, '_-');
 +-----------------------------------------------+

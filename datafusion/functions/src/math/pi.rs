@@ -90,10 +90,11 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_pi_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_MATH)
-            .with_description("Returns an approximate value of π.")
-            .with_syntax_example("pi()")
-            .build()
+        Documentation::builder(
+            DOC_SECTION_MATH,
+            "Returns an approximate value of π.",
+            "pi()",
+        )
+        .build()
     })
 }

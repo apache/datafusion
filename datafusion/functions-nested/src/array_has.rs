@@ -146,12 +146,11 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_array_has_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_ARRAY)
-            .with_description(
+        Documentation::builder(
+            DOC_SECTION_ARRAY,
                 "Returns true if the array contains the element.",
-            )
-            .with_syntax_example("array_has(array, element)")
+
+            "array_has(array, element)")
             .with_sql_example(
                 r#"```sql
 > select array_has([1, 2, 3], 2);
@@ -344,12 +343,11 @@ impl ScalarUDFImpl for ArrayHasAll {
 
 fn get_array_has_all_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_ARRAY)
-            .with_description(
+        Documentation::builder(
+            DOC_SECTION_ARRAY,
                 "Returns true if all elements of sub-array exist in array.",
-            )
-            .with_syntax_example("array_has_all(array, sub-array)")
+
+            "array_has_all(array, sub-array)")
             .with_sql_example(
                 r#"```sql
 > select array_has_all([1, 2, 3, 4], [2, 3]);
@@ -428,12 +426,11 @@ impl ScalarUDFImpl for ArrayHasAny {
 
 fn get_array_has_any_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_ARRAY)
-            .with_description(
+        Documentation::builder(
+            DOC_SECTION_ARRAY,
                 "Returns true if any elements exist in both arrays.",
-            )
-            .with_syntax_example("array_has_any(array, sub-array)")
+
+            "array_has_any(array, sub-array)")
             .with_sql_example(
                 r#"```sql
 > select array_has_any([1, 2, 3], [3, 4]);

@@ -164,10 +164,10 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_make_date_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_DATETIME)
-            .with_description("Make a date from year/month/day component parts.")
-            .with_syntax_example("make_date(year, month, day)")
+        Documentation::builder(
+            DOC_SECTION_DATETIME,
+            "Make a date from year/month/day component parts.",
+            "make_date(year, month, day)")
             .with_argument(
                 "year",
                 " Year to use when making the date. Can be a constant, column or function, and any combination of arithmetic operators.", )

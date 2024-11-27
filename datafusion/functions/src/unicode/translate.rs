@@ -93,10 +93,7 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_translate_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_STRING)
-            .with_description("Translates characters in a string to specified translation characters.")
-            .with_syntax_example("translate(str, chars, translation)")
+        Documentation::builder(DOC_SECTION_STRING,"Translates characters in a string to specified translation characters.","translate(str, chars, translation)")
             .with_sql_example(r#"```sql
 > select translate('twice', 'wic', 'her');
 +--------------------------------------------------+
