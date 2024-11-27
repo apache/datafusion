@@ -58,7 +58,8 @@ use arrow::downcast_primitive_array;
 use arrow::record_batch::RecordBatch;
 use arrow::util::bit_util;
 use arrow_array::cast::downcast_array;
-use arrow_schema::ArrowError;
+use arrow::array::AsArray;
+use arrow_schema::{ArrowError, DataType};
 use datafusion_common::utils::memory::estimate_memory_size;
 use datafusion_common::{
     internal_datafusion_err, internal_err, plan_err, project_schema, DataFusionError,
@@ -1208,38 +1209,79 @@ fn equal_with_indices(
     // TODO: Write a reusable framework and support more arrow types.
     downcast_primitive_array! {
         (arr_left, arr_right) => {
-            let iter = indices_left.values().iter().zip(
-                indices_right.values().iter()
-            );
+            if null_equals_null {
+                let iter = indices_left.values().iter().zip(
+                    indices_right.values().iter()
+                );
 
-            for (index, (idx_left, idx_right)) in iter.enumerate() {
-                if !equal.get_bit(index) {
-                    continue;
-                }
+                for (index, (idx_left, idx_right)) in iter.enumerate() {
+                    let idx_left = *idx_left as usize;
+                    let idx_right = *idx_right as usize;
 
-                let idx_left = *idx_left as usize;
-                let idx_right = *idx_right as usize;
-
-                let is_equal = if null_equals_null {
                     let null_left = arr_left.is_null(idx_left);
                     let null_right = arr_right.is_null(idx_right);
 
-                    match (null_left, null_right) {
-                        (true, true) => true,
+                    let is_eq = match (null_left, null_right) {
                         (true, false) | (false, true) => false,
-                        (false, false) => unsafe {
+                        _ => true,
+                    };
+
+                    equal.set_bit(index, is_eq);
+                } 
+
+                let iter = indices_left.values().iter().zip(
+                    indices_right.values().iter()
+                );
+
+                for (index, (idx_left, idx_right)) in iter.enumerate() {
+                    if equal.get_bit(index) {
+                        let idx_left = *idx_left as usize;
+                        let idx_right = *idx_right as usize;
+
+                        equal.set_bit(
+                            index,
+                            unsafe {
+                                arr_left.value_unchecked(idx_left) == arr_right.value_unchecked(idx_right)
+                            }
+                        );
+                    }
+                }
+            } else {
+                let iter = indices_left.values().iter().zip(
+                    indices_right.values().iter()
+                );
+
+                for (index, (idx_left, idx_right)) in iter.enumerate() {
+                    let idx_left = *idx_left as usize;
+                    let idx_right = *idx_right as usize;
+
+                    equal.set_bit(
+                        index,
+                        unsafe {
                             arr_left.value_unchecked(idx_left) == arr_right.value_unchecked(idx_right)
                         }
-                    }
-                } else {
-                    unsafe {
-                        arr_left.value_unchecked(idx_left) == arr_right.value_unchecked(idx_right)
-                    }
-                };
-
-                equal.set_bit(index, is_equal);
+                    );
+                }
             }
 
+            Ok(())
+        }
+
+        (DataType::Struct(_), DataType::Struct(_)) => {
+            let arr_left = arr_left.as_struct();
+            let arr_right = arr_right.as_struct();
+
+            for (left, right) in arr_left.columns().iter().zip(arr_right.columns().iter()) {
+                equal_with_indices(
+                    equal, 
+                    indices_left,
+                    indices_right,
+                    left,
+                    right,
+                    null_equals_null,
+                )?;
+            }
+                
             Ok(())
         }
 
@@ -4110,8 +4152,12 @@ mod tests {
         let (_, batches_null_neq) =
             join_collect(left, right, on, &JoinType::Inner, false, task_ctx).await?;
 
-        let expected_null_neq =
-            ["+----+----+", "| n1 | n2 |", "+----+----+", "+----+----+"];
+        let expected_null_neq = [
+            "+----+----+",
+            "| n1 | n2 |",
+            "+----+----+",
+            "+----+----+"
+        ];
         assert_batches_eq!(expected_null_neq, &batches_null_neq);
 
         Ok(())
