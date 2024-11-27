@@ -66,7 +66,8 @@ use datafusion_expr::{
     planner::ExprPlanner,
     Expr, UserDefinedLogicalNode, WindowUDF,
 };
-use futures::FutureExt;
+use futures::stream::BoxStream;
+use futures::{FutureExt, TryStreamExt};
 
 // backwards compatibility
 pub use crate::execution::session_state::SessionState;
@@ -292,13 +293,14 @@ impl SessionContext {
 
     /// Finds any [`ListingSchemaProvider`]s and instructs them to reload tables from "disk"
     pub async fn refresh_catalogs(&self) -> Result<()> {
-        let cat_names = self.catalog_names().await.clone();
-        for cat_name in cat_names.iter() {
-            let cat = self.catalog(cat_name.as_str()).await.ok_or_else(|| {
+        let mut cat_names = self.catalog_names().await;
+        while let Some(cat_name) = cat_names.try_next().await? {
+            let cat = self.catalog(cat_name.as_str()).await?.ok_or_else(|| {
                 DataFusionError::Internal("Catalog not found!".to_string())
             })?;
-            for schema_name in cat.schema_names().await {
-                let schema = cat.schema(schema_name.as_str()).await.ok_or_else(|| {
+            let mut schema_names = cat.schema_names().await;
+            while let Some(schema_name) = schema_names.try_next().await? {
+                let schema = cat.schema(&schema_name).await?.ok_or_else(|| {
                     DataFusionError::Internal("Schema not found!".to_string())
                 })?;
                 let lister = schema.as_any().downcast_ref::<ListingSchemaProvider>();
@@ -919,7 +921,7 @@ impl SessionContext {
                     (name, catalog_list)
                 };
                 let catalog_fut = catalog_list.catalog(&name);
-                let catalog = catalog_fut.await.ok_or_else(|| {
+                let catalog = catalog_fut.await?.ok_or_else(|| {
                     DataFusionError::Execution(format!(
                         "Missing default catalog '{name}'"
                     ))
@@ -928,14 +930,14 @@ impl SessionContext {
             }
             2 => {
                 let name = &tokens[0];
-                let catalog = self.catalog(name).await.ok_or_else(|| {
+                let catalog = self.catalog(name).await?.ok_or_else(|| {
                     DataFusionError::Execution(format!("Missing catalog '{name}'"))
                 })?;
                 (catalog, tokens[1])
             }
             _ => return exec_err!("Unable to parse catalog from {schema_name}"),
         };
-        let schema = catalog.schema(schema_name).await;
+        let schema = catalog.schema(schema_name).await?;
 
         match (if_not_exists, schema) {
             (true, Some(_)) => self.return_empty_dataframe(),
@@ -954,7 +956,7 @@ impl SessionContext {
             if_not_exists,
             ..
         } = cmd;
-        let catalog = self.catalog(catalog_name.as_str()).await;
+        let catalog = self.catalog(catalog_name.as_str()).await?;
 
         match (if_not_exists, catalog) {
             (true, Some(_)) => self.return_empty_dataframe(),
@@ -963,7 +965,7 @@ impl SessionContext {
                 let catalog_list = self.state.write().catalog_list().clone();
                 catalog_list
                     .register_catalog(catalog_name, new_catalog)
-                    .await;
+                    .await?;
                 self.return_empty_dataframe()
             }
             (false, Some(_)) => exec_err!("Catalog '{catalog_name}' already exists"),
@@ -1017,7 +1019,7 @@ impl SessionContext {
                 let catalog_list = state.catalog_list().clone();
                 (catalog_name, catalog_list)
             };
-            if let Some(catalog) = catalog_list.catalog(&catalog_name).await {
+            if let Some(catalog) = catalog_list.catalog(&catalog_name).await? {
                 catalog
             } else if allow_missing {
                 return self.return_empty_dataframe();
@@ -1085,8 +1087,8 @@ impl SessionContext {
                 let catalog_list = state.catalog_list().clone();
                 (resolved, catalog_list)
             };
-            if let Some(catalog) = catalog_list.catalog(&resolved.catalog).await {
-                catalog.schema(&resolved.schema).await
+            if let Some(catalog) = catalog_list.catalog(&resolved.catalog).await? {
+                catalog.schema(&resolved.schema).await?
             } else {
                 None
             }
@@ -1440,22 +1442,22 @@ impl SessionContext {
         &self,
         name: impl Into<String>,
         catalog: Arc<dyn CatalogProvider>,
-    ) -> Option<Arc<dyn CatalogProvider>> {
+    ) -> Result<Option<Arc<dyn CatalogProvider>>> {
         let name = name.into();
         let catalog_list = self.state.read().catalog_list().clone();
         catalog_list.register_catalog(name, catalog).await
     }
 
     /// Retrieves the list of available catalog names.
-    pub async fn catalog_names(&self) -> Vec<String> {
+    pub async fn catalog_names(&self) -> BoxStream<'static, Result<String>> {
         let catalog_list = self.state.read().catalog_list().clone();
         catalog_list.catalog_names().await
     }
 
     /// Retrieves a [`CatalogProvider`] instance by name
-    pub async fn catalog(&self, name: &str) -> Option<Arc<dyn CatalogProvider>> {
+    pub async fn catalog(&self, name: &str) -> Result<Option<Arc<dyn CatalogProvider>>> {
         let catalog_list = self.state.read().catalog_list().clone();
-        catalog_list.catalog(name).await
+        Ok(catalog_list.catalog(name).await?)
     }
 
     /// Registers a [`TableProvider`] as a table that can be
@@ -2097,7 +2099,9 @@ mod tests {
             .register_schema("my_schema", Arc::new(schema))
             .await
             .unwrap();
-        ctx.register_catalog("my_catalog", Arc::new(catalog)).await;
+        ctx.register_catalog("my_catalog", Arc::new(catalog))
+            .await
+            .unwrap();
 
         for table_ref in &["my_catalog.my_schema.test", "my_schema.test", "test"] {
             let result = plan_and_collect(
@@ -2130,7 +2134,9 @@ mod tests {
         catalog_a
             .register_schema("schema_a", Arc::new(schema_a))
             .await?;
-        ctx.register_catalog("catalog_a", Arc::new(catalog_a)).await;
+        ctx.register_catalog("catalog_a", Arc::new(catalog_a))
+            .await
+            .unwrap();
 
         let catalog_b = MemoryCatalogProvider::new();
         let schema_b = MemorySchemaProvider::new();
@@ -2140,7 +2146,8 @@ mod tests {
         catalog_b
             .register_schema("schema_b", Arc::new(schema_b))
             .await?;
-        ctx.register_catalog("catalog_b", Arc::new(catalog_b)).await;
+        ctx.register_catalog("catalog_b", Arc::new(catalog_b))
+            .await?;
 
         let result = plan_and_collect(
             &ctx,
@@ -2178,7 +2185,7 @@ mod tests {
         // register a single catalog
         let catalog = Arc::new(MemoryCatalogProvider::new());
         let catalog_weak = Arc::downgrade(&catalog);
-        ctx.register_catalog("my_catalog", catalog).await;
+        ctx.register_catalog("my_catalog", catalog).await.unwrap();
 
         let catalog_list_weak = {
             let state = ctx.state.read();

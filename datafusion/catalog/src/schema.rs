@@ -20,6 +20,7 @@
 
 use async_trait::async_trait;
 use datafusion_common::{exec_err, DataFusionError};
+use futures::stream::BoxStream;
 use std::any::Any;
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -45,7 +46,7 @@ pub trait SchemaProvider: Debug + Sync + Send {
     fn as_any(&self) -> &dyn Any;
 
     /// Retrieves the list of available table names in this schema.
-    async fn table_names(&self) -> Vec<String>;
+    async fn table_names(&self) -> BoxStream<'static, Result<String>>;
 
     /// Retrieves a specific table from the schema by name, if it exists,
     /// otherwise returns `None`.

@@ -34,8 +34,8 @@ async fn create_custom_table() -> Result<()> {
     let sql = "CREATE EXTERNAL TABLE dt STORED AS DELTATABLE LOCATION 's3://bucket/schema/table';";
     ctx.sql(sql).await.unwrap();
 
-    let cat = ctx.catalog("datafusion").await.unwrap();
-    let schema = cat.schema("public").await.unwrap();
+    let cat = ctx.catalog("datafusion").await.unwrap().unwrap();
+    let schema = cat.schema("public").await.unwrap().unwrap();
     let exists = schema.table_exist("dt").await;
     assert!(exists, "Table should have been created!");
 
@@ -56,8 +56,8 @@ async fn create_external_table_with_ddl() -> Result<()> {
     let sql = "CREATE EXTERNAL TABLE dt (a_id integer, a_str string, a_bool boolean) STORED AS MOCKTABLE LOCATION 'mockprotocol://path/to/table';";
     ctx.sql(sql).await.unwrap();
 
-    let cat = ctx.catalog("datafusion").await.unwrap();
-    let schema = cat.schema("public").await.unwrap();
+    let cat = ctx.catalog("datafusion").await.unwrap().unwrap();
+    let schema = cat.schema("public").await.unwrap().unwrap();
 
     let exists = schema.table_exist("dt").await;
     assert!(exists, "Table should have been created!");

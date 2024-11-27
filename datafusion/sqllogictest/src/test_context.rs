@@ -253,7 +253,9 @@ pub async fn register_table_with_many_types(ctx: &SessionContext) {
         .register_schema("my_schema", Arc::new(schema))
         .await
         .unwrap();
-    ctx.register_catalog("my_catalog", Arc::new(catalog)).await;
+    ctx.register_catalog("my_catalog", Arc::new(catalog))
+        .await
+        .unwrap();
 
     ctx.register_table(
         "my_catalog.my_schema.table_with_many_types",

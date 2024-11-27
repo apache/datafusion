@@ -323,7 +323,7 @@ impl SessionState {
         async move {
             catalog_list
                 .catalog(&resolved_ref.catalog)
-                .await
+                .await?
                 .ok_or_else(|| {
                     plan_datafusion_err!(
                         "failed to resolve catalog: {}",
@@ -331,7 +331,7 @@ impl SessionState {
                     )
                 })?
                 .schema(&resolved_ref.schema)
-                .await
+                .await?
                 .ok_or_else(|| {
                     plan_datafusion_err!(
                         "failed to resolve schema: {}",
@@ -1042,6 +1042,7 @@ impl SessionStateBuilder {
             .catalog_list()
             .catalog(&existing.config.options().catalog.default_catalog)
             .await
+            .unwrap()
             .is_some();
         // The new `with_create_default_catalog_and_schema` should be false if the default catalog exists
         let create_default_catalog_and_schema = existing
@@ -1452,7 +1453,8 @@ impl SessionStateBuilder {
                     state.config.options().catalog.default_catalog.clone(),
                     Arc::new(default_catalog),
                 )
-                .await;
+                .await
+                .unwrap();
         }
 
         if let Some(analyzer_rules) = analyzer_rules {
@@ -2062,8 +2064,10 @@ mod tests {
             .catalog(default_catalog.as_str())
             .await
             .unwrap()
+            .unwrap()
             .schema(default_schema.as_str())
             .await
+            .unwrap()
             .unwrap()
             .table_exist("employee")
             .await;
@@ -2078,8 +2082,10 @@ mod tests {
                 .catalog(default_catalog.as_str())
                 .await
                 .unwrap()
+                .unwrap()
                 .schema(default_schema.as_str())
                 .await
+                .unwrap()
                 .unwrap()
                 .table_exist("employee")
                 .await
@@ -2096,6 +2102,7 @@ mod tests {
             .catalog_list()
             .catalog(&default_catalog)
             .await
+            .unwrap()
             .is_none());
         let new_state = SessionStateBuilder::new_from_existing(without_default_state)
             .await
@@ -2105,6 +2112,7 @@ mod tests {
             .catalog_list()
             .catalog(&default_catalog)
             .await
+            .unwrap()
             .is_none());
         Ok(())
     }

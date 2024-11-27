@@ -176,7 +176,8 @@ async fn main_inner() -> Result<()> {
     // enable dynamic file query
     let ctx =
         SessionContext::new_with_config_rt(session_config.clone(), Arc::new(runtime_env))
-            .enable_url_table();
+            .enable_url_table()
+            .await;
     ctx.refresh_catalogs().await?;
     // install dynamic catalog provider that can register required object stores
     ctx.register_catalog_list(Arc::new(DynamicObjectStoreCatalog::new(

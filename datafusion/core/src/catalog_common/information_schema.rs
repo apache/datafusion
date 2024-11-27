@@ -39,6 +39,8 @@ use async_trait::async_trait;
 use datafusion_common::error::Result;
 use datafusion_common::DataFusionError;
 use datafusion_expr::{AggregateUDF, ScalarUDF, Signature, TypeSignature, WindowUDF};
+use futures::stream::BoxStream;
+use futures::{StreamExt, TryStreamExt};
 use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::{any::Any, sync::Arc};
@@ -96,14 +98,17 @@ impl InformationSchemaConfig {
     ) -> Result<(), DataFusionError> {
         // create a mem table with the names of tables
 
-        for catalog_name in self.catalog_list.catalog_names().await {
-            let catalog = self.catalog_list.catalog(&catalog_name).await.unwrap();
+        let mut catalog_names = self.catalog_list.catalog_names().await;
+        while let Some(catalog_name) = catalog_names.try_next().await? {
+            let catalog = self.catalog_list.catalog(&catalog_name).await?.unwrap();
 
-            for schema_name in catalog.schema_names().await {
+            let mut schema_names = catalog.schema_names().await;
+            while let Some(schema_name) = schema_names.try_next().await? {
                 if schema_name != INFORMATION_SCHEMA {
                     // schema name may not exist in the catalog, so we need to check
-                    if let Some(schema) = catalog.schema(&schema_name).await {
-                        for table_name in schema.table_names().await {
+                    if let Some(schema) = catalog.schema(&schema_name).await? {
+                        let mut table_names = schema.table_names().await;
+                        while let Some(table_name) = table_names.try_next().await? {
                             if let Some(table) = schema.table(&table_name).await? {
                                 builder.add_table(
                                     &catalog_name,
@@ -131,33 +136,42 @@ impl InformationSchemaConfig {
         Ok(())
     }
 
-    async fn make_schemata(&self, builder: &mut InformationSchemataBuilder) {
-        for catalog_name in self.catalog_list.catalog_names().await {
-            let catalog = self.catalog_list.catalog(&catalog_name).await.unwrap();
+    async fn make_schemata(
+        &self,
+        builder: &mut InformationSchemataBuilder,
+    ) -> Result<()> {
+        let mut catalog_names = self.catalog_list.catalog_names().await;
+        while let Some(catalog_name) = catalog_names.try_next().await? {
+            let catalog = self.catalog_list.catalog(&catalog_name).await?.unwrap();
 
-            for schema_name in catalog.schema_names().await {
+            let mut schema_names = catalog.schema_names().await;
+            while let Some(schema_name) = schema_names.try_next().await? {
                 if schema_name != INFORMATION_SCHEMA {
-                    if let Some(schema) = catalog.schema(&schema_name).await {
+                    if let Some(schema) = catalog.schema(&schema_name).await? {
                         let schema_owner = schema.owner_name().await;
                         builder.add_schemata(&catalog_name, &schema_name, schema_owner);
                     }
                 }
             }
         }
+        Ok(())
     }
 
     async fn make_views(
         &self,
         builder: &mut InformationSchemaViewBuilder,
     ) -> Result<(), DataFusionError> {
-        for catalog_name in self.catalog_list.catalog_names().await {
-            let catalog = self.catalog_list.catalog(&catalog_name).await.unwrap();
+        let mut catalog_names = self.catalog_list.catalog_names().await;
+        while let Some(catalog_name) = catalog_names.try_next().await? {
+            let catalog = self.catalog_list.catalog(&catalog_name).await?.unwrap();
 
-            for schema_name in catalog.schema_names().await {
+            let mut schema_names = catalog.schema_names().await;
+            while let Some(schema_name) = schema_names.try_next().await? {
                 if schema_name != INFORMATION_SCHEMA {
                     // schema name may not exist in the catalog, so we need to check
-                    if let Some(schema) = catalog.schema(&schema_name).await {
-                        for table_name in schema.table_names().await {
+                    if let Some(schema) = catalog.schema(&schema_name).await? {
+                        let mut table_names = schema.table_names().await;
+                        while let Some(table_name) = table_names.try_next().await? {
                             if let Some(table) = schema.table(&table_name).await? {
                                 builder.add_view(
                                     &catalog_name,
@@ -180,14 +194,17 @@ impl InformationSchemaConfig {
         &self,
         builder: &mut InformationSchemaColumnsBuilder,
     ) -> Result<(), DataFusionError> {
-        for catalog_name in self.catalog_list.catalog_names().await {
-            let catalog = self.catalog_list.catalog(&catalog_name).await.unwrap();
+        let mut catalog_names = self.catalog_list.catalog_names().await;
+        while let Some(catalog_name) = catalog_names.try_next().await? {
+            let catalog = self.catalog_list.catalog(&catalog_name).await?.unwrap();
 
-            for schema_name in catalog.schema_names().await {
+            let mut schema_names = catalog.schema_names().await;
+            while let Some(schema_name) = schema_names.try_next().await? {
                 if schema_name != INFORMATION_SCHEMA {
                     // schema name may not exist in the catalog, so we need to check
-                    if let Some(schema) = catalog.schema(&schema_name).await {
-                        for table_name in schema.table_names().await {
+                    if let Some(schema) = catalog.schema(&schema_name).await? {
+                        let mut table_names = schema.table_names().await;
+                        while let Some(table_name) = table_names.try_next().await? {
                             if let Some(table) = schema.table(&table_name).await? {
                                 for (field_position, field) in
                                     table.schema().fields().iter().enumerate()
@@ -469,11 +486,9 @@ impl SchemaProvider for InformationSchemaProvider {
         self
     }
 
-    async fn table_names(&self) -> Vec<String> {
-        INFORMATION_SCHEMA_TABLES
-            .iter()
-            .map(|t| t.to_string())
-            .collect()
+    async fn table_names(&self) -> BoxStream<'static, Result<String>> {
+        let table_names = INFORMATION_SCHEMA_TABLES.iter().map(|s| Ok(s.to_string()));
+        futures::stream::iter(table_names).boxed()
     }
 
     async fn table(
@@ -994,7 +1009,7 @@ impl PartitionStream for InformationSchemata {
             Arc::clone(&self.schema),
             // TODO: Stream this
             futures::stream::once(async move {
-                config.make_schemata(&mut builder).await;
+                config.make_schemata(&mut builder).await?;
                 Ok(builder.finish())
             }),
         ))

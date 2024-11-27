@@ -23,6 +23,7 @@ pub use crate::schema::SchemaProvider;
 use async_trait::async_trait;
 use datafusion_common::not_impl_err;
 use datafusion_common::Result;
+use futures::stream::BoxStream;
 
 /// Represents a catalog, comprising a number of named schemas.
 ///
@@ -110,10 +111,10 @@ pub trait CatalogProvider: Debug + Sync + Send {
     fn as_any(&self) -> &dyn Any;
 
     /// Retrieves the list of available schema names in this catalog.
-    async fn schema_names(&self) -> Vec<String>;
+    async fn schema_names(&self) -> BoxStream<'static, Result<String>>;
 
     /// Retrieves a specific schema from the catalog by name, provided it exists.
-    async fn schema(&self, name: &str) -> Option<Arc<dyn SchemaProvider>>;
+    async fn schema(&self, name: &str) -> Result<Option<Arc<dyn SchemaProvider>>>;
 
     /// Adds a new schema to this catalog.
     ///
@@ -167,11 +168,11 @@ pub trait CatalogProviderList: Debug + Sync + Send {
         &self,
         name: String,
         catalog: Arc<dyn CatalogProvider>,
-    ) -> Option<Arc<dyn CatalogProvider>>;
+    ) -> Result<Option<Arc<dyn CatalogProvider>>>;
 
     /// Retrieves the list of available catalog names
-    async fn catalog_names(&self) -> Vec<String>;
+    async fn catalog_names(&self) -> BoxStream<'static, Result<String>>;
 
     /// Retrieves a specific catalog by name, provided it exists.
-    async fn catalog(&self, name: &str) -> Option<Arc<dyn CatalogProvider>>;
+    async fn catalog(&self, name: &str) -> Result<Option<Arc<dyn CatalogProvider>>>;
 }

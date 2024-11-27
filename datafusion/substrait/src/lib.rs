@@ -59,7 +59,7 @@
 //! // Create a plan that scans table 't'
 //!  let ctx = SessionContext::new();
 //!  let batch = RecordBatch::try_from_iter(vec![("x", Arc::new(Int32Array::from(vec![42])) as _)])?;
-//!  ctx.register_batch("t", batch)?;
+//!  ctx.register_batch("t", batch).await?;
 //!  let df = ctx.sql("SELECT x from t").await?;
 //!  let plan = df.into_optimized_plan()?;
 //!

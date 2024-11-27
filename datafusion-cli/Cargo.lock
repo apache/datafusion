@@ -1248,6 +1248,7 @@ dependencies = [
  "datafusion-execution",
  "datafusion-expr",
  "datafusion-physical-plan",
+ "futures",
  "parking_lot",
 ]
 

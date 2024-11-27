@@ -29,6 +29,7 @@ use datafusion::{
     execution::context::SessionState,
     prelude::SessionContext,
 };
+use futures::{stream::BoxStream, StreamExt};
 use std::sync::RwLock;
 use std::{any::Any, collections::HashMap, path::Path, sync::Arc};
 use std::{fs::File, io::Write};
@@ -82,7 +83,9 @@ async fn main() -> Result<()> {
         .await?;
 
     // register our catalog in the context
-    ctx.register_catalog("dircat", Arc::new(catalog)).await;
+    ctx.register_catalog("dircat", Arc::new(catalog))
+        .await
+        .unwrap();
     {
         // catalog was passed down into our custom catalog list since we override the ctx's default
         let catalogs = cataloglist.catalogs.read().unwrap();
@@ -188,9 +191,9 @@ impl SchemaProvider for DirSchema {
         self
     }
 
-    async fn table_names(&self) -> Vec<String> {
+    async fn table_names(&self) -> BoxStream<'static, Result<String>> {
         let tables = self.tables.read().unwrap();
-        tables.keys().cloned().collect::<Vec<_>>()
+        futures::stream::iter(tables.keys().cloned().map(Ok).collect::<Vec<_>>()).boxed()
     }
 
     async fn table(&self, name: &str) -> Result<Option<Arc<dyn TableProvider>>> {
@@ -253,19 +256,19 @@ impl CatalogProvider for DirCatalog {
         Ok(Some(schema))
     }
 
-    async fn schema_names(&self) -> Vec<String> {
+    async fn schema_names(&self) -> BoxStream<'static, Result<String>> {
         let schemas = self.schemas.read().unwrap();
-        schemas.keys().cloned().collect()
+        futures::stream::iter(schemas.keys().cloned().map(Ok).collect::<Vec<_>>()).boxed()
     }
 
-    async fn schema(&self, name: &str) -> Option<Arc<dyn SchemaProvider>> {
+    async fn schema(&self, name: &str) -> Result<Option<Arc<dyn SchemaProvider>>> {
         let schemas = self.schemas.read().unwrap();
         let maybe_schema = schemas.get(name);
         if let Some(schema) = maybe_schema {
             let schema = schema.clone() as Arc<dyn SchemaProvider>;
-            Some(schema)
+            Ok(Some(schema))
         } else {
-            None
+            Ok(None)
         }
     }
 }
@@ -291,22 +294,22 @@ impl CatalogProviderList for CustomCatalogProviderList {
         &self,
         name: String,
         catalog: Arc<dyn CatalogProvider>,
-    ) -> Option<Arc<dyn CatalogProvider>> {
+    ) -> Result<Option<Arc<dyn CatalogProvider>>> {
         let mut cats = self.catalogs.write().unwrap();
         cats.insert(name, catalog.clone());
-        Some(catalog)
+        Ok(Some(catalog))
     }
 
     /// Retrieves the list of available catalog names
-    async fn catalog_names(&self) -> Vec<String> {
+    async fn catalog_names(&self) -> BoxStream<'static, Result<String>> {
         let cats = self.catalogs.read().unwrap();
-        cats.keys().cloned().collect()
+        futures::stream::iter(cats.keys().cloned().map(Ok).collect::<Vec<_>>()).boxed()
     }
 
     /// Retrieves a specific catalog by name, provided it exists.
-    async fn catalog(&self, name: &str) -> Option<Arc<dyn CatalogProvider>> {
+    async fn catalog(&self, name: &str) -> Result<Option<Arc<dyn CatalogProvider>>> {
         let cats = self.catalogs.read().unwrap();
-        cats.get(name).cloned()
+        Ok(cats.get(name).cloned())
     }
 }
 

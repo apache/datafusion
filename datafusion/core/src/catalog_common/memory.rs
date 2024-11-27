@@ -23,7 +23,9 @@ use crate::catalog::{
 };
 use async_trait::async_trait;
 use dashmap::DashMap;
-use datafusion_common::{exec_err, DataFusionError};
+use datafusion_common::{exec_err, DataFusionError, Result};
+use futures::stream::BoxStream;
+use futures::{StreamExt, TryStreamExt};
 use std::any::Any;
 use std::sync::Arc;
 
@@ -59,16 +61,21 @@ impl CatalogProviderList for MemoryCatalogProviderList {
         &self,
         name: String,
         catalog: Arc<dyn CatalogProvider>,
-    ) -> Option<Arc<dyn CatalogProvider>> {
-        self.catalogs.insert(name, catalog)
+    ) -> Result<Option<Arc<dyn CatalogProvider>>> {
+        Ok(self.catalogs.insert(name, catalog))
     }
 
-    async fn catalog_names(&self) -> Vec<String> {
-        self.catalogs.iter().map(|c| c.key().clone()).collect()
+    async fn catalog_names(&self) -> BoxStream<'static, Result<String>> {
+        let catalog_names = self
+            .catalogs
+            .iter()
+            .map(|keyval| Ok(keyval.key().clone()))
+            .collect::<Vec<_>>();
+        futures::stream::iter(catalog_names).boxed()
     }
 
-    async fn catalog(&self, name: &str) -> Option<Arc<dyn CatalogProvider>> {
-        self.catalogs.get(name).map(|c| Arc::clone(c.value()))
+    async fn catalog(&self, name: &str) -> Result<Option<Arc<dyn CatalogProvider>>> {
+        Ok(self.catalogs.get(name).map(|c| Arc::clone(c.value())))
     }
 }
 
@@ -99,19 +106,24 @@ impl CatalogProvider for MemoryCatalogProvider {
         self
     }
 
-    async fn schema_names(&self) -> Vec<String> {
-        self.schemas.iter().map(|s| s.key().clone()).collect()
+    async fn schema_names(&self) -> BoxStream<'static, Result<String>> {
+        let schema_names = self
+            .schemas
+            .iter()
+            .map(|keyval| Ok(keyval.key().clone()))
+            .collect::<Vec<_>>();
+        futures::stream::iter(schema_names).boxed()
     }
 
-    async fn schema(&self, name: &str) -> Option<Arc<dyn SchemaProvider>> {
-        self.schemas.get(name).map(|s| Arc::clone(s.value()))
+    async fn schema(&self, name: &str) -> Result<Option<Arc<dyn SchemaProvider>>> {
+        Ok(self.schemas.get(name).map(|s| Arc::clone(s.value())))
     }
 
     async fn register_schema(
         &self,
         name: &str,
         schema: Arc<dyn SchemaProvider>,
-    ) -> datafusion_common::Result<Option<Arc<dyn SchemaProvider>>> {
+    ) -> Result<Option<Arc<dyn SchemaProvider>>> {
         Ok(self.schemas.insert(name.into(), schema))
     }
 
@@ -119,9 +131,9 @@ impl CatalogProvider for MemoryCatalogProvider {
         &self,
         name: &str,
         cascade: bool,
-    ) -> datafusion_common::Result<Option<Arc<dyn SchemaProvider>>> {
-        if let Some(schema) = self.schema(name).await {
-            let table_names = schema.table_names().await;
+    ) -> Result<Option<Arc<dyn SchemaProvider>>> {
+        if let Some(schema) = self.schema(name).await? {
+            let table_names = schema.table_names().await.try_collect::<Vec<_>>().await?;
             match (table_names.is_empty(), cascade) {
                 (true, _) | (false, true) => {
                     let (_, removed) = self.schemas.remove(name).unwrap();
@@ -166,17 +178,19 @@ impl SchemaProvider for MemorySchemaProvider {
         self
     }
 
-    async fn table_names(&self) -> Vec<String> {
-        self.tables
+    async fn table_names(&self) -> BoxStream<'static, Result<String>> {
+        let table_names = self
+            .tables
             .iter()
-            .map(|table| table.key().clone())
-            .collect()
+            .map(|keyval| Ok(keyval.key().clone()))
+            .collect::<Vec<_>>();
+        futures::stream::iter(table_names).boxed()
     }
 
     async fn table(
         &self,
         name: &str,
-    ) -> datafusion_common::Result<Option<Arc<dyn TableProvider>>, DataFusionError> {
+    ) -> Result<Option<Arc<dyn TableProvider>>, DataFusionError> {
         Ok(self.tables.get(name).map(|table| Arc::clone(table.value())))
     }
 
@@ -184,7 +198,7 @@ impl SchemaProvider for MemorySchemaProvider {
         &self,
         name: String,
         table: Arc<dyn TableProvider>,
-    ) -> datafusion_common::Result<Option<Arc<dyn TableProvider>>> {
+    ) -> Result<Option<Arc<dyn TableProvider>>> {
         if self.table_exist(name.as_str()).await {
             return exec_err!("The table {name} already exists");
         }
@@ -194,7 +208,7 @@ impl SchemaProvider for MemorySchemaProvider {
     async fn deregister_table(
         &self,
         name: &str,
-    ) -> datafusion_common::Result<Option<Arc<dyn TableProvider>>> {
+    ) -> Result<Option<Arc<dyn TableProvider>>> {
         Ok(self.tables.remove(name).map(|(_, table)| table))
     }
 
@@ -261,11 +275,14 @@ mod test {
                 self
             }
 
-            async fn schema_names(&self) -> Vec<String> {
+            async fn schema_names(&self) -> BoxStream<'static, Result<String>> {
                 unimplemented!()
             }
 
-            async fn schema(&self, _name: &str) -> Option<Arc<dyn SchemaProvider>> {
+            async fn schema(
+                &self,
+                _name: &str,
+            ) -> Result<Option<Arc<dyn SchemaProvider>>> {
                 unimplemented!()
             }
         }
@@ -340,7 +357,9 @@ mod test {
             .register_schema("active", Arc::new(schema))
             .await
             .unwrap();
-        ctx.register_catalog("cat", Arc::new(catalog)).await;
+        ctx.register_catalog("cat", Arc::new(catalog))
+            .await
+            .unwrap();
 
         let df = ctx
             .sql("SELECT id, bool_col FROM cat.active.alltypes_plain")
