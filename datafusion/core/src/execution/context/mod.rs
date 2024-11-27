@@ -917,7 +917,7 @@ impl SessionContext {
                 let (name, catalog_list) = {
                     let state = self.state.read();
                     let name = state.config().options().catalog.default_catalog.clone();
-                    let catalog_list = state.catalog_list().clone();
+                    let catalog_list = Arc::clone(state.catalog_list());
                     (name, catalog_list)
                 };
                 let catalog_fut = catalog_list.catalog(&name);
@@ -962,7 +962,7 @@ impl SessionContext {
             (true, Some(_)) => self.return_empty_dataframe(),
             (true, None) | (false, None) => {
                 let new_catalog = Arc::new(MemoryCatalogProvider::new());
-                let catalog_list = self.state.write().catalog_list().clone();
+                let catalog_list = Arc::clone(self.state.write().catalog_list());
                 catalog_list
                     .register_catalog(catalog_name, new_catalog)
                     .await?;
@@ -1016,7 +1016,7 @@ impl SessionContext {
                         state.config_options().catalog.default_catalog.to_string()
                     }
                 };
-                let catalog_list = state.catalog_list().clone();
+                let catalog_list = Arc::clone(state.catalog_list());
                 (catalog_name, catalog_list)
             };
             if let Some(catalog) = catalog_list.catalog(&catalog_name).await? {
@@ -1084,7 +1084,7 @@ impl SessionContext {
             let (resolved, catalog_list) = {
                 let state = self.state.read();
                 let resolved = state.resolve_table_ref(table_ref);
-                let catalog_list = state.catalog_list().clone();
+                let catalog_list = Arc::clone(state.catalog_list());
                 (resolved, catalog_list)
             };
             if let Some(catalog) = catalog_list.catalog(&resolved.catalog).await? {
@@ -1444,20 +1444,20 @@ impl SessionContext {
         catalog: Arc<dyn CatalogProvider>,
     ) -> Result<Option<Arc<dyn CatalogProvider>>> {
         let name = name.into();
-        let catalog_list = self.state.read().catalog_list().clone();
+        let catalog_list = Arc::clone(self.state.read().catalog_list());
         catalog_list.register_catalog(name, catalog).await
     }
 
     /// Retrieves the list of available catalog names.
     pub async fn catalog_names(&self) -> BoxStream<'static, Result<String>> {
-        let catalog_list = self.state.read().catalog_list().clone();
+        let catalog_list = Arc::clone(self.state.read().catalog_list());
         catalog_list.catalog_names().await
     }
 
     /// Retrieves a [`CatalogProvider`] instance by name
     pub async fn catalog(&self, name: &str) -> Result<Option<Arc<dyn CatalogProvider>>> {
-        let catalog_list = self.state.read().catalog_list().clone();
-        Ok(catalog_list.catalog(name).await?)
+        let catalog_list = Arc::clone(self.state.read().catalog_list());
+        catalog_list.catalog(name).await
     }
 
     /// Registers a [`TableProvider`] as a table that can be

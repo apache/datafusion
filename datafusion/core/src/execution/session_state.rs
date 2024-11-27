@@ -308,7 +308,7 @@ impl SessionState {
         table_ref: impl Into<TableReference>,
     ) -> BoxFuture<'static, datafusion_common::Result<Arc<dyn SchemaProvider>>> {
         let resolved_ref = self.resolve_table_ref(table_ref);
-        let catalog_list = self.catalog_list.clone();
+        let catalog_list = Arc::clone(&self.catalog_list);
         if self.config.information_schema() && *resolved_ref.schema == *INFORMATION_SCHEMA
         {
             return std::future::ready(Ok(Arc::new(InformationSchemaProvider::new(
