@@ -28,7 +28,6 @@ use arrow_schema::DataType;
 use datafusion_common::Result;
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
 use datafusion_expr::EmitTo;
-use datafusion_physical_expr::aggregate::utils::adjust_output_array;
 use half::f16;
 use hashbrown::raw::RawTable;
 use std::mem::size_of;
@@ -209,13 +208,8 @@ where
                 build_primitive(split, null_group)
             }
         };
-        let array_ref =
-            Arc::new(array.with_data_type(self.data_type.clone())) as ArrayRef;
 
-        let adjusted_array = adjust_output_array(&self.data_type, array_ref)
-            .expect("Failed to adjust array data type");
-
-        Ok(vec![adjusted_array])
+        Ok(vec![Arc::new(array.with_data_type(self.data_type.clone()))])
     }
 
     fn clear_shrink(&mut self, batch: &RecordBatch) {
