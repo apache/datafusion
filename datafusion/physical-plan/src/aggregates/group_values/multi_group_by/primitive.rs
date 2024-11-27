@@ -22,7 +22,6 @@ use arrow_array::cast::AsArray;
 use arrow_array::{Array, ArrayRef, ArrowPrimitiveType, PrimitiveArray};
 use arrow_schema::DataType;
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
-use datafusion_physical_expr::aggregate::utils::adjust_output_array;
 use itertools::izip;
 use std::iter;
 use std::sync::Arc;
