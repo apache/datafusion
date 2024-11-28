@@ -24,7 +24,7 @@ use sqlparser::ast::Expr as SQLExpr;
 use sqlparser::ast::Query;
 use std::sync::Arc;
 
-impl<'a, S: ContextProvider> SqlToRel<'a, S> {
+impl<S: ContextProvider> SqlToRel<'_, S> {
     pub(super) fn parse_exists_subquery(
         &self,
         subquery: Query,

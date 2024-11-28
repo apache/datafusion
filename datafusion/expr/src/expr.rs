@@ -1852,7 +1852,7 @@ macro_rules! expr_vec_fmt {
 }
 
 struct SchemaDisplay<'a>(&'a Expr);
-impl<'a> Display for SchemaDisplay<'a> {
+impl Display for SchemaDisplay<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self.0 {
             // The same as Display

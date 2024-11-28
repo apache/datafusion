@@ -60,7 +60,7 @@ pub struct AvroArrowArrayReader<'a, R: Read> {
     schema_lookup: BTreeMap<String, usize>,
 }
 
-impl<'a, R: Read> AvroArrowArrayReader<'a, R> {
+impl<R: Read> AvroArrowArrayReader<'_, R> {
     pub fn try_new(
         reader: R,
         schema: SchemaRef,

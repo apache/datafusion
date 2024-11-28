@@ -190,7 +190,7 @@ impl FunctionArgs {
     }
 }
 
-impl<'a, S: ContextProvider> SqlToRel<'a, S> {
+impl<S: ContextProvider> SqlToRel<'_, S> {
     pub(super) fn sql_function_to_expr(
         &self,
         function: SQLFunction,
