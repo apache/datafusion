@@ -89,7 +89,11 @@ impl ScalarUDFImpl for RPadFunc {
         utf8_to_str_type(&arg_types[0], "rpad")
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         match (
             args.len(),
             args[0].data_type(),
@@ -147,7 +151,6 @@ fn get_rpad_doc() -> &'static Documentation {
                            "String expression to pad with. Can be a constant, column, or function, and any combination of string operators. _Default is a space._")
             .with_related_udf("lpad")
             .build()
-            .unwrap()
     })
 }
 

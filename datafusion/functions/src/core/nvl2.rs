@@ -63,7 +63,11 @@ impl ScalarUDFImpl for NVL2Func {
         Ok(arg_types[1].clone())
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         nvl2_func(args)
     }
 
@@ -133,7 +137,6 @@ fn get_nvl2_doc() -> &'static Documentation {
                 "Expression to return if expr1 is null. Can be a constant, column, or function, and any combination of operators."
             )
             .build()
-            .unwrap()
     })
 }
 

@@ -160,7 +160,11 @@ impl ScalarUDFImpl for AbsFunc {
         }
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         let args = ColumnarValue::values_to_arrays(args)?;
 
         if args.len() != 1 {
@@ -203,6 +207,5 @@ fn get_abs_doc() -> &'static Documentation {
             .with_syntax_example("abs(numeric_expression)")
             .with_standard_argument("numeric_expression", Some("Numeric"))
             .build()
-            .unwrap()
     })
 }

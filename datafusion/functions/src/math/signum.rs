@@ -80,7 +80,11 @@ impl ScalarUDFImpl for SignumFunc {
         Ok(input[0].sort_properties)
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         make_scalar_function(signum, vec![])(args)
     }
 
@@ -103,7 +107,6 @@ Zero and positive numbers return `1`."#,
             .with_syntax_example("signum(numeric_expression)")
             .with_standard_argument("numeric_expression", Some("Numeric"))
             .build()
-            .unwrap()
     })
 }
 

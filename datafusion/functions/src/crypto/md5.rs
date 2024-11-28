@@ -85,7 +85,11 @@ impl ScalarUDFImpl for Md5Func {
             }
         })
     }
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         md5(args)
     }
 
@@ -114,6 +118,5 @@ fn get_md5_doc() -> &'static Documentation {
             )
             .with_standard_argument("expression", Some("String"))
             .build()
-            .unwrap()
     })
 }

@@ -109,7 +109,6 @@ fn get_version_doc() -> &'static Documentation {
 ```"#,
             )
             .build()
-            .unwrap()
     })
 }
 

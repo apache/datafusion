@@ -71,7 +71,11 @@ impl ScalarUDFImpl for IsZeroFunc {
         Ok(Boolean)
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         make_scalar_function(iszero, vec![])(args)
     }
 
@@ -92,7 +96,6 @@ fn get_iszero_doc() -> &'static Documentation {
             .with_syntax_example("iszero(numeric_expression)")
             .with_standard_argument("numeric_expression", Some("Numeric"))
             .build()
-            .unwrap()
     })
 }
 

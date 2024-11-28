@@ -137,7 +137,11 @@ impl ScalarUDFImpl for DateTruncFunc {
         }
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         let (granularity, array) = (&args[0], &args[1]);
 
         let granularity = if let ColumnarValue::Scalar(ScalarValue::Utf8(Some(v))) =
@@ -274,7 +278,6 @@ fn get_date_trunc_doc() -> &'static Documentation {
                 "Time expression to operate on. Can be a constant, column, or function.",
             )
             .build()
-            .unwrap()
     })
 }
 
@@ -724,14 +727,15 @@ mod tests {
                 .map(|s| Some(string_to_timestamp_nanos(s).unwrap()))
                 .collect::<TimestampNanosecondArray>()
                 .with_timezone_opt(tz_opt.clone());
-            let batch_size = input.len();
+            let batch_len = input.len();
+            #[allow(deprecated)] // TODO migrate UDF invoke to invoke_batch
             let result = DateTruncFunc::new()
                 .invoke_batch(
                     &[
                         ColumnarValue::Scalar(ScalarValue::from("day")),
                         ColumnarValue::Array(Arc::new(input)),
                     ],
-                    batch_size,
+                    batch_len,
                 )
                 .unwrap();
             if let ColumnarValue::Array(result) = result {
@@ -886,14 +890,15 @@ mod tests {
                 .map(|s| Some(string_to_timestamp_nanos(s).unwrap()))
                 .collect::<TimestampNanosecondArray>()
                 .with_timezone_opt(tz_opt.clone());
-            let batch_size = input.len();
+            let batch_len = input.len();
+            #[allow(deprecated)] // TODO migrate UDF invoke to invoke_batch
             let result = DateTruncFunc::new()
                 .invoke_batch(
                     &[
                         ColumnarValue::Scalar(ScalarValue::from("hour")),
                         ColumnarValue::Array(Arc::new(input)),
                     ],
-                    batch_size,
+                    batch_len,
                 )
                 .unwrap();
             if let ColumnarValue::Array(result) = result {

@@ -114,8 +114,8 @@ fn criterion_benchmark(c: &mut Criterion) {
             &format!("strpos_StringArray_ascii_str_len_{}", str_len),
             |b| {
                 b.iter(|| {
-                    #[allow(deprecated)] // TODO use invoke_batch
-                    black_box(strpos.invoke(&args_string_ascii))
+                    // TODO use invoke_with_args
+                    black_box(strpos.invoke_batch(&args_string_ascii, n_rows))
                 })
             },
         );
@@ -126,8 +126,8 @@ fn criterion_benchmark(c: &mut Criterion) {
             &format!("strpos_StringArray_utf8_str_len_{}", str_len),
             |b| {
                 b.iter(|| {
-                    #[allow(deprecated)] // TODO use invoke_batch
-                    black_box(strpos.invoke(&args_string_utf8))
+                    // TODO use invoke_with_args
+                    black_box(strpos.invoke_batch(&args_string_utf8, n_rows))
                 })
             },
         );
@@ -138,8 +138,8 @@ fn criterion_benchmark(c: &mut Criterion) {
             &format!("strpos_StringViewArray_ascii_str_len_{}", str_len),
             |b| {
                 b.iter(|| {
-                    #[allow(deprecated)] // TODO use invoke_batch
-                    black_box(strpos.invoke(&args_string_view_ascii))
+                    // TODO use invoke_with_args
+                    black_box(strpos.invoke_batch(&args_string_view_ascii, n_rows))
                 })
             },
         );
@@ -150,8 +150,8 @@ fn criterion_benchmark(c: &mut Criterion) {
             &format!("strpos_StringViewArray_utf8_str_len_{}", str_len),
             |b| {
                 b.iter(|| {
-                    #[allow(deprecated)] // TODO use invoke_batch
-                    black_box(strpos.invoke(&args_string_view_utf8))
+                    // TODO use invoke_with_args
+                    black_box(strpos.invoke_batch(&args_string_view_utf8, n_rows))
                 })
             },
         );

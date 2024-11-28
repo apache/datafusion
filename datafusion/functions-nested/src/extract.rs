@@ -143,7 +143,11 @@ impl ScalarUDFImpl for ArrayElement {
         }
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         make_scalar_function(array_element_inner)(args)
     }
 
@@ -185,7 +189,6 @@ fn get_array_element_doc() -> &'static Documentation {
                 "Index to extract the element from the array.",
             )
             .build()
-            .unwrap()
     })
 }
 
@@ -347,7 +350,11 @@ impl ScalarUDFImpl for ArraySlice {
         Ok(arg_types[0].clone())
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         make_scalar_function(array_slice_inner)(args)
     }
 
@@ -395,7 +402,6 @@ fn get_array_slice_doc() -> &'static Documentation {
                 "Stride of the array slice. The default is 1.",
             )
             .build()
-            .unwrap()
     })
 }
 
@@ -656,7 +662,11 @@ impl ScalarUDFImpl for ArrayPopFront {
         Ok(arg_types[0].clone())
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         make_scalar_function(array_pop_front_inner)(args)
     }
 
@@ -692,7 +702,6 @@ fn get_array_pop_front_doc() -> &'static Documentation {
                 "Array expression. Can be a constant, column, or function, and any combination of array operators.",
             )
             .build()
-            .unwrap()
     })
 }
 
@@ -762,7 +771,11 @@ impl ScalarUDFImpl for ArrayPopBack {
         Ok(arg_types[0].clone())
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         make_scalar_function(array_pop_back_inner)(args)
     }
 
@@ -798,7 +811,6 @@ fn get_array_pop_back_doc() -> &'static Documentation {
                 "Array expression. Can be a constant, column, or function, and any combination of array operators.",
             )
             .build()
-            .unwrap()
     })
 }
 
@@ -877,7 +889,11 @@ impl ScalarUDFImpl for ArrayAnyValue {
         }
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         make_scalar_function(array_any_value_inner)(args)
     }
     fn aliases(&self) -> &[String] {
@@ -912,7 +928,6 @@ fn get_array_any_value_doc() -> &'static Documentation {
                 "Array expression. Can be a constant, column, or function, and any combination of array operators.",
             )
             .build()
-            .unwrap()
     })
 }
 

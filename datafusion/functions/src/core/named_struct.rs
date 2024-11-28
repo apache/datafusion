@@ -158,7 +158,11 @@ impl ScalarUDFImpl for NamedStructFunc {
         Ok(DataType::Struct(Fields::from(return_fields)))
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         named_struct_expr(args)
     }
 
@@ -201,6 +205,5 @@ a struct type of fields `field_a` and `field_b`:
             )
             .with_argument("expression_n_input", "Expression to include in the output struct. Can be a constant, column, or function, and any combination of arithmetic or string operators.")
             .build()
-            .unwrap()
     })
 }

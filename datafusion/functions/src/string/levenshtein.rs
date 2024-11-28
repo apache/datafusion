@@ -65,7 +65,11 @@ impl ScalarUDFImpl for LevenshteinFunc {
         utf8_to_int_type(&arg_types[0], "levenshtein")
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         match args[0].data_type() {
             DataType::Utf8View | DataType::Utf8 => {
                 make_scalar_function(levenshtein::<i32>, vec![])(args)
@@ -101,7 +105,6 @@ fn get_levenshtein_doc() -> &'static Documentation {
             .with_argument("str1", "String expression to compute Levenshtein distance with str2.")
             .with_argument("str2", "String expression to compute Levenshtein distance with str1.")
             .build()
-            .unwrap()
     })
 }
 
