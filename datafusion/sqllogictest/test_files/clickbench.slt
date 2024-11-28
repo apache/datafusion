@@ -136,7 +136,7 @@ SELECT "UserID", "SearchPhrase", COUNT(*) FROM hits GROUP BY "UserID", "SearchPh
 519640690937130534 (empty) 2
 7418527520126366595 (empty) 1
 
-query IRTI rowsort
+query IITI rowsort
 SELECT "UserID", extract(minute FROM to_timestamp_seconds("EventTime")) AS m, "SearchPhrase", COUNT(*) FROM hits GROUP BY "UserID", m, "SearchPhrase" ORDER BY COUNT(*) DESC LIMIT 10;
 ----
 -2461439046089301801 18 (empty) 1

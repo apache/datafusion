@@ -42,43 +42,6 @@ SELECT arrow_cast('', 'Dictionary(Int32, Utf8)');
 ----
 (empty)
 
-# TODO: move it back to `string_query.slt.part` after fixing the issue
-# see detail: https://github.com/apache/datafusion/issues/12637
-# Test pattern with wildcard characters
-query TTBBBB
-select ascii_1, unicode_1,
-       ascii_1 like 'An%' as ascii_like,
-       unicode_1 like '%ion数据%' as unicode_like,
-       ascii_1 ilike 'An%' as ascii_ilike,
-       unicode_1 ilike '%ion数据%' as unicode_ilik
-from test_basic_operator;
-----
-Andrew datafusion📊🔥 true false true false
-Xiangpeng datafusion数据融合 false true false true
-Raphael datafusionДатаФусион false false false false
-under_score un iść core false false false false
-percent pan Tadeusz ma iść w kąt false false false false
-(empty) (empty) false false false false
-% (empty) false false false false
-_ (empty) false false false false
-NULL NULL NULL NULL NULL NULL
-NULL NULL NULL NULL NULL NULL
-
-# TODO: move it back to `string_query.slt.part` after fixing the issue
-# see issue https://github.com/apache/datafusion/issues/13329
-query IIII
-select bit_length(ascii_1), bit_length(ascii_2), bit_length(unicode_1), bit_length(unicode_2) from test_basic_operator;
-----
-48 8 144 32
-72 72 176 176
-56 8 240 64
-88 88 104 256
-56 24 216 288
-0 8 0 0
-8 16 0 0
-8 16 0 0
-NULL 8 NULL NULL
-NULL 8 NULL 32
 
 #
 # common test for string-like functions and operators

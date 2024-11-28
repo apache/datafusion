@@ -195,7 +195,6 @@ fn get_nth_value_doc() -> &'static Documentation {
             .with_argument("expression", "The column or expression to retrieve the nth value from.")
             .with_argument("n", "The position (nth) of the value to retrieve, based on the ordering.")
             .build()
-            .unwrap()
     })
 }
 

@@ -51,7 +51,6 @@ log = { workspace = true }
 recursive = { workspace = true }
 regex = { workspace = true }
 sqlparser = { workspace = true }
-strum = { version = "0.26.1", features = ["derive"] }
 
 [dev-dependencies]
 ctor = { workspace = true }

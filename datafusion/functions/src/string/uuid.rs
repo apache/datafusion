@@ -101,6 +101,5 @@ fn get_uuid_doc() -> &'static Documentation {
 +--------------------------------------+
 ```"#)
             .build()
-            .unwrap()
     })
 }

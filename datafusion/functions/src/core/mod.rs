@@ -25,6 +25,7 @@ pub mod arrowtypeof;
 pub mod coalesce;
 pub mod expr_ext;
 pub mod getfield;
+pub mod greatest;
 pub mod named_struct;
 pub mod nullif;
 pub mod nvl;
@@ -43,6 +44,7 @@ make_udf_function!(r#struct::StructFunc, STRUCT, r#struct);
 make_udf_function!(named_struct::NamedStructFunc, NAMED_STRUCT, named_struct);
 make_udf_function!(getfield::GetFieldFunc, GET_FIELD, get_field);
 make_udf_function!(coalesce::CoalesceFunc, COALESCE, coalesce);
+make_udf_function!(greatest::GreatestFunc, GREATEST, greatest);
 make_udf_function!(version::VersionFunc, VERSION, version);
 
 pub mod expr_fn {
@@ -80,6 +82,10 @@ pub mod expr_fn {
         coalesce,
         "Returns `coalesce(args...)`, which evaluates to the value of the first expr which is not NULL",
         args,
+    ),(
+        greatest,
+        "Returns `greatest(args...)`, which evaluates to the greatest value in the list of expressions or NULL if all the expressions are NULL",
+        args,
     ));
 
     #[doc = "Returns the value of the field with the given name from the struct"]
@@ -106,6 +112,7 @@ pub fn functions() -> Vec<Arc<ScalarUDF>> {
         // calls to `get_field`
         get_field(),
         coalesce(),
+        greatest(),
         version(),
         r#struct(),
     ]

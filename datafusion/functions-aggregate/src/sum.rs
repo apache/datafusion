@@ -263,7 +263,6 @@ fn get_sum_doc() -> &'static Documentation {
             )
             .with_standard_argument("expression", None)
             .build()
-            .unwrap()
     })
 }
 

@@ -80,7 +80,11 @@ impl ScalarUDFImpl for ArrayResize {
         }
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         make_scalar_function(array_resize_inner)(args)
     }
 
@@ -126,7 +130,6 @@ fn get_array_resize_doc() -> &'static Documentation {
                 "Defines new elements' value or empty if value is not set.",
             )
             .build()
-            .unwrap()
     })
 }
 

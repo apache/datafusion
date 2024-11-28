@@ -62,7 +62,11 @@ impl ScalarUDFImpl for OctetLengthFunc {
         utf8_to_int_type(&arg_types[0], "octet_length")
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         if args.len() != 1 {
             return exec_err!(
                 "octet_length function requires 1 argument, got {}",
@@ -114,7 +118,6 @@ fn get_octet_length_doc() -> &'static Documentation {
             .with_related_udf("bit_length")
             .with_related_udf("length")
             .build()
-            .unwrap()
     })
 }
 

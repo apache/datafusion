@@ -141,7 +141,7 @@ physical_plan
 
 
 
-query TTRR
+query TTIR
 select
     supp_nation,
     cust_nation,

@@ -84,7 +84,11 @@ impl ScalarUDFImpl for PowerFunc {
         &self.aliases
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         let args = ColumnarValue::values_to_arrays(args)?;
 
         let arr: ArrayRef = match args[0].data_type() {
@@ -183,7 +187,6 @@ fn get_power_doc() -> &'static Documentation {
             .with_standard_argument("base", Some("Numeric"))
             .with_standard_argument("exponent", Some("Exponent numeric"))
             .build()
-            .unwrap()
     })
 }
 

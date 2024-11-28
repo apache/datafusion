@@ -96,9 +96,9 @@ fn criterion_benchmark(c: &mut Criterion) {
 
         b.iter(|| {
             black_box(
-                #[allow(deprecated)] // TODO use invoke_batch
+                // TODO use invoke_with_args
                 map_udf()
-                    .invoke(&[keys.clone(), values.clone()])
+                    .invoke_batch(&[keys.clone(), values.clone()], 1)
                     .expect("map should work on valid values"),
             );
         });

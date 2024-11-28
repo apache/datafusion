@@ -1189,7 +1189,7 @@ mod tests {
 
     use crate::common::collect;
     use crate::memory::MemoryExec;
-    use datafusion_physical_expr::window::BuiltInWindowExpr;
+    use datafusion_physical_expr::window::StandardWindowExpr;
     use futures::future::Shared;
     use futures::{pin_mut, ready, FutureExt, Stream, StreamExt};
     use itertools::Itertools;
@@ -1562,7 +1562,7 @@ mod tests {
 
         let window_exprs = vec![
             // LAST_VALUE(a)
-            Arc::new(BuiltInWindowExpr::new(
+            Arc::new(StandardWindowExpr::new(
                 last_value_func,
                 &[],
                 &LexOrdering::default(),
@@ -1573,7 +1573,7 @@ mod tests {
                 )),
             )) as _,
             // NTH_VALUE(a, -1)
-            Arc::new(BuiltInWindowExpr::new(
+            Arc::new(StandardWindowExpr::new(
                 nth_value_func1,
                 &[],
                 &LexOrdering::default(),
@@ -1584,7 +1584,7 @@ mod tests {
                 )),
             )) as _,
             // NTH_VALUE(a, -2)
-            Arc::new(BuiltInWindowExpr::new(
+            Arc::new(StandardWindowExpr::new(
                 nth_value_func2,
                 &[],
                 &LexOrdering::default(),

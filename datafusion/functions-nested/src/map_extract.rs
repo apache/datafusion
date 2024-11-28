@@ -85,7 +85,11 @@ impl ScalarUDFImpl for MapExtract {
         ))))
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         make_scalar_function(map_extract_inner)(args)
     }
 
@@ -144,7 +148,6 @@ SELECT map_extract(MAP {'x': 10, 'y': NULL, 'z': 30}, 'y');
                 "Key to extract from the map. Can be a constant, column, or function, any combination of arithmetic or string operators, or a named expression of the previously listed.",
             )
             .build()
-            .unwrap()
     })
 }
 

@@ -65,7 +65,11 @@ impl ScalarUDFImpl for SHA512Func {
         utf8_or_binary_to_binary_type(&arg_types[0], self.name())
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         sha512(args)
     }
 
@@ -94,6 +98,5 @@ fn get_sha512_doc() -> &'static Documentation {
             )
             .with_argument("expression", "String")
             .build()
-            .unwrap()
     })
 }

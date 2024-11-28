@@ -154,7 +154,6 @@ fn get_covar_samp_doc() -> &'static Documentation {
             .with_standard_argument("expression1", Some("First"))
             .with_standard_argument("expression2", Some("Second"))
             .build()
-            .unwrap()
     })
 }
 
@@ -252,7 +251,6 @@ fn get_covar_pop_doc() -> &'static Documentation {
             .with_standard_argument("expression1", Some("First"))
             .with_standard_argument("expression2", Some("Second"))
             .build()
-            .unwrap()
     })
 }
 

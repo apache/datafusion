@@ -98,6 +98,5 @@ The random seed is unique to each row."#,
             )
             .with_syntax_example("random()")
             .build()
-            .unwrap()
     })
 }

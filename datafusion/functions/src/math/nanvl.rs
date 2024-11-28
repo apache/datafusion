@@ -73,7 +73,11 @@ impl ScalarUDFImpl for NanvlFunc {
         }
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         make_scalar_function(nanvl, vec![])(args)
     }
 
@@ -96,7 +100,6 @@ Returns the second argument otherwise."#,
             .with_argument("expression_x", "Numeric expression to return if it's not _NaN_. Can be a constant, column, or function, and any combination of arithmetic operators.")
             .with_argument("expression_y", "Numeric expression to return if the first expression is _NaN_. Can be a constant, column, or function, and any combination of arithmetic operators.")
             .build()
-            .unwrap()
     })
 }
 

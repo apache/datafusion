@@ -208,7 +208,11 @@ macro_rules! make_math_unary_udf {
                     $EVALUATE_BOUNDS(inputs)
                 }
 
-                fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+                fn invoke_batch(
+                    &self,
+                    args: &[ColumnarValue],
+                    _number_rows: usize,
+                ) -> Result<ColumnarValue> {
                     let args = ColumnarValue::values_to_arrays(args)?;
                     let arr: ArrayRef = match args[0].data_type() {
                         DataType::Float64 => Arc::new(
@@ -316,7 +320,11 @@ macro_rules! make_math_binary_udf {
                     $OUTPUT_ORDERING(input)
                 }
 
-                fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+                fn invoke_batch(
+                    &self,
+                    args: &[ColumnarValue],
+                    _number_rows: usize,
+                ) -> Result<ColumnarValue> {
                     let args = ColumnarValue::values_to_arrays(args)?;
                     let arr: ArrayRef = match args[0].data_type() {
                         DataType::Float64 => {

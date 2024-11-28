@@ -99,7 +99,7 @@ pub trait TableSource: Sync + Send {
     }
 
     /// Tests whether the table provider can make use of any or all filter expressions
-    /// to optimise data retrieval.
+    /// to optimise data retrieval. Only non-volatile expressions are passed to this function.
     fn supports_filters_pushdown(
         &self,
         filters: &[&Expr],

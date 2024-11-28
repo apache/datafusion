@@ -115,7 +115,6 @@ fn get_rank_doc() -> &'static Documentation {
             )
             .with_syntax_example("rank()")
             .build()
-            .unwrap()
     })
 }
 
@@ -132,7 +131,6 @@ fn get_dense_rank_doc() -> &'static Documentation {
             )
             .with_syntax_example("dense_rank()")
             .build()
-            .unwrap()
     })
 }
 
@@ -148,7 +146,6 @@ fn get_percent_rank_doc() -> &'static Documentation {
             )
             .with_syntax_example("percent_rank()")
             .build()
-            .unwrap()
     })
 }
 

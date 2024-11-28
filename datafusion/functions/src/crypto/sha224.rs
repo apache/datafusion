@@ -70,7 +70,6 @@ fn get_sha224_doc() -> &'static Documentation {
             )
             .with_standard_argument("expression", Some("String"))
             .build()
-            .unwrap()
     })
 }
 
@@ -91,7 +90,11 @@ impl ScalarUDFImpl for SHA224Func {
         utf8_or_binary_to_binary_type(&arg_types[0], self.name())
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         sha224(args)
     }
 

@@ -86,7 +86,11 @@ impl ScalarUDFImpl for ArraySort {
         }
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         make_scalar_function(array_sort_inner)(args)
     }
 
@@ -132,7 +136,6 @@ fn get_array_sort_doc() -> &'static Documentation {
                 "Whether to sort nulls first(`NULLS FIRST` or `NULLS LAST`).",
             )
             .build()
-            .unwrap()
     })
 }
 

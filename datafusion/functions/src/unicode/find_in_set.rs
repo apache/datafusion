@@ -76,7 +76,11 @@ impl ScalarUDFImpl for FindInSetFunc {
         utf8_to_int_type(&arg_types[0], "find_in_set")
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         make_scalar_function(find_in_set, vec![])(args)
     }
 
@@ -104,7 +108,6 @@ fn get_find_in_set_doc() -> &'static Documentation {
             .with_argument("str", "String expression to find in strlist.")
             .with_argument("strlist", "A string list is a string composed of substrings separated by , characters.")
             .build()
-            .unwrap()
     })
 }
 

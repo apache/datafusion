@@ -69,7 +69,11 @@ impl ScalarUDFImpl for IsNanFunc {
         Ok(DataType::Boolean)
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         let args = ColumnarValue::values_to_arrays(args)?;
 
         let arr: ArrayRef = match args[0].data_type() {
@@ -109,6 +113,5 @@ fn get_isnan_doc() -> &'static Documentation {
             .with_syntax_example("isnan(numeric_expression)")
             .with_standard_argument("numeric_expression", Some("Numeric"))
             .build()
-            .unwrap()
     })
 }

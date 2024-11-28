@@ -91,7 +91,11 @@ impl ScalarUDFImpl for Flatten {
         Ok(data_type)
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         make_scalar_function(flatten_inner)(args)
     }
 
@@ -128,7 +132,6 @@ fn get_flatten_doc() -> &'static Documentation {
                 "Array expression. Can be a constant, column, or function, and any combination of array operators.",
             )
             .build()
-            .unwrap()
     })
 }
 

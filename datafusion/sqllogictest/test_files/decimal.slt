@@ -733,3 +733,10 @@ true 2
 
 statement ok
 drop table decimal256_simple;
+
+
+# https://github.com/apache/datafusion/issues/12870
+query R
+SELECT CAST('0' AS decimal(38,0));
+----
+0

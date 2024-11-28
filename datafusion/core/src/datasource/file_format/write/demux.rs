@@ -37,7 +37,7 @@ use datafusion_common::cast::{
     as_boolean_array, as_date32_array, as_date64_array, as_int32_array, as_int64_array,
     as_string_array, as_string_view_array,
 };
-use datafusion_common::{exec_datafusion_err, DataFusionError};
+use datafusion_common::{exec_datafusion_err, not_impl_err, DataFusionError};
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::TaskContext;
 
@@ -438,10 +438,10 @@ fn compute_partition_keys_by_row<'a>(
                 )
             }
             _ => {
-                return Err(DataFusionError::NotImplemented(format!(
+                return not_impl_err!(
                 "it is not yet supported to write to hive partitions with datatype {}",
                 dtype
-            )))
+            )
             }
         }
 

@@ -28,6 +28,7 @@ use arrow::datatypes::{
     DataType, Field, FieldRef, Fields, TimeUnit, DECIMAL128_MAX_PRECISION,
     DECIMAL128_MAX_SCALE, DECIMAL256_MAX_PRECISION, DECIMAL256_MAX_SCALE,
 };
+use datafusion_common::types::NativeType;
 use datafusion_common::{
     exec_datafusion_err, exec_err, internal_err, plan_datafusion_err, plan_err, Result,
 };
@@ -641,6 +642,21 @@ pub fn comparison_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<D
         .or_else(|| struct_coercion(lhs_type, rhs_type))
 }
 
+// Similar to comparison_coercion but prefer numeric if compares with numeric and string
+pub fn comparison_coercion_numeric(
+    lhs_type: &DataType,
+    rhs_type: &DataType,
+) -> Option<DataType> {
+    if lhs_type == rhs_type {
+        // same type => equality is possible
+        return Some(lhs_type.clone());
+    }
+    binary_numeric_coercion(lhs_type, rhs_type)
+        .or_else(|| string_coercion(lhs_type, rhs_type))
+        .or_else(|| null_coercion(lhs_type, rhs_type))
+        .or_else(|| string_numeric_coercion_as_numeric(lhs_type, rhs_type))
+}
+
 /// Coerce `lhs_type` and `rhs_type` to a common type for the purposes of a comparison operation
 /// where one is numeric and one is `Utf8`/`LargeUtf8`.
 fn string_numeric_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
@@ -652,6 +668,24 @@ fn string_numeric_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<D
         (_, LargeUtf8) if lhs_type.is_numeric() => Some(LargeUtf8),
         _ => None,
     }
+}
+
+/// Coerce `lhs_type` and `rhs_type` to a common type for the purposes of a comparison operation
+/// where one is numeric and one is `Utf8`/`LargeUtf8`.
+fn string_numeric_coercion_as_numeric(
+    lhs_type: &DataType,
+    rhs_type: &DataType,
+) -> Option<DataType> {
+    let lhs_logical_type = NativeType::from(lhs_type);
+    let rhs_logical_type = NativeType::from(rhs_type);
+    if lhs_logical_type.is_numeric() && rhs_logical_type == NativeType::String {
+        return Some(lhs_type.to_owned());
+    }
+    if rhs_logical_type.is_numeric() && lhs_logical_type == NativeType::String {
+        return Some(rhs_type.to_owned());
+    }
+
+    None
 }
 
 /// Coerce `lhs_type` and `rhs_type` to a common type for the purposes of a comparison operation

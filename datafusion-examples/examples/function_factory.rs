@@ -26,7 +26,9 @@ use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{exec_err, internal_err, DataFusionError};
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
-use datafusion_expr::{CreateFunction, Expr, ScalarUDF, ScalarUDFImpl, Signature};
+use datafusion_expr::{
+    CreateFunction, Expr, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature,
+};
 
 /// This example shows how to utilize [FunctionFactory] to implement simple
 /// SQL-macro like functions using a `CREATE FUNCTION` statement. The same
@@ -132,9 +134,9 @@ impl ScalarUDFImpl for ScalarFunctionWrapper {
         Ok(self.return_type.clone())
     }
 
-    fn invoke(
+    fn invoke_with_args(
         &self,
-        _args: &[datafusion_expr::ColumnarValue],
+        _args: ScalarFunctionArgs,
     ) -> Result<datafusion_expr::ColumnarValue> {
         // Since this function is always simplified to another expression, it
         // should never actually be invoked

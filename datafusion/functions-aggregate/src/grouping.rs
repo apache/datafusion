@@ -129,6 +129,5 @@ fn get_grouping_doc() -> &'static Documentation {
             )
             .with_argument("expression", "Expression to evaluate whether data is aggregated across the specified column. Can be a constant, column, or function.")
             .build()
-            .unwrap()
     })
 }

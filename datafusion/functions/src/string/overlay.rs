@@ -77,7 +77,11 @@ impl ScalarUDFImpl for OverlayFunc {
         utf8_to_str_type(&arg_types[0], "overlay")
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         match args[0].data_type() {
             DataType::Utf8View | DataType::Utf8 => {
                 make_scalar_function(overlay::<i32>, vec![])(args)
@@ -113,7 +117,6 @@ fn get_overlay_doc() -> &'static Documentation {
             .with_argument("pos", "The start position to start the replace in str.")
             .with_argument("count", "The count of characters to be replaced from start position of str. If not specified, will use substr length instead.")
             .build()
-            .unwrap()
     })
 }
 

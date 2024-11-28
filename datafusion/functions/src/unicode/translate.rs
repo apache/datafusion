@@ -76,7 +76,11 @@ impl ScalarUDFImpl for TranslateFunc {
         utf8_to_str_type(&arg_types[0], "translate")
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         make_scalar_function(invoke_translate, vec![])(args)
     }
 
@@ -105,7 +109,6 @@ fn get_translate_doc() -> &'static Documentation {
             .with_argument("chars", "Characters to translate.")
             .with_argument("translation", "Translation characters. Translation characters replace only characters at the same position in the **chars** string.")
             .build()
-            .unwrap()
     })
 }
 

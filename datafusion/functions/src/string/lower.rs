@@ -62,7 +62,11 @@ impl ScalarUDFImpl for LowerFunc {
         utf8_to_str_type(&arg_types[0], "lower")
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         to_lower(args, "lower")
     }
 
@@ -93,20 +97,20 @@ fn get_lower_doc() -> &'static Documentation {
             .with_related_udf("initcap")
             .with_related_udf("upper")
             .build()
-            .unwrap()
     })
 }
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::{ArrayRef, StringArray};
+    use arrow::array::{Array, ArrayRef, StringArray};
     use std::sync::Arc;
 
     fn to_lower(input: ArrayRef, expected: ArrayRef) -> Result<()> {
         let func = LowerFunc::new();
-        let batch_size = input.len();
+        let batch_len = input.len();
         let args = vec![ColumnarValue::Array(input)];
-        let result = match func.invoke_batch(&args, batch_size)? {
+        #[allow(deprecated)] // TODO migrate UDF to invoke
+        let result = match func.invoke_batch(&args, batch_len)? {
             ColumnarValue::Array(result) => result,
             _ => unreachable!("lower"),
         };

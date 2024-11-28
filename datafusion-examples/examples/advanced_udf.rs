@@ -91,7 +91,11 @@ impl ScalarUDFImpl for PowUdf {
     ///
     /// However, it also means the implementation is more complex than when
     /// using `create_udf`.
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         // DataFusion has arranged for the correct inputs to be passed to this
         // function, but we check again to make sure
         assert_eq!(args.len(), 2);

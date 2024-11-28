@@ -49,7 +49,7 @@ use datafusion_common::file_options::parquet_writer::ParquetWriterOptions;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::stats::Precision;
 use datafusion_common::{
-    internal_datafusion_err, not_impl_err, DataFusionError, GetExt,
+    internal_datafusion_err, internal_err, not_impl_err, DataFusionError, GetExt,
     DEFAULT_PARQUET_EXTENSION,
 };
 use datafusion_common_runtime::SpawnedTask;
@@ -323,9 +323,7 @@ impl FileFormat for ParquetFormat {
         let ext = self.get_ext();
         match file_compression_type.get_variant() {
             CompressionTypeVariant::UNCOMPRESSED => Ok(ext),
-            _ => Err(DataFusionError::Internal(
-                "Parquet FileFormat does not support compression.".into(),
-            )),
+            _ => internal_err!("Parquet FileFormat does not support compression."),
         }
     }
 

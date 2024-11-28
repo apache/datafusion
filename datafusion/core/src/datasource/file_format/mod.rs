@@ -573,7 +573,9 @@ pub(crate) mod test_util {
         let store = Arc::new(LocalFileSystem::new()) as _;
         let meta = local_unpartitioned_file(format!("{store_root}/{file_name}"));
 
-        let file_schema = format.infer_schema(state, &store, &[meta.clone()]).await?;
+        let file_schema = format
+            .infer_schema(state, &store, std::slice::from_ref(&meta))
+            .await?;
 
         let statistics = format
             .infer_stats(state, &store, file_schema.clone(), &meta)

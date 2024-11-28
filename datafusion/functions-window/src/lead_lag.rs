@@ -166,7 +166,6 @@ fn get_lag_doc() -> &'static Documentation {
             .with_argument("default", "The default value if the offset is \
             not within the partition. Must be of the same type as expression.")
             .build()
-            .unwrap()
     })
 }
 
@@ -188,7 +187,6 @@ fn get_lead_doc() -> &'static Documentation {
             .with_argument("default", "The default value if the offset is \
             not within the partition. Must be of the same type as expression.")
             .build()
-            .unwrap()
     })
 }
 

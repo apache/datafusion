@@ -49,7 +49,6 @@ fn get_cot_doc() -> &'static Documentation {
             .with_syntax_example(r#"cot(numeric_expression)"#)
             .with_standard_argument("numeric_expression", Some("Numeric"))
             .build()
-            .unwrap()
     })
 }
 
@@ -95,7 +94,11 @@ impl ScalarUDFImpl for CotFunc {
         Some(get_cot_doc())
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         make_scalar_function(cot, vec![])(args)
     }
 }

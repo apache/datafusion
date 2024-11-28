@@ -15,7 +15,6 @@
 # specific language governing permissions and limitations
 # under the License.
 
-# TODO (https://github.com/apache/datafusion/issues/12637): add a row with '%%' pattern
 statement ok
 create table test_source as values
   ('Andrew', 'X', 'datafusion📊🔥', '🔥'),
@@ -24,6 +23,7 @@ create table test_source as values
   ('under_score', 'un_____core', 'un iść core', 'chrząszcz na łące w 東京都'),
   ('percent', 'p%t', 'pan Tadeusz ma iść w kąt', 'Pan Tadeusz ma frunąć stąd w kąt'),
   ('', '%', '', ''),
+  ('', '%%', '', ''),
   ('%', '\%', '', ''),
   ('_', '\_', '', ''),
   (NULL, '%', NULL, NULL),

@@ -861,16 +861,16 @@ SELECT
 ----
 false false true false true false
 
-# \ as an explicit escape character is currently not supported
-query error DataFusion error: Execution error: LIKE does not support escape_char
+query BBBB
 SELECT
     'a' LIKE '\%' ESCAPE '\',
     '\a' LIKE '\%' ESCAPE '\',
     '%' LIKE '\%' ESCAPE '\',
     '\%' LIKE '\%' ESCAPE '\'
+----
+false false true false
 
-# \ as an explicit escape character is currently not supported
-query error DataFusion error: Execution error: LIKE does not support escape_char
+query BBBBBB
 SELECT
     'a' LIKE '\_' ESCAPE '\',
     '\a' LIKE '\_' ESCAPE '\',
@@ -878,6 +878,26 @@ SELECT
     '\_' LIKE '\_' ESCAPE '\',
     'abc' LIKE 'a_c' ESCAPE '\',
     'abc' LIKE 'a\_c' ESCAPE '\'
+----
+false false true false true false
+
+# Only \ is currently supported as an explicit escape character
+query error DataFusion error: Execution error: LIKE does not support escape_char other than the backslash \(\\\)
+SELECT
+    'a' LIKE '$%' ESCAPE '$',
+    '\a' LIKE '$%' ESCAPE '$',
+    '%' LIKE '$%' ESCAPE '$',
+    '\%' LIKE '$%' ESCAPE '$'
+
+# Only \ is currently supported as an explicit escape character
+query error DataFusion error: Execution error: LIKE does not support escape_char other than the backslash \(\\\)
+SELECT
+    'a' LIKE '$_' ESCAPE '$',
+    '\a' LIKE '$_' ESCAPE '$',
+    '_' LIKE '$_' ESCAPE '$',
+    '\_' LIKE '$_' ESCAPE '$',
+    'abc' LIKE 'a_c' ESCAPE '$',
+    'abc' LIKE 'a$_c' ESCAPE '$'
 
 # a LIKE pattern containing escape can never match an empty string
 query BBBBB

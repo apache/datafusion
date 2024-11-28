@@ -79,7 +79,11 @@ impl ScalarUDFImpl for MapKeysFunc {
         ))))
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         make_scalar_function(map_keys_inner)(args)
     }
 
@@ -114,7 +118,6 @@ SELECT map_keys(map([100, 5], [42, 43]));
                 "Map expression. Can be a constant, column, or function, and any combination of map operators."
             )
             .build()
-            .unwrap()
     })
 }
 

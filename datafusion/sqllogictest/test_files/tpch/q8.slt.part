@@ -163,7 +163,7 @@ physical_plan
 
 
 
-query RR
+query IR
 select
     o_year,
     cast(cast(sum(case

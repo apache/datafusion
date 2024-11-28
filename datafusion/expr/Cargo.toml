@@ -44,6 +44,7 @@ arrow-array = { workspace = true }
 arrow-buffer = { workspace = true }
 chrono = { workspace = true }
 datafusion-common = { workspace = true }
+datafusion-doc = { workspace = true }
 datafusion-expr-common = { workspace = true }
 datafusion-functions-aggregate-common = { workspace = true }
 datafusion-functions-window-common = { workspace = true }

@@ -123,7 +123,7 @@ impl Stream for GroupedTopKAggregateStream {
                         batch.num_rows()
                     );
                     if log::log_enabled!(Level::Trace) && batch.num_rows() < 20 {
-                        print_batches(&[batch.clone()])?;
+                        print_batches(std::slice::from_ref(&batch))?;
                     }
                     self.row_count += batch.num_rows();
                     let batches = &[batch];
@@ -165,7 +165,7 @@ impl Stream for GroupedTopKAggregateStream {
                         batch.num_rows()
                     );
                     if log::log_enabled!(Level::Trace) {
-                        print_batches(&[batch.clone()])?;
+                        print_batches(std::slice::from_ref(&batch))?;
                     }
                     return Poll::Ready(Some(Ok(batch)));
                 }

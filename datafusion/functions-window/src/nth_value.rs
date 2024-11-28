@@ -140,7 +140,6 @@ fn get_first_value_doc() -> &'static Documentation {
             .with_syntax_example("first_value(expression)")
             .with_argument("expression", "Expression to operate on")
             .build()
-            .unwrap()
     })
 }
 
@@ -157,7 +156,6 @@ fn get_last_value_doc() -> &'static Documentation {
             .with_syntax_example("last_value(expression)")
             .with_argument("expression", "Expression to operate on")
             .build()
-            .unwrap()
     })
 }
 
@@ -179,7 +177,6 @@ fn get_nth_value_doc() -> &'static Documentation {
             )
             .with_argument("n", "Integer. Specifies the n in nth")
             .build()
-            .unwrap()
     })
 }
 

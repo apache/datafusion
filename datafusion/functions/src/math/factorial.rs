@@ -68,7 +68,11 @@ impl ScalarUDFImpl for FactorialFunc {
         Ok(Int64)
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         make_scalar_function(factorial, vec![])(args)
     }
 
@@ -87,7 +91,6 @@ fn get_factorial_doc() -> &'static Documentation {
             .with_syntax_example("factorial(numeric_expression)")
             .with_standard_argument("numeric_expression", Some("Numeric"))
             .build()
-            .unwrap()
     })
 }
 

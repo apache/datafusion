@@ -520,10 +520,6 @@ impl ScalarUDFImpl for AddIndexToStringVolatileScalarUDF {
         Ok(self.return_type.clone())
     }
 
-    fn invoke(&self, _args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        not_impl_err!("index_with_offset function does not accept arguments")
-    }
-
     fn invoke_batch(
         &self,
         args: &[ColumnarValue],
@@ -720,7 +716,11 @@ impl ScalarUDFImpl for CastToI64UDF {
         Ok(ExprSimplifyResult::Simplified(new_expr))
     }
 
-    fn invoke(&self, _args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        _args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         unimplemented!("Function should have been simplified prior to evaluation")
     }
 }
@@ -848,7 +848,11 @@ impl ScalarUDFImpl for TakeUDF {
     }
 
     // The actual implementation
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         let take_idx = match &args[2] {
             ColumnarValue::Scalar(ScalarValue::Int64(Some(v))) if v < &2 => *v as usize,
             _ => unreachable!(),
@@ -956,7 +960,11 @@ impl ScalarUDFImpl for ScalarFunctionWrapper {
         Ok(self.return_type.clone())
     }
 
-    fn invoke(&self, _args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        _args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         internal_err!("This function should not get invoked!")
     }
 
@@ -1240,7 +1248,11 @@ impl ScalarUDFImpl for MyRegexUdf {
         }
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         match args {
             [ColumnarValue::Scalar(ScalarValue::Utf8(value))] => {
                 Ok(ColumnarValue::Scalar(ScalarValue::Boolean(

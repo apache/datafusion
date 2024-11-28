@@ -117,7 +117,11 @@ impl ScalarUDFImpl for Range {
         }
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         if args.iter().any(|arg| arg.data_type().is_null()) {
             return Ok(ColumnarValue::Array(Arc::new(NullArray::new(1))));
         }
@@ -182,7 +186,6 @@ fn get_range_doc() -> &'static Documentation {
                 "Increase by step (cannot be 0). Steps less than a day are supported only for timestamp ranges.",
             )
             .build()
-            .unwrap()
     })
 }
 
@@ -255,7 +258,11 @@ impl ScalarUDFImpl for GenSeries {
         }
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         if args.iter().any(|arg| arg.data_type().is_null()) {
             return Ok(ColumnarValue::Array(Arc::new(NullArray::new(1))));
         }
@@ -316,7 +323,6 @@ fn get_generate_series_doc() -> &'static Documentation {
                 "increase by step (can not be 0). Steps less than a day are supported only for timestamp ranges.",
             )
             .build()
-            .unwrap()
     })
 }
 

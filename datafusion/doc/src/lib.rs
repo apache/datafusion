@@ -15,15 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion_common::exec_err;
-use datafusion_common::Result;
-
-/// Documentation for use by [`ScalarUDFImpl`](crate::ScalarUDFImpl),
-/// [`AggregateUDFImpl`](crate::AggregateUDFImpl) and [`WindowUDFImpl`](crate::WindowUDFImpl) functions
+#[allow(rustdoc::broken_intra_doc_links)]
+/// Documentation for use by [`ScalarUDFImpl`](ScalarUDFImpl),
+/// [`AggregateUDFImpl`](AggregateUDFImpl) and [`WindowUDFImpl`](WindowUDFImpl) functions
 /// that will be used to generate public documentation.
 ///
-/// The name of the udf will be pulled from the [`ScalarUDFImpl::name`](crate::ScalarUDFImpl::name),
-/// [`AggregateUDFImpl::name`](crate::AggregateUDFImpl::name) or [`WindowUDFImpl::name`](crate::WindowUDFImpl::name)
+/// The name of the udf will be pulled from the [`ScalarUDFImpl::name`](ScalarUDFImpl::name),
+/// [`AggregateUDFImpl::name`](AggregateUDFImpl::name) or [`WindowUDFImpl::name`](WindowUDFImpl::name)
 /// function as appropriate.
 ///
 /// All strings in the documentation are required to be
@@ -79,18 +77,21 @@ pub struct DocSection {
 /// Example:
 ///
 /// ```rust
-/// # use datafusion_expr::Documentation;
-/// # use datafusion_expr::scalar_doc_sections::DOC_SECTION_MATH;
-/// # use datafusion_common::Result;
-/// #
-/// # fn main() -> Result<()> {
-///       let documentation = Documentation::builder()
-///           .with_doc_section(DOC_SECTION_MATH)
+///
+/// # fn main() {
+///     use datafusion_doc::{DocSection, Documentation};
+///     let doc_section = DocSection {
+///         include: true,
+///         label: "Display Label",
+///         description: None,
+///     };
+///
+///     let documentation = Documentation::builder()
+///           .with_doc_section(doc_section)
 ///           .with_description("Add one to an int32")
 ///           .with_syntax_example("add_one(2)")
 ///           .with_argument("arg_1", "The int32 number to add one to")
-///           .build()?;
-///       Ok(())  
+///           .build();
 /// # }
 pub struct DocumentationBuilder {
     pub doc_section: Option<DocSection>,
@@ -190,7 +191,10 @@ impl DocumentationBuilder {
         self
     }
 
-    pub fn build(self) -> Result<Documentation> {
+    /// Build the documentation from provided components
+    ///
+    /// Panics if `doc_section`, `description` or `syntax_example` is not set
+    pub fn build(self) -> Documentation {
         let Self {
             doc_section,
             description,
@@ -202,16 +206,16 @@ impl DocumentationBuilder {
         } = self;
 
         if doc_section.is_none() {
-            return exec_err!("Documentation must have a doc section");
+            panic!("Documentation must have a doc section");
         }
         if description.is_none() {
-            return exec_err!("Documentation must have a description");
+            panic!("Documentation must have a description");
         }
         if syntax_example.is_none() {
-            return exec_err!("Documentation must have a syntax_example");
+            panic!("Documentation must have a syntax_example");
         }
 
-        Ok(Documentation {
+        Documentation {
             doc_section: doc_section.unwrap(),
             description: description.unwrap(),
             syntax_example: syntax_example.unwrap(),
@@ -219,7 +223,7 @@ impl DocumentationBuilder {
             arguments,
             alternative_syntax,
             related_udfs,
-        })
+        }
     }
 }
 

@@ -1118,7 +1118,7 @@ impl Expr {
     }
 
     /// Returns a full and complete string representation of this expression.
-    #[deprecated(note = "use format! instead")]
+    #[deprecated(since = "42.0.0", note = "use format! instead")]
     pub fn canonical_name(&self) -> String {
         format!("{self}")
     }
@@ -2389,7 +2389,7 @@ mod test {
     use crate::expr_fn::col;
     use crate::{
         case, lit, qualified_wildcard, wildcard, wildcard_with_options, ColumnarValue,
-        ScalarUDF, ScalarUDFImpl, Volatility,
+        ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Volatility,
     };
     use sqlparser::ast;
     use sqlparser::ast::{Ident, IdentWithAlias};
@@ -2518,7 +2518,10 @@ mod test {
                 Ok(DataType::Utf8)
             }
 
-            fn invoke(&self, _args: &[ColumnarValue]) -> Result<ColumnarValue> {
+            fn invoke_with_args(
+                &self,
+                _args: ScalarFunctionArgs,
+            ) -> Result<ColumnarValue> {
                 Ok(ColumnarValue::Scalar(ScalarValue::from("a")))
             }
         }

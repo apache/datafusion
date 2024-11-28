@@ -859,3 +859,30 @@ query I
 select count(*) from (select unnest(range(0, 100000)) id) t inner join (select unnest(range(0, 100000)) id) t1 on t.id = t1.id;
 ----
 100000
+
+
+## Unnest in subquery
+query IIII
+with t as (
+  select
+    left1,
+    width1,
+    min(column3) as min_height
+  from
+    unnest_table a
+    cross join unnest(ARRAY[1,2,3,4,5,6,7,8,9,10]) as t(left1)
+    cross join unnest(ARRAY[1,2,3,4,5,6,7,8,9,10]) as t1(width1)
+  where
+    left1 + width1 - 1 <= 10
+    and column3 between left1 and left1 + width1 - 1
+  group by
+    left1, width1
+)
+select
+  left1, width1, min_height, min_height * width1 as area
+from t
+where min_height * width1 = (
+  select max(min_height * width1) from t
+)
+----
+4 7 4 28

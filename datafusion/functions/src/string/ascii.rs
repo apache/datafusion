@@ -64,7 +64,11 @@ impl ScalarUDFImpl for AsciiFunc {
         Ok(Int32)
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         make_scalar_function(ascii, vec![])(args)
     }
 
@@ -102,7 +106,6 @@ fn get_ascii_doc() -> &'static Documentation {
             .with_standard_argument("str", Some("String"))
             .with_related_udf("chr")
             .build()
-            .unwrap()
     })
 }
 

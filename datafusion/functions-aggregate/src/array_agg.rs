@@ -171,7 +171,6 @@ fn get_array_agg_doc() -> &'static Documentation {
             )
             .with_standard_argument("expression", None)
             .build()
-            .unwrap()
     })
 }
 

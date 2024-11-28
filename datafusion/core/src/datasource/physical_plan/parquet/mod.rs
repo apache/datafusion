@@ -1702,7 +1702,7 @@ mod tests {
 
         let store = Arc::new(LocalFileSystem::new()) as _;
         let file_schema = ParquetFormat::default()
-            .infer_schema(&state, &store, &[meta.clone()])
+            .infer_schema(&state, &store, std::slice::from_ref(&meta))
             .await?;
 
         let group_empty = vec![vec![file_range(&meta, 0, 2)]];
@@ -1734,7 +1734,7 @@ mod tests {
         let meta = local_unpartitioned_file(filename);
 
         let schema = ParquetFormat::default()
-            .infer_schema(&state, &store, &[meta.clone()])
+            .infer_schema(&state, &store, std::slice::from_ref(&meta))
             .await
             .unwrap();
 

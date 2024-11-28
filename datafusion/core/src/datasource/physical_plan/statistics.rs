@@ -34,7 +34,7 @@ use arrow::{
 };
 use arrow_array::RecordBatch;
 use arrow_schema::SchemaRef;
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{plan_err, DataFusionError, Result};
 use datafusion_physical_expr::{expressions::Column, PhysicalSortExpr};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
@@ -232,9 +232,7 @@ impl MinMaxStatistics {
 
                     // check that sort columns are non-nullable
                     if field.is_nullable() {
-                        return Err(DataFusionError::Plan(
-                            "cannot sort by nullable column".to_string(),
-                        ));
+                        return plan_err!("cannot sort by nullable column");
                     }
 
                     Ok(SortColumn {

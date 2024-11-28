@@ -78,7 +78,11 @@ impl ScalarUDFImpl for SubstrIndexFunc {
         utf8_to_str_type(&arg_types[0], "substr_index")
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         make_scalar_function(substr_index, vec![])(args)
     }
 
@@ -119,7 +123,6 @@ If count is negative, everything to the right of the final delimiter (counting f
             .with_argument("delim", "The string to find in str to split str.")
             .with_argument("count", "The number of times to search for the delimiter. Can be either a positive or negative number.")
             .build()
-            .unwrap()
     })
 }
 

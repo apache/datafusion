@@ -2684,7 +2684,11 @@ impl ScalarUDFImpl for DummyUDF {
         Ok(self.return_type.clone())
     }
 
-    fn invoke(&self, _args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        _args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         unimplemented!("DummyUDF::invoke")
     }
 }

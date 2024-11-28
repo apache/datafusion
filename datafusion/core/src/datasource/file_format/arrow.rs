@@ -476,7 +476,7 @@ mod tests {
                 .infer_schema(
                     &state,
                     &(store.clone() as Arc<dyn ObjectStore>),
-                    &[object_meta.clone()],
+                    std::slice::from_ref(&object_meta),
                 )
                 .await?;
             let actual_fields = inferred_schema
@@ -515,7 +515,7 @@ mod tests {
             .infer_schema(
                 &state,
                 &(store.clone() as Arc<dyn ObjectStore>),
-                &[object_meta.clone()],
+                std::slice::from_ref(&object_meta),
             )
             .await;
 

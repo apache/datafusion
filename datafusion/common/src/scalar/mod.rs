@@ -40,7 +40,9 @@ use crate::cast::{
 use crate::error::{DataFusionError, Result, _exec_err, _internal_err, _not_impl_err};
 use crate::hash_utils::create_hashes;
 use crate::utils::{
-    array_into_fixed_size_list_array, array_into_large_list_array, array_into_list_array,
+    array_into_fixed_size_list_array_with_field_name, array_into_large_list_array,
+    array_into_large_list_array_with_field_name, array_into_list_array,
+    array_into_list_array_with_field_name,
 };
 use arrow::compute::kernels::numeric::*;
 use arrow::util::display::{array_value_to_string, ArrayFormatter, FormatOptions};
@@ -2663,27 +2665,36 @@ impl ScalarValue {
                 let list_array = array.as_list::<i32>();
                 let nested_array = list_array.value(index);
                 // Produces a single element `ListArray` with the value at `index`.
-                let arr =
-                    Arc::new(array_into_list_array(nested_array, field.is_nullable()));
+                let arr = Arc::new(array_into_list_array_with_field_name(
+                    nested_array,
+                    field.is_nullable(),
+                    field.name(),
+                ));
 
                 ScalarValue::List(arr)
             }
-            DataType::LargeList(_) => {
+            DataType::LargeList(field) => {
                 let list_array = as_large_list_array(array);
                 let nested_array = list_array.value(index);
                 // Produces a single element `LargeListArray` with the value at `index`.
-                let arr = Arc::new(array_into_large_list_array(nested_array));
+                let arr = Arc::new(array_into_large_list_array_with_field_name(
+                    nested_array,
+                    field.name(),
+                ));
 
                 ScalarValue::LargeList(arr)
             }
             // TODO: There is no test for FixedSizeList now, add it later
-            DataType::FixedSizeList(_, _) => {
+            DataType::FixedSizeList(field, _) => {
                 let list_array = as_fixed_size_list_array(array)?;
                 let nested_array = list_array.value(index);
                 // Produces a single element `ListArray` with the value at `index`.
                 let list_size = nested_array.len();
-                let arr =
-                    Arc::new(array_into_fixed_size_list_array(nested_array, list_size));
+                let arr = Arc::new(array_into_fixed_size_list_array_with_field_name(
+                    nested_array,
+                    list_size,
+                    field.name(),
+                ));
 
                 ScalarValue::FixedSizeList(arr)
             }
@@ -5969,6 +5980,51 @@ mod tests {
         check_scalar_cast(
             ScalarValue::from("larger than 12 bytes string"),
             DataType::Utf8View,
+        );
+        check_scalar_cast(
+            {
+                let element_field =
+                    Arc::new(Field::new("element", DataType::Int32, true));
+
+                let mut builder =
+                    ListBuilder::new(Int32Builder::new()).with_field(element_field);
+                builder.append_value([Some(1)]);
+                builder.append(true);
+
+                ScalarValue::List(Arc::new(builder.finish()))
+            },
+            DataType::List(Arc::new(Field::new("element", DataType::Int64, true))),
+        );
+        check_scalar_cast(
+            {
+                let element_field =
+                    Arc::new(Field::new("element", DataType::Int32, true));
+
+                let mut builder = FixedSizeListBuilder::new(Int32Builder::new(), 1)
+                    .with_field(element_field);
+                builder.values().append_value(1);
+                builder.append(true);
+
+                ScalarValue::FixedSizeList(Arc::new(builder.finish()))
+            },
+            DataType::FixedSizeList(
+                Arc::new(Field::new("element", DataType::Int64, true)),
+                1,
+            ),
+        );
+        check_scalar_cast(
+            {
+                let element_field =
+                    Arc::new(Field::new("element", DataType::Int32, true));
+
+                let mut builder =
+                    LargeListBuilder::new(Int32Builder::new()).with_field(element_field);
+                builder.append_value([Some(1)]);
+                builder.append(true);
+
+                ScalarValue::LargeList(Arc::new(builder.finish()))
+            },
+            DataType::LargeList(Arc::new(Field::new("element", DataType::Int64, true))),
         );
     }
 
