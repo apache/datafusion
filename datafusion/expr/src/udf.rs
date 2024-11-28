@@ -319,7 +319,7 @@ impl ScalarUDF {
 
 impl<F> From<F> for ScalarUDF
 where
-    F: ScalarUDFImpl + Send + Sync + 'static,
+    F: ScalarUDFImpl + 'static,
 {
     fn from(fun: F) -> Self {
         Self::new_from_impl(fun)
