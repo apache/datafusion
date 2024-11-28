@@ -28,6 +28,7 @@ pub(crate) mod stats {
     pub use datafusion_functions_aggregate_common::stats::StatsType;
 }
 pub mod utils {
+    #[allow(deprecated)] // allow adjust_output_array
     pub use datafusion_functions_aggregate_common::utils::{
         adjust_output_array, get_accum_scalar_values_as_arrays, get_sort_options,
         ordering_fields, DecimalAverager, Hashable,
