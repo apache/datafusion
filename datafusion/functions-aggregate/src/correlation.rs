@@ -284,6 +284,7 @@ impl Accumulator for CorrelationAccumulator {
     }
 }
 
+#[derive(Default)]
 pub struct CorrelationGroupsAccumulator {
     // Number of elements for each group
     // This is also used to track nulls: if a group has 0 valid values accumulated,
@@ -303,14 +304,7 @@ pub struct CorrelationGroupsAccumulator {
 
 impl CorrelationGroupsAccumulator {
     pub fn new() -> Self {
-        Self {
-            count: Vec::new(),
-            sum_x: Vec::new(),
-            sum_y: Vec::new(),
-            sum_xy: Vec::new(),
-            sum_xx: Vec::new(),
-            sum_yy: Vec::new(),
-        }
+        Default::default()
     }
 }
 
