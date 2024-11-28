@@ -319,6 +319,7 @@ where
 {
     // Make sure that, array is not empty.
     debug_assert!(!array.is_empty());
+    // `.unwrap()` is safe here as the array is supposed to be non-empty
     *array
         .iter()
         .max_by(|x, y| x.partial_cmp(y).unwrap_or(Ordering::Less))
