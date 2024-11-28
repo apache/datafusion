@@ -16,13 +16,12 @@
 // under the License.
 
 use datafusion::{error::Result, DATAFUSION_VERSION};
+use datafusion_common::utils::get_available_parallelism;
 use serde::{Serialize, Serializer};
 use serde_json::Value;
 use std::{
     collections::HashMap,
-    num::NonZero,
     path::Path,
-    thread::available_parallelism,
     time::{Duration, SystemTime},
 };
 
@@ -70,9 +69,7 @@ impl RunContext {
         Self {
             benchmark_version: env!("CARGO_PKG_VERSION").to_owned(),
             datafusion_version: DATAFUSION_VERSION.to_owned(),
-            num_cpus: available_parallelism()
-                .unwrap_or(NonZero::new(1).unwrap())
-                .get(),
+            num_cpus: get_available_parallelism(),
             start_time: SystemTime::now(),
             arguments: std::env::args().skip(1).collect::<Vec<String>>(),
         }

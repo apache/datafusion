@@ -39,8 +39,10 @@ use sqlparser::parser::Parser;
 use std::borrow::{Borrow, Cow};
 use std::cmp::{min, Ordering};
 use std::collections::HashSet;
+use std::num::NonZero;
 use std::ops::Range;
 use std::sync::Arc;
+use std::thread::available_parallelism;
 
 /// Applies an optional projection to a [`SchemaRef`], returning the
 /// projected schema
@@ -763,6 +765,16 @@ pub fn combine_limit(
     };
 
     (combined_skip, combined_fetch)
+}
+
+/// Returns the estimated number of threads available for parallel execution.
+///
+/// This is a wrapper around `std::thread::available_parallelism`, providing a default value
+/// of `1` if the system's parallelism cannot be determined.
+pub fn get_available_parallelism() -> usize {
+    available_parallelism()
+        .unwrap_or(NonZero::new(1).expect("literal value `1` shouldn't be zero"))
+        .get()
 }
 
 #[cfg(test)]
