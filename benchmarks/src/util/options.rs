@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::{num::NonZero, thread::available_parallelism};
+
 use datafusion::prelude::SessionConfig;
 use structopt::StructOpt;
 
@@ -48,7 +50,13 @@ impl CommonOpt {
     /// Modify the existing config appropriately
     pub fn update_config(&self, config: SessionConfig) -> SessionConfig {
         config
-            .with_target_partitions(self.partitions.unwrap_or(num_cpus::get()))
+            .with_target_partitions(
+                self.partitions.unwrap_or(
+                    available_parallelism()
+                        .unwrap_or(NonZero::new(1).unwrap())
+                        .get(),
+                ),
+            )
             .with_batch_size(self.batch_size)
     }
 }

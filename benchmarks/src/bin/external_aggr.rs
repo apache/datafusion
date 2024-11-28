@@ -18,9 +18,11 @@
 //! external_aggr binary entrypoint
 
 use std::collections::HashMap;
+use std::num::NonZero;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::OnceLock;
+use std::thread::available_parallelism;
 use structopt::StructOpt;
 
 use arrow::record_batch::RecordBatch;
@@ -325,7 +327,11 @@ impl ExternalAggrConfig {
     }
 
     fn partitions(&self) -> usize {
-        self.common.partitions.unwrap_or(num_cpus::get())
+        self.common.partitions.unwrap_or(
+            available_parallelism()
+                .unwrap_or(NonZero::new(1).unwrap())
+                .get(),
+        )
     }
 
     /// Parse memory limit from string to number of bytes
