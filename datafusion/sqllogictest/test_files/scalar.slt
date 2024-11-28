@@ -93,7 +93,7 @@ select abs(a), abs(b), abs(c) from signed_integers;
 query RRR rowsort
 select acos(0), acos(0.5), acos(1);
 ----
-1.570796326795 1.047197551197 0
+1.5707963267948966 1.0471975511965976 0
 
 # acos scalar nulls
 query R rowsort
@@ -140,7 +140,7 @@ NaN 9.90349 NaN
 query RRR rowsort
 select asin(0), asin(0.5), asin(1);
 ----
-0 0.523598775598 1.570796326795
+0 0.5235987755982988 1.5707963267948966
 
 # asin scalar nulls
 query R rowsort
@@ -187,7 +187,7 @@ select round(asinh(a), 5), round(asinh(b), 5), round(asinh(c), 5) from small_flo
 query RRR rowsort
 select atan(0), atan(cbrt(3)), atan(1);
 ----
-0 0.964539792856 0.785398163397
+0 0.9645397928556647 0.7853981633974483
 
 # atan scalar nulls
 query R rowsort
@@ -211,7 +211,7 @@ select round(atan(a), 5), round(atan(b), 5), round(atan(c), 5) from small_floats
 query RRR rowsort
 select atanh((exp(2) - 1) / (exp(2) + 1)), atanh((exp(4) - 1) / (exp(4) + 1)), atanh((exp(6) - 1) / (exp(6) + 1));
 ----
-1 2 3
+0.9999999999999999 2.0000000000000004 3.0000000000000013
 
 # atanh scalar nulls
 query R rowsort
@@ -304,10 +304,10 @@ NULL
 query RRR rowsort
 select ceil(a), ceil(b), ceil(c) from small_floats;
 ----
+-0 1 -1
 -1 NULL NULL
-0 1 -1
-1 0 0
-1 0 1
+1 -0 0
+1 -0 1
 
 ## degrees
 
@@ -338,7 +338,7 @@ select round(degrees(a), 5), round(degrees(e), 5), round(degrees(f), 5) from sig
 query RRR rowsort
 select cos(0), cos(pi() / 3), cos(pi() / 2);
 ----
-1 0.5 0
+1 0.5000000000000001 6.123233995736766e-17
 
 # cos scalar nulls
 query R rowsort
@@ -362,7 +362,7 @@ select round(cos(a), 5), round(cos(b), 5), round(cos(c), 5) from signed_integers
 query RRR rowsort
 select cosh(1), cosh(2), cosh(3);
 ----
-1.543080634815 3.762195691084 10.067661995778
+1.5430806348152437 3.7621956910836314 10.067661995777765
 
 # cosh scalar nulls
 query R rowsort
@@ -385,7 +385,7 @@ select round(cosh(a), 5), round(cosh(b), 5), round(cosh(c), 5) from small_floats
 query RRR rowsort
 select exp(0), exp(1), exp(2);
 ----
-1 2.718281828459 7.389056098931
+1 2.718281828459045 7.38905609893065
 
 # exp scalar nulls
 query R rowsort
@@ -454,7 +454,7 @@ select floor(a), floor(b), floor(c) from signed_integers;
 query RRR rowsort
 select ln(1), ln(exp(1)), ln(3);
 ----
-0 1 1.098612288668
+0 1 1.0986122886681098
 
 # ln scalar nulls
 query R rowsort
@@ -509,7 +509,7 @@ NULL NULL
 query RR rowsort
 select log(2, 2.0/3) a, log(10, 2.0/3) b;
 ----
--0.584962500721 -0.176091259056
+-0.5849625007211563 -0.17609125905568124
 
 # log scalar ops with zero edgecases
 # please see https://github.com/apache/datafusion/pull/5245#issuecomment-1426828382
@@ -546,8 +546,8 @@ select log(arrow_cast(10, 'Float64')) a ,log(arrow_cast(100, 'Float32')) b;
 query RR rowsort
 select log(arrow_cast(a, 'Float64')), log(arrow_cast(b, 'Float32')) from signed_integers;
 ----
-0.301029995664 NaN
-0.602059991328 NULL
+0.30102999566398114 NaN
+0.6020599913279623 NULL
 NaN 2
 NaN 4
 
@@ -585,7 +585,7 @@ NULL
 query R rowsort
 select log10(2.0/3);
 ----
--0.176091259056
+-0.17609125905568127
 
 # log10 scalar ops with zero edgecases
 # please see https://github.com/apache/datafusion/pull/5245#issuecomment-1426828382
@@ -621,7 +621,7 @@ NULL
 query R rowsort
 select log2(2.0/3);
 ----
--0.584962500721
+-0.5849625007211563
 
 # log2 scalar ops with zero edgecases
 # please see https://github.com/apache/datafusion/pull/5245#issuecomment-1426828382
@@ -726,7 +726,7 @@ NULL NULL NULL NULL
 query RRR rowsort
 select pi(), pi() / 2, pi() / 3;
 ----
-3.14159265359 1.570796326795 1.047197551197
+3.141592653589793 1.5707963267948966 1.0471975511965976
 
 ## power
 
@@ -769,7 +769,7 @@ NaN NaN 2.32282
 query RRR rowsort
 select radians(0), radians(90), radians(180);
 ----
-0 1.570796326795 3.14159265359
+0 1.5707963267948966 3.141592653589793
 
 # radians scalar nulls
 query R rowsort
@@ -806,8 +806,8 @@ select round(a), round(b), round(c) from small_floats;
 ----
 -1 0 -1
 -1 NULL NULL
-0 0 1
-1 0 0
+0 -0 1
+1 -0 0
 
 # round with too large
 #  max Int32 is 2147483647
@@ -848,7 +848,7 @@ select signum(a), signum(b), signum(c) from signed_integers;
 query RRR rowsort
 select sin(0), sin(pi() / 3), sin(pi() / 2);
 ----
-0 0.866025403784 1
+0 0.8660254037844386 1
 
 # sin scalar nulls
 query R rowsort
@@ -872,7 +872,7 @@ select round(sin(a), 5), round(sin(b), 5), round(sin(c), 5) from small_floats;
 query RRR rowsort
 select sinh(1), sinh(2), sinh(3);
 ----
-1.175201193644 3.626860407847 10.01787492741
+1.1752011936438014 3.6268604078470186 10.017874927409903
 
 # sinh scalar nulls
 query R rowsort
@@ -916,7 +916,7 @@ NaN 100 NaN
 query RR rowsort
 select sqrt(1.4), sqrt(2.0/3);
 ----
-1.18321595662 0.816496580928
+1.1832159566199232 0.816496580927726
 
 # sqrt scalar cast
 query R rowsort
@@ -937,7 +937,7 @@ NaN
 query RRR rowsort
 select tan(0), tan(pi() / 6), tan(pi() / 4);
 ----
-0 0.57735026919 1
+0 0.5773502691896256 0.9999999999999999
 
 # tan scalar nulls
 query R rowsort
@@ -961,7 +961,7 @@ select round(tan(a), 5), round(tan(b), 5), round(tan(c), 5) from small_floats;
 query RRR rowsort
 select tanh(1), tanh(2), tanh(3);
 ----
-0.761594155956 0.964027580076 0.995054753687
+0.7615941559557649 0.9640275800758169 0.9950547536867305
 
 # tanh scalar nulls
 query R rowsort
@@ -996,10 +996,10 @@ NULL
 query RRR rowsort
 select trunc(a), trunc(b), trunc(c) from small_floats;
 ----
+-0 0 -1
 -1 NULL NULL
-0 0 -1
-0 0 0
-0 0 1
+0 -0 0
+0 -0 1
 
 # trunc with precision
 query RRRRR rowsort
@@ -1360,13 +1360,13 @@ SELECT COUNT(*), COUNT(1) AS c, COUNT(c1) FROM aggregate_test_100
 query R
 SELECT sqrt(sqrt(c12)) FROM aggregate_test_100 LIMIT 1
 ----
-0.98186505614
+0.9818650561397431
 
 # csv query cbrt cbrt
 query R
 SELECT cbrt(cbrt(c12)) FROM aggregate_test_100 LIMIT 1
 ----
-0.991899036678
+0.9918990366780552
 
 # csv query cast
 query R rowsort
@@ -1379,8 +1379,8 @@ SELECT CAST(c12 AS float) FROM aggregate_test_100 WHERE c12 > 0.376 AND c12 < 0.
 query RR rowsort
 SELECT c12, CAST(1 AS float) FROM aggregate_test_100 WHERE c12 > CAST(0 AS float) LIMIT 2
 ----
-0.311471253986 1
-0.929409733247 1
+0.3114712539863804 1
+0.9294097332465232 1
 
 statement ok
 drop table aggregate_test_100
@@ -1570,7 +1570,7 @@ drop table test_int32
 query RRRR
 SELECT 0e0 AS c1, 0.e-0 AS c2, -.0e+0 AS c3, 00.00e-00 AS c4
 ----
-0 0 0 0
+0 0 -0 0
 
 # scientific notation (integer)
 query RRRR
@@ -1595,7 +1595,7 @@ SELECT -2.e-1, 0.e0, .0002E+3, .02E+2;
 query RRRR
 SELECT -1.79e309, -2.22e-309, 2.22E-309, 1.79E+309;
 ----
--Infinity 0 0 Infinity
+-Infinity -2.22e-309 2.22e-309 Infinity
 
 # scientific notation (other edgecases)
 query IRRR

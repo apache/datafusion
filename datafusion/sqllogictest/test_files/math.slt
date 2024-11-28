@@ -92,7 +92,7 @@ SELECT round(125.2345, -3), round(125.2345, -2), round(125.2345, -1), round(125.
 query RRRRRRR
 SELECT atan2(2.0, 1.0), atan2(-2.0, 1.0), atan2(2.0, -1.0), atan2(-2.0, -1.0), atan2(NULL, 1.0), atan2(2.0, NULL), atan2(NULL, NULL);
 ----
-1.107148717794 -1.107148717794 2.034443935796 -2.034443935796 NULL NULL NULL
+1.1071487177940904 -1.1071487177940904 2.0344439357957027 -2.0344439357957027 NULL NULL NULL
 
 # nanvl
 query RRR
@@ -371,7 +371,7 @@ CREATE TABLE test_nullable_float(
 query RR rowsort
 SELECT c1*0, c2*0 FROM test_nullable_float
 ----
-0 0
+-0 -0
 0 0
 0 0
 NULL NULL
@@ -398,7 +398,7 @@ NaN NaN
 query RR rowsort
 SELECT c1%1, c2%1 FROM test_nullable_float
 ----
-0 0
+-0 -0
 0 0
 0 0
 NULL NULL
@@ -442,7 +442,7 @@ INSERT INTO test_non_nullable_float VALUES
 query RR rowsort
 SELECT c1*0, c2*0 FROM test_non_nullable_float
 ----
-0 0
+-0 -0
 0 0
 0 0
 NaN NaN
@@ -466,7 +466,7 @@ NaN NaN
 query RR rowsort
 SELECT c1%1, c2%1 FROM test_non_nullable_float
 ----
-0 0
+-0 -0
 0 0
 0 0
 NaN NaN

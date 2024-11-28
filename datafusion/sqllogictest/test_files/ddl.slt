@@ -265,7 +265,7 @@ CREATE TABLE my_table AS SELECT * FROM aggregate_simple
 query RRB rowsort
 SELECT * FROM my_table order by c1 LIMIT 1
 ----
-0.00001 0.000000000001 true
+0.00001 1e-12 true
 
 statement ok
 drop table my_table
@@ -277,7 +277,7 @@ SELECT* INTO my_table FROM (SELECT * FROM aggregate_simple)
 query RRB rowsort
 SELECT * FROM my_table order by c1 LIMIT 1
 ----
-0.00001 0.000000000001 true
+0.00001 1e-12 true
 
 statement ok
 DROP TABLE my_table;
@@ -302,7 +302,7 @@ CREATE TABLE my_table(c1 float, c2 double, c3 boolean, c4 varchar) AS SELECT *,c
 query RRBT rowsort
 SELECT * FROM my_table order by c1 LIMIT 1
 ----
-0.00001 0.000000000001 true true
+0.00001 1e-12 true true
 
 statement ok
 DROP TABLE my_table;
@@ -461,7 +461,7 @@ OPTIONS ('format.has_header' 'true');
 query TIIIIIIIIIRRT
 SELECT c1, c2, c3, c4, c5, c6, c7, c8, c9, 10, c11, c12, c13 FROM aggregate_test_100 LIMIT 1;
 ----
-c 2 1 18109 2033001162 -6513304855495910254 25 43062 1491205016 10 0.110830784 0.929409733247 6WfVFBVGJSQb7FhA7E0lBwdvjfZnSW
+c 2 1 18109 2033001162 -6513304855495910254 25 43062 1491205016 10 0.110830784 0.9294097332465232 6WfVFBVGJSQb7FhA7E0lBwdvjfZnSW
 
 
 
@@ -544,12 +544,12 @@ CREATE EXTERNAL TABLE aggregate_simple STORED AS CSV LOCATION '../core/tests/dat
 query RRB
 SELECT * FROM aggregate_simple order by c1 LIMIT 1;
 ----
-0.00001 0.000000000001 true
+0.00001 1e-12 true
 
 query RRB
 SELECT * FROM aggregate_simple order by c1 DESC LIMIT 1;
 ----
-0.00005 0.000000000005 true
+0.00005 5e-12 true
 
 
 statement ok
