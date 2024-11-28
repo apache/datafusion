@@ -154,7 +154,7 @@ async fn prepared_statement_type_coercion() -> Result<()> {
         ("signed", Arc::new(signed_ints) as ArrayRef),
         ("unsigned", Arc::new(unsigned_ints) as ArrayRef),
     ])?;
-    ctx.register_batch("test", batch)?;
+    ctx.register_batch("test", batch).await?;
     let results = ctx.sql("SELECT signed, unsigned FROM test WHERE $1 >= signed AND signed <= $2 AND unsigned = $3")
         .await?
         .with_param_values(vec![
@@ -184,7 +184,7 @@ async fn test_parameter_type_coercion() -> Result<()> {
         ("signed", Arc::new(signed_ints) as ArrayRef),
         ("unsigned", Arc::new(unsigned_ints) as ArrayRef),
     ])?;
-    ctx.register_batch("test", batch)?;
+    ctx.register_batch("test", batch).await?;
     let results = ctx.sql("SELECT signed, unsigned FROM test WHERE $foo >= signed AND signed <= $bar AND unsigned <= $baz AND unsigned = $str")
         .await?
         .with_param_values(vec![
@@ -215,7 +215,7 @@ async fn test_parameter_invalid_types() -> Result<()> {
     ])]);
     let batch =
         RecordBatch::try_from_iter(vec![("list", Arc::new(list_array) as ArrayRef)])?;
-    ctx.register_batch("test", batch)?;
+    ctx.register_batch("test", batch).await?;
     let results = ctx
         .sql("SELECT list FROM test WHERE list = $1")
         .await?

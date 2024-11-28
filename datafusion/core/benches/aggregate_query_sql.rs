@@ -25,6 +25,7 @@ use crate::criterion::Criterion;
 use data_utils::create_table_provider;
 use datafusion::error::Result;
 use datafusion::execution::context::SessionContext;
+use futures::FutureExt;
 use parking_lot::Mutex;
 use std::sync::Arc;
 use tokio::runtime::Runtime;
@@ -42,7 +43,7 @@ fn create_context(
 ) -> Result<Arc<Mutex<SessionContext>>> {
     let ctx = SessionContext::new();
     let provider = create_table_provider(partitions_len, array_len, batch_size)?;
-    ctx.register_table("t", provider)?;
+    ctx.register_table("t", provider).now_or_never().unwrap()?;
     Ok(Arc::new(Mutex::new(ctx)))
 }
 

@@ -215,7 +215,10 @@ async fn roundtrip_custom_tables() -> Result<()> {
     let mut table_factories: HashMap<String, Arc<dyn TableProviderFactory>> =
         HashMap::new();
     table_factories.insert("TESTTABLE".to_string(), Arc::new(TestTableFactory {}));
-    let mut state = SessionStateBuilder::new().with_default_features().build();
+    let mut state = SessionStateBuilder::new()
+        .with_default_features()
+        .build()
+        .await;
     // replace factories
     *state.table_factories_mut() = table_factories;
     let ctx = SessionContext::new_with_state(state);

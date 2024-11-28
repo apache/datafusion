@@ -19,6 +19,8 @@
 
 use crate::{CatalogProvider, CatalogProviderList, SchemaProvider, TableProvider};
 use async_trait::async_trait;
+use datafusion_common::Result;
+use futures::stream::BoxStream;
 use std::any::Any;
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -41,30 +43,31 @@ impl DynamicFileCatalog {
     }
 }
 
+#[async_trait]
 impl CatalogProviderList for DynamicFileCatalog {
     fn as_any(&self) -> &dyn Any {
         self
     }
 
-    fn register_catalog(
+    async fn register_catalog(
         &self,
         name: String,
         catalog: Arc<dyn CatalogProvider>,
-    ) -> Option<Arc<dyn CatalogProvider>> {
-        self.inner.register_catalog(name, catalog)
+    ) -> Result<Option<Arc<dyn CatalogProvider>>> {
+        Ok(self.inner.register_catalog(name, catalog).await?)
     }
 
-    fn catalog_names(&self) -> Vec<String> {
-        self.inner.catalog_names()
+    async fn catalog_names(&self) -> BoxStream<'static, Result<String>> {
+        self.inner.catalog_names().await
     }
 
-    fn catalog(&self, name: &str) -> Option<Arc<dyn CatalogProvider>> {
-        self.inner.catalog(name).map(|catalog| {
+    async fn catalog(&self, name: &str) -> Result<Option<Arc<dyn CatalogProvider>>> {
+        Ok(self.inner.catalog(name).await?.map(|catalog| {
             Arc::new(DynamicFileCatalogProvider::new(
                 catalog,
                 Arc::clone(&self.factory),
             )) as _
-        })
+        }))
     }
 }
 
@@ -86,30 +89,31 @@ impl DynamicFileCatalogProvider {
     }
 }
 
+#[async_trait]
 impl CatalogProvider for DynamicFileCatalogProvider {
     fn as_any(&self) -> &dyn Any {
         self
     }
 
-    fn schema_names(&self) -> Vec<String> {
-        self.inner.schema_names()
+    async fn schema_names(&self) -> BoxStream<'static, Result<String>> {
+        self.inner.schema_names().await
     }
 
-    fn schema(&self, name: &str) -> Option<Arc<dyn SchemaProvider>> {
-        self.inner.schema(name).map(|schema| {
+    async fn schema(&self, name: &str) -> Result<Option<Arc<dyn SchemaProvider>>> {
+        Ok(self.inner.schema(name).await?.map(|schema| {
             Arc::new(DynamicFileSchemaProvider::new(
                 schema,
                 Arc::clone(&self.factory),
             )) as _
-        })
+        }))
     }
 
-    fn register_schema(
+    async fn register_schema(
         &self,
         name: &str,
         schema: Arc<dyn SchemaProvider>,
-    ) -> datafusion_common::Result<Option<Arc<dyn SchemaProvider>>> {
-        self.inner.register_schema(name, schema)
+    ) -> Result<Option<Arc<dyn SchemaProvider>>> {
+        Ok(self.inner.register_schema(name, schema).await?)
     }
 }
 
@@ -141,14 +145,11 @@ impl SchemaProvider for DynamicFileSchemaProvider {
         self
     }
 
-    fn table_names(&self) -> Vec<String> {
-        self.inner.table_names()
+    async fn table_names(&self) -> BoxStream<'static, Result<String>> {
+        self.inner.table_names().await
     }
 
-    async fn table(
-        &self,
-        name: &str,
-    ) -> datafusion_common::Result<Option<Arc<dyn TableProvider>>> {
+    async fn table(&self, name: &str) -> Result<Option<Arc<dyn TableProvider>>> {
         if let Some(table) = self.inner.table(name).await? {
             return Ok(Some(table));
         };
@@ -156,23 +157,23 @@ impl SchemaProvider for DynamicFileSchemaProvider {
         self.factory.try_new(name).await
     }
 
-    fn register_table(
+    async fn register_table(
         &self,
         name: String,
         table: Arc<dyn TableProvider>,
-    ) -> datafusion_common::Result<Option<Arc<dyn TableProvider>>> {
-        self.inner.register_table(name, table)
+    ) -> Result<Option<Arc<dyn TableProvider>>> {
+        self.inner.register_table(name, table).await
     }
 
-    fn deregister_table(
+    async fn deregister_table(
         &self,
         name: &str,
-    ) -> datafusion_common::Result<Option<Arc<dyn TableProvider>>> {
-        self.inner.deregister_table(name)
+    ) -> Result<Option<Arc<dyn TableProvider>>> {
+        self.inner.deregister_table(name).await
     }
 
-    fn table_exist(&self, name: &str) -> bool {
-        self.inner.table_exist(name)
+    async fn table_exist(&self, name: &str) -> bool {
+        self.inner.table_exist(name).await
     }
 }
 
@@ -180,8 +181,5 @@ impl SchemaProvider for DynamicFileSchemaProvider {
 #[async_trait]
 pub trait UrlTableFactory: Debug + Sync + Send {
     /// create a new table provider from the provided url
-    async fn try_new(
-        &self,
-        url: &str,
-    ) -> datafusion_common::Result<Option<Arc<dyn TableProvider>>>;
+    async fn try_new(&self, url: &str) -> Result<Option<Arc<dyn TableProvider>>>;
 }

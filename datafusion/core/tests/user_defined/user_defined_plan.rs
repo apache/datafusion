@@ -262,14 +262,14 @@ async fn normal_query_with_analyzer() -> Result<()> {
 // Run the query using topk optimization
 async fn topk_query() -> Result<()> {
     // Note the only difference is that the top
-    let ctx = setup_table(make_topk_context()).await?;
+    let ctx = setup_table(make_topk_context().await).await?;
     run_and_compare_query(ctx, "Topk context").await
 }
 
 #[tokio::test]
 // Run EXPLAIN PLAN and show the plan was in fact rewritten
 async fn topk_plan() -> Result<()> {
-    let ctx = setup_table(make_topk_context()).await?;
+    let ctx = setup_table(make_topk_context().await).await?;
 
     let mut expected = ["| logical_plan after topk                               | TopK: k=3                                                                     |",
         "|                                                       |   TableScan: sales projection=[customer_id,revenue]                                  |"].join("\n");
@@ -295,7 +295,7 @@ async fn topk_plan() -> Result<()> {
     Ok(())
 }
 
-fn make_topk_context() -> SessionContext {
+async fn make_topk_context() -> SessionContext {
     let config = SessionConfig::new().with_target_partitions(48);
     let runtime = Arc::new(RuntimeEnv::default());
     let state = SessionStateBuilder::new()
@@ -305,7 +305,8 @@ fn make_topk_context() -> SessionContext {
         .with_query_planner(Arc::new(TopKQueryPlanner {}))
         .with_optimizer_rule(Arc::new(TopKOptimizerRule {}))
         .with_analyzer_rule(Arc::new(MyAnalyzerRule {}))
-        .build();
+        .build()
+        .await;
     SessionContext::new_with_state(state)
 }
 

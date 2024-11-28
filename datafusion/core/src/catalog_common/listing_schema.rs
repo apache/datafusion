@@ -26,12 +26,13 @@ use crate::catalog::{SchemaProvider, TableProvider, TableProviderFactory};
 use crate::execution::context::SessionState;
 
 use datafusion_common::{
-    Constraints, DFSchema, DataFusionError, HashMap, TableReference,
+    Constraints, DFSchema, DataFusionError, HashMap, Result, TableReference,
 };
 use datafusion_expr::CreateExternalTable;
 
 use async_trait::async_trait;
-use futures::TryStreamExt;
+use futures::stream::BoxStream;
+use futures::{StreamExt, TryStreamExt};
 use itertools::Itertools;
 use object_store::ObjectStore;
 
@@ -88,7 +89,7 @@ impl ListingSchemaProvider {
     }
 
     /// Reload table information from ObjectStore
-    pub async fn refresh(&self, state: &SessionState) -> datafusion_common::Result<()> {
+    pub async fn refresh(&self, state: &SessionState) -> Result<()> {
         let entries: Vec<_> = self.store.list(Some(&self.path)).try_collect().await?;
         let base = Path::new(self.path.as_ref());
         let mut tables = HashSet::new();
@@ -123,7 +124,7 @@ impl ListingSchemaProvider {
                 DataFusionError::Internal("Cannot parse file name!".to_string())
             })?;
 
-            if !self.table_exist(table_name) {
+            if !self.table_exist(table_name).await {
                 let table_url = format!("{}/{}", self.authority, table_path);
 
                 let name = TableReference::bare(table_name);
@@ -148,8 +149,9 @@ impl ListingSchemaProvider {
                         },
                     )
                     .await?;
-                let _ =
-                    self.register_table(table_name.to_string(), Arc::clone(&provider))?;
+                let _ = self
+                    .register_table(table_name.to_string(), Arc::clone(&provider))
+                    .await?;
             }
         }
         Ok(())
@@ -162,13 +164,10 @@ impl SchemaProvider for ListingSchemaProvider {
         self
     }
 
-    fn table_names(&self) -> Vec<String> {
-        self.tables
-            .lock()
-            .expect("Can't lock tables")
-            .keys()
-            .map(|it| it.to_string())
-            .collect()
+    async fn table_names(&self) -> BoxStream<'static, Result<String>> {
+        let tables = self.tables.lock().expect("Can't lock tables");
+        let tables = tables.keys().map(|k| Ok(k.clone())).collect::<Vec<_>>();
+        futures::stream::iter(tables).boxed()
     }
 
     async fn table(
@@ -183,11 +182,11 @@ impl SchemaProvider for ListingSchemaProvider {
             .cloned())
     }
 
-    fn register_table(
+    async fn register_table(
         &self,
         name: String,
         table: Arc<dyn TableProvider>,
-    ) -> datafusion_common::Result<Option<Arc<dyn TableProvider>>> {
+    ) -> Result<Option<Arc<dyn TableProvider>>> {
         self.tables
             .lock()
             .expect("Can't lock tables")
@@ -195,14 +194,14 @@ impl SchemaProvider for ListingSchemaProvider {
         Ok(Some(table))
     }
 
-    fn deregister_table(
+    async fn deregister_table(
         &self,
         name: &str,
-    ) -> datafusion_common::Result<Option<Arc<dyn TableProvider>>> {
+    ) -> Result<Option<Arc<dyn TableProvider>>> {
         Ok(self.tables.lock().expect("Can't lock tables").remove(name))
     }
 
-    fn table_exist(&self, name: &str) -> bool {
+    async fn table_exist(&self, name: &str) -> bool {
         self.tables
             .lock()
             .expect("Can't lock tables")

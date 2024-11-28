@@ -48,7 +48,7 @@ pub async fn main() -> Result<()> {
     ctx.add_optimizer_rule(Arc::new(MyOptimizerRule {}));
 
     // Now, let's plan and run queries with the new rule
-    ctx.register_batch("person", person_batch())?;
+    ctx.register_batch("person", person_batch()).await?;
     let sql = "SELECT * FROM person WHERE age = 22";
     let plan = ctx.sql(sql).await?.into_optimized_plan()?;
 

@@ -534,8 +534,10 @@ impl TestCase {
             None => builder,
         };
 
-        let ctx = SessionContext::new_with_state(builder.build());
-        ctx.register_table("t", table).expect("registering table");
+        let ctx = SessionContext::new_with_state(builder.build().await);
+        ctx.register_table("t", table)
+            .await
+            .expect("registering table");
 
         let query = query.expect("Test error: query not specified");
         let df = ctx.sql(&query).await.expect("Planning query");

@@ -2441,7 +2441,7 @@ mod test {
 
     #[tokio::test]
     async fn extended_expressions() -> Result<()> {
-        let state = SessionStateBuilder::default().build();
+        let state = SessionStateBuilder::default().build().await;
 
         // One expression, empty input schema
         let expr = Expr::Literal(ScalarValue::Int32(Some(42)));
@@ -2493,7 +2493,7 @@ mod test {
 
     #[tokio::test]
     async fn invalid_extended_expression() {
-        let state = SessionStateBuilder::default().build();
+        let state = SessionStateBuilder::default().build().await;
 
         // Not ok if input schema is missing field referenced by expr
         let expr = Expr::Column("missing".into());

@@ -26,7 +26,7 @@ use datafusion_common::cast::as_float64_array;
 use std::sync::Arc;
 
 // create local session context with an in-memory table
-fn create_context() -> Result<SessionContext> {
+async fn create_context() -> Result<SessionContext> {
     use datafusion::arrow::datatypes::{Field, Schema};
     use datafusion::datasource::MemTable;
     // define a schema.
@@ -47,7 +47,7 @@ fn create_context() -> Result<SessionContext> {
 
     // declare a table in memory. In spark API, this corresponds to createDataFrame(...).
     let provider = MemTable::try_new(schema, vec![vec![batch1], vec![batch2]])?;
-    ctx.register_table("t", Arc::new(provider))?;
+    ctx.register_table("t", Arc::new(provider)).await?;
     Ok(ctx)
 }
 
@@ -137,7 +137,7 @@ impl Accumulator for GeometricMean {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let ctx = create_context()?;
+    let ctx = create_context().await?;
 
     // here is where we define the UDAF. We also declare its signature:
     let geometric_mean = create_udaf(

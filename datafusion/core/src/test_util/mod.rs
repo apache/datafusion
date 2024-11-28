@@ -357,7 +357,7 @@ impl RecordBatchStream for UnboundedStream {
 }
 
 /// This function creates an unbounded sorted file for testing purposes.
-pub fn register_unbounded_file_with_ordering(
+pub async fn register_unbounded_file_with_ordering(
     ctx: &SessionContext,
     schema: SchemaRef,
     file_path: &Path,
@@ -368,7 +368,8 @@ pub fn register_unbounded_file_with_ordering(
     let config = StreamConfig::new(Arc::new(source)).with_order(file_sort_order);
 
     // Register table:
-    ctx.register_table(table_name, Arc::new(StreamTable::new(Arc::new(config))))?;
+    ctx.register_table(table_name, Arc::new(StreamTable::new(Arc::new(config))))
+        .await?;
     Ok(())
 }
 

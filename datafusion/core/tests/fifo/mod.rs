@@ -189,7 +189,7 @@ mod unix_test {
         ]));
 
         let provider = fifo_table(schema, fifo_path, vec![]);
-        ctx.register_table("left", provider).unwrap();
+        ctx.register_table("left", provider).await.unwrap();
 
         // Register right table
         let schema = aggr_test_schema();
@@ -251,10 +251,10 @@ mod unix_test {
 
         // Set unbounded sorted files read configuration
         let provider = fifo_table(schema.clone(), left_fifo.clone(), order.clone());
-        ctx.register_table("left", provider)?;
+        ctx.register_table("left", provider).await?;
 
         let provider = fifo_table(schema.clone(), right_fifo.clone(), order);
-        ctx.register_table("right", provider)?;
+        ctx.register_table("right", provider).await?;
 
         // Execute the query, with no matching rows. (since key is modulus 10)
         let df = ctx

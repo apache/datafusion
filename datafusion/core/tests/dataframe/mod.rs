@@ -65,7 +65,7 @@ use datafusion_functions_aggregate::expr_fn::{array_agg, avg, count, max, sum};
 
 #[tokio::test]
 async fn test_count_wildcard_on_sort() -> Result<()> {
-    let ctx = create_join_context()?;
+    let ctx = create_join_context().await?;
 
     let sql_results = ctx
         .sql("select b,count(*) from t1 group by b order by count(*)")
@@ -92,7 +92,7 @@ async fn test_count_wildcard_on_sort() -> Result<()> {
 
 #[tokio::test]
 async fn test_count_wildcard_on_where_in() -> Result<()> {
-    let ctx = create_join_context()?;
+    let ctx = create_join_context().await?;
     let sql_results = ctx
         .sql("SELECT a,b FROM t1 WHERE a in (SELECT count(*) FROM t2)")
         .await?
@@ -103,7 +103,7 @@ async fn test_count_wildcard_on_where_in() -> Result<()> {
     // In the same SessionContext, AliasGenerator will increase subquery_alias id by 1
     // https://github.com/apache/datafusion/blame/cf45eb9020092943b96653d70fafb143cc362e19/datafusion/optimizer/src/alias.rs#L40-L43
     // for compare difference between sql and df logical plan, we need to create a new SessionContext here
-    let ctx = create_join_context()?;
+    let ctx = create_join_context().await?;
     let df_results = ctx
         .table("t1")
         .await?
@@ -133,7 +133,7 @@ async fn test_count_wildcard_on_where_in() -> Result<()> {
 
 #[tokio::test]
 async fn test_count_wildcard_on_where_exist() -> Result<()> {
-    let ctx = create_join_context()?;
+    let ctx = create_join_context().await?;
     let sql_results = ctx
         .sql("SELECT a, b FROM t1 WHERE EXISTS (SELECT count(*) FROM t2)")
         .await?
@@ -169,7 +169,7 @@ async fn test_count_wildcard_on_where_exist() -> Result<()> {
 
 #[tokio::test]
 async fn test_count_wildcard_on_window() -> Result<()> {
-    let ctx = create_join_context()?;
+    let ctx = create_join_context().await?;
 
     let sql_results = ctx
         .sql("select count(*) OVER(ORDER BY a DESC RANGE BETWEEN 6 PRECEDING AND 2 FOLLOWING)  from t1")
@@ -207,7 +207,7 @@ async fn test_count_wildcard_on_window() -> Result<()> {
 
 #[tokio::test]
 async fn test_count_wildcard_on_aggregate() -> Result<()> {
-    let ctx = create_join_context()?;
+    let ctx = create_join_context().await?;
     register_alltypes_tiny_pages_parquet(&ctx).await?;
 
     let sql_results = ctx
@@ -239,7 +239,7 @@ async fn test_count_wildcard_on_aggregate() -> Result<()> {
 
 #[tokio::test]
 async fn test_count_wildcard_on_where_scalar_subquery() -> Result<()> {
-    let ctx = create_join_context()?;
+    let ctx = create_join_context().await?;
 
     let sql_results = ctx
         .sql("select a,b from t1 where (select count(*) from t2 where t1.a = t2.a)>0;")
@@ -251,7 +251,7 @@ async fn test_count_wildcard_on_where_scalar_subquery() -> Result<()> {
     // In the same SessionContext, AliasGenerator will increase subquery_alias id by 1
     // https://github.com/apache/datafusion/blame/cf45eb9020092943b96653d70fafb143cc362e19/datafusion/optimizer/src/alias.rs#L40-L43
     // for compare difference between sql and df logical plan, we need to create a new SessionContext here
-    let ctx = create_join_context()?;
+    let ctx = create_join_context().await?;
     let df_results = ctx
         .table("t1")
         .await?
@@ -310,11 +310,11 @@ async fn join() -> Result<()> {
 
     let ctx = SessionContext::new();
 
-    ctx.register_batch("aa", batch1)?;
+    ctx.register_batch("aa", batch1).await?;
 
     let df1 = ctx.table("aa").await?;
 
-    ctx.register_batch("aaa", batch2)?;
+    ctx.register_batch("aaa", batch2).await?;
 
     let df2 = ctx.table("aaa").await?;
 
@@ -344,7 +344,7 @@ async fn sort_on_unprojected_columns() -> Result<()> {
     .unwrap();
 
     let ctx = SessionContext::new();
-    ctx.register_batch("t", batch).unwrap();
+    ctx.register_batch("t", batch).await.unwrap();
 
     let df = ctx
         .table("t")
@@ -387,7 +387,7 @@ async fn sort_on_distinct_columns() -> Result<()> {
     .unwrap();
 
     let ctx = SessionContext::new();
-    ctx.register_batch("t", batch).unwrap();
+    ctx.register_batch("t", batch).await.unwrap();
     let df = ctx
         .table("t")
         .await
@@ -429,7 +429,7 @@ async fn sort_on_distinct_unprojected_columns() -> Result<()> {
 
     // Cannot sort on a column after distinct that would add a new column
     let ctx = SessionContext::new();
-    ctx.register_batch("t", batch)?;
+    ctx.register_batch("t", batch).await?;
     let err = ctx
         .table("t")
         .await?
@@ -528,7 +528,7 @@ async fn filter_with_alias_overwrite() -> Result<()> {
     .unwrap();
 
     let ctx = SessionContext::new();
-    ctx.register_batch("t", batch).unwrap();
+    ctx.register_batch("t", batch).await.unwrap();
 
     let df = ctx
         .table("t")
@@ -562,7 +562,7 @@ async fn select_with_alias_overwrite() -> Result<()> {
     )?;
 
     let ctx = SessionContext::new();
-    ctx.register_batch("t", batch)?;
+    ctx.register_batch("t", batch).await?;
 
     let df = ctx
         .table("t")
@@ -741,7 +741,7 @@ async fn test_grouping_set_array_agg_with_overflow() -> Result<()> {
 
 #[tokio::test]
 async fn join_with_alias_filter() -> Result<()> {
-    let join_ctx = create_join_context()?;
+    let join_ctx = create_join_context().await?;
     let t1 = join_ctx.table("t1").await?;
     let t2 = join_ctx.table("t2").await?;
     let t1_schema = t1.schema().clone();
@@ -797,7 +797,7 @@ async fn join_with_alias_filter() -> Result<()> {
 
 #[tokio::test]
 async fn right_semi_with_alias_filter() -> Result<()> {
-    let join_ctx = create_join_context()?;
+    let join_ctx = create_join_context().await?;
     let t1 = join_ctx.table("t1").await?;
     let t2 = join_ctx.table("t2").await?;
 
@@ -842,7 +842,7 @@ async fn right_semi_with_alias_filter() -> Result<()> {
 
 #[tokio::test]
 async fn right_anti_filter_push_down() -> Result<()> {
-    let join_ctx = create_join_context()?;
+    let join_ctx = create_join_context().await?;
     let t1 = join_ctx.table("t1").await?;
     let t2 = join_ctx.table("t2").await?;
 
@@ -1046,7 +1046,7 @@ async fn unnest_fixed_list() -> Result<()> {
     let batch = get_fixed_list_batch()?;
 
     let ctx = SessionContext::new();
-    ctx.register_batch("shapes", batch)?;
+    ctx.register_batch("shapes", batch).await?;
     let df = ctx.table("shapes").await?;
 
     let results = df.clone().collect().await?;
@@ -1096,7 +1096,7 @@ async fn unnest_fixed_list_drop_nulls() -> Result<()> {
     let batch = get_fixed_list_batch()?;
 
     let ctx = SessionContext::new();
-    ctx.register_batch("shapes", batch)?;
+    ctx.register_batch("shapes", batch).await?;
     let df = ctx.table("shapes").await?;
 
     let results = df.clone().collect().await?;
@@ -1163,7 +1163,7 @@ async fn unnest_fixed_list_nonull() -> Result<()> {
     ])?;
 
     let ctx = SessionContext::new();
-    ctx.register_batch("shapes", batch)?;
+    ctx.register_batch("shapes", batch).await?;
     let df = ctx.table("shapes").await?;
 
     let results = df.clone().collect().await?;
@@ -1264,7 +1264,7 @@ async fn unnest_array_agg() -> Result<()> {
     ])?;
 
     let ctx = SessionContext::new();
-    ctx.register_batch("shapes", batch)?;
+    ctx.register_batch("shapes", batch).await?;
     let df = ctx.table("shapes").await?;
 
     let results = df.clone().collect().await?;
@@ -1354,7 +1354,7 @@ async fn unnest_with_redundant_columns() -> Result<()> {
     ])?;
 
     let ctx = SessionContext::new();
-    ctx.register_batch("shapes", batch)?;
+    ctx.register_batch("shapes", batch).await?;
     let df = ctx.table("shapes").await?;
 
     let results = df.clone().collect().await?;
@@ -1547,7 +1547,8 @@ async fn test_read_batches() -> Result<()> {
         .with_config(config)
         .with_runtime_env(runtime)
         .with_default_features()
-        .build();
+        .build()
+        .await;
     let ctx = SessionContext::new_with_state(state);
 
     let schema = Arc::new(Schema::new(vec![
@@ -1601,7 +1602,8 @@ async fn test_read_batches_empty() -> Result<()> {
         .with_config(config)
         .with_runtime_env(runtime)
         .with_default_features()
-        .build();
+        .build()
+        .await;
     let ctx = SessionContext::new_with_state(state);
 
     let batches = vec![];
@@ -1615,7 +1617,10 @@ async fn test_read_batches_empty() -> Result<()> {
 
 #[tokio::test]
 async fn consecutive_projection_same_schema() -> Result<()> {
-    let state = SessionStateBuilder::new().with_default_features().build();
+    let state = SessionStateBuilder::new()
+        .with_default_features()
+        .build()
+        .await;
     let ctx = SessionContext::new_with_state(state);
 
     let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
@@ -1687,7 +1692,7 @@ async fn create_test_table(name: &str) -> Result<DataFrame> {
 
     let ctx = SessionContext::new();
 
-    ctx.register_batch(name, batch)?;
+    ctx.register_batch(name, batch).await?;
 
     ctx.table(name).await
 }
@@ -1702,7 +1707,7 @@ async fn aggregates_table(ctx: &SessionContext) -> Result<DataFrame> {
     .await
 }
 
-fn create_join_context() -> Result<SessionContext> {
+async fn create_join_context() -> Result<SessionContext> {
     let t1 = Arc::new(Schema::new(vec![
         Field::new("a", DataType::UInt32, false),
         Field::new("b", DataType::Utf8, false),
@@ -1735,8 +1740,8 @@ fn create_join_context() -> Result<SessionContext> {
 
     let ctx = SessionContext::new();
 
-    ctx.register_batch("t1", batch1)?;
-    ctx.register_batch("t2", batch2)?;
+    ctx.register_batch("t1", batch1).await?;
+    ctx.register_batch("t2", batch2).await?;
 
     Ok(ctx)
 }
@@ -1804,7 +1809,7 @@ async fn table_with_nested_types(n: usize) -> Result<DataFrame> {
     ])?;
 
     let ctx = SessionContext::new();
-    ctx.register_batch("shapes", batch)?;
+    ctx.register_batch("shapes", batch).await?;
     ctx.table("shapes").await
 }
 
@@ -1876,7 +1881,7 @@ async fn table_with_mixed_lists() -> Result<DataFrame> {
     ])?;
 
     let ctx = SessionContext::new();
-    ctx.register_batch("mixed_lists", batch)?;
+    ctx.register_batch("mixed_lists", batch).await?;
     ctx.table("mixed_lists").await
 }
 
@@ -1910,7 +1915,7 @@ async fn table_with_lists_and_nulls() -> Result<DataFrame> {
     ])?;
 
     let ctx = SessionContext::new();
-    ctx.register_batch("shapes", batch)?;
+    ctx.register_batch("shapes", batch).await?;
     ctx.table("shapes").await
 }
 
@@ -1951,7 +1956,7 @@ async fn use_var_provider() -> Result<()> {
         .set_bool("datafusion.optimizer.skip_failed_rules", false);
     let ctx = SessionContext::new_with_config(config);
 
-    ctx.register_table("csv_table", mem_table)?;
+    ctx.register_table("csv_table", mem_table).await?;
     ctx.register_variable(VarType::UserDefined, Arc::new(HardcodedIntProvider {}));
 
     let dataframe = ctx
@@ -2074,7 +2079,7 @@ async fn write_partitioned_parquet_results() -> Result<()> {
     let mem_table = Arc::new(MemTable::try_new(schema, vec![vec![record_batch]])?);
 
     // Register the table in the context
-    ctx.register_table("test", mem_table)?;
+    ctx.register_table("test", mem_table).await?;
 
     let local = Arc::new(LocalFileSystem::new_with_prefix(&tmp_dir)?);
     let local_url = Url::parse("file://local").unwrap();
@@ -2239,7 +2244,7 @@ async fn sparse_union_is_null() {
 
     let ctx = SessionContext::new();
 
-    ctx.register_batch("union_batch", batch).unwrap();
+    ctx.register_batch("union_batch", batch).await.unwrap();
 
     let df = ctx.table("union_batch").await.unwrap();
 
@@ -2316,7 +2321,7 @@ async fn dense_union_is_null() {
 
     let ctx = SessionContext::new();
 
-    ctx.register_batch("union_batch", batch).unwrap();
+    ctx.register_batch("union_batch", batch).await.unwrap();
 
     let df = ctx.table("union_batch").await.unwrap();
 
@@ -2383,7 +2388,7 @@ async fn boolean_dictionary_as_filter() {
 
     let ctx = SessionContext::new();
 
-    ctx.register_batch("dict_batch", batch).unwrap();
+    ctx.register_batch("dict_batch", batch).await.unwrap();
 
     let df = ctx.table("dict_batch").await.unwrap();
 
@@ -2436,7 +2441,9 @@ async fn boolean_dictionary_as_filter() {
 
     let batch = RecordBatch::try_new(schema, vec![Arc::new(nested_array)]).unwrap();
 
-    ctx.register_batch("nested_dict_batch", batch).unwrap();
+    ctx.register_batch("nested_dict_batch", batch)
+        .await
+        .unwrap();
 
     let df = ctx.table("nested_dict_batch").await.unwrap();
 

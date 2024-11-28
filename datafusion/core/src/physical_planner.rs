@@ -545,7 +545,7 @@ impl DefaultPhysicalPlanner {
                 ..
             }) => {
                 let name = table_name.table();
-                let schema = session_state.schema_for_ref(table_name.clone())?;
+                let schema = session_state.schema_for_ref(table_name.clone()).await?;
                 if let Some(provider) = schema.table(name).await? {
                     let input_exec = children.one()?;
                     provider
@@ -2033,7 +2033,7 @@ mod tests {
     use datafusion_functions_aggregate::expr_fn::sum;
     use datafusion_physical_expr::EquivalenceProperties;
 
-    fn make_session_state() -> SessionState {
+    async fn make_session_state() -> SessionState {
         let runtime = Arc::new(RuntimeEnv::default());
         let config = SessionConfig::new().with_target_partitions(4);
         let config = config.set_bool("datafusion.optimizer.skip_failed_rules", false);
@@ -2042,10 +2042,11 @@ mod tests {
             .with_runtime_env(runtime)
             .with_default_features()
             .build()
+            .await
     }
 
     async fn plan(logical_plan: &LogicalPlan) -> Result<Arc<dyn ExecutionPlan>> {
-        let session_state = make_session_state();
+        let session_state = make_session_state().await;
         // optimize the logical plan
         let logical_plan = session_state.optimize(logical_plan)?;
         let planner = DefaultPhysicalPlanner::default();
@@ -2087,7 +2088,7 @@ mod tests {
         let physical_input_schema = plan.schema();
         let physical_input_schema = physical_input_schema.as_ref();
         let logical_input_schema = logical_plan.schema();
-        let session_state = make_session_state();
+        let session_state = make_session_state().await;
 
         let cube = create_cube_physical_expr(
             &exprs,
@@ -2114,7 +2115,7 @@ mod tests {
         let physical_input_schema = plan.schema();
         let physical_input_schema = physical_input_schema.as_ref();
         let logical_input_schema = logical_plan.schema();
-        let session_state = make_session_state();
+        let session_state = make_session_state().await;
 
         let rollup = create_rollup_physical_expr(
             &exprs,
@@ -2140,7 +2141,7 @@ mod tests {
         let expr = planner.create_physical_expr(
             &col("a").not(),
             &dfschema,
-            &make_session_state(),
+            &make_session_state().await,
         )?;
         let expected = expressions::not(expressions::col("a", &schema)?)?;
 
@@ -2170,7 +2171,7 @@ mod tests {
 
     #[tokio::test]
     async fn error_during_extension_planning() {
-        let session_state = make_session_state();
+        let session_state = make_session_state().await;
         let planner = DefaultPhysicalPlanner::with_extension_planners(vec![Arc::new(
             ErrorExtensionPlanner {},
         )]);
@@ -2231,7 +2232,7 @@ mod tests {
 
     #[tokio::test]
     async fn default_extension_planner() {
-        let session_state = make_session_state();
+        let session_state = make_session_state().await;
         let planner = DefaultPhysicalPlanner::default();
         let logical_plan = LogicalPlan::Extension(Extension {
             node: Arc::new(NoOpExtensionNode::default()),
@@ -2255,7 +2256,7 @@ mod tests {
     async fn bad_extension_planner() {
         // Test that creating an execution plan whose schema doesn't
         // match the logical plan's schema generates an error.
-        let session_state = make_session_state();
+        let session_state = make_session_state().await;
         let planner = DefaultPhysicalPlanner::with_extension_planners(vec![Arc::new(
             BadExtensionPlanner {},
         )]);

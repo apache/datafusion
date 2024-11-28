@@ -188,7 +188,10 @@ async fn get_listing_table(
 ) -> ListingTable {
     let schema = opt
         .infer_schema(
-            &SessionStateBuilder::new().with_default_features().build(),
+            &SessionStateBuilder::new()
+                .with_default_features()
+                .build()
+                .await,
             table_path,
         )
         .await

@@ -31,6 +31,7 @@ use datafusion::execution::session_state::SessionStateBuilder;
 
 use async_trait::async_trait;
 use dirs::home_dir;
+use futures::stream::BoxStream;
 use parking_lot::RwLock;
 
 /// Wraps another catalog, automatically register require object stores for the file locations
@@ -49,28 +50,29 @@ impl DynamicObjectStoreCatalog {
     }
 }
 
+#[async_trait]
 impl CatalogProviderList for DynamicObjectStoreCatalog {
     fn as_any(&self) -> &dyn Any {
         self
     }
 
-    fn register_catalog(
+    async fn register_catalog(
         &self,
         name: String,
         catalog: Arc<dyn CatalogProvider>,
-    ) -> Option<Arc<dyn CatalogProvider>> {
-        self.inner.register_catalog(name, catalog)
+    ) -> Result<Option<Arc<dyn CatalogProvider>>> {
+        self.inner.register_catalog(name, catalog).await
     }
 
-    fn catalog_names(&self) -> Vec<String> {
-        self.inner.catalog_names()
+    async fn catalog_names(&self) -> BoxStream<'static, Result<String>> {
+        self.inner.catalog_names().await
     }
 
-    fn catalog(&self, name: &str) -> Option<Arc<dyn CatalogProvider>> {
+    async fn catalog(&self, name: &str) -> Result<Option<Arc<dyn CatalogProvider>>> {
         let state = self.state.clone();
-        self.inner.catalog(name).map(|catalog| {
+        Ok(self.inner.catalog(name).await?.map(|catalog| {
             Arc::new(DynamicObjectStoreCatalogProvider::new(catalog, state)) as _
-        })
+        }))
     }
 }
 
@@ -90,28 +92,29 @@ impl DynamicObjectStoreCatalogProvider {
     }
 }
 
+#[async_trait]
 impl CatalogProvider for DynamicObjectStoreCatalogProvider {
     fn as_any(&self) -> &dyn Any {
         self
     }
 
-    fn schema_names(&self) -> Vec<String> {
-        self.inner.schema_names()
+    async fn schema_names(&self) -> BoxStream<'static, Result<String>> {
+        self.inner.schema_names().await
     }
 
-    fn schema(&self, name: &str) -> Option<Arc<dyn SchemaProvider>> {
+    async fn schema(&self, name: &str) -> Result<Option<Arc<dyn SchemaProvider>>> {
         let state = self.state.clone();
-        self.inner.schema(name).map(|schema| {
+        Ok(self.inner.schema(name).await?.map(|schema| {
             Arc::new(DynamicObjectStoreSchemaProvider::new(schema, state)) as _
-        })
+        }))
     }
 
-    fn register_schema(
+    async fn register_schema(
         &self,
         name: &str,
         schema: Arc<dyn SchemaProvider>,
     ) -> Result<Option<Arc<dyn SchemaProvider>>> {
-        self.inner.register_schema(name, schema)
+        self.inner.register_schema(name, schema).await
     }
 }
 
@@ -138,16 +141,16 @@ impl SchemaProvider for DynamicObjectStoreSchemaProvider {
         self
     }
 
-    fn table_names(&self) -> Vec<String> {
-        self.inner.table_names()
+    async fn table_names(&self) -> BoxStream<'static, Result<String>> {
+        self.inner.table_names().await
     }
 
-    fn register_table(
+    async fn register_table(
         &self,
         name: String,
         table: Arc<dyn TableProvider>,
     ) -> Result<Option<Arc<dyn TableProvider>>> {
-        self.inner.register_table(name, table)
+        self.inner.register_table(name, table).await
     }
 
     async fn table(&self, name: &str) -> Result<Option<Arc<dyn TableProvider>>> {
@@ -166,7 +169,7 @@ impl SchemaProvider for DynamicObjectStoreSchemaProvider {
             .ok_or_else(|| plan_datafusion_err!("locking error"))?
             .read()
             .clone();
-        let mut builder = SessionStateBuilder::from(state.clone());
+        let mut builder = SessionStateBuilder::new_from_existing(state.clone()).await;
         let optimized_name = substitute_tilde(name.to_owned());
         let table_url = ListingTableUrl::parse(optimized_name.as_str())?;
         let scheme = table_url.scheme();
@@ -194,7 +197,7 @@ impl SchemaProvider for DynamicObjectStoreSchemaProvider {
                     }
                     _ => {}
                 };
-                state = builder.build();
+                state = builder.build().await;
                 let store = get_object_store(
                     &state,
                     table_url.scheme(),
@@ -208,12 +211,15 @@ impl SchemaProvider for DynamicObjectStoreSchemaProvider {
         self.inner.table(name).await
     }
 
-    fn deregister_table(&self, name: &str) -> Result<Option<Arc<dyn TableProvider>>> {
-        self.inner.deregister_table(name)
+    async fn deregister_table(
+        &self,
+        name: &str,
+    ) -> Result<Option<Arc<dyn TableProvider>>> {
+        self.inner.deregister_table(name).await
     }
 
-    fn table_exist(&self, name: &str) -> bool {
-        self.inner.table_exist(name)
+    async fn table_exist(&self, name: &str) -> bool {
+        self.inner.table_exist(name).await
     }
 }
 
@@ -234,8 +240,9 @@ mod tests {
 
     use datafusion::catalog::SchemaProvider;
     use datafusion::prelude::SessionContext;
+    use futures::TryStreamExt;
 
-    fn setup_context() -> (SessionContext, Arc<dyn SchemaProvider>) {
+    async fn setup_context() -> (SessionContext, Arc<dyn SchemaProvider>) {
         let ctx = SessionContext::new();
         ctx.register_catalog_list(Arc::new(DynamicObjectStoreCatalog::new(
             ctx.state().catalog_list().clone(),
@@ -247,10 +254,30 @@ mod tests {
             ctx.state_weak_ref(),
         ) as &dyn CatalogProviderList;
         let catalog = provider
-            .catalog(provider.catalog_names().first().unwrap())
+            .catalog(
+                &provider
+                    .catalog_names()
+                    .await
+                    .try_next()
+                    .await
+                    .unwrap()
+                    .unwrap(),
+            )
+            .await
+            .unwrap()
             .unwrap();
         let schema = catalog
-            .schema(catalog.schema_names().first().unwrap())
+            .schema(
+                &catalog
+                    .schema_names()
+                    .await
+                    .try_next()
+                    .await
+                    .unwrap()
+                    .unwrap(),
+            )
+            .await
+            .unwrap()
             .unwrap();
         (ctx, schema)
     }
@@ -262,7 +289,7 @@ mod tests {
         let domain = "example.com";
         let location = format!("http://{domain}/file.parquet");
 
-        let (ctx, schema) = setup_context();
+        let (ctx, schema) = setup_context().await;
 
         // That's a non registered table so expecting None here
         let table = schema.table(&location).await?;
@@ -287,7 +314,7 @@ mod tests {
         let bucket = "examples3bucket";
         let location = format!("s3://{bucket}/file.parquet");
 
-        let (ctx, schema) = setup_context();
+        let (ctx, schema) = setup_context().await;
 
         let table = schema.table(&location).await?;
         assert!(table.is_none());
@@ -309,7 +336,7 @@ mod tests {
         let bucket = "examplegsbucket";
         let location = format!("gs://{bucket}/file.parquet");
 
-        let (ctx, schema) = setup_context();
+        let (ctx, schema) = setup_context().await;
 
         let table = schema.table(&location).await?;
         assert!(table.is_none());
@@ -329,7 +356,7 @@ mod tests {
     #[tokio::test]
     async fn query_invalid_location_test() {
         let location = "ts://file.parquet";
-        let (_ctx, schema) = setup_context();
+        let (_ctx, schema) = setup_context().await;
 
         assert!(schema.table(location).await.is_err());
     }

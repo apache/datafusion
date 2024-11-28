@@ -56,7 +56,7 @@ impl SubstraitPlanningState for SessionState {
         reference: &TableReference,
     ) -> Result<Option<Arc<dyn TableProvider>>, DataFusionError> {
         let table = reference.table().to_string();
-        let schema = self.schema_for_ref(reference.clone())?;
+        let schema = self.schema_for_ref(reference.clone()).await?;
         let table_provider = schema.table(&table).await?;
         Ok(table_provider)
     }

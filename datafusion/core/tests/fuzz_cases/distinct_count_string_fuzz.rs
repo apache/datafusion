@@ -59,7 +59,7 @@ async fn run_distinct_count_test(mut generator: StringBatchGenerator) {
     ];
 
     let provider = MemTable::try_new(schema, partitions).unwrap();
-    ctx.register_table("t", Arc::new(provider)).unwrap();
+    ctx.register_table("t", Arc::new(provider)).await.unwrap();
     // input has two columns, a and b.  The result is the number of distinct
     // values in each column.
     //

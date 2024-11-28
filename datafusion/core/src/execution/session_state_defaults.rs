@@ -35,6 +35,7 @@ use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_expr::planner::ExprPlanner;
 use datafusion_expr::{AggregateUDF, ScalarUDF, WindowUDF};
+use futures::FutureExt;
 use std::collections::HashMap;
 use std::sync::Arc;
 use url::Url;
@@ -72,6 +73,8 @@ impl SessionStateDefaults {
                 &config.options().catalog.default_schema,
                 Arc::new(MemorySchemaProvider::new()),
             )
+            .now_or_never()
+            .expect("memory catalog provider is synchronous")
             .expect("memory catalog provider can register schema");
 
         Self::register_default_schema(config, table_factories, runtime, &default_catalog);
@@ -202,6 +205,8 @@ impl SessionStateDefaults {
         );
         let _ = default_catalog
             .register_schema("default", Arc::new(schema))
+            .now_or_never()
+            .expect("memory catalog provider is synchronous")
             .expect("Failed to register default schema");
     }
 

@@ -1348,7 +1348,7 @@ mod tests {
     async fn read_empty_table() -> Result<()> {
         let ctx = SessionContext::new();
         let path = String::from("table/p1=v1/file.avro");
-        register_test_store(&ctx, &[(&path, 100)]);
+        register_test_store(&ctx, &[(&path, 100)]).await;
 
         let opt = ListingOptions::new(Arc::new(AvroFormat {}))
             .with_file_extension(AvroFormat.get_ext())
@@ -1592,7 +1592,8 @@ mod tests {
         file_ext: Option<&str>,
     ) -> Result<()> {
         let ctx = SessionContext::new();
-        register_test_store(&ctx, &files.iter().map(|f| (*f, 10)).collect::<Vec<_>>());
+        register_test_store(&ctx, &files.iter().map(|f| (*f, 10)).collect::<Vec<_>>())
+            .await;
 
         let format = AvroFormat {};
 
@@ -1626,7 +1627,8 @@ mod tests {
         file_ext: Option<&str>,
     ) -> Result<()> {
         let ctx = SessionContext::new();
-        register_test_store(&ctx, &files.iter().map(|f| (*f, 10)).collect::<Vec<_>>());
+        register_test_store(&ctx, &files.iter().map(|f| (*f, 10)).collect::<Vec<_>>())
+            .await;
 
         let format = AvroFormat {};
 
@@ -2028,7 +2030,9 @@ mod tests {
             schema.clone(),
             vec![vec![batch.clone(), batch.clone()]],
         )?);
-        session_ctx.register_table("source", source_table.clone())?;
+        session_ctx
+            .register_table("source", source_table.clone())
+            .await?;
         // Convert the source table into a provider so that it can be used in a query
         let source = provider_as_source(source_table);
         // Create a table scan logical plan to read from the source table

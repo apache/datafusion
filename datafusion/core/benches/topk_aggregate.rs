@@ -24,6 +24,7 @@ use datafusion::prelude::SessionContext;
 use datafusion::{datasource::MemTable, error::Result};
 use datafusion_execution::config::SessionConfig;
 use datafusion_execution::TaskContext;
+use futures::FutureExt;
 use std::sync::Arc;
 use tokio::runtime::Runtime;
 
@@ -42,7 +43,10 @@ async fn create_context(
     let opts = cfg.options_mut();
     opts.optimizer.enable_topk_aggregation = use_topk;
     let ctx = SessionContext::new_with_config(cfg);
-    let _ = ctx.register_table("traces", mem_table)?;
+    let _ = ctx
+        .register_table("traces", mem_table)
+        .now_or_never()
+        .expect("default context should use synchronous in-memory catalog")?;
     let sql = format!("select trace_id, max(timestamp_ms) from traces group by trace_id order by max(timestamp_ms) desc limit {limit};");
     let df = ctx.sql(sql.as_str()).await?;
     let physical_plan = df.create_physical_plan().await?;

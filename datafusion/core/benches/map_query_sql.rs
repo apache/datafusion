@@ -19,6 +19,7 @@ use std::sync::Arc;
 
 use arrow_array::{ArrayRef, Int32Array, RecordBatch};
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use futures::FutureExt;
 use parking_lot::Mutex;
 use rand::prelude::ThreadRng;
 use rand::Rng;
@@ -55,7 +56,9 @@ fn t_batch(num: i32) -> RecordBatch {
 
 fn create_context(num: i32) -> datafusion_common::Result<Arc<Mutex<SessionContext>>> {
     let ctx = SessionContext::new();
-    ctx.register_batch("t", t_batch(num))?;
+    ctx.register_batch("t", t_batch(num))
+        .now_or_never()
+        .expect("default context should use synchronous in-memory catalog")?;
     Ok(Arc::new(Mutex::new(ctx)))
 }
 

@@ -198,7 +198,7 @@ impl Accumulator for GeometricMean {
 }
 
 // create local session context with an in-memory table
-fn create_context() -> Result<SessionContext> {
+async fn create_context() -> Result<SessionContext> {
     use datafusion::datasource::MemTable;
     // define a schema.
     let schema = Arc::new(Schema::new(vec![
@@ -227,7 +227,7 @@ fn create_context() -> Result<SessionContext> {
 
     // declare a table in memory. In spark API, this corresponds to createDataFrame(...).
     let provider = MemTable::try_new(schema, vec![vec![batch1], vec![batch2]])?;
-    ctx.register_table("t", Arc::new(provider))?;
+    ctx.register_table("t", Arc::new(provider)).await?;
     Ok(ctx)
 }
 
@@ -401,7 +401,7 @@ impl GroupsAccumulator for GeometricMeanGroupsAccumulator {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let ctx = create_context()?;
+    let ctx = create_context().await?;
 
     // create the AggregateUDF
     let geometric_mean = AggregateUDF::from(GeoMeanUdaf::new());

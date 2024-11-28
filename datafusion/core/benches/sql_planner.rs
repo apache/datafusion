@@ -28,6 +28,7 @@ use criterion::Bencher;
 use datafusion::datasource::MemTable;
 use datafusion::execution::context::SessionContext;
 use datafusion_common::ScalarValue;
+use futures::FutureExt;
 use itertools::Itertools;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
@@ -78,15 +79,23 @@ fn create_table_provider(column_prefix: &str, num_columns: usize) -> Arc<MemTabl
 
 fn create_context() -> SessionContext {
     let ctx = SessionContext::new();
-    ctx.register_table("t1", create_table_provider("a", 200))
-        .unwrap();
-    ctx.register_table("t2", create_table_provider("b", 200))
-        .unwrap();
-    ctx.register_table("t700", create_table_provider("c", 700))
-        .unwrap();
-    ctx.register_table("t1000", create_table_provider("d", 1000))
-        .unwrap();
-    ctx
+    async move {
+        ctx.register_table("t1", create_table_provider("a", 200))
+            .await
+            .unwrap();
+        ctx.register_table("t2", create_table_provider("b", 200))
+            .await
+            .unwrap();
+        ctx.register_table("t700", create_table_provider("c", 700))
+            .await
+            .unwrap();
+        ctx.register_table("t1000", create_table_provider("d", 1000))
+            .await
+            .unwrap();
+        ctx
+    }
+    .now_or_never()
+    .expect("default context should use synchronous in-memory catalog")
 }
 
 /// Register the table definitions as a MemTable with the context and return the
@@ -97,6 +106,8 @@ fn register_defs(ctx: SessionContext, defs: Vec<TableDef>) -> SessionContext {
             name,
             Arc::new(MemTable::try_new(Arc::new(schema.clone()), vec![vec![]]).unwrap()),
         )
+        .now_or_never()
+        .expect("default context should use synchronous in-memory catalog")
         .unwrap();
     });
     ctx

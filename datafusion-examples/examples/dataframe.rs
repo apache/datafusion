@@ -109,7 +109,7 @@ async fn read_csv(ctx: &SessionContext) -> Result<()> {
 
     // You can also create DataFrames from the result of sql queries
     // and using the `enable_url_table` refer to local files directly
-    let dyn_ctx = ctx.clone().enable_url_table();
+    let dyn_ctx = ctx.clone().enable_url_table().await;
     let csv_df = dyn_ctx
         .sql(&format!("SELECT rating, unixtime FROM '{}'", file_path))
         .await?;
@@ -127,7 +127,7 @@ async fn read_memory(ctx: &SessionContext) -> Result<()> {
     let batch = RecordBatch::try_from_iter(vec![("a", a), ("b", b)])?;
 
     // declare a table in memory. In Apache Spark API, this corresponds to createDataFrame(...).
-    ctx.register_batch("t", batch)?;
+    ctx.register_batch("t", batch).await?;
     let df = ctx.table("t").await?;
 
     // construct an expression corresponding to "SELECT a, b FROM t WHERE b = 10" in SQL

@@ -88,7 +88,7 @@ async fn main() -> Result<()> {
         ("id", Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef),
         ("bank_account", Arc::new(Int32Array::from(vec![9000, 8000, 7000]))),
     ])?;
-    ctx.register_batch("users", data)?;
+    ctx.register_batch("users", data).await?;
     // Create a DataFrame using SQL
     let dataframe = ctx.sql("SELECT * FROM users;")
         .await?

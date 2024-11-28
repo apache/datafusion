@@ -32,7 +32,7 @@ mod tests {
         let proto_plan = read_json(
             "tests/testdata/test_plans/emit_kind/direct_on_project.substrait.json",
         );
-        let ctx = add_plan_schemas_to_ctx(SessionContext::new(), &proto_plan)?;
+        let ctx = add_plan_schemas_to_ctx(SessionContext::new(), &proto_plan).await?;
         let plan = from_substrait_plan(&ctx.state(), &proto_plan).await?;
 
         let plan_str = format!("{}", plan);
@@ -50,7 +50,7 @@ mod tests {
         let proto_plan = read_json(
             "tests/testdata/test_plans/emit_kind/emit_on_filter.substrait.json",
         );
-        let ctx = add_plan_schemas_to_ctx(SessionContext::new(), &proto_plan)?;
+        let ctx = add_plan_schemas_to_ctx(SessionContext::new(), &proto_plan).await?;
         let plan = from_substrait_plan(&ctx.state(), &proto_plan).await?;
 
         let plan_str = format!("{}", plan);
@@ -69,7 +69,8 @@ mod tests {
         let state = SessionStateBuilder::new()
             .with_config(SessionConfig::default())
             .with_default_features()
-            .build();
+            .build()
+            .await;
         let ctx = SessionContext::new_with_state(state);
         ctx.register_csv("data", "tests/testdata/data.csv", CsvReadOptions::default())
             .await?;

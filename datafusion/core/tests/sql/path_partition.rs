@@ -264,7 +264,8 @@ async fn csv_filter_with_file_col() -> Result<()> {
         ],
         &[("date", DataType::Utf8)],
         "mirror:///mytable/",
-    );
+    )
+    .await;
 
     let result = ctx
         .sql("SELECT c1, c2 FROM t WHERE date='2021-10-27' and c1!='2021-10-27' LIMIT 5")
@@ -302,7 +303,8 @@ async fn csv_filter_with_file_nonstring_col() -> Result<()> {
         ],
         &[("date", DataType::Date32)],
         "mirror:///mytable/",
-    );
+    )
+    .await;
 
     let result = ctx
         .sql("SELECT c1, c2, date FROM t WHERE date > '2021-10-27' LIMIT 5")
@@ -340,7 +342,8 @@ async fn csv_projection_on_partition() -> Result<()> {
         ],
         &[("date", DataType::Date32)],
         "mirror:///mytable/",
-    );
+    )
+    .await;
 
     let result = ctx
         .sql("SELECT c1, date FROM t WHERE date='2021-10-27' LIMIT 5")
@@ -379,7 +382,8 @@ async fn csv_grouping_by_partition() -> Result<()> {
         ],
         &[("date", DataType::Date32)],
         "mirror:///mytable/",
-    );
+    )
+    .await;
 
     let result = ctx
         .sql("SELECT date, count(*), count(distinct(c1)) FROM t WHERE date<='2021-10-27' GROUP BY date")
@@ -573,7 +577,7 @@ async fn parquet_overlapping_columns() -> Result<()> {
     Ok(())
 }
 
-fn register_partitioned_aggregate_csv(
+async fn register_partitioned_aggregate_csv(
     ctx: &SessionContext,
     store_paths: &[&str],
     partition_cols: &[(&str, DataType)],
@@ -603,6 +607,7 @@ fn register_partitioned_aggregate_csv(
     let table = ListingTable::try_new(config).unwrap();
 
     ctx.register_table("t", Arc::new(table))
+        .await
         .expect("registering listing table failed");
 }
 
@@ -622,6 +627,7 @@ async fn register_partitioned_alltypes_parquet(
     )
     .await;
     ctx.register_table("t", table)
+        .await
         .expect("registering listing table failed");
 }
 

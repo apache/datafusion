@@ -195,7 +195,7 @@ impl ScalarUDFImpl for PowUdf {
 /// and invoke it via the DataFrame API and SQL
 #[tokio::main]
 async fn main() -> Result<()> {
-    let ctx = create_context()?;
+    let ctx = create_context().await?;
 
     // create the UDF
     let pow = ScalarUDF::from(PowUdf::new());
@@ -234,7 +234,7 @@ async fn main() -> Result<()> {
 /// | 5.1 | 4.0 |
 /// +-----+-----+
 /// ```
-fn create_context() -> Result<SessionContext> {
+async fn create_context() -> Result<SessionContext> {
     // define data.
     let a: ArrayRef = Arc::new(Float32Array::from(vec![2.1, 3.1, 4.1, 5.1]));
     let b: ArrayRef = Arc::new(Float64Array::from(vec![1.0, 2.0, 3.0, 4.0]));
@@ -244,6 +244,6 @@ fn create_context() -> Result<SessionContext> {
     let ctx = SessionContext::new();
 
     // declare a table in memory. In Spark API, this corresponds to createDataFrame(...).
-    ctx.register_batch("t", batch)?;
+    ctx.register_batch("t", batch).await?;
     Ok(ctx)
 }

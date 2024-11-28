@@ -225,7 +225,8 @@ unsafe extern "C" fn scan_fn_wrapper(
         let session = SessionStateBuilder::new()
             .with_default_features()
             .with_config(config.0)
-            .build();
+            .build()
+            .await;
         let ctx = SessionContext::new_with_state(session);
 
         let filters = match filters_serialized.is_empty() {
@@ -467,7 +468,8 @@ mod tests {
 
         let foreign_table_provider: ForeignTableProvider = (&ffi_provider).into();
 
-        ctx.register_table("t", Arc::new(foreign_table_provider))?;
+        ctx.register_table("t", Arc::new(foreign_table_provider))
+            .await?;
 
         let df = ctx.table("t").await?;
 

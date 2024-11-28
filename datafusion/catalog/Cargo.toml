@@ -34,6 +34,7 @@ datafusion-common = { workspace = true }
 datafusion-execution = { workspace = true }
 datafusion-expr = { workspace = true }
 datafusion-physical-plan = { workspace = true }
+futures = { workspace = true }
 parking_lot = { workspace = true }
 
 [lints]

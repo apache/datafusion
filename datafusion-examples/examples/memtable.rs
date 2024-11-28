@@ -34,7 +34,7 @@ async fn main() -> Result<()> {
     let ctx = SessionContext::new();
 
     // Register the in-memory table containing the data
-    ctx.register_table("users", Arc::new(mem_table))?;
+    ctx.register_table("users", Arc::new(mem_table)).await?;
 
     let dataframe = ctx.sql("SELECT * FROM users;").await?;
 
