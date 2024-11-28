@@ -196,14 +196,12 @@ impl Column {
         schemas: &[&[&DFSchema]],
         using_columns: &[HashSet<Column>],
     ) -> Result<Self> {
-        if self.relation.is_some() {
-            return Ok(self);
-        }
-
         for schema_level in schemas {
             let qualified_fields = schema_level
                 .iter()
-                .flat_map(|s| s.qualified_fields_with_unqualified_name(&self.name))
+                .flat_map(|s| {
+                    s.qualified_field_with_name(self.relation.as_ref(), &self.name)
+                })
                 .collect::<Vec<_>>();
             match qualified_fields.len() {
                 0 => continue,
@@ -326,10 +324,13 @@ mod tests {
         let schema2 = create_qualified_schema("t2", vec!["c", "d"])?;
         let schema3 = create_qualified_schema("t3", vec!["a", "b", "c", "d", "e"])?;
 
-        // already normalized
+        // already normalized but not found in any schema
         let col = Column::new(Some("t1"), "a");
-        let col = col.normalize_with_schemas_and_ambiguity_check(&[], &[])?;
-        assert_eq!(col, Column::new(Some("t1"), "a"));
+        let err = col
+            .normalize_with_schemas_and_ambiguity_check(&[], &[])
+            .expect_err("should've failed to find field");
+        let expected = r#"Schema error: No field named t1.a."#;
+        assert_eq!(err.strip_backtrace(), expected);
 
         // should find in first level (schema1)
         let col = Column::from_name("a");
