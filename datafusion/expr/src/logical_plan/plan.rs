@@ -3496,7 +3496,9 @@ mod tests {
     use crate::logical_plan::table_scan;
     use crate::{col, exists, in_subquery, lit, placeholder, GroupingSet};
 
-    use datafusion_common::tree_node::{TransformedResult, TreeNodeVisitor};
+    use datafusion_common::tree_node::{
+        TransformedResult, TreeNodeRewriter, TreeNodeVisitor,
+    };
     use datafusion_common::{not_impl_err, Constraint, ScalarValue};
 
     use crate::test::function_stub::count;
@@ -4156,5 +4158,121 @@ digraph {
             )
             .unwrap();
         assert_eq!(limit, new_limit);
+    }
+
+    #[test]
+    fn test_with_subqueries_jump() {
+        // The plan contains a `Project` node above a `Filter` node so returning
+        // `TreeNodeRecursion::Jump` on `Project` should cause not visiting `Filter`.
+        let plan = test_plan();
+
+        let mut filter_found = false;
+        plan.apply_with_subqueries(|plan| {
+            match plan {
+                LogicalPlan::Projection(..) => return Ok(TreeNodeRecursion::Jump),
+                LogicalPlan::Filter(..) => filter_found = true,
+                _ => {}
+            }
+            Ok(TreeNodeRecursion::Continue)
+        })
+        .unwrap();
+        assert!(!filter_found);
+
+        struct ProjectJumpVisitor {
+            filter_found: bool,
+        }
+
+        impl ProjectJumpVisitor {
+            fn new() -> Self {
+                Self {
+                    filter_found: false,
+                }
+            }
+        }
+
+        impl<'n> TreeNodeVisitor<'n> for ProjectJumpVisitor {
+            type Node = LogicalPlan;
+
+            fn f_down(&mut self, node: &'n Self::Node) -> Result<TreeNodeRecursion> {
+                match node {
+                    LogicalPlan::Projection(..) => return Ok(TreeNodeRecursion::Jump),
+                    LogicalPlan::Filter(..) => self.filter_found = true,
+                    _ => {}
+                }
+                Ok(TreeNodeRecursion::Continue)
+            }
+        }
+
+        let mut visitor = ProjectJumpVisitor::new();
+        plan.visit_with_subqueries(&mut visitor).unwrap();
+        assert!(!visitor.filter_found);
+
+        let mut filter_found = false;
+        plan.clone()
+            .transform_down_with_subqueries(|plan| {
+                match plan {
+                    LogicalPlan::Projection(..) => {
+                        return Ok(Transformed::new(plan, false, TreeNodeRecursion::Jump))
+                    }
+                    LogicalPlan::Filter(..) => filter_found = true,
+                    _ => {}
+                }
+                Ok(Transformed::no(plan))
+            })
+            .unwrap();
+        assert!(!filter_found);
+
+        let mut filter_found = false;
+        plan.clone()
+            .transform_down_up_with_subqueries(
+                |plan| {
+                    match plan {
+                        LogicalPlan::Projection(..) => {
+                            return Ok(Transformed::new(
+                                plan,
+                                false,
+                                TreeNodeRecursion::Jump,
+                            ))
+                        }
+                        LogicalPlan::Filter(..) => filter_found = true,
+                        _ => {}
+                    }
+                    Ok(Transformed::no(plan))
+                },
+                |plan| Ok(Transformed::no(plan)),
+            )
+            .unwrap();
+        assert!(!filter_found);
+
+        struct ProjectJumpRewriter {
+            filter_found: bool,
+        }
+
+        impl ProjectJumpRewriter {
+            fn new() -> Self {
+                Self {
+                    filter_found: false,
+                }
+            }
+        }
+
+        impl TreeNodeRewriter for ProjectJumpRewriter {
+            type Node = LogicalPlan;
+
+            fn f_down(&mut self, node: Self::Node) -> Result<Transformed<Self::Node>> {
+                match node {
+                    LogicalPlan::Projection(..) => {
+                        return Ok(Transformed::new(node, false, TreeNodeRecursion::Jump))
+                    }
+                    LogicalPlan::Filter(..) => self.filter_found = true,
+                    _ => {}
+                }
+                Ok(Transformed::no(node))
+            }
+        }
+
+        let mut rewriter = ProjectJumpRewriter::new();
+        plan.rewrite_with_subqueries(&mut rewriter).unwrap();
+        assert!(!rewriter.filter_found);
     }
 }
