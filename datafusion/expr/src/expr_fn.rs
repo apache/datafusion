@@ -434,10 +434,22 @@ impl SimpleScalarUDF {
         volatility: Volatility,
         fun: ScalarFunctionImplementation,
     ) -> Self {
-        let name = name.into();
-        let signature = Signature::exact(input_types, volatility);
-        Self {
+        Self::new_with_signature(
             name,
+            Signature::exact(input_types, volatility),
+            return_type,
+            fun,
+        )
+    }
+
+    pub fn new_with_signature(
+        name: impl Into<String>,
+        signature: Signature,
+        return_type: DataType,
+        fun: ScalarFunctionImplementation,
+    ) -> Self {
+        Self {
+            name: name.into(),
             signature,
             return_type,
             fun,
