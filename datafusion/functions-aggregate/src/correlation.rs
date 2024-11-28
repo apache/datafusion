@@ -527,13 +527,12 @@ impl GroupsAccumulator for CorrelationGroupsAccumulator {
     }
 
     fn size(&self) -> usize {
-        size_of::<f64>()
-            * (self.count.capacity()
-                + self.sum_x.capacity()
-                + self.sum_y.capacity()
-                + self.sum_xy.capacity()
-                + self.sum_xx.capacity()
-                + self.sum_yy.capacity())
+        size_of_val(&self.count)
+            + size_of_val(&self.sum_x)
+            + size_of_val(&self.sum_y)
+            + size_of_val(&self.sum_xy)
+            + size_of_val(&self.sum_xx)
+            + size_of_val(&self.sum_yy)
     }
 }
 
