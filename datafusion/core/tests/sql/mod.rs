@@ -15,7 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::num::NonZero;
 use std::sync::Arc;
+use std::thread::available_parallelism;
 
 use arrow::{
     array::*, datatypes::*, record_batch::RecordBatch,
@@ -259,7 +261,12 @@ impl ExplainNormalizer {
 
         // convert things like partitioning=RoundRobinBatch(16)
         // to partitioning=RoundRobinBatch(NUM_CORES)
-        let needle = format!("RoundRobinBatch({})", num_cpus::get());
+        let needle = format!(
+            "RoundRobinBatch({})",
+            available_parallelism()
+                .unwrap_or(NonZero::new(1).unwrap())
+                .get()
+        );
         replacements.push((needle, "RoundRobinBatch(NUM_CORES)".to_string()));
 
         Self { replacements }

@@ -20,7 +20,9 @@
 use std::any::Any;
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::{self, Display};
+use std::num::NonZero;
 use std::str::FromStr;
+use std::thread::available_parallelism;
 
 use crate::error::_config_err;
 use crate::parsers::CompressionTypeVariant;
@@ -250,7 +252,7 @@ config_namespace! {
         /// concurrency.
         ///
         /// Defaults to the number of CPU cores on the system
-        pub target_partitions: usize, default = num_cpus::get()
+        pub target_partitions: usize, default = available_parallelism().unwrap_or(NonZero::new(1).unwrap()).get()
 
         /// The default time zone
         ///
@@ -266,7 +268,7 @@ config_namespace! {
         /// This is mostly use to plan `UNION` children in parallel.
         ///
         /// Defaults to the number of CPU cores on the system
-        pub planning_concurrency: usize, default = num_cpus::get()
+        pub planning_concurrency: usize, default = available_parallelism().unwrap_or(NonZero::new(1).unwrap()).get()
 
         /// When set to true, skips verifying that the schema produced by
         /// planning the input of `LogicalPlan::Aggregate` exactly matches the
