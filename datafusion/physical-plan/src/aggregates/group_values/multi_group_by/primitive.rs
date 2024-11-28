@@ -19,8 +19,8 @@ use crate::aggregates::group_values::multi_group_by::{nulls_equal_to, GroupColum
 use crate::aggregates::group_values::null_builder::MaybeNullBufferBuilder;
 use arrow::array::PrimitiveBuilder;
 use arrow::buffer::ScalarBuffer;
-use arrow::compute::{self, take};
 use arrow::compute::kernels::take;
+use arrow::compute::{self, take};
 use arrow_array::cast::AsArray;
 use arrow_array::{Array, ArrayRef, ArrowPrimitiveType, PrimitiveArray};
 use arrow_buffer::{BooleanBufferBuilder, MutableBuffer};
@@ -43,11 +43,18 @@ use std::{iter, mem};
 pub struct PrimitiveGroupValueBuilder<T: ArrowPrimitiveType, const NULLABLE: bool> {
     group_values: Vec<T::Native>,
     nulls: MaybeNullBufferBuilder,
+}
 
-    exist_values_buffer: MutableBuffer,
-    exist_nulls_buffer: MutableBuffer,
-    input_values_buffer: MutableBuffer,
-    input_nulls_buffer: MutableBuffer,
+enum RhsIterateStrategy {
+    AllRows,
+    MostRows,
+    SomeRows,
+}
+
+enum Nullability {
+    BothNonNullable,
+    RhsNonNullable,
+    BothNullable,
 }
 
 impl<T, const NULLABLE: bool> PrimitiveGroupValueBuilder<T, NULLABLE>
@@ -59,11 +66,6 @@ where
         Self {
             group_values: vec![],
             nulls: MaybeNullBufferBuilder::new(),
-            exist_values_buffer: MutableBuffer::new(0),
-            exist_nulls_buffer: MutableBuffer::new(0),
-            input_values_buffer: MutableBuffer::new(0),
-            input_nulls_buffer: MutableBuffer::new(0),
-            
         }
     }
 }
@@ -100,11 +102,6 @@ impl<T: ArrowPrimitiveType, const NULLABLE: bool> GroupColumn
         }
     }
 
-    // fn take_from_exists(&mut self, lhs_rows: &[usize]) -> PrimitiveArray<T> {
-    //     // Take value firstly
-    //     take(values, indices, options)
-    // }
-
     fn vectorized_equal_to(
         &mut self,
         lhs_rows: &[usize],
@@ -114,30 +111,117 @@ impl<T: ArrowPrimitiveType, const NULLABLE: bool> GroupColumn
     ) {
         let array = array.as_primitive::<T>();
 
-        let iter = izip!(
-            lhs_rows.iter(),
-            rhs_rows.iter(),
-            equal_to_results.iter_mut(),
-        );
+        // Perf: three iterating strategies for `array`
+        //   1. `all input rows needed` + `both lhs and rhs non-nullable`
+        //   2. `all input rows needed` + `only rhs non-nullable`
+        //   3. `all input rows needed` + `both lhs and rhs nullable`
+        //   4. others
 
-        for (&lhs_row, &rhs_row, equal_to_result) in iter {
-            // Has found not equal to in previous column, don't need to check
-            if !*equal_to_result {
-                continue;
-            }
+        match (
+            array.len() == rhs_rows.len(),
+            NULLABLE,
+            array.null_count() == 0,
+        ) {
+            (true, false, _) => {
+                let iter = izip!(
+                    lhs_rows.iter(),
+                    array.values().iter(),
+                    equal_to_results.iter_mut(),
+                );
 
-            // Perf: skip null check (by short circuit) if input is not nullable
-            if NULLABLE {
-                let exist_null = self.nulls.is_null(lhs_row);
-                let input_null = array.is_null(rhs_row);
-                if let Some(result) = nulls_equal_to(exist_null, input_null) {
-                    *equal_to_result = result;
-                    continue;
+                for (&lhr_row, &rhs_value, equal_to_res) in iter {
+                    *equal_to_res =
+                        *equal_to_res && (self.group_values[lhr_row] == rhs_value);
                 }
-                // Otherwise, we need to check their values
             }
+            (true, true, true) => {
+                let iter = izip!(
+                    lhs_rows.iter(),
+                    array.values().iter(),
+                    equal_to_results.iter_mut(),
+                );
 
-            *equal_to_result = self.group_values[lhs_row] == array.value(rhs_row);
+                for (&lhr_row, &rhs_value, equal_to_res) in iter {
+                    *equal_to_res = *equal_to_res
+                        && !self.nulls.is_null(lhr_row)
+                        && (self.group_values[lhr_row] == rhs_value);
+                }
+            }
+            (true, true, false) => {
+                let iter = izip!(
+                    lhs_rows.iter(),
+                    array.values().iter().enumerate(),
+                    equal_to_results.iter_mut(),
+                );
+
+                for (&lhs_row, (rhs_row, &rhs_value), equal_to_res) in iter {
+                    // Has found not equal to in previous column, don't need to check
+                    if !*equal_to_res {
+                        continue;
+                    }
+
+                    // Perf: skip null check (by short circuit) if input is not nullable
+                    let exist_null = self.nulls.is_null(lhs_row);
+                    let input_null = array.is_null(rhs_row);
+                    if let Some(result) = nulls_equal_to(exist_null, input_null) {
+                        *equal_to_res = result;
+                        continue;
+                    }
+                    // Otherwise, we need to check their values
+
+                    *equal_to_res = self.group_values[lhs_row] == rhs_value;
+                }
+            }
+            (false, false, _) => {
+                let iter = izip!(
+                    lhs_rows.iter(),
+                    rhs_rows.iter(),
+                    equal_to_results.iter_mut(),
+                );
+
+                for (&lhr_row, &rhs_row, equal_to_res) in iter {
+                    *equal_to_res = *equal_to_res
+                        && (self.group_values[lhr_row] == array.value(rhs_row));
+                }
+            }
+            (false, true, true) => {
+                let iter = izip!(
+                    lhs_rows.iter(),
+                    rhs_rows.iter(),
+                    equal_to_results.iter_mut(),
+                );
+
+                for (&lhr_row, &rhs_row, equal_to_res) in iter {
+                    *equal_to_res = *equal_to_res
+                        && !self.nulls.is_null(lhr_row)
+                        && (self.group_values[lhr_row] == array.value(rhs_row));
+                }
+            }
+            (false, true, false) => {
+                let iter = izip!(
+                    lhs_rows.iter(),
+                    rhs_rows.iter(),
+                    equal_to_results.iter_mut(),
+                );
+
+                for (&lhs_row, &rhs_row, equal_to_res) in iter {
+                    // Has found not equal to in previous column, don't need to check
+                    if !*equal_to_res {
+                        continue;
+                    }
+
+                    // Perf: skip null check (by short circuit) if input is not nullable
+                    let exist_null = self.nulls.is_null(lhs_row);
+                    let input_null = array.is_null(rhs_row);
+                    if let Some(result) = nulls_equal_to(exist_null, input_null) {
+                        *equal_to_res = result;
+                        continue;
+                    }
+                    // Otherwise, we need to check their values
+
+                    *equal_to_res = self.group_values[lhs_row] == array.value(rhs_row);
+                }
+            }
         }
     }
 
