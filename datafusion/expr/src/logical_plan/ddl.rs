@@ -291,7 +291,7 @@ impl PartialOrd for CreateExternalTable {
 }
 
 impl CreateExternalTable {
-    pub fn new(fields: CreateExternalTableFields) -> Result<Self> {
+    pub fn try_new(fields: CreateExternalTableFields) -> Result<Self> {
         let CreateExternalTableFields {
             name,
             schema,
@@ -365,7 +365,7 @@ impl CreateExternalTable {
 
 /// A struct with same fields as [`CreateExternalTable`] struct so that the DDL can be conveniently
 /// destructed with validation that each field is handled, while still requiring that all
-/// construction goes through the [`CreateExternalTable::new`] constructor or the builder.
+/// construction goes through the [`CreateExternalTable::try_new`] constructor or the builder.
 pub struct CreateExternalTableFields {
     /// The table name
     pub name: TableReference,
@@ -497,7 +497,7 @@ impl CreateExternalTableBuilder {
     }
 
     pub fn build(self) -> Result<CreateExternalTable> {
-        CreateExternalTable::new(CreateExternalTableFields {
+        CreateExternalTable::try_new(CreateExternalTableFields {
             name: self.name.expect("name is required"),
             schema: self.schema.expect("schema is required"),
             location: self.location.expect("location is required"),
@@ -536,7 +536,7 @@ pub struct CreateMemoryTable {
 }
 
 impl CreateMemoryTable {
-    pub fn new(fields: CreateMemoryTableFields) -> Result<Self> {
+    pub fn try_new(fields: CreateMemoryTableFields) -> Result<Self> {
         let CreateMemoryTableFields {
             name,
             constraints,
@@ -586,7 +586,7 @@ impl CreateMemoryTable {
 
 /// A struct with same fields as [`CreateMemoryTable`] struct so that the DDL can be conveniently
 /// destructed with validation that each field is handled, while still requiring that all
-/// construction goes through the [`CreateMemoryTable::new`] constructor or the builder.
+/// construction goes through the [`CreateMemoryTable::try_new`] constructor or the builder.
 pub struct CreateMemoryTableFields {
     /// The table name
     pub name: TableReference,
@@ -664,7 +664,7 @@ impl CreateMemoryTableBuilder {
     }
 
     pub fn build(self) -> Result<CreateMemoryTable> {
-        CreateMemoryTable::new(CreateMemoryTableFields {
+        CreateMemoryTable::try_new(CreateMemoryTableFields {
             name: self.name.expect("name is required"),
             constraints: self.constraints,
             input: self.input.expect("input is required"),
@@ -693,7 +693,7 @@ pub struct CreateView {
 }
 
 impl CreateView {
-    pub fn new(fields: CreateViewFields) -> Result<Self> {
+    pub fn try_new(fields: CreateViewFields) -> Result<Self> {
         let CreateViewFields {
             name,
             input,
@@ -735,7 +735,7 @@ impl CreateView {
 
 /// A struct with same fields as [`CreateView`] struct so that the DDL can be conveniently
 /// destructed with validation that each field is handled, while still requiring that all
-/// construction goes through the [`CreateView::new`] constructor or the builder.
+/// construction goes through the [`CreateView::try_new`] constructor or the builder.
 pub struct CreateViewFields {
     /// The table name
     pub name: TableReference,
@@ -795,7 +795,7 @@ impl CreateViewBuilder {
     }
 
     pub fn build(self) -> Result<CreateView> {
-        CreateView::new(CreateViewFields {
+        CreateView::try_new(CreateViewFields {
             name: self.name.expect("name is required"),
             input: self.input.expect("input is required"),
             or_replace: self.or_replace,

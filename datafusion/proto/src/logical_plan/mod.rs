@@ -568,7 +568,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                 }
 
                 Ok(LogicalPlan::Ddl(DdlStatement::CreateExternalTable(
-                    CreateExternalTable::new(CreateExternalTableFields {
+                    CreateExternalTable::try_new(CreateExternalTableFields {
                         schema: pb_schema.try_into()?,
                         name: from_table_reference(
                             create_extern_table.name.as_ref(),
@@ -602,8 +602,8 @@ impl AsLogicalPlan for LogicalPlanNode {
                     None
                 };
 
-                Ok(LogicalPlan::Ddl(DdlStatement::CreateView(CreateView::new(
-                    CreateViewFields {
+                Ok(LogicalPlan::Ddl(DdlStatement::CreateView(
+                    CreateView::try_new(CreateViewFields {
                         name: from_table_reference(
                             create_view.name.as_ref(),
                             "CreateView",
@@ -612,8 +612,8 @@ impl AsLogicalPlan for LogicalPlanNode {
                         input: Arc::new(plan),
                         or_replace: create_view.or_replace,
                         definition,
-                    },
-                )?)))
+                    })?,
+                )))
             }
             LogicalPlanType::CreateCatalogSchema(create_catalog_schema) => {
                 let pb_schema = (create_catalog_schema.schema.clone()).ok_or_else(|| {
