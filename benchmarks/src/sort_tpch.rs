@@ -22,10 +22,8 @@
 //! runs end-to-end sort queries and test the performance on multiple CPU cores.
 
 use futures::StreamExt;
-use std::num::NonZero;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::thread::available_parallelism;
 use structopt::StructOpt;
 
 use datafusion::datasource::file_format::parquet::ParquetFormat;
@@ -39,6 +37,7 @@ use datafusion::physical_plan::display::DisplayableExecutionPlan;
 use datafusion::physical_plan::{displayable, execute_stream};
 use datafusion::prelude::*;
 use datafusion_common::instant::Instant;
+use datafusion_common::utils::get_available_parallelism;
 use datafusion_common::DEFAULT_PARQUET_EXTENSION;
 
 use crate::util::{BenchmarkRun, CommonOpt};
@@ -317,10 +316,8 @@ impl RunOpt {
     }
 
     fn partitions(&self) -> usize {
-        self.common.partitions.unwrap_or(
-            available_parallelism()
-                .unwrap_or(NonZero::new(1).unwrap())
-                .get(),
-        )
+        self.common
+            .partitions
+            .unwrap_or(get_available_parallelism())
     }
 }

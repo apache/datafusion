@@ -15,15 +15,15 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{cmp, num::NonZero, sync::Arc, thread::available_parallelism};
+use std::{cmp, sync::Arc};
 
 use datafusion::{
     datasource::MemTable,
     prelude::{SessionConfig, SessionContext},
 };
 use datafusion_catalog::TableProvider;
-use datafusion_common::error::Result;
 use datafusion_common::ScalarValue;
+use datafusion_common::{error::Result, utils::get_available_parallelism};
 use datafusion_expr::col;
 use rand::{thread_rng, Rng};
 
@@ -73,9 +73,7 @@ impl SessionContextGenerator {
         ];
 
         let max_batch_size = cmp::max(1, dataset_ref.total_rows_num);
-        let max_target_partitions = available_parallelism()
-            .unwrap_or(NonZero::new(1).unwrap())
-            .get();
+        let max_target_partitions = get_available_parallelism();
 
         Self {
             dataset: dataset_ref,

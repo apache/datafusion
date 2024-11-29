@@ -18,11 +18,9 @@
 //! external_aggr binary entrypoint
 
 use std::collections::HashMap;
-use std::num::NonZero;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::OnceLock;
-use std::thread::available_parallelism;
 use structopt::StructOpt;
 
 use arrow::record_batch::RecordBatch;
@@ -41,6 +39,7 @@ use datafusion::physical_plan::{collect, displayable};
 use datafusion::prelude::*;
 use datafusion_benchmarks::util::{BenchmarkRun, CommonOpt};
 use datafusion_common::instant::Instant;
+use datafusion_common::utils::get_available_parallelism;
 use datafusion_common::{exec_datafusion_err, exec_err, DEFAULT_PARQUET_EXTENSION};
 
 #[derive(Debug, StructOpt)]
@@ -327,11 +326,9 @@ impl ExternalAggrConfig {
     }
 
     fn partitions(&self) -> usize {
-        self.common.partitions.unwrap_or(
-            available_parallelism()
-                .unwrap_or(NonZero::new(1).unwrap())
-                .get(),
-        )
+        self.common
+            .partitions
+            .unwrap_or(get_available_parallelism())
     }
 
     /// Parse memory limit from string to number of bytes
