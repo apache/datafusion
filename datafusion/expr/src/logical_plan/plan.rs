@@ -3494,7 +3494,9 @@ mod tests {
     use super::*;
     use crate::builder::LogicalTableSource;
     use crate::logical_plan::table_scan;
-    use crate::{col, exists, in_subquery, lit, placeholder, GroupingSet};
+    use crate::{
+        col, exists, in_subquery, lit, placeholder, scalar_subquery, GroupingSet,
+    };
 
     use datafusion_common::tree_node::{
         TransformedResult, TreeNodeRewriter, TreeNodeVisitor,
@@ -4162,9 +4164,31 @@ digraph {
 
     #[test]
     fn test_with_subqueries_jump() {
-        // The plan contains a `Project` node above a `Filter` node so returning
-        // `TreeNodeRecursion::Jump` on `Project` should cause not visiting `Filter`.
-        let plan = test_plan();
+        // The test plan contains a `Project` node above a `Filter` node, and the
+        // `Project` node contains a subquery plan with a `Filter` root node, so returning
+        // `TreeNodeRecursion::Jump` on `Project` should cause not visiting any of the
+        // `Filter`s.
+        let subquery_schema =
+            Schema::new(vec![Field::new("sub_id", DataType::Int32, false)]);
+
+        let subquery_plan =
+            table_scan(TableReference::none(), &subquery_schema, Some(vec![0]))
+                .unwrap()
+                .filter(col("sub_id").eq(lit(0)))
+                .unwrap()
+                .build()
+                .unwrap();
+
+        let schema = Schema::new(vec![Field::new("id", DataType::Int32, false)]);
+
+        let plan = table_scan(TableReference::none(), &schema, Some(vec![0]))
+            .unwrap()
+            .filter(col("id").eq(lit(0)))
+            .unwrap()
+            .project(vec![col("id"), scalar_subquery(Arc::new(subquery_plan))])
+            .unwrap()
+            .build()
+            .unwrap();
 
         let mut filter_found = false;
         plan.apply_with_subqueries(|plan| {
