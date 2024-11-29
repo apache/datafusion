@@ -1195,4 +1195,25 @@ mod tests {
     test_stack_overflow!(2048);
     test_stack_overflow!(4096);
     test_stack_overflow!(8192);
+    #[test]
+    fn test_sql_to_expr_with_alias() {
+        let schema = DFSchema::empty();
+        let mut planner_context = PlannerContext::default();
+
+        let expr_str = "int_col as int_col_alias";
+
+        let dialect = GenericDialect {};
+        let mut parser = Parser::new(&dialect).try_with_sql(expr_str).unwrap();
+        // from sqlparser
+        let sql_expr = parser.parse_expr_with_alias().unwrap();
+
+        let context_provider = TestContextProvider::new();
+        let sql_to_rel = SqlToRel::new(&context_provider);
+
+        let expr = sql_to_rel
+            .sql_expr_to_logical_expr_with_alias(sql_expr, &schema, &mut planner_context)
+            .unwrap();
+
+        assert!(matches!(expr, Expr::Alias(_)));
+    }
 }
