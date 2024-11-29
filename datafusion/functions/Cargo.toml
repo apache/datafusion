@@ -86,6 +86,7 @@ regex = { workspace = true, optional = true }
 sha2 = { version = "^0.10.1", optional = true }
 unicode-segmentation = { version = "^1.7.1", optional = true }
 uuid = { version = "1.7", features = ["v4"], optional = true }
+libm = "0.2.11"
 
 [dev-dependencies]
 arrow = { workspace = true, features = ["test_utils"] }

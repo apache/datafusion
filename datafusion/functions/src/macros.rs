@@ -157,6 +157,9 @@ macro_rules! make_math_unary_udf {
                 ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
             };
 
+            #[allow(unused_imports)]
+            use $crate::macros::StdFloat as _;
+
             #[derive(Debug)]
             pub struct $UDF {
                 signature: Signature,
@@ -218,12 +221,16 @@ macro_rules! make_math_unary_udf {
                         DataType::Float64 => Arc::new(
                             args[0]
                                 .as_primitive::<Float64Type>()
-                                .unary::<_, Float64Type>(|x: f64| f64::$UNARY_FUNC(x)),
+                                .unary::<_, Float64Type>(|x: f64| {
+                                    libm::Libm::<f64>::$UNARY_FUNC(x)
+                                }),
                         ) as ArrayRef,
                         DataType::Float32 => Arc::new(
                             args[0]
                                 .as_primitive::<Float32Type>()
-                                .unary::<_, Float32Type>(|x: f32| f32::$UNARY_FUNC(x)),
+                                .unary::<_, Float32Type>(|x: f32| {
+                                    libm::Libm::<f32>::$UNARY_FUNC(x)
+                                }),
                         ) as ArrayRef,
                         other => {
                             return exec_err!(
@@ -333,7 +340,7 @@ macro_rules! make_math_binary_udf {
                             let result = arrow::compute::binary::<_, _, _, Float64Type>(
                                 y,
                                 x,
-                                |y, x| f64::$BINARY_FUNC(y, x),
+                                |y, x| libm::Libm::<f64>::$BINARY_FUNC(y, x),
                             )?;
                             Arc::new(result) as _
                         }
@@ -343,7 +350,7 @@ macro_rules! make_math_binary_udf {
                             let result = arrow::compute::binary::<_, _, _, Float32Type>(
                                 y,
                                 x,
-                                |y, x| f32::$BINARY_FUNC(y, x),
+                                |y, x| libm::Libm::<f32>::$BINARY_FUNC(y, x),
                             )?;
                             Arc::new(result) as _
                         }
@@ -364,4 +371,31 @@ macro_rules! make_math_binary_udf {
             }
         }
     };
+}
+
+/// Adds methods that exist in std but are missing from libm,
+/// because they are not platform intrinsics but just conveniences.
+pub trait StdFloat<T> {
+    fn to_radians(x: T) -> T;
+    fn to_degrees(x: T) -> T;
+}
+
+impl StdFloat<f64> for libm::Libm<f64> {
+    fn to_radians(x: f64) -> f64 {
+        x.to_radians()
+    }
+
+    fn to_degrees(x: f64) -> f64 {
+        x.to_degrees()
+    }
+}
+
+impl StdFloat<f32> for libm::Libm<f32> {
+    fn to_radians(x: f32) -> f32 {
+        x.to_radians()
+    }
+
+    fn to_degrees(x: f32) -> f32 {
+        x.to_degrees()
+    }
 }

@@ -177,7 +177,7 @@ make_math_unary_udf!(
     LnFunc,
     LN,
     ln,
-    ln,
+    log,
     super::ln_order,
     super::bounds::unbounded_bounds,
     super::get_ln_doc

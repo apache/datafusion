@@ -93,7 +93,7 @@ select abs(a), abs(b), abs(c) from signed_integers;
 query RRR rowsort
 select acos(0), acos(0.5), acos(1);
 ----
-1.5707963267948966 1.0471975511965976 0
+1.5707963267948966 1.0471975511965979 0
 
 # acos scalar nulls
 query R rowsort
@@ -140,7 +140,7 @@ NaN 9.90349 NaN
 query RRR rowsort
 select asin(0), asin(0.5), asin(1);
 ----
-0 0.5235987755982988 1.5707963267948966
+0 0.5235987755982989 1.5707963267948966
 
 # asin scalar nulls
 query R rowsort
@@ -362,7 +362,7 @@ select round(cos(a), 5), round(cos(b), 5), round(cos(c), 5) from signed_integers
 query RRR rowsort
 select cosh(1), cosh(2), cosh(3);
 ----
-1.5430806348152437 3.7621956910836314 10.067661995777765
+1.543080634815244 3.7621956910836314 10.067661995777765
 
 # cosh scalar nulls
 query R rowsort
@@ -385,7 +385,7 @@ select round(cosh(a), 5), round(cosh(b), 5), round(cosh(c), 5) from small_floats
 query RRR rowsort
 select exp(0), exp(1), exp(2);
 ----
-1 2.718281828459045 7.38905609893065
+1 2.7182818284590455 7.38905609893065
 
 # exp scalar nulls
 query R rowsort
@@ -454,7 +454,7 @@ select floor(a), floor(b), floor(c) from signed_integers;
 query RRR rowsort
 select ln(1), ln(exp(1)), ln(3);
 ----
-0 1 1.0986122886681098
+0 1 1.0986122886681096
 
 # ln scalar nulls
 query R rowsort
@@ -872,7 +872,7 @@ select round(sin(a), 5), round(sin(b), 5), round(sin(c), 5) from small_floats;
 query RRR rowsort
 select sinh(1), sinh(2), sinh(3);
 ----
-1.1752011936438014 3.6268604078470186 10.017874927409903
+1.1752011936438014 3.626860407847019 10.017874927409903
 
 # sinh scalar nulls
 query R rowsort
@@ -937,7 +937,7 @@ NaN
 query RRR rowsort
 select tan(0), tan(pi() / 6), tan(pi() / 4);
 ----
-0 0.5773502691896256 0.9999999999999999
+0 0.5773502691896257 0.9999999999999999
 
 # tan scalar nulls
 query R rowsort
