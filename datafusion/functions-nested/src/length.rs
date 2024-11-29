@@ -43,10 +43,17 @@ make_udf_expr_and_func!(
 );
 
 #[derive(Debug)]
-pub(super) struct ArrayLength {
+pub struct ArrayLength {
     signature: Signature,
     aliases: Vec<String>,
 }
+
+impl Default for ArrayLength {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ArrayLength {
     pub fn new() -> Self {
         Self {

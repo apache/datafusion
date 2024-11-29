@@ -42,10 +42,17 @@ make_udf_expr_and_func!(
 );
 
 #[derive(Debug)]
-pub(super) struct Flatten {
+pub struct Flatten {
     signature: Signature,
     aliases: Vec<String>,
 }
+
+impl Default for Flatten {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Flatten {
     pub fn new() -> Self {
         Self {
