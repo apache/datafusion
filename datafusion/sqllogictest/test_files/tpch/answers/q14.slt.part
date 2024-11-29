@@ -1,5 +1,4 @@
 
-
 # Licensed to the Apache Software Foundation (ASF) under one
 # or more contributor license agreements.  See the NOTICE file
 # distributed with this work for additional information
@@ -17,15 +16,19 @@
 # specific language governing permissions and limitations
 # under the License.
 
-include ./create_tables.slt.part
-include ./plans/q*.slt.part
-include ./answers/q*.slt.part
-
-# test answers with sort merge join
-statement ok
-set datafusion.optimizer.prefer_hash_join = false;
-
-include ./answers/q*.slt.part
-
-include ./drop_tables.slt.part
-
+query R
+select
+            100.00 * sum(case
+                             when p_type like 'PROMO%'
+                                 then l_extendedprice * (1 - l_discount)
+                             else 0
+            end) / sum(l_extendedprice * (1 - l_discount)) as promo_revenue
+from
+    lineitem,
+    part
+where
+        l_partkey = p_partkey
+  and l_shipdate >= date '1995-09-01'
+  and l_shipdate < date '1995-10-01';
+----
+16.283855689006

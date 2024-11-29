@@ -1,5 +1,4 @@
 
-
 # Licensed to the Apache Software Foundation (ASF) under one
 # or more contributor license agreements.  See the NOTICE file
 # distributed with this work for additional information
@@ -17,15 +16,36 @@
 # specific language governing permissions and limitations
 # under the License.
 
-include ./create_tables.slt.part
-include ./plans/q*.slt.part
-include ./answers/q*.slt.part
-
-# test answers with sort merge join
-statement ok
-set datafusion.optimizer.prefer_hash_join = false;
-
-include ./answers/q*.slt.part
-
-include ./drop_tables.slt.part
-
+query II
+select
+    c_count,
+    count(*) as custdist
+from
+    (
+        select
+            c_custkey,
+            count(o_orderkey)
+        from
+            customer left outer join orders on
+                        c_custkey = o_custkey
+                    and o_comment not like '%special%requests%'
+        group by
+            c_custkey
+    ) as c_orders (c_custkey, c_count)
+group by
+    c_count
+order by
+    custdist desc,
+    c_count desc
+limit 10;
+----
+0 5000
+10 665
+9 657
+11 621
+12 567
+8 564
+13 492
+18 482
+7 480
+20 456

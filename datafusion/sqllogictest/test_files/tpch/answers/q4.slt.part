@@ -1,5 +1,4 @@
 
-
 # Licensed to the Apache Software Foundation (ASF) under one
 # or more contributor license agreements.  See the NOTICE file
 # distributed with this work for additional information
@@ -17,15 +16,31 @@
 # specific language governing permissions and limitations
 # under the License.
 
-include ./create_tables.slt.part
-include ./plans/q*.slt.part
-include ./answers/q*.slt.part
-
-# test answers with sort merge join
-statement ok
-set datafusion.optimizer.prefer_hash_join = false;
-
-include ./answers/q*.slt.part
-
-include ./drop_tables.slt.part
-
+query TI
+select
+    o_orderpriority,
+    count(*) as order_count
+from
+    orders
+where
+        o_orderdate >= '1993-07-01'
+  and o_orderdate < date '1993-07-01' + interval '3' month
+  and exists (
+        select
+            *
+        from
+            lineitem
+        where
+                l_orderkey = o_orderkey
+          and l_commitdate < l_receiptdate
+    )
+group by
+    o_orderpriority
+order by
+    o_orderpriority;
+----
+1-URGENT 999
+2-HIGH 997
+3-MEDIUM 1031
+4-NOT SPECIFIED 989
+5-LOW 1077
