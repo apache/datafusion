@@ -101,7 +101,6 @@ use datafusion_common::Result;
 /// [`UnityCatalogProvider`]: https://github.com/delta-io/delta-rs/blob/951436ecec476ce65b5ed3b58b50fb0846ca7b91/crates/deltalake-core/src/data_catalog/unity/datafusion.rs#L111-L123
 ///
 /// [`TableProvider`]: crate::TableProvider
-
 pub trait CatalogProvider: Debug + Sync + Send {
     /// Returns the catalog provider as [`Any`]
     /// so that it can be downcast to a specific implementation.

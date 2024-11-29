@@ -374,7 +374,7 @@ impl<'a> RowGroupPruningStatistics<'a> {
     }
 }
 
-impl<'a> PruningStatistics for RowGroupPruningStatistics<'a> {
+impl PruningStatistics for RowGroupPruningStatistics<'_> {
     fn min_values(&self, column: &Column) -> Option<ArrayRef> {
         self.statistics_converter(column)
             .and_then(|c| Ok(c.row_group_mins(self.metadata_iter())?))
