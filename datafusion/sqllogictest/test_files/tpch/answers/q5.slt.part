@@ -1,5 +1,4 @@
 
-
 # Licensed to the Apache Software Foundation (ASF) under one
 # or more contributor license agreements.  See the NOTICE file
 # distributed with this work for additional information
@@ -17,15 +16,34 @@
 # specific language governing permissions and limitations
 # under the License.
 
-include ./create_tables.slt.part
-include ./plans/q*.slt.part
-include ./answers/q*.slt.part
-
-# test answers with sort merge join
-statement ok
-set datafusion.optimizer.prefer_hash_join = false;
-
-include ./answers/q*.slt.part
-
-include ./drop_tables.slt.part
-
+query TR
+select
+    n_name,
+    sum(l_extendedprice * (1 - l_discount)) as revenue
+from
+    customer,
+    orders,
+    lineitem,
+    supplier,
+    nation,
+    region
+where
+        c_custkey = o_custkey
+  and l_orderkey = o_orderkey
+  and l_suppkey = s_suppkey
+  and c_nationkey = s_nationkey
+  and s_nationkey = n_nationkey
+  and n_regionkey = r_regionkey
+  and r_name = 'ASIA'
+  and o_orderdate >= date '1994-01-01'
+  and o_orderdate < date '1995-01-01'
+group by
+    n_name
+order by
+    revenue desc;
+----
+CHINA 7822103
+INDIA 6376121.5085
+JAPAN 6000077.2184
+INDONESIA 5580475.4027
+VIETNAM 4497840.5466

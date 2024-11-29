@@ -1,5 +1,4 @@
 
-
 # Licensed to the Apache Software Foundation (ASF) under one
 # or more contributor license agreements.  See the NOTICE file
 # distributed with this work for additional information
@@ -17,15 +16,43 @@
 # specific language governing permissions and limitations
 # under the License.
 
-include ./create_tables.slt.part
-include ./plans/q*.slt.part
-include ./answers/q*.slt.part
-
-# test answers with sort merge join
-statement ok
-set datafusion.optimizer.prefer_hash_join = false;
-
-include ./answers/q*.slt.part
-
-include ./drop_tables.slt.part
-
+query IR
+select
+    ps_partkey,
+    sum(ps_supplycost * ps_availqty) as value
+from
+    partsupp,
+    supplier,
+    nation
+where
+    ps_suppkey = s_suppkey
+  and s_nationkey = n_nationkey
+  and n_name = 'GERMANY'
+group by
+    ps_partkey having
+    sum(ps_supplycost * ps_availqty) > (
+    select
+    sum(ps_supplycost * ps_availqty) * 0.0001
+    from
+    partsupp,
+    supplier,
+    nation
+    where
+    ps_suppkey = s_suppkey
+                  and s_nationkey = n_nationkey
+                  and n_name = 'GERMANY'
+    )
+order by
+    value desc
+limit 10;
+----
+12098 16227681.21
+5134 15709338.52
+13334 15023662.41
+17052 14351644.2
+3452 14070870.14
+12552 13332469.18
+1084 13170428.29
+5797 13038622.72
+12633 12892561.61
+403 12856217.34
