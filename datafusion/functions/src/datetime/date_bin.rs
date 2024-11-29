@@ -133,7 +133,11 @@ impl ScalarUDFImpl for DateBinFunc {
         }
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         if args.len() == 2 {
             // Default to unix EPOCH
             let origin = ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(
@@ -173,14 +177,14 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_date_bin_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_DATETIME)
-            .with_description(r#"
+        Documentation::builder(
+            DOC_SECTION_DATETIME,
+            r#"
 Calculates time intervals and returns the start of the interval nearest to the specified timestamp. Use `date_bin` to downsample time series data by grouping rows into time-based "bins" or "windows" and applying an aggregate or selector function to each window.
 
 For example, if you "bin" or "window" data into 15 minute intervals, an input timestamp of `2023-01-01T18:18:18Z` will be updated to the start time of the 15 minute bin it is in: `2023-01-01T18:15:00Z`.
-"#)
-            .with_syntax_example("date_bin(interval, expression, origin-timestamp)")
+"#,
+            "date_bin(interval, expression, origin-timestamp)")
             .with_sql_example(r#"```sql
 -- Bin the timestamp into 1 day intervals
 > SELECT date_bin(interval '1 day', time) as bin
@@ -224,7 +228,6 @@ The following intervals are supported:
 - century
 ")
             .build()
-            .unwrap()
     })
 }
 
@@ -515,6 +518,7 @@ mod tests {
     use chrono::TimeDelta;
 
     #[test]
+    #[allow(deprecated)] // TODO migrate UDF invoke from invoke_batch
     fn test_date_bin() {
         let res = DateBinFunc::new().invoke_batch(
             &[
@@ -532,7 +536,7 @@ mod tests {
         assert!(res.is_ok());
 
         let timestamps = Arc::new((1..6).map(Some).collect::<TimestampNanosecondArray>());
-        let batch_size = timestamps.len();
+        let batch_len = timestamps.len();
         let res = DateBinFunc::new().invoke_batch(
             &[
                 ColumnarValue::Scalar(ScalarValue::IntervalDayTime(Some(
@@ -544,7 +548,7 @@ mod tests {
                 ColumnarValue::Array(timestamps),
                 ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
             ],
-            batch_size,
+            batch_len,
         );
         assert!(res.is_ok());
 
@@ -720,14 +724,13 @@ mod tests {
                 })
                 .collect::<IntervalDayTimeArray>(),
         );
-        let batch_size = intervals.len();
         let res = DateBinFunc::new().invoke_batch(
             &[
                 ColumnarValue::Array(intervals),
                 ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
                 ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
             ],
-            batch_size,
+            1,
         );
         assert_eq!(
             res.err().unwrap().strip_backtrace(),
@@ -736,7 +739,7 @@ mod tests {
 
         // unsupported array type for origin
         let timestamps = Arc::new((1..6).map(Some).collect::<TimestampNanosecondArray>());
-        let batch_size = timestamps.len();
+        let batch_len = timestamps.len();
         let res = DateBinFunc::new().invoke_batch(
             &[
                 ColumnarValue::Scalar(ScalarValue::IntervalDayTime(Some(
@@ -748,7 +751,7 @@ mod tests {
                 ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
                 ColumnarValue::Array(timestamps),
             ],
-            batch_size,
+            batch_len,
         );
         assert_eq!(
             res.err().unwrap().strip_backtrace(),
@@ -864,7 +867,8 @@ mod tests {
                     .map(|s| Some(string_to_timestamp_nanos(s).unwrap()))
                     .collect::<TimestampNanosecondArray>()
                     .with_timezone_opt(tz_opt.clone());
-                let batch_size = input.len();
+                let batch_len = input.len();
+                #[allow(deprecated)] // TODO migrate UDF invoke to invoke_batch
                 let result = DateBinFunc::new()
                     .invoke_batch(
                         &[
@@ -875,7 +879,7 @@ mod tests {
                                 tz_opt.clone(),
                             )),
                         ],
-                        batch_size,
+                        batch_len,
                     )
                     .unwrap();
                 if let ColumnarValue::Array(result) = result {

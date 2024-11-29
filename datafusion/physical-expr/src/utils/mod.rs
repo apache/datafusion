@@ -146,9 +146,7 @@ struct PhysicalExprDAEGBuilder<'a, T, F: Fn(&ExprTreeNode<NodeIndex>) -> Result<
     constructor: &'a F,
 }
 
-impl<'a, T, F: Fn(&ExprTreeNode<NodeIndex>) -> Result<T>>
-    PhysicalExprDAEGBuilder<'a, T, F>
-{
+impl<T, F: Fn(&ExprTreeNode<NodeIndex>) -> Result<T>> PhysicalExprDAEGBuilder<'_, T, F> {
     // This method mutates an expression node by transforming it to a physical expression
     // and adding it to the graph. The method returns the mutated expression node.
     fn mutate(
@@ -311,7 +309,11 @@ pub(crate) mod tests {
             Ok(input[0].sort_properties)
         }
 
-        fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+        fn invoke_batch(
+            &self,
+            args: &[ColumnarValue],
+            _number_rows: usize,
+        ) -> Result<ColumnarValue> {
             let args = ColumnarValue::values_to_arrays(args)?;
 
             let arr: ArrayRef = match args[0].data_type() {

@@ -880,12 +880,12 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
 /// `$t`: the primitive type of the builder
 ///
 macro_rules! instantiate_primitive {
-    ($v:expr, $nullable:expr, $t:ty) => {
+    ($v:expr, $nullable:expr, $t:ty, $data_type:ident) => {
         if $nullable {
-            let b = PrimitiveGroupValueBuilder::<$t, true>::new();
+            let b = PrimitiveGroupValueBuilder::<$t, true>::new($data_type.to_owned());
             $v.push(Box::new(b) as _)
         } else {
-            let b = PrimitiveGroupValueBuilder::<$t, false>::new();
+            let b = PrimitiveGroupValueBuilder::<$t, false>::new($data_type.to_owned());
             $v.push(Box::new(b) as _)
         }
     };
@@ -898,53 +898,114 @@ impl<const STREAMING: bool> GroupValues for GroupValuesColumn<STREAMING> {
 
             for f in self.schema.fields().iter() {
                 let nullable = f.is_nullable();
-                match f.data_type() {
-                    &DataType::Int8 => instantiate_primitive!(v, nullable, Int8Type),
-                    &DataType::Int16 => instantiate_primitive!(v, nullable, Int16Type),
-                    &DataType::Int32 => instantiate_primitive!(v, nullable, Int32Type),
-                    &DataType::Int64 => instantiate_primitive!(v, nullable, Int64Type),
-                    &DataType::UInt8 => instantiate_primitive!(v, nullable, UInt8Type),
-                    &DataType::UInt16 => instantiate_primitive!(v, nullable, UInt16Type),
-                    &DataType::UInt32 => instantiate_primitive!(v, nullable, UInt32Type),
-                    &DataType::UInt64 => instantiate_primitive!(v, nullable, UInt64Type),
+                let data_type = f.data_type();
+                match data_type {
+                    &DataType::Int8 => {
+                        instantiate_primitive!(v, nullable, Int8Type, data_type)
+                    }
+                    &DataType::Int16 => {
+                        instantiate_primitive!(v, nullable, Int16Type, data_type)
+                    }
+                    &DataType::Int32 => {
+                        instantiate_primitive!(v, nullable, Int32Type, data_type)
+                    }
+                    &DataType::Int64 => {
+                        instantiate_primitive!(v, nullable, Int64Type, data_type)
+                    }
+                    &DataType::UInt8 => {
+                        instantiate_primitive!(v, nullable, UInt8Type, data_type)
+                    }
+                    &DataType::UInt16 => {
+                        instantiate_primitive!(v, nullable, UInt16Type, data_type)
+                    }
+                    &DataType::UInt32 => {
+                        instantiate_primitive!(v, nullable, UInt32Type, data_type)
+                    }
+                    &DataType::UInt64 => {
+                        instantiate_primitive!(v, nullable, UInt64Type, data_type)
+                    }
                     &DataType::Float32 => {
-                        instantiate_primitive!(v, nullable, Float32Type)
+                        instantiate_primitive!(v, nullable, Float32Type, data_type)
                     }
                     &DataType::Float64 => {
-                        instantiate_primitive!(v, nullable, Float64Type)
+                        instantiate_primitive!(v, nullable, Float64Type, data_type)
                     }
-                    &DataType::Date32 => instantiate_primitive!(v, nullable, Date32Type),
-                    &DataType::Date64 => instantiate_primitive!(v, nullable, Date64Type),
+                    &DataType::Date32 => {
+                        instantiate_primitive!(v, nullable, Date32Type, data_type)
+                    }
+                    &DataType::Date64 => {
+                        instantiate_primitive!(v, nullable, Date64Type, data_type)
+                    }
                     &DataType::Time32(t) => match t {
                         TimeUnit::Second => {
-                            instantiate_primitive!(v, nullable, Time32SecondType)
+                            instantiate_primitive!(
+                                v,
+                                nullable,
+                                Time32SecondType,
+                                data_type
+                            )
                         }
                         TimeUnit::Millisecond => {
-                            instantiate_primitive!(v, nullable, Time32MillisecondType)
+                            instantiate_primitive!(
+                                v,
+                                nullable,
+                                Time32MillisecondType,
+                                data_type
+                            )
                         }
                         _ => {}
                     },
                     &DataType::Time64(t) => match t {
                         TimeUnit::Microsecond => {
-                            instantiate_primitive!(v, nullable, Time64MicrosecondType)
+                            instantiate_primitive!(
+                                v,
+                                nullable,
+                                Time64MicrosecondType,
+                                data_type
+                            )
                         }
                         TimeUnit::Nanosecond => {
-                            instantiate_primitive!(v, nullable, Time64NanosecondType)
+                            instantiate_primitive!(
+                                v,
+                                nullable,
+                                Time64NanosecondType,
+                                data_type
+                            )
                         }
                         _ => {}
                     },
                     &DataType::Timestamp(t, _) => match t {
                         TimeUnit::Second => {
-                            instantiate_primitive!(v, nullable, TimestampSecondType)
+                            instantiate_primitive!(
+                                v,
+                                nullable,
+                                TimestampSecondType,
+                                data_type
+                            )
                         }
                         TimeUnit::Millisecond => {
-                            instantiate_primitive!(v, nullable, TimestampMillisecondType)
+                            instantiate_primitive!(
+                                v,
+                                nullable,
+                                TimestampMillisecondType,
+                                data_type
+                            )
                         }
                         TimeUnit::Microsecond => {
-                            instantiate_primitive!(v, nullable, TimestampMicrosecondType)
+                            instantiate_primitive!(
+                                v,
+                                nullable,
+                                TimestampMicrosecondType,
+                                data_type
+                            )
                         }
                         TimeUnit::Nanosecond => {
-                            instantiate_primitive!(v, nullable, TimestampNanosecondType)
+                            instantiate_primitive!(
+                                v,
+                                nullable,
+                                TimestampNanosecondType,
+                                data_type
+                            )
                         }
                     },
                     &DataType::Utf8 => {

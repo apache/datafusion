@@ -74,7 +74,11 @@ impl ScalarUDFImpl for ArrayRemove {
         Ok(arg_types[0].clone())
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         make_scalar_function(array_remove_inner)(args)
     }
 
@@ -91,12 +95,11 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_array_remove_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_ARRAY)
-            .with_description(
+        Documentation::builder(
+            DOC_SECTION_ARRAY,
                 "Removes the first element from the array equal to the given value.",
-            )
-            .with_syntax_example("array_remove(array, element)")
+
+            "array_remove(array, element)")
             .with_sql_example(
                 r#"```sql
 > select array_remove([1, 2, 2, 3, 2, 1, 4], 2);
@@ -116,7 +119,6 @@ fn get_array_remove_doc() -> &'static Documentation {
                 "Element to be removed from the array.",
             )
             .build()
-            .unwrap()
     })
 }
 
@@ -160,7 +162,11 @@ impl ScalarUDFImpl for ArrayRemoveN {
         Ok(arg_types[0].clone())
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         make_scalar_function(array_remove_n_inner)(args)
     }
 
@@ -175,12 +181,11 @@ impl ScalarUDFImpl for ArrayRemoveN {
 
 fn get_array_remove_n_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_ARRAY)
-            .with_description(
+        Documentation::builder(
+            DOC_SECTION_ARRAY,
                 "Removes the first `max` elements from the array equal to the given value.",
-            )
-            .with_syntax_example("array_remove_n(array, element, max)")
+
+            "array_remove_n(array, element, max)")
             .with_sql_example(
                 r#"```sql
 > select array_remove_n([1, 2, 2, 3, 2, 1, 4], 2, 2);
@@ -204,7 +209,6 @@ fn get_array_remove_n_doc() -> &'static Documentation {
                 "Number of first occurrences to remove.",
             )
             .build()
-            .unwrap()
     })
 }
 
@@ -248,7 +252,11 @@ impl ScalarUDFImpl for ArrayRemoveAll {
         Ok(arg_types[0].clone())
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         make_scalar_function(array_remove_all_inner)(args)
     }
 
@@ -263,12 +271,11 @@ impl ScalarUDFImpl for ArrayRemoveAll {
 
 fn get_array_remove_all_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_ARRAY)
-            .with_description(
+        Documentation::builder(
+            DOC_SECTION_ARRAY,
                 "Removes all elements from the array equal to the given value.",
-            )
-            .with_syntax_example("array_remove_all(array, element)")
+
+            "array_remove_all(array, element)")
             .with_sql_example(
                 r#"```sql
 > select array_remove_all([1, 2, 2, 3, 2, 1, 4], 2);
@@ -288,7 +295,6 @@ fn get_array_remove_all_doc() -> &'static Documentation {
                 "Element to be removed from the array.",
             )
             .build()
-            .unwrap()
     })
 }
 

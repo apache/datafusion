@@ -1764,7 +1764,7 @@ impl<'a> BadPlanVisitor<'a> {
     }
 }
 
-impl<'n, 'a> TreeNodeVisitor<'n> for BadPlanVisitor<'a> {
+impl<'n> TreeNodeVisitor<'n> for BadPlanVisitor<'_> {
     type Node = LogicalPlan;
 
     fn f_down(&mut self, node: &'n Self::Node) -> Result<TreeNodeRecursion> {

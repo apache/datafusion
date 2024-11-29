@@ -17,6 +17,8 @@
 
 //! Common unit test utility methods
 
+#![allow(missing_docs)]
+
 use std::any::Any;
 use std::fs::File;
 use std::io::prelude::*;

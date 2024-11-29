@@ -77,7 +77,6 @@ unicode_expressions = [
 ]
 
 [dependencies]
-ahash = { workspace = true }
 apache-avro = { version = "0.16", optional = true }
 arrow = { workspace = true }
 arrow-array = { workspace = true }
@@ -114,18 +113,13 @@ datafusion-sql = { workspace = true }
 flate2 = { version = "1.0.24", optional = true }
 futures = { workspace = true }
 glob = "0.3.0"
-half = { workspace = true }
-hashbrown = { workspace = true }
-indexmap = { workspace = true }
 itertools = { workspace = true }
 log = { workspace = true }
 num-traits = { version = "0.2", optional = true }
-num_cpus = { workspace = true }
 object_store = { workspace = true }
 parking_lot = { workspace = true }
 parquet = { workspace = true, optional = true, default-features = true }
 paste = "1.0.15"
-pin-project-lite = "^0.2.7"
 rand = { workspace = true }
 sqlparser = { workspace = true }
 tempfile = { workspace = true }
@@ -139,14 +133,11 @@ zstd = { version = "0.13", optional = true, default-features = false }
 [dev-dependencies]
 arrow-buffer = { workspace = true }
 async-trait = { workspace = true }
-bigdecimal = { workspace = true }
 criterion = { version = "0.5", features = ["async_tokio"] }
-csv = "1.1.6"
 ctor = { workspace = true }
 datafusion-functions-window-common = { workspace = true }
 doc-comment = { workspace = true }
 env_logger = { workspace = true }
-half = { workspace = true, default-features = true }
 paste = "^1.0"
 postgres-protocol = "0.6.4"
 postgres-types = { version = "0.2.4", features = ["derive", "with-chrono-0_4"] }

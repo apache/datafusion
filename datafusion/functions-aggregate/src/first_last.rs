@@ -169,12 +169,11 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_first_value_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_GENERAL)
-            .with_description(
+        Documentation::builder(
+            DOC_SECTION_GENERAL,
                 "Returns the first element in an aggregation group according to the requested ordering. If no ordering is given, returns an arbitrary element from the group.",
-            )
-            .with_syntax_example("first_value(expression [ORDER BY expression])")
+
+            "first_value(expression [ORDER BY expression])")
             .with_sql_example(r#"```sql
 > SELECT first_value(column_name ORDER BY other_column) FROM table_name;
 +-----------------------------------------------+
@@ -186,7 +185,6 @@ fn get_first_value_doc() -> &'static Documentation {
             )
             .with_standard_argument("expression", None)
             .build()
-            .unwrap()
     })
 }
 
@@ -491,12 +489,11 @@ impl AggregateUDFImpl for LastValue {
 
 fn get_last_value_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_GENERAL)
-            .with_description(
+        Documentation::builder(
+            DOC_SECTION_GENERAL,
                 "Returns the last element in an aggregation group according to the requested ordering. If no ordering is given, returns an arbitrary element from the group.",
-            )
-            .with_syntax_example("last_value(expression [ORDER BY expression])")
+
+            "last_value(expression [ORDER BY expression])")
             .with_sql_example(r#"```sql
 > SELECT last_value(column_name ORDER BY other_column) FROM table_name;
 +-----------------------------------------------+
@@ -508,7 +505,6 @@ fn get_last_value_doc() -> &'static Documentation {
             )
             .with_standard_argument("expression", None)
             .build()
-            .unwrap()
     })
 }
 

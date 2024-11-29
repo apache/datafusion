@@ -29,29 +29,35 @@ fn criterion_benchmark(c: &mut Criterion) {
         let str_array = Arc::new(create_string_array_with_len::<i32>(size, 0.2, 32));
         c.bench_function(&format!("base64_decode/{size}"), |b| {
             let method = ColumnarValue::Scalar("base64".into());
-            #[allow(deprecated)] // TODO use invoke_batch
+            // TODO: use invoke_with_args
             let encoded = encoding::encode()
-                .invoke(&[ColumnarValue::Array(str_array.clone()), method.clone()])
+                .invoke_batch(
+                    &[ColumnarValue::Array(str_array.clone()), method.clone()],
+                    size,
+                )
                 .unwrap();
 
             let args = vec![encoded, method];
             b.iter(|| {
-                #[allow(deprecated)] // TODO use invoke_batch
-                black_box(decode.invoke(&args).unwrap())
+                // TODO use invoke_with_args
+                black_box(decode.invoke_batch(&args, size).unwrap())
             })
         });
 
         c.bench_function(&format!("hex_decode/{size}"), |b| {
             let method = ColumnarValue::Scalar("hex".into());
-            #[allow(deprecated)] // TODO use invoke_batch
+            // TODO use invoke_with_args
             let encoded = encoding::encode()
-                .invoke(&[ColumnarValue::Array(str_array.clone()), method.clone()])
+                .invoke_batch(
+                    &[ColumnarValue::Array(str_array.clone()), method.clone()],
+                    size,
+                )
                 .unwrap();
 
             let args = vec![encoded, method];
             b.iter(|| {
-                #[allow(deprecated)] // TODO use invoke_batch
-                black_box(decode.invoke(&args).unwrap())
+                // TODO use invoke_with_args
+                black_box(decode.invoke_batch(&args, size).unwrap())
             })
         });
     }

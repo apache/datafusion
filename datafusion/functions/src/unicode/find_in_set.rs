@@ -76,7 +76,11 @@ impl ScalarUDFImpl for FindInSetFunc {
         utf8_to_int_type(&arg_types[0], "find_in_set")
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         make_scalar_function(find_in_set, vec![])(args)
     }
 
@@ -89,10 +93,10 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_find_in_set_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_STRING)
-            .with_description("Returns a value in the range of 1 to N if the string str is in the string list strlist consisting of N substrings.")
-            .with_syntax_example("find_in_set(str, strlist)")
+        Documentation::builder(
+            DOC_SECTION_STRING,
+            "Returns a value in the range of 1 to N if the string str is in the string list strlist consisting of N substrings.",
+            "find_in_set(str, strlist)")
             .with_sql_example(r#"```sql
 > select find_in_set('b', 'a,b,c,d');
 +----------------------------------------+
@@ -104,7 +108,6 @@ fn get_find_in_set_doc() -> &'static Documentation {
             .with_argument("str", "String expression to find in strlist.")
             .with_argument("strlist", "A string list is a string composed of substrings separated by , characters.")
             .build()
-            .unwrap()
     })
 }
 

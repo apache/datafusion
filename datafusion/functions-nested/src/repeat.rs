@@ -79,7 +79,11 @@ impl ScalarUDFImpl for ArrayRepeat {
         ))))
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         make_scalar_function(array_repeat_inner)(args)
     }
 
@@ -96,12 +100,11 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_array_repeat_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_ARRAY)
-            .with_description(
+        Documentation::builder(
+            DOC_SECTION_ARRAY,
                 "Returns an array containing element `count` times.",
-            )
-            .with_syntax_example("array_repeat(element, count)")
+
+            "array_repeat(element, count)")
             .with_sql_example(
                 r#"```sql
 > select array_repeat(1, 3);
@@ -127,7 +130,6 @@ fn get_array_repeat_doc() -> &'static Documentation {
                 "Value of how many times to repeat the element.",
             )
             .build()
-            .unwrap()
     })
 }
 

@@ -117,7 +117,11 @@ impl ScalarUDFImpl for Range {
         }
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         if args.iter().any(|arg| arg.data_type().is_null()) {
             return Ok(ColumnarValue::Array(Arc::new(NullArray::new(1))));
         }
@@ -146,12 +150,11 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_range_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_ARRAY)
-            .with_description(
+        Documentation::builder(
+            DOC_SECTION_ARRAY,
                 "Returns an Arrow array between start and stop with step. The range start..end contains all values with start <= x < end. It is empty if start >= end. Step cannot be 0.",
-            )
-            .with_syntax_example("range(start, stop, step)")
+
+            "range(start, stop, step)")
             .with_sql_example(
                 r#"```sql
 > select range(2, 10, 3);
@@ -182,7 +185,6 @@ fn get_range_doc() -> &'static Documentation {
                 "Increase by step (cannot be 0). Steps less than a day are supported only for timestamp ranges.",
             )
             .build()
-            .unwrap()
     })
 }
 
@@ -255,7 +257,11 @@ impl ScalarUDFImpl for GenSeries {
         }
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         if args.iter().any(|arg| arg.data_type().is_null()) {
             return Ok(ColumnarValue::Array(Arc::new(NullArray::new(1))));
         }
@@ -287,12 +293,11 @@ static GENERATE_SERIES_DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_generate_series_doc() -> &'static Documentation {
     GENERATE_SERIES_DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_ARRAY)
-            .with_description(
+        Documentation::builder(
+            DOC_SECTION_ARRAY,
                 "Similar to the range function, but it includes the upper bound.",
-            )
-            .with_syntax_example("generate_series(start, stop, step)")
+
+            "generate_series(start, stop, step)")
             .with_sql_example(
                 r#"```sql
 > select generate_series(1,3);
@@ -316,7 +321,6 @@ fn get_generate_series_doc() -> &'static Documentation {
                 "increase by step (can not be 0). Steps less than a day are supported only for timestamp ranges.",
             )
             .build()
-            .unwrap()
     })
 }
 

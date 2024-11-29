@@ -186,14 +186,13 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_bool_and_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_GENERAL)
-            .with_description(
-                "Returns true if all non-null input values are true, otherwise false.",
-            )
-            .with_syntax_example("bool_and(expression)")
-            .with_sql_example(
-                r#"```sql
+        Documentation::builder(
+            DOC_SECTION_GENERAL,
+            "Returns true if all non-null input values are true, otherwise false.",
+            "bool_and(expression)",
+        )
+        .with_sql_example(
+            r#"```sql
 > SELECT bool_and(column_name) FROM table_name;
 +----------------------------+
 | bool_and(column_name)       |
@@ -201,10 +200,9 @@ fn get_bool_and_doc() -> &'static Documentation {
 | true                        |
 +----------------------------+
 ```"#,
-            )
-            .with_standard_argument("expression", None)
-            .build()
-            .unwrap()
+        )
+        .with_standard_argument("expression", None)
+        .build()
     })
 }
 
@@ -335,14 +333,13 @@ impl AggregateUDFImpl for BoolOr {
 
 fn get_bool_or_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_GENERAL)
-            .with_description(
-                "Returns true if any non-null input value is true, otherwise false.",
-            )
-            .with_syntax_example("bool_or(expression)")
-            .with_sql_example(
-                r#"```sql
+        Documentation::builder(
+            DOC_SECTION_GENERAL,
+            "Returns true if any non-null input value is true, otherwise false.",
+            "bool_or(expression)",
+        )
+        .with_sql_example(
+            r#"```sql
 > SELECT bool_or(column_name) FROM table_name;
 +----------------------------+
 | bool_or(column_name)        |
@@ -350,10 +347,9 @@ fn get_bool_or_doc() -> &'static Documentation {
 | true                        |
 +----------------------------+
 ```"#,
-            )
-            .with_standard_argument("expression", None)
-            .build()
-            .unwrap()
+        )
+        .with_standard_argument("expression", None)
+        .build()
     })
 }
 

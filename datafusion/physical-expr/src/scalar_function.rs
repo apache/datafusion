@@ -140,6 +140,11 @@ impl PhysicalExpr for ScalarFunctionExpr {
             .map(|e| e.evaluate(batch))
             .collect::<Result<Vec<_>>>()?;
 
+        let input_empty = inputs.is_empty();
+        let input_all_scalar = inputs
+            .iter()
+            .all(|arg| matches!(arg, ColumnarValue::Scalar(_)));
+
         // evaluate the function
         let output = self.fun.invoke_with_args(ScalarFunctionArgs {
             args: inputs.as_slice(),
@@ -151,11 +156,8 @@ impl PhysicalExpr for ScalarFunctionExpr {
             if array.len() != batch.num_rows() {
                 // If the arguments are a non-empty slice of scalar values, we can assume that
                 // returning a one-element array is equivalent to returning a scalar.
-                let preserve_scalar = array.len() == 1
-                    && !inputs.is_empty()
-                    && inputs
-                        .iter()
-                        .all(|arg| matches!(arg, ColumnarValue::Scalar(_)));
+                let preserve_scalar =
+                    array.len() == 1 && !input_empty && input_all_scalar;
                 return if preserve_scalar {
                     ScalarValue::try_from_array(array, 0).map(ColumnarValue::Scalar)
                 } else {

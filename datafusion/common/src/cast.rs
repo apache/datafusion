@@ -36,11 +36,19 @@ use arrow::{
     },
     datatypes::{ArrowDictionaryKeyType, ArrowPrimitiveType},
 };
-use arrow_array::{BinaryViewArray, StringViewArray};
+use arrow_array::{
+    BinaryViewArray, Float16Array, Int16Array, Int8Array, LargeBinaryArray,
+    LargeStringArray, StringViewArray, UInt16Array,
+};
 
 // Downcast ArrayRef to Date32Array
 pub fn as_date32_array(array: &dyn Array) -> Result<&Date32Array> {
     Ok(downcast_value!(array, Date32Array))
+}
+
+// Downcast ArrayRef to Date64Array
+pub fn as_date64_array(array: &dyn Array) -> Result<&Date64Array> {
+    Ok(downcast_value!(array, Date64Array))
 }
 
 // Downcast ArrayRef to StructArray
@@ -48,9 +56,24 @@ pub fn as_struct_array(array: &dyn Array) -> Result<&StructArray> {
     Ok(downcast_value!(array, StructArray))
 }
 
+// Downcast ArrayRef to Int8Array
+pub fn as_int8_array(array: &dyn Array) -> Result<&Int8Array> {
+    Ok(downcast_value!(array, Int8Array))
+}
+
 // Downcast ArrayRef to UInt8Array
 pub fn as_uint8_array(array: &dyn Array) -> Result<&UInt8Array> {
     Ok(downcast_value!(array, UInt8Array))
+}
+
+// Downcast ArrayRef to Int16Array
+pub fn as_int16_array(array: &dyn Array) -> Result<&Int16Array> {
+    Ok(downcast_value!(array, Int16Array))
+}
+
+// Downcast ArrayRef to UInt16Array
+pub fn as_uint16_array(array: &dyn Array) -> Result<&UInt16Array> {
+    Ok(downcast_value!(array, UInt16Array))
 }
 
 // Downcast ArrayRef to Int32Array
@@ -58,9 +81,19 @@ pub fn as_int32_array(array: &dyn Array) -> Result<&Int32Array> {
     Ok(downcast_value!(array, Int32Array))
 }
 
+// Downcast ArrayRef to UInt32Array
+pub fn as_uint32_array(array: &dyn Array) -> Result<&UInt32Array> {
+    Ok(downcast_value!(array, UInt32Array))
+}
+
 // Downcast ArrayRef to Int64Array
 pub fn as_int64_array(array: &dyn Array) -> Result<&Int64Array> {
     Ok(downcast_value!(array, Int64Array))
+}
+
+// Downcast ArrayRef to UInt64Array
+pub fn as_uint64_array(array: &dyn Array) -> Result<&UInt64Array> {
+    Ok(downcast_value!(array, UInt64Array))
 }
 
 // Downcast ArrayRef to Decimal128Array
@@ -71,6 +104,11 @@ pub fn as_decimal128_array(array: &dyn Array) -> Result<&Decimal128Array> {
 // Downcast ArrayRef to Decimal256Array
 pub fn as_decimal256_array(array: &dyn Array) -> Result<&Decimal256Array> {
     Ok(downcast_value!(array, Decimal256Array))
+}
+
+// Downcast ArrayRef to Float16Array
+pub fn as_float16_array(array: &dyn Array) -> Result<&Float16Array> {
+    Ok(downcast_value!(array, Float16Array))
 }
 
 // Downcast ArrayRef to Float32Array
@@ -93,14 +131,9 @@ pub fn as_string_view_array(array: &dyn Array) -> Result<&StringViewArray> {
     Ok(downcast_value!(array, StringViewArray))
 }
 
-// Downcast ArrayRef to UInt32Array
-pub fn as_uint32_array(array: &dyn Array) -> Result<&UInt32Array> {
-    Ok(downcast_value!(array, UInt32Array))
-}
-
-// Downcast ArrayRef to UInt64Array
-pub fn as_uint64_array(array: &dyn Array) -> Result<&UInt64Array> {
-    Ok(downcast_value!(array, UInt64Array))
+// Downcast ArrayRef to LargeStringArray
+pub fn as_large_string_array(array: &dyn Array) -> Result<&LargeStringArray> {
+    Ok(downcast_value!(array, LargeStringArray))
 }
 
 // Downcast ArrayRef to BooleanArray
@@ -232,6 +265,11 @@ pub fn as_binary_view_array(array: &dyn Array) -> Result<&BinaryViewArray> {
     Ok(downcast_value!(array, BinaryViewArray))
 }
 
+// Downcast ArrayRef to LargeBinaryArray
+pub fn as_large_binary_array(array: &dyn Array) -> Result<&LargeBinaryArray> {
+    Ok(downcast_value!(array, LargeBinaryArray))
+}
+
 // Downcast ArrayRef to FixedSizeListArray
 pub fn as_fixed_size_list_array(array: &dyn Array) -> Result<&FixedSizeListArray> {
     Ok(downcast_value!(array, FixedSizeListArray))
@@ -240,11 +278,6 @@ pub fn as_fixed_size_list_array(array: &dyn Array) -> Result<&FixedSizeListArray
 // Downcast ArrayRef to FixedSizeListArray
 pub fn as_fixed_size_binary_array(array: &dyn Array) -> Result<&FixedSizeBinaryArray> {
     Ok(downcast_value!(array, FixedSizeBinaryArray))
-}
-
-// Downcast ArrayRef to Date64Array
-pub fn as_date64_array(array: &dyn Array) -> Result<&Date64Array> {
-    Ok(downcast_value!(array, Date64Array))
 }
 
 // Downcast ArrayRef to GenericBinaryArray

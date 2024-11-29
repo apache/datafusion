@@ -62,15 +62,15 @@ static ENCODE_DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_encode_doc() -> &'static Documentation {
     ENCODE_DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_BINARY_STRING)
-            .with_description("Encode binary data into a textual representation.")
-            .with_syntax_example("encode(expression, format)")
-            .with_argument("expression", "Expression containing string or binary data")
-            .with_argument("format", "Supported formats are: `base64`, `hex`")
-            .with_related_udf("decode")
-            .build()
-            .unwrap()
+        Documentation::builder(
+            DOC_SECTION_BINARY_STRING,
+            "Encode binary data into a textual representation.",
+            "encode(expression, format)",
+        )
+        .with_argument("expression", "Expression containing string or binary data")
+        .with_argument("format", "Supported formats are: `base64`, `hex`")
+        .with_related_udf("decode")
+        .build()
     })
 }
 
@@ -90,7 +90,11 @@ impl ScalarUDFImpl for EncodeFunc {
         Ok(arg_types[0].to_owned())
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         encode(args)
     }
 
@@ -149,15 +153,15 @@ static DECODE_DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_decode_doc() -> &'static Documentation {
     DECODE_DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_BINARY_STRING)
-            .with_description("Decode binary data from textual representation in string.")
-            .with_syntax_example("decode(expression, format)")
-            .with_argument("expression", "Expression containing encoded string data")
-            .with_argument("format", "Same arguments as [encode](#encode)")
-            .with_related_udf("encode")
-            .build()
-            .unwrap()
+        Documentation::builder(
+            DOC_SECTION_BINARY_STRING,
+            "Decode binary data from textual representation in string.",
+            "decode(expression, format)",
+        )
+        .with_argument("expression", "Expression containing encoded string data")
+        .with_argument("format", "Same arguments as [encode](#encode)")
+        .with_related_udf("encode")
+        .build()
     })
 }
 
@@ -177,7 +181,11 @@ impl ScalarUDFImpl for DecodeFunc {
         Ok(arg_types[0].to_owned())
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         decode(args)
     }
 

@@ -72,7 +72,11 @@ impl ScalarUDFImpl for NowFunc {
         Ok(Timestamp(Nanosecond, Some("+00:00".into())))
     }
 
-    fn invoke(&self, _args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        _args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         internal_err!("invoke should not be called on a simplified now() function")
     }
 
@@ -106,15 +110,14 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_to_unixtime_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_DATETIME)
-            .with_description(r#"
+        Documentation::builder(
+            DOC_SECTION_DATETIME,
+            r#"
 Returns the current UTC timestamp.
 
 The `now()` return value is determined at query time and will return the same timestamp, no matter when in the query plan the function executes.
-"#)
-            .with_syntax_example("now()")
+"#,
+            "now()")
             .build()
-            .unwrap()
     })
 }

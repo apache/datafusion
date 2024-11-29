@@ -164,12 +164,13 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_median_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_GENERAL)
-            .with_description("Returns the median value in the specified column.")
-            .with_syntax_example("median(expression)")
-            .with_sql_example(
-                r#"```sql
+        Documentation::builder(
+            DOC_SECTION_GENERAL,
+            "Returns the median value in the specified column.",
+            "median(expression)",
+        )
+        .with_sql_example(
+            r#"```sql
 > SELECT median(column_name) FROM table_name;
 +----------------------+
 | median(column_name)   |
@@ -177,10 +178,9 @@ fn get_median_doc() -> &'static Documentation {
 | 45.5                 |
 +----------------------+
 ```"#,
-            )
-            .with_standard_argument("expression", None)
-            .build()
-            .unwrap()
+        )
+        .with_standard_argument("expression", None)
+        .build()
     })
 }
 

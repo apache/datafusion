@@ -219,7 +219,7 @@ pub fn with_new_children_if_necessary(
 /// Example output: `[a + 1, b]`
 pub fn format_physical_expr_list(exprs: &[Arc<dyn PhysicalExpr>]) -> impl Display + '_ {
     struct DisplayWrapper<'a>(&'a [Arc<dyn PhysicalExpr>]);
-    impl<'a> Display for DisplayWrapper<'a> {
+    impl Display for DisplayWrapper<'_> {
         fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
             let mut iter = self.0.iter();
             write!(f, "[")?;
