@@ -23,7 +23,7 @@ use datafusion::physical_expr::window::{SlidingAggregateWindowExpr, StandardWind
 use datafusion::physical_expr::{LexOrdering, PhysicalSortExpr, ScalarFunctionExpr};
 use datafusion::physical_plan::expressions::{
     BinaryExpr, CaseExpr, CastExpr, Column, InListExpr, IsNotNullExpr, IsNullExpr,
-    Literal, NegativeExpr, NotExpr, TryCastExpr,
+    Literal, NegativeExpr, NotExpr, TryCastExpr, UnKnownColumn,
 };
 use datafusion::physical_plan::udaf::AggregateFunctionExpr;
 use datafusion::physical_plan::windows::{PlainAggregateWindowExpr, WindowUDFExpr};
@@ -217,6 +217,14 @@ pub fn serialize_physical_expr(
                 protobuf::PhysicalColumn {
                     name: expr.name().to_string(),
                     index: expr.index() as u32,
+                },
+            )),
+        })
+    } else if let Some(expr) = expr.downcast_ref::<UnKnownColumn>() {
+        Ok(protobuf::PhysicalExprNode {
+            expr_type: Some(protobuf::physical_expr_node::ExprType::UnknownColumn(
+                protobuf::UnknownColumn {
+                    name: expr.name().to_string(),
                 },
             )),
         })
