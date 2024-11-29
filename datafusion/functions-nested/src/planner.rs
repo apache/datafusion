@@ -185,5 +185,5 @@ impl ExprPlanner for FieldAccessPlanner {
 }
 
 fn is_array_agg(agg_func: &datafusion_expr::expr::AggregateFunction) -> bool {
-    return agg_func.func.name() == "array_agg";
+    agg_func.func.name() == "array_agg"
 }

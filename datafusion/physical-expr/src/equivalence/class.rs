@@ -125,7 +125,7 @@ impl ConstExpr {
     /// Returns a [`Display`]able list of `ConstExpr`.
     pub fn format_list(input: &[ConstExpr]) -> impl Display + '_ {
         struct DisplayableList<'a>(&'a [ConstExpr]);
-        impl<'a> Display for DisplayableList<'a> {
+        impl Display for DisplayableList<'_> {
             fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
                 let mut first = true;
                 for const_expr in self.0 {

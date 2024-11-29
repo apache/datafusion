@@ -477,7 +477,7 @@ impl<'a> ObjectStoreFetch<'a> {
     }
 }
 
-impl<'a> MetadataFetch for ObjectStoreFetch<'a> {
+impl MetadataFetch for ObjectStoreFetch<'_> {
     fn fetch(
         &mut self,
         range: Range<usize>,
