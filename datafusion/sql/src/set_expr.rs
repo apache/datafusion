@@ -21,7 +21,7 @@ use datafusion_expr::{LogicalPlan, LogicalPlanBuilder};
 use recursive::recursive;
 use sqlparser::ast::{SetExpr, SetOperator, SetQuantifier};
 
-impl<'a, S: ContextProvider> SqlToRel<'a, S> {
+impl<S: ContextProvider> SqlToRel<'_, S> {
     #[recursive]
     pub(super) fn set_expr_to_plan(
         &self,

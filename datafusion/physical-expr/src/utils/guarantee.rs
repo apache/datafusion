@@ -124,7 +124,7 @@ impl LiteralGuarantee {
             // for an `AND` conjunction to be true, all terms individually must be true
             .fold(GuaranteeBuilder::new(), |builder, expr| {
                 if let Some(cel) = ColOpLit::try_new(expr) {
-                    return builder.aggregate_conjunct(cel);
+                    builder.aggregate_conjunct(cel)
                 } else if let Some(inlist) = expr
                     .as_any()
                     .downcast_ref::<crate::expressions::InListExpr>()

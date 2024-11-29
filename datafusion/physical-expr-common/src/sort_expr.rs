@@ -251,7 +251,7 @@ pub fn format_physical_sort_requirement_list(
     exprs: &[PhysicalSortRequirement],
 ) -> impl Display + '_ {
     struct DisplayWrapper<'a>(&'a [PhysicalSortRequirement]);
-    impl<'a> Display for DisplayWrapper<'a> {
+    impl Display for DisplayWrapper<'_> {
         fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
             let mut iter = self.0.iter();
             write!(f, "[")?;
