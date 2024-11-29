@@ -15,10 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::num::NonZero;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::thread::available_parallelism;
 
 use super::{
     get_query_sql, get_tbl_tpch_table_schema, get_tpch_table_schema, TPCH_TABLES,
@@ -39,6 +37,7 @@ use datafusion::physical_plan::display::DisplayableExecutionPlan;
 use datafusion::physical_plan::{collect, displayable};
 use datafusion::prelude::*;
 use datafusion_common::instant::Instant;
+use datafusion_common::utils::get_available_parallelism;
 use datafusion_common::{DEFAULT_CSV_EXTENSION, DEFAULT_PARQUET_EXTENSION};
 
 use log::info;
@@ -298,11 +297,9 @@ impl RunOpt {
     }
 
     fn partitions(&self) -> usize {
-        self.common.partitions.unwrap_or(
-            available_parallelism()
-                .unwrap_or(NonZero::new(1).unwrap())
-                .get(),
-        )
+        self.common
+            .partitions
+            .unwrap_or(get_available_parallelism())
     }
 }
 
