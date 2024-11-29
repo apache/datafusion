@@ -1209,57 +1209,37 @@ fn equal_with_indices(
     // TODO: Write a reusable framework and support more arrow types.
     downcast_primitive_array! {
         (arr_left, arr_right) => {
-            if null_equals_null {
-                let iter = indices_left.values().iter().zip(
-                    indices_right.values().iter()
-                );
+            let iter = indices_left.values().iter().zip(
+                indices_right.values().iter()
+            );
 
-                for (index, (idx_left, idx_right)) in iter.enumerate() {
-                    let idx_left = *idx_left as usize;
-                    let idx_right = *idx_right as usize;
+            for (index, (idx_left, idx_right)) in iter.enumerate() {
+                let idx_left = *idx_left as usize;
+                let idx_right = *idx_right as usize;
 
-                    let null_left = arr_left.is_null(idx_left);
-                    let null_right = arr_right.is_null(idx_right);
+                if !equal.get_bit(index) {
+                    continue;
+                }
 
-                    match (null_left, null_right) {
-                        (true, false) | (false, true) => equal.set_bit(index, false),
-                        _ => {},
-                    };
-                } 
+                let null_left = arr_left.is_null(idx_left);
+                let null_right = arr_right.is_null(idx_right);
 
-                let iter = indices_left.values().iter().zip(
-                    indices_right.values().iter()
-                );
-
-                for (index, (idx_left, idx_right)) in iter.enumerate() {
-                    if equal.get_bit(index) {
-                        let idx_left = *idx_left as usize;
-                        let idx_right = *idx_right as usize;
-
+                match (null_left, null_right) {
+                    (true, true) => {
+                        if !null_equals_null {
+                            equal.set_bit(index, false);
+                        }
+                    },
+                    (true, false) | (false, true) => equal.set_bit(index, false),
+                    (false, false) => {
                         equal.set_bit(
                             index,
                             unsafe {
                                 arr_left.value_unchecked(idx_left) == arr_right.value_unchecked(idx_right)
                             }
                         );
-                    }
-                }
-            } else {
-                let iter = indices_left.values().iter().zip(
-                    indices_right.values().iter()
-                );
-
-                for (index, (idx_left, idx_right)) in iter.enumerate() {
-                    let idx_left = *idx_left as usize;
-                    let idx_right = *idx_right as usize;
-
-                    equal.set_bit(
-                        index,
-                        unsafe {
-                            arr_left.value_unchecked(idx_left) == arr_right.value_unchecked(idx_right)
-                        }
-                    );
-                }
+                    },
+                };
             }
 
             Ok(())
@@ -1269,25 +1249,6 @@ fn equal_with_indices(
             let arr_left = arr_left.as_struct();
             let arr_right = arr_right.as_struct();
 
-            if null_equals_null {
-                let iter = indices_left.values().iter().zip(
-                    indices_right.values().iter()
-                );
-    
-                for (index, (idx_left, idx_right)) in iter.enumerate() {
-                    let idx_left = *idx_left as usize;
-                    let idx_right = *idx_right as usize;
-    
-                    let null_left = arr_left.is_null(idx_left);
-                    let null_right = arr_right.is_null(idx_right);
-    
-                    match (null_left, null_right) {
-                        (true, false) | (false, true) => equal.set_bit(index, false),
-                        _ => {},
-                    };
-                }
-            } 
-
             for (left, right) in arr_left.columns().iter().zip(arr_right.columns().iter()) {
                 equal_with_indices(
                     equal, 
@@ -1295,8 +1256,26 @@ fn equal_with_indices(
                     indices_right,
                     left,
                     right,
-                    null_equals_null,
+                    true,
                 )?;
+            }
+
+            let iter = indices_left.values().iter().zip(
+                indices_right.values().iter()
+            );
+
+            for (index, (idx_left, idx_right)) in iter.enumerate() {
+                let idx_left = *idx_left as usize;
+                let idx_right = *idx_right as usize;
+
+                let null_left = arr_left.is_null(idx_left);
+                let null_right = arr_right.is_null(idx_right);
+
+                match (null_left, null_right) {
+                    (true, true) => equal.set_bit(index, null_equals_null),
+                    (true, false) | (false, true) => equal.set_bit(index, false),
+                    _ => {}
+                }
             }
                 
             Ok(())
@@ -1333,11 +1312,6 @@ pub fn equal_rows_arr(
         null_equals_null,
     )?;
 
-    // Use map and try_fold to iterate over the remaining pairs of arrays.
-    // In each iteration, take is used on the pair of arrays and their equality is determined.
-    // The results are then folded (combined) using the and function to get a final equality result.
-    //
-    // TODO: Avoid using `and` and construct a new `BooleanArray` for each loop. Modify the `BooleanBuffer` directly.
     iter.try_for_each(|(left, right)| {
         equal_with_indices(
             &mut equal, 
