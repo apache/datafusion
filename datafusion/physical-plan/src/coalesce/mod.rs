@@ -114,7 +114,20 @@ impl BatchCoalescer {
     /// Push next batch, and returns [`CoalescerState`] indicating the current
     /// state of the buffer.
     pub fn push_batch(&mut self, batch: RecordBatch) -> CoalescerState {
+        // println!("batch num_rows: {}", batch.num_rows());
         let batch = gc_string_view_batch(&batch);
+        if self.limit_reached(&batch) {
+            CoalescerState::LimitReached
+        } else if self.target_reached(batch) {
+            CoalescerState::TargetReached
+        } else {
+            CoalescerState::Continue
+        }
+    }
+
+    /// Push next batch, and returns [`CoalescerState`] indicating the current
+    /// state of the buffer.
+    pub fn push_batch_without_gc(&mut self, batch: RecordBatch) -> CoalescerState {
         if self.limit_reached(&batch) {
             CoalescerState::LimitReached
         } else if self.target_reached(batch) {
@@ -170,6 +183,7 @@ impl BatchCoalescer {
 
     /// Concatenates and returns all buffered batches, and clears the buffer.
     pub fn finish_batch(&mut self) -> datafusion_common::Result<RecordBatch> {
+        // println!("buffered_rows: {}", self.buffered_rows);
         let batch = concat_batches(&self.schema, &self.buffer)?;
         self.buffer.clear();
         self.buffered_rows = 0;
@@ -244,6 +258,7 @@ fn gc_string_view_batch(batch: &RecordBatch) -> RecordBatch {
             // Re-creating the array copies data and can be time consuming.
             // We only do it if the array is sparse
             if actual_buffer_size > (ideal_buffer_size * 2) {
+                // println!("apply gc!");
                 // We set the block size to `ideal_buffer_size` so that the new StringViewArray only has one buffer, which accelerate later concat_batches.
                 // See https://github.com/apache/arrow-rs/issues/6094 for more details.
                 let mut builder = StringViewBuilder::with_capacity(s.len());

@@ -1,0 +1,22 @@
+statement ok
+CREATE EXTERNAL TABLE hits
+STORED AS PARQUET
+LOCATION '../../benchmarks/data/hits.parquet';
+
+query TT
+explain SELECT "UserID", extract(minute FROM to_timestamp_seconds("EventTime")) AS m, "SearchPhrase", COUNT(*) FROM hits GROUP BY "UserID", m, "SearchPhrase" ORDER BY COUNT(*) DESC LIMIT 10;
+----
+logical_plan
+01)Sort: count(*) DESC NULLS FIRST, fetch=10
+02)--Projection: hits.UserID, date_part(Utf8("MINUTE"),to_timestamp_seconds(hits.EventTime)) AS m, hits.SearchPhrase, count(*)
+03)----Aggregate: groupBy=[[hits.UserID, date_part(Utf8("MINUTE"), to_timestamp_seconds(hits.EventTime)), hits.SearchPhrase]], aggr=[[count(Int64(1)) AS count(*)]]
+04)------TableScan: hits projection=[EventTime, UserID, SearchPhrase]
+physical_plan
+01)SortPreservingMergeExec: [count(*)@3 DESC], fetch=10
+02)--SortExec: TopK(fetch=10), expr=[count(*)@3 DESC], preserve_partitioning=[true]
+03)----ProjectionExec: expr=[UserID@0 as UserID, date_part(Utf8("MINUTE"),to_timestamp_seconds(hits.EventTime))@1 as m, SearchPhrase@2 as SearchPhrase, count(*)@3 as count(*)]
+04)------AggregateExec: mode=FinalPartitioned, gby=[UserID@0 as UserID, date_part(Utf8("MINUTE"),to_timestamp_seconds(hits.EventTime))@1 as date_part(Utf8("MINUTE"),to_timestamp_seconds(hits.EventTime)), SearchPhrase@2 as SearchPhrase], aggr=[count(*)]
+05)--------CoalesceBatchesExec: target_batch_size=8192
+06)----------RepartitionExec: partitioning=Hash([UserID@0, date_part(Utf8("MINUTE"),to_timestamp_seconds(hits.EventTime))@1, SearchPhrase@2], 4), input_partitions=4
+07)------------AggregateExec: mode=Partial, gby=[UserID@1 as UserID, date_part(MINUTE, to_timestamp_seconds(EventTime@0)) as date_part(Utf8("MINUTE"),to_timestamp_seconds(hits.EventTime)), SearchPhrase@2 as SearchPhrase], aggr=[count(*)]
+08)--------------ParquetExec: file_groups={4 groups: [[WORKSPACE_ROOT/benchmarks/data/hits.parquet:0..3694994112], [WORKSPACE_ROOT/benchmarks/data/hits.parquet:3694994112..7389988224], [WORKSPACE_ROOT/benchmarks/data/hits.parquet:7389988224..11084982336], [WORKSPACE_ROOT/benchmarks/data/hits.parquet:11084982336..14779976446]]}, projection=[EventTime, UserID, SearchPhrase]
