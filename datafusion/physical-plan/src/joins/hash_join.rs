@@ -1198,6 +1198,7 @@ fn lookup_join_hashmap(
     Ok((build_indices, probe_indices, next_offset))
 }
 
+/// Compare two arrays based on the indices and update equal boolean buffer.
 fn equal_with_indices(
     equal: &mut BooleanBufferBuilder,
     indices_left: &UInt64Array,
@@ -1217,6 +1218,7 @@ fn equal_with_indices(
                 let idx_left = *idx_left as usize;
                 let idx_right = *idx_right as usize;
 
+                // Has found not equal to in previous column, do not need to check. 
                 if !equal.get_bit(index) {
                     continue;
                 }
