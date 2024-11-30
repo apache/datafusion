@@ -20,13 +20,12 @@ use std::{cmp::Ordering, sync::Arc, vec};
 use datafusion_common::{
     internal_err,
     tree_node::{Transformed, TransformedResult, TreeNode},
-    Column, DataFusionError, Result, ScalarValue,
+    Column, DataFusionError, IndexSet, Result, ScalarValue,
 };
 use datafusion_expr::{
     expr, utils::grouping_set_to_exprlist, Aggregate, Expr, LogicalPlan,
     LogicalPlanBuilder, Projection, SortExpr, Unnest, Window,
 };
-use indexmap::IndexSet;
 use sqlparser::ast;
 
 use super::{
