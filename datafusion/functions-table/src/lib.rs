@@ -22,8 +22,30 @@ use std::sync::Arc;
 
 /// Returns all default table functions
 pub fn all_default_table_functions() -> Vec<Arc<TableFunction>> {
-    vec![Arc::new(TableFunction::new(
-        "generate_series".to_string(),
-        Arc::new(generate_series::GenerateSeriesFunc {}),
-    ))]
+    vec![generate_series()]
 }
+
+/// Creates a singleton instance of a table function
+/// - `$module`: A struct implementing `TableFunctionImpl` to create the function from
+/// - `$name`: The name to give to the created function
+///
+/// This is used to ensure creating the list of `TableFunction` only happens once.
+#[macro_export]
+macro_rules! create_udtf_function {
+    ($module:path, $name:expr) => {
+        paste::paste! {
+            static INSTANCE: std::sync::OnceLock<Arc<TableFunction>> = std::sync::OnceLock::new();
+
+            pub fn [<$name:lower>]() -> Arc<TableFunction> {
+                INSTANCE.get_or_init(|| {
+                    Arc::new(TableFunction::new(
+                        $name.to_string(),
+                        Arc::new($module {}),
+                    ))
+                }).clone()
+            }
+        }
+    };
+}
+
+create_udtf_function!(generate_series::GenerateSeriesFunc, "generate_series");
