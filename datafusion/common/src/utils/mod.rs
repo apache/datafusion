@@ -39,8 +39,10 @@ use sqlparser::parser::Parser;
 use std::borrow::{Borrow, Cow};
 use std::cmp::{min, Ordering};
 use std::collections::HashSet;
+use std::num::NonZero;
 use std::ops::Range;
 use std::sync::Arc;
+use std::thread::available_parallelism;
 
 /// Applies an optional projection to a [`SchemaRef`], returning the
 /// projected schema
@@ -319,8 +321,6 @@ pub fn longest_consecutive_prefix<T: Borrow<usize>>(
     count
 }
 
-/// Array Utils
-
 /// Wrap an array into a single element `ListArray`.
 /// For example `[1, 2, 3]` would be converted into `[[1, 2, 3]]`
 /// The field in the list array is nullable.
@@ -328,14 +328,26 @@ pub fn array_into_list_array_nullable(arr: ArrayRef) -> ListArray {
     array_into_list_array(arr, true)
 }
 
-/// Array Utils
-
 /// Wrap an array into a single element `ListArray`.
 /// For example `[1, 2, 3]` would be converted into `[[1, 2, 3]]`
 pub fn array_into_list_array(arr: ArrayRef, nullable: bool) -> ListArray {
     let offsets = OffsetBuffer::from_lengths([arr.len()]);
     ListArray::new(
         Arc::new(Field::new_list_field(arr.data_type().to_owned(), nullable)),
+        offsets,
+        arr,
+        None,
+    )
+}
+
+pub fn array_into_list_array_with_field_name(
+    arr: ArrayRef,
+    nullable: bool,
+    field_name: &str,
+) -> ListArray {
+    let offsets = OffsetBuffer::from_lengths([arr.len()]);
+    ListArray::new(
+        Arc::new(Field::new(field_name, arr.data_type().to_owned(), nullable)),
         offsets,
         arr,
         None,
@@ -354,6 +366,19 @@ pub fn array_into_large_list_array(arr: ArrayRef) -> LargeListArray {
     )
 }
 
+pub fn array_into_large_list_array_with_field_name(
+    arr: ArrayRef,
+    field_name: &str,
+) -> LargeListArray {
+    let offsets = OffsetBuffer::from_lengths([arr.len()]);
+    LargeListArray::new(
+        Arc::new(Field::new(field_name, arr.data_type().to_owned(), true)),
+        offsets,
+        arr,
+        None,
+    )
+}
+
 pub fn array_into_fixed_size_list_array(
     arr: ArrayRef,
     list_size: usize,
@@ -361,6 +386,20 @@ pub fn array_into_fixed_size_list_array(
     let list_size = list_size as i32;
     FixedSizeListArray::new(
         Arc::new(Field::new_list_field(arr.data_type().to_owned(), true)),
+        list_size,
+        arr,
+        None,
+    )
+}
+
+pub fn array_into_fixed_size_list_array_with_field_name(
+    arr: ArrayRef,
+    list_size: usize,
+    field_name: &str,
+) -> FixedSizeListArray {
+    let list_size = list_size as i32;
+    FixedSizeListArray::new(
+        Arc::new(Field::new(field_name, arr.data_type().to_owned(), true)),
         list_size,
         arr,
         None,
@@ -528,7 +567,7 @@ pub mod datafusion_strsim {
 
     struct StringWrapper<'a>(&'a str);
 
-    impl<'a, 'b> IntoIterator for &'a StringWrapper<'b> {
+    impl<'b> IntoIterator for &StringWrapper<'b> {
         type Item = char;
         type IntoIter = Chars<'b>;
 
@@ -722,6 +761,16 @@ pub fn combine_limit(
     };
 
     (combined_skip, combined_fetch)
+}
+
+/// Returns the estimated number of threads available for parallel execution.
+///
+/// This is a wrapper around `std::thread::available_parallelism`, providing a default value
+/// of `1` if the system's parallelism cannot be determined.
+pub fn get_available_parallelism() -> usize {
+    available_parallelism()
+        .unwrap_or(NonZero::new(1).expect("literal value `1` shouldn't be zero"))
+        .get()
 }
 
 #[cfg(test)]

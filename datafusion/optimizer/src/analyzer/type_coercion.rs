@@ -290,7 +290,7 @@ impl<'a> TypeCoercionRewriter<'a> {
     }
 }
 
-impl<'a> TreeNodeRewriter for TypeCoercionRewriter<'a> {
+impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
     type Node = Expr;
 
     fn f_up(&mut self, expr: Expr) -> Result<Transformed<Expr>> {
@@ -692,6 +692,7 @@ fn extract_window_frame_target_type(col_type: &DataType) -> Result<DataType> {
     if col_type.is_numeric()
         || is_utf8_or_large_utf8(col_type)
         || matches!(col_type, DataType::Null)
+        || matches!(col_type, DataType::Boolean)
     {
         Ok(col_type.clone())
     } else if is_datetime(col_type) {
@@ -1250,7 +1251,11 @@ mod test {
             Ok(Utf8)
         }
 
-        fn invoke(&self, _args: &[ColumnarValue]) -> Result<ColumnarValue> {
+        fn invoke_batch(
+            &self,
+            _args: &[ColumnarValue],
+            _number_rows: usize,
+        ) -> Result<ColumnarValue> {
             Ok(ColumnarValue::Scalar(ScalarValue::from("a")))
         }
     }

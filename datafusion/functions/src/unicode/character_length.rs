@@ -72,7 +72,11 @@ impl ScalarUDFImpl for CharacterLengthFunc {
         utf8_to_int_type(&arg_types[0], "character_length")
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         make_scalar_function(character_length, vec![])(args)
     }
 
@@ -89,12 +93,13 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_character_length_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_STRING)
-            .with_description("Returns the number of characters in a string.")
-            .with_syntax_example("character_length(str)")
-            .with_sql_example(
-                r#"```sql
+        Documentation::builder(
+            DOC_SECTION_STRING,
+            "Returns the number of characters in a string.",
+            "character_length(str)",
+        )
+        .with_sql_example(
+            r#"```sql
 > select character_length('Ångström');
 +------------------------------------+
 | character_length(Utf8("Ångström")) |
@@ -102,12 +107,11 @@ fn get_character_length_doc() -> &'static Documentation {
 | 8                                  |
 +------------------------------------+
 ```"#,
-            )
-            .with_standard_argument("str", Some("String"))
-            .with_related_udf("bit_length")
-            .with_related_udf("octet_length")
-            .build()
-            .unwrap()
+        )
+        .with_standard_argument("str", Some("String"))
+        .with_related_udf("bit_length")
+        .with_related_udf("octet_length")
+        .build()
     })
 }
 

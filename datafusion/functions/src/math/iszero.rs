@@ -71,7 +71,11 @@ impl ScalarUDFImpl for IsZeroFunc {
         Ok(Boolean)
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         make_scalar_function(iszero, vec![])(args)
     }
 
@@ -84,15 +88,13 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_iszero_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_MATH)
-            .with_description(
-                "Returns true if a given number is +0.0 or -0.0 otherwise returns false.",
-            )
-            .with_syntax_example("iszero(numeric_expression)")
-            .with_standard_argument("numeric_expression", Some("Numeric"))
-            .build()
-            .unwrap()
+        Documentation::builder(
+            DOC_SECTION_MATH,
+            "Returns true if a given number is +0.0 or -0.0 otherwise returns false.",
+            "iszero(numeric_expression)",
+        )
+        .with_standard_argument("numeric_expression", Some("Numeric"))
+        .build()
     })
 }
 

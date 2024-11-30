@@ -27,6 +27,7 @@ use datafusion_expr::{col, lit, table_scan, wildcard, LogicalPlanBuilder};
 use datafusion_functions::unicode;
 use datafusion_functions_aggregate::grouping::grouping_udaf;
 use datafusion_functions_nested::make_array::make_array_udf;
+use datafusion_functions_nested::map::map_udf;
 use datafusion_functions_window::rank::rank_udwf;
 use datafusion_sql::planner::{ContextProvider, PlannerContext, SqlToRel};
 use datafusion_sql::unparser::dialect::{
@@ -188,7 +189,10 @@ fn roundtrip_statement() -> Result<()> {
             "SELECT ARRAY[1, 2, 3][1]",
             "SELECT [1, 2, 3]",
             "SELECT [1, 2, 3][1]",
-            "SELECT left[1] FROM array"
+            "SELECT left[1] FROM array",
+            "SELECT {a:1, b:2}",
+            "SELECT s.a FROM (SELECT {a:1, b:2} AS s)",
+            "SELECT MAP {'a': 1, 'b': 2}"
     ];
 
     // For each test sql string, we transform as follows:
@@ -204,6 +208,7 @@ fn roundtrip_statement() -> Result<()> {
         let state = MockSessionState::default()
             .with_scalar_function(make_array_udf())
             .with_scalar_function(array_element_udf())
+            .with_scalar_function(map_udf())
             .with_aggregate_function(sum_udaf())
             .with_aggregate_function(count_udaf())
             .with_aggregate_function(max_udaf())
@@ -1154,6 +1159,36 @@ fn test_join_with_table_scan_filters() -> Result<()> {
     let sql = plan_to_sql(&join_plan_multiple_filters)?;
 
     let expected_sql = r#"SELECT * FROM left_table AS "left" JOIN right_table ON "left".id = right_table.id AND (("left".id > 5) AND (("left"."name" LIKE 'some_name' AND (right_table."name" = 'before_join_filter_val')) AND (age > 10))) WHERE ("left"."name" = 'after_join_filter_val')"#;
+
+    assert_eq!(sql.to_string(), expected_sql);
+
+    let right_plan_with_filter_schema = table_scan_with_filters(
+        Some("right_table"),
+        &schema_right,
+        None,
+        vec![
+            col("right_table.age").gt(lit(10)),
+            col("right_table.age").lt(lit(11)),
+        ],
+    )?
+    .build()?;
+    let right_plan_with_duplicated_filter =
+        LogicalPlanBuilder::from(right_plan_with_filter_schema.clone())
+            .filter(col("right_table.age").gt(lit(10)))?
+            .build()?;
+
+    let join_plan_duplicated_filter = LogicalPlanBuilder::from(left_plan)
+        .join(
+            right_plan_with_duplicated_filter,
+            datafusion_expr::JoinType::Inner,
+            (vec!["left.id"], vec!["right_table.id"]),
+            Some(col("left.id").gt(lit(5))),
+        )?
+        .build()?;
+
+    let sql = plan_to_sql(&join_plan_duplicated_filter)?;
+
+    let expected_sql = r#"SELECT * FROM left_table AS "left" JOIN right_table ON "left".id = right_table.id AND (("left".id > 5) AND (("left"."name" LIKE 'some_name' AND (right_table.age > 10)) AND (right_table.age < 11)))"#;
 
     assert_eq!(sql.to_string(), expected_sql);
 

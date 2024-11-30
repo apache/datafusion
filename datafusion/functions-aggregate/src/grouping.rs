@@ -108,12 +108,11 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_grouping_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_GENERAL)
-            .with_description(
+        Documentation::builder(
+            DOC_SECTION_GENERAL,
                 "Returns 1 if the data is aggregated across the specified column, or 0 if it is not aggregated in the result set.",
-            )
-            .with_syntax_example("grouping(expression)")
+
+            "grouping(expression)")
             .with_sql_example(r#"```sql
 > SELECT column_name, GROUPING(column_name) AS group_column
   FROM table_name
@@ -129,6 +128,5 @@ fn get_grouping_doc() -> &'static Documentation {
             )
             .with_argument("expression", "Expression to evaluate whether data is aggregated across the specified column. Can be a constant, column, or function.")
             .build()
-            .unwrap()
     })
 }

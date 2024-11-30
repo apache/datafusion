@@ -84,7 +84,11 @@ impl ScalarUDFImpl for PowerFunc {
         &self.aliases
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         let args = ColumnarValue::values_to_arrays(args)?;
 
         let arr: ArrayRef = match args[0].data_type() {
@@ -174,16 +178,14 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_power_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_MATH)
-            .with_description(
-                "Returns a base expression raised to the power of an exponent.",
-            )
-            .with_syntax_example("power(base, exponent)")
-            .with_standard_argument("base", Some("Numeric"))
-            .with_standard_argument("exponent", Some("Exponent numeric"))
-            .build()
-            .unwrap()
+        Documentation::builder(
+            DOC_SECTION_MATH,
+            "Returns a base expression raised to the power of an exponent.",
+            "power(base, exponent)",
+        )
+        .with_standard_argument("base", Some("Numeric"))
+        .with_standard_argument("exponent", Some("Exponent numeric"))
+        .build()
     })
 }
 
@@ -205,7 +207,7 @@ mod tests {
             ColumnarValue::Array(Arc::new(Float64Array::from(vec![2.0, 2.0, 3.0, 5.0]))), // base
             ColumnarValue::Array(Arc::new(Float64Array::from(vec![3.0, 2.0, 4.0, 4.0]))), // exponent
         ];
-
+        #[allow(deprecated)] // TODO: migrate to invoke_with_args
         let result = PowerFunc::new()
             .invoke_batch(&args, 4)
             .expect("failed to initialize function power");
@@ -232,7 +234,7 @@ mod tests {
             ColumnarValue::Array(Arc::new(Int64Array::from(vec![2, 2, 3, 5]))), // base
             ColumnarValue::Array(Arc::new(Int64Array::from(vec![3, 2, 4, 4]))), // exponent
         ];
-
+        #[allow(deprecated)] // TODO: migrate to invoke_with_args
         let result = PowerFunc::new()
             .invoke_batch(&args, 4)
             .expect("failed to initialize function power");

@@ -48,7 +48,6 @@ use tokio::task::JoinSet;
 /// 3. Automatically cancels any outstanding tasks when the receiver stream is dropped.
 ///
 /// [`ReceiverStream` from tokio-stream]: https://docs.rs/tokio-stream/latest/tokio_stream/wrappers/struct.ReceiverStream.html
-
 pub(crate) struct ReceiverStreamBuilder<O> {
     tx: Sender<Result<O>>,
     rx: Receiver<Result<O>>,

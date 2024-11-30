@@ -83,7 +83,11 @@ impl ScalarUDFImpl for RegexpMatchFunc {
             other => DataType::List(Arc::new(Field::new("item", other.clone(), true))),
         })
     }
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         let len = args
             .iter()
             .fold(Option::<usize>::None, |acc, arg| match arg {
@@ -117,10 +121,10 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_regexp_match_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_REGEX)
-            .with_description("Returns the first [regular expression](https://docs.rs/regex/latest/regex/#syntax) matches in a string.")
-            .with_syntax_example("regexp_match(str, regexp[, flags])")
+        Documentation::builder(
+            DOC_SECTION_REGEX,
+            "Returns the first [regular expression](https://docs.rs/regex/latest/regex/#syntax) matches in a string.",
+            "regexp_match(str, regexp[, flags])")
             .with_sql_example(r#"```sql
             > select regexp_match('Köln', '[a-zA-Z]ö[a-zA-Z]{2}');
             +---------------------------------------------------------+
@@ -148,7 +152,6 @@ Additional examples can be found [here](https://github.com/apache/datafusion/blo
   - **R**: enables CRLF mode: when multi-line mode is enabled, \r\n is used
   - **U**: swap the meaning of x* and x*?"#)
             .build()
-            .unwrap()
     })
 }
 

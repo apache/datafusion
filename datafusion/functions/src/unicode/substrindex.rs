@@ -78,7 +78,11 @@ impl ScalarUDFImpl for SubstrIndexFunc {
         utf8_to_str_type(&arg_types[0], "substr_index")
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         make_scalar_function(substr_index, vec![])(args)
     }
 
@@ -95,12 +99,12 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_substr_index_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_STRING)
-            .with_description(r#"Returns the substring from str before count occurrences of the delimiter delim.
+        Documentation::builder(
+            DOC_SECTION_STRING,
+            r#"Returns the substring from str before count occurrences of the delimiter delim.
 If count is positive, everything to the left of the final delimiter (counting from the left) is returned.
-If count is negative, everything to the right of the final delimiter (counting from the right) is returned."#)
-            .with_syntax_example("substr_index(str, delim, count)")
+If count is negative, everything to the right of the final delimiter (counting from the right) is returned."#,
+            "substr_index(str, delim, count)")
             .with_sql_example(r#"```sql
 > select substr_index('www.apache.org', '.', 1);
 +---------------------------------------------------------+
@@ -119,7 +123,6 @@ If count is negative, everything to the right of the final delimiter (counting f
             .with_argument("delim", "The string to find in str to split str.")
             .with_argument("count", "The number of times to search for the delimiter. Can be either a positive or negative number.")
             .build()
-            .unwrap()
     })
 }
 

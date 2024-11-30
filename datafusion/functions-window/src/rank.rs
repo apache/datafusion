@@ -106,16 +106,14 @@ static RANK_DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_rank_doc() -> &'static Documentation {
     RANK_DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_RANKING)
-            .with_description(
+        Documentation::builder(
+            DOC_SECTION_RANKING,
                 "Returns the rank of the current row within its partition, allowing \
                 gaps between ranks. This function provides a ranking similar to `row_number`, but \
                 skips ranks for identical values.",
-            )
-            .with_syntax_example("rank()")
+
+            "rank()")
             .build()
-            .unwrap()
     })
 }
 
@@ -123,16 +121,10 @@ static DENSE_RANK_DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_dense_rank_doc() -> &'static Documentation {
     DENSE_RANK_DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_RANKING)
-            .with_description(
-                "Returns the rank of the current row without gaps. This function ranks \
+        Documentation::builder(DOC_SECTION_RANKING, "Returns the rank of the current row without gaps. This function ranks \
                 rows in a dense manner, meaning consecutive ranks are assigned even for identical \
-                values.",
-            )
-            .with_syntax_example("dense_rank()")
+                values.", "dense_rank()")
             .build()
-            .unwrap()
     })
 }
 
@@ -140,15 +132,9 @@ static PERCENT_RANK_DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_percent_rank_doc() -> &'static Documentation {
     PERCENT_RANK_DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_RANKING)
-            .with_description(
-                "Returns the percentage rank of the current row within its partition. \
-                The value ranges from 0 to 1 and is computed as `(rank - 1) / (total_rows - 1)`.",
-            )
-            .with_syntax_example("percent_rank()")
+        Documentation::builder(DOC_SECTION_RANKING, "Returns the percentage rank of the current row within its partition. \
+                The value ranges from 0 to 1 and is computed as `(rank - 1) / (total_rows - 1)`.", "percent_rank()")
             .build()
-            .unwrap()
     })
 }
 

@@ -1200,7 +1200,6 @@ dependencies = [
 name = "datafusion"
 version = "43.0.0"
 dependencies = [
- "ahash",
  "apache-avro",
  "arrow",
  "arrow-array",
@@ -1231,18 +1230,13 @@ dependencies = [
  "flate2",
  "futures",
  "glob",
- "half",
- "hashbrown 0.14.5",
- "indexmap",
  "itertools",
  "log",
  "num-traits",
- "num_cpus",
  "object_store",
  "parking_lot",
  "parquet",
  "paste",
- "pin-project-lite",
  "rand",
  "sqlparser",
  "tempfile",
@@ -1313,7 +1307,6 @@ dependencies = [
  "hashbrown 0.14.5",
  "indexmap",
  "libc",
- "num_cpus",
  "object_store",
  "parquet",
  "paste",
@@ -1332,6 +1325,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "datafusion-doc"
+version = "43.0.0"
+
+[[package]]
 name = "datafusion-execution"
 version = "43.0.0"
 dependencies = [
@@ -1341,7 +1338,6 @@ dependencies = [
  "datafusion-common",
  "datafusion-expr",
  "futures",
- "hashbrown 0.14.5",
  "log",
  "object_store",
  "parking_lot",
@@ -1360,6 +1356,7 @@ dependencies = [
  "arrow-buffer",
  "chrono",
  "datafusion-common",
+ "datafusion-doc",
  "datafusion-expr-common",
  "datafusion-functions-aggregate-common",
  "datafusion-functions-window-common",
@@ -1394,8 +1391,10 @@ dependencies = [
  "blake3",
  "chrono",
  "datafusion-common",
+ "datafusion-doc",
  "datafusion-execution",
  "datafusion-expr",
+ "datafusion-macros",
  "hashbrown 0.14.5",
  "hex",
  "itertools",
@@ -1422,7 +1421,6 @@ dependencies = [
  "datafusion-physical-expr",
  "datafusion-physical-expr-common",
  "half",
- "indexmap",
  "log",
  "paste",
 ]
@@ -1505,6 +1503,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "datafusion-macros"
+version = "43.0.0"
+dependencies = [
+ "datafusion-doc",
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
 name = "datafusion-optimizer"
 version = "43.0.0"
 dependencies = [
@@ -1514,11 +1522,9 @@ dependencies = [
  "datafusion-common",
  "datafusion-expr",
  "datafusion-physical-expr",
- "hashbrown 0.14.5",
  "indexmap",
  "itertools",
  "log",
- "paste",
  "recursive",
  "regex",
  "regex-syntax",
@@ -1532,10 +1538,7 @@ dependencies = [
  "arrow",
  "arrow-array",
  "arrow-buffer",
- "arrow-ord",
  "arrow-schema",
- "arrow-string",
- "chrono",
  "datafusion-common",
  "datafusion-expr",
  "datafusion-expr-common",
@@ -1560,7 +1563,6 @@ dependencies = [
  "datafusion-expr-common",
  "hashbrown 0.14.5",
  "itertools",
- "rand",
 ]
 
 [[package]]
@@ -1568,11 +1570,9 @@ name = "datafusion-physical-optimizer"
 version = "43.0.0"
 dependencies = [
  "arrow",
- "arrow-schema",
  "datafusion-common",
  "datafusion-execution",
  "datafusion-expr-common",
- "datafusion-optimizer",
  "datafusion-physical-expr",
  "datafusion-physical-plan",
  "itertools",
@@ -1596,7 +1596,6 @@ dependencies = [
  "datafusion-common-runtime",
  "datafusion-execution",
  "datafusion-expr",
- "datafusion-functions-aggregate-common",
  "datafusion-functions-window-common",
  "datafusion-physical-expr",
  "datafusion-physical-expr-common",
@@ -1627,7 +1626,6 @@ dependencies = [
  "recursive",
  "regex",
  "sqlparser",
- "strum 0.26.3",
 ]
 
 [[package]]
@@ -2779,16 +2777,6 @@ checksum = "071dfc062690e90b734c0b2273ce72ad0ffa95f0c74596bc250dcfd960262841"
 dependencies = [
  "autocfg",
  "libm",
-]
-
-[[package]]
-name = "num_cpus"
-version = "1.16.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4161fcb6d602d4d2081af7c3a45852d875a03dd337a6bfdd6e06407b61342a43"
-dependencies = [
- "hermit-abi",
- "libc",
 ]
 
 [[package]]

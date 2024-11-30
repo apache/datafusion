@@ -39,6 +39,7 @@ use datafusion::physical_plan::{collect, displayable};
 use datafusion::prelude::*;
 use datafusion_benchmarks::util::{BenchmarkRun, CommonOpt};
 use datafusion_common::instant::Instant;
+use datafusion_common::utils::get_available_parallelism;
 use datafusion_common::{exec_datafusion_err, exec_err, DEFAULT_PARQUET_EXTENSION};
 
 #[derive(Debug, StructOpt)]
@@ -325,7 +326,9 @@ impl ExternalAggrConfig {
     }
 
     fn partitions(&self) -> usize {
-        self.common.partitions.unwrap_or(num_cpus::get())
+        self.common
+            .partitions
+            .unwrap_or(get_available_parallelism())
     }
 
     /// Parse memory limit from string to number of bytes

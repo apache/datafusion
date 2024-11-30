@@ -20,6 +20,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use clap::Parser;
+use datafusion_common::utils::get_available_parallelism;
 use datafusion_sqllogictest::{DataFusion, TestContext};
 use futures::stream::StreamExt;
 use itertools::Itertools;
@@ -112,7 +113,7 @@ async fn run_tests() -> Result<()> {
             .join()
         })
         // run up to num_cpus streams in parallel
-        .buffer_unordered(num_cpus::get())
+        .buffer_unordered(get_available_parallelism())
         .flat_map(|result| {
             // Filter out any Ok() leaving only the DataFusionErrors
             futures::stream::iter(match result {

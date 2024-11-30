@@ -85,7 +85,11 @@ impl ScalarUDFImpl for ConcatFunc {
 
     /// Concatenates the text representations of all the arguments. NULL arguments are ignored.
     /// concat('abcde', 2, NULL, 22) = 'abcde222'
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         let mut return_datatype = DataType::Utf8;
         args.iter().for_each(|col| {
             if col.data_type() == DataType::Utf8View {
@@ -267,12 +271,13 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_concat_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_STRING)
-            .with_description("Concatenates multiple strings together.")
-            .with_syntax_example("concat(str[, ..., str_n])")
-            .with_sql_example(
-                r#"```sql
+        Documentation::builder(
+            DOC_SECTION_STRING,
+            "Concatenates multiple strings together.",
+            "concat(str[, ..., str_n])",
+        )
+        .with_sql_example(
+            r#"```sql
 > select concat('data', 'f', 'us', 'ion');
 +-------------------------------------------------------+
 | concat(Utf8("data"),Utf8("f"),Utf8("us"),Utf8("ion")) |
@@ -280,12 +285,11 @@ fn get_concat_doc() -> &'static Documentation {
 | datafusion                                            |
 +-------------------------------------------------------+
 ```"#,
-            )
-            .with_standard_argument("str", Some("String"))
-            .with_argument("str_n", "Subsequent string expressions to concatenate.")
-            .with_related_udf("concat_ws")
-            .build()
-            .unwrap()
+        )
+        .with_standard_argument("str", Some("String"))
+        .with_argument("str_n", "Subsequent string expressions to concatenate.")
+        .with_related_udf("concat_ws")
+        .build()
     })
 }
 
@@ -472,6 +476,7 @@ mod tests {
         ])));
         let args = &[c0, c1, c2, c3, c4];
 
+        #[allow(deprecated)] // TODO migrate UDF invoke to invoke_batch
         let result = ConcatFunc::new().invoke_batch(args, 3)?;
         let expected =
             Arc::new(StringViewArray::from(vec!["foo,x,a", "bar,,", "baz,z,b"]))
