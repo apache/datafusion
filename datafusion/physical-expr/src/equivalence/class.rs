@@ -15,19 +15,18 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use super::{add_offset_to_expr, collapse_lex_req, ProjectionMapping};
+use crate::{
+    expressions::Column, physical_exprs_contains, LexOrdering, LexRequirement,
+    PhysicalExpr, PhysicalExprRef, PhysicalSortExpr, PhysicalSortRequirement,
+};
+use indexmap::IndexSet;
 use std::fmt::Display;
 use std::sync::Arc;
 
-use super::{add_offset_to_expr, collapse_lex_req, ProjectionMapping};
-use crate::{
-    expressions::Column, physical_expr::deduplicate_physical_exprs,
-    physical_exprs_bag_equal, physical_exprs_contains, LexOrdering, LexRequirement,
-    PhysicalExpr, PhysicalExprRef, PhysicalSortExpr, PhysicalSortRequirement,
-};
-
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::JoinType;
-use datafusion_physical_expr_common::physical_expr::format_physical_expr_list;
+use datafusion_physical_expr_common::physical_expr::format_physical_expr_list2;
 
 /// A structure representing a expression known to be constant in a physical execution plan.
 ///
@@ -191,46 +190,48 @@ pub struct EquivalenceClass {
     /// matter for equivalence purposes
     ///
     /// TODO: use a HashSet for this instead of a Vec
-    exprs: Vec<Arc<dyn PhysicalExpr>>,
+    exprs: IndexSet<Arc<dyn PhysicalExpr>>,
 }
 
 impl PartialEq for EquivalenceClass {
     /// Returns true if other is equal in the sense
     /// of bags (multi-sets), disregarding their orderings.
     fn eq(&self, other: &Self) -> bool {
-        physical_exprs_bag_equal(&self.exprs, &other.exprs)
+        self.exprs.eq(&other.exprs)
     }
 }
 
 impl EquivalenceClass {
     /// Create a new empty equivalence class
     pub fn new_empty() -> Self {
-        Self { exprs: vec![] }
+        Self {
+            exprs: IndexSet::new(),
+        }
     }
 
     // Create a new equivalence class from a pre-existing `Vec`
-    pub fn new(mut exprs: Vec<Arc<dyn PhysicalExpr>>) -> Self {
-        deduplicate_physical_exprs(&mut exprs);
-        Self { exprs }
+    pub fn new(exprs: Vec<Arc<dyn PhysicalExpr>>) -> Self {
+        // deduplicate_physical_exprs(&mut exprs);
+        Self {
+            exprs: exprs.into_iter().collect(),
+        }
     }
 
     /// Return the inner vector of expressions
     pub fn into_vec(self) -> Vec<Arc<dyn PhysicalExpr>> {
-        self.exprs
+        self.exprs.into_iter().collect()
     }
 
     /// Return the "canonical" expression for this class (the first element)
     /// if any
     fn canonical_expr(&self) -> Option<Arc<dyn PhysicalExpr>> {
-        self.exprs.first().cloned()
+        self.exprs.iter().next().cloned()
     }
 
     /// Insert the expression into this class, meaning it is known to be equal to
     /// all other expressions in this class
     pub fn push(&mut self, expr: Arc<dyn PhysicalExpr>) {
-        if !self.contains(&expr) {
-            self.exprs.push(expr);
-        }
+        self.exprs.insert(expr);
     }
 
     /// Inserts all the expressions from other into this class
@@ -243,7 +244,7 @@ impl EquivalenceClass {
 
     /// Returns true if this equivalence class contains t expression
     pub fn contains(&self, expr: &Arc<dyn PhysicalExpr>) -> bool {
-        physical_exprs_contains(&self.exprs, expr)
+        self.exprs.contains(expr)
     }
 
     /// Returns true if this equivalence class has any entries in common with `other`
@@ -281,7 +282,7 @@ impl EquivalenceClass {
 
 impl Display for EquivalenceClass {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "[{}]", format_physical_expr_list(&self.exprs))
+        write!(f, "[{}]", format_physical_expr_list2(&self.exprs))
     }
 }
 
