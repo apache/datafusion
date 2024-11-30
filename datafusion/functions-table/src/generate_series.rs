@@ -24,7 +24,7 @@ use datafusion_catalog::TableFunctionImpl;
 use datafusion_catalog::TableProvider;
 use datafusion_common::{not_impl_err, plan_err, Result, ScalarValue};
 use datafusion_expr::{Expr, TableType};
-use datafusion_physical_plan::memory::{StreamingBatchGenerator, StreamingMemoryExec};
+use datafusion_physical_plan::memory::{LazyBatchGenerator, LazyMemoryExec};
 use datafusion_physical_plan::ExecutionPlan;
 use std::fmt;
 use std::sync::Arc;
@@ -44,7 +44,7 @@ struct GenerateSeriesTable {
 #[derive(Debug, Clone)]
 struct GenerateSeriesState {
     schema: SchemaRef,
-    _start: i64,
+    _start: i64, // Kept for display
     end: i64,
     batch_size: usize,
 
@@ -63,7 +63,7 @@ impl fmt::Display for GenerateSeriesState {
     }
 }
 
-impl StreamingBatchGenerator for GenerateSeriesState {
+impl LazyBatchGenerator for GenerateSeriesState {
     fn generate_next_batch(&mut self) -> Result<Option<RecordBatch>> {
         // Check if we've reached the end
         if self.current > self.end {
@@ -112,7 +112,7 @@ impl TableProvider for GenerateSeriesTable {
                     );
                 }
 
-                Ok(Arc::new(StreamingMemoryExec::try_new(
+                Ok(Arc::new(LazyMemoryExec::try_new(
                     self.schema.clone(),
                     vec![Arc::new(Mutex::new(GenerateSeriesState {
                         schema: self.schema.clone(),
@@ -125,7 +125,7 @@ impl TableProvider for GenerateSeriesTable {
             }
             _ => {
                 // Either start or end is None, return a generator that outputs 0 rows
-                Ok(Arc::new(StreamingMemoryExec::try_new(
+                Ok(Arc::new(LazyMemoryExec::try_new(
                     self.schema.clone(),
                     vec![Arc::new(Mutex::new(GenerateSeriesState {
                         schema: self.schema.clone(),
@@ -147,10 +147,10 @@ impl TableFunctionImpl for GenerateSeriesFunc {
     // Check input `exprs` type and number. Input validity check (e.g. start <= end)
     // will be performed in `TableProvider::scan`
     fn call(&self, exprs: &[Expr]) -> Result<Arc<dyn TableProvider>> {
-        // TODO: support 3 arguments following DuckDB:
+        // TODO: support 1 or 3 arguments following DuckDB:
         // <https://duckdb.org/docs/sql/functions/list#generate_series>
-        if exprs.len() == 3 {
-            return not_impl_err!("generate_series does not support 3 arguments");
+        if exprs.len() == 3 || exprs.len() == 1 {
+            return not_impl_err!("generate_series does not support 1 or 3 arguments");
         }
 
         if exprs.len() != 2 {

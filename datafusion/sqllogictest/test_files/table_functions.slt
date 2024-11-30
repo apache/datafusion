@@ -109,10 +109,26 @@ query TT
 EXPLAIN SELECT * FROM generate_series(1, 5)
 ----
 logical_plan TableScan: tmp_table projection=[value]
-physical_plan StreamingMemoryExec: partitions=1, batch_generators=[generate_series: start=1, end=5, batch_size=8192]
+physical_plan LazyMemoryExec: partitions=1, batch_generators=[generate_series: start=1, end=5, batch_size=8192]
+
+#
+# Test generate_series with invalid arguments
+#
 
 query error DataFusion error: Error during planning: End value must be greater than or equal to start value
 SELECT * FROM generate_series(5, 1)
 
-statement error DataFusion error: This feature is not implemented: generate_series does not support 3 arguments
+statement error DataFusion error: This feature is not implemented: generate_series does not support 1 or 3 arguments
 SELECT * FROM generate_series(1, 5, NULL)
+
+statement error DataFusion error: This feature is not implemented: generate_series does not support 1 or 3 arguments
+SELECT * FROM generate_series(1)
+
+statement error DataFusion error: Error during planning: generate_series expects 2 arguments
+SELECT * FROM generate_series(1, 2, 3, 4)
+
+statement error DataFusion error: Error during planning: Second argument must be an integer literal
+SELECT * FROM generate_series(1, '2')
+
+statement error DataFusion error: Error during planning: First argument must be an integer literal
+SELECT * FROM generate_series('foo', 'bar')

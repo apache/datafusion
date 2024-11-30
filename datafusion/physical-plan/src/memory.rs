@@ -366,29 +366,29 @@ impl RecordBatchStream for MemoryStream {
     }
 }
 
-pub trait StreamingBatchGenerator: Send + Sync + fmt::Debug + fmt::Display {
+pub trait LazyBatchGenerator: Send + Sync + fmt::Debug + fmt::Display {
     /// Generate the next batch, return `None` when no more batches are available
     fn generate_next_batch(&mut self) -> Result<Option<RecordBatch>>;
 }
 
-/// Execution plan for streaming in-memory batches of data
+/// Execution plan for lazy in-memory batches of data
 ///
 /// This plan generates output batches lazily, it doesn't have to buffer all batches
 /// in memory up front (compared to `MemoryExec`), thus consuming constant memory.
-pub struct StreamingMemoryExec {
+pub struct LazyMemoryExec {
     /// Schema representing the data
     schema: SchemaRef,
     /// Functions to generate batches for each partition
-    batch_generators: Vec<Arc<Mutex<dyn StreamingBatchGenerator>>>,
+    batch_generators: Vec<Arc<Mutex<dyn LazyBatchGenerator>>>,
     /// Total number of rows to generate for statistics
     cache: PlanProperties,
 }
 
-impl StreamingMemoryExec {
-    /// Create a new streaming memory execution plan
+impl LazyMemoryExec {
+    /// Create a new lazy memory execution plan
     pub fn try_new(
         schema: SchemaRef,
-        generators: Vec<Arc<Mutex<dyn StreamingBatchGenerator>>>,
+        generators: Vec<Arc<Mutex<dyn LazyBatchGenerator>>>,
     ) -> Result<Self> {
         let cache = PlanProperties::new(
             EquivalenceProperties::new(Arc::clone(&schema)),
@@ -403,22 +403,22 @@ impl StreamingMemoryExec {
     }
 }
 
-impl fmt::Debug for StreamingMemoryExec {
+impl fmt::Debug for LazyMemoryExec {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.debug_struct("StreamingMemoryExec")
+        f.debug_struct("LazyMemoryExec")
             .field("schema", &self.schema)
             .field("batch_generators", &self.batch_generators)
             .finish()
     }
 }
 
-impl DisplayAs for StreamingMemoryExec {
+impl DisplayAs for LazyMemoryExec {
     fn fmt_as(&self, t: DisplayFormatType, f: &mut fmt::Formatter) -> fmt::Result {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 write!(
                     f,
-                    "StreamingMemoryExec: partitions={}, batch_generators=[{}]",
+                    "LazyMemoryExec: partitions={}, batch_generators=[{}]",
                     self.batch_generators.len(),
                     self.batch_generators
                         .iter()
@@ -431,9 +431,9 @@ impl DisplayAs for StreamingMemoryExec {
     }
 }
 
-impl ExecutionPlan for StreamingMemoryExec {
+impl ExecutionPlan for LazyMemoryExec {
     fn name(&self) -> &'static str {
-        "StreamingMemoryExec"
+        "LazyMemoryExec"
     }
 
     fn as_any(&self) -> &dyn Any {
@@ -459,7 +459,7 @@ impl ExecutionPlan for StreamingMemoryExec {
         if children.is_empty() {
             Ok(self)
         } else {
-            internal_err!("Children cannot be replaced in StreamingMemoryExec")
+            internal_err!("Children cannot be replaced in LazyMemoryExec")
         }
     }
 
@@ -470,13 +470,13 @@ impl ExecutionPlan for StreamingMemoryExec {
     ) -> Result<SendableRecordBatchStream> {
         if partition >= self.batch_generators.len() {
             return internal_err!(
-                "Invalid partition {} for StreamingMemoryExec with {} partitions",
+                "Invalid partition {} for LazyMemoryExec with {} partitions",
                 partition,
                 self.batch_generators.len()
             );
         }
 
-        Ok(Box::pin(StreamingMemoryStream {
+        Ok(Box::pin(LazyMemoryStream {
             schema: Arc::clone(&self.schema),
             generator: Arc::clone(&self.batch_generators[partition]),
         }))
@@ -488,19 +488,19 @@ impl ExecutionPlan for StreamingMemoryExec {
 }
 
 /// Stream that generates record batches on demand
-pub struct StreamingMemoryStream {
+pub struct LazyMemoryStream {
     schema: SchemaRef,
     /// Generator to produce batches
     ///
     /// Note: Idiomatically, DataFusion uses plan-time parallelism - each stream
-    /// should have a unique `StreamingBatchGenerator`. Use RepartitionExec or
-    /// construct multiple `StreamingMemoryStream`s during planning to enable
+    /// should have a unique `LazyBatchGenerator`. Use RepartitionExec or
+    /// construct multiple `LazyMemoryStream`s during planning to enable
     /// parallel execution.
     /// Sharing generators between streams should be used with caution.
-    generator: Arc<Mutex<dyn StreamingBatchGenerator>>,
+    generator: Arc<Mutex<dyn LazyBatchGenerator>>,
 }
 
-impl Stream for StreamingMemoryStream {
+impl Stream for LazyMemoryStream {
     type Item = Result<RecordBatch>;
 
     fn poll_next(
@@ -517,7 +517,7 @@ impl Stream for StreamingMemoryStream {
     }
 }
 
-impl RecordBatchStream for StreamingMemoryStream {
+impl RecordBatchStream for LazyMemoryStream {
     fn schema(&self) -> SchemaRef {
         Arc::clone(&self.schema)
     }
@@ -576,7 +576,7 @@ mod memory_exec_tests {
 }
 
 #[cfg(test)]
-mod streaming_memory_tests {
+mod lazy_memory_tests {
     use super::*;
     use arrow::array::Int64Array;
     use arrow::datatypes::{DataType, Field, Schema};
@@ -600,7 +600,7 @@ mod streaming_memory_tests {
         }
     }
 
-    impl StreamingBatchGenerator for TestGenerator {
+    impl LazyBatchGenerator for TestGenerator {
         fn generate_next_batch(&mut self) -> Result<Option<RecordBatch>> {
             if self.counter >= self.max_batches {
                 return Ok(None);
@@ -619,7 +619,7 @@ mod streaming_memory_tests {
     }
 
     #[tokio::test]
-    async fn test_streaming_memory_exec() -> Result<()> {
+    async fn test_lazy_memory_exec() -> Result<()> {
         let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));
         let generator = TestGenerator {
             counter: 0,
@@ -629,7 +629,7 @@ mod streaming_memory_tests {
         };
 
         let exec =
-            StreamingMemoryExec::try_new(schema, vec![Arc::new(Mutex::new(generator))])?;
+            LazyMemoryExec::try_new(schema, vec![Arc::new(Mutex::new(generator))])?;
 
         // Test schema
         assert_eq!(exec.schema().fields().len(), 1);
@@ -670,7 +670,7 @@ mod streaming_memory_tests {
     }
 
     #[tokio::test]
-    async fn test_streaming_memory_exec_invalid_partition() -> Result<()> {
+    async fn test_lazy_memory_exec_invalid_partition() -> Result<()> {
         let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));
         let generator = TestGenerator {
             counter: 0,
@@ -680,7 +680,7 @@ mod streaming_memory_tests {
         };
 
         let exec =
-            StreamingMemoryExec::try_new(schema, vec![Arc::new(Mutex::new(generator))])?;
+            LazyMemoryExec::try_new(schema, vec![Arc::new(Mutex::new(generator))])?;
 
         // Test invalid partition
         let result = exec.execute(1, Arc::new(TaskContext::default()));
@@ -688,7 +688,7 @@ mod streaming_memory_tests {
         // partition is 0-indexed, so there only should be partition 0
         assert!(matches!(
             result,
-            Err(e) if e.to_string().contains("Invalid partition 1 for StreamingMemoryExec with 1 partitions")
+            Err(e) if e.to_string().contains("Invalid partition 1 for LazyMemoryExec with 1 partitions")
         ));
 
         Ok(())
