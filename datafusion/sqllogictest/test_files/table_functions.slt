@@ -132,3 +132,11 @@ SELECT * FROM generate_series(1, '2')
 
 statement error DataFusion error: Error during planning: First argument must be an integer literal
 SELECT * FROM generate_series('foo', 'bar')
+
+# UDF and UDTF `generate_series` can be used simultaneously
+query ? rowsort
+SELECT generate_series(1, t1.end) FROM generate_series(3, 5) as t1(end)
+----
+[1, 2, 3, 4, 5]
+[1, 2, 3, 4]
+[1, 2, 3]
