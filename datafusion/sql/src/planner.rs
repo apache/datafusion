@@ -622,24 +622,41 @@ pub fn object_name_to_table_reference(
     idents_to_table_reference(idents, enable_normalization)
 }
 
+struct IdentTaker(Vec<Ident>);
+/// Take the next identifier from the back of idents, panic'ing if
+/// there are none left
+impl IdentTaker {
+    fn take(&mut self, enable_normalization: bool) -> String {
+        let ident = self.0.pop().expect("no more identifiers");
+        IdentNormalizer::new(enable_normalization).normalize(ident)
+    }
+}
+
+// impl Display for a nicer error message
+impl std::fmt::Display for IdentTaker {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut first = true;
+        for ident in self.0.iter() {
+            if !first {
+                write!(f, ".")?;
+            }
+            write!(f, "{}", ident)?;
+            first = false;
+        }
+
+        Ok(())
+    }
+}
+
 /// Create a [`TableReference`] after normalizing the specified identifier
 pub(crate) fn idents_to_table_reference(
     idents: Vec<Ident>,
     enable_normalization: bool,
 ) -> Result<TableReference> {
-    struct IdentTaker(Vec<Ident>);
-    /// Take the next identifier from the back of idents, panic'ing if
-    /// there are none left
-    impl IdentTaker {
-        fn take(&mut self, enable_normalization: bool) -> String {
-            let ident = self.0.pop().expect("no more identifiers");
-            IdentNormalizer::new(enable_normalization).normalize(ident)
-        }
-    }
-
     let mut taker = IdentTaker(idents);
+    let num_idents = taker.0.len();
 
-    match taker.0.len() {
+    match num_idents {
         1 => {
             let table = taker.take(enable_normalization);
             Ok(TableReference::bare(table))
@@ -655,7 +672,11 @@ pub(crate) fn idents_to_table_reference(
             let catalog = taker.take(enable_normalization);
             Ok(TableReference::full(catalog, schema, table))
         }
-        _ => plan_err!("Unsupported compound identifier '{:?}'", taker.0),
+        _ => plan_err!(
+            "Unsupported compound identifier '{}'. Expected 1, 2 or 3 parts, got {}",
+            taker,
+            num_idents
+        ),
     }
 }
 
