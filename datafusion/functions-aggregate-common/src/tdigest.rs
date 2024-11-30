@@ -250,7 +250,7 @@ impl TDigest {
 
     pub fn merge_sorted_f64(&self, sorted_values: &[f64]) -> TDigest {
         #[cfg(debug_assertions)]
-        debug_assert!(is_sorted(sorted_values), "unsorted input to TDigest");
+        debug_assert!(is_total_ordered(sorted_values), "unsorted input to TDigest");
 
         if sorted_values.is_empty() {
             return self.clone();
@@ -662,8 +662,8 @@ impl TDigest {
 }
 
 #[cfg(debug_assertions)]
-fn is_sorted(values: &[f64]) -> bool {
-    values.windows(2).all(|w| w[0].total_cmp(&w[1]).is_le())
+fn is_total_ordered(values: &[f64]) -> bool {
+    values.is_sorted_by(|a, b| a.total_cmp(b).is_le())
 }
 
 #[cfg(test)]
