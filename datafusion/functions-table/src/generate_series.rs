@@ -26,9 +26,9 @@ use datafusion_common::{not_impl_err, plan_err, Result, ScalarValue};
 use datafusion_expr::{Expr, TableType};
 use datafusion_physical_plan::memory::{LazyBatchGenerator, LazyMemoryExec};
 use datafusion_physical_plan::ExecutionPlan;
+use parking_lot::RwLock;
 use std::fmt;
 use std::sync::Arc;
-use std::sync::Mutex;
 
 /// Table that generates a series of integers from `start`(inclusive) to `end`(inclusive)
 #[derive(Debug, Clone)]
@@ -114,7 +114,7 @@ impl TableProvider for GenerateSeriesTable {
 
                 Ok(Arc::new(LazyMemoryExec::try_new(
                     self.schema.clone(),
-                    vec![Arc::new(Mutex::new(GenerateSeriesState {
+                    vec![Arc::new(RwLock::new(GenerateSeriesState {
                         schema: self.schema.clone(),
                         _start: start,
                         end,
@@ -127,7 +127,7 @@ impl TableProvider for GenerateSeriesTable {
                 // Either start or end is None, return a generator that outputs 0 rows
                 Ok(Arc::new(LazyMemoryExec::try_new(
                     self.schema.clone(),
-                    vec![Arc::new(Mutex::new(GenerateSeriesState {
+                    vec![Arc::new(RwLock::new(GenerateSeriesState {
                         schema: self.schema.clone(),
                         _start: 0,
                         end: 0,

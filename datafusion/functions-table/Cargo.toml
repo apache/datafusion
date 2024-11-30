@@ -53,6 +53,7 @@ datafusion-physical-plan = { workspace = true }
 half = { workspace = true }
 indexmap = { workspace = true }
 log = { workspace = true }
+parking_lot = { workspace = true }
 paste = "1.0.14"
 
 [dev-dependencies]

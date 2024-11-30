@@ -17,10 +17,10 @@
 
 //! Execution plan for reading in-memory batches of data
 
+use parking_lot::RwLock;
 use std::any::Any;
 use std::fmt;
 use std::sync::Arc;
-use std::sync::Mutex;
 use std::task::{Context, Poll};
 
 use super::{
@@ -379,7 +379,7 @@ pub struct LazyMemoryExec {
     /// Schema representing the data
     schema: SchemaRef,
     /// Functions to generate batches for each partition
-    batch_generators: Vec<Arc<Mutex<dyn LazyBatchGenerator>>>,
+    batch_generators: Vec<Arc<RwLock<dyn LazyBatchGenerator>>>,
     /// Total number of rows to generate for statistics
     cache: PlanProperties,
 }
@@ -388,7 +388,7 @@ impl LazyMemoryExec {
     /// Create a new lazy memory execution plan
     pub fn try_new(
         schema: SchemaRef,
-        generators: Vec<Arc<Mutex<dyn LazyBatchGenerator>>>,
+        generators: Vec<Arc<RwLock<dyn LazyBatchGenerator>>>,
     ) -> Result<Self> {
         let cache = PlanProperties::new(
             EquivalenceProperties::new(Arc::clone(&schema)),
@@ -422,7 +422,7 @@ impl DisplayAs for LazyMemoryExec {
                     self.batch_generators.len(),
                     self.batch_generators
                         .iter()
-                        .map(|g| g.lock().unwrap().to_string())
+                        .map(|g| g.read().to_string())
                         .collect::<Vec<_>>()
                         .join(", ")
                 )
@@ -497,7 +497,7 @@ pub struct LazyMemoryStream {
     /// construct multiple `LazyMemoryStream`s during planning to enable
     /// parallel execution.
     /// Sharing generators between streams should be used with caution.
-    generator: Arc<Mutex<dyn LazyBatchGenerator>>,
+    generator: Arc<RwLock<dyn LazyBatchGenerator>>,
 }
 
 impl Stream for LazyMemoryStream {
@@ -507,7 +507,7 @@ impl Stream for LazyMemoryStream {
         self: std::pin::Pin<&mut Self>,
         _: &mut Context<'_>,
     ) -> Poll<Option<Self::Item>> {
-        let batch = self.generator.lock().unwrap().generate_next_batch();
+        let batch = self.generator.write().generate_next_batch();
 
         match batch {
             Ok(Some(batch)) => Poll::Ready(Some(Ok(batch))),
@@ -629,7 +629,7 @@ mod lazy_memory_tests {
         };
 
         let exec =
-            LazyMemoryExec::try_new(schema, vec![Arc::new(Mutex::new(generator))])?;
+            LazyMemoryExec::try_new(schema, vec![Arc::new(RwLock::new(generator))])?;
 
         // Test schema
         assert_eq!(exec.schema().fields().len(), 1);
@@ -680,7 +680,7 @@ mod lazy_memory_tests {
         };
 
         let exec =
-            LazyMemoryExec::try_new(schema, vec![Arc::new(Mutex::new(generator))])?;
+            LazyMemoryExec::try_new(schema, vec![Arc::new(RwLock::new(generator))])?;
 
         // Test invalid partition
         let result = exec.execute(1, Arc::new(TaskContext::default()));
