@@ -49,16 +49,14 @@ use crate::{
     Statistics,
 };
 
-use arrow::array::{
-    Array, ArrayRef, BooleanBufferBuilder, UInt32Array, UInt64Array,
-};
+use arrow::array::AsArray;
+use arrow::array::{Array, ArrayRef, BooleanBufferBuilder, UInt32Array, UInt64Array};
 use arrow::compute::{concat_batches, FilterBuilder};
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::downcast_primitive_array;
 use arrow::record_batch::RecordBatch;
 use arrow::util::bit_util;
 use arrow_array::cast::downcast_array;
-use arrow::array::AsArray;
 use arrow_schema::{ArrowError, DataType};
 use datafusion_common::utils::memory::estimate_memory_size;
 use datafusion_common::{
@@ -1218,7 +1216,7 @@ fn equal_with_indices(
                 let idx_left = *idx_left as usize;
                 let idx_right = *idx_right as usize;
 
-                // Has found not equal to in previous column, do not need to check. 
+                // Has found not equal to in previous column, do not need to check.
                 if !equal.get_bit(index) {
                     continue;
                 }
@@ -1250,7 +1248,7 @@ fn equal_with_indices(
         (DataType::Boolean, DataType::Boolean) => {
             let arr_left = arr_left.as_boolean();
             let arr_right = arr_right.as_boolean();
-            
+
             let iter = indices_left.values().iter().zip(
                 indices_right.values().iter()
             );
@@ -1290,7 +1288,7 @@ fn equal_with_indices(
         (DataType::Utf8, DataType::Utf8) => {
             let arr_left = arr_left.as_string::<i32>();
             let arr_right = arr_right.as_string::<i32>();
-            
+
             let iter = indices_left.values().iter().zip(
                 indices_right.values().iter()
             );
@@ -1333,7 +1331,7 @@ fn equal_with_indices(
 
             for (left, right) in arr_left.columns().iter().zip(arr_right.columns().iter()) {
                 equal_with_indices(
-                    equal, 
+                    equal,
                     indices_left,
                     indices_right,
                     left,
@@ -1359,7 +1357,7 @@ fn equal_with_indices(
                     _ => {}
                 }
             }
-                
+
             Ok(())
         },
 
@@ -1398,16 +1396,18 @@ pub fn equal_rows_arr(
 
     iter.try_for_each(|(left, right)| {
         equal_with_indices(
-            &mut equal, 
-            indices_left, 
-            indices_right, 
-            &left, 
-            &right, 
+            &mut equal,
+            indices_left,
+            indices_right,
+            &left,
+            &right,
             null_equals_null,
         )
     })?;
 
-    let filter_builder = FilterBuilder::new(&equal.finish().into()).optimize().build();
+    let filter_builder = FilterBuilder::new(&equal.finish().into())
+        .optimize()
+        .build();
 
     let left_filtered = filter_builder.filter(indices_left)?;
     let right_filtered = filter_builder.filter(indices_right)?;
@@ -4227,12 +4227,8 @@ mod tests {
         let (_, batches_null_neq) =
             join_collect(left, right, on, &JoinType::Inner, false, task_ctx).await?;
 
-        let expected_null_neq = [
-            "+----+----+",
-            "| n1 | n2 |",
-            "+----+----+",
-            "+----+----+"
-        ];
+        let expected_null_neq =
+            ["+----+----+", "| n1 | n2 |", "+----+----+", "+----+----+"];
         assert_batches_eq!(expected_null_neq, &batches_null_neq);
 
         Ok(())
