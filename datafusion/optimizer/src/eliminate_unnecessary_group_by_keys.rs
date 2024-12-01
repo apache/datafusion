@@ -28,15 +28,11 @@ use std::hash::{Hash, Hasher};
 
 /// Optimization rule that eliminate unnecessary group by keys
 #[derive(Default, Debug)]
-pub struct EliminateUnnecessaryGroupByKeys {
-    column_group_keys: HashSet<Column>,
-}
+pub struct EliminateUnnecessaryGroupByKeys {}
 
 impl EliminateUnnecessaryGroupByKeys {
     pub fn new() -> Self {
-        Self {
-            column_group_keys: HashSet::new(),
-        }
+        Self {}
     }
 }
 
@@ -76,6 +72,8 @@ impl OptimizerRule for EliminateUnnecessaryGroupByKeys {
                 for group_key in agg.group_expr.iter() {
                     if matches!(&group_key, Expr::BinaryExpr(_))
                         || matches!(&group_key, Expr::ScalarFunction(_))
+                        || matches!(&group_key, Expr::Cast(_))
+                        || matches!(&group_key, Expr::TryCast(_))
                     {
                         // If all of the cols in `column_group_keys`, we should eliminate this key.
                         // For example, `a + 1` in `group by a, a + 1` should be eliminated.
@@ -94,7 +92,8 @@ impl OptimizerRule for EliminateUnnecessaryGroupByKeys {
                 }
 
                 if len != keep_group_by_keys.len() {
-                    let projection_expr = agg.group_expr.into_iter().chain(agg.aggr_expr.clone());
+                    let projection_expr =
+                        agg.group_expr.into_iter().chain(agg.aggr_expr.clone());
                     let new_plan = LogicalPlanBuilder::from(agg.input)
                         .aggregate(keep_group_by_keys, agg.aggr_expr)?
                         .project(projection_expr)?
