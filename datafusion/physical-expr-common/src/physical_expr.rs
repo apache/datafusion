@@ -26,7 +26,7 @@ use arrow::array::BooleanArray;
 use arrow::compute::filter_record_batch;
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
-use datafusion_common::{internal_err, not_impl_err, IndexSet, Result};
+use datafusion_common::{internal_err, not_impl_err, Result};
 use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_expr_common::interval_arithmetic::Interval;
 use datafusion_expr_common::sort_properties::ExprProperties;
@@ -217,35 +217,24 @@ pub fn with_new_children_if_necessary(
 /// Returns [`Display`] able a list of [`PhysicalExpr`]
 ///
 /// Example output: `[a + 1, b]`
-pub fn format_physical_expr_list(exprs: &[Arc<dyn PhysicalExpr>]) -> impl Display + '_ {
-    struct DisplayWrapper<'a>(&'a [Arc<dyn PhysicalExpr>]);
-    impl Display for DisplayWrapper<'_> {
-        fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-            let mut iter = self.0.iter();
-            write!(f, "[")?;
-            if let Some(expr) = iter.next() {
-                write!(f, "{}", expr)?;
-            }
-            for expr in iter {
-                write!(f, ", {}", expr)?;
-            }
-            write!(f, "]")?;
-            Ok(())
-        }
-    }
-    DisplayWrapper(exprs)
-}
+pub fn format_physical_expr_list<T>(exprs: T) -> impl Display
+where
+    T: IntoIterator,
+    T::Item: Display,
+    T::IntoIter: Clone,
+{
+    struct DisplayWrapper<I>(I)
+    where
+        I: Iterator + Clone,
+        I::Item: Display;
 
-/// Returns [`Display`] able a list of [`PhysicalExpr`]
-///
-/// Example output: `[a + 1, b]`
-pub fn format_physical_expr_list2(
-    exprs: &IndexSet<Arc<dyn PhysicalExpr>>,
-) -> impl Display + '_ {
-    struct DisplayWrapper<'a>(&'a IndexSet<Arc<dyn PhysicalExpr>>);
-    impl Display for DisplayWrapper<'_> {
+    impl<I> Display for DisplayWrapper<I>
+    where
+        I: Iterator + Clone,
+        I::Item: Display,
+    {
         fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-            let mut iter = self.0.iter();
+            let mut iter = self.0.clone();
             write!(f, "[")?;
             if let Some(expr) = iter.next() {
                 write!(f, "{}", expr)?;
@@ -257,5 +246,6 @@ pub fn format_physical_expr_list2(
             Ok(())
         }
     }
-    DisplayWrapper(exprs)
+
+    DisplayWrapper(exprs.into_iter())
 }
