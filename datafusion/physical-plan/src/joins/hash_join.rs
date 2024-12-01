@@ -1361,7 +1361,15 @@ fn equal_with_indices(
             Ok(())
         },
 
-        (DataType::Null, DataType::Null) => Ok(()),
+        (DataType::Null, DataType::Null) => {
+            if !null_equals_null {
+                for idx in 0..indices_left.len() {
+                    equal.set_bit(idx, false);
+                }
+            }
+
+            Ok(())
+        }
 
         t => unimplemented!("Take not supported for data type {:?}", t)
     }
