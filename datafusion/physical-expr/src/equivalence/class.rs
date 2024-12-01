@@ -211,7 +211,6 @@ impl EquivalenceClass {
 
     // Create a new equivalence class from a pre-existing `Vec`
     pub fn new(exprs: Vec<Arc<dyn PhysicalExpr>>) -> Self {
-        // deduplicate_physical_exprs(&mut exprs);
         Self {
             exprs: exprs.into_iter().collect(),
         }
