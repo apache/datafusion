@@ -1119,8 +1119,11 @@ mod tests {
             None
         }
 
-        fn get_aggregate_meta(&self, _name: &str) -> Option<Arc<AggregateUDF>> {
-            None
+        fn get_aggregate_meta(&self, name: &str) -> Option<Arc<AggregateUDF>> {
+            match name {
+                "sum" => Some(datafusion_functions_aggregate::sum::sum_udaf()),
+                _ => None,
+            }
         }
 
         fn get_variable_type(&self, _variable_names: &[String]) -> Option<DataType> {
@@ -1135,12 +1138,10 @@ mod tests {
             None
         }
 
-        fn udf_names(&self) -> Vec<String> {
-            Vec::new()
-        }
+        fn udf_names(&self) -> Vec<String> { Vec::new() }
 
         fn udaf_names(&self) -> Vec<String> {
-            Vec::new()
+            vec!["sum".to_string()]
         }
 
         fn udwf_names(&self) -> Vec<String> {
@@ -1200,7 +1201,7 @@ mod tests {
         let schema = DFSchema::empty();
         let mut planner_context = PlannerContext::default();
 
-        let expr_str = "int_col as int_col_alias";
+        let expr_str = "SUM(int_col) as sum_int_col";
 
         let dialect = GenericDialect {};
         let mut parser = Parser::new(&dialect).try_with_sql(expr_str).unwrap();
