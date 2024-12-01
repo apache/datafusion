@@ -720,6 +720,7 @@ impl SessionState {
         logical_plan: &LogicalPlan,
     ) -> datafusion_common::Result<Arc<dyn ExecutionPlan>> {
         let logical_plan = self.optimize(logical_plan)?;
+        println!("{logical_plan}");
         self.query_planner
             .create_physical_plan(&logical_plan, self)
             .await
