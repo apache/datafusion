@@ -253,10 +253,10 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_date_part_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_DATETIME)
-            .with_description("Returns the specified part of the date as an integer.")
-            .with_syntax_example("date_part(part, expression)")
+        Documentation::builder(
+            DOC_SECTION_DATETIME,
+            "Returns the specified part of the date as an integer.",
+            "date_part(part, expression)")
             .with_argument(
                 "part",
                 r#"Part of the date to return. The following date parts are supported:

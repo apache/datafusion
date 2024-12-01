@@ -108,10 +108,10 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_rtrim_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_STRING)
-            .with_description("Trims the specified trim string from the end of a string. If no trim string is provided, all whitespace is removed from the end of the input string.")
-            .with_syntax_example("rtrim(str[, trim_str])")
+        Documentation::builder(
+            DOC_SECTION_STRING,
+            "Trims the specified trim string from the end of a string. If no trim string is provided, all whitespace is removed from the end of the input string.",
+            "rtrim(str[, trim_str])")
             .with_sql_example(r#"```sql
 > select rtrim('  datafusion  ');
 +-------------------------------+

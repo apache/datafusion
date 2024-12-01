@@ -30,7 +30,7 @@ use std::any::Any;
 use std::sync::OnceLock;
 
 #[user_doc(
-    doc_section(include = "true", label = "Time and Date Functions"),
+    doc_section(label = "Time and Date Functions"),
     description = r"Converts a value to a date (`YYYY-MM-DD`).
 Supports strings, integer and double types as input.
 Strings are parsed as YYYY-MM-DD (e.g. '2023-07-20') if no [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html)s are provided.

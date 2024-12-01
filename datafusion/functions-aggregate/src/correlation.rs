@@ -119,14 +119,13 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_corr_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_STATISTICAL)
-            .with_description(
-                "Returns the coefficient of correlation between two numeric values.",
-            )
-            .with_syntax_example("corr(expression1, expression2)")
-            .with_sql_example(
-                r#"```sql
+        Documentation::builder(
+            DOC_SECTION_STATISTICAL,
+            "Returns the coefficient of correlation between two numeric values.",
+            "corr(expression1, expression2)",
+        )
+        .with_sql_example(
+            r#"```sql
 > SELECT corr(column1, column2) FROM table_name;
 +--------------------------------+
 | corr(column1, column2)         |
@@ -134,10 +133,10 @@ fn get_corr_doc() -> &'static Documentation {
 | 0.85                           |
 +--------------------------------+
 ```"#,
-            )
-            .with_standard_argument("expression1", Some("First"))
-            .with_standard_argument("expression2", Some("Second"))
-            .build()
+        )
+        .with_standard_argument("expression1", Some("First"))
+        .with_standard_argument("expression2", Some("Second"))
+        .build()
     })
 }
 

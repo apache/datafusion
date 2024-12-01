@@ -92,7 +92,7 @@ arrow-ipc = { version = "53.3.0", default-features = false, features = [
 arrow-ord = { version = "53.3.0", default-features = false }
 arrow-schema = { version = "53.3.0", default-features = false }
 async-trait = "0.1.73"
-bigdecimal = "=0.4.1"
+bigdecimal = "0.4.6"
 bytes = "1.4"
 chrono = { version = "0.4.38", default-features = false }
 ctor = "0.2.0"
@@ -129,7 +129,6 @@ hashbrown = { version = "0.14.5", features = ["raw"] }
 indexmap = "2.0.0"
 itertools = "0.13"
 log = "^0.4"
-num_cpus = "1.13.0"
 object_store = { version = "0.11.0", default-features = false }
 parking_lot = "0.12"
 parquet = { version = "53.3.0", default-features = false, features = [

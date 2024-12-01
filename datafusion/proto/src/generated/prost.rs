@@ -1165,7 +1165,7 @@ pub struct PhysicalExtensionNode {
 pub struct PhysicalExprNode {
     #[prost(
         oneof = "physical_expr_node::ExprType",
-        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 15, 16, 18, 19"
+        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 15, 16, 18, 19, 20"
     )]
     pub expr_type: ::core::option::Option<physical_expr_node::ExprType>,
 }
@@ -1214,6 +1214,8 @@ pub mod physical_expr_node {
         LikeExpr(::prost::alloc::boxed::Box<super::PhysicalLikeExprNode>),
         #[prost(message, tag = "19")]
         Extension(super::PhysicalExtensionExprNode),
+        #[prost(message, tag = "20")]
+        UnknownColumn(super::UnknownColumn),
     }
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1564,6 +1566,11 @@ pub struct PhysicalColumn {
     pub name: ::prost::alloc::string::String,
     #[prost(uint32, tag = "2")]
     pub index: u32,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct UnknownColumn {
+    #[prost(string, tag = "1")]
+    pub name: ::prost::alloc::string::String,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct JoinOn {

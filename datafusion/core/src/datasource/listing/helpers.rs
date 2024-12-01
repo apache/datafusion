@@ -135,7 +135,7 @@ pub fn split_files(
     partitioned_files.sort_by(|a, b| a.path().cmp(b.path()));
 
     // effectively this is div with rounding up instead of truncating
-    let chunk_size = (partitioned_files.len() + n - 1) / n;
+    let chunk_size = partitioned_files.len().div_ceil(n);
     let mut chunks = Vec::with_capacity(n);
     let mut current_chunk = Vec::with_capacity(chunk_size);
     for file in partitioned_files.drain(..) {

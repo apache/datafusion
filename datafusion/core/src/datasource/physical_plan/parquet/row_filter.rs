@@ -336,7 +336,7 @@ impl<'schema> PushdownChecker<'schema> {
     }
 }
 
-impl<'schema> TreeNodeRewriter for PushdownChecker<'schema> {
+impl TreeNodeRewriter for PushdownChecker<'_> {
     type Node = Arc<dyn PhysicalExpr>;
 
     fn f_down(

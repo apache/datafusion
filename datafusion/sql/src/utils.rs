@@ -259,7 +259,7 @@ pub(crate) fn make_decimal_type(
     }
 }
 
-// Normalize an owned identifier to a lowercase string unless the identifier is quoted.
+/// Normalize an owned identifier to a lowercase string, unless the identifier is quoted.
 pub(crate) fn normalize_ident(id: Ident) -> String {
     match id.quote_style {
         Some(_) => id.value,
@@ -328,7 +328,7 @@ struct RecursiveUnnestRewriter<'a> {
     columns_unnestings: &'a mut IndexMap<Column, Option<Vec<ColumnUnnestList>>>,
     transformed_root_exprs: Option<Vec<Expr>>,
 }
-impl<'a> RecursiveUnnestRewriter<'a> {
+impl RecursiveUnnestRewriter<'_> {
     /// This struct stores the history of expr
     /// during its tree-traversal with a notation of
     /// \[None,**Unnest(exprA)**,**Unnest(exprB)**,None,None\]
@@ -416,7 +416,7 @@ impl<'a> RecursiveUnnestRewriter<'a> {
     }
 }
 
-impl<'a> TreeNodeRewriter for RecursiveUnnestRewriter<'a> {
+impl TreeNodeRewriter for RecursiveUnnestRewriter<'_> {
     type Node = Expr;
 
     /// This downward traversal needs to keep track of:

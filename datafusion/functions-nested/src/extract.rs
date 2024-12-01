@@ -164,12 +164,11 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_array_element_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_ARRAY)
-            .with_description(
+        Documentation::builder(
+            DOC_SECTION_ARRAY,
                 "Extracts the element with the index n from the array.",
-            )
-            .with_syntax_example("array_element(array, index)")
+
+            "array_element(array, index)")
             .with_sql_example(
                 r#"```sql
 > select array_element([1, 2, 3, 4], 3);
@@ -369,12 +368,11 @@ impl ScalarUDFImpl for ArraySlice {
 
 fn get_array_slice_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_ARRAY)
-            .with_description(
+        Documentation::builder(
+            DOC_SECTION_ARRAY,
                 "Returns a slice of the array based on 1-indexed start and end positions.",
-            )
-            .with_syntax_example("array_slice(array, begin, end)")
+
+            "array_slice(array, begin, end)")
             .with_sql_example(
                 r#"```sql
 > select array_slice([1, 2, 3, 4, 5, 6, 7, 8], 3, 6);
@@ -681,12 +679,11 @@ impl ScalarUDFImpl for ArrayPopFront {
 
 fn get_array_pop_front_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_ARRAY)
-            .with_description(
+        Documentation::builder(
+            DOC_SECTION_ARRAY,
                 "Returns the array without the first element.",
-            )
-            .with_syntax_example("array_pop_front(array)")
+
+            "array_pop_front(array)")
             .with_sql_example(
                 r#"```sql
 > select array_pop_front([1, 2, 3]);
@@ -790,12 +787,11 @@ impl ScalarUDFImpl for ArrayPopBack {
 
 fn get_array_pop_back_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_ARRAY)
-            .with_description(
+        Documentation::builder(
+            DOC_SECTION_ARRAY,
                 "Returns the array without the last element.",
-            )
-            .with_syntax_example("array_pop_back(array)")
+
+            "array_pop_back(array)")
             .with_sql_example(
                 r#"```sql
 > select array_pop_back([1, 2, 3]);
@@ -907,12 +903,11 @@ impl ScalarUDFImpl for ArrayAnyValue {
 
 fn get_array_any_value_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_ARRAY)
-            .with_description(
+        Documentation::builder(
+            DOC_SECTION_ARRAY,
                 "Returns the first non-null element in the array.",
-            )
-            .with_syntax_example("array_any_value(array)")
+
+            "array_any_value(array)")
             .with_sql_example(
                 r#"```sql
 > select array_any_value([NULL, 1, 2, 3]);

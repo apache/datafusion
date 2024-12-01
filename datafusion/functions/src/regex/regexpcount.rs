@@ -119,10 +119,10 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_regexp_count_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_REGEX)
-            .with_description("Returns the number of matches that a [regular expression](https://docs.rs/regex/latest/regex/#syntax) has in a string.")
-            .with_syntax_example("regexp_count(str, regexp[, start, flags])")
+        Documentation::builder(
+            DOC_SECTION_REGEX,
+            "Returns the number of matches that a [regular expression](https://docs.rs/regex/latest/regex/#syntax) has in a string.",
+            "regexp_count(str, regexp[, start, flags])")
             .with_sql_example(r#"```sql
 > select regexp_count('abcAbAbc', 'abc', 2, 'i');
 +---------------------------------------------------------------+

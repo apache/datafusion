@@ -248,14 +248,13 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_avg_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_GENERAL)
-            .with_description(
-                "Returns the average of numeric values in the specified column.",
-            )
-            .with_syntax_example("avg(expression)")
-            .with_sql_example(
-                r#"```sql
+        Documentation::builder(
+            DOC_SECTION_GENERAL,
+            "Returns the average of numeric values in the specified column.",
+            "avg(expression)",
+        )
+        .with_sql_example(
+            r#"```sql
 > SELECT avg(column_name) FROM table_name;
 +---------------------------+
 | avg(column_name)           |
@@ -263,9 +262,9 @@ fn get_avg_doc() -> &'static Documentation {
 | 42.75                      |
 +---------------------------+
 ```"#,
-            )
-            .with_standard_argument("expression", None)
-            .build()
+        )
+        .with_standard_argument("expression", None)
+        .build()
     })
 }
 

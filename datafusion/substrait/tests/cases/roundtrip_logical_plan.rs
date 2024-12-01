@@ -412,6 +412,16 @@ async fn implicit_cast() -> Result<()> {
 }
 
 #[tokio::test]
+async fn try_cast_decimal_to_int() -> Result<()> {
+    roundtrip("SELECT * FROM data WHERE a = TRY_CAST(b AS int)").await
+}
+
+#[tokio::test]
+async fn try_cast_decimal_to_string() -> Result<()> {
+    roundtrip("SELECT * FROM data WHERE a = TRY_CAST(b AS string)").await
+}
+
+#[tokio::test]
 async fn aggregate_case() -> Result<()> {
     assert_expected_plan(
         "SELECT sum(CASE WHEN a > 0 THEN 1 ELSE NULL END) FROM data",

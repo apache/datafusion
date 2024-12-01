@@ -119,12 +119,11 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_array_union_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_ARRAY)
-            .with_description(
+        Documentation::builder(
+            DOC_SECTION_ARRAY,
                 "Returns an array of elements that are present in both arrays (all elements from both arrays) with out duplicates.",
-            )
-            .with_syntax_example("array_union(array1, array2)")
+
+            "array_union(array1, array2)")
             .with_sql_example(
                 r#"```sql
 > select array_union([1, 2, 3, 4], [5, 6, 3, 4]);
@@ -208,12 +207,11 @@ impl ScalarUDFImpl for ArrayIntersect {
 
 fn get_array_intersect_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_ARRAY)
-            .with_description(
+        Documentation::builder(
+            DOC_SECTION_ARRAY,
                 "Returns an array of elements in the intersection of array1 and array2.",
-            )
-            .with_syntax_example("array_intersect(array1, array2)")
+
+            "array_intersect(array1, array2)")
             .with_sql_example(
                 r#"```sql
 > select array_intersect([1, 2, 3, 4], [5, 6, 3, 4]);
@@ -307,12 +305,11 @@ impl ScalarUDFImpl for ArrayDistinct {
 
 fn get_array_distinct_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_ARRAY)
-            .with_description(
+        Documentation::builder(
+            DOC_SECTION_ARRAY,
                 "Returns distinct values from the array after removing duplicates.",
-            )
-            .with_syntax_example("array_distinct(array)")
+
+            "array_distinct(array)")
             .with_sql_example(
                 r#"```sql
 > select array_distinct([1, 3, 2, 3, 1, 2, 4]);

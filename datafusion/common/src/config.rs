@@ -24,6 +24,7 @@ use std::str::FromStr;
 
 use crate::error::_config_err;
 use crate::parsers::CompressionTypeVariant;
+use crate::utils::get_available_parallelism;
 use crate::{DataFusionError, Result};
 
 /// A macro that wraps a configuration struct and automatically derives
@@ -250,7 +251,7 @@ config_namespace! {
         /// concurrency.
         ///
         /// Defaults to the number of CPU cores on the system
-        pub target_partitions: usize, default = num_cpus::get()
+        pub target_partitions: usize, default = get_available_parallelism()
 
         /// The default time zone
         ///
@@ -266,7 +267,7 @@ config_namespace! {
         /// This is mostly use to plan `UNION` children in parallel.
         ///
         /// Defaults to the number of CPU cores on the system
-        pub planning_concurrency: usize, default = num_cpus::get()
+        pub planning_concurrency: usize, default = get_available_parallelism()
 
         /// When set to true, skips verifying that the schema produced by
         /// planning the input of `LogicalPlan::Aggregate` exactly matches the

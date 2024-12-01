@@ -111,12 +111,11 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_string_agg_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_GENERAL)
-            .with_description(
-                "Concatenates the values of string expressions and places separator values between them."
-            )
-            .with_syntax_example("string_agg(expression, delimiter)")
+        Documentation::builder(
+            DOC_SECTION_GENERAL,
+                "Concatenates the values of string expressions and places separator values between them.",
+
+            "string_agg(expression, delimiter)")
             .with_sql_example(r#"```sql
 > SELECT string_agg(name, ', ') AS names_list
   FROM employee;

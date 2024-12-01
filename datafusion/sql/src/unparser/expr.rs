@@ -882,7 +882,7 @@ impl Unparser<'_> {
             Operator::Plus => Ok(BinaryOperator::Plus),
             Operator::Minus => Ok(BinaryOperator::Minus),
             Operator::Multiply => Ok(BinaryOperator::Multiply),
-            Operator::Divide => Ok(BinaryOperator::Divide),
+            Operator::Divide => Ok(self.dialect.division_operator()),
             Operator::Modulo => Ok(BinaryOperator::Modulo),
             Operator::And => Ok(BinaryOperator::And),
             Operator::Or => Ok(BinaryOperator::Or),
@@ -2578,6 +2578,32 @@ mod tests {
 
             let actual = format!("{}", ast);
             let expected = format!(r#"CAST(a AS {identifier})"#);
+
+            assert_eq!(actual, expected);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn custom_dialect_division_operator() -> Result<()> {
+        let default_dialect = CustomDialectBuilder::new().build();
+        let duckdb_dialect = CustomDialectBuilder::new()
+            .with_division_operator(BinaryOperator::DuckIntegerDivide)
+            .build();
+
+        for (dialect, expected) in
+            [(default_dialect, "(a / b)"), (duckdb_dialect, "(a // b)")]
+        {
+            let unparser = Unparser::new(&dialect);
+            let expr = Expr::BinaryExpr(BinaryExpr {
+                left: Box::new(col("a")),
+                op: Operator::Divide,
+                right: Box::new(col("b")),
+            });
+            let ast = unparser.expr_to_sql(&expr)?;
+
+            let actual = format!("{}", ast);
+            let expected = expected.to_string();
 
             assert_eq!(actual, expected);
         }

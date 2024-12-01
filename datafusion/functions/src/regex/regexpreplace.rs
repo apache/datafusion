@@ -138,10 +138,10 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_regexp_replace_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-    Documentation::builder()
-        .with_doc_section(DOC_SECTION_REGEX)
-        .with_description("Replaces substrings in a string that match a [regular expression](https://docs.rs/regex/latest/regex/#syntax).")
-        .with_syntax_example("regexp_replace(str, regexp, replacement[, flags])")
+    Documentation::builder(
+        DOC_SECTION_REGEX,
+        "Replaces substrings in a string that match a [regular expression](https://docs.rs/regex/latest/regex/#syntax).",
+        "regexp_replace(str, regexp, replacement[, flags])")
         .with_sql_example(r#"```sql
 > select regexp_replace('foobarbaz', 'b(..)', 'X\\1Y', 'g');
 +------------------------------------------------------------------------+

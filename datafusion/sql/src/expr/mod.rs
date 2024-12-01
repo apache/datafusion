@@ -49,7 +49,7 @@ mod substring;
 mod unary_op;
 mod value;
 
-impl<'a, S: ContextProvider> SqlToRel<'a, S> {
+impl<S: ContextProvider> SqlToRel<'_, S> {
     pub(crate) fn sql_expr_to_logical_expr(
         &self,
         sql: SQLExpr,
