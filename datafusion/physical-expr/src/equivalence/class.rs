@@ -189,7 +189,6 @@ pub struct EquivalenceClass {
     /// The expressions in this equivalence class. The order doesn't
     /// matter for equivalence purposes
     ///
-    /// TODO: use a HashSet for this instead of a Vec
     exprs: IndexSet<Arc<dyn PhysicalExpr>>,
 }
 
