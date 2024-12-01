@@ -44,7 +44,7 @@ struct GenerateSeriesTable {
 #[derive(Debug, Clone)]
 struct GenerateSeriesState {
     schema: SchemaRef,
-    _start: i64, // Kept for display
+    start: i64, // Kept for display
     end: i64,
     batch_size: usize,
 
@@ -58,7 +58,7 @@ impl fmt::Display for GenerateSeriesState {
         write!(
             f,
             "generate_series: start={}, end={}, batch_size={}",
-            self._start, self.end, self.batch_size
+            self.start, self.end, self.batch_size
         )
     }
 }
@@ -116,7 +116,7 @@ impl TableProvider for GenerateSeriesTable {
                     self.schema.clone(),
                     vec![Arc::new(RwLock::new(GenerateSeriesState {
                         schema: self.schema.clone(),
-                        _start: start,
+                        start,
                         end,
                         current: start,
                         batch_size,
@@ -129,7 +129,7 @@ impl TableProvider for GenerateSeriesTable {
                     self.schema.clone(),
                     vec![Arc::new(RwLock::new(GenerateSeriesState {
                         schema: self.schema.clone(),
-                        _start: 0,
+                        start: 0,
                         end: 0,
                         current: 1,
                         batch_size,

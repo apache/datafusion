@@ -380,7 +380,7 @@ pub struct LazyMemoryExec {
     schema: SchemaRef,
     /// Functions to generate batches for each partition
     batch_generators: Vec<Arc<RwLock<dyn LazyBatchGenerator>>>,
-    /// Total number of rows to generate for statistics
+    /// Plan properties cache storing equivalence properties, partitioning, and execution mode
     cache: PlanProperties,
 }
 
