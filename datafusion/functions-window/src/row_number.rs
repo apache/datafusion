@@ -66,14 +66,12 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_row_number_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_RANKING)
-            .with_description(
-                "Number of the current row within its partition, counting from 1.",
-            )
-            .with_syntax_example("row_number()")
-            .build()
-            .unwrap()
+        Documentation::builder(
+            DOC_SECTION_RANKING,
+            "Number of the current row within its partition, counting from 1.",
+            "row_number()",
+        )
+        .build()
     })
 }
 

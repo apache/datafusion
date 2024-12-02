@@ -75,7 +75,11 @@ impl ScalarUDFImpl for ConcatWsFunc {
 
     /// Concatenates all but the first argument, with separators. The first argument is used as the separator string, and should not be NULL. Other NULL arguments are ignored.
     /// concat_ws(',', 'abcde', 2, NULL, 22) = 'abcde,2,22'
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         // do not accept 0 arguments.
         if args.len() < 2 {
             return exec_err!(
@@ -275,14 +279,13 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_concat_ws_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_STRING)
-            .with_description(
-                "Concatenates multiple strings together with a specified separator.",
-            )
-            .with_syntax_example("concat_ws(separator, str[, ..., str_n])")
-            .with_sql_example(
-                r#"```sql
+        Documentation::builder(
+            DOC_SECTION_STRING,
+            "Concatenates multiple strings together with a specified separator.",
+            "concat_ws(separator, str[, ..., str_n])",
+        )
+        .with_sql_example(
+            r#"```sql
 > select concat_ws('_', 'data', 'fusion');
 +--------------------------------------------------+
 | concat_ws(Utf8("_"),Utf8("data"),Utf8("fusion")) |
@@ -290,16 +293,15 @@ fn get_concat_ws_doc() -> &'static Documentation {
 | data_fusion                                      |
 +--------------------------------------------------+
 ```"#,
-            )
-            .with_argument(
-                "separator",
-                "Separator to insert between concatenated strings.",
-            )
-            .with_standard_argument("str", Some("String"))
-            .with_argument("str_n", "Subsequent string expressions to concatenate.")
-            .with_related_udf("concat")
-            .build()
-            .unwrap()
+        )
+        .with_argument(
+            "separator",
+            "Separator to insert between concatenated strings.",
+        )
+        .with_standard_argument("str", Some("String"))
+        .with_argument("str_n", "Subsequent string expressions to concatenate.")
+        .with_related_udf("concat")
+        .build()
     })
 }
 
@@ -467,6 +469,7 @@ mod tests {
         ])));
         let args = &[c0, c1, c2];
 
+        #[allow(deprecated)] // TODO migrate UDF invoke to invoke_batch
         let result = ConcatWsFunc::new().invoke_batch(args, 3)?;
         let expected =
             Arc::new(StringArray::from(vec!["foo,x", "bar", "baz,z"])) as ArrayRef;
@@ -492,6 +495,7 @@ mod tests {
         ])));
         let args = &[c0, c1, c2];
 
+        #[allow(deprecated)] // TODO migrate UDF invoke to invoke_batch
         let result = ConcatWsFunc::new().invoke_batch(args, 3)?;
         let expected =
             Arc::new(StringArray::from(vec![Some("foo,x"), None, Some("baz+z")]))

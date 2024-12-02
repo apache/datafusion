@@ -64,7 +64,11 @@ impl ScalarUDFImpl for InitcapFunc {
         utf8_to_str_type(&arg_types[0], "initcap")
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         match args[0].data_type() {
             DataType::Utf8 => make_scalar_function(initcap::<i32>, vec![])(args),
             DataType::LargeUtf8 => make_scalar_function(initcap::<i64>, vec![])(args),
@@ -84,10 +88,10 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_initcap_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_STRING)
-            .with_description("Capitalizes the first character in each word in the input string. Words are delimited by non-alphanumeric characters.")
-            .with_syntax_example("initcap(str)")
+        Documentation::builder(
+            DOC_SECTION_STRING,
+            "Capitalizes the first character in each word in the input string. Words are delimited by non-alphanumeric characters.",
+            "initcap(str)")
             .with_sql_example(r#"```sql
 > select initcap('apache datafusion');
 +------------------------------------+
@@ -100,7 +104,6 @@ fn get_initcap_doc() -> &'static Documentation {
             .with_related_udf("lower")
             .with_related_udf("upper")
             .build()
-            .unwrap()
     })
 }
 

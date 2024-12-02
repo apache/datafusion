@@ -165,12 +165,11 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_approx_percentile_cont_with_weight_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_APPROXIMATE)
-            .with_description(
+        Documentation::builder(
+            DOC_SECTION_APPROXIMATE,
                 "Returns the weighted approximate percentile of input values using the t-digest algorithm.",
-            )
-            .with_syntax_example("approx_percentile_cont_with_weight(expression, weight, percentile)")
+
+            "approx_percentile_cont_with_weight(expression, weight, percentile)")
             .with_sql_example(r#"```sql
 > SELECT approx_percentile_cont_with_weight(column_name, weight_column, 0.90) FROM table_name;
 +----------------------------------------------------------------------+
@@ -184,7 +183,6 @@ fn get_approx_percentile_cont_with_weight_doc() -> &'static Documentation {
             .with_argument("weight", "Expression to use as weight. Can be a constant, column, or function, and any combination of arithmetic operators.")
             .with_argument("percentile", "Percentile to compute. Must be a float value between 0 and 1 (inclusive).")
             .build()
-            .unwrap()
     })
 }
 

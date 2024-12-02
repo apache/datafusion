@@ -354,12 +354,13 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_max_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_GENERAL)
-            .with_description("Returns the maximum value in the specified column.")
-            .with_syntax_example("max(expression)")
-            .with_sql_example(
-                r#"```sql
+        Documentation::builder(
+            DOC_SECTION_GENERAL,
+            "Returns the maximum value in the specified column.",
+            "max(expression)",
+        )
+        .with_sql_example(
+            r#"```sql
 > SELECT max(column_name) FROM table_name;
 +----------------------+
 | max(column_name)      |
@@ -367,10 +368,9 @@ fn get_max_doc() -> &'static Documentation {
 | 150                  |
 +----------------------+
 ```"#,
-            )
-            .with_standard_argument("expression", None)
-            .build()
-            .unwrap()
+        )
+        .with_standard_argument("expression", None)
+        .build()
     })
 }
 
@@ -1184,12 +1184,13 @@ impl AggregateUDFImpl for Min {
 
 fn get_min_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_GENERAL)
-            .with_description("Returns the minimum value in the specified column.")
-            .with_syntax_example("min(expression)")
-            .with_sql_example(
-                r#"```sql
+        Documentation::builder(
+            DOC_SECTION_GENERAL,
+            "Returns the minimum value in the specified column.",
+            "min(expression)",
+        )
+        .with_sql_example(
+            r#"```sql
 > SELECT min(column_name) FROM table_name;
 +----------------------+
 | min(column_name)      |
@@ -1197,10 +1198,9 @@ fn get_min_doc() -> &'static Documentation {
 | 12                   |
 +----------------------+
 ```"#,
-            )
-            .with_standard_argument("expression", None)
-            .build()
-            .unwrap()
+        )
+        .with_standard_argument("expression", None)
+        .build()
     })
 }
 

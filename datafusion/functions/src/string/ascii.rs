@@ -64,7 +64,11 @@ impl ScalarUDFImpl for AsciiFunc {
         Ok(Int32)
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         make_scalar_function(ascii, vec![])(args)
     }
 
@@ -77,14 +81,13 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_ascii_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_STRING)
-            .with_description(
-                "Returns the Unicode character code of the first character in a string.",
-            )
-            .with_syntax_example("ascii(str)")
-            .with_sql_example(
-                r#"```sql
+        Documentation::builder(
+            DOC_SECTION_STRING,
+            "Returns the Unicode character code of the first character in a string.",
+            "ascii(str)",
+        )
+        .with_sql_example(
+            r#"```sql
 > select ascii('abc');
 +--------------------+
 | ascii(Utf8("abc")) |
@@ -98,11 +101,10 @@ fn get_ascii_doc() -> &'static Documentation {
 | 128640            |
 +-------------------+
 ```"#,
-            )
-            .with_standard_argument("str", Some("String"))
-            .with_related_udf("chr")
-            .build()
-            .unwrap()
+        )
+        .with_standard_argument("str", Some("String"))
+        .with_related_udf("chr")
+        .build()
     })
 }
 

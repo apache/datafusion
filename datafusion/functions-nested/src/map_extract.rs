@@ -85,7 +85,11 @@ impl ScalarUDFImpl for MapExtract {
         ))))
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         make_scalar_function(map_extract_inner)(args)
     }
 
@@ -114,12 +118,10 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_map_extract_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_MAP)
-            .with_description(
+        Documentation::builder(
+            DOC_SECTION_MAP,
                 "Returns a list containing the value for the given key or an empty list if the key is not present in the map.",
-            )
-            .with_syntax_example("map_extract(map, key)")
+            "map_extract(map, key)")
             .with_sql_example(
                 r#"```sql
 SELECT map_extract(MAP {'a': 1, 'b': NULL, 'c': 3}, 'a');
@@ -144,7 +146,6 @@ SELECT map_extract(MAP {'x': 10, 'y': NULL, 'z': 30}, 'y');
                 "Key to extract from the map. Can be a constant, column, or function, any combination of arithmetic or string operators, or a named expression of the previously listed.",
             )
             .build()
-            .unwrap()
     })
 }
 

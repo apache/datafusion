@@ -165,7 +165,11 @@ impl ScalarUDFImpl for DatePartFunc {
         }
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         if args.len() != 2 {
             return exec_err!("Expected two arguments in DATE_PART");
         }
@@ -249,10 +253,10 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_date_part_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_DATETIME)
-            .with_description("Returns the specified part of the date as an integer.")
-            .with_syntax_example("date_part(part, expression)")
+        Documentation::builder(
+            DOC_SECTION_DATETIME,
+            "Returns the specified part of the date as an integer.",
+            "date_part(part, expression)")
             .with_argument(
                 "part",
                 r#"Part of the date to return. The following date parts are supported:
@@ -279,7 +283,6 @@ fn get_date_part_doc() -> &'static Documentation {
             )
             .with_alternative_syntax("extract(field FROM source)")
             .build()
-            .unwrap()
     })
 }
 

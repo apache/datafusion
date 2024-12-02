@@ -90,7 +90,11 @@ impl ScalarUDFImpl for LPadFunc {
         utf8_to_str_type(&arg_types[0], "lpad")
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         match args[0].data_type() {
             Utf8 | Utf8View => make_scalar_function(lpad::<i32>, vec![])(args),
             LargeUtf8 => make_scalar_function(lpad::<i64>, vec![])(args),
@@ -107,10 +111,10 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_lpad_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_STRING)
-            .with_description("Pads the left side of a string with another string to a specified string length.")
-            .with_syntax_example("lpad(str, n[, padding_str])")
+        Documentation::builder(
+            DOC_SECTION_STRING,
+            "Pads the left side of a string with another string to a specified string length.",
+            "lpad(str, n[, padding_str])")
             .with_sql_example(r#"```sql
 > select lpad('Dolly', 10, 'hello');
 +---------------------------------------------+
@@ -124,7 +128,6 @@ fn get_lpad_doc() -> &'static Documentation {
             .with_argument("padding_str", "Optional string expression to pad with. Can be a constant, column, or function, and any combination of string operators. _Default is a space._")
             .with_related_udf("rpad")
             .build()
-            .unwrap()
     })
 }
 

@@ -85,7 +85,11 @@ impl ScalarUDFImpl for TruncFunc {
         }
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         make_scalar_function(trunc, vec![])(args)
     }
 
@@ -113,12 +117,11 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_trunc_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_MATH)
-            .with_description(
+        Documentation::builder(
+            DOC_SECTION_MATH,
                 "Truncates a number to a whole number or truncated to the specified decimal places.",
-            )
-            .with_syntax_example("trunc(numeric_expression[, decimal_places])")
+
+            "trunc(numeric_expression[, decimal_places])")
             .with_standard_argument("numeric_expression", Some("Numeric"))
             .with_argument("decimal_places", r#"Optional. The number of decimal places to
   truncate to. Defaults to 0 (truncate to a whole number). If
@@ -126,7 +129,6 @@ fn get_trunc_doc() -> &'static Documentation {
   right of the decimal point. If `decimal_places` is a negative
   integer, replaces digits to the left of the decimal point with `0`."#)
             .build()
-            .unwrap()
     })
 }
 

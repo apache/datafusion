@@ -88,10 +88,10 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_uuid_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_STRING)
-            .with_description("Returns [`UUID v4`](https://en.wikipedia.org/wiki/Universally_unique_identifier#Version_4_(random)) string value which is unique per row.")
-            .with_syntax_example("uuid()")
+        Documentation::builder(
+            DOC_SECTION_STRING,
+            "Returns [`UUID v4`](https://en.wikipedia.org/wiki/Universally_unique_identifier#Version_4_(random)) string value which is unique per row.",
+            "uuid()")
             .with_sql_example(r#"```sql
 > select uuid();
 +--------------------------------------+
@@ -101,6 +101,5 @@ fn get_uuid_doc() -> &'static Documentation {
 +--------------------------------------+
 ```"#)
             .build()
-            .unwrap()
     })
 }
