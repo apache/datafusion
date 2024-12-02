@@ -16,9 +16,7 @@
 // under the License.
 
 use arrow::datatypes::{i256, Decimal128Type, Decimal256Type, DecimalType};
-use bigdecimal::BigDecimal;
 use half::f16;
-use rust_decimal::prelude::*;
 
 /// Represents a constant for NULL string in your database.
 pub const NULL_STR: &str = "NULL";
@@ -40,17 +38,7 @@ pub(crate) fn varchar_to_str(value: &str) -> String {
 }
 
 pub(crate) fn f16_to_str(value: f16) -> String {
-    if value.is_nan() {
-        // The sign of NaN can be different depending on platform.
-        // So the string representation of NaN ignores the sign.
-        "NaN".to_string()
-    } else if value == f16::INFINITY {
-        "Infinity".to_string()
-    } else if value == f16::NEG_INFINITY {
-        "-Infinity".to_string()
-    } else {
-        big_decimal_to_str(BigDecimal::from_str(&value.to_string()).unwrap())
-    }
+    f32_to_str(value.to_f32())
 }
 
 pub(crate) fn f32_to_str(value: f32) -> String {
@@ -63,7 +51,7 @@ pub(crate) fn f32_to_str(value: f32) -> String {
     } else if value == f32::NEG_INFINITY {
         "-Infinity".to_string()
     } else {
-        big_decimal_to_str(BigDecimal::from_str(&value.to_string()).unwrap())
+        trim_decimal_trailing_zeros(ryu::Buffer::new().format(value).to_string())
     }
 }
 
@@ -77,94 +65,33 @@ pub(crate) fn f64_to_str(value: f64) -> String {
     } else if value == f64::NEG_INFINITY {
         "-Infinity".to_string()
     } else {
-        big_decimal_to_str(BigDecimal::from_str(&value.to_string()).unwrap())
+        trim_decimal_trailing_zeros(ryu::Buffer::new().format(value).to_string())
     }
 }
 
 pub(crate) fn i128_to_str(value: i128, precision: &u8, scale: &i8) -> String {
-    big_decimal_to_str(
-        BigDecimal::from_str(&Decimal128Type::format_decimal(value, *precision, *scale))
-            .unwrap(),
-    )
+    trim_decimal_trailing_zeros(Decimal128Type::format_decimal(value, *precision, *scale))
 }
 
 pub(crate) fn i256_to_str(value: i256, precision: &u8, scale: &i8) -> String {
-    big_decimal_to_str(
-        BigDecimal::from_str(&Decimal256Type::format_decimal(value, *precision, *scale))
-            .unwrap(),
-    )
+    trim_decimal_trailing_zeros(Decimal256Type::format_decimal(value, *precision, *scale))
 }
 
 #[cfg(feature = "postgres")]
-pub(crate) fn decimal_to_str(value: Decimal) -> String {
-    big_decimal_to_str(BigDecimal::from_str(&value.to_string()).unwrap())
+pub(crate) fn decimal_to_str(value: rust_decimal::Decimal) -> String {
+    trim_decimal_trailing_zeros(value.to_string())
 }
 
-pub(crate) fn big_decimal_to_str(value: BigDecimal) -> String {
-    // Round the value to limit the number of decimal places
-    let value = value.round(12).normalized();
-    // Format the value to a string
-    format_big_decimal(value)
-}
-
-fn format_big_decimal(value: BigDecimal) -> String {
-    let (integer, scale) = value.into_bigint_and_exponent();
-    let mut str = integer.to_str_radix(10);
-    if scale <= 0 {
-        // Append zeros to the right of the integer part
-        str.extend(std::iter::repeat('0').take(scale.unsigned_abs() as usize));
-        str
-    } else {
-        let (sign, unsigned_len, unsigned_str) = if integer.is_negative() {
-            ("-", str.len() - 1, &str[1..])
-        } else {
-            ("", str.len(), &str[..])
-        };
-        let scale = scale as usize;
-        if unsigned_len <= scale {
-            format!("{}0.{:0>scale$}", sign, unsigned_str)
-        } else {
-            str.insert(str.len() - scale, '.');
-            str
+fn trim_decimal_trailing_zeros(mut string: String) -> String {
+    // Remove trailing zeros after the decimal point
+    if let Some(decimal_idx) = string.find('.') {
+        let after_decimal_idx = decimal_idx + 1;
+        let after = &mut string[after_decimal_idx..];
+        let trimmed_len = after.trim_end_matches('0').len();
+        string.truncate(after_decimal_idx + trimmed_len);
+        if string.ends_with('.') {
+            string.pop();
         }
     }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::big_decimal_to_str;
-    use bigdecimal::{num_bigint::BigInt, BigDecimal};
-
-    macro_rules! assert_decimal_str_eq {
-        ($integer:expr, $scale:expr, $expected:expr) => {
-            assert_eq!(
-                big_decimal_to_str(BigDecimal::from_bigint(
-                    BigInt::from($integer),
-                    $scale
-                )),
-                $expected
-            );
-        };
-    }
-
-    #[test]
-    fn test_big_decimal_to_str() {
-        assert_decimal_str_eq!(11, 3, "0.011");
-        assert_decimal_str_eq!(11, 2, "0.11");
-        assert_decimal_str_eq!(11, 1, "1.1");
-        assert_decimal_str_eq!(11, 0, "11");
-        assert_decimal_str_eq!(11, -1, "110");
-        assert_decimal_str_eq!(0, 0, "0");
-
-        // Negative cases
-        assert_decimal_str_eq!(-11, 3, "-0.011");
-        assert_decimal_str_eq!(-11, 2, "-0.11");
-        assert_decimal_str_eq!(-11, 1, "-1.1");
-        assert_decimal_str_eq!(-11, 0, "-11");
-        assert_decimal_str_eq!(-11, -1, "-110");
-
-        // Round to 12 decimal places
-        // 1.0000000000011 -> 1.000000000001
-        assert_decimal_str_eq!(10_i128.pow(13) + 11, 13, "1.000000000001");
-    }
+    string
 }

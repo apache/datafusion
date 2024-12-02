@@ -36,7 +36,6 @@ path = "src/lib.rs"
 [dependencies]
 arrow = { workspace = true }
 async-trait = { workspace = true }
-bigdecimal = { workspace = true }
 bytes = { workspace = true, optional = true }
 chrono = { workspace = true, optional = true }
 clap = { version = "4.5.16", features = ["derive", "env"] }
@@ -50,7 +49,8 @@ log = { workspace = true }
 object_store = { workspace = true }
 postgres-protocol = { version = "0.6.4", optional = true }
 postgres-types = { version = "0.2.4", optional = true }
-rust_decimal = { version = "1.27.0" }
+rust_decimal = { version = "1.27.0", features = ["tokio-pg"], optional = true }
+ryu = "1.0.18"
 sqllogictest = "0.23.0"
 sqlparser = { workspace = true }
 tempfile = { workspace = true }
@@ -66,6 +66,7 @@ postgres = [
     "tokio-postgres",
     "postgres-types",
     "postgres-protocol",
+    "rust_decimal",
 ]
 
 [dev-dependencies]

@@ -337,17 +337,17 @@ OPTIONS ('format.has_header' 'true');
 query R
 SELECT avg(sqrt(c11)) FROM aggregate_test_100
 ----
-0.658440848589
+0.6584408485889435
 
 query R
 SELECT avg(CAST(sqrt(c11) AS double)) FROM aggregate_test_100
 ----
-0.658440848589
+0.6584408485889435
 
 query R
 SELECT avg(sqrt(CAST(c11 AS double))) FROM aggregate_test_100
 ----
-0.658440848342
+0.6584408483418835
 
 statement ok
 drop table aggregate_test_100
@@ -372,12 +372,12 @@ create table t as values (
 query R
 SELECT sqrt(column1) FROM t
 ----
-1.414213562373
+1.4142135623730951
 
 query R
 SELECT SQRT(column1) FROM t
 ----
-1.414213562373
+1.4142135623730951
 
 statement error Error during planning: Invalid function 'SQRT'
 SELECT "SQRT"(column1) FROM t
@@ -385,13 +385,13 @@ SELECT "SQRT"(column1) FROM t
 query R
 SELECT "sqrt"(column1) FROM t
 ----
-1.414213562373
+1.4142135623730951
 
 # case_builtin_math_expression
 query RRRRRRRRRR
 SELECT sqrt(column1),sqrt(column2),sqrt(column3),sqrt(column4),sqrt(column5),sqrt(column6),sqrt(column7),sqrt(column8),sqrt(column9),sqrt(column10) FROM t
 ----
-1.414213562373 1.414213562373 1.414213562373 1.414213562373 1.414213562373 1.414213562373 1.414213562373 1.414213562373 1.4142135 1.414213562373
+1.4142135623730951 1.4142135623730951 1.4142135623730951 1.4142135623730951 1.4142135623730951 1.4142135623730951 1.4142135623730951 1.4142135623730951 1.4142135 1.4142135623730951
 
 statement ok
 drop table t
