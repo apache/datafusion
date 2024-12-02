@@ -1221,11 +1221,6 @@ fn equal_with_indices(
                         let idx_left = idx_left as usize;
                         let idx_right = idx_right as usize;
 
-                        // Has found not equal to in previous column, do not need to check.
-                        if !equal.get_bit(index) {
-                            continue;
-                        }
-
                         equal.set_bit(
                             index,
                             unsafe {
@@ -1239,11 +1234,6 @@ fn equal_with_indices(
                     for (index, (&idx_left, &idx_right)) in iter.enumerate() {
                         let idx_left = idx_left as usize;
                         let idx_right = idx_right as usize;
-
-                        // Has found not equal to in previous column, do not need to check.
-                        if !equal.get_bit(index) {
-                            continue;
-                        }
 
                         let null_left = arr_left.is_null(idx_left);
                         let null_right = arr_right.is_null(idx_right);
