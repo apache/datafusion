@@ -38,7 +38,7 @@
 [Chat](https://discord.com/channels/885562378132000778/885562378132000781)
 
 <a href="https://datafusion.apache.org/">
-  <img src="./docs/source/_static/images/2x_bgwhite_original.png" width="512" alt="logo"/>
+  <img src="https://github.com/apache/datafusion/raw/HEAD/docs/source/_static/images/2x_bgwhite_original.png" width="512" alt="logo"/>
 </a>
 
 DataFusion is an extensible query engine written in [Rust] that
