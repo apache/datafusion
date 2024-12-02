@@ -322,7 +322,7 @@ pub fn longest_consecutive_prefix<T: Borrow<usize>>(
 }
 
 /// Creates single element [`ListArray`], [`LargeListArray`] and
-/// [`FixedListArray`] from other arrays
+/// [`FixedSizeListArray`] from other arrays
 ///
 /// For example this builder can convert `[1, 2, 3]` into `[[1, 2, 3]]`
 ///
@@ -483,13 +483,7 @@ pub fn array_into_fixed_size_list_array(
     arr: ArrayRef,
     list_size: usize,
 ) -> FixedSizeListArray {
-    let list_size = list_size as i32;
-    FixedSizeListArray::new(
-        Arc::new(Field::new_list_field(arr.data_type().to_owned(), true)),
-        list_size,
-        arr,
-        None,
-    )
+    SingleRowArrayBuilder::new(arr).build_fixed_size_list_array(list_size)
 }
 
 #[deprecated(since = "44.0.0", note = "please use `SingleRowArrayBuilder` instead")]
@@ -498,13 +492,9 @@ pub fn array_into_fixed_size_list_array_with_field_name(
     list_size: usize,
     field_name: &str,
 ) -> FixedSizeListArray {
-    let list_size = list_size as i32;
-    FixedSizeListArray::new(
-        Arc::new(Field::new(field_name, arr.data_type().to_owned(), true)),
-        list_size,
-        arr,
-        None,
-    )
+    SingleRowArrayBuilder::new(arr)
+        .with_field_name(Some(field_name.to_string()))
+        .build_fixed_size_list_array(list_size)
 }
 
 /// Wrap arrays into a single element `ListArray`.
