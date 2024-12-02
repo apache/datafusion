@@ -72,6 +72,7 @@ use datafusion_physical_expr::PhysicalExprRef;
 
 use ahash::RandomState;
 use futures::{ready, Stream, StreamExt, TryStreamExt};
+use itertools::izip;
 use parking_lot::Mutex;
 
 type SharedBitmapBuilder = Mutex<BooleanBufferBuilder>;
@@ -1198,7 +1199,7 @@ fn lookup_join_hashmap(
 
 /// Compare two arrays based on the indices and update equal boolean buffer.
 fn equal_with_indices(
-    equal: &mut BooleanBufferBuilder,
+    equal: &mut [bool],
     indices_left: &UInt64Array,
     indices_right: &UInt32Array,
     arr_left: &dyn Array,
@@ -1208,122 +1209,64 @@ fn equal_with_indices(
     // TODO: Write a reusable framework and support more arrow types.
     downcast_primitive_array! {
         (arr_left, arr_right) => {
-            let iter = indices_left.values().iter().zip(
-                indices_right.values().iter()
+            let iter = izip!(
+                indices_left.values().iter(),
+                indices_right.values().iter(),
+                equal.iter_mut(),
             );
 
-            for (index, (idx_left, idx_right)) in iter.enumerate() {
-                let idx_left = *idx_left as usize;
-                let idx_right = *idx_right as usize;
+            Ok(match (
+                arr_left.null_count() == 0,
+                arr_right.null_count() == 0,
+                null_equals_null
+            ) {
+                (true, true, _) => {
+                    // Both arrays do not have nulls, compare the values directly.
+                    for (&idx_left, &idx_right, eq) in iter {
+                        let idx_left = idx_left as usize;
+                        let idx_right = idx_right as usize;
 
-                // Has found not equal to in previous column, do not need to check.
-                if !equal.get_bit(index) {
-                    continue;
+                        // Has found not equal to in previous column, do not need to check.
+                        if !*eq {
+                            continue;
+                        }
+
+                        *eq = unsafe {
+                            arr_left.value_unchecked(idx_left) == arr_right.value_unchecked(idx_right)
+                        };
+                    }
                 }
 
-                let null_left = arr_left.is_null(idx_left);
-                let null_right = arr_right.is_null(idx_right);
+                _ => {
+                    for (&idx_left, &idx_right, eq) in iter {
+                        let idx_left = idx_left as usize;
+                        let idx_right = idx_right as usize;
 
-                match (null_left, null_right) {
-                    (true, true) => {
-                        if !null_equals_null {
-                            equal.set_bit(index, false);
+                        // Has found not equal to in previous column, do not need to check.
+                        if !*eq {
+                            continue;
                         }
-                    },
-                    (true, false) | (false, true) => equal.set_bit(index, false),
-                    (false, false) => {
-                        equal.set_bit(
-                            index,
-                            unsafe {
-                                arr_left.value_unchecked(idx_left) == arr_right.value_unchecked(idx_right)
-                            }
-                        );
-                    },
-                };
-            }
 
-            Ok(())
+                        let null_left = arr_left.is_null(idx_left);
+                        let null_right = arr_right.is_null(idx_right);
+
+                        match (null_left, null_right) {
+                            (true, true) => {
+                                if !null_equals_null {
+                                    *eq = false;
+                                }
+                            },
+                            (true, false) | (false, true) => *eq = false,
+                            (false, false) => {
+                                *eq = unsafe {
+                                    arr_left.value_unchecked(idx_left) == arr_right.value_unchecked(idx_right)
+                                };
+                            },
+                        };
+                    }
+                }
+            })
         }
-
-        (DataType::Boolean, DataType::Boolean) => {
-            let arr_left = arr_left.as_boolean();
-            let arr_right = arr_right.as_boolean();
-
-            let iter = indices_left.values().iter().zip(
-                indices_right.values().iter()
-            );
-
-            for (index, (idx_left, idx_right)) in iter.enumerate() {
-                let idx_left = *idx_left as usize;
-                let idx_right = *idx_right as usize;
-
-                if !equal.get_bit(index) {
-                    continue;
-                }
-
-                let null_left = arr_left.is_null(idx_left);
-                let null_right = arr_right.is_null(idx_right);
-
-                match (null_left, null_right) {
-                    (true, true) => {
-                        if !null_equals_null {
-                            equal.set_bit(index, false);
-                        }
-                    },
-                    (true, false) | (false, true) => equal.set_bit(index, false),
-                    (false, false) => {
-                        equal.set_bit(
-                            index,
-                            unsafe {
-                                arr_left.value_unchecked(idx_left) == arr_right.value_unchecked(idx_right)
-                            }
-                        );
-                    },
-                };
-            }
-
-            Ok(())
-        },
-
-        (DataType::Utf8, DataType::Utf8) => {
-            let arr_left = arr_left.as_string::<i32>();
-            let arr_right = arr_right.as_string::<i32>();
-
-            let iter = indices_left.values().iter().zip(
-                indices_right.values().iter()
-            );
-
-            for (index, (idx_left, idx_right)) in iter.enumerate() {
-                let idx_left = *idx_left as usize;
-                let idx_right = *idx_right as usize;
-
-                if !equal.get_bit(index) {
-                    continue;
-                }
-
-                let null_left = arr_left.is_null(idx_left);
-                let null_right = arr_right.is_null(idx_right);
-
-                match (null_left, null_right) {
-                    (true, true) => {
-                        if !null_equals_null {
-                            equal.set_bit(index, false);
-                        }
-                    },
-                    (true, false) | (false, true) => equal.set_bit(index, false),
-                    (false, false) => {
-                        equal.set_bit(
-                            index,
-                            unsafe {
-                                arr_left.value_unchecked(idx_left) == arr_right.value_unchecked(idx_right)
-                            }
-                        );
-                    },
-                };
-            }
-
-            Ok(())
-        },
 
         (DataType::Struct(_), DataType::Struct(_)) => {
             let arr_left = arr_left.as_struct();
@@ -1340,36 +1283,28 @@ fn equal_with_indices(
                 )?;
             }
 
-            let iter = indices_left.values().iter().zip(
-                indices_right.values().iter()
+            let iter = izip!(
+                indices_left.values().iter(),
+                indices_right.values().iter(),
+                equal.iter_mut(),
             );
 
-            for (index, (idx_left, idx_right)) in iter.enumerate() {
-                let idx_left = *idx_left as usize;
-                let idx_right = *idx_right as usize;
+            for (&idx_left, &idx_right, eq) in iter {
+                let idx_left = idx_left as usize;
+                let idx_right = idx_right as usize;
 
                 let null_left = arr_left.is_null(idx_left);
                 let null_right = arr_right.is_null(idx_right);
 
                 match (null_left, null_right) {
-                    (true, true) => equal.set_bit(index, null_equals_null),
-                    (true, false) | (false, true) => equal.set_bit(index, false),
+                    (true, true) => *eq = null_equals_null,
+                    (true, false) | (false, true) => *eq = false,
                     _ => {}
                 }
             }
 
             Ok(())
         },
-
-        (DataType::Null, DataType::Null) => {
-            if !null_equals_null {
-                for idx in 0..indices_left.len() {
-                    equal.set_bit(idx, false);
-                }
-            }
-
-            Ok(())
-        }
 
         t => unimplemented!("Take not supported for data type {:?}", t)
     }
@@ -1384,8 +1319,7 @@ pub fn equal_rows_arr(
 ) -> Result<(UInt64Array, UInt32Array)> {
     let mut iter = left_arrays.iter().zip(right_arrays.iter());
 
-    let mut equal = BooleanBufferBuilder::new(indices_left.len());
-    equal.append_n(indices_left.len(), true);
+    let mut equal = vec![true; indices_left.len()];
 
     let (first_left, first_right) = iter.next().ok_or_else(|| {
         DataFusionError::Internal(
@@ -1413,9 +1347,7 @@ pub fn equal_rows_arr(
         )
     })?;
 
-    let filter_builder = FilterBuilder::new(&equal.finish().into())
-        .optimize()
-        .build();
+    let filter_builder = FilterBuilder::new(&(equal.into())).optimize().build();
 
     let left_filtered = filter_builder.filter(indices_left)?;
     let right_filtered = filter_builder.filter(indices_right)?;
