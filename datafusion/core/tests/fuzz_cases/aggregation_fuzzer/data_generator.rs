@@ -87,12 +87,7 @@ impl DatasetGeneratorConfig {
             .iter()
             .filter_map(|d| {
                 if d.column_type.is_numeric()
-                    && !matches!(
-                        d.column_type,
-                        DataType::Float32
-                            | DataType::Float64
-                            | DataType::Decimal128(_, _)
-                    )
+                    && !matches!(d.column_type, DataType::Float32 | DataType::Float64)
                 {
                     Some(d.name.as_str())
                 } else {
