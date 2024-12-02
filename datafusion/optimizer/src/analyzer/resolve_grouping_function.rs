@@ -30,7 +30,7 @@ use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{
     internal_datafusion_err, plan_err, Column, DFSchemaRef, Result, ScalarValue,
 };
-use datafusion_expr::expr::{AggregateFunction, Alias};
+use datafusion_expr::expr::AggregateFunction;
 use datafusion_expr::logical_plan::LogicalPlan;
 use datafusion_expr::utils::grouping_set_to_exprlist;
 use datafusion_expr::{
@@ -79,7 +79,7 @@ fn replace_grouping_exprs(
     aggr_expr: Vec<Expr>,
 ) -> Result<LogicalPlan> {
     // Create HashMap from Expr to index in the grouping_id bitmap
-    let is_grouping_set = matches!(group_expr.as_slice(), [Expr::GroupingSet(_)]);
+    let is_grouping_set = matches!(group_expr.as_slice(), [Expr::GroupingSet(_, _)]);
     let group_expr_to_bitmap_index = group_expr_to_bitmap_index(&group_expr)?;
     let columns = schema.columns();
     let mut new_agg_expr = Vec::new();
@@ -90,36 +90,33 @@ fn replace_grouping_exprs(
         columns
             .iter()
             .take(group_expr_len)
-            .map(|column| Expr::Column(column.clone())),
+            .map(|column| Expr::column(column.clone())),
     );
     for (expr, column) in aggr_expr
         .into_iter()
         .zip(columns.into_iter().skip(group_expr_len + grouping_id_len))
     {
         match expr {
-            Expr::AggregateFunction(ref function) if is_grouping_function(&expr) => {
+            Expr::AggregateFunction(ref function, _) if is_grouping_function(&expr) => {
                 let grouping_expr = grouping_function_on_id(
                     function,
                     &group_expr_to_bitmap_index,
                     is_grouping_set,
                 )?;
-                projection_exprs.push(Expr::Alias(Alias::new(
-                    grouping_expr,
-                    column.relation,
-                    column.name,
-                )));
+                projection_exprs
+                    .push(grouping_expr.alias_qualified(column.relation, column.name));
             }
             _ => {
-                projection_exprs.push(Expr::Column(column));
+                projection_exprs.push(Expr::column(column));
                 new_agg_expr.push(expr);
             }
         }
     }
     // Recreate aggregate without grouping functions
     let new_aggregate =
-        LogicalPlan::Aggregate(Aggregate::try_new(input, group_expr, new_agg_expr)?);
+        LogicalPlan::aggregate(Aggregate::try_new(input, group_expr, new_agg_expr)?);
     // Create projection with grouping functions calculations
-    let projection = LogicalPlan::Projection(Projection::try_new(
+    let projection = LogicalPlan::projection(Projection::try_new(
         projection_exprs,
         new_aggregate.into(),
     )?);
@@ -132,13 +129,16 @@ fn analyze_internal(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
         plan.map_subqueries(|plan| plan.transform_up(analyze_internal))?;
 
     let transformed_plan = transformed_plan.transform_data(|plan| match plan {
-        LogicalPlan::Aggregate(Aggregate {
-            input,
-            group_expr,
-            aggr_expr,
-            schema,
-            ..
-        }) if contains_grouping_function(&aggr_expr) => Ok(Transformed::yes(
+        LogicalPlan::Aggregate(
+            Aggregate {
+                input,
+                group_expr,
+                aggr_expr,
+                schema,
+                ..
+            },
+            _,
+        ) if contains_grouping_function(&aggr_expr) => Ok(Transformed::yes(
             replace_grouping_exprs(input, schema, group_expr, aggr_expr)?,
         )),
         _ => Ok(Transformed::no(plan)),
@@ -150,7 +150,7 @@ fn analyze_internal(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
 fn is_grouping_function(expr: &Expr) -> bool {
     // TODO: Do something better than name here should grouping be a built
     // in expression?
-    matches!(expr, Expr::AggregateFunction(AggregateFunction { ref func, .. }) if func.name() == "grouping")
+    matches!(expr, Expr::AggregateFunction(AggregateFunction { ref func, .. }, _) if func.name() == "grouping")
 }
 
 fn contains_grouping_function(exprs: &[Expr]) -> bool {
@@ -188,23 +188,23 @@ fn grouping_function_on_id(
     // Postgres allows grouping function for group by without grouping sets, the result is then
     // always 0
     if !is_grouping_set {
-        return Ok(Expr::Literal(ScalarValue::from(0i32)));
+        return Ok(Expr::literal(ScalarValue::from(0i32)));
     }
 
     let group_by_expr_count = group_by_expr.len();
     let literal = |value: usize| {
         if group_by_expr_count < 8 {
-            Expr::Literal(ScalarValue::from(value as u8))
+            Expr::literal(ScalarValue::from(value as u8))
         } else if group_by_expr_count < 16 {
-            Expr::Literal(ScalarValue::from(value as u16))
+            Expr::literal(ScalarValue::from(value as u16))
         } else if group_by_expr_count < 32 {
-            Expr::Literal(ScalarValue::from(value as u32))
+            Expr::literal(ScalarValue::from(value as u32))
         } else {
-            Expr::Literal(ScalarValue::from(value as u64))
+            Expr::literal(ScalarValue::from(value as u64))
         }
     };
 
-    let grouping_id_column = Expr::Column(Column::from(Aggregate::INTERNAL_GROUPING_ID));
+    let grouping_id_column = Expr::column(Column::from(Aggregate::INTERNAL_GROUPING_ID));
     // The grouping call is exactly our internal grouping id
     if args.len() == group_by_expr_count
         && args

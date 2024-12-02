@@ -22,6 +22,7 @@ use recursive::recursive;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_common::{plan_err, Result};
 use datafusion_expr::expr_rewriter::strip_outer_reference;
+use datafusion_expr::logical_plan::tree_node::LogicalPlanPattern;
 use datafusion_expr::utils::split_conjunction;
 use datafusion_expr::{Aggregate, Expr, Filter, Join, JoinType, LogicalPlan, Window};
 
@@ -38,7 +39,7 @@ pub fn check_subquery_expr(
     expr: &Expr,
 ) -> Result<()> {
     check_plan(inner_plan)?;
-    if let Expr::ScalarSubquery(subquery) = expr {
+    if let Expr::ScalarSubquery(subquery, _) = expr {
         // Scalar subquery should only return one column
         if subquery.subquery.schema().fields().len() > 1 {
             return plan_err!(
@@ -50,13 +51,13 @@ pub fn check_subquery_expr(
         // Correlated scalar subquery must be aggregated to return at most one row
         if !subquery.outer_ref_columns.is_empty() {
             match strip_inner_query(inner_plan) {
-                LogicalPlan::Aggregate(agg) => {
+                LogicalPlan::Aggregate(agg, _) => {
                     check_aggregation_in_scalar_subquery(inner_plan, agg)
                 }
-                LogicalPlan::Filter(Filter { input, .. })
-                    if matches!(input.as_ref(), LogicalPlan::Aggregate(_)) =>
+                LogicalPlan::Filter(Filter { input, .. }, _)
+                    if matches!(input.as_ref(), LogicalPlan::Aggregate(_, _)) =>
                 {
-                    if let LogicalPlan::Aggregate(agg) = input.as_ref() {
+                    if let LogicalPlan::Aggregate(agg, _) = input.as_ref() {
                         check_aggregation_in_scalar_subquery(inner_plan, agg)
                     } else {
                         Ok(())
@@ -77,9 +78,9 @@ pub fn check_subquery_expr(
                 }
             }?;
             match outer_plan {
-                LogicalPlan::Projection(_)
-                | LogicalPlan::Filter(_) => Ok(()),
-                LogicalPlan::Aggregate(Aggregate {group_expr, aggr_expr,..}) => {
+                LogicalPlan::Projection(_, _)
+                | LogicalPlan::Filter(_, _) => Ok(()),
+                LogicalPlan::Aggregate(Aggregate {group_expr, aggr_expr,..}, _) => {
                     if group_expr.contains(expr) && !aggr_expr.contains(expr) {
                         // TODO revisit this validation logic
                         plan_err!(
@@ -96,7 +97,7 @@ pub fn check_subquery_expr(
         }
         check_correlations_in_subquery(inner_plan)
     } else {
-        if let Expr::InSubquery(subquery) = expr {
+        if let Expr::InSubquery(subquery, _) = expr {
             // InSubquery should only return one column
             if subquery.subquery.subquery.schema().fields().len() > 1 {
                 return plan_err!(
@@ -107,11 +108,11 @@ pub fn check_subquery_expr(
             }
         }
         match outer_plan {
-            LogicalPlan::Projection(_)
-            | LogicalPlan::Filter(_)
-            | LogicalPlan::Window(_)
-            | LogicalPlan::Aggregate(_)
-            | LogicalPlan::Join(_) => Ok(()),
+            LogicalPlan::Projection(_, _)
+            | LogicalPlan::Filter(_, _)
+            | LogicalPlan::Window(_, _)
+            | LogicalPlan::Aggregate(_, _)
+            | LogicalPlan::Join(_, _) => Ok(()),
             _ => plan_err!(
                 "In/Exist subquery can only be used in \
                 Projection, Filter, Window functions, Aggregate and Join plan nodes, \
@@ -136,17 +137,17 @@ fn check_inner_plan(inner_plan: &LogicalPlan, can_contain_outer_ref: bool) -> Re
     }
     // We want to support as many operators as possible inside the correlated subquery
     match inner_plan {
-        LogicalPlan::Aggregate(_) => {
+        LogicalPlan::Aggregate(_, _) => {
             inner_plan.apply_children(|plan| {
                 check_inner_plan(plan, can_contain_outer_ref)?;
                 Ok(TreeNodeRecursion::Continue)
             })?;
             Ok(())
         }
-        LogicalPlan::Filter(Filter { input, .. }) => {
+        LogicalPlan::Filter(Filter { input, .. }, _) => {
             check_inner_plan(input, can_contain_outer_ref)
         }
-        LogicalPlan::Window(window) => {
+        LogicalPlan::Window(window, _) => {
             check_mixed_out_refer_in_window(window)?;
             inner_plan.apply_children(|plan| {
                 check_inner_plan(plan, can_contain_outer_ref)?;
@@ -154,29 +155,32 @@ fn check_inner_plan(inner_plan: &LogicalPlan, can_contain_outer_ref: bool) -> Re
             })?;
             Ok(())
         }
-        LogicalPlan::Projection(_)
-        | LogicalPlan::Distinct(_)
-        | LogicalPlan::Sort(_)
-        | LogicalPlan::Union(_)
-        | LogicalPlan::TableScan(_)
-        | LogicalPlan::EmptyRelation(_)
-        | LogicalPlan::Limit(_)
-        | LogicalPlan::Values(_)
-        | LogicalPlan::Subquery(_)
-        | LogicalPlan::SubqueryAlias(_)
-        | LogicalPlan::Unnest(_) => {
+        LogicalPlan::Projection(_, _)
+        | LogicalPlan::Distinct(_, _)
+        | LogicalPlan::Sort(_, _)
+        | LogicalPlan::Union(_, _)
+        | LogicalPlan::TableScan(_, _)
+        | LogicalPlan::EmptyRelation(_, _)
+        | LogicalPlan::Limit(_, _)
+        | LogicalPlan::Values(_, _)
+        | LogicalPlan::Subquery(_, _)
+        | LogicalPlan::SubqueryAlias(_, _)
+        | LogicalPlan::Unnest(_, _) => {
             inner_plan.apply_children(|plan| {
                 check_inner_plan(plan, can_contain_outer_ref)?;
                 Ok(TreeNodeRecursion::Continue)
             })?;
             Ok(())
         }
-        LogicalPlan::Join(Join {
-            left,
-            right,
-            join_type,
-            ..
-        }) => match join_type {
+        LogicalPlan::Join(
+            Join {
+                left,
+                right,
+                join_type,
+                ..
+            },
+            _,
+        ) => match join_type {
             JoinType::Inner => {
                 inner_plan.apply_children(|plan| {
                     check_inner_plan(plan, can_contain_outer_ref)?;
@@ -203,7 +207,7 @@ fn check_inner_plan(inner_plan: &LogicalPlan, can_contain_outer_ref: bool) -> Re
                 Ok(())
             }
         },
-        LogicalPlan::Extension(_) => Ok(()),
+        LogicalPlan::Extension(_, _) => Ok(()),
         _ => plan_err!("Unsupported operator in the subquery plan."),
     }
 }
@@ -241,10 +245,10 @@ fn check_aggregation_in_scalar_subquery(
 
 fn strip_inner_query(inner_plan: &LogicalPlan) -> &LogicalPlan {
     match inner_plan {
-        LogicalPlan::Projection(projection) => {
+        LogicalPlan::Projection(projection, _) => {
             strip_inner_query(projection.input.as_ref())
         }
-        LogicalPlan::SubqueryAlias(alias) => strip_inner_query(alias.input.as_ref()),
+        LogicalPlan::SubqueryAlias(alias, _) => strip_inner_query(alias.input.as_ref()),
         other => other,
     }
 }
@@ -252,7 +256,14 @@ fn strip_inner_query(inner_plan: &LogicalPlan) -> &LogicalPlan {
 fn get_correlated_expressions(inner_plan: &LogicalPlan) -> Result<Vec<Expr>> {
     let mut exprs = vec![];
     inner_plan.apply_with_subqueries(|plan| {
-        if let LogicalPlan::Filter(Filter { predicate, .. }) = plan {
+        if !plan
+            .stats()
+            .contains_pattern(LogicalPlanPattern::LogicalPlanFilter)
+        {
+            return Ok(TreeNodeRecursion::Jump);
+        }
+
+        if let LogicalPlan::Filter(Filter { predicate, .. }, _) = plan {
             let (correlated, _): (Vec<_>, Vec<_>) = split_conjunction(predicate)
                 .into_iter()
                 .partition(|e| e.contains_outer());
@@ -340,7 +351,7 @@ mod test {
 
     #[test]
     fn wont_fail_extension_plan() {
-        let plan = LogicalPlan::Extension(Extension {
+        let plan = LogicalPlan::extension(Extension {
             node: Arc::new(MockUserDefinedLogicalPlan {
                 empty_schema: DFSchemaRef::new(DFSchema::empty()),
             }),

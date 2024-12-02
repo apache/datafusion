@@ -165,7 +165,7 @@ impl SimpleCsvTable {
     async fn interpreter_expr(&self, state: &dyn Session) -> Result<i64> {
         use datafusion::logical_expr::expr_rewriter::normalize_col;
         use datafusion::logical_expr::utils::columnize_expr;
-        let plan = LogicalPlan::EmptyRelation(EmptyRelation {
+        let plan = LogicalPlan::empty_relation(EmptyRelation {
             produce_one_row: true,
             schema: Arc::new(DFSchema::empty()),
         });
@@ -176,7 +176,7 @@ impl SimpleCsvTable {
             )?],
             Arc::new(plan),
         )
-        .map(LogicalPlan::Projection)?;
+        .map(LogicalPlan::projection)?;
         let rbs = collect(
             state.create_physical_plan(&logical_plan).await?,
             Arc::new(TaskContext::from(state)),
@@ -201,7 +201,7 @@ impl TableFunctionImpl for SimpleCsvTableFunc {
         let mut filepath = String::new();
         for expr in exprs {
             match expr {
-                Expr::Literal(ScalarValue::Utf8(Some(ref path))) => {
+                Expr::Literal(ScalarValue::Utf8(Some(ref path)), _) => {
                     filepath.clone_from(path);
                 }
                 expr => new_exprs.push(expr.clone()),

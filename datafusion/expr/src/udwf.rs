@@ -130,7 +130,7 @@ impl WindowUDF {
     pub fn call(&self, args: Vec<Expr>) -> Expr {
         let fun = crate::WindowFunctionDefinition::WindowUDF(Arc::new(self.clone()));
 
-        Expr::WindowFunction(WindowFunction::new(fun, args))
+        Expr::window_function(WindowFunction::new(fun, args))
     }
 
     /// Returns this function's name

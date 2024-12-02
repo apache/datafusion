@@ -312,18 +312,18 @@ impl<'a, 'b> PgJsonVisitor<'a, 'b> {
     /// Converts a logical plan node to a json object.
     fn to_json_value(node: &LogicalPlan) -> serde_json::Value {
         match node {
-            LogicalPlan::EmptyRelation(_) => {
+            LogicalPlan::EmptyRelation(_, _) => {
                 json!({
                     "Node Type": "EmptyRelation",
                 })
             }
-            LogicalPlan::RecursiveQuery(RecursiveQuery { is_distinct, .. }) => {
+            LogicalPlan::RecursiveQuery(RecursiveQuery { is_distinct, .. }, _) => {
                 json!({
                     "Node Type": "RecursiveQuery",
                     "Is Distinct": is_distinct,
                 })
             }
-            LogicalPlan::Values(Values { ref values, .. }) => {
+            LogicalPlan::Values(Values { ref values, .. }, _) => {
                 let str_values = values
                     .iter()
                     // limit to only 5 values to avoid horrible display
@@ -347,13 +347,16 @@ impl<'a, 'b> PgJsonVisitor<'a, 'b> {
                     "Values": values_str
                 })
             }
-            LogicalPlan::TableScan(TableScan {
-                ref source,
-                ref table_name,
-                ref filters,
-                ref fetch,
-                ..
-            }) => {
+            LogicalPlan::TableScan(
+                TableScan {
+                    ref source,
+                    ref table_name,
+                    ref filters,
+                    ref fetch,
+                    ..
+                },
+                _,
+            ) => {
                 let mut object = json!({
                     "Node Type": "TableScan",
                     "Relation Name": table_name.table(),
@@ -407,26 +410,29 @@ impl<'a, 'b> PgJsonVisitor<'a, 'b> {
 
                 object
             }
-            LogicalPlan::Projection(Projection { ref expr, .. }) => {
+            LogicalPlan::Projection(Projection { ref expr, .. }, _) => {
                 json!({
                     "Node Type": "Projection",
                     "Expressions": expr.iter().map(|e| e.to_string()).collect::<Vec<_>>()
                 })
             }
-            LogicalPlan::Dml(DmlStatement { table_name, op, .. }) => {
+            LogicalPlan::Dml(DmlStatement { table_name, op, .. }, _) => {
                 json!({
                     "Node Type": "Projection",
                     "Operation": op.name(),
                     "Table Name": table_name.table()
                 })
             }
-            LogicalPlan::Copy(CopyTo {
-                input: _,
-                output_url,
-                file_type,
-                partition_by: _,
-                options,
-            }) => {
+            LogicalPlan::Copy(
+                CopyTo {
+                    input: _,
+                    output_url,
+                    file_type,
+                    partition_by: _,
+                    options,
+                },
+                _,
+            ) => {
                 let op_str = options
                     .iter()
                     .map(|(k, v)| format!("{}={}", k, v))
@@ -439,41 +445,50 @@ impl<'a, 'b> PgJsonVisitor<'a, 'b> {
                     "Options": op_str
                 })
             }
-            LogicalPlan::Ddl(ddl) => {
+            LogicalPlan::Ddl(ddl, _) => {
                 json!({
                     "Node Type": "Ddl",
                     "Operation": format!("{}", ddl.display())
                 })
             }
-            LogicalPlan::Filter(Filter {
-                predicate: ref expr,
-                ..
-            }) => {
+            LogicalPlan::Filter(
+                Filter {
+                    predicate: ref expr,
+                    ..
+                },
+                _,
+            ) => {
                 json!({
                     "Node Type": "Filter",
                     "Condition": format!("{}", expr)
                 })
             }
-            LogicalPlan::Window(Window {
-                ref window_expr, ..
-            }) => {
+            LogicalPlan::Window(
+                Window {
+                    ref window_expr, ..
+                },
+                _,
+            ) => {
                 json!({
                     "Node Type": "WindowAggr",
                     "Expressions": expr_vec_fmt!(window_expr)
                 })
             }
-            LogicalPlan::Aggregate(Aggregate {
-                ref group_expr,
-                ref aggr_expr,
-                ..
-            }) => {
+            LogicalPlan::Aggregate(
+                Aggregate {
+                    ref group_expr,
+                    ref aggr_expr,
+                    ..
+                },
+                _,
+            ) => {
                 json!({
                     "Node Type": "Aggregate",
                     "Group By": expr_vec_fmt!(group_expr),
                     "Aggregates": expr_vec_fmt!(aggr_expr)
                 })
             }
-            LogicalPlan::Sort(Sort { expr, fetch, .. }) => {
+            LogicalPlan::Sort(Sort { expr, fetch, .. }, _) => {
                 let mut object = json!({
                     "Node Type": "Sort",
                     "Sort Key": expr_vec_fmt!(expr),
@@ -485,13 +500,16 @@ impl<'a, 'b> PgJsonVisitor<'a, 'b> {
 
                 object
             }
-            LogicalPlan::Join(Join {
-                on: ref keys,
-                filter,
-                join_constraint,
-                join_type,
-                ..
-            }) => {
+            LogicalPlan::Join(
+                Join {
+                    on: ref keys,
+                    filter,
+                    join_constraint,
+                    join_type,
+                    ..
+                },
+                _,
+            ) => {
                 let join_expr: Vec<String> =
                     keys.iter().map(|(l, r)| format!("{l} = {r}")).collect();
                 let filter_expr = filter
@@ -505,10 +523,13 @@ impl<'a, 'b> PgJsonVisitor<'a, 'b> {
                     "Filter": format!("{}", filter_expr)
                 })
             }
-            LogicalPlan::Repartition(Repartition {
-                partitioning_scheme,
-                ..
-            }) => match partitioning_scheme {
+            LogicalPlan::Repartition(
+                Repartition {
+                    partitioning_scheme,
+                    ..
+                },
+                _,
+            ) => match partitioning_scheme {
                 Partitioning::RoundRobinBatch(n) => {
                     json!({
                         "Node Type": "Repartition",
@@ -537,11 +558,14 @@ impl<'a, 'b> PgJsonVisitor<'a, 'b> {
                     })
                 }
             },
-            LogicalPlan::Limit(Limit {
-                ref skip,
-                ref fetch,
-                ..
-            }) => {
+            LogicalPlan::Limit(
+                Limit {
+                    ref skip,
+                    ref fetch,
+                    ..
+                },
+                _,
+            ) => {
                 let mut object = serde_json::json!(
                     {
                         "Node Type": "Limit",
@@ -555,24 +579,24 @@ impl<'a, 'b> PgJsonVisitor<'a, 'b> {
                 };
                 object
             }
-            LogicalPlan::Subquery(Subquery { .. }) => {
+            LogicalPlan::Subquery(Subquery { .. }, _) => {
                 json!({
                     "Node Type": "Subquery"
                 })
             }
-            LogicalPlan::SubqueryAlias(SubqueryAlias { ref alias, .. }) => {
+            LogicalPlan::SubqueryAlias(SubqueryAlias { ref alias, .. }, _) => {
                 json!({
                     "Node Type": "Subquery",
                     "Alias": alias.table(),
                 })
             }
-            LogicalPlan::Statement(statement) => {
+            LogicalPlan::Statement(statement, _) => {
                 json!({
                     "Node Type": "Statement",
                     "Statement": format!("{}", statement.display())
                 })
             }
-            LogicalPlan::Distinct(distinct) => match distinct {
+            LogicalPlan::Distinct(distinct, _) => match distinct {
                 Distinct::All(_) => {
                     json!({
                         "Node Type": "DistinctAll"
@@ -607,28 +631,31 @@ impl<'a, 'b> PgJsonVisitor<'a, 'b> {
                     "Node Type": "Analyze"
                 })
             }
-            LogicalPlan::Union(_) => {
+            LogicalPlan::Union(_, _) => {
                 json!({
                     "Node Type": "Union"
                 })
             }
-            LogicalPlan::Extension(e) => {
+            LogicalPlan::Extension(e, _) => {
                 json!({
                     "Node Type": e.node.name(),
                     "Detail": format!("{:?}", e.node)
                 })
             }
-            LogicalPlan::DescribeTable(DescribeTable { .. }) => {
+            LogicalPlan::DescribeTable(DescribeTable { .. }, _) => {
                 json!({
                     "Node Type": "DescribeTable"
                 })
             }
-            LogicalPlan::Unnest(Unnest {
-                input: plan,
-                list_type_columns: list_col_indices,
-                struct_type_columns: struct_col_indices,
-                ..
-            }) => {
+            LogicalPlan::Unnest(
+                Unnest {
+                    input: plan,
+                    list_type_columns: list_col_indices,
+                    struct_type_columns: struct_col_indices,
+                    ..
+                },
+                _,
+            ) => {
                 let input_columns = plan.schema().columns();
                 let list_type_columns = list_col_indices
                     .iter()

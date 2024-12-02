@@ -78,7 +78,7 @@ fn rewrite_in_terms_of_projection(
         // search for unnormalized names first such as "c1" (such as aliases)
         if let Some(found) = proj_exprs.iter().find(|a| (**a) == expr) {
             let (qualifier, field_name) = found.qualified_name();
-            let col = Expr::Column(Column::new(qualifier, field_name));
+            let col = Expr::column(Column::new(qualifier, field_name));
             return Ok(Transformed::yes(col));
         }
 
@@ -98,7 +98,7 @@ fn rewrite_in_terms_of_projection(
         // for a column with the same "MIN(C2)", so translate there
         let name = normalized_expr.schema_name().to_string();
 
-        let search_col = Expr::Column(Column {
+        let search_col = Expr::column(Column {
             relation: None,
             name,
         });
@@ -107,14 +107,16 @@ fn rewrite_in_terms_of_projection(
         if let Some(found) = proj_exprs.iter().find(|a| expr_match(&search_col, a)) {
             let found = found.clone();
             return Ok(Transformed::yes(match normalized_expr {
-                Expr::Cast(Cast { expr: _, data_type }) => Expr::Cast(Cast {
+                Expr::Cast(Cast { expr: _, data_type }, _) => Expr::cast(Cast {
                     expr: Box::new(found),
                     data_type,
                 }),
-                Expr::TryCast(TryCast { expr: _, data_type }) => Expr::TryCast(TryCast {
-                    expr: Box::new(found),
-                    data_type,
-                }),
+                Expr::TryCast(TryCast { expr: _, data_type }, _) => {
+                    Expr::try_cast(TryCast {
+                        expr: Box::new(found),
+                        data_type,
+                    })
+                }
                 _ => found,
             }));
         }
@@ -128,7 +130,7 @@ fn rewrite_in_terms_of_projection(
 /// so avg(c) as average will match avgc
 fn expr_match(needle: &Expr, expr: &Expr) -> bool {
     // check inside aliases
-    if let Expr::Alias(Alias { expr, .. }) = &expr {
+    if let Expr::Alias(Alias { expr, .. }, _) = &expr {
         expr.as_ref() == needle
     } else {
         expr == needle

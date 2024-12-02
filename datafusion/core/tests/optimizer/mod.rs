@@ -301,7 +301,7 @@ fn test_inequalities_non_null_bounded() {
         (col("x").not_between(lit(0), lit(5)), false),
         (col("x").not_between(lit(5), lit(10)), true),
         (
-            Expr::BinaryExpr(BinaryExpr {
+            Expr::binary_expr(BinaryExpr {
                 left: Box::new(col("x")),
                 op: Operator::IsDistinctFrom,
                 right: Box::new(lit(ScalarValue::Null)),
@@ -309,7 +309,7 @@ fn test_inequalities_non_null_bounded() {
             true,
         ),
         (
-            Expr::BinaryExpr(BinaryExpr {
+            Expr::binary_expr(BinaryExpr {
                 left: Box::new(col("x")),
                 op: Operator::IsDistinctFrom,
                 right: Box::new(lit(5)),

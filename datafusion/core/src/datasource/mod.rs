@@ -65,7 +65,7 @@ fn create_ordering(
         let mut sort_exprs = LexOrdering::default();
         for sort in exprs {
             match &sort.expr {
-                Expr::Column(col) => match expressions::col(&col.name, schema) {
+                Expr::Column(col, _) => match expressions::col(&col.name, schema) {
                     Ok(expr) => {
                         sort_exprs.push(PhysicalSortExpr {
                             expr,

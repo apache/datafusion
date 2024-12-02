@@ -116,11 +116,11 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             return Ok(plan);
         }
 
-        if let LogicalPlan::Distinct(Distinct::On(ref distinct_on)) = plan {
+        if let LogicalPlan::Distinct(Distinct::On(ref distinct_on), _) = plan {
             // In case of `DISTINCT ON` we must capture the sort expressions since during the plan
             // optimization we're effectively doing a `first_value` aggregation according to them.
             let distinct_on = distinct_on.clone().with_sort_expr(order_by)?;
-            Ok(LogicalPlan::Distinct(Distinct::On(distinct_on)))
+            Ok(LogicalPlan::distinct(Distinct::On(distinct_on)))
         } else {
             LogicalPlanBuilder::from(plan).sort(order_by)?.build()
         }
@@ -133,7 +133,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         select_into: Option<SelectInto>,
     ) -> Result<LogicalPlan> {
         match select_into {
-            Some(into) => Ok(LogicalPlan::Ddl(DdlStatement::CreateMemoryTable(
+            Some(into) => Ok(LogicalPlan::ddl(DdlStatement::CreateMemoryTable(
                 CreateMemoryTable {
                     name: self.object_name_to_table_reference(into.name)?,
                     constraints: Constraints::empty(),

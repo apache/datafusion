@@ -39,7 +39,7 @@ fn total_join_count(plan: &LogicalPlan) -> usize {
     // We can use the TreeNode API to walk over a LogicalPlan.
     plan.apply(|node| {
         // if we encounter a join we update the running count
-        if matches!(node, LogicalPlan::Join(_)) {
+        if matches!(node, LogicalPlan::Join(_, _)) {
             total += 1;
         }
         Ok(TreeNodeRecursion::Continue)
@@ -89,7 +89,7 @@ fn count_trees(plan: &LogicalPlan) -> (usize, Vec<usize>) {
     while let Some(node) = to_visit.pop() {
         // if we encounter a join, we know were at the root of the tree
         // count this tree and recurse on it's inputs
-        if matches!(node, LogicalPlan::Join(_)) {
+        if matches!(node, LogicalPlan::Join(_, _)) {
             let (group_count, inputs) = count_tree(node);
             total += group_count;
             groups.push(group_count);
@@ -146,12 +146,12 @@ fn count_tree(join: &LogicalPlan) -> (usize, Vec<&LogicalPlan>) {
         //     /  \
         //    B    C
         // we can continue the recursion in this case
-        if let LogicalPlan::Projection(_) = node {
+        if let LogicalPlan::Projection(_, _) = node {
             return Ok(TreeNodeRecursion::Continue);
         }
 
         // any join we count
-        if matches!(node, LogicalPlan::Join(_)) {
+        if matches!(node, LogicalPlan::Join(_, _)) {
             total += 1;
             Ok(TreeNodeRecursion::Continue)
         } else {

@@ -91,7 +91,7 @@ impl AggregateUDFImpl for BetterAvgUdaf {
         // as an example for this functionality we replace UDF function
         // with build-in aggregate function to illustrate the use
         let simplify = |aggregate_function: AggregateFunction, _: &dyn SimplifyInfo| {
-            Ok(Expr::AggregateFunction(AggregateFunction::new_udf(
+            Ok(Expr::aggregate_function(AggregateFunction::new_udf(
                 avg_udaf(),
                 // yes it is the same Avg, `BetterAvgUdaf` was just a
                 // marketing pitch :)

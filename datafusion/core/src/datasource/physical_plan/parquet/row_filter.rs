@@ -432,7 +432,7 @@ pub fn can_expr_be_pushed_down_with_schemas(
 ) -> bool {
     let mut can_be_pushed = true;
     expr.apply(|expr| match expr {
-        datafusion_expr::Expr::Column(column) => {
+        datafusion_expr::Expr::Column(column, _) => {
             can_be_pushed &=
                 !would_column_prevent_pushdown(column.name(), file_schema, table_schema);
             Ok(if can_be_pushed {
@@ -699,7 +699,7 @@ mod test {
             .expect("expected error free record batch");
 
         // Test all should fail
-        let expr = col("timestamp_col").lt(Expr::Literal(
+        let expr = col("timestamp_col").lt(Expr::literal(
             ScalarValue::TimestampNanosecond(Some(1), Some(Arc::from("UTC"))),
         ));
         let expr = logical2physical(&expr, &table_schema);
@@ -723,7 +723,7 @@ mod test {
         assert!(matches!(filtered, Ok(a) if a == BooleanArray::from(vec![false; 8])));
 
         // Test all should pass
-        let expr = col("timestamp_col").gt(Expr::Literal(
+        let expr = col("timestamp_col").gt(Expr::literal(
             ScalarValue::TimestampNanosecond(Some(0), Some(Arc::from("UTC"))),
         ));
         let expr = logical2physical(&expr, &table_schema);
@@ -826,7 +826,7 @@ mod test {
 
         let expr = col("str_col")
             .is_not_null()
-            .or(col("int_col").gt(Expr::Literal(ScalarValue::UInt64(Some(5)))));
+            .or(col("int_col").gt(Expr::literal(ScalarValue::UInt64(Some(5)))));
 
         assert!(can_expr_be_pushed_down_with_schemas(
             &expr,

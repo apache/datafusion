@@ -40,24 +40,24 @@ async fn count_only_nulls() -> Result<()> {
         vec![Field::new("col", DataType::Null, true)].into(),
         HashMap::new(),
     )?);
-    let input = Arc::new(LogicalPlan::Values(Values {
+    let input = Arc::new(LogicalPlan::values(Values {
         schema: input_schema,
         values: vec![
-            vec![Expr::Literal(ScalarValue::Null)],
-            vec![Expr::Literal(ScalarValue::Null)],
-            vec![Expr::Literal(ScalarValue::Null)],
+            vec![Expr::literal(ScalarValue::Null)],
+            vec![Expr::literal(ScalarValue::Null)],
+            vec![Expr::literal(ScalarValue::Null)],
         ],
     }));
-    let input_col_ref = Expr::Column(Column {
+    let input_col_ref = Expr::column(Column {
         relation: None,
         name: "col".to_string(),
     });
 
     // Aggregation: count(col) AS count
-    let aggregate = LogicalPlan::Aggregate(Aggregate::try_new(
+    let aggregate = LogicalPlan::aggregate(Aggregate::try_new(
         input,
         vec![],
-        vec![Expr::AggregateFunction(AggregateFunction {
+        vec![Expr::aggregate_function(AggregateFunction {
             func: Arc::new(AggregateUDF::new_from_impl(Count::new())),
             args: vec![input_col_ref],
             distinct: false,

@@ -91,31 +91,31 @@ impl Unparser<'_> {
         let plan = normalize_union_schema(plan)?;
 
         match plan {
-            LogicalPlan::Projection(_)
-            | LogicalPlan::Filter(_)
-            | LogicalPlan::Window(_)
-            | LogicalPlan::Aggregate(_)
-            | LogicalPlan::Sort(_)
-            | LogicalPlan::Join(_)
-            | LogicalPlan::Repartition(_)
-            | LogicalPlan::Union(_)
-            | LogicalPlan::TableScan(_)
-            | LogicalPlan::EmptyRelation(_)
-            | LogicalPlan::Subquery(_)
-            | LogicalPlan::SubqueryAlias(_)
-            | LogicalPlan::Limit(_)
-            | LogicalPlan::Statement(_)
-            | LogicalPlan::Values(_)
-            | LogicalPlan::Distinct(_) => self.select_to_sql_statement(&plan),
-            LogicalPlan::Dml(_) => self.dml_to_sql(&plan),
-            LogicalPlan::Explain(_)
-            | LogicalPlan::Analyze(_)
-            | LogicalPlan::Extension(_)
-            | LogicalPlan::Ddl(_)
-            | LogicalPlan::Copy(_)
-            | LogicalPlan::DescribeTable(_)
-            | LogicalPlan::RecursiveQuery(_)
-            | LogicalPlan::Unnest(_) => not_impl_err!("Unsupported plan: {plan:?}"),
+            LogicalPlan::Projection(_, _)
+            | LogicalPlan::Filter(_, _)
+            | LogicalPlan::Window(_, _)
+            | LogicalPlan::Aggregate(_, _)
+            | LogicalPlan::Sort(_, _)
+            | LogicalPlan::Join(_, _)
+            | LogicalPlan::Repartition(_, _)
+            | LogicalPlan::Union(_, _)
+            | LogicalPlan::TableScan(_, _)
+            | LogicalPlan::EmptyRelation(_, _)
+            | LogicalPlan::Subquery(_, _)
+            | LogicalPlan::SubqueryAlias(_, _)
+            | LogicalPlan::Limit(_, _)
+            | LogicalPlan::Statement(_, _)
+            | LogicalPlan::Values(_, _)
+            | LogicalPlan::Distinct(_, _) => self.select_to_sql_statement(&plan),
+            LogicalPlan::Dml(_, _) => self.dml_to_sql(&plan),
+            LogicalPlan::Explain(_, _)
+            | LogicalPlan::Analyze(_, _)
+            | LogicalPlan::Extension(_, _)
+            | LogicalPlan::Ddl(_, _)
+            | LogicalPlan::Copy(_, _)
+            | LogicalPlan::DescribeTable(_, _)
+            | LogicalPlan::RecursiveQuery(_, _)
+            | LogicalPlan::Unnest(_, _) => not_impl_err!("Unsupported plan: {plan:?}"),
         }
     }
 
@@ -275,7 +275,7 @@ impl Unparser<'_> {
         relation: &mut RelationBuilder,
     ) -> Result<()> {
         match plan {
-            LogicalPlan::TableScan(scan) => {
+            LogicalPlan::TableScan(scan, _) => {
                 if let Some(unparsed_table_scan) =
                     Self::unparse_table_scan_pushdown(plan, None)?
                 {
@@ -304,7 +304,7 @@ impl Unparser<'_> {
 
                 Ok(())
             }
-            LogicalPlan::Projection(p) => {
+            LogicalPlan::Projection(p, _) => {
                 if let Some(new_plan) = rewrite_plan_for_sort_on_non_projected_fields(p) {
                     return self
                         .select_to_sql_recursively(&new_plan, query, select, relation);
@@ -321,7 +321,7 @@ impl Unparser<'_> {
                 self.reconstruct_select_statement(plan, p, select)?;
                 self.select_to_sql_recursively(p.input.as_ref(), query, select, relation)
             }
-            LogicalPlan::Filter(filter) => {
+            LogicalPlan::Filter(filter, _) => {
                 if let Some(agg) =
                     find_agg_node_within_select(plan, select.already_projected())
                 {
@@ -341,7 +341,7 @@ impl Unparser<'_> {
                     relation,
                 )
             }
-            LogicalPlan::Limit(limit) => {
+            LogicalPlan::Limit(limit, _) => {
                 // Limit can be top-level plan for derived table
                 if select.already_projected() {
                     return self.derive_with_dialect_alias(
@@ -378,7 +378,7 @@ impl Unparser<'_> {
                     relation,
                 )
             }
-            LogicalPlan::Sort(sort) => {
+            LogicalPlan::Sort(sort, _) => {
                 // Sort can be top-level plan for derived table
                 if select.already_projected() {
                     return self.derive_with_dialect_alias(
@@ -419,7 +419,7 @@ impl Unparser<'_> {
                     relation,
                 )
             }
-            LogicalPlan::Aggregate(agg) => {
+            LogicalPlan::Aggregate(agg, _) => {
                 // Aggregation can be already handled in the projection case
                 if !select.already_projected() {
                     // The query returns aggregate and group expressions. If that weren't the case,
@@ -448,7 +448,7 @@ impl Unparser<'_> {
                     relation,
                 )
             }
-            LogicalPlan::Distinct(distinct) => {
+            LogicalPlan::Distinct(distinct, _) => {
                 // Distinct can be top-level plan for derived table
                 if select.already_projected() {
                     return self.derive_with_dialect_alias(
@@ -486,7 +486,7 @@ impl Unparser<'_> {
                 select.distinct(Some(select_distinct));
                 self.select_to_sql_recursively(input, query, select, relation)
             }
-            LogicalPlan::Join(join) => {
+            LogicalPlan::Join(join, _) => {
                 let mut table_scan_filters = vec![];
 
                 let left_plan =
@@ -529,7 +529,7 @@ impl Unparser<'_> {
                     // Combine `table_scan_filters` into a single filter using `AND`
                     let Some(combined_filters) =
                         table_scan_filters.into_iter().reduce(|acc, filter| {
-                            Expr::BinaryExpr(BinaryExpr {
+                            Expr::binary_expr(BinaryExpr {
                                 left: Box::new(acc),
                                 op: Operator::And,
                                 right: Box::new(filter),
@@ -541,7 +541,7 @@ impl Unparser<'_> {
 
                     // Combine `join.filter` with `combined_filters` using `AND`
                     match &join.filter {
-                        Some(filter) => Some(Expr::BinaryExpr(BinaryExpr {
+                        Some(filter) => Some(Expr::binary_expr(BinaryExpr {
                             left: Box::new(filter.clone()),
                             op: Operator::And,
                             right: Box::new(combined_filters),
@@ -579,7 +579,7 @@ impl Unparser<'_> {
 
                 Ok(())
             }
-            LogicalPlan::SubqueryAlias(plan_alias) => {
+            LogicalPlan::SubqueryAlias(plan_alias, _) => {
                 let (plan, mut columns) =
                     subquery_alias_inner_query_and_columns(plan_alias);
                 let unparsed_table_scan = Self::unparse_table_scan_pushdown(
@@ -626,7 +626,7 @@ impl Unparser<'_> {
 
                 Ok(())
             }
-            LogicalPlan::Union(union) => {
+            LogicalPlan::Union(union, _) => {
                 if union.inputs.len() != 2 {
                     return not_impl_err!(
                         "UNION ALL expected 2 inputs, but found {}",
@@ -665,7 +665,7 @@ impl Unparser<'_> {
 
                 Ok(())
             }
-            LogicalPlan::Window(window) => {
+            LogicalPlan::Window(window, _) => {
                 // Window nodes are handled simultaneously with Projection nodes
                 self.select_to_sql_recursively(
                     window.input.as_ref(),
@@ -674,12 +674,14 @@ impl Unparser<'_> {
                     relation,
                 )
             }
-            LogicalPlan::EmptyRelation(_) => {
+            LogicalPlan::EmptyRelation(_, _) => {
                 relation.empty();
                 Ok(())
             }
-            LogicalPlan::Extension(_) => not_impl_err!("Unsupported operator: {plan:?}"),
-            LogicalPlan::Unnest(unnest) => {
+            LogicalPlan::Extension(_, _) => {
+                not_impl_err!("Unsupported operator: {plan:?}")
+            }
+            LogicalPlan::Unnest(unnest, _) => {
                 if !unnest.struct_type_columns.is_empty() {
                     return internal_err!(
                         "Struct type columns are not currently supported in UNNEST: {:?}",
@@ -694,7 +696,7 @@ impl Unparser<'_> {
                 // |     Projection: table.col1, table.col2 AS UNNEST(table.col2)
                 // |       Filter: table.col3 = Int64(3)
                 // |         TableScan: table projection=None
-                if let LogicalPlan::Projection(p) = unnest.input.as_ref() {
+                if let LogicalPlan::Projection(p, _) = unnest.input.as_ref() {
                     // continue with projection input
                     self.select_to_sql_recursively(&p.input, query, select, relation)
                 } else {
@@ -716,7 +718,7 @@ impl Unparser<'_> {
         alias: Option<TableReference>,
     ) -> Result<Option<LogicalPlan>> {
         match plan {
-            LogicalPlan::TableScan(table_scan) => {
+            LogicalPlan::TableScan(table_scan, _) => {
                 if !Self::is_scan_with_pushdown(table_scan) {
                     return Ok(None);
                 }
@@ -801,7 +803,7 @@ impl Unparser<'_> {
 
                 Ok(Some(builder.build()?))
             }
-            LogicalPlan::SubqueryAlias(subquery_alias) => {
+            LogicalPlan::SubqueryAlias(subquery_alias, _) => {
                 Self::unparse_table_scan_pushdown(
                     &subquery_alias.input,
                     Some(subquery_alias.alias.clone()),
@@ -809,7 +811,7 @@ impl Unparser<'_> {
             }
             // SubqueryAlias could be rewritten to a plan with a projection as the top node by [rewrite::subquery_alias_inner_query_and_columns].
             // The inner table scan could be a scan with pushdown operations.
-            LogicalPlan::Projection(projection) => {
+            LogicalPlan::Projection(projection, _) => {
                 if let Some(plan) =
                     Self::unparse_table_scan_pushdown(&projection.input, alias.clone())?
                 {
@@ -847,7 +849,7 @@ impl Unparser<'_> {
 
     fn select_item_to_sql(&self, expr: &Expr) -> Result<ast::SelectItem> {
         match expr {
-            Expr::Alias(Alias { expr, name, .. }) => {
+            Expr::Alias(Alias { expr, name, .. }, _) => {
                 let inner = self.expr_to_sql(expr)?;
 
                 Ok(ast::SelectItem::ExprWithAlias {
@@ -908,14 +910,20 @@ impl Unparser<'_> {
         for (left, right) in join_conditions {
             match (left, right) {
                 (
-                    Expr::Column(Column {
-                        relation: _,
-                        name: left_name,
-                    }),
-                    Expr::Column(Column {
-                        relation: _,
-                        name: right_name,
-                    }),
+                    Expr::Column(
+                        Column {
+                            relation: _,
+                            name: left_name,
+                        },
+                        _,
+                    ),
+                    Expr::Column(
+                        Column {
+                            relation: _,
+                            name: right_name,
+                        },
+                        _,
+                    ),
                 ) if left_name == right_name => {
                     idents.push(self.new_ident_quoted_if_needs(left_name.to_string()));
                 }

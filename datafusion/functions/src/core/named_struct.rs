@@ -148,7 +148,7 @@ impl ScalarUDFImpl for NamedStructFunc {
                 let name = &chunk[0];
                 let value = &chunk[1];
 
-                if let Expr::Literal(ScalarValue::Utf8(Some(name))) = name {
+                if let Expr::Literal(ScalarValue::Utf8(Some(name)), _) = name {
                     Ok(Field::new(name, value.get_type(schema)?, true))
                 } else {
                     exec_err!("named_struct even arguments must be string literals, got {name} instead at position {}", i * 2)

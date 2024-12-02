@@ -72,7 +72,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
         // Process `from` clause
         let plan = self.plan_from_tables(select.from, planner_context)?;
-        let empty_from = matches!(plan, LogicalPlan::EmptyRelation(_));
+        let empty_from = matches!(plan, LogicalPlan::EmptyRelation(_, _));
 
         // Process `where` clause
         let base_plan = self.plan_selection(select.selection, plan, planner_context)?;
@@ -178,9 +178,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             select_exprs
                 .iter()
                 .filter(|select_expr| match select_expr {
-                    Expr::AggregateFunction(_) => false,
-                    Expr::Alias(Alias { expr, name: _, .. }) => {
-                        !matches!(**expr, Expr::AggregateFunction(_))
+                    Expr::AggregateFunction(_, _) => false,
+                    Expr::Alias(Alias { expr, name: _, .. }, _) => {
+                        !matches!(**expr, Expr::AggregateFunction(_, _))
                     }
                     _ => true,
                 })
@@ -364,7 +364,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
     fn try_process_aggregate_unnest(&self, input: LogicalPlan) -> Result<LogicalPlan> {
         match input {
-            LogicalPlan::Aggregate(agg) => {
+            LogicalPlan::Aggregate(agg, _) => {
                 let agg_expr = agg.aggr_expr.clone();
                 let (new_input, new_group_by_exprs) =
                     self.try_process_group_by_unnest(agg)?;
@@ -372,12 +372,12 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     .aggregate(new_group_by_exprs, agg_expr)?
                     .build()
             }
-            LogicalPlan::Filter(mut filter) => {
+            LogicalPlan::Filter(mut filter, _) => {
                 filter.input =
                     Arc::new(self.try_process_aggregate_unnest(Arc::unwrap_or_clone(
                         filter.input,
                     ))?);
-                Ok(LogicalPlan::Filter(filter))
+                Ok(LogicalPlan::filter(filter))
             }
             _ => Ok(input),
         }
@@ -440,8 +440,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                         let mut columns = HashSet::new();
                         for expr in &aggr_expr {
                             expr.apply(|expr| {
-                                if let Expr::Column(c) = expr {
-                                    columns.insert(Expr::Column(c.clone()));
+                                if let Expr::Column(c, _) = expr {
+                                    columns.insert(Expr::column(c.clone()));
                                 }
                                 Ok(TreeNodeRecursion::Continue)
                             })
@@ -519,7 +519,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     &[using_columns],
                 )?;
 
-                Ok(LogicalPlan::Filter(Filter::try_new(
+                Ok(LogicalPlan::filter(Filter::try_new(
                     filter_expr,
                     Arc::new(plan),
                 )?))
@@ -611,7 +611,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 let name = self.ident_normalizer.normalize(alias);
                 // avoiding adding an alias if the column name is the same.
                 let expr = match &col {
-                    Expr::Column(column) if column.name.eq(&name) => col,
+                    Expr::Column(column, _) if column.name.eq(&name) => col,
                     _ => col.alias(name),
                 };
                 Ok(vec![expr])
@@ -746,7 +746,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         let plan = LogicalPlanBuilder::from(input.clone())
             .aggregate(group_by_exprs.to_vec(), aggr_exprs.to_vec())?
             .build()?;
-        let group_by_exprs = if let LogicalPlan::Aggregate(agg) = &plan {
+        let group_by_exprs = if let LogicalPlan::Aggregate(agg, _) = &plan {
             &agg.group_expr
         } else {
             unreachable!();
@@ -762,13 +762,13 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         let mut aggr_projection_exprs = vec![];
         for expr in group_by_exprs {
             match expr {
-                Expr::GroupingSet(GroupingSet::Rollup(exprs)) => {
+                Expr::GroupingSet(GroupingSet::Rollup(exprs), _) => {
                     aggr_projection_exprs.extend_from_slice(exprs)
                 }
-                Expr::GroupingSet(GroupingSet::Cube(exprs)) => {
+                Expr::GroupingSet(GroupingSet::Cube(exprs), _) => {
                     aggr_projection_exprs.extend_from_slice(exprs)
                 }
-                Expr::GroupingSet(GroupingSet::GroupingSets(lists_of_exprs)) => {
+                Expr::GroupingSet(GroupingSet::GroupingSets(lists_of_exprs), _) => {
                     for exprs in lists_of_exprs {
                         aggr_projection_exprs.extend_from_slice(exprs)
                     }

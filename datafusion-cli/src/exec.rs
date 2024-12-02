@@ -274,9 +274,9 @@ impl AdjustedPrintOptions {
         // all rows
         if matches!(
             plan,
-            LogicalPlan::Explain(_)
-                | LogicalPlan::DescribeTable(_)
-                | LogicalPlan::Analyze(_)
+            LogicalPlan::Explain(_, _)
+                | LogicalPlan::DescribeTable(_, _)
+                | LogicalPlan::Analyze(_, _)
         ) {
             self.inner.maxrows = MaxRows::Unlimited;
         }
@@ -311,7 +311,7 @@ async fn create_plan(
     // Note that cmd is a mutable reference so that create_external_table function can remove all
     // datafusion-cli specific options before passing through to datafusion. Otherwise, datafusion
     // will raise Configuration errors.
-    if let LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) = &plan {
+    if let LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd), _) = &plan {
         // To support custom formats, treat error as None
         let format = config_file_type_from_str(&cmd.file_type);
         register_object_store_and_config_extensions(
@@ -323,7 +323,7 @@ async fn create_plan(
         .await?;
     }
 
-    if let LogicalPlan::Copy(copy_to) = &mut plan {
+    if let LogicalPlan::Copy(copy_to, _) = &mut plan {
         let format = config_file_type_from_str(&copy_to.file_type.get_ext());
 
         register_object_store_and_config_extensions(
@@ -412,7 +412,7 @@ mod tests {
         let ctx = SessionContext::new();
         let plan = ctx.state().create_logical_plan(sql).await?;
 
-        if let LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) = &plan {
+        if let LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd), _) = &plan {
             let format = config_file_type_from_str(&cmd.file_type);
             register_object_store_and_config_extensions(
                 &ctx,
@@ -438,7 +438,7 @@ mod tests {
 
         let plan = ctx.state().create_logical_plan(sql).await?;
 
-        if let LogicalPlan::Copy(cmd) = &plan {
+        if let LogicalPlan::Copy(cmd, _) = &plan {
             let format = config_file_type_from_str(&cmd.file_type.get_ext());
             register_object_store_and_config_extensions(
                 &ctx,
@@ -492,7 +492,7 @@ mod tests {
             for statement in statements {
                 //Should not fail
                 let mut plan = create_plan(&ctx, statement).await?;
-                if let LogicalPlan::Copy(copy_to) = &mut plan {
+                if let LogicalPlan::Copy(copy_to, _) = &mut plan {
                     assert_eq!(copy_to.output_url, location);
                     assert_eq!(copy_to.file_type.get_ext(), "parquet".to_string());
                     ctx.runtime_env()

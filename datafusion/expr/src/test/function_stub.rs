@@ -60,7 +60,7 @@ macro_rules! create_func {
 create_func!(Sum, sum_udaf);
 
 pub fn sum(expr: Expr) -> Expr {
-    Expr::AggregateFunction(AggregateFunction::new_udf(
+    Expr::aggregate_function(AggregateFunction::new_udf(
         sum_udaf(),
         vec![expr],
         false,
@@ -73,7 +73,7 @@ pub fn sum(expr: Expr) -> Expr {
 create_func!(Count, count_udaf);
 
 pub fn count(expr: Expr) -> Expr {
-    Expr::AggregateFunction(AggregateFunction::new_udf(
+    Expr::aggregate_function(AggregateFunction::new_udf(
         count_udaf(),
         vec![expr],
         false,
@@ -86,7 +86,7 @@ pub fn count(expr: Expr) -> Expr {
 create_func!(Avg, avg_udaf);
 
 pub fn avg(expr: Expr) -> Expr {
-    Expr::AggregateFunction(AggregateFunction::new_udf(
+    Expr::aggregate_function(AggregateFunction::new_udf(
         avg_udaf(),
         vec![expr],
         false,
@@ -284,7 +284,7 @@ impl AggregateUDFImpl for Count {
 create_func!(Min, min_udaf);
 
 pub fn min(expr: Expr) -> Expr {
-    Expr::AggregateFunction(AggregateFunction::new_udf(
+    Expr::aggregate_function(AggregateFunction::new_udf(
         min_udaf(),
         vec![expr],
         false,
@@ -369,7 +369,7 @@ impl AggregateUDFImpl for Min {
 create_func!(Max, max_udaf);
 
 pub fn max(expr: Expr) -> Expr {
-    Expr::AggregateFunction(AggregateFunction::new_udf(
+    Expr::aggregate_function(AggregateFunction::new_udf(
         max_udaf(),
         vec![expr],
         false,

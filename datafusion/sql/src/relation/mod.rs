@@ -128,7 +128,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                             planner_context,
                         )?;
                         Self::check_unnest_arg(&expr, &schema)?;
-                        Ok(Expr::Unnest(Unnest::new(expr)))
+                        Ok(Expr::unnest(Unnest::new(expr)))
                     })
                     .collect::<Result<Vec<_>>>()?;
                 if unnest_exprs.is_empty() {
@@ -189,16 +189,16 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         planner_context.set_outer_from_schema(Some(old_from_schema));
 
         match plan {
-            LogicalPlan::SubqueryAlias(SubqueryAlias { input, alias, .. }) => {
+            LogicalPlan::SubqueryAlias(SubqueryAlias { input, alias, .. }, _) => {
                 subquery_alias(
-                    LogicalPlan::Subquery(Subquery {
+                    LogicalPlan::subquery(Subquery {
                         subquery: input,
                         outer_ref_columns,
                     }),
                     alias,
                 )
             }
-            plan => Ok(LogicalPlan::Subquery(Subquery {
+            plan => Ok(LogicalPlan::subquery(Subquery {
                 subquery: Arc::new(plan),
                 outer_ref_columns,
             })),
@@ -215,17 +215,17 @@ fn optimize_subquery_sort(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>>
     // 3. LIMIT => Handled by a `Sort`, so we need to search for it.
     let mut has_limit = false;
     let new_plan = plan.transform_down(|c| {
-        if let LogicalPlan::Limit(_) = c {
+        if let LogicalPlan::Limit(_, _) = c {
             has_limit = true;
             return Ok(Transformed::no(c));
         }
         match c {
-            LogicalPlan::Sort(s) => {
+            LogicalPlan::Sort(s, _) => {
                 if !has_limit {
                     has_limit = false;
                     return Ok(Transformed::yes(s.input.as_ref().clone()));
                 }
-                Ok(Transformed::no(LogicalPlan::Sort(s)))
+                Ok(Transformed::no(LogicalPlan::sort(s)))
             }
             _ => Ok(Transformed::no(c)),
         }

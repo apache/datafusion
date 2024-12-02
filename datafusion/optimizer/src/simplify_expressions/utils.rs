@@ -23,6 +23,7 @@ use datafusion_expr::{
     expr_fn::{and, bitwise_and, bitwise_or, or},
     Expr, Like, Operator,
 };
+use std::ops::Not;
 
 pub static POWS_OF_TEN: [i128; 38] = [
     1,
@@ -69,7 +70,7 @@ pub static POWS_OF_TEN: [i128; 38] = [
 /// expressions. Such as: (A AND B) AND C
 fn expr_contains_inner(expr: &Expr, needle: &Expr, search_op: Operator) -> bool {
     match expr {
-        Expr::BinaryExpr(BinaryExpr { left, op, right }) if *op == search_op => {
+        Expr::BinaryExpr(BinaryExpr { left, op, right }, _) if *op == search_op => {
             expr_contains_inner(left, needle, search_op)
                 || expr_contains_inner(right, needle, search_op)
         }
@@ -92,7 +93,7 @@ pub fn delete_xor_in_complex_expr(expr: &Expr, needle: &Expr, is_left: bool) -> 
         xor_counter: &mut i32,
     ) -> Expr {
         match expr {
-            Expr::BinaryExpr(BinaryExpr { left, op, right })
+            Expr::BinaryExpr(BinaryExpr { left, op, right }, _)
                 if *op == Operator::BitwiseXor =>
             {
                 let left_expr = recursive_delete_xor_in_expr(left, needle, xor_counter);
@@ -105,7 +106,7 @@ pub fn delete_xor_in_complex_expr(expr: &Expr, needle: &Expr, is_left: bool) -> 
                     return left_expr;
                 }
 
-                Expr::BinaryExpr(BinaryExpr::new(
+                Expr::binary_expr(BinaryExpr::new(
                     Box::new(left_expr),
                     *op,
                     Box::new(right_expr),
@@ -121,13 +122,13 @@ pub fn delete_xor_in_complex_expr(expr: &Expr, needle: &Expr, is_left: bool) -> 
         return needle.clone();
     } else if xor_counter % 2 == 0 {
         if is_left {
-            return Expr::BinaryExpr(BinaryExpr::new(
+            return Expr::binary_expr(BinaryExpr::new(
                 Box::new(needle.clone()),
                 Operator::BitwiseXor,
                 Box::new(result_expr),
             ));
         } else {
-            return Expr::BinaryExpr(BinaryExpr::new(
+            return Expr::binary_expr(BinaryExpr::new(
                 Box::new(result_expr),
                 Operator::BitwiseXor,
                 Box::new(needle.clone()),
@@ -139,34 +140,34 @@ pub fn delete_xor_in_complex_expr(expr: &Expr, needle: &Expr, is_left: bool) -> 
 
 pub fn is_zero(s: &Expr) -> bool {
     match s {
-        Expr::Literal(ScalarValue::Int8(Some(0)))
-        | Expr::Literal(ScalarValue::Int16(Some(0)))
-        | Expr::Literal(ScalarValue::Int32(Some(0)))
-        | Expr::Literal(ScalarValue::Int64(Some(0)))
-        | Expr::Literal(ScalarValue::UInt8(Some(0)))
-        | Expr::Literal(ScalarValue::UInt16(Some(0)))
-        | Expr::Literal(ScalarValue::UInt32(Some(0)))
-        | Expr::Literal(ScalarValue::UInt64(Some(0))) => true,
-        Expr::Literal(ScalarValue::Float32(Some(v))) if *v == 0. => true,
-        Expr::Literal(ScalarValue::Float64(Some(v))) if *v == 0. => true,
-        Expr::Literal(ScalarValue::Decimal128(Some(v), _p, _s)) if *v == 0 => true,
+        Expr::Literal(ScalarValue::Int8(Some(0)), _)
+        | Expr::Literal(ScalarValue::Int16(Some(0)), _)
+        | Expr::Literal(ScalarValue::Int32(Some(0)), _)
+        | Expr::Literal(ScalarValue::Int64(Some(0)), _)
+        | Expr::Literal(ScalarValue::UInt8(Some(0)), _)
+        | Expr::Literal(ScalarValue::UInt16(Some(0)), _)
+        | Expr::Literal(ScalarValue::UInt32(Some(0)), _)
+        | Expr::Literal(ScalarValue::UInt64(Some(0)), _) => true,
+        Expr::Literal(ScalarValue::Float32(Some(v)), _) if *v == 0. => true,
+        Expr::Literal(ScalarValue::Float64(Some(v)), _) if *v == 0. => true,
+        Expr::Literal(ScalarValue::Decimal128(Some(v), _p, _s), _) if *v == 0 => true,
         _ => false,
     }
 }
 
 pub fn is_one(s: &Expr) -> bool {
     match s {
-        Expr::Literal(ScalarValue::Int8(Some(1)))
-        | Expr::Literal(ScalarValue::Int16(Some(1)))
-        | Expr::Literal(ScalarValue::Int32(Some(1)))
-        | Expr::Literal(ScalarValue::Int64(Some(1)))
-        | Expr::Literal(ScalarValue::UInt8(Some(1)))
-        | Expr::Literal(ScalarValue::UInt16(Some(1)))
-        | Expr::Literal(ScalarValue::UInt32(Some(1)))
-        | Expr::Literal(ScalarValue::UInt64(Some(1))) => true,
-        Expr::Literal(ScalarValue::Float32(Some(v))) if *v == 1. => true,
-        Expr::Literal(ScalarValue::Float64(Some(v))) if *v == 1. => true,
-        Expr::Literal(ScalarValue::Decimal128(Some(v), _p, s)) => {
+        Expr::Literal(ScalarValue::Int8(Some(1)), _)
+        | Expr::Literal(ScalarValue::Int16(Some(1)), _)
+        | Expr::Literal(ScalarValue::Int32(Some(1)), _)
+        | Expr::Literal(ScalarValue::Int64(Some(1)), _)
+        | Expr::Literal(ScalarValue::UInt8(Some(1)), _)
+        | Expr::Literal(ScalarValue::UInt16(Some(1)), _)
+        | Expr::Literal(ScalarValue::UInt32(Some(1)), _)
+        | Expr::Literal(ScalarValue::UInt64(Some(1)), _) => true,
+        Expr::Literal(ScalarValue::Float32(Some(v)), _) if *v == 1. => true,
+        Expr::Literal(ScalarValue::Float64(Some(v)), _) if *v == 1. => true,
+        Expr::Literal(ScalarValue::Decimal128(Some(v), _p, s), _) => {
             *s >= 0
                 && POWS_OF_TEN
                     .get(*s as usize)
@@ -179,7 +180,7 @@ pub fn is_one(s: &Expr) -> bool {
 
 pub fn is_true(expr: &Expr) -> bool {
     match expr {
-        Expr::Literal(ScalarValue::Boolean(Some(v))) => *v,
+        Expr::Literal(ScalarValue::Boolean(Some(v)), _) => *v,
         _ => false,
     }
 }
@@ -187,48 +188,48 @@ pub fn is_true(expr: &Expr) -> bool {
 /// returns true if expr is a
 /// `Expr::Literal(ScalarValue::Boolean(v))` , false otherwise
 pub fn is_bool_lit(expr: &Expr) -> bool {
-    matches!(expr, Expr::Literal(ScalarValue::Boolean(_)))
+    matches!(expr, Expr::Literal(ScalarValue::Boolean(_), _))
 }
 
 /// Return a literal NULL value of Boolean data type
 pub fn lit_bool_null() -> Expr {
-    Expr::Literal(ScalarValue::Boolean(None))
+    Expr::literal(ScalarValue::Boolean(None))
 }
 
 pub fn is_null(expr: &Expr) -> bool {
     match expr {
-        Expr::Literal(v) => v.is_null(),
+        Expr::Literal(v, _) => v.is_null(),
         _ => false,
     }
 }
 
 pub fn is_false(expr: &Expr) -> bool {
     match expr {
-        Expr::Literal(ScalarValue::Boolean(Some(v))) => !(*v),
+        Expr::Literal(ScalarValue::Boolean(Some(v)), _) => !(*v),
         _ => false,
     }
 }
 
 /// returns true if `haystack` looks like (needle OP X) or (X OP needle)
 pub fn is_op_with(target_op: Operator, haystack: &Expr, needle: &Expr) -> bool {
-    matches!(haystack, Expr::BinaryExpr(BinaryExpr { left, op, right }) if op == &target_op && (needle == left.as_ref() || needle == right.as_ref()) && !needle.is_volatile())
+    matches!(haystack, Expr::BinaryExpr(BinaryExpr { left, op, right }, _) if op == &target_op && (needle == left.as_ref() || needle == right.as_ref()) && !needle.is_volatile())
 }
 
 /// returns true if `not_expr` is !`expr` (not)
 pub fn is_not_of(not_expr: &Expr, expr: &Expr) -> bool {
-    matches!(not_expr, Expr::Not(inner) if expr == inner.as_ref())
+    matches!(not_expr, Expr::Not(inner, _) if expr == inner.as_ref())
 }
 
 /// returns true if `not_expr` is !`expr` (bitwise not)
 pub fn is_negative_of(not_expr: &Expr, expr: &Expr) -> bool {
-    matches!(not_expr, Expr::Negative(inner) if expr == inner.as_ref())
+    matches!(not_expr, Expr::Negative(inner, _) if expr == inner.as_ref())
 }
 
 /// returns the contained boolean value in `expr` as
 /// `Expr::Literal(ScalarValue::Boolean(v))`.
 pub fn as_bool_lit(expr: &Expr) -> Result<Option<bool>> {
     match expr {
-        Expr::Literal(ScalarValue::Boolean(v)) => Ok(*v),
+        Expr::Literal(ScalarValue::Boolean(v), _) => Ok(*v),
         _ => internal_err!("Expected boolean literal, got {expr:?}"),
     }
 }
@@ -249,9 +250,9 @@ pub fn as_bool_lit(expr: &Expr) -> Result<Option<bool>> {
 /// For others, use Not clause
 pub fn negate_clause(expr: Expr) -> Expr {
     match expr {
-        Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
+        Expr::BinaryExpr(BinaryExpr { left, op, right }, _) => {
             if let Some(negated_op) = op.negate() {
-                return Expr::BinaryExpr(BinaryExpr::new(left, negated_op, right));
+                return Expr::binary_expr(BinaryExpr::new(left, negated_op, right));
             }
             match op {
                 // not (A and B) ===> (not A) or (not B)
@@ -269,34 +270,35 @@ pub fn negate_clause(expr: Expr) -> Expr {
                     and(left, right)
                 }
                 // use not clause
-                _ => Expr::Not(Box::new(Expr::BinaryExpr(BinaryExpr::new(
-                    left, op, right,
-                )))),
+                _ => Expr::binary_expr(BinaryExpr::new(left, op, right)).not(),
             }
         }
         // not (not A) ===> A
-        Expr::Not(expr) => *expr,
+        Expr::Not(expr, _) => *expr,
         // not (A is not null) ===> A is null
-        Expr::IsNotNull(expr) => expr.is_null(),
+        Expr::IsNotNull(expr, _) => expr.is_null(),
         // not (A is null) ===> A is not null
-        Expr::IsNull(expr) => expr.is_not_null(),
+        Expr::IsNull(expr, _) => expr.is_not_null(),
         // not (A not in (..)) ===> A in (..)
         // not (A in (..)) ===> A not in (..)
-        Expr::InList(InList {
-            expr,
-            list,
-            negated,
-        }) => expr.in_list(list, !negated),
+        Expr::InList(
+            InList {
+                expr,
+                list,
+                negated,
+            },
+            _,
+        ) => expr.in_list(list, !negated),
         // not (A between B and C) ===> (A not between B and C)
         // not (A not between B and C) ===> (A between B and C)
-        Expr::Between(between) => Expr::Between(Between::new(
+        Expr::Between(between, _) => Expr::_between(Between::new(
             between.expr,
             !between.negated,
             between.low,
             between.high,
         )),
         // not (A like B) ===> A not like B
-        Expr::Like(like) => Expr::Like(Like::new(
+        Expr::Like(like, _) => Expr::_like(Like::new(
             !like.negated,
             like.expr,
             like.pattern,
@@ -304,7 +306,7 @@ pub fn negate_clause(expr: Expr) -> Expr {
             like.case_insensitive,
         )),
         // use not clause
-        _ => Expr::Not(Box::new(expr)),
+        _ => expr.not(),
     }
 }
 
@@ -318,7 +320,7 @@ pub fn negate_clause(expr: Expr) -> Expr {
 /// For others, use Negative clause
 pub fn distribute_negation(expr: Expr) -> Expr {
     match expr {
-        Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
+        Expr::BinaryExpr(BinaryExpr { left, op, right }, _) => {
             match op {
                 // ~(A & B) ===> ~A | ~B
                 Operator::BitwiseAnd => {
@@ -335,14 +337,14 @@ pub fn distribute_negation(expr: Expr) -> Expr {
                     bitwise_and(left, right)
                 }
                 // use negative clause
-                _ => Expr::Negative(Box::new(Expr::BinaryExpr(BinaryExpr::new(
+                _ => Expr::negative(Box::new(Expr::binary_expr(BinaryExpr::new(
                     left, op, right,
                 )))),
             }
         }
         // ~(~A) ===> A
-        Expr::Negative(expr) => *expr,
+        Expr::Negative(expr, _) => *expr,
         // use negative clause
-        _ => Expr::Negative(Box::new(expr)),
+        _ => Expr::negative(Box::new(expr)),
     }
 }

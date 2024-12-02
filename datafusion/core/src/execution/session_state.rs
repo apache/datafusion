@@ -632,7 +632,7 @@ impl SessionState {
 
     /// Optimizes the logical plan by applying optimizer rules.
     pub fn optimize(&self, plan: &LogicalPlan) -> datafusion_common::Result<LogicalPlan> {
-        if let LogicalPlan::Explain(e) = plan {
+        if let LogicalPlan::Explain(e, _) = plan {
             let mut stringified_plans = e.stringified_plans.clone();
 
             // analyze & capture output of each rule
@@ -652,7 +652,7 @@ impl SessionState {
                     stringified_plans
                         .push(StringifiedPlan::new(plan_type, err.to_string()));
 
-                    return Ok(LogicalPlan::Explain(Explain {
+                    return Ok(LogicalPlan::explain(Explain {
                         verbose: e.verbose,
                         plan: Arc::clone(&e.plan),
                         stringified_plans,
@@ -688,7 +688,7 @@ impl SessionState {
                 Err(e) => return Err(e),
             };
 
-            Ok(LogicalPlan::Explain(Explain {
+            Ok(LogicalPlan::explain(Explain {
                 verbose: e.verbose,
                 plan,
                 stringified_plans,

@@ -236,11 +236,14 @@ async fn custom_source_dataframe() -> Result<()> {
 
     let optimized_plan = state.optimize(&logical_plan)?;
     match &optimized_plan {
-        LogicalPlan::TableScan(TableScan {
-            source,
-            projected_schema,
-            ..
-        }) => {
+        LogicalPlan::TableScan(
+            TableScan {
+                source,
+                projected_schema,
+                ..
+            },
+            _,
+        ) => {
             assert_eq!(source.schema().fields().len(), 2);
             assert_eq!(projected_schema.fields().len(), 1);
         }

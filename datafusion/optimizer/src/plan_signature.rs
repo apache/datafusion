@@ -97,21 +97,22 @@ mod tests {
     fn node_number_for_some_plan() -> Result<()> {
         let schema = Arc::new(DFSchema::empty());
 
-        let one_node_plan =
-            Arc::new(LogicalPlan::EmptyRelation(datafusion_expr::EmptyRelation {
+        let one_node_plan = Arc::new(LogicalPlan::empty_relation(
+            datafusion_expr::EmptyRelation {
                 produce_one_row: false,
                 schema: Arc::clone(&schema),
-            }));
+            },
+        ));
 
         assert_eq!(1, get_node_number(&one_node_plan).get());
 
-        let two_node_plan = Arc::new(LogicalPlan::Projection(
+        let two_node_plan = Arc::new(LogicalPlan::projection(
             datafusion_expr::Projection::try_new(vec![lit(1), lit(2)], one_node_plan)?,
         ));
 
         assert_eq!(2, get_node_number(&two_node_plan).get());
 
-        let five_node_plan = Arc::new(LogicalPlan::Union(datafusion_expr::Union {
+        let five_node_plan = Arc::new(LogicalPlan::union(datafusion_expr::Union {
             inputs: vec![Arc::clone(&two_node_plan), two_node_plan],
             schema,
         }));

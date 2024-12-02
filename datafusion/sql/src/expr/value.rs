@@ -41,7 +41,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         match value {
             Value::Number(n, _) => self.parse_sql_number(&n, false),
             Value::SingleQuotedString(s) | Value::DoubleQuotedString(s) => Ok(lit(s)),
-            Value::Null => Ok(Expr::Literal(ScalarValue::Null)),
+            Value::Null => Ok(Expr::literal(ScalarValue::Null)),
             Value::Boolean(n) => Ok(lit(n)),
             Value::Placeholder(param) => {
                 Self::create_placeholder_expr(param, param_data_types)
@@ -112,7 +112,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             Ok(index) => index - 1,
             Err(_) => {
                 return if param_data_types.is_empty() {
-                    Ok(Expr::Placeholder(Placeholder::new(param, None)))
+                    Ok(Expr::placeholder(Placeholder::new(param, None)))
                 } else {
                     // when PREPARE Statement, param_data_types length is always 0
                     plan_err!("Invalid placeholder, not a number: {param}")
@@ -127,7 +127,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             param, param_type
         );
 
-        Ok(Expr::Placeholder(Placeholder::new(
+        Ok(Expr::placeholder(Placeholder::new(
             param,
             param_type.cloned(),
         )))
@@ -223,7 +223,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     fractional_seconds_precision: None,
                 },
             )?;
-            return Ok(Expr::BinaryExpr(BinaryExpr::new(
+            return Ok(Expr::binary_expr(BinaryExpr::new(
                 Box::new(left_expr),
                 df_op,
                 Box::new(right_expr),
@@ -349,7 +349,7 @@ fn parse_decimal_128(unsigned_number: &str, negative: bool) -> Result<Expr> {
         ))));
     }
 
-    Ok(Expr::Literal(ScalarValue::Decimal128(
+    Ok(Expr::literal(ScalarValue::Decimal128(
         Some(if negative { -number } else { number }),
         precision as u8,
         scale as i8,

@@ -20,6 +20,7 @@ use datafusion_common::{DFSchema, DFSchemaRef};
 use std::fmt::{self, Display};
 use std::sync::{Arc, OnceLock};
 
+use crate::logical_plan::tree_node::LogicalPlanStats;
 use crate::{expr_vec_fmt, Expr, LogicalPlan};
 
 /// Statements have a unchanging empty schema.
@@ -129,6 +130,16 @@ impl Statement {
             }
         }
         Wrapper(self)
+    }
+
+    pub(crate) fn stats(&self) -> LogicalPlanStats {
+        match self {
+            Statement::Prepare(Prepare { input, .. }) => input.stats(),
+            Statement::Execute(Execute { parameters, .. }) => parameters
+                .iter()
+                .fold(LogicalPlanStats::empty(), |s, e| s.merge(e.stats())),
+            _ => LogicalPlanStats::empty(),
+        }
     }
 }
 

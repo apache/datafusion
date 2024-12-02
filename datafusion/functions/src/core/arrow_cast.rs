@@ -129,7 +129,7 @@ impl ScalarUDFImpl for ArrowCastFunc {
             arg
         } else {
             // Use an actual cast to get the correct type
-            Expr::Cast(datafusion_expr::Cast {
+            Expr::cast(datafusion_expr::Cast {
                 expr: Box::new(arg),
                 data_type: target_type,
             })
@@ -176,7 +176,7 @@ fn data_type_from_args(args: &[Expr]) -> Result<DataType> {
     if args.len() != 2 {
         return plan_err!("arrow_cast needs 2 arguments, {} provided", args.len());
     }
-    let Expr::Literal(ScalarValue::Utf8(Some(val))) = &args[1] else {
+    let Expr::Literal(ScalarValue::Utf8(Some(val)), _) = &args[1] else {
         return plan_err!(
             "arrow_cast requires its second argument to be a constant string, got {:?}",
             &args[1]

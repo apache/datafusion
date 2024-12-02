@@ -91,24 +91,27 @@ impl OptimizerRule for EliminateCrossJoin {
         let mut all_inputs: Vec<LogicalPlan> = vec![];
         let mut all_filters: Vec<Expr> = vec![];
 
-        let parent_predicate = if let LogicalPlan::Filter(filter) = plan {
+        let parent_predicate = if let LogicalPlan::Filter(filter, _) = plan {
             // if input isn't a join that can potentially be rewritten
             // avoid unwrapping the input
             let rewriteable = matches!(
                 filter.input.as_ref(),
-                LogicalPlan::Join(Join {
-                    join_type: JoinType::Inner,
-                    ..
-                })
+                LogicalPlan::Join(
+                    Join {
+                        join_type: JoinType::Inner,
+                        ..
+                    },
+                    _
+                )
             );
 
             if !rewriteable {
                 // recursively try to rewrite children
-                return rewrite_children(self, LogicalPlan::Filter(filter), config);
+                return rewrite_children(self, LogicalPlan::filter(filter), config);
             }
 
             if !can_flatten_join_inputs(&filter.input) {
-                return Ok(Transformed::no(LogicalPlan::Filter(filter)));
+                return Ok(Transformed::no(LogicalPlan::filter(filter)));
             }
 
             let Filter {
@@ -125,10 +128,13 @@ impl OptimizerRule for EliminateCrossJoin {
             Some(predicate)
         } else if matches!(
             plan,
-            LogicalPlan::Join(Join {
-                join_type: JoinType::Inner,
-                ..
-            })
+            LogicalPlan::Join(
+                Join {
+                    join_type: JoinType::Inner,
+                    ..
+                },
+                _
+            )
         ) {
             if !can_flatten_join_inputs(&plan) {
                 return Ok(Transformed::no(plan));
@@ -160,7 +166,7 @@ impl OptimizerRule for EliminateCrossJoin {
         left = rewrite_children(self, left, config)?.data;
 
         if &plan_schema != left.schema() {
-            left = LogicalPlan::Projection(Projection::new_from_schema(
+            left = LogicalPlan::projection(Projection::new_from_schema(
                 Arc::new(left),
                 Arc::clone(&plan_schema),
             ));
@@ -170,7 +176,7 @@ impl OptimizerRule for EliminateCrossJoin {
             // Add any filters on top - PushDownFilter can push filters down to applicable join
             let first = all_filters.swap_remove(0);
             let predicate = all_filters.into_iter().fold(first, and);
-            left = LogicalPlan::Filter(Filter::try_new(predicate, Arc::new(left))?);
+            left = LogicalPlan::filter(Filter::try_new(predicate, Arc::new(left))?);
         }
 
         let Some(predicate) = parent_predicate else {
@@ -180,12 +186,12 @@ impl OptimizerRule for EliminateCrossJoin {
         // If there are no join keys then do nothing:
         if all_join_keys.is_empty() {
             Filter::try_new(predicate, Arc::new(left))
-                .map(|filter| Transformed::yes(LogicalPlan::Filter(filter)))
+                .map(|filter| Transformed::yes(LogicalPlan::filter(filter)))
         } else {
             // Remove join expressions from filter:
             match remove_join_expressions(predicate, &all_join_keys) {
                 Some(filter_expr) => Filter::try_new(filter_expr, Arc::new(left))
-                    .map(|filter| Transformed::yes(LogicalPlan::Filter(filter))),
+                    .map(|filter| Transformed::yes(LogicalPlan::filter(filter))),
                 _ => Ok(Transformed::yes(left)),
             }
         }
@@ -224,7 +230,7 @@ fn flatten_join_inputs(
     all_filters: &mut Vec<Expr>,
 ) -> Result<()> {
     match plan {
-        LogicalPlan::Join(join) if join.join_type == JoinType::Inner => {
+        LogicalPlan::Join(join, _) if join.join_type == JoinType::Inner => {
             if let Some(filter) = join.filter {
                 all_filters.push(filter);
             }
@@ -256,15 +262,18 @@ fn flatten_join_inputs(
 fn can_flatten_join_inputs(plan: &LogicalPlan) -> bool {
     // can only flatten inner / cross joins
     match plan {
-        LogicalPlan::Join(join) if join.join_type == JoinType::Inner => {}
+        LogicalPlan::Join(join, _) if join.join_type == JoinType::Inner => {}
         _ => return false,
     };
 
     for child in plan.inputs() {
-        if let LogicalPlan::Join(Join {
-            join_type: JoinType::Inner,
-            ..
-        }) = child
+        if let LogicalPlan::Join(
+            Join {
+                join_type: JoinType::Inner,
+                ..
+            },
+            _,
+        ) = child
         {
             if !can_flatten_join_inputs(child) {
                 return false;
@@ -321,7 +330,7 @@ fn find_inner_join(
                 &JoinType::Inner,
             )?);
 
-            return Ok(LogicalPlan::Join(Join {
+            return Ok(LogicalPlan::join(Join {
                 left: Arc::new(left_input),
                 right: Arc::new(right_input),
                 join_type: JoinType::Inner,
@@ -343,7 +352,7 @@ fn find_inner_join(
         &JoinType::Inner,
     )?);
 
-    Ok(LogicalPlan::Join(Join {
+    Ok(LogicalPlan::join(Join {
         left: Arc::new(left_input),
         right: Arc::new(right),
         schema: join_schema,
@@ -357,7 +366,7 @@ fn find_inner_join(
 
 /// Extract join keys from a WHERE clause
 fn extract_possible_join_keys(expr: &Expr, join_keys: &mut JoinKeySet) {
-    if let Expr::BinaryExpr(BinaryExpr { left, op, right }) = expr {
+    if let Expr::BinaryExpr(BinaryExpr { left, op, right }, _) = expr {
         match op {
             Operator::Eq => {
                 // insert handles ensuring  we don't add the same Join keys multiple times
@@ -389,20 +398,23 @@ fn extract_possible_join_keys(expr: &Expr, join_keys: &mut JoinKeySet) {
 /// * `None` otherwise
 fn remove_join_expressions(expr: Expr, join_keys: &JoinKeySet) -> Option<Expr> {
     match expr {
-        Expr::BinaryExpr(BinaryExpr {
-            left,
-            op: Operator::Eq,
-            right,
-        }) if join_keys.contains(&left, &right) => {
+        Expr::BinaryExpr(
+            BinaryExpr {
+                left,
+                op: Operator::Eq,
+                right,
+            },
+            _,
+        ) if join_keys.contains(&left, &right) => {
             // was a join key, so remove it
             None
         }
         // Fix for issue#78 join predicates from inside of OR expr also pulled up properly.
-        Expr::BinaryExpr(BinaryExpr { left, op, right }) if op == Operator::And => {
+        Expr::BinaryExpr(BinaryExpr { left, op, right }, _) if op == Operator::And => {
             let l = remove_join_expressions(*left, join_keys);
             let r = remove_join_expressions(*right, join_keys);
             match (l, r) {
-                (Some(ll), Some(rr)) => Some(Expr::BinaryExpr(BinaryExpr::new(
+                (Some(ll), Some(rr)) => Some(Expr::binary_expr(BinaryExpr::new(
                     Box::new(ll),
                     op,
                     Box::new(rr),
@@ -412,11 +424,11 @@ fn remove_join_expressions(expr: Expr, join_keys: &JoinKeySet) -> Option<Expr> {
                 _ => None,
             }
         }
-        Expr::BinaryExpr(BinaryExpr { left, op, right }) if op == Operator::Or => {
+        Expr::BinaryExpr(BinaryExpr { left, op, right }, _) if op == Operator::Or => {
             let l = remove_join_expressions(*left, join_keys);
             let r = remove_join_expressions(*right, join_keys);
             match (l, r) {
-                (Some(ll), Some(rr)) => Some(Expr::BinaryExpr(BinaryExpr::new(
+                (Some(ll), Some(rr)) => Some(Expr::binary_expr(BinaryExpr::new(
                     Box::new(ll),
                     op,
                     Box::new(rr),

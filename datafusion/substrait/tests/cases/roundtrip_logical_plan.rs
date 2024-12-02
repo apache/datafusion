@@ -908,7 +908,7 @@ async fn roundtrip_values() -> Result<()> {
 async fn roundtrip_values_no_columns() -> Result<()> {
     let ctx = create_context().await?;
     // "VALUES ()" is not yet supported by the SQL parser, so we construct the plan manually
-    let plan = LogicalPlan::Values(Values {
+    let plan = LogicalPlan::values(Values {
         values: vec![vec![], vec![]], // two rows, no columns
         schema: DFSchemaRef::new(DFSchema::empty()),
     });
@@ -981,7 +981,7 @@ async fn new_test_grammar() -> Result<()> {
 async fn extension_logical_plan() -> Result<()> {
     let ctx = create_context().await?;
     let validation_bytes = "MockUserDefinedLogicalPlan".as_bytes().to_vec();
-    let ext_plan = LogicalPlan::Extension(Extension {
+    let ext_plan = LogicalPlan::extension(Extension {
         node: Arc::new(MockUserDefinedLogicalPlan {
             validation_bytes,
             inputs: vec![],
@@ -1086,7 +1086,7 @@ async fn roundtrip_window_udf() -> Result<()> {
 async fn roundtrip_repartition_roundrobin() -> Result<()> {
     let ctx = create_context().await?;
     let scan_plan = ctx.sql("SELECT * FROM data").await?.into_optimized_plan()?;
-    let plan = LogicalPlan::Repartition(Repartition {
+    let plan = LogicalPlan::repartition(Repartition {
         input: Arc::new(scan_plan),
         partitioning_scheme: Partitioning::RoundRobinBatch(8),
     });
@@ -1103,7 +1103,7 @@ async fn roundtrip_repartition_roundrobin() -> Result<()> {
 async fn roundtrip_repartition_hash() -> Result<()> {
     let ctx = create_context().await?;
     let scan_plan = ctx.sql("SELECT * FROM data").await?.into_optimized_plan()?;
-    let plan = LogicalPlan::Repartition(Repartition {
+    let plan = LogicalPlan::repartition(Repartition {
         input: Arc::new(scan_plan),
         partitioning_scheme: Partitioning::Hash(vec![col("data.a")], 8),
     });

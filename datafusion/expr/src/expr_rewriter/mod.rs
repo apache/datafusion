@@ -64,9 +64,9 @@ pub trait FunctionRewrite: Debug {
 pub fn normalize_col(expr: Expr, plan: &LogicalPlan) -> Result<Expr> {
     expr.transform(|expr| {
         Ok({
-            if let Expr::Column(c) = expr {
+            if let Expr::Column(c, _) = expr {
                 let col = LogicalPlanBuilder::normalize(plan, c)?;
-                Transformed::yes(Expr::Column(col))
+                Transformed::yes(Expr::column(col))
             } else {
                 Transformed::no(expr)
             }
@@ -82,21 +82,21 @@ pub fn normalize_col_with_schemas_and_ambiguity_check(
     using_columns: &[HashSet<Column>],
 ) -> Result<Expr> {
     // Normalize column inside Unnest
-    if let Expr::Unnest(Unnest { expr }) = expr {
+    if let Expr::Unnest(Unnest { expr }, _) = expr {
         let e = normalize_col_with_schemas_and_ambiguity_check(
             expr.as_ref().clone(),
             schemas,
             using_columns,
         )?;
-        return Ok(Expr::Unnest(Unnest { expr: Box::new(e) }));
+        return Ok(Expr::unnest(Unnest { expr: Box::new(e) }));
     }
 
     expr.transform(|expr| {
         Ok({
-            if let Expr::Column(c) = expr {
+            if let Expr::Column(c, _) = expr {
                 let col =
                     c.normalize_with_schemas_and_ambiguity_check(schemas, using_columns)?;
-                Transformed::yes(Expr::Column(col))
+                Transformed::yes(Expr::column(col))
             } else {
                 Transformed::no(expr)
             }
@@ -135,9 +135,9 @@ pub fn normalize_sorts(
 pub fn replace_col(expr: Expr, replace_map: &HashMap<&Column, &Column>) -> Result<Expr> {
     expr.transform(|expr| {
         Ok({
-            if let Expr::Column(c) = &expr {
+            if let Expr::Column(c, _) = &expr {
                 match replace_map.get(c) {
-                    Some(new_c) => Transformed::yes(Expr::Column((*new_c).to_owned())),
+                    Some(new_c) => Transformed::yes(Expr::column((*new_c).to_owned())),
                     None => Transformed::no(expr),
                 }
             } else {
@@ -156,12 +156,12 @@ pub fn replace_col(expr: Expr, replace_map: &HashMap<&Column, &Column>) -> Resul
 pub fn unnormalize_col(expr: Expr) -> Expr {
     expr.transform(|expr| {
         Ok({
-            if let Expr::Column(c) = expr {
+            if let Expr::Column(c, _) = expr {
                 let col = Column {
                     relation: None,
                     name: c.name,
                 };
-                Transformed::yes(Expr::Column(col))
+                Transformed::yes(Expr::column(col))
             } else {
                 Transformed::no(expr)
             }
@@ -177,11 +177,11 @@ pub fn create_col_from_scalar_expr(
     subqry_alias: String,
 ) -> Result<Column> {
     match scalar_expr {
-        Expr::Alias(Alias { name, .. }) => Ok(Column::new(
+        Expr::Alias(Alias { name, .. }, _) => Ok(Column::new(
             Some::<TableReference>(subqry_alias.into()),
             name,
         )),
-        Expr::Column(Column { relation: _, name }) => Ok(Column::new(
+        Expr::Column(Column { relation: _, name }, _) => Ok(Column::new(
             Some::<TableReference>(subqry_alias.into()),
             name,
         )),
@@ -206,8 +206,8 @@ pub fn unnormalize_cols(exprs: impl IntoIterator<Item = Expr>) -> Vec<Expr> {
 pub fn strip_outer_reference(expr: Expr) -> Expr {
     expr.transform(|expr| {
         Ok({
-            if let Expr::OuterReferenceColumn(_, col) = expr {
-                Transformed::yes(Expr::Column(col))
+            if let Expr::OuterReferenceColumn(_, col, _) = expr {
+                Transformed::yes(Expr::column(col))
             } else {
                 Transformed::no(expr)
             }
@@ -225,10 +225,10 @@ pub fn coerce_plan_expr_for_schema(
 ) -> Result<LogicalPlan> {
     match plan {
         // special case Projection to avoid adding multiple projections
-        LogicalPlan::Projection(Projection { expr, input, .. }) => {
+        LogicalPlan::Projection(Projection { expr, input, .. }, _) => {
             let new_exprs = coerce_exprs_for_schema(expr, input.schema(), schema)?;
             let projection = Projection::try_new(new_exprs, input)?;
-            Ok(LogicalPlan::Projection(projection))
+            Ok(LogicalPlan::projection(projection))
         }
         _ => {
             let exprs: Vec<Expr> = plan.schema().iter().map(Expr::from).collect();
@@ -236,7 +236,7 @@ pub fn coerce_plan_expr_for_schema(
             let add_project = new_exprs.iter().any(|expr| expr.try_as_col().is_none());
             if add_project {
                 let projection = Projection::try_new(new_exprs, Arc::new(plan))?;
-                Ok(LogicalPlan::Projection(projection))
+                Ok(LogicalPlan::projection(projection))
             } else {
                 Ok(plan)
             }
@@ -256,7 +256,7 @@ fn coerce_exprs_for_schema(
             let new_type = dst_schema.field(idx).data_type();
             if new_type != &expr.get_type(src_schema)? {
                 match expr {
-                    Expr::Alias(Alias { expr, name, .. }) => {
+                    Expr::Alias(Alias { expr, name, .. }, _) => {
                         Ok(expr.cast_to(new_type, src_schema)?.alias(name))
                     }
                     Expr::Wildcard { .. } => Ok(expr),
@@ -273,7 +273,7 @@ fn coerce_exprs_for_schema(
 #[inline]
 pub fn unalias(expr: Expr) -> Expr {
     match expr {
-        Expr::Alias(Alias { expr, .. }) => unalias(*expr),
+        Expr::Alias(Alias { expr, .. }, _) => unalias(*expr),
         _ => expr,
     }
 }
@@ -310,11 +310,11 @@ impl NamePreserver {
             // so there is no need to preserve expression names to prevent a schema change.
             use_alias: !matches!(
                 plan,
-                LogicalPlan::Filter(_)
-                    | LogicalPlan::Join(_)
-                    | LogicalPlan::TableScan(_)
-                    | LogicalPlan::Limit(_)
-                    | LogicalPlan::Statement(_)
+                LogicalPlan::Filter(_, _)
+                    | LogicalPlan::Join(_, _)
+                    | LogicalPlan::TableScan(_, _)
+                    | LogicalPlan::Limit(_, _)
+                    | LogicalPlan::Statement(_, _)
             ),
         }
     }
@@ -387,7 +387,7 @@ mod test {
         // rewrites all "foo" string literals to "bar"
         let transformer = |expr: Expr| -> Result<Transformed<Expr>> {
             match expr {
-                Expr::Literal(ScalarValue::Utf8(Some(utf8_val))) => {
+                Expr::Literal(ScalarValue::Utf8(Some(utf8_val)), _) => {
                     let utf8_val = if utf8_val == "foo" {
                         "bar".to_string()
                     } else {
@@ -514,7 +514,7 @@ mod test {
         // cast data types
         test_rewrite(
             col("a"),
-            Expr::Cast(Cast::new(Box::new(col("a")), DataType::Int32)),
+            Expr::cast(Cast::new(Box::new(col("a")), DataType::Int32)),
         );
 
         // change literal type from i32 to i64
@@ -522,12 +522,12 @@ mod test {
 
         // test preserve qualifier
         test_rewrite(
-            Expr::Column(Column::new(Some("test"), "a")),
-            Expr::Column(Column::new_unqualified("test.a")),
+            Expr::column(Column::new(Some("test"), "a")),
+            Expr::column(Column::new_unqualified("test.a")),
         );
         test_rewrite(
-            Expr::Column(Column::new_unqualified("test.a")),
-            Expr::Column(Column::new(Some("test"), "a")),
+            Expr::column(Column::new_unqualified("test.a")),
+            Expr::column(Column::new(Some("test"), "a")),
         );
     }
 

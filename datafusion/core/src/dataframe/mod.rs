@@ -253,7 +253,7 @@ impl DataFrame {
             .collect::<Result<Vec<_>>>()?;
         let expr: Vec<Expr> = fields
             .into_iter()
-            .map(|(qualifier, field)| Expr::Column(Column::from((qualifier, field))))
+            .map(|(qualifier, field)| Expr::column(Column::from((qualifier, field))))
             .collect();
         self.select(expr)
     }
@@ -369,7 +369,7 @@ impl DataFrame {
             .enumerate()
             .map(|(idx, _)| self.plan.schema().qualified_field(idx))
             .filter(|(qualifier, f)| !fields_to_drop.contains(&(*qualifier, f)))
-            .map(|(qualifier, field)| Expr::Column(Column::from((qualifier, field))))
+            .map(|(qualifier, field)| Expr::column(Column::from((qualifier, field))))
             .collect();
         self.select(expr)
     }
@@ -513,7 +513,7 @@ impl DataFrame {
         group_expr: Vec<Expr>,
         aggr_expr: Vec<Expr>,
     ) -> Result<DataFrame> {
-        let is_grouping_set = matches!(group_expr.as_slice(), [Expr::GroupingSet(_)]);
+        let is_grouping_set = matches!(group_expr.as_slice(), [Expr::GroupingSet(_, _)]);
         let aggr_expr_len = aggr_expr.len();
         let plan = LogicalPlanBuilder::from(self.plan)
             .aggregate(group_expr, aggr_expr)?
@@ -527,7 +527,7 @@ impl DataFrame {
                 .into_iter()
                 .enumerate()
                 .filter(|(idx, _)| *idx != grouping_id_pos)
-                .map(|(_, column)| Expr::Column(column))
+                .map(|(_, column)| Expr::column(column))
                 .collect::<Vec<_>>();
             LogicalPlanBuilder::from(plan).project(exprs)?.build()?
         } else {
@@ -1164,7 +1164,7 @@ impl DataFrame {
     /// ```
     pub async fn count(self) -> Result<usize> {
         let rows = self
-            .aggregate(vec![], vec![count(Expr::Literal(COUNT_STAR_EXPANSION))])?
+            .aggregate(vec![], vec![count(Expr::literal(COUNT_STAR_EXPANSION))])?
             .collect()
             .await?;
         let len = *rows
@@ -1403,7 +1403,7 @@ impl DataFrame {
     /// # }
     /// ```
     pub fn explain(self, verbose: bool, analyze: bool) -> Result<DataFrame> {
-        if matches!(self.plan, LogicalPlan::Explain(_)) {
+        if matches!(self.plan, LogicalPlan::Explain(_, _)) {
             return plan_err!("Nested EXPLAINs are not supported");
         }
         let plan = LogicalPlanBuilder::from(self.plan)
@@ -2175,7 +2175,7 @@ mod tests {
     async fn select_with_window_exprs() -> Result<()> {
         // build plan using Table API
         let t = test_table().await?;
-        let first_row = Expr::WindowFunction(WindowFunction::new(
+        let first_row = Expr::window_function(WindowFunction::new(
             WindowFunctionDefinition::WindowUDF(first_value_udwf()),
             vec![col("aggregate_test_100.c1")],
         ))
@@ -2741,7 +2741,7 @@ mod tests {
                 vec![col("c3")],
             );
 
-            Expr::WindowFunction(w)
+            Expr::window_function(w)
                 .null_treatment(NullTreatment::IgnoreNulls)
                 .order_by(vec![col("c2").sort(true, true), col("c3").sort(true, true)])
                 .window_frame(WindowFrame::new_bounds(
@@ -3007,7 +3007,7 @@ mod tests {
         let join = left.clone().join_on(
             right.clone(),
             JoinType::Inner,
-            Some(Expr::Literal(ScalarValue::Null)),
+            Some(Expr::literal(ScalarValue::Null)),
         )?;
         let expected_plan = "EmptyRelation";
         assert_eq!(expected_plan, format!("{}", join.into_optimized_plan()?));

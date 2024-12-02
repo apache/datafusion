@@ -36,7 +36,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     .collect()
             })
             .collect();
-        Ok(Expr::GroupingSet(GroupingSet::GroupingSets(args?)))
+        Ok(Expr::grouping_set(GroupingSet::GroupingSets(args?)))
     }
 
     pub(super) fn sql_rollup_to_expr(
@@ -57,7 +57,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 }
             })
             .collect();
-        Ok(Expr::GroupingSet(GroupingSet::Rollup(args?)))
+        Ok(Expr::grouping_set(GroupingSet::Rollup(args?)))
     }
 
     pub(super) fn sql_cube_to_expr(
@@ -76,6 +76,6 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 }
             })
             .collect();
-        Ok(Expr::GroupingSet(GroupingSet::Cube(args?)))
+        Ok(Expr::grouping_set(GroupingSet::Cube(args?)))
     }
 }

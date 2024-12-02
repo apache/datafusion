@@ -17,11 +17,11 @@
 
 //! [`UnwrapCastInComparison`] rewrites `CAST(col) = lit` to `col = CAST(lit)`
 
+use std::cell::Cell;
 use std::cmp::Ordering;
 use std::mem;
 use std::sync::Arc;
 
-use crate::optimizer::ApplyOrder;
 use crate::{OptimizerConfig, OptimizerRule};
 
 use crate::utils::NamePreserver;
@@ -32,8 +32,10 @@ use arrow::temporal_conversions::{MICROSECONDS, MILLISECONDS, NANOSECONDS};
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRewriter};
 use datafusion_common::{internal_err, DFSchema, DFSchemaRef, Result, ScalarValue};
 use datafusion_expr::expr::{BinaryExpr, Cast, InList, TryCast};
+use datafusion_expr::logical_plan::tree_node::LogicalPlanPattern;
 use datafusion_expr::utils::merge_schema;
 use datafusion_expr::{lit, Expr, ExprSchemable, LogicalPlan};
+use enumset::enum_set;
 
 /// [`UnwrapCastInComparison`] attempts to remove casts from
 /// comparisons to literals ([`ScalarValue`]s) by applying the casts
@@ -86,10 +88,6 @@ impl OptimizerRule for UnwrapCastInComparison {
         "unwrap_cast_in_comparison"
     }
 
-    fn apply_order(&self) -> Option<ApplyOrder> {
-        Some(ApplyOrder::BottomUp)
-    }
-
     fn supports_rewrite(&self) -> bool {
         true
     }
@@ -99,44 +97,99 @@ impl OptimizerRule for UnwrapCastInComparison {
         plan: LogicalPlan,
         _config: &dyn OptimizerConfig,
     ) -> Result<Transformed<LogicalPlan>> {
-        let mut schema = merge_schema(&plan.inputs());
+        let skip = Cell::new(false);
+        plan.transform_down_up_with_subqueries(
+            |plan| {
+                if !(plan.stats().contains_any_patterns(enum_set!(
+                    LogicalPlanPattern::ExprBinaryExpr | LogicalPlanPattern::ExprInList
+                )) && plan.stats().contains_any_patterns(enum_set!(
+                    LogicalPlanPattern::ExprTryCast | LogicalPlanPattern::ExprCast
+                )) && plan
+                    .stats()
+                    .contains_pattern(LogicalPlanPattern::ExprLiteral))
+                {
+                    skip.set(true);
+                    return Ok(Transformed::jump(plan));
+                }
 
-        if let LogicalPlan::TableScan(ts) = &plan {
-            let source_schema = DFSchema::try_from_qualified_schema(
-                ts.table_name.clone(),
-                &ts.source.schema(),
-            )?;
-            schema.merge(&source_schema);
-        }
+                Ok(Transformed::no(plan))
+            },
+            |plan| {
+                if skip.get() {
+                    skip.set(false);
+                    return Ok(Transformed::no(plan));
+                }
 
-        schema.merge(plan.schema());
+                let mut schema = merge_schema(&plan.inputs());
 
-        let mut expr_rewriter = UnwrapCastExprRewriter {
-            schema: Arc::new(schema),
-        };
+                if let LogicalPlan::TableScan(ts, _) = &plan {
+                    let source_schema = DFSchema::try_from_qualified_schema(
+                        ts.table_name.clone(),
+                        &ts.source.schema(),
+                    )?;
+                    schema.merge(&source_schema);
+                }
 
-        let name_preserver = NamePreserver::new(&plan);
-        plan.map_expressions(|expr| {
-            let original_name = name_preserver.save(&expr);
-            expr.rewrite(&mut expr_rewriter)
-                .map(|transformed| transformed.update_data(|e| original_name.restore(e)))
-        })
+                schema.merge(plan.schema());
+
+                let mut expr_rewriter = UnwrapCastExprRewriter::new(Arc::new(schema));
+
+                let name_preserver = NamePreserver::new(&plan);
+                plan.map_expressions(|expr| {
+                    let original_name = name_preserver.save(&expr);
+                    expr.rewrite(&mut expr_rewriter).map(|transformed| {
+                        transformed.update_data(|e| original_name.restore(e))
+                    })
+                })
+            },
+        )
     }
 }
 
 struct UnwrapCastExprRewriter {
     schema: DFSchemaRef,
+    skip: bool,
+}
+
+impl UnwrapCastExprRewriter {
+    fn new(schema: DFSchemaRef) -> Self {
+        Self {
+            schema,
+            skip: false,
+        }
+    }
 }
 
 impl TreeNodeRewriter for UnwrapCastExprRewriter {
     type Node = Expr;
 
+    fn f_down(&mut self, node: Self::Node) -> Result<Transformed<Self::Node>> {
+        if !(node.stats().contains_any_patterns(enum_set!(
+            LogicalPlanPattern::ExprBinaryExpr | LogicalPlanPattern::ExprInList
+        )) && node.stats().contains_any_patterns(enum_set!(
+            LogicalPlanPattern::ExprTryCast | LogicalPlanPattern::ExprCast
+        )) && node
+            .stats()
+            .contains_pattern(LogicalPlanPattern::ExprLiteral))
+        {
+            self.skip = true;
+            return Ok(Transformed::jump(node));
+        }
+
+        Ok(Transformed::no(node))
+    }
+
     fn f_up(&mut self, mut expr: Expr) -> Result<Transformed<Expr>> {
+        if self.skip {
+            self.skip = false;
+            return Ok(Transformed::no(expr));
+        }
+
         match &mut expr {
             // For case:
             // try_cast/cast(expr as data_type) op literal
             // literal op try_cast/cast(expr as data_type)
-            Expr::BinaryExpr(BinaryExpr { left, op, right })
+            Expr::BinaryExpr(BinaryExpr { left, op, right }, _)
                 if {
                     let Ok(left_type) = left.get_type(&self.schema) else {
                         return Ok(Transformed::no(expr));
@@ -151,13 +204,19 @@ impl TreeNodeRewriter for UnwrapCastExprRewriter {
             {
                 match (left.as_mut(), right.as_mut()) {
                     (
-                        Expr::Literal(left_lit_value),
-                        Expr::TryCast(TryCast {
-                            expr: right_expr, ..
-                        })
-                        | Expr::Cast(Cast {
-                            expr: right_expr, ..
-                        }),
+                        Expr::Literal(left_lit_value, _),
+                        Expr::TryCast(
+                            TryCast {
+                                expr: right_expr, ..
+                            },
+                            _,
+                        )
+                        | Expr::Cast(
+                            Cast {
+                                expr: right_expr, ..
+                            },
+                            _,
+                        ),
                     ) => {
                         // if the left_lit_value can be cast to the type of expr
                         // we need to unwrap the cast for cast/try_cast expr, and add cast to the literal
@@ -173,21 +232,30 @@ impl TreeNodeRewriter for UnwrapCastExprRewriter {
                                 else {
                                     return Ok(Transformed::no(expr));
                                 };
-                                **left = lit(value);
                                 // unwrap the cast/try_cast for the right expr
-                                **right = mem::take(right_expr);
+                                expr = Expr::binary_expr(BinaryExpr {
+                                    left: Box::new(lit(value)),
+                                    op: *op,
+                                    right: Box::new(mem::take(right_expr)),
+                                });
                                 Ok(Transformed::yes(expr))
                             }
                         }
                     }
                     (
-                        Expr::TryCast(TryCast {
-                            expr: left_expr, ..
-                        })
-                        | Expr::Cast(Cast {
-                            expr: left_expr, ..
-                        }),
-                        Expr::Literal(right_lit_value),
+                        Expr::TryCast(
+                            TryCast {
+                                expr: left_expr, ..
+                            },
+                            _,
+                        )
+                        | Expr::Cast(
+                            Cast {
+                                expr: left_expr, ..
+                            },
+                            _,
+                        ),
+                        Expr::Literal(right_lit_value, _),
                     ) => {
                         // if the right_lit_value can be cast to the type of expr
                         // we need to unwrap the cast for cast/try_cast expr, and add cast to the literal
@@ -204,8 +272,11 @@ impl TreeNodeRewriter for UnwrapCastExprRewriter {
                                     return Ok(Transformed::no(expr));
                                 };
                                 // unwrap the cast/try_cast for the left expr
-                                **left = mem::take(left_expr);
-                                **right = lit(value);
+                                expr = Expr::binary_expr(BinaryExpr {
+                                    left: mem::take(left_expr),
+                                    op: *op,
+                                    right: Box::new(lit(value)),
+                                });
                                 Ok(Transformed::yes(expr))
                             }
                         }
@@ -215,15 +286,26 @@ impl TreeNodeRewriter for UnwrapCastExprRewriter {
             }
             // For case:
             // try_cast/cast(expr as left_type) in (expr1,expr2,expr3)
-            Expr::InList(InList {
-                expr: left, list, ..
-            }) => {
-                let (Expr::TryCast(TryCast {
-                    expr: left_expr, ..
-                })
-                | Expr::Cast(Cast {
-                    expr: left_expr, ..
-                })) = left.as_mut()
+            Expr::InList(
+                InList {
+                    expr: left,
+                    list,
+                    negated,
+                },
+                _,
+            ) => {
+                let (Expr::TryCast(
+                    TryCast {
+                        expr: left_expr, ..
+                    },
+                    _,
+                )
+                | Expr::Cast(
+                    Cast {
+                        expr: left_expr, ..
+                    },
+                    _,
+                )) = left.as_mut()
                 else {
                     return Ok(Transformed::no(expr));
                 };
@@ -244,7 +326,7 @@ impl TreeNodeRewriter for UnwrapCastExprRewriter {
                             )?;
                         }
                         match right {
-                            Expr::Literal(right_lit_value) => {
+                            Expr::Literal(right_lit_value, _) => {
                                 // if the right_lit_value can be casted to the type of internal_left_expr
                                 // we need to unwrap the cast for cast/try_cast expr, and add cast to the literal
                                 let Some(value) = try_cast_literal_to_type(right_lit_value, &expr_type) else {
@@ -264,8 +346,11 @@ impl TreeNodeRewriter for UnwrapCastExprRewriter {
                     .collect::<Result<Vec<_>>>() else {
                     return Ok(Transformed::no(expr))
                 };
-                **left = mem::take(left_expr);
-                *list = right_exprs;
+                expr = Expr::_in_list(InList {
+                    expr: Box::new(mem::take(left_expr)),
+                    list: right_exprs,
+                    negated: *negated,
+                });
                 Ok(Transformed::yes(expr))
             }
             // TODO: handle other expr type and dfs visit them
@@ -837,9 +922,7 @@ mod tests {
     }
 
     fn optimize_test(expr: Expr, schema: &DFSchemaRef) -> Expr {
-        let mut expr_rewriter = UnwrapCastExprRewriter {
-            schema: Arc::clone(schema),
-        };
+        let mut expr_rewriter = UnwrapCastExprRewriter::new(Arc::clone(schema));
         expr.rewrite(&mut expr_rewriter).data().unwrap()
     }
 

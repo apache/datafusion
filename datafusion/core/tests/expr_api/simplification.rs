@@ -190,7 +190,7 @@ fn make_udf_add(volatility: Volatility) -> Arc<ScalarUDF> {
 }
 
 fn cast_to_int64_expr(expr: Expr) -> Expr {
-    Expr::Cast(Cast::new(expr.into(), DataType::Int64))
+    Expr::cast(Cast::new(expr.into(), DataType::Int64))
 }
 
 fn to_timestamp_expr(arg: impl Into<String>) -> Expr {
@@ -282,7 +282,7 @@ fn select_date_plus_interval() -> Result<()> {
 
     let date_plus_interval_expr = to_timestamp_expr(ts_string)
         .cast_to(&DataType::Date32, schema)?
-        + Expr::Literal(ScalarValue::IntervalDayTime(Some(IntervalDayTime {
+        + Expr::literal(ScalarValue::IntervalDayTime(Some(IntervalDayTime {
             days: 123,
             milliseconds: 0,
         })));
@@ -391,7 +391,7 @@ fn test_const_evaluator_scalar_functions() {
     // rand() + (1 + 2) --> rand() + 3
     let fun = math::random();
     assert_eq!(fun.signature().volatility, Volatility::Volatile);
-    let rand = Expr::ScalarFunction(ScalarFunction::new_udf(fun, vec![]));
+    let rand = Expr::scalar_function(ScalarFunction::new_udf(fun, vec![]));
     let expr = rand.clone() + (lit(1) + lit(2));
     let expected = rand + lit(3);
     test_evaluate(expr, expected);
@@ -399,7 +399,7 @@ fn test_const_evaluator_scalar_functions() {
     // parenthesization matters: can't rewrite
     // (rand() + 1) + 2 --> (rand() + 1) + 2)
     let fun = math::random();
-    let rand = Expr::ScalarFunction(ScalarFunction::new_udf(fun, vec![]));
+    let rand = Expr::scalar_function(ScalarFunction::new_udf(fun, vec![]));
     let expr = (rand + lit(1)) + lit(2);
     test_evaluate(expr.clone(), expr);
 }
@@ -429,7 +429,7 @@ fn test_evaluator_udfs() {
 
     // immutable UDF should get folded
     // udf_add(1+2, 30+40) --> 73
-    let expr = Expr::ScalarFunction(ScalarFunction::new_udf(
+    let expr = Expr::scalar_function(ScalarFunction::new_udf(
         make_udf_add(Volatility::Immutable),
         args.clone(),
     ));
@@ -439,15 +439,15 @@ fn test_evaluator_udfs() {
     // udf_add(1+2, 30+40) --> 73
     let fun = make_udf_add(Volatility::Stable);
     let expr =
-        Expr::ScalarFunction(ScalarFunction::new_udf(Arc::clone(&fun), args.clone()));
+        Expr::scalar_function(ScalarFunction::new_udf(Arc::clone(&fun), args.clone()));
     test_evaluate(expr, lit(73));
 
     // volatile UDF should have args folded
     // udf_add(1+2, 30+40) --> udf_add(3, 70)
     let fun = make_udf_add(Volatility::Volatile);
-    let expr = Expr::ScalarFunction(ScalarFunction::new_udf(Arc::clone(&fun), args));
+    let expr = Expr::scalar_function(ScalarFunction::new_udf(Arc::clone(&fun), args));
     let expected_expr =
-        Expr::ScalarFunction(ScalarFunction::new_udf(Arc::clone(&fun), folded_args));
+        Expr::scalar_function(ScalarFunction::new_udf(Arc::clone(&fun), folded_args));
     test_evaluate(expr, expected_expr);
 }
 

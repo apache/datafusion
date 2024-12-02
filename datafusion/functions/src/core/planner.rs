@@ -46,7 +46,7 @@ impl ExprPlanner for CoreFunctionPlanner {
         args: Vec<Expr>,
         is_named_struct: bool,
     ) -> Result<PlannerResult<Vec<Expr>>> {
-        Ok(PlannerResult::Planned(Expr::ScalarFunction(
+        Ok(PlannerResult::Planned(Expr::scalar_function(
             ScalarFunction::new_udf(
                 if is_named_struct {
                     named_struct()
@@ -59,7 +59,7 @@ impl ExprPlanner for CoreFunctionPlanner {
     }
 
     fn plan_overlay(&self, args: Vec<Expr>) -> Result<PlannerResult<Vec<Expr>>> {
-        Ok(PlannerResult::Planned(Expr::ScalarFunction(
+        Ok(PlannerResult::Planned(Expr::scalar_function(
             ScalarFunction::new_udf(crate::string::overlay(), args),
         )))
     }
@@ -70,7 +70,7 @@ impl ExprPlanner for CoreFunctionPlanner {
         qualifier: Option<&TableReference>,
         nested_names: &[String],
     ) -> Result<PlannerResult<Vec<Expr>>> {
-        let col = Expr::Column(Column::from((qualifier, field)));
+        let col = Expr::column(Column::from((qualifier, field)));
 
         // Start with the base column expression
         let mut expr = col;
@@ -78,7 +78,7 @@ impl ExprPlanner for CoreFunctionPlanner {
         // Iterate over nested_names and create nested get_field expressions
         for nested_name in nested_names {
             let get_field_args = vec![expr, lit(ScalarValue::from(nested_name.clone()))];
-            expr = Expr::ScalarFunction(ScalarFunction::new_udf(
+            expr = Expr::scalar_function(ScalarFunction::new_udf(
                 crate::core::get_field(),
                 get_field_args,
             ));

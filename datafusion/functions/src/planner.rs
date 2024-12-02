@@ -30,21 +30,21 @@ pub struct UserDefinedFunctionPlanner;
 impl ExprPlanner for UserDefinedFunctionPlanner {
     #[cfg(feature = "datetime_expressions")]
     fn plan_extract(&self, args: Vec<Expr>) -> Result<PlannerResult<Vec<Expr>>> {
-        Ok(PlannerResult::Planned(Expr::ScalarFunction(
+        Ok(PlannerResult::Planned(Expr::scalar_function(
             ScalarFunction::new_udf(crate::datetime::date_part(), args),
         )))
     }
 
     #[cfg(feature = "unicode_expressions")]
     fn plan_position(&self, args: Vec<Expr>) -> Result<PlannerResult<Vec<Expr>>> {
-        Ok(PlannerResult::Planned(Expr::ScalarFunction(
+        Ok(PlannerResult::Planned(Expr::scalar_function(
             ScalarFunction::new_udf(crate::unicode::strpos(), args),
         )))
     }
 
     #[cfg(feature = "unicode_expressions")]
     fn plan_substring(&self, args: Vec<Expr>) -> Result<PlannerResult<Vec<Expr>>> {
-        Ok(PlannerResult::Planned(Expr::ScalarFunction(
+        Ok(PlannerResult::Planned(Expr::scalar_function(
             ScalarFunction::new_udf(crate::unicode::substr(), args),
         )))
     }

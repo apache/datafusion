@@ -51,11 +51,11 @@ pub(crate) fn find_agg_node_within_select(
         input.first()?
     };
     // Agg nodes explicitly return immediately with a single node
-    if let LogicalPlan::Aggregate(agg) = input {
+    if let LogicalPlan::Aggregate(agg, _) = input {
         Some(agg)
-    } else if let LogicalPlan::TableScan(_) = input {
+    } else if let LogicalPlan::TableScan(_, _) = input {
         None
-    } else if let LogicalPlan::Projection(_) = input {
+    } else if let LogicalPlan::Projection(_, _) = input {
         if already_projected {
             None
         } else {
@@ -77,11 +77,11 @@ pub(crate) fn find_unnest_node_within_select(plan: &LogicalPlan) -> Option<&Unne
         input.first()?
     };
 
-    if let LogicalPlan::Unnest(unnest) = input {
+    if let LogicalPlan::Unnest(unnest, _) = input {
         Some(unnest)
-    } else if let LogicalPlan::TableScan(_) = input {
+    } else if let LogicalPlan::TableScan(_, _) = input {
         None
-    } else if let LogicalPlan::Projection(_) = input {
+    } else if let LogicalPlan::Projection(_, _) = input {
         None
     } else {
         find_unnest_node_within_select(input)
@@ -108,7 +108,7 @@ pub(crate) fn find_window_nodes_within_select<'a>(
 
     // Window nodes accumulate in a vec until encountering a TableScan or 2nd projection
     match input {
-        LogicalPlan::Window(window) => {
+        LogicalPlan::Window(window, _) => {
             prev_windows = match &mut prev_windows {
                 Some(windows) => {
                     windows.push(window);
@@ -118,14 +118,14 @@ pub(crate) fn find_window_nodes_within_select<'a>(
             };
             find_window_nodes_within_select(input, prev_windows, already_projected)
         }
-        LogicalPlan::Projection(_) => {
+        LogicalPlan::Projection(_, _) => {
             if already_projected {
                 prev_windows
             } else {
                 find_window_nodes_within_select(input, prev_windows, true)
             }
         }
-        LogicalPlan::TableScan(_) => prev_windows,
+        LogicalPlan::TableScan(_, _) => prev_windows,
         _ => find_window_nodes_within_select(input, prev_windows, already_projected),
     }
 }
@@ -136,14 +136,14 @@ pub(crate) fn find_window_nodes_within_select<'a>(
 /// it will be transformed into an actual unnest expression UNNEST([1, 2, 2, 5, NULL])
 pub(crate) fn unproject_unnest_expr(expr: Expr, unnest: &Unnest) -> Result<Expr> {
     expr.transform(|sub_expr| {
-            if let Expr::Column(col_ref) = &sub_expr {
+            if let Expr::Column(col_ref, _) = &sub_expr {
                 // Check if the column is among the columns to run unnest on. 
                 // Currently, only List/Array columns (defined in `list_type_columns`) are supported for unnesting. 
                 if unnest.list_type_columns.iter().any(|e| e.1.output_column.name == col_ref.name) {
                     if let Ok(idx) = unnest.schema.index_of_column(col_ref) {
-                        if let LogicalPlan::Projection(Projection { expr, .. }) = unnest.input.as_ref() {
+                        if let LogicalPlan::Projection(Projection { expr, .. }, _) = unnest.input.as_ref() {
                             if let Some(unprojected_expr) = expr.get(idx) {
-                                let unnest_expr = Expr::Unnest(expr::Unnest::new(unprojected_expr.clone()));
+                                let unnest_expr = Expr::unnest(expr::Unnest::new(unprojected_expr.clone()));
                                 return Ok(Transformed::yes(unnest_expr));
                             }
                         }
@@ -170,7 +170,7 @@ pub(crate) fn unproject_agg_exprs(
     windows: Option<&[&Window]>,
 ) -> Result<Expr> {
     expr.transform(|sub_expr| {
-            if let Expr::Column(c) = sub_expr {
+            if let Expr::Column(c, _) = sub_expr {
                 if let Some(unprojected_expr) = find_agg_expr(agg, &c)? {
                     Ok(Transformed::yes(unprojected_expr.clone()))
                 } else if let Some(unprojected_expr) =
@@ -197,11 +197,11 @@ pub(crate) fn unproject_agg_exprs(
 /// into an actual window expression as identified in the window node.
 pub(crate) fn unproject_window_exprs(expr: Expr, windows: &[&Window]) -> Result<Expr> {
     expr.transform(|sub_expr| {
-        if let Expr::Column(c) = sub_expr {
+        if let Expr::Column(c, _) = sub_expr {
             if let Some(unproj) = find_window_expr(windows, &c.name) {
                 Ok(Transformed::yes(unproj.clone()))
             } else {
-                Ok(Transformed::no(Expr::Column(c)))
+                Ok(Transformed::no(Expr::column(c)))
             }
         } else {
             Ok(Transformed::no(sub_expr))
@@ -212,7 +212,7 @@ pub(crate) fn unproject_window_exprs(expr: Expr, windows: &[&Window]) -> Result<
 
 fn find_agg_expr<'a>(agg: &'a Aggregate, column: &Column) -> Result<Option<&'a Expr>> {
     if let Ok(index) = agg.schema.index_of_column(column) {
-        if matches!(agg.group_expr.as_slice(), [Expr::GroupingSet(_)]) {
+        if matches!(agg.group_expr.as_slice(), [Expr::GroupingSet(_, _)]) {
             // For grouping set expr, we must operate by expression list from the grouping set
             let grouping_expr = grouping_set_to_exprlist(agg.group_expr.as_slice())?;
             match index.cmp(&grouping_expr.len()) {
@@ -256,11 +256,11 @@ pub(crate) fn unproject_sort_expr(
     let mut sort_expr = sort_expr.clone();
 
     // Remove alias if present, because ORDER BY cannot use aliases
-    if let Expr::Alias(alias) = &sort_expr.expr {
+    if let Expr::Alias(alias, _) = &sort_expr.expr {
         sort_expr.expr = *alias.expr.clone();
     }
 
-    let Expr::Column(ref col_ref) = sort_expr.expr else {
+    let Expr::Column(ref col_ref, _) = sort_expr.expr else {
         return Ok(sort_expr);
     };
 
@@ -280,10 +280,10 @@ pub(crate) fn unproject_sort_expr(
     // If SELECT and ORDER BY contain the same expression with a scalar function, the ORDER BY expression will
     // be replaced by a Column expression (e.g., "substr(customer.c_last_name, Int64(0), Int64(5))"), and we need
     // to transform it back to the actual expression.
-    if let LogicalPlan::Projection(Projection { expr, schema, .. }) = input {
+    if let LogicalPlan::Projection(Projection { expr, schema, .. }, _) = input {
         if let Ok(idx) = schema.index_of_column(col_ref) {
-            if let Some(Expr::ScalarFunction(scalar_fn)) = expr.get(idx) {
-                sort_expr.expr = Expr::ScalarFunction(scalar_fn.clone());
+            if let Some(Expr::ScalarFunction(scalar_fn, _)) = expr.get(idx) {
+                sort_expr.expr = Expr::scalar_function(scalar_fn.clone());
             }
         }
         return Ok(sort_expr);
@@ -317,17 +317,17 @@ pub(crate) fn try_transform_to_simple_table_scan_with_filters(
 
     while let Some(current_plan) = plan_stack.pop() {
         match current_plan {
-            LogicalPlan::SubqueryAlias(alias) => {
+            LogicalPlan::SubqueryAlias(alias, _) => {
                 table_alias = Some(alias.alias.clone());
                 plan_stack.push(alias.input.as_ref());
             }
-            LogicalPlan::Filter(filter) => {
+            LogicalPlan::Filter(filter, _) => {
                 if !filters.contains(&filter.predicate) {
                     filters.insert(filter.predicate.clone());
                 }
                 plan_stack.push(filter.input.as_ref());
             }
-            LogicalPlan::TableScan(table_scan) => {
+            LogicalPlan::TableScan(table_scan, _) => {
                 let table_schema = table_scan.source.schema();
                 // optional rewriter if table has an alias
                 let mut filter_alias_rewriter =
@@ -389,7 +389,7 @@ pub(crate) fn date_part_to_sql(
     match (style, date_part_args.len()) {
         (DateFieldExtractStyle::Extract, 2) => {
             let date_expr = unparser.expr_to_sql(&date_part_args[1])?;
-            if let Expr::Literal(ScalarValue::Utf8(Some(field))) = &date_part_args[0] {
+            if let Expr::Literal(ScalarValue::Utf8(Some(field)), _) = &date_part_args[0] {
                 let field = match field.to_lowercase().as_str() {
                     "year" => ast::DateTimeField::Year,
                     "month" => ast::DateTimeField::Month,
@@ -410,7 +410,7 @@ pub(crate) fn date_part_to_sql(
         (DateFieldExtractStyle::Strftime, 2) => {
             let column = unparser.expr_to_sql(&date_part_args[1])?;
 
-            if let Expr::Literal(ScalarValue::Utf8(Some(field))) = &date_part_args[0] {
+            if let Expr::Literal(ScalarValue::Utf8(Some(field)), _) = &date_part_args[0] {
                 let field = match field.to_lowercase().as_str() {
                     "year" => "%Y",
                     "month" => "%m",

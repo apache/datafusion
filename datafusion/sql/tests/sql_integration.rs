@@ -206,10 +206,14 @@ fn test_parse_options_value_normalization() {
             assert_eq!(expected_plan, format!("{plan}"));
 
             match plan {
-                LogicalPlan::Ddl(DdlStatement::CreateExternalTable(
-                    CreateExternalTable { options, .. },
-                ))
-                | LogicalPlan::Copy(CopyTo { options, .. }) => {
+                LogicalPlan::Ddl(
+                    DdlStatement::CreateExternalTable(CreateExternalTable {
+                        options,
+                        ..
+                    }),
+                    _,
+                )
+                | LogicalPlan::Copy(CopyTo { options, .. }, _) => {
                     expected_options.iter().for_each(|(k, v)| {
                         assert_eq!(Some(&v.to_string()), options.get(*k));
                     });
@@ -2715,7 +2719,7 @@ fn prepare_stmt_quick_test(
     assert_eq!(format!("{assert_plan}"), expected_plan);
 
     // verify data types
-    if let LogicalPlan::Statement(Statement::Prepare(Prepare { data_types, .. })) =
+    if let LogicalPlan::Statement(Statement::Prepare(Prepare { data_types, .. }), _) =
         assert_plan
     {
         let dt = format!("{data_types:?}");
@@ -4440,15 +4444,18 @@ fn plan_create_index() {
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_name ON test USING btree (name, age DESC)";
     let plan = logical_plan_with_options(sql, ParserOptions::default()).unwrap();
     match plan {
-        LogicalPlan::Ddl(DdlStatement::CreateIndex(CreateIndex {
-            name,
-            table,
-            using,
-            columns,
-            unique,
-            if_not_exists,
-            ..
-        })) => {
+        LogicalPlan::Ddl(
+            DdlStatement::CreateIndex(CreateIndex {
+                name,
+                table,
+                using,
+                columns,
+                unique,
+                if_not_exists,
+                ..
+            }),
+            _,
+        ) => {
             assert_eq!(name, Some("idx_name".to_string()));
             assert_eq!(format!("{table}"), "test");
             assert_eq!(using, Some("btree".to_string()));

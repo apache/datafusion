@@ -167,7 +167,7 @@ fn split_eq_and_noneq_join_predicate_with_nulls_equality(
     for expr in exprs {
         #[allow(clippy::collapsible_match)]
         match expr {
-            Expr::BinaryExpr(binary_expr) => match binary_expr {
+            Expr::BinaryExpr(binary_expr, _) => match binary_expr {
                 x @ (BinaryExpr {
                     left,
                     op: Operator::Eq,
@@ -185,7 +185,7 @@ fn split_eq_and_noneq_join_predicate_with_nulls_equality(
                     };
 
                     match (left.as_ref(), right.as_ref()) {
-                        (Expr::Column(l), Expr::Column(r)) => {
+                        (Expr::Column(l, _), Expr::Column(r, _)) => {
                             accum_join_keys.push((l.clone(), r.clone()));
                         }
                         _ => accum_filters.push(expr.clone()),
@@ -293,16 +293,16 @@ pub async fn from_substrait_plan(
                         match plan {
                             // If the last node of the plan produces expressions, bake the renames into those expressions.
                             // This isn't necessary for correctness, but helps with roundtrip tests.
-                            LogicalPlan::Projection(p) => Ok(LogicalPlan::Projection(Projection::try_new(rename_expressions(p.expr, p.input.schema(), renamed_schema.fields())?, p.input)?)),
-                            LogicalPlan::Aggregate(a) => {
+                            LogicalPlan::Projection(p, _) => Ok(LogicalPlan::projection(Projection::try_new(rename_expressions(p.expr, p.input.schema(), renamed_schema.fields())?, p.input)?)),
+                            LogicalPlan::Aggregate(a, _) => {
                                 let (group_fields, expr_fields) = renamed_schema.fields().split_at(a.group_expr.len());
                                 let new_group_exprs = rename_expressions(a.group_expr, a.input.schema(), group_fields)?;
                                 let new_aggr_exprs = rename_expressions(a.aggr_expr, a.input.schema(), expr_fields)?;
-                                Ok(LogicalPlan::Aggregate(Aggregate::try_new(a.input, new_group_exprs, new_aggr_exprs)?))
+                                Ok(LogicalPlan::aggregate(Aggregate::try_new(a.input, new_group_exprs, new_aggr_exprs)?))
                             },
                             // There are probably more plans where we could bake things in, can add them later as needed.
                             // Otherwise, add a new Project to handle the renaming.
-                            _ => Ok(LogicalPlan::Projection(Projection::try_new(rename_expressions(plan.schema().columns().iter().map(|c| col(c.to_owned())), plan.schema(), renamed_schema.fields())?, Arc::new(plan))?))
+                            _ => Ok(LogicalPlan::projection(Projection::try_new(rename_expressions(plan.schema().columns().iter().map(|c| col(c.to_owned())), plan.schema(), renamed_schema.fields())?, Arc::new(plan))?))
                         }
                     }
                 },
@@ -438,7 +438,7 @@ fn rename_expressions(
         .map(|(old_expr, new_field)| {
             // Check if type (i.e. nested struct field names) match, use Cast to rename if needed
             let new_expr = if &old_expr.get_type(input_schema)? != new_field.data_type() {
-                Expr::Cast(Cast::new(
+                Expr::cast(Cast::new(
                     Box::new(old_expr),
                     new_field.data_type().to_owned(),
                 ))
@@ -448,7 +448,7 @@ fn rename_expressions(
             // Alias column if needed to fix the top-level name
             match &new_expr {
                 // If expr is a column reference, alias_if_changed would cause an aliasing if the old expr has a qualifier
-                Expr::Column(c) if &c.name == new_field.name() => Ok(new_expr),
+                Expr::Column(c, _) if &c.name == new_field.name() => Ok(new_expr),
                 _ => new_expr.alias_if_changed(new_field.name().to_owned()),
             }
         })
@@ -595,7 +595,7 @@ pub async fn from_substrait_rel(
                     )
                     .await?;
                     // if the expression is WindowFunction, wrap in a Window relation
-                    if let Expr::WindowFunction(_) = &e {
+                    if let Expr::WindowFunction(_, _) = &e {
                         // Adding the same expression here and in the project below
                         // works because the project's builder uses columnize_expr(..)
                         // to transform it into a column reference
@@ -606,7 +606,7 @@ pub async fn from_substrait_rel(
 
                 let mut final_exprs: Vec<Expr> = vec![];
                 for index in 0..original_schema.fields().len() {
-                    let e = Expr::Column(Column::from(
+                    let e = Expr::column(Column::from(
                         original_schema.qualified_field(index),
                     ));
                     final_exprs.push(name_tracker.get_uniquely_named_expr(e)?);
@@ -711,7 +711,7 @@ pub async fn from_substrait_rel(
                         // Note that GroupingSet::Rollup would become GroupingSet::GroupingSets, when
                         // parsed by the producer and consumer, since Substrait does not have a type dedicated
                         // to ROLLUP. Only vector of Groupings (grouping sets) is available.
-                        group_exprs.push(Expr::GroupingSet(GroupingSet::GroupingSets(
+                        group_exprs.push(Expr::grouping_set(GroupingSet::GroupingSets(
                             grouping_sets,
                         )));
                     }
@@ -913,7 +913,7 @@ pub async fn from_substrait_rel(
                 }
                 Some(ReadType::VirtualTable(vt)) => {
                     if vt.values.is_empty() {
-                        return Ok(LogicalPlan::EmptyRelation(EmptyRelation {
+                        return Ok(LogicalPlan::empty_relation(EmptyRelation {
                             produce_one_row: false,
                             schema: DFSchemaRef::new(substrait_schema),
                         }));
@@ -929,7 +929,7 @@ pub async fn from_substrait_rel(
                             .iter()
                             .map(|lit| {
                                 name_idx += 1; // top-level names are provided through schema
-                                Ok(Expr::Literal(from_substrait_literal(
+                                Ok(Expr::literal(from_substrait_literal(
                                     lit,
                                     extensions,
                                     &named_struct.names,
@@ -948,7 +948,7 @@ pub async fn from_substrait_rel(
                     })
                     .collect::<Result<_>>()?;
 
-                    Ok(LogicalPlan::Values(Values {
+                    Ok(LogicalPlan::values(Values {
                         schema: DFSchemaRef::new(substrait_schema),
                         values,
                     }))
@@ -1045,7 +1045,7 @@ pub async fn from_substrait_rel(
             let plan = state
                 .serializer_registry()
                 .deserialize_logical_plan(&ext_detail.type_url, &ext_detail.value)?;
-            Ok(LogicalPlan::Extension(Extension { node: plan }))
+            Ok(LogicalPlan::extension(Extension { node: plan }))
         }
         Some(RelType::ExtensionSingle(extension)) => {
             let Some(ext_detail) = &extension.detail else {
@@ -1062,7 +1062,7 @@ pub async fn from_substrait_rel(
             let input_plan = from_substrait_rel(state, input_rel, extensions).await?;
             let plan =
                 plan.with_exprs_and_inputs(plan.expressions(), vec![input_plan])?;
-            Ok(LogicalPlan::Extension(Extension { node: plan }))
+            Ok(LogicalPlan::extension(Extension { node: plan }))
         }
         Some(RelType::ExtensionMulti(extension)) => {
             let Some(ext_detail) = &extension.detail else {
@@ -1077,7 +1077,7 @@ pub async fn from_substrait_rel(
                 inputs.push(input_plan);
             }
             let plan = plan.with_exprs_and_inputs(plan.expressions(), inputs)?;
-            Ok(LogicalPlan::Extension(Extension { node: plan }))
+            Ok(LogicalPlan::extension(Extension { node: plan }))
         }
         Some(RelType::Exchange(exchange)) => {
             let Some(input) = exchange.input.as_ref() else {
@@ -1113,7 +1113,7 @@ pub async fn from_substrait_rel(
                     return not_impl_err!("Unsupported exchange kind: {exchange_kind:?}");
                 }
             };
-            Ok(LogicalPlan::Repartition(Repartition {
+            Ok(LogicalPlan::repartition(Repartition {
                 input,
                 partitioning_scheme,
             }))
@@ -1181,7 +1181,7 @@ fn apply_emit_kind(
                 // expressions in the projection are volatile. This is to avoid issues like
                 // converting a single call of the random() function into multiple calls due to
                 // duplicate fields in the output_mapping.
-                LogicalPlan::Projection(proj) if !contains_volatile_expr(&proj) => {
+                LogicalPlan::Projection(proj, _) if !contains_volatile_expr(&proj) => {
                     let mut exprs: Vec<Expr> = vec![];
                     for field in output_mapping {
                         let expr = proj.expr
@@ -1202,7 +1202,7 @@ fn apply_emit_kind(
 
                     let mut exprs: Vec<Expr> = vec![];
                     for index in output_mapping.into_iter() {
-                        let column = Expr::Column(Column::from(
+                        let column = Expr::column(Column::from(
                             input_schema.qualified_field(index as usize),
                         ));
                         let expr = name_tracker.get_uniquely_named_expr(column)?;
@@ -1291,7 +1291,7 @@ fn apply_projection(
     let df_schema = df_schema.to_owned();
 
     match plan {
-        LogicalPlan::TableScan(mut scan) => {
+        LogicalPlan::TableScan(mut scan, _) => {
             let column_indices: Vec<usize> = substrait_schema
                 .strip_qualifiers()
                 .fields()
@@ -1315,7 +1315,7 @@ fn apply_projection(
             )?);
             scan.projection = Some(column_indices);
 
-            Ok(LogicalPlan::TableScan(scan))
+            Ok(LogicalPlan::table_scan(scan))
         }
         _ => plan_err!("DataFrame passed to apply_projection must be a TableScan"),
     }
@@ -1526,12 +1526,12 @@ pub async fn from_substrait_agg_func(
     if let Ok(fun) = state.udaf(function_name) {
         // deal with situation that count(*) got no arguments
         let args = if fun.name() == "count" && args.is_empty() {
-            vec![Expr::Literal(ScalarValue::Int64(Some(1)))]
+            vec![Expr::literal(ScalarValue::Int64(Some(1)))]
         } else {
             args
         };
 
-        Ok(Arc::new(Expr::AggregateFunction(
+        Ok(Arc::new(Expr::aggregate_function(
             expr::AggregateFunction::new_udf(fun, args, distinct, filter, order_by, None),
         )))
     } else {
@@ -1555,7 +1555,7 @@ pub async fn from_substrait_rex(
         Some(RexType::SingularOrList(s)) => {
             let substrait_expr = s.value.as_ref().unwrap();
             let substrait_list = s.options.as_ref();
-            Ok(Expr::InList(InList {
+            Ok(Expr::_in_list(InList {
                 expr: Box::new(
                     from_substrait_rex(state, substrait_expr, input_schema, extensions)
                         .await?,
@@ -1622,7 +1622,7 @@ pub async fn from_substrait_rex(
                 )),
                 None => None,
             };
-            Ok(Expr::Case(Case {
+            Ok(Expr::case(Case {
                 expr,
                 when_then_expr,
                 else_expr,
@@ -1644,7 +1644,7 @@ pub async fn from_substrait_rex(
             // try to first match the requested function into registered udfs, then built-in ops
             // and finally built-in expressions
             if let Ok(func) = state.udf(fn_name) {
-                Ok(Expr::ScalarFunction(expr::ScalarFunction::new_udf(
+                Ok(Expr::scalar_function(expr::ScalarFunction::new_udf(
                     func.to_owned(),
                     args,
                 )))
@@ -1661,7 +1661,7 @@ pub async fn from_substrait_rex(
                     .into_iter()
                     .fold(None, |combined_expr: Option<Expr>, arg: Expr| {
                         Some(match combined_expr {
-                            Some(expr) => Expr::BinaryExpr(BinaryExpr {
+                            Some(expr) => Expr::binary_expr(BinaryExpr {
                                 left: Box::new(expr),
                                 op,
                                 right: Box::new(arg),
@@ -1680,7 +1680,7 @@ pub async fn from_substrait_rex(
         }
         Some(RexType::Literal(lit)) => {
             let scalar_value = from_substrait_literal_without_names(lit, extensions)?;
-            Ok(Expr::Literal(scalar_value))
+            Ok(Expr::literal(scalar_value))
         }
         Some(RexType::Cast(cast)) => match cast.as_ref().r#type.as_ref() {
             Some(output_type) => {
@@ -1696,9 +1696,9 @@ pub async fn from_substrait_rex(
                 let data_type =
                     from_substrait_type_without_names(output_type, extensions)?;
                 if cast.failure_behavior() == ReturnNull {
-                    Ok(Expr::TryCast(TryCast::new(input_expr, data_type)))
+                    Ok(Expr::try_cast(TryCast::new(input_expr, data_type)))
                 } else {
-                    Ok(Expr::Cast(Cast::new(input_expr, data_type)))
+                    Ok(Expr::cast(Cast::new(input_expr, data_type)))
                 }
             }
             None => substrait_err!("Cast expression without output type is not allowed"),
@@ -1747,7 +1747,7 @@ pub async fn from_substrait_rex(
                         }
                     }
                 };
-            Ok(Expr::WindowFunction(expr::WindowFunction {
+            Ok(Expr::window_function(expr::WindowFunction {
                 fun,
                 args: from_substrait_func_args(
                     state,
@@ -1785,7 +1785,7 @@ pub async fn from_substrait_rex(
                                 from_substrait_rel(state, haystack_expr, extensions)
                                     .await?;
                             let outer_refs = haystack_expr.all_out_ref_exprs();
-                            Ok(Expr::InSubquery(InSubquery {
+                            Ok(Expr::in_subquery(InSubquery {
                                 expr: Box::new(
                                     from_substrait_rex(
                                         state,
@@ -1814,7 +1814,7 @@ pub async fn from_substrait_rex(
                     )
                     .await?;
                     let outer_ref_columns = plan.all_out_ref_exprs();
-                    Ok(Expr::ScalarSubquery(Subquery {
+                    Ok(Expr::scalar_subquery(Subquery {
                         subquery: Arc::new(plan),
                         outer_ref_columns,
                     }))
@@ -1831,7 +1831,7 @@ pub async fn from_substrait_rex(
                             )
                             .await?;
                             let outer_ref_columns = plan.all_out_ref_exprs();
-                            Ok(Expr::Exists(Exists::new(
+                            Ok(Expr::exists(Exists::new(
                                 Subquery {
                                     subquery: Arc::new(plan),
                                     outer_ref_columns,
@@ -2838,7 +2838,7 @@ fn from_substrait_field_reference(
                 Some(_) => not_impl_err!(
                     "Direct reference StructField with child is not supported"
                 ),
-                None => Ok(Expr::Column(Column::from(
+                None => Ok(Expr::column(Column::from(
                     input_schema.qualified_field(x.field as usize),
                 ))),
             },
@@ -2917,16 +2917,16 @@ impl BuiltinExprBuilder {
         let arg = Box::new(arg);
 
         let expr = match fn_name {
-            "not" => Expr::Not(arg),
-            "negative" | "negate" => Expr::Negative(arg),
-            "is_null" => Expr::IsNull(arg),
-            "is_not_null" => Expr::IsNotNull(arg),
-            "is_true" => Expr::IsTrue(arg),
-            "is_false" => Expr::IsFalse(arg),
-            "is_not_true" => Expr::IsNotTrue(arg),
-            "is_not_false" => Expr::IsNotFalse(arg),
-            "is_unknown" => Expr::IsUnknown(arg),
-            "is_not_unknown" => Expr::IsNotUnknown(arg),
+            "not" => Expr::_not(arg),
+            "negative" | "negate" => Expr::negative(arg),
+            "is_null" => Expr::_is_null(arg),
+            "is_not_null" => Expr::_is_not_null(arg),
+            "is_true" => Expr::_is_true(arg),
+            "is_false" => Expr::_is_false(arg),
+            "is_not_true" => Expr::_is_not_true(arg),
+            "is_not_false" => Expr::_is_not_false(arg),
+            "is_unknown" => Expr::_is_unknown(arg),
+            "is_not_unknown" => Expr::_is_not_unknown(arg),
             _ => return not_impl_err!("Unsupported builtin expression: {}", fn_name),
         };
 
@@ -2973,7 +2973,7 @@ impl BuiltinExprBuilder {
             .await?;
 
             match escape_char_expr {
-                Expr::Literal(ScalarValue::Utf8(escape_char_string)) => {
+                Expr::Literal(ScalarValue::Utf8(escape_char_string), _) => {
                     // Convert Option<String> to Option<char>
                     escape_char_string.and_then(|s| s.chars().next())
                 }
@@ -2987,7 +2987,7 @@ impl BuiltinExprBuilder {
             None
         };
 
-        Ok(Expr::Like(Like {
+        Ok(Expr::_like(Like {
             negated: false,
             expr: Box::new(expr),
             pattern: Box::new(pattern),

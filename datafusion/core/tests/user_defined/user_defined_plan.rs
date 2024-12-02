@@ -69,6 +69,7 @@ use arrow::{
     util::pretty::pretty_format_batches,
 };
 use async_trait::async_trait;
+use enumset::enum_set;
 use futures::{Stream, StreamExt};
 
 use datafusion::execution::session_state::SessionStateBuilder;
@@ -97,8 +98,8 @@ use datafusion::{
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::ScalarValue;
+use datafusion_expr::logical_plan::tree_node::LogicalPlanPattern;
 use datafusion_expr::{FetchType, Projection, SortExpr};
-use datafusion_optimizer::optimizer::ApplyOrder;
 use datafusion_optimizer::AnalyzerRule;
 
 /// Execute the specified sql and return the resulting record batches
@@ -343,10 +344,6 @@ impl OptimizerRule for TopKOptimizerRule {
         "topk"
     }
 
-    fn apply_order(&self) -> Option<ApplyOrder> {
-        Some(ApplyOrder::TopDown)
-    }
-
     fn supports_rewrite(&self) -> bool {
         true
     }
@@ -357,35 +354,47 @@ impl OptimizerRule for TopKOptimizerRule {
         plan: LogicalPlan,
         _config: &dyn OptimizerConfig,
     ) -> Result<Transformed<LogicalPlan>, DataFusionError> {
-        // Note: this code simply looks for the pattern of a Limit followed by a
-        // Sort and replaces it by a TopK node. It does not handle many
-        // edge cases (e.g multiple sort columns, sort ASC / DESC), etc.
-        let LogicalPlan::Limit(ref limit) = plan else {
-            return Ok(Transformed::no(plan));
-        };
-        let FetchType::Literal(Some(fetch)) = limit.get_fetch_type()? else {
-            return Ok(Transformed::no(plan));
-        };
-
-        if let LogicalPlan::Sort(Sort {
-            ref expr,
-            ref input,
-            ..
-        }) = limit.input.as_ref()
-        {
-            if expr.len() == 1 {
-                // we found a sort with a single sort expr, replace with a a TopK
-                return Ok(Transformed::yes(LogicalPlan::Extension(Extension {
-                    node: Arc::new(TopKPlanNode {
-                        k: fetch,
-                        input: input.as_ref().clone(),
-                        expr: expr[0].clone(),
-                    }),
-                })));
+        plan.transform_down_with_subqueries(|plan| {
+            if !plan.stats().contains_all_patterns(enum_set!(
+                LogicalPlanPattern::LogicalPlanLimit
+                    | LogicalPlanPattern::LogicalPlanSort
+            )) {
+                return Ok(Transformed::jump(plan));
             }
-        }
 
-        Ok(Transformed::no(plan))
+            // Note: this code simply looks for the pattern of a Limit followed by a
+            // Sort and replaces it by a TopK node. It does not handle many
+            // edge cases (e.g multiple sort columns, sort ASC / DESC), etc.
+            let LogicalPlan::Limit(ref limit, _) = plan else {
+                return Ok(Transformed::no(plan));
+            };
+            let FetchType::Literal(Some(fetch)) = limit.get_fetch_type()? else {
+                return Ok(Transformed::no(plan));
+            };
+
+            if let LogicalPlan::Sort(
+                Sort {
+                    ref expr,
+                    ref input,
+                    ..
+                },
+                _,
+            ) = limit.input.as_ref()
+            {
+                if expr.len() == 1 {
+                    // we found a sort with a single sort expr, replace with a a TopK
+                    return Ok(Transformed::yes(LogicalPlan::extension(Extension {
+                        node: Arc::new(TopKPlanNode {
+                            k: fetch,
+                            input: input.as_ref().clone(),
+                            expr: expr[0].clone(),
+                        }),
+                    })));
+                }
+            }
+
+            Ok(Transformed::no(plan))
+        })
     }
 }
 
@@ -705,9 +714,9 @@ impl MyAnalyzerRule {
     fn analyze_plan(plan: LogicalPlan) -> Result<LogicalPlan> {
         plan.transform(|plan| {
             Ok(match plan {
-                LogicalPlan::Projection(projection) => {
+                LogicalPlan::Projection(projection, _) => {
                     let expr = Self::analyze_expr(projection.expr.clone())?;
-                    Transformed::yes(LogicalPlan::Projection(Projection::try_new(
+                    Transformed::yes(LogicalPlan::projection(Projection::try_new(
                         expr,
                         projection.input,
                     )?))
@@ -723,9 +732,9 @@ impl MyAnalyzerRule {
             .map(|e| {
                 e.transform(|e| {
                     Ok(match e {
-                        Expr::Literal(ScalarValue::Int64(i)) => {
+                        Expr::Literal(ScalarValue::Int64(i), _) => {
                             // transform to UInt64
-                            Transformed::yes(Expr::Literal(ScalarValue::UInt64(
+                            Transformed::yes(Expr::literal(ScalarValue::UInt64(
                                 i.map(|i| i as u64),
                             )))
                         }

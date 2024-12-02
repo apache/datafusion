@@ -61,10 +61,10 @@ async fn main() -> Result<()> {
     let expr = col("a") + lit(5);
 
     // The same same expression can be created directly, with much more code:
-    let expr2 = Expr::BinaryExpr(BinaryExpr::new(
+    let expr2 = Expr::binary_expr(BinaryExpr::new(
         Box::new(col("a")),
         Operator::Plus,
-        Box::new(Expr::Literal(ScalarValue::Int32(Some(5)))),
+        Box::new(Expr::literal(ScalarValue::Int32(Some(5)))),
     ));
     assert_eq!(expr, expr2);
 
@@ -396,20 +396,20 @@ fn type_coercion_demo() -> Result<()> {
     let coerced_expr = expr
         .transform(|e| {
             // Only type coerces binary expressions.
-            let Expr::BinaryExpr(e) = e else {
+            let Expr::BinaryExpr(e, _) = e else {
                 return Ok(Transformed::no(e));
             };
-            if let Expr::Column(ref col_expr) = *e.left {
+            if let Expr::Column(ref col_expr, _) = *e.left {
                 let field = df_schema.field_with_name(None, col_expr.name())?;
                 let cast_to_type = field.data_type();
                 let coerced_right = e.right.cast_to(cast_to_type, &df_schema)?;
-                Ok(Transformed::yes(Expr::BinaryExpr(BinaryExpr::new(
+                Ok(Transformed::yes(Expr::binary_expr(BinaryExpr::new(
                     e.left,
                     e.op,
                     Box::new(coerced_right),
                 ))))
             } else {
-                Ok(Transformed::no(Expr::BinaryExpr(e)))
+                Ok(Transformed::no(Expr::binary_expr(e)))
             }
         })?
         .data;

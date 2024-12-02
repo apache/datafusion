@@ -43,10 +43,10 @@ pub(crate) fn resolve_columns(expr: &Expr, plan: &LogicalPlan) -> Result<Expr> {
     expr.clone()
         .transform_up(|nested_expr| {
             match nested_expr {
-                Expr::Column(col) => {
+                Expr::Column(col, _) => {
                     let (qualifier, field) =
                         plan.schema().qualified_field_from_column(&col)?;
-                    Ok(Transformed::yes(Expr::Column(Column::from((
+                    Ok(Transformed::yes(Expr::column(Column::from((
                         qualifier, field,
                     )))))
                 }
@@ -97,23 +97,23 @@ pub(crate) fn check_columns_satisfy_exprs(
     message_prefix: &str,
 ) -> Result<()> {
     columns.iter().try_for_each(|c| match c {
-        Expr::Column(_) => Ok(()),
+        Expr::Column(_, _) => Ok(()),
         _ => internal_err!("Expr::Column are required"),
     })?;
     let column_exprs = find_column_exprs(exprs);
     for e in &column_exprs {
         match e {
-            Expr::GroupingSet(GroupingSet::Rollup(exprs)) => {
+            Expr::GroupingSet(GroupingSet::Rollup(exprs), _) => {
                 for e in exprs {
                     check_column_satisfies_expr(columns, e, message_prefix)?;
                 }
             }
-            Expr::GroupingSet(GroupingSet::Cube(exprs)) => {
+            Expr::GroupingSet(GroupingSet::Cube(exprs), _) => {
                 for e in exprs {
                     check_column_satisfies_expr(columns, e, message_prefix)?;
                 }
             }
-            Expr::GroupingSet(GroupingSet::GroupingSets(lists_of_exprs)) => {
+            Expr::GroupingSet(GroupingSet::GroupingSets(lists_of_exprs), _) => {
                 for exprs in lists_of_exprs {
                     for e in exprs {
                         check_column_satisfies_expr(columns, e, message_prefix)?;
@@ -148,7 +148,9 @@ pub(crate) fn extract_aliases(exprs: &[Expr]) -> HashMap<String, Expr> {
     exprs
         .iter()
         .filter_map(|expr| match expr {
-            Expr::Alias(Alias { expr, name, .. }) => Some((name.clone(), *expr.clone())),
+            Expr::Alias(Alias { expr, name, .. }, _) => {
+                Some((name.clone(), *expr.clone()))
+            }
             _ => None,
         })
         .collect::<HashMap<String, Expr>>()
@@ -165,17 +167,17 @@ pub(crate) fn resolve_positions_to_exprs(
     match expr {
         // sql_expr_to_logical_expr maps number to i64
         // https://github.com/apache/datafusion/blob/8d175c759e17190980f270b5894348dc4cff9bbf/datafusion/src/sql/planner.rs#L882-L887
-        Expr::Literal(ScalarValue::Int64(Some(position)))
+        Expr::Literal(ScalarValue::Int64(Some(position)), _)
             if position > 0_i64 && position <= select_exprs.len() as i64 =>
         {
             let index = (position - 1) as usize;
             let select_expr = &select_exprs[index];
             Ok(match select_expr {
-                Expr::Alias(Alias { expr, .. }) => *expr.clone(),
+                Expr::Alias(Alias { expr, .. }, _) => *expr.clone(),
                 _ => select_expr.clone(),
             })
         }
-        Expr::Literal(ScalarValue::Int64(Some(position))) => plan_err!(
+        Expr::Literal(ScalarValue::Int64(Some(position)), _) => plan_err!(
             "Cannot find column with position {} in SELECT clause. Valid columns: 1 to {}",
             position, select_exprs.len()
         ),
@@ -190,11 +192,11 @@ pub(crate) fn resolve_aliases_to_exprs(
     aliases: &HashMap<String, Expr>,
 ) -> Result<Expr> {
     expr.transform_up(|nested_expr| match nested_expr {
-        Expr::Column(c) if c.relation.is_none() => {
+        Expr::Column(c, _) if c.relation.is_none() => {
             if let Some(aliased_expr) = aliases.get(&c.name) {
                 Ok(Transformed::yes(aliased_expr.clone()))
             } else {
-                Ok(Transformed::no(Expr::Column(c)))
+                Ok(Transformed::no(Expr::column(c)))
             }
         }
         _ => Ok(Transformed::no(nested_expr)),
@@ -208,9 +210,11 @@ pub fn window_expr_common_partition_keys(window_exprs: &[Expr]) -> Result<&[Expr
     let all_partition_keys = window_exprs
         .iter()
         .map(|expr| match expr {
-            Expr::WindowFunction(WindowFunction { partition_by, .. }) => Ok(partition_by),
-            Expr::Alias(Alias { expr, .. }) => match expr.as_ref() {
-                Expr::WindowFunction(WindowFunction { partition_by, .. }) => {
+            Expr::WindowFunction(WindowFunction { partition_by, .. }, _) => {
+                Ok(partition_by)
+            }
+            Expr::Alias(Alias { expr, .. }, _) => match expr.as_ref() {
+                Expr::WindowFunction(WindowFunction { partition_by, .. }, _) => {
                     Ok(partition_by)
                 }
                 expr => exec_err!("Impossibly got non-window expr {expr:?}"),
@@ -382,7 +386,7 @@ impl RecursiveUnnestRewriter<'_> {
                 Ok(
                     get_struct_unnested_columns(&placeholder_name, &inner_fields)
                         .into_iter()
-                        .map(Expr::Column)
+                        .map(Expr::column)
                         .collect(),
                 )
             }
@@ -424,7 +428,7 @@ impl TreeNodeRewriter for RecursiveUnnestRewriter<'_> {
     /// - If some unnest expr has been visited, maintain a stack of such information, this
     ///   is used to detect if some recursive unnest expr exists (e.g **unnest(unnest(unnest(3d column))))**
     fn f_down(&mut self, expr: Expr) -> Result<Transformed<Expr>> {
-        if let Expr::Unnest(ref unnest_expr) = expr {
+        if let Expr::Unnest(ref unnest_expr, _) = expr {
             let (data_type, _) =
                 unnest_expr.expr.data_type_and_nullable(self.input_schema)?;
             self.consecutive_unnest.push(Some(unnest_expr.clone()));
@@ -481,7 +485,7 @@ impl TreeNodeRewriter for RecursiveUnnestRewriter<'_> {
     /// ```
     ///         
     fn f_up(&mut self, expr: Expr) -> Result<Transformed<Expr>> {
-        if let Expr::Unnest(ref traversing_unnest) = expr {
+        if let Expr::Unnest(ref traversing_unnest, _) = expr {
             if traversing_unnest == self.top_most_unnest.as_ref().unwrap() {
                 self.top_most_unnest = None;
             }
@@ -534,7 +538,7 @@ impl TreeNodeRewriter for RecursiveUnnestRewriter<'_> {
         // retain their projection
         // e.g given expr tree unnest(col_a) + col_b, we have to retain projection of col_b
         // this condition can be checked by maintaining an Option<top most unnest>
-        if matches!(&expr, Expr::Column(_)) && self.top_most_unnest.is_none() {
+        if matches!(&expr, Expr::Column(_, _)) && self.top_most_unnest.is_none() {
             push_projection_dedupl(self.inner_projection_exprs, expr.clone());
         }
 
@@ -592,7 +596,7 @@ pub(crate) fn rewrite_recursive_unnest_bottom_up(
     } = original_expr.clone().rewrite(&mut rewriter)?;
 
     if !transformed {
-        if matches!(&transformed_expr, Expr::Column(_))
+        if matches!(&transformed_expr, Expr::Column(_, _))
             || matches!(&transformed_expr, Expr::Wildcard { .. })
         {
             push_projection_dedupl(inner_projection_exprs, transformed_expr.clone());
@@ -602,7 +606,7 @@ pub(crate) fn rewrite_recursive_unnest_bottom_up(
             // outer projection just select its name
             let column_name = transformed_expr.schema_name().to_string();
             push_projection_dedupl(inner_projection_exprs, transformed_expr);
-            Ok(vec![Expr::Column(Column::from_name(column_name))])
+            Ok(vec![Expr::column(Column::from_name(column_name))])
         }
     } else {
         if let Some(transformed_root_exprs) = rewriter.transformed_root_exprs {
@@ -671,7 +675,7 @@ mod tests {
 
         let dfschema = DFSchema::try_from(schema)?;
 
-        let input = LogicalPlan::EmptyRelation(EmptyRelation {
+        let input = LogicalPlan::empty_relation(EmptyRelation {
             produce_one_row: false,
             schema: Arc::new(dfschema),
         });
@@ -775,7 +779,7 @@ mod tests {
 
         let dfschema = DFSchema::try_from(schema)?;
 
-        let input = LogicalPlan::EmptyRelation(EmptyRelation {
+        let input = LogicalPlan::empty_relation(EmptyRelation {
             produce_one_row: false,
             schema: Arc::new(dfschema),
         });
@@ -887,7 +891,7 @@ mod tests {
 
         let dfschema = DFSchema::try_from(schema)?;
 
-        let input = LogicalPlan::EmptyRelation(EmptyRelation {
+        let input = LogicalPlan::empty_relation(EmptyRelation {
             produce_one_row: false,
             schema: Arc::new(dfschema),
         });

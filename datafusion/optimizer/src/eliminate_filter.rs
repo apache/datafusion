@@ -17,13 +17,13 @@
 
 //! [`EliminateFilter`] replaces `where false` or `where null` with an empty relation.
 
+use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::tree_node::Transformed;
 use datafusion_common::{Result, ScalarValue};
+use datafusion_expr::logical_plan::tree_node::LogicalPlanPattern;
 use datafusion_expr::{EmptyRelation, Expr, Filter, LogicalPlan};
+use enumset::enum_set;
 use std::sync::Arc;
-
-use crate::optimizer::ApplyOrder;
-use crate::{OptimizerConfig, OptimizerRule};
 
 /// Optimization rule that eliminate the scalar value (true/false/null) filter
 /// with an [LogicalPlan::EmptyRelation]
@@ -45,10 +45,6 @@ impl OptimizerRule for EliminateFilter {
         "eliminate_filter"
     }
 
-    fn apply_order(&self) -> Option<ApplyOrder> {
-        Some(ApplyOrder::TopDown)
-    }
-
     fn supports_rewrite(&self) -> bool {
         true
     }
@@ -58,22 +54,33 @@ impl OptimizerRule for EliminateFilter {
         plan: LogicalPlan,
         _config: &dyn OptimizerConfig,
     ) -> Result<Transformed<LogicalPlan>> {
-        match plan {
-            LogicalPlan::Filter(Filter {
-                predicate: Expr::Literal(ScalarValue::Boolean(v)),
-                input,
-                ..
-            }) => match v {
-                Some(true) => Ok(Transformed::yes(Arc::unwrap_or_clone(input))),
-                Some(false) | None => Ok(Transformed::yes(LogicalPlan::EmptyRelation(
-                    EmptyRelation {
-                        produce_one_row: false,
-                        schema: Arc::clone(input.schema()),
+        plan.transform_down_with_subqueries(|plan| {
+            if !plan.stats().contains_any_patterns(enum_set!(
+                LogicalPlanPattern::LogicalPlanFilter | LogicalPlanPattern::ExprLiteral
+            )) {
+                return Ok(Transformed::jump(plan));
+            }
+
+            match plan {
+                LogicalPlan::Filter(
+                    Filter {
+                        predicate: Expr::Literal(ScalarValue::Boolean(v), _),
+                        input,
+                        ..
                     },
-                ))),
-            },
-            _ => Ok(Transformed::no(plan)),
-        }
+                    _,
+                ) => match v {
+                    Some(true) => Ok(Transformed::yes(Arc::unwrap_or_clone(input))),
+                    Some(false) | None => Ok(Transformed::yes(
+                        LogicalPlan::empty_relation(EmptyRelation {
+                            produce_one_row: false,
+                            schema: Arc::clone(input.schema()),
+                        }),
+                    )),
+                },
+                _ => Ok(Transformed::no(plan)),
+            }
+        })
     }
 }
 
@@ -111,7 +118,7 @@ mod tests {
 
     #[test]
     fn filter_null() -> Result<()> {
-        let filter_expr = Expr::Literal(ScalarValue::Boolean(None));
+        let filter_expr = Expr::literal(ScalarValue::Boolean(None));
 
         let table_scan = test_table_scan().unwrap();
         let plan = LogicalPlanBuilder::from(table_scan)

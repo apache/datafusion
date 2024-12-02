@@ -25,6 +25,7 @@ use std::{
 };
 
 use crate::expr::Sort;
+use crate::logical_plan::tree_node::LogicalPlanStats;
 use arrow::datatypes::DataType;
 use datafusion_common::tree_node::{Transformed, TreeNodeContainer, TreeNodeRecursion};
 use datafusion_common::{
@@ -187,6 +188,46 @@ impl DdlStatement {
             }
         }
         Wrapper(self)
+    }
+
+    pub(crate) fn stats(&self) -> LogicalPlanStats {
+        match self {
+            DdlStatement::CreateExternalTable(CreateExternalTable {
+                order_exprs,
+                column_defaults,
+                ..
+            }) => order_exprs
+                .iter()
+                .flatten()
+                .map(|s| &s.expr)
+                .chain(column_defaults.values())
+                .fold(LogicalPlanStats::empty(), |s, e| s.merge(e.stats())),
+            DdlStatement::CreateMemoryTable(CreateMemoryTable {
+                input,
+                column_defaults,
+                ..
+            }) => column_defaults
+                .iter()
+                .map(|(_, e)| e)
+                .fold(input.stats(), |s, e| s.merge(e.stats())),
+            DdlStatement::CreateView(CreateView { input, .. }) => input.stats(),
+            DdlStatement::CreateIndex(CreateIndex { columns, .. }) => columns
+                .iter()
+                .map(|s| &s.expr)
+                .fold(LogicalPlanStats::empty(), |s, e| s.merge(e.stats())),
+            DdlStatement::CreateFunction(CreateFunction { args, params, .. }) => args
+                .iter()
+                .flatten()
+                .flat_map(|a| a.default_expr.as_slice())
+                .chain(params.function_body.as_slice())
+                .fold(LogicalPlanStats::empty(), |s, e| s.merge(e.stats())),
+            DdlStatement::CreateCatalogSchema(_)
+            | DdlStatement::CreateCatalog(_)
+            | DdlStatement::DropTable(_)
+            | DdlStatement::DropView(_)
+            | DdlStatement::DropCatalogSchema(_)
+            | DdlStatement::DropFunction(_) => LogicalPlanStats::empty(),
+        }
     }
 }
 

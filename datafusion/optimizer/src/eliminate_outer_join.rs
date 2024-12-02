@@ -21,9 +21,10 @@ use datafusion_common::{Column, DFSchema, Result};
 use datafusion_expr::logical_plan::{Join, JoinType, LogicalPlan};
 use datafusion_expr::{Expr, Filter, Operator};
 
-use crate::optimizer::ApplyOrder;
 use datafusion_common::tree_node::Transformed;
 use datafusion_expr::expr::{BinaryExpr, Cast, TryCast};
+use datafusion_expr::logical_plan::tree_node::LogicalPlanPattern;
+use enumset::enum_set;
 use std::sync::Arc;
 
 ///
@@ -64,10 +65,6 @@ impl OptimizerRule for EliminateOuterJoin {
         "eliminate_outer_join"
     }
 
-    fn apply_order(&self) -> Option<ApplyOrder> {
-        Some(ApplyOrder::TopDown)
-    }
-
     fn supports_rewrite(&self) -> bool {
         true
     }
@@ -77,59 +74,70 @@ impl OptimizerRule for EliminateOuterJoin {
         plan: LogicalPlan,
         _config: &dyn OptimizerConfig,
     ) -> Result<Transformed<LogicalPlan>> {
-        match plan {
-            LogicalPlan::Filter(mut filter) => match Arc::unwrap_or_clone(filter.input) {
-                LogicalPlan::Join(join) => {
-                    let mut non_nullable_cols: Vec<Column> = vec![];
+        plan.transform_down_with_subqueries(|plan| {
+            if !plan.stats().contains_all_patterns(enum_set!(
+                LogicalPlanPattern::LogicalPlanFilter
+                    | LogicalPlanPattern::LogicalPlanJoin
+            )) {
+                return Ok(Transformed::jump(plan));
+            }
 
-                    extract_non_nullable_columns(
-                        &filter.predicate,
-                        &mut non_nullable_cols,
-                        join.left.schema(),
-                        join.right.schema(),
-                        true,
-                    );
+            match plan {
+                LogicalPlan::Filter(mut filter, _) => {
+                    match Arc::unwrap_or_clone(filter.input) {
+                        LogicalPlan::Join(join, _) => {
+                            let mut non_nullable_cols: Vec<Column> = vec![];
 
-                    let new_join_type = if join.join_type.is_outer() {
-                        let mut left_non_nullable = false;
-                        let mut right_non_nullable = false;
-                        for col in non_nullable_cols.iter() {
-                            if join.left.schema().has_column(col) {
-                                left_non_nullable = true;
-                            }
-                            if join.right.schema().has_column(col) {
-                                right_non_nullable = true;
-                            }
+                            extract_non_nullable_columns(
+                                &filter.predicate,
+                                &mut non_nullable_cols,
+                                join.left.schema(),
+                                join.right.schema(),
+                                true,
+                            );
+
+                            let new_join_type = if join.join_type.is_outer() {
+                                let mut left_non_nullable = false;
+                                let mut right_non_nullable = false;
+                                for col in non_nullable_cols.iter() {
+                                    if join.left.schema().has_column(col) {
+                                        left_non_nullable = true;
+                                    }
+                                    if join.right.schema().has_column(col) {
+                                        right_non_nullable = true;
+                                    }
+                                }
+                                eliminate_outer(
+                                    join.join_type,
+                                    left_non_nullable,
+                                    right_non_nullable,
+                                )
+                            } else {
+                                join.join_type
+                            };
+
+                            let new_join = Arc::new(LogicalPlan::join(Join {
+                                left: join.left,
+                                right: join.right,
+                                join_type: new_join_type,
+                                join_constraint: join.join_constraint,
+                                on: join.on.clone(),
+                                filter: join.filter.clone(),
+                                schema: Arc::clone(&join.schema),
+                                null_equals_null: join.null_equals_null,
+                            }));
+                            Filter::try_new(filter.predicate, new_join)
+                                .map(|f| Transformed::yes(LogicalPlan::filter(f)))
                         }
-                        eliminate_outer(
-                            join.join_type,
-                            left_non_nullable,
-                            right_non_nullable,
-                        )
-                    } else {
-                        join.join_type
-                    };
-
-                    let new_join = Arc::new(LogicalPlan::Join(Join {
-                        left: join.left,
-                        right: join.right,
-                        join_type: new_join_type,
-                        join_constraint: join.join_constraint,
-                        on: join.on.clone(),
-                        filter: join.filter.clone(),
-                        schema: Arc::clone(&join.schema),
-                        null_equals_null: join.null_equals_null,
-                    }));
-                    Filter::try_new(filter.predicate, new_join)
-                        .map(|f| Transformed::yes(LogicalPlan::Filter(f)))
+                        filter_input => {
+                            filter.input = Arc::new(filter_input);
+                            Ok(Transformed::no(LogicalPlan::filter(filter)))
+                        }
+                    }
                 }
-                filter_input => {
-                    filter.input = Arc::new(filter_input);
-                    Ok(Transformed::no(LogicalPlan::Filter(filter)))
-                }
-            },
-            _ => Ok(Transformed::no(plan)),
-        }
+                _ => Ok(Transformed::no(plan)),
+            }
+        })
     }
 }
 
@@ -180,10 +188,10 @@ fn extract_non_nullable_columns(
     top_level: bool,
 ) {
     match expr {
-        Expr::Column(col) => {
+        Expr::Column(col, _) => {
             non_nullable_cols.push(col.clone());
         }
-        Expr::BinaryExpr(BinaryExpr { left, op, right }) => match op {
+        Expr::BinaryExpr(BinaryExpr { left, op, right }, _) => match op {
             // If one of the inputs are null for these operators, the results should be false.
             Operator::Eq
             | Operator::NotEq
@@ -270,14 +278,14 @@ fn extract_non_nullable_columns(
             }
             _ => {}
         },
-        Expr::Not(arg) => extract_non_nullable_columns(
+        Expr::Not(arg, _) => extract_non_nullable_columns(
             arg,
             non_nullable_cols,
             left_schema,
             right_schema,
             false,
         ),
-        Expr::IsNotNull(arg) => {
+        Expr::IsNotNull(arg, _) => {
             if !top_level {
                 return;
             }
@@ -289,14 +297,16 @@ fn extract_non_nullable_columns(
                 false,
             )
         }
-        Expr::Cast(Cast { expr, data_type: _ })
-        | Expr::TryCast(TryCast { expr, data_type: _ }) => extract_non_nullable_columns(
-            expr,
-            non_nullable_cols,
-            left_schema,
-            right_schema,
-            false,
-        ),
+        Expr::Cast(Cast { expr, data_type: _ }, _)
+        | Expr::TryCast(TryCast { expr, data_type: _ }, _) => {
+            extract_non_nullable_columns(
+                expr,
+                non_nullable_cols,
+                left_schema,
+                right_schema,
+                false,
+            )
+        }
         _ => {}
     }
 }

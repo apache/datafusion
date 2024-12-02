@@ -97,7 +97,7 @@ impl PhysicalExpr for Literal {
 /// Create a literal expression
 pub fn lit<T: datafusion_expr::Literal>(value: T) -> Arc<dyn PhysicalExpr> {
     match value.lit() {
-        Expr::Literal(v) => Arc::new(Literal::new(v)),
+        Expr::Literal(v, _) => Arc::new(Literal::new(v)),
         _ => unreachable!(),
     }
 }

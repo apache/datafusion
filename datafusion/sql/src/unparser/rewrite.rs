@@ -23,7 +23,6 @@ use datafusion_common::{
     tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRewriter},
     Column, HashMap, Result, TableReference,
 };
-use datafusion_expr::expr::Alias;
 use datafusion_expr::{Expr, LogicalPlan, Projection, Sort, SortExpr};
 use sqlparser::ast::Ident;
 
@@ -58,20 +57,20 @@ pub(super) fn normalize_union_schema(plan: &LogicalPlan) -> Result<LogicalPlan> 
     let plan = plan.clone();
 
     let transformed_plan = plan.transform_up(|plan| match plan {
-        LogicalPlan::Union(mut union) => {
+        LogicalPlan::Union(mut union, _) => {
             let schema = Arc::unwrap_or_clone(union.schema);
             let schema = schema.strip_qualifiers();
 
             union.schema = Arc::new(schema);
-            Ok(Transformed::yes(LogicalPlan::Union(union)))
+            Ok(Transformed::yes(LogicalPlan::union(union)))
         }
-        LogicalPlan::Sort(sort) => {
+        LogicalPlan::Sort(sort, _) => {
             // Only rewrite Sort expressions that have a UNION as their input
-            if !matches!(&*sort.input, LogicalPlan::Union(_)) {
-                return Ok(Transformed::no(LogicalPlan::Sort(sort)));
+            if !matches!(&*sort.input, LogicalPlan::Union(_, _)) {
+                return Ok(Transformed::no(LogicalPlan::sort(sort)));
             }
 
-            Ok(Transformed::yes(LogicalPlan::Sort(Sort {
+            Ok(Transformed::yes(LogicalPlan::sort(Sort {
                 expr: rewrite_sort_expr_for_union(sort.expr)?,
                 input: sort.input,
                 fetch: sort.fetch,
@@ -87,9 +86,9 @@ fn rewrite_sort_expr_for_union(exprs: Vec<SortExpr>) -> Result<Vec<SortExpr>> {
     let sort_exprs = exprs
         .map_elements(&mut |expr: Expr| {
             expr.transform_up(|expr| {
-                if let Expr::Column(mut col) = expr {
+                if let Expr::Column(mut col, _) = expr {
                     col.relation = None;
-                    Ok(Transformed::yes(Expr::Column(col)))
+                    Ok(Transformed::yes(Expr::column(col)))
                 } else {
                     Ok(Transformed::no(expr))
                 }
@@ -122,11 +121,11 @@ fn rewrite_sort_expr_for_union(exprs: Vec<SortExpr>) -> Result<Vec<SortExpr>> {
 pub(super) fn rewrite_plan_for_sort_on_non_projected_fields(
     p: &Projection,
 ) -> Option<LogicalPlan> {
-    let LogicalPlan::Sort(sort) = p.input.as_ref() else {
+    let LogicalPlan::Sort(sort, _) = p.input.as_ref() else {
         return None;
     };
 
-    let LogicalPlan::Projection(inner_p) = sort.input.as_ref() else {
+    let LogicalPlan::Projection(inner_p, _) = sort.input.as_ref() else {
         return None;
     };
 
@@ -136,20 +135,20 @@ pub(super) fn rewrite_plan_for_sort_on_non_projected_fields(
         .iter()
         .enumerate()
         .map(|(i, f)| match f {
-            Expr::Alias(alias) => {
-                let a = Expr::Column(alias.name.clone().into());
+            Expr::Alias(alias, _) => {
+                let a = Expr::column(alias.name.clone().into());
                 map.insert(a.clone(), f.clone());
                 a
             }
-            Expr::Column(_) => {
+            Expr::Column(_, _) => {
                 map.insert(
-                    Expr::Column(inner_p.schema.field(i).name().into()),
+                    Expr::column(inner_p.schema.field(i).name().into()),
                     f.clone(),
                 );
                 f.clone()
             }
             _ => {
-                let a = Expr::Column(inner_p.schema.field(i).name().into());
+                let a = Expr::column(inner_p.schema.field(i).name().into());
                 map.insert(a.clone(), f.clone());
                 a
             }
@@ -182,9 +181,9 @@ pub(super) fn rewrite_plan_for_sort_on_non_projected_fields(
             .collect::<Vec<_>>();
 
         inner_p.expr.clone_from(&new_exprs);
-        sort.input = Arc::new(LogicalPlan::Projection(inner_p));
+        sort.input = Arc::new(LogicalPlan::projection(inner_p));
 
-        Some(LogicalPlan::Sort(sort))
+        Some(LogicalPlan::sort(sort))
     } else {
         None
     }
@@ -222,7 +221,7 @@ pub(super) fn subquery_alias_inner_query_and_columns(
 ) -> (&LogicalPlan, Vec<Ident>) {
     let plan: &LogicalPlan = subquery_alias.input.as_ref();
 
-    let LogicalPlan::Projection(outer_projections) = plan else {
+    let LogicalPlan::Projection(outer_projections, _) = plan else {
         return (plan, vec![]);
     };
 
@@ -236,14 +235,14 @@ pub(super) fn subquery_alias_inner_query_and_columns(
     //     Projection: j1.j1_id AS id
     //       Projection: j1.j1_id
     for (i, inner_expr) in inner_projection.expr.iter().enumerate() {
-        let Expr::Alias(ref outer_alias) = &outer_projections.expr[i] else {
+        let Expr::Alias(ref outer_alias, _) = &outer_projections.expr[i] else {
             return (plan, vec![]);
         };
 
         // Inner projection schema fields store the projection name which is used in outer
         // projection expr
         let inner_expr_string = match inner_expr {
-            Expr::Column(_) => inner_expr.to_string(),
+            Expr::Column(_, _) => inner_expr.to_string(),
             _ => inner_projection.schema.field(i).name().clone(),
         };
 
@@ -270,11 +269,13 @@ pub(super) fn inject_column_aliases_into_subquery(
     aliases: Vec<Ident>,
 ) -> Result<LogicalPlan> {
     match &plan {
-        LogicalPlan::Projection(inner_p) => Ok(inject_column_aliases(inner_p, aliases)),
+        LogicalPlan::Projection(inner_p, _) => {
+            Ok(inject_column_aliases(inner_p, aliases))
+        }
         _ => {
             // projection is wrapped by other operator (LIMIT, SORT, etc), iterate through the plan to find it
             plan.map_children(|child| {
-                if let LogicalPlan::Projection(p) = &child {
+                if let LogicalPlan::Projection(p, _) = &child {
                     Ok(Transformed::yes(inject_column_aliases(p, aliases.clone())))
                 } else {
                     Ok(Transformed::no(child))
@@ -303,29 +304,25 @@ pub(super) fn inject_column_aliases(
         .zip(aliases)
         .map(|(expr, col_alias)| {
             let relation = match &expr {
-                Expr::Column(col) => col.relation.clone(),
+                Expr::Column(col, _) => col.relation.clone(),
                 _ => None,
             };
 
-            Expr::Alias(Alias {
-                expr: Box::new(expr.clone()),
-                relation,
-                name: col_alias.value,
-            })
+            expr.clone().alias_qualified(relation, col_alias.value)
         })
         .collect::<Vec<_>>();
 
     updated_projection.expr = new_exprs;
 
-    LogicalPlan::Projection(updated_projection)
+    LogicalPlan::projection(updated_projection)
 }
 
 fn find_projection(logical_plan: &LogicalPlan) -> Option<&Projection> {
     match logical_plan {
-        LogicalPlan::Projection(p) => Some(p),
-        LogicalPlan::Limit(p) => find_projection(p.input.as_ref()),
-        LogicalPlan::Distinct(p) => find_projection(p.input().as_ref()),
-        LogicalPlan::Sort(p) => find_projection(p.input.as_ref()),
+        LogicalPlan::Projection(p, _) => Some(p),
+        LogicalPlan::Limit(p, _) => find_projection(p.input.as_ref()),
+        LogicalPlan::Distinct(p, _) => find_projection(p.input().as_ref()),
+        LogicalPlan::Sort(p, _) => find_projection(p.input.as_ref()),
         _ => None,
     }
 }
@@ -352,13 +349,13 @@ impl TreeNodeRewriter for TableAliasRewriter<'_> {
 
     fn f_down(&mut self, expr: Expr) -> Result<Transformed<Expr>> {
         match expr {
-            Expr::Column(column) => {
+            Expr::Column(column, _) => {
                 if let Ok(field) = self.table_schema.field_with_name(&column.name) {
                     let new_column =
                         Column::new(Some(self.alias_name.clone()), field.name().clone());
-                    Ok(Transformed::yes(Expr::Column(new_column)))
+                    Ok(Transformed::yes(Expr::column(new_column)))
                 } else {
-                    Ok(Transformed::no(Expr::Column(column)))
+                    Ok(Transformed::no(Expr::column(column)))
                 }
             }
             _ => Ok(Transformed::no(expr)),

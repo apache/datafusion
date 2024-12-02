@@ -707,7 +707,7 @@ impl ScalarUDFImpl for CastToI64UDF {
             arg
         } else {
             // need to use an actual cast to get the correct type
-            Expr::Cast(datafusion_expr::Cast {
+            Expr::cast(datafusion_expr::Cast {
                 expr: Box::new(arg),
                 data_type: DataType::Int64,
             })
@@ -829,7 +829,7 @@ impl ScalarUDFImpl for TakeUDF {
             return plan_err!("Expected 3 arguments, got {}.", arg_exprs.len());
         }
 
-        let take_idx = if let Some(Expr::Literal(ScalarValue::Int64(Some(idx)))) =
+        let take_idx = if let Some(Expr::Literal(ScalarValue::Int64(Some(idx)), _)) =
             arg_exprs.get(2)
         {
             if *idx == 0 || *idx == 1 {
@@ -988,7 +988,7 @@ impl ScalarFunctionWrapper {
     fn replacement(expr: &Expr, args: &[Expr]) -> Result<Expr> {
         let result = expr.clone().transform(|e| {
             let r = match e {
-                Expr::Placeholder(placeholder) => {
+                Expr::Placeholder(placeholder, _) => {
                     let placeholder_position =
                         Self::parse_placeholder_identifier(&placeholder.id)?;
                     if placeholder_position < args.len() {

@@ -17,15 +17,14 @@
 
 //! [`PushDownLimit`] pushes `LIMIT` earlier in the query plan
 
+use crate::{OptimizerConfig, OptimizerRule};
 use std::cmp::min;
 use std::sync::Arc;
-
-use crate::optimizer::ApplyOrder;
-use crate::{OptimizerConfig, OptimizerRule};
 
 use datafusion_common::tree_node::Transformed;
 use datafusion_common::utils::combine_limit;
 use datafusion_common::Result;
+use datafusion_expr::logical_plan::tree_node::LogicalPlanPattern;
 use datafusion_expr::logical_plan::{Join, JoinType, Limit, LogicalPlan};
 use datafusion_expr::{lit, FetchType, SkipType};
 
@@ -53,140 +52,147 @@ impl OptimizerRule for PushDownLimit {
         plan: LogicalPlan,
         _config: &dyn OptimizerConfig,
     ) -> Result<Transformed<LogicalPlan>> {
-        let LogicalPlan::Limit(mut limit) = plan else {
-            return Ok(Transformed::no(plan));
-        };
+        plan.transform_down_with_subqueries(|plan| {
+            if !plan
+                .stats()
+                .contains_pattern(LogicalPlanPattern::LogicalPlanLimit)
+            {
+                return Ok(Transformed::jump(plan));
+            }
 
-        // Currently only rewrite if skip and fetch are both literals
-        let SkipType::Literal(skip) = limit.get_skip_type()? else {
-            return Ok(Transformed::no(LogicalPlan::Limit(limit)));
-        };
-        let FetchType::Literal(fetch) = limit.get_fetch_type()? else {
-            return Ok(Transformed::no(LogicalPlan::Limit(limit)));
-        };
-
-        // Merge the Parent Limit and the Child Limit.
-        if let LogicalPlan::Limit(child) = limit.input.as_ref() {
-            let SkipType::Literal(child_skip) = child.get_skip_type()? else {
-                return Ok(Transformed::no(LogicalPlan::Limit(limit)));
-            };
-            let FetchType::Literal(child_fetch) = child.get_fetch_type()? else {
-                return Ok(Transformed::no(LogicalPlan::Limit(limit)));
+            let LogicalPlan::Limit(mut limit, _) = plan else {
+                return Ok(Transformed::no(plan));
             };
 
-            let (skip, fetch) = combine_limit(skip, fetch, child_skip, child_fetch);
-            let plan = LogicalPlan::Limit(Limit {
-                skip: Some(Box::new(lit(skip as i64))),
-                fetch: fetch.map(|f| Box::new(lit(f as i64))),
-                input: Arc::clone(&child.input),
-            });
+            // Currently only rewrite if skip and fetch are both literals
+            let SkipType::Literal(skip) = limit.get_skip_type()? else {
+                return Ok(Transformed::no(LogicalPlan::limit(limit)));
+            };
+            let FetchType::Literal(fetch) = limit.get_fetch_type()? else {
+                return Ok(Transformed::no(LogicalPlan::limit(limit)));
+            };
 
-            // recursively reapply the rule on the new plan
-            return self.rewrite(plan, _config);
-        }
+            // Merge the Parent Limit and the Child Limit.
+            if let LogicalPlan::Limit(child, _) = limit.input.as_ref() {
+                let SkipType::Literal(child_skip) = child.get_skip_type()? else {
+                    return Ok(Transformed::no(LogicalPlan::limit(limit)));
+                };
+                let FetchType::Literal(child_fetch) = child.get_fetch_type()? else {
+                    return Ok(Transformed::no(LogicalPlan::limit(limit)));
+                };
 
-        // no fetch to push, so return the original plan
-        let Some(fetch) = fetch else {
-            return Ok(Transformed::no(LogicalPlan::Limit(limit)));
-        };
+                let (skip, fetch) = combine_limit(skip, fetch, child_skip, child_fetch);
+                let plan = LogicalPlan::limit(Limit {
+                    skip: Some(Box::new(lit(skip as i64))),
+                    fetch: fetch.map(|f| Box::new(lit(f as i64))),
+                    input: Arc::clone(&child.input),
+                });
 
-        match Arc::unwrap_or_clone(limit.input) {
-            LogicalPlan::TableScan(mut scan) => {
-                let rows_needed = if fetch != 0 { fetch + skip } else { 0 };
-                let new_fetch = scan
-                    .fetch
-                    .map(|x| min(x, rows_needed))
-                    .or(Some(rows_needed));
-                if new_fetch == scan.fetch {
-                    original_limit(skip, fetch, LogicalPlan::TableScan(scan))
-                } else {
-                    // push limit into the table scan itself
-                    scan.fetch = scan
+                // recursively reapply the rule on the new plan
+                return self.rewrite(plan, _config);
+            }
+
+            // no fetch to push, so return the original plan
+            let Some(fetch) = fetch else {
+                return Ok(Transformed::no(LogicalPlan::limit(limit)));
+            };
+
+            match Arc::unwrap_or_clone(limit.input) {
+                LogicalPlan::TableScan(mut scan, _) => {
+                    let rows_needed = if fetch != 0 { fetch + skip } else { 0 };
+                    let new_fetch = scan
                         .fetch
                         .map(|x| min(x, rows_needed))
                         .or(Some(rows_needed));
-                    transformed_limit(skip, fetch, LogicalPlan::TableScan(scan))
-                }
-            }
-            LogicalPlan::Union(mut union) => {
-                // push limits to each input of the union
-                union.inputs = union
-                    .inputs
-                    .into_iter()
-                    .map(|input| make_arc_limit(0, fetch + skip, input))
-                    .collect();
-                transformed_limit(skip, fetch, LogicalPlan::Union(union))
-            }
-
-            LogicalPlan::Join(join) => Ok(push_down_join(join, fetch + skip)
-                .update_data(|join| {
-                    make_limit(skip, fetch, Arc::new(LogicalPlan::Join(join)))
-                })),
-
-            LogicalPlan::Sort(mut sort) => {
-                let new_fetch = {
-                    let sort_fetch = skip + fetch;
-                    Some(sort.fetch.map(|f| f.min(sort_fetch)).unwrap_or(sort_fetch))
-                };
-                if new_fetch == sort.fetch {
-                    if skip > 0 {
-                        original_limit(skip, fetch, LogicalPlan::Sort(sort))
+                    if new_fetch == scan.fetch {
+                        original_limit(skip, fetch, LogicalPlan::table_scan(scan))
                     } else {
-                        Ok(Transformed::yes(LogicalPlan::Sort(sort)))
+                        // push limit into the table scan itself
+                        scan.fetch = scan
+                            .fetch
+                            .map(|x| min(x, rows_needed))
+                            .or(Some(rows_needed));
+                        transformed_limit(skip, fetch, LogicalPlan::table_scan(scan))
                     }
-                } else {
-                    sort.fetch = new_fetch;
-                    limit.input = Arc::new(LogicalPlan::Sort(sort));
-                    Ok(Transformed::yes(LogicalPlan::Limit(limit)))
                 }
-            }
-            LogicalPlan::Projection(mut proj) => {
-                // commute
-                limit.input = Arc::clone(&proj.input);
-                let new_limit = LogicalPlan::Limit(limit);
-                proj.input = Arc::new(new_limit);
-                Ok(Transformed::yes(LogicalPlan::Projection(proj)))
-            }
-            LogicalPlan::SubqueryAlias(mut subquery_alias) => {
-                // commute
-                limit.input = Arc::clone(&subquery_alias.input);
-                let new_limit = LogicalPlan::Limit(limit);
-                subquery_alias.input = Arc::new(new_limit);
-                Ok(Transformed::yes(LogicalPlan::SubqueryAlias(subquery_alias)))
-            }
-            LogicalPlan::Extension(extension_plan)
-                if extension_plan.node.supports_limit_pushdown() =>
-            {
-                let new_children = extension_plan
-                    .node
-                    .inputs()
-                    .into_iter()
-                    .map(|child| {
-                        LogicalPlan::Limit(Limit {
-                            skip: None,
-                            fetch: Some(Box::new(lit((fetch + skip) as i64))),
-                            input: Arc::new(child.clone()),
+                LogicalPlan::Union(mut union, _) => {
+                    // push limits to each input of the union
+                    union.inputs = union
+                        .inputs
+                        .into_iter()
+                        .map(|input| make_arc_limit(0, fetch + skip, input))
+                        .collect();
+                    transformed_limit(skip, fetch, LogicalPlan::union(union))
+                }
+
+                LogicalPlan::Join(join, _) => Ok(push_down_join(join, fetch + skip)
+                    .update_data(|join| {
+                        make_limit(skip, fetch, Arc::new(LogicalPlan::join(join)))
+                    })),
+
+                LogicalPlan::Sort(mut sort, _) => {
+                    let new_fetch = {
+                        let sort_fetch = skip + fetch;
+                        Some(sort.fetch.map(|f| f.min(sort_fetch)).unwrap_or(sort_fetch))
+                    };
+                    if new_fetch == sort.fetch {
+                        if skip > 0 {
+                            original_limit(skip, fetch, LogicalPlan::sort(sort))
+                        } else {
+                            Ok(Transformed::yes(LogicalPlan::sort(sort)))
+                        }
+                    } else {
+                        sort.fetch = new_fetch;
+                        limit.input = Arc::new(LogicalPlan::sort(sort));
+                        Ok(Transformed::yes(LogicalPlan::limit(limit)))
+                    }
+                }
+                LogicalPlan::Projection(mut proj, _) => {
+                    // commute
+                    limit.input = Arc::clone(&proj.input);
+                    let new_limit = LogicalPlan::limit(limit);
+                    proj.input = Arc::new(new_limit);
+                    Ok(Transformed::yes(LogicalPlan::projection(proj)))
+                }
+                LogicalPlan::SubqueryAlias(mut subquery_alias, _) => {
+                    // commute
+                    limit.input = Arc::clone(&subquery_alias.input);
+                    let new_limit = LogicalPlan::limit(limit);
+                    subquery_alias.input = Arc::new(new_limit);
+                    Ok(Transformed::yes(LogicalPlan::subquery_alias(
+                        subquery_alias,
+                    )))
+                }
+                LogicalPlan::Extension(extension_plan, _)
+                    if extension_plan.node.supports_limit_pushdown() =>
+                {
+                    let new_children = extension_plan
+                        .node
+                        .inputs()
+                        .into_iter()
+                        .map(|child| {
+                            LogicalPlan::limit(Limit {
+                                skip: None,
+                                fetch: Some(Box::new(lit((fetch + skip) as i64))),
+                                input: Arc::new(child.clone()),
+                            })
                         })
-                    })
-                    .collect::<Vec<_>>();
+                        .collect::<Vec<_>>();
 
-                // Create a new extension node with updated inputs
-                let child_plan = LogicalPlan::Extension(extension_plan);
-                let new_extension =
-                    child_plan.with_new_exprs(child_plan.expressions(), new_children)?;
+                    // Create a new extension node with updated inputs
+                    let child_plan = LogicalPlan::extension(extension_plan);
+                    let new_extension = child_plan
+                        .with_new_exprs(child_plan.expressions(), new_children)?;
 
-                transformed_limit(skip, fetch, new_extension)
+                    transformed_limit(skip, fetch, new_extension)
+                }
+                input => original_limit(skip, fetch, input),
             }
-            input => original_limit(skip, fetch, input),
-        }
+        })
     }
 
     fn name(&self) -> &str {
         "push_down_limit"
-    }
-
-    fn apply_order(&self) -> Option<ApplyOrder> {
-        Some(ApplyOrder::TopDown)
     }
 }
 
@@ -203,7 +209,7 @@ impl OptimizerRule for PushDownLimit {
 ///  input
 /// ```
 fn make_limit(skip: usize, fetch: usize, input: Arc<LogicalPlan>) -> LogicalPlan {
-    LogicalPlan::Limit(Limit {
+    LogicalPlan::limit(Limit {
         skip: Some(Box::new(lit(skip as i64))),
         fetch: Some(Box::new(lit(fetch as i64))),
         input,
@@ -400,7 +406,7 @@ mod test {
     #[test]
     fn limit_pushdown_basic() -> Result<()> {
         let table_scan = test_table_scan()?;
-        let noop_plan = LogicalPlan::Extension(Extension {
+        let noop_plan = LogicalPlan::extension(Extension {
             node: Arc::new(NoopPlan {
                 input: vec![table_scan.clone()],
                 schema: Arc::clone(table_scan.schema()),
@@ -422,7 +428,7 @@ mod test {
     #[test]
     fn limit_pushdown_with_skip() -> Result<()> {
         let table_scan = test_table_scan()?;
-        let noop_plan = LogicalPlan::Extension(Extension {
+        let noop_plan = LogicalPlan::extension(Extension {
             node: Arc::new(NoopPlan {
                 input: vec![table_scan.clone()],
                 schema: Arc::clone(table_scan.schema()),
@@ -444,7 +450,7 @@ mod test {
     #[test]
     fn limit_pushdown_multiple_limits() -> Result<()> {
         let table_scan = test_table_scan()?;
-        let noop_plan = LogicalPlan::Extension(Extension {
+        let noop_plan = LogicalPlan::extension(Extension {
             node: Arc::new(NoopPlan {
                 input: vec![table_scan.clone()],
                 schema: Arc::clone(table_scan.schema()),
@@ -467,7 +473,7 @@ mod test {
     #[test]
     fn limit_pushdown_multiple_inputs() -> Result<()> {
         let table_scan = test_table_scan()?;
-        let noop_plan = LogicalPlan::Extension(Extension {
+        let noop_plan = LogicalPlan::extension(Extension {
             node: Arc::new(NoopPlan {
                 input: vec![table_scan.clone(), table_scan.clone()],
                 schema: Arc::clone(table_scan.schema()),
@@ -491,7 +497,7 @@ mod test {
     #[test]
     fn limit_pushdown_disallowed_noop_plan() -> Result<()> {
         let table_scan = test_table_scan()?;
-        let no_limit_noop_plan = LogicalPlan::Extension(Extension {
+        let no_limit_noop_plan = LogicalPlan::extension(Extension {
             node: Arc::new(NoLimitNoopPlan {
                 input: vec![table_scan.clone()],
                 schema: Arc::clone(table_scan.schema()),

@@ -44,7 +44,7 @@ fn plan_to_json() {
     use datafusion_expr::{logical_plan::EmptyRelation, LogicalPlan};
     use datafusion_proto::bytes::logical_plan_to_json;
 
-    let plan = LogicalPlan::EmptyRelation(EmptyRelation {
+    let plan = LogicalPlan::empty_relation(EmptyRelation {
         produce_one_row: false,
         schema: Arc::new(DFSchema::empty()),
     });
@@ -62,7 +62,7 @@ fn json_to_plan() {
     let input = r#"{"emptyRelation":{}}"#.to_string();
     let ctx = SessionContext::new();
     let actual = logical_plan_from_json(&input, &ctx).unwrap();
-    let result = matches!(actual, LogicalPlan::EmptyRelation(_));
+    let result = matches!(actual, LogicalPlan::EmptyRelation(_, _));
     assert!(result, "Should parse empty relation");
 }
 
@@ -256,12 +256,12 @@ fn test_expression_serialization_roundtrip() {
     use datafusion_proto::logical_plan::from_proto::parse_expr;
 
     let ctx = SessionContext::new();
-    let lit = Expr::Literal(ScalarValue::Utf8(None));
+    let lit = Expr::literal(ScalarValue::Utf8(None));
     for function in string::functions() {
         // default to 4 args (though some exprs like substr have error checking)
         let num_args = 4;
         let args: Vec<_> = std::iter::repeat(&lit).take(num_args).cloned().collect();
-        let expr = Expr::ScalarFunction(ScalarFunction::new_udf(function, args));
+        let expr = Expr::scalar_function(ScalarFunction::new_udf(function, args));
 
         let extension_codec = DefaultLogicalExtensionCodec {};
         let proto = serialize_expr(&expr, &extension_codec).unwrap();
