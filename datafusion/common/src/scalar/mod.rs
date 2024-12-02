@@ -39,11 +39,7 @@ use crate::cast::{
 };
 use crate::error::{DataFusionError, Result, _exec_err, _internal_err, _not_impl_err};
 use crate::hash_utils::create_hashes;
-use crate::utils::{
-    array_into_fixed_size_list_array_with_field_name, array_into_large_list_array,
-    array_into_large_list_array_with_field_name, array_into_list_array,
-    array_into_list_array_with_field_name,
-};
+use crate::utils::SingleRowArrayBuilder;
 use arrow::compute::kernels::numeric::*;
 use arrow::util::display::{array_value_to_string, ArrayFormatter, FormatOptions};
 use arrow::{
@@ -2092,7 +2088,11 @@ impl ScalarValue {
         } else {
             Self::iter_to_array(values.iter().cloned()).unwrap()
         };
-        Arc::new(array_into_list_array(values, nullable))
+        Arc::new(
+            SingleRowArrayBuilder::new(values)
+                .with_nullable(nullable)
+                .build_list_array(),
+        )
     }
 
     /// Same as [`ScalarValue::new_list`] but with nullable set to true.
@@ -2148,7 +2148,11 @@ impl ScalarValue {
         } else {
             Self::iter_to_array(values).unwrap()
         };
-        Arc::new(array_into_list_array(values, nullable))
+        Arc::new(
+            SingleRowArrayBuilder::new(values)
+                .with_nullable(nullable)
+                .build_list_array(),
+        )
     }
 
     /// Converts `Vec<ScalarValue>` where each element has type corresponding to
@@ -2185,7 +2189,7 @@ impl ScalarValue {
         } else {
             Self::iter_to_array(values.iter().cloned()).unwrap()
         };
-        Arc::new(array_into_large_list_array(values))
+        Arc::new(SingleRowArrayBuilder::new(values).build_large_list_array())
     }
 
     /// Converts a scalar value into an array of `size` rows.
@@ -2665,38 +2669,27 @@ impl ScalarValue {
                 let list_array = array.as_list::<i32>();
                 let nested_array = list_array.value(index);
                 // Produces a single element `ListArray` with the value at `index`.
-                let arr = Arc::new(array_into_list_array_with_field_name(
-                    nested_array,
-                    field.is_nullable(),
-                    field.name(),
-                ));
-
-                ScalarValue::List(arr)
+                SingleRowArrayBuilder::new(nested_array)
+                    .with_field(field)
+                    .build_list_scalar()
             }
             DataType::LargeList(field) => {
                 let list_array = as_large_list_array(array);
                 let nested_array = list_array.value(index);
                 // Produces a single element `LargeListArray` with the value at `index`.
-                let arr = Arc::new(array_into_large_list_array_with_field_name(
-                    nested_array,
-                    field.name(),
-                ));
-
-                ScalarValue::LargeList(arr)
+                SingleRowArrayBuilder::new(nested_array)
+                    .with_field(field)
+                    .build_large_list_scalar()
             }
             // TODO: There is no test for FixedSizeList now, add it later
             DataType::FixedSizeList(field, _) => {
                 let list_array = as_fixed_size_list_array(array)?;
                 let nested_array = list_array.value(index);
-                // Produces a single element `ListArray` with the value at `index`.
+                // Produces a single element `FixedSizeListArray` with the value at `index`.
                 let list_size = nested_array.len();
-                let arr = Arc::new(array_into_fixed_size_list_array_with_field_name(
-                    nested_array,
-                    list_size,
-                    field.name(),
-                ));
-
-                ScalarValue::FixedSizeList(arr)
+                SingleRowArrayBuilder::new(nested_array)
+                    .with_field(field)
+                    .build_fixed_size_list_scalar(list_size)
             }
             DataType::Date32 => typed_cast!(array, index, Date32Array, Date32)?,
             DataType::Date64 => typed_cast!(array, index, Date64Array, Date64)?,
@@ -3895,7 +3888,6 @@ mod tests {
     };
 
     use crate::assert_batches_eq;
-    use crate::utils::array_into_list_array_nullable;
     use arrow::buffer::OffsetBuffer;
     use arrow::compute::{is_null, kernels};
     use arrow::error::ArrowError;
@@ -4071,12 +4063,12 @@ mod tests {
 
         let result = ScalarValue::new_list_nullable(scalars.as_slice(), &DataType::Utf8);
 
-        let expected = array_into_list_array_nullable(Arc::new(StringArray::from(vec![
-            "rust",
-            "arrow",
-            "data-fusion",
-        ])));
+        let expected = single_row_list_array(vec!["rust", "arrow", "data-fusion"]);
         assert_eq!(*result, expected);
+    }
+
+    fn single_row_list_array(items: Vec<&str>) -> ListArray {
+        SingleRowArrayBuilder::new(Arc::new(StringArray::from(items))).build_list_array()
     }
 
     fn build_list<O: OffsetSizeTrait>(
@@ -4283,12 +4275,8 @@ mod tests {
 
     #[test]
     fn iter_to_array_string_test() {
-        let arr1 = array_into_list_array_nullable(Arc::new(StringArray::from(vec![
-            "foo", "bar", "baz",
-        ])));
-        let arr2 = array_into_list_array_nullable(Arc::new(StringArray::from(vec![
-            "rust", "world",
-        ])));
+        let arr1 = single_row_list_array(vec!["foo", "bar", "baz"]);
+        let arr2 = single_row_list_array(vec!["rust", "world"]);
 
         let scalars = vec![
             ScalarValue::List(Arc::new(arr1)),
@@ -5745,13 +5733,13 @@ mod tests {
         // Define list-of-structs scalars
 
         let nl0_array = ScalarValue::iter_to_array(vec![s0, s1.clone()]).unwrap();
-        let nl0 = ScalarValue::List(Arc::new(array_into_list_array_nullable(nl0_array)));
+        let nl0 = SingleRowArrayBuilder::new(nl0_array).build_list_scalar();
 
         let nl1_array = ScalarValue::iter_to_array(vec![s2]).unwrap();
-        let nl1 = ScalarValue::List(Arc::new(array_into_list_array_nullable(nl1_array)));
+        let nl1 = SingleRowArrayBuilder::new(nl1_array).build_list_scalar();
 
         let nl2_array = ScalarValue::iter_to_array(vec![s1]).unwrap();
-        let nl2 = ScalarValue::List(Arc::new(array_into_list_array_nullable(nl2_array)));
+        let nl2 = SingleRowArrayBuilder::new(nl2_array).build_list_scalar();
 
         // iter_to_array for list-of-struct
         let array = ScalarValue::iter_to_array(vec![nl0, nl1, nl2]).unwrap();

@@ -26,7 +26,7 @@ use std::sync::{Arc, OnceLock};
 use arrow::array::{new_empty_array, ArrayRef, AsArray, StructArray};
 use arrow_schema::{DataType, Field, Fields};
 
-use datafusion_common::utils::{array_into_list_array_nullable, get_row_at_idx};
+use datafusion_common::utils::{get_row_at_idx, SingleRowArrayBuilder};
 use datafusion_common::{exec_err, internal_err, not_impl_err, Result, ScalarValue};
 use datafusion_expr::aggregate_doc_sections::DOC_SECTION_STATISTICAL;
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
@@ -423,9 +423,7 @@ impl NthValueAccumulator {
         let ordering_array =
             StructArray::try_new(struct_field, column_wise_ordering_values, None)?;
 
-        Ok(ScalarValue::List(Arc::new(array_into_list_array_nullable(
-            Arc::new(ordering_array),
-        ))))
+        Ok(SingleRowArrayBuilder::new(Arc::new(ordering_array)).build_list_scalar())
     }
 
     fn evaluate_values(&self) -> ScalarValue {

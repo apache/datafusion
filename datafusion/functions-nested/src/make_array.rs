@@ -28,7 +28,8 @@ use arrow_array::{
 use arrow_buffer::OffsetBuffer;
 use arrow_schema::DataType::{List, Null};
 use arrow_schema::{DataType, Field};
-use datafusion_common::{plan_err, utils::array_into_list_array_nullable, Result};
+use datafusion_common::utils::SingleRowArrayBuilder;
+use datafusion_common::{plan_err, Result};
 use datafusion_expr::binary::{
     try_type_union_resolution_with_struct, type_union_resolution,
 };
@@ -194,7 +195,9 @@ pub(crate) fn make_array_inner(arrays: &[ArrayRef]) -> Result<ArrayRef> {
             let length = arrays.iter().map(|a| a.len()).sum();
             // By default Int64
             let array = new_null_array(&DataType::Int64, length);
-            Ok(Arc::new(array_into_list_array_nullable(array)))
+            Ok(Arc::new(
+                SingleRowArrayBuilder::new(array).build_list_array(),
+            ))
         }
         _ => array_array::<i32>(arrays, data_type),
     }
