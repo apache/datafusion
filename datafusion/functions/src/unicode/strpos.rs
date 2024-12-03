@@ -218,7 +218,7 @@ mod tests {
         ($lhs:literal, $rhs:literal -> $result:literal; $t1:ident $t2:ident $t3:ident $t4:ident $t5:ident) => {
             test_function!(
                 StrposFunc::new(),
-                &[
+                vec![
                     ColumnarValue::Scalar(ScalarValue::$t1(Some($lhs.to_owned()))),
                     ColumnarValue::Scalar(ScalarValue::$t2(Some($rhs.to_owned()))),
                 ],
