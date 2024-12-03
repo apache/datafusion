@@ -55,11 +55,8 @@ fn generate_test_file() -> TestCsvFile {
 
     let generator = AccessLogGenerator::new().with_include_nulls(true);
     let num_batches = 2;
-    let test_file =
-        TestCsvFile::try_new(file_path.clone(), generator.take(num_batches as usize))
-            .expect("Failed to create the test file.");
-
-    test_file
+    TestCsvFile::try_new(file_path.clone(), generator.take(num_batches as usize))
+        .expect("Failed to create test file.")
 }
 
 fn criterion_benchmark(c: &mut Criterion) {
