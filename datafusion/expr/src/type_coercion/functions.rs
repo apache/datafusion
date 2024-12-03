@@ -570,8 +570,12 @@ fn get_valid_types(
                 let logical_type: NativeType = current_type.into();
                 let target_logical_type = target_type.native();
                 if can_coerce_to(&logical_type, target_logical_type) {
-                    let target_type =
-                        target_logical_type.default_cast_for(current_type)?;
+                    let target_type = if &logical_type == target_logical_type {
+                        current_type.clone()
+                    } else {
+                        target_logical_type.default_cast_for(current_type)?
+                    };
+                    // let target_type = target_logical_type.default_cast_for(current_type)?;
                     new_types.push(target_type);
                 }
             }
