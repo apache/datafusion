@@ -274,7 +274,7 @@ pub(crate) fn get_map_entry_field(data_type: &DataType) -> Result<&Fields> {
 mod tests {
     use super::*;
     use arrow::datatypes::Int64Type;
-    use datafusion_common::utils::SingleRowArrayBuilder;
+    use datafusion_common::utils::SingleRowListArrayBuilder;
 
     /// Only test internal functions, array-related sql functions will be tested in sqllogictest `array.slt`
     #[test]
@@ -290,10 +290,10 @@ mod tests {
             ]));
 
         let array2d_1: ArrayRef = Arc::new(
-            SingleRowArrayBuilder::new(Arc::clone(&array1d_1)).build_list_array(),
+            SingleRowListArrayBuilder::new(Arc::clone(&array1d_1)).build_list_array(),
         );
         let array2d_2 = Arc::new(
-            SingleRowArrayBuilder::new(Arc::clone(&array1d_2)).build_list_array(),
+            SingleRowListArrayBuilder::new(Arc::clone(&array1d_2)).build_list_array(),
         );
 
         let res = align_array_dimensions::<i32>(vec![
@@ -311,9 +311,9 @@ mod tests {
         );
 
         let array3d_1: ArrayRef =
-            Arc::new(SingleRowArrayBuilder::new(array2d_1).build_list_array());
+            Arc::new(SingleRowListArrayBuilder::new(array2d_1).build_list_array());
         let array3d_2: ArrayRef =
-            Arc::new(SingleRowArrayBuilder::new(array2d_2).build_list_array());
+            Arc::new(SingleRowListArrayBuilder::new(array2d_2).build_list_array());
         let res = align_array_dimensions::<i32>(vec![array1d_1, array3d_2]).unwrap();
 
         let expected = as_list_array(&array3d_1).unwrap();

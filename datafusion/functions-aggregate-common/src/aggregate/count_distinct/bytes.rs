@@ -19,7 +19,7 @@
 
 use arrow::array::{ArrayRef, OffsetSizeTrait};
 use datafusion_common::cast::as_list_array;
-use datafusion_common::utils::SingleRowArrayBuilder;
+use datafusion_common::utils::SingleRowListArrayBuilder;
 use datafusion_common::ScalarValue;
 use datafusion_expr_common::accumulator::Accumulator;
 use datafusion_physical_expr_common::binary_map::{ArrowBytesSet, OutputType};
@@ -48,7 +48,7 @@ impl<O: OffsetSizeTrait> Accumulator for BytesDistinctCountAccumulator<O> {
     fn state(&mut self) -> datafusion_common::Result<Vec<ScalarValue>> {
         let set = self.0.take();
         let arr = set.into_state();
-        Ok(vec![SingleRowArrayBuilder::new(arr).build_list_scalar()])
+        Ok(vec![SingleRowListArrayBuilder::new(arr).build_list_scalar()])
     }
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> datafusion_common::Result<()> {
@@ -107,7 +107,7 @@ impl Accumulator for BytesViewDistinctCountAccumulator {
     fn state(&mut self) -> datafusion_common::Result<Vec<ScalarValue>> {
         let set = self.0.take();
         let arr = set.into_state();
-        Ok(vec![SingleRowArrayBuilder::new(arr).build_list_scalar()])
+        Ok(vec![SingleRowListArrayBuilder::new(arr).build_list_scalar()])
     }
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> datafusion_common::Result<()> {

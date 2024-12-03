@@ -331,17 +331,17 @@ pub fn longest_consecutive_prefix<T: Borrow<usize>>(
 /// # use std::sync::Arc;
 /// # use arrow_array::{Array, ListArray};
 /// # use arrow_array::types::Int64Type;
-/// # use datafusion_common::utils::SingleRowArrayBuilder;
+/// # use datafusion_common::utils::SingleRowListArrayBuilder;
 /// // Array is [1, 2, 3]
 /// let arr = ListArray::from_iter_primitive::<Int64Type, _, _>(vec![
 ///       Some(vec![Some(1), Some(2), Some(3)]),
 /// ]);
 /// // Wrap as a list array: [[1, 2, 3]]
-/// let list_arr = SingleRowArrayBuilder::new(Arc::new(arr)).build_list_array();
+/// let list_arr = SingleRowListArrayBuilder::new(Arc::new(arr)).build_list_array();
 /// assert_eq!(list_arr.len(), 1);
 /// ```
 #[derive(Debug, Clone)]
-pub struct SingleRowArrayBuilder {
+pub struct SingleRowListArrayBuilder {
     /// array to be wrapped
     arr: ArrayRef,
     /// Should the resulting array be nullable? Defaults to `true`.
@@ -351,8 +351,8 @@ pub struct SingleRowArrayBuilder {
     field_name: Option<String>,
 }
 
-impl SingleRowArrayBuilder {
-    /// Create a new instance of `SingleRowArrayBuilder`
+impl SingleRowListArrayBuilder {
+    /// Create a new instance of [`SingleRowListArrayBuilder`]
     pub fn new(arr: ArrayRef) -> Self {
         Self {
             arr,
@@ -433,29 +433,38 @@ impl SingleRowArrayBuilder {
 /// Wrap an array into a single element `ListArray`.
 /// For example `[1, 2, 3]` would be converted into `[[1, 2, 3]]`
 /// The field in the list array is nullable.
-#[deprecated(since = "44.0.0", note = "please use `SingleRowArrayBuilder` instead")]
+#[deprecated(
+    since = "44.0.0",
+    note = "please use `SingleRowListArrayBuilder` instead"
+)]
 pub fn array_into_list_array_nullable(arr: ArrayRef) -> ListArray {
-    SingleRowArrayBuilder::new(arr)
+    SingleRowListArrayBuilder::new(arr)
         .with_nullable(true)
         .build_list_array()
 }
 
 /// Wrap an array into a single element `ListArray`.
 /// For example `[1, 2, 3]` would be converted into `[[1, 2, 3]]`
-#[deprecated(since = "44.0.0", note = "please use `SingleRowArrayBuilder` instead")]
+#[deprecated(
+    since = "44.0.0",
+    note = "please use `SingleRowListArrayBuilder` instead"
+)]
 pub fn array_into_list_array(arr: ArrayRef, nullable: bool) -> ListArray {
-    SingleRowArrayBuilder::new(arr)
+    SingleRowListArrayBuilder::new(arr)
         .with_nullable(nullable)
         .build_list_array()
 }
 
-#[deprecated(since = "44.0.0", note = "please use `SingleRowArrayBuilder` instead")]
+#[deprecated(
+    since = "44.0.0",
+    note = "please use `SingleRowListArrayBuilder` instead"
+)]
 pub fn array_into_list_array_with_field_name(
     arr: ArrayRef,
     nullable: bool,
     field_name: &str,
 ) -> ListArray {
-    SingleRowArrayBuilder::new(arr)
+    SingleRowListArrayBuilder::new(arr)
         .with_nullable(nullable)
         .with_field_name(Some(field_name.to_string()))
         .build_list_array()
@@ -463,36 +472,48 @@ pub fn array_into_list_array_with_field_name(
 
 /// Wrap an array into a single element `LargeListArray`.
 /// For example `[1, 2, 3]` would be converted into `[[1, 2, 3]]`
-#[deprecated(since = "44.0.0", note = "please use `SingleRowArrayBuilder` instead")]
+#[deprecated(
+    since = "44.0.0",
+    note = "please use `SingleRowListArrayBuilder` instead"
+)]
 pub fn array_into_large_list_array(arr: ArrayRef) -> LargeListArray {
-    SingleRowArrayBuilder::new(arr).build_large_list_array()
+    SingleRowListArrayBuilder::new(arr).build_large_list_array()
 }
 
-#[deprecated(since = "44.0.0", note = "please use `SingleRowArrayBuilder` instead")]
+#[deprecated(
+    since = "44.0.0",
+    note = "please use `SingleRowListArrayBuilder` instead"
+)]
 pub fn array_into_large_list_array_with_field_name(
     arr: ArrayRef,
     field_name: &str,
 ) -> LargeListArray {
-    SingleRowArrayBuilder::new(arr)
+    SingleRowListArrayBuilder::new(arr)
         .with_field_name(Some(field_name.to_string()))
         .build_large_list_array()
 }
 
-#[deprecated(since = "44.0.0", note = "please use `SingleRowArrayBuilder` instead")]
+#[deprecated(
+    since = "44.0.0",
+    note = "please use `SingleRowListArrayBuilder` instead"
+)]
 pub fn array_into_fixed_size_list_array(
     arr: ArrayRef,
     list_size: usize,
 ) -> FixedSizeListArray {
-    SingleRowArrayBuilder::new(arr).build_fixed_size_list_array(list_size)
+    SingleRowListArrayBuilder::new(arr).build_fixed_size_list_array(list_size)
 }
 
-#[deprecated(since = "44.0.0", note = "please use `SingleRowArrayBuilder` instead")]
+#[deprecated(
+    since = "44.0.0",
+    note = "please use `SingleRowListArrayBuilder` instead"
+)]
 pub fn array_into_fixed_size_list_array_with_field_name(
     arr: ArrayRef,
     list_size: usize,
     field_name: &str,
 ) -> FixedSizeListArray {
-    SingleRowArrayBuilder::new(arr)
+    SingleRowListArrayBuilder::new(arr)
         .with_field_name(Some(field_name.to_string()))
         .build_fixed_size_list_array(list_size)
 }

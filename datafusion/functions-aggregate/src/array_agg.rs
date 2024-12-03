@@ -22,7 +22,7 @@ use arrow::datatypes::DataType;
 
 use arrow_schema::{Field, Fields};
 use datafusion_common::cast::as_list_array;
-use datafusion_common::utils::{get_row_at_idx, SingleRowArrayBuilder};
+use datafusion_common::utils::{get_row_at_idx, SingleRowListArrayBuilder};
 use datafusion_common::{exec_err, ScalarValue};
 use datafusion_common::{internal_err, Result};
 use datafusion_expr::aggregate_doc_sections::DOC_SECTION_GENERAL;
@@ -239,7 +239,7 @@ impl Accumulator for ArrayAggAccumulator {
 
         let concated_array = arrow::compute::concat(&element_arrays)?;
 
-        Ok(SingleRowArrayBuilder::new(concated_array).build_list_scalar())
+        Ok(SingleRowListArrayBuilder::new(concated_array).build_list_scalar())
     }
 
     fn size(&self) -> usize {
@@ -529,7 +529,7 @@ impl OrderSensitiveArrayAggAccumulator {
 
         let ordering_array =
             StructArray::try_new(struct_field, column_wise_ordering_values, None)?;
-        Ok(SingleRowArrayBuilder::new(Arc::new(ordering_array)).build_list_scalar())
+        Ok(SingleRowListArrayBuilder::new(Arc::new(ordering_array)).build_list_scalar())
     }
 }
 

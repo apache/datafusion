@@ -39,7 +39,7 @@ use crate::cast::{
 };
 use crate::error::{DataFusionError, Result, _exec_err, _internal_err, _not_impl_err};
 use crate::hash_utils::create_hashes;
-use crate::utils::SingleRowArrayBuilder;
+use crate::utils::SingleRowListArrayBuilder;
 use arrow::compute::kernels::numeric::*;
 use arrow::util::display::{array_value_to_string, ArrayFormatter, FormatOptions};
 use arrow::{
@@ -2089,7 +2089,7 @@ impl ScalarValue {
             Self::iter_to_array(values.iter().cloned()).unwrap()
         };
         Arc::new(
-            SingleRowArrayBuilder::new(values)
+            SingleRowListArrayBuilder::new(values)
                 .with_nullable(nullable)
                 .build_list_array(),
         )
@@ -2149,7 +2149,7 @@ impl ScalarValue {
             Self::iter_to_array(values).unwrap()
         };
         Arc::new(
-            SingleRowArrayBuilder::new(values)
+            SingleRowListArrayBuilder::new(values)
                 .with_nullable(nullable)
                 .build_list_array(),
         )
@@ -2189,7 +2189,7 @@ impl ScalarValue {
         } else {
             Self::iter_to_array(values.iter().cloned()).unwrap()
         };
-        Arc::new(SingleRowArrayBuilder::new(values).build_large_list_array())
+        Arc::new(SingleRowListArrayBuilder::new(values).build_large_list_array())
     }
 
     /// Converts a scalar value into an array of `size` rows.
@@ -2669,7 +2669,7 @@ impl ScalarValue {
                 let list_array = array.as_list::<i32>();
                 let nested_array = list_array.value(index);
                 // Produces a single element `ListArray` with the value at `index`.
-                SingleRowArrayBuilder::new(nested_array)
+                SingleRowListArrayBuilder::new(nested_array)
                     .with_field(field)
                     .build_list_scalar()
             }
@@ -2677,7 +2677,7 @@ impl ScalarValue {
                 let list_array = as_large_list_array(array);
                 let nested_array = list_array.value(index);
                 // Produces a single element `LargeListArray` with the value at `index`.
-                SingleRowArrayBuilder::new(nested_array)
+                SingleRowListArrayBuilder::new(nested_array)
                     .with_field(field)
                     .build_large_list_scalar()
             }
@@ -2687,7 +2687,7 @@ impl ScalarValue {
                 let nested_array = list_array.value(index);
                 // Produces a single element `FixedSizeListArray` with the value at `index`.
                 let list_size = nested_array.len();
-                SingleRowArrayBuilder::new(nested_array)
+                SingleRowListArrayBuilder::new(nested_array)
                     .with_field(field)
                     .build_fixed_size_list_scalar(list_size)
             }
@@ -4068,7 +4068,8 @@ mod tests {
     }
 
     fn single_row_list_array(items: Vec<&str>) -> ListArray {
-        SingleRowArrayBuilder::new(Arc::new(StringArray::from(items))).build_list_array()
+        SingleRowListArrayBuilder::new(Arc::new(StringArray::from(items)))
+            .build_list_array()
     }
 
     fn build_list<O: OffsetSizeTrait>(
@@ -5733,13 +5734,13 @@ mod tests {
         // Define list-of-structs scalars
 
         let nl0_array = ScalarValue::iter_to_array(vec![s0, s1.clone()]).unwrap();
-        let nl0 = SingleRowArrayBuilder::new(nl0_array).build_list_scalar();
+        let nl0 = SingleRowListArrayBuilder::new(nl0_array).build_list_scalar();
 
         let nl1_array = ScalarValue::iter_to_array(vec![s2]).unwrap();
-        let nl1 = SingleRowArrayBuilder::new(nl1_array).build_list_scalar();
+        let nl1 = SingleRowListArrayBuilder::new(nl1_array).build_list_scalar();
 
         let nl2_array = ScalarValue::iter_to_array(vec![s1]).unwrap();
-        let nl2 = SingleRowArrayBuilder::new(nl2_array).build_list_scalar();
+        let nl2 = SingleRowListArrayBuilder::new(nl2_array).build_list_scalar();
 
         // iter_to_array for list-of-struct
         let array = ScalarValue::iter_to_array(vec![nl0, nl1, nl2]).unwrap();
