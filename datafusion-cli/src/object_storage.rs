@@ -437,6 +437,7 @@ pub(crate) async fn get_object_store(
         }
         "http" | "https" => Arc::new(
             HttpBuilder::new()
+                .with_allow_http(true)
                 .with_url(url.origin().ascii_serialization())
                 .build()?,
         ),
