@@ -2014,7 +2014,7 @@ async fn test_dataframe_placeholder_missing_param_values() -> Result<()> {
     assert!(optimized_plan
         .unwrap_err()
         .to_string()
-        .contains("Placeholder type could not be resolved. Make sure that the placeholder is bound to a concrete type, e.g. by providing parameter values."));
+        .contains("Placeholder type for '$0' could not be resolved. Make sure that the placeholder is bound to a concrete type, e.g. by providing parameter values."));
 
     // Prodiving a parameter value should resolve the error
     let df = ctx
@@ -2045,6 +2045,139 @@ async fn test_dataframe_placeholder_missing_param_values() -> Result<()> {
 
     let actual = optimized_plan.unwrap().display_indent_schema().to_string();
     let expected = "EmptyRelation [a:Int32]";
+    assert_eq!(expected, actual);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_dataframe_placeholder_column_parameter() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    let df = ctx.read_empty().unwrap().select_exprs(&["$1"]).unwrap();
+
+    let logical_plan = df.logical_plan();
+    let formatted = logical_plan.display_indent_schema().to_string();
+    let actual: Vec<&str> = formatted.trim().lines().collect();
+    let expected = vec!["Projection: $1 [$1:Null;N]", "  EmptyRelation []"];
+    assert_eq!(
+        expected, actual,
+        "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+    );
+
+    // The placeholder is not replaced with a value,
+    // so the filter data type is not know, i.e. a = $0.
+    // Therefore, the optimization fails.
+    let optimized_plan = ctx.state().optimize(logical_plan);
+    assert!(optimized_plan.is_err());
+    assert!(optimized_plan
+        .unwrap_err()
+        .to_string()
+        .contains("Placeholder type for '$1' could not be resolved. Make sure that the placeholder is bound to a concrete type, e.g. by providing parameter values."));
+
+    // Prodiving a parameter value should resolve the error
+    let df = ctx
+        .read_empty()
+        .unwrap()
+        .select_exprs(&["$1"])
+        .unwrap()
+        .with_param_values(vec![("1", ScalarValue::from(3i32))])
+        .unwrap();
+
+    let logical_plan = df.logical_plan();
+    let formatted = logical_plan.display_indent_schema().to_string();
+    let actual: Vec<&str> = formatted.trim().lines().collect();
+    let expected = vec![
+        "Projection: Int32(3) AS $1 [$1:Null;N]",
+        "  EmptyRelation []",
+    ];
+    assert_eq!(
+        expected, actual,
+        "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+    );
+
+    let optimized_plan = ctx.state().optimize(logical_plan);
+    assert!(optimized_plan.is_ok());
+
+    let formatted = optimized_plan.unwrap().display_indent_schema().to_string();
+    let actual: Vec<&str> = formatted.trim().lines().collect();
+    let expected = vec![
+        "Projection: Int32(3) AS $1 [$1:Int32]",
+        "  EmptyRelation []",
+    ];
+    assert_eq!(expected, actual);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_dataframe_placeholder_like_expression() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    let df = ctx
+        .read_empty()
+        .unwrap()
+        .with_column("a", lit("foo"))
+        .unwrap()
+        .filter(col("a").like(placeholder("$1")))
+        .unwrap();
+
+    let logical_plan = df.logical_plan();
+    let formatted = logical_plan.display_indent_schema().to_string();
+    let actual: Vec<&str> = formatted.trim().lines().collect();
+    let expected = vec![
+        "Filter: a LIKE $1 [a:Utf8]",
+        "  Projection: Utf8(\"foo\") AS a [a:Utf8]",
+        "    EmptyRelation []",
+    ];
+    assert_eq!(
+        expected, actual,
+        "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+    );
+
+    // The placeholder is not replaced with a value,
+    // so the filter data type is not know, i.e. a = $0.
+    // Therefore, the optimization fails.
+    let optimized_plan = ctx.state().optimize(logical_plan);
+    assert!(optimized_plan.is_err());
+    assert!(optimized_plan
+        .unwrap_err()
+        .to_string()
+        .contains("Placeholder type for '$1' could not be resolved. Make sure that the placeholder is bound to a concrete type, e.g. by providing parameter values."));
+
+    // Prodiving a parameter value should resolve the error
+    let df = ctx
+        .read_empty()
+        .unwrap()
+        .with_column("a", lit("foo"))
+        .unwrap()
+        .filter(col("a").like(placeholder("$1")))
+        .unwrap()
+        .with_param_values(vec![("1", ScalarValue::from("f%"))])
+        .unwrap();
+
+    let logical_plan = df.logical_plan();
+    let formatted = logical_plan.display_indent_schema().to_string();
+    let actual: Vec<&str> = formatted.trim().lines().collect();
+    let expected = vec![
+        "Filter: a LIKE Utf8(\"f%\") [a:Utf8]",
+        "  Projection: Utf8(\"foo\") AS a [a:Utf8]",
+        "    EmptyRelation []",
+    ];
+    assert_eq!(
+        expected, actual,
+        "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+    );
+
+    let optimized_plan = ctx.state().optimize(logical_plan);
+    assert!(optimized_plan.is_ok());
+
+    let formatted = optimized_plan.unwrap().display_indent_schema().to_string();
+    let actual: Vec<&str> = formatted.trim().lines().collect();
+    let expected = vec![
+        "Projection: Utf8(\"foo\") AS a [a:Utf8]",
+        "  EmptyRelation []",
+    ];
     assert_eq!(expected, actual);
 
     Ok(())
