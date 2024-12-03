@@ -87,7 +87,7 @@ impl AggregateUDFImpl for ApproxMedian {
             Field::new(format_state_name(args.name, "min"), Float64, false),
             Field::new_list(
                 format_state_name(args.name, "centroids"),
-                Field::new("item", Float64, true),
+                Field::new_list_field(Float64, true),
                 false,
             ),
         ])

@@ -89,8 +89,7 @@ impl ScalarUDFImpl for MakeArray {
             0 => Ok(empty_array_type()),
             _ => {
                 // At this point, all the type in array should be coerced to the same one
-                Ok(List(Arc::new(Field::new(
-                    "item",
+                Ok(List(Arc::new(Field::new_list_field(
                     arg_types[0].to_owned(),
                     true,
                 ))))
@@ -172,7 +171,7 @@ fn get_make_array_doc() -> &'static Documentation {
 
 // Empty array is a special case that is useful for many other array functions
 pub(super) fn empty_array_type() -> DataType {
-    List(Arc::new(Field::new("item", DataType::Int64, true)))
+    List(Arc::new(Field::new_list_field(DataType::Int64, true)))
 }
 
 /// `make_array_inner` is the implementation of the `make_array` function.
@@ -285,7 +284,7 @@ fn array_array<O: OffsetSizeTrait>(
     let data = mutable.freeze();
 
     Ok(Arc::new(GenericListArray::<O>::try_new(
-        Arc::new(Field::new("item", data_type, true)),
+        Arc::new(Field::new_list_field(data_type, true)),
         OffsetBuffer::new(offsets.into()),
         arrow_array::make_array(data),
         None,

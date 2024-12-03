@@ -1309,7 +1309,7 @@ mod tests {
         //   6. Only decrease group indices in non-inlined group index view
         //   7. Erase all things
 
-        let field = Field::new("item", DataType::Int32, true);
+        let field = Field::new_list_field(DataType::Int32, true);
         let schema = Arc::new(Schema::new_with_metadata(vec![field], HashMap::new()));
         let mut group_values = GroupValuesColumn::<false>::try_new(schema).unwrap();
 

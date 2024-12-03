@@ -2430,7 +2430,7 @@ mod test {
                 "struct",
                 DataType::Struct(Fields::from(vec![Field::new(
                     "inner",
-                    DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))),
+                    DataType::List(Arc::new(Field::new_list_field(DataType::Utf8, true))),
                     true,
                 )])),
                 true,

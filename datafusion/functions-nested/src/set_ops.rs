@@ -270,13 +270,10 @@ impl ScalarUDFImpl for ArrayDistinct {
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         match &arg_types[0] {
-            List(field) | FixedSizeList(field, _) => Ok(List(Arc::new(Field::new(
-                "item",
-                field.data_type().clone(),
-                true,
-            )))),
-            LargeList(field) => Ok(LargeList(Arc::new(Field::new(
-                "item",
+            List(field) | FixedSizeList(field, _) => Ok(List(Arc::new(
+                Field::new_list_field(field.data_type().clone(), true),
+            ))),
+            LargeList(field) => Ok(LargeList(Arc::new(Field::new_list_field(
                 field.data_type().clone(),
                 true,
             )))),
@@ -376,10 +373,10 @@ fn generic_set_lists<OffsetSize: OffsetSizeTrait>(
     set_op: SetOp,
 ) -> Result<ArrayRef> {
     if matches!(l.value_type(), Null) {
-        let field = Arc::new(Field::new("item", r.value_type(), true));
+        let field = Arc::new(Field::new_list_field(r.value_type(), true));
         return general_array_distinct::<OffsetSize>(r, &field);
     } else if matches!(r.value_type(), Null) {
-        let field = Arc::new(Field::new("item", l.value_type(), true));
+        let field = Arc::new(Field::new_list_field(l.value_type(), true));
         return general_array_distinct::<OffsetSize>(l, &field);
     }
 
