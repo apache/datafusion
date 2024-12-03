@@ -32,7 +32,7 @@ use aws_credential_types::provider::ProvideCredentials;
 use object_store::aws::{AmazonS3Builder, AwsCredential};
 use object_store::gcp::GoogleCloudStorageBuilder;
 use object_store::http::HttpBuilder;
-use object_store::{CredentialProvider, ObjectStore};
+use object_store::{ClientOptions, CredentialProvider, ObjectStore};
 use url::Url;
 
 pub async fn get_s3_object_store_builder(
@@ -437,7 +437,7 @@ pub(crate) async fn get_object_store(
         }
         "http" | "https" => Arc::new(
             HttpBuilder::new()
-                .with_allow_http(true)
+                .with_client_options(ClientOptions::new().with_allow_http(true).with_allow_http2())
                 .with_url(url.origin().ascii_serialization())
                 .build()?,
         ),
