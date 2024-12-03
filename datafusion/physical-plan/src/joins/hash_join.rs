@@ -1180,13 +1180,13 @@ fn lookup_join_hashmap(
         })
         .collect::<Result<Vec<_>>>()?;
 
-    let (probe_indices, build_indices, next_offset) = build_hashmap
+    let (mut probe_indices, mut build_indices, next_offset) = build_hashmap
         .get_matched_indices_with_limit_offset(hashes_buffer, None, limit, offset);
 
-    let build_indices: UInt64Array = build_indices.into();
-    let probe_indices: UInt32Array = probe_indices.into();
+    let mut equal = vec![true; build_indices.len()];
 
-    let (build_indices, probe_indices) = equal_rows_arr(
+    equal_rows_arr(
+        &mut equal,
         &build_indices,
         &probe_indices,
         &build_join_values,
@@ -1194,14 +1194,24 @@ fn lookup_join_hashmap(
         null_equals_null,
     )?;
 
-    Ok((build_indices, probe_indices, next_offset))
+    retain_with_eq_arr::<u64>(&mut build_indices, &equal);
+    retain_with_eq_arr::<u32>(&mut probe_indices, &equal);
+
+    Ok((build_indices.into(), probe_indices.into(), next_offset))
+}
+
+pub fn retain_with_eq_arr<T>(indices: &mut Vec<T>, equal: &[bool]) {
+    let mut iter = equal.iter();
+    indices.retain(|_| {
+        *iter.next().unwrap()
+    });
 }
 
 /// Compare two arrays based on the indices and update equal boolean buffer.
 fn equal_with_indices(
-    equal: &mut BooleanBufferBuilder,
-    indices_left: &UInt64Array,
-    indices_right: &UInt32Array,
+    equal: &mut [bool],
+    indices_left: &[u64],
+    indices_right: &[u32],
     arr_left: &dyn Array,
     arr_right: &dyn Array,
     null_equals_null: bool,
@@ -1209,7 +1219,11 @@ fn equal_with_indices(
     // TODO: Write a reusable framework and support more arrow types.
     downcast_primitive_array! {
         (arr_left, arr_right) => {
-            let iter = indices_left.values().iter().zip(indices_right.values().iter());
+            let iter = izip!(
+                indices_left.iter(),
+                indices_right.iter(),
+                equal.iter_mut(),
+            );
 
             Ok(match (
                 arr_left.null_count() == 0,
@@ -1217,21 +1231,18 @@ fn equal_with_indices(
             ) {
                 (true, true) => {
                     // Both arrays do not have nulls, compare the values directly.
-                    for (index, (&idx_left, &idx_right)) in iter.enumerate() {
+                    for (&idx_left, &idx_right, eq) in iter {
                         let idx_left = idx_left as usize;
                         let idx_right = idx_right as usize;
 
-                        equal.set_bit(
-                            index,
-                            unsafe {
-                                arr_left.value_unchecked(idx_left) == arr_right.value_unchecked(idx_right)
-                            }
-                        );
+                        *eq = unsafe {
+                            arr_left.value_unchecked(idx_left) == arr_right.value_unchecked(idx_right)
+                        };
                     }
                 }
 
                 _ => {
-                    for (index, (&idx_left, &idx_right)) in iter.enumerate() {
+                    for (&idx_left, &idx_right, eq) in iter {
                         let idx_left = idx_left as usize;
                         let idx_right = idx_right as usize;
 
@@ -1239,15 +1250,12 @@ fn equal_with_indices(
                         let null_right = arr_right.is_null(idx_right);
 
                         match (null_left, null_right) {
-                            (true, true) => equal.set_bit(index, null_equals_null),
-                            (true, false) | (false, true) => equal.set_bit(index, false),
+                            (true, true) => *eq = null_equals_null,
+                            (true, false) | (false, true) => *eq = false,
                             (false, false) => {
-                                equal.set_bit(
-                                    index,
-                                    unsafe {
-                                        arr_left.value_unchecked(idx_left) == arr_right.value_unchecked(idx_right)
-                                    }
-                                )
+                                *eq = unsafe {
+                                    arr_left.value_unchecked(idx_left) == arr_right.value_unchecked(idx_right)
+                                };
                             },
                         };
                     }
@@ -1260,16 +1268,14 @@ fn equal_with_indices(
 }
 
 pub fn equal_rows_arr(
-    indices_left: &UInt64Array,
-    indices_right: &UInt32Array,
+    equal: &mut Vec<bool>,
+    indices_left: &[u64],
+    indices_right: &[u32],
     left_arrays: &[ArrayRef],
     right_arrays: &[ArrayRef],
     null_equals_null: bool,
-) -> Result<(UInt64Array, UInt32Array)> {
+) -> Result<()> {
     let mut iter = left_arrays.iter().zip(right_arrays.iter());
-
-    let mut equal = BooleanBufferBuilder::new(indices_left.len());
-    equal.append_n(indices_left.len(), true);
 
     let (first_left, first_right) = iter.next().ok_or_else(|| {
         DataFusionError::Internal(
@@ -1278,7 +1284,7 @@ pub fn equal_rows_arr(
     })?;
 
     equal_with_indices(
-        &mut equal,
+        equal,
         indices_left,
         indices_right,
         &first_left,
@@ -1288,7 +1294,7 @@ pub fn equal_rows_arr(
 
     iter.try_for_each(|(left, right)| {
         equal_with_indices(
-            &mut equal,
+            equal,
             indices_left,
             indices_right,
             &left,
@@ -1297,17 +1303,7 @@ pub fn equal_rows_arr(
         )
     })?;
 
-    let filter_builder = FilterBuilder::new(&equal.finish().into())
-        .optimize()
-        .build();
-
-    let left_filtered = filter_builder.filter(indices_left)?;
-    let right_filtered = filter_builder.filter(indices_right)?;
-
-    Ok((
-        downcast_array(left_filtered.as_ref()),
-        downcast_array(right_filtered.as_ref()),
-    ))
+    Ok(())
 }
 
 fn get_final_indices_from_shared_bitmap(
