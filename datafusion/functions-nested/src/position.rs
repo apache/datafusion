@@ -103,12 +103,11 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_array_position_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_ARRAY)
-            .with_description(
+        Documentation::builder(
+            DOC_SECTION_ARRAY,
                 "Returns the position of the first occurrence of the specified element in the array.",
-            )
-            .with_syntax_example("array_position(array, element)\narray_position(array, element, index)")
+
+            "array_position(array, element)\narray_position(array, element, index)")
             .with_sql_example(
                 r#"```sql
 > select array_position([1, 2, 2, 3, 1, 4], 2);
@@ -275,12 +274,11 @@ impl ScalarUDFImpl for ArrayPositions {
 
 fn get_array_positions_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_ARRAY)
-            .with_description(
+        Documentation::builder(
+            DOC_SECTION_ARRAY,
                 "Searches for an element in the array, returns all occurrences.",
-            )
-            .with_syntax_example("array_positions(array, element)")
+
+            "array_positions(array, element)")
             .with_sql_example(
                 r#"```sql
 > select array_positions([1, 2, 2, 3, 1, 4], 2);

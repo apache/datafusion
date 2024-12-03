@@ -32,7 +32,7 @@ use sqlparser::ast::{BinaryOperator, Expr as SQLExpr, Interval, UnaryOperator, V
 use sqlparser::parser::ParserError::ParserError;
 use std::borrow::Cow;
 
-impl<'a, S: ContextProvider> SqlToRel<'a, S> {
+impl<S: ContextProvider> SqlToRel<'_, S> {
     pub(crate) fn parse_value(
         &self,
         value: Value,

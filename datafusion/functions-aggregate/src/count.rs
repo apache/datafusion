@@ -336,12 +336,11 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_count_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_GENERAL)
-            .with_description(
+        Documentation::builder(
+            DOC_SECTION_GENERAL,
                 "Returns the number of non-null values in the specified column. To include null values in the total count, use `count(*)`.",
-            )
-            .with_syntax_example("count(expression)")
+
+            "count(expression)")
             .with_sql_example(r#"```sql
 > SELECT count(column_name) FROM table_name;
 +-----------------------+

@@ -100,12 +100,13 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_octet_length_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_STRING)
-            .with_description("Returns the length of a string in bytes.")
-            .with_syntax_example("octet_length(str)")
-            .with_sql_example(
-                r#"```sql
+        Documentation::builder(
+            DOC_SECTION_STRING,
+            "Returns the length of a string in bytes.",
+            "octet_length(str)",
+        )
+        .with_sql_example(
+            r#"```sql
 > select octet_length('Ångström');
 +--------------------------------+
 | octet_length(Utf8("Ångström")) |
@@ -113,11 +114,11 @@ fn get_octet_length_doc() -> &'static Documentation {
 | 10                             |
 +--------------------------------+
 ```"#,
-            )
-            .with_standard_argument("str", Some("String"))
-            .with_related_udf("bit_length")
-            .with_related_udf("length")
-            .build()
+        )
+        .with_standard_argument("str", Some("String"))
+        .with_related_udf("bit_length")
+        .with_related_udf("length")
+        .build()
     })
 }
 

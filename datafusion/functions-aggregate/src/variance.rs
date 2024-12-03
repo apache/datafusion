@@ -145,14 +145,13 @@ static VARIANCE_SAMPLE_DOC: OnceLock<Documentation> = OnceLock::new();
 
 fn get_variance_sample_doc() -> &'static Documentation {
     VARIANCE_SAMPLE_DOC.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_GENERAL)
-            .with_description(
-                "Returns the statistical sample variance of a set of numbers.",
-            )
-            .with_syntax_example("var(expression)")
-            .with_standard_argument("expression", Some("Numeric"))
-            .build()
+        Documentation::builder(
+            DOC_SECTION_GENERAL,
+            "Returns the statistical sample variance of a set of numbers.",
+            "var(expression)",
+        )
+        .with_standard_argument("expression", Some("Numeric"))
+        .build()
     })
 }
 
@@ -250,14 +249,13 @@ static VARIANCE_POPULATION_DOC: OnceLock<Documentation> = OnceLock::new();
 
 fn get_variance_population_doc() -> &'static Documentation {
     VARIANCE_POPULATION_DOC.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_GENERAL)
-            .with_description(
-                "Returns the statistical population variance of a set of numbers.",
-            )
-            .with_syntax_example("var_pop(expression)")
-            .with_standard_argument("expression", Some("Numeric"))
-            .build()
+        Documentation::builder(
+            DOC_SECTION_GENERAL,
+            "Returns the statistical population variance of a set of numbers.",
+            "var_pop(expression)",
+        )
+        .with_standard_argument("expression", Some("Numeric"))
+        .build()
     })
 }
 

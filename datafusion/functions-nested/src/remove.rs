@@ -95,12 +95,11 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_array_remove_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_ARRAY)
-            .with_description(
+        Documentation::builder(
+            DOC_SECTION_ARRAY,
                 "Removes the first element from the array equal to the given value.",
-            )
-            .with_syntax_example("array_remove(array, element)")
+
+            "array_remove(array, element)")
             .with_sql_example(
                 r#"```sql
 > select array_remove([1, 2, 2, 3, 2, 1, 4], 2);
@@ -182,12 +181,11 @@ impl ScalarUDFImpl for ArrayRemoveN {
 
 fn get_array_remove_n_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_ARRAY)
-            .with_description(
+        Documentation::builder(
+            DOC_SECTION_ARRAY,
                 "Removes the first `max` elements from the array equal to the given value.",
-            )
-            .with_syntax_example("array_remove_n(array, element, max)")
+
+            "array_remove_n(array, element, max)")
             .with_sql_example(
                 r#"```sql
 > select array_remove_n([1, 2, 2, 3, 2, 1, 4], 2, 2);
@@ -273,12 +271,11 @@ impl ScalarUDFImpl for ArrayRemoveAll {
 
 fn get_array_remove_all_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_ARRAY)
-            .with_description(
+        Documentation::builder(
+            DOC_SECTION_ARRAY,
                 "Removes all elements from the array equal to the given value.",
-            )
-            .with_syntax_example("array_remove_all(array, element)")
+
+            "array_remove_all(array, element)")
             .with_sql_example(
                 r#"```sql
 > select array_remove_all([1, 2, 2, 3, 2, 1, 4], 2);

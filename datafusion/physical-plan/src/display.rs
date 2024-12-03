@@ -124,7 +124,7 @@ impl<'a> DisplayableExecutionPlan<'a> {
             show_statistics: bool,
             show_schema: bool,
         }
-        impl<'a> fmt::Display for Wrapper<'a> {
+        impl fmt::Display for Wrapper<'_> {
             fn fmt(&self, f: &mut Formatter) -> fmt::Result {
                 let mut visitor = IndentVisitor {
                     t: self.format_type,
@@ -163,7 +163,7 @@ impl<'a> DisplayableExecutionPlan<'a> {
             show_metrics: ShowMetrics,
             show_statistics: bool,
         }
-        impl<'a> fmt::Display for Wrapper<'a> {
+        impl fmt::Display for Wrapper<'_> {
             fn fmt(&self, f: &mut Formatter) -> fmt::Result {
                 let t = DisplayFormatType::Default;
 
@@ -202,7 +202,7 @@ impl<'a> DisplayableExecutionPlan<'a> {
             show_schema: bool,
         }
 
-        impl<'a> fmt::Display for Wrapper<'a> {
+        impl fmt::Display for Wrapper<'_> {
             fn fmt(&self, f: &mut Formatter) -> fmt::Result {
                 let mut visitor = IndentVisitor {
                     f,
@@ -268,7 +268,7 @@ struct IndentVisitor<'a, 'b> {
     show_schema: bool,
 }
 
-impl<'a, 'b> ExecutionPlanVisitor for IndentVisitor<'a, 'b> {
+impl ExecutionPlanVisitor for IndentVisitor<'_, '_> {
     type Error = fmt::Error;
     fn pre_visit(&mut self, plan: &dyn ExecutionPlan) -> Result<bool, Self::Error> {
         write!(self.f, "{:indent$}", "", indent = self.indent * 2)?;
@@ -349,7 +349,7 @@ impl ExecutionPlanVisitor for GraphvizVisitor<'_, '_> {
 
         struct Wrapper<'a>(&'a dyn ExecutionPlan, DisplayFormatType);
 
-        impl<'a> fmt::Display for Wrapper<'a> {
+        impl fmt::Display for Wrapper<'_> {
             fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
                 self.0.fmt_as(self.1, f)
             }
@@ -447,7 +447,7 @@ impl<T: DisplayAs> fmt::Display for VerboseDisplay<T> {
 #[derive(Debug)]
 pub struct ProjectSchemaDisplay<'a>(pub &'a SchemaRef);
 
-impl<'a> fmt::Display for ProjectSchemaDisplay<'a> {
+impl fmt::Display for ProjectSchemaDisplay<'_> {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         let parts: Vec<_> = self
             .0

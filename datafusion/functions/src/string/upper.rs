@@ -78,12 +78,13 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_upper_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_STRING)
-            .with_description("Converts a string to upper-case.")
-            .with_syntax_example("upper(str)")
-            .with_sql_example(
-                r#"```sql
+        Documentation::builder(
+            DOC_SECTION_STRING,
+            "Converts a string to upper-case.",
+            "upper(str)",
+        )
+        .with_sql_example(
+            r#"```sql
 > select upper('dataFusion');
 +---------------------------+
 | upper(Utf8("dataFusion")) |
@@ -91,11 +92,11 @@ fn get_upper_doc() -> &'static Documentation {
 | DATAFUSION                |
 +---------------------------+
 ```"#,
-            )
-            .with_standard_argument("str", Some("String"))
-            .with_related_udf("initcap")
-            .with_related_udf("lower")
-            .build()
+        )
+        .with_standard_argument("str", Some("String"))
+        .with_related_udf("initcap")
+        .with_related_udf("lower")
+        .build()
     })
 }
 

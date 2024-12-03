@@ -82,12 +82,13 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_sha256_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_HASHING)
-            .with_description("Computes the SHA-256 hash of a binary string.")
-            .with_syntax_example("sha256(expression)")
-            .with_sql_example(
-                r#"```sql
+        Documentation::builder(
+            DOC_SECTION_HASHING,
+            "Computes the SHA-256 hash of a binary string.",
+            "sha256(expression)",
+        )
+        .with_sql_example(
+            r#"```sql
 > select sha256('foo');
 +--------------------------------------+
 | sha256(Utf8("foo"))                  |
@@ -95,8 +96,8 @@ fn get_sha256_doc() -> &'static Documentation {
 | <sha256_hash_result>                 |
 +--------------------------------------+
 ```"#,
-            )
-            .with_standard_argument("expression", Some("String"))
-            .build()
+        )
+        .with_standard_argument("expression", Some("String"))
+        .build()
     })
 }

@@ -162,10 +162,10 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_substr_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_STRING)
-            .with_description("Extracts a substring of a specified number of characters from a specific starting position in a string.")
-            .with_syntax_example("substr(str, start_pos[, length])")
+        Documentation::builder(
+            DOC_SECTION_STRING,
+            "Extracts a substring of a specified number of characters from a specific starting position in a string.",
+            "substr(str, start_pos[, length])")
             .with_sql_example(r#"```sql
 > select substr('datafusion', 5, 3);
 +----------------------------------------------+

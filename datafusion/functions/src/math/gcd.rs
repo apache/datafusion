@@ -85,12 +85,11 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_gcd_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_MATH)
-            .with_description(
+        Documentation::builder(
+            DOC_SECTION_MATH,
                 "Returns the greatest common divisor of `expression_x` and `expression_y`. Returns 0 if both inputs are zero.",
-            )
-            .with_syntax_example("gcd(expression_x, expression_y)")
+
+            "gcd(expression_x, expression_y)")
             .with_standard_argument("expression_x", Some("First numeric"))
             .with_standard_argument("expression_y", Some("Second numeric"))
             .build()

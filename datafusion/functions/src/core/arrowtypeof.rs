@@ -85,12 +85,11 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_arrowtypeof_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_OTHER)
-            .with_description(
+        Documentation::builder(
+            DOC_SECTION_OTHER,
                 "Returns the name of the underlying [Arrow data type](https://docs.rs/arrow/latest/arrow/datatypes/enum.DataType.html) of the expression.",
-            )
-            .with_syntax_example("arrow_typeof(expression)")
+
+            "arrow_typeof(expression)")
             .with_sql_example(
                 r#"```sql
 > select arrow_typeof('foo'), arrow_typeof(1);

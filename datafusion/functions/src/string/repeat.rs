@@ -89,14 +89,13 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_repeat_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_STRING)
-            .with_description(
-                "Returns a string with an input string repeated a specified number.",
-            )
-            .with_syntax_example("repeat(str, n)")
-            .with_sql_example(
-                r#"```sql
+        Documentation::builder(
+            DOC_SECTION_STRING,
+            "Returns a string with an input string repeated a specified number.",
+            "repeat(str, n)",
+        )
+        .with_sql_example(
+            r#"```sql
 > select repeat('data', 3);
 +-------------------------------+
 | repeat(Utf8("data"),Int64(3)) |
@@ -104,10 +103,10 @@ fn get_repeat_doc() -> &'static Documentation {
 | datadatadata                  |
 +-------------------------------+
 ```"#,
-            )
-            .with_standard_argument("str", Some("String"))
-            .with_argument("n", "Number of times to repeat the input string.")
-            .build()
+        )
+        .with_standard_argument("str", Some("String"))
+        .with_argument("n", "Number of times to repeat the input string.")
+        .build()
     })
 }
 

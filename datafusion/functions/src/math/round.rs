@@ -112,16 +112,17 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_round_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_MATH)
-            .with_description("Rounds a number to the nearest integer.")
-            .with_syntax_example("round(numeric_expression[, decimal_places])")
-            .with_standard_argument("numeric_expression", Some("Numeric"))
-            .with_argument(
-                "decimal_places",
-                "Optional. The number of decimal places to round to. Defaults to 0.",
-            )
-            .build()
+        Documentation::builder(
+            DOC_SECTION_MATH,
+            "Rounds a number to the nearest integer.",
+            "round(numeric_expression[, decimal_places])",
+        )
+        .with_standard_argument("numeric_expression", Some("Numeric"))
+        .with_argument(
+            "decimal_places",
+            "Optional. The number of decimal places to round to. Defaults to 0.",
+        )
+        .build()
     })
 }
 

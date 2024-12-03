@@ -107,12 +107,11 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_array_append_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_ARRAY)
-            .with_description(
+        Documentation::builder(
+            DOC_SECTION_ARRAY,
                 "Appends an element to the end of an array.",
-            )
-            .with_syntax_example("array_append(array, element)")
+
+            "array_append(array, element)")
             .with_sql_example(
                 r#"```sql
 > select array_append([1, 2, 3], 4);
@@ -206,12 +205,11 @@ static DOCUMENTATION_PREPEND: OnceLock<Documentation> = OnceLock::new();
 
 fn get_array_prepend_doc() -> &'static Documentation {
     DOCUMENTATION_PREPEND.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_ARRAY)
-            .with_description(
+        Documentation::builder(
+            DOC_SECTION_ARRAY,
                 "Prepends an element to the beginning of an array.",
-            )
-            .with_syntax_example("array_prepend(element, array)")
+
+            "array_prepend(element, array)")
             .with_sql_example(
                 r#"```sql
 > select array_prepend(1, [2, 3, 4]);
@@ -327,12 +325,11 @@ impl ScalarUDFImpl for ArrayConcat {
 
 fn get_array_concat_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_ARRAY)
-            .with_description(
+        Documentation::builder(
+            DOC_SECTION_ARRAY,
                 "Concatenates arrays.",
-            )
-            .with_syntax_example("array_concat(array[, ..., array_n])")
+
+            "array_concat(array[, ..., array_n])")
             .with_sql_example(
                 r#"```sql
 > select array_concat([1, 2], [3, 4], [5, 6]);
@@ -441,7 +438,7 @@ fn concat_internal<O: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
     Ok(Arc::new(list_arr))
 }
 
-/// Kernal functions
+// Kernel functions
 
 /// Array_append SQL function
 pub(crate) fn array_append_inner(args: &[ArrayRef]) -> Result<ArrayRef> {

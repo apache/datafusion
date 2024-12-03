@@ -103,6 +103,7 @@ datafusion-expr = { workspace = true }
 datafusion-functions = { workspace = true }
 datafusion-functions-aggregate = { workspace = true }
 datafusion-functions-nested = { workspace = true, optional = true }
+datafusion-functions-table = { workspace = true }
 datafusion-functions-window = { workspace = true }
 datafusion-optimizer = { workspace = true }
 datafusion-physical-expr = { workspace = true }
@@ -116,7 +117,6 @@ glob = "0.3.0"
 itertools = { workspace = true }
 log = { workspace = true }
 num-traits = { version = "0.2", optional = true }
-num_cpus = { workspace = true }
 object_store = { workspace = true }
 parking_lot = { workspace = true }
 parquet = { workspace = true, optional = true, default-features = true }

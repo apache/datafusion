@@ -63,7 +63,7 @@ pub trait HashValue {
     fn hash_one(&self, state: &RandomState) -> u64;
 }
 
-impl<'a, T: HashValue + ?Sized> HashValue for &'a T {
+impl<T: HashValue + ?Sized> HashValue for &T {
     fn hash_one(&self, state: &RandomState) -> u64 {
         T::hash_one(self, state)
     }

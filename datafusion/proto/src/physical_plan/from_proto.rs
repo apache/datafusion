@@ -38,7 +38,7 @@ use datafusion::logical_expr::WindowFunctionDefinition;
 use datafusion::physical_expr::{LexOrdering, PhysicalSortExpr, ScalarFunctionExpr};
 use datafusion::physical_plan::expressions::{
     in_list, BinaryExpr, CaseExpr, CastExpr, Column, IsNotNullExpr, IsNullExpr, LikeExpr,
-    Literal, NegativeExpr, NotExpr, TryCastExpr,
+    Literal, NegativeExpr, NotExpr, TryCastExpr, UnKnownColumn,
 };
 use datafusion::physical_plan::windows::{create_window_expr, schema_add_window_field};
 use datafusion::physical_plan::{Partitioning, PhysicalExpr, WindowExpr};
@@ -219,6 +219,7 @@ pub fn parse_physical_expr(
             let pcol: Column = c.into();
             Arc::new(pcol)
         }
+        ExprType::UnknownColumn(c) => Arc::new(UnKnownColumn::new(&c.name)),
         ExprType::Literal(scalar) => Arc::new(Literal::new(scalar.try_into()?)),
         ExprType::BinaryExpr(binary_expr) => Arc::new(BinaryExpr::new(
             parse_required_physical_expr(

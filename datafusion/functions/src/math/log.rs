@@ -51,10 +51,10 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_log_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_MATH)
-            .with_description("Returns the base-x logarithm of a number. Can either provide a specified base, or if omitted then takes the base-10 of a number.")
-            .with_syntax_example(r#"log(base, numeric_expression)
+        Documentation::builder(
+            DOC_SECTION_MATH,
+            "Returns the base-x logarithm of a number. Can either provide a specified base, or if omitted then takes the base-10 of a number.",
+            r#"log(base, numeric_expression)
 log(numeric_expression)"#)
             .with_standard_argument("base", Some("Base numeric"))
             .with_standard_argument("numeric_expression", Some("Numeric"))

@@ -54,8 +54,6 @@ use datafusion_expr::{Aggregate, Distinct, DistinctOn, Expr, LogicalPlan};
 /// )
 /// ORDER BY a DESC
 /// ```
-
-/// Optimizer that replaces logical [[Distinct]] with a logical [[Aggregate]]
 #[derive(Default, Debug)]
 pub struct ReplaceDistinctWithAggregate {}
 

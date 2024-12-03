@@ -217,11 +217,24 @@ pub fn with_new_children_if_necessary(
 /// Returns [`Display`] able a list of [`PhysicalExpr`]
 ///
 /// Example output: `[a + 1, b]`
-pub fn format_physical_expr_list(exprs: &[Arc<dyn PhysicalExpr>]) -> impl Display + '_ {
-    struct DisplayWrapper<'a>(&'a [Arc<dyn PhysicalExpr>]);
-    impl<'a> Display for DisplayWrapper<'a> {
+pub fn format_physical_expr_list<T>(exprs: T) -> impl Display
+where
+    T: IntoIterator,
+    T::Item: Display,
+    T::IntoIter: Clone,
+{
+    struct DisplayWrapper<I>(I)
+    where
+        I: Iterator + Clone,
+        I::Item: Display;
+
+    impl<I> Display for DisplayWrapper<I>
+    where
+        I: Iterator + Clone,
+        I::Item: Display,
+    {
         fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-            let mut iter = self.0.iter();
+            let mut iter = self.0.clone();
             write!(f, "[")?;
             if let Some(expr) = iter.next() {
                 write!(f, "{}", expr)?;
@@ -233,5 +246,6 @@ pub fn format_physical_expr_list(exprs: &[Arc<dyn PhysicalExpr>]) -> impl Displa
             Ok(())
         }
     }
-    DisplayWrapper(exprs)
+
+    DisplayWrapper(exprs.into_iter())
 }

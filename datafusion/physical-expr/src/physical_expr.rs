@@ -65,34 +65,14 @@ pub fn physical_exprs_bag_equal(
     }
 }
 
-/// This utility function removes duplicates from the given `exprs` vector.
-/// Note that this function does not necessarily preserve its input ordering.
-pub fn deduplicate_physical_exprs(exprs: &mut Vec<Arc<dyn PhysicalExpr>>) {
-    // TODO: Once we can use `HashSet`s with `Arc<dyn PhysicalExpr>`, this
-    //       function should use a `HashSet` to reduce computational complexity.
-    // See issue: https://github.com/apache/datafusion/issues/8027
-    let mut idx = 0;
-    while idx < exprs.len() {
-        let mut rest_idx = idx + 1;
-        while rest_idx < exprs.len() {
-            if exprs[idx].eq(&exprs[rest_idx]) {
-                exprs.swap_remove(rest_idx);
-            } else {
-                rest_idx += 1;
-            }
-        }
-        idx += 1;
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
 
     use crate::expressions::{Column, Literal};
     use crate::physical_expr::{
-        deduplicate_physical_exprs, physical_exprs_bag_equal, physical_exprs_contains,
-        physical_exprs_equal, PhysicalExpr,
+        physical_exprs_bag_equal, physical_exprs_contains, physical_exprs_equal,
+        PhysicalExpr,
     };
 
     use datafusion_common::ScalarValue;
@@ -207,42 +187,5 @@ mod tests {
         assert!(!physical_exprs_equal(list4.as_slice(), list3.as_slice()));
         assert!(physical_exprs_bag_equal(list3.as_slice(), list3.as_slice()));
         assert!(physical_exprs_bag_equal(list4.as_slice(), list4.as_slice()));
-    }
-
-    #[test]
-    fn test_deduplicate_physical_exprs() {
-        let lit_true = &(Arc::new(Literal::new(ScalarValue::Boolean(Some(true))))
-            as Arc<dyn PhysicalExpr>);
-        let lit_false = &(Arc::new(Literal::new(ScalarValue::Boolean(Some(false))))
-            as Arc<dyn PhysicalExpr>);
-        let lit4 = &(Arc::new(Literal::new(ScalarValue::Int32(Some(4))))
-            as Arc<dyn PhysicalExpr>);
-        let lit2 = &(Arc::new(Literal::new(ScalarValue::Int32(Some(2))))
-            as Arc<dyn PhysicalExpr>);
-        let col_a_expr = &(Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>);
-        let col_b_expr = &(Arc::new(Column::new("b", 1)) as Arc<dyn PhysicalExpr>);
-
-        // First vector in the tuple is arguments, second one is the expected value.
-        let test_cases = vec![
-            // ---------- TEST CASE 1----------//
-            (
-                vec![
-                    lit_true, lit_false, lit4, lit2, col_a_expr, col_a_expr, col_b_expr,
-                    lit_true, lit2,
-                ],
-                vec![lit_true, lit_false, lit4, lit2, col_a_expr, col_b_expr],
-            ),
-            // ---------- TEST CASE 2----------//
-            (
-                vec![lit_true, lit_true, lit_false, lit4],
-                vec![lit_true, lit4, lit_false],
-            ),
-        ];
-        for (exprs, expected) in test_cases {
-            let mut exprs = exprs.into_iter().cloned().collect::<Vec<_>>();
-            let expected = expected.into_iter().cloned().collect::<Vec<_>>();
-            deduplicate_physical_exprs(&mut exprs);
-            assert!(physical_exprs_equal(&exprs, &expected));
-        }
     }
 }
