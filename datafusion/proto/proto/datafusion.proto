@@ -830,7 +830,7 @@ message PhysicalExprNode {
     PhysicalExtensionExprNode extension = 19;
 
     UnknownColumn unknown_column = 20;
-    
+
     PhysicalScalarRegexMatchExprNode scalar_regex_match_expr = 21;
   }
 }
