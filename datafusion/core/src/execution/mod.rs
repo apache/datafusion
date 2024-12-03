@@ -18,6 +18,7 @@
 //! Shared state for query planning and execution.
 
 pub mod context;
+pub mod cross_rt;
 pub mod session_state;
 pub use session_state::{SessionState, SessionStateBuilder};
 
