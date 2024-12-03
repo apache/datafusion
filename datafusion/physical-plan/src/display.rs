@@ -38,7 +38,39 @@ pub enum DisplayFormatType {
     Verbose,
 }
 
-/// Wraps an `ExecutionPlan` with various ways to display this plan
+/// Wraps an `ExecutionPlan` with various methods for formatting
+///
+///
+/// # Example
+/// ```
+/// # use std::sync::Arc;
+/// # use arrow_schema::{Field, Schema, DataType};
+/// # use datafusion_expr::Operator;
+/// # use datafusion_physical_expr::expressions::{binary, col, lit};
+/// # use datafusion_physical_plan::{displayable, ExecutionPlan};
+/// # use datafusion_physical_plan::empty::EmptyExec;
+/// # use datafusion_physical_plan::filter::FilterExec;
+/// # let schema = Schema::new(vec![Field::new("i", DataType::Int32, false)]);
+/// # let plan = EmptyExec::new(Arc::new(schema));
+/// # let i = col("i", &plan.schema()).unwrap();
+/// # let predicate = binary(i, Operator::Eq, lit(1), &plan.schema()).unwrap();
+/// # let plan: Arc<dyn ExecutionPlan> = Arc::new(FilterExec::try_new(predicate, Arc::new(plan)).unwrap());
+/// // Get a one line description (Displayable)
+/// let display_plan = displayable(plan.as_ref());
+///
+/// // you can use the returned objects to format plans
+/// // where you can use `Display` such as  format! or println!
+/// assert_eq!(
+///    &format!("The plan is: {}", display_plan.one_line()),
+///   "The plan is: FilterExec: i@0 = 1\n"
+/// );
+/// // You can also print out the plan and its children in indented mode
+/// assert_eq!(display_plan.indent(false).to_string(),
+///   "FilterExec: i@0 = 1\
+///   \n  EmptyExec\
+///   \n"
+/// );
+/// ```
 #[derive(Debug, Clone)]
 pub struct DisplayableExecutionPlan<'a> {
     inner: &'a dyn ExecutionPlan,
