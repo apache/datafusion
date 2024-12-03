@@ -26,8 +26,8 @@
 //! messages.
 use arrow::util::pretty::pretty_format_batches;
 use datafusion::error::Result;
+use datafusion::execution::dedicated_executor::DedicatedExecutor;
 use datafusion::execution::SendableRecordBatchStream;
-use datafusion::physical_plan::DedicatedExecutor;
 use datafusion::prelude::*;
 use futures::stream::StreamExt;
 use object_store::http::HttpBuilder;
@@ -156,7 +156,7 @@ async fn different_runtime_advanced() -> Result<()> {
 
     let dedicated_executor = DedicatedExecutor::builder().build();
 
-    // By default, the object store will use the current runtime for IO operations
+    // By default, the object store will use the "current runtime" for IO operations
     // if we use a dedicated executor to run the plan, the eventual object store requests will also use the
     // dedicated executor's runtime
     //
@@ -167,7 +167,7 @@ async fn different_runtime_advanced() -> Result<()> {
     // ctx.register_object_store(&base_url, http_store);
     // A Tokio 1.x context was found, but timers are disabled. Call `enable_time` on the runtime builder to enable timers.
 
-    let http_store = dedicated_executor.wrap_object_store(http_store);
+    //let http_store = dedicated_executor.wrap_object_store(http_store);
 
     // Tell datafusion about processing http:// urls with this wrapped object store
     ctx.register_object_store(&base_url, http_store);

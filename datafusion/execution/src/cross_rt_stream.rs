@@ -33,8 +33,7 @@ use std::{
     task::{Context, Poll},
 };
 
-use crate::dedicated_executor::JobError;
-use crate::DedicatedExecutor;
+use crate::dedicated_executor::{DedicatedExecutor, JobError};
 use datafusion_common::DataFusionError;
 use futures::{future::BoxFuture, ready, FutureExt, Stream, StreamExt};
 use tokio::sync::mpsc::{channel, Sender};
@@ -203,8 +202,7 @@ impl<T> Stream for CrossRtStream<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::DedicatedExecutorBuilder;
-    use datafusion_execution::dedicated_executor::JobError;
+    use crate::dedicated_executor::DedicatedExecutorBuilder;
     use std::sync::OnceLock;
     use std::{sync::Arc, time::Duration};
     use tokio::runtime::{Handle, RuntimeFlavor};

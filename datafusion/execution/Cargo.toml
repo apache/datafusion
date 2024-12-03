@@ -37,6 +37,7 @@ path = "src/lib.rs"
 
 [dependencies]
 arrow = { workspace = true }
+async-trait = {workspace = true}
 chrono = { workspace = true }
 dashmap = { workspace = true }
 datafusion-common = { workspace = true, default-features = true }
@@ -45,6 +46,12 @@ futures = { workspace = true }
 log = { workspace = true }
 object_store = { workspace = true }
 parking_lot = { workspace = true }
+pin-project-lite = "^0.2.7"
 rand = { workspace = true }
 tempfile = { workspace = true }
+
 url = { workspace = true }
+tokio = { workspace = true }
+# todo figure out if we need to use tokio_stream / could use record batch receiver stream
+tokio-stream = {version = "0.1"}
+

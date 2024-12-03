@@ -17,8 +17,7 @@
 
 use std::sync::Arc;
 
-use crate::dedicated_executor::JobError;
-use crate::DedicatedExecutor;
+use crate::dedicated_executor::{DedicatedExecutor, JobError};
 use async_trait::async_trait;
 use futures::stream::BoxStream;
 use object_store::{
@@ -34,14 +33,13 @@ use object_store::{
 ///
 #[derive(Debug)]
 pub struct IoObjectStore {
-    executor: DedicatedExecutor,
+    //executor: DedicatedExecutor,
     inner: Arc<dyn ObjectStore>,
 }
 
 impl IoObjectStore {
-    pub fn new(executor: DedicatedExecutor, object_store: Arc<dyn ObjectStore>) -> Self {
+    pub fn new(_executor: DedicatedExecutor, object_store: Arc<dyn ObjectStore>) -> Self {
         Self {
-            executor,
             inner: object_store,
         }
     }
