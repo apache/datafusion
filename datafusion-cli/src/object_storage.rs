@@ -471,12 +471,13 @@ mod tests {
 
     #[tokio::test]
     async fn s3_object_store_builder() -> Result<()> {
-        let access_key_id = "fake_access_key_id";
-        let secret_access_key = "fake_secret_access_key";
+        // "fake" is uppercase to ensure the values are not lowercased when parsed
+        let access_key_id = "FAKE_access_key_id";
+        let secret_access_key = "FAKE_secret_access_key";
         let region = "fake_us-east-2";
         let endpoint = "endpoint33";
-        let session_token = "fake_session_token";
-        let location = "s3://bucket/path/file.parquet";
+        let session_token = "FAKE_session_token";
+        let location = "s3://bucket/path/FAKE/file.parquet";
 
         let table_url = ListingTableUrl::parse(location)?;
         let scheme = table_url.scheme();

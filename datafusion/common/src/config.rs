@@ -38,7 +38,7 @@ use crate::{DataFusionError, Result};
 ///    /// Amazing config
 ///    pub struct MyConfig {
 ///        /// Field 1 doc
-///        field1: String, default = "".to_string()
+///        field1: String, transform = str::to_lowercase, default = "".to_string()
 ///
 ///        /// Field 2 doc
 ///        field2: usize, default = 232
@@ -67,9 +67,12 @@ use crate::{DataFusionError, Result};
 ///     fn set(&mut self, key: &str, value: &str) -> Result<()> {
 ///         let (key, rem) = key.split_once('.').unwrap_or((key, ""));
 ///         match key {
-///             "field1" => self.field1.set(rem, value),
-///             "field2" => self.field2.set(rem, value),
-///             "field3" => self.field3.set(rem, value),
+///             "field1" => {
+///                 let value = str::to_lowercase(value);
+///                 self.field1.set(rem, value.as_ref())
+///             },
+///             "field2" => self.field2.set(rem, value.as_ref()),
+///             "field3" => self.field3.set(rem, value.as_ref()),
 ///             _ => _internal_err!(
 ///                 "Config value \"{}\" not found on MyConfig",
 ///                 key
@@ -102,7 +105,6 @@ use crate::{DataFusionError, Result};
 /// ```
 ///
 /// NB: Misplaced commas may result in nonsensical errors
-///
 #[macro_export]
 macro_rules! config_namespace {
     (
@@ -110,7 +112,7 @@ macro_rules! config_namespace {
      $vis:vis struct $struct_name:ident {
         $(
         $(#[doc = $d:tt])*
-        $field_vis:vis $field_name:ident : $field_type:ty, default = $default:expr
+        $field_vis:vis $field_name:ident : $field_type:ty, $(transform = $transform:expr,)? default = $default:expr
         )*$(,)*
     }
     ) => {
@@ -127,9 +129,13 @@ macro_rules! config_namespace {
         impl ConfigField for $struct_name {
             fn set(&mut self, key: &str, value: &str) -> Result<()> {
                 let (key, rem) = key.split_once('.').unwrap_or((key, ""));
+
                 match key {
                     $(
-                       stringify!($field_name) => self.$field_name.set(rem, value),
+                       stringify!($field_name) => {
+                           $(let value = $transform(value);)?
+                           self.$field_name.set(rem, value.as_ref())
+                       },
                     )*
                     _ => return _config_err!(
                         "Config value \"{}\" not found on {}", key, stringify!($struct_name)
@@ -216,7 +222,8 @@ config_namespace! {
 
         /// Configure the SQL dialect used by DataFusion's parser; supported values include: Generic,
         /// MySQL, PostgreSQL, Hive, SQLite, Snowflake, Redshift, MsSQL, ClickHouse, BigQuery, and Ansi.
-        pub dialect: String, default = "generic".to_string()
+        pub dialect: String, default = "generic".to_string() // no need to lowercase because
+        // [`sqlparser::dialect_from_str`] is case-insensitive
 
         /// If true, permit lengths for `VARCHAR` such as `VARCHAR(20)`, but
         /// ignore the length. If false, error if a `VARCHAR` with a length is
@@ -431,7 +438,7 @@ config_namespace! {
         ///
         /// Note that this default setting is not the same as
         /// the default parquet writer setting.
-        pub compression: Option<String>, default = Some("zstd(3)".into())
+        pub compression: Option<String>, transform = str::to_lowercase, default = Some("zstd(3)".into())
 
         /// (writing) Sets if dictionary encoding is enabled. If NULL, uses
         /// default parquet writer setting
@@ -444,7 +451,7 @@ config_namespace! {
         /// Valid values are: "none", "chunk", and "page"
         /// These values are not case sensitive. If NULL, uses
         /// default parquet writer setting
-        pub statistics_enabled: Option<String>, default = Some("page".into())
+        pub statistics_enabled: Option<String>, transform = str::to_lowercase, default = Some("page".into())
 
         /// (writing) Sets max statistics size for any column. If NULL, uses
         /// default parquet writer setting
@@ -470,7 +477,7 @@ config_namespace! {
         /// delta_byte_array, rle_dictionary, and byte_stream_split.
         /// These values are not case sensitive. If NULL, uses
         /// default parquet writer setting
-        pub encoding: Option<String>, default = None
+        pub encoding: Option<String>, transform = str::to_lowercase, default = None
 
         /// (writing) Use any available bloom filters when reading parquet files
         pub bloom_filter_on_read: bool, default = true
@@ -973,16 +980,24 @@ impl<F: ConfigField + Default> ConfigField for Option<F> {
 
 #[macro_export]
 macro_rules! config_field {
-    ($t:ty) => {
+    ($t:ty $(, $transform:expr)?) => {
         impl ConfigField for $t {
             fn visit<V: Visit>(&self, v: &mut V, key: &str, description: &'static str) {
                 v.some(key, self, description)
             }
 
             fn set(&mut self, _: &str, value: &str) -> Result<()> {
+                $(
+                    let value = $transform(&value);
+                )?
+
                 *self = value.parse().map_err(|e| {
                     DataFusionError::Context(
-                        format!(concat!("Error parsing {} as ", stringify!($t),), value),
+                        format!(
+                            "Error parsing '{}' as {}",
+                            value,
+                            stringify!($t),
+                        ),
                         Box::new(DataFusionError::External(Box::new(e))),
                     )
                 })?;
@@ -993,7 +1008,7 @@ macro_rules! config_field {
 }
 
 config_field!(String);
-config_field!(bool);
+config_field!(bool, str::to_lowercase);
 config_field!(usize);
 config_field!(f64);
 config_field!(u64);
