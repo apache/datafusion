@@ -27,20 +27,14 @@ use datafusion::execution::context::SessionContext;
 use datafusion::prelude::CsvReadOptions;
 use datafusion::test_util::csv::TestCsvFile;
 use parking_lot::Mutex;
-use test_utils::AccessLogGenerator;
 use std::sync::Arc;
 use std::time::Duration;
+use test_utils::AccessLogGenerator;
 use tokio::runtime::Runtime;
 
-fn load_csv(ctx: Arc<Mutex<SessionContext>>, path: &str, options: CsvReadOptions) {    
+fn load_csv(ctx: Arc<Mutex<SessionContext>>, path: &str, options: CsvReadOptions) {
     let rt = Runtime::new().unwrap();
-    let df = rt.block_on(
-        ctx.lock()
-            .read_csv(
-                path,
-                options,
-            )
-        ).unwrap();
+    let df = rt.block_on(ctx.lock().read_csv(path, options)).unwrap();
     criterion::black_box(rt.block_on(df.collect()).unwrap());
 }
 
@@ -61,10 +55,9 @@ fn generate_test_file() -> TestCsvFile {
 
     let generator = AccessLogGenerator::new().with_include_nulls(true);
     let num_batches = 2;
-    let test_file = TestCsvFile::try_new(
-        file_path.clone(),
-        generator.take(num_batches as usize)
-    ).expect("Failed to create the test file.");
+    let test_file =
+        TestCsvFile::try_new(file_path.clone(), generator.take(num_batches as usize))
+            .expect("Failed to create the test file.");
 
     test_file
 }
