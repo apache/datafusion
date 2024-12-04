@@ -50,7 +50,7 @@ pub enum Statement {
 impl Statement {
     /// Get a reference to the logical plan's schema
     pub fn schema(&self) -> &DFSchemaRef {
-        // Statements have a unchanging empty schema.
+        // Statements have an unchanging empty schema.
         static STATEMENT_EMPTY_SCHEMA: LazyLock<DFSchemaRef> =
             LazyLock::new(|| Arc::new(DFSchema::empty()));
 
