@@ -158,6 +158,23 @@ fn print_docs(
                 unreachable!()
             };
 
+            // let attr_text = documentation.to_doc_attribute();
+            //
+            // let file_path = format!("{}.txt", name);
+            // if std::path::Path::new(&file_path).exists() {
+            //     std::fs::remove_file(&file_path).unwrap();
+            // }
+            //
+            // // Open the file in append mode, create it if it doesn't exist
+            // let mut file = std::fs::OpenOptions::new()
+            //     .append(true) // Open in append mode
+            //     .create(true) // Create the file if it doesn't exist
+            //     .open(file_path)
+            //     .unwrap();
+            //
+            // use std::io::Write;
+            // file.write_all(attr_text.as_bytes()).unwrap();
+
             // first, the name, description and syntax example
             let _ = write!(
                 docs,
