@@ -36,12 +36,13 @@ use crate::{
 
 use arrow_schema::{SchemaRef, SortOptions};
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_common::{internal_err, plan_err, JoinSide, JoinType, Result};
+use datafusion_common::{
+    internal_err, plan_err, IndexMap, IndexSet, JoinSide, JoinType, Result,
+};
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_physical_expr_common::utils::ExprPropertiesNode;
 
-use indexmap::{IndexMap, IndexSet};
 use itertools::Itertools;
 
 /// A `EquivalenceProperties` object stores information known about the output
