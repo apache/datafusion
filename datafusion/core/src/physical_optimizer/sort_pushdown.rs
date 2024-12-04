@@ -566,6 +566,10 @@ fn handle_custom_pushdown(
 
     // If all columns are from the maintained child, update the parent requirements
     if all_from_maintained_child {
+        let sub_offset = len_of_child_schemas
+            .iter()
+            .take(maintained_child_idx)
+            .sum::<usize>();
         // Transform the parent-required expression for the child schema by adjusting columns
         let updated_parent_req = parent_required
             .iter()
@@ -574,10 +578,10 @@ fn handle_custom_pushdown(
                 let updated_columns = Arc::clone(&req.expr)
                     .transform_up(|expr| {
                         if let Some(col) = expr.as_any().downcast_ref::<Column>() {
-                            let index = child_schema.index_of(col.name())?;
+                            let new_index = col.index() - sub_offset;
                             Ok(Transformed::yes(Arc::new(Column::new(
-                                child_schema.field(index).name(),
-                                index,
+                                child_schema.field(new_index).name(),
+                                new_index,
                             ))))
                         } else {
                             Ok(Transformed::no(expr))
