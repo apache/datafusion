@@ -22,6 +22,7 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use datafusion_expr::registry::FunctionRegistry;
+use datafusion_expr::Union;
 use log::{debug, warn};
 
 use datafusion_common::alias::AliasGenerator;
@@ -482,6 +483,14 @@ fn check_plan(
     // verify invariant: fields must have unique names
     assert_unique_field_names(plan)?;
 
+    /* This current fails for:
+       - execution::context::tests::cross_catalog_access
+       - at test_files/string/string.slt:46
+               External error: query failed: DataFusion error: Optimizer rule 'eliminate_nested_union' failed
+    */
+    // verify invariant: equivalent schema across union inputs
+    // assert_unions_are_valid(check_name, plan)?;
+
     // TODO: trait API and provide extension on the Optimizer to define own validations?
     Ok(())
 }
@@ -520,6 +529,24 @@ fn assert_unique_field_names(plan: &LogicalPlan) -> Result<()> {
 
     plan.apply_with_subqueries(|plan: &LogicalPlan| {
         plan.schema().check_names()?;
+        Ok(TreeNodeRecursion::Continue)
+    })
+    .map(|_| ())
+}
+
+/// Returns an error if any union nodes are invalid.
+#[allow(dead_code)]
+fn assert_unions_are_valid(rule_name: &str, plan: &LogicalPlan) -> Result<()> {
+    plan.apply_with_subqueries(|plan: &LogicalPlan| {
+        if let LogicalPlan::Union(Union { schema, inputs }) = plan {
+            inputs.iter().try_for_each(|subplan| {
+                assert_schema_is_the_same(
+                    format!("{rule_name}:union_check").as_str(),
+                    schema,
+                    subplan,
+                )
+            })?;
+        }
         Ok(TreeNodeRecursion::Continue)
     })
     .map(|_| ())
