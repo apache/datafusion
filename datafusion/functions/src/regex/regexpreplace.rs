@@ -575,7 +575,7 @@ pub fn specialize_regexp_replace<T: OffsetSizeTrait>(
                         Hint::AcceptsSingular => 1,
                         Hint::Pad => inferred_length,
                     };
-                    arg.clone().into_array(expansion_len)
+                    arg.to_array(expansion_len)
                 })
                 .collect::<Result<Vec<_>>>()?;
             _regexp_replace_static_pattern_replace::<T>(&args)
@@ -586,7 +586,7 @@ pub fn specialize_regexp_replace<T: OffsetSizeTrait>(
         (_, _, _, _) => {
             let args = args
                 .iter()
-                .map(|arg| arg.clone().into_array(inferred_length))
+                .map(|arg| arg.to_array(inferred_length))
                 .collect::<Result<Vec<_>>>()?;
 
             match args[0].data_type() {
