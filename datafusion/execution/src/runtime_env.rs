@@ -163,7 +163,7 @@ impl Default for RuntimeEnv {
     }
 }
 
-/// Please see: <https://github.com/apache/datafusion/issues/12156a>
+/// Please see: <https://github.com/apache/datafusion/issues/12156>
 /// This a type alias for backwards compatibility.
 #[deprecated(since = "43.0.0", note = "please use `RuntimeEnvBuilder` instead")]
 pub type RuntimeConfig = RuntimeEnvBuilder;
