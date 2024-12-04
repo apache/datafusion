@@ -38,6 +38,8 @@ use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::utils::collect_columns;
 use datafusion_physical_expr::PhysicalSortRequirement;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};
+use datafusion_physical_plan::joins::utils::ColumnIndex;
+use datafusion_physical_plan::joins::HashJoinExec;
 
 /// This is a "data class" we use within the [`EnforceSorting`] rule to push
 /// down [`SortExec`] in the plan. In some cases, we can reduce the total
@@ -294,6 +296,8 @@ fn pushdown_requirement_to_children(
                 .then(|| LexRequirement::new(parent_required.to_vec()));
             Ok(Some(vec![req]))
         }
+    } else if let Some(hash_join) = plan.as_any().downcast_ref::<HashJoinExec>() {
+        handle_hash_join(hash_join, parent_required)
     } else {
         handle_custom_pushdown(plan, parent_required, maintains_input_order)
     }
@@ -599,6 +603,118 @@ fn handle_custom_pushdown(
         Ok(Some(result))
     } else {
         Ok(None)
+    }
+}
+
+// For hash join we only maintain the input order for the right child
+// for join type: Inner, Right, RightSemi, RightAnti
+fn handle_hash_join(
+    plan: &HashJoinExec,
+    parent_required: &LexRequirement,
+) -> Result<Option<Vec<Option<LexRequirement>>>> {
+    // If there's no requirement from the parent or the plan has no children
+    // or the join type is not Inner, Right, RightSemi, RightAnti, return early
+    if parent_required.is_empty()
+        || plan.children().is_empty()
+        || !matches!(
+            plan.join_type(),
+            JoinType::Inner | JoinType::Right | JoinType::RightSemi | JoinType::RightAnti
+        )
+    {
+        return Ok(None);
+    }
+
+    // Collect all unique column indices used in the parent-required sorting expression
+    let all_indices: HashSet<usize> = parent_required
+        .iter()
+        .flat_map(|order| {
+            collect_columns(&order.expr)
+                .iter()
+                .map(|col| col.index())
+                .collect::<HashSet<_>>()
+        })
+        .collect();
+
+    let column_indices = build_join_column_index(plan);
+    let projected_indices: Vec<_> = if let Some(projection) = &plan.projection {
+        projection.iter().map(|&i| &column_indices[i]).collect()
+    } else {
+        column_indices.iter().collect()
+    };
+    let len_of_left_fields = projected_indices
+        .iter()
+        .filter(|ci| ci.side == JoinSide::Left)
+        .count();
+
+    let all_from_right_child = all_indices.iter().all(|i| *i >= len_of_left_fields);
+
+    // If all columns are from the right child, update the parent requirements
+    if all_from_right_child {
+        // Transform the parent-required expression for the child schema by adjusting columns
+        let updated_parent_req = parent_required
+            .iter()
+            .map(|req| {
+                let child_schema = plan.children()[1].schema();
+                let updated_columns = Arc::clone(&req.expr)
+                    .transform_up(|expr| {
+                        if let Some(col) = expr.as_any().downcast_ref::<Column>() {
+                            let index = projected_indices[col.index()].index;
+                            Ok(Transformed::yes(Arc::new(Column::new(
+                                child_schema.field(index).name(),
+                                index,
+                            ))))
+                        } else {
+                            Ok(Transformed::no(expr))
+                        }
+                    })?
+                    .data;
+                Ok(PhysicalSortRequirement::new(updated_columns, req.options))
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        // Populating with the updated requirements for children that maintain order
+        Ok(Some(vec![
+            None,
+            Some(LexRequirement::new(updated_parent_req)),
+        ]))
+    } else {
+        Ok(None)
+    }
+}
+
+// this function is used to build the column index for the hash join
+// push down sort requirements to the right child
+fn build_join_column_index(plan: &HashJoinExec) -> Vec<ColumnIndex> {
+    let left = plan.left().schema();
+    let right = plan.right().schema();
+
+    let left_fields = || {
+        left.fields()
+            .iter()
+            .enumerate()
+            .map(|(index, _)| ColumnIndex {
+                index,
+                side: JoinSide::Left,
+            })
+    };
+
+    let right_fields = || {
+        right
+            .fields()
+            .iter()
+            .enumerate()
+            .map(|(index, _)| ColumnIndex {
+                index,
+                side: JoinSide::Right,
+            })
+    };
+
+    match plan.join_type() {
+        JoinType::Inner | JoinType::Right => {
+            left_fields().chain(right_fields()).collect()
+        }
+        JoinType::RightSemi | JoinType::RightAnti => right_fields().collect(),
+        _ => unreachable!("unexpected join type: {}", plan.join_type()),
     }
 }
 

@@ -2864,13 +2864,13 @@ explain SELECT t1_id, t1_name FROM left_semi_anti_join_table_t1 t1 WHERE t1_id I
 ----
 physical_plan
 01)SortPreservingMergeExec: [t1_id@0 ASC NULLS LAST]
-02)--SortExec: expr=[t1_id@0 ASC NULLS LAST], preserve_partitioning=[true]
-03)----CoalesceBatchesExec: target_batch_size=2
-04)------HashJoinExec: mode=Partitioned, join_type=RightSemi, on=[(t2_id@0, t1_id@0)]
-05)--------CoalesceBatchesExec: target_batch_size=2
-06)----------RepartitionExec: partitioning=Hash([t2_id@0], 2), input_partitions=2
-07)------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
-08)--------------MemoryExec: partitions=1, partition_sizes=[1]
+02)--CoalesceBatchesExec: target_batch_size=2
+03)----HashJoinExec: mode=Partitioned, join_type=RightSemi, on=[(t2_id@0, t1_id@0)]
+04)------CoalesceBatchesExec: target_batch_size=2
+05)--------RepartitionExec: partitioning=Hash([t2_id@0], 2), input_partitions=2
+06)----------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+07)------------MemoryExec: partitions=1, partition_sizes=[1]
+08)------SortExec: expr=[t1_id@0 ASC NULLS LAST], preserve_partitioning=[true]
 09)--------CoalesceBatchesExec: target_batch_size=2
 10)----------RepartitionExec: partitioning=Hash([t1_id@0], 2), input_partitions=2
 11)------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
@@ -2905,13 +2905,13 @@ explain SELECT t1_id, t1_name FROM left_semi_anti_join_table_t1 t1 LEFT SEMI JOI
 ----
 physical_plan
 01)SortPreservingMergeExec: [t1_id@0 ASC NULLS LAST]
-02)--SortExec: expr=[t1_id@0 ASC NULLS LAST], preserve_partitioning=[true]
-03)----CoalesceBatchesExec: target_batch_size=2
-04)------HashJoinExec: mode=Partitioned, join_type=RightSemi, on=[(t2_id@0, t1_id@0)]
-05)--------CoalesceBatchesExec: target_batch_size=2
-06)----------RepartitionExec: partitioning=Hash([t2_id@0], 2), input_partitions=2
-07)------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
-08)--------------MemoryExec: partitions=1, partition_sizes=[1]
+02)--CoalesceBatchesExec: target_batch_size=2
+03)----HashJoinExec: mode=Partitioned, join_type=RightSemi, on=[(t2_id@0, t1_id@0)]
+04)------CoalesceBatchesExec: target_batch_size=2
+05)--------RepartitionExec: partitioning=Hash([t2_id@0], 2), input_partitions=2
+06)----------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+07)------------MemoryExec: partitions=1, partition_sizes=[1]
+08)------SortExec: expr=[t1_id@0 ASC NULLS LAST], preserve_partitioning=[true]
 09)--------CoalesceBatchesExec: target_batch_size=2
 10)----------RepartitionExec: partitioning=Hash([t1_id@0], 2), input_partitions=2
 11)------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
@@ -2967,10 +2967,10 @@ explain SELECT t1_id, t1_name FROM left_semi_anti_join_table_t1 t1 WHERE t1_id I
 ----
 physical_plan
 01)SortPreservingMergeExec: [t1_id@0 ASC NULLS LAST]
-02)--SortExec: expr=[t1_id@0 ASC NULLS LAST], preserve_partitioning=[true]
-03)----CoalesceBatchesExec: target_batch_size=2
-04)------HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(t2_id@0, t1_id@0)]
-05)--------MemoryExec: partitions=1, partition_sizes=[1]
+02)--CoalesceBatchesExec: target_batch_size=2
+03)----HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(t2_id@0, t1_id@0)]
+04)------MemoryExec: partitions=1, partition_sizes=[1]
+05)------SortExec: expr=[t1_id@0 ASC NULLS LAST], preserve_partitioning=[true]
 06)--------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
 07)----------MemoryExec: partitions=1, partition_sizes=[1]
 
@@ -3003,10 +3003,10 @@ explain SELECT t1_id, t1_name FROM left_semi_anti_join_table_t1 t1 LEFT SEMI JOI
 ----
 physical_plan
 01)SortPreservingMergeExec: [t1_id@0 ASC NULLS LAST]
-02)--SortExec: expr=[t1_id@0 ASC NULLS LAST], preserve_partitioning=[true]
-03)----CoalesceBatchesExec: target_batch_size=2
-04)------HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(t2_id@0, t1_id@0)]
-05)--------MemoryExec: partitions=1, partition_sizes=[1]
+02)--CoalesceBatchesExec: target_batch_size=2
+03)----HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(t2_id@0, t1_id@0)]
+04)------MemoryExec: partitions=1, partition_sizes=[1]
+05)------SortExec: expr=[t1_id@0 ASC NULLS LAST], preserve_partitioning=[true]
 06)--------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
 07)----------MemoryExec: partitions=1, partition_sizes=[1]
 
@@ -3061,13 +3061,13 @@ explain SELECT t1_id, t1_name, t1_int FROM right_semi_anti_join_table_t1 t1 WHER
 ----
 physical_plan
 01)SortPreservingMergeExec: [t1_id@0 ASC NULLS LAST]
-02)--SortExec: expr=[t1_id@0 ASC NULLS LAST], preserve_partitioning=[true]
-03)----CoalesceBatchesExec: target_batch_size=2
-04)------HashJoinExec: mode=Partitioned, join_type=RightSemi, on=[(t2_id@0, t1_id@0)], filter=t2_name@1 != t1_name@0
-05)--------CoalesceBatchesExec: target_batch_size=2
-06)----------RepartitionExec: partitioning=Hash([t2_id@0], 2), input_partitions=2
-07)------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
-08)--------------MemoryExec: partitions=1, partition_sizes=[1]
+02)--CoalesceBatchesExec: target_batch_size=2
+03)----HashJoinExec: mode=Partitioned, join_type=RightSemi, on=[(t2_id@0, t1_id@0)], filter=t2_name@1 != t1_name@0
+04)------CoalesceBatchesExec: target_batch_size=2
+05)--------RepartitionExec: partitioning=Hash([t2_id@0], 2), input_partitions=2
+06)----------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+07)------------MemoryExec: partitions=1, partition_sizes=[1]
+08)------SortExec: expr=[t1_id@0 ASC NULLS LAST], preserve_partitioning=[true]
 09)--------CoalesceBatchesExec: target_batch_size=2
 10)----------RepartitionExec: partitioning=Hash([t1_id@0], 2), input_partitions=2
 11)------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
@@ -3083,13 +3083,13 @@ explain SELECT t1_id, t1_name, t1_int FROM right_semi_anti_join_table_t2 t2 RIGH
 ----
 physical_plan
 01)SortPreservingMergeExec: [t1_id@0 ASC NULLS LAST]
-02)--SortExec: expr=[t1_id@0 ASC NULLS LAST], preserve_partitioning=[true]
-03)----CoalesceBatchesExec: target_batch_size=2
-04)------HashJoinExec: mode=Partitioned, join_type=RightSemi, on=[(t2_id@0, t1_id@0)], filter=t2_name@0 != t1_name@1
-05)--------CoalesceBatchesExec: target_batch_size=2
-06)----------RepartitionExec: partitioning=Hash([t2_id@0], 2), input_partitions=2
-07)------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
-08)--------------MemoryExec: partitions=1, partition_sizes=[1]
+02)--CoalesceBatchesExec: target_batch_size=2
+03)----HashJoinExec: mode=Partitioned, join_type=RightSemi, on=[(t2_id@0, t1_id@0)], filter=t2_name@0 != t1_name@1
+04)------CoalesceBatchesExec: target_batch_size=2
+05)--------RepartitionExec: partitioning=Hash([t2_id@0], 2), input_partitions=2
+06)----------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+07)------------MemoryExec: partitions=1, partition_sizes=[1]
+08)------SortExec: expr=[t1_id@0 ASC NULLS LAST], preserve_partitioning=[true]
 09)--------CoalesceBatchesExec: target_batch_size=2
 10)----------RepartitionExec: partitioning=Hash([t1_id@0], 2), input_partitions=2
 11)------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
@@ -3143,10 +3143,10 @@ explain SELECT t1_id, t1_name, t1_int FROM right_semi_anti_join_table_t1 t1 WHER
 ----
 physical_plan
 01)SortPreservingMergeExec: [t1_id@0 ASC NULLS LAST]
-02)--SortExec: expr=[t1_id@0 ASC NULLS LAST], preserve_partitioning=[true]
-03)----CoalesceBatchesExec: target_batch_size=2
-04)------HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(t2_id@0, t1_id@0)], filter=t2_name@1 != t1_name@0
-05)--------MemoryExec: partitions=1, partition_sizes=[1]
+02)--CoalesceBatchesExec: target_batch_size=2
+03)----HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(t2_id@0, t1_id@0)], filter=t2_name@1 != t1_name@0
+04)------MemoryExec: partitions=1, partition_sizes=[1]
+05)------SortExec: expr=[t1_id@0 ASC NULLS LAST], preserve_partitioning=[true]
 06)--------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
 07)----------MemoryExec: partitions=1, partition_sizes=[1]
 
@@ -3160,10 +3160,10 @@ explain SELECT t1_id, t1_name, t1_int FROM right_semi_anti_join_table_t2 t2 RIGH
 ----
 physical_plan
 01)SortPreservingMergeExec: [t1_id@0 ASC NULLS LAST]
-02)--SortExec: expr=[t1_id@0 ASC NULLS LAST], preserve_partitioning=[true]
-03)----CoalesceBatchesExec: target_batch_size=2
-04)------HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(t2_id@0, t1_id@0)], filter=t2_name@0 != t1_name@1
-05)--------MemoryExec: partitions=1, partition_sizes=[1]
+02)--CoalesceBatchesExec: target_batch_size=2
+03)----HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(t2_id@0, t1_id@0)], filter=t2_name@0 != t1_name@1
+04)------MemoryExec: partitions=1, partition_sizes=[1]
+05)------SortExec: expr=[t1_id@0 ASC NULLS LAST], preserve_partitioning=[true]
 06)--------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
 07)----------MemoryExec: partitions=1, partition_sizes=[1]
 
