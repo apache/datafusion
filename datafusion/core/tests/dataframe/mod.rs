@@ -2066,7 +2066,7 @@ async fn test_dataframe_placeholder_column_parameter() -> Result<()> {
     );
 
     // The placeholder is not replaced with a value,
-    // so the filter data type is not know, i.e. a = $0.
+    // so the filter data type is not known, i.e. a = $0.
     // Therefore, the optimization fails.
     let optimized_plan = ctx.state().optimize(logical_plan);
     assert!(optimized_plan
@@ -2135,7 +2135,7 @@ async fn test_dataframe_placeholder_like_expression() -> Result<()> {
     );
 
     // The placeholder is not replaced with a value,
-    // so the filter data type is not know, i.e. a = $0.
+    // so the filter data type is not known, i.e. a = $0.
     // Therefore, the optimization fails.
     let optimized_plan = ctx.state().optimize(logical_plan);
     assert!(optimized_plan
