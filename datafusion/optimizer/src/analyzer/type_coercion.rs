@@ -1847,7 +1847,7 @@ mod test {
 
     #[test]
     fn tes_case_when_list() -> Result<()> {
-        let inner_field = Arc::new(Field::new("item", DataType::Int64, true));
+        let inner_field = Arc::new(Field::new_list_field(DataType::Int64, true));
         let schema = Arc::new(DFSchema::from_unqualified_fields(
             vec![
                 Field::new(
@@ -1869,7 +1869,7 @@ mod test {
         test_case_expression!(
             Some("list"),
             vec![(Box::new(col("large_list")), Box::new(lit("1")))],
-            DataType::LargeList(Arc::new(Field::new("item", DataType::Int64, true))),
+            DataType::LargeList(Arc::new(Field::new_list_field(DataType::Int64, true))),
             Utf8,
             schema
         );
@@ -1877,7 +1877,7 @@ mod test {
         test_case_expression!(
             Some("large_list"),
             vec![(Box::new(col("list")), Box::new(lit("1")))],
-            DataType::LargeList(Arc::new(Field::new("item", DataType::Int64, true))),
+            DataType::LargeList(Arc::new(Field::new_list_field(DataType::Int64, true))),
             Utf8,
             schema
         );
@@ -1885,7 +1885,7 @@ mod test {
         test_case_expression!(
             Some("list"),
             vec![(Box::new(col("fixed_list")), Box::new(lit("1")))],
-            DataType::List(Arc::new(Field::new("item", DataType::Int64, true))),
+            DataType::List(Arc::new(Field::new_list_field(DataType::Int64, true))),
             Utf8,
             schema
         );
@@ -1893,7 +1893,7 @@ mod test {
         test_case_expression!(
             Some("fixed_list"),
             vec![(Box::new(col("list")), Box::new(lit("1")))],
-            DataType::List(Arc::new(Field::new("item", DataType::Int64, true))),
+            DataType::List(Arc::new(Field::new_list_field(DataType::Int64, true))),
             Utf8,
             schema
         );
@@ -1901,7 +1901,7 @@ mod test {
         test_case_expression!(
             Some("fixed_list"),
             vec![(Box::new(col("large_list")), Box::new(lit("1")))],
-            DataType::LargeList(Arc::new(Field::new("item", DataType::Int64, true))),
+            DataType::LargeList(Arc::new(Field::new_list_field(DataType::Int64, true))),
             Utf8,
             schema
         );
@@ -1909,7 +1909,7 @@ mod test {
         test_case_expression!(
             Some("large_list"),
             vec![(Box::new(col("fixed_list")), Box::new(lit("1")))],
-            DataType::LargeList(Arc::new(Field::new("item", DataType::Int64, true))),
+            DataType::LargeList(Arc::new(Field::new_list_field(DataType::Int64, true))),
             Utf8,
             schema
         );
@@ -1918,7 +1918,7 @@ mod test {
 
     #[test]
     fn test_then_else_list() -> Result<()> {
-        let inner_field = Arc::new(Field::new("item", DataType::Int64, true));
+        let inner_field = Arc::new(Field::new_list_field(DataType::Int64, true));
         let schema = Arc::new(DFSchema::from_unqualified_fields(
             vec![
                 Field::new("boolean", DataType::Boolean, true),
@@ -1946,7 +1946,7 @@ mod test {
                 (Box::new(col("boolean")), Box::new(col("list")))
             ],
             DataType::Boolean,
-            DataType::LargeList(Arc::new(Field::new("item", DataType::Int64, true))),
+            DataType::LargeList(Arc::new(Field::new_list_field(DataType::Int64, true))),
             schema
         );
 
@@ -1957,7 +1957,7 @@ mod test {
                 (Box::new(col("boolean")), Box::new(col("large_list")))
             ],
             DataType::Boolean,
-            DataType::LargeList(Arc::new(Field::new("item", DataType::Int64, true))),
+            DataType::LargeList(Arc::new(Field::new_list_field(DataType::Int64, true))),
             schema
         );
 
@@ -1969,7 +1969,7 @@ mod test {
                 (Box::new(col("boolean")), Box::new(col("list")))
             ],
             DataType::Boolean,
-            DataType::List(Arc::new(Field::new("item", DataType::Int64, true))),
+            DataType::List(Arc::new(Field::new_list_field(DataType::Int64, true))),
             schema
         );
 
@@ -1980,7 +1980,7 @@ mod test {
                 (Box::new(col("boolean")), Box::new(col("fixed_list")))
             ],
             DataType::Boolean,
-            DataType::List(Arc::new(Field::new("item", DataType::Int64, true))),
+            DataType::List(Arc::new(Field::new_list_field(DataType::Int64, true))),
             schema
         );
 
@@ -1992,7 +1992,7 @@ mod test {
                 (Box::new(col("boolean")), Box::new(col("large_list")))
             ],
             DataType::Boolean,
-            DataType::LargeList(Arc::new(Field::new("item", DataType::Int64, true))),
+            DataType::LargeList(Arc::new(Field::new_list_field(DataType::Int64, true))),
             schema
         );
 
@@ -2003,7 +2003,7 @@ mod test {
                 (Box::new(col("boolean")), Box::new(col("fixed_list")))
             ],
             DataType::Boolean,
-            DataType::LargeList(Arc::new(Field::new("item", DataType::Int64, true))),
+            DataType::LargeList(Arc::new(Field::new_list_field(DataType::Int64, true))),
             schema
         );
         Ok(())
