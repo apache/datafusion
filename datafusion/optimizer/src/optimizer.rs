@@ -355,6 +355,16 @@ impl Optimizer {
     where
         F: FnMut(&LogicalPlan, &dyn OptimizerRule),
     {
+        // verify at the start, before the first LP optimizer pass.
+        check_plan("before_optimizers", &plan, Arc::clone(plan.schema())).map_err(
+            |e| {
+                DataFusionError::Context(
+                    "check_plan_before_optimizers".to_string(),
+                    Box::new(e),
+                )
+            },
+        )?;
+
         let start_time = Instant::now();
         let options = config.options();
         let mut new_plan = plan;
@@ -384,9 +394,15 @@ impl Optimizer {
                     // rule handles recursion itself
                     None => optimize_plan_node(new_plan, rule.as_ref(), config),
                 }
-                // verify the rule didn't change the schema
                 .and_then(|tnr| {
-                    assert_schema_is_the_same(rule.name(), &starting_schema, &tnr.data)?;
+                    // verify after each optimizer pass.
+                    check_plan(rule.name(), &tnr.data, starting_schema).map_err(|e| {
+                        DataFusionError::Context(
+                            "check_optimized_plan".to_string(),
+                            Box::new(e),
+                        )
+                    })?;
+
                     Ok(tnr)
                 });
 
@@ -449,6 +465,22 @@ impl Optimizer {
         debug!("Optimizer took {} ms", start_time.elapsed().as_millis());
         Ok(new_plan)
     }
+}
+
+/// These are invariants to hold true for each logical plan.
+/// Do necessary check and fail the invalid plan.
+///
+/// Checks for elements which are immutable across optimizer passes.
+fn check_plan(
+    check_name: &str,
+    plan: &LogicalPlan,
+    prev_schema: Arc<DFSchema>,
+) -> Result<()> {
+    // verify invariant: optimizer rule didn't change the schema
+    assert_schema_is_the_same(check_name, &prev_schema, plan)?;
+
+    // TODO: trait API and provide extension on the Optimizer to define own validations?
+    Ok(())
 }
 
 /// Returns an error if `new_plan`'s schema is different than `prev_schema`
