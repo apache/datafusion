@@ -27,7 +27,7 @@ use log::{debug, warn};
 use datafusion_common::alias::AliasGenerator;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::instant::Instant;
-use datafusion_common::tree_node::{Transformed, TreeNodeRewriter};
+use datafusion_common::tree_node::{Transformed, TreeNodeRecursion, TreeNodeRewriter};
 use datafusion_common::{internal_err, DFSchema, DataFusionError, HashSet, Result};
 use datafusion_expr::logical_plan::LogicalPlan;
 
@@ -479,6 +479,9 @@ fn check_plan(
     // verify invariant: optimizer rule didn't change the schema
     assert_schema_is_the_same(check_name, &prev_schema, plan)?;
 
+    // verify invariant: fields must have unique names
+    assert_unique_field_names(plan)?;
+
     // TODO: trait API and provide extension on the Optimizer to define own validations?
     Ok(())
 }
@@ -506,6 +509,20 @@ pub(crate) fn assert_schema_is_the_same(
     } else {
         Ok(())
     }
+}
+
+/// Returns an error if plan, and subplans, do not have unique fields.
+///
+/// This invariant is subject to change.
+/// refer: <https://github.com/apache/datafusion/issues/13525#issuecomment-2494046463>
+fn assert_unique_field_names(plan: &LogicalPlan) -> Result<()> {
+    plan.schema().check_names()?;
+
+    plan.apply_with_subqueries(|plan: &LogicalPlan| {
+        plan.schema().check_names()?;
+        Ok(TreeNodeRecursion::Continue)
+    })
+    .map(|_| ())
 }
 
 #[cfg(test)]
