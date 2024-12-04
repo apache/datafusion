@@ -70,6 +70,7 @@ use substrait::proto::rel_common::EmitKind::Emit;
 use substrait::proto::{
     rel_common, ExchangeRel, ExpressionReference, ExtendedExpression, RelCommon,
 };
+use substrait::proto::expression::field_reference::{RootReference, RootType};
 use substrait::{
     proto::{
         aggregate_function::AggregationInvocation,
@@ -2150,7 +2151,7 @@ fn try_to_substrait_field_reference(
                         }),
                     )),
                 })),
-                root_type: None,
+                root_type: Some(RootType::RootReference(RootReference{}) ),
             })
         }
         _ => substrait_err!("Expect a `Column` expr, but found {expr:?}"),
@@ -2192,13 +2193,14 @@ fn substrait_field_ref(index: usize) -> Result<Expression> {
                     }),
                 )),
             })),
-            root_type: None,
+            root_type: Some(RootType::RootReference(RootReference{}) ),
         }))),
     })
 }
 
 #[cfg(test)]
 mod test {
+
     use super::*;
     use crate::logical_plan::consumer::{
         from_substrait_extended_expr, from_substrait_literal_without_names,
@@ -2419,6 +2421,22 @@ mod test {
         let roundtrip_dt =
             from_substrait_type_without_names(&substrait, &Extensions::default())?;
         assert_eq!(dt, roundtrip_dt);
+        Ok(())
+    }
+
+
+    #[test]
+    fn to_field_reference() -> Result<()>{
+        let expression = substrait_field_ref(2)? ;
+
+        match &expression.rex_type {
+            Some(RexType::Selection(field_ref)) => {
+                assert_ne!(field_ref.root_type, None);
+                
+            },
+
+            _ => assert!(false),
+        }
         Ok(())
     }
 
