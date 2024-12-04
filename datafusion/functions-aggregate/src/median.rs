@@ -104,7 +104,7 @@ impl AggregateUDFImpl for Median {
 
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
         //Intermediate state is a list of the elements we have collected so far
-        let field = Field::new("item", args.input_types[0].clone(), true);
+        let field = Field::new_list_field(args.input_types[0].clone(), true);
         let state_name = if args.is_distinct {
             "distinct_median"
         } else {

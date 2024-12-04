@@ -54,11 +54,10 @@ use datafusion_common::file_options::file_type::FileType;
 use datafusion_common::{
     exec_err, get_target_functional_dependencies, internal_err, not_impl_err,
     plan_datafusion_err, plan_err, Column, DFSchema, DFSchemaRef, DataFusionError,
-    FunctionalDependencies, Result, ScalarValue, TableReference, ToDFSchema,
+    FunctionalDependencies, IndexSet, Result, ScalarValue, TableReference, ToDFSchema,
     UnnestOptions,
 };
 use datafusion_expr_common::type_coercion::binary::type_union_resolution;
-use indexmap::IndexSet;
 
 /// Default table name for unnamed table
 pub const UNNAMED_TABLE: &str = "?table?";
@@ -2432,7 +2431,7 @@ mod tests {
             ],
             false,
         );
-        let string_field = Field::new("item", DataType::Utf8, false);
+        let string_field = Field::new_list_field(DataType::Utf8, false);
         let strings_field = Field::new_list("item", string_field.clone(), false);
         let schema = Schema::new(vec![
             Field::new("scalar", DataType::UInt32, false),

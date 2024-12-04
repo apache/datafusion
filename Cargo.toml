@@ -30,6 +30,7 @@ members = [
     "datafusion/functions",
     "datafusion/functions-aggregate",
     "datafusion/functions-aggregate-common",
+    "datafusion/functions-table",
     "datafusion/functions-nested",
     "datafusion/functions-window",
     "datafusion/functions-window-common",
@@ -64,7 +65,7 @@ homepage = "https://datafusion.apache.org"
 license = "Apache-2.0"
 readme = "README.md"
 repository = "https://github.com/apache/datafusion"
-rust-version = "1.79"
+rust-version = "1.80"
 version = "43.0.0"
 
 [workspace.dependencies]
@@ -110,6 +111,7 @@ datafusion-functions = { path = "datafusion/functions", version = "43.0.0" }
 datafusion-functions-aggregate = { path = "datafusion/functions-aggregate", version = "43.0.0" }
 datafusion-functions-aggregate-common = { path = "datafusion/functions-aggregate-common", version = "43.0.0" }
 datafusion-functions-nested = { path = "datafusion/functions-nested", version = "43.0.0" }
+datafusion-functions-table = { path = "datafusion/functions-table", version = "43.0.0" }
 datafusion-functions-window = { path = "datafusion/functions-window", version = "43.0.0" }
 datafusion-functions-window-common = { path = "datafusion/functions-window-common", version = "43.0.0" }
 datafusion-macros = { path = "datafusion/macros", version = "43.0.0" }
