@@ -28,6 +28,7 @@ use crate::physical_plan::repartition::RepartitionExec;
 use crate::physical_plan::sorts::sort::SortExec;
 use crate::physical_plan::tree_node::PlanContext;
 use crate::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
+use arrow_schema::SchemaRef;
 
 use datafusion_common::tree_node::{
     ConcreteTreeNode, Transformed, TreeNode, TreeNodeRecursion,
@@ -618,13 +619,7 @@ fn handle_hash_join(
 ) -> Result<Option<Vec<Option<LexRequirement>>>> {
     // If there's no requirement from the parent or the plan has no children
     // or the join type is not Inner, Right, RightSemi, RightAnti, return early
-    if parent_required.is_empty()
-        || plan.children().is_empty()
-        || !matches!(
-            plan.join_type(),
-            JoinType::Inner | JoinType::Right | JoinType::RightSemi | JoinType::RightAnti
-        )
-    {
+    if parent_required.is_empty() || !plan.maintains_input_order()[1] {
         return Ok(None);
     }
 
@@ -633,7 +628,7 @@ fn handle_hash_join(
         .iter()
         .flat_map(|order| {
             collect_columns(&order.expr)
-                .iter()
+                .into_iter()
                 .map(|col| col.index())
                 .collect::<HashSet<_>>()
         })
@@ -689,35 +684,25 @@ fn handle_hash_join(
 // this function is used to build the column index for the hash join
 // push down sort requirements to the right child
 fn build_join_column_index(plan: &HashJoinExec) -> Vec<ColumnIndex> {
-    let left = plan.left().schema();
-    let right = plan.right().schema();
-
-    let left_fields = || {
-        left.fields()
-            .iter()
-            .enumerate()
-            .map(|(index, _)| ColumnIndex {
-                index,
-                side: JoinSide::Left,
-            })
-    };
-
-    let right_fields = || {
-        right
+    let map_fields = |schema: SchemaRef, side: JoinSide| {
+        schema
             .fields()
             .iter()
             .enumerate()
-            .map(|(index, _)| ColumnIndex {
-                index,
-                side: JoinSide::Right,
-            })
+            .map(|(index, _)| ColumnIndex { index, side })
+            .collect::<Vec<_>>()
     };
 
     match plan.join_type() {
         JoinType::Inner | JoinType::Right => {
-            left_fields().chain(right_fields()).collect()
+            map_fields(plan.left().schema(), JoinSide::Left)
+                .into_iter()
+                .chain(map_fields(plan.right().schema(), JoinSide::Right))
+                .collect::<Vec<_>>()
         }
-        JoinType::RightSemi | JoinType::RightAnti => right_fields().collect(),
+        JoinType::RightSemi | JoinType::RightAnti => {
+            map_fields(plan.right().schema(), JoinSide::Right)
+        }
         _ => unreachable!("unexpected join type: {}", plan.join_type()),
     }
 }
