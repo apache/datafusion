@@ -147,7 +147,7 @@ impl ScalarUDFImpl for RegexpLikeFunc {
         let inferred_length = len.unwrap_or(1);
         let args = args
             .iter()
-            .map(|arg| arg.clone().into_array(inferred_length))
+            .map(|arg| arg.to_array(inferred_length))
             .collect::<Result<Vec<_>>>()?;
 
         let result = regexp_like(&args);
