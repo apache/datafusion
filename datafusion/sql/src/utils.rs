@@ -763,8 +763,7 @@ mod tests {
             ),
             Field::new(
                 "array_col",
-                ArrowDataType::List(Arc::new(Field::new(
-                    "item",
+                ArrowDataType::List(Arc::new(Field::new_list_field(
                     ArrowDataType::Int64,
                     true,
                 ))),

@@ -114,7 +114,7 @@ pub(crate) fn align_array_dimensions<O: OffsetSizeTrait>(
                     let offsets = OffsetBuffer::<O>::from_lengths(array_lengths);
 
                     aligned_array = Arc::new(GenericListArray::<O>::try_new(
-                        Arc::new(Field::new("item", data_type, true)),
+                        Arc::new(Field::new_list_field(data_type, true)),
                         offsets,
                         aligned_array,
                         None,

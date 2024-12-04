@@ -80,7 +80,7 @@ impl ScalarUDFImpl for RegexpMatchFunc {
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         Ok(match &arg_types[0] {
             DataType::Null => DataType::Null,
-            other => DataType::List(Arc::new(Field::new("item", other.clone(), true))),
+            other => DataType::List(Arc::new(Field::new_list_field(other.clone(), true))),
         })
     }
     fn invoke_batch(

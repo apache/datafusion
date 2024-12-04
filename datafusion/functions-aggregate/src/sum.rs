@@ -183,7 +183,7 @@ impl AggregateUDFImpl for Sum {
             Ok(vec![Field::new_list(
                 format_state_name(args.name, "sum distinct"),
                 // See COMMENTS.md to understand why nullable is set to true
-                Field::new("item", args.return_type.clone(), true),
+                Field::new_list_field(args.return_type.clone(), true),
                 false,
             )])
         } else {

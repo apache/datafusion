@@ -958,7 +958,7 @@ mod tests {
 
     #[test]
     fn test_fixed_list_wildcard_coerce() -> Result<()> {
-        let inner = Arc::new(Field::new("item", DataType::Int32, false));
+        let inner = Arc::new(Field::new_list_field(DataType::Int32, false));
         let current_types = vec![
             DataType::FixedSizeList(Arc::clone(&inner), 2), // able to coerce for any size
         ];
@@ -996,10 +996,9 @@ mod tests {
     #[test]
     fn test_nested_wildcard_fixed_size_lists() -> Result<()> {
         let type_into = DataType::FixedSizeList(
-            Arc::new(Field::new(
-                "item",
+            Arc::new(Field::new_list_field(
                 DataType::FixedSizeList(
-                    Arc::new(Field::new("item", DataType::Int32, false)),
+                    Arc::new(Field::new_list_field(DataType::Int32, false)),
                     FIXED_SIZE_LIST_WILDCARD,
                 ),
                 false,
@@ -1008,10 +1007,9 @@ mod tests {
         );
 
         let type_from = DataType::FixedSizeList(
-            Arc::new(Field::new(
-                "item",
+            Arc::new(Field::new_list_field(
                 DataType::FixedSizeList(
-                    Arc::new(Field::new("item", DataType::Int8, false)),
+                    Arc::new(Field::new_list_field(DataType::Int8, false)),
                     4,
                 ),
                 false,
@@ -1022,10 +1020,9 @@ mod tests {
         assert_eq!(
             coerced_from(&type_into, &type_from),
             Some(DataType::FixedSizeList(
-                Arc::new(Field::new(
-                    "item",
+                Arc::new(Field::new_list_field(
                     DataType::FixedSizeList(
-                        Arc::new(Field::new("item", DataType::Int32, false)),
+                        Arc::new(Field::new_list_field(DataType::Int32, false)),
                         4,
                     ),
                     false,

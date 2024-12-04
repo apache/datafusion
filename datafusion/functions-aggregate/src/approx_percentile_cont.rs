@@ -240,7 +240,7 @@ impl AggregateUDFImpl for ApproxPercentileCont {
             ),
             Field::new_list(
                 format_state_name(args.name, "centroids"),
-                Field::new("item", DataType::Float64, true),
+                Field::new_list_field(DataType::Float64, true),
                 false,
             ),
         ])

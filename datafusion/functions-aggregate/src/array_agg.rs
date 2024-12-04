@@ -77,8 +77,7 @@ impl AggregateUDFImpl for ArrayAgg {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        Ok(DataType::List(Arc::new(Field::new(
-            "item",
+        Ok(DataType::List(Arc::new(Field::new_list_field(
             arg_types[0].clone(),
             true,
         ))))
@@ -89,7 +88,7 @@ impl AggregateUDFImpl for ArrayAgg {
             return Ok(vec![Field::new_list(
                 format_state_name(args.name, "distinct_array_agg"),
                 // See COMMENTS.md to understand why nullable is set to true
-                Field::new("item", args.input_types[0].clone(), true),
+                Field::new_list_field(args.input_types[0].clone(), true),
                 true,
             )]);
         }
@@ -97,7 +96,7 @@ impl AggregateUDFImpl for ArrayAgg {
         let mut fields = vec![Field::new_list(
             format_state_name(args.name, "array_agg"),
             // See COMMENTS.md to understand why nullable is set to true
-            Field::new("item", args.input_types[0].clone(), true),
+            Field::new_list_field(args.input_types[0].clone(), true),
             true,
         )];
 
@@ -108,7 +107,7 @@ impl AggregateUDFImpl for ArrayAgg {
         let orderings = args.ordering_fields.to_vec();
         fields.push(Field::new_list(
             format_state_name(args.name, "array_agg_orderings"),
-            Field::new("item", DataType::Struct(Fields::from(orderings)), true),
+            Field::new_list_field(DataType::Struct(Fields::from(orderings)), true),
             false,
         ));
 

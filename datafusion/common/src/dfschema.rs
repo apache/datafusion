@@ -1382,14 +1382,14 @@ mod tests {
 
         // Succeeds if both have the same element type, disregards names and nullability
         assert!(DFSchema::datatype_is_logically_equal(
-            &DataType::List(Field::new("item", DataType::Int8, true).into()),
+            &DataType::List(Field::new_list_field(DataType::Int8, true).into()),
             &DataType::List(Field::new("element", DataType::Int8, false).into())
         ));
 
         // Fails if element type is different
         assert!(!DFSchema::datatype_is_logically_equal(
-            &DataType::List(Field::new("item", DataType::Int8, true).into()),
-            &DataType::List(Field::new("item", DataType::Int16, true).into())
+            &DataType::List(Field::new_list_field(DataType::Int8, true).into()),
+            &DataType::List(Field::new_list_field(DataType::Int16, true).into())
         ));
 
         // Test maps
@@ -1522,14 +1522,14 @@ mod tests {
 
         // Succeeds if both have the same element type, disregards names and nullability
         assert!(DFSchema::datatype_is_semantically_equal(
-            &DataType::List(Field::new("item", DataType::Int8, true).into()),
+            &DataType::List(Field::new_list_field(DataType::Int8, true).into()),
             &DataType::List(Field::new("element", DataType::Int8, false).into())
         ));
 
         // Fails if element type is different
         assert!(!DFSchema::datatype_is_semantically_equal(
-            &DataType::List(Field::new("item", DataType::Int8, true).into()),
-            &DataType::List(Field::new("item", DataType::Int16, true).into())
+            &DataType::List(Field::new_list_field(DataType::Int8, true).into()),
+            &DataType::List(Field::new_list_field(DataType::Int16, true).into())
         ));
 
         // Test maps
