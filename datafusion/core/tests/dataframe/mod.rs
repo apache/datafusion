@@ -2069,7 +2069,6 @@ async fn test_dataframe_placeholder_column_parameter() -> Result<()> {
     // so the filter data type is not know, i.e. a = $0.
     // Therefore, the optimization fails.
     let optimized_plan = ctx.state().optimize(logical_plan);
-    assert!(optimized_plan.is_err());
     assert!(optimized_plan
         .unwrap_err()
         .to_string()
@@ -2139,7 +2138,6 @@ async fn test_dataframe_placeholder_like_expression() -> Result<()> {
     // so the filter data type is not know, i.e. a = $0.
     // Therefore, the optimization fails.
     let optimized_plan = ctx.state().optimize(logical_plan);
-    assert!(optimized_plan.is_err());
     assert!(optimized_plan
         .unwrap_err()
         .to_string()
