@@ -164,8 +164,12 @@ impl TestParquetFile {
         if let Some(filter) = maybe_filter {
             let simplifier = ExprSimplifier::new(context);
             let filter = simplifier.coerce(filter, &df_schema).unwrap();
-            let physical_filter_expr =
-                create_physical_expr(&filter, &df_schema, &ExecutionProps::default())?;
+            let physical_filter_expr = create_physical_expr(
+                &filter,
+                &df_schema,
+                &ExecutionProps::default(),
+                Arc::new(ConfigOptions::default()),
+            )?;
 
             let parquet_exec =
                 ParquetExecBuilder::new_with_options(scan_config, parquet_options)

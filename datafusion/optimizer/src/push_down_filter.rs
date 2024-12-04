@@ -22,6 +22,7 @@ use std::sync::Arc;
 
 use itertools::Itertools;
 
+use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
 };
@@ -521,6 +522,7 @@ fn push_down_all_join(
 fn push_down_join(
     join: Join,
     parent_predicate: Option<&Expr>,
+    config_options: &ConfigOptions,
 ) -> Result<Transformed<LogicalPlan>> {
     // Split the parent predicate into individual conjunctive parts.
     let predicates = parent_predicate
@@ -534,7 +536,7 @@ fn push_down_join(
 
     // Are there any new join predicates that can be inferred from the filter expressions?
     let inferred_join_predicates =
-        infer_join_predicates(&join, &predicates, &on_filters)?;
+        infer_join_predicates(&join, &predicates, &on_filters, config_options)?;
 
     if on_filters.is_empty()
         && predicates.is_empty()
@@ -560,6 +562,7 @@ fn infer_join_predicates(
     join: &Join,
     predicates: &[Expr],
     on_filters: &[Expr],
+    config_options: &ConfigOptions,
 ) -> Result<Vec<Expr>> {
     // Only allow both side key is column.
     let join_col_keys = join
@@ -580,6 +583,7 @@ fn infer_join_predicates(
         &join_col_keys,
         predicates,
         &mut inferred_predicates,
+        config_options,
     )?;
 
     infer_join_predicates_from_on_filters(
@@ -587,6 +591,7 @@ fn infer_join_predicates(
         join_type,
         on_filters,
         &mut inferred_predicates,
+        config_options,
     )?;
 
     Ok(inferred_predicates.predicates)
@@ -617,12 +622,14 @@ impl InferredPredicates {
         &mut self,
         predicate: Expr,
         replace_map: &HashMap<&Column, &Column>,
+        config_options: &ConfigOptions,
     ) -> Result<()> {
         if self.is_inner_join
             || matches!(
                 is_restrict_null_predicate(
                     predicate.clone(),
-                    replace_map.keys().cloned()
+                    replace_map.keys().cloned(),
+                    config_options,
                 ),
                 Ok(true)
             )
@@ -647,11 +654,13 @@ fn infer_join_predicates_from_predicates(
     join_col_keys: &[(&Column, &Column)],
     predicates: &[Expr],
     inferred_predicates: &mut InferredPredicates,
+    config_options: &ConfigOptions,
 ) -> Result<()> {
     infer_join_predicates_impl::<true, true>(
         join_col_keys,
         predicates,
         inferred_predicates,
+        config_options,
     )
 }
 
@@ -672,6 +681,7 @@ fn infer_join_predicates_from_on_filters(
     join_type: JoinType,
     on_filters: &[Expr],
     inferred_predicates: &mut InferredPredicates,
+    config_options: &ConfigOptions,
 ) -> Result<()> {
     match join_type {
         JoinType::Full | JoinType::LeftAnti | JoinType::RightAnti => Ok(()),
@@ -679,12 +689,14 @@ fn infer_join_predicates_from_on_filters(
             join_col_keys,
             on_filters,
             inferred_predicates,
+            config_options,
         ),
         JoinType::Left | JoinType::LeftSemi | JoinType::LeftMark => {
             infer_join_predicates_impl::<true, false>(
                 join_col_keys,
                 on_filters,
                 inferred_predicates,
+                config_options,
             )
         }
         JoinType::Right | JoinType::RightSemi => {
@@ -692,6 +704,7 @@ fn infer_join_predicates_from_on_filters(
                 join_col_keys,
                 on_filters,
                 inferred_predicates,
+                config_options,
             )
         }
     }
@@ -720,6 +733,7 @@ fn infer_join_predicates_impl<
     join_col_keys: &[(&Column, &Column)],
     input_predicates: &[Expr],
     inferred_predicates: &mut InferredPredicates,
+    config_options: &ConfigOptions,
 ) -> Result<()> {
     for predicate in input_predicates {
         let mut join_cols_to_replace = HashMap::new();
@@ -740,8 +754,11 @@ fn infer_join_predicates_impl<
             continue;
         }
 
-        inferred_predicates
-            .try_build_predicate(predicate.clone(), &join_cols_to_replace)?;
+        inferred_predicates.try_build_predicate(
+            predicate.clone(),
+            &join_cols_to_replace,
+            config_options,
+        )?;
     }
     Ok(())
 }
@@ -762,10 +779,10 @@ impl OptimizerRule for PushDownFilter {
     fn rewrite(
         &self,
         plan: LogicalPlan,
-        _config: &dyn OptimizerConfig,
+        config: &dyn OptimizerConfig,
     ) -> Result<Transformed<LogicalPlan>> {
         if let LogicalPlan::Join(join) = plan {
-            return push_down_join(join, None);
+            return push_down_join(join, None, config.options());
         };
 
         let plan_schema = Arc::clone(plan.schema());
@@ -795,7 +812,7 @@ impl OptimizerRule for PushDownFilter {
                     new_predicate,
                     child_filter.input,
                 )?);
-                self.rewrite(new_filter, _config)
+                self.rewrite(new_filter, config)
             }
             LogicalPlan::Repartition(repartition) => {
                 let new_filter =
@@ -984,7 +1001,9 @@ impl OptimizerRule for PushDownFilter {
                         }
                     })
             }
-            LogicalPlan::Join(join) => push_down_join(join, Some(&filter.predicate)),
+            LogicalPlan::Join(join) => {
+                push_down_join(join, Some(&filter.predicate), config.options())
+            }
             LogicalPlan::TableScan(scan) => {
                 let filter_predicates = split_conjunction(&filter.predicate);
 

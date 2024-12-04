@@ -266,6 +266,7 @@ mod tests {
 
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow_schema::SortOptions;
+    use datafusion_common::config::ConfigOptions;
     use datafusion_common::{DFSchema, Result};
     use datafusion_expr::{Operator, ScalarUDF};
     use datafusion_physical_expr_common::sort_expr::LexOrdering;
@@ -320,6 +321,7 @@ mod tests {
             &test_schema,
             &[],
             &DFSchema::empty(),
+            Arc::new(ConfigOptions::default()),
         )?;
         let floor_f = &crate::udf::create_physical_expr(
             &test_fun,
@@ -327,6 +329,7 @@ mod tests {
             &test_schema,
             &[],
             &DFSchema::empty(),
+            Arc::new(ConfigOptions::default()),
         )?;
         let exp_a = &crate::udf::create_physical_expr(
             &test_fun,
@@ -334,6 +337,7 @@ mod tests {
             &test_schema,
             &[],
             &DFSchema::empty(),
+            Arc::new(ConfigOptions::default()),
         )?;
         let a_plus_b = Arc::new(BinaryExpr::new(
             Arc::clone(col_a),

@@ -22,6 +22,7 @@ use datafusion::execution::context::ExecutionProps;
 use datafusion::physical_expr::create_physical_expr;
 use datafusion::physical_optimizer::pruning::{PruningPredicate, PruningStatistics};
 use datafusion::prelude::*;
+use datafusion_common::config::ConfigOptions;
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -187,7 +188,9 @@ impl PruningStatistics for MyCatalog {
 fn create_pruning_predicate(expr: Expr, schema: &SchemaRef) -> PruningPredicate {
     let df_schema = DFSchema::try_from(schema.as_ref().clone()).unwrap();
     let props = ExecutionProps::new();
-    let physical_expr = create_physical_expr(&expr, &df_schema, &props).unwrap();
+    let config_options = Arc::new(ConfigOptions::default());
+    let physical_expr =
+        create_physical_expr(&expr, &df_schema, &props, config_options).unwrap();
     PruningPredicate::try_new(physical_expr, schema.clone()).unwrap()
 }
 

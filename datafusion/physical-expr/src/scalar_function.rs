@@ -31,7 +31,7 @@
 
 use std::any::Any;
 use std::fmt::{self, Debug, Formatter};
-use std::hash::Hash;
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use crate::PhysicalExpr;
@@ -39,20 +39,23 @@ use crate::PhysicalExpr;
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
 use arrow_array::Array;
+use datafusion_common::config::ConfigOptions;
 use datafusion_common::{internal_err, DFSchema, Result, ScalarValue};
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::sort_properties::ExprProperties;
 use datafusion_expr::type_coercion::functions::data_types_with_scalar_udf;
 use datafusion_expr::{expr_vec_fmt, ColumnarValue, Expr, ScalarFunctionArgs, ScalarUDF};
+use datafusion_physical_expr_common::physical_expr::{DynEq, DynHash};
+use itertools::Itertools;
 
 /// Physical expression of a scalar function
-#[derive(Eq, PartialEq, Hash)]
 pub struct ScalarFunctionExpr {
     fun: Arc<ScalarUDF>,
     name: String,
     args: Vec<Arc<dyn PhysicalExpr>>,
     return_type: DataType,
     nullable: bool,
+    config_options: Arc<ConfigOptions>,
 }
 
 impl Debug for ScalarFunctionExpr {
@@ -73,6 +76,7 @@ impl ScalarFunctionExpr {
         fun: Arc<ScalarUDF>,
         args: Vec<Arc<dyn PhysicalExpr>>,
         return_type: DataType,
+        config_options: Arc<ConfigOptions>,
     ) -> Self {
         Self {
             fun,
@@ -80,6 +84,7 @@ impl ScalarFunctionExpr {
             args,
             return_type,
             nullable: true,
+            config_options,
         }
     }
 
@@ -119,6 +124,47 @@ impl fmt::Display for ScalarFunctionExpr {
     }
 }
 
+impl DynEq for ScalarFunctionExpr {
+    fn dyn_eq(&self, other: &dyn Any) -> bool {
+        other.downcast_ref::<Self>().map_or(false, |o| {
+            let eq = self.fun.eq(&o.fun);
+            let eq = eq && self.name.eq(&o.name);
+            let eq = eq && self.args.eq(&o.args);
+            let eq = eq && self.return_type.eq(&o.return_type);
+            let eq = eq && self.nullable.eq(&o.nullable);
+            let eq = eq
+                && self
+                    .config_options
+                    .entries()
+                    .iter()
+                    .sorted_by(|l, r| l.key.cmp(&r.key))
+                    .zip(
+                        o.config_options
+                            .entries()
+                            .iter()
+                            .sorted_by(|l, r| l.key.cmp(&r.key)),
+                    )
+                    .filter(|(l, r)| l.ne(r))
+                    .count()
+                    == 0;
+
+            eq
+        })
+    }
+}
+
+impl DynHash for ScalarFunctionExpr {
+    fn dyn_hash(&self, mut state: &mut dyn Hasher) {
+        self.type_id().hash(&mut state);
+        self.fun.hash(&mut state);
+        self.name.hash(&mut state);
+        self.args.hash(&mut state);
+        self.return_type.hash(&mut state);
+        self.nullable.hash(&mut state);
+        self.config_options.entries().hash(&mut state);
+    }
+}
+
 impl PhysicalExpr for ScalarFunctionExpr {
     /// Return a reference to Any that can be used for downcasting
     fn as_any(&self) -> &dyn Any {
@@ -150,6 +196,7 @@ impl PhysicalExpr for ScalarFunctionExpr {
             args: inputs.as_slice(),
             number_rows: batch.num_rows(),
             return_type: &self.return_type,
+            config_options: Arc::clone(&self.config_options),
         })?;
 
         if let ColumnarValue::Array(array) = &output {
@@ -183,6 +230,7 @@ impl PhysicalExpr for ScalarFunctionExpr {
                 Arc::clone(&self.fun),
                 children,
                 self.return_type().clone(),
+                Arc::clone(&self.config_options),
             )
             .with_nullable(self.nullable),
         ))
@@ -222,6 +270,7 @@ pub fn create_physical_expr(
     input_schema: &Schema,
     args: &[Expr],
     input_dfschema: &DFSchema,
+    config_options: Arc<ConfigOptions>,
 ) -> Result<Arc<dyn PhysicalExpr>> {
     let input_expr_types = input_phy_exprs
         .iter()
@@ -231,7 +280,7 @@ pub fn create_physical_expr(
     // verify that input data types is consistent with function's `TypeSignature`
     data_types_with_scalar_udf(&input_expr_types, fun)?;
 
-    // Since we have arg_types, we dont need args and schema.
+    // Since we have arg_types, we don't need args and schema.
     let return_type =
         fun.return_type_from_exprs(args, input_dfschema, &input_expr_types)?;
 
@@ -241,6 +290,7 @@ pub fn create_physical_expr(
             Arc::new(fun.clone()),
             input_phy_exprs.to_vec(),
             return_type,
+            Arc::clone(&config_options),
         )
         .with_nullable(fun.is_nullable(args, input_dfschema)),
     ))

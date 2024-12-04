@@ -17,15 +17,15 @@
 
 //! Expression simplification API
 
-use std::borrow::Cow;
-use std::collections::HashSet;
-use std::ops::Not;
-
 use arrow::{
     array::{new_null_array, AsArray},
     datatypes::{DataType, Field, Schema},
     record_batch::RecordBatch,
 };
+use std::borrow::Cow;
+use std::collections::HashSet;
+use std::ops::Not;
+use std::sync::Arc;
 
 use datafusion_common::{
     cast::{as_large_list_array, as_list_array},
@@ -46,14 +46,14 @@ use datafusion_expr::{
 };
 use datafusion_physical_expr::{create_physical_expr, execution_props::ExecutionProps};
 
+use super::inlist_simplifier::ShortenInListSimplifier;
+use super::utils::*;
 use crate::analyzer::type_coercion::TypeCoercionRewriter;
 use crate::simplify_expressions::guarantees::GuaranteeRewriter;
 use crate::simplify_expressions::regex::simplify_regex_expr;
 use crate::simplify_expressions::SimplifyInfo;
+use datafusion_common::config::ConfigOptions;
 use regex::Regex;
-
-use super::inlist_simplifier::ShortenInListSimplifier;
-use super::utils::*;
 
 /// This structure handles API for expression simplification
 ///
@@ -558,7 +558,7 @@ impl<'a> ConstEvaluator<'a> {
         let input_schema = DFSchema::try_from(schema.clone())?;
         // Need a single "input" row to produce a single output row
         let col = new_null_array(&DataType::Null, 1);
-        let input_batch = RecordBatch::try_new(std::sync::Arc::new(schema), vec![col])?;
+        let input_batch = RecordBatch::try_new(Arc::new(schema), vec![col])?;
 
         Ok(Self {
             can_evaluate: vec![],
@@ -632,11 +632,18 @@ impl<'a> ConstEvaluator<'a> {
             return ConstSimplifyResult::NotSimplified(s);
         }
 
-        let phys_expr =
-            match create_physical_expr(&expr, &self.input_schema, self.execution_props) {
-                Ok(e) => e,
-                Err(err) => return ConstSimplifyResult::SimplifyRuntimeError(err, expr),
-            };
+        // todo - should the config options be the actual options here or is this sufficient?
+        // todo - the only use case currently is ScalarFunctionExpr which won't use this till
+        // todo - invocation
+        let phys_expr = match create_physical_expr(
+            &expr,
+            &self.input_schema,
+            self.execution_props,
+            Arc::new(ConfigOptions::default()),
+        ) {
+            Ok(e) => e,
+            Err(err) => return ConstSimplifyResult::SimplifyRuntimeError(err, expr),
+        };
         let col_val = match phys_expr.evaluate(&self.input_batch) {
             Ok(v) => v,
             Err(err) => return ConstSimplifyResult::SimplifyRuntimeError(err, expr),

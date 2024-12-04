@@ -20,6 +20,7 @@ use crate::fuzz_cases::equivalence::utils::{
     is_table_same_after_sort, TestScalarUDF,
 };
 use arrow_schema::SortOptions;
+use datafusion_common::config::ConfigOptions;
 use datafusion_common::{DFSchema, Result};
 use datafusion_expr::{Operator, ScalarUDF};
 use datafusion_physical_expr::equivalence::ProjectionMapping;
@@ -49,6 +50,7 @@ fn project_orderings_random() -> Result<()> {
             &test_schema,
             &[],
             &DFSchema::empty(),
+            Arc::new(ConfigOptions::default()),
         )?;
         // a + b
         let a_plus_b = Arc::new(BinaryExpr::new(
@@ -127,6 +129,7 @@ fn ordering_satisfy_after_projection_random() -> Result<()> {
             &test_schema,
             &[],
             &DFSchema::empty(),
+            Arc::new(ConfigOptions::default()),
         )?;
         // a + b
         let a_plus_b = Arc::new(BinaryExpr::new(

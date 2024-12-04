@@ -28,6 +28,7 @@ use datafusion::functions_aggregate::first_last::first_value_udaf;
 use datafusion::optimizer::simplify_expressions::ExprSimplifier;
 use datafusion::physical_expr::{analyze, AnalysisContext, ExprBoundaries};
 use datafusion::prelude::*;
+use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{ScalarValue, ToDFSchema};
 use datafusion_expr::execution_props::ExecutionProps;
@@ -356,8 +357,13 @@ fn type_coercion_demo() -> Result<()> {
 
     // Evaluation with an expression that has not been type coerced cannot succeed.
     let props = ExecutionProps::default();
-    let physical_expr =
-        datafusion_physical_expr::create_physical_expr(&expr, &df_schema, &props)?;
+    let config_options = Arc::new(ConfigOptions::default());
+    let physical_expr = datafusion_physical_expr::create_physical_expr(
+        &expr,
+        &df_schema,
+        &props,
+        Arc::clone(&config_options),
+    )?;
     let e = physical_expr.evaluate(&batch).unwrap_err();
     assert!(e
         .find_root()
@@ -377,6 +383,7 @@ fn type_coercion_demo() -> Result<()> {
         &coerced_expr,
         &df_schema,
         &props,
+        Arc::clone(&config_options),
     )?;
     assert!(physical_expr.evaluate(&batch).is_ok());
 
@@ -389,6 +396,7 @@ fn type_coercion_demo() -> Result<()> {
         &coerced_expr,
         &df_schema,
         &props,
+        Arc::clone(&config_options),
     )?;
     assert!(physical_expr.evaluate(&batch).is_ok());
 
@@ -417,6 +425,7 @@ fn type_coercion_demo() -> Result<()> {
         &coerced_expr,
         &df_schema,
         &props,
+        Arc::clone(&config_options),
     )?;
     assert!(physical_expr.evaluate(&batch).is_ok());
 
