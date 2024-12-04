@@ -129,6 +129,24 @@ impl ColumnarValue {
         })
     }
 
+    /// Convert a columnar value into an Arrow [`ArrayRef`] with the specified
+    /// number of rows. [`Self::Scalar`] is converted by repeating the same
+    /// scalar multiple times which is not as efficient as handling the scalar
+    /// directly.
+    ///
+    /// See [`Self::values_to_arrays`] to convert multiple columnar values into
+    /// arrays of the same length.
+    ///
+    /// # Errors
+    ///
+    /// Errors if `self` is a Scalar that fails to be converted into an array of size
+    pub fn to_array(&self, num_rows: usize) -> Result<ArrayRef> {
+        Ok(match self {
+            ColumnarValue::Array(array) => Arc::clone(array),
+            ColumnarValue::Scalar(scalar) => scalar.to_array_of_size(num_rows)?,
+        })
+    }
+
     /// Null columnar values are implemented as a null array in order to pass batch
     /// num_rows
     pub fn create_null_array(num_rows: usize) -> Self {
@@ -176,7 +194,7 @@ impl ColumnarValue {
 
         let args = args
             .iter()
-            .map(|arg| arg.clone().into_array(inferred_length))
+            .map(|arg| arg.to_array(inferred_length))
             .collect::<Result<Vec<_>>>()?;
 
         Ok(args)
