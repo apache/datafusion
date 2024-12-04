@@ -208,6 +208,7 @@ where
                 build_primitive(split, null_group)
             }
         };
+
         Ok(vec![Arc::new(array.with_data_type(self.data_type.clone()))])
     }
 

@@ -31,8 +31,8 @@ use crate::aggregates::group_values::GroupValues;
 use ahash::RandomState;
 use arrow::compute::cast;
 use arrow::datatypes::{
-    BinaryViewType, Date32Type, Date64Type, Float32Type, Float64Type, Int16Type,
-    Int32Type, Int64Type, Int8Type, StringViewType, Time32MillisecondType,
+    BinaryViewType, Date32Type, Date64Type, Decimal128Type, Float32Type, Float64Type,
+    Int16Type, Int32Type, Int64Type, Int8Type, StringViewType, Time32MillisecondType,
     Time32SecondType, Time64MicrosecondType, Time64NanosecondType,
     TimestampMicrosecondType, TimestampMillisecondType, TimestampNanosecondType,
     TimestampSecondType, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
@@ -1008,6 +1008,14 @@ impl<const STREAMING: bool> GroupValues for GroupValuesColumn<STREAMING> {
                             )
                         }
                     },
+                    &DataType::Decimal128(_, _) => {
+                        instantiate_primitive! {
+                            v,
+                            nullable,
+                            Decimal128Type,
+                            data_type
+                        }
+                    }
                     &DataType::Utf8 => {
                         let b = ByteGroupValueBuilder::<i32>::new(OutputType::Utf8);
                         v.push(Box::new(b) as _)
@@ -1214,6 +1222,7 @@ fn supported_type(data_type: &DataType) -> bool {
             | DataType::UInt64
             | DataType::Float32
             | DataType::Float64
+            | DataType::Decimal128(_, _)
             | DataType::Utf8
             | DataType::LargeUtf8
             | DataType::Binary
