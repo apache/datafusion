@@ -218,6 +218,8 @@ impl ExprSchemable for Expr {
                 if let Some(dtype) = data_type {
                     Ok(dtype.clone())
                 } else {
+                    // If the placeholder's type hasn't been specified, treat it as
+                    // null (unspecified placeholders generate an error during planning)
                     Ok(DataType::Null)
                 }
             }
