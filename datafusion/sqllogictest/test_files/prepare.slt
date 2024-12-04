@@ -88,6 +88,16 @@ EXECUTE my_plan('j%');
 statement ok
 DEALLOCATE my_plan
 
+# Check for missing parameters
+statement ok
+PREPARE my_plan AS SELECT * FROM person WHERE id < $1;
+
+statement error No value found for placeholder with id $1
+EXECUTE my_plan
+
+statement ok
+DEALLOCATE my_plan
+
 statement ok
 PREPARE my_plan(STRING, STRING) AS SELECT * FROM (VALUES(1, $1), (2, $2)) AS t (num, letter);
 

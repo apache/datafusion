@@ -1501,26 +1501,6 @@ impl LogicalPlan {
         .map(|_| param_types)
     }
 
-    /// Walk the logical plan, error out if any `Placeholder` tokens with DataType::Null
-    pub fn validate_parameter_types(&self) -> Result<(), DataFusionError> {
-        self.apply_with_subqueries(|plan| {
-            plan.apply_expressions(|expr| {
-                expr.apply(|expr| {
-                    if let Expr::Placeholder(Placeholder { id, data_type }) = expr {
-                        if data_type.is_none() {
-                            plan_err!(
-                                "Placeholder type for '{id}' could not be resolved. Make sure that the \
-                                placeholder is bound to a concrete type, e.g. by providing \
-                                parameter values.")?;
-                        }
-                    }
-                    Ok(TreeNodeRecursion::Continue)
-                })
-            })
-        })
-        .map(|_| ())
-    }
-
     // ------------
     // Various implementations for printing out LogicalPlans
     // ------------

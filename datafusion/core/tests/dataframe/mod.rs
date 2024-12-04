@@ -1985,6 +1985,7 @@ async fn test_array_agg() -> Result<()> {
 async fn test_dataframe_placeholder_missing_param_values() -> Result<()> {
     let ctx = SessionContext::new();
 
+    // Creating LogicalPlans with placeholders should work.
     let df = ctx
         .read_empty()
         .unwrap()
@@ -2006,17 +2007,16 @@ async fn test_dataframe_placeholder_missing_param_values() -> Result<()> {
         "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
     );
 
-    // The placeholder is not replaced with a value,
-    // so the filter data type is not know, i.e. a = $0.
-    // Therefore, the optimization fails.
-    let optimized_plan = ctx.state().optimize(logical_plan);
-    assert!(optimized_plan.is_err());
-    assert!(optimized_plan
-        .unwrap_err()
-        .to_string()
-        .contains("Placeholder type for '$0' could not be resolved. Make sure that the placeholder is bound to a concrete type, e.g. by providing parameter values."));
+    // Executing LogicalPlans with placeholders that don't have bound values
+    // should fail.
+    let results = df.collect().await;
+    let err_mesg = results.unwrap_err().strip_backtrace();
+    assert_eq!(
+        err_mesg,
+        "Execution error: Placeholder '$0' was not provided a value for execution."
+    );
 
-    // Prodiving a parameter value should resolve the error
+    // Providing a parameter value should resolve the error
     let df = ctx
         .read_empty()
         .unwrap()
@@ -2040,12 +2040,14 @@ async fn test_dataframe_placeholder_missing_param_values() -> Result<()> {
         "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
     );
 
-    let optimized_plan = ctx.state().optimize(logical_plan);
-    assert!(optimized_plan.is_ok());
+    // N.B., the test is basically `SELECT 1 as a WHERE a = 3;` which returns no results.
+    #[rustfmt::skip]
+    let expected = [
+        "++",
+        "++"
+    ];
 
-    let actual = optimized_plan.unwrap().display_indent_schema().to_string();
-    let expected = "EmptyRelation [a:Int32]";
-    assert_eq!(expected, actual);
+    assert_batches_eq!(expected, &df.collect().await.unwrap());
 
     Ok(())
 }
@@ -2054,27 +2056,33 @@ async fn test_dataframe_placeholder_missing_param_values() -> Result<()> {
 async fn test_dataframe_placeholder_column_parameter() -> Result<()> {
     let ctx = SessionContext::new();
 
+    // Creating LogicalPlans with placeholders should work
     let df = ctx.read_empty().unwrap().select_exprs(&["$1"]).unwrap();
-
     let logical_plan = df.logical_plan();
     let formatted = logical_plan.display_indent_schema().to_string();
     let actual: Vec<&str> = formatted.trim().lines().collect();
-    let expected = vec!["Projection: $1 [$1:Null;N]", "  EmptyRelation []"];
+
+    #[rustfmt::skip]
+    let expected = vec![
+        "Projection: $1 [$1:Null;N]",
+        "  EmptyRelation []"
+    ];
+
     assert_eq!(
         expected, actual,
         "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
     );
 
-    // The placeholder is not replaced with a value,
-    // so the filter data type is not known, i.e. a = $0.
-    // Therefore, the optimization fails.
-    let optimized_plan = ctx.state().optimize(logical_plan);
-    assert!(optimized_plan
-        .unwrap_err()
-        .to_string()
-        .contains("Placeholder type for '$1' could not be resolved. Make sure that the placeholder is bound to a concrete type, e.g. by providing parameter values."));
+    // Executing LogicalPlans with placeholders that don't have bound values
+    // should fail.
+    let results = df.collect().await;
+    let err_mesg = results.unwrap_err().strip_backtrace();
+    assert_eq!(
+        err_mesg,
+        "Execution error: Placeholder '$1' was not provided a value for execution."
+    );
 
-    // Prodiving a parameter value should resolve the error
+    // Providing a parameter value should resolve the error
     let df = ctx
         .read_empty()
         .unwrap()
@@ -2095,16 +2103,16 @@ async fn test_dataframe_placeholder_column_parameter() -> Result<()> {
         "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
     );
 
-    let optimized_plan = ctx.state().optimize(logical_plan);
-    assert!(optimized_plan.is_ok());
-
-    let formatted = optimized_plan.unwrap().display_indent_schema().to_string();
-    let actual: Vec<&str> = formatted.trim().lines().collect();
-    let expected = vec![
-        "Projection: Int32(3) AS $1 [$1:Int32]",
-        "  EmptyRelation []",
+    #[rustfmt::skip]
+    let expected = [
+        "+----+",
+        "| $1 |",
+        "+----+",
+        "| 3  |",
+        "+----+"
     ];
-    assert_eq!(expected, actual);
+
+    assert_batches_eq!(expected, &df.collect().await.unwrap());
 
     Ok(())
 }
@@ -2113,6 +2121,7 @@ async fn test_dataframe_placeholder_column_parameter() -> Result<()> {
 async fn test_dataframe_placeholder_like_expression() -> Result<()> {
     let ctx = SessionContext::new();
 
+    // Creating LogicalPlans with placeholders should work
     let df = ctx
         .read_empty()
         .unwrap()
@@ -2134,16 +2143,16 @@ async fn test_dataframe_placeholder_like_expression() -> Result<()> {
         "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
     );
 
-    // The placeholder is not replaced with a value,
-    // so the filter data type is not known, i.e. a = $0.
-    // Therefore, the optimization fails.
-    let optimized_plan = ctx.state().optimize(logical_plan);
-    assert!(optimized_plan
-        .unwrap_err()
-        .to_string()
-        .contains("Placeholder type for '$1' could not be resolved. Make sure that the placeholder is bound to a concrete type, e.g. by providing parameter values."));
+    // Executing LogicalPlans with placeholders that don't have bound values
+    // should fail.
+    let results = df.collect().await;
+    let err_mesg = results.unwrap_err().strip_backtrace();
+    assert_eq!(
+        err_mesg,
+        "Execution error: Placeholder '$1' was not provided a value for execution."
+    );
 
-    // Prodiving a parameter value should resolve the error
+    // Providing a parameter value should resolve the error
     let df = ctx
         .read_empty()
         .unwrap()
@@ -2167,16 +2176,16 @@ async fn test_dataframe_placeholder_like_expression() -> Result<()> {
         "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
     );
 
-    let optimized_plan = ctx.state().optimize(logical_plan);
-    assert!(optimized_plan.is_ok());
-
-    let formatted = optimized_plan.unwrap().display_indent_schema().to_string();
-    let actual: Vec<&str> = formatted.trim().lines().collect();
-    let expected = vec![
-        "Projection: Utf8(\"foo\") AS a [a:Utf8]",
-        "  EmptyRelation []",
+    #[rustfmt::skip]
+    let expected = [
+        "+-----+",
+        "| a   |",
+        "+-----+",
+        "| foo |",
+        "+-----+"
     ];
-    assert_eq!(expected, actual);
+
+    assert_batches_eq!(expected, &df.collect().await.unwrap());
 
     Ok(())
 }

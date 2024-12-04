@@ -357,7 +357,6 @@ impl Optimizer {
     {
         let start_time = Instant::now();
         let options = config.options();
-        plan.validate_parameter_types()?;
         let mut new_plan = plan;
 
         let mut previous_plans = HashSet::with_capacity(16);
