@@ -49,7 +49,6 @@ use url::Url;
 async fn main() -> Result<()> {
     // The first two examples only do local file IO. Enable the  URL table so we
     // can select directly from filenames in SQL.
-    let ctx = SessionContext::new().enable_url_table();
     let sql = format!(
         "SELECT * FROM '{}/alltypes_plain.parquet'",
         datafusion::test_util::parquet_test_data()
@@ -57,14 +56,10 @@ async fn main() -> Result<()> {
 
     // Run the same query on the same runtime. Note that calling `await` here
     // will effectively run the future (in this case the `async` function) on
-    // the current runtime.
-    same_runtime(&ctx, &sql).await?;
+    // the current runtime
+    same_runtime(&sql).await?;
 
-    // Run the same query on a different runtime. Note that we are still calling
-    // `await` here, so the the `async` function still runs on the current runtime.
-    // We use the `DedicatedExecutor` to run the query on a different runtime.
-    different_runtime_basic(ctx, sql).await?;
-
+    // Run the same query on a different runtime.
     // Run the same query on a different runtime including remote IO
     different_runtime_advanced().await?;
 
@@ -75,7 +70,9 @@ async fn main() -> Result<()> {
 ///
 /// This is now most examples in DataFusion are written and works well for
 /// development and local query processing.
-async fn same_runtime(ctx: &SessionContext, sql: &str) -> Result<()> {
+async fn same_runtime(sql: &str) -> Result<()> {
+    let ctx = SessionContext::new().enable_url_table();
+
     // Calling .sql is an async function as it may also do network
     // I/O, for example to contact a remote catalog or do an object store LIST
     let df = ctx.sql(sql).await?;
