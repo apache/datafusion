@@ -77,21 +77,21 @@ version = "43.0.0"
 ahash = { version = "0.8", default-features = false, features = [
     "runtime-rng",
 ] }
-arrow = { version = "53.3.0", features = [
+arrow = { version = "54.0.0", features = [
     "prettyprint",
 ] }
-arrow-array = { version = "53.3.0", default-features = false, features = [
+arrow-array = { version = "54.0.0", default-features = false, features = [
     "chrono-tz",
 ] }
-arrow-buffer = { version = "53.3.0", default-features = false }
-arrow-flight = { version = "53.3.0", features = [
+arrow-buffer = { version = "54.0.0", default-features = false }
+arrow-flight = { version = "54.0.0", features = [
     "flight-sql-experimental",
 ] }
-arrow-ipc = { version = "53.3.0", default-features = false, features = [
+arrow-ipc = { version = "54.0.0", default-features = false, features = [
     "lz4",
 ] }
-arrow-ord = { version = "53.3.0", default-features = false }
-arrow-schema = { version = "53.3.0", default-features = false }
+arrow-ord = { version = "54.0.0", default-features = false }
+arrow-schema = { version = "54.0.0", default-features = false }
 async-trait = "0.1.73"
 bigdecimal = "0.4.7"
 bytes = "1.4"
@@ -133,7 +133,7 @@ itertools = "0.13"
 log = "^0.4"
 object_store = { version = "0.11.0", default-features = false }
 parking_lot = "0.12"
-parquet = { version = "53.3.0", default-features = false, features = [
+parquet = { version = "54.0.0", default-features = false, features = [
     "arrow",
     "async",
     "object_store",
@@ -177,3 +177,18 @@ large_futures = "warn"
 [workspace.lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ["cfg(tarpaulin)"] }
 unused_qualifications = "deny"
+
+# Temp patch to main of arrow-rs
+[patch.crates-io]
+arrow = { git = "https://github.com/apache/arrow-rs.git", tag = "54.0.0" }
+arrow-array = { git = "https://github.com/apache/arrow-rs.git", tag = "54.0.0" }
+arrow-buffer = { git = "https://github.com/apache/arrow-rs.git", tag = "54.0.0" }
+arrow-cast = { git = "https://github.com/apache/arrow-rs.git", tag = "54.0.0" }
+arrow-data = { git = "https://github.com/apache/arrow-rs.git", tag = "54.0.0" }
+arrow-ipc = { git = "https://github.com/apache/arrow-rs.git", tag = "54.0.0" }
+arrow-schema = { git = "https://github.com/apache/arrow-rs.git", tag = "54.0.0" }
+arrow-select = { git = "https://github.com/apache/arrow-rs.git", tag = "54.0.0" }
+arrow-string = { git = "https://github.com/apache/arrow-rs.git", tag = "54.0.0" }
+arrow-ord = { git = "https://github.com/apache/arrow-rs.git", tag = "54.0.0" }
+arrow-flight = { git = "https://github.com/apache/arrow-rs.git", tag = "54.0.0" }
+parquet = { git = "https://github.com/apache/arrow-rs.git", tag = "54.0.0" }
