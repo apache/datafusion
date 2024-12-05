@@ -182,7 +182,7 @@ fn print_docs(
             };
 
             // Temporary for doc gen migration, see `save_doc_code_text` comments
-            save_doc_code_text(documentation, &name);
+            // save_doc_code_text(documentation, &name);
 
             // first, the name, description and syntax example
             let _ = write!(
