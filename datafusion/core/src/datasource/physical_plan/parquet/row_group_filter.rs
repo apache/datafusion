@@ -431,8 +431,8 @@ mod tests {
     use datafusion_expr::{cast, col, lit, Expr};
     use datafusion_physical_expr::planner::logical2physical;
 
-    use parquet::arrow::arrow_to_parquet_schema;
     use parquet::arrow::async_reader::ParquetObjectReader;
+    use parquet::arrow::ArrowSchemaConverter;
     use parquet::basic::LogicalType;
     use parquet::data_type::{ByteArray, FixedLenByteArray};
     use parquet::file::metadata::ColumnChunkMetaData;
@@ -719,7 +719,7 @@ mod tests {
             Field::new("c1", DataType::Int32, false),
             Field::new("c2", DataType::Boolean, false),
         ]));
-        let schema_descr = arrow_to_parquet_schema(&schema).unwrap();
+        let schema_descr = ArrowSchemaConverter::new().convert(&schema).unwrap();
         let expr = col("c1").gt(lit(15)).and(col("c2").is_null());
         let expr = logical2physical(&expr, &schema);
         let pruning_predicate = PruningPredicate::try_new(expr, schema.clone()).unwrap();
@@ -748,7 +748,7 @@ mod tests {
             Field::new("c1", DataType::Int32, false),
             Field::new("c2", DataType::Boolean, false),
         ]));
-        let schema_descr = arrow_to_parquet_schema(&schema).unwrap();
+        let schema_descr = ArrowSchemaConverter::new().convert(&schema).unwrap();
         let expr = col("c1")
             .gt(lit(15))
             .and(col("c2").eq(lit(ScalarValue::Boolean(None))));
