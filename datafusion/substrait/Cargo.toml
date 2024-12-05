@@ -42,8 +42,8 @@ object_store = { workspace = true }
 pbjson-types = "0.7"
 # TODO use workspace version
 prost = "0.13"
-# The MSRV of substrait@0.49.5 is 1.80.1, which is greater than ours.
-# TODO: Remove this version constraint when DataFusion updates its MSRV.
+# The MSRV of substrait@0.49.5 is 1.80.1, which is higher than ours.
+# TODO: Update this version constraint when DataFusion updates its MSRV.
 substrait = { version = ">=0.49.0, <0.49.5", features = ["serde"] }
 url = { workspace = true }
 
