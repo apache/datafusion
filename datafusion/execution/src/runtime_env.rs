@@ -28,7 +28,7 @@ use crate::{
 
 use crate::cache::cache_manager::{CacheManager, CacheManagerConfig};
 use crate::dedicated_executor::DedicatedExecutor;
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{internal_datafusion_err, DataFusionError, Result};
 use object_store::ObjectStore;
 use std::future::Future;
 use std::path::PathBuf;
@@ -37,6 +37,7 @@ use std::{
     fmt::{Debug, Formatter},
     num::NonZeroUsize,
 };
+use futures::TryFutureExt;
 use url::Url;
 
 #[derive(Clone)]
@@ -69,6 +70,8 @@ use url::Url;
 ///   .build()
 ///   .unwrap();
 /// ```
+///
+/// TODO examples for spawning IO / CPU bound work
 pub struct RuntimeEnv {
     /// Runtime memory management
     pub memory_pool: Arc<dyn MemoryPool>,
@@ -165,8 +168,11 @@ impl RuntimeEnv {
         self.dedicated_executor.as_ref()
     }
 
-    /// Spawn a future that will do IO operations on the IO thread pool
+    /// Run an async future that will do IO operations on the IO thread pool
     /// if there is a [`DedicatedExecutor`] registered
+    ///
+    /// If no DedicatedExecutor is registered, runs the operation on the current
+    /// thread pool
     ///
     /// See [`DedicatedExecutor`] for more details
     pub async fn spawn_io<Fut>(&self, fut: Fut) -> Fut::Output
@@ -175,16 +181,44 @@ impl RuntimeEnv {
         Fut::Output: Send,
     {
         if self.dedicated_executor().is_some() {
-            println!("Running on dedicated executor");
+            println!("Running IO on dedicated executor");
             // TODO it is strange that the io thread is tied directly to a thread
             // local rather than bound to an instance
             DedicatedExecutor::spawn_io(fut).await
         } else {
             // otherwise run on the current runtime
-            println!("Running on current runtime");
+            println!("Running IO on current runtime");
             fut.await
         }
     }
+
+    /// Run an async future that will do CPU operations on the CPU task pool
+    /// if there is a [`DedicatedExecutor`] registered
+    ///
+    /// If no DedicatedExecutor is registered, runs the operation on the current
+    /// thread pool
+    ///
+    /// See [`DedicatedExecutor`] for more details
+    pub async fn spawn_cpu<Fut>(&self, fut: Fut) -> Result<Fut::Output>
+    where
+        Fut: Future + Send + 'static,
+        Fut::Output: Send,
+    {
+        if let Some(dedicated_executor) = self.dedicated_executor() {
+            println!("Running CPU on dedicated executor");
+            dedicated_executor.spawn(fut)
+                .await
+                .map_err( |e| DataFusionError::Context(
+                    "Join Error (panic)".to_string(),
+                    Box::new(DataFusionError::External(e.into())),
+                ))
+        } else {
+            // otherwise run on the current runtime
+            println!("Running CPU on current runtime");
+            Ok(fut.await)
+        }
+    }
+
 }
 
 impl Default for RuntimeEnv {
