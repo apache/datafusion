@@ -22,7 +22,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use datafusion_catalog::{SessionStore, UrlTableFactory};
-use datafusion_common::plan_datafusion_err;
+use datafusion_common::{internal_err, plan_datafusion_err};
 
 use crate::datasource::listing::{ListingTable, ListingTableConfig, ListingTableUrl};
 use crate::datasource::TableProvider;
@@ -55,28 +55,46 @@ impl UrlTableFactory for DynamicListTableFactory {
             return Ok(None);
         };
 
-        let state = &self
+        let session = self
             .session_store()
             .get_session()
             .upgrade()
-            .and_then(|session| {
-                session
-                    .read()
-                    .as_any()
-                    .downcast_ref::<SessionState>()
-                    .cloned()
-            })
             .ok_or_else(|| plan_datafusion_err!("get current SessionStore error"))?;
 
-        match ListingTableConfig::new(table_url.clone())
-            .infer_options(state)
-            .await
-        {
+        let runtime_env = Arc::clone(&session.read().runtime_env());
+
+        // Do remove catalog operations
+        let Some(state) = session
+            .read()
+            .as_any()
+            .downcast_ref::<SessionState>()
+            .cloned()
+        else {
+            return internal_err!("Expected SessionState, got something else");
+        };
+        let config = runtime_env
+            .spawn_io(async move {
+                ListingTableConfig::new(table_url.clone())
+                    .infer_options(&state)
+                    .await
+            })
+            .await;
+
+        let Some(state) = session
+            .read()
+            .as_any()
+            .downcast_ref::<SessionState>()
+            .cloned()
+        else {
+            return internal_err!("Expected SessionState, got something else");
+        };
+
+        match config {
             Ok(cfg) => {
                 let cfg = cfg
-                    .infer_partitions_from_path(state)
+                    .infer_partitions_from_path(&state)
                     .await?
-                    .infer_schema(state)
+                    .infer_schema(&state)
                     .await?;
                 ListingTable::try_new(cfg)
                     .map(|table| Some(Arc::new(table) as Arc<dyn TableProvider>))

@@ -27,7 +27,8 @@
 use arrow::util::pretty::pretty_format_batches;
 use datafusion::error::Result;
 use datafusion::execution::dedicated_executor::DedicatedExecutor;
-use datafusion::execution::SendableRecordBatchStream;
+use datafusion::execution::runtime_env::RuntimeEnvBuilder;
+use datafusion::execution::{SendableRecordBatchStream, SessionStateBuilder};
 use datafusion::prelude::*;
 use futures::stream::StreamExt;
 use object_store::http::HttpBuilder;
@@ -147,14 +148,12 @@ async fn different_runtime_advanced() -> Result<()> {
     // In this example, we will configure access to a remote object store
     // over the network during the plan
 
-    let ctx = SessionContext::new().enable_url_table();
+    let dedicated_executor = DedicatedExecutor::builder().build();
 
     // setup http object store
     let base_url = Url::parse("https://github.com").unwrap();
     let http_store: Arc<dyn ObjectStore> =
         Arc::new(HttpBuilder::new().with_url(base_url.clone()).build()?);
-
-    let dedicated_executor = DedicatedExecutor::builder().build();
 
     // By default, the object store will use the "current runtime" for IO operations
     // if we use a dedicated executor to run the plan, the eventual object store requests will also use the
@@ -169,8 +168,21 @@ async fn different_runtime_advanced() -> Result<()> {
 
     //let http_store = dedicated_executor.wrap_object_store(http_store);
 
+    // we must also register the dedicated executor with the runtime
+    let runtime_env = RuntimeEnvBuilder::new()
+        .with_dedicated_executor(dedicated_executor.clone())
+        .build_arc()?;
+
     // Tell datafusion about processing http:// urls with this wrapped object store
-    ctx.register_object_store(&base_url, http_store);
+    runtime_env.register_object_store(&base_url, http_store);
+
+    let ctx = SessionContext::from(
+        SessionStateBuilder::new()
+            .with_runtime_env(runtime_env)
+            .with_default_features()
+            .build(),
+    )
+    .enable_url_table();
 
     // Plan (and execute) the query on the dedicated runtime
     let stream = dedicated_executor

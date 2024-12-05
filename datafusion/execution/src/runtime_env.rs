@@ -175,11 +175,13 @@ impl RuntimeEnv {
         Fut::Output: Send,
     {
         if self.dedicated_executor().is_some() {
+            println!("Running on dedicated executor");
             // TODO it is strange that the io thread is tied directly to a thread
             // local rather than bound to an instance
             DedicatedExecutor::spawn_io(fut).await
         } else {
             // otherwise run on the current runtime
+            println!("Running on current runtime");
             fut.await
         }
     }
