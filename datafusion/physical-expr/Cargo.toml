@@ -48,6 +48,7 @@ datafusion-functions-aggregate-common = { workspace = true }
 datafusion-physical-expr-common = { workspace = true }
 half = { workspace = true }
 hashbrown = { workspace = true }
+indexmap = { workspace = true }
 itertools = { workspace = true, features = ["use_std"] }
 log = { workspace = true }
 paste = "^1.0"
