@@ -146,6 +146,7 @@ async fn different_runtime_advanced() -> Result<()> {
     .enable_url_table();
 
     // Plan (and execute) the query on the dedicated runtime
+    // TODO it would be great to figure out how to run this as part of `ctx.sql`
     let stream = dedicated_executor
         .spawn_cpu(async move {
             // Plan / execute the query
