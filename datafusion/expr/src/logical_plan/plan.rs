@@ -51,9 +51,10 @@ use datafusion_common::tree_node::{
 use datafusion_common::{
     aggregate_functional_dependencies, internal_err, plan_err, Column, Constraints,
     DFSchema, DFSchemaRef, DataFusionError, Dependency, FunctionalDependence,
-    FunctionalDependencies, IndexSet, ParamValues, Result, ScalarValue, TableReference,
+    FunctionalDependencies, ParamValues, Result, ScalarValue, TableReference,
     UnnestOptions,
 };
+use indexmap::IndexSet;
 
 // backwards compatibility
 use crate::display::PgJsonVisitor;

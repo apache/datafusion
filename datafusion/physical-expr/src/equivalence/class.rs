@@ -24,8 +24,10 @@ use std::fmt::Display;
 use std::sync::Arc;
 
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_common::{IndexSet, JoinType};
+use datafusion_common::JoinType;
 use datafusion_physical_expr_common::physical_expr::format_physical_expr_list;
+
+use indexmap::IndexSet;
 
 /// A structure representing a expression known to be constant in a physical execution plan.
 ///

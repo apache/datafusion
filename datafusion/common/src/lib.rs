@@ -73,7 +73,6 @@ pub use param_value::ParamValues;
 pub use scalar::{ScalarType, ScalarValue};
 pub use schema_reference::SchemaReference;
 pub use stats::{ColumnStatistics, Statistics};
-use std::hash::RandomState;
 pub use table_reference::{ResolvedTableReference, TableReference};
 pub use unnest::{RecursionUnnestOption, UnnestOptions};
 pub use utils::project_schema;
@@ -93,9 +92,6 @@ pub use error::{
 // The HashMap and HashSet implementations that should be used as the uniform defaults
 pub type HashMap<K, V, S = DefaultHashBuilder> = hashbrown::HashMap<K, V, S>;
 pub type HashSet<T, S = DefaultHashBuilder> = hashbrown::HashSet<T, S>;
-
-pub type IndexMap<T, S = DefaultHashBuilder> = indexmap::IndexMap<T, S>;
-pub type IndexSet<T, S = RandomState> = indexmap::IndexSet<T, S>;
 
 /// Downcast an Arrow Array to a concrete type, return an `DataFusionError::Internal` if the cast is
 /// not possible. In normal usage of DataFusion the downcast should always succeed.
