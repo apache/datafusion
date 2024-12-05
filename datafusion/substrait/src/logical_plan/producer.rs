@@ -2205,6 +2205,7 @@ mod test {
     use crate::logical_plan::consumer::{
         from_substrait_extended_expr, from_substrait_literal_without_names,
         from_substrait_named_struct, from_substrait_type_without_names,
+        DefaultSubstraitConsumer,
     };
     use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano};
     use datafusion::arrow::array::{
@@ -2214,6 +2215,10 @@ mod test {
     use datafusion::common::scalar::ScalarStructBuilder;
     use datafusion::common::DFSchema;
     use datafusion::execution::SessionStateBuilder;
+
+    fn test_consumer() -> DefaultSubstraitConsumer {
+        DefaultSubstraitConsumer::default()
+    }
 
     #[test]
     fn round_trip_literals() -> Result<()> {
@@ -2339,7 +2344,7 @@ mod test {
         let mut extensions = Extensions::default();
         let substrait_literal = to_substrait_literal(&scalar, &mut extensions)?;
         let roundtrip_scalar =
-            from_substrait_literal_without_names(&substrait_literal, &extensions)?;
+            from_substrait_literal_without_names(&test_consumer(), &substrait_literal)?;
         assert_eq!(scalar, roundtrip_scalar);
         Ok(())
     }
@@ -2418,8 +2423,8 @@ mod test {
         // As DataFusion doesn't consider nullability as a property of the type, but field,
         // it doesn't matter if we set nullability to true or false here.
         let substrait = to_substrait_type(&dt, true)?;
-        let roundtrip_dt =
-            from_substrait_type_without_names(&substrait, &Extensions::default())?;
+        let consumer = test_consumer();
+        let roundtrip_dt = from_substrait_type_without_names(&consumer, &substrait)?;
         assert_eq!(dt, roundtrip_dt);
         Ok(())
     }
@@ -2470,7 +2475,7 @@ mod test {
         );
 
         let roundtrip_schema =
-            from_substrait_named_struct(&named_struct, &Extensions::default())?;
+            from_substrait_named_struct(&test_consumer(), &named_struct)?;
         assert_eq!(schema.as_ref(), &roundtrip_schema);
         Ok(())
     }

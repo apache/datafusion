@@ -25,24 +25,31 @@ use datafusion_substrait::logical_plan::{
 use std::cmp::Ordering;
 use std::mem::size_of_val;
 
+use async_trait::async_trait;
 use datafusion::arrow::datatypes::{DataType, Field, IntervalUnit, Schema, TimeUnit};
-use datafusion::common::{not_impl_err, plan_err, DFSchema, DFSchemaRef};
+use datafusion::catalog::TableProvider;
+use datafusion::catalog_common::TableReference;
+use datafusion::common::{not_impl_err, plan_err, substrait_err, DFSchema, DFSchemaRef};
 use datafusion::error::Result;
 use datafusion::execution::registry::SerializerRegistry;
 use datafusion::execution::runtime_env::RuntimeEnv;
+use datafusion::execution::session_state::SessionStateBuilder;
+use datafusion::execution::SessionState;
 use datafusion::logical_expr::{
     Extension, LogicalPlan, PartitionEvaluator, Repartition, UserDefinedLogicalNode,
     Values, Volatility,
 };
 use datafusion::optimizer::simplify_expressions::expr_simplifier::THRESHOLD_INLINE_INLIST;
 use datafusion::prelude::*;
+use datafusion_substrait::extensions::Extensions;
+use datafusion_substrait::logical_plan::consumer::{
+    from_substrait_plan_with_consumer, SubstraitConsumer,
+};
 use std::hash::Hash;
 use std::sync::Arc;
-
-use datafusion::execution::session_state::SessionStateBuilder;
 use substrait::proto::extensions::simple_extension_declaration::MappingType;
 use substrait::proto::rel::RelType;
-use substrait::proto::{plan_rel, Plan, Rel};
+use substrait::proto::{plan_rel, ExtensionLeafRel, Plan, Rel};
 
 #[derive(Debug)]
 struct MockSerializerRegistry;
@@ -977,6 +984,43 @@ async fn new_test_grammar() -> Result<()> {
     .await
 }
 
+struct MockSubstraitConsumer {
+    extensions: Extensions,
+    state: SessionState,
+}
+
+#[async_trait]
+impl SubstraitConsumer for MockSubstraitConsumer {
+    async fn resolve_table_ref(
+        &self,
+        _: &TableReference,
+    ) -> Result<Option<Arc<dyn TableProvider>>> {
+        not_impl_err!("MockSubstraitConsumer does not implement resolve_table_ref")
+    }
+
+    fn get_extensions(&self) -> &Extensions {
+        &self.extensions
+    }
+
+    fn get_state(&self) -> &SessionState {
+        &self.state
+    }
+
+    async fn consume_extension_leaf(
+        &self,
+        rel: &ExtensionLeafRel,
+    ) -> Result<LogicalPlan> {
+        let Some(ext_detail) = &rel.detail else {
+            return substrait_err!("Unexpected empty detail in ExtensionLeafRel");
+        };
+        let plan = self
+            .state
+            .serializer_registry()
+            .deserialize_logical_plan(&ext_detail.type_url, &ext_detail.value)?;
+        Ok(LogicalPlan::Extension(Extension { node: plan }))
+    }
+}
+
 #[tokio::test]
 async fn extension_logical_plan() -> Result<()> {
     let ctx = create_context().await?;
@@ -989,8 +1033,13 @@ async fn extension_logical_plan() -> Result<()> {
         }),
     });
 
+    let consumer = MockSubstraitConsumer {
+        state: ctx.state(),
+        extensions: Extensions::default(),
+    };
+
     let proto = to_substrait_plan(&ext_plan, &ctx.state())?;
-    let plan2 = from_substrait_plan(&ctx.state(), &proto).await?;
+    let plan2 = from_substrait_plan_with_consumer(&consumer, &proto).await?;
 
     let plan1str = format!("{ext_plan}");
     let plan2str = format!("{plan2}");
