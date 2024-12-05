@@ -70,9 +70,7 @@ use parquet::arrow::arrow_writer::{
     compute_leaves, get_column_writers, ArrowColumnChunk, ArrowColumnWriter,
     ArrowLeafColumn,
 };
-use parquet::arrow::{
-    arrow_to_parquet_schema, parquet_to_arrow_schema, AsyncArrowWriter,
-};
+use parquet::arrow::{parquet_to_arrow_schema, ArrowSchemaConverter, AsyncArrowWriter};
 use parquet::file::metadata::{ParquetMetaData, ParquetMetaDataReader, RowGroupMetaData};
 use parquet::file::properties::WriterProperties;
 use parquet::file::writer::SerializedFileWriter;
@@ -934,7 +932,7 @@ fn spawn_column_parallel_row_group_writer(
     max_buffer_size: usize,
     pool: &Arc<dyn MemoryPool>,
 ) -> Result<(Vec<ColumnWriterTask>, Vec<ColSender>)> {
-    let schema_desc = arrow_to_parquet_schema(&schema)?;
+    let schema_desc = ArrowSchemaConverter::new().convert(&schema)?;
     let col_writers = get_column_writers(&schema_desc, &parquet_props, &schema)?;
     let num_columns = col_writers.len();
 
@@ -1137,7 +1135,7 @@ async fn concatenate_parallel_row_groups(
     let mut file_reservation =
         MemoryConsumer::new("ParquetSink(SerializedFileWriter)").register(&pool);
 
-    let schema_desc = arrow_to_parquet_schema(schema.as_ref())?;
+    let schema_desc = ArrowSchemaConverter::new().convert(&schema)?;
     let mut parquet_writer = SerializedFileWriter::new(
         merged_buff.clone(),
         schema_desc.root_schema_ptr(),
