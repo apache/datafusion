@@ -216,3 +216,8 @@ name = "topk_aggregate"
 harness = false
 name = "map_query_sql"
 required-features = ["nested_expressions"]
+
+[[bench]]
+harness = false
+name = "scalar_regex_match_query_sql"
+
