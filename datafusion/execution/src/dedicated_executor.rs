@@ -199,6 +199,19 @@ impl DedicatedExecutor {
         .boxed()
     }
 
+    /// Runs the specified work on the dedicated executor and returns the result
+    ///
+    /// Note the future is not 'static (aka it can have internal references)
+    pub fn spawn_cpu2<'a, T>(&self, task: T) -> impl Future<Output = T::Output>
+    where
+        T: Future + Send + 'a,
+        T::Output: Send,
+    {
+        // If we can figure out how to make this work, then
+        // we could integrate it nicely into DataFusion
+        async { todo!() }
+    }
+
     /// signals shutdown of this executor and any Clones
     pub fn shutdown(&self) {
         // hang up the channel which will cause the dedicated thread

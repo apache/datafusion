@@ -147,17 +147,12 @@ async fn different_runtime_advanced() -> Result<()> {
 
     // Plan (and execute) the query on the dedicated runtime
     // TODO it would be great to figure out how to run this as part of `ctx.sql`
-    let stream = dedicated_executor
-        .spawn_cpu(async move {
-            // Plan / execute the query
-            let url = "https://github.com/apache/arrow-testing/raw/master/data/csv/aggregate_test_100.csv";
-            let df = ctx
-                .sql(&format!("SELECT c1,c2,c3 FROM '{url}' LIMIT 5"))
-                .await?;
-            let stream: SendableRecordBatchStream = df.execute_stream().await?;
-
-            Ok(stream) as Result<_>
-        }).await??;
+    // Plan / execute the query
+    let url = "https://github.com/apache/arrow-testing/raw/master/data/csv/aggregate_test_100.csv";
+    let df = ctx
+        .sql(&format!("SELECT c1,c2,c3 FROM '{url}' LIMIT 5"))
+        .await?;
+    let stream: SendableRecordBatchStream = df.execute_stream().await?;
 
     // We have now planned the query on the dedicated runtime, Yay! but we still need to
     // drive the stream (aka call `next()` to get the results).

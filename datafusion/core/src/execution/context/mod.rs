@@ -608,10 +608,14 @@ impl SessionContext {
         sql: &str,
         options: SQLOptions,
     ) -> Result<DataFrame> {
-        let plan = self.state().create_logical_plan(sql).await?;
-        options.verify_plan(&plan)?;
+        self.runtime_env()
+            .spawn_cpu2(async {
+                let plan = self.state().create_logical_plan(sql).await?;
+                options.verify_plan(&plan)?;
 
-        self.execute_logical_plan(plan).await
+                self.execute_logical_plan(plan).await
+            })
+            .await
     }
 
     /// Creates logical expressions from SQL query text.

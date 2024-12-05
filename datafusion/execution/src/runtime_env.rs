@@ -217,6 +217,23 @@ impl RuntimeEnv {
             Ok(fut.await)
         }
     }
+
+    /// Figure out signature necessary to run futures with references in them on
+    /// a different thread pool.
+    pub async fn spawn_cpu2<'a, Fut>(&self, fut: Fut) -> Fut::Output
+    where
+        Fut: Future + Send + 'a,
+        Fut::Output: Send,
+    {
+        if let Some(dedicated_executor) = self.dedicated_executor() {
+            println!("2 Running CPU on dedicated executor");
+            dedicated_executor.spawn_cpu2(fut).await
+        } else {
+            // otherwise run on the current runtime
+            println!("2 Running CPU on current runtime");
+            fut.await
+        }
+    }
 }
 
 impl Default for RuntimeEnv {
