@@ -679,7 +679,7 @@ impl ListingOptions {
 /// # Ok(())
 /// # }
 /// ```
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ListingTable {
     table_paths: Vec<ListingTableUrl>,
     /// File fields only
@@ -843,10 +843,22 @@ impl TableProvider for ListingTable {
             });
         // TODO (https://github.com/apache/datafusion/issues/11600) remove downcast_ref from here?
         let session_state = state.as_any().downcast_ref::<SessionState>().unwrap();
-        let (mut partitioned_file_lists, statistics) = self
-            .list_files_for_scan(session_state, &partition_filters, limit)
+        // TODO avoid these clones when possible.
+        let session_state_captured = session_state.clone();
+        let partition_filters_captured = partition_filters.clone();
+        let self_captured = self.clone();
+        let (mut partitioned_file_lists, statistics) = state
+            .runtime_env()
+            .spawn_io(async move {
+                self_captured
+                    .list_files_for_scan(
+                        &session_state_captured,
+                        &partition_filters_captured,
+                        limit,
+                    )
+                    .await
+            })
             .await?;
-
         // if no files need to be read, return an `EmptyExec`
         if partitioned_file_lists.is_empty() {
             let projected_schema = project_schema(&self.schema(), projection)?;
