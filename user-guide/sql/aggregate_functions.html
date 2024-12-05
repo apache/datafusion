@@ -1618,8 +1618,8 @@ dev/update_function_docs.sh file for updating surrounding text.
 </section>
 <section id="last-value">
 <h3><code class="docutils literal notranslate"><span class="pre">last_value</span></code><a class="headerlink" href="#last-value" title="Link to this heading">¶</a></h3>
-<p>Returns the first element in an aggregation group according to the requested ordering. If no ordering is given, returns an arbitrary element from the group.</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">first_value</span><span class="p">(</span><span class="n">expression</span> <span class="p">[</span><span class="n">ORDER</span> <span class="n">BY</span> <span class="n">expression</span><span class="p">])</span>
+<p>Returns the last element in an aggregation group according to the requested ordering. If no ordering is given, returns an arbitrary element from the group.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">last_value</span><span class="p">(</span><span class="n">expression</span> <span class="p">[</span><span class="n">ORDER</span> <span class="n">BY</span> <span class="n">expression</span><span class="p">])</span>
 </pre></div>
 </div>
 <section id="id16">
@@ -1630,11 +1630,11 @@ dev/update_function_docs.sh file for updating surrounding text.
 </section>
 <section id="id17">
 <h4>Example<a class="headerlink" href="#id17" title="Link to this heading">¶</a></h4>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">SELECT</span><span class="w"> </span><span class="n">first_value</span><span class="p">(</span><span class="k">column_name</span><span class="w"> </span><span class="k">ORDER</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">other_column</span><span class="p">)</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="k">table_name</span><span class="p">;</span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">SELECT</span><span class="w"> </span><span class="n">last_value</span><span class="p">(</span><span class="k">column_name</span><span class="w"> </span><span class="k">ORDER</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">other_column</span><span class="p">)</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="k">table_name</span><span class="p">;</span>
 <span class="o">+</span><span class="c1">-----------------------------------------------+</span>
-<span class="o">|</span><span class="w"> </span><span class="n">first_value</span><span class="p">(</span><span class="k">column_name</span><span class="w"> </span><span class="k">ORDER</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">other_column</span><span class="p">)</span><span class="o">|</span>
+<span class="o">|</span><span class="w"> </span><span class="n">last_value</span><span class="p">(</span><span class="k">column_name</span><span class="w"> </span><span class="k">ORDER</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">other_column</span><span class="p">)</span><span class="w"> </span><span class="o">|</span>
 <span class="o">+</span><span class="c1">-----------------------------------------------+</span>
-<span class="o">|</span><span class="w"> </span><span class="n">first_element</span><span class="w">                                 </span><span class="o">|</span>
+<span class="o">|</span><span class="w"> </span><span class="n">last_element</span><span class="w">                                  </span><span class="o">|</span>
 <span class="o">+</span><span class="c1">-----------------------------------------------+</span>
 </pre></div>
 </div>
@@ -1694,8 +1694,8 @@ dev/update_function_docs.sh file for updating surrounding text.
 </section>
 <section id="min">
 <h3><code class="docutils literal notranslate"><span class="pre">min</span></code><a class="headerlink" href="#min" title="Link to this heading">¶</a></h3>
-<p>Returns the maximum value in the specified column.</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="nb">max</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
+<p>Returns the minimum value in the specified column.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="nb">min</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id22">
@@ -1706,11 +1706,11 @@ dev/update_function_docs.sh file for updating surrounding text.
 </section>
 <section id="id23">
 <h4>Example<a class="headerlink" href="#id23" title="Link to this heading">¶</a></h4>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">SELECT</span><span class="w"> </span><span class="k">max</span><span class="p">(</span><span class="k">column_name</span><span class="p">)</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="k">table_name</span><span class="p">;</span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">SELECT</span><span class="w"> </span><span class="k">min</span><span class="p">(</span><span class="k">column_name</span><span class="p">)</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="k">table_name</span><span class="p">;</span>
 <span class="o">+</span><span class="c1">----------------------+</span>
-<span class="o">|</span><span class="w"> </span><span class="k">max</span><span class="p">(</span><span class="k">column_name</span><span class="p">)</span><span class="w">      </span><span class="o">|</span>
+<span class="o">|</span><span class="w"> </span><span class="k">min</span><span class="p">(</span><span class="k">column_name</span><span class="p">)</span><span class="w">      </span><span class="o">|</span>
 <span class="o">+</span><span class="c1">----------------------+</span>
-<span class="o">|</span><span class="w"> </span><span class="mi">150</span><span class="w">                  </span><span class="o">|</span>
+<span class="o">|</span><span class="w"> </span><span class="mi">12</span><span class="w">                   </span><span class="o">|</span>
 <span class="o">+</span><span class="c1">----------------------+</span>
 </pre></div>
 </div>
@@ -2112,8 +2112,8 @@ dev/update_function_docs.sh file for updating surrounding text.
 </section>
 <section id="stddev-pop">
 <h3><code class="docutils literal notranslate"><span class="pre">stddev_pop</span></code><a class="headerlink" href="#stddev-pop" title="Link to this heading">¶</a></h3>
-<p>Returns the standard deviation of a set of numbers.</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">stddev</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
+<p>Returns the population standard deviation of a set of numbers.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">stddev_pop</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id53">
@@ -2124,12 +2124,12 @@ dev/update_function_docs.sh file for updating surrounding text.
 </section>
 <section id="id54">
 <h4>Example<a class="headerlink" href="#id54" title="Link to this heading">¶</a></h4>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">SELECT</span><span class="w"> </span><span class="n">stddev</span><span class="p">(</span><span class="k">column_name</span><span class="p">)</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="k">table_name</span><span class="p">;</span>
-<span class="o">+</span><span class="c1">----------------------+</span>
-<span class="o">|</span><span class="w"> </span><span class="n">stddev</span><span class="p">(</span><span class="k">column_name</span><span class="p">)</span><span class="w">   </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">----------------------+</span>
-<span class="o">|</span><span class="w"> </span><span class="mi">12</span><span class="p">.</span><span class="mi">34</span><span class="w">                </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">----------------------+</span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">SELECT</span><span class="w"> </span><span class="n">stddev_pop</span><span class="p">(</span><span class="k">column_name</span><span class="p">)</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="k">table_name</span><span class="p">;</span>
+<span class="o">+</span><span class="c1">--------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">stddev_pop</span><span class="p">(</span><span class="k">column_name</span><span class="p">)</span><span class="w">   </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">--------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="mi">10</span><span class="p">.</span><span class="mi">56</span><span class="w">                    </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">--------------------------+</span>
 </pre></div>
 </div>
 </section>
