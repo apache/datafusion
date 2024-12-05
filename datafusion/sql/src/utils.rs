@@ -27,7 +27,7 @@ use datafusion_common::tree_node::{
 };
 use datafusion_common::{
     exec_err, internal_err, plan_err, Column, DFSchemaRef, DataFusionError, HashMap,
-    IndexMap, Result, ScalarValue,
+    Result, ScalarValue,
 };
 use datafusion_expr::builder::get_struct_unnested_columns;
 use datafusion_expr::expr::{Alias, GroupingSet, Unnest, WindowFunction};
@@ -35,6 +35,8 @@ use datafusion_expr::utils::{expr_as_column_expr, find_column_exprs};
 use datafusion_expr::{
     col, expr_vec_fmt, ColumnUnnestList, Expr, ExprSchemable, LogicalPlan,
 };
+
+use indexmap::IndexMap;
 use sqlparser::ast::{Ident, Value};
 
 /// Make a best-effort attempt at resolving all columns in the expression tree
@@ -617,7 +619,7 @@ mod tests {
 
     use arrow::datatypes::{DataType as ArrowDataType, Field, Schema};
     use arrow_schema::Fields;
-    use datafusion_common::{Column, DFSchema, IndexMap, Result};
+    use datafusion_common::{Column, DFSchema, Result};
     use datafusion_expr::{
         col, lit, unnest, ColumnUnnestList, EmptyRelation, LogicalPlan,
     };
@@ -625,6 +627,7 @@ mod tests {
     use datafusion_functions_aggregate::expr_fn::count;
 
     use crate::utils::{resolve_positions_to_exprs, rewrite_recursive_unnest_bottom_up};
+    use indexmap::IndexMap;
 
     fn column_unnests_eq(
         l: Vec<&str>,

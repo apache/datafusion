@@ -20,13 +20,14 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+use indexmap::IndexSet;
 use itertools::Itertools;
 
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
 };
 use datafusion_common::{
-    internal_err, plan_err, qualified_name, Column, DFSchema, IndexSet, Result,
+    internal_err, plan_err, qualified_name, Column, DFSchema, Result,
 };
 use datafusion_expr::expr_rewriter::replace_col;
 use datafusion_expr::logical_plan::{Join, JoinType, LogicalPlan, TableScan, Union};
