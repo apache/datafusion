@@ -190,6 +190,12 @@ pub fn user_doc(args: TokenStream, input: TokenStream) -> TokenStream {
         .map(|desc| quote! { Some(#desc)})
         .unwrap_or(quote! { None });
 
+    let sql_example = sql_example.map(|ex| {
+        quote! {
+            .with_sql_example(#ex)
+        }
+    });
+
     let udf_args = udf_args
         .iter()
         .map(|(name, desc)| {
@@ -202,8 +208,14 @@ pub fn user_doc(args: TokenStream, input: TokenStream) -> TokenStream {
     let standard_args = standard_args
         .iter()
         .map(|(name, desc)| {
+            let desc = if let Some(d) = desc {
+                quote! { #d.into() }
+            } else {
+                quote! { None }
+            };
+
             quote! {
-                .with_standard_argument(#name, #desc.into())
+                .with_standard_argument(#name, #desc)
             }
         })
         .collect::<Vec<_>>();
@@ -223,20 +235,21 @@ pub fn user_doc(args: TokenStream, input: TokenStream) -> TokenStream {
         }
     });
 
+    let lock_name: proc_macro2::TokenStream =
+        format!("{name}_DOCUMENTATION").parse().unwrap();
+
     let generated = quote! {
         #input
 
-        use datafusion_doc::DocSection;
-        use datafusion_doc::DocumentationBuilder;
-
-        static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+        static #lock_name: OnceLock<Documentation> = OnceLock::new();
 
         impl #name {
+
                 fn doc(&self) -> Option<&Documentation> {
-                    Some(DOCUMENTATION.get_or_init(|| {
+                    Some(#lock_name.get_or_init(|| {
                         Documentation::builder(DocSection { include: #doc_section_include, label: #doc_section_lbl, description: #doc_section_description },
                     #description.to_string(), #syntax_example.to_string())
-                        .with_sql_example(#sql_example.to_string())
+                        #sql_example
                         #alt_syntax_example
                         #(#standard_args)*
                         #(#udf_args)*
@@ -248,7 +261,9 @@ pub fn user_doc(args: TokenStream, input: TokenStream) -> TokenStream {
     };
 
     // Debug the generated code if needed
-    //eprintln!("Generated code: {}", generated);
+    // if name == "ArrayAgg" {
+    //     eprintln!("Generated code: {}", generated);
+    // }
 
     // Return the generated code
     TokenStream::from(generated)

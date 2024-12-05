@@ -25,13 +25,14 @@ use datafusion_common::cast::as_list_array;
 use datafusion_common::utils::{get_row_at_idx, SingleRowListArrayBuilder};
 use datafusion_common::{exec_err, ScalarValue};
 use datafusion_common::{internal_err, Result};
-use datafusion_expr::aggregate_doc_sections::DOC_SECTION_GENERAL;
+use datafusion_doc::DocSection;
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{Accumulator, Signature, Volatility};
 use datafusion_expr::{AggregateUDFImpl, Documentation};
 use datafusion_functions_aggregate_common::merge_arrays::merge_ordered_arrays;
 use datafusion_functions_aggregate_common::utils::ordering_fields;
+use datafusion_macros::user_doc;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 use std::collections::{HashSet, VecDeque};
 use std::mem::{size_of, size_of_val};
@@ -45,6 +46,20 @@ make_udaf_expr_and_func!(
     array_agg_udaf
 );
 
+#[user_doc(
+    doc_section(label = "General Functions"),
+    description = "Returns an array created from the expression elements. If ordering is required, elements are inserted in the specified order.",
+    syntax_example = "array_agg(expression [ORDER BY expression])",
+    sql_example = r#"```sql
+> SELECT array_agg(column_name ORDER BY other_column) FROM table_name;
++-----------------------------------------------+
+| array_agg(column_name ORDER BY other_column)  |
++-----------------------------------------------+
+| [element1, element2, element3]                |
++-----------------------------------------------+
+```"#,
+    standard_argument(name = "expression",)
+)]
 #[derive(Debug)]
 /// ARRAY_AGG aggregate expression
 pub struct ArrayAgg {
@@ -145,31 +160,8 @@ impl AggregateUDFImpl for ArrayAgg {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_array_agg_doc())
+        self.doc()
     }
-}
-
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_array_agg_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder(
-            DOC_SECTION_GENERAL,
-                "Returns an array created from the expression elements. If ordering is required, elements are inserted in the specified order.",
-
-            "array_agg(expression [ORDER BY expression])")
-            .with_sql_example(r#"```sql
-> SELECT array_agg(column_name ORDER BY other_column) FROM table_name;
-+-----------------------------------------------+
-| array_agg(column_name ORDER BY other_column)  |
-+-----------------------------------------------+
-| [element1, element2, element3]                |
-+-----------------------------------------------+
-```"#, 
-            )
-            .with_standard_argument("expression", None)
-            .build()
-    })
 }
 
 #[derive(Debug)]
