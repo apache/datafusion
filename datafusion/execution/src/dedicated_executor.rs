@@ -109,7 +109,7 @@ impl From<Builder> for DedicatedExecutorBuilder {
 /// ## "No IO runtime registered. Call `register_io_runtime`/`register_current_runtime_for_io` in current thread!
 ///
 /// This means that IO was attempted on a tokio runtime that was not registered
-/// for IO. One solution is to run the task using [DedicatedExecutor::spawn].
+/// for IO. One solution is to run the task using [DedicatedExecutor::spawn_cpu].
 ///
 /// ## "Cannot drop a runtime in a context where blocking is not allowed"`
 ///
@@ -135,7 +135,20 @@ impl DedicatedExecutor {
     /// Runs the specified [`Future`] (and any tasks it spawns) on the thread
     /// pool managed by this `DedicatedExecutor`.
     ///
+    /// # TODO: make this wait (aka so the API doesn't start a new background task or whatever)
+    ///
     /// # Notes
+    ///
+    /// This task is run on a dedicated Tokio runtime that purposely does not have
+    /// IO enabled. If your future makes any IO calls, you have to
+    /// explicitly run them on DedicatedExecutor::spawn_io.
+    ///
+    /// If you see a message like this
+    ///
+    /// (Panic { msg: "A Tokio 1.x context was found, but timers are disabled. Call `enable_time` on the runtime builder to enable timers."
+    ///
+    /// It means some work that was meant to be done on the IO runtime was done
+    /// on the CPU runtime.
     ///
     /// UNLIKE [`tokio::task::spawn`], the returned future is **cancelled** when
     /// it is dropped. Thus, you need ensure the returned future lives until it
@@ -143,7 +156,10 @@ impl DedicatedExecutor {
     ///
     /// All spawned tasks are added to the tokio executor immediately and
     /// compete for the threadpool's resources.
-    pub fn spawn<T>(&self, task: T) -> impl Future<Output = Result<T::Output, JobError>>
+    pub fn spawn_cpu<T>(
+        &self,
+        task: T,
+    ) -> impl Future<Output = Result<T::Output, JobError>>
     where
         T: Future + Send + 'static,
         T::Output: Send + 'static,
@@ -364,7 +380,7 @@ impl Drop for State {
 
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(60 * 5);
 
-/// Potential error returned when polling [`DedicatedExecutor::spawn`].
+/// Potential error returned when polling [`DedicatedExecutor::spawn_cpu`].
 #[derive(Debug)]
 pub enum JobError {
     WorkerGone,
@@ -561,7 +577,7 @@ mod tests {
     async fn test_io_runtime_multi_thread_impl(dedicated: DedicatedExecutor) {
         let io_runtime_id = std::thread::current().id();
         dedicated
-            .spawn(async move {
+            .spawn_cpu(async move {
                 let dedicated_id = std::thread::current().id();
                 let spawned =
                     DedicatedExecutor::spawn_io(
@@ -581,7 +597,7 @@ mod tests {
         let barrier = Arc::new(Barrier::new(2));
 
         let exec = exec();
-        let dedicated_task = exec.spawn(do_work(42, Arc::clone(&barrier)));
+        let dedicated_task = exec.spawn_cpu(do_work(42, Arc::clone(&barrier)));
 
         // Note the dedicated task will never complete if it runs on
         // the main tokio thread (as this test is not using the
@@ -600,7 +616,7 @@ mod tests {
         let barrier = Arc::new(Barrier::new(2));
         let exec = exec();
         // Run task on clone should work fine
-        let dedicated_task = exec.clone().spawn(do_work(42, Arc::clone(&barrier)));
+        let dedicated_task = exec.clone().spawn_cpu(do_work(42, Arc::clone(&barrier)));
         barrier.wait();
         assert_eq!(dedicated_task.await.unwrap(), 42);
 
@@ -619,7 +635,7 @@ mod tests {
 
         drop(exec.clone());
 
-        let task = exec.spawn(do_work(42, Arc::clone(&barrier)));
+        let task = exec.spawn_cpu(do_work(42, Arc::clone(&barrier)));
         barrier.wait();
         assert_eq!(task.await.unwrap(), 42);
 
@@ -650,8 +666,8 @@ mod tests {
 
         // make an executor with two threads
         let exec = exec2();
-        let dedicated_task1 = exec.spawn(do_work(11, Arc::clone(&barrier)));
-        let dedicated_task2 = exec.spawn(do_work(42, Arc::clone(&barrier)));
+        let dedicated_task1 = exec.spawn_cpu(do_work(11, Arc::clone(&barrier)));
+        let dedicated_task2 = exec.spawn_cpu(do_work(42, Arc::clone(&barrier)));
 
         // block main thread until completion of other two tasks
         barrier.wait();
@@ -669,7 +685,7 @@ mod tests {
 
         // spawn a task that spawns to other tasks and ensure they run on the dedicated
         // executor
-        let dedicated_task = exec.spawn(async move {
+        let dedicated_task = exec.spawn_cpu(async move {
             // spawn separate tasks
             let t1 = tokio::task::spawn(async { 25usize });
             t1.await.unwrap()
@@ -684,7 +700,7 @@ mod tests {
     #[tokio::test]
     async fn panic_on_executor_str() {
         let exec = exec();
-        let dedicated_task = exec.spawn(async move {
+        let dedicated_task = exec.spawn_cpu(async move {
             if true {
                 panic!("At the disco, on the dedicated task scheduler");
             } else {
@@ -705,7 +721,7 @@ mod tests {
     #[tokio::test]
     async fn panic_on_executor_string() {
         let exec = exec();
-        let dedicated_task = exec.spawn(async move {
+        let dedicated_task = exec.spawn_cpu(async move {
             if true {
                 panic!("{} {}", 1, 2);
             } else {
@@ -723,7 +739,7 @@ mod tests {
     #[tokio::test]
     async fn panic_on_executor_other() {
         let exec = exec();
-        let dedicated_task = exec.spawn(async move {
+        let dedicated_task = exec.spawn_cpu(async move {
             if true {
                 panic_any(1)
             } else {
@@ -746,7 +762,7 @@ mod tests {
         let captured_2 = Arc::clone(&barrier_2);
 
         let exec = exec();
-        let dedicated_task = exec.spawn(async move {
+        let dedicated_task = exec.spawn_cpu(async move {
             captured_1.wait();
             do_work(42, captured_2).await
         });
@@ -768,7 +784,7 @@ mod tests {
 
         // Simulate trying to submit tasks once executor has shutdown
         exec.shutdown();
-        let dedicated_task = exec.spawn(async { 11 });
+        let dedicated_task = exec.spawn_cpu(async { 11 });
 
         // task should complete, but return an error
         let err = dedicated_task.await.unwrap_err();
@@ -788,7 +804,7 @@ mod tests {
         exec.clone().join().await;
 
         // Simulate trying to submit tasks once executor has shutdown
-        let dedicated_task = exec.spawn(async { 11 });
+        let dedicated_task = exec.spawn_cpu(async { 11 });
 
         // task should complete, but return an error
         let err = dedicated_task.await.unwrap_err();
@@ -835,7 +851,7 @@ mod tests {
         let barrier1_pre_captured = Arc::clone(&barrier1_pre);
         let barrier1_post = Arc::new(AsyncBarrier::new(2));
         let barrier1_post_captured = Arc::clone(&barrier1_post);
-        let dedicated_task1 = exec.spawn(async move {
+        let dedicated_task1 = exec.spawn_cpu(async move {
             barrier1_pre_captured.wait().await;
             do_work_async(11, barrier1_post_captured).await
         });
@@ -846,7 +862,7 @@ mod tests {
         let barrier2_pre_captured = Arc::clone(&barrier2_pre);
         let barrier2_post = Arc::new(AsyncBarrier::new(2));
         let barrier2_post_captured = Arc::clone(&barrier2_post);
-        let dedicated_task2 = exec.spawn(async move {
+        let dedicated_task2 = exec.spawn_cpu(async move {
             barrier2_pre_captured.wait().await;
             do_work_async(22, barrier2_post_captured).await
         });
@@ -910,7 +926,7 @@ mod tests {
         let exec = DedicatedExecutorBuilder::new().build();
 
         let io_disabled = exec
-            .spawn(async move {
+            .spawn_cpu(async move {
                 // the only way (I've found) to test if IO is enabled is to use it and observer if tokio panics
                 TcpListener::bind("127.0.0.1:0")
                     .catch_unwind()

@@ -47,7 +47,7 @@ use tokio_stream::wrappers::ReceiverStream;
 pub struct CrossRtStream<T> {
     /// Future that drives the underlying stream.
     ///
-    /// This is actually wrapped into [`DedicatedExecutor::spawn`] so it can be safely polled by the receiving runtime.
+    /// This is actually wrapped into [`DedicatedExecutor::spawn_cpu`] so it can be safely polled by the receiving runtime.
     driver: BoxFuture<'static, ()>,
 
     /// Flags if the [driver](Self::driver) returned [`Poll::Ready`].
@@ -78,7 +78,7 @@ impl<T> std::fmt::Debug for CrossRtStream<T> {
 impl<T> CrossRtStream<T> {
     /// Create new stream by producing a future that sends its state to the given [`Sender`].
     ///
-    /// This is an internal method. `f` should always be wrapped into [`DedicatedExecutor::spawn`] (except for testing purposes).
+    /// This is an internal method. `f` should always be wrapped into [`DedicatedExecutor::spawn_cpu`] (except for testing purposes).
     fn new_with_tx<F, Fut>(f: F) -> Self
     where
         F: FnOnce(Sender<T>) -> Fut,
@@ -129,7 +129,7 @@ where
 
             // future for this runtime (likely the tokio/tonic/web driver)
             async move {
-                if let Err(e) = exec.spawn(fut).await {
+                if let Err(e) = exec.spawn_cpu(fut).await {
                     let e = converter(e);
 
                     // last message, so we don't care about the receiver side

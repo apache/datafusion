@@ -205,7 +205,7 @@ impl RuntimeEnv {
     {
         if let Some(dedicated_executor) = self.dedicated_executor() {
             println!("Running CPU on dedicated executor");
-            dedicated_executor.spawn(fut).await.map_err(|e| {
+            dedicated_executor.spawn_cpu(fut).await.map_err(|e| {
                 DataFusionError::Context(
                     "Join Error (panic)".to_string(),
                     Box::new(DataFusionError::External(e.into())),

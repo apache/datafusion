@@ -108,42 +108,6 @@ async fn same_runtime(ctx: &SessionContext, sql: &str) -> Result<()> {
 
 /// Demonstrates how to run queries on a **different** runtime than the current one
 ///
-/// See [`different_runtime_advanced`] to see how you should run DataFusion
-/// queries from a network server or when processing data from a remote object
-/// store.
-async fn different_runtime_basic(ctx: SessionContext, sql: String) -> Result<()> {
-    // First, we need a new runtime, which we can create with the tokio builder
-    // however, since we are already in the context of another runtime
-    // (installed by #[tokio::main]) we create a new thread for the runtime
-    let dedicated_executor = DedicatedExecutor::builder().build();
-
-    // Now, we can simply run the query on the new runtime
-    dedicated_executor
-        .spawn(async move {
-            // this runs on the different threadpool
-            let df = ctx.sql(&sql).await?;
-            let mut stream: SendableRecordBatchStream = df.execute_stream().await?;
-
-            // Calling `next()` to drive the plan on the different threadpool
-            while let Some(batch) = stream.next().await {
-                println!("{}", pretty_format_batches(&[batch?]).unwrap());
-            }
-            Ok(()) as Result<()>
-        })
-        // even though we are `await`ing here on the "current" pool, internally
-        // the DedicatedExecutor runs the work on the separate threadpool pool
-        // and the `await` simply notifies when the work is done  that the work is done
-        .await??;
-
-    // When done with a DedicatedExecutor, it should be shut down cleanly to give
-    // any outstanding tasks a chance to clean up
-    dedicated_executor.join().await;
-
-    Ok(())
-}
-
-/// Demonstrates how to run queries on a different runtime than the current run
-/// and how to handle IO operations.
 async fn different_runtime_advanced() -> Result<()> {
     // In this example, we will configure access to a remote object store
     // over the network during the plan
@@ -186,7 +150,7 @@ async fn different_runtime_advanced() -> Result<()> {
 
     // Plan (and execute) the query on the dedicated runtime
     let stream = dedicated_executor
-        .spawn(async move {
+        .spawn_cpu(async move {
             // Plan / execute the query
             let url = "https://github.com/apache/arrow-testing/raw/master/data/csv/aggregate_test_100.csv";
             let df = ctx
@@ -223,3 +187,6 @@ async fn different_runtime_advanced() -> Result<()> {
 
     Ok(())
 }
+
+// TODO add an example of a how to call IO / CPU bound work directly using DedicatedExecutor
+// (e.g. to create a listing table directly)
