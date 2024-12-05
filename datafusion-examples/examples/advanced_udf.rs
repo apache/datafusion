@@ -211,9 +211,12 @@ fn pow_in_place(base: f64, exp_array: ArrayRef) -> Result<ArrayRef> {
     let owned_array = exp_array
         // as before we downcast to Float64Array
         .as_primitive::<Float64Type>()
-        // non-obviously, clone (which increments ref counts, it
-        // doesn't clone the data) to get an typed own array
-        // so we drop the original exp_array (untyped) reference
+        // non-obviously, we call clone here to get an owned `Float64Array`.
+        // Calling clone() is relatively inexpensive as it increments
+        // some ref counts but doesn't clone the data)
+        //
+        // Once we have the owned Float64Array we can drop the original
+        // exp_array (untyped) reference
         .clone();
 
     // We *MUST* drop this reference explicitly so that owned_array
