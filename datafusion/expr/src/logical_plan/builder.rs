@@ -1967,6 +1967,7 @@ mod tests {
     use crate::{col, expr, expr_fn::exists, in_subquery, lit, scalar_subquery};
 
     use datafusion_common::{RecursionUnnestOption, SchemaError};
+    use sqlparser::tokenizer::Span;
 
     #[test]
     fn plan_builder_simple() -> Result<()> {
@@ -2211,6 +2212,7 @@ mod tests {
                         Column {
                             relation: Some(TableReference::Bare { table }),
                             name,
+                            span: _,
                         },
                 },
                 _,

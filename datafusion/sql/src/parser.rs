@@ -283,10 +283,10 @@ impl<'a> DFParser<'a> {
         dialect: &'a dyn Dialect,
     ) -> Result<Self, ParserError> {
         let mut tokenizer = Tokenizer::new(dialect, sql);
-        let tokens = tokenizer.tokenize()?;
+        let tokens = tokenizer.tokenize_with_location()?;
 
         Ok(DFParser {
-            parser: Parser::new(dialect).with_tokens(tokens),
+            parser: Parser::new(dialect).with_tokens_with_locations(tokens),
         })
     }
 

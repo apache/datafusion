@@ -18,22 +18,35 @@
 //! Column
 
 use arrow_schema::{Field, FieldRef};
+use sqlparser::tokenizer::Span;
 
 use crate::error::_schema_err;
 use crate::utils::{parse_identifiers_normalized, quote_identifier};
 use crate::{DFSchema, Result, SchemaError, TableReference};
+use derivative::Derivative;
 use std::collections::HashSet;
 use std::convert::Infallible;
 use std::fmt;
 use std::str::FromStr;
 
 /// A named reference to a qualified field in a schema.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, Derivative)]
+#[derivative(PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Column {
     /// relation/table reference.
     pub relation: Option<TableReference>,
     /// field/column name.
     pub name: String,
+    #[derivative(
+        PartialEq = "ignore",
+        Hash = "ignore",
+        PartialOrd = "ignore",
+        Ord = "ignore"
+    )]
+    /// The location in the source code where this column originally came from.
+    /// Does not change as the [`Column`] undergoes normalization and other
+    /// transformations.
+    pub span: Span,
 }
 
 impl Column {
@@ -50,6 +63,7 @@ impl Column {
         Self {
             relation: relation.map(|r| r.into()),
             name: name.into(),
+            span: Span::empty(),
         }
     }
 
@@ -58,6 +72,7 @@ impl Column {
         Self {
             relation: None,
             name: name.into(),
+            span: Span::empty(),
         }
     }
 
@@ -68,6 +83,7 @@ impl Column {
         Self {
             relation: None,
             name: name.into(),
+            span: Span::empty(),
         }
     }
 
@@ -99,7 +115,11 @@ impl Column {
             // identifiers will be treated as an unqualified column name
             _ => return None,
         };
-        Some(Self { relation, name })
+        Some(Self {
+            relation,
+            name,
+            span: Span::empty(),
+        })
     }
 
     /// Deserialize a fully qualified name string into a column
@@ -113,6 +133,7 @@ impl Column {
             Self {
                 relation: None,
                 name: flat_name,
+                span: Span::empty(),
             },
         )
     }
@@ -124,6 +145,7 @@ impl Column {
             Self {
                 relation: None,
                 name: flat_name,
+                span: Span::empty(),
             },
         )
     }
@@ -253,6 +275,13 @@ impl Column {
                 .flat_map(|s| s.columns())
                 .collect(),
         })
+    }
+
+    /// Attaches a [`Span`] to the [`Column`], i.e. its location in the source
+    /// SQL query.
+    pub fn with_span(mut self, span: Span) -> Self {
+        self.span = span;
+        self
     }
 }
 

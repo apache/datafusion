@@ -42,6 +42,7 @@ use sqlparser::ast::{
     display_comma_separated, ExceptSelectItem, ExcludeSelectItem, IlikeSelectItem,
     NullTreatment, RenameSelectItem, ReplaceSelectElement,
 };
+use sqlparser::tokenizer::Span;
 
 /// Represents logical expressions such as `A + 1`, or `CAST(c1 AS int)`.
 ///
@@ -1113,7 +1114,7 @@ impl Expr {
     /// output schema. We can use this qualified name to reference the field.
     pub fn qualified_name(&self) -> (Option<TableReference>, String) {
         match self {
-            Expr::Column(Column { relation, name }) => (relation.clone(), name.clone()),
+            Expr::Column(Column { relation, name, span: _ }) => (relation.clone(), name.clone()),
             Expr::Alias(Alias { relation, name, .. }) => (relation.clone(), name.clone()),
             _ => (None, self.schema_name().to_string()),
         }
@@ -1663,6 +1664,13 @@ impl Expr {
             | Expr::WindowFunction(..)
             | Expr::Literal(..)
             | Expr::Placeholder(..) => false,
+        }
+    }
+
+    pub fn get_span(&self) -> Option<Span> {
+        match self {
+            Expr::Column(Column{span, ..}) => Some(*span),
+            _ => None,
         }
     }
 }

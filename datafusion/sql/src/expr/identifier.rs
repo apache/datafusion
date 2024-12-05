@@ -46,6 +46,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 })?;
             Ok(Expr::ScalarVariable(ty, var_names))
         } else {
+            let id_span = id.span;
+
             // Don't use `col()` here because it will try to
             // interpret names with '.' as if they were
             // compound identifiers, but this is not a compound
@@ -59,6 +61,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 return Ok(Expr::Column(Column {
                     relation: qualifier.filter(|q| q.table() != UNNAMED_TABLE).cloned(),
                     name: normalize_ident,
+                    span: id_span,
                 }));
             }
 
@@ -79,6 +82,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             Ok(Expr::Column(Column {
                 relation: None,
                 name: normalize_ident,
+                span: id_span,
             }))
         }
     }

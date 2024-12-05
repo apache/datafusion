@@ -25,6 +25,7 @@ use datafusion_expr::logical_plan::{LogicalPlan, Values};
 use datafusion_expr::{Aggregate, AggregateUDF, Expr};
 use datafusion_functions_aggregate::count::Count;
 use datafusion_physical_plan::collect;
+use sqlparser::tokenizer::Span;
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::ops::Deref;
@@ -51,6 +52,7 @@ async fn count_only_nulls() -> Result<()> {
     let input_col_ref = Expr::Column(Column {
         relation: None,
         name: "col".to_string(),
+        span: Span::empty(),
     });
 
     // Aggregation: count(col) AS count

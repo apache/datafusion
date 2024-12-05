@@ -26,6 +26,7 @@ use std::io;
 use std::result;
 use std::sync::Arc;
 
+use crate::diagnostic::Diagnostic;
 use crate::utils::quote_identifier;
 use crate::{Column, DFSchema, TableReference};
 #[cfg(feature = "avro")]
@@ -131,6 +132,7 @@ pub enum DataFusionError {
     /// Errors from either mapping LogicalPlans to/from Substrait plans
     /// or serializing/deserializing protobytes to Substrait plans
     Substrait(String),
+    Diagnostic(Diagnostic, Box<DataFusionError>),
 }
 
 #[macro_export]
@@ -316,6 +318,7 @@ impl Error for DataFusionError {
             DataFusionError::External(e) => Some(e.as_ref()),
             DataFusionError::Context(_, e) => Some(e.as_ref()),
             DataFusionError::Substrait(_) => None,
+            DataFusionError::Diagnostic(_, e) => Some(e.as_ref()),
         }
     }
 }
@@ -370,6 +373,11 @@ impl DataFusionError {
     /// wraps self in Self::Context with a description
     pub fn context(self, description: impl Into<String>) -> Self {
         Self::Context(description.into(), Box::new(self))
+    }
+
+    /// wraps self in Self::Diagnostic with a [`Diagnostic`]
+    pub fn with_diagnostic(self, diag: Diagnostic) -> Self {
+        Self::Diagnostic(diag, Box::new(self))
     }
 
     /// Strips backtrace out of the error message
@@ -429,6 +437,7 @@ impl DataFusionError {
             DataFusionError::External(_) => "External error: ",
             DataFusionError::Context(_, _) => "",
             DataFusionError::Substrait(_) => "Substrait error: ",
+            DataFusionError::Diagnostic(_, _) => "",
         }
     }
 
@@ -469,7 +478,40 @@ impl DataFusionError {
                 Cow::Owned(format!("{desc}\ncaused by\n{}", *err))
             }
             DataFusionError::Substrait(ref desc) => Cow::Owned(desc.to_string()),
+            DataFusionError::Diagnostic(_, ref err) => Cow::Owned(err.to_string()),
         }
+    }
+
+    pub fn get_diagnostics(&self) -> impl Iterator<Item = &Diagnostic> + '_ {
+        struct DiagnosticsIterator<'a> {
+            head: &'a DataFusionError,
+        }
+
+        impl<'a> Iterator for DiagnosticsIterator<'a> {
+            type Item = &'a Diagnostic;
+
+            fn next(&mut self) -> Option<Self::Item> {
+                loop {
+                    if let DataFusionError::Diagnostic(diagnostics, source) = self.head {
+                        self.head = source.as_ref();
+                        return Some(diagnostics);
+                    }
+
+                    if let Some(source) = self
+                        .head
+                        .source()
+                        .map(|source| source.downcast_ref::<DataFusionError>())
+                        .flatten()
+                    {
+                        self.head = source;
+                    } else {
+                        return None;
+                    }
+                }
+            }
+        }
+
+        DiagnosticsIterator { head: self }
     }
 }
 

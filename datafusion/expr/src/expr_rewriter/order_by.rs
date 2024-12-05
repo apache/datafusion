@@ -23,6 +23,7 @@ use crate::{expr::Sort, Cast, Expr, LogicalPlan, TryCast};
 
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{Column, Result};
+use sqlparser::tokenizer::Span;
 
 /// Rewrite sort on aggregate expressions to sort on the column of aggregate output
 /// For example, `max(x)` is written to `col("max(x)")`
@@ -101,6 +102,8 @@ fn rewrite_in_terms_of_projection(
         let search_col = Expr::Column(Column {
             relation: None,
             name,
+            // Span is not used in PartialEq
+            span: Span::empty(),
         });
 
         // look for the column named the same as this expr

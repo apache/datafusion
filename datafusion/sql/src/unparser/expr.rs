@@ -1695,6 +1695,7 @@ mod tests {
                 Expr::Column(Column {
                     relation: Some(TableReference::partial("a", "b")),
                     name: "c".to_string(),
+                    span: Span::empty(),
                 })
                 .gt(lit(4)),
                 r#"(b.c > 4)"#,
@@ -2032,6 +2033,7 @@ mod tests {
                     expr: Box::new(Expr::Column(Column {
                         relation: Some(TableReference::partial("schema", "table")),
                         name: "array_col".to_string(),
+                        span: Span::empty(),
                     })),
                 }),
                 r#"UNNEST("table".array_col)"#,

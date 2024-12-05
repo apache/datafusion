@@ -30,9 +30,11 @@ use arrow::datatypes::{
 };
 use datafusion_common::types::NativeType;
 use datafusion_common::{
-    exec_datafusion_err, exec_err, internal_err, plan_datafusion_err, plan_err, Result,
+    exec_datafusion_err, exec_err, internal_err, plan_datafusion_err, plan_err,
+    Diagnostic, DiagnosticEntry, DiagnosticEntryKind, Result, WithSpan,
 };
 use itertools::Itertools;
+use sqlparser::tokenizer::Span;
 
 /// The type signature of an instantiation of binary operator expression such as
 /// `lhs + rhs`
@@ -69,10 +71,19 @@ impl Signature {
 }
 
 /// Returns a [`Signature`] for applying `op` to arguments of type `lhs` and `rhs`
-fn signature(lhs: &DataType, op: &Operator, rhs: &DataType) -> Result<Signature> {
+fn signature<'a>(
+    lhs: impl Into<WithSpan<&'a DataType>>,
+    op: impl Into<WithSpan<&'a Operator>>,
+    rhs: impl Into<WithSpan<&'a DataType>>,
+) -> Result<Signature> {
     use arrow::datatypes::DataType::*;
     use Operator::*;
-    match op {
+
+    let lhs: WithSpan<_> = lhs.into();
+    let op: WithSpan<_> = op.into();
+    let rhs: WithSpan<_> = rhs.into();
+
+    match *op {
         Eq |
         NotEq |
         Lt |
@@ -81,13 +92,13 @@ fn signature(lhs: &DataType, op: &Operator, rhs: &DataType) -> Result<Signature>
         GtEq |
         IsDistinctFrom |
         IsNotDistinctFrom => {
-            comparison_coercion(lhs, rhs).map(Signature::comparison).ok_or_else(|| {
+            comparison_coercion(&lhs, &rhs).map(Signature::comparison).ok_or_else(|| {
                 plan_datafusion_err!(
                     "Cannot infer common argument type for comparison operation {lhs} {op} {rhs}"
                 )
             })
         }
-        And | Or => if matches!((lhs, rhs), (Boolean | Null, Boolean | Null)) {
+        And | Or => if matches!((*lhs, *rhs), (Boolean | Null, Boolean | Null)) {
             // Logical binary boolean operators can only be evaluated for
             // boolean or null arguments.                   
             Ok(Signature::uniform(Boolean))
@@ -97,28 +108,28 @@ fn signature(lhs: &DataType, op: &Operator, rhs: &DataType) -> Result<Signature>
             )
         }
         RegexMatch | RegexIMatch | RegexNotMatch | RegexNotIMatch => {
-            regex_coercion(lhs, rhs).map(Signature::comparison).ok_or_else(|| {
+            regex_coercion(lhs.as_ref(), rhs.as_ref()).map(Signature::comparison).ok_or_else(|| {
                 plan_datafusion_err!(
                     "Cannot infer common argument type for regex operation {lhs} {op} {rhs}"
                 )
             })
         }
         LikeMatch | ILikeMatch | NotLikeMatch | NotILikeMatch => {
-            regex_coercion(lhs, rhs).map(Signature::comparison).ok_or_else(|| {
+            regex_coercion(lhs.as_ref(), rhs.as_ref()).map(Signature::comparison).ok_or_else(|| {
                 plan_datafusion_err!(
                     "Cannot infer common argument type for regex operation {lhs} {op} {rhs}"
                 )
             })
         }
         BitwiseAnd | BitwiseOr | BitwiseXor | BitwiseShiftRight | BitwiseShiftLeft => {
-            bitwise_coercion(lhs, rhs).map(Signature::uniform).ok_or_else(|| {
+            bitwise_coercion(lhs.as_ref(), rhs.as_ref()).map(Signature::uniform).ok_or_else(|| {
                 plan_datafusion_err!(
                     "Cannot infer common type for bitwise operation {lhs} {op} {rhs}"
                 )
             })
         }
         StringConcat => {
-            string_concat_coercion(lhs, rhs).map(Signature::uniform).ok_or_else(|| {
+            string_concat_coercion(lhs.as_ref(), rhs.as_ref()).map(Signature::uniform).ok_or_else(|| {
                 plan_datafusion_err!(
                     "Cannot infer common string type for string concat operation {lhs} {op} {rhs}"
                 )
@@ -128,7 +139,7 @@ fn signature(lhs: &DataType, op: &Operator, rhs: &DataType) -> Result<Signature>
             // ArrowAt and AtArrow check for whether one array is contained in another.
             // The result type is boolean. Signature::comparison defines this signature.
             // Operation has nothing to do with comparison
-            array_coercion(lhs, rhs).map(Signature::comparison).ok_or_else(|| {
+            array_coercion(lhs.as_ref(), rhs.as_ref()).map(Signature::comparison).ok_or_else(|| {
                 plan_datafusion_err!(
                     "Cannot infer common array type for arrow operation {lhs} {op} {rhs}"
                 )
@@ -140,7 +151,7 @@ fn signature(lhs: &DataType, op: &Operator, rhs: &DataType) -> Result<Signature>
                 let l = new_empty_array(lhs);
                 let r = new_empty_array(rhs);
 
-                let result = match op {
+                let result = match *op {
                     Plus => add_wrapping(&l, &r),
                     Minus => sub_wrapping(&l, &r),
                     Multiply => mul_wrapping(&l, &r),
@@ -151,14 +162,14 @@ fn signature(lhs: &DataType, op: &Operator, rhs: &DataType) -> Result<Signature>
                 result.map(|x| x.data_type().clone())
             };
 
-            if let Ok(ret) = get_result(lhs, rhs) {
+            if let Ok(ret) = get_result(lhs.as_ref(), rhs.as_ref()) {
                 // Temporal arithmetic, e.g. Date32 + Interval
                 Ok(Signature{
-                    lhs: lhs.clone(),
-                    rhs: rhs.clone(),
+                    lhs: lhs.into_inner().clone(),
+                    rhs: rhs.into_inner().clone(),
                     ret,
                 })
-            } else if let Some(coerced) = temporal_coercion_strict_timezone(lhs, rhs) {
+            } else if let Some(coerced) = temporal_coercion_strict_timezone(lhs.as_ref(), rhs.as_ref()) {
                 // Temporal arithmetic by first coercing to a common time representation
                 // e.g. Date32 - Timestamp
                 let ret = get_result(&coerced, &coerced).map_err(|e| {
@@ -171,7 +182,7 @@ fn signature(lhs: &DataType, op: &Operator, rhs: &DataType) -> Result<Signature>
                     rhs: coerced,
                     ret,
                 })
-            } else if let Some((lhs, rhs)) = math_decimal_coercion(lhs, rhs) {
+            } else if let Some((lhs, rhs)) = math_decimal_coercion(lhs.as_ref(), rhs.as_ref()) {
                 // Decimal arithmetic, e.g. Decimal(10, 2) + Decimal(10, 0)
                 let ret = get_result(&lhs, &rhs).map_err(|e| {
                     plan_datafusion_err!(
@@ -183,32 +194,56 @@ fn signature(lhs: &DataType, op: &Operator, rhs: &DataType) -> Result<Signature>
                     rhs,
                     ret,
                 })
-            } else if let Some(numeric) = mathematics_numerical_coercion(lhs, rhs) {
+            } else if let Some(numeric) = mathematics_numerical_coercion(lhs.as_ref(), rhs.as_ref()) {
                 // Numeric arithmetic, e.g. Int32 + Int32
                 Ok(Signature::uniform(numeric))
             } else {
                 plan_err!(
                     "Cannot coerce arithmetic expression {lhs} {op} {rhs} to valid types"
-                )
+                ).map_err(|err | {
+                    if lhs.span == Span::empty() || rhs.span == Span::empty() {
+                        err
+                    } else {
+                        err.with_diagnostic(Diagnostic {
+                            entries: vec![
+                                DiagnosticEntry {
+                                    kind: DiagnosticEntryKind::Error,
+                                    message: "Binary expression has invalid types".to_string(),
+                                    span: lhs.span.union(&rhs.span),
+                                },
+                                DiagnosticEntry {
+                                    kind: DiagnosticEntryKind::Note,
+                                    message: format!("Is of type {}", *lhs),
+                                    span: lhs.span,
+                                },
+                                DiagnosticEntry {
+                                    kind: DiagnosticEntryKind::Note,
+                                    message: format!("Is of type {}", *rhs),
+                                    span: rhs.span,
+                                }
+                            ]
+                        })
+                    }
+                })
             }
         }
     }
 }
 
 /// Returns the resulting type of a binary expression evaluating the `op` with the left and right hand types
-pub fn get_result_type(
-    lhs: &DataType,
-    op: &Operator,
-    rhs: &DataType,
+pub fn get_result_type<'a>(
+    lhs: impl Into<WithSpan<&'a DataType>>,
+    op: impl Into<WithSpan<&'a Operator>>,
+    rhs: impl Into<WithSpan<&'a DataType>>,
 ) -> Result<DataType> {
     signature(lhs, op, rhs).map(|sig| sig.ret)
 }
 
 /// Returns the coerced input types for a binary expression evaluating the `op` with the left and right hand types
-pub fn get_input_types(
-    lhs: &DataType,
-    op: &Operator,
-    rhs: &DataType,
+pub fn get_input_types<'a>(
+    lhs: impl Into<WithSpan<&'a DataType>>,
+    op: impl Into<WithSpan<&'a Operator>>,
+    rhs: impl Into<WithSpan<&'a DataType>>,
 ) -> Result<(DataType, DataType)> {
     signature(lhs, op, rhs).map(|sig| (sig.lhs, sig.rhs))
 }

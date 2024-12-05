@@ -911,10 +911,12 @@ impl Unparser<'_> {
                     Expr::Column(Column {
                         relation: _,
                         name: left_name,
+                        span: _,
                     }),
                     Expr::Column(Column {
                         relation: _,
                         name: right_name,
+                        span: _,
                     }),
                 ) if left_name == right_name => {
                     idents.push(self.new_ident_quoted_if_needs(left_name.to_string()));

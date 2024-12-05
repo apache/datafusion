@@ -149,6 +149,7 @@ sqlparser = { version = "0.52.0", features = ["visitor"] }
 tempfile = "3"
 tokio = { version = "1.36", features = ["macros", "rt", "sync"] }
 url = "2.2"
+derivative = "2.2.0"
 
 [profile.release]
 codegen-units = 1
