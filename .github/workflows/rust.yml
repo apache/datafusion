@@ -80,8 +80,11 @@ jobs:
       - name: Check datafusion-common without default features
         run: cargo check --all-targets --no-default-features -p datafusion-common
 
-      - name: Check datafusion-functions
+      - name: Check datafusion-functions without default features
         run: cargo check --all-targets --no-default-features -p datafusion-functions
+
+      - name: Check datafusion-substrait without default features
+        run: cargo check --all-targets --no-default-features -p datafusion-substrait
 
       - name: Check workspace in debug mode
         run: cargo check --all-targets --workspace

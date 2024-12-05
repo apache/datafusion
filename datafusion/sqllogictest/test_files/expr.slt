@@ -560,7 +560,7 @@ select repeat('-1.2', arrow_cast(3, 'Int32'));
 ----
 -1.2-1.2-1.2
 
-query error DataFusion error: Error during planning: Error during planning: Coercion from \[Utf8, Float64\] to the signature
+query error DataFusion error: Error during planning: Error during planning: Failed to coerce arguments to satisfy a call to repeat function: coercion from \[Utf8, Float64\] to the signature
 select repeat('-1.2', 3.2);
 
 query T

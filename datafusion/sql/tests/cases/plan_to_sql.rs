@@ -601,7 +601,7 @@ fn test_aggregation_without_projection() -> Result<()> {
 
     assert_eq!(
         actual,
-        r#"SELECT sum(users.age), users."name" FROM (SELECT users."name", users.age FROM users) GROUP BY users."name""#
+        r#"SELECT sum(users.age), users."name" FROM users GROUP BY users."name""#
     );
 
     Ok(())
@@ -926,12 +926,25 @@ fn test_table_scan_pushdown() -> Result<()> {
     let query_from_table_scan_with_projection = LogicalPlanBuilder::from(
         table_scan(Some("t1"), &schema, Some(vec![0, 1]))?.build()?,
     )
-    .project(vec![wildcard()])?
+    .project(vec![col("id"), col("age")])?
     .build()?;
     let query_from_table_scan_with_projection =
         plan_to_sql(&query_from_table_scan_with_projection)?;
     assert_eq!(
         query_from_table_scan_with_projection.to_string(),
+        "SELECT t1.id, t1.age FROM t1"
+    );
+
+    let query_from_table_scan_with_two_projections = LogicalPlanBuilder::from(
+        table_scan(Some("t1"), &schema, Some(vec![0, 1]))?.build()?,
+    )
+    .project(vec![col("id"), col("age")])?
+    .project(vec![wildcard()])?
+    .build()?;
+    let query_from_table_scan_with_two_projections =
+        plan_to_sql(&query_from_table_scan_with_two_projections)?;
+    assert_eq!(
+        query_from_table_scan_with_two_projections.to_string(),
         "SELECT * FROM (SELECT t1.id, t1.age FROM t1)"
     );
 
